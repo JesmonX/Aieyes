@@ -1,0 +1,19 @@
+[package]
+name = "aieyes-desktop"
+version = "0.1.0"
+edition = "2024"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+aieyes-core = { path = "../../../crates/core" }
+serde_json = "1.0.151"
+serde = { version = "1.0.229", features = ["derive"] }
+tauri = { version = "2.11.5", features = ["tray-icon"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.7.4"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

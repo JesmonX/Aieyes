@@ -1,0 +1,70 @@
+name: Windows and Linux desktop
+on:
+  workflow_dispatch:
+    inputs:
+      full_checks:
+        description: '额外运行 Rust 测试（默认只做轻量检查和打包）'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'Cargo.*', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'Cargo.*', '.github/workflows/desktop.yml']
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libglib2.0-bin
+      - name: JavaScript syntax
+        shell: bash
+        run: |
+          node --check apps/desktop/web/app.js
+          node --check apps/desktop/web/desktop.js
+          node --check apps/desktop/web/floating.js
+      - run: node --test scripts/test-desktop.mjs
+      - name: Optional Rust tests
+        if: inputs.full_checks == true
+        shell: bash
+        run: |
+          cargo test --workspace --locked
+          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
+      - name: Install prebuilt Tauri CLI
+        run: npm install --global @tauri-apps/cli@2
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-desktop.ps1 release
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: sh scripts/build-desktop.sh release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aieyes-${{ runner.os }}
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            apps/desktop/src-tauri/target/release/bundle/deb/*.deb
+            apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
