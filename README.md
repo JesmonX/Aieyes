@@ -1,0 +1,100 @@
+# Aieyes
+
+跨平台 Agent 用量与 SSH 服务器监控工具。macOS 使用原生菜单栏，Windows 默认使用悬浮球，Linux 优先使用状态栏、不支持时自动回退悬浮球。SwiftUI/AppKit 与 Tauri 界面共享 Rust 核心和 SQLite 本地存储。
+
+## 当前开发版
+
+macOS 开发包输出到 `dist/Aieyes.app`，目前已验证 Intel macOS 14+ 构建。双击后从系统菜单栏的眼睛图标打开；右键可打开详情、设置或退出。关闭详情窗口后继续留在菜单栏。
+
+调试包的数据位于项目的 `.local/app/`，发布构建使用 `~/Library/Application Support/Aieyes/`。调试包包含当前项目路径，请保留项目目录。应用内置核心程序，运行时不需要 Node 或 Rust。
+
+```sh
+sh scripts/build-macos.sh debug
+open dist/Aieyes.app
+```
+
+已有依赖缓存时可使用 `AIEYES_OFFLINE=1 sh scripts/build-macos.sh debug`。
+
+## 功能状态
+
+| 功能 | 当前状态 |
+| --- | --- |
+| 原生菜单栏、固定面板、详情与设置 | 已实现并编译，完成原生浅深色截图检查；完整交互待验收 |
+| Codex 历史统计 | 已用本机真实日志验证；增量导入、去重、账号和来源筛选 |
+| Claude Code 历史统计 | 解析和缓存归一化已实现；合成格式测试通过，本机暂无有效用量 |
+| 时间范围、趋势与模型 | 默认今日概览；7/30/90/365 天、按模型堆叠、逐日缓存率与 365 天热力图 |
+| Codex 限额、Bank Reset | 日志限额已验证；实时协议由本机 CLI 核对，联网读取待验证；Bank Reset 只读 |
+| Claude Code 限额 | 本机及远程 OAuth 读取、远程代理前置命令；联网读取待验证 |
+| Antigravity / agy | 标准统计记录导入；agy CLI 只读查询模型组 5h/7d 限额，本机已实测 |
+| DeepSeek | 官方余额查询，显示币种、总额、赠送及充值余额；需配置 API Key |
+| OpenRouter 定价 | 缺失模型与维度清单、映射、手动补价、自动补计缺项、重算；联网同步待验证 |
+| Linux SSH 监控 | 可勾选挂载点及设备、12 项细分显示；独立并行采样、前台约 2 秒间隔；3 台实机验证通过 |
+| 账户与数据源 | 独立管理、多个来源共用账户限额、本机多账户、无账户 API 来源 |
+| 远程历史、前置命令 | 限额查询可单独配置代理前置命令；远端只回传统计字段 |
+| 代理 | HTTP/HTTPS/SOCKS5、来源覆盖；macOS 静态系统代理，其他平台代理环境变量；PAC 和代理认证界面尚未实现 |
+| GitHub 更新 | 检查 Release；自动下载安装与签名发布尚未实现 |
+| Windows/Linux | 已实现悬浮球、动态托盘、自动回退及本机会话状态；构建脚本和 CI 已配置，安装包及目标系统实测待完成 |
+
+服务器当前提供实时快照与速率，尚未保存长期采样历史。Token 历史保存在 SQLite 中。
+
+在「设置 → 账户」点击「接入 agy」或「接入 DeepSeek」，完成数据源设置并保存，再刷新限额。agy 使用本机或 SSH 位置当前登录的 CLI；DeepSeek 在数据源中填写 API Key。只有一个账户时，菜单栏直接显示完整限额卡片。
+
+在「设置 → 服务器 → 编辑」点击「读取挂载点与设备」，勾选需要显示的文件系统、GPU、CPU 核心、磁盘和网卡，并选择细分项。前台服务器页约每 2 秒发起一次采样（加上请求耗时），后台使用设置间隔；新配置默认 10 秒，旧配置保留。
+
+## 构建与验证
+
+macOS 需要完成 Xcode 初始化并安装 Rust。首次构建需获取 Cargo 依赖。
+
+```sh
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+python3 scripts/test-collectors.py
+node --check apps/desktop/web/app.js
+sh scripts/build-macos.sh debug
+```
+
+Tauri 界面在安装目标系统构建依赖后运行：
+
+```sh
+cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
+```
+
+Windows 使用 `./scripts/build-desktop.ps1 debug`；Linux 使用 `sh scripts/build-desktop.sh debug`。将 `debug` 改为 `release` 可构建安装包，需要先安装 Tauri v2 CLI。完整依赖、操作方式和平台验证范围见 [Windows / Linux 桌面版](docs/windows-linux.md)。
+
+悬浮球可拖动、单击打开概览、右键打开菜单；Linux 托盘通过原生菜单打开详情和设置。「设置 → 通用 → 桌面显示」可切换模式或重置位置。关闭详情窗口后继续监测，选择「退出 Aieyes」才退出应用。
+
+核心可独立运行 JSON-RPC stdio 或单次命令：
+
+```sh
+cargo run -p aieyes-core -- --data-dir .local/app --call sources.scan
+cargo run -p aieyes-core -- --data-dir .local/app --call dashboard
+```
+
+原生界面渲染入口需在有 macOS 图形会话的终端执行：
+
+```sh
+dist/Aieyes.app/Contents/MacOS/Aieyes --render "$PWD/.local/previews"
+```
+
+## 菜单栏会话状态
+
+菜单栏和面板显示本机 Codex 会话的日志状态：进行中、思考中、执行工具、已完成、中断。展开会话条可查看各会话，颜色与图标同时区分状态；动效遵循系统「减少动态效果」。正文 15pt、辅助信息至少 14pt，使用半透明彩色卡片。
+
+每 5 秒检查已有日志，每 30 秒发现新会话。连续 3 分钟无日志更新会标记「状态待确认」，避免将退出或失联的会话一直显示为工作中；完成、中断保留 90 秒，待确认状态最多保留 1 小时。监测仅读取已启用的本机 Codex 数据源，不代表进程存活、审批等待或远程会话状态。
+
+会话解析与过期行为验证：
+
+```sh
+swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-sessions.swift -o .build/verify-sessions
+.build/verify-sessions
+```
+
+## 接入与设计
+
+- [账户、数据源、前置命令与计价](docs/adapters.md)
+- [产品规格](docs/product-spec.md)
+- [技术设计](docs/architecture.md)
+- [实现与验收记录](docs/implementation-plan.md)
+- [本轮验证结果](docs/verification.md)
+
+应用使用直接的状态与操作文案。演示数据不混入真实统计；项目不包含真实登录凭据或服务器私钥。
