@@ -81,6 +81,8 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --l
 
 `.github/workflows/desktop.yml` 在 main 更新或 PR 时构建 Windows / Ubuntu 安装包，生成 CI artifacts。默认只执行 JavaScript 语法和轻量交互测试，Rust 直接进行一次 release 构建；省去重复的 fmt、Clippy 和测试编译。使用 Rust 依赖缓存、npm 预编译 Tauri CLI、取消同分支过期任务及免压缩上传来加快构建。需要完整 Rust 测试时，可手动运行工作流并勾选 `full_checks`。
 
-已在 macOS 宿主验证共享核心、桌面逻辑、前端事件和配置解析；目标系统验证结果见 GitHub Actions。Windows 专用 `.cmd` 执行测试仅在 Windows 启用完整测试时运行。
+2026-10-03 [首次原生构建](https://github.com/JesmonX/Aieyes/actions/runs/37125369069) 已通过：Windows 生成 NSIS 安装包，Ubuntu 22.04 生成 deb 和 AppImage，两个平台的 JavaScript 语法与 4 项交互测试均通过。产物在运行页面的 Artifacts，保留 14 天。
 
-目标平台验收：Windows 拖动与点击／右键、重启后位置、不同 DPI／多屏、隐藏窗口后的会话更新、npm CLI 查询；Linux 有／无托盘、托盘服务退出及恢复、X11／Wayland、退出应用；最后检查安装与卸载流程。浏览器视觉预览本轮因自动审批服务 404 未执行。
+已在 macOS 宿主完成 30 项核心、3 项桌面、4 项 Node、4 项 Python 测试及 Clippy 严格检查。Windows 专用 `.cmd` 执行测试仅在 Windows 启用完整测试时运行，本次默认构建未运行完整 Rust 测试。
+
+目标平台验收：Windows 拖动与点击／右键、重启后位置、不同 DPI／多屏、隐藏窗口后的会话更新、npm CLI 查询；Linux 有／无托盘、托盘服务退出及恢复、X11／Wayland、退出应用；最后检查安装与卸载流程。本轮未完成图形会话的视觉和交互验收。

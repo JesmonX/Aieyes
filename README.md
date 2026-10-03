@@ -2,6 +2,12 @@
 
 跨平台 Agent 用量与 SSH 服务器监控工具。macOS 使用原生菜单栏，Windows 默认使用悬浮球，Linux 优先使用状态栏、不支持时自动回退悬浮球。SwiftUI/AppKit 与 Tauri 界面共享 Rust 核心和 SQLite 本地存储。
 
+## 下载安装包
+
+Windows 和 Linux 已通过原生 CI 构建。打开 [Desktop 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/desktop.yml)，选择最近一次成功运行，在 Artifacts 下载 `Aieyes-Windows`（NSIS `.exe`）或 `Aieyes-Linux`（`.deb`、`.AppImage`）。需要登录 GitHub，构建产物保留 14 天。
+
+当前为开发版，安装包尚未签名；目标系统的桌面交互、安装与卸载仍需实机验收。
+
 ## 当前开发版
 
 macOS 开发包输出到 `dist/Aieyes.app`，目前已验证 Intel macOS 14+ 构建。双击后从系统菜单栏的眼睛图标打开；右键可打开详情、设置或退出。关闭详情窗口后继续留在菜单栏。
@@ -33,7 +39,7 @@ open dist/Aieyes.app
 | 远程历史、前置命令 | 限额查询可单独配置代理前置命令；远端只回传统计字段 |
 | 代理 | HTTP/HTTPS/SOCKS5、来源覆盖；macOS 静态系统代理，其他平台代理环境变量；PAC 和代理认证界面尚未实现 |
 | GitHub 更新 | 检查 Release；自动下载安装与签名发布尚未实现 |
-| Windows/Linux | 已实现悬浮球、动态托盘、自动回退及本机会话状态；构建脚本和 CI 已配置，安装包及目标系统实测待完成 |
+| Windows/Linux | 已实现悬浮球、动态托盘、自动回退及本机会话状态；Windows NSIS、Linux deb/AppImage 原生 CI 构建通过；桌面交互和安装卸载待实测 |
 
 服务器当前提供实时快照与速率，尚未保存长期采样历史。Token 历史保存在 SQLite 中。
 

@@ -2,13 +2,13 @@
 
 ## 建议架构
 
-2026-10-03 实现进度：共享核心先集中在 `crates/core` 内按模块分层。macOS 外壳已实现；Windows/Linux Tauri 外壳已通过宿主平台编译检查。下述多 crate 目录为后续拆分目标。当前能力与未完成项以 [README](../README.md) 为准。
+2026-10-03 实现进度：共享核心先集中在 `crates/core` 内按模块分层。macOS 外壳已实现；Windows/Linux Tauri 外壳已通过原生 CI 编译与安装包生成。下述多 crate 目录为后续拆分目标。当前能力与未完成项以 [README](../README.md) 为准。
 
 macOS：SwiftUI + AppKit，原生状态栏、弹出面板、设置与详情窗口。菜单栏用 AppKit 精细管理锚点、焦点和固定窗口行为；统计页面使用原生图表与视图。
 
 跨平台核心：Rust，负责采集、归一化、去重、存储、限额刷新、价格计算、SSH 调度和更新元数据获取。数据库使用 SQLite。
 
-Windows/Linux：Tauri 桌面界面，共享同一个核心协议、配置模型与测试样例。Windows 默认使用透明置顶悬浮球，Linux 检测 AppIndicator / StatusNotifierHost 后优先使用动态托盘，不可用时回退悬浮球。显示方式与悬浮球位置保存在本机 `desktop.json`。Rust 独立线程每约 5 秒读取本机会话生命周期元数据并向两个窗口发出状态事件，关闭详情不影响监测。目标系统运行与打包验证尚待完成，详见 [平台说明](windows-linux.md)。
+Windows/Linux：Tauri 桌面界面，共享同一个核心协议、配置模型与测试样例。Windows 默认使用透明置顶悬浮球，Linux 检测 AppIndicator / StatusNotifierHost 后优先使用动态托盘，不可用时回退悬浮球。显示方式与悬浮球位置保存在本机 `desktop.json`。Rust 独立线程每约 5 秒读取本机会话生命周期元数据并向两个窗口发出状态事件，关闭详情不影响监测。Windows NSIS 和 Linux deb/AppImage 已通过原生 CI 构建，目标系统图形交互与安装卸载验证尚待完成，详见 [平台说明](windows-linux.md)。
 
 macOS 原生界面与核心使用随应用分发的子进程，通过带协议版本的 JSON-RPC/stdin/stdout 通信，不监听本机网络端口。Tauri 外壳直接调用同一个 Rust 引擎，使用相同的方法名、输入和输出模型。原始命令标准错误不进入 UI，连接故障映射为简洁的状态文案。
 
@@ -93,4 +93,4 @@ SQLite 保存配置引用、基础用量、价格、限额快照与聚合历史�
 
 GitHub Release 元数据与下载走应用代理设置；更新提供平台、架构、版本与校验信息。macOS 和 Windows/Linux 的安装更新流程由各自外壳实现，共享发布元数据。
 
-发布时处理 macOS 应用签名、公证、Universal 构建，以及 Windows/Linux 包格式。仓库与发布身份尚未指定，此阶段不配置发布或上传产物。
+发布时处理 macOS 应用签名、公证、Universal 构建，以及 Windows/Linux 包格式。仓库为 `JesmonX/Aieyes`。CI 上传 Windows/Linux 开发构建产物到 Actions Artifacts；签名、公证及正式 GitHub Release 发布尚未配置。

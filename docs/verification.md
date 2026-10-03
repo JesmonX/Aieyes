@@ -6,8 +6,8 @@
 - 悬浮球支持拖动、位置保存、启动时屏幕工作区校正、点击详情、右键菜单、键盘菜单及退出。会话采样由 Rust 独立线程运行，每约 5 秒更新，关闭详情后继续。
 - 新增 Rust `sessions.list` 与有界日志尾部读取；状态、过期、来源范围、去重、部分写入及不可读提示已覆盖测试。Windows 后台命令不创建控制台，CLI 解析优先使用原生程序／npm Windows 启动器，避免误选同名 POSIX 脚本。
 - macOS 宿主上的 Rust 核心 30 项、Tauri 桌面 3 项、Node 前端交互 4 项、Python 采集器 4 项测试通过；核心和桌面 Clippy 均以 `-D warnings` 通过。平台打包配置已由 Tauri 配置类型解析验证；JavaScript、JSON、shell 语法与文档链接检查通过。
-- 新增 Windows PowerShell 和 Linux shell 构建脚本、NSIS / deb / AppImage 配置、Windows / Ubuntu CI 打包工作流（默认轻量检查，完整 Rust 测试手动启用）。首次发布前 CI 尚未执行，未生成 Windows/Linux 安装包，Windows 专用 `.cmd` 执行测试及实际系统托盘、透明窗口、多屏 DPI、Wayland、安装卸载均待目标平台验证。
-- 浏览器视觉预览未执行：自动审批服务返回 404，无法完成审批检查。上述前端验证使用模拟 Tauri API 的事件测试，不替代真实桌面验收。操作及依赖见 [Windows / Linux 桌面版](windows-linux.md)。
+- 新增 Windows PowerShell 和 Linux shell 构建脚本、NSIS / deb / AppImage 配置、Windows / Ubuntu CI 打包工作流（默认轻量检查，完整 Rust 测试手动启用）。[首次 GitHub Actions 原生构建](https://github.com/JesmonX/Aieyes/actions/runs/37125369069) 已通过，代码提交 `bf1e2a2`，产出 Windows NSIS、Linux deb 和 AppImage；两个平台均完成轻量前端检查，Rust 完整测试本次未开启。Windows 专用 `.cmd` 执行测试及实际系统托盘、透明窗口、多屏 DPI、Wayland、安装卸载仍待目标平台验证。
+- 此前阻止 GitHub 写入的审批服务故障已恢复，源码和工作流已上传到 Public 仓库 `JesmonX/Aieyes`，项目根目录 Git 已与远端同步。浏览器视觉预览仍未执行；上述前端验证使用模拟 Tauri API 的事件测试，不替代真实桌面验收。操作及依赖见 [Windows / Linux 桌面版](windows-linux.md)。
 
 ## 原生卡片密度与提示优化
 
