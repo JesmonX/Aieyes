@@ -122,9 +122,10 @@ fn query_only_sources_do_not_scan_credential_files() {
         )
         .unwrap();
     let path = std::path::Path::new(saved["path"].as_str().unwrap());
+    // Windows can return a short temp path; compare canonical directory identities.
     assert_eq!(
-        path.parent().unwrap(),
-        temp.path().canonicalize().unwrap().join("credentials")
+        path.parent().unwrap().canonicalize().unwrap(),
+        temp.path().join("credentials").canonicalize().unwrap()
     );
     assert_eq!(std::fs::read_to_string(path).unwrap(), "fixture-key");
     #[cfg(unix)]

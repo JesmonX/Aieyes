@@ -1,5 +1,12 @@
 # 验证记录 · 2026-10-03
 
+## Windows Release 回归修复 · v0.1.1
+
+- `v0.1.0` 的 Release 在 Windows 核心测试阶段失败：临时目录的短路径与规范化长路径直接比较不相等；其他三个构建任务成功，发布任务跳过，未公开 Release。[失败运行](https://github.com/JesmonX/Aieyes/actions/runs/37131417067)。同期 Windows/Linux 桌面打包工作流成功。
+- 凭据目录断言改为规范化两侧路径，继续检查凭据未逃逸目录、文件内容与 Unix 权限；Linux 采集器测试在 Windows 上显式创建 `os.statvfs` 模拟，保留全部采集断言。
+- 本机 Rust 查询来源回归 4 项、Python 发布校验 3 项、采集器 4 项通过；删除进程内 `os.statvfs` 后重跑采集器 4 项也通过，覆盖 Windows 缺少该 API 的环境。原生 Windows 验证由新版本 Release 工作流执行。
+- 所有应用版本和 Cargo 锁文件同步为 `0.1.1`，macOS 构建号递增为 2；保留 `v0.1.0` 原标签。
+
 ## Release 与界面改进
 
 - 新增四任务 Release 矩阵，交付 macOS Intel / Apple Silicon DMG、Windows NSIS、Linux DEB / AppImage；只有全部检查通过且附件完整才公开 Release。actionlint 检查两个工作流通过。

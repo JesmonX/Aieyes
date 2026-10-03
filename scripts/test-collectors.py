@@ -74,7 +74,8 @@ class Collectors(unittest.TestCase):
             return io.StringIO(files[str(path)]) if str(path) in files else original_open(path, *args, **kwargs)
         stats = types.SimpleNamespace(f_blocks=1000, f_frsize=4096, f_bavail=300, f_bfree=400, f_files=200, f_ffree=120)
         output = io.StringIO()
-        with patch("builtins.open", side_effect=fake_open), patch("os.statvfs", return_value=stats), patch("time.sleep"), patch("time.monotonic", side_effect=[10.0, 10.25]), patch("sys.argv", ["collector", '["filesystems"]', "true"]), contextlib.redirect_stdout(output):
+        # The remote Linux collector is tested on Windows too, where statvfs is absent.
+        with patch("builtins.open", side_effect=fake_open), patch("os.statvfs", return_value=stats, create=True), patch("time.sleep"), patch("time.monotonic", side_effect=[10.0, 10.25]), patch("sys.argv", ["collector", '["filesystems"]', "true"]), contextlib.redirect_stdout(output):
             runpy.run_path(str(SCRIPTS / "linux_metrics.py"))
         sample = json.loads(output.getvalue())
         self.assertEqual([f["id"] for f in sample["filesystems"]], ["/", "/data space"])
