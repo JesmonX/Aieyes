@@ -4,6 +4,10 @@ PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$PROJECT_DIR"
 BUILD_MODE=${1:-debug}
 case "$BUILD_MODE" in debug|release) ;; *) echo 'Usage: scripts/build-macos.sh [debug|release]' >&2; exit 2 ;; esac
+PACKAGE_MODE=${2:-}
+case "$PACKAGE_MODE" in ''|--dmg) ;; *) echo 'Optional second argument: --dmg' >&2; exit 2 ;; esac
+if [ "$PACKAGE_MODE" = --dmg ] && [ "$BUILD_MODE" != release ]; then echo 'DMG requires release mode' >&2; exit 2; fi
+export MACOSX_DEPLOYMENT_TARGET=14.0
 export PATH="$HOME/.cargo/bin:$PATH"
 export CLANG_MODULE_CACHE_PATH="$PROJECT_DIR/.build/clang-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$PROJECT_DIR/.build/swift-module-cache"
@@ -23,3 +27,12 @@ fi
 codesign --force --sign - "$APP_DIR/Contents/Resources/aieyes-core"
 codesign --force --sign - "$APP_DIR"
 echo "$APP_DIR"
+if [ "$PACKAGE_MODE" = --dmg ]; then
+  VERSION=$(python3 scripts/release.py check)
+  case "$(uname -m)" in arm64) ARCH=arm64 ;; x86_64) ARCH=x64 ;; *) exit 2 ;; esac
+  STAGING=$(mktemp -d "$PROJECT_DIR/dist/dmg-stage.XXXXXX")
+  trap 'rm -rf "$STAGING"' EXIT HUP INT TERM
+  ditto "$APP_DIR" "$STAGING/Aieyes.app"
+  ln -s /Applications "$STAGING/Applications"
+  hdiutil create -volname Aieyes -srcfolder "$STAGING" -ov -format UDZO "$PROJECT_DIR/dist/Aieyes-$VERSION-macos-$ARCH.dmg"
+fi

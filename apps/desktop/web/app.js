@@ -37,7 +37,10 @@ async function sample() { if(state.serverBusy)return; state.serverBusy=true; try
 } catch(e) { notify(String(e)); state.lastMetrics=Date.now(); } finally { state.serverBusy=false; } }
 async function saveSettings() { await api('settings.save',state.settings); await loadDashboard(); notify('已保存'); }
 function option(value,label,current) { return `<option value="${escapeHTML(value)}" ${String(value) === String(current) ? 'selected' : ''}>${escapeHTML(label)}</option>`; }
-function stat(label,value,detail,icon) { return `<div class="stat"><div class="stat-label">${label}<b>${icon}</b></div><div class="stat-value">${value}</div><small>${detail}</small></div>`; }
+function stat(label,value,detail,icon) {
+  const paths={'✧':'M12 3 9 9 3 12l6 3 3 6 3-6 6-3-6-3Z','▱':'M4 7h16v10H4ZM8 10v4m4-4v4m4-4v4','↗':'M5 19 19 5M8 5h11v11','$':'M12 2v20m5-16H9a4 4 0 0 0 0 8h6a4 4 0 0 1 0 8H6'};
+  icon=`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[icon]??paths['✧']}"/></svg>`;
+  return `<div class="stat"><div class="stat-label">${label}<b>${icon}</b></div><div class="stat-value">${value}</div><small>${detail}</small></div>`; }
 function render() {
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active',b.dataset.page === state.page));
   $('#title').textContent = {agent:'使用概览',servers:'服务器',settings:'设置'}[state.page];
@@ -48,7 +51,7 @@ const cacheRate = t => { const input=t.input+t.cacheRead+t.cacheWrite; return in
 const missingLabels = gap => [['input','输入'],['output','输出'],['cacheRead','缓存读取'],['cacheWrite','缓存写入']].filter(([k])=>gap.tokens[k]>0).map(([,label])=>label).join('、');
 function gapList() {
   const gaps=state.dashboard?.pricingGaps??[];
-  return gaps.length ? `<div class="card pricing-gaps"><h2>所选范围 · 待计价模型</h2><p class="muted tiny">同步价格、映射到已有模型，或补充缺失单价。保存后自动补计缺项。</p>${gaps.map((g,i)=>`<div class="list-row"><div class="row-body"><strong>${escapeHTML(g.model)}</strong><small>缺少${missingLabels(g)} · ${compact(g.unpricedTokens)} Token</small></div><button data-gap-map="${i}">映射</button><button data-gap-price="${i}">补充价格</button></div>`).join('')}</div>` : '';
+  return gaps.length ? `<div class="card pricing-gaps"><h2>所选范围 · 待计价模型</h2>${gaps.map((g,i)=>`<div class="list-row"><div class="row-body"><strong>${escapeHTML(g.model)}</strong><small>缺少${missingLabels(g)} · ${compact(g.unpricedTokens)} Token</small></div><button data-gap-map="${i}">映射</button><button data-gap-price="${i}">补充价格</button></div>`).join('')}</div>` : '';
 }
 async function openPricing() { state.page='settings';state.settingsTab='prices';state.prices=await api('prices.list');render(); }
 function renderAgent() {
@@ -92,7 +95,7 @@ function drawTrend() {
   const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);
   const days=state.dashboard.trendDays,rows=state.dashboard.dayModels,values=days.map(d=>state.cost?d.cost:d.total),max=Math.max(1,...values);
   const left=58,top=12,bottom=30,plot=height-top-bottom,space=(width-left)/Math.max(1,days.length);
-  const muted=getComputedStyle(canvas).getPropertyValue('--muted');ctx.font='11px system-ui';ctx.fillStyle=muted;ctx.textAlign='right';
+  const style=getComputedStyle(canvas),muted=style.getPropertyValue('--muted');ctx.font=`13px ${style.fontFamily}`;ctx.fillStyle=muted;ctx.textAlign='right';
   for(let i=0;i<3;i++){const y=top+plot*i/2;ctx.fillText(state.cost?money(max*(1-i/2)):compact(max*(1-i/2)),left-9,y+3);ctx.strokeStyle='rgba(140,145,170,.15)';ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width,y);ctx.stroke();}
   days.forEach((d,i)=>{let used=0;const x=left+i*space+space*.2;rows.filter(r=>r.day===d.key).forEach(r=>{const h=(state.cost?r.usage.cost:r.usage.total)/max*plot;ctx.fillStyle=color(r.model);ctx.fillRect(x,top+plot-used-h,Math.max(1,space*.6),h);used+=h;});if(i%Math.max(1,Math.floor(days.length/7))===0){ctx.fillStyle=muted;ctx.textAlign='center';ctx.fillText(d.key.slice(5),x+space*.3,height-5);}});
   canvas.onmousemove=e=>{const i=Math.floor((e.offsetX-left)/space),day=days[i];canvas.title=day?`${day.key} · 缓存命中率 ${pct(cacheRate(day.tokens))}\n`+rows.filter(r=>r.day===day.key).map(r=>`${r.model}: ${state.cost?money(r.usage.cost):compact(r.usage.total)+' Token'}`).join('\n'):'';};
@@ -127,7 +130,7 @@ function renderSettings() {
   const tabs={accounts:'账户',sources:'数据源',hosts:'服务器',connection:'连接',prices:'价格',general:'通用'};
   let body='';const s=state.settings;
   if(state.settingsTab==='accounts') {
-    body=`<p class="muted">账户管理身份与限额；数据源管理记录目录。同一账户可关联本机与服务器上的多个目录。</p><div class="card">${s.accounts.map((a,i)=>`<div class="list-row"><div class="row-body"><strong>${escapeHTML(a.name)}</strong><small>${providers[a.provider]} · ${s.sources.filter(src=>src.provider===a.provider&&src.accountId===a.id).length} 个数据源 · ${a.quotaEnabled?'显示限额':'仅统计用量'}</small></div><button data-edit-account="${i}">编辑</button><button data-remove-account="${i}" aria-label="移除账户">−</button></div>`).join('')||'<div class="empty">添加个人账户或工作账户</div>'}</div><button id="add-account" class="primary">＋ 添加账户</button> <button data-add-query="agy">接入 agy</button> <button data-add-query="deepseek">接入 DeepSeek</button><p class="tiny muted">本机两个 Codex 账户：添加两个账户，再分别关联各自的数据目录。外接 API 可直接添加无账户的数据源。</p>`;
+    body=`<div class="card">${s.accounts.map((a,i)=>`<div class="list-row"><div class="row-body"><strong>${escapeHTML(a.name)}</strong><small>${providers[a.provider]} · ${s.sources.filter(src=>src.provider===a.provider&&src.accountId===a.id).length} 个数据源 · ${a.quotaEnabled?'显示限额':'仅统计用量'}</small></div><button data-edit-account="${i}">编辑</button><button data-remove-account="${i}" aria-label="移除账户">−</button></div>`).join('')||'<div class="empty">添加个人账户或工作账户</div>'}</div><button id="add-account" class="primary">＋ 添加账户</button> <button data-add-query="agy">接入 agy</button> <button data-add-query="deepseek">接入 DeepSeek</button>`;
   }else if(state.settingsTab==='sources'||state.settingsTab==='hosts'){
     const isSource=state.settingsTab==='sources',list=isSource?s.sources:s.hosts;
     body=`<div class="card">${list.map(item=>`<div class="list-row"><input type="checkbox" data-enable="${escapeHTML(item.id)}" ${item.enabled?'checked':''} aria-label="启用 ${escapeHTML(item.name)}"><div class="row-body">${escapeHTML(item.name||item.target)}<small>${escapeHTML(isSource?`${providers[item.provider]} · ${item.accountId ? "账户："+(s.accounts.find(a=>a.id===item.accountId&&a.provider===item.provider)?.name??item.accountId) : "无账户 / API"} · ${item.path}`:item.target)}</small></div><button data-edit="${escapeHTML(item.id)}">编辑</button><button data-remove="${escapeHTML(item.id)}" aria-label="移除 ${escapeHTML(item.name)}">−</button></div>`).join('')||'<div class="empty">添加第一个'+(isSource?'数据源':'主机')+'</div>'}</div><button id="add-item" class="primary">＋ 添加${isSource?'数据源':'主机'}</button>`;
@@ -163,11 +166,14 @@ function renderSettings() {
   document.querySelectorAll('[data-unmap]').forEach(b=>b.onclick=()=>job('保存映射',async()=>{delete s.modelMappings[b.dataset.unmap];await saveSettings();renderSettings();}));
   if($('#reprice'))$('#reprice').onclick=()=>job('重新计价',async()=>{await api('prices.recalculate');await loadDashboard();renderSettings();notify('已按当前价格重算');});
 }
-function showEditor(title,html,onSubmit){$('#editor-title').textContent=title;$('#editor-fields').innerHTML=html;$('#editor-form').onsubmit=async e=>{e.preventDefault();try{await onSubmit(new FormData(e.target));$('#editor').close();}catch(err){notify(String(err));}};$('#editor').showModal();}
+let editorSelectors=[];
+function clearEditorSelectors(){editorSelectors.forEach(c=>c.destroy());editorSelectors=[];}
+function closeEditor(){clearEditorSelectors();$('#editor').close();}
+function showEditor(title,html,onSubmit){clearEditorSelectors();$('#editor-title').textContent=title;$('#editor-fields').innerHTML=html;$('#editor-form').onsubmit=async e=>{e.preventDefault();try{await onSubmit(new FormData(e.target));closeEditor();}catch(err){notify(String(err));}};$('#editor').showModal();}
 function editAccount(index) {
   const a=structuredClone(index==null?{id:crypto.randomUUID(),name:'',provider:'codex',quotaEnabled:true,quotaSourceId:null}:state.settings.accounts[index]);
   const linked=state.settings.sources.filter(s=>s.accountId===a.id&&s.provider===a.provider);
-  showEditor('账户',field('name','账户名称',a.name,'个人账户 / 工作账户')+select('provider','Agent',Object.entries(providers),a.provider)+select('quotaEnabled','账户限额',[['yes','显示并查询'],['no','仅统计用量']],a.quotaEnabled?'yes':'no')+select('quotaSourceId','优先查询位置',[['','自动 · 优先本机'],...linked.map(s=>[s.id,s.name])],a.quotaSourceId??'')+'<p class="muted tiny">同一账户只显示一份限额。查询失败会尝试其他已关联的数据源。Codex、Claude Code、agy 支持限额读取，DeepSeek 支持余额查询。</p>',async f=>{
+  showEditor('账户',field('name','账户名称',a.name,'个人账户 / 工作账户')+select('provider','Agent',Object.entries(providers),a.provider)+select('quotaEnabled','账户限额',[['yes','显示并查询'],['no','仅统计用量']],a.quotaEnabled?'yes':'no')+select('quotaSourceId','优先查询位置',[['','自动 · 优先本机'],...linked.map(s=>[s.id,s.name])],a.quotaSourceId??'')+'',async f=>{
     a.name=f.get('name').trim();if(!a.name)throw new Error('请输入账户名称');if(!linked.length)a.provider=f.get('provider');a.quotaEnabled=f.get('quotaEnabled')==='yes';a.quotaSourceId=f.get('quotaSourceId')||null;
     const next=structuredClone(state.settings);if(index==null)next.accounts.push(a);else next.accounts[index]=a;
     await api('settings.save',next);state.settings=next;await loadDashboard();renderSettings();notify('已保存');
@@ -179,46 +185,77 @@ function editItem(existing){
   const source=state.settingsTab==='sources';
   const item=structuredClone(existing??(source?{id:crypto.randomUUID(),name:'',provider:'codex',accountId:'',path:'~/.codex',hostId:null,enabled:true,quotaCommand:'',quotaPreCommand:'',codexBinary:'codex',agyBinary:'agy',proxy:null}:{id:crypto.randomUUID(),name:'',target:'',port:null,identityFile:'',shell:'/bin/sh',preCommand:'',enabled:true,metrics:Object.keys(groups),devices:[],details:Object.keys(detailOptions)}));
   const accountOptions=provider=>[['','无账户 / 外接 API'],...state.settings.accounts.filter(a=>a.provider===provider).map(a=>[a.id,a.name])];
-  const body=source?field('name','名称',item.name)+select('provider','Agent',Object.entries(providers),item.provider)+select('accountId','关联账户',accountOptions(item.provider),item.accountId)+`<p class="tiny muted">在「账户」中添加身份。同一账户的本机和远程目录选择同一项；本机多个账户使用各自目录。修改关联后需同步记录。</p>`+select('hostId','位置',[['','本机'],...state.settings.hosts.map(h=>[h.id,h.name||h.target])],item.hostId??'')+field('path','数据目录',item.path)+field('codexBinary','Codex 程序',item.codexBinary)+field('agyBinary','agy 程序',item.agyBinary??'agy')+`<div id="deepseek-key">${field('apiKey','DeepSeek API Key（留空保留）','','','password')}<p class="tiny muted">API Key 保存为本机私有凭据文件。未设置时读取 DEEPSEEK_API_KEY 环境变量。</p></div>`+`<div id="remote-quota">${textarea('quotaPreCommand','限额查询前置命令',item.quotaPreCommand)}<p class="tiny muted">例如：export HTTPS_PROXY=http://127.0.0.1:7890<br>在远程限额查询的同一 shell 中执行，用于加载代理环境；留空继承主机前置命令。限额由应用自动读取。</p></div><div id="local-proxy">${select('proxyMode','查询代理',[['inherit','跟随应用'],['system','系统代理'],['direct','直连'],['custom','自定义']],item.proxy?.mode??'inherit')+field('proxyURL','代理地址',item.proxy?.url??'')}</div>`:
-    field('name','名称',item.name)+field('target','SSH 别名或地址',item.target,'my-server 或 user@host')+field('port','端口',item.port??'','跟随 SSH 配置','number')+field('identityFile','密钥路径',item.identityFile,'跟随 SSH 配置')+field('shell','远程 shell',item.shell)+textarea('preCommand','远程前置命令',item.preCommand)+`<div class="form-row"><label>采集项目</label><div class="check-group">${Object.entries(groups).map(([k,v])=>`<label><input type="checkbox" name="metrics" value="${k}" ${item.metrics.includes(k)?'checked':''}> ${v}</label>`).join('')}</div></div>`+`<button type="button" id="discover-devices">读取挂载点与设备</button><p id="discovery-status" class="tiny muted"></p><div id="discovered-devices"></div>`+field('devices','指定设备',item.devices.join(', '),'network:eth0, gpu:0, filesystems:/')+`<p class="tiny muted">留空显示全部；读取设备后勾选需要显示的项目，也可手填。</p><h3>显示细分项</h3><div class="check-group">${Object.entries(detailOptions).map(([k,v])=>`<label><input type="checkbox" name="details" value="${k}" ${item.details==null||item.details.includes(k)?'checked':''}> ${v}</label>`).join('')}</div>`;
+  const body=source?field('name','名称',item.name)+select('provider','Agent',Object.entries(providers),item.provider)+select('accountId','关联账户',accountOptions(item.provider),item.accountId)+``+select('hostId','位置',[['','本机'],...state.settings.hosts.map(h=>[h.id,h.name||h.target])],item.hostId??'')+field('path','数据目录',item.path)+field('codexBinary','Codex 程序',item.codexBinary)+field('agyBinary','agy 程序',item.agyBinary??'agy')+`<div id="deepseek-key">${field('apiKey','DeepSeek API Key（留空保留）','','','password')}<p class="tiny muted">API Key 保存为本机私有凭据文件。未设置时读取 DEEPSEEK_API_KEY 环境变量。</p></div>`+`<div id="remote-quota">${textarea('quotaPreCommand','限额查询前置命令',item.quotaPreCommand)}<p class="tiny muted">留空继承主机前置命令。</p></div><div id="local-proxy">${select('proxyMode','查询代理',[['inherit','跟随应用'],['system','系统代理'],['direct','直连'],['custom','自定义']],item.proxy?.mode??'inherit')+field('proxyURL','代理地址',item.proxy?.url??'')}</div>`:
+    field('name','名称',item.name)+field('target','SSH 别名或地址',item.target,'my-server 或 user@host')+field('port','端口',item.port??'','跟随 SSH 配置','number')+field('identityFile','密钥路径',item.identityFile,'跟随 SSH 配置')+`<section class="host-selectors"><div id="metric-select"></div><div class="section-head"><h3>设备</h3><button type="button" id="discover-devices">读取设备</button></div><p id="discovery-status" class="error" role="status" hidden></p><div id="device-selects" class="device-selects"></div><div id="detail-select"></div></section><details class="advanced"><summary>高级设置</summary>${field('shell','远程 shell',item.shell)+textarea('preCommand','远程前置命令',item.preCommand)+field('devices','设备表达式',item.devices.join(', '),'network:eth0, gpu:0, filesystems:/')}<p class="muted tiny">设备表达式留空时显示全部。</p></details>`;
   showEditor(source?'数据源':'SSH 主机',body,async f=>{
     if(source){for(const k of ['name','provider','accountId','path','codexBinary','agyBinary','quotaPreCommand'])item[k]=f.get(k);item.hostId=f.get('hostId')||null;item.proxy=f.get('proxyMode')==='inherit'?null:{mode:f.get('proxyMode'),url:f.get('proxyURL')};if(!item.name)item.name=providers[item.provider];if(['agy','deepseek'].includes(item.provider)&&!item.accountId)throw new Error('请选择要查询的账户，或从账户页快捷接入');if(item.provider==='deepseek'){item.hostId=null;if(f.get('apiKey')?.trim()){const saved=await api('credentials.save',{sourceId:item.id,apiKey:f.get('apiKey')});item.path=saved.path;}}}
-    else{for(const k of ['name','target','identityFile','shell','preCommand'])item[k]=f.get(k);item.port=f.get('port')?Number(f.get('port')):null;item.metrics=f.getAll('metrics');item.details=f.getAll('details');item.devices=f.get('devices').split(',').map(s=>s.trim()).filter(Boolean);if(!item.name)item.name=item.target;}
+    else{for(const k of ['name','target','identityFile','shell','preCommand'])item[k]=f.get(k);item.port=f.get('port')?Number(f.get('port')):null;item.devices=f.get('devices').split(',').map(s=>s.trim()).filter(Boolean);if(!item.name)item.name=item.target;}
     const next=structuredClone(state.settings),items=source?next.sources:next.hosts,index=items.findIndex(i=>i.id===item.id);if(index<0)items.push(item);else items[index]=item;
     if(source)for(const a of next.accounts)if(a.quotaSourceId===item.id&&(a.id!==item.accountId||a.provider!==item.provider))a.quotaSourceId=null;
     await api('settings.save',next);state.settings=next;await loadDashboard();renderSettings();notify('已保存');
   });
-  if(!source){
-    $('#discover-devices').onclick=async()=>{
-      const button=$('#discover-devices');button.disabled=true;$('#discovery-status').textContent='读取中…';
-      const f=new FormData($('#editor-form')),host={...item};
-      for(const k of ['target','identityFile','shell','preCommand'])host[k]=f.get(k);
-      host.port=f.get('port')?Number(f.get('port')):null;
-      try {
-        const sample=await api('hosts.discover',{host});
-        const selected=()=>$('#field-devices').value.split(',').map(s=>s.trim()).filter(Boolean);
-        const available=Object.entries(groups).filter(([k])=>Array.isArray(sample[k]));
-        $('#discovered-devices').innerHTML=available.map(([k,v])=>`<details open><summary>${v}</summary><div class="check-group">${sample[k].filter(d=>k!=='cpu'||d.id!=='cpu').map(d=>`<label><input type="checkbox" data-device-group="${k}" value="${escapeHTML(d.id)}" ${!selected().some(s=>s.startsWith(k+':'))||selected().includes(k+':'+d.id)?'checked':''}> ${escapeHTML(d.id)} ${escapeHTML(d.type??d.name??'')}</label>`).join('')}</div><button type="button" data-all-devices="${k}">显示全部</button></details>`).join('');
-        $('#discovery-status').textContent=Object.keys(sample.errors??{}).map(k=>(groups[k]??k)+'采集失败').join(' · ')||'已读取，勾选需要显示的设备';
-        document.querySelectorAll('[data-device-group]').forEach(c=>c.onchange=()=>{const group=c.dataset.deviceGroup,values=selected().filter(s=>!s.startsWith(group+':'));const chosen=[...document.querySelectorAll('[data-device-group]')].filter(e=>e.dataset.deviceGroup===group&&e.checked).map(e=>group+':'+e.value);$('#field-devices').value=[...values,...(chosen.length?chosen:[group+':__none__'])].join(', ');});
-        document.querySelectorAll('[data-all-devices]').forEach(b=>b.onclick=()=>{const group=b.dataset.allDevices;$('#field-devices').value=selected().filter(s=>!s.startsWith(group+':')).join(', ');document.querySelectorAll('[data-device-group]').forEach(c=>{if(c.dataset.deviceGroup===group)c.checked=true;});});
-      } catch(e) { $('#discovery-status').textContent=String(e); }
-      finally {button.disabled=false;}
-    };
-  }
+  if(!source) bindHostSelectors(item);
   if(source){
     const update=()=>{const provider=$('#field-provider').value;$('#deepseek-key').hidden=provider!=='deepseek';$('#field-agyBinary').closest('.form-row').hidden=provider!=='agy';$('#field-path').closest('.form-row').hidden=provider==='agy';document.querySelector('label[for=field-path]').textContent=provider==='deepseek'?'API Key 文件（可选）':'数据目录';$('#field-hostId').closest('.form-row').hidden=provider==='deepseek';$('#remote-quota').hidden=!$('#field-hostId').value||!$('#field-accountId').value;$('#local-proxy').hidden=!!$('#field-hostId').value;$('#field-codexBinary').closest('.form-row').hidden=$('#field-provider').value!=='codex';};
     $('#field-hostId').onchange=$('#field-accountId').onchange=update;
     $('#field-provider').onchange=e=>{const provider=e.target.value;if(provider==='deepseek'){$('#field-hostId').value='';$('#field-path').value='';}$('#field-accountId').innerHTML=accountOptions(provider).map(([k,v])=>option(k,v,'')).join('');if(['~/.codex','~/.claude',''].includes($('#field-path').value))$('#field-path').value=provider==='codex'?'~/.codex':provider==='claude'?'~/.claude':'';update();};update();
   }
 }
+function bindHostSelectors(item) {
+  const selectors=AieyesSelect;
+  let discovered={}, deviceControls=[];
+  const tokens=()=>selectors.parse($('#field-devices').value);
+  const detailGroup={cpuTimes:'cpu',memoryCache:'memory',swap:'memory',fsAvailable:'filesystems',fsType:'filesystems',inodes:'filesystems',diskIops:'disk',diskBusy:'disk',networkTotals:'network',networkErrors:'network',gpuMemory:'gpu',gpuThermals:'gpu'};
+  item.details ??= Object.keys(detailOptions);
+  function redrawDevices() {
+    deviceControls.forEach(c=>{c.destroy();editorSelectors.splice(editorSelectors.indexOf(c),1);});
+    deviceControls=[]; $('#device-selects').replaceChildren();
+    for(const [group,title] of Object.entries(groups).filter(([g])=>g!=='memory')) {
+      const root=document.createElement('div'); $('#device-selects').append(root);
+      const options=()=>{
+        const rows=(discovered[group]??[]).filter(d=>group!=='cpu'||d.id!=='cpu');
+        const known=new Set(rows.map(d=>d.id));
+        return [...rows.map(d=>({id:d.id,label:[d.id,d.type??d.name].filter(Boolean).join(' · ')})),
+          ...selectors.deviceIds(tokens(),group).filter(id=>!known.has(id)).map(id=>({id,label:id,unavailable:true}))];
+      };
+      const control=selectors.mount(root,{title,options,selected:()=>selectors.deviceSelected(tokens(),group,options().map(o=>o.id)),all:()=>!tokens().some(s=>s.startsWith(group+':')),disabled:()=>!item.metrics.includes(group),
+        onChange:(selected,{all})=>{$('#field-devices').value=selectors.writeDevices(tokens(),group,selected,all).join(', ');}});
+      deviceControls.push(control);editorSelectors.push(control);
+    }
+  }
+  const metrics=selectors.mount($('#metric-select'),{title:'采集项目',options:()=>Object.entries(groups).map(([id,label])=>({id,label})),selected:()=>item.metrics,
+    onChange:values=>{item.metrics=values;deviceControls.forEach(c=>c.refresh());details.refresh();}});
+  // Disabled categories retain their saved detail values; only enabled categories are editable.
+  const details=selectors.mount($('#detail-select'),{title:'显示细分项',options:()=>Object.entries(detailOptions).filter(([id])=>item.metrics.includes(detailGroup[id])).map(([id,label])=>({id,label})),selected:()=>item.details,disabled:()=>!item.metrics.length,
+    onChange:values=>{item.details=values;}});
+  editorSelectors.push(metrics,details);redrawDevices();
+  $('#field-devices').onchange=redrawDevices;
+  $('#discover-devices').onclick=async()=>{
+    const button=$('#discover-devices'), status=$('#discovery-status');
+    button.disabled=true;button.textContent='读取中…';status.hidden=true;
+    const form=$('#editor-form'), f=new FormData(form), host={...item};
+    for(const key of ['target','identityFile','shell','preCommand'])host[key]=f.get(key);
+    host.port=f.get('port')?Number(f.get('port')):null;
+    try {
+      const sample=await api('hosts.discover',{host});
+      if(!$('#editor').open||!button.isConnected)return;
+      for(const group of Object.keys(groups))if(Array.isArray(sample[group]))discovered[group]=sample[group];
+      redrawDevices();
+      status.textContent=Object.keys(sample.errors??{}).map(k=>(groups[k]??k)+'读取失败').join(' · ');status.hidden=!status.textContent;
+    }catch(error){if(button.isConnected){status.textContent=String(error);status.hidden=false;}}
+    finally{button.disabled=false;button.textContent='读取设备';}
+  };
+}
 function editPrice(existing){const price=structuredClone(existing??{id:'',name:'',input:null,output:null,cacheRead:null,cacheWrite:null,fetchedAt:0});
   showEditor('模型价格 · USD / 百万 Token',field('id','模型 ID',price.id)+field('name','显示名称',price.name)+[['input','输入'],['output','输出'],['cacheRead','缓存读取'],['cacheWrite','缓存写入']].map(([k,label])=>field(k,label,price[k]==null?'':price[k]*1e6,'待定价')).join(''),async f=>{price.id=f.get('id');price.name=f.get('name');for(const k of ['input','output','cacheRead','cacheWrite']){const v=f.get(k);price[k]=v===''?null:Number(v)/1e6;if(price[k]!=null&&(!Number.isFinite(price[k])||price[k]<0))throw new Error('价格需要为非负数');}await api('prices.save',{prices:[price]});state.prices=await api('prices.list');await loadDashboard();renderSettings();});
 }
 document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{state.page=b.dataset.page;render();if(state.page==='servers')sample();});
-$('#scan').onclick=scan;$('#quota').onclick=quotas;$('#message').onclick=()=>notify('');$('#close-editor').onclick=$('#cancel-editor').onclick=()=>$('#editor').close();
+$('#editor').addEventListener('close',()=>{if(!$('#editor').open)clearEditorSelectors();});
+$('#editor').addEventListener('cancel',clearEditorSelectors);
+$('#scan').onclick=scan;$('#quota').onclick=quotas;$('#message').onclick=()=>notify('');$('#close-editor').onclick=$('#cancel-editor').onclick=()=>closeEditor();
 new ResizeObserver(()=>{if(state.page==='agent')drawTrend();}).observe($('#content'));
-async function boot(){try{if(!window.__TAURI__)throw new Error('通过 Aieyes 桌面应用打开');state.settings=await api('settings.get');await loadDashboard();await scan();}catch(e){notify(String(e));$('#activity').textContent='连接已断开';}}
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(state.page==='agent')requestAnimationFrame(drawTrend);});
+async function boot(){try{if(!window.__TAURI__)throw new Error('通过 Aieyes 桌面应用打开');const info=await api('hello');$('#app-version').textContent=info.version;state.settings=await api('settings.get');await loadDashboard();await scan();}catch(e){notify(String(e));$('#activity').textContent='连接已断开';}}
 setInterval(()=>{
   if(!state.settings||$('#editor').open)return;
   if(!state.serverBusy&&state.settings.hosts.some(h=>h.enabled)&&Date.now()-state.lastMetrics>(state.page==='servers'&&!document.hidden?2000:state.settings.serverRefreshSeconds*1000)){sample();}

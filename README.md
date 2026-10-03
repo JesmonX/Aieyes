@@ -4,9 +4,11 @@
 
 ## 下载安装包
 
-Windows 和 Linux 已通过原生 CI 构建。打开 [Desktop 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/desktop.yml)，选择最近一次成功运行，在 Artifacts 下载 `Aieyes-Windows`（NSIS `.exe`）或 `Aieyes-Linux`（`.deb`、`.AppImage`）。需要登录 GitHub，构建产物保留 14 天。
+从 [GitHub Releases](https://github.com/JesmonX/Aieyes/releases) 下载正式版本：macOS 提供 Intel x64、Apple Silicon arm64 两个 DMG（macOS 14+），Windows 提供 x64 NSIS EXE，Linux 提供 x64 DEB 和 AppImage。发布页的 `SHA256SUMS` 包含全部安装包校验值。
 
-当前为开发版，安装包尚未签名；目标系统的桌面交互、安装与卸载仍需实机验收。
+[Release 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/release.yml) 在推送 `v主版本.次版本.修订版本` 标签后构建，所有平台测试和打包成功后自动发布。macOS 沿用 ad-hoc 签名，Windows 暂未证书签名。首次运行新工作流前，仍可从 [Desktop 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/desktop.yml) 下载保留 14 天的开发构建。
+
+发布维护与验证方式见 [发布说明](docs/releases.md)。
 
 ## 当前开发版
 
@@ -45,7 +47,7 @@ open dist/Aieyes.app
 
 在「设置 → 账户」点击「接入 agy」或「接入 DeepSeek」，完成数据源设置并保存，再刷新限额。agy 使用本机或 SSH 位置当前登录的 CLI；DeepSeek 在数据源中填写 API Key。只有一个账户时，菜单栏直接显示完整限额卡片。
 
-在「设置 → 服务器 → 编辑」点击「读取挂载点与设备」，勾选需要显示的文件系统、GPU、CPU 核心、磁盘和网卡，并选择细分项。前台服务器页约每 2 秒发起一次采样（加上请求耗时），后台使用设置间隔；新配置默认 10 秒，旧配置保留。
+在「设置 → 服务器 → 编辑」点击「读取设备」，按组下拉选择文件系统、GPU、CPU 核心、磁盘、网卡及细分项。选择面板支持搜索、全选、清空和反选；有搜索词时仅操作匹配结果。前台服务器页约每 2 秒发起一次采样（加上请求耗时），后台使用设置间隔；新配置默认 10 秒，旧配置保留。
 
 ## 构建与验证
 
@@ -65,7 +67,7 @@ Tauri 界面在安装目标系统构建依赖后运行：
 cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
 ```
 
-Windows 使用 `./scripts/build-desktop.ps1 debug`；Linux 使用 `sh scripts/build-desktop.sh debug`。将 `debug` 改为 `release` 可构建安装包，需要先安装 Tauri v2 CLI。完整依赖、操作方式和平台验证范围见 [Windows / Linux 桌面版](docs/windows-linux.md)。
+Windows 使用 `./scripts/build-desktop.ps1 debug`；Linux 使用 `sh scripts/build-desktop.sh debug`。将 `debug` 改为 `release` 可构建安装包，需要先安装 Tauri v2 CLI。macOS DMG 使用 `sh scripts/build-macos.sh release --dmg`，并需要 Python 3.11+。完整依赖、操作方式和平台验证范围见 [Windows / Linux 桌面版](docs/windows-linux.md)。
 
 悬浮球可拖动、单击打开概览、右键打开菜单；Linux 托盘通过原生菜单打开详情和设置。「设置 → 通用 → 桌面显示」可切换模式或重置位置。关闭详情窗口后继续监测，选择「退出 Aieyes」才退出应用。
 

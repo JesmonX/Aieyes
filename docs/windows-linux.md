@@ -10,6 +10,12 @@ Windows 默认使用置顶悬浮球；Linux 优先使用桌面状态栏／托盘
 - 默认显示方式为「跟随系统」。也可明确选择「悬浮球」或「系统状态栏 / 托盘」。检测不到可用托盘时，即使选择了托盘也会使用悬浮球。
 - 关闭详情窗口后继续运行，使用菜单或设置页的「退出 Aieyes」退出。会话监测在 Rust 后台线程运行，不依赖隐藏窗口的 JavaScript 计时器，也不会被 SSH 或限额查询阻塞。
 
+## 窗口与界面
+
+Windows 使用自绘标题栏，窗口按钮保留在右上角。标题栏支持拖动和双击最大化，按钮提供最小化、最大化／还原、关闭到后台。Windows 11 使用 Mica 材质；旧系统保持实色背景，内部采用相同的半透明卡片。Linux 保留原生窗口装饰，界面样式与 Windows 共用。
+
+正文、表单、图表和悬浮球共用字体规则，支持浅深色、减少动态效果和高对比度。服务器编辑使用分组下拉多选；搜索后的全选、清空、反选仅作用于匹配结果。高级设置仍支持手填设备表达式，旧配置直接兼容。
+
 ## Linux 桌面适配
 
 每约 15 秒检查 AppIndicator 动态库和会话 D-Bus 的 `org.kde.StatusNotifierWatcher.IsStatusNotifierHostRegistered`。检测通过时创建原生托盘；服务未注册、库缺失、查询失败或图标创建失败时回退为悬浮球。托盘服务恢复后，「跟随系统」模式自动恢复托盘。
@@ -79,10 +85,24 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features
 cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --features custom-protocol -- -D warnings
 ```
 
-`.github/workflows/desktop.yml` 在 main 更新或 PR 时构建 Windows / Ubuntu 安装包，生成 CI artifacts。默认只执行 JavaScript 语法和轻量交互测试，Rust 直接进行一次 release 构建；省去重复的 fmt、Clippy 和测试编译。使用 Rust 依赖缓存、npm 预编译 Tauri CLI、取消同分支过期任务及免压缩上传来加快构建。需要完整 Rust 测试时，可手动运行工作流并勾选 `full_checks`。
+`.github/workflows/desktop.yml` 在 main 更新或 PR 时构建 Windows / Ubuntu 安装包，生成 CI artifacts。默认执行 JavaScript 语法、交互、版本与发布校验，并在 Linux 运行浏览器集成测试及截图；Rust 直接进行一次 release 构建。使用 Rust 依赖缓存、npm 预编译 Tauri CLI、取消同分支过期任务及免压缩上传来加快构建。需要完整 Rust 测试时，可手动运行工作流并勾选 `full_checks`。
 
 2026-10-03 [首次原生构建](https://github.com/JesmonX/Aieyes/actions/runs/37125369069) 已通过：Windows 生成 NSIS 安装包，Ubuntu 22.04 生成 deb 和 AppImage，两个平台的 JavaScript 语法与 4 项交互测试均通过。产物在运行页面的 Artifacts，保留 14 天。
 
 已在 macOS 宿主完成 30 项核心、3 项桌面、4 项 Node、4 项 Python 测试及 Clippy 严格检查。Windows 专用 `.cmd` 执行测试仅在 Windows 启用完整测试时运行，本次默认构建未运行完整 Rust 测试。
 
 目标平台验收：Windows 拖动与点击／右键、重启后位置、不同 DPI／多屏、隐藏窗口后的会话更新、npm CLI 查询；Linux 有／无托盘、托盘服务退出及恢复、X11／Wayland、退出应用；最后检查安装与卸载流程。本轮未完成图形会话的视觉和交互验收。
+
+
+## 本地浏览器验证
+
+需要 Node.js 24。测试使用内存中的 IPC 数据，不访问个人账户或服务器：
+
+```sh
+npm ci --prefix apps/desktop
+cd apps/desktop
+npx playwright install chromium
+npm run test:ui
+```
+
+截图输出至项目 `.local/ui-previews/`，包括浅深色概览、多选面板及最小尺寸窗口。完整发布流程见 [发布说明](releases.md)。

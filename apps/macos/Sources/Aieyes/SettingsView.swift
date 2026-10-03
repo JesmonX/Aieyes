@@ -59,7 +59,6 @@ struct SettingsView: View {
     }
     private var accounts: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("账户管理身份与限额；数据源管理本机或服务器上的记录目录。多个数据源可以关联同一账户。").font(.callout).foregroundStyle(.secondary).padding(.horizontal, 8)
             List {
                 ForEach(draft.accounts, id: \.key) { account in
                     HStack(spacing: 12) {
@@ -136,7 +135,6 @@ struct SettingsView: View {
                             }
                         }.padding(6)
                     }.frame(maxHeight: 125)
-                    Text("可同步价格、映射到已有模型，或手动填写缺失单价。保存后自动补计缺项。").font(.caption).foregroundStyle(.secondary)
                 }
             }
             HStack {
@@ -168,7 +166,7 @@ struct SettingsView: View {
             }
             Section("更新") {
                 TextField("GitHub 仓库", text: $draft.githubRepository, prompt: Text("owner/repo"))
-                HStack { Text("Aieyes 0.1.0").foregroundStyle(.secondary); Spacer(); Button("检查更新") { Task {
+                HStack { Text("Aieyes \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")").foregroundStyle(.secondary); Spacer(); Button("检查更新") { Task {
                     if await model.save(draft) {
                         do { let update: UpdateInfo = try await model.engine.call("updates.check"); model.message = "最新版本 \(update.version)"; if let url = URL(string: update.url), url.host == "github.com" { NSWorkspace.shared.open(url) } }
                         catch { model.message = error.localizedDescription }
@@ -257,7 +255,6 @@ struct AccountEditor: View {
                         Text("自动 · 优先本机").tag("")
                         ForEach(linked) { Text($0.name).tag($0.id) }
                     }
-                    Text("同一账户只显示一份限额。查询失败会尝试其他已关联的数据源；远程查询使用该数据源的代理前置命令。").font(.caption).foregroundStyle(.secondary)
                 }
                 if !["codex", "claude", "agy", "deepseek"].contains(account.provider) { Text("此 Agent 暂未接入自动限额查询，可先关闭限额，仅统计用量。").font(.caption).foregroundStyle(.secondary) }
                 if !linked.isEmpty { Section("关联的数据源") { ForEach(linked) { Text($0.name + " · " + $0.path).font(.callout) } } }
@@ -273,37 +270,41 @@ struct HostEditor: View {
     @State var host: Host
     var onSave: (Host) -> Void
     @State private var devices = ""
-    @State private var discovered: MetricSample?
+    @State private var discovered: [String: [DeviceMetric]] = [:]
     @State private var discovering = false
     @State private var discoveryError: String?
     private let discoveryEngine = EngineClient()
-    private func deviceRows(_ group: String) -> [DeviceMetric] {
-        guard let discovered else { return [] }
-        switch group { case "cpu": return discovered.cpu ?? []; case "gpu": return discovered.gpu ?? []; case "filesystems": return discovered.filesystems ?? []; case "disk": return discovered.disk ?? []; case "network": return discovered.network ?? []; default: return [] }
-    }
-    private func selection(_ group: String, _ id: String) -> Binding<Bool> {
-        Binding(get: {
-            let selected = devices.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            return !selected.contains { $0.hasPrefix(group + ":") } || selected.contains(group + ":" + id)
-        }, set: { enabled in
-            var selected = devices.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            if !selected.contains(where: { $0.hasPrefix(group + ":") }) { selected += deviceRows(group).map { group + ":" + $0.id } }
-            selected.removeAll { $0 == group + ":" + id }
-            if enabled { selected.append(group + ":" + id) }
-            // A group with no selected devices is explicitly hidden, rather than reverting to all.
-            if !selected.contains(where: { $0.hasPrefix(group + ":") }) { selected.append(group + ":__none__") }
-            devices = selected.joined(separator: ", ")
-        })
+    private let groups = [("cpu","CPU"),("memory","内存"),("gpu","GPU"),("filesystems","文件系统"),("disk","磁盘 I/O"),("network","网络")]
+    private let detailGroups = ["cpuTimes":"cpu", "memoryCache":"memory", "swap":"memory", "fsAvailable":"filesystems", "fsType":"filesystems", "inodes":"filesystems", "diskIops":"disk", "diskBusy":"disk", "networkTotals":"network", "networkErrors":"network", "gpuMemory":"gpu", "gpuThermals":"gpu"]
+    private var tokens: [String] { MonitorSelection.parse(devices) }
+    private func deviceOptions(_ group: String) -> [SelectionOption] {
+        let rows = (discovered[group] ?? []).filter { group != "cpu" || $0.id != "cpu" }
+        let known = Set(rows.map(\.id))
+        let missing = MonitorSelection.deviceIDs(tokens, group: group).subtracting(known).sorted()
+        return rows.map { device in SelectionOption(id: device.id, label: device.id + (device.type.map { " · " + $0 } ?? device.name.map { " · " + $0 } ?? "")) }
+            + missing.map { SelectionOption(id: $0, label: $0, unavailable: true) }
     }
     private func discover() async {
         discovering = true; defer { discovering = false }; discoveryError = nil
         do {
             let data = try JSONEncoder().encode(host)
             let object = try JSONSerialization.jsonObject(with: data)
-            discovered = try await discoveryEngine.call("hosts.discover", params: ["host": object])
+            let sample: MetricSample = try await discoveryEngine.call("hosts.discover", params: ["host": object])
+            for (group, rows) in [("cpu",sample.cpu),("gpu",sample.gpu),("filesystems",sample.filesystems),("disk",sample.disk),("network",sample.network)] {
+                if let rows { discovered[group] = rows }
+            }
+            let failed = sample.errors.keys.sorted().map { key in (groups.first { $0.0 == key }?.1 ?? key) + "读取失败" }
+            discoveryError = failed.isEmpty ? nil : failed.joined(separator: " · ")
         } catch { discoveryError = error.localizedDescription }
     }
-    let groups = [("cpu","CPU"),("memory","内存"),("gpu","GPU"),("filesystems","文件系统"),("disk","磁盘 I/O"),("network","网络")]
+    private func devicePicker(_ group: String, _ label: String) -> some View {
+        let options = deviceOptions(group)
+        return MultiSelectPicker(title: label, options: options,
+            selected: MonitorSelection.selected(tokens, group: group, available: Set(options.map(\.id))),
+            all: !tokens.contains { $0.hasPrefix(group + ":") }) { selected, all in
+                devices = MonitorSelection.write(tokens, group: group, selected: selected, all: all).joined(separator: ", ")
+            }.disabled(!host.metrics.contains(group))
+    }
     var body: some View {
         VStack(spacing: 0) {
             HStack { Text("SSH 主机").font(.title2.weight(.semibold)); Spacer() }.padding(22)
@@ -312,39 +313,30 @@ struct HostEditor: View {
                 TextField("SSH 别名或地址", text: $host.target, prompt: Text("my-server 或 user@host"))
                 TextField("端口", text: Binding(get: { host.port.map(String.init) ?? "" }, set: { host.port = Int($0) }), prompt: Text("跟随 SSH 配置"))
                 TextField("密钥路径", text: $host.identityFile, prompt: Text("跟随 SSH 配置"))
-                TextField("远程 shell", text: $host.shell)
-                Section("远程前置命令") {
-                    TextEditor(text: $host.preCommand).font(.system(.caption, design: .monospaced)).frame(height: 65)
-                    Text("例如：export HTTPS_PROXY=http://127.0.0.1:7890").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                }
-                Section("采集项目") {
-                    HStack { ForEach(groups, id: \.0) { key, label in Toggle(label, isOn: Binding(get: { host.metrics.contains(key) }, set: { on in if on { host.metrics.append(key) } else { host.metrics.removeAll { $0 == key } } })).toggleStyle(.checkbox) } }
-                    Button(discovering ? "读取设备中…" : "读取挂载点与设备") { Task { await discover() } }.disabled(discovering || host.target.isEmpty)
-                    if let discoveryError { Text(discoveryError).font(.caption).foregroundStyle(.orange) }
-                    ForEach(groups.filter { $0.0 != "memory" }, id: \.0) { group, label in
-                        if !deviceRows(group).isEmpty {
-                            DisclosureGroup(label) {
-                                ForEach(deviceRows(group).filter { $0.id != "cpu" || group != "cpu" }) { device in
-                                    Toggle(device.id + (device.type.map { " · " + $0 } ?? device.name.map { " · " + $0 } ?? ""), isOn: selection(group, device.id)).toggleStyle(.checkbox)
-                                }
-                                Button("显示全部") { devices = devices.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.hasPrefix(group + ":") }.joined(separator: ", ") }
-                            }
-                        }
+                Section {
+                    MultiSelectPicker(title: "采集项目", options: groups.map { SelectionOption(id: $0.0, label: $0.1) }, selected: Set(host.metrics)) { selected, _ in
+                        host.metrics = selected.sorted()
                     }
-                    TextField("指定设备", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/"))
-                    Text("留空显示全部设备；勾选后仅显示所选设备。也可手填，多个项目以逗号分隔。").font(.caption).foregroundStyle(.secondary)
                 }
-                Section("显示细分项") {
-                    LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading) {
-                        ForEach(Host.detailOptions, id: \.0) { key, title in
-                            Toggle(title, isOn: Binding(get: { host.shows(key) }, set: { on in
-                                var values = host.details ?? Host.detailOptions.map { $0.0 }; values.removeAll { $0 == key }; if on { values.append(key) }; host.details = values
-                            })).toggleStyle(.checkbox)
-                        }
-                    }
+                Section("设备") {
+                    Button(discovering ? "读取中…" : "读取设备") { Task { await discover() } }.disabled(discovering || host.target.isEmpty)
+                    if let discoveryError { Text(discoveryError).font(.system(size: 13)).foregroundStyle(.orange) }
+                    ForEach(groups.filter { $0.0 != "memory" }, id: \.0) { group, label in devicePicker(group, label) }
+                }
+                Section {
+                    MultiSelectPicker(title: "显示细分项", options: Host.detailOptions.filter { host.metrics.contains(detailGroups[$0.0] ?? "") }.map { SelectionOption(id: $0.0, label: $0.1) }, selected: Set(host.details ?? Host.detailOptions.map { $0.0 })) { selected, _ in
+                        host.details = selected.sorted()
+                    }.disabled(host.metrics.isEmpty)
+                }
+                DisclosureGroup("高级设置") {
+                    TextField("远程 shell", text: $host.shell)
+                    Text("远程前置命令").foregroundStyle(.secondary)
+                    TextEditor(text: $host.preCommand).font(.system(size: 13, design: .monospaced)).frame(height: 65)
+                    TextField("设备表达式", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/"))
+                    Text("设备表达式留空时显示全部。").font(.system(size: 13)).foregroundStyle(.secondary)
                 }
             }.formStyle(.grouped)
-            HStack { Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Button("完成") { host.devices = devices.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }; if host.name.isEmpty { host.name = host.target }; onSave(host) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty) }.padding(20)
+            HStack { Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Button("完成") { host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; onSave(host) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty) }.padding(20)
         }.frame(width: 620, height: 650).onAppear { devices = host.devices.joined(separator: ", ") }
     }
 }

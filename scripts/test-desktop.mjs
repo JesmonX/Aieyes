@@ -7,7 +7,8 @@ const read = name => readFileSync(new URL(`../apps/desktop/web/${name}`, import.
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function harness(file, initial = {}) {
   const elements = new Map(), events = new Map(), calls = [], notices = [];
-  let dragCount = 0;
+  let dragCount = 0, maximized = false;
+  const windowCalls = [];
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
       textContent:'', innerHTML:'', value:'', hidden:false, dataset:{}, listeners:new Map(),
@@ -18,15 +19,23 @@ function harness(file, initial = {}) {
     return elements.get(id);
   }
   const info = {mode:'auto',effectiveMode:'floating',platform:'windows',summary:'思考中 · 2 个会话',phase:'thinking',activeCount:2,sessions:[],page:'agent',...initial};
-  const document = {body:element('body'),activeElement:null,querySelector:element};
+  const document = {body:element('body'),documentElement:element('html'),activeElement:null,querySelector:element};
+  const native = {
+    async startDragging(){dragCount++;},
+    async isMaximized(){return maximized;},
+    async toggleMaximize(){maximized=!maximized;windowCalls.push('maximize');},
+    async minimize(){windowCalls.push('minimize');},
+    async close(){windowCalls.push('close');},
+    async onResized(fn){events.set('resize',fn);return ()=>{};},
+  };
   const window = {__TAURI__:{
     core:{async invoke(command, args) { calls.push({command,args}); return info; }},
     event:{async listen(name, fn) { events.set(name, fn); return () => {}; }},
-    window:{getCurrentWindow:()=>({async startDragging(){dragCount++;}})},
+    window:{getCurrentWindow:()=>native},
   }};
   const state = {page:'agent',settingsTab:'accounts'};
   vm.runInNewContext(read(file), {window,document,state,notify:e=>notices.push(e),render(){},console}, {filename:file});
-  return {window,document,element,events,calls,notices,state,info,get dragCount(){return dragCount;}};
+  return {window,document,element,events,calls,notices,state,info,windowCalls,native,get dragCount(){return dragCount;}};
 }
 
 test('floating ball receives live status and opens the details window on click', async () => {
@@ -76,4 +85,20 @@ test('main window escapes source names and can navigate from the native menu', a
   assert.equal(mode.value,'auto');
   assert.equal(mode.disabled,false);
   assert.equal(h.notices.length,1);
+});
+test('Windows titlebar minimizes, restores, and requests close rather than quit', async () => {
+  const h = harness('desktop.js',{material:'mica'}); await flush();
+  assert.equal(h.element('#titlebar').hidden,false);
+  assert.equal(h.document.documentElement.dataset.material,'mica');
+  await h.element('#window-minimize').onclick();
+  await h.element('#window-maximize').onclick();
+  assert.equal(h.element('#window-maximize')['aria-label'],'还原');
+  await h.element('#window-maximize').onclick();
+  assert.equal(h.element('#window-maximize')['aria-label'],'最大化');
+  await h.element('#window-close').onclick();
+  assert.deepEqual(h.windowCalls,['minimize','maximize','maximize','close']);
+  assert.equal(h.calls.some(c=>c.args?.action==='quit'),false);
+  h.native.close = async () => {throw new Error('关闭失败');};
+  await h.element('#window-close').onclick();
+  assert.match(h.notices.at(-1),/关闭失败/);
 });

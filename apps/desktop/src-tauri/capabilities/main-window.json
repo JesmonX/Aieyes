@@ -1,0 +1,6 @@
+{
+  "identifier": "main-window",
+  "description": "Main window titlebar controls",
+  "windows": ["main"],
+  "permissions": ["core:window:allow-minimize", "core:window:allow-toggle-maximize", "core:window:allow-close"]
+}

@@ -15,5 +15,8 @@ tauri = { version = "2.11.5", features = ["tray-icon"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 libloading = "0.7.4"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+window-vibrancy = "0.6.0"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

@@ -1,0 +1,6 @@
+{
+  "name": "aieyes-desktop-checks",
+  "private": true,
+  "scripts": { "test:ui": "node ../../scripts/test-ui.cjs" },
+  "devDependencies": { "playwright": "1.62.0" }
+}

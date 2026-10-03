@@ -1,0 +1,25 @@
+:root {
+  --font-ui: "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-code: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --ink: #233047;
+  --muted: #617088;
+  --accent: #5265d6;
+  --panel: rgba(255,255,255,.78);
+  --solid: #f6f8fc;
+  --soft: rgba(92,112,209,.09);
+  --border: rgba(80,100,145,.15);
+  --shadow: 0 5px 24px rgba(35,52,91,.045);
+  --radius: 18px;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  color: var(--ink);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --ink:#e5eaf5; --muted:#a8b3c8; --accent:#a5b5ff; --panel:rgba(35,44,62,.8); --solid:#1c2433; --soft:rgba(147,167,248,.12); --border:rgba(174,192,229,.15); --shadow:0 5px 24px rgba(0,0,0,.08); color-scheme:dark; }
+}
+@media (prefers-reduced-transparency: reduce) { :root { --panel:var(--solid); } }
+@media (forced-colors: active) { :root { --ink:CanvasText; --muted:CanvasText; --accent:LinkText; --panel:Canvas; --solid:Canvas; --soft:Canvas; --border:ButtonText; --shadow:none; } }

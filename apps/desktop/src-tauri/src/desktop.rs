@@ -52,6 +52,7 @@ pub struct Desktop {
     menu: Menu<tauri::Wry>,
     status_item: MenuItem<tauri::Wry>,
     tray_available: AtomicBool,
+    material: &'static str,
 }
 
 // Never hide the only usable entry point when tray support is absent.
@@ -59,7 +60,21 @@ fn use_floating(mode: Mode, windows: bool, tray_available: bool) -> bool {
     !tray_available || mode == Mode::Floating || (mode == Mode::Auto && windows)
 }
 
+fn main_window_material(_app: &tauri::App) -> &'static str {
+    #[cfg(target_os = "windows")]
+    if let Some(window) = _app.get_webview_window("main") {
+        let dark = window.theme().ok().map(|theme| theme == tauri::Theme::Dark);
+        // The direct API reports unsupported Windows versions; Tauri's effects list
+        // does not fall through on errors. Keep the web surface opaque on failure.
+        if window_vibrancy::apply_mica(&window, dark).is_ok() {
+            return "mica";
+        }
+    }
+    "opaque"
+}
+
 pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let material = main_window_material(app);
     let path = root.join("desktop.json");
     let preferences = std::fs::read(&path)
         .ok()
@@ -103,6 +118,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         menu,
         status_item,
         tray_available: AtomicBool::new(false),
+        material,
     });
     // The native Swift app remains the macOS entry point; opaque mode permits Tauri development there.
     let floating =
@@ -303,7 +319,7 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
     let desktop = app.state::<Desktop>();
     let state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
     Ok(json!({
-        "platform": std::env::consts::OS, "mode": state.preferences.mode,
+        "platform": std::env::consts::OS, "material": desktop.material, "mode": state.preferences.mode,
         "effectiveMode": if state.floating { "floating" } else { "tray" },
         "trayAvailable": desktop.tray_available.load(Ordering::Relaxed), "reason": state.reason,
         "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
@@ -430,6 +446,10 @@ fn restore_position(app: &AppHandle) -> tauri::Result<()> {
 
 pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     match event {
+        #[cfg(target_os = "windows")]
+        tauri::WindowEvent::ThemeChanged(theme) if window.label() == "main" => {
+            let _ = window_vibrancy::apply_mica(window, Some(*theme == tauri::Theme::Dark));
+        }
         tauri::WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
             if window.label() == "main" {
@@ -522,7 +542,18 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .extend(overlay["bundle"].as_object().unwrap().clone());
-            serde_json::from_value::<tauri::Config>(merged).unwrap();
+            if let Some(app) = overlay.get("app") {
+                merged["app"]
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(app.as_object().unwrap().clone());
+            }
+            let parsed = serde_json::from_value::<tauri::Config>(merged).unwrap();
+            if overlay.get("app").is_some() {
+                assert!(parsed.app.windows[0].transparent);
+                assert!(!parsed.app.windows[0].decorations);
+                assert_eq!(parsed.app.windows[0].label, "main");
+            }
         }
     }
     #[test]

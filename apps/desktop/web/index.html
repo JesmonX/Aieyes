@@ -1,6 +1,25 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aieyes</title><link rel="stylesheet" href="style.css"></head>
-<body><div class="shell">
-<aside><div class="brand"><span class="eye">◉</span><div>Aieyes<small>Agent 与服务器</small></div></div><nav><button class="active" data-page="agent">◈ <span>Agent 概览</span></button><button data-page="servers">▤ <span>服务器</span></button><button data-page="settings">⚙ <span>设置</span></button></nav><div class="aside-foot"><span class="dot"></span><span id="activity">正在加载</span><small>0.1.0</small></div></aside>
-<main><header><div><p class="eyebrow">AIEYES / ACTIVITY</p><h1 id="title">Agent 概览</h1></div><div class="actions"><button id="scan">同步记录</button><button id="quota">刷新限额</button></div></header><div id="message" role="status" hidden></div><details id="live-sessions"><summary><span class="dot"></span> <span id="session-summary">正在读取会话状态…</span><span class="muted">本机 Codex</span></summary><div id="session-list"></div><p id="session-warning" class="error" hidden>部分日志不可读，状态可能不完整。</p><p class="muted tiny">仅读取已启用的本机 Codex 日志。3 分钟无更新标记为待确认；日志状态不代表进程存活。</p></details><section id="content"></section></main>
-</div><dialog id="editor"><form id="editor-form"><div class="dialog-head"><h2 id="editor-title"></h2><button type="button" id="close-editor" aria-label="关闭">×</button></div><div id="editor-fields"></div><div class="dialog-foot"><button type="button" id="cancel-editor">取消</button><button class="primary" type="submit">保存</button></div></form></dialog><script src="app.js"></script><script src="desktop.js"></script></body></html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aieyes</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="style.css"></head>
+<body>
+<div id="titlebar" hidden><div class="titlebar-drag" data-tauri-drag-region>Aieyes</div><div class="window-controls"><button id="window-minimize" aria-label="最小化" title="最小化"><svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg></button><button id="window-maximize" aria-label="最大化" title="最大化"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9"/></svg></button><button id="window-close" aria-label="关闭窗口" title="关闭窗口"><svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg></button></div></div>
+<div class="shell">
+  <aside>
+    <div class="brand"><span class="eye"><svg viewBox="0 0 24 24"><path d="M2 12C7 3 17 3 22 12C17 21 7 21 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span><div>Aieyes</div></div>
+    <nav aria-label="主导航">
+      <button class="active" data-page="agent" title="Agent 概览"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg><span>Agent 概览</span></button>
+      <button data-page="servers" title="服务器"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M12 6.5h5M12 17.5h5"/></svg><span>服务器</span></button>
+      <button data-page="settings" title="设置"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg><span>设置</span></button>
+    </nav>
+    <div class="aside-foot"><span class="dot"></span><span id="activity">正在加载</span><small id="app-version"></small></div>
+  </aside>
+  <main>
+    <header><h1 id="title">Agent 概览</h1><div class="actions"><button id="scan">同步记录</button><button id="quota">刷新限额</button></div></header>
+    <div id="message" role="status" hidden></div>
+    <details id="live-sessions"><summary><span class="dot"></span><span id="session-summary">正在读取会话状态…</span><span class="muted" title="已启用的本机 Codex 日志状态">本机 Codex</span></summary><div id="session-list"></div><p id="session-warning" class="error" hidden>部分日志不可读，状态可能不完整。</p></details>
+    <section id="content"></section>
+  </main>
+</div>
+<dialog id="editor"><form id="editor-form"><div class="dialog-head"><h2 id="editor-title"></h2><button type="button" id="close-editor" aria-label="关闭">×</button></div><div id="editor-fields"></div><div class="dialog-foot"><button type="button" id="cancel-editor">取消</button><button class="primary" type="submit">保存</button></div></form></dialog>
+<script src="multiselect.js"></script><script src="app.js"></script><script src="desktop.js"></script>
+</body></html>

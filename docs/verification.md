@@ -1,5 +1,14 @@
 # 验证记录 · 2026-10-03
 
+## Release 与界面改进
+
+- 新增四任务 Release 矩阵，交付 macOS Intel / Apple Silicon DMG、Windows NSIS、Linux DEB / AppImage；只有全部检查通过且附件完整才公开 Release。actionlint 检查两个工作流通过。
+- Node 12 项测试、Python 发布校验 3 项、采集器 4 项通过；覆盖选项隔离、搜索批量操作、清空持久化、窗口按钮、公开版本防覆盖、上传失败保留草稿及重跑。
+- Rust 核心 30 项测试通过。本机 `/etc/profile.d/clash.sh` 含不兼容 dash 的语法，因此 shell 回归在临时 mount namespace 中屏蔽该宿主脚本后通过；没有修改主机配置或测试代码。
+- Chromium 集成回归通过，覆盖 256 核心、100 挂载点、暂不可用设备、禁用类别保留选项、取消编辑、读取失败、Esc 焦点、弹出层边界、高对比度及 150%/200% 缩放。浅深色截图位于 `.local/ui-previews/`。
+- Windows GNU 目标的 Tauri 编译检查通过，包括 Mica、平台窗口配置和主窗口权限；使用临时目录中的交叉工具链，只做编译检查，不代表 Windows 安装或实机运行通过。
+- 当前宿主为 Ubuntu 20.04，缺少 WebKitGTK 4.1，GLib 版本不足；无法在本机完成 Linux 桌面构建。宿主无 Swift，macOS 编译、原生选择模型测试、DMG/签名检查已接入 macOS CI，尚未在本轮运行。新工作流尚未实际发布 Release；三平台安装卸载与 Windows 原生材质需实机验收。
+
 ## Windows / Linux 桌面支持
 
 - Windows 默认悬浮球；Linux 检测托盘宿主后优先使用动态状态栏，检测失败或服务退出时回退悬浮球，服务恢复后可自动恢复托盘。通用设置支持手动切换。
