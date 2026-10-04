@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aieyes</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="style.css"></head>
 <body>
-<div id="titlebar" hidden><div class="titlebar-drag" data-tauri-drag-region>Aieyes</div><div class="window-controls"><button id="window-minimize" aria-label="最小化" title="最小化"><svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg></button><button id="window-maximize" aria-label="最大化" title="最大化"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9"/></svg></button><button id="window-close" aria-label="关闭窗口" title="关闭窗口"><svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg></button></div></div>
+<div id="titlebar" hidden><div class="titlebar-drag" data-tauri-drag-region><span class="titlebar-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12C7 3 17 3 22 12C17 21 7 21 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span><span class="titlebar-title">Aieyes</span></div><div class="window-controls"><button id="window-minimize" aria-label="最小化" title="最小化"><svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg></button><button id="window-maximize" aria-label="最大化" title="最大化"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9"/></svg></button><button id="window-close" aria-label="关闭窗口" title="关闭窗口"><svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg></button></div></div>
 <div class="shell">
   <aside>
     <div class="brand"><span class="eye"><svg viewBox="0 0 24 24"><path d="M2 12C7 3 17 3 22 12C17 21 7 21 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span><div>Aieyes</div></div>
@@ -14,13 +14,13 @@
     <div class="aside-foot"><span class="dot"></span><span id="activity">正在加载</span><small id="app-version"></small></div>
   </aside>
   <main>
-    <header><h1 id="title">Agent 概览</h1><div class="actions"><button id="scan">同步记录</button><button id="quota">刷新限额</button></div></header>
+    <header><h1 id="title">Agent 概览</h1><div class="actions"><button id="scan" title="立即导入最新的日志记录">同步记录</button><button id="quota" title="重新查询各账户的实时限额">刷新限额</button></div></header>
     <div id="message" role="status" hidden></div>
     <details id="live-sessions"><summary><span class="dot"></span><span id="session-summary">正在读取会话状态…</span><span class="muted" title="已启用的本机 Codex 日志状态">本机 Codex</span></summary><div id="session-list"></div><p id="session-warning" class="error" hidden>部分日志不可读，状态可能不完整。</p></details>
     <section id="content"></section>
   </main>
 </div>
 <div id="editor-backdrop" hidden></div>
-<dialog id="editor" aria-labelledby="editor-title" aria-describedby="editor-error"><form id="editor-form"><div class="dialog-head"><h2 id="editor-title"></h2><button type="button" id="close-editor" aria-label="关闭">×</button></div><p id="editor-error" class="error" role="alert" hidden></p><div id="editor-fields"></div><div class="dialog-foot"><button type="button" id="cancel-editor">取消</button><button class="primary" type="submit">保存</button></div></form></dialog>
-<script src="multiselect.js"></script><script src="app.js"></script><script src="desktop.js"></script>
+<dialog id="editor" aria-labelledby="editor-title" aria-describedby="editor-error"><form id="editor-form"><div class="dialog-head"><h2 id="editor-title"></h2><button type="button" id="close-editor" aria-label="关闭" title="关闭"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8"/></svg></button></div><p id="editor-error" class="error" role="alert" hidden></p><div id="editor-fields"></div><div class="dialog-foot"><button type="button" id="cancel-editor">取消</button><button class="primary" type="submit">保存</button></div></form></dialog>
+<script src="tooltip.js"></script><script src="multiselect.js"></script><script src="app.js"></script><script src="desktop.js"></script>
 </body></html>

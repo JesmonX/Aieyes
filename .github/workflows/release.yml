@@ -81,6 +81,7 @@ jobs:
           cargo test --workspace --locked
           python scripts/test-collectors.py
           node --check apps/desktop/web/app.js
+          node --check apps/desktop/web/tooltip.js
           node --check apps/desktop/web/multiselect.js
           node --check apps/desktop/web/desktop.js
           node --check apps/desktop/web/floating.js

@@ -1,8 +1,77 @@
-:root{color-scheme:light dark;background:transparent;--accent:#7a879d;--surface:#f7f9ff;--ink:#233047}
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;user-select:none}body{display:grid;place-items:center}
-#ball{position:relative;width:72px;height:72px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:2px solid var(--accent);border-radius:50%;background:color-mix(in srgb,var(--surface) 94%,transparent);color:var(--accent);box-shadow:0 3px 8px #14224230,inset 0 0 14px color-mix(in srgb,var(--accent) 12%,transparent);padding:0;cursor:grab;touch-action:none;font:inherit}
-#ball:hover{border-width:3px}#ball:active{cursor:grabbing}#ball:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.eye{width:34px;height:24px;pointer-events:none}#phase{font-size:13px;line-height:18px;color:var(--ink);pointer-events:none;white-space:nowrap}#count{position:absolute;right:-3px;top:-3px;min-width:21px;height:21px;padding:0 4px;border-radius:12px;background:var(--accent);color:white;font-size:11px;font-weight:650;display:grid;place-items:center;border:2px solid var(--surface)}[hidden]{display:none!important}
-body[data-phase=working]{--accent:#198c7b}body[data-phase=thinking]{--accent:#9461c9}body[data-phase=tool]{--accent:#427fd4}body[data-phase=complete]{--accent:#26945b}body[data-phase=interrupted]{--accent:#bd8429}
-body[data-active=true] .eye{animation:breathe 2s ease-in-out infinite}@keyframes breathe{50%{opacity:.45;transform:scale(.94)}}
-@media(prefers-color-scheme:dark){:root{--surface:#202b3d;--ink:#edf2fc;--accent:#a0adc2}body[data-phase=working]{--accent:#59c4ad}body[data-phase=thinking]{--accent:#c094eb}body[data-phase=tool]{--accent:#8cb7ff}body[data-phase=complete]{--accent:#69cf94}body[data-phase=interrupted]{--accent:#edba67}#count{color:#172134}}
-@media(prefers-reduced-motion:reduce){body[data-active=true] .eye{animation:none}}
+/* The floating ball: a small frosted sphere. The window is transparent and only
+   88px wide, so surfaces stay near-opaque rather than relying on vibrancy. */
+:root{
+  color-scheme:light dark; background:transparent;
+  --accent:#7a879d; --ink:#243049;
+  --ball-1:#ffffff; --ball-2:#eef2fb;
+  --badge-ink:#ffffff;
+  --ease:cubic-bezier(.22,.61,.36,1);
+  --ease-spring:cubic-bezier(.34,1.4,.44,1);
+}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;user-select:none}
+body{
+  display:grid;place-items:center;
+  font-family:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"PingFang SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+#ball{
+  position:relative;width:72px;height:72px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  border:0;border-radius:50%;padding:0;color:var(--accent);font:inherit;cursor:grab;touch-action:none;
+  background:radial-gradient(circle at 50% 18%,var(--ball-1),var(--ball-2) 72%);
+  box-shadow:
+    inset 0 0 0 1.5px color-mix(in srgb,var(--accent) 46%,transparent),
+    inset 0 1px 0 rgba(255,255,255,.85),
+    0 1px 2px rgba(20,34,66,.16),
+    0 14px 26px -14px rgba(20,34,66,.5);
+  transition:transform .2s var(--ease-spring),box-shadow .24s var(--ease);
+}
+#ball:hover{transform:scale(1.05);box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 62%,transparent),inset 0 1px 0 rgba(255,255,255,.9),0 2px 4px rgba(20,34,66,.18),0 20px 34px -16px rgba(20,34,66,.55)}
+#ball:active{cursor:grabbing;transform:scale(.96)}
+#ball:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.halo{position:absolute;inset:-7px;border-radius:50%;pointer-events:none;opacity:.5;transition:opacity .3s var(--ease);
+  background:radial-gradient(circle,color-mix(in srgb,var(--accent) 32%,transparent) 0%,transparent 68%)}
+.eye{width:34px;height:24px;pointer-events:none;transition:transform .3s var(--ease)}
+#phase{font-size:12.5px;line-height:17px;font-weight:500;letter-spacing:.1px;color:var(--ink);pointer-events:none;white-space:nowrap}
+#count{
+  position:absolute;right:-4px;top:-4px;min-width:22px;height:22px;padding:0 5px;border-radius:11px;
+  display:grid;place-items:center;font-size:11px;font-weight:650;color:var(--badge-ink);
+  background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 82%,white),var(--accent));
+  border:1.5px solid rgba(255,255,255,.9);box-shadow:0 2px 6px rgba(20,34,66,.3);
+  animation:badge-pop .3s var(--ease-spring);
+}
+@keyframes badge-pop{from{transform:scale(.45);opacity:0}to{transform:scale(1);opacity:1}}
+[hidden]{display:none!important}
+
+body[data-phase=working]{--accent:#12967f}
+body[data-phase=thinking]{--accent:#8b52c6}
+body[data-phase=tool]{--accent:#3a76d8}
+body[data-phase=complete]{--accent:#1f8f57}
+body[data-phase=interrupted]{--accent:#b1761f}
+
+body[data-active=true] .eye{animation:breathe 2.4s ease-in-out infinite}
+body[data-active=true] .halo{animation:halo 2.4s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(.93)}}
+@keyframes halo{0%,100%{opacity:.5;transform:scale(1)}50%{opacity:.95;transform:scale(1.07)}}
+
+@media (prefers-color-scheme:dark){
+  :root{--ball-1:#323d55;--ball-2:#1b2334;--ink:#eef2fc;--accent:#9aa7bd;--badge-ink:#131a2a}
+  body[data-phase=working]{--accent:#59c4ad}
+  body[data-phase=thinking]{--accent:#c094eb}
+  body[data-phase=tool]{--accent:#8cb7ff}
+  body[data-phase=complete]{--accent:#69cf94}
+  body[data-phase=interrupted]{--accent:#edba67}
+  #ball{box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--accent) 52%,transparent),inset 0 1px 0 rgba(255,255,255,.14),0 2px 6px rgba(0,0,0,.5),0 18px 30px -16px rgba(0,0,0,.75)}
+  #ball:hover{box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 70%,transparent),inset 0 1px 0 rgba(255,255,255,.2),0 3px 8px rgba(0,0,0,.55),0 24px 38px -18px rgba(0,0,0,.8)}
+  #count{border-color:rgba(255,255,255,.28)}
+}
+@media (prefers-reduced-motion:reduce){
+  #ball,#ball:hover,#ball:active{transform:none;transition:none}
+  body[data-active=true] .eye,body[data-active=true] .halo{animation:none}
+  #count{animation:none}
+}
+@media (prefers-reduced-transparency:reduce){
+  #ball{background:linear-gradient(180deg,var(--ball-1),var(--ball-2))}
+  .halo{display:none}
+}

@@ -41,7 +41,7 @@ open dist/Aieyes.app
 | 远程历史、前置命令 | 限额查询可单独配置代理前置命令；远端只回传统计字段 |
 | 代理 | HTTP/HTTPS/SOCKS5、来源覆盖；macOS 静态系统代理，其他平台代理环境变量；PAC 和代理认证界面尚未实现 |
 | GitHub 更新 | 检查 Release；自动下载安装与签名发布尚未实现 |
-| Windows/Linux | 已实现悬浮球、动态托盘、自动回退及本机会话状态；Windows NSIS、Linux deb/AppImage 原生 CI 构建通过；桌面交互和安装卸载待实测 |
+| Windows/Linux | 已实现悬浮球、动态托盘、自动回退及本机会话状态；界面为半透明圆润风格，含统一动效与悬停提示（见 [Windows 界面刷新](docs/windows-ui-refresh.md)）；Windows NSIS、Linux deb/AppImage 原生 CI 构建通过；桌面交互和安装卸载待实测 |
 
 服务器通过 CPU、内存、GPU 圆环和设备状态条展示实时资源，尚未保存长期采样历史。Token 历史保存在 SQLite 中。
 
@@ -60,6 +60,7 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 scripts/test-collectors.py
 node --check apps/desktop/web/app.js
+node --check apps/desktop/web/tooltip.js
 sh scripts/build-macos.sh debug
 ```
 
