@@ -1,4 +1,6 @@
-use crate::{models::ProxyConfig, process};
+use crate::models::ProxyConfig;
+#[cfg(target_os = "macos")]
+use crate::process;
 use anyhow::{Context, Result};
 use std::{process::Command, time::Duration};
 
@@ -51,6 +53,30 @@ pub fn client(proxy: &ProxyConfig) -> Result<reqwest::blocking::Client> {
         _ => {}
     }
     Ok(builder.build()?)
+}
+
+pub fn open_release_page() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("rundll32.exe");
+    #[cfg(target_os = "windows")]
+    command.arg("url.dll,FileProtocolHandler");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+    command.arg("https://github.com/JesmonX/Aieyes/releases/latest");
+    crate::process::prepare(&mut command);
+    // Only a fixed product URL is passed to the OS; no shell or user arguments.
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("无法打开发布页")?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 pub fn apply_env(command: &mut Command, proxy: &ProxyConfig) {
     let proxy = effective_proxy(proxy);

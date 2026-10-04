@@ -39,6 +39,9 @@ impl Tokens {
 #[serde(rename_all = "camelCase")]
 pub struct UsageEvent {
     pub id: String,
+    // Only the parser needs this key; old persisted events remain readable.
+    #[serde(skip)]
+    pub import_identity: Option<String>,
     pub source_id: String,
     pub account_id: String,
     pub provider: String,
@@ -99,6 +102,7 @@ pub struct Account {
     pub provider: String,
     pub quota_enabled: bool,
     pub quota_source_id: Option<String>,
+    pub archived: bool,
 }
 impl Default for Account {
     fn default() -> Self {
@@ -108,6 +112,7 @@ impl Default for Account {
             provider: "codex".into(),
             quota_enabled: true,
             quota_source_id: None,
+            archived: false,
         }
     }
 }
@@ -229,7 +234,10 @@ impl Settings {
     pub fn quota_enabled(&self, source: &Source) -> bool {
         !source.account_id.is_empty()
             && self.accounts.iter().any(|a| {
-                a.id == source.account_id && a.provider == source.provider && a.quota_enabled
+                a.id == source.account_id
+                    && a.provider == source.provider
+                    && a.quota_enabled
+                    && !a.archived
             })
     }
 }

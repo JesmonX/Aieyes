@@ -19,12 +19,14 @@ impl Store {
         CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,provider TEXT NOT NULL,account_id TEXT NOT NULL,model TEXT NOT NULL,stamp INTEGER NOT NULL,payload TEXT NOT NULL,cost REAL NOT NULL,priced_tokens INTEGER NOT NULL,price TEXT);
         CREATE INDEX IF NOT EXISTS events_stamp ON events(stamp);
         CREATE TABLE IF NOT EXISTS event_sources(event_id TEXT NOT NULL REFERENCES events(id),source_id TEXT NOT NULL,PRIMARY KEY(event_id,source_id));
+        CREATE INDEX IF NOT EXISTS event_sources_source ON event_sources(source_id,event_id);
+        CREATE TABLE IF NOT EXISTS source_identities(source_id TEXT NOT NULL,provider TEXT NOT NULL,account_id TEXT NOT NULL,PRIMARY KEY(source_id,provider,account_id));
         CREATE TABLE IF NOT EXISTS files(source_id TEXT NOT NULL,path TEXT NOT NULL,signature TEXT NOT NULL,offset INTEGER NOT NULL,state TEXT NOT NULL,PRIMARY KEY(source_id,path));
         CREATE TABLE IF NOT EXISTS quotas(account_key TEXT PRIMARY KEY,payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS source_status(source_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS price_history(id INTEGER PRIMARY KEY,model_id TEXT NOT NULL,fetched_at INTEGER NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS price_model ON price_history(model_id,fetched_at);
-        PRAGMA user_version=1;")?;
+        PRAGMA user_version=2;")?;
         Ok(Self { db })
     }
     pub fn settings(&self) -> Result<Settings> {
@@ -152,6 +154,11 @@ impl Store {
                     "代理支持 HTTP、HTTPS 与 SOCKS5"
                 );
                 anyhow::ensure!(
+                    url.host_str().is_some_and(|host| !host.is_empty()),
+                    "请输入代理 Host"
+                );
+                anyhow::ensure!(url.port() != Some(0), "请输入有效代理端口");
+                anyhow::ensure!(
                     url.username().is_empty() && url.password().is_none(),
                     "请使用本机代理端口"
                 );
@@ -174,20 +181,47 @@ impl Store {
         let tx = self.db.unchecked_transaction()?;
         if let Some(previous) = previous {
             let previous: Settings = serde_json::from_str(&previous)?;
+            // Archiving retains the namespace used to deduplicate imported records.
+            // Protect history from destructive deletion by older clients as well.
+            for account in &previous.accounts {
+                if !s
+                    .accounts
+                    .iter()
+                    .any(|a| a.id == account.id && a.provider == account.provider)
+                {
+                    let has_history: bool = tx.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM events WHERE provider=?1 AND account_id=?2)",
+                        params![account.provider, account.id],
+                        |row| row.get(0),
+                    )?;
+                    anyhow::ensure!(!has_history, "该账户存在历史记录，请归档账户以保留历史");
+                }
+            }
             for source in &s.sources {
                 if let Some(old) = previous.sources.iter().find(|old| old.id == source.id) {
-                    if old.account_id != source.account_id || old.provider != source.provider {
+                    if old.provider != source.provider {
                         tx.execute("DELETE FROM event_sources WHERE source_id=?1", [&source.id])?;
                         tx.execute("DELETE FROM events WHERE NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=events.id)", [])?;
                         tx.execute("DELETE FROM files WHERE source_id=?1", [&source.id])?;
                         tx.execute("DELETE FROM source_status WHERE source_id=?1", [&source.id])?;
-                    } else if old.path != source.path || old.host_id != source.host_id {
-                        tx.execute("DELETE FROM files WHERE source_id=?1", [&source.id])?;
+                    } else {
+                        if old.account_id != source.account_id {
+                            // Attribution changes apply to new records only. Remember old
+                            // namespaces so full SSH reads and file rescans retain identity.
+                            tx.execute(
+                                "INSERT OR IGNORE INTO source_identities VALUES(?1,?2,?3)",
+                                params![old.id, old.provider, old.account_id],
+                            )?;
+                        }
+                        if old.path != source.path || old.host_id != source.host_id {
+                            tx.execute("DELETE FROM files WHERE source_id=?1", [&source.id])?;
+                        }
                     }
                 }
             }
         }
         tx.execute("INSERT INTO kv VALUES('settings',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[serde_json::to_string(s)?])?;
+        self.reprice_in_transaction(s, true)?;
         tx.commit()?;
         Ok(())
     }
@@ -215,21 +249,44 @@ impl Store {
         prices: &[ModelPrice],
         settings: &Settings,
     ) -> Result<bool> {
+        let mut next = e.clone();
+        if let Some(identity) = &e.import_identity {
+            let mut query = self.db.prepare("SELECT account_id FROM source_identities WHERE source_id=?1 AND provider=?2 ORDER BY rowid")?;
+            let scopes = query
+                .query_map(params![e.source_id, e.provider], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            // Only reuse an event previously observed by this source. Unrelated
+            // no-account sources and separate accounts keep independent identities.
+            for account_id in scopes {
+                let id = crate::usage::event_id(&e.provider, &e.source_id, &account_id, identity);
+                let observed: bool = self.db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM event_sources WHERE event_id=?1 AND source_id=?2)",
+                    params![id, e.source_id],
+                    |row| row.get(0),
+                )?;
+                if observed {
+                    next.id = id;
+                    break;
+                }
+            }
+        }
         let old: Option<(String, Option<String>)> = self
             .db
             .query_row(
                 "SELECT payload,price FROM events WHERE id=?1",
-                [&e.id],
+                [&next.id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let mut next = e.clone();
         let frozen: Option<ModelPrice> = old
             .as_ref()
             .and_then(|(_, p)| p.as_ref())
             .and_then(|p| serde_json::from_str(p).ok());
         if let Some((old, _)) = &old {
             let prior: UsageEvent = serde_json::from_str(old)?;
+            next.account_id = prior.account_id;
             next.timestamp = next.timestamp.min(prior.timestamp);
             next.source_id = prior.source_id;
             next.tokens.input = next.tokens.input.max(prior.tokens.input);
@@ -246,11 +303,17 @@ impl Store {
             params![next.id,next.provider,next.account_id,next.model,next.timestamp,serde_json::to_string(&next)?,cost,covered,price.map(serde_json::to_string).transpose()?])?;
         self.db.execute(
             "INSERT OR IGNORE INTO event_sources VALUES(?1,?2)",
-            params![e.id, e.source_id],
+            params![next.id, e.source_id],
         )?;
         Ok(old.is_none())
     }
     pub fn reprice(&self, settings: &Settings, only_unpriced: bool) -> Result<u64> {
+        let tx = self.db.unchecked_transaction()?;
+        let count = self.reprice_in_transaction(settings, only_unpriced)?;
+        tx.commit()?;
+        Ok(count)
+    }
+    fn reprice_in_transaction(&self, settings: &Settings, only_unpriced: bool) -> Result<u64> {
         let prices = self.prices()?;
         let mut query = self
             .db
@@ -265,7 +328,6 @@ impl Store {
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let tx = self.db.unchecked_transaction()?;
         let mut count = 0;
         for (id, raw, snapshot, covered) in rows {
             let e: UsageEvent = serde_json::from_str(&raw)?;
@@ -283,14 +345,13 @@ impl Store {
                     p.cache_write = old.cache_write.or(p.cache_write);
                 }
                 let (c, n) = pricing::estimate(&e.tokens, Some(&p));
-                tx.execute(
+                self.db.execute(
                     "UPDATE events SET cost=?1,priced_tokens=?2,price=?3 WHERE id=?4",
                     params![c, n, serde_json::to_string(&p)?, id],
                 )?;
                 count += 1;
             }
         }
-        tx.commit()?;
         Ok(count)
     }
     pub fn cursor(&self, source: &str, path: &str) -> Result<Option<(String, u64, ParseState)>> {
@@ -521,7 +582,11 @@ impl Store {
             .collect();
         d.models = models.into_values().collect();
         d.models.sort_by_key(|a| std::cmp::Reverse(a.total));
-        for account in settings.accounts.iter().filter(|a| a.quota_enabled) {
+        for account in settings
+            .accounts
+            .iter()
+            .filter(|a| a.quota_enabled && !a.archived)
+        {
             if f.provider.as_ref().is_some_and(|p| p != &account.provider)
                 || f.account_id.as_ref().is_some_and(|id| id != &account.id)
             {
@@ -588,7 +653,16 @@ impl Store {
                     |r| r.get(0),
                 )
                 .optional()?;
-            d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":source.enabled,"accountId":source.account_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok())}));
+            let mut query = self.db.prepare("SELECT DISTINCT e.account_id FROM events e JOIN event_sources es ON es.event_id=e.id WHERE es.source_id=?1 AND e.provider=?2")?;
+            let mut account_ids = query
+                .query_map(params![source.id, source.provider], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if !account_ids.contains(&source.account_id) {
+                account_ids.push(source.account_id.clone());
+            }
+            d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":source.enabled,"accountId":source.account_id,"accountIds":account_ids,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok())}));
         }
         d.price_updated_at =
             self.db

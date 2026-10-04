@@ -90,10 +90,11 @@
       panel.style.width = `${width}px`;
       panel.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
       const below = window.innerHeight - rect.bottom - 12;
-      const above = rect.top - 12;
+      const topMargin = doc.body.dataset.platform === 'windows' ? 52 : 12;
+      const above = rect.top - topMargin;
       const height = Math.min(360, Math.max(above, below));
       panel.style.maxHeight = `${height}px`;
-      panel.style.top = `${below >= Math.min(360, above) ? rect.bottom + 4 : Math.max(12, rect.top - height - 4)}px`;
+      panel.style.top = `${below >= Math.min(360, above) ? rect.bottom + 4 : Math.max(topMargin, rect.top - height - 4)}px`;
     }
     function outside(event) { if (!panel.contains(event.target) && !trigger.contains(event.target)) close(false); }
     function keydown(event) {

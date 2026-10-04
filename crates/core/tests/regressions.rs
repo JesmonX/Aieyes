@@ -125,7 +125,7 @@ fn blank_quota_and_failed_refresh_keep_last_data() {
     assert_eq!(q.updated_at, 130);
 }
 #[test]
-fn changing_account_reimports_without_double_counting() {
+fn changing_account_preserves_prior_attribution() {
     let temp = tempfile::tempdir().unwrap();
     let db = Store::open(&temp.path().join("db")).unwrap();
     let path = temp.path().join("usage.jsonl");
@@ -147,7 +147,14 @@ fn changing_account_reimports_without_double_counting() {
     };
     db.save_settings(&settings).unwrap();
     import::scan(&db, &settings, &source).unwrap();
+    settings = db.settings().unwrap();
     source.account_id = "new-account".into();
+    settings.accounts.push(Account {
+        id: "new-account".into(),
+        provider: source.provider.clone(),
+        name: "New account".into(),
+        ..Default::default()
+    });
     settings.sources = vec![source.clone()];
     db.save_settings(&settings).unwrap();
     import::scan(&db, &settings, &source).unwrap();
@@ -160,8 +167,171 @@ fn changing_account_reimports_without_double_counting() {
         .unwrap()
         .summary
         .total,
-        100
+        0
     );
+}
+
+#[test]
+fn archiving_account_preserves_history_cursors_prices_and_deduplication() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("db");
+    let db = Store::open(&root).unwrap();
+    let path = temp.path().join("usage.jsonl");
+    let log = format!(
+        "{}\n",
+        json!({"id":"one","model":"model-a","timestamp":now(),"tokens":{"input":100,"output":20}})
+    );
+    std::fs::write(&path, &log).unwrap();
+    let source = Source {
+        path: path.to_string_lossy().into(),
+        ..source("s")
+    };
+    let mut settings = Settings {
+        version: 2,
+        accounts: vec![Account {
+            id: source.account_id.clone(),
+            name: "Personal".into(),
+            provider: source.provider.clone(),
+            ..Default::default()
+        }],
+        sources: vec![source.clone()],
+        ..Default::default()
+    };
+    db.save_settings(&settings).unwrap();
+    db.save_prices(&[ModelPrice {
+        id: "model-a".into(),
+        input: Some(0.01),
+        output: Some(0.02),
+        ..Default::default()
+    }])
+    .unwrap();
+    import::scan(&db, &settings, &source).unwrap();
+    let before = db.dashboard(&Filter::default()).unwrap();
+    let cursor = db.cursor(&source.id, &source.path).unwrap().unwrap();
+    let payload: String = db
+        .db
+        .query_row("SELECT payload FROM events", [], |r| r.get(0))
+        .unwrap();
+    let price: String = db
+        .db
+        .query_row("SELECT price FROM events", [], |r| r.get(0))
+        .unwrap();
+    std::fs::remove_file(&path).unwrap();
+
+    settings.accounts[0].archived = true;
+    db.save_settings(&settings).unwrap();
+    let archived = db.settings().unwrap();
+    assert!(!archived.quota_enabled(&source));
+    let after = db
+        .dashboard(&Filter {
+            account_id: Some(source.account_id.clone()),
+            source_id: Some(source.id.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(after.summary.total, before.summary.total);
+    assert_eq!(after.summary.cost, before.summary.cost);
+    assert!(after.quotas.is_empty());
+    assert_eq!(
+        db.cursor(&source.id, &source.path).unwrap().unwrap().1,
+        cursor.1
+    );
+    assert_eq!(
+        db.db
+            .query_row::<String, _, _>("SELECT payload FROM events", [], |r| r.get(0))
+            .unwrap(),
+        payload
+    );
+    assert_eq!(
+        db.db
+            .query_row::<String, _, _>("SELECT price FROM events", [], |r| r.get(0))
+            .unwrap(),
+        price
+    );
+    let mut engine = aieyes_core::Engine::open(&root).unwrap();
+    assert_eq!(engine.call("quotas.refresh", json!({})).unwrap(), json!([]));
+
+    settings.accounts[0].archived = false;
+    db.save_settings(&settings).unwrap();
+    std::fs::write(&path, log).unwrap();
+    import::scan(&db, &settings, &source).unwrap();
+    assert_eq!(
+        db.dashboard(&Filter::default()).unwrap().summary.total,
+        before.summary.total
+    );
+    assert_eq!(db.dashboard(&Filter::default()).unwrap().summary.events, 1);
+    assert!(db.settings().unwrap().quota_enabled(&source));
+}
+
+#[test]
+fn deleting_account_with_history_is_rejected_without_changing_settings_or_records() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Store::open(temp.path()).unwrap();
+    let source = source("s");
+    let settings = Settings {
+        version: 2,
+        accounts: vec![Account {
+            id: source.account_id.clone(),
+            name: "Personal".into(),
+            provider: source.provider.clone(),
+            ..Default::default()
+        }],
+        sources: vec![source.clone()],
+        ..Default::default()
+    };
+    db.save_settings(&settings).unwrap();
+    db.put_event(&event(&source, "one", 100), &[], &settings)
+        .unwrap();
+    let mut draft = settings.clone();
+    draft.accounts.clear();
+    draft.sources[0].account_id.clear();
+    assert!(
+        db.save_settings(&draft)
+            .unwrap_err()
+            .to_string()
+            .contains("归档")
+    );
+    assert_eq!(
+        db.settings().unwrap().sources[0].account_id,
+        source.account_id
+    );
+    assert_eq!(db.settings().unwrap().accounts.len(), 1);
+    assert_eq!(db.dashboard(&Filter::default()).unwrap().summary.total, 120);
+}
+
+#[test]
+fn settings_and_repricing_roll_back_together_if_price_update_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Store::open(temp.path()).unwrap();
+    let source = source("s");
+    db.save_settings(&Settings {
+        sources: vec![source.clone()],
+        ..Default::default()
+    })
+    .unwrap();
+    let settings = db.settings().unwrap();
+    db.put_event(&event(&source, "one", 100), &[], &settings)
+        .unwrap();
+    db.save_prices(&[ModelPrice {
+        id: "model-a".into(),
+        input: Some(0.01),
+        output: Some(0.02),
+        ..Default::default()
+    }])
+    .unwrap();
+    db.db.execute_batch("CREATE TRIGGER reject_reprice BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'test write failure'); END;").unwrap();
+    let mut draft = settings.clone();
+    draft.refresh_seconds = 600;
+    assert!(db.save_settings(&draft).is_err());
+    assert_eq!(
+        db.settings().unwrap().refresh_seconds,
+        settings.refresh_seconds
+    );
+    assert_eq!(db.dashboard(&Filter::default()).unwrap().summary.cost, 0.0);
+    db.db.execute_batch("DROP TRIGGER reject_reprice;").unwrap();
+    db.save_settings(&draft).unwrap();
+    assert_eq!(db.settings().unwrap().refresh_seconds, 600);
+    assert!(db.dashboard(&Filter::default()).unwrap().summary.cost > 0.0);
 }
 #[test]
 fn source_failures_preserve_success_time() {
@@ -400,9 +570,20 @@ fn quota_precommand_inherits_or_overrides_and_stops_on_failure() {
     use aieyes_core::{process, quota, ssh};
     use std::process::Command;
     use std::time::Duration;
+    // Test the command composition without reading the host's login profiles.
+    let temp = tempfile::tempdir().unwrap();
+    let test_shell = temp.path().join("test-shell");
+    std::fs::write(
+        &test_shell,
+        "#!/bin/sh\n[ \"$1\" = -lc ] || exit 2\nshift\nexec /bin/sh -c \"$@\"\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&test_shell, std::fs::Permissions::from_mode(0o700)).unwrap();
     let host = Host {
         target: "example".into(),
         pre_command: "export TEST_PROXY=host".into(),
+        shell: test_shell.to_string_lossy().into(),
         ..Default::default()
     };
     let mut s = source("remote");
@@ -423,4 +604,239 @@ fn quota_precommand_inherits_or_overrides_and_stops_on_failure() {
     let mut shell = Command::new("/bin/sh");
     shell.args(["-c", ssh.get_args().last().unwrap().to_str().unwrap()]);
     assert!(process::run(shell, vec![], Duration::from_secs(3)).is_err());
+}
+
+#[test]
+fn detaching_and_relinking_preserves_local_and_full_replay_history() {
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("db");
+    let path = temp.path().join("usage.jsonl");
+    let record = |id: &str, input| {
+        json!({"id":id,"sessionId":"session","model":"model-a","timestamp":now(),"tokens":{"input":input,"output":20}}).to_string() + "\n"
+    };
+    std::fs::write(&path, record("old", 100)).unwrap();
+    let mut src = Source {
+        path: path.to_string_lossy().into(),
+        ..source("s")
+    };
+    let db = Store::open(&root).unwrap();
+    let mut settings = Settings {
+        sources: vec![src.clone()],
+        ..Default::default()
+    };
+    db.save_settings(&settings).unwrap();
+    settings = db.settings().unwrap();
+    db.save_prices(&[ModelPrice {
+        id: "model-a".into(),
+        input: Some(0.01),
+        output: Some(0.01),
+        ..Default::default()
+    }])
+    .unwrap();
+    import::scan(&db, &settings, &src).unwrap();
+    let cursor = db.cursor(&src.id, &src.path).unwrap();
+    let cost = db.dashboard(&Filter::default()).unwrap().summary.cost;
+    src.account_id.clear();
+    settings.sources[0] = src.clone();
+    db.save_settings(&settings).unwrap();
+    assert_eq!(
+        db.cursor(&src.id, &src.path).unwrap().map(|c| c.1),
+        cursor.map(|c| c.1)
+    );
+    assert_eq!(db.dashboard(&Filter::default()).unwrap().summary.cost, cost);
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap(),
+        "{}",
+        record("new", 50).trim()
+    )
+    .unwrap();
+    import::scan(&db, &settings, &src).unwrap();
+    // Full replays model SSH, and also exercise legacy events without stored raw identities.
+    for (id, input) in [("old", 100), ("new", 50)] {
+        db.put_event(&event(&src, id, input), &db.prices().unwrap(), &settings)
+            .unwrap();
+    }
+    assert_eq!(db.dashboard(&Filter::default()).unwrap().summary.total, 190);
+    assert_eq!(
+        db.dashboard(&Filter {
+            account_id: Some("account".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .summary
+        .total,
+        120
+    );
+    assert_eq!(
+        db.dashboard(&Filter {
+            account_id: Some(String::new()),
+            ..Default::default()
+        })
+        .unwrap()
+        .summary
+        .total,
+        70
+    );
+    src.account_id = "account".into();
+    settings.sources[0] = src.clone();
+    db.save_settings(&settings).unwrap();
+    drop(db);
+    let db = Store::open(&root).unwrap();
+    for (id, input) in [("old", 100), ("new", 50)] {
+        db.put_event(&event(&src, id, input), &db.prices().unwrap(), &settings)
+            .unwrap();
+    }
+    db.db.execute("DELETE FROM files", []).unwrap();
+    import::scan(&db, &settings, &src).unwrap();
+    assert_eq!(db.dashboard(&Filter::default()).unwrap().summary.total, 190);
+    assert_eq!(
+        db.dashboard(&Filter {
+            source_id: Some(src.id.clone()),
+            ..Default::default()
+        })
+        .unwrap()
+        .summary
+        .total,
+        190
+    );
+    assert_eq!(
+        db.dashboard(&Filter {
+            account_id: Some(String::new()),
+            ..Default::default()
+        })
+        .unwrap()
+        .summary
+        .total,
+        70
+    );
+    let metadata = db.dashboard(&Filter::default()).unwrap().sources;
+    let ids = metadata.iter().find(|row| row["id"] == src.id).unwrap()["accountIds"]
+        .as_array()
+        .unwrap();
+    assert!(ids.contains(&json!("account")) && ids.contains(&json!("")));
+    // An unrelated no-account source with the same event remains independent.
+    let other = Source {
+        account_id: String::new(),
+        ..source("other")
+    };
+    db.put_event(&event(&other, "old", 100), &db.prices().unwrap(), &settings)
+        .unwrap();
+    assert_eq!(db.dashboard(&Filter::default()).unwrap().summary.total, 310);
+}
+
+#[test]
+fn codex_account_toggle_keeps_cumulative_cursor_and_full_replay_identity() {
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let db = Store::open(&temp.path().join("db")).unwrap();
+    let path = temp.path().join("codex.jsonl");
+    let records = vec![
+        json!({"type":"session_meta","payload":{"id":"session"}}),
+        json!({"type":"turn_context","payload":{"model":"codex-test"}}),
+        json!({"type":"event_msg","timestamp":now()-1,"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":30,"output_tokens":40}}}}),
+        json!({"type":"event_msg","timestamp":now(),"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":160,"cached_input_tokens":50,"output_tokens":60}}}}),
+    ];
+    std::fs::write(
+        &path,
+        records[..3]
+            .iter()
+            .map(|record| record.to_string() + "\n")
+            .collect::<String>(),
+    )
+    .unwrap();
+    let mut src = Source {
+        id: "codex-local".into(),
+        provider: "codex".into(),
+        account_id: "personal".into(),
+        path: path.to_string_lossy().into(),
+        ..Default::default()
+    };
+    let mut settings = Settings {
+        sources: vec![src.clone()],
+        accounts: vec![Account {
+            id: "personal".into(),
+            provider: "codex".into(),
+            name: "Personal".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    db.save_settings(&settings).unwrap();
+    import::scan(&db, &settings, &src).unwrap();
+    src.account_id.clear();
+    settings.sources[0] = src.clone();
+    db.save_settings(&settings).unwrap();
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap(),
+        "{}",
+        records[3]
+    )
+    .unwrap();
+    import::scan(&db, &settings, &src).unwrap();
+    for account_id in ["", "personal", "", "personal"] {
+        src.account_id = account_id.into();
+        settings.sources[0] = src.clone();
+        db.save_settings(&settings).unwrap();
+        let mut state = ParseState::default();
+        for record in &records {
+            if let Some(event) = usage::parse(&src, &mut state, record) {
+                db.put_event(&event, &[], &settings).unwrap();
+            }
+        }
+        assert_eq!(db.dashboard(&Filter::default()).unwrap().summary.total, 220);
+        assert_eq!(
+            db.dashboard(&Filter {
+                account_id: Some("personal".into()),
+                ..Default::default()
+            })
+            .unwrap()
+            .summary
+            .total,
+            140
+        );
+        assert_eq!(
+            db.dashboard(&Filter {
+                account_id: Some(String::new()),
+                ..Default::default()
+            })
+            .unwrap()
+            .summary
+            .total,
+            80
+        );
+    }
+}
+
+#[test]
+fn proxy_addresses_validate_without_breaking_legacy_default_ports() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Store::open(temp.path()).unwrap();
+    let mut settings = Settings::default();
+    settings.proxy.mode = "custom".into();
+    for url in [
+        "http://127.0.0.1:7890",
+        "https://proxy.example",
+        "socks5://localhost",
+        "socks5h://[::1]:1080",
+    ] {
+        settings.proxy.url = url.into();
+        db.save_settings(&settings).unwrap();
+    }
+    for url in [
+        "http://127.0.0.1:0",
+        "socks5:///path",
+        "ftp://proxy.example",
+        "http://user:password@localhost:7890",
+    ] {
+        settings.proxy.url = url.into();
+        assert!(db.save_settings(&settings).is_err());
+        assert_eq!(db.settings().unwrap().proxy.url, "socks5h://[::1]:1080");
+    }
 }

@@ -28,7 +28,7 @@ struct Quota: Codable, Identifiable {
     var id: String { provider + ":" + accountId }
 }
 struct SourceStatus: Codable { var updatedAt: Double?, newEvents: Int?, files: Int?, readBytes: Int?, malformedLines: Int?, error: String? }
-struct SourceSummary: Codable, Identifiable { var id: String, name: String, provider: String, enabled: Bool, status: SourceStatus? }
+struct SourceSummary: Codable, Identifiable { var id: String, name: String, provider: String, enabled: Bool, status: SourceStatus?, accountIds: [String]? }
 struct DayModel: Codable, Identifiable {
     var day: String, model: String, usage: Aggregate
     var id: String { day + ":" + model }
@@ -41,6 +41,7 @@ struct PricingGap: Codable, Identifiable {
 struct AgentAccount: Codable, Identifiable {
     var id = UUID().uuidString, name = "", provider = "codex", quotaEnabled = true
     var quotaSourceId: String?
+    var archived: Bool?
     var key: String { provider + ":" + id }
 }
 struct Dashboard: Codable {
@@ -49,6 +50,23 @@ struct Dashboard: Codable {
     var quotas: [Quota] = [], sources: [SourceSummary] = [], priceUpdatedAt: Double?
 }
 struct ProxySettings: Codable { var mode = "system", url = "" }
+struct ProxyAddressDraft: Equatable {
+    var scheme = "http", host = "127.0.0.1", port = "7890", customURL = ""
+    init(url: String) {
+        customURL = url
+        guard !url.isEmpty else { return }
+        guard let parts = URLComponents(string: url), let scheme = parts.scheme, ["http", "https", "socks5", "socks5h"].contains(scheme), let host = parts.host, !host.isEmpty,
+              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil, ["", "/"].contains(parts.path) else { self.scheme = "url"; return }
+        self.scheme = scheme; self.host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        self.port = parts.port.map(String.init) ?? (scheme == "http" ? "80" : scheme == "https" ? "443" : "1080")
+    }
+    var url: String {
+        if scheme == "url" { return customURL }
+        let hostname = host.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        guard !hostname.isEmpty, !hostname.contains(where: { $0.isWhitespace || "/@?#".contains($0) }), let number = Int(port.trimmingCharacters(in: .whitespacesAndNewlines)), (1...65535).contains(number) else { return "invalid-proxy-address" }
+        return scheme + "://" + (hostname.contains(":") ? "[" + hostname + "]" : hostname) + ":" + port.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
 struct AgentSource: Codable, Identifiable {
     var id = UUID().uuidString, name = "", provider = "codex", accountId = ""
     var path = "~/.codex", hostId: String?, enabled = true, quotaCommand = "", quotaPreCommand = "", codexBinary = "codex", agyBinary: String? = "agy", proxy: ProxySettings?

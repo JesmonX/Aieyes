@@ -30,15 +30,8 @@ fn event(
     attribution: &str,
 ) -> UsageEvent {
     UsageEvent {
-        id: hash(&format!(
-            "{}:{}:{identity}",
-            source.provider,
-            if source.account_id.is_empty() {
-                format!("source:{}", source.id)
-            } else {
-                source.account_id.clone()
-            }
-        )),
+        id: event_id(&source.provider, &source.id, &source.account_id, &identity),
+        import_identity: Some(identity),
         source_id: source.id.clone(),
         account_id: source.account_id.clone(),
         provider: source.provider.clone(),
@@ -48,6 +41,15 @@ fn event(
         tokens,
         attribution: attribution.into(),
     }
+}
+
+pub fn event_id(provider: &str, source_id: &str, account_id: &str, identity: &str) -> String {
+    let namespace = if account_id.is_empty() {
+        format!("source:{source_id}")
+    } else {
+        account_id.to_string()
+    };
+    hash(&format!("{provider}:{namespace}:{identity}"))
 }
 
 pub fn parse(source: &Source, state: &mut ParseState, v: &Value) -> Option<UsageEvent> {

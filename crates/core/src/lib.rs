@@ -88,7 +88,6 @@ impl Engine {
             "settings.save" => {
                 let s: Settings = serde_json::from_value(params)?;
                 self.store.save_settings(&s)?;
-                self.store.reprice(&self.store.settings()?, true)?;
                 Ok(json!({"saved":true}))
             }
             "dashboard" => Ok(serde_json::to_value(
@@ -173,7 +172,9 @@ impl Engine {
                 let settings = self.store.settings()?;
                 let mut result = Vec::new();
                 for account in settings.accounts.iter().filter(|a| {
-                    a.quota_enabled && params["accountId"].as_str().is_none_or(|id| a.id == id)
+                    a.quota_enabled
+                        && !a.archived
+                        && params["accountId"].as_str().is_none_or(|id| a.id == id)
                 }) {
                     let mut sources: Vec<_> = settings
                         .sources
@@ -334,20 +335,17 @@ impl Engine {
                 }
                 Ok(json!(results))
             }
+            "updates.open" => {
+                network::open_release_page()?;
+                Ok(json!({"opened":true}))
+            }
             "updates.check" => {
                 let s = self.store.settings()?;
-                let parts: Vec<_> = s.github_repository.split('/').collect();
-                anyhow::ensure!(
-                    parts.len() == 2
-                        && parts.iter().all(|p| !p.is_empty()
-                            && p.chars()
-                                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))),
-                    "填写 GitHub 仓库 owner/repo"
-                );
+                let repository = "JesmonX/Aieyes";
                 let response = network::client(&s.proxy)?
                     .get(format!(
                         "https://api.github.com/repos/{}/releases/latest",
-                        s.github_repository
+                        repository
                     ))
                     .send()
                     .map_err(|_| anyhow::anyhow!("更新连接失败"))?;

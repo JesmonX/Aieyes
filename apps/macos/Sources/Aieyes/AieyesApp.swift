@@ -124,7 +124,7 @@ import Combine
                     try await capture(RootView(model: model, compact: compact), size: NSSize(width: compact ? 450 : 1080, height: compact ? 720 : 1000), dark: dark, to: root.appendingPathComponent("\(compact ? "menubar" : "dashboard")-\(dark ? "dark" : "light").png"))
                 }
             }
-            for tab in ["accounts", "sources", "servers", "prices"] {
+            for tab in ["sources", "servers", "prices", "general"] {
                 model.settingsTab = tab
                 try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: false, to: root.appendingPathComponent("settings-\(tab).png"))
             }
@@ -133,13 +133,13 @@ import Combine
             }
             for provider in ["agy", "deepseek"] {
                 let source = AgentSource(name: Format.provider(provider), provider: provider, path: "")
-                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent(provider + "-source.png"))
+                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent(provider + "-source.png"))
             }
             if let host = model.settings.hosts.first {
                 try await capture(HostEditor(host: host, onSave: { _ in }), size: NSSize(width: 620, height: 650), dark: false, to: root.appendingPathComponent("host-editor.png"))
             }
             if let source = model.settings.sources.first(where: { $0.hostId != nil }) {
-                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent("remote-source.png"))
+                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent("remote-source.png"))
             }
         } catch { fputs("\(error.localizedDescription)\n", stderr) }
         NSApp.terminate(nil)

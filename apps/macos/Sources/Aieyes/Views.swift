@@ -120,7 +120,7 @@ struct RootView: View {
             if !compact {
                 Picker("数据源", selection: $model.selectedSource) {
                     Text("全部数据源").tag("all")
-                    ForEach(model.settings.sources.filter { (model.provider == "all" || $0.provider == model.provider) && (model.selectedAccount == "all" || $0.accountId == (model.selectedAccount == "none" ? "" : model.settings.accounts.first { $0.key == model.selectedAccount }?.id ?? "")) }) { Text($0.name).tag($0.id) }
+                    ForEach(selectableSources) { Text($0.name).tag($0.id) }
                 }.labelsHidden()
                 Picker("模型", selection: $model.selectedModel) {
                     Text("全部模型").tag("all")
@@ -140,12 +140,12 @@ struct RootView: View {
             StatCard(title: "总 Token", value: Format.compact(model.dashboard.summary.total), detail: "", icon: "sparkle", accent: Palette.accent)
             StatCard(title: "API 等价成本", value: model.dashboard.summary.pricedTokens > 0 ? Format.money(model.dashboard.summary.cost) : "—", detail: "", icon: "dollarsign.circle", accent: .teal, pricingIncomplete: model.dashboard.summary.total > 0 && model.dashboard.summary.pricedTokens < model.dashboard.summary.total, onPricing: { model.openPricing() })
             if !compact {
-                StatCard(title: "缓存命中率", value: Format.percent(model.dashboard.summary.tokens.cacheRate.map { $0 * 100 }), detail: "读取 \(Format.compact(model.dashboard.summary.tokens.cacheRead)) Token", icon: "square.3.layers.3d", accent: .purple)
-                StatCard(title: "输出 Token", value: Format.compact(model.dashboard.summary.tokens.output), detail: "输入 \(Format.compact(model.dashboard.summary.tokens.allInput))", icon: "arrow.up.right", accent: .orange)
+                StatCard(title: "缓存命中率", value: Format.percent(model.dashboard.summary.tokens.cacheRate.map { $0 * 100 }), detail: "", icon: "square.3.layers.3d", accent: .purple)
+                TokenBreakdownCard(tokens: model.dashboard.summary.tokens)
             }
         }
         if compact {
-            HStack { Text("缓存命中 \(Format.percent(model.dashboard.summary.tokens.cacheRate.map { $0 * 100 }))"); Spacer(); Text("输出 \(Format.compact(model.dashboard.summary.tokens.output))") }.font(.system(size: 14)).foregroundStyle(.secondary).monospacedDigit()
+            VStack(spacing: 8) { HStack { Text("缓存命中率"); Spacer(); Text(Format.percent(model.dashboard.summary.tokens.cacheRate.map { $0 * 100 })) }; TokenBreakdown(tokens: model.dashboard.summary.tokens, inline: true) }.font(.system(size: 14)).foregroundStyle(.secondary).monospacedDigit()
         }
         if compact {
             Surface {
@@ -166,11 +166,20 @@ struct RootView: View {
             }
             Surface(title: "每日明细") { DailyUsage(days: model.dashboard.trendDays, rows: model.dashboard.dayModels, compact: false) }
             Surface(title: "过去 365 天") { Heatmap(days: model.dashboard.heatmap, cost: costMode) }
-            sourceSection
         }
-        if model.settings.sources.isEmpty { EmptyCard(icon: "tray.and.arrow.down", title: "添加第一个数据源", subtitle: "连接本机目录或 SSH 主机", action: { model.showSettings?() }) }
+        if model.settings.sources.isEmpty { EmptyCard(icon: "tray.and.arrow.down", title: "添加数据源", subtitle: "", action: { model.settingsTab = "sources"; model.showSettings?() }) }
     }
     private var recentDays: [Aggregate] { Array(model.dashboard.trendDays.suffix(7)) }
+    private var selectableSources: [AgentSource] {
+        let account = model.settings.accounts.first { $0.key == model.selectedAccount }
+        return model.settings.sources.filter { source in
+            guard model.provider == "all" || source.provider == model.provider else { return false }
+            if model.selectedAccount == "all" { return true }
+            let ids = model.dashboard.sources.first { $0.id == source.id }?.accountIds ?? [source.accountId]
+            if model.selectedAccount == "none" { return ids.contains("") }
+            return source.provider == account?.provider && ids.contains(account?.id ?? "")
+        }
+    }
     private var recentRows: [DayModel] {
         let dates = Set(recentDays.map(\.key))
         return model.dashboard.dayModels.filter { dates.contains($0.day) }
@@ -206,36 +215,51 @@ struct RootView: View {
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { Text("账户限额").font(.system(size: compact ? 19 : 24, weight: .semibold)); if model.dashboard.quotas.count > 1 { Text("\(model.dashboard.quotas.count)").font(.system(size: 14)).foregroundStyle(.secondary) }; Spacer(); Button("刷新") { Task { await model.refreshQuotas() } }.font(.system(size: 14)).disabled(model.busy) }
-            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: model.dashboard.quotas.filter { $0.provider == quota.provider }.count > 1, sourceName: quotaLocation(quota)) } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { QuotaCard(quota: $0, sourceName: quotaLocation($0)) } } }
+            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: model.dashboard.quotas.filter { $0.provider == quota.provider }.count > 1, sourceName: "") } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { QuotaCard(quota: $0, sourceName: "") } } }
         }
     }
-    private func quotaLocation(_ quota: Quota) -> String {
-        let sources = model.settings.sources.filter { $0.accountId == quota.accountId && $0.provider == quota.provider }
-        let location = sources.first { $0.id == quota.sourceId }?.name
-        guard sources.count > 1 && model.dashboard.quotas.filter({ $0.provider == quota.provider }).count > 1 else { return "" }
-        return "\(sources.count) 个数据源" + (location.map { " · 查询自 " + $0 } ?? "")
+    @ViewBuilder private var serverContent: some View {
+        HStack { VStack(alignment: .leading, spacing: 4) { Text("服务器").font(.system(size: compact ? 22 : 28, weight: .semibold, design: .default)); Text("\(model.settings.hosts.filter(\.enabled).count) 台主机").font(.system(size: 14)).foregroundStyle(.secondary) }; Spacer(); Button { model.settingsTab = "servers"; model.showSettings?() } label: { Image(systemName: "plus") }.help("添加主机") }
+        if model.settings.hosts.isEmpty { EmptyCard(icon: "server.rack", title: "添加服务器", subtitle: "", action: { model.settingsTab = "servers"; model.showSettings?() }) }
+        ForEach(model.settings.hosts) { host in
+            ServerCard(host: host, result: model.hosts.first(where: { $0.id == host.id }), compact: compact)
+        }
     }
-    private var sourceSection: some View {
-        Surface(title: "数据来源") {
-            ForEach(model.dashboard.sources) { source in
-                HStack(alignment: .top) {
-                    Image(systemName: source.status?.error == nil ? "circle.fill" : "circle").font(.system(size: 6)).foregroundStyle(source.status?.error == nil ? .teal : .orange).padding(.top, 5)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(source.name).font(.callout)
-                        Text(source.status?.error ?? "\(source.status?.files ?? 0) 个记录文件").font(.system(size: 14)).foregroundStyle(.secondary)
-                    }
-                    Spacer(); Text(Format.date(source.status?.updatedAt)).font(.system(size: 14)).foregroundStyle(.secondary)
+}
+
+struct TokenBreakdown: View {
+    var tokens: Tokens
+    var inline = false
+    private var values: [(String, Double)] { [("输入", tokens.input), ("输出", tokens.output), ("缓存", tokens.cacheRead + tokens.cacheWrite)] }
+    var body: some View {
+        if inline {
+            HStack(spacing: 12) {
+                ForEach(values, id: \.0) { label, value in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(label).font(.system(size: 14)).foregroundStyle(.secondary)
+                        Text(Format.compact(value)).font(.system(size: 18, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        } else {
+            VStack(spacing: 5) {
+                ForEach(values, id: \.0) { label, value in
+                    HStack { Text(label).font(.system(size: 14)).foregroundStyle(.secondary); Spacer(); Text(Format.compact(value)).font(.system(size: 16, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6) }
                 }
             }
         }
     }
-    @ViewBuilder private var serverContent: some View {
-        HStack { VStack(alignment: .leading, spacing: 4) { Text("服务器").font(.system(size: compact ? 22 : 28, weight: .semibold, design: .default)); Text("\(model.settings.hosts.filter(\.enabled).count) 台主机").font(.system(size: 14)).foregroundStyle(.secondary) }; Spacer(); Button { model.showSettings?() } label: { Image(systemName: "plus") }.help("添加主机") }
-        if model.settings.hosts.isEmpty { EmptyCard(icon: "server.rack", title: "连接你的服务器", subtitle: "通过 SSH 查看资源与流量", action: { model.showSettings?() }) }
-        ForEach(model.settings.hosts) { host in
-            ServerCard(host: host, result: model.hosts.first(where: { $0.id == host.id }), compact: compact)
-        }
+}
+struct TokenBreakdownCard: View {
+    var tokens: Tokens
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Token 明细").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+            TokenBreakdown(tokens: tokens)
+        }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(LinearGradient(colors: [Color.orange.opacity(0.14), Color.orange.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.orange.opacity(0.16)))
     }
 }
 
@@ -257,7 +281,7 @@ struct StatCard: View {
                 Spacer(); Image(systemName: icon).font(.system(size: 14)).foregroundStyle(accent) }
             Text(value).contentTransition(.numericText()).font(.system(size: 28, weight: .semibold, design: .default)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
             if !detail.isEmpty { Text(detail).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1) }
-        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(LinearGradient(colors: [accent.opacity(0.14), accent.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(accent.opacity(0.16)))
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: value)
@@ -266,7 +290,7 @@ struct StatCard: View {
 struct EmptyCard: View {
     var icon: String, title: String, subtitle: String, action: () -> Void
     var body: some View {
-        VStack(spacing: 12) { Image(systemName: icon).font(.system(size: 32, weight: .light)).foregroundStyle(Palette.accent); Text(title).font(.headline); Text(subtitle).font(.callout).foregroundStyle(.secondary); Button("添加", action: action).buttonStyle(.borderedProminent) }
+        VStack(spacing: 12) { Image(systemName: icon).font(.system(size: 32, weight: .light)).foregroundStyle(Palette.accent); if !subtitle.isEmpty { Text(subtitle).font(.callout).foregroundStyle(.secondary) }; Button(title, action: action).buttonStyle(.borderedProminent) }
             .frame(maxWidth: .infinity).padding(.vertical, 36)
     }
 }
@@ -480,6 +504,12 @@ struct ServerCard: View {
             DisclosureGroup(isExpanded: $expanded) {
                 if let sample = result?.sample {
                     VStack(alignment: .leading, spacing: 16) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 14)], spacing: 14) {
+                            if sample.cpu != nil { ResourceRing(title: "CPU", percent: sample.cpu?.first(where: { $0.id == "cpu" })?.utilization) }
+                            if let memory = sample.memory { ResourceRing(title: "内存", percent: memory.total > 0 ? (memory.total - memory.available) / memory.total * 100 : nil) }
+                            ForEach(sample.gpu ?? []) { gpu in ResourceRing(title: "GPU " + gpu.id, percent: gpu.utilization) }
+                        }
+
                         if let cpus = sample.cpu {
                             DisclosureGroup {
                                 ForEach(cpus.filter { $0.id != "cpu" }) { cpu in
@@ -494,7 +524,7 @@ struct ServerCard: View {
                         if let m = sample.memory {
                             DisclosureGroup {
                                 metricRow("可用", Format.bytes(m.available)); if host.shows("memoryCache") { metricRow("缓存 / Buffer", "\(Format.bytes(m.cached)) / \(Format.bytes(m.buffers))") }
-                                if host.shows("swap") { metricRow("Swap", "\(Format.bytes(m.swapTotal - m.swapFree)) / \(Format.bytes(m.swapTotal))") }
+                                if host.shows("swap") { metricRow("Swap", "\(Format.bytes(m.swapTotal - m.swapFree)) / \(Format.bytes(m.swapTotal))"); ResourceBar(percent: m.swapTotal > 0 ? (m.swapTotal - m.swapFree) / m.swapTotal * 100 : nil) }
                             } label: { MetricHeading(icon: "memorychip", title: "内存", value: "\(Format.bytes(m.total - m.available)) / \(Format.bytes(m.total))", percent: m.total > 0 ? (m.total - m.available) / m.total * 100 : nil) }
                         }
                         if let gpus = sample.gpu {
@@ -522,7 +552,7 @@ struct ServerCard: View {
                         }
                         if let disks = sample.disk {
                             DisclosureGroup {
-                                ForEach(disks) { disk in VStack(spacing: 4) { metricRow(disk.id, "读 \(Format.speed(disk.readBytesPerSecond))"); metricRow("", "写 \(Format.speed(disk.writeBytesPerSecond))"); if host.shows("diskIops") { metricRow("IOPS 读 / 写", "\(disk.readIops.map(Format.compact) ?? "—") / \(disk.writeIops.map(Format.compact) ?? "—")") }; if host.shows("diskBusy") { metricRow("忙碌率", Format.percent(disk.busyMsPerSecond.map { min(100, $0 / 10) })) } }.padding(.vertical, 3) }
+                                ForEach(disks) { disk in VStack(spacing: 4) { metricRow(disk.id, "读 \(Format.speed(disk.readBytesPerSecond))"); metricRow("", "写 \(Format.speed(disk.writeBytesPerSecond))"); if host.shows("diskIops") { metricRow("IOPS 读 / 写", "\(disk.readIops.map(Format.compact) ?? "—") / \(disk.writeIops.map(Format.compact) ?? "—")") }; if host.shows("diskBusy") { metricRow("忙碌率", Format.percent(disk.busyMsPerSecond.map { min(100, max(0, $0 / 10)) })); ResourceBar(percent: disk.busyMsPerSecond.map { $0 / 10 }) } }.padding(.vertical, 3) }
                             } label: { MetricHeading(icon: "arrow.left.arrow.right", title: "磁盘 I/O", value: "\(disks.count) 个设备") }
                         }
                         if let networks = sample.network {
@@ -547,8 +577,12 @@ struct ServerCard: View {
                         Text(host.name.isEmpty ? host.target : host.name).font(.headline).lineLimit(1).help(host.name.isEmpty ? host.target : host.name)
                         if expanded { Text(host.target).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1).help(host.target) }
                     }
-                    Spacer(); Circle().fill(!host.enabled ? Color.gray : result?.error != nil ? Color.orange : result?.sample != nil ? Color.teal : Color.gray).frame(width: 6, height: 6)
-                    Text(!host.enabled ? "已暂停" : result?.error != nil ? "连接失败" : result?.sample == nil ? "等待采样" : "").font(.system(size: 14)).foregroundStyle(.secondary)
+                    Spacer()
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let label = status(at: context.date)
+                        HStack(spacing: 6) { Circle().fill(label == "正常" ? Color.teal : label == "已暂停" ? Color.gray : label == "连接失败" ? Color.red : Color.orange).frame(width: 6, height: 6); Text(label).font(.system(size: 14)).foregroundStyle(.secondary) }
+                    }
+
                 }
             }
             if !expanded, let sample = result?.sample {
@@ -566,6 +600,13 @@ struct ServerCard: View {
                 }
             }
         }
+    }
+    private func status(at date: Date) -> String {
+        if !host.enabled { return "已暂停" }
+        if result?.error != nil { return "连接失败" }
+        guard let sample = result?.sample else { return "等待采样" }
+        if date.timeIntervalSince1970 - sample.timestamp > 10 { return "数据延迟" }
+        return sample.errors.isEmpty ? "正常" : "部分采集失败"
     }
     private func compactMetric(_ title: String, percent: Double?) -> some View {
         VStack(spacing: 6) {
@@ -586,6 +627,21 @@ struct MetricHeading: View {
     }
 }
 
+struct ResourceRing: View {
+    var title: String, percent: Double?
+    private var value: Double? { percent.flatMap { $0.isFinite ? min(100, max(0, $0)) : nil } }
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle().stroke(.primary.opacity(0.07), lineWidth: 7)
+                if let value, value > 0 { Circle().trim(from: 0, to: value / 100).stroke(value >= 90 ? Color.red : value >= 70 ? Color.orange : Palette.accent, style: StrokeStyle(lineWidth: 7, lineCap: .round)).rotationEffect(.degrees(-90)) }
+                Text(Format.percent(value)).font(.system(size: 14, weight: .semibold)).monospacedDigit()
+            }.frame(width: 72, height: 72)
+            Text(title).font(.system(size: 14, weight: .medium)).lineLimit(1)
+        }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .ignore).accessibilityLabel(title + " " + Format.percent(value))
+    }
+}
+
 struct ResourceBar: View {
     var percent: Double?
     var tint: Color? = nil
@@ -594,7 +650,7 @@ struct ResourceBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(.primary.opacity(0.07))
                 if let percent, percent.isFinite {
-                    Capsule().fill(tint ?? (percent >= 90 ? .orange : Palette.accent))
+                    Capsule().fill(tint ?? (percent >= 90 ? .red : percent >= 70 ? .orange : Palette.accent))
                         .frame(width: proxy.size.width * min(1, max(0, percent / 100)))
                 }
             }

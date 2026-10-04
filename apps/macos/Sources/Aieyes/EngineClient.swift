@@ -89,7 +89,7 @@ struct Acknowledgement: Decodable { }
     @Published var provider = "all"
     @Published var selectedSource = "all"
     @Published var selectedAccount = "all"
-    @Published var settingsTab = "accounts"
+    @Published var settingsTab = "sources"
     @Published var selectedModel = "all"
     @Published var range = 1
     @Published var busy = false

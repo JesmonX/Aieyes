@@ -20,7 +20,7 @@ struct SettingsView: View {
             HStack { Text("设置").font(.title2.weight(.semibold)); Spacer(); if saving { ProgressView().controlSize(.small) }; Button("保存") { Task { saving = true; _ = await model.save(draft); saving = false } }.buttonStyle(.borderedProminent).keyboardShortcut("s").disabled(saving) }.padding(22)
             if let message = model.message { HStack { Text(message).font(.caption); Spacer(); Button { model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain) }.padding(.horizontal, 22).padding(.bottom, 10) }
             HStack(spacing: 6) {
-                ForEach([("accounts", "账户", "person.crop.circle"), ("sources", "数据源", "tray.full"), ("servers", "服务器", "server.rack"), ("connection", "连接", "network"), ("prices", "价格", "dollarsign.circle"), ("general", "通用", "slider.horizontal.3")], id: \.0) { key, title, icon in
+                ForEach([("sources", "数据源", "tray.full"), ("servers", "服务器", "server.rack"), ("prices", "价格", "dollarsign.circle"), ("general", "通用", "slider.horizontal.3")], id: \.0) { key, title, icon in
                     Button { model.settingsTab = key } label: {
                         Label(title, systemImage: icon).font(.system(size: 13, weight: model.settingsTab == key ? .semibold : .regular)).frame(maxWidth: .infinity).padding(.vertical, 10)
                             .foregroundStyle(model.settingsTab == key ? Palette.accent : .secondary)
@@ -31,54 +31,41 @@ struct SettingsView: View {
             Divider().opacity(0.5)
             Group {
                 switch model.settingsTab {
-                case "sources": sources
+                case "sources", "accounts": sources
                 case "servers": servers
-                case "connection": connection
                 case "prices": prices
-                case "general": general
-                default: accounts
+                case "general", "connection": general
+                default: sources
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16)
         }
         .frame(width: 760, height: 600).tint(Palette.accent)
-        .onAppear { Task { await model.loadPrices() } }
-        .sheet(item: $sourceEditor) { source in SourceEditor(source: source, hosts: draft.hosts, accounts: draft.accounts) { item in
-            if let i = draft.sources.firstIndex(where: { $0.id == item.id }) { draft.sources[i] = item } else { draft.sources.append(item) }
-            for i in draft.accounts.indices where draft.accounts[i].quotaSourceId == item.id && (draft.accounts[i].id != item.accountId || draft.accounts[i].provider != item.provider) { draft.accounts[i].quotaSourceId = nil }
-            sourceEditor = nil
-        } }
-        .sheet(item: $accountEditor) { account in AccountEditor(account: account, sources: draft.sources) { item in
-            if let i = draft.accounts.firstIndex(where: { $0.key == account.key }) { draft.accounts[i] = item } else { draft.accounts.append(item) }
-            accountEditor = nil
-        } }
+        .onAppear { if model.settingsTab == "accounts" { model.settingsTab = "sources" }; if model.settingsTab == "connection" { model.settingsTab = "general" }; Task { await model.loadPrices() } }
+        .sheet(item: $sourceEditor) { source in
+            SourceEditor(source: source, hosts: draft.hosts, accounts: draft.accounts, sources: draft.sources) { item, account in
+                var next = draft
+                if let i = next.sources.firstIndex(where: { $0.id == item.id }) { next.sources[i] = item } else { next.sources.append(item) }
+                if let account {
+                    if let i = next.accounts.firstIndex(where: { $0.key == account.key }) { next.accounts[i] = account } else { next.accounts.append(account) }
+                }
+                for i in next.accounts.indices where next.accounts[i].quotaSourceId == item.id && (next.accounts[i].id != item.accountId || next.accounts[i].provider != item.provider) { next.accounts[i].quotaSourceId = nil }
+                guard await model.save(next) else { throw ClientError.message(model.message ?? "保存失败") }
+                draft = next; sourceEditor = nil
+            }
+        }
+        .sheet(item: $accountEditor) { account in
+            AccountEditor(account: account, sources: draft.sources) { item in
+                var next = draft
+                if let i = next.accounts.firstIndex(where: { $0.key == account.key }) { next.accounts[i] = item }
+                guard await model.save(next) else { throw ClientError.message(model.message ?? "保存失败") }
+                draft = next; accountEditor = nil
+            }
+        }
         .sheet(item: $hostEditor) { host in HostEditor(host: host) { item in
             if let i = draft.hosts.firstIndex(where: { $0.id == item.id }) { draft.hosts[i] = item } else { draft.hosts.append(item) }
             hostEditor = nil
         } }
         .sheet(item: $priceEditor) { price in PriceEditor(price: price) { item in Task { if await model.savePrice(item) { priceEditor = nil } } } }
-    }
-    private var accounts: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            List {
-                ForEach(draft.accounts, id: \.key) { account in
-                    HStack(spacing: 12) {
-                        Image(systemName: "person.crop.circle").font(.title2).foregroundStyle(Palette.accent)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(account.name).font(.headline)
-                            Text("\(Format.provider(account.provider)) · \(draft.sources.filter { $0.provider == account.provider && $0.accountId == account.id }.count) 个数据源 · \(account.quotaEnabled ? "显示限额" : "仅统计用量")").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer(); Button("编辑") { accountEditor = account }
-                        Button { draft.accounts.removeAll { $0.key == account.key }; for i in draft.sources.indices where draft.sources[i].accountId == account.id && draft.sources[i].provider == account.provider { draft.sources[i].accountId = "" } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除账户并解除数据源关联")
-                    }.padding(.vertical, 8)
-                }
-            }.listStyle(.inset)
-            HStack { Button("添加账户", systemImage: "plus") { accountEditor = AgentAccount() }; Spacer(); Button("接入 agy") { addQuery("agy") }; Button("接入 DeepSeek") { addQuery("deepseek") } }.padding(.horizontal, 8)
-        }.padding(.vertical, 12)
-    }
-    private func addQuery(_ provider: String) {
-        let account = AgentAccount(name: Format.provider(provider), provider: provider)
-        draft.accounts.append(account)
-        sourceEditor = AgentSource(name: Format.provider(provider) + " · 本机", provider: provider, accountId: account.id, path: "")
     }
     private var sources: some View {
         VStack(spacing: 12) {
@@ -86,15 +73,38 @@ struct SettingsView: View {
                 ForEach($draft.sources) { $source in
                     HStack(spacing: 12) {
                         Toggle("启用", isOn: $source.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
-                        VStack(alignment: .leading, spacing: 5) { Text(source.name).font(.headline); Text(source.accountId.isEmpty ? "无账户 / 外接 API" : "账户 · " + (draft.accounts.first { $0.id == source.accountId && $0.provider == source.provider }?.name ?? source.accountId)).font(.caption).foregroundStyle(Palette.accent); Text("\(Format.provider(source.provider)) · \(source.hostId.flatMap { id in draft.hosts.first { $0.id == id }?.name } ?? "本机") · \(source.path)").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
+                        VStack(alignment: .leading, spacing: 5) { Text(source.name).font(.headline); Text(Format.provider(source.provider) + " · " + (source.accountId.isEmpty ? "无账户" : draft.accounts.first { $0.id == source.accountId && $0.provider == source.provider }?.name ?? source.accountId)).font(.caption).foregroundStyle(.secondary) }
+                        if let error = model.dashboard.sources.first(where: { $0.id == source.id })?.status?.error { Text(error).font(.caption).foregroundStyle(.orange) }
                         Spacer()
                         Button("编辑") { sourceEditor = source }
                         Button { draft.sources.removeAll { $0.id == source.id }; for i in draft.accounts.indices where draft.accounts[i].quotaSourceId == source.id { draft.accounts[i].quotaSourceId = nil } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除数据源")
                     }.padding(.vertical, 7)
                 }
+                if !unlinkedAccounts.isEmpty {
+                    DisclosureGroup("未关联账户") { ForEach(unlinkedAccounts, id: \.key) { accountRow($0) } }
+                }
+                let archived = draft.accounts.filter { $0.archived == true }
+                if !archived.isEmpty {
+                    DisclosureGroup("已归档账户") { ForEach(archived, id: \.key) { accountRow($0) } }
+                }
             }.listStyle(.inset)
             HStack { Button("添加数据源", systemImage: "plus") { sourceEditor = AgentSource() }; Spacer(); Button("同步记录") { Task { if await model.save(draft) { await model.scan() } } }.disabled(model.busy) }.padding(.horizontal, 8)
         }.padding(.vertical, 12)
+    }
+    private var unlinkedAccounts: [AgentAccount] {
+        draft.accounts.filter { account in account.archived != true && !draft.sources.contains { $0.accountId == account.id && $0.provider == account.provider } }
+    }
+    private func accountRow(_ account: AgentAccount) -> some View {
+        HStack {
+            Text(account.name); Spacer(); Button("编辑") { accountEditor = account }
+            Button(account.archived == true ? "恢复" : "归档") {
+                Task {
+                    var next = draft
+                    if let i = next.accounts.firstIndex(where: { $0.key == account.key }) { next.accounts[i].archived = account.archived != true }
+                    if await model.save(next) { draft = next }
+                }
+            }
+        }.padding(.vertical, 6)
     }
     private var servers: some View {
         VStack(spacing: 12) {
@@ -109,15 +119,9 @@ struct SettingsView: View {
             HStack { Button("添加 SSH 主机", systemImage: "plus") { hostEditor = Host() }; Spacer(); Button("测试采样") { Task { if await model.save(draft) { await model.sampleHosts(); if let e = model.hosts.first(where: { $0.error != nil })?.error { model.message = e } else { model.message = "采样完成" } } } }.disabled(model.serverBusy) }.padding(.horizontal, 8)
         }.padding(.vertical, 12)
     }
-    private var connection: some View {
-        Form {
-            Section("应用代理") {
-                Picker("连接方式", selection: $draft.proxy.mode) { Text("系统代理").tag("system"); Text("直连").tag("direct"); Text("自定义代理").tag("custom") }
-                if draft.proxy.mode == "custom" { TextField("代理地址", text: $draft.proxy.url, prompt: Text("http://127.0.0.1:7890")) }
-                LabeledContent("应用范围", value: "限额查询、模型价格、GitHub 更新")
-            }
-            Section("远程连接") { Text("SSH 使用已有的密钥、ssh-agent 与跳板配置。远程代理在数据源的「限额查询前置命令」中设置。").font(.callout).foregroundStyle(.secondary) }
-        }.formStyle(.grouped)
+    private var filteredPrices: [ModelPrice] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.prices.filter { query.isEmpty || $0.id.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
     }
     private var prices: some View {
         VStack(spacing: 12) {
@@ -142,9 +146,9 @@ struct SettingsView: View {
                 Button("同步 OpenRouter") { Task { if await model.save(draft) { await model.syncPrices() } } }.disabled(model.busy)
                 Button("添加价格") { priceEditor = ModelPrice() }
             }
-            List(model.prices.filter { search.isEmpty || $0.id.localizedCaseInsensitiveContains(search) }) { price in
+            List(filteredPrices) { price in
                 HStack { VStack(alignment: .leading, spacing: 4) { Text(price.id).font(.callout); Text("输入 \(price.input.map { Format.money($0 * 1e6) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1e6) } ?? "—") / 百万 Token").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button("编辑") { priceEditor = price } }
-            }.listStyle(.inset)
+            }.listStyle(.inset).overlay { if filteredPrices.isEmpty { Text(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步模型价格" : "无匹配模型").foregroundStyle(.secondary) } }
             GroupBox("模型映射") {
                 VStack(spacing: 8) {
                     HStack { TextField("日志中的模型名称", text: $mappingModel); Image(systemName: "arrow.right"); TextField("OpenRouter 模型 ID", text: $mappingID); Button("保存映射") { draft.modelMappings[mappingModel] = mappingID; mappingModel = ""; mappingID = ""; Task { _ = await model.save(draft) } }.disabled(mappingModel.isEmpty || mappingID.isEmpty) }
@@ -162,15 +166,12 @@ struct SettingsView: View {
             Section("刷新") {
                 TextField("Agent 间隔（秒）", value: $draft.refreshSeconds, format: .number)
                 TextField("服务器后台间隔（秒）", value: $draft.serverRefreshSeconds, format: .number)
-                LabeledContent("服务器面板展开时", value: "每 3 秒")
             }
+            Section("连接") { ProxyFields(proxy: $draft.proxy) }
             Section("更新") {
-                TextField("GitHub 仓库", text: $draft.githubRepository, prompt: Text("owner/repo"))
-                HStack { Text("Aieyes \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")").foregroundStyle(.secondary); Spacer(); Button("检查更新") { Task {
-                    if await model.save(draft) {
-                        do { let update: UpdateInfo = try await model.engine.call("updates.check"); model.message = "最新版本 \(update.version)"; if let url = URL(string: update.url), url.host == "github.com" { NSWorkspace.shared.open(url) } }
-                        catch { model.message = error.localizedDescription }
-                    }
+                HStack { Button("检查更新") { Task {
+                    do { let update: UpdateInfo = try await model.engine.call("updates.check"); model.message = "最新版本 \(update.version)"; if let url = URL(string: update.url), url.scheme == "https", url.host == "github.com", url.path.hasPrefix("/JesmonX/Aieyes/releases/") { NSWorkspace.shared.open(url) } }
+                    catch { model.message = error.localizedDescription }
                 } } }
             }
         }.formStyle(.grouped)
@@ -178,90 +179,172 @@ struct SettingsView: View {
 }
 struct UpdateInfo: Decodable { var version: String, url: String }
 
+struct ProxyFields: View {
+    @Binding var proxy: ProxySettings
+    var inherit = false
+    @State private var address: ProxyAddressDraft
+    init(proxy: Binding<ProxySettings>, inherit: Bool = false) {
+        _proxy = proxy; self.inherit = inherit
+        _address = State(initialValue: ProxyAddressDraft(url: proxy.wrappedValue.url))
+    }
+    var body: some View {
+        Group {
+            Picker("连接方式", selection: $proxy.mode) {
+                if inherit { Text("跟随应用").tag("inherit") }
+                Text("系统代理").tag("system"); Text("直连").tag("direct"); Text("指定代理").tag("custom")
+            }
+            if proxy.mode == "custom" {
+                Picker("协议", selection: $address.scheme) {
+                    Text("HTTP").tag("http"); Text("HTTPS").tag("https"); Text("SOCKS5").tag("socks5"); Text("SOCKS5H").tag("socks5h"); Text("自定义 URL").tag("url")
+                }
+                if address.scheme == "url" { TextField("代理 URL", text: $address.customURL) }
+                else { TextField("Host", text: $address.host); TextField("端口", text: $address.port) }
+            }
+        }
+        .onChange(of: address.scheme) { old, scheme in
+            if scheme == "url", old != "url" { var prior = address; prior.scheme = old; address.customURL = prior.url }
+        }
+        .onChange(of: address) { _, value in proxy.url = value.url }
+        .onChange(of: proxy.mode) { _, mode in if mode == "custom" { proxy.url = address.url } }
+    }
+}
+
 struct SourceEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var source: AgentSource
+    @State private var asAccount: Bool
+    @State private var accountChoice: String
+    @State private var account: AgentAccount
     @State private var apiKey = ""
-    @State private var savingKey = false
+    @State private var saving = false
     @State private var error: String?
     private let credentialEngine = EngineClient()
-    var hosts: [Host], accounts: [AgentAccount], onSave: (AgentSource) -> Void
+    var hosts: [Host], accounts: [AgentAccount], sources: [AgentSource]
+    var onSave: (AgentSource, AgentAccount?) async throws -> Void
+    init(source: AgentSource, hosts: [Host], accounts: [AgentAccount], sources: [AgentSource] = [], onSave: @escaping (AgentSource, AgentAccount?) async throws -> Void) {
+        _source = State(initialValue: source); self.hosts = hosts; self.accounts = accounts; self.sources = sources; self.onSave = onSave
+        _asAccount = State(initialValue: !source.accountId.isEmpty)
+        _accountChoice = State(initialValue: source.accountId.isEmpty ? "new" : source.accountId)
+        _account = State(initialValue: accounts.first { $0.id == source.accountId && $0.provider == source.provider } ?? AgentAccount(provider: source.provider, quotaEnabled: ["codex", "claude", "agy", "deepseek"].contains(source.provider)))
+    }
     var body: some View {
         VStack(spacing: 0) {
             HStack { Text("数据源").font(.title2.weight(.semibold)); Spacer() }.padding(22)
             Form {
                 TextField("名称", text: $source.name)
-                Picker("Agent", selection: $source.provider) { Text("Codex").tag("codex"); Text("Claude Code").tag("claude"); Text("Antigravity · 导入记录").tag("antigravity"); Text("agy · 限额查询").tag("agy"); Text("DeepSeek · 余额").tag("deepseek"); Text("自定义").tag("custom") }
-                Picker("关联账户", selection: $source.accountId) {
-                    Text("无账户 / 外接 API").tag("")
-                    ForEach(accounts.filter { $0.provider == source.provider }, id: \.key) { Text($0.name).tag($0.id) }
+                Picker("Agent", selection: $source.provider) {
+                    Text("Codex").tag("codex"); Text("Claude Code").tag("claude"); Text("Antigravity").tag("antigravity"); Text("agy").tag("agy"); Text("DeepSeek").tag("deepseek"); Text("自定义").tag("custom")
                 }
-                Text(["agy", "deepseek"].contains(source.provider) ? "选择要查询的账户。也可从「账户」页使用快捷接入按钮。" : "先在「账户」中添加身份。同一账户的本机和远程目录选择同一项；两个本机账户分别选择各自数据目录。修改关联后需同步记录。").font(.caption).foregroundStyle(.secondary)
-                if source.provider != "deepseek" { Picker("位置", selection: Binding(get: { source.hostId ?? "local" }, set: { source.hostId = $0 == "local" ? nil : $0 })) { Text("本机").tag("local"); ForEach(hosts) { Text($0.name.isEmpty ? $0.target : $0.name).tag($0.id) } } }
+                Toggle("作为账户", isOn: $asAccount)
+                if asAccount {
+                    Picker("账户", selection: $accountChoice) {
+                        Text("新建账户").tag("new")
+                        ForEach(accounts.filter { $0.provider == source.provider && ($0.archived != true || $0.id == source.accountId) }, id: \.key) { Text($0.name + ($0.archived == true ? "（已归档）" : "")).tag($0.id) }
+                    }
+                    TextField("账户名称", text: $account.name)
+                    Toggle("显示并查询账户限额", isOn: $account.quotaEnabled)
+                    if account.quotaEnabled {
+                        Picker("优先查询位置", selection: Binding(get: { account.quotaSourceId ?? "" }, set: { account.quotaSourceId = $0.isEmpty ? nil : $0 })) {
+                            Text("自动 · 优先本机").tag("")
+                            ForEach(sources.filter { $0.provider == source.provider && $0.accountId == account.id && $0.id != source.id }) { Text($0.name).tag($0.id) }
+                            Text(source.name.isEmpty ? "此数据源" : source.name).tag(source.id)
+                        }
+                    }
+                    Toggle("归档账户", isOn: Binding(get: { account.archived == true }, set: { account.archived = $0 }))
+                }
+                if source.provider != "deepseek" {
+                    Picker("位置", selection: Binding(get: { source.hostId ?? "local" }, set: { source.hostId = $0 == "local" ? nil : $0 })) {
+                        Text("本机").tag("local"); ForEach(hosts) { Text($0.name.isEmpty ? $0.target : $0.name).tag($0.id) }
+                    }
+                }
                 if source.provider == "deepseek" {
                     SecureField("API Key（留空保留）", text: $apiKey)
-                    Text("查询可用余额、赠送余额和充值余额。已有 Key 不会回显，留空保留。").font(.caption).foregroundStyle(.secondary)
-                    DisclosureGroup("高级设置") {
-                        TextField("API Key 文件（可选）", text: $source.path)
-                        Text("可选择包含 API Key 的文本文件。未指定时使用 DEEPSEEK_API_KEY 环境变量。").font(.caption).foregroundStyle(.secondary)
+                    DisclosureGroup("高级设置") { TextField("API Key 文件（可选）", text: $source.path) }
+                } else if source.provider != "agy" {
+                    HStack {
+                        TextField("数据目录", text: $source.path)
+                        if source.hostId == nil {
+                            Button("选择") { let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.showsHiddenFiles = true; if panel.runModal() == .OK, let url = panel.url { source.path = url.path } }
+                        }
                     }
-                } else if source.provider != "agy" { HStack { TextField("数据目录", text: $source.path); if source.hostId == nil { Button("选择") { let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.showsHiddenFiles = true; if panel.runModal() == .OK, let url = panel.url { source.path = url.path } } } } }
-                if source.provider == "agy" {
-                    TextField("agy 程序", text: Binding(get: { source.agyBinary ?? "agy" }, set: { source.agyBinary = $0 }))
-                    Text("读取此位置 agy 当前登录账户的 /usage；请先在终端登录 agy。此入口只查询限额。").font(.caption).foregroundStyle(.secondary)
                 }
-                if let error { Text(error).foregroundStyle(.orange) }
+                if source.provider == "agy" { TextField("agy 程序", text: Binding(get: { source.agyBinary ?? "agy" }, set: { source.agyBinary = $0 })) }
                 if source.provider == "codex" { TextField("Codex 程序", text: $source.codexBinary) }
-                if source.hostId != nil && !source.accountId.isEmpty {
-                    Section("限额查询前置命令") {
-                        TextEditor(text: $source.quotaPreCommand).font(.system(.callout, design: .monospaced)).frame(height: 75)
-                        Text("例如：export HTTPS_PROXY=http://127.0.0.1:7890\n在远程限额查询的同一 shell 中执行，用于加载代理环境；留空继承主机前置命令。限额由应用自动读取。").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    }
+                if source.hostId != nil && asAccount {
+                    Section("限额查询前置命令") { TextEditor(text: $source.quotaPreCommand).font(.system(.callout, design: .monospaced)).frame(height: 75).help("留空继承主机前置命令") }
                 }
                 if source.hostId == nil {
-                    Picker("查询代理", selection: Binding(get: { source.proxy?.mode ?? "inherit" }, set: { source.proxy = $0 == "inherit" ? nil : ProxySettings(mode: $0, url: source.proxy?.url ?? "") })) { Text("跟随应用").tag("inherit"); Text("系统代理").tag("system"); Text("直连").tag("direct"); Text("自定义").tag("custom") }
-                    if source.proxy?.mode == "custom" { TextField("代理地址", text: Binding(get: { source.proxy?.url ?? "" }, set: { source.proxy?.url = $0 })) }
+                    ProxyFields(proxy: Binding(get: { source.proxy ?? ProxySettings(mode: "inherit") }, set: { source.proxy = $0.mode == "inherit" ? nil : $0 }), inherit: true)
                 }
-            }.formStyle(.grouped)
-            HStack { Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Button(savingKey ? "保存中…" : "完成") { Task {
-                savingKey = true; defer { savingKey = false }
-                do {
-                    if source.provider == "deepseek", !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        let result: [String: String] = try await credentialEngine.call("credentials.save", params: ["sourceId": source.id, "apiKey": apiKey])
-                        source.path = result["path"] ?? source.path; apiKey = ""
-                    }
-                    if source.name.isEmpty { source.name = Format.provider(source.provider) }; onSave(source)
-                } catch { self.error = error.localizedDescription }
-            } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(savingKey || (["agy", "deepseek"].contains(source.provider) && source.accountId.isEmpty) || (source.path.isEmpty && !["agy", "deepseek"].contains(source.provider))) }.padding(20)
+                if let error { Text(error).foregroundStyle(.orange) }
+            }.formStyle(.grouped).disabled(saving)
+            HStack {
+                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer()
+                Button(saving ? "保存中…" : "保存") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving)
+            }.padding(20)
         }.frame(width: 570, height: 660)
-        .onChange(of: source.provider) { _, p in source.accountId = ""; apiKey = ""; if p == "deepseek" { source.hostId = nil; source.path = "" }; if ["~/.codex", "~/.claude", ""].contains(source.path) { source.path = p == "codex" ? "~/.codex" : p == "claude" ? "~/.claude" : "" } }
+        .interactiveDismissDisabled(saving)
+        .onChange(of: accountChoice) { _, id in
+            account = accounts.first { $0.id == id && $0.provider == source.provider } ?? AgentAccount(provider: source.provider, quotaEnabled: ["codex", "claude", "agy", "deepseek"].contains(source.provider))
+        }
+        .onChange(of: source.provider) { _, provider in
+            accountChoice = "new"; account = AgentAccount(provider: provider, quotaEnabled: ["codex", "claude", "agy", "deepseek"].contains(provider)); source.accountId = ""; apiKey = ""
+            if provider == "deepseek" { source.hostId = nil; source.path = "" }
+            if ["~/.codex", "~/.claude", ""].contains(source.path) { source.path = provider == "codex" ? "~/.codex" : provider == "claude" ? "~/.claude" : "" }
+        }
+    }
+    private func save() async {
+        saving = true; error = nil; defer { saving = false }
+        do {
+            var next = source
+            if !["agy", "deepseek"].contains(next.provider), next.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ClientError.message("请输入数据目录") }
+            if next.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { next.name = Format.provider(next.provider) }
+            if asAccount {
+                account.provider = next.provider
+                if account.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { account.name = next.name }
+                next.accountId = account.id
+            } else { next.accountId = "" }
+            if next.provider == "deepseek" {
+                next.hostId = nil
+                if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let result: [String: String] = try await credentialEngine.call("credentials.save", params: ["sourceId": next.id, "apiKey": apiKey])
+                    next.path = result["path"] ?? next.path; source.path = next.path; apiKey = ""
+                }
+            }
+            try await onSave(next, asAccount ? account : nil)
+        } catch { self.error = error.localizedDescription }
     }
 }
 
 struct AccountEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var account: AgentAccount
-    var sources: [AgentSource], onSave: (AgentAccount) -> Void
+    @State private var saving = false
+    @State private var error: String?
+    var sources: [AgentSource], onSave: (AgentAccount) async throws -> Void
     private var linked: [AgentSource] { sources.filter { $0.provider == account.provider && $0.accountId == account.id } }
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Text("账户").font(.title2.weight(.semibold)); Spacer() }.padding(22)
+            Text("账户").font(.title2.weight(.semibold)).padding(22)
             Form {
-                TextField("账户名称", text: $account.name, prompt: Text("个人账户 / 工作账户"))
-                Picker("Agent", selection: $account.provider) { Text("Codex").tag("codex"); Text("Claude Code").tag("claude"); Text("Antigravity").tag("antigravity"); Text("agy").tag("agy"); Text("DeepSeek").tag("deepseek"); Text("自定义").tag("custom") }.disabled(!linked.isEmpty)
+                TextField("账户名称", text: $account.name)
                 Toggle("显示并查询账户限额", isOn: $account.quotaEnabled)
+                Toggle("归档账户", isOn: Binding(get: { account.archived == true }, set: { account.archived = $0 }))
                 if account.quotaEnabled {
                     Picker("优先查询位置", selection: Binding(get: { account.quotaSourceId ?? "" }, set: { account.quotaSourceId = $0.isEmpty ? nil : $0 })) {
-                        Text("自动 · 优先本机").tag("")
-                        ForEach(linked) { Text($0.name).tag($0.id) }
+                        Text("自动 · 优先本机").tag(""); ForEach(linked) { Text($0.name).tag($0.id) }
                     }
                 }
-                if !["codex", "claude", "agy", "deepseek"].contains(account.provider) { Text("此 Agent 暂未接入自动限额查询，可先关闭限额，仅统计用量。").font(.caption).foregroundStyle(.secondary) }
-                if !linked.isEmpty { Section("关联的数据源") { ForEach(linked) { Text($0.name + " · " + $0.path).font(.callout) } } }
-            }.formStyle(.grouped)
-            HStack { Button("取消") { dismiss() }; Spacer(); Button("完成") { onSave(account) }.buttonStyle(.borderedProminent).disabled(account.name.trimmingCharacters(in: .whitespaces).isEmpty) }.padding(20)
-        }.frame(width: 560, height: 470)
-        .onChange(of: account.provider) { _, provider in account.quotaSourceId = nil; account.quotaEnabled = ["codex", "claude", "agy", "deepseek"].contains(provider) }
+                if let error { Text(error).foregroundStyle(.orange) }
+            }.formStyle(.grouped).disabled(saving)
+            HStack {
+                Button("取消") { dismiss() }.disabled(saving); Spacer()
+                Button("保存") { Task {
+                    saving = true; error = nil; defer { saving = false }
+                    do { try await onSave(account) } catch { self.error = error.localizedDescription }
+                } }.buttonStyle(.borderedProminent).disabled(saving || account.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }.padding(20)
+        }.frame(width: 560, height: 420).interactiveDismissDisabled(saving)
     }
 }
 
@@ -332,8 +415,7 @@ struct HostEditor: View {
                     TextField("远程 shell", text: $host.shell)
                     Text("远程前置命令").foregroundStyle(.secondary)
                     TextEditor(text: $host.preCommand).font(.system(size: 13, design: .monospaced)).frame(height: 65)
-                    TextField("设备表达式", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/"))
-                    Text("设备表达式留空时显示全部。").font(.system(size: 13)).foregroundStyle(.secondary)
+                    TextField("设备表达式", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/")).help("留空显示全部设备")
                 }
             }.formStyle(.grouped)
             HStack { Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Button("完成") { host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; onSave(host) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty) }.padding(20)
