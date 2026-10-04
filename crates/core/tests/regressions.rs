@@ -840,3 +840,39 @@ fn proxy_addresses_validate_without_breaking_legacy_default_ports() {
         assert_eq!(db.settings().unwrap().proxy.url, "socks5h://[::1]:1080");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn default_shell_avoids_login_profiles_and_keeps_tools_reachable() {
+    use aieyes_core::{process, ssh};
+    use std::process::Command;
+    use std::time::Duration;
+    let host = Host {
+        target: "example".into(),
+        ..Default::default()
+    };
+    assert_eq!(host.shell, "/bin/sh");
+    let ssh = ssh::command(&host, "printf '%s' \"$PATH\"").unwrap();
+    let remote = ssh.get_args().last().unwrap().to_str().unwrap();
+    // A login /bin/sh (dash) exits with status 2 when a profile script contains
+    // bash syntax, so the default shell must not be a login shell.
+    assert!(remote.contains("'/bin/sh' -c "), "{remote}");
+    assert!(!remote.contains("-lc"), "{remote}");
+    assert!(remote.contains("$HOME/.local/bin"), "{remote}");
+    // The composed string must survive a POSIX shell parsing it, like sshd does.
+    let mut outer = Command::new("/bin/sh");
+    outer.args(["-c", remote]);
+    let path =
+        String::from_utf8(process::run(outer, vec![], Duration::from_secs(3)).unwrap()).unwrap();
+    assert!(path.contains(".local/bin"), "{path}");
+    // An explicitly configured shell keeps its login semantics.
+    let host = Host {
+        target: "example".into(),
+        shell: "/bin/bash".into(),
+        ..Default::default()
+    };
+    let ssh = ssh::command(&host, "true").unwrap();
+    let remote = ssh.get_args().last().unwrap().to_str().unwrap();
+    assert!(remote.contains("'/bin/bash' -lc "), "{remote}");
+    assert!(!remote.contains("$HOME/.local/bin"), "{remote}");
+}

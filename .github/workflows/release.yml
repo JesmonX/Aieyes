@@ -85,6 +85,7 @@ jobs:
           node --check apps/desktop/web/multiselect.js
           node --check apps/desktop/web/desktop.js
           node --check apps/desktop/web/floating.js
+          node --check apps/desktop/web/sessions.js
           node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs
       - name: Desktop Rust tests
         if: runner.os != 'macOS'

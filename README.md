@@ -41,7 +41,7 @@ open dist/Aieyes.app
 | 远程历史、前置命令 | 限额查询可单独配置代理前置命令；远端只回传统计字段 |
 | 代理 | HTTP/HTTPS/SOCKS5、来源覆盖；macOS 静态系统代理，其他平台代理环境变量；PAC 和代理认证界面尚未实现 |
 | GitHub 更新 | 检查 Release；自动下载安装与签名发布尚未实现 |
-| Windows/Linux | 已实现悬浮球、动态托盘、自动回退及本机会话状态；界面为半透明圆润风格，含统一动效与悬停提示（见 [Windows 界面刷新](docs/windows-ui-refresh.md)）；Windows NSIS、Linux deb/AppImage 原生 CI 构建通过；桌面交互和安装卸载待实测 |
+| Windows/Linux | 已实现悬浮球、动态托盘、自动回退及本机会话状态；悬浮球单击或悬停展开与 macOS 菜单栏一致的面板，支持贴边与暂时隐藏；界面为半透明圆润风格，含统一动效与悬停提示（见 [Windows 界面刷新](docs/windows-ui-refresh.md)）；Windows NSIS、Linux deb/AppImage 原生 CI 构建通过；桌面交互和安装卸载待实测 |
 
 服务器通过 CPU、内存、GPU 圆环和设备状态条展示实时资源，尚未保存长期采样历史。Token 历史保存在 SQLite 中。
 
@@ -72,7 +72,7 @@ cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features 
 
 Windows 使用 `./scripts/build-desktop.ps1 debug`；Linux 使用 `sh scripts/build-desktop.sh debug`。将 `debug` 改为 `release` 可构建安装包，需要先安装 Tauri v2 CLI。macOS DMG 使用 `sh scripts/build-macos.sh release --dmg`，并需要 Python 3.11+。完整依赖、操作方式和平台验证范围见 [Windows / Linux 桌面版](docs/windows-linux.md)。
 
-悬浮球可拖动、单击打开概览、右键打开菜单；Linux 托盘通过原生菜单打开详情和设置。「设置 → 通用 → 桌面显示」可切换模式或重置位置。关闭详情窗口后继续监测，选择「退出 Aieyes」才退出应用。
+悬浮球单击或悬停展开与 macOS 菜单栏一致的面板，拖动松手后自动贴边，可暂时隐藏以应对全屏场景；右键打开菜单，Linux 托盘通过原生菜单打开详情和设置。「设置 → 通用 → 桌面显示」可切换模式或重置位置。关闭详情窗口后继续监测，选择「退出 Aieyes」才退出应用。
 
 核心可独立运行 JSON-RPC stdio 或单次命令：
 

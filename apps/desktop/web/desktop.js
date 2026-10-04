@@ -1,27 +1,18 @@
 (() => {
   let current = null;
-  const mark = path => `<svg viewBox="0 0 24 24"><path d="${path}"/></svg>`;
-  const phases = {
-    working:[mark('M8 5v14l11-7Z'),'进行中'], thinking:[mark('M12 3 9 9 3 12l6 3 3 6 3-6 6-3-6-3Z'),'思考中'],
-    tool:[mark('m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18'),'执行工具'], complete:[mark('m5 12 4 4L19 6'),'已完成'],
-    interrupted:[mark('M8 5v14M16 5v14'),'已中断'], unknown:[mark('M9 8a3 3 0 1 1 5 2c-2 1-2 2-2 4m0 4h.01'),'状态待确认'],
-  };
   const invoke = (name, args) => window.__TAURI__.core.invoke(name, args);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function update(info) {
     current = info;
     document.body.dataset.platform = info.platform;
     document.documentElement.dataset.material = info.material || 'opaque';
-    document.querySelector('#session-summary').textContent = info.summary;
-    document.querySelector('#session-list').innerHTML = info.sessions.map(s => {
-      const [symbol,label] = phases[s.phase] || phases.unknown;
-      return `<div class="live-row"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(s.source || 'Codex')}</strong><small>会话 ${escape(s.id.slice(0,8))} · ${new Date(s.updatedAt*1000).toLocaleTimeString('zh-CN')}</small></div><span>${label}</span></div>`;
-    }).join('') || '<p class="muted">暂无活跃会话</p>';
-    document.querySelector('#session-warning').hidden = !info.unavailable;
+    renderLiveSessions(info);
     const mode = document.querySelector('#desktop-mode');
     if (mode && document.activeElement !== mode) mode.value = info.mode;
     const effective = document.querySelector('#desktop-effective');
     if (effective) effective.textContent = effectiveText(info);
+    const hide = document.querySelector('#hide-ball');
+    if (hide && document.activeElement !== hide) hide.textContent = info.hidden ? '恢复显示悬浮球' : '暂时隐藏悬浮球';
   }
   function effectiveText(info) {
     return info.reason || `当前使用${info.effectiveMode === 'floating' ? '悬浮球' : '系统状态栏'}。`;
@@ -46,7 +37,7 @@
   }
   window.AieyesDesktop = {
     settingsHTML() {
-      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="auto">跟随系统</option><option value="floating">悬浮球</option><option value="tray">系统状态栏 / 托盘</option></select></div><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><div class="between"><button type="button" id="reset-ball">重置悬浮球位置</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
+      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="auto">跟随系统</option><option value="floating">悬浮球</option><option value="tray">系统状态栏 / 托盘</option></select></div><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">悬浮球单击或悬停打开面板，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，重启应用也会恢复。</p><div class="between"><button type="button" id="reset-ball">重置悬浮球位置</button><button type="button" id="hide-ball">暂时隐藏悬浮球</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
     },
     bindSettings() {
       const select = document.querySelector('#desktop-mode');
@@ -59,6 +50,11 @@
         finally { select.disabled = false; }
       };
       document.querySelector('#reset-ball').onclick = () => invoke('desktop_action',{action:'reset-position'}).catch(e=>notify(String(e)));
+      const hide = document.querySelector('#hide-ball');
+      if (hide) {
+        hide.textContent = current?.hidden ? '恢复显示悬浮球' : '暂时隐藏悬浮球';
+        hide.onclick = () => invoke('desktop_action',{action: current?.hidden ? 'show-ball' : 'hide-ball'}).catch(e=>notify(String(e)));
+      }
       document.querySelector('#quit-app').onclick = () => invoke('desktop_action',{action:'quit'}).catch(e=>notify(String(e)));
     },
   };
@@ -68,14 +64,21 @@
       await window.__TAURI__.event.listen('desktop:status', event => update(event.payload));
       await window.__TAURI__.event.listen('desktop:error', event => notify(String(event.payload)));
       await window.__TAURI__.event.listen('desktop:navigate', event => {
-        state.page = event.payload === 'settings' ? 'settings' : 'agent';
-        if (state.page === 'settings') state.settingsTab = 'general';
+        const page = event.payload;
+        state.page = page === 'settings' || page === 'prices' ? 'settings' : 'agent';
+        if (state.page === 'settings') state.settingsTab = page === 'prices' ? 'prices' : 'general';
         render();
+        if (page === 'prices') api('prices.list').then(prices => { state.prices = prices; render(); }).catch(e => notify(String(e)));
       });
       const info = await invoke('desktop_info');
       update(info);
       await bindTitlebar(info);
-      if (info.page === 'settings') { state.page = 'settings'; state.settingsTab = 'general'; render(); }
+      if (info.page === 'settings' || info.page === 'prices') {
+        state.page = 'settings';
+        state.settingsTab = info.page === 'prices' ? 'prices' : 'general';
+        if (info.page === 'prices') state.prices = await api('prices.list');
+        render();
+      }
     } catch (error) { notify(String(error)); }
   }
   boot();

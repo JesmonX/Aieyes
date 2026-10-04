@@ -6,8 +6,8 @@ import { readFileSync } from 'node:fs';
 const read = name => readFileSync(new URL(`../apps/desktop/web/${name}`, import.meta.url), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function harness(file, initial = {}) {
-  const elements = new Map(), events = new Map(), calls = [], notices = [];
-  let dragCount = 0, maximized = false;
+  const elements = new Map(), events = new Map(), calls = [], notices = [], runs = [], timers = new Map();
+  let dragCount = 0, maximized = false, timerId = 0;
   const windowCalls = [];
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
@@ -18,8 +18,11 @@ function harness(file, initial = {}) {
     });
     return elements.get(id);
   }
-  const info = {mode:'auto',effectiveMode:'floating',platform:'windows',summary:'思考中 · 2 个会话',phase:'thinking',activeCount:2,sessions:[],page:'agent',...initial};
-  const document = {body:element('body'),documentElement:element('html'),activeElement:null,querySelector:element};
+  const document = {body:element('body'),documentElement:element('html'),activeElement:null,querySelector:element,listeners:new Map(),
+    addEventListener(name, fn) { this.listeners.set(name, fn); },
+    async dispatch(name, fields = {}) { await this.listeners.get(name)?.({preventDefault(){},...fields}); },
+  };
+  const info = {mode:'auto',effectiveMode:'floating',platform:'windows',summary:'思考中 · 2 个会话',phase:'thinking',activeCount:2,sessions:[],page:'agent',panelOpen:false,panelPinned:false,hidden:false,...initial};
   const native = {
     async startDragging(){dragCount++;},
     async isMaximized(){return maximized;},
@@ -29,41 +32,116 @@ function harness(file, initial = {}) {
     async onResized(fn){events.set('resize',fn);return ()=>{};},
   };
   const window = {__TAURI__:{
-    core:{async invoke(command, args) { calls.push({command,args}); return info; }},
+    core:{async invoke(command, args) {
+      calls.push({command,args});
+      if (command === 'desktop_panel') { info.panelOpen = args.open; return {...info}; }
+      if (command === 'desktop_panel_pin') { info.panelPinned = args.pinned; return {...info}; }
+      return info;
+    }},
     event:{async listen(name, fn) { events.set(name, fn); return () => {}; }},
     window:{getCurrentWindow:()=>native},
   }};
-  const state = {page:'agent',settingsTab:'accounts'};
-  vm.runInNewContext(read(file), {window,document,state,notify:e=>notices.push(e),render(){},console}, {filename:file});
-  return {window,document,element,events,calls,notices,state,info,windowCalls,native,get dragCount(){return dragCount;}};
+  const state = {page:'agent',settingsTab:'accounts',settings:{accounts:[],sources:[],hosts:[]},hosts:[],dashboard:null,provider:'',accountKey:'',sourceId:'',model:'',days:1,cost:false,busy:false};
+  const sandbox = {
+    window, document, state, console,
+    notify: e => notices.push(e),
+    render(){}, drawTrend(){},
+    loadDashboard: async () => {},
+    scan: async () => { runs.push('scan'); },
+    quotas: async () => { runs.push('quotas'); },
+    syncPrices: async () => { runs.push('prices'); },
+    sample: async () => { runs.push('hosts'); },
+    api: async () => ({ prices: [] }),
+    setTimeout: (fn, ms = 0) => { const id = ++timerId; timers.set(id, {fn, ms}); return id; },
+    clearTimeout: id => { timers.delete(id); },
+    requestAnimationFrame: fn => { fn(); return 0; },
+    Element: class {},
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(read('sessions.js'), sandbox, {filename:'sessions.js'});
+  vm.runInContext(read(file), sandbox, {filename:file});
+  return {window,document,element,events,calls,notices,runs,state,info,windowCalls,native,timers,
+    get dragCount(){return dragCount;},
+    async runTimers(ms) { for (const [id, timer] of [...timers.entries()]) { if (ms === undefined || timer.ms === ms) { timers.delete(id); await timer.fn(); } } },
+  };
 }
 
-test('floating ball receives live status and opens the details window on click', async () => {
+test('floating ball receives live status and opens the panel on click', async () => {
   const h = harness('floating.js'); await flush();
   assert.equal(h.element('#phase').textContent, '思考中');
   assert.equal(h.element('#count').textContent, '2');
   assert.equal(h.document.body.dataset.active, 'true');
-  await h.element('#ball').dispatch('click',{detail:1});
-  assert.equal(h.calls.at(-1).args.action,'open');
-  h.events.get('desktop:status')({payload:{...h.info,phase:'complete',activeCount:0}});
+  await h.element('#ball').dispatch('click',{detail:1}); await flush();
+  assert.equal(h.calls.at(-1).command,'desktop_panel');
+  assert.equal(h.calls.at(-1).args.open,true);
+  assert.equal(h.document.body.dataset.view,'panel');
+  h.events.get('desktop:status')({payload:{...h.info,panelOpen:true,phase:'complete',activeCount:0}});
   assert.equal(h.element('#count').hidden,true);
   assert.equal(h.element('#phase').textContent,'已完成');
   assert.equal(h.document.body.dataset.active,'false');
 });
-test('dragging does not open details; keyboard activation still works after a drag', async () => {
+test('dragging snaps the ball without opening the panel; keyboard activation still works', async () => {
   const h = harness('floating.js'); await flush();
   const ball = h.element('#ball');
   await ball.dispatch('pointerdown',{button:0,clientX:20,clientY:20});
   await ball.dispatch('pointermove',{buttons:1,clientX:22,clientY:20});
   assert.equal(h.dragCount,0);
-  await ball.dispatch('pointermove',{buttons:1,clientX:34,clientY:20});
+  await ball.dispatch('pointermove',{buttons:1,clientX:34,clientY:20}); await flush();
   assert.equal(h.dragCount,1);
-  await ball.dispatch('click',{detail:1});
-  assert.equal(h.calls.filter(c=>c.command==='desktop_action').length,0);
-  await ball.dispatch('click',{detail:0});
-  assert.equal(h.calls.at(-1).args.action,'open');
+  assert.equal(h.calls.filter(c=>c.command==='desktop_action').at(-1).args.action,'snap');
+  await ball.dispatch('click',{detail:1}); await flush();
+  assert.equal(h.calls.filter(c=>c.command==='desktop_panel').length,0);
+  await ball.dispatch('click',{detail:0}); await flush();
+  assert.equal(h.calls.at(-1).command,'desktop_panel');
   await ball.dispatch('contextmenu');
   assert.equal(h.calls.at(-1).args.action,'menu');
+});
+test('hovering opens the panel, leaving closes it, and Esc or pin behave', async () => {
+  const h = harness('floating.js'); await flush();
+  const ball = h.element('#ball');
+  await ball.dispatch('pointerenter');
+  await h.runTimers(350); await flush();
+  assert.equal(h.calls.at(-1).command,'desktop_panel');
+  assert.equal(h.calls.at(-1).args.open,true);
+  assert.equal(h.document.body.dataset.view,'panel');
+  await h.element('#panel').dispatch('pointerleave');
+  await h.runTimers(450); await flush();
+  assert.equal(h.info.panelOpen,false);
+  assert.equal(h.document.body.dataset.view,'ball');
+  // The hover that survives the window shrink must not reopen the panel immediately.
+  await ball.dispatch('pointerenter');
+  await h.runTimers(350); await flush();
+  assert.equal(h.calls.filter(c=>c.command==='desktop_panel'&&c.args.open).length,1);
+  await ball.dispatch('click',{detail:1}); await flush();
+  assert.equal(h.info.panelOpen,true);
+  await h.document.dispatch('keydown',{key:'Escape'}); await flush();
+  assert.equal(h.info.panelOpen,false);
+  await ball.dispatch('click',{detail:1}); await flush();
+  await h.element('#panel-pin').dispatch('click'); await flush();
+  assert.equal(h.info.panelPinned,true);
+  assert.equal(h.element('#panel-pin').dataset.pinned,'true');
+  assert.equal(h.element('#panel-pin')['aria-pressed'],'true');
+});
+test('the refresh menu runs scans, quotas, prices and host sampling', async () => {
+  const h = harness('floating.js'); await flush();
+  await h.element('#ball').dispatch('click',{detail:1}); await flush();
+  h.element('#panel-menu').hidden = true;
+  await h.element('#panel-refresh').dispatch('click');
+  assert.equal(h.element('#panel-menu').hidden,false);
+  assert.equal(h.element('#panel-refresh')['aria-expanded'],'true');
+  await h.element('#panel-menu').dispatch('click',{target:{closest:()=>({dataset:{refresh:'quotas'}})}});
+  assert.deepEqual(h.runs,['quotas']);
+  assert.equal(h.element('#panel-menu').hidden,true);
+});
+test('panel footer opens details, settings and quit through desktop actions', async () => {
+  const h = harness('floating.js'); await flush();
+  await h.element('#ball').dispatch('click',{detail:1}); await flush();
+  await h.element('#panel-detail').dispatch('click'); await flush();
+  assert.equal(h.calls.filter(c=>c.command==='desktop_action').at(-1).args.action,'open');
+  await h.element('#panel-settings').dispatch('click'); await flush();
+  assert.equal(h.calls.filter(c=>c.command==='desktop_action').at(-1).args.action,'settings');
+  await h.element('#panel-quit').dispatch('click'); await flush();
+  assert.equal(h.calls.filter(c=>c.command==='desktop_action').at(-1).args.action,'quit');
 });
 test('unavailable logs are visible and never look like confirmed idle status', async () => {
   const h = harness('floating.js',{unavailable:true,phase:null,activeCount:0}); await flush();
@@ -77,6 +155,8 @@ test('main window escapes source names and can navigate from the native menu', a
   h.events.get('desktop:navigate')({payload:'settings'});
   assert.equal(h.state.page,'settings');
   assert.equal(h.state.settingsTab,'general');
+  h.events.get('desktop:navigate')({payload:'prices'}); await flush();
+  assert.equal(h.state.settingsTab,'prices');
   h.window.AieyesDesktop.bindSettings();
   const mode = h.element('#desktop-mode');
   mode.value='tray';
@@ -85,6 +165,18 @@ test('main window escapes source names and can navigate from the native menu', a
   assert.equal(mode.value,'auto');
   assert.equal(mode.disabled,false);
   assert.equal(h.notices.length,1);
+});
+test('settings hide and restore the floating ball with the live label', async () => {
+  const h = harness('desktop.js'); await flush();
+  h.window.AieyesDesktop.bindSettings();
+  const hide = h.element('#hide-ball');
+  assert.equal(hide.textContent,'暂时隐藏悬浮球');
+  await hide.onclick();
+  assert.equal(h.calls.filter(c=>c.command==='desktop_action').at(-1).args.action,'hide-ball');
+  h.events.get('desktop:status')({payload:{...h.info,hidden:true}});
+  assert.equal(hide.textContent,'恢复显示悬浮球');
+  await hide.onclick();
+  assert.equal(h.calls.filter(c=>c.command==='desktop_action').at(-1).args.action,'show-ball');
 });
 test('Windows titlebar minimizes, restores, and requests close rather than quit', async () => {
   const h = harness('desktop.js',{material:'mica'}); await flush();

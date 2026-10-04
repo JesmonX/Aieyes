@@ -37,7 +37,12 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
                     &source.quota_command,
                 ]);
             } else {
-                c.args(["-lc", &source.quota_command]);
+                // dash exits with status 2 on bash-only profile scripts, so the local
+                // shell also runs without login profiles, with a fallback PATH.
+                c.args([
+                    "-c",
+                    &format!("{}{}", ssh::PATH_FALLBACK, source.quota_command),
+                ]);
             }
             network::apply_env(&mut c, source.proxy.as_ref().unwrap_or(&settings.proxy));
             c

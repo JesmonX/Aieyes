@@ -48,22 +48,44 @@ pub fn command(host: &Host, remote: &str) -> Result<Command> {
     if !host.identity_file.is_empty() {
         cmd.arg("-i").arg(expand(&host.identity_file));
     }
+    let shell = if host.shell.is_empty() {
+        DEFAULT_SHELL
+    } else {
+        host.shell.as_str()
+    };
+    // A login POSIX shell re-reads /etc/profile and profile.d scripts before running
+    // the command. On Debian-style hosts `/bin/sh` is dash and those files are often
+    // bash-only, so the shell exits with status 2 before the script starts. The
+    // fallback PATH keeps user-installed CLIs reachable without the profiles.
+    let login = login_shell(shell);
     let mut script = String::from("set -e\n");
+    if !login {
+        script.push_str(PATH_FALLBACK);
+    }
     if !host.pre_command.trim().is_empty() {
         script.push_str("{\n");
         script.push_str(&host.pre_command);
         script.push_str("\n} </dev/null >&2\n");
     }
     script.push_str(remote);
-    let shell = if host.shell.is_empty() {
-        "/bin/sh"
-    } else {
-        &host.shell
-    };
+    let flag = if login { "-lc" } else { "-c" };
     cmd.arg("--")
         .arg(&host.target)
-        .arg(format!("{} -lc {}", quote(shell), quote(&script)));
+        .arg(format!("{} {} {}", quote(shell), flag, quote(&script)));
     Ok(cmd)
+}
+
+/// Shell used when a host does not configure one.
+pub const DEFAULT_SHELL: &str = "/bin/sh";
+
+/// Keeps user-installed CLIs reachable without a login shell; mirrors the local
+/// CLI resolver so remote agents installed in the home directory keep working.
+pub const PATH_FALLBACK: &str = "PATH=\"$HOME/.local/bin:$HOME/bin:$HOME/.codex/packages/standalone/current/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}\"\nexport PATH\n";
+
+/// Only explicitly configured non-POSIX shells are invoked as login shells: a
+/// login `/bin/sh` or `/bin/dash` re-reads profiles that may not be POSIX.
+fn login_shell(shell: &str) -> bool {
+    !matches!(shell.rsplit('/').next().unwrap_or(shell), "sh" | "dash")
 }
 pub fn python(host: &Host, script: &str, args: &[String]) -> Result<serde_json::Value> {
     let remote = format!(

@@ -46,6 +46,8 @@ fn main() {
             engine_call,
             desktop::desktop_info,
             desktop::desktop_mode,
+            desktop::desktop_panel,
+            desktop::desktop_panel_pin,
             desktop::desktop_action
         ])
         .build(tauri::generate_context!())

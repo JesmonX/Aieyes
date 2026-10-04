@@ -33,11 +33,19 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
       window.saved=[]; window.discoveryFails=false; window.nativeCalls=[]; window.engineCalls=[]; window.settingsSaveFails=false; window.quotaFails=false; let maximized=false;
       window.uiTimers=[];
       window.setInterval=(fn,ms)=>{window.uiTimers.push({fn,ms});return window.uiTimers.length;};
+      window.desktopInfo={platform:'windows',material:'opaque',mode:'auto',effectiveMode:'floating',sessions:[],summary:'暂无活跃会话',panelOpen:false,panelPinned:false,hidden:false};
+      window.desktopCalls=[]; window.__listeners={};
       window.__TAURI__={
-        event:{async listen(){return ()=>{};}},
+        event:{async listen(name,fn){window.__listeners[name]=fn;return ()=>{};}},
         window:{getCurrentWindow:()=>({async isMaximized(){return maximized;},async toggleMaximize(){maximized=!maximized;window.nativeCalls.push('maximize');},async minimize(){window.nativeCalls.push('minimize');},async close(){window.nativeCalls.push('close');},async onResized(){return ()=>{};}})},
         core:{async invoke(command,args){
-          if(command==='desktop_info')return {platform:'windows',material:'opaque',mode:'auto',effectiveMode:'floating',sessions:[],summary:'暂无活跃会话'};
+          if(command==='desktop_info')return structuredClone(window.desktopInfo);
+          if(command==='desktop_panel'||command==='desktop_panel_pin'||command==='desktop_action'){
+            window.desktopCalls.push({command,args:structuredClone(args)});
+            if(command==='desktop_panel')window.desktopInfo.panelOpen=args.open;
+            if(command==='desktop_panel_pin')window.desktopInfo.panelPinned=args.pinned;
+            return structuredClone(window.desktopInfo);
+          }
           if(command!=='engine_call')return {};
           window.engineCalls.push({method:args.method,params:structuredClone(args.params)});
           switch(args.method){
@@ -405,6 +413,53 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await quotaPage.evaluate(()=>{state.settings.accounts[0].archived=true;state.lastQuota=0;window.uiTimers.find(t=>t.ms===500).fn();});
     assert.equal(await quotaPage.evaluate(()=>window.engineCalls.filter(c=>c.method==='quotas.refresh').length),2);
     await quotaPage.close();
+
+    // The floating window expands into the compact panel and mirrors the menu bar layout.
+    const floating=await browser.newPage({viewport:{width:420,height:640}});
+    floating.on('pageerror',error=>errors.push(String(error)));
+    await floating.addInitScript(fixture);
+    await floating.addInitScript(()=>{
+      window.fixtureHosts=[{id:'host1',sample:{timestamp:Date.now()/1000,load:[0.2,0.3,0.4],errors:{},cpu:[{id:'cpu',utilization:42}],memory:{total:16000000000,available:4000000000,cached:1000000000,buffers:50000000,swapTotal:0,swapFree:0}}}];
+    });
+    await floating.goto(`http://127.0.0.1:${server.address().port}/floating.html`);
+    await floating.locator('#phase').waitFor();
+    assert.equal(await floating.locator('body').getAttribute('data-view'),'ball');
+    assert.equal(await floating.locator('#panel').isVisible(),false);
+    await floating.locator('#ball').click();
+    await floating.waitForFunction(()=>window.desktopInfo.panelOpen===true);
+    assert.equal(await floating.locator('body').getAttribute('data-view'),'panel');
+    assert.equal(await floating.locator('.panel-tabs [data-page=agent].active').count(),1);
+    await floating.locator('.panel-stats .stat-value').first().waitFor();
+    assert.equal(await floating.locator('.panel-stats .stat').count(),2);
+    assert.equal(await floating.locator('#live-sessions').isVisible(),true);
+    assert.equal(await floating.locator('#trend').isVisible(),true);
+    assert.equal(await floating.evaluate(()=>window.engineCalls.filter(c=>c.method==='dashboard').length>0),true);
+    await floating.screenshot({animations:'disabled',path:path.join(output,'floating-panel-light.png')});
+    await floating.locator('.panel-tabs [data-page=servers]').click();
+    await floating.locator('.server-card').first().waitFor();
+    await floating.locator('.server-card .resource-ring').first().waitFor();
+    assert.equal(await floating.locator('.server-card .resource-ring').count(),2);
+    await floating.locator('.panel-tabs [data-page=agent]').click();
+    await floating.locator('.panel-stats').waitFor();
+    await floating.locator('#panel-pin').click();
+    await floating.waitForFunction(()=>window.desktopInfo.panelPinned===true);
+    await floating.locator('#panel-refresh').click();
+    await floating.locator('[data-refresh=quotas]').click();
+    await floating.waitForFunction(()=>window.engineCalls.some(c=>c.method==='quotas.refresh'));
+    await floating.locator('#panel-detail').click();
+    await floating.waitForFunction(()=>window.desktopCalls.some(c=>c.command==='desktop_action'&&c.args.action==='open'));
+    assert.equal(await floating.evaluate(()=>window.desktopInfo.panelOpen),false);
+    await floating.mouse.move(1,1);
+    await floating.waitForTimeout(800);
+    await floating.locator('#ball').hover();
+    await floating.waitForFunction(()=>window.desktopInfo.panelOpen===true);
+    await floating.keyboard.press('Escape');
+    await floating.waitForFunction(()=>window.desktopInfo.panelOpen===false);
+    await floating.emulateMedia({colorScheme:'dark'});
+    await floating.locator('#ball').click();
+    await floating.waitForFunction(()=>window.desktopInfo.panelOpen===true);
+    await floating.screenshot({animations:'disabled',path:path.join(output,'floating-panel-dark.png')});
+    await floating.close();
     assert.deepEqual(errors,[]);
     console.log(`Browser integration checks passed; previews: ${output}`);
   } finally {
