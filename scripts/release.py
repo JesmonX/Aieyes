@@ -21,15 +21,15 @@ PACKAGES = {
 
 
 def version(root=ROOT, tag=None):
-    core = tomllib.loads((root / "crates/core/Cargo.toml").read_text())["package"]["version"]
+    core = tomllib.loads((root / "crates/core/Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
     versions = {
         "core": core,
-        "desktop": tomllib.loads((root / "apps/desktop/src-tauri/Cargo.toml").read_text())["package"]["version"],
-        "tauri": json.loads((root / "apps/desktop/src-tauri/tauri.conf.json").read_text())["version"],
+        "desktop": tomllib.loads((root / "apps/desktop/src-tauri/Cargo.toml").read_text(encoding="utf-8"))["package"]["version"],
+        "tauri": json.loads((root / "apps/desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"],
         "macOS": plistlib.loads((root / "apps/macos/Info.plist").read_bytes())["CFBundleShortVersionString"],
     }
     for lock in ("Cargo.lock", "apps/desktop/src-tauri/Cargo.lock"):
-        for package in tomllib.loads((root / lock).read_text())["package"]:
+        for package in tomllib.loads((root / lock).read_text(encoding="utf-8"))["package"]:
             if package["name"] in ("aieyes-core", "aieyes-desktop"):
                 versions[f'{lock}:{package["name"]}'] = package["version"]
     if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", core):
@@ -55,20 +55,20 @@ def update_manifest(directory, release_version):
     platforms = {}
     for target, suffix in [('windows-x86_64-nsis', 'windows-x64.exe'), ('linux-x86_64-appimage', 'linux-x64.AppImage'), ('linux-x86_64-deb', 'linux-x64.deb')]:
         name = f'Aieyes-{release_version}-{suffix}'
-        signature = (directory / (name + '.sig')).read_text().strip()
+        signature = (directory / (name + '.sig')).read_text(encoding="utf-8").strip()
         decoded = base64.b64decode(signature, validate=True).decode('utf-8')
         if not decoded.startswith('untrusted comment:') or f'version:{release_version}' not in decoded:
             raise ValueError(f'Missing signed version in {name}')
         platforms[target] = {'url': f'https://github.com/JesmonX/Aieyes/releases/download/v{release_version}/{name}', 'signature': signature}
     notes_path = ROOT / 'dist/release-notes.txt'
-    notes = notes_path.read_text() if notes_path.exists() else f'Aieyes {release_version}：改进与修复。'
+    notes = notes_path.read_text(encoding="utf-8") if notes_path.exists() else f'Aieyes {release_version}：改进与修复。'
     manifest = {'version': release_version, 'notes': notes, 'platforms': platforms}
-    (directory / 'latest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
+    (directory / 'latest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     validate_updates(directory, release_version)
 
 
 def validate_updates(directory, release_version):
-    manifest = json.loads((directory / 'latest.json').read_text())
+    manifest = json.loads((directory / 'latest.json').read_text(encoding="utf-8"))
     if manifest['version'] != release_version:
         raise ValueError('Updater manifest version mismatch')
     targets = {'windows-x86_64-nsis': 'windows-x64.exe', 'linux-x86_64-appimage': 'linux-x64.AppImage', 'linux-x86_64-deb': 'linux-x64.deb'}
@@ -77,12 +77,12 @@ def validate_updates(directory, release_version):
     for target, suffix in targets.items():
         entry = manifest['platforms'][target]
         name = f'Aieyes-{release_version}-{suffix}'
-        if entry['url'] != f'https://github.com/JesmonX/Aieyes/releases/download/v{release_version}/{name}' or entry['signature'] != (directory / (name + '.sig')).read_text().strip():
+        if entry['url'] != f'https://github.com/JesmonX/Aieyes/releases/download/v{release_version}/{name}' or entry['signature'] != (directory / (name + '.sig')).read_text(encoding="utf-8").strip():
             raise ValueError('Updater URL/signature mismatch')
     sparkle = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
     builds = []
     for arch in ('x64', 'arm64'):
-        feed = (directory / f'appcast-macos-{arch}.xml').read_text()
+        feed = (directory / f'appcast-macos-{arch}.xml').read_text(encoding="utf-8")
         if '<!-- sparkle-signatures:' not in feed:
             raise ValueError('Sparkle feed is not signed')
         item = ET.fromstring(feed).find('./channel/item')

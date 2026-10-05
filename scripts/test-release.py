@@ -5,6 +5,7 @@ import unittest
 import base64
 import json
 import plistlib
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("release", pathlib.Path(__file__).with_name("release.py"))
 release = importlib.util.module_from_spec(spec)
@@ -12,6 +13,18 @@ spec.loader.exec_module(release)
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_manifest_uses_utf8_on_non_utf8_hosts(self):
+        original_open = pathlib.Path.open
+        def windows_open(path, mode='r', buffering=-1, encoding=None, errors=None, newline=None):
+            if 'b' not in mode and encoding in (None, 'locale'):
+                encoding = 'cp1252'
+            return original_open(path, mode, buffering, encoding, errors, newline)
+        with tempfile.TemporaryDirectory() as temporary, patch.object(pathlib.Path, 'open', windows_open):
+            root = pathlib.Path(temporary)
+            self.assets(root)
+            release.checksum_assets(root, '1.2.3')
+            self.assertEqual(json.loads((root/'latest.json').read_bytes())['version'], '1.2.3')
+
     def assets(self, root, version='1.2.3'):
         for name in release.installer_names(version):
             (root / name).write_bytes(b'installer')
@@ -52,14 +65,14 @@ class ReleaseTests(unittest.TestCase):
             root = pathlib.Path(temporary)
             self.assets(root)
             manifest_path = root/'latest.json'
-            original = manifest_path.read_text()
+            original = manifest_path.read_text(encoding="utf-8")
             manifest = json.loads(original)
             manifest['platforms']['linux-x86_64-deb']['url'] = 'https://example.com/other.deb'
             manifest_path.write_text(json.dumps(manifest))
             with self.assertRaises(ValueError):
                 release.checksum_assets(root, '1.2.3')
-            manifest_path.write_text(original)
-            (root/'appcast-macos-x64.xml').write_text((root/'appcast-macos-x64.xml').read_text().replace('<sparkle:version>', '<sparkle:version>9'))
+            manifest_path.write_text(original, encoding="utf-8")
+            (root/'appcast-macos-x64.xml').write_text((root/'appcast-macos-x64.xml').read_text(encoding="utf-8").replace('<sparkle:version>', '<sparkle:version>9'))
             with self.assertRaises(ValueError):
                 release.checksum_assets(root, '1.2.3')
 

@@ -59,6 +59,7 @@ class WakeTests(unittest.TestCase):
                 wake.atomic(root/'tasks/wake-missed.json',json.dumps(m));wake.tick(root);self.assertEqual(cli.call_count,1)
                 m=self.manifest();m['id']='wake-overlap';wake.atomic(root/'tasks/wake-overlap.json',json.dumps(m))
                 with sqlite3.connect(str(root/'runner.sqlite')) as db:db.execute('INSERT INTO leases VALUES(?,?)',('codex:test',int(wake.time.time())+100))
+                db.close()
                 wake.tick(root);self.assertEqual(cli.call_count,1);self.assertEqual(wake.history(root,'wake-overlap')[0]['status'],'skipped-overlap')
 
     def test_zero_exit_without_completion_and_timeout_are_failures(self):
