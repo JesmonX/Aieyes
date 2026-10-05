@@ -151,7 +151,7 @@ impl Default for Host {
             target: String::new(),
             port: None,
             identity_file: String::new(),
-            shell: "/bin/sh".into(),
+            shell: crate::ssh::DEFAULT_SHELL.into(),
             pre_command: String::new(),
             enabled: true,
             metrics: ["cpu", "memory", "gpu", "filesystems", "disk", "network"]

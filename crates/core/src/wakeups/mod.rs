@@ -361,7 +361,8 @@ fn manifest(task: &Task, source: &Source, settings: &Settings) -> Result<Manifes
         pre_command,
         shell: pre
             .map(|h| h.shell.clone())
-            .unwrap_or_else(|| "/bin/sh".into()),
+            .filter(|shell| !shell.trim().is_empty())
+            .unwrap_or_else(|| ssh::DEFAULT_SHELL.into()),
         proxy: if source.host_id.is_some() {
             source.proxy.clone().unwrap_or(ProxyConfig {
                 mode: "system".into(),

@@ -895,19 +895,20 @@ fn proxy_addresses_validate_without_breaking_legacy_default_ports() {
 
 #[cfg(unix)]
 #[test]
-fn default_shell_avoids_login_profiles_and_keeps_tools_reachable() {
+fn explicit_posix_shell_avoids_login_profiles_and_keeps_tools_reachable() {
     use aieyes_core::{process, ssh};
     use std::process::Command;
     use std::time::Duration;
     let host = Host {
         target: "example".into(),
+        shell: "/bin/sh".into(),
         ..Default::default()
     };
     assert_eq!(host.shell, "/bin/sh");
     let ssh = ssh::command(&host, "printf '%s' \"$PATH\"").unwrap();
     let remote = ssh.get_args().last().unwrap().to_str().unwrap();
     // A login /bin/sh (dash) exits with status 2 when a profile script contains
-    // bash syntax, so the default shell must not be a login shell.
+    // bash syntax, so explicitly configured POSIX shells must not use login mode.
     assert!(remote.contains("'/bin/sh' -c "), "{remote}");
     assert!(!remote.contains("-lc"), "{remote}");
     assert!(remote.contains("$HOME/.local/bin"), "{remote}");
@@ -917,12 +918,12 @@ fn default_shell_avoids_login_profiles_and_keeps_tools_reachable() {
     let path =
         String::from_utf8(process::run(outer, vec![], Duration::from_secs(3)).unwrap()).unwrap();
     assert!(path.contains(".local/bin"), "{path}");
-    // An explicitly configured shell keeps its login semantics.
+    // New hosts default to Bash and retain its login semantics.
     let host = Host {
         target: "example".into(),
-        shell: "/bin/bash".into(),
         ..Default::default()
     };
+    assert_eq!(host.shell, "/bin/bash");
     let ssh = ssh::command(&host, "true").unwrap();
     let remote = ssh.get_args().last().unwrap().to_str().unwrap();
     assert!(remote.contains("'/bin/bash' -lc "), "{remote}");

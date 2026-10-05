@@ -9,7 +9,7 @@ function fixture() {
   const tokens={input:12000,output:3000,cacheRead:5000,cacheWrite:0};
   const usage={tokens,total:20000,events:3,pricedTokens:20000,cost:0.04};
   const empty={tokens:{input:0,output:0,cacheRead:0,cacheWrite:0},total:0,events:0,pricedTokens:0,cost:0};
-  const host={id:'host',name:'训练服务器',target:'gpu-lab',enabled:true,port:null,identityFile:'',shell:'/bin/sh',preCommand:'',metrics:['cpu','memory','network'],devices:[],details:['cpuTimes','memoryCache','networkTotals']};
+  const host={id:'host',name:'训练服务器',target:'gpu-lab',enabled:true,port:null,identityFile:'',shell:'/bin/bash',preCommand:'',metrics:['cpu','memory','network'],devices:[],details:['cpuTimes','memoryCache','networkTotals']};
   const sample={timestamp:Date.now()/1000,load:[0.1,0.2,0.3],errors:{},cpu:[{id:'cpu',utilization:42}],memory:{total:16000000000,available:4000000000}};
   window.review={empty:true,failScan:false,failQuota:false,failHosts:false,quotaRows:[],scanRows:[],saved:[],actions:[],calls:[],settings:{accounts:[],sources:[],hosts:[host],modelMappings:{},proxy:{mode:'system',url:''},refreshSeconds:300,serverRefreshSeconds:10},hosts:[{id:'host',sample}]};
   window.reviewListeners={};window.reviewEmit=(name,payload)=>Promise.all((window.reviewListeners[name]??[]).map(fn=>fn({payload})));

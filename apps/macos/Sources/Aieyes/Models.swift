@@ -79,7 +79,7 @@ struct AgentSource: Codable, Equatable, Identifiable {
     var path = "~/.codex", hostId: String?, enabled = true, quotaCommand = "", quotaPreCommand = "", codexBinary = "codex", agyBinary: String? = "agy", proxy: ProxySettings?
 }
 struct Host: Codable, Equatable, Identifiable {
-    var id = UUID().uuidString, name = "", target = "", port: Int?, identityFile = "", shell = "/bin/sh", preCommand = "", enabled = true
+    var id = UUID().uuidString, name = "", target = "", port: Int?, identityFile = "", shell = "/bin/bash", preCommand = "", enabled = true
     var metrics = ["cpu", "memory", "gpu", "filesystems", "disk", "network"], devices: [String] = []
     var details: [String]? = Host.detailOptions.map { $0.0 }
     static let detailOptions = [("cpuTimes", "CPU 时间分布"), ("memoryCache", "内存缓存 / Buffer"), ("swap", "Swap"), ("fsAvailable", "文件系统可用空间"), ("fsType", "文件系统类型 / 设备"), ("inodes", "inode"), ("diskIops", "磁盘 IOPS"), ("diskBusy", "磁盘忙碌率"), ("networkTotals", "累计流量"), ("networkErrors", "网络错误 / 丢包"), ("gpuMemory", "GPU 显存"), ("gpuThermals", "GPU 温度 / 功耗")]

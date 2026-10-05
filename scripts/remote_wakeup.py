@@ -16,6 +16,30 @@ import threading
 import time
 
 CLEAR_ENV = ('OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY')
+CLI_READY = b'AIEYES_WAKEUP_CLI_READY'
+
+
+def shell_argv(m, argv, diagnostic=False):
+    import shlex
+    if not m.get('preCommand', '').strip():
+        return argv
+    # Keep banners out of CLI JSON/help and keep initialization from consuming RPC input.
+    script = 'set -e\n{\n' + m['preCommand'] + '\n} </dev/null >&2\n'
+    if diagnostic:
+        script += "printf '\\nAIEYES_WAKEUP_CLI_READY\\n' >&2\n"
+    return [m.get('shell') or '/bin/bash', '-c', script + 'exec ' + ' '.join(shlex.quote(a) for a in argv)]
+
+
+def call_stage(args):
+    if args == ['--help']:
+        return '读取 CLI 帮助'
+    if args == ['exec', '--help']:
+        return '检查 Codex exec 能力'
+    if args[:2] == ['auth', 'status']:
+        return '检查订阅登录'
+    if args == ['models']:
+        return '读取模型列表'
+    return 'CLI 调用'
 
 
 def private_dir(path):
@@ -41,7 +65,6 @@ def atomic(path, data):
 
 
 def call(m, args, cwd=None, timeout=20):
-    import shlex
     env = dict(os.environ)
     for key in CLEAR_ENV:
         env.pop(key, None)
@@ -57,14 +80,15 @@ def call(m, args, cwd=None, timeout=20):
     if proxy.get('mode') == 'custom':
         for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'):
             env[key] = proxy['url']
-    argv = [m['binary']] + args
-    if m.get('preCommand', '').strip():
-        argv = [m.get('shell') or '/bin/sh', '-c', 'set -e\n' + m['preCommand'] + '\nexec ' + ' '.join(shlex.quote(a) for a in argv)]
-    process = subprocess.Popen(argv, cwd=str(cwd or pathlib.Path.home()), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    argv = shell_argv(m, [m['binary']] + args, diagnostic=True)
+    process = subprocess.Popen(argv, cwd=str(cwd or pathlib.Path.home()), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
-        output, _ = process.communicate(timeout=timeout)
+        output, errors = process.communicate(timeout=timeout)
+        # Report only fixed labels and exit codes; never expose command output or credentials.
+        if m.get('preCommand', '').strip() and CLI_READY not in errors.splitlines():
+            raise ValueError('%s：前置命令未完成（退出码 %s）；请检查脚本、shell 及非交互环境' % (call_stage(args), process.returncode))
         if process.returncode:
-            raise ValueError('CLI 调用失败；请检查登录、模型和代理配置')
+            raise ValueError('%s失败（退出码 %s）；请检查 CLI 路径、运行环境及配置' % (call_stage(args), process.returncode))
         if len(output) > 4 * 1024 * 1024:
             raise ValueError('CLI 输出超过限制')
         return output.decode('utf-8')
@@ -84,10 +108,7 @@ def codex_rpc(m, method, params):
             env.pop(key, None)
     if proxy.get('mode') == 'custom':
         env.update({k: proxy['url'] for k in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')})
-    import shlex
-    argv = [m['binary'], 'app-server', '--stdio']
-    if m.get('preCommand', '').strip():
-        argv = [m.get('shell') or '/bin/sh', '-c', 'set -e\n' + m['preCommand'] + '\nexec ' + ' '.join(shlex.quote(a) for a in argv)]
+    argv = shell_argv(m, [m['binary'], 'app-server', '--stdio'])
     process = subprocess.Popen(argv, env=env, cwd=str(pathlib.Path.home()), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
     replies = queue.Queue()
     def reader():

@@ -29,7 +29,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
       const day='2026-10-03';
       const history=Array.from({length:365},(_,i)=>({...usage,key:new Date(Date.UTC(2025,9,4+i)).toISOString().slice(0,10),total:i%5?100000+(i*71239)%850000:0}));
       const trend=history.slice(-7);
-      window.fixtureSettings={accounts:[],sources:[],hosts:[{id:'host1',name:'训练服务器',target:'gpu-lab',port:null,identityFile:'',shell:'/bin/sh',preCommand:'',enabled:true,metrics:groups,devices:[],details}],proxy:{mode:'system',url:''},refreshSeconds:300,serverRefreshSeconds:10,githubRepository:'JesmonX/Aieyes',modelMappings:{}};
+      window.fixtureSettings={accounts:[],sources:[],hosts:[{id:'host1',name:'训练服务器',target:'gpu-lab',port:null,identityFile:'',shell:'/bin/bash',preCommand:'',enabled:true,metrics:groups,devices:[],details}],proxy:{mode:'system',url:''},refreshSeconds:300,serverRefreshSeconds:10,githubRepository:'JesmonX/Aieyes',modelMappings:{}};
       window.saved=[]; window.discoveryFails=false; window.nativeCalls=[]; window.engineCalls=[]; window.settingsSaveFails=false; window.quotaFails=false; let maximized=false;
       window.uiTimers=[];
       window.setInterval=(fn,ms)=>{window.uiTimers.push({fn,ms});return window.uiTimers.length;};

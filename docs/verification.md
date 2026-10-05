@@ -72,7 +72,7 @@
 
 ## 2026-10-04：SSH 默认 shell 修复与悬浮球面板
 
-- SSH：主机未单独配置 shell 时（默认 `/bin/sh`），远程命令不再以登录 shell（`-lc`）执行。Debian 系服务器的 `/bin/sh` 多为 dash，登录模式会先读取 `/etc/profile` 与 `/etc/profile.d/*.sh`，其中不兼容的语法会让 dash 在脚本运行前以状态码 2 退出，界面显示「命令执行失败（2）」。改为 `-c` 并在脚本内前置 PATH（`~/.local/bin`、`~/bin`、Codex 独立安装目录、Homebrew 与系统目录，保留原有 PATH）；显式配置的非 POSIX shell（如 `/bin/bash`）仍沿用登录模式。本机自定义限额命令同步改为 `-c` 加同一 PATH 前置。新增回归 `default_shell_avoids_login_profiles_and_keeps_tools_reachable`，实际用 POSIX shell 解析组合后的命令并校验 PATH。
+- SSH：主机显式配置 `/bin/sh` 时，远程命令不再以登录 shell（`-lc`）执行。Debian 系服务器的 `/bin/sh` 多为 dash，登录模式会先读取 `/etc/profile` 与 `/etc/profile.d/*.sh`，其中不兼容的语法会让 dash 在脚本运行前以状态码 2 退出，界面显示「命令执行失败（2）」。改为 `-c` 并在脚本内前置 PATH（`~/.local/bin`、`~/bin`、Codex 独立安装目录、Homebrew 与系统目录，保留原有 PATH）；显式配置的非 POSIX shell（如 `/bin/bash`）仍沿用登录模式。本机自定义限额命令同步改为 `-c` 加同一 PATH 前置。新增回归 `explicit_posix_shell_avoids_login_profiles_and_keeps_tools_reachable`，实际用 POSIX shell 解析组合后的命令并校验 PATH。
 - 悬浮球面板：Windows/Linux 悬浮球单击或悬停展开与 macOS 菜单栏一致的紧凑面板（Agent / 服务器切换、会话状态、账户限额、今日概览、近 7 天用量与每日明细、刷新菜单、固定 / 打开详情 / 设置 / 退出）。面板复用详情窗口的渲染与数据通道（`app.js` 紧凑模式与共享的 `sessions.js`）；面板打开时读取一次概览，周期性轮询仍由详情窗口负责，避免重复的 SSH 与限额查询。面板失焦自动收起，固定后保留；`Esc`、指针离开均会收起，收起后短暂抑制悬停以免立刻重开。
 - 贴边与隐藏：拖动结束后按 48 逻辑像素阈值吸附到工作区边缘（左右与上下独立），位置继续保存在 `desktop.json`；面板按工作区自动选边并限制在可见区域。菜单与「设置 → 通用」可「暂时隐藏悬浮球」，隐藏期间保留托盘入口（Linux 悬浮球模式下也强制显示托盘），无其它入口时拒绝隐藏；重启恢复显示，隐藏状态不持久化。
 - 验证：核心 Rust 22 项（4 项来源查询 + 18 项回归，含新增 SSH 回归）通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过；Tauri 桌面 6 项单测通过（含贴边、面板位置与隐藏入口三项新增）且 Clippy 严格检查通过；Node 16 项（桌面 9、多选 4、发布 3）通过；浏览器集成回归通过，新增悬浮球页面检查（单击与悬停展开、面板内容、服务器页、固定、刷新菜单、Esc 关闭、浅深色截图 `floating-panel-light.png` / `floating-panel-dark.png`）；采集器 4 项通过；`cargo fmt` 检查通过。

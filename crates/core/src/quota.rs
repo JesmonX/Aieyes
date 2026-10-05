@@ -27,7 +27,7 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
             let mut c = Command::new(if cfg!(windows) {
                 "powershell"
             } else {
-                "/bin/sh"
+                ssh::DEFAULT_SHELL
             });
             if cfg!(windows) {
                 c.args([
@@ -37,8 +37,7 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
                     &source.quota_command,
                 ]);
             } else {
-                // dash exits with status 2 on bash-only profile scripts, so the local
-                // shell also runs without login profiles, with a fallback PATH.
+                // Run local commands without login profiles, with a fallback PATH.
                 c.args([
                     "-c",
                     &format!("{}{}", ssh::PATH_FALLBACK, source.quota_command),

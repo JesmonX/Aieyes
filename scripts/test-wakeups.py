@@ -3,6 +3,7 @@ import datetime
 import importlib.util
 import json
 import pathlib
+import shlex
 import sqlite3
 import subprocess
 import tempfile
@@ -15,7 +16,40 @@ wake=importlib.util.module_from_spec(spec);spec.loader.exec_module(wake)
 
 class WakeTests(unittest.TestCase):
     def manifest(self, binary='fake'):
-        return dict(version=1,id='wake-test',accountKey='codex:test',provider='codex',model='model',effort='low',binary=binary,args=['exec','-m','model','-c','model_reasoning_effort="low"',"hi; $(touch never)"],configPath='/fixture',preCommand='',shell='/bin/sh',proxy={'mode':'direct'},times=[datetime.datetime.now().strftime('%H:%M')],enabled=True)
+        return dict(version=1,id='wake-test',accountKey='codex:test',provider='codex',model='model',effort='low',binary=binary,args=['exec','-m','model','-c','model_reasoning_effort="low"',"hi; $(touch never)"],configPath='/fixture',preCommand='',shell='/bin/bash',proxy={'mode':'direct'},times=[datetime.datetime.now().strftime('%H:%M')],enabled=True)
+
+    def test_sourced_environment_and_banner_are_isolated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            script = root / 'proxy setup'
+            script.write_text('export WAKE_TEST_VALUE=ready\nprintf "private banner\\n"\n')
+            m = dict(self.manifest('/bin/sh'), shell='/bin/bash', preCommand='source ' + shlex.quote(str(script)))
+            self.assertEqual(wake.call(m, ['-c', 'printf "%s" "$WAKE_TEST_VALUE"']), 'ready')
+            # The same wrapper must leave stdin available for app-server RPC.
+            argv = wake.shell_argv(m, ['/bin/sh', '-c', 'read value; printf "%s" "$value"'])
+            result = subprocess.run(argv, input=b'rpc-message\n', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(result.stdout, b'rpc-message')
+
+    def test_precommand_failure_is_distinct_from_cli_failure(self):
+        m = dict(self.manifest('/bin/sh'), preCommand='echo secret-token >&2\nfalse')
+        with self.assertRaisesRegex(ValueError, '前置命令未完成（退出码 1）') as error:
+            wake.call(m, ['--help'])
+        self.assertNotIn('secret-token', str(error.exception))
+        m['preCommand'] = 'exit 0'
+        with self.assertRaisesRegex(ValueError, '前置命令未完成（退出码 0）'):
+            wake.call(m, ['--help'])
+        m['preCommand'] = 'export WAKE_TEST_VALUE=ready'
+        with self.assertRaisesRegex(ValueError, 'CLI 调用失败（退出码 7）') as error:
+            wake.call(m, ['-c', 'echo secret-token >&2; exit 7'])
+        self.assertNotIn('secret-token', str(error.exception))
+
+    def test_help_failure_reports_stage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = pathlib.Path(temporary) / 'fake-codex'
+            binary.write_text('#!/bin/sh\nexit 9\n')
+            binary.chmod(0o700)
+            with self.assertRaisesRegex(ValueError, '读取 CLI 帮助失败（退出码 9）'):
+                wake.call(self.manifest(str(binary)), ['--help'])
 
     def test_scheduler_preserves_other_jobs_and_repeated_remove_is_safe(self):
         with tempfile.TemporaryDirectory() as temporary:

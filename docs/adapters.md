@@ -45,6 +45,8 @@ Codex 使用配置目录启动 App Server；Claude Code 本机读取登录信息
 
 ## SSH 前置命令
 
+新建服务器及未配置 shell 时默认使用 `/bin/bash`，支持 `source` 等 Bash 语法；已保存的 shell 配置保持不变。
+
 使用 `source` 的命令选择 `/bin/bash`。例如：
 
 ```sh

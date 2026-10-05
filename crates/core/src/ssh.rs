@@ -76,7 +76,7 @@ pub fn command(host: &Host, remote: &str) -> Result<Command> {
 }
 
 /// Shell used when a host does not configure one.
-pub const DEFAULT_SHELL: &str = "/bin/sh";
+pub const DEFAULT_SHELL: &str = "/bin/bash";
 
 /// Keeps user-installed CLIs reachable without a login shell; mirrors the local
 /// CLI resolver so remote agents installed in the home directory keep working.
