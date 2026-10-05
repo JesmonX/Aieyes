@@ -152,7 +152,9 @@ struct Acknowledgement: Decodable { }
         catch { message = error.localizedDescription }
     }
     func openPricing() { settingsTab = "prices"; showSettings?() }
+    private var dashboardRequest = 0
     func reload() async {
+        dashboardRequest += 1; let request = dashboardRequest
         var params: [String: Any] = ["days":range]
         if provider != "all" { params["provider"] = provider }
         if selectedAccount == "none" { params["accountId"] = "" }
@@ -160,10 +162,20 @@ struct Acknowledgement: Decodable { }
         if selectedSource != "all" { params["sourceId"] = selectedSource }
         if selectedModel != "all" { params["model"] = selectedModel }
         do {
-            dashboard = try await engine.call("dashboard", params: params)
+            let next: Dashboard = try await engine.call("dashboard", params: params)
+            guard request == dashboardRequest else { return }
+            dashboard = next
             let names = dashboard.dayModels.map(\.model)
             fallbackModelOptions = Array(Set(selectedModel == "all" ? names : fallbackModelOptions + names)).sorted()
-        } catch { message = error.localizedDescription }
+        } catch { if request == dashboardRequest { message = error.localizedDescription } }
+    }
+    func saveQuotaOrder(_ keys: [String]) async throws {
+        let _: [String] = try await engine.call("quotas.order.set", params: ["keys": keys])
+        await reload()
+    }
+    func estimateAction(_ action: String, params: [String: Any]) async throws {
+        let _: QuotaEstimate = try await engine.call("quotaEstimates." + action, params: params)
+        await reload()
     }
     func scan() async {
         guard !busy else { return }; busy = true; activity = "同步记录"; defer { busy = false; activity = ""; lastScan = Date() }

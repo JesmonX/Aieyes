@@ -17,7 +17,13 @@ def main():
             ["swift", "-module-cache-path", str(cache), str(ROOT / "scripts/render-icon.swift"), directory],
             check=True, env={**os.environ, "CLANG_MODULE_CACHE_PATH": str(cache)},
         )
+        template = (pathlib.Path(directory) / "template-64.png").read_bytes()
+        rgba = (pathlib.Path(directory) / "brand.rgba").read_bytes()
         images = {s: (pathlib.Path(directory) / f"{s}.png").read_bytes() for s in SIZES}
+    (ROOT / "apps/macos/Resources/Brand.png").write_bytes(images[128])
+    (ROOT / "apps/macos/Resources/BrandTemplate.png").write_bytes(template)
+    (ROOT / "apps/desktop/web/brand.png").write_bytes(images[128])
+    (ROOT / "apps/desktop/src-tauri/icons/brand.rgba").write_bytes(rgba)
     icons = ROOT / "apps/desktop/src-tauri/icons"
     icons.mkdir(parents=True, exist_ok=True)
     (icons / "icon.png").write_bytes(images[1024])

@@ -194,6 +194,9 @@ pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapsh
         ] {
             if let Some(used) = v[key]["utilization"].as_f64() {
                 q.windows.push(QuotaWindow {
+                    id: key.into(),
+                    group_id: key.into(),
+                    group_name: label.into(),
                     name: label.into(),
                     used_percent: used,
                     window_minutes: Some(minutes),
@@ -413,6 +416,19 @@ fn parse_agy(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
                     _ => bucket["name"].as_str().unwrap_or(window),
                 };
                 q.windows.push(QuotaWindow {
+                    id: format!(
+                        "{}:{window}",
+                        group["id"]
+                            .as_str()
+                            .or(group["name"].as_str())
+                            .unwrap_or("agy")
+                    ),
+                    group_id: group["id"]
+                        .as_str()
+                        .or(group["name"].as_str())
+                        .unwrap_or("agy")
+                        .into(),
+                    group_name: group["name"].as_str().unwrap_or("agy").into(),
                     name: format!("{} · {}", group["name"].as_str().unwrap_or("agy"), label),
                     used_percent: (1.0 - remaining) * 100.0,
                     window_minutes: match window {

@@ -1,3 +1,4 @@
+pub mod estimates;
 pub mod import;
 pub mod metrics;
 pub mod models;
@@ -30,6 +31,11 @@ impl Engine {
     }
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value> {
         match method {
+            name if name.starts_with("quotaEstimates.") => self.estimate_call(name, params),
+            "quotas.order.set" => Ok(serde_json::to_value(
+                self.store
+                    .set_quota_order(serde_json::from_value(params["keys"].clone())?)?,
+            )?),
             "sessions.list" => Ok(serde_json::to_value(self.sessions.read(
                 &self.store.settings()?.sources,
                 std::time::SystemTime::now(),
@@ -162,6 +168,7 @@ impl Engine {
                         Err(e) => {
                             let v = json!({"id":source.id,"error":e.to_string(),"failedAt":now()});
                             self.store.source_status(&source.id, &v)?;
+                            self.store.pause_source_estimates(&source.id)?;
                             results.push(v);
                         }
                     }
@@ -169,6 +176,24 @@ impl Engine {
                 Ok(json!(results))
             }
             "quotas.refresh" => {
+                let samples = self.store.estimates()?;
+                let mut ids: Vec<String> = samples
+                    .iter()
+                    .filter(|e| {
+                        e.status == "active"
+                            && params["accountId"].as_str().is_none_or(|id| {
+                                e.account_key.split_once(':').is_some_and(|(_, a)| a == id)
+                            })
+                    })
+                    .flat_map(|e| e.source_ids.clone())
+                    .collect();
+                ids.sort();
+                ids.dedup();
+                // Only opt-in sampling adds a history sync before a live observation.
+                // A failed source pauses its samples; the ordinary quota query can still run.
+                for id in ids {
+                    let _ = self.sync_estimate_sources(&[id]);
+                }
                 let settings = self.store.settings()?;
                 let mut result = Vec::new();
                 for account in settings.accounts.iter().filter(|a| {

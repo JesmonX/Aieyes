@@ -40,6 +40,11 @@ fn event(
         model,
         tokens,
         attribution: attribution.into(),
+        billing: BillingEvidence {
+            category: "unknown".into(),
+            evidence: state.model_provider.clone(),
+        },
+        interval_start: None,
     }
 }
 
@@ -64,6 +69,9 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
     let payload = &v["payload"];
     match v["type"].as_str()? {
         "session_meta" => {
+            state.session_started_at =
+                timestamp(&payload["timestamp"]).or_else(|| timestamp(&v["timestamp"]));
+            state.model_provider = payload["model_provider"].as_str().unwrap_or("").into();
             if let Some(id) = payload["id"].as_str().or(payload["session_id"].as_str()) {
                 state.session_id = id.into();
             }
@@ -81,6 +89,9 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             if state.last_cumulative.as_ref() == Some(&cumulative) {
                 return None;
             }
+            let interval_start = (state.last_timestamp > 0)
+                .then_some(state.last_timestamp)
+                .or(state.session_started_at);
             let (tokens, attribution) = match &state.last_cumulative {
                 None => (cumulative.clone(), "session-summary"),
                 Some(prev) => {
@@ -107,7 +118,7 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                 stamp,
                 serde_json::to_string(&cumulative).ok()?
             );
-            Some(event(
+            let mut parsed = event(
                 source,
                 state,
                 stamp,
@@ -119,7 +130,9 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                 tokens,
                 identity,
                 attribution,
-            ))
+            );
+            parsed.interval_start = interval_start;
+            Some(parsed)
         }
         _ => None,
     }
@@ -176,7 +189,7 @@ fn parse_normalized(source: &Source, state: &mut ParseState, v: &Value) -> Optio
     let id = v["id"].as_str()?;
     state.session_id = v["sessionId"].as_str().unwrap_or("import").into();
     let model = v["model"].as_str()?.to_string();
-    Some(event(
+    let mut parsed = event(
         source,
         state,
         stamp,
@@ -184,7 +197,14 @@ fn parse_normalized(source: &Source, state: &mut ParseState, v: &Value) -> Optio
         tokens,
         format!("{}:{id}", state.session_id),
         "import",
-    ))
+    );
+    if let Some(category @ ("api" | "subscription")) = v["billing"]["category"].as_str() {
+        parsed.billing = BillingEvidence {
+            category: category.into(),
+            evidence: "normalized-record".into(),
+        };
+    }
+    Some(parsed)
 }
 
 pub fn codex_quota(source: &Source, value: &Value, stamp: i64, origin: &str) -> QuotaSnapshot {
@@ -225,6 +245,9 @@ pub fn codex_quota(source: &Source, value: &Value, stamp: i64, origin: &str) -> 
                     None => key.into(),
                 };
                 q.windows.push(QuotaWindow {
+                    id: format!("{name}:{key}"),
+                    group_id: name.into(),
+                    group_name: name.into(),
                     name: if name == "codex" {
                         label
                     } else {

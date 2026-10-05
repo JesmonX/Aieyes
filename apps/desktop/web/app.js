@@ -22,7 +22,7 @@ const timeLabel = stamp => new Date(stamp).toLocaleTimeString('zh-CN',{hour:'2-d
 function focusSelector(element) {
   if(!element||element===document.body)return null;
   if(element.id)return '#'+CSS.escape(element.id);
-  const attributes=['data-page','data-settings-tab','data-edit','data-remove','data-price','data-edit-account','data-remove-account','data-restore-account','data-enable','data-gap-map','data-gap-price'];
+  const attributes=['data-estimate','data-page','data-settings-tab','data-edit','data-remove','data-price','data-edit-account','data-remove-account','data-restore-account','data-enable','data-gap-map','data-gap-price'];
   for(const attribute of attributes)if(element.hasAttribute(attribute))return `[${attribute}="${CSS.escape(element.getAttribute(attribute))}"]`;
   if(element.tagName==='SUMMARY')for(const attribute of ['data-agent-detail','data-metric'])if(element.parentElement.hasAttribute(attribute))return `[${attribute}="${CSS.escape(element.parentElement.getAttribute(attribute))}"] > summary`;
   return null;
@@ -51,7 +51,7 @@ function bindSetup() { if($('#add-first-source'))$('#add-first-source').onclick=
 function quotaSection(d) {
   const quotas=d.quotas??[],missing=state.settings.accounts.filter(a=>!a.archived&&a.quotaEnabled&&(!state.provider||a.provider===state.provider)&&(!state.accountKey||state.accountKey===a.provider+':'+a.id)&&!quotas.some(q=>q.provider===a.provider&&q.accountId===a.id));
   if(!quotas.length&&!missing.length)return '';
-  return `<div class="section-head"><h2>账户限额 <span class="count">${quotas.length+missing.length}</span></h2><button id="read-quotas" ${state.quotaBusy?'disabled':''} title="重新查询各账户的实时限额">${state.quotaBusy?'读取中…':'刷新限额'}</button></div><div class="quotas">${quotas.map(quotaCard).join('')}${missing.map(a=>{
+  return `<div class="section-head"><h2>账户限额 <span class="count">${quotas.length+missing.length}</span></h2><button id="order-quotas" title="调整账户顺序">排序</button><button id="read-quotas" ${state.quotaBusy?'disabled':''} title="重新查询各账户的实时限额">${state.quotaBusy?'读取中…':'刷新限额'}</button></div><div class="quotas">${quotas.map(quotaCard).join('')}${missing.map(a=>{
     const enabled=state.settings.sources.some(src=>src.enabled&&src.provider===a.provider&&src.accountId===a.id&&(!src.hostId||state.settings.hosts.some(h=>h.id===src.hostId&&h.enabled)));
     const text=!enabled?'关联并启用数据源后可读取限额':state.quotaBusy?'正在读取账户限额…':state.quotaError?'读取失败，可重试刷新限额':'尚未读取限额，可点击刷新限额';
     return `<div class="card quota-placeholder"><h3>${escapeHTML(a.name)}</h3><p class="muted" role="status">${text}</p>${enabled&&state.quotaError?`<p class="error">${escapeHTML(state.quotaError)}</p>`:''}</div>`;
@@ -80,6 +80,7 @@ async function loadDashboard() {
   if(request!==state.dashboardRequest)return;
   state.dashboard=dashboard;
   if (state.page === 'agent') render();
+  refreshQuotaDialog();
 }
 function batchError(rows,label) {
   if(!Array.isArray(rows))return null;
@@ -169,7 +170,7 @@ function renderAgent() {
   const sources=state.settings.sources.filter(src=>{const ids=d.sources.find(s=>s.id===src.id)?.accountIds??[src.accountId];return (!state.provider||src.provider===state.provider)&&(!state.accountKey||(state.accountKey==='none'?ids.includes(''):src.provider===account?.provider&&ids.includes(account?.id)));});
   const trendModels=[...new Set(d.dayModels.map(r=>r.model))].sort();
   $('#title').textContent='Agent 概览';
-  $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','无账户 / API',state.accountKey)}${state.settings.accounts.filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select><select id="source" aria-label="数据源">${option('','全部数据源',state.sourceId)}${sources.map(s=>option(s.id,s.name,state.sourceId)).join('')}</select><select id="model" aria-label="模型">${option('','全部模型',state.model)}${[...new Set([...(d.modelOptions??trendModels),...(state.model?[state.model]:[])])].map(m=>option(m,m,state.model)).join('')}</select></div>
+  $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${state.settings.accounts.filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select><select id="source" aria-label="数据源">${option('','全部数据源',state.sourceId)}${sources.map(s=>option(s.id,s.name,state.sourceId)).join('')}</select><select id="model" aria-label="模型">${option('','全部模型',state.model)}${[...new Set([...(d.modelOptions??trendModels),...(state.model?[state.model]:[])])].map(m=>option(m,m,state.model)).join('')}</select></div>
   ${quotaSection(d)}
   <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':`最近 ${n} 天`,state.days)).join('')}</select></div>
   <div class="stats">${stat('总 Token',compact(s.total),'','✧')}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens?money(s.cost):'—','','$')}${stat('缓存命中率',pct(cacheRate(t)),'','▱')}<div class="stat token-card"><div class="stat-label">Token 明细</div><div class="token-breakdown">${[['输入',t.input],['输出',t.output],['缓存',t.cacheRead+t.cacheWrite]].map(([label,value])=>`<div><span>${label}</span><strong>${compact(value)}</strong></div>`).join('')}</div></div></div>
@@ -186,13 +187,14 @@ function renderAgent() {
   $('#days').onchange=async e=>{state.days=Number(e.target.value);await loadDashboard();};
   $('#cost-mode').onchange=e=>{state.cost=e.target.checked;renderAgent();};
   if($('#read-quotas'))$('#read-quotas').onclick=quotas;
+  bindQuotaTools();
   if($('#repair-pricing'))$('#repair-pricing').onclick=openPricing;
   shortenEmptyUsage(d);restoreView(view);
   requestAnimationFrame(drawTrend);
 }
 function renderAgentPanel(d) {
   const view=rememberView(),s=d.summary,t=s.tokens,trendTitle=`近 ${Math.max(7,state.days)} 天用量`;
-  $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','无账户 / API',state.accountKey)}${state.settings.accounts.filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select></div>
+  $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${state.settings.accounts.filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select></div>
   ${quotaSection(d)}
   <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':`最近 ${n} 天`,state.days)).join('')}</select></div>
   <div class="stats panel-stats">${stat('总 Token',compact(s.total),'','✧')}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens?money(s.cost):'—','','$')}</div>
@@ -203,6 +205,7 @@ function renderAgentPanel(d) {
   $('#account').onchange=async e=>{state.accountKey=e.target.value;state.sourceId='';await loadDashboard();};
   $('#days').onchange=async e=>{state.days=Number(e.target.value);await loadDashboard();};
   if($('#read-quotas'))$('#read-quotas').onclick=quotas;
+  bindQuotaTools();
   if($('#repair-pricing'))$('#repair-pricing').onclick=openPricing;
   $('#open-detail').onclick=()=>window.__TAURI__.core.invoke('desktop_action',{action:'open'}).catch(e=>notify(String(e)));
   bindSetup();shortenEmptyUsage(d);restoreView(view);
@@ -220,8 +223,16 @@ function dailyTable(days,rows) {
   return `<div class="daily-table"><div class="day-head"><span>日期 / 模型</span><span>Token</span><span>缓存命中率</span><span>已计价成本</span></div>${[...days].reverse().map(day=>`<details class="day" data-agent-detail="day:${escapeHTML(day.key)}"><summary><span>${day.key}</span><strong>${compact(day.total)}</strong><span>${pct(cacheRate(day.tokens))}</span><span>${day.pricedTokens?money(day.cost):'—'}</span></summary>${rows.filter(r=>r.day===day.key).map(r=>`<div class="day-model"><span><i style="background:${color(r.model)}"></i>${escapeHTML(r.model)}</span><span>${compact(r.usage.total)}</span><span>${pct(cacheRate(r.usage.tokens))}</span><span>${r.usage.pricedTokens?money(r.usage.cost):'—'}</span></div>`).join('')||'<p class="muted tiny">当日暂无记录</p>'}</details>`).join('')}</div>`;
 }
 function quotaCard(q) {
-  return `<div class="card"><div class="quota-title"><div><h3>${escapeHTML(q.name)}</h3><div class="sub">${escapeHTML(providers[q.provider] ?? q.provider)}${q.plan ? ' · '+escapeHTML(q.plan) : ''}</div></div><span class="tiny muted">${q.origin==='log'?'记录':'更新'} ${date(q.updatedAt)}</span></div>${(q.balances??[]).map(b=>`<div class="quota-window"><div class="between"><span>可用余额</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted"><span>赠送 ${escapeHTML(b.granted)}</span><span>充值 ${escapeHTML(b.toppedUp)}</span></div></div>`).join('')}${q.isAvailable===false?'<p class="error">当前余额不足以调用 API</p>':''}${q.windows.map(w=>`<div class="quota-window"><div class="between tiny"><span>${escapeHTML(w.name)}</span><strong>剩余 ${pct(Math.max(0,100-w.usedPercent))}</strong></div><div class="track"><span style="width:${Math.min(100,Math.max(0,100-w.usedPercent))}%;${w.usedPercent>=90?'background:#d79a4b':''}"></span></div><div class="between tiny muted"><span>重置于 ${date(w.resetsAt)}</span><span>${w.resetsAt ? w.resetsAt*1000>Date.now() ? `剩余 ${Math.ceil((w.resetsAt*1000-Date.now())/3600000)}h` : '等待同步' : ''}</span></div></div>`).join('')}${q.bankReset ? `<details class="bank" data-agent-detail="bank:${escapeHTML(q.provider+':'+q.accountId)}"><summary>Bank Reset · ${q.bankReset.availableCount} 次可用</summary>${(q.bankReset.credits ?? []).map(c=>`<div class="between tiny muted" style="margin-top:9px"><span>${escapeHTML(c.title ?? 'Reset Credit')}</span><span>${c.expiresAt ? '到期 '+date(c.expiresAt) : '无到期时间'}</span></div>`).join('')}</details>`:''}${q.error ? `<p class="error">${escapeHTML(q.error)}</p>`:''}</div>`;
+  const key=q.provider+':'+q.accountId, latest=(state.dashboard?.quotaEstimates??[]).find(e=>e.accountKey===key);
+  const windowHTML=w=>`<div class="quota-window"><div class="between tiny"><span>${escapeHTML(w.name)}</span><strong>剩余 ${pct(Math.max(0,100-w.usedPercent))}</strong></div>${resourceBar(100-w.usedPercent,w.name+'剩余额度')}<div class="tiny muted quota-reset">重置 ${date(w.resetsAt)}${w.resetsAt&&w.resetsAt*1000<=Date.now()?' · 等待同步':''}</div></div>`;
+  let windows=q.windows.map(windowHTML).join('');
+  if(q.provider==='agy'){
+    const groups=new Map();for(const w of q.windows){const group=w.groupName||w.name.split(' · ').slice(0,-1).join(' · ');if(!groups.has(group))groups.set(group,[]);groups.get(group).push(w);}
+    windows=`<details class="agy-details" data-agent-detail="agy:${escapeHTML(key)}"><summary>模型组额度 <span class="muted tiny">展开重置时间</span></summary></details><div class="agy-groups">${[...groups].map(([group,rows])=>`<div class="agy-group"><strong>${escapeHTML(group)}</strong><div class="agy-windows">${rows.sort((a,b)=>(a.windowMinutes??0)-(b.windowMinutes??0)).map(w=>windowHTML({...w,name:w.windowMinutes===10080?'7d':w.windowMinutes===300?'5h':w.name})).join('')}</div></div>`).join('')}</div>`;
+  }
+  return `<div class="card quota-card" data-quota="${escapeHTML(key)}"><div class="quota-title"><div><h3>${escapeHTML(q.name)}</h3><div class="sub">${escapeHTML(providers[q.provider]??q.provider)}${q.plan?' · '+escapeHTML(q.plan):''}</div></div><span class="tiny muted">${q.origin==='log'?'记录':'更新'} ${date(q.updatedAt)}</span></div>${(q.balances??[]).map(b=>`<div class="quota-window"><div class="between"><span>可用余额</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted"><span>赠送 ${escapeHTML(b.granted)}</span><span>充值 ${escapeHTML(b.toppedUp)}</span></div></div>`).join('')}${q.isAvailable===false?'<p class="error">当前余额不足以调用 API</p>':''}${windows}${q.bankReset?`<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>Bank Reset · ${q.bankReset.availableCount} 次可用</summary>${(q.bankReset.credits??[]).map(c=>`<div class="between tiny muted"><span>${escapeHTML(c.title??'Reset Credit')}</span><span>到期 ${date(c.expiresAt)}</span></div>`).join('')}</details>`:''}${q.error?`<p class="error">${escapeHTML(q.error)}</p>`:''}${(q.provider!=='agy'&&q.windows.some(w=>w.windowMinutes===10080))||latest?`<button class="estimate-entry" data-estimate="${escapeHTML(key)}"><span>${latest?'7d 整周估值':'估算整周价值'}</span><strong>${latest?.weeklyValue!=null?money(latest.weeklyValue)+' USD'+(latest.status==='pending'?' · 待确认':''):latest?estimateStatus(latest):'›'}</strong></button>`:''}</div>`;
 }
+
 function drawTrend() {
   const canvas=$('#trend');if(!canvas||!state.dashboard)return;
   const width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;canvas.width=width*dpr;canvas.height=height*dpr;
@@ -642,10 +653,72 @@ window.AieyesApp={
 if(!PANEL)setInterval(()=>{
   if(!state.settings)return;
   if(!state.serverBusy&&state.settings.hosts.some(h=>h.enabled)&&Date.now()-state.lastMetrics>((state.page==='servers'&&!document.hidden)||(state.panelOpen&&state.panelPage==='servers')?2000:state.settings.serverRefreshSeconds*1000)){sample();}
-  if($('#editor').open||state.busy||state.settingsSaving)return;
+  if($('#editor').open||$('#quota-dialog')?.dataset.busy||state.busy||state.settingsSaving)return;
   if(hasQuotaSources()&&(!state.lastQuota||Date.now()-state.lastQuota>state.settings.refreshSeconds*1000)){quotas();return;}
   if(Date.now()-state.lastScan>state.settings.refreshSeconds*1000){scan();return;}
 },500);
 // Age visible samples even while an RPC is slow or the panel receives no new events.
 setInterval(updateHostStatuses,1000);
+function estimateStatus(e){return {active:'采样中',pending:'待确认',completed:'已结束'}[e.status]??e.status;}
+function quotaDialog(title,body){
+  let dialog=$('#quota-dialog');if(!dialog){dialog=document.createElement('dialog');dialog.id='quota-dialog';dialog.setAttribute('aria-labelledby','quota-dialog-title');document.body.append(dialog);}
+  dialog.innerHTML=`<div class="dialog-head"><h2 id="quota-dialog-title">${escapeHTML(title)}</h2><button type="button" id="quota-close" aria-label="关闭">×</button></div><div class="quota-dialog-body">${body}<p id="quota-tool-error" class="error" role="alert" hidden></p></div>`;
+  delete dialog.dataset.estimateKey;delete dialog.dataset.records;
+  $('#quota-close').onclick=()=>dialog.close();if(!dialog.open){dialog.dataset.opener=focusSelector(document.activeElement)??'';dialog.onclose=()=>{if(dialog.dataset.opener)document.querySelector(dialog.dataset.opener)?.focus({preventScroll:true});};dialog.showModal();}return dialog;
+}
+async function quotaAction(action,params){
+  const dialog=$('#quota-dialog'),controls=[...dialog.querySelectorAll('button,input,select')].map(el=>[el,el.disabled]);
+  dialog.dataset.busy='true';controls.forEach(([el])=>el.disabled=true);dialog.oncancel=e=>e.preventDefault();$('#quota-tool-error').hidden=true;
+  try{await api(action,params);await loadDashboard();return true;}
+  catch(error){$('#quota-tool-error').textContent=error.message??String(error);$('#quota-tool-error').hidden=false;await loadDashboard();return false;}
+  finally{controls.forEach(([el,disabled])=>el.disabled=disabled);dialog.oncancel=null;delete dialog.dataset.busy;}
+}
+function refreshQuotaDialog(){
+  const dialog=$('#quota-dialog'),key=dialog?.dataset.estimateKey;
+  if(!dialog?.open||!key||dialog.dataset.busy)return;
+  const records=JSON.stringify((state.dashboard.quotaEstimates??[]).filter(e=>e.accountKey===key));
+  if(records===dialog.dataset.records)return;
+  const expanded=dialog.querySelector('details')?.open,focus=document.activeElement?.id;
+  openQuotaEstimate(key);
+  if(expanded&&dialog.querySelector('details'))dialog.querySelector('details').open=true;
+  if(focus)document.getElementById(focus)?.focus({preventScroll:true});
+}
+function bindQuotaTools(){
+  document.querySelectorAll('.agy-details').forEach(detail=>{detail.ontoggle=()=>{detail.querySelector('summary .muted').textContent=detail.open?'收起重置时间':'展开重置时间';};});
+  if($('#order-quotas'))$('#order-quotas').onclick=openQuotaOrder;
+  document.querySelectorAll('[data-estimate]').forEach(b=>b.onclick=()=>openQuotaEstimate(b.dataset.estimate));
+}
+function openQuotaOrder(){
+  let keys=[...(state.dashboard.quotaOrder??state.settings.accounts.map(a=>a.provider+':'+a.id))],dragged=null;
+  quotaDialog('调整账户顺序','<p class="muted">拖动账户，或使用上下按钮。顺序应用于所有限额面板。</p><div id="quota-order-list"></div><button class="primary" id="quota-order-save">保存顺序</button>');
+  function draw(focus){
+    const positions=new Map([...document.querySelectorAll('[data-order]')].map(row=>[row.dataset.order,row.getBoundingClientRect().top]));
+    $('#quota-order-list').innerHTML=keys.map((key,i)=>`<div class="quota-order-row" draggable="true" data-order="${escapeHTML(key)}"><span aria-hidden="true">☰</span><span>${escapeHTML(state.settings.accounts.find(a=>a.provider+':'+a.id===key)?.name??key)}</span><button type="button" data-direction="-1" aria-label="上移账户" ${i===0?'disabled':''}>↑</button><button type="button" data-direction="1" aria-label="下移账户" ${i===keys.length-1?'disabled':''}>↓</button></div>`).join('');
+    for(const row of document.querySelectorAll('[data-order]')){
+      row.ondragstart=e=>{document.querySelectorAll('[data-order]').forEach(el=>el.getAnimations().forEach(animation=>animation.cancel()));dragged=row.dataset.order;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragged);};row.ondragend=()=>{dragged=null;document.querySelectorAll('.drop-target').forEach(el=>el.classList.remove('drop-target'));};row.ondragover=e=>{e.preventDefault();row.classList.add('drop-target');};row.ondragleave=()=>row.classList.remove('drop-target');
+      row.ondrop=e=>{e.preventDefault();if(!dragged||dragged===row.dataset.order)return;const to=keys.indexOf(row.dataset.order);keys.splice(keys.indexOf(dragged),1);keys.splice(to,0,dragged);dragged=null;requestAnimationFrame(()=>draw());};
+      row.querySelectorAll('button').forEach(b=>b.onclick=()=>{const i=keys.indexOf(row.dataset.order),j=i+Number(b.dataset.direction);[keys[i],keys[j]]=[keys[j],keys[i]];draw({key:row.dataset.order,direction:b.dataset.direction});});
+    }
+    if(focus&&!matchMedia('(prefers-reduced-motion: reduce)').matches)for(const row of document.querySelectorAll('[data-order]')){const old=positions.get(row.dataset.order);if(old!=null)row.animate([{transform:`translateY(${old-row.getBoundingClientRect().top}px)`},{transform:'translateY(0)'}],{duration:220,easing:'cubic-bezier(.2,.8,.2,1)'});}
+    if(focus){const row=[...document.querySelectorAll('[data-order]')].find(r=>r.dataset.order===focus.key);(row?.querySelector(`button[data-direction="${focus.direction}"]:not(:disabled)`)??row?.querySelector('button:not(:disabled)'))?.focus();}
+  }
+  draw();$('#quota-order-save').onclick=async()=>{if(await quotaAction('quotas.order.set',{keys}))$('#quota-dialog').close();};
+}
+function openQuotaEstimate(key){
+  const q=state.dashboard.quotas.find(q=>q.provider+':'+q.accountId===key);if(!q)return;
+  const records=(state.dashboard.quotaEstimates??[]).filter(e=>e.accountKey===key),current=records.find(e=>e.status!=='completed');
+  const windows=q.windows.filter(w=>w.windowMinutes===10080),eligible=q.provider!=='agy'&&(windows.length===1||(q.provider==='claude'&&windows.some(w=>w.id==='seven_day'||w.name==='7d')));
+  const sources=state.settings.sources.filter(s=>s.enabled&&s.provider===q.provider&&s.accountId===q.accountId&&!['agy','deepseek'].includes(s.provider));
+  const confirmation='<label class="quota-confirm"><input type="checkbox" id="estimate-confirm">我确认采样期间只使用目标订阅，所有设备用量均已纳入所选来源；不混用 API / 中转。</label>';
+  const result=e=>`<div class="estimate-result"><div class="between"><strong>${estimateStatus(e)}</strong><strong>${e.weeklyValue!=null?money(e.weeklyValue)+' USD':'—'}</strong></div><p class="muted">${escapeHTML(e.calculationNote)}</p><details><summary>计算依据</summary><p>${date(e.startedAt)} → ${date(e.checkpointAt)}<br>${escapeHTML(e.windowName)} · 消耗 ${pct(e.consumedPercent)} · 样本成本 ${money(e.cost)} USD<br>计价 Token：${compact(e.pricedTokens)} / ${compact(e.totalTokens)}<br>${escapeHTML(e.sourceNames.join('、'))}</p><p class="tiny muted">整周估值 = 样本 API 等价成本 × 100 ÷ 消耗百分点；结束后价格依据固定。</p>${e.reason?`<p class="error">${escapeHTML(e.reason)}</p>`:''}${(e.prices??[]).length?`<p class="tiny muted">价格快照：${e.prices.map(p=>escapeHTML(p.id)+' · '+date(p.fetchedAt)).join('；')}</p>`:''}</details></div>`;
+  const setup=eligible&&sources.length?`<label>7d 额度池<select id="estimate-window">${windows.filter(w=>windows.length===1||w.id==='seven_day'||w.name==='7d').map(w=>option(w.id||w.name,w.name,'')).join('')}</select></label><p>纳入的用量来源</p>${sources.map(s=>`<label class="quota-confirm"><input type="checkbox" name="estimate-source" value="${escapeHTML(s.id)}" checked>${escapeHTML(s.name)}</label>`).join('')}${confirmation}<p class="tiny muted">建议开始后新建会话。至少消耗 5 个百分点后输出估值；跨采样边界的累计用量会使本次结果不可用。</p><button class="primary" id="estimate-start" disabled>开始采样</button>`:'<p class="muted">需要可采集 Token 的关联数据源及可靠的额度池映射。agy 限额查询本身不提供用量历史，此额度池暂不支持估值。</p>';
+  quotaDialog(q.name+' · 7d 整周价值',`<p class="muted">按本次模型组合的 API 等价成本与额度消耗比例估算，不是可兑换余额。</p>${current?result(current)+(current.status==='pending'?confirmation+'<button id="estimate-restart" disabled>确认并开始新一段</button>':'')+`<button class="primary" id="estimate-stop">${current.status==='pending'?'结束并保留有效段':'结束采样并计算'}</button>`:setup}${records.some(e=>e.status==='completed')?'<h3>采样历史</h3>'+records.filter(e=>e.status==='completed').map(result).join(''):''}`);
+  $('#quota-dialog').dataset.estimateKey=key;$('#quota-dialog').dataset.records=JSON.stringify(records);
+  const confirm=$('#estimate-confirm');if(confirm)confirm.onchange=()=>{const b=$('#estimate-start')??$('#estimate-restart');if(b)b.disabled=!confirm.checked;};
+  const act=async(action,params)=>{if(await quotaAction('quotaEstimates.'+action,params))openQuotaEstimate(key);else {const message=$('#quota-tool-error').textContent;refreshQuotaDialog();$('#quota-tool-error').textContent=message;$('#quota-tool-error').hidden=false;}};
+  if($('#estimate-start'))$('#estimate-start').onclick=()=>act('start',{accountKey:key,windowId:$('#estimate-window').value,sourceIds:[...document.querySelectorAll('[name=estimate-source]:checked')].map(el=>el.value),confirmed:confirm.checked});
+  if($('#estimate-stop'))$('#estimate-stop').onclick=()=>act('stop',{id:current.id});
+  if($('#estimate-restart'))$('#estimate-restart').onclick=()=>act('restart',{id:current.id,confirmed:confirm.checked});
+}
+
 const appReady=boot();

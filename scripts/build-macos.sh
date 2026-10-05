@@ -20,6 +20,8 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$PROJECT_DIR/.build/swift/$BUILD_MODE/Aieyes" "$APP_DIR/Contents/MacOS/Aieyes"
 cp "$PROJECT_DIR/target/$BUILD_MODE/aieyes-core" "$APP_DIR/Contents/Resources/aieyes-core"
 cp "$PROJECT_DIR/apps/macos/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
+cp "$PROJECT_DIR/apps/macos/Resources/Brand.png" "$APP_DIR/Contents/Resources/Brand.png"
+cp "$PROJECT_DIR/apps/macos/Resources/BrandTemplate.png" "$APP_DIR/Contents/Resources/BrandTemplate.png"
 cp "$PROJECT_DIR/apps/macos/Info.plist" "$APP_DIR/Contents/Info.plist"
 if [ "$BUILD_MODE" = debug ]; then
   /usr/libexec/PlistBuddy -c "Add :AieyesDevelopmentDataDirectory string $PROJECT_DIR/.local/app" "$APP_DIR/Contents/Info.plist"

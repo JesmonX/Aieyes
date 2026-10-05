@@ -50,6 +50,17 @@ pub struct UsageEvent {
     pub timestamp: i64,
     pub tokens: Tokens,
     pub attribution: String,
+    #[serde(default)]
+    pub billing: BillingEvidence,
+    #[serde(default)]
+    pub interval_start: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BillingEvidence {
+    pub category: String,
+    pub evidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -250,11 +261,16 @@ pub struct ParseState {
     pub last_cumulative: Option<Tokens>,
     pub cumulative_segment: u64,
     pub last_timestamp: i64,
+    pub model_provider: String,
+    pub session_started_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct QuotaWindow {
+    pub id: String,
+    pub group_id: String,
+    pub group_name: String,
     pub name: String,
     pub used_percent: f64,
     pub window_minutes: Option<i64>,
@@ -341,6 +357,8 @@ pub struct Dashboard {
     pub day_models: Vec<DayModel>,
     pub pricing_gaps: Vec<PricingGap>,
     pub quotas: Vec<QuotaSnapshot>,
+    pub quota_order: Vec<String>,
+    pub quota_estimates: Vec<crate::estimates::Estimate>,
     pub sources: Vec<Value>,
     pub price_updated_at: Option<i64>,
 }

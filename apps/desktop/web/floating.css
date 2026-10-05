@@ -78,3 +78,4 @@ body[data-active=true] .halo{animation:halo 2.4s ease-in-out infinite}
 }
 
 @media (forced-colors:active){body[data-view=ball]{--accent:LinkText;--ink:CanvasText;--ball-1:Canvas;--ball-2:Canvas;--badge-ink:Canvas}#ball{border:1px solid ButtonText}.halo{display:none}}
+#ball > img.eye { width: 46px; height: 46px; object-fit: contain; filter: drop-shadow(0 2px 5px rgba(0,0,0,.15)); }

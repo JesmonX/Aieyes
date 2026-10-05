@@ -26,7 +26,11 @@ impl Store {
         CREATE TABLE IF NOT EXISTS source_status(source_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS price_history(id INTEGER PRIMARY KEY,model_id TEXT NOT NULL,fetched_at INTEGER NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS price_model ON price_history(model_id,fetched_at);
-        PRAGMA user_version=2;")?;
+        CREATE TABLE IF NOT EXISTS quota_history(id INTEGER PRIMARY KEY,account_key TEXT NOT NULL,stamp INTEGER NOT NULL,payload TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS quota_history_account ON quota_history(account_key,stamp);
+        CREATE TABLE IF NOT EXISTS quota_estimates(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS estimate_active ON quota_estimates(account_key) WHERE status IN ('active','pending');
+        PRAGMA user_version=3;")?;
         Ok(Self { db })
     }
     pub fn settings(&self) -> Result<Settings> {
@@ -222,6 +226,7 @@ impl Store {
         }
         tx.execute("INSERT INTO kv VALUES('settings',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[serde_json::to_string(s)?])?;
         self.reprice_in_transaction(s, true)?;
+        self.reconcile_estimates(s)?;
         tx.commit()?;
         Ok(())
     }
@@ -286,6 +291,18 @@ impl Store {
             .and_then(|p| serde_json::from_str(p).ok());
         if let Some((old, _)) = &old {
             let prior: UsageEvent = serde_json::from_str(old)?;
+            // A copied record with less metadata must not erase known API billing.
+            if (prior.billing.category == "api"
+                || next.billing.category.is_empty()
+                || next.billing.category == "unknown")
+                && !prior.billing.category.is_empty()
+            {
+                next.billing = prior.billing.clone();
+            }
+            next.interval_start = match (next.interval_start, prior.interval_start) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
             next.account_id = prior.account_id;
             next.timestamp = next.timestamp.min(prior.timestamp);
             next.source_id = prior.source_id;
@@ -408,6 +425,13 @@ impl Store {
                 next.bank_reset = old.bank_reset;
                 next.bank_updated_at = old.bank_updated_at.or(Some(old.updated_at));
             }
+        }
+        self.observe_estimates(q)?;
+        if q.error.is_none() && q.origin != "log" {
+            self.db.execute(
+                "INSERT INTO quota_history(account_key,stamp,payload) VALUES(?1,?2,?3)",
+                params![key, q.updated_at, serde_json::to_string(q)?],
+            )?;
         }
         self.db.execute("INSERT INTO quotas VALUES(?1,?2) ON CONFLICT(account_key) DO UPDATE SET payload=excluded.payload",params![key,serde_json::to_string(&next)?])?;
         Ok(())
@@ -661,11 +685,21 @@ impl Store {
             }
             d.quotas.push(quota);
         }
+        d.quota_order = self.quota_order()?;
+        d.quota_estimates = self.estimates()?;
         d.quotas.sort_by(|a, b| {
-            a.windows
-                .is_empty()
-                .cmp(&b.windows.is_empty())
-                .then(a.name.cmp(&b.name))
+            let rank = |q: &QuotaSnapshot| {
+                d.quota_order
+                    .iter()
+                    .position(|k| k == &format!("{}:{}", q.provider, q.account_id))
+                    .unwrap_or(usize::MAX)
+            };
+            rank(a).cmp(&rank(b)).then_with(|| {
+                a.windows
+                    .is_empty()
+                    .cmp(&b.windows.is_empty())
+                    .then(a.name.cmp(&b.name))
+            })
         });
         for source in &settings.sources {
             let status: Option<String> = self

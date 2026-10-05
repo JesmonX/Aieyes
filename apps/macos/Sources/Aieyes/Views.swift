@@ -35,6 +35,8 @@ struct RootView: View {
     var compact = true
     @State private var tab = "agent"
     @State private var costMode = false
+    @State private var orderingQuotas = false
+    @State private var estimatingQuota: Quota?
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -64,6 +66,8 @@ struct RootView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: tab)
         .font(.system(size: 15))
         .tint(Palette.accent)
+        .sheet(isPresented: $orderingQuotas) { QuotaOrderView(model: model) }
+        .sheet(item: $estimatingQuota) { quota in QuotaEstimateView(model: model, quota: quota) }
         .onChange(of: model.provider) { _, _ in model.selectedModel = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; Task { await model.reload() } }
         .onChange(of: model.selectedAccount) { _, _ in model.selectedSource = "all"; Task { await model.reload() } }
         .onChange(of: model.selectedSource) { _, _ in Task { await model.reload() } }
@@ -74,23 +78,20 @@ struct RootView: View {
     }
     private var header: some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 9).fill(Palette.accent.gradient).frame(width: 34, height: 34)
-                Image(systemName: "eye").font(.system(size: 18, weight: .medium)).foregroundStyle(.white)
-            }
+            BrandMark().frame(width: 34, height: 34)
             if !compact { VStack(alignment: .leading, spacing: 1) { Text("Aieyes").font(.headline); EmptyView() } }
             Picker("页面", selection: $tab) { Text("Agent").tag("agent"); Text("服务器").tag("servers") }
                 .pickerStyle(.segmented).labelsHidden().frame(maxWidth: compact ? .infinity : 230)
             if !compact { Spacer() }
             Menu {
-                Button("同步记录") { Task { await model.scan() } }
-                Button("刷新限额") { Task { await model.refreshQuotas() } }
-                Button("同步价格") { Task { await model.syncPrices() } }
-                Button("刷新服务器") { Task { await model.sampleHosts() } }
+                Button("同步记录") { Task { await model.scan() } }.disabled(model.busy)
+                Button("刷新限额") { Task { await model.refreshQuotas() } }.disabled(model.quotaBusy)
+                Button("同步价格") { Task { await model.syncPrices() } }.disabled(model.busy)
+                Button("刷新服务器") { Task { await model.sampleHosts() } }.disabled(model.serverBusy)
             } label: {
                 if model.busy || model.serverBusy || model.quotaBusy { ProgressView().controlSize(.regular).frame(width: 18) }
                 else { Image(systemName: "arrow.clockwise").font(.system(size: 14)) }
-            }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().disabled(model.busy || model.serverBusy || model.quotaBusy).help("刷新").accessibilityLabel("刷新选项")
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("刷新").accessibilityLabel("刷新选项")
         }.padding(.horizontal, compact ? 18 : 28).padding(.vertical, 16)
     }
     private var footer: some View {
@@ -116,7 +117,7 @@ struct RootView: View {
                 ForEach(["codex", "claude", "antigravity", "agy", "deepseek", "custom"], id: \.self) { Text(Format.provider($0)).tag($0) }
             }.labelsHidden()
             Picker("账户", selection: $model.selectedAccount) {
-                Text("全部账户").tag("all"); Text("无账户 / API").tag("none")
+                Text("全部账户").tag("all"); Text("未关联账户").tag("none")
                 ForEach(model.settings.accounts.filter { model.provider == "all" || $0.provider == model.provider }, id: \.key) { Text($0.name).tag($0.key) }
             }.labelsHidden()
             if !compact {
@@ -260,7 +261,7 @@ struct RootView: View {
     }
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("账户限额").font(.system(size: compact ? 19 : 24, weight: .semibold)); if model.dashboard.quotas.count > 1 { Text("\(model.dashboard.quotas.count)").font(.system(size: 14)).foregroundStyle(.secondary) }; Spacer(); Button(model.quotaBusy ? "读取中…" : "刷新") { Task { await model.refreshQuotas() } }.font(.system(size: 14)).disabled(model.quotaBusy) }
+            HStack { Text("账户限额").font(.system(size: compact ? 19 : 24, weight: .semibold)); if model.dashboard.quotas.count > 1 { Text("\(model.dashboard.quotas.count)").font(.system(size: 14)).foregroundStyle(.secondary) }; Spacer(); Button { orderingQuotas = true } label: { Image(systemName: "arrow.up.arrow.down") }.help("调整账户顺序").accessibilityLabel("调整账户顺序"); Button(model.quotaBusy ? "读取中…" : "刷新") { Task { await model.refreshQuotas() } }.font(.system(size: 14)).disabled(model.quotaBusy) }
             ForEach(displayedQuotaAccounts.filter { account in
                 !model.dashboard.quotas.contains { $0.provider == account.provider && $0.accountId == account.id }
             }, id: \.key) { account in
@@ -275,9 +276,9 @@ struct RootView: View {
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(.caption).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: model.dashboard.quotas.filter { $0.provider == quota.provider }.count > 1, sourceName: "") } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { QuotaCard(quota: $0, sourceName: "") } } }
-        }
+            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { estimatingQuota = quota }) } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { estimatingQuota = quota }) } } }
+        }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
     @ViewBuilder private var serverContent: some View {
         HStack { VStack(alignment: .leading, spacing: 4) { Text("服务器").font(.system(size: compact ? 22 : 28, weight: .semibold, design: .default)); Text("\(model.settings.hosts.filter(\.enabled).count) 台主机").font(.system(size: 14)).foregroundStyle(.secondary) }; Spacer(); Button { model.settingsTab = "servers"; model.showSettings?() } label: { Image(systemName: "plus") }.help("添加主机") }
@@ -484,10 +485,13 @@ struct QuotaCard: View {
     var quota: Quota
     var compact = false
     var sourceName = ""
+    var estimate: QuotaEstimate?
+    var onEstimate: (() -> Void)?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage private var expanded: Bool
-    init(quota: Quota, compact: Bool = false, sourceName: String = "") {
-        self.quota = quota; self.compact = compact; self.sourceName = sourceName
-        _expanded = AppStorage(wrappedValue: true, "quota.expanded." + quota.id)
+    init(quota: Quota, compact: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil) {
+        self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate
+        _expanded = AppStorage(wrappedValue: quota.provider != "agy", "quota.expanded." + quota.id)
     }
     var body: some View {
         fullCard
@@ -501,19 +505,45 @@ struct QuotaCard: View {
         } }
         if quota.isAvailable == false { Text("余额不足").font(.system(size: 14)).foregroundStyle(.orange) }
     }
+    private var agyGroups: [String] {
+        quota.windows.reduce(into: [String]()) { result, w in
+            let group = w.groupLabel
+            if !result.contains(group) { result.append(group) }
+        }
+    }
+    private var agyWindows: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(agyGroups, id: \.self) { group in
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(group).font(.system(size: 14, weight: .medium)).fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .top, spacing: 14) {
+                        ForEach(quota.windows.filter { $0.groupLabel == group }.sorted { ($0.windowMinutes ?? 0) < ($1.windowMinutes ?? 0) }) { window in
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack { Text(window.windowMinutes == 10080 ? "7d" : window.windowMinutes == 300 ? "5h" : window.name); Spacer(minLength: 2); Text(Format.percent(max(0, 100-window.usedPercent))).monospacedDigit() }.font(.system(size: 14))
+                                ResourceBar(percent: 100-window.usedPercent, tint: window.usedPercent >= 90 ? .orange : Palette.accent)
+                                if expanded { Text(window.resetsAt.map { "重置 " + Format.date($0) } ?? "重置时间未知").font(.system(size: 14)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                            }.frame(maxWidth: .infinity).accessibilityElement(children: .combine).accessibilityLabel(window.name + "，剩余 " + Format.percent(max(0, 100-window.usedPercent)))
+                        }
+                    }
+                }
+            }
+        }
+    }
     private var fullCard: some View {
         Surface {
-            Button { expanded.toggle() } label: {
+            Button { withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)) { expanded.toggle() } } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 3) { Text(quota.name).font(.system(size: 14, weight: .semibold)); if expanded { Text(quota.plan.map { "\(Format.provider(quota.provider)) · \($0.capitalized)" } ?? Format.provider(quota.provider)).font(.system(size: 14)).foregroundStyle(.secondary) } }
                 Spacer()
+                if quota.provider == "agy" { Text("剩余额度").font(.system(size: 14)).foregroundStyle(.secondary) }
                 if expanded && quota.updatedAt > 0 { Text("\(quota.origin == "log" ? "记录" : "更新") \(Format.date(quota.updatedAt))").font(.system(size: 14)).foregroundStyle(.secondary) }
                 Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
             }.contentShape(Rectangle())
             }.buttonStyle(.plain).help(expanded ? "折叠限额" : "展开限额")
                 .accessibilityLabel(quota.name + (expanded ? "，折叠限额" : "，展开限额"))
             balanceContent
-            if !quota.windows.isEmpty { LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: expanded ? 1 : 2), alignment: .leading, spacing: expanded ? 14 : 8) {
+            if quota.provider == "agy" { agyWindows }
+            else if !quota.windows.isEmpty { LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: expanded ? 1 : 2), alignment: .leading, spacing: expanded ? 14 : 8) {
             ForEach(quota.windows) { window in
                 VStack(spacing: 6) {
                     ViewThatFits(in: .horizontal) {
@@ -534,6 +564,16 @@ struct QuotaCard: View {
             }
             }
             }
+            if let onEstimate, (quota.provider != "agy" && quota.windows.contains(where: { $0.windowMinutes == 10080 })) || estimate != nil {
+                Button(action: onEstimate) {
+                    HStack { Label(estimate == nil ? "估算整周价值" : "7d 整周估值", systemImage: "chart.line.uptrend.xyaxis"); Spacer();
+                        if let value = estimate?.weeklyValue { Text(Format.money(value) + " USD").monospacedDigit(); if estimate?.status == "pending" { Text("待确认").foregroundStyle(.orange) } }
+                        else if let estimate { Text(estimate.statusLabel).foregroundStyle(.secondary) }
+                        Image(systemName: "chevron.right").font(.caption)
+                    }.font(.system(size: 14)).contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+            }
+            if quota.provider == "agy" && expanded { Text("整周估值需匹配的 Token 用量与模型组归属。").font(.system(size: 14)).foregroundStyle(.secondary) }
             if expanded && !sourceName.isEmpty { Text(sourceName).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1) }
             if expanded, let bank = quota.bankReset {
                 Divider().opacity(0.5)
@@ -707,6 +747,7 @@ struct ResourceRing: View {
 struct ResourceBar: View {
     var percent: Double?
     var tint: Color? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
@@ -717,6 +758,7 @@ struct ResourceBar: View {
                 }
             }
         }.frame(height: 4)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: percent)
             .accessibilityLabel(percent.map { Format.percent($0) } ?? "暂无数据")
     }
 }

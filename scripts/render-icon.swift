@@ -3,12 +3,17 @@ import AppKit
 func color(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> CGColor {
     CGColor(red: r / 255, green: g / 255, blue: b / 255, alpha: a)
 }
+for template in [false, true] {
 for size in [16, 32, 48, 64, 128, 256, 512, 1024] {
     let space = CGColorSpaceCreateDeviceRGB()
     let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8,
                         bytesPerRow: size * 4, space: space,
                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     ctx.scaleBy(x: CGFloat(size) / 1024, y: CGFloat(size) / 1024)
+    if template {
+        ctx.translateBy(x: 512, y: 512); ctx.scaleBy(x: 1.4, y: 1.4); ctx.translateBy(x: -512, y: -520)
+    }
+    if !template {
     let tile = CGPath(roundedRect: CGRect(x: 64, y: 64, width: 896, height: 896),
                       cornerWidth: 204, cornerHeight: 204, transform: nil)
     ctx.saveGState()
@@ -23,6 +28,7 @@ for size in [16, 32, 48, 64, 128, 256, 512, 1024] {
                            endCenter: CGPoint(x: 400, y: 660), endRadius: 520, options: [])
     ctx.restoreGState()
     ctx.addPath(tile); ctx.setStrokeColor(color(156, 205, 234, 0.16)); ctx.setLineWidth(3); ctx.strokePath()
+    }
     // Almond silhouette for recognition at small sizes.
     let eye = CGMutablePath()
     eye.move(to: CGPoint(x: 210, y: 520))
@@ -44,9 +50,16 @@ for size in [16, 32, 48, 64, 128, 256, 512, 1024] {
         let bar = CGPath(roundedRect: CGRect(x: x - 12, y: 468, width: 24, height: h), cornerWidth: 12, cornerHeight: 12, transform: nil)
         ctx.addPath(bar); ctx.setFillColor(color(218, 249, 255)); ctx.fillPath()
     }
+    if !template {
     ctx.setFillColor(color(9, 29, 46)); ctx.fillEllipse(in: CGRect(x: 733, y: 299, width: 94, height: 94))
     ctx.setFillColor(color(94, 231, 175)); ctx.fillEllipse(in: CGRect(x: 746, y: 312, width: 68, height: 68))
+    }
+    if size == 32 && !template {
+        try Data(bytes: ctx.data!, count: 32 * 32 * 4).write(to: URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("brand.rgba"))
+    }
     let bitmap = NSBitmapImageRep(cgImage: ctx.makeImage()!)
     try bitmap.representation(using: .png, properties: [:])!.write(to:
-        URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("\(size).png"))
+        URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent("\(template ? "template-" : "")\(size).png"))
+}
+
 }

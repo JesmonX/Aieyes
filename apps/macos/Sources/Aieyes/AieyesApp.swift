@@ -29,8 +29,6 @@ import Combine
         model.showDetail = { [weak self] in self?.openDetail() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "Aieyes")
-            button.image?.isTemplate = true; button.imagePosition = .imageLeading
             button.target = self; button.action = #selector(togglePopover)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
@@ -81,10 +79,12 @@ import Combine
         popover.performClose(nil)
         if detailWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            window.contentMinSize = NSSize(width: 760, height: 480)
             window.title = "Aieyes"; window.titlebarAppearsTransparent = true; window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: RootView(model: model, compact: false)); window.center(); window.delegate = self
             window.setFrameAutosaveName("AieyesDetails"); detailWindow = window
         }
+        if let window = detailWindow { fitToVisibleScreen(window) }
         detailWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); model.setWindowVisible(true, window: "detail")
     }
     private func openSettings() {
@@ -97,12 +97,22 @@ import Combine
             if let screen = NSScreen.main { window.setContentSize(NSSize(width: min(760, screen.visibleFrame.width - 40), height: min(600, screen.visibleFrame.height - 70))) }
             window.center(); window.setFrameAutosaveName("AieyesSettings"); settingsWindow = window
         }
+        if let window = settingsWindow { fitToVisibleScreen(window) }
         settingsWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    }
+    private func fitToVisibleScreen(_ window: NSWindow) {
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame.insetBy(dx: 8, dy: 8)
+        var frame = window.frame
+        frame.size.width = min(frame.width, visible.width); frame.size.height = min(frame.height, visible.height)
+        frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX-frame.width)
+        frame.origin.y = min(max(frame.minY, visible.minY), visible.maxY-frame.height)
+        window.setFrame(frame, display: true)
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard sender === settingsWindow else { return true }
         if approvingSettingsClose { approvingSettingsClose = false; return true }
-        guard !model.settingsSaving else { return false }
+        guard !model.settingsSaving, sender.attachedSheet == nil else { return false }
         guard model.settingsDirty else { return true }
         let alert = NSAlert()
         alert.messageText = "保存配置更改？"
@@ -205,6 +215,15 @@ import Combine
             if let quota = model.dashboard.quotas.first {
                 try await capture(QuotaCard(quota: quota), size: NSSize(width: 420, height: 450), dark: false, to: root.appendingPathComponent("single-quota.png"))
             }
+            for dark in [false, true] {
+                if let agy = model.dashboard.quotas.first(where: { $0.provider == "agy" }) {
+                    try await capture(QuotaCard(quota: agy, compact: true), size: NSSize(width: 414, height: 340), dark: dark, to: root.appendingPathComponent("agy-compact-\(dark ? "dark" : "light").png"))
+                }
+                if let account = model.dashboard.quotas.first(where: { $0.provider == "codex" }) {
+                    try await capture(QuotaEstimateView(model: model, quota: account), size: NSSize(width: 518, height: 620), dark: dark, to: root.appendingPathComponent("quota-estimate-\(dark ? "dark" : "light").png"))
+                }
+            }
+            try await capture(QuotaOrderView(model: model), size: NSSize(width: 488, height: 430), dark: false, to: root.appendingPathComponent("quota-order.png"))
             for provider in ["agy", "deepseek"] {
                 let source = AgentSource(name: Format.provider(provider), provider: provider, path: "")
                 try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent(provider + "-source.png"))

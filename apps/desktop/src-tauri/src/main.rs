@@ -16,6 +16,13 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
         }];
     }
     if result.is_err() {
+        // Sampling may have persisted a pending checkpoint before a later sync fails.
+        if matches!(
+            method,
+            "quotaEstimates.start" | "quotaEstimates.stop" | "quotaEstimates.restart"
+        ) {
+            return vec![("desktop:data-changed", Value::String(method.into()))];
+        }
         return vec![];
     }
     let mut events = vec![];
@@ -25,7 +32,15 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
     }
     if matches!(
         method,
-        "settings.save" | "sources.scan" | "quotas.refresh" | "prices.save" | "prices.sync"
+        "settings.save"
+            | "sources.scan"
+            | "quotas.refresh"
+            | "prices.save"
+            | "prices.sync"
+            | "quotas.order.set"
+            | "quotaEstimates.start"
+            | "quotaEstimates.stop"
+            | "quotaEstimates.restart"
     ) {
         events.push(("desktop:data-changed", Value::String(method.into())));
     }
@@ -101,6 +116,18 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn sampling_failure_invalidates_pending_state_without_claiming_success() {
+        let events = update_events("quotaEstimates.stop", &Err("sync failed".into()));
+        assert_eq!(
+            events,
+            vec![(
+                "desktop:data-changed",
+                Value::String("quotaEstimates.stop".into())
+            )]
+        );
+        assert_eq!(update_events("quotas.order.set", &Ok(Value::Null)).len(), 1);
+    }
     #[test]
     fn failed_host_sampling_notifies_the_panel_without_replacing_its_snapshot() {
         assert_eq!(

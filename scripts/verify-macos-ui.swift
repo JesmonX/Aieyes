@@ -35,6 +35,7 @@ for line in sys.stdin:
         target=root+'/'+hashlib.sha256(req['params']['sourceId'].encode()).hexdigest()+'.key'
         with open(target,'x') as keyfile: keyfile.write(req['params']['apiKey'])
         response['result']=dict(path=target)
+    elif method=='quotas.order.set': response['result']=req['params']['keys']
     elif method=='settings.save':
         with open(root+'/settings.json','w') as config: json.dump(req['params'],config)
         response['result']={}
@@ -51,6 +52,12 @@ for line in sys.stdin:
         defer { model.engine.stop(); model.metricsEngine.stop() }
         await model.bootstrap()
         precondition(model.settings == settings && model.settingsDraft == settings && !model.settingsDirty)
+        let legacyWindow = try JSONDecoder().decode(QuotaWindow.self, from: Data(#"{"id":"","name":"Claude · 7d","usedPercent":20,"windowMinutes":10080,"groupName":""}"#.utf8))
+        precondition(legacyWindow.id == "Claude · 7d" && legacyWindow.groupLabel == "Claude")
+        model.settingsDraft.refreshSeconds = 321
+        try await model.saveQuotaOrder(["deepseek:fixture"])
+        precondition(model.settingsDraft.refreshSeconds == 321 && model.settings.refreshSeconds == 300 && model.settingsDirty)
+        model.discardSettingsDraft()
         precondition(model.quotaError == "模拟限额连接失败")
         precondition(model.quotaNextAttempt.map { $0 > Date() } == true)
         func calls(_ method: String) throws -> Int {

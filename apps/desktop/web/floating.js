@@ -140,6 +140,7 @@
   panel.addEventListener('pointerdown', () => { sticky = true; clearTimeout(hoverWatch); });
   document.addEventListener('focusin', () => { if (panelOpen) { sticky = true; clearTimeout(hoverWatch); } });
   document.addEventListener('keydown', event => {
+    if (event.defaultPrevented || document.querySelector('#quota-dialog')?.open) return;
     if (event.key === 'Escape' && panelOpen) {
       event.preventDefault();
       const more = document.querySelector('#panel-more');

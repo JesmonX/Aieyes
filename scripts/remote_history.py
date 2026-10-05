@@ -37,7 +37,7 @@ for path in sorted(files):
                 payload = value.get("payload") or {}
                 kind = value.get("type")
                 if kind == "session_meta":
-                    event = {"type": kind, "payload": {"id": payload.get("id", payload.get("session_id"))}}
+                    event = {"type": kind, "timestamp": value.get("timestamp"), "payload": {"timestamp": payload.get("timestamp"), "id": payload.get("id", payload.get("session_id")), "model_provider": payload.get("model_provider")}}
                 elif kind == "turn_context":
                     event = {"type": kind, "payload": {"model": payload.get("model")}}
                 elif kind == "event_msg" and payload.get("type") == "token_count":
@@ -49,7 +49,7 @@ for path in sorted(files):
                     event = {k: value.get(k) for k in ("type", "timestamp", "sessionId", "requestId", "uuid", "isApiErrorMessage")}
                     event["message"] = {k: message.get(k) for k in ("id", "model", "usage")}
             elif "tokens" in value:
-                event = {k: value.get(k) for k in ("id", "sessionId", "timestamp", "model", "tokens")}
+                event = {k: value.get(k) for k in ("id", "sessionId", "timestamp", "model", "tokens", "billing")}
             if event:
                 size += len(json.dumps(event))
                 if size > 48 * 1024 * 1024:

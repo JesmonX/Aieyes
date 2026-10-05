@@ -962,14 +962,21 @@ fn icon(phase: Option<Phase>) -> tauri::image::Image<'static> {
         Some(Phase::Interrupted) => [217, 148, 52, 255],
         _ => [132, 145, 167, 255],
     };
-    let mut rgba = vec![0; 32 * 32 * 4];
-    for y in 0..32 {
-        for x in 0..32 {
-            let dx = x as f64 - 15.5;
-            let dy = y as f64 - 15.5;
-            let eye = dx * dx / 196.0 + dy * dy / 64.0;
-            if (0.65..=1.0).contains(&eye) || dx * dx + dy * dy < 18.0 {
-                rgba[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4].copy_from_slice(&color);
+    let mut rgba = include_bytes!("../icons/brand.rgba").to_vec();
+    // Live state is a separate top-right badge, not a recoloring of the brand.
+    if phase.is_some() {
+        for y in 0..12 {
+            for x in 20..32 {
+                let dx = x as f64 - 25.5;
+                let dy = y as f64 - 5.5;
+                if dx * dx + dy * dy <= 25.0 {
+                    let ink = if dx * dx + dy * dy > 16.0 {
+                        [20, 30, 50, 255]
+                    } else {
+                        color
+                    };
+                    rgba[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4].copy_from_slice(&ink);
+                }
             }
         }
     }
@@ -979,6 +986,15 @@ fn icon(phase: Option<Phase>) -> tauri::image::Image<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tray_reuses_brand_pixels_and_only_overlays_the_status_badge() {
+        let brand = icon(None);
+        let active = icon(Some(Phase::Working));
+        assert_eq!(brand.rgba(), include_bytes!("../icons/brand.rgba"));
+        assert_eq!(brand.rgba().len(), 4096);
+        assert_eq!(&brand.rgba()[12 * 32 * 4..], &active.rgba()[12 * 32 * 4..]);
+        assert_ne!(brand.rgba(), active.rgba());
+    }
     #[test]
     fn platform_bundle_configurations_are_valid() {
         let base: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();

@@ -11,7 +11,10 @@ struct Aggregate: Codable, Identifiable {
 }
 struct QuotaWindow: Codable, Identifiable {
     var name: String, usedPercent: Double, windowMinutes: Int?, resetsAt: Double?
-    var id: String { name }
+    var stableId: String?, groupId: String?, groupName: String?
+    var id: String { stableId.flatMap { $0.isEmpty ? nil : $0 } ?? name }
+    var groupLabel: String { groupName.flatMap { $0.isEmpty ? nil : $0 } ?? name.components(separatedBy: " · ").dropLast().joined(separator: " · ") }
+    enum CodingKeys: String, CodingKey { case name, usedPercent, windowMinutes, resetsAt, groupId, groupName; case stableId = "id" }
 }
 struct ResetCredit: Codable, Identifiable {
     var id: String, status: String, expiresAt: Double?, grantedAt: Double?, title: String?
@@ -48,6 +51,7 @@ struct Dashboard: Codable {
     var generatedAt: Double = 0, summary = Aggregate(), days: [Aggregate] = [], heatmap: [Aggregate] = [], models: [Aggregate] = []
     var trendDays: [Aggregate] = [], dayModels: [DayModel] = [], pricingGaps: [PricingGap] = []
     var modelOptions: [String]? = nil
+    var quotaOrder: [String]? = nil, quotaEstimates: [QuotaEstimate]? = nil
     var quotas: [Quota] = [], sources: [SourceSummary] = [], priceUpdatedAt: Double?
 }
 struct ProxySettings: Codable, Equatable { var mode = "system", url = "" }
@@ -122,4 +126,14 @@ enum Format {
     }
     static func time(_ stamp: Double) -> String { Date(timeIntervalSince1970: stamp).formatted(date: .omitted, time: .shortened) }
     static func provider(_ key: String) -> String { ["codex":"Codex", "claude":"Claude Code", "antigravity":"Antigravity", "agy":"agy", "deepseek":"DeepSeek", "custom":"自定义" ][key] ?? key }
+}
+
+struct QuotaEstimate: Codable, Identifiable {
+    var id: String, accountKey: String, windowId: String, windowName: String
+    var sourceIds: [String], sourceNames: [String], status: String, reason: String
+    var startedAt: Double, checkpointAt: Double, endedAt: Double?
+    var consumedPercent: Double, cost: Double, totalTokens: Double, pricedTokens: Double
+    var weeklyValue: Double?, calculationNote: String
+    var prices: [ModelPrice]?
+    var statusLabel: String { ["active":"采样中", "pending":"待确认", "completed":"已结束"][status] ?? status }
 }

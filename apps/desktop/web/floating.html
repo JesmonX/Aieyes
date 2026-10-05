@@ -4,12 +4,12 @@
 <body data-view="ball">
   <button id="ball" type="button" aria-label="打开 Aieyes 面板；拖动可移动，右键打开菜单" title="单击或悬停打开面板 · 拖动移动 · 右键菜单">
     <span class="halo" aria-hidden="true"></span>
-    <svg class="eye" viewBox="0 0 40 26" fill="none" aria-hidden="true"><path d="M3 13S9 3 20 3s17 10 17 10-6 10-17 10S3 13 3 13Z" stroke="currentColor" stroke-width="2.5"/><circle cx="20" cy="13" r="4.5" fill="currentColor"/></svg>
+    <img class="eye brand-art" src="brand.png" alt="" aria-hidden="true">
     <span id="phase" aria-live="polite">连接中</span><span id="count" hidden></span>
   </button>
   <div id="panel">
     <header class="panel-head">
-      <span class="panel-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M2 12C7 3 17 3 22 12C17 21 7 21 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span>
+      <span class="panel-mark" aria-hidden="true"><img class="brand-art" src="brand.png" alt="Aieyes"></span>
       <nav class="panel-tabs" aria-label="面板导航">
         <button type="button" data-page="agent" class="active">Agent</button>
         <button type="button" data-page="servers">服务器</button>

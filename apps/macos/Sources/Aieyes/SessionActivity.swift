@@ -106,10 +106,25 @@ struct MenuActivityLabel: View {
     @ObservedObject var model: AppModel
     var body: some View {
         HStack(spacing: 5) {
-            Image(systemName: "eye").font(.system(size: 15, weight: .medium))
+            BrandMark(template: true).frame(width: 22, height: 22)
             ActivityIndicator(phase: model.sessionPhase)
             if model.activeSessions.count > 0 { Text("\(model.activeSessions.count)").monospacedDigit() }
             if !model.menuText.isEmpty { Text(model.menuText).monospacedDigit() }
         }.font(.system(size: 14, weight: .medium)).padding(.horizontal, 5)
     }
+}
+
+struct BrandMark: View {
+    var template = false
+    private static let full = load(template: false)
+    private static let monochrome = load(template: true)
+    private static func load(template: Bool) -> NSImage {
+        let name = template ? "BrandTemplate" : "Brand"
+        let sourceResources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources")
+        let url = Bundle.main.url(forResource: name, withExtension: "png") ?? sourceResources.appendingPathComponent(name + ".png")
+        let image = NSImage(contentsOf: url) ?? NSImage(named: NSImage.applicationIconName) ?? NSImage()
+        image.isTemplate = template
+        return image
+    }
+    var body: some View { Image(nsImage: template ? Self.monochrome : Self.full).resizable().scaledToFit().accessibilityLabel("Aieyes") }
 }
