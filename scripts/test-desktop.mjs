@@ -7,13 +7,17 @@ const read = name => readFileSync(new URL(`../apps/desktop/web/${name}`, import.
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function harness(file, initial = {}) {
   const elements = new Map(), events = new Map(), calls = [], notices = [], runs = [], timers = new Map();
-  let dragCount = 0, maximized = false, timerId = 0;
+  let dragCount = 0, maximized = false, timerId = 0, now = 1000;
   const windowCalls = [];
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
       textContent:'', innerHTML:'', value:'', hidden:false, dataset:{}, listeners:new Map(),
       addEventListener(name, fn) { this.listeners.set(name, fn); },
       setAttribute(name, value) { this[name] = value; },
+      focus() { document.activeElement = this; },
+      contains(other) { return other === this || other?.parent === this; },
+      querySelector: selector => element(selector),
+      querySelectorAll() { return this.children || []; },
       async dispatch(name, fields = {}) { await this.listeners.get(name)?.({preventDefault(){},...fields}); },
     });
     return elements.get(id);
@@ -24,6 +28,7 @@ function harness(file, initial = {}) {
   };
   const info = {mode:'auto',effectiveMode:'floating',platform:'windows',summary:'思考中 · 2 个会话',phase:'thinking',activeCount:2,sessions:[],page:'agent',panelOpen:false,panelPinned:false,hidden:false,...initial};
   const native = {
+    cursorInside:true,
     async startDragging(){dragCount++;},
     async isMaximized(){return maximized;},
     async toggleMaximize(){maximized=!maximized;windowCalls.push('maximize');},
@@ -36,6 +41,7 @@ function harness(file, initial = {}) {
       calls.push({command,args});
       if (command === 'desktop_panel') { info.panelOpen = args.open; return {...info}; }
       if (command === 'desktop_panel_pin') { info.panelPinned = args.pinned; return {...info}; }
+      if (command === 'desktop_panel_cursor_inside') return native.cursorInside;
       return info;
     }},
     event:{async listen(name, fn) { events.set(name, fn); return () => {}; }},
@@ -44,6 +50,7 @@ function harness(file, initial = {}) {
   const state = {page:'agent',settingsTab:'accounts',settings:{accounts:[],sources:[],hosts:[]},hosts:[],dashboard:null,provider:'',accountKey:'',sourceId:'',model:'',days:1,cost:false,busy:false};
   const sandbox = {
     window, document, state, console,
+    Date: class extends Date { static now() { return now; } },
     notify: e => notices.push(e),
     render(){}, drawTrend(){},
     loadDashboard: async () => {},
@@ -58,11 +65,12 @@ function harness(file, initial = {}) {
     Element: class {},
   };
   vm.createContext(sandbox);
+  element('#panel-menu').hidden = true;
   vm.runInContext(read('sessions.js'), sandbox, {filename:'sessions.js'});
   vm.runInContext(read(file), sandbox, {filename:file});
   return {window,document,element,events,calls,notices,runs,state,info,windowCalls,native,timers,
     get dragCount(){return dragCount;},
-    async runTimers(ms) { for (const [id, timer] of [...timers.entries()]) { if (ms === undefined || timer.ms === ms) { timers.delete(id); await timer.fn(); } } },
+    async runTimers(ms) { now += ms ?? 0; for (const [id, timer] of [...timers.entries()]) { if (ms === undefined || timer.ms === ms) { timers.delete(id); await timer.fn(); } } },
   };
 }
 
@@ -104,6 +112,7 @@ test('hovering opens the panel, leaving closes it, and Esc or pin behave', async
   assert.equal(h.calls.at(-1).command,'desktop_panel');
   assert.equal(h.calls.at(-1).args.open,true);
   assert.equal(h.document.body.dataset.view,'panel');
+  h.native.cursorInside = false;
   await h.element('#panel').dispatch('pointerleave');
   await h.runTimers(450); await flush();
   assert.equal(h.info.panelOpen,false);
@@ -122,6 +131,19 @@ test('hovering opens the panel, leaving closes it, and Esc or pin behave', async
   assert.equal(h.element('#panel-pin').dataset.pinned,'true');
   assert.equal(h.element('#panel-pin')['aria-pressed'],'true');
 });
+test('hover is available again after dragging without requiring a click', async () => {
+  const h = harness('floating.js'); await flush();
+  const ball=h.element('#ball');
+  await ball.dispatch('pointerenter');
+  await ball.dispatch('pointerdown',{button:0,clientX:20,clientY:20});
+  await ball.dispatch('pointermove',{buttons:1,clientX:34,clientY:20}); await flush();
+  await ball.dispatch('pointerup');
+  await ball.dispatch('click',{detail:1}); await flush();
+  assert.equal(h.info.panelOpen,false);
+  await h.runTimers(650);
+  await h.runTimers(350); await flush();
+  assert.equal(h.info.panelOpen,true);
+});
 test('the refresh menu runs scans, quotas, prices and host sampling', async () => {
   const h = harness('floating.js'); await flush();
   await h.element('#ball').dispatch('click',{detail:1}); await flush();
@@ -132,6 +154,48 @@ test('the refresh menu runs scans, quotas, prices and host sampling', async () =
   await h.element('#panel-menu').dispatch('click',{target:{closest:()=>({dataset:{refresh:'quotas'}})}});
   assert.deepEqual(h.runs,['quotas']);
   assert.equal(h.element('#panel-menu').hidden,true);
+});
+test('hover closes after leaving both native rectangles without entering the panel', async () => {
+  const h = harness('floating.js'); await flush();
+  await h.element('#ball').dispatch('pointerenter');
+  await h.runTimers(350); await flush();
+  await h.runTimers(150);
+  assert.equal(h.info.panelOpen,true);
+  h.native.cursorInside = false;
+  for (let i = 0; i < 4; i++) { await h.runTimers(150); await flush(); }
+  assert.equal(h.info.panelOpen,false);
+});
+test('Escape closes the refresh menu before the panel and restores keyboard focus', async () => {
+  const h = harness('floating.js'); await flush();
+  await h.element('#ball').dispatch('click',{detail:0}); await flush();
+  assert.equal(h.document.activeElement,h.element('.panel-tabs button.active'));
+  await h.element('#panel-refresh').dispatch('click');
+  await h.document.dispatch('keydown',{key:'Escape'}); await flush();
+  assert.equal(h.element('#panel-menu').hidden,true);
+  assert.equal(h.info.panelOpen,true);
+  assert.equal(h.document.activeElement,h.element('#panel-refresh'));
+  h.element('#panel-refresh').parent = h.element('#panel');
+  await h.document.dispatch('keydown',{key:'Escape'}); await flush();
+  assert.equal(h.info.panelOpen,false);
+  assert.equal(h.document.activeElement,h.element('#ball'));
+});
+test('refresh menu arrow keys move between its actions', async () => {
+  const h = harness('floating.js'); await flush();
+  const items=['scan','quotas','prices','hosts'].map(id=>h.element(id));
+  h.element('#panel-menu').children=items;
+  await h.element('#panel-refresh').dispatch('keydown',{key:'ArrowDown'});
+  assert.equal(h.document.activeElement,items[0]);
+  await h.element('#panel-menu').dispatch('keydown',{key:'ArrowUp'});
+  assert.equal(h.document.activeElement,items[3]);
+  await h.element('#panel-menu').dispatch('keydown',{key:'Home'});
+  assert.equal(h.document.activeElement,items[0]);
+});
+test('opening the panel refreshes its settings as well as its dashboard', async () => {
+  const h = harness('floating.js'); await flush();
+  let refreshes=0;
+  h.window.AieyesApp={refreshPanel:async()=>{refreshes++;}};
+  await h.element('#ball').dispatch('click',{detail:0}); await flush();
+  assert.equal(refreshes,1);
 });
 test('panel footer opens details, settings and quit through desktop actions', async () => {
   const h = harness('floating.js'); await flush();
@@ -177,6 +241,14 @@ test('settings hide and restore the floating ball with the live label', async ()
   assert.equal(hide.textContent,'恢复显示悬浮球');
   await hide.onclick();
   assert.equal(h.calls.filter(c=>c.command==='desktop_action').at(-1).args.action,'show-ball');
+});
+test('native setup routes open the requested main-window editor', async () => {
+  const h = harness('desktop.js'); await flush();
+  const editors=[];
+  h.window.AieyesApp={openSetupInMain:async kind=>editors.push(kind)};
+  h.events.get('desktop:navigate')({payload:'add-host'}); await flush();
+  h.events.get('desktop:navigate')({payload:'add-source'}); await flush();
+  assert.deepEqual(editors,['hosts','sources']);
 });
 test('Windows titlebar minimizes, restores, and requests close rather than quit', async () => {
   const h = harness('desktop.js',{material:'mica'}); await flush();

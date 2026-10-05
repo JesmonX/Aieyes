@@ -335,6 +335,8 @@ pub struct Dashboard {
     pub days: Vec<Aggregate>,
     pub heatmap: Vec<Aggregate>,
     pub models: Vec<Aggregate>,
+    /// Model choices honor the other filters but not the selected model itself.
+    pub model_options: Vec<String>,
     pub trend_days: Vec<Aggregate>,
     pub day_models: Vec<DayModel>,
     pub pricing_gaps: Vec<PricingGap>,

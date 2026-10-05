@@ -9,24 +9,41 @@
   const HOVER_DELAY = 350, LEAVE_DELAY = 450, SUPPRESS = 650;
   let start = null, dragged = false, info = null;
   let panelOpen = false, pinned = false, hoverOpened = false, sticky = false, hovering = false;
-  let hoverTimer = 0, leaveTimer = 0, suppress = 0;
+  let hoverTimer = 0, leaveTimer = 0, hoverWatch = 0, outsideSince = null, suppress = 0;
 
   function failure(error) {
     document.querySelector('#phase').textContent = '连接异常';
     document.body.dataset.active = 'false';
     ball.title = String(error) + '；右键打开菜单';
+    if (panelOpen && typeof notify === 'function') notify(String(error));
   }
   async function action(name) {
     try { return await invoke('desktop_action', { action: name }); } catch (error) { failure(error); }
   }
-  function closeMenu() {
+  function closeMenu(restoreFocus = false) {
     const menu = document.querySelector('#panel-menu');
     if (!menu || menu.hidden) return;
     menu.hidden = true;
     document.querySelector('#panel-refresh')?.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) document.querySelector('#panel-refresh')?.focus({preventScroll:true});
+  }
+  function watchHover() {
+    clearTimeout(hoverWatch);
+    if (!panelOpen || !hoverOpened || sticky || pinned) return;
+    hoverWatch = setTimeout(async () => {
+      try {
+        const inside = await invoke('desktop_panel_cursor_inside');
+        if (!panelOpen || !hoverOpened || sticky || pinned) return;
+        if (inside) outsideSince = null;
+        else if (outsideSince === null) outsideSince = Date.now();
+        else if (Date.now() - outsideSince >= LEAVE_DELAY) { setPanel(false); return; }
+      } catch (_) { /* Pointer events remain the fallback on unsupported desktops. */ }
+      watchHover();
+    }, 150);
   }
   function applyPanel(next) {
     const was = panelOpen;
+    const focused = document.activeElement;
     panelOpen = !!next.panelOpen;
     pinned = !!next.panelPinned;
     document.body.dataset.view = panelOpen ? 'panel' : 'ball';
@@ -35,18 +52,26 @@
       pin.dataset.pinned = String(pinned);
       pin.setAttribute('aria-pressed', String(pinned));
       pin.title = pinned ? '取消固定' : '固定面板';
+      pin.setAttribute('aria-label', pin.title);
     }
     if (was && !panelOpen) {
       // Do not immediately reopen from the hover that may survive the window shrink.
       suppress = Date.now() + SUPPRESS;
       hoverOpened = sticky = false;
       clearTimeout(leaveTimer);
+      clearTimeout(hoverWatch);
+      outsideSince = null;
       closeMenu();
+      const more = document.querySelector('#panel-more');
+      if (more) more.open = false;
+      if (panel.contains(focused)) ball.focus({preventScroll:true});
     }
     if (!was && panelOpen) {
       clearTimeout(hoverTimer);
       if (typeof render === 'function') render();
       requestAnimationFrame(() => { if (typeof drawTrend === 'function') drawTrend(); });
+      if (sticky) panel.querySelector('.panel-tabs button.active')?.focus({preventScroll:true});
+      watchHover();
     }
   }
   async function setPanel(open, hover) {
@@ -54,12 +79,15 @@
     if (open) { hoverOpened = !!hover; sticky = !hover; }
     try { applyPanel(await invoke('desktop_panel', { open })); }
     catch (error) { failure(error); return; }
-    if (open && panelOpen && typeof loadDashboard === 'function') loadDashboard().catch(error => notify(String(error)));
+    if (open && panelOpen) {
+      const refresh = window.AieyesApp?.refreshPanel || (typeof loadDashboard === 'function' ? loadDashboard : null);
+      if (refresh) refresh().catch(error => notify(String(error)));
+    }
   }
   function scheduleHover() {
     clearTimeout(hoverTimer);
     hoverTimer = setTimeout(() => {
-      if (!hovering || panelOpen || dragged || Date.now() < suppress) return;
+      if (!hovering || panelOpen || start || dragged || Date.now() < suppress) return;
       if (info?.hidden) return;
       setPanel(true, true);
     }, HOVER_DELAY);
@@ -80,6 +108,10 @@
     // Keep the panel closed right after a drag; the ball settles onto a nearby edge.
     suppress = Date.now() + SUPPRESS;
     action('snap');
+    setTimeout(() => {
+      dragged = false;
+      if (hovering && !panelOpen) scheduleHover();
+    }, SUPPRESS);
   });
   ball.addEventListener('pointerup', () => { start = null; });
   ball.addEventListener('pointercancel', () => { start = null; });
@@ -95,27 +127,61 @@
     if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') { event.preventDefault(); action('menu'); }
   });
 
-  panel.addEventListener('pointerenter', () => clearTimeout(leaveTimer));
+  panel.addEventListener('pointerenter', () => { clearTimeout(leaveTimer); outsideSince = null; });
   panel.addEventListener('pointerleave', () => {
     if (!panelOpen || sticky || pinned) return;
     clearTimeout(leaveTimer);
-    leaveTimer = setTimeout(() => { if (panelOpen && hoverOpened && !sticky && !pinned) setPanel(false); }, LEAVE_DELAY);
+    leaveTimer = setTimeout(async () => {
+      if (!panelOpen || !hoverOpened || sticky || pinned) return;
+      try { if (await invoke('desktop_panel_cursor_inside')) return; } catch (_) {}
+      if (panelOpen && hoverOpened && !sticky && !pinned) setPanel(false);
+    }, LEAVE_DELAY);
   });
-  panel.addEventListener('pointerdown', () => { sticky = true; });
-  document.addEventListener('focusin', () => { if (panelOpen) sticky = true; });
+  panel.addEventListener('pointerdown', () => { sticky = true; clearTimeout(hoverWatch); });
+  document.addEventListener('focusin', () => { if (panelOpen) { sticky = true; clearTimeout(hoverWatch); } });
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && panelOpen) { event.preventDefault(); closeMenu(); setPanel(false); }
+    if (event.key === 'Escape' && panelOpen) {
+      event.preventDefault();
+      const more = document.querySelector('#panel-more');
+      if (more?.open) { more.open = false; more.querySelector('summary')?.focus({preventScroll:true}); }
+      else if (!document.querySelector('#panel-menu').hidden) closeMenu(true);
+      else setPanel(false);
+    }
   });
   document.addEventListener('pointerdown', event => {
     const menu = document.querySelector('#panel-menu');
     const wrap = event.target instanceof Element ? event.target.closest('.panel-refresh-wrap') : null;
     if (menu && !menu.hidden && !wrap) closeMenu();
+    const more = document.querySelector('#panel-more');
+    if (more?.open && !more.contains(event.target)) more.open = false;
   });
 
   document.querySelector('#panel-refresh').addEventListener('click', () => {
     const menu = document.querySelector('#panel-menu');
     menu.hidden = !menu.hidden;
+    const more = document.querySelector('#panel-more');
+    if (more) more.open = false;
     document.querySelector('#panel-refresh').setAttribute('aria-expanded', String(!menu.hidden));
+  });
+  document.querySelector('#panel-refresh').addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const menu = document.querySelector('#panel-menu');
+      menu.hidden = false;
+      document.querySelector('#panel-refresh').setAttribute('aria-expanded', 'true');
+      const buttons = [...menu.querySelectorAll('button')];
+      buttons[event.key === 'ArrowDown' ? 0 : buttons.length - 1]?.focus();
+    }
+  });
+  document.querySelector('#panel-menu').addEventListener('keydown', event => {
+    const buttons = [...document.querySelector('#panel-menu').querySelectorAll('button')];
+    const index = buttons.indexOf(document.activeElement);
+    let next;
+    if (event.key === 'ArrowDown') next = (index + 1) % buttons.length;
+    if (event.key === 'ArrowUp') next = (index + buttons.length - 1) % buttons.length;
+    if (event.key === 'Home') next = 0;
+    if (event.key === 'End') next = buttons.length - 1;
+    if (next !== undefined) { event.preventDefault(); buttons[next]?.focus(); }
   });
   document.querySelector('#panel-menu').addEventListener('click', event => {
     const button = event.target.closest('[data-refresh]');
@@ -131,6 +197,9 @@
   document.querySelector('#panel-detail').addEventListener('click', () => { setPanel(false); action('open'); });
   document.querySelector('#panel-settings').addEventListener('click', () => { setPanel(false); action('settings'); });
   document.querySelector('#panel-quit').addEventListener('click', () => action('quit'));
+  document.querySelector('#panel-more')?.addEventListener('toggle', event => {
+    if (event.target.open) closeMenu();
+  });
 
   function update(next) {
     info = next;

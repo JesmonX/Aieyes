@@ -83,7 +83,24 @@ struct Acknowledgement: Decodable { }
         sessionBusy = false
     }
     @Published var dashboard = Dashboard()
+    @Published private(set) var fallbackModelOptions: [String] = []
+    var modelOptions: [String] { dashboard.modelOptions ?? fallbackModelOptions }
     @Published var settings = Settings()
+    @Published var settingsDraft = Settings()
+    @Published var settingsLoaded = false
+    @Published var settingsSaving = false
+    @Published var settingsMessage: String?
+    @Published private(set) var pendingAPIKeys: [String: String] = [:]
+    private var preparedCredentials: [String: (key: String, path: String)] = [:]
+    var settingsDirty: Bool { settingsDraft != settings || !pendingAPIKeys.isEmpty }
+    func stageAPIKey(_ key: String?, sourceID: String) {
+        let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty { pendingAPIKeys.removeValue(forKey: sourceID) }
+        else { pendingAPIKeys[sourceID] = trimmed }
+        if preparedCredentials[sourceID]?.key != trimmed { preparedCredentials.removeValue(forKey: sourceID) }
+    }
+    @Published var requestedSourceProvider: String?
+    @Published var requestHostEditor = false
     @Published var hosts: [HostResult] = []
     @Published var prices: [ModelPrice] = []
     @Published var provider = "all"
@@ -97,12 +114,26 @@ struct Acknowledgement: Decodable { }
     @Published var message: String?
     @Published var activity = ""
     @Published var isPinned = false
-    var panelVisible = false
-    var serverTabVisible = false
+    @Published var panelHeight: CGFloat = 720
+    private var visibleWindows = Set<String>()
+    var panelVisible: Bool { !visibleWindows.isEmpty }
+    func setWindowVisible(_ visible: Bool, window: String) {
+        if visible { visibleWindows.insert(window) } else { visibleWindows.remove(window) }
+    }
+    private var visibleServerWindows = Set<String>()
+    var serverTabVisible: Bool { !visibleServerWindows.intersection(visibleWindows).isEmpty }
+    func setServerVisible(_ visible: Bool, window: String) {
+        if visible { visibleServerWindows.insert(window) } else { visibleServerWindows.remove(window) }
+    }
+    @Published var quotaBusy = false
+    @Published var quotaError: String?
+    @Published var quotaNextAttempt: Date?
+    var quotaAccounts: [AgentAccount] { settings.accounts.filter { $0.quotaEnabled && $0.archived != true } }
+    var hasQuotaAccounts: Bool { !quotaAccounts.isEmpty }
     private var timer: Timer?
     private var lastScan = Date.distantPast
     private var lastMetrics = Date.distantPast
-    private var lastQuota = Date.distantPast
+    private var lastHostError: String?
     var showSettings: (() -> Void)?
     var showDetail: (() -> Void)?
 
@@ -114,7 +145,10 @@ struct Acknowledgement: Decodable { }
         }
     }
     func bootstrap() async {
-        do { settings = try await engine.call("settings.get"); await reload(); await scan() }
+        do {
+            settings = try await engine.call("settings.get"); settingsDraft = settings; settingsLoaded = true
+            await reload(); await scan(); await refreshQuotas()
+        }
         catch { message = error.localizedDescription }
     }
     func openPricing() { settingsTab = "prices"; showSettings?() }
@@ -125,40 +159,97 @@ struct Acknowledgement: Decodable { }
         else if let account = settings.accounts.first(where: { $0.key == selectedAccount }) { params["accountId"] = account.id; params["provider"] = account.provider }
         if selectedSource != "all" { params["sourceId"] = selectedSource }
         if selectedModel != "all" { params["model"] = selectedModel }
-        do { dashboard = try await engine.call("dashboard", params: params) } catch { message = error.localizedDescription }
+        do {
+            dashboard = try await engine.call("dashboard", params: params)
+            let names = dashboard.dayModels.map(\.model)
+            fallbackModelOptions = Array(Set(selectedModel == "all" ? names : fallbackModelOptions + names)).sorted()
+        } catch { message = error.localizedDescription }
     }
     func scan() async {
-        guard !busy else { return }; busy = true; activity = "同步记录"; defer { busy = false; activity = "" }
+        guard !busy else { return }; busy = true; activity = "同步记录"; defer { busy = false; activity = ""; lastScan = Date() }
         do { let _: [Acknowledgement] = try await engine.call("sources.scan"); lastScan = Date(); await reload() }
         catch { message = error.localizedDescription }
     }
     func refreshQuotas() async {
-        guard !busy else { return }; busy = true; activity = "读取限额"; defer { busy = false; activity = "" }
-        do { let _: [Quota] = try await engine.call("quotas.refresh"); lastQuota = Date(); await reload() }
-        catch { message = error.localizedDescription }
+        guard !quotaBusy, hasQuotaAccounts else { return }
+        quotaBusy = true; quotaError = nil
+        // Advance the retry deadline on every attempt, including failed requests.
+        quotaNextAttempt = Date().addingTimeInterval(Double(max(30, settings.refreshSeconds)))
+        defer { quotaBusy = false }
+        do {
+            let result: [Quota] = try await engine.call("quotas.refresh")
+            let failures = result.compactMap(\.error)
+            if !failures.isEmpty { quotaError = failures.joined(separator: " · ") }
+            else if result.isEmpty { quotaError = "暂未获得限额数据，请检查关联数据源与账户设置。" }
+            await reload()
+        } catch { quotaError = error.localizedDescription }
     }
     func sampleHosts() async {
-        guard !serverBusy, !settings.hosts.isEmpty else { return }; serverBusy = true; defer { serverBusy = false }
+        guard !serverBusy, !settings.hosts.isEmpty else { return }; serverBusy = true; defer { serverBusy = false; lastMetrics = Date() }
         do {
             let results: [HostResult] = try await metricsEngine.call("hosts.sample")
             hosts = results.map { result in
                 if result.error != nil, let old = hosts.first(where: { $0.id == result.id }) {
-                    return HostResult(id: result.id, name: result.name, sample: old.sample, error: result.error)
+                    return HostResult(id: result.id, name: result.name, sample: result.sample ?? old.sample, error: result.error)
                 }
                 return result
             }
-            lastMetrics = Date()
-        } catch { message = error.localizedDescription }
+            if !results.contains(where: { $0.error != nil }), let lastHostError {
+                if message == lastHostError { message = nil }
+                self.lastHostError = nil
+            }
+        } catch {
+            let failure = error.localizedDescription
+            lastHostError = failure
+            message = failure
+            hosts = settings.hosts.map { host in
+                let previous = hosts.first { $0.id == host.id }
+                return HostResult(id: host.id, name: host.name.isEmpty ? host.target : host.name, sample: previous?.sample, error: host.enabled ? failure : nil)
+            }
+        }
+    }
+    func saveSettingsDraft() async -> Bool {
+        guard !settingsSaving else { return false }
+        settingsSaving = true; settingsMessage = nil
+        defer { settingsSaving = false }
+        var next = settingsDraft
+        do {
+            for id in pendingAPIKeys.keys.sorted() {
+                guard let index = next.sources.firstIndex(where: { $0.id == id && $0.provider == "deepseek" }), let key = pendingAPIKeys[id] else { continue }
+                let path: String
+                if let prepared = preparedCredentials[id], prepared.key == key { path = prepared.path }
+                else {
+                    // A fresh storage identity also protects users of older cores that wrote one file per source ID.
+                    let result: [String: String] = try await engine.call("credentials.save", params: ["sourceId": id + "-draft-" + UUID().uuidString, "apiKey": key])
+                    guard let createdPath = result["path"], !createdPath.isEmpty else { throw ClientError.message("未获得凭据保存路径") }
+                    path = createdPath
+                    preparedCredentials[id] = (key, path)
+                }
+                next.sources[index].path = path
+            }
+            let success = await save(next)
+            if success { settingsDraft = settings; pendingAPIKeys.removeAll(); preparedCredentials.removeAll() }
+            settingsMessage = success ? "已保存全部配置" : message ?? "保存失败"
+            return success
+        } catch { settingsMessage = error.localizedDescription; return false }
+    }
+    func discardSettingsDraft() {
+        settingsDraft = settings; settingsMessage = nil
+        pendingAPIKeys.removeAll(); preparedCredentials.removeAll()
     }
     func save(_ draft: Settings) async -> Bool {
         do {
             let data = try JSONEncoder().encode(draft)
             let params = try JSONSerialization.jsonObject(with: data) as! [String: Any]
             let _: Acknowledgement = try await engine.call("settings.save", params: params)
+            let quotaConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.proxy != draft.proxy
             settings = draft
+            if quotaConfigurationChanged { quotaNextAttempt = nil }
             if selectedAccount != "all" && selectedAccount != "none" && !settings.accounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
             if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
-            message = "已保存"; await reload(); return true
+            message = "已保存"; await reload()
+            if hasQuotaAccounts && quotaNextAttempt == nil { Task { await refreshQuotas() } }
+            return true
         } catch { message = error.localizedDescription; return false }
     }
     func syncPrices() async {
@@ -184,10 +275,9 @@ struct Acknowledgement: Decodable { }
         if !serverBusy, !settings.hosts.isEmpty, Date().timeIntervalSince(lastMetrics) > Double(panelVisible && serverTabVisible ? 2 : settings.serverRefreshSeconds) {
             Task { await sampleHosts() }
         }
+        if hasQuotaAccounts, !quotaBusy, quotaNextAttempt == nil || Date() >= quotaNextAttempt! { Task { await refreshQuotas() } }
         guard !busy else { return }
         if Date().timeIntervalSince(lastScan) > Double(settings.refreshSeconds) { Task { await scan() }; return }
-        // Live quota polling starts after the user first requests it.
-        if lastQuota != .distantPast, Date().timeIntervalSince(lastQuota) > Double(settings.refreshSeconds) { Task { await refreshQuotas() } }
     }
     var menuText: String {
         switch settings.menuMetric {

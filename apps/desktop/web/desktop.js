@@ -17,6 +17,16 @@
   function effectiveText(info) {
     return info.reason || `当前使用${info.effectiveMode === 'floating' ? '悬浮球' : '系统状态栏'}。`;
   }
+  async function navigate(page) {
+    if (page === 'add-source' || page === 'add-host' || page === 'add-quota') {
+      await window.AieyesApp.openSetupInMain(page === 'add-host' ? 'hosts' : page === 'add-quota' ? 'quota' : 'sources');
+      return;
+    }
+    state.page = page === 'settings' || page === 'prices' ? 'settings' : 'agent';
+    if (state.page === 'settings') state.settingsTab = page === 'prices' ? 'prices' : 'general';
+    if (page === 'prices') state.prices = await api('prices.list');
+    render();
+  }
   async function bindTitlebar(info) {
     if (info.platform !== 'windows') return;
     const titlebar = document.querySelector('#titlebar');
@@ -64,21 +74,12 @@
       await window.__TAURI__.event.listen('desktop:status', event => update(event.payload));
       await window.__TAURI__.event.listen('desktop:error', event => notify(String(event.payload)));
       await window.__TAURI__.event.listen('desktop:navigate', event => {
-        const page = event.payload;
-        state.page = page === 'settings' || page === 'prices' ? 'settings' : 'agent';
-        if (state.page === 'settings') state.settingsTab = page === 'prices' ? 'prices' : 'general';
-        render();
-        if (page === 'prices') api('prices.list').then(prices => { state.prices = prices; render(); }).catch(e => notify(String(e)));
+        navigate(event.payload).catch(e => notify(String(e)));
       });
       const info = await invoke('desktop_info');
       update(info);
       await bindTitlebar(info);
-      if (info.page === 'settings' || info.page === 'prices') {
-        state.page = 'settings';
-        state.settingsTab = info.page === 'prices' ? 'prices' : 'general';
-        if (info.page === 'prices') state.prices = await api('prices.list');
-        render();
-      }
+      if (info.page !== 'agent') await navigate(info.page);
     } catch (error) { notify(String(error)); }
   }
   boot();

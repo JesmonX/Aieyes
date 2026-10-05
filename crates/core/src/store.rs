@@ -459,6 +459,29 @@ impl Store {
             generated_at: now(),
             ..Default::default()
         };
+        let options_from = Local
+            .from_local_datetime(&trend_start.and_hms_opt(0, 0, 0).unwrap())
+            .earliest()
+            .map(|v| v.timestamp())
+            .unwrap_or(from);
+        let mut options = self.db.prepare(
+            "SELECT DISTINCT model FROM events e WHERE stamp>=?1 AND stamp<=?2
+             AND (?3 IS NULL OR provider=?3) AND (?4 IS NULL OR account_id=?4)
+             AND (?5 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?5))
+             ORDER BY model",
+        )?;
+        d.model_options = options
+            .query_map(
+                params![
+                    options_from,
+                    d.generated_at,
+                    f.provider,
+                    f.account_id,
+                    f.source_id
+                ],
+                |row| row.get(0),
+            )?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
         let mut days = BTreeMap::<String, Aggregate>::new();
         let mut heat = BTreeMap::<String, Aggregate>::new();
         let mut models = BTreeMap::<String, Aggregate>::new();

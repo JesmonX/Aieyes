@@ -14,6 +14,58 @@ fn event(source: &Source, id: &str, input: u64) -> UsageEvent {
     usage::parse(source,&mut ParseState::default(),&json!({"id":id,"sessionId":"session","model":"model-a","timestamp":now(),"tokens":{"input":input,"output":20}})).unwrap()
 }
 #[test]
+fn model_choices_preserve_siblings_and_honor_other_filters() {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Store::open(temp.path()).unwrap();
+    let a = source("a");
+    let b = Source {
+        account_id: "other".into(),
+        ..source("b")
+    };
+    let settings = Settings {
+        sources: vec![a.clone(), b.clone()],
+        ..Default::default()
+    };
+    db.save_settings(&settings).unwrap();
+    for (id, model, src, age) in [
+        ("one", "model-a", &a, 0),
+        ("two", "model-b", &a, 0),
+        ("three", "model-c", &b, 0),
+        ("old", "old-model", &a, 40 * 86400),
+    ] {
+        let mut e = event(src, id, 100);
+        e.model = model.into();
+        e.timestamp -= age;
+        db.put_event(&e, &[], &settings).unwrap();
+    }
+    let d = db
+        .dashboard(&Filter {
+            provider: Some("custom".into()),
+            account_id: Some("account".into()),
+            source_id: Some("a".into()),
+            model: Some("model-a".into()),
+            days: Some(7),
+        })
+        .unwrap();
+    assert_eq!(d.model_options, ["model-a", "model-b"]);
+    assert_eq!(d.summary.total, 120);
+    assert_eq!(d.models.len(), 1);
+    let d = db
+        .dashboard(&Filter {
+            account_id: Some("other".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(d.model_options, ["model-c"]);
+    let d = db
+        .dashboard(&Filter {
+            provider: Some("codex".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(d.model_options.is_empty());
+}
+#[test]
 fn copied_records_have_one_total_and_two_source_views() {
     let temp = tempfile::tempdir().unwrap();
     let db = Store::open(temp.path()).unwrap();

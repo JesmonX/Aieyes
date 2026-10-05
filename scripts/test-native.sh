@@ -9,3 +9,5 @@ swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Mo
 .build/verify-sessions
 swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Models.swift scripts/verify-proxy.swift -o .build/verify-proxy
 .build/verify-proxy
+swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-macos-ui.swift -o .build/verify-macos-ui
+.build/verify-macos-ui

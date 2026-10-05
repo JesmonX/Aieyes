@@ -15,7 +15,7 @@
         <button type="button" data-page="servers">服务器</button>
       </nav>
       <div class="panel-refresh-wrap">
-        <button type="button" id="panel-refresh" aria-haspopup="true" aria-expanded="false" title="刷新"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6"/></svg></button>
+        <button type="button" id="panel-refresh" aria-label="刷新" aria-haspopup="true" aria-expanded="false" title="刷新"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6"/></svg></button>
         <div id="panel-menu" class="panel-menu" hidden>
           <button type="button" data-refresh="scan">同步记录</button>
           <button type="button" data-refresh="quotas">刷新限额</button>
@@ -31,12 +31,13 @@
     </div>
     <footer class="panel-foot">
       <span id="activity">正在加载</span>
-      <button type="button" id="panel-pin" data-pinned="false" aria-pressed="false" title="固定面板"><svg viewBox="0 0 24 24"><path d="M12 17v5M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Z"/></svg></button>
-      <button type="button" id="panel-detail" title="打开详情"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8M10 20H4v-6"/></svg></button>
-      <button type="button" id="panel-settings" title="设置"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg></button>
-      <button type="button" id="panel-quit" title="退出 Aieyes"><svg viewBox="0 0 24 24"><path d="M12 3v8M6.6 6.6a8 8 0 1 0 10.8 0"/></svg></button>
+      <button type="button" id="panel-pin" aria-label="固定面板" data-pinned="false" aria-pressed="false" title="固定面板"><svg viewBox="0 0 24 24"><path d="M12 17v5M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Z"/></svg></button>
+      <button type="button" id="panel-detail" aria-label="打开详情" title="打开详情"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8M10 20H4v-6"/></svg></button>
+      <button type="button" id="panel-settings" aria-label="设置" title="设置"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg></button>
+      <details id="panel-more" class="panel-more"><summary aria-label="更多操作" title="更多操作"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></summary><div class="panel-more-menu"><p>关闭面板后继续后台监测。</p><button type="button" id="panel-quit">退出 Aieyes</button></div></details>
     </footer>
   </div>
+  <script src="tooltip.js"></script>
   <script src="sessions.js"></script>
   <script>window.AIEYES_PANEL = true;</script>
   <script src="app.js"></script>

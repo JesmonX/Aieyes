@@ -19,6 +19,7 @@ use tauri::{
 };
 
 const TRAY_ID: &str = "aieyes-status";
+const HIDE_MENU_ID: &str = "hide";
 /// Floating window edge in logical pixels; the panel expands the same window.
 const BALL_SIZE: f64 = 88.0;
 /// Panel size in logical pixels; height is clamped to the monitor work area.
@@ -54,6 +55,8 @@ struct ShellState {
     visible: bool,
     hidden: bool,
     panel: bool,
+    panel_page: String,
+    panel_anchor: Option<Position>,
     pin: bool,
     reason: String,
     page: String,
@@ -144,6 +147,67 @@ fn panel_size(scale: f64, work_height: Option<u32>) -> (u32, u32) {
     (width, height)
 }
 
+/// Work areas and positions use physical desktop coordinates; the user's size
+/// is logical so a 150% or 200% display must not be treated as a 1x desktop.
+#[cfg(any(target_os = "windows", test))]
+fn main_window_bounds(
+    pos: Position,
+    requested: (f64, f64),
+    area: (i32, i32, u32, u32),
+    scale: f64,
+) -> (Position, (u32, u32)) {
+    let (x, y, width, height) = area;
+    let fitted_width = (requested.0 * scale).round().max(1.0) as u32;
+    let fitted_height = (requested.1 * scale).round().max(1.0) as u32;
+    let size = (fitted_width.min(width), fitted_height.min(height));
+    let pos = Position {
+        x: pos.x.clamp(x, x.saturating_add((width - size.0) as i32)),
+        y: pos.y.clamp(y, y.saturating_add((height - size.1) as i32)),
+    };
+    (pos, size)
+}
+
+#[cfg(target_os = "windows")]
+fn fit_main_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    // The window manager owns maximized/fullscreen bounds and Snap placement.
+    if window.is_maximized()? || window.is_fullscreen()? {
+        return Ok(());
+    }
+    let Some(monitor) = window.current_monitor()?.or(window.primary_monitor()?) else {
+        return Ok(());
+    };
+    let area = monitor.work_area();
+    let scale = window.scale_factor()?;
+    let original_pos = window.outer_position()?;
+    let original_size = window.outer_size()?;
+    let logical = original_size.to_logical::<f64>(scale);
+    let (pos, size) = main_window_bounds(
+        Position {
+            x: original_pos.x,
+            y: original_pos.y,
+        },
+        (logical.width, logical.height),
+        (
+            area.position.x,
+            area.position.y,
+            area.size.width,
+            area.size.height,
+        ),
+        scale,
+    );
+    window.set_min_size(Some(tauri::LogicalSize::new(
+        640.0_f64.min(f64::from(area.size.width) / scale),
+        440.0_f64.min(f64::from(area.size.height) / scale),
+    )))?;
+    if size != (original_size.width, original_size.height) {
+        window.set_size(PhysicalSize::new(size.0, size.1))?;
+    }
+    if (pos.x, pos.y) != (original_pos.x, original_pos.y) {
+        window.set_position(PhysicalPosition::new(pos.x, pos.y))?;
+    }
+    Ok(())
+}
+
 fn main_window_material(_app: &tauri::App) -> &'static str {
     #[cfg(target_os = "windows")]
     if let Some(window) = _app.get_webview_window("main") {
@@ -176,7 +240,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     )?;
     let floating = MenuItem::with_id(app, "floating", "使用悬浮球", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset-position", "重置悬浮球位置", true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, "hide", "暂时隐藏悬浮球", false, None::<&str>)?;
+    let hide = MenuItem::with_id(app, HIDE_MENU_ID, "暂时隐藏悬浮球", false, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Aieyes", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
@@ -200,6 +264,8 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             visible: false,
             hidden: false,
             panel: false,
+            panel_page: "agent".into(),
+            panel_anchor: None,
             pin: false,
             reason: String::new(),
             page: "agent".into(),
@@ -263,6 +329,11 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             std::thread::sleep(Duration::from_secs(5));
         }
     });
+    #[cfg(target_os = "windows")]
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = fit_main_window(&window);
+        window.show()?;
+    }
     Ok(())
 }
 
@@ -388,6 +459,9 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
         state.visible = visible;
         (floating, hidden, changed)
     };
+    if changed && (!floating || hidden) {
+        set_panel(app, false)?;
+    }
     if changed && let Some(window) = app.get_webview_window("floating") {
         let result = if floating && !hidden {
             // Some Wayland compositors refuse absolute placement; the window must still open.
@@ -420,6 +494,7 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
+        "panelPage": state.panel_page,
     }))
 }
 #[tauri::command]
@@ -455,6 +530,55 @@ pub fn desktop_panel_pin(app: AppHandle, pinned: bool) -> Result<Value, String> 
     desktop_info(app)
 }
 #[tauri::command]
+pub fn desktop_panel_page(app: AppHandle, page: String) -> Result<(), String> {
+    if !matches!(page.as_str(), "agent" | "servers") {
+        return Err("未知面板页面".into());
+    }
+    app.state::<Desktop>()
+        .state
+        .lock()
+        .map_err(|_| "显示状态不可用")?
+        .panel_page = page;
+    emit_shell(&app);
+    Ok(())
+}
+
+fn contains_point(point: (f64, f64), pos: Position, size: (u32, u32)) -> bool {
+    point.0 >= f64::from(pos.x)
+        && point.1 >= f64::from(pos.y)
+        && point.0 < f64::from(pos.x) + f64::from(size.0)
+        && point.1 < f64::from(pos.y) + f64::from(size.1)
+}
+
+/// Hover does not focus the panel. The cursor can leave directly from the old
+/// ball position without ever generating a pointerleave event in the panel.
+#[tauri::command]
+pub fn desktop_panel_cursor_inside(app: AppHandle) -> Result<bool, String> {
+    let anchor = {
+        let desktop = app.state::<Desktop>();
+        let state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        if !state.panel {
+            return Ok(false);
+        }
+        state.panel_anchor
+    };
+    let window = app.get_webview_window("floating").ok_or("悬浮球不可用")?;
+    let point = window.cursor_position().map_err(|e| e.to_string())?;
+    let pos = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let point = (point.x, point.y);
+    if contains_point(
+        point,
+        Position { x: pos.x, y: pos.y },
+        (size.width, size.height),
+    ) {
+        return Ok(true);
+    }
+    let ball = (BALL_SIZE * window.scale_factor().map_err(|e| e.to_string())?).round() as u32;
+    Ok(anchor.is_some_and(|pos| contains_point(point, pos, (ball, ball))))
+}
+
+#[tauri::command]
 pub fn desktop_action(app: AppHandle, action: String) -> Result<(), String> {
     self::action(&app, &action)
 }
@@ -463,6 +587,9 @@ fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         "open" => show_main(app, "agent"),
         "settings" => show_main(app, "settings"),
         "prices" => show_main(app, "prices"),
+        "add-source" => show_main(app, "add-source"),
+        "add-host" => show_main(app, "add-host"),
+        "add-quota" => show_main(app, "add-quota"),
         "auto" => desktop_mode(app.clone(), Mode::Auto).map(|_| ()),
         "floating" => desktop_mode(app.clone(), Mode::Floating).map(|_| ()),
         "reset-position" => {
@@ -480,6 +607,15 @@ fn action(app: &AppHandle, action: &str) -> Result<(), String> {
             .popup_menu(&app.state::<Desktop>().menu)
             .map_err(|e| e.to_string()),
         "snap" => snap_ball(app),
+        HIDE_MENU_ID => {
+            let hidden = app
+                .state::<Desktop>()
+                .state
+                .lock()
+                .map_err(|_| "显示状态不可用")?
+                .hidden;
+            set_hidden(app, !hidden)
+        }
         "hide-ball" => set_hidden(app, true),
         "show-ball" => set_hidden(app, false),
         "quit" => {
@@ -498,8 +634,10 @@ fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
     window
         .show()
         .and_then(|_| window.unminimize())
-        .and_then(|_| window.set_focus())
         .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    let _ = fit_main_window(&window);
+    window.set_focus().map_err(|e| e.to_string())?;
     let _ = window.emit("desktop:navigate", page);
     Ok(())
 }
@@ -599,6 +737,12 @@ fn set_panel(app: &AppHandle, open: bool) -> Result<(), String> {
     let ball = (BALL_SIZE * scale).round() as i32;
     if open {
         let position = window.outer_position().map_err(|error| error.to_string())?;
+        if let Ok(mut state) = desktop.state.lock() {
+            state.panel_anchor = Some(Position {
+                x: position.x,
+                y: position.y,
+            });
+        }
         let monitor = window
             .current_monitor()
             .map_err(|error| error.to_string())?
@@ -637,6 +781,9 @@ fn set_panel(app: &AppHandle, open: bool) -> Result<(), String> {
             .set_size(PhysicalSize::new(ball as u32, ball as u32))
             .map_err(|error| error.to_string())?;
         let _ = restore_position(app);
+        if let Ok(mut state) = desktop.state.lock() {
+            state.panel_anchor = None;
+        }
     }
     emit_shell(app);
     Ok(())
@@ -722,6 +869,12 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         tauri::WindowEvent::ThemeChanged(theme) if window.label() == "main" => {
             let _ = window_vibrancy::apply_mica(window, Some(*theme == tauri::Theme::Dark));
         }
+        #[cfg(target_os = "windows")]
+        tauri::WindowEvent::ScaleFactorChanged { .. } if window.label() == "main" => {
+            if let Some(main) = window.app_handle().get_webview_window("main") {
+                let _ = fit_main_window(&main);
+            }
+        }
         tauri::WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
             if window.label() == "main" {
@@ -745,6 +898,8 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 if ready {
                     let _ = window.hide();
                 }
+            } else if window.label() == "floating" {
+                let _ = set_panel(window.app_handle(), false);
             }
         }
         tauri::WindowEvent::Moved(pos) if window.label() == "floating" => {
@@ -933,5 +1088,43 @@ mod tests {
         assert!(can_hide(true, true));
         assert!(!can_hide(true, false));
         assert!(!can_hide(false, true));
+    }
+    #[test]
+    fn hover_hit_testing_supports_negative_monitors_and_excludes_far_edges() {
+        let pos = Position { x: -1920, y: 40 };
+        assert!(contains_point((-1919.5, 41.0), pos, (420, 640)));
+        assert!(contains_point((-1920.0, 40.0), pos, (420, 640)));
+        assert!(!contains_point((-1500.0, 40.0), pos, (420, 640)));
+        assert!(!contains_point((-1920.0, 680.0), pos, (420, 640)));
+        assert!(!contains_point((0.0, 40.0), pos, (420, 640)));
+    }
+    #[test]
+    fn main_window_fits_small_high_dpi_work_areas_without_enlarging_user_sizes() {
+        let (pos, size) = main_window_bounds(
+            Position { x: 180, y: 90 },
+            (1120.0, 800.0),
+            (0, 0, 1366, 708),
+            1.5,
+        );
+        assert_eq!((pos.x, pos.y), (0, 0));
+        assert_eq!(size, (1366, 708));
+        let (pos, size) = main_window_bounds(
+            Position { x: 120, y: 20 },
+            (640.0, 440.0),
+            (0, 0, 1366, 708),
+            1.5,
+        );
+        assert_eq!((pos.x, pos.y), (120, 20));
+        assert_eq!(size, (960, 660));
+    }
+    #[test]
+    fn main_window_rehomes_negative_origin_and_mixed_dpi_bounds() {
+        let area = (-1920, 40, 1920, 1000);
+        let (pos, size) =
+            main_window_bounds(Position { x: 100, y: -100 }, (800.0, 600.0), area, 2.0);
+        assert_eq!((pos.x, pos.y), (-1600, 40));
+        assert_eq!(size, (1600, 1000));
+        let (_, size) = main_window_bounds(Position { x: -1700, y: 80 }, (800.0, 600.0), area, 1.0);
+        assert_eq!(size, (800, 600));
     }
 }

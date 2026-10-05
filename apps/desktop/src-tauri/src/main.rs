@@ -4,21 +4,48 @@ mod desktop;
 use aieyes_core::Engine;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 struct Shared(Arc<Mutex<Engine>>, Arc<Mutex<Engine>>);
+
+fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static str, Value)> {
+    if method == "hosts.sample" {
+        return vec![match result {
+            Ok(rows) => ("desktop:hosts", rows.clone()),
+            Err(error) => ("desktop:hosts-error", Value::String(error.clone())),
+        }];
+    }
+    if result.is_err() {
+        return vec![];
+    }
+    let mut events = vec![];
+    if method == "settings.save" {
+        // Broadcast invalidation only, never settings or credentials.
+        events.push(("desktop:settings", Value::Null));
+    }
+    if matches!(
+        method,
+        "settings.save" | "sources.scan" | "quotas.refresh" | "prices.save" | "prices.sync"
+    ) {
+        events.push(("desktop:data-changed", Value::String(method.into())));
+    }
+    events
+}
+
 #[tauri::command]
 async fn engine_call(
     method: String,
     params: Value,
     state: tauri::State<'_, Shared>,
+    app: tauri::AppHandle,
 ) -> Result<Value, String> {
+    let changed = method.clone();
     let engine = if method.starts_with("hosts.") {
         state.1.clone()
     } else {
         state.0.clone()
     };
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         engine
             .lock()
             .map_err(|_| "核心连接已断开".to_string())?
@@ -26,8 +53,16 @@ async fn engine_call(
             .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+    .and_then(|result| result);
+    // Keep both webviews current without starting a second poller or broadcasting
+    // settings that may contain credentials, proxy URLs, or shell commands.
+    for (event, payload) in update_events(&changed, &result) {
+        let _ = app.emit(event, payload);
+    }
+    result
 }
+
 fn main() {
     let app = tauri::Builder::default()
         .setup(|app| {
@@ -48,6 +83,8 @@ fn main() {
             desktop::desktop_mode,
             desktop::desktop_panel,
             desktop::desktop_panel_pin,
+            desktop::desktop_panel_page,
+            desktop::desktop_panel_cursor_inside,
             desktop::desktop_action
         ])
         .build(tauri::generate_context!())
@@ -57,4 +94,47 @@ fn main() {
             desktop::save(app);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn failed_host_sampling_notifies_the_panel_without_replacing_its_snapshot() {
+        assert_eq!(
+            update_events("hosts.sample", &Err("核心连接已断开".into())),
+            vec![("desktop:hosts-error", json!("核心连接已断开"))]
+        );
+        let rows = json!([{ "id": "host1", "sample": { "timestamp": 100 } }]);
+        assert_eq!(
+            update_events("hosts.sample", &Ok(rows.clone())),
+            vec![("desktop:hosts", rows)]
+        );
+    }
+
+    #[test]
+    fn failed_mutations_do_not_publish_success_or_configuration_updates() {
+        for method in [
+            "settings.save",
+            "sources.scan",
+            "quotas.refresh",
+            "prices.save",
+        ] {
+            assert!(update_events(method, &Err("失败".into())).is_empty());
+        }
+        assert!(update_events("settings.get", &Ok(json!({ "secret": "private" }))).is_empty());
+    }
+
+    #[test]
+    fn successful_settings_updates_only_invalidate_configuration() {
+        assert_eq!(
+            update_events("settings.save", &Ok(json!({ "secret": "private" }))),
+            vec![
+                ("desktop:settings", Value::Null),
+                ("desktop:data-changed", json!("settings.save"))
+            ]
+        );
+    }
 }

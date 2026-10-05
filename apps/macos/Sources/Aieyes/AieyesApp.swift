@@ -13,6 +13,7 @@ import Combine
     private let popover = NSPopover()
     private var detailWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var approvingSettingsClose = false
     private var cancellables = Set<AnyCancellable>()
     private var model: AppModel!
 
@@ -57,9 +58,12 @@ import Combine
             statusItem.menu = menu; button.performClick(nil); statusItem.menu = nil; return
         }
         if popover.isShown { popover.performClose(nil) }
-        else { NSApp.activate(ignoringOtherApps: true); popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); model.panelVisible = true }
+        else {
+            model.panelHeight = min(720, max(360, (button.window?.screen?.visibleFrame.height ?? 800) - 34))
+            popover.contentSize = NSSize(width: 450, height: model.panelHeight)
+            NSApp.activate(ignoringOtherApps: true); popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); model.setWindowVisible(true, window: "panel") }
     }
-    func popoverDidClose(_ notification: Notification) { model.panelVisible = detailWindow?.isVisible == true }
+    func popoverDidClose(_ notification: Notification) { model.setWindowVisible(false, window: "panel") }
     @objc private func detailAction() { openDetail() }
     @objc private func settingsAction() { openSettings() }
     @objc private func wake() { Task { await model.scan() } }
@@ -71,6 +75,7 @@ import Combine
         button.toolTip = "Aieyes · " + model.sessionSummary + (model.sessionPhase.map { " · " + $0.rawValue } ?? "")
         button.setAccessibilityLabel(button.toolTip)
         popover.behavior = model.isPinned ? .applicationDefined : .transient
+        settingsWindow?.isDocumentEdited = model.settingsDirty
     }
     private func openDetail() {
         popover.performClose(nil)
@@ -80,18 +85,76 @@ import Combine
             window.contentView = NSHostingView(rootView: RootView(model: model, compact: false)); window.center(); window.delegate = self
             window.setFrameAutosaveName("AieyesDetails"); detailWindow = window
         }
-        detailWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); model.panelVisible = true
+        detailWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); model.setWindowVisible(true, window: "detail")
     }
     private func openSettings() {
         popover.performClose(nil)
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 600), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = "Aieyes 设置"; window.isReleasedWhenClosed = false; window.center(); settingsWindow = window
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 600), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.title = "Aieyes 设置"; window.isReleasedWhenClosed = false; window.delegate = self
+            window.contentMinSize = NSSize(width: 620, height: 440)
+            window.contentView = NSHostingView(rootView: SettingsView(model: model))
+            if let screen = NSScreen.main { window.setContentSize(NSSize(width: min(760, screen.visibleFrame.width - 40), height: min(600, screen.visibleFrame.height - 70))) }
+            window.center(); window.setFrameAutosaveName("AieyesSettings"); settingsWindow = window
         }
-        settingsWindow?.contentView = NSHostingView(rootView: SettingsView(model: model))
         settingsWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
-    func windowWillClose(_ notification: Notification) { if (notification.object as? NSWindow) === detailWindow { model.panelVisible = popover.isShown } }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard sender === settingsWindow else { return true }
+        if approvingSettingsClose { approvingSettingsClose = false; return true }
+        guard !model.settingsSaving else { return false }
+        guard model.settingsDirty else { return true }
+        let alert = NSAlert()
+        alert.messageText = "保存配置更改？"
+        alert.informativeText = "关闭设置前，保存全部配置，或放弃本次未保存的更改。Aieyes 将继续在菜单栏运行。"
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "放弃更改")
+        alert.addButton(withTitle: "取消")
+        alert.buttons[2].keyEquivalent = "\u{1b}"
+        alert.beginSheetModal(for: sender) { [weak self, weak sender] response in
+            guard let self, let sender else { return }
+            if response == .alertFirstButtonReturn {
+                Task { @MainActor in
+                    if await self.model.saveSettingsDraft() { self.approvingSettingsClose = true; sender.performClose(nil) }
+                }
+            } else if response == .alertSecondButtonReturn {
+                self.model.discardSettingsDraft(); self.approvingSettingsClose = true; sender.performClose(nil)
+            }
+        }
+        return false
+    }
+    func windowWillClose(_ notification: Notification) {
+        if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(false, window: "detail") }
+    }
+    func windowDidMiniaturize(_ notification: Notification) {
+        if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(false, window: "detail") }
+    }
+    func windowDidDeminiaturize(_ notification: Notification) {
+        if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(true, window: "detail") }
+    }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if settingsWindow?.attachedSheet != nil { settingsWindow?.makeKeyAndOrderFront(nil); return .terminateCancel }
+        guard model != nil, model.settingsDirty else { return .terminateNow }
+        guard !model.settingsSaving else { return .terminateCancel }
+        openSettings()
+        guard let window = settingsWindow, window.attachedSheet == nil else { return .terminateCancel }
+        let alert = NSAlert()
+        alert.messageText = "退出前保存配置更改？"
+        alert.informativeText = "保存全部配置，或放弃本次未保存的更改。"
+        alert.addButton(withTitle: "保存并退出")
+        alert.addButton(withTitle: "放弃更改并退出")
+        alert.addButton(withTitle: "取消")
+        alert.buttons[2].keyEquivalent = "\u{1b}"
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { sender.reply(toApplicationShouldTerminate: false); return }
+            if response == .alertFirstButtonReturn {
+                Task { @MainActor in sender.reply(toApplicationShouldTerminate: await self.model.saveSettingsDraft()) }
+            } else if response == .alertSecondButtonReturn {
+                self.model.discardSettingsDraft(); sender.reply(toApplicationShouldTerminate: true)
+            } else { sender.reply(toApplicationShouldTerminate: false) }
+        }
+        return .terminateLater
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) { model?.engine.stop() }
     private func capture<V: View>(_ content: V, size: NSSize, dark: Bool, to url: URL) async throws {
@@ -113,7 +176,7 @@ import Combine
     }
     private func renderSnapshots(to directory: String) async {
         do {
-            model.settings = try await model.engine.call("settings.get")
+            model.settings = try await model.engine.call("settings.get"); model.settingsDraft = model.settings; model.settingsLoaded = true
             await model.reload()
             await model.loadPrices()
             await model.refreshSessions()
@@ -128,18 +191,29 @@ import Combine
                 model.settingsTab = tab
                 try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: false, to: root.appendingPathComponent("settings-\(tab).png"))
             }
+            model.settingsTab = "prices"
+            try await capture(SettingsView(model: model), size: NSSize(width: 620, height: 460), dark: false, to: root.appendingPathComponent("settings-prices-small.png"))
+            let savedSources = model.settings.sources
+            model.settings.sources = []; model.settingsDraft = model.settings
+            model.panelHeight = 540
+            try await capture(RootView(model: model), size: NSSize(width: 450, height: 540), dark: false, to: root.appendingPathComponent("onboarding-small.png"))
+            model.settings.sources = savedSources; model.settingsDraft = model.settings
+            model.selectedSource = savedSources.first?.id ?? "all"
+            model.selectedModel = model.dashboard.modelOptions?.first ?? "gpt-review"
+            try await capture(RootView(model: model), size: NSSize(width: 450, height: 540), dark: false, to: root.appendingPathComponent("filtered-panel-small.png"))
+            model.selectedSource = "all"; model.selectedModel = "all"; model.panelHeight = 720
             if let quota = model.dashboard.quotas.first {
                 try await capture(QuotaCard(quota: quota), size: NSSize(width: 420, height: 450), dark: false, to: root.appendingPathComponent("single-quota.png"))
             }
             for provider in ["agy", "deepseek"] {
                 let source = AgentSource(name: Format.provider(provider), provider: provider, path: "")
-                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent(provider + "-source.png"))
+                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent(provider + "-source.png"))
             }
             if let host = model.settings.hosts.first {
                 try await capture(HostEditor(host: host, onSave: { _ in }), size: NSSize(width: 620, height: 650), dark: false, to: root.appendingPathComponent("host-editor.png"))
             }
             if let source = model.settings.sources.first(where: { $0.hostId != nil }) {
-                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent("remote-source.png"))
+                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent("remote-source.png"))
             }
         } catch { fputs("\(error.localizedDescription)\n", stderr) }
         NSApp.terminate(nil)

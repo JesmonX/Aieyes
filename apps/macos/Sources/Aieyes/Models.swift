@@ -38,7 +38,7 @@ struct PricingGap: Codable, Identifiable {
     var id: String { model }
     var missing: String { [("输入", tokens.input), ("输出", tokens.output), ("缓存读取", tokens.cacheRead), ("缓存写入", tokens.cacheWrite)].filter { $0.1 > 0 }.map { $0.0 }.joined(separator: "、") }
 }
-struct AgentAccount: Codable, Identifiable {
+struct AgentAccount: Codable, Equatable, Identifiable {
     var id = UUID().uuidString, name = "", provider = "codex", quotaEnabled = true
     var quotaSourceId: String?
     var archived: Bool?
@@ -47,9 +47,10 @@ struct AgentAccount: Codable, Identifiable {
 struct Dashboard: Codable {
     var generatedAt: Double = 0, summary = Aggregate(), days: [Aggregate] = [], heatmap: [Aggregate] = [], models: [Aggregate] = []
     var trendDays: [Aggregate] = [], dayModels: [DayModel] = [], pricingGaps: [PricingGap] = []
+    var modelOptions: [String]? = nil
     var quotas: [Quota] = [], sources: [SourceSummary] = [], priceUpdatedAt: Double?
 }
-struct ProxySettings: Codable { var mode = "system", url = "" }
+struct ProxySettings: Codable, Equatable { var mode = "system", url = "" }
 struct ProxyAddressDraft: Equatable {
     var scheme = "http", host = "127.0.0.1", port = "7890", customURL = ""
     init(url: String) {
@@ -67,18 +68,18 @@ struct ProxyAddressDraft: Equatable {
         return scheme + "://" + (hostname.contains(":") ? "[" + hostname + "]" : hostname) + ":" + port.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
-struct AgentSource: Codable, Identifiable {
+struct AgentSource: Codable, Equatable, Identifiable {
     var id = UUID().uuidString, name = "", provider = "codex", accountId = ""
     var path = "~/.codex", hostId: String?, enabled = true, quotaCommand = "", quotaPreCommand = "", codexBinary = "codex", agyBinary: String? = "agy", proxy: ProxySettings?
 }
-struct Host: Codable, Identifiable {
+struct Host: Codable, Equatable, Identifiable {
     var id = UUID().uuidString, name = "", target = "", port: Int?, identityFile = "", shell = "/bin/sh", preCommand = "", enabled = true
     var metrics = ["cpu", "memory", "gpu", "filesystems", "disk", "network"], devices: [String] = []
     var details: [String]? = Host.detailOptions.map { $0.0 }
     static let detailOptions = [("cpuTimes", "CPU 时间分布"), ("memoryCache", "内存缓存 / Buffer"), ("swap", "Swap"), ("fsAvailable", "文件系统可用空间"), ("fsType", "文件系统类型 / 设备"), ("inodes", "inode"), ("diskIops", "磁盘 IOPS"), ("diskBusy", "磁盘忙碌率"), ("networkTotals", "累计流量"), ("networkErrors", "网络错误 / 丢包"), ("gpuMemory", "GPU 显存"), ("gpuThermals", "GPU 温度 / 功耗")]
     func shows(_ key: String) -> Bool { details?.contains(key) ?? true }
 }
-struct Settings: Codable {
+struct Settings: Codable, Equatable {
     var version = 2, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
     var refreshSeconds = 300, serverRefreshSeconds = 10, menuMetric = "icon", githubRepository = ""
     var modelMappings: [String: String] = [:]
