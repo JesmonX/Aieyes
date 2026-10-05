@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "aieyes-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "aieyes-desktop"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "aieyes-core",
  "base64 0.22.1",
