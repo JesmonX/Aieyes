@@ -51,6 +51,7 @@ jobs:
           node --check apps/desktop/web/desktop.js
           node --check apps/desktop/web/floating.js
           node --check apps/desktop/web/sessions.js
+          node --check apps/desktop/web/updates.js
           node --check apps/desktop/web/multiselect.js
       - run: node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs
       - name: Browser integration
@@ -74,7 +75,7 @@ jobs:
           cargo test --workspace --locked
           cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
       - name: Install prebuilt Tauri CLI
-        run: npm install --global @tauri-apps/cli@2.11.4
+        run: npm install --global @tauri-apps/cli@2.12.1
       - name: Windows installer
         if: runner.os == 'Windows'
         shell: pwsh

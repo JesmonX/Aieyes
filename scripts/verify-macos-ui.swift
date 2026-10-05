@@ -28,6 +28,17 @@ for line in sys.stdin:
     if method=='settings.get': response['result']=json.load(open(root+'/settings.json'))
     elif method=='dashboard': response['result']=json.load(open(root+'/dashboard.json'))
     elif method=='settings.save' and req['params']['refreshSeconds'] < 5: response['error']=dict(message='刷新间隔无效')
+    elif method.startswith('quotaEstimates.'):
+        import time
+        time.sleep(0.15)
+        estimate=json.load(open(root+'/estimate.json'))
+        dashboard=json.load(open(root+'/dashboard.json'))
+        if method=='quotaEstimates.restart':
+            estimate['status']='pending'
+            response['error']=dict(message='模拟采样同步失败')
+        else: response['result']=estimate
+        dashboard['quotaEstimates']=[estimate]
+        with open(root+'/dashboard.json','w') as stored: json.dump(dashboard,stored)
     elif method=='quotas.refresh': response['error']=dict(message='模拟限额连接失败')
     elif method=='prices.save': response['error']=dict(message='模拟价格保存失败')
     elif method=='hosts.sample': response['error']=dict(message='模拟采样连接失败')
@@ -144,6 +155,23 @@ for line in sys.stdin:
         precondition(samplesBeforeTick == 1 && samplesAfterTick == 1, "RPC failures must not retry on every 0.5s tick")
         let priceSaved = await model.savePrice(ModelPrice(id: "fixture/price", name: "Fixture"))
         precondition(!priceSaved && model.message == "模拟价格保存失败")
+        let estimate = QuotaEstimate(id: "sample", accountKey: "codex:fixture", windowId: "seven_day", windowName: "7d", sourceIds: [], sourceNames: [], status: "active", reason: "", startedAt: 1, checkpointAt: 2, endedAt: nil, consumedPercent: 1, cost: 1, totalTokens: 100, pricedTokens: 100, weeklyValue: nil, calculationNote: "测试采样")
+        try encoder.encode(estimate).write(to: root.appendingPathComponent("estimate.json"))
+        model.setWindowVisible(true, window: "panel")
+        let sampling = Task { await model.performEstimate("start", accountKey: estimate.accountKey, params: [:]) }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        precondition(model.estimateBusy.contains(estimate.accountKey))
+        let duplicate = await model.performEstimate("start", accountKey: estimate.accountKey, params: [:])
+        precondition(!duplicate)
+        model.setWindowVisible(false, window: "panel")
+        let started = await sampling.value
+        precondition(started && model.estimateBusy.isEmpty && !model.isPinned)
+        precondition(model.runningEstimates.count == 1 && model.samplingSummary.contains("采样中"))
+        model.selectedAccount = "deepseek:fixture"
+        precondition(model.runningEstimates.count == 1, "Menu sampling badge must not depend on usage filters")
+        let failedRestart = await model.performEstimate("restart", accountKey: estimate.accountKey, params: [:])
+        precondition(!failedRestart && model.samplingNeedsAttention && model.estimateErrors[estimate.accountKey] == "模拟采样同步失败")
+        precondition(!model.panelVisible && model.estimateBusy.isEmpty)
         print("macOS draft rollback/commit, automatic quota retry, per-window visibility, model-options compatibility, staged credential commit/rollback, sampling failure throttling, and price failure checks passed")
     }
 }

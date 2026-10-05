@@ -3,11 +3,43 @@
   "productName": "Aieyes",
   "version": "0.1.5",
   "identifier": "app.aieyes.desktop",
-  "build": { "frontendDist": "../web" },
+  "build": {
+    "frontendDist": "../web"
+  },
   "app": {
     "withGlobalTauri": true,
-    "windows": [{ "label": "main", "title": "Aieyes", "width": 1120, "height": 800, "minWidth": 840, "minHeight": 600 }],
-    "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost" }
+    "windows": [
+      {
+        "label": "main",
+        "title": "Aieyes",
+        "width": 1120,
+        "height": 800,
+        "minWidth": 840,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
   },
-  "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"], "shortDescription": "Agent usage and SSH server monitor", "category": "DeveloperTool" }
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "shortDescription": "Agent usage and SSH server monitor",
+    "category": "DeveloperTool"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "windows": {
+        "installMode": "passive"
+      },
+      "requireSignedVersion": true
+    }
+  }
 }

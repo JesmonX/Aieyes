@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod desktop;
+mod updates;
 
 use aieyes_core::Engine;
 use serde_json::Value;
@@ -54,18 +55,30 @@ async fn engine_call(
     state: tauri::State<'_, Shared>,
     app: tauri::AppHandle,
 ) -> Result<Value, String> {
+    if app
+        .state::<updates::Updates>()
+        .installing
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err("正在安装更新，请稍候".into());
+    }
     let changed = method.clone();
     let engine = if method.starts_with("hosts.") {
         state.1.clone()
     } else {
         state.0.clone()
     };
+    let guarded_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        engine
-            .lock()
-            .map_err(|_| "核心连接已断开".to_string())?
-            .call(&method, params)
-            .map_err(|e| e.to_string())
+        let mut engine = engine.lock().map_err(|_| "核心连接已断开".to_string())?;
+        if guarded_app
+            .state::<updates::Updates>()
+            .installing
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err("正在安装更新，请稍候".into());
+        }
+        engine.call(&method, params).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())
@@ -80,6 +93,7 @@ async fn engine_call(
 
 fn main() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let root = std::env::var_os("AIEYES_DATA_DIR")
                 .map(std::path::PathBuf::from)
@@ -88,12 +102,18 @@ fn main() {
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
             ));
+            updates::setup(app.handle(), &root);
             desktop::setup(app, &root)?;
             Ok(())
         })
         .on_window_event(desktop::on_window_event)
         .invoke_handler(tauri::generate_handler![
             engine_call,
+            updates::updates_info,
+            updates::updates_check,
+            updates::updates_install,
+            updates::updates_preferences,
+            updates::updates_later,
             desktop::desktop_info,
             desktop::desktop_mode,
             desktop::desktop_panel,

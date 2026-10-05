@@ -55,6 +55,12 @@ jobs:
             arch: x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      AIEYES_REQUIRE_UPDATER: '1'
+      AIEYES_UPDATER_PUBLIC_KEY: ${{ vars.AIEYES_UPDATER_PUBLIC_KEY }}
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+      CLANG_MODULE_CACHE_PATH: ${{ github.workspace }}/.build/clang-cache
+      SWIFTPM_MODULECACHE_OVERRIDE: ${{ github.workspace }}/.build/swift-module-cache
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,6 +80,16 @@ jobs:
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libglib2.0-bin
+      - name: Validate update signing configuration
+        shell: bash
+        run: |
+          if [ '${{ runner.os }}' = macOS ]; then
+            test -n "$SPARKLE_PUBLIC_KEY" || { echo 'Configure SPARKLE_PUBLIC_KEY repository variable'; exit 1; }
+          else
+            test -n "$AIEYES_UPDATER_PUBLIC_KEY" || { echo 'Configure AIEYES_UPDATER_PUBLIC_KEY repository variable'; exit 1; }
+          fi
+          mkdir -p dist
+          git log -15 --pretty=format:'%s' > dist/release-notes.txt
       - name: Shared checks
         shell: bash
         run: |
@@ -86,6 +102,7 @@ jobs:
           node --check apps/desktop/web/desktop.js
           node --check apps/desktop/web/floating.js
           node --check apps/desktop/web/sessions.js
+          node --check apps/desktop/web/updates.js
           node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs
       - name: Desktop Rust tests
         if: runner.os != 'macOS'
@@ -99,7 +116,20 @@ jobs:
           npm run test:ui
       - name: Install Tauri CLI
         if: runner.os != 'macOS'
-        run: npm install --global @tauri-apps/cli@2.11.4
+        run: npm install --global @tauri-apps/cli@2.12.1
+      - name: Update signature tampering tests
+        if: runner.os != 'macOS'
+        run: python scripts/test-update-signatures.py
+      - name: Optional Developer ID signing setup
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: python3 scripts/setup-macos-signing.py
       - name: macOS DMG and native checks
         if: runner.os == 'macOS'
         run: |
@@ -120,6 +150,23 @@ jobs:
       - name: Collect packages
         shell: bash
         run: python scripts/release.py collect --tag "$RELEASE_TAG" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}'
+      - name: Sign macOS updates and feeds
+        if: runner.os == 'macOS'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          sh scripts/prepare-sparkle.sh
+          python3 scripts/sign-macos-update.py --arch '${{ matrix.arch }}'
+      - name: Sign Windows and Linux updates
+        if: runner.os != 'macOS'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: python scripts/sign-desktop-updates.py --platform '${{ matrix.platform }}'
+      - name: Clean temporary signing keychain
+        if: always() && runner.os == 'macOS'
+        run: python3 scripts/setup-macos-signing.py --cleanup
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.platform }}-${{ matrix.arch }}
@@ -127,6 +174,8 @@ jobs:
           if-no-files-found: error
           compression-level: 0
   publish:
+    env:
+      MACOS_SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
     needs: build
     if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-22.04
@@ -144,7 +193,11 @@ jobs:
           pattern: release-*
           path: dist/release
           merge-multiple: true
-      - run: python scripts/release.py checksums --tag "$RELEASE_TAG"
+      - run: |
+          mkdir -p dist
+          git log -15 --pretty=format:'%s' > dist/release-notes.txt
+          python scripts/release.py updates --tag "$RELEASE_TAG"
+          python scripts/release.py checksums --tag "$RELEASE_TAG"
       - name: Upload complete draft and publish
         uses: actions/github-script@v7
         with:

@@ -2,15 +2,21 @@
 name = "aieyes-desktop"
 version = "0.1.5"
 edition = "2024"
+default-run = "aieyes-desktop"
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "=2.7.1", features = [] }
 
 [dependencies]
 aieyes-core = { path = "../../../crates/core" }
 serde_json = "1.0.151"
 serde = { version = "1.0.229", features = ["derive"] }
-tauri = { version = "2.11.5", features = ["tray-icon"] }
+tauri = { version = "=2.12.1", features = ["tray-icon"] }
+tauri-plugin-updater = "=2.13.1"
+semver = "1"
+tempfile = "3"
+minisign-verify = "0.2.5"
+base64 = "0.22"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libloading = "0.7.4"
@@ -19,4 +25,10 @@ libloading = "0.7.4"
 window-vibrancy = "0.6.0"
 
 [features]
+release-tools = []
 custom-protocol = ["tauri/custom-protocol"]
+
+[[bin]]
+name = "verify-update"
+path = "src/verify-update.rs"
+required-features = ["release-tools"]

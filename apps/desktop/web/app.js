@@ -327,7 +327,7 @@ function renderSettings() {
       if(archived.length)body+=`<details class="card account-history"><summary>已归档账户</summary>${accountRows(archived)}</details>`;
     }
   }else if(state.settingsTab==='prices')body=gapList()+`<div class="price-toolbar"><input id="price-search" type="search" aria-label="搜索模型" placeholder="搜索模型" value="${escapeHTML(state.priceSearch)}"><button id="sync-prices" title="从项目 Release 同步 OpenRouter 价格表">同步 OpenRouter</button><button id="add-price" title="手动添加一个模型价格">添加价格</button></div><div class="card prices-list">${priceRows()}</div><form id="mapping-form" class="card"><h2>模型映射</h2>${Object.entries(s.modelMappings).map(([from,to])=>`<div class="list-row tiny"><span>${escapeHTML(from)} → ${escapeHTML(to)}</span><button type="button" data-unmap="${escapeHTML(from)}" aria-label="移除 ${escapeHTML(from)} 的模型映射">−</button></div>`).join('')}${field('mappingModel','日志模型名称')}${field('mappingId','OpenRouter 模型 ID')}<div class="between"><button>添加映射</button><button id="reprice" type="button" title="按当前价格重新计算历史成本">按当前价格重算</button></div></form><span class="muted tiny">USD / 百万 Token</span>`;
-  else body=(window.AieyesDesktop?.settingsHTML() || '')+`<form id="connection-form" class="card"><h2>连接</h2>${proxyFields('app',s.proxy)}<button class="primary">保存</button></form><form id="general-form" class="card"><h2>刷新</h2>${field('refreshSeconds','Agent 间隔（秒）',s.refreshSeconds,'','number')}${field('serverRefreshSeconds','服务器间隔（秒）',s.serverRefreshSeconds,'','number')}<button class="primary">保存</button></form><div class="card"><button id="updates" title="检查 GitHub Release 是否有新版本">检查更新</button><span id="update-result" role="status"></span></div>`;
+  else body=(window.AieyesDesktop?.settingsHTML() || '')+`<form id="connection-form" class="card"><h2>连接</h2>${proxyFields('app',s.proxy)}<button class="primary">保存</button></form><form id="general-form" class="card"><h2>刷新</h2>${field('refreshSeconds','Agent 间隔（秒）',s.refreshSeconds,'','number')}${field('serverRefreshSeconds','服务器间隔（秒）',s.serverRefreshSeconds,'','number')}<button class="primary">保存</button></form>${window.AieyesUpdates?.settingsHTML() ?? '<div class="card"><p>正在读取更新信息…</p></div>'}`;
   $('#content').innerHTML=`<div class="settings-tabs" role="tablist" aria-label="设置分类">${Object.entries(tabs).map(([k,v])=>`<button id="settings-tab-${k}" data-settings-tab="${k}" role="tab" aria-controls="settings-panel" aria-selected="${state.settingsTab===k}" tabindex="${state.settingsTab===k?0:-1}" class="${state.settingsTab===k?'active':''}">${v}</button>`).join('')}</div><div id="settings-panel" class="settings-block" role="tabpanel" aria-labelledby="settings-tab-${state.settingsTab}">${body}</div>`;
   window.AieyesDesktop?.bindSettings();
   document.querySelectorAll('[data-settings-tab]').forEach(button=>{
@@ -379,9 +379,9 @@ function renderSettings() {
     $('#cancel-editor').focus();
   });
   if($('#add-item'))$('#add-item').onclick=()=>editItem();
-  if($('#connection-form'))$('#connection-form').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);job('保存设置',async()=>{const next=structuredClone(state.settings);next.proxy=proxyValue(f,'app');await saveSettings(next);});};
-  if($('#general-form'))$('#general-form').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);job('保存设置',async()=>{const next=structuredClone(state.settings);next.refreshSeconds=Number(f.get('refreshSeconds'));next.serverRefreshSeconds=Number(f.get('serverRefreshSeconds'));await saveSettings(next);});};
-  if($('#updates'))$('#updates').onclick=()=>job('检查更新',async()=>{const u=await api('updates.check');const target=new URL(u.url);if(target.origin!=='https://github.com'||!target.pathname.startsWith('/JesmonX/Aieyes/releases/'))throw new Error('更新地址无效');$('#update-result').innerHTML=` ${escapeHTML(u.version)} · <a href="${escapeHTML(target.href)}" target="_blank" rel="noopener noreferrer">发布页</a>`;$('#update-result a').onclick=e=>{e.preventDefault();job('打开发布页',()=>api('updates.open'));};});
+  if($('#connection-form'))$('#connection-form').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);job('保存设置',async()=>{const next=structuredClone(state.settings);next.proxy=proxyValue(f,'app');await saveSettings(next);e.target.dataset.updateSavedValues=JSON.stringify([...new FormData(e.target)]);});};
+  if($('#general-form'))$('#general-form').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);job('保存设置',async()=>{const next=structuredClone(state.settings);next.refreshSeconds=Number(f.get('refreshSeconds'));next.serverRefreshSeconds=Number(f.get('serverRefreshSeconds'));await saveSettings(next);e.target.dataset.updateSavedValues=JSON.stringify([...new FormData(e.target)]);});};
+  window.AieyesUpdates?.bindSettings();
   if($('#sync-prices'))$('#sync-prices').onclick=syncPrices;
   if($('#add-price'))$('#add-price').onclick=()=>editPrice();
   bindPrices();
@@ -653,7 +653,7 @@ window.AieyesApp={
 if(!PANEL)setInterval(()=>{
   if(!state.settings)return;
   if(!state.serverBusy&&state.settings.hosts.some(h=>h.enabled)&&Date.now()-state.lastMetrics>((state.page==='servers'&&!document.hidden)||(state.panelOpen&&state.panelPage==='servers')?2000:state.settings.serverRefreshSeconds*1000)){sample();}
-  if($('#editor').open||$('#quota-dialog')?.dataset.busy||state.busy||state.settingsSaving)return;
+  if(window.AieyesUpdates?.busy||$('#editor').open||$('#quota-dialog')?.dataset.busy||state.busy||state.settingsSaving)return;
   if(hasQuotaSources()&&(!state.lastQuota||Date.now()-state.lastQuota>state.settings.refreshSeconds*1000)){quotas();return;}
   if(Date.now()-state.lastScan>state.settings.refreshSeconds*1000){scan();return;}
 },500);

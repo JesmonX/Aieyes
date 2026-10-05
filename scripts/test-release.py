@@ -2,6 +2,9 @@ import importlib.util
 import pathlib
 import tempfile
 import unittest
+import base64
+import json
+import plistlib
 
 spec = importlib.util.spec_from_file_location("release", pathlib.Path(__file__).with_name("release.py"))
 release = importlib.util.module_from_spec(spec)
@@ -9,6 +12,17 @@ spec.loader.exec_module(release)
 
 
 class ReleaseTests(unittest.TestCase):
+    def assets(self, root, version='1.2.3'):
+        for name in release.installer_names(version):
+            (root / name).write_bytes(b'installer')
+            if '-macos-' not in name:
+                (root / (name + '.sig')).write_text(base64.b64encode(f'untrusted comment: fixture\nfixture\ntrusted comment: version:{version}\nfixture'.encode()).decode())
+        build = plistlib.loads((release.ROOT/'apps/macos/Info.plist').read_bytes())['CFBundleVersion']
+        signature = base64.b64encode(bytes(64)).decode()
+        for arch in ('arm64', 'x64'):
+            name = f'Aieyes-{version}-macos-{arch}.dmg'
+            (root / f'appcast-macos-{arch}.xml').write_text(f'<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><sparkle:version>{build}</sparkle:version><sparkle:shortVersionString>{version}</sparkle:shortVersionString><enclosure url="https://github.com/JesmonX/Aieyes/releases/download/v{version}/{name}" length="9" sparkle:edSignature="{signature}" /></item></channel></rss><!-- sparkle-signatures: fixture -->')
+        release.update_manifest(root, version)
     def test_version_and_tag_must_agree(self):
         current = release.version()
         self.assertEqual(release.version(tag="v" + current), current)
@@ -19,11 +33,10 @@ class ReleaseTests(unittest.TestCase):
     def test_missing_or_empty_asset_prevents_publication(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
-            for name in release.asset_names("1.2.3"):
-                (root / name).write_bytes(b"installer")
+            self.assets(root)
             release.checksum_assets(root, "1.2.3")
             sums = (root / "SHA256SUMS").read_bytes()
-            self.assertEqual(len(sums.splitlines()), 5)
+            self.assertEqual(len(sums.splitlines()), 11)
             release.checksum_assets(root, "1.2.3")
             self.assertEqual((root / "SHA256SUMS").read_bytes(), sums)
             missing = root / "Aieyes-1.2.3-macos-arm64.dmg"
@@ -33,6 +46,22 @@ class ReleaseTests(unittest.TestCase):
             missing.touch()
             with self.assertRaises(ValueError):
                 release.checksum_assets(root, "1.2.3")
+
+    def test_feed_cannot_point_at_another_release_or_omit_an_installer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            self.assets(root)
+            manifest_path = root/'latest.json'
+            original = manifest_path.read_text()
+            manifest = json.loads(original)
+            manifest['platforms']['linux-x86_64-deb']['url'] = 'https://example.com/other.deb'
+            manifest_path.write_text(json.dumps(manifest))
+            with self.assertRaises(ValueError):
+                release.checksum_assets(root, '1.2.3')
+            manifest_path.write_text(original)
+            (root/'appcast-macos-x64.xml').write_text((root/'appcast-macos-x64.xml').read_text().replace('<sparkle:version>', '<sparkle:version>9'))
+            with self.assertRaises(ValueError):
+                release.checksum_assets(root, '1.2.3')
 
     def test_collector_rejects_ambiguous_stale_packages(self):
         with tempfile.TemporaryDirectory() as temporary:

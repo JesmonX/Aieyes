@@ -39,6 +39,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
         event:{async listen(name,fn){window.__listeners[name]=fn;return ()=>{};}},
         window:{getCurrentWindow:()=>({async isMaximized(){return maximized;},async toggleMaximize(){maximized=!maximized;window.nativeCalls.push('maximize');},async minimize(){window.nativeCalls.push('minimize');},async close(){window.nativeCalls.push('close');},async onResized(){return ()=>{};}})},
         core:{async invoke(command,args){
+          if(command==='updates_info'||command==='updates_check')return {currentVersion:'0.1.1',latestVersion:'0.1.1',phase:command==='updates_check'?'current':'idle',message:command==='updates_check'?'当前已是最新版本 v0.1.1':'',automatic:true,prompt:false};
           if(command==='desktop_info')return structuredClone(window.desktopInfo);
           if(command==='desktop_panel'||command==='desktop_panel_pin'||command==='desktop_action'){
             window.desktopCalls.push({command,args:structuredClone(args)});
@@ -325,10 +326,10 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     assert.equal(await page.evaluate(()=>state.settings.proxy.url),'socks5://localhost:1080');
     await page.locator('#updates').click();
     await page.waitForFunction(()=>!state.busy);
-    assert.equal(await page.locator('#update-result a').getAttribute('href'),'https://github.com/JesmonX/Aieyes/releases/tag/v0.1.1');
-    await page.locator('#update-result a').click();
-    await page.waitForFunction(()=>!state.busy);
-    assert.equal(await page.evaluate(()=>window.engineCalls.filter(c=>c.method==='updates.open').length),1);
+    await page.waitForFunction(()=>document.querySelector('#update-result').textContent.includes('当前已是最新版本'));
+    assert.match(await page.locator('#update-current').textContent(),/0\.1\.1/);
+    assert.equal(await page.locator('#update-result a').count(),0);
+    assert.equal(await page.evaluate(()=>window.engineCalls.filter(c=>c.method==='updates.open').length),0);
     await page.screenshot({animations:'disabled',path:path.join(output,'general-light.png'),fullPage:true});
 
     await page.locator('[data-settings-tab=prices]').click();

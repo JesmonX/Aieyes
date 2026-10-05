@@ -110,6 +110,12 @@ struct MenuActivityLabel: View {
             ActivityIndicator(phase: model.sessionPhase)
             if model.activeSessions.count > 0 { Text("\(model.activeSessions.count)").monospacedDigit() }
             if !model.menuText.isEmpty { Text(model.menuText).monospacedDigit() }
+            if !model.runningEstimates.isEmpty {
+                Image(systemName: model.samplingNeedsAttention ? "pause.circle.fill" : "record.circle")
+                    .foregroundStyle(model.samplingNeedsAttention ? .orange : .teal)
+                    .accessibilityLabel(model.samplingSummary)
+                if model.runningEstimates.count > 1 { Text("\(model.runningEstimates.count)").monospacedDigit() }
+            }
         }.font(.system(size: 14, weight: .medium)).padding(.horizontal, 5)
     }
 }

@@ -14,7 +14,7 @@ export SWIFTPM_MODULECACHE_OVERRIDE="$PROJECT_DIR/.build/swift-module-cache"
 mkdir -p "$CLANG_MODULE_CACHE_PATH" "$SWIFTPM_MODULECACHE_OVERRIDE"
 if [ "${AIEYES_OFFLINE:-0}" = 1 ]; then export CARGO_NET_OFFLINE=true; fi
 if [ "$BUILD_MODE" = release ]; then cargo build --locked --release; else cargo build --locked; fi
-swift build --package-path apps/macos --scratch-path "$PROJECT_DIR/.build/swift" --cache-path "$PROJECT_DIR/.build/spm-cache" --config-path "$PROJECT_DIR/.build/spm-config" --security-path "$PROJECT_DIR/.build/spm-security" --disable-sandbox -c "$BUILD_MODE"
+swift build --package-path apps/macos --scratch-path "$PROJECT_DIR/.build/swift" --cache-path "$PROJECT_DIR/.build/spm-cache" --config-path "$PROJECT_DIR/.build/spm-config" --security-path "$PROJECT_DIR/.build/spm-security" --disable-sandbox -c "$BUILD_MODE" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 APP_DIR="$PROJECT_DIR/dist/Aieyes.app"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$PROJECT_DIR/.build/swift/$BUILD_MODE/Aieyes" "$APP_DIR/Contents/MacOS/Aieyes"
@@ -26,8 +26,7 @@ cp "$PROJECT_DIR/apps/macos/Info.plist" "$APP_DIR/Contents/Info.plist"
 if [ "$BUILD_MODE" = debug ]; then
   /usr/libexec/PlistBuddy -c "Add :AieyesDevelopmentDataDirectory string $PROJECT_DIR/.local/app" "$APP_DIR/Contents/Info.plist"
 fi
-codesign --force --sign - "$APP_DIR/Contents/Resources/aieyes-core"
-codesign --force --sign - "$APP_DIR"
+python3 scripts/macos-distribution.py bundle "$APP_DIR" --mode "$BUILD_MODE"
 echo "$APP_DIR"
 if [ "$PACKAGE_MODE" = --dmg ]; then
   VERSION=$(python3 scripts/release.py check)
@@ -37,4 +36,5 @@ if [ "$PACKAGE_MODE" = --dmg ]; then
   ditto "$APP_DIR" "$STAGING/Aieyes.app"
   ln -s /Applications "$STAGING/Applications"
   hdiutil create -volname Aieyes -srcfolder "$STAGING" -ov -format UDZO "$PROJECT_DIR/dist/Aieyes-$VERSION-macos-$ARCH.dmg"
+  python3 scripts/macos-distribution.py dmg "$PROJECT_DIR/dist/Aieyes-$VERSION-macos-$ARCH.dmg"
 fi

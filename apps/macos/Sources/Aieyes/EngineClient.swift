@@ -114,6 +114,17 @@ struct Acknowledgement: Decodable { }
     @Published var message: String?
     @Published var activity = ""
     @Published var isPinned = false
+    @Published var installingUpdate = false
+    @Published private(set) var estimateBusy = Set<String>()
+    @Published private(set) var estimateErrors: [String: String] = [:]
+    // Dashboard estimates are global, even when usage is filtered by account/model.
+    var runningEstimates: [QuotaEstimate] { (dashboard.quotaEstimates ?? []).filter { $0.status == "active" || $0.status == "pending" } }
+    var samplingNeedsAttention: Bool { runningEstimates.contains { $0.status == "pending" } }
+    var samplingSummary: String {
+        let active = runningEstimates.filter { $0.status == "active" }.count
+        let pending = runningEstimates.count - active
+        return [(active > 0 ? "\(active) 项采样中" : nil), (pending > 0 ? "\(pending) 项待确认" : nil)].compactMap { $0 }.joined(separator: " · ")
+    }
     @Published var panelHeight: CGFloat = 720
     private var visibleWindows = Set<String>()
     var panelVisible: Bool { !visibleWindows.isEmpty }
@@ -136,6 +147,18 @@ struct Acknowledgement: Decodable { }
     private var lastHostError: String?
     var showSettings: (() -> Void)?
     var showDetail: (() -> Void)?
+    var showEstimate: ((Quota) -> Void)?
+    var showSampling: (() -> Void)?
+    func openEstimate(_ estimate: QuotaEstimate) async {
+        do {
+            // Use an unfiltered read so changing the usage filter cannot hide sampling controls.
+            let snapshot: Dashboard = try await engine.call("dashboard", params: ["days": 1])
+            guard let quota = snapshot.quotas.first(where: { $0.id == estimate.accountKey }) else {
+                estimateErrors[estimate.accountKey] = "此账户已归档或移除；仍可结束采样并保留有效段。"; return
+            }
+            showEstimate?(quota)
+        } catch { estimateErrors[estimate.accountKey] = error.localizedDescription }
+    }
 
     init(autostart: Bool = true) {
         guard autostart else { return }
@@ -176,6 +199,13 @@ struct Acknowledgement: Decodable { }
     func estimateAction(_ action: String, params: [String: Any]) async throws {
         let _: QuotaEstimate = try await engine.call("quotaEstimates." + action, params: params)
         await reload()
+    }
+    func performEstimate(_ action: String, accountKey: String, params: [String: Any]) async -> Bool {
+        guard !estimateBusy.contains(accountKey) else { return false }
+        estimateBusy.insert(accountKey); estimateErrors[accountKey] = nil
+        defer { estimateBusy.remove(accountKey) }
+        do { try await estimateAction(action, params: params); return true }
+        catch { estimateErrors[accountKey] = error.localizedDescription; await reload(); return false }
     }
     func scan() async {
         guard !busy else { return }; busy = true; activity = "同步记录"; defer { busy = false; activity = ""; lastScan = Date() }
@@ -282,6 +312,7 @@ struct Acknowledgement: Decodable { }
         catch { message = error.localizedDescription }
     }
     func tick() {
+        guard !installingUpdate else { return }
         if !sessionBusy, Date().timeIntervalSince(lastSessionRead) >= 5 { Task { await refreshSessions() } }
         
         if !serverBusy, !settings.hosts.isEmpty, Date().timeIntervalSince(lastMetrics) > Double(panelVisible && serverTabVisible ? 2 : settings.serverRefreshSeconds) {

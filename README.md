@@ -6,7 +6,7 @@
 
 从 [GitHub Releases](https://github.com/JesmonX/Aieyes/releases) 下载正式版本：macOS 提供 Intel x64、Apple Silicon arm64 两个 DMG（macOS 14+），Windows 提供 x64 NSIS EXE，Linux 提供 x64 DEB 和 AppImage。发布页的 `SHA256SUMS` 包含全部安装包校验值。
 
-[Release 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/release.yml) 在推送 `v主版本.次版本.修订版本` 标签后构建，所有平台测试和打包成功后自动发布。macOS 沿用 ad-hoc 签名，Windows 暂未证书签名。首次运行新工作流前，仍可从 [Desktop 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/desktop.yml) 下载保留 14 天的开发构建。
+[Release 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/release.yml) 在推送 `v主版本.次版本.修订版本` 标签后构建，所有平台测试和打包成功后自动发布。默认 macOS 使用 ad-hoc 签名，Windows 暂未证书签名；发布前需要配置应用内更新签名密钥，详见 [发布说明](docs/releases.md)。首次运行新工作流前，仍可从 [Desktop 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/desktop.yml) 下载保留 14 天的开发构建。
 
 发布维护与验证方式见 [发布说明](docs/releases.md)。
 
@@ -40,14 +40,14 @@ open dist/Aieyes.app
 | 账户与数据源 | 统一入口、来源内新建或关联账户、共享限额、保留历史归属 |
 | 远程历史、前置命令 | 限额查询可单独配置代理前置命令；远端只回传统计字段 |
 | 代理 | HTTP/HTTPS/SOCKS5、来源覆盖；macOS 静态系统代理，其他平台代理环境变量；PAC 和代理认证界面尚未实现 |
-| GitHub 更新 | 检查 Release；自动下载安装与签名发布尚未实现 |
+| 应用内更新 | 显示当前版本，支持手动及每日检查、签名校验、一键安装重启；Linux 支持 AppImage 与 DEB |
 | Windows/Linux | 已实现悬浮球、动态托盘、自动回退及本机会话状态；悬浮球单击或悬停展开与 macOS 菜单栏一致的面板，支持贴边与暂时隐藏；界面为半透明圆润风格，含统一动效与悬停提示（见 [Windows 界面刷新](docs/windows-ui-refresh.md)）；Windows NSIS、Linux deb/AppImage 原生 CI 构建通过；桌面交互和安装卸载待实测 |
 
 服务器通过 CPU、内存、GPU 圆环和设备状态条展示实时资源，尚未保存长期采样历史。Token 历史保存在 SQLite 中。
 
-设置包含数据源、服务器、价格和通用四个标签。代理位于通用，选择协议并填写 Host、端口，或使用自定义 URL；价格支持按模型 ID 和名称搜索，更新按钮直接检查项目 Release。概览仅保留主指标与输入、输出、缓存明细，计价不足以感叹号进入价格设置。
+设置包含数据源、服务器、价格和通用四个标签。代理位于通用，选择协议并填写 Host、端口，或使用自定义 URL；价格支持按模型 ID 和名称搜索，更新按钮在应用内检查、下载安装；无新版时明确提示当前已是最新版本。概览仅保留主指标与输入、输出、缓存明细，计价不足以感叹号进入价格设置。
 
-macOS 配置编辑器的「完成」更新草稿，设置顶部「保存」提交全部配置（包括 API Key）；关闭或退出时可保存、放弃或取消。价格条目独立即时保存。Windows 来源/主机编辑器保存后立即生效，删除主机会先说明关联来源受到的影响。两端均自动查询已启用账户的限额。
+macOS 配置编辑器的「完成」更新草稿，设置顶部「保存」提交全部配置（包括 API Key）；关闭或退出时可保存、放弃或取消。价格条目独立即时保存。Windows 来源/主机编辑器保存后立即生效，删除主机会先说明关联来源受到的影响。两端均自动查询已启用账户的限额。macOS 的 7d 额度采样使用独立窗口，关闭后继续后台采样，菜单栏保留采样标记和管理入口。
 
 Windows 悬浮面板同步设置与服务器采样，固定面板持续显示最新读数；错误与过期数据有明确状态，退出入口位于面板「更多」。本轮完整修复与验证见 [跨平台交互和 UI 评审](docs/cross-platform-ui-review-2026-10-05.md)。
 

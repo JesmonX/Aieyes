@@ -41,7 +41,7 @@ struct MultiSelectPicker: View {
                 Spacer()
                 Text(summary).foregroundStyle(.secondary)
                 Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            }.font(.system(size: 14)).padding(.vertical, 5)
+            }.font(AppFont.secondary).padding(.vertical, 5)
         }
         .focused($triggerFocused)
         .accessibilityLabel("\(title)，\(summary)")
@@ -55,7 +55,7 @@ struct MultiSelectPicker: View {
                     Button(term.isEmpty ? "反选" : "反选结果") { apply(.invert) }
                     Spacer()
                     Text("\(count) / \(options.count)").foregroundStyle(.secondary).monospacedDigit()
-                }.font(.system(size: 13)).buttonStyle(.borderless).disabled(filtered.isEmpty)
+                }.font(AppFont.secondary).buttonStyle(.borderless).disabled(filtered.isEmpty)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(filtered) { option in
@@ -64,9 +64,9 @@ struct MultiSelectPicker: View {
                             })) {
                                 HStack {
                                     Text(option.label).fixedSize(horizontal: false, vertical: true)
-                                    if option.unavailable { Spacer(); Text("暂不可用").font(.system(size: 12)).foregroundStyle(.secondary) }
+                                    if option.unavailable { Spacer(); Text("暂不可用").font(AppFont.secondary).foregroundStyle(.secondary) }
                                 }
-                            }.toggleStyle(.checkbox).font(.system(size: 14)).padding(.vertical, 8)
+                            }.toggleStyle(.checkbox).font(AppFont.secondary).padding(.vertical, 8)
                         }
                         if filtered.isEmpty { Text("没有匹配项").foregroundStyle(.secondary).padding() }
                     }.padding(.horizontal, 2)

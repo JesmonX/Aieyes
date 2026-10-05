@@ -20,8 +20,8 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("设置").font(.title2.weight(.semibold))
-                    Text(!model.settingsLoaded ? "正在读取配置…" : model.settingsDirty ? "有未保存的配置更改" : "配置编辑完成后，在此保存全部更改").font(.caption).foregroundStyle(.secondary)
+                    Text("设置").font(AppFont.title)
+                    Text(!model.settingsLoaded ? "正在读取配置…" : model.settingsDirty ? "有未保存的配置更改" : "配置编辑完成后，在此保存全部更改").font(AppFont.secondary).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if !model.settingsLoaded { Button("重试读取") { Task { await model.bootstrap() } } }
@@ -29,11 +29,11 @@ struct SettingsView: View {
                 Button("放弃更改") { model.discardSettingsDraft() }.disabled(!model.settingsDirty || model.settingsSaving)
                 Button(model.settingsSaving ? "保存中…" : "保存") { Task { _ = await model.saveSettingsDraft() } }.buttonStyle(.borderedProminent).keyboardShortcut("s").disabled(!model.settingsDirty || model.settingsSaving)
             }.padding(22)
-            if let message = model.settingsMessage ?? model.message { HStack { Text(message).font(.caption).textSelection(.enabled); Spacer(); Button { model.settingsMessage = nil; model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭提示") }.padding(.horizontal, 22).padding(.bottom, 10) }
+            if let message = model.settingsMessage ?? model.message { HStack { Text(message).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.settingsMessage = nil; model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭提示") }.padding(.horizontal, 22).padding(.bottom, 10) }
             HStack(spacing: 6) {
                 ForEach([("sources", "数据源", "tray.full"), ("servers", "服务器", "server.rack"), ("prices", "价格", "dollarsign.circle"), ("general", "通用", "slider.horizontal.3")], id: \.0) { key, title, icon in
                     Button { model.settingsTab = key } label: {
-                        Label(title, systemImage: icon).font(.system(size: 13, weight: model.settingsTab == key ? .semibold : .regular)).frame(maxWidth: .infinity).padding(.vertical, 10)
+                        Label(title, systemImage: icon).font(.system(size: 15, weight: model.settingsTab == key ? .semibold : .regular)).frame(maxWidth: .infinity).padding(.vertical, 10)
                             .foregroundStyle(model.settingsTab == key ? Palette.accent : .secondary)
                             .background(model.settingsTab == key ? Palette.accent.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
                     }.buttonStyle(.plain).accessibilityValue(model.settingsTab == key ? "已选中" : "")
@@ -50,6 +50,7 @@ struct SettingsView: View {
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16).disabled(model.settingsSaving || !model.settingsLoaded)
         }
+        .font(AppFont.body).disabled(model.installingUpdate)
         .frame(minWidth: 620, idealWidth: 760, minHeight: 440, idealHeight: 600).tint(Palette.accent)
         .onAppear { if model.settingsTab == "accounts" { model.settingsTab = "sources" }; if model.settingsTab == "connection" { model.settingsTab = "general" }; Task { await model.loadPrices() }; consumeEditorRequest() }
         .onChange(of: model.requestedSourceProvider) { _, _ in consumeEditorRequest() }
@@ -94,8 +95,8 @@ struct SettingsView: View {
                 ForEach($model.settingsDraft.sources) { $source in
                     HStack(spacing: 12) {
                         Toggle("启用", isOn: $source.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
-                        VStack(alignment: .leading, spacing: 5) { Text(source.name).font(.headline); Text(Format.provider(source.provider) + " · " + (source.accountId.isEmpty ? "无账户" : draft.accounts.first { $0.id == source.accountId && $0.provider == source.provider }?.name ?? source.accountId)).font(.caption).foregroundStyle(.secondary) }
-                        if let error = model.dashboard.sources.first(where: { $0.id == source.id })?.status?.error { Text(error).font(.caption).foregroundStyle(.orange) }
+                        VStack(alignment: .leading, spacing: 5) { Text(source.name).font(AppFont.section); Text(Format.provider(source.provider) + " · " + (source.accountId.isEmpty ? "无账户" : draft.accounts.first { $0.id == source.accountId && $0.provider == source.provider }?.name ?? source.accountId)).font(AppFont.secondary).foregroundStyle(.secondary) }
+                        if let error = model.dashboard.sources.first(where: { $0.id == source.id })?.status?.error { Text(error).font(AppFont.secondary).foregroundStyle(.orange) }
                         Spacer()
                         Button("编辑") { sourceEditor = source }
                         Button { model.stageAPIKey(nil, sourceID: source.id); draft.sources.removeAll { $0.id == source.id }; for i in draft.accounts.indices where draft.accounts[i].quotaSourceId == source.id { draft.accounts[i].quotaSourceId = nil } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除数据源")
@@ -132,7 +133,7 @@ struct SettingsView: View {
             List {
                 ForEach($model.settingsDraft.hosts) { $host in HStack(spacing: 12) {
                     Toggle("启用", isOn: $host.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
-                    VStack(alignment: .leading, spacing: 5) { Text(host.name.isEmpty ? host.target : host.name).font(.headline); Text(host.target).font(.caption).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading, spacing: 5) { Text(host.name.isEmpty ? host.target : host.name).font(AppFont.section); Text(host.target).font(AppFont.secondary).foregroundStyle(.secondary) }
                     Spacer(); Button("编辑") { hostEditor = host }
                     Button { draft.hosts.removeAll { $0.id == host.id }; for i in draft.sources.indices where draft.sources[i].hostId == host.id { draft.sources[i].hostId = nil; draft.sources[i].enabled = false } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除主机")
                 }.padding(.vertical, 7) }
@@ -145,22 +146,22 @@ struct SettingsView: View {
         return model.prices.filter { query.isEmpty || $0.id.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
     }
     private var prices: some View {
-        VStack(spacing: 12) {
-            Text("价格条目与同步立即生效；模型映射随顶部“保存”提交。").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+        ScrollView { VStack(spacing: 12) {
+            Text("价格条目与同步立即生效；模型映射随顶部“保存”提交。").font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
             if !model.dashboard.pricingGaps.isEmpty {
                 GroupBox("所选时间范围 · 待计价模型") {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 10) {
                             ForEach(model.dashboard.pricingGaps) { gap in
                                 HStack {
-                                    VStack(alignment: .leading, spacing: 4) { Text(gap.model).font(.system(size: 12, weight: .medium)); Text("缺少\(gap.missing) · \(Format.compact(gap.unpricedTokens)) Token").font(.caption).foregroundStyle(.secondary) }
+                                    VStack(alignment: .leading, spacing: 4) { Text(gap.model).font(.system(size: 14, weight: .medium)); Text("缺少\(gap.missing) · \(Format.compact(gap.unpricedTokens)) Token").font(AppFont.secondary).foregroundStyle(.secondary) }
                                     Spacer()
                                     Button("映射") { mappingModel = gap.model; mappingID = gap.priceId ?? "" }
                                     Button("补充价格") { priceEditor = model.prices.first { $0.id == (gap.priceId ?? gap.model) } ?? ModelPrice(id: gap.priceId ?? gap.model, name: gap.model) }
                                 }
                             }
                         }.padding(6)
-                    }.frame(maxHeight: 88)
+                    }.frame(height: 100)
                 }
             }
             HStack {
@@ -169,16 +170,16 @@ struct SettingsView: View {
                 Button("添加价格") { priceEditor = ModelPrice() }
             }
             List(filteredPrices) { price in
-                HStack { VStack(alignment: .leading, spacing: 4) { Text(price.id).font(.callout); Text("输入 \(price.input.map { Format.money($0 * 1e6) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1e6) } ?? "—") / 百万 Token").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button("编辑") { priceEditor = price } }
-            }.listStyle(.inset).overlay { if filteredPrices.isEmpty { Text(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步模型价格" : "无匹配模型").foregroundStyle(.secondary) } }
+                HStack { VStack(alignment: .leading, spacing: 4) { Text(price.id).font(AppFont.body); Text("输入 \(price.input.map { Format.money($0 * 1e6) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1e6) } ?? "—") / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button("编辑") { priceEditor = price } }
+            }.listStyle(.inset).frame(height: 200).overlay { if filteredPrices.isEmpty { Text(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步模型价格" : "无匹配模型").foregroundStyle(.secondary) } }
             GroupBox("模型映射") {
                 VStack(spacing: 8) {
                     HStack { TextField("日志中的模型名称", text: $mappingModel); Image(systemName: "arrow.right"); TextField("OpenRouter 模型 ID", text: $mappingID); Button("添加映射") { draft.modelMappings[mappingModel.trimmingCharacters(in: .whitespacesAndNewlines)] = mappingID.trimmingCharacters(in: .whitespacesAndNewlines); mappingModel = ""; mappingID = "" }.disabled(mappingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mappingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-                    ScrollView { LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in HStack { Text(key); Image(systemName: "arrow.right"); Text(draft.modelMappings[key] ?? ""); Spacer(); Button { draft.modelMappings.removeValue(forKey: key) } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain) }.font(.caption) } }.padding(.vertical, 4) }.frame(maxHeight: 100)
+                    ScrollView { LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in HStack { Text(key); Image(systemName: "arrow.right"); Text(draft.modelMappings[key] ?? ""); Spacer(); Button { draft.modelMappings.removeValue(forKey: key) } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain) }.font(AppFont.secondary) } }.padding(.vertical, 4) }.frame(maxHeight: 100)
                 }.padding(6)
             }
-            HStack { Text("USD / 百万 Token").font(.caption).foregroundStyle(.secondary); Spacer(); Button("保存配置并重算") { Task { if await model.saveSettingsDraft() { await model.reprice() } } } }
-        }.padding(12)
+            HStack { Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("保存配置并重算") { Task { if await model.saveSettingsDraft() { await model.reprice() } } } }
+        }.padding(12) }
     }
     private var general: some View {
         Form {
@@ -190,16 +191,10 @@ struct SettingsView: View {
                 TextField("服务器后台间隔（秒）", value: $model.settingsDraft.serverRefreshSeconds, format: .number)
             }
             Section("连接") { ProxyFields(proxy: $model.settingsDraft.proxy) }
-            Section("更新") {
-                HStack { Button("检查更新") { Task {
-                    do { let update: UpdateInfo = try await model.engine.call("updates.check"); model.message = "最新版本 \(update.version)"; if let url = URL(string: update.url), url.scheme == "https", url.host == "github.com", url.path.hasPrefix("/JesmonX/Aieyes/releases/") { NSWorkspace.shared.open(url) } }
-                    catch { model.message = error.localizedDescription }
-                } } }
-            }
+            Section("更新") { UpdateSettingsView() }
         }.formStyle(.grouped)
     }
 }
-struct UpdateInfo: Decodable { var version: String, url: String }
 
 struct ProxyFields: View {
     @Binding var proxy: ProxySettings
@@ -251,14 +246,14 @@ struct SourceEditor: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Text("数据源").font(.title2.weight(.semibold)); Spacer() }.padding(22)
+            HStack { Text("数据源").font(AppFont.title); Spacer() }.padding(22)
             Form {
                 TextField("名称", text: $source.name)
                 Picker("Agent", selection: $source.provider) {
                     Text("Codex").tag("codex"); Text("Claude Code").tag("claude"); Text("Antigravity").tag("antigravity"); Text("agy").tag("agy"); Text("DeepSeek").tag("deepseek"); Text("自定义").tag("custom")
                 }
                 Toggle("关联账户与限额", isOn: $asAccount)
-                Text("多个数据源可以关联同一账户，共用账户身份和限额。").font(.caption).foregroundStyle(.secondary)
+                Text("多个数据源可以关联同一账户，共用账户身份和限额。").font(AppFont.secondary).foregroundStyle(.secondary)
                 if asAccount {
                     Picker("账户", selection: $accountChoice) {
                         Text("新建账户").tag("new")
@@ -282,7 +277,7 @@ struct SourceEditor: View {
                 }
                 if source.provider == "deepseek" {
                     SecureField("API Key（留空保留）", text: $apiKey)
-                    Text("新 Key 随设置顶部的保存提交；留空保留已保存 Key。").font(.caption).foregroundStyle(.secondary)
+                    Text("新 Key 随设置顶部的保存提交；留空保留已保存 Key。").font(AppFont.secondary).foregroundStyle(.secondary)
                     DisclosureGroup("高级设置") { TextField("API Key 文件（可选）", text: $source.path) }
                 } else if source.provider != "agy" {
                     HStack {
@@ -295,7 +290,7 @@ struct SourceEditor: View {
                 if source.provider == "agy" { TextField("agy 程序", text: Binding(get: { source.agyBinary ?? "agy" }, set: { source.agyBinary = $0 })) }
                 if source.provider == "codex" { TextField("Codex 程序", text: $source.codexBinary) }
                 if source.hostId != nil && asAccount {
-                    Section("限额查询前置命令") { TextEditor(text: $source.quotaPreCommand).font(.system(.callout, design: .monospaced)).frame(height: 75).help("留空继承主机前置命令") }
+                    Section("限额查询前置命令") { TextEditor(text: $source.quotaPreCommand).font(.system(size: 14, design: .monospaced)).frame(height: 75).help("留空继承主机前置命令") }
                 }
                 if source.hostId == nil {
                     ProxyFields(proxy: Binding(get: { source.proxy ?? ProxySettings(mode: "inherit") }, set: { source.proxy = $0.mode == "inherit" ? nil : $0 }), inherit: true)
@@ -303,10 +298,10 @@ struct SourceEditor: View {
                 if let error { Text(error).foregroundStyle(.orange) }
             }.formStyle(.grouped).disabled(saving)
             HStack {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("完成后，在设置中保存").font(.caption).foregroundStyle(.secondary); Spacer()
+                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("完成后，在设置中保存").font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
                 Button(saving ? "处理中…" : "完成") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving)
             }.padding(20)
-        }.frame(width: 570, height: EditorLayout.height(660))
+        }.font(AppFont.body).frame(width: 570, height: EditorLayout.height(660))
         .interactiveDismissDisabled(saving)
         .onChange(of: accountChoice) { _, id in
             account = accounts.first { $0.id == id && $0.provider == source.provider } ?? AgentAccount(provider: source.provider, quotaEnabled: ["codex", "claude", "agy", "deepseek"].contains(source.provider))
@@ -345,7 +340,7 @@ struct AccountEditor: View {
     private var linked: [AgentSource] { sources.filter { $0.provider == account.provider && $0.accountId == account.id } }
     var body: some View {
         VStack(spacing: 0) {
-            Text("账户").font(.title2.weight(.semibold)).padding(22)
+            Text("账户").font(AppFont.title).padding(22)
             Form {
                 TextField("账户名称", text: $account.name)
                 Toggle("显示并查询账户限额", isOn: $account.quotaEnabled)
@@ -358,13 +353,13 @@ struct AccountEditor: View {
                 if let error { Text(error).foregroundStyle(.orange) }
             }.formStyle(.grouped).disabled(saving)
             HStack {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("完成后，在设置中保存").font(.caption).foregroundStyle(.secondary); Spacer()
+                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("完成后，在设置中保存").font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
                 Button("完成") { Task {
                     saving = true; error = nil; defer { saving = false }
                     do { try await onSave(account) } catch { self.error = error.localizedDescription }
                 } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving || account.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding(20)
-        }.frame(width: 560, height: EditorLayout.height(420)).interactiveDismissDisabled(saving)
+        }.font(AppFont.body).frame(width: 560, height: EditorLayout.height(420)).interactiveDismissDisabled(saving)
     }
 }
 
@@ -410,7 +405,7 @@ struct HostEditor: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Text("SSH 主机").font(.title2.weight(.semibold)); Spacer() }.padding(22)
+            HStack { Text("SSH 主机").font(AppFont.title); Spacer() }.padding(22)
             Form {
                 TextField("名称", text: $host.name)
                 TextField("SSH 别名或地址", text: $host.target, prompt: Text("my-server 或 user@host"))
@@ -423,7 +418,7 @@ struct HostEditor: View {
                 }
                 Section("设备") {
                     Button(discovering ? "读取中…" : "读取设备") { Task { await discover() } }.disabled(discovering || host.target.isEmpty)
-                    if let discoveryError { Text(discoveryError).font(.system(size: 13)).foregroundStyle(.orange) }
+                    if let discoveryError { Text(discoveryError).font(AppFont.secondary).foregroundStyle(.orange) }
                     ForEach(groups.filter { $0.0 != "memory" }, id: \.0) { group, label in devicePicker(group, label) }
                 }
                 Section {
@@ -434,12 +429,12 @@ struct HostEditor: View {
                 DisclosureGroup("高级设置") {
                     TextField("远程 shell", text: $host.shell)
                     Text("远程前置命令").foregroundStyle(.secondary)
-                    TextEditor(text: $host.preCommand).font(.system(size: 13, design: .monospaced)).frame(height: 65)
+                    TextEditor(text: $host.preCommand).font(.system(size: 14, design: .monospaced)).frame(height: 65)
                     TextField("设备表达式", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/")).help("留空显示全部设备")
                 }
             }.formStyle(.grouped)
-            HStack { Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Text("完成后，在设置中保存").font(.caption).foregroundStyle(.secondary); Spacer(); Button("完成") { host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; onSave(host) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty) }.padding(20)
-        }.frame(width: 620, height: EditorLayout.height(650)).onAppear { devices = host.devices.joined(separator: ", ") }
+            HStack { Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Text("完成后，在设置中保存").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("完成") { host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; onSave(host) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty) }.padding(20)
+        }.font(AppFont.body).frame(width: 620, height: EditorLayout.height(650)).onAppear { devices = host.devices.joined(separator: ", ") }
     }
 }
 
@@ -457,8 +452,8 @@ struct PriceEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                HStack { Text("模型价格").font(.title2.weight(.semibold)); Spacer(); Text("USD / 百万 Token").font(.caption).foregroundStyle(.secondary) }
-                Text("保存此价格后立即生效，不需要再保存设置。").font(.caption).foregroundStyle(.secondary)
+                HStack { Text("模型价格").font(AppFont.title); Spacer(); Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary) }
+                Text("保存此价格后立即生效，不需要再保存设置。").font(AppFont.secondary).foregroundStyle(.secondary)
             }.padding(22)
             Form {
                 TextField("模型 ID", text: $price.id, prompt: Text("openai/model-name"))
@@ -473,7 +468,7 @@ struct PriceEditor: View {
                 Spacer()
                 Button(saving ? "保存中…" : "保存价格") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving || !valid || price.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding(20)
-        }.frame(width: 520, height: EditorLayout.height(470)).interactiveDismissDisabled(saving)
+        }.font(AppFont.body).frame(width: 520, height: EditorLayout.height(470)).interactiveDismissDisabled(saving)
             .onAppear { input = price.input.map { String($0 * 1e6) } ?? ""; output = price.output.map { String($0 * 1e6) } ?? ""; cacheRead = price.cacheRead.map { String($0 * 1e6) } ?? ""; cacheWrite = price.cacheWrite.map { String($0 * 1e6) } ?? "" }
     }
     private func save() async {
