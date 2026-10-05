@@ -20,11 +20,12 @@ use tauri::{
 
 const TRAY_ID: &str = "aieyes-status";
 const HIDE_MENU_ID: &str = "hide";
-/// Floating window edge in logical pixels; the panel expands the same window.
-const BALL_SIZE: f64 = 88.0;
+/// Linux WebView capsule size in logical pixels; Windows uses its own native window.
+const BALL_SIZE: f64 = 160.0;
+const BALL_HEIGHT: f64 = 60.0;
 /// Panel size in logical pixels; height is clamped to the monitor work area.
-const PANEL_WIDTH: f64 = 420.0;
-const PANEL_HEIGHT: f64 = 640.0;
+const PANEL_WIDTH: f64 = 450.0;
+const PANEL_HEIGHT: f64 = 720.0;
 /// Distance to a work-area edge that makes a dragged ball snap, in logical pixels.
 const SNAP_DISTANCE: f64 = 48.0;
 /// Gap between the ball and the opened panel, in logical pixels.
@@ -61,6 +62,9 @@ struct ShellState {
     reason: String,
     page: String,
     dirty: bool,
+    native_interacting: bool,
+    panel_generation: u64,
+    recovery: String,
 }
 pub struct Desktop {
     path: PathBuf,
@@ -82,15 +86,15 @@ fn can_hide(floating: bool, tray_available: bool) -> bool {
     floating && tray_available
 }
 
-fn snap_position(
+fn snap_rect(
     position: Position,
     area: (i32, i32, u32, u32),
-    ball: i32,
+    ball: (i32, i32),
     threshold: i32,
 ) -> Position {
     let (x, y, width, height) = area;
-    let right = x + width as i32 - ball;
-    let bottom = y + height as i32 - ball;
+    let right = x + width as i32 - ball.0;
+    let bottom = y + height as i32 - ball.1;
     let mut snapped = position;
     if position.x - x <= threshold {
         snapped.x = x;
@@ -102,26 +106,26 @@ fn snap_position(
     } else if bottom - position.y <= threshold {
         snapped.y = bottom;
     }
-    clamp_position(snapped, x, y, width, height, ball)
+    clamp_rect(snapped, x, y, width, height, ball)
 }
 
-fn panel_position(
+fn panel_rect(
     ball_pos: Position,
-    ball: i32,
+    ball: (i32, i32),
     panel: (i32, i32),
     area: (i32, i32, u32, u32),
     gap: i32,
 ) -> Position {
     let (x, y, width, height) = area;
     let (panel_width, panel_height) = panel;
-    let mut left = if ball_pos.x + ball / 2 >= x + width as i32 / 2 {
-        ball_pos.x + ball - panel_width
+    let mut left = if ball_pos.x + ball.0 / 2 >= x + width as i32 / 2 {
+        ball_pos.x + ball.0 - panel_width
     } else {
         ball_pos.x
     };
-    let below = ball_pos.y + ball + gap;
+    let below = ball_pos.y + ball.1 + gap;
     let above = ball_pos.y - panel_height - gap;
-    let mut top = if ball_pos.y + ball / 2 < y + height as i32 / 2 {
+    let mut top = if ball_pos.y + ball.1 / 2 < y + height as i32 / 2 {
         below
     } else {
         above
@@ -137,6 +141,18 @@ fn panel_position(
     Position { x: left, y: top }
 }
 
+#[cfg(test)]
+fn snap_position(p: Position, a: (i32, i32, u32, u32), b: i32, t: i32) -> Position {
+    snap_rect(p, a, (b, b), t)
+}
+#[cfg(test)]
+fn panel_position(p: Position, b: i32, s: (i32, i32), a: (i32, i32, u32, u32), g: i32) -> Position {
+    panel_rect(p, (b, b), s, a, g)
+}
+#[cfg(test)]
+fn clamp_position(p: Position, x: i32, y: i32, w: u32, h: u32, b: i32) -> Position {
+    clamp_rect(p, x, y, w, h, (b, b))
+}
 fn panel_size(scale: f64, work_height: Option<u32>) -> (u32, u32) {
     let width = (PANEL_WIDTH * scale).round() as u32;
     let height = (PANEL_HEIGHT * scale).round() as u32;
@@ -241,11 +257,17 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     let floating = MenuItem::with_id(app, "floating", "使用悬浮球", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset-position", "重置悬浮球位置", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, HIDE_MENU_ID, "暂时隐藏悬浮球", false, None::<&str>)?;
+    let refresh = MenuItem::with_id(app, "refresh-floating", "刷新悬浮窗", true, None::<&str>)?;
+    let toggle = MenuItem::with_id(app, "toggle-panel", "打开／收起面板", true, None::<&str>)?;
+    let pin = MenuItem::with_id(app, "toggle-pin", "固定／取消固定面板", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Aieyes", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
             &status_item,
+            &toggle,
+            &pin,
+            &refresh,
             &open,
             &settings,
             &auto,
@@ -270,6 +292,9 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             reason: String::new(),
             page: "agent".into(),
             dirty: false,
+            native_interacting: false,
+            panel_generation: 0,
+            recovery: String::new(),
         }),
         menu,
         status_item,
@@ -277,21 +302,24 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         tray_available: AtomicBool::new(false),
         material,
     });
-    // The native Swift app remains the macOS entry point; opaque mode permits Tauri development there.
-    let floating =
-        WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("floating.html".into()))
-            .title("Aieyes 会话状态")
-            .inner_size(88.0, 88.0)
-            .resizable(false)
-            .decorations(false)
-            .shadow(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .focused(false)
-            .visible(false);
-    #[cfg(not(target_os = "macos"))]
-    let floating = floating.transparent(true);
-    floating.build()?;
+    create_floating(app.handle(), 0)?;
+    #[cfg(target_os = "windows")]
+    {
+        let position = app
+            .state::<Desktop>()
+            .state
+            .lock()
+            .ok()
+            .and_then(|s| s.preferences.position)
+            .map(|p| (p.x, p.y));
+        app.manage(
+            crate::capsule::Capsule::start(app.handle().clone(), position)
+                .map_err(std::io::Error::other)?,
+        );
+        if let Some(main) = app.get_webview_window("main") {
+            configure_webview(&main);
+        }
+    }
     let _ = restore_position(app.handle());
     apply_mode(app.handle()).map_err(std::io::Error::other)?;
     app.on_menu_event(|app, event| {
@@ -373,6 +401,229 @@ fn tray_supported() -> bool {
         .is_ok_and(|out| String::from_utf8_lossy(&out).trim() == "(<true>,)")
 }
 
+fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
+    let builder =
+        WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("floating.html".into()))
+            .title("Aieyes 面板")
+            .inner_size(
+                if cfg!(windows) {
+                    PANEL_WIDTH
+                } else {
+                    BALL_SIZE
+                },
+                if cfg!(windows) {
+                    PANEL_HEIGHT
+                } else {
+                    BALL_HEIGHT
+                },
+            )
+            .resizable(false)
+            .decorations(false)
+            .shadow(cfg!(windows))
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .focused(false)
+            .visible(false)
+            .zoom_hotkeys_enabled(false)
+            .initialization_script(format!("window.AIEYES_SHELL_GENERATION = {generation};"))
+            .on_navigation(|url| {
+                matches!(url.scheme(), "tauri" | "http" | "https")
+                    && matches!(url.host_str(), Some("tauri.localhost" | "localhost"))
+            })
+            .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.transparent(true);
+    let window = builder.build()?;
+    configure_webview(&window);
+    Ok(())
+}
+fn configure_webview(_window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    let _ = _window.with_webview(|view| unsafe {
+        if let Ok(core) = view.controller().CoreWebView2()
+            && let Ok(settings) = core.Settings()
+        {
+            let _ = settings.SetAreDefaultContextMenusEnabled(false);
+            let _ = settings.SetIsStatusBarEnabled(false);
+            let _ = settings.SetIsZoomControlEnabled(false);
+            #[cfg(not(debug_assertions))]
+            let _ = settings.SetAreDevToolsEnabled(false);
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn native_interaction(app: &AppHandle, active: bool) {
+    if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+        state.native_interacting = active;
+    }
+}
+#[cfg(target_os = "windows")]
+pub(crate) fn capsule_moved(app: &AppHandle, x: i32, y: i32) {
+    let open = if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+        state.preferences.position = Some(Position { x, y });
+        state.dirty = true;
+        state.panel
+    } else {
+        false
+    };
+    // Re-anchor an open panel after a drag without blocking the native message pump.
+    if open {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let _ = set_native_panel(&app, true);
+        });
+    }
+}
+#[cfg(target_os = "windows")]
+fn set_native_panel(app: &AppHandle, open: bool) -> Result<(), String> {
+    let window = app
+        .get_webview_window("floating")
+        .ok_or("面板不可用，可右键刷新悬浮窗")?;
+    if open {
+        let capsule = app
+            .try_state::<crate::capsule::Capsule>()
+            .ok_or("悬浮入口不可用")?;
+        let (x, y, ball_width, ball_height, scale) = capsule.geometry()?;
+        let monitors = window.available_monitors().map_err(|e| e.to_string())?;
+        let monitor = monitors
+            .into_iter()
+            .find(|m| {
+                let a = m.work_area();
+                x >= a.position.x
+                    && y >= a.position.y
+                    && x < a.position.x + a.size.width as i32
+                    && y < a.position.y + a.size.height as i32
+            })
+            .or(window.primary_monitor().map_err(|e| e.to_string())?)
+            .ok_or("屏幕不可用")?;
+        let area = monitor.work_area();
+        let (width, height) = panel_size(scale, Some(area.size.height));
+        let width = width.min(area.size.width.saturating_sub((24.0 * scale) as u32).max(1));
+        let pos = panel_rect(
+            Position { x, y },
+            (ball_width as i32, ball_height as i32),
+            (width as i32, height as i32),
+            (
+                area.position.x,
+                area.position.y,
+                area.size.width,
+                area.size.height,
+            ),
+            (PANEL_GAP * scale) as i32,
+        );
+        window
+            .set_position(PhysicalPosition::new(pos.x, pos.y))
+            .map_err(|e| e.to_string())?;
+        window
+            .set_size(PhysicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+        window
+            .show()
+            .and_then(|_| window.set_focus())
+            .map_err(|e| e.to_string())?;
+    } else {
+        window.hide().map_err(|e| e.to_string())?;
+    }
+    app.state::<Desktop>()
+        .state
+        .lock()
+        .map_err(|_| "显示状态不可用")?
+        .panel = open;
+    emit_shell(app);
+    Ok(())
+}
+
+/// Recreate the renderer, never the core or the native capsule. The menu callback
+/// must return before Windows starts constructing another WebView2 controller.
+fn refresh_floating(app: &AppHandle) -> Result<(), String> {
+    let (generation, open) = {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        if state.recovery == "refreshing" {
+            return Ok(());
+        }
+        state.panel_generation += 1;
+        state.recovery = "refreshing".into();
+        (state.panel_generation, state.panel)
+    };
+    emit_shell(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            if let Some(window) = app.get_webview_window("floating") {
+                window.destroy().map_err(|e| e.to_string())?;
+            }
+            // Wait for Tauri to remove the destroyed window's label before reuse.
+            for _ in 0..100 {
+                if app.get_webview_window("floating").is_none() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            create_floating(&app, generation).map_err(|e| e.to_string())?;
+            #[cfg(target_os = "windows")]
+            set_native_panel(&app, open)?;
+            #[cfg(not(target_os = "windows"))]
+            {
+                app.state::<Desktop>()
+                    .state
+                    .lock()
+                    .map_err(|_| "显示状态不可用")?
+                    .panel = false;
+                restore_position(&app).map_err(|e| e.to_string())?;
+                set_panel(&app, open)?;
+                let visible = app
+                    .state::<Desktop>()
+                    .state
+                    .lock()
+                    .map_err(|_| "显示状态不可用")?
+                    .visible;
+                if visible && let Some(window) = app.get_webview_window("floating") {
+                    window.show().map_err(|e| e.to_string())?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            recovery_failed(&app, generation, &error);
+            return;
+        }
+        std::thread::sleep(Duration::from_secs(10));
+        let waiting = app
+            .state::<Desktop>()
+            .state
+            .lock()
+            .is_ok_and(|s| s.panel_generation == generation && s.recovery == "refreshing");
+        if waiting {
+            recovery_failed(&app, generation, "面板恢复超时，可再次刷新悬浮窗");
+        }
+    });
+    Ok(())
+}
+fn recovery_failed(app: &AppHandle, generation: u64, error: &str) {
+    if let Ok(mut state) = app.state::<Desktop>().state.lock()
+        && state.panel_generation == generation
+    {
+        state.recovery = "failed".into();
+    }
+    emit_shell(app);
+    let _ = app.emit("desktop:error", error);
+}
+#[tauri::command]
+pub fn desktop_panel_ready(app: AppHandle, generation: u64) -> Result<(), String> {
+    {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        if generation != state.panel_generation {
+            return Ok(());
+        }
+        state.recovery.clear();
+    }
+    emit_shell(&app);
+    Ok(())
+}
+
 fn create_tray(app: &AppHandle, desktop: &Desktop) -> tauri::Result<()> {
     if app.tray_by_id(TRAY_ID).is_some() {
         return Ok(());
@@ -434,6 +685,10 @@ fn update(app: &AppHandle, snapshot: Snapshot, supported: Option<bool>) {
         let _ = app.emit("desktop:error", error);
     }
     if let Ok(info) = desktop_info(app.clone()) {
+        #[cfg(target_os = "windows")]
+        if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
+            capsule.status(info.clone());
+        }
         let _ = app.emit("desktop:status", info);
     }
     save(app);
@@ -462,6 +717,11 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
     if changed && (!floating || hidden) {
         set_panel(app, false)?;
     }
+    #[cfg(target_os = "windows")]
+    if changed && let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
+        capsule.visible(floating && !hidden);
+    }
+    #[cfg(not(target_os = "windows"))]
     if changed && let Some(window) = app.get_webview_window("floating") {
         let result = if floating && !hidden {
             // Some Wayland compositors refuse absolute placement; the window must still open.
@@ -485,6 +745,10 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
+    let dark = app
+        .get_webview_window("main")
+        .and_then(|w| w.theme().ok())
+        .is_some_and(|t| t == tauri::Theme::Dark);
     let desktop = app.state::<Desktop>();
     let state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
     Ok(json!({
@@ -494,7 +758,9 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
-        "panelPage": state.panel_page,
+        "panelPage": state.panel_page, "nativeCapsule": cfg!(windows),
+        "recovery": state.recovery, "generation": state.panel_generation,
+        "dark": dark,
     }))
 }
 #[tauri::command]
@@ -582,8 +848,61 @@ pub fn desktop_panel_cursor_inside(app: AppHandle) -> Result<bool, String> {
 pub fn desktop_action(app: AppHandle, action: String) -> Result<(), String> {
     self::action(&app, &action)
 }
-fn action(app: &AppHandle, action: &str) -> Result<(), String> {
+#[tauri::command]
+pub fn desktop_detail(app: AppHandle, view: Value) -> Result<(), String> {
+    let mut filter = serde_json::Map::new();
+    for key in ["provider", "sourceId", "accountKey", "model"] {
+        if let Some(value) = view[key].as_str() {
+            filter.insert(key.into(), json!(value));
+        }
+    }
+    filter.insert(
+        "page".into(),
+        json!(if view["page"] == "servers" {
+            "servers"
+        } else {
+            "agent"
+        }),
+    );
+    filter.insert(
+        "days".into(),
+        json!(
+            view["days"]
+                .as_u64()
+                .filter(|n| [1, 7, 30, 90, 365].contains(n))
+                .unwrap_or(1)
+        ),
+    );
+    filter.insert(
+        "cost".into(),
+        json!(view["cost"].as_bool().unwrap_or(false)),
+    );
+    show_main(&app, "agent")?;
+    app.emit_to("main", "desktop:detail-view", filter)
+        .map_err(|e| e.to_string())
+}
+pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
     match action {
+        "focus-panel" => set_panel(app, true),
+        "refresh-floating" => refresh_floating(app),
+        "toggle-panel" => {
+            let open = app
+                .state::<Desktop>()
+                .state
+                .lock()
+                .map_err(|_| "显示状态不可用")?
+                .panel;
+            set_panel(app, !open)
+        }
+        "toggle-pin" => {
+            let pin = app
+                .state::<Desktop>()
+                .state
+                .lock()
+                .map_err(|_| "显示状态不可用")?
+                .pin;
+            desktop_panel_pin(app.clone(), !pin).map(|_| ())
+        }
         "open" => show_main(app, "agent"),
         "settings" => show_main(app, "settings"),
         "prices" => show_main(app, "prices"),
@@ -627,6 +946,7 @@ fn action(app: &AppHandle, action: &str) -> Result<(), String> {
     }
 }
 fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
+    let _ = set_panel(app, false);
     if let Ok(mut state) = app.state::<Desktop>().state.lock() {
         state.page = page.into();
     }
@@ -642,17 +962,42 @@ fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn clamp_position(pos: Position, x: i32, y: i32, width: u32, height: u32, ball: i32) -> Position {
+fn clamp_rect(
+    pos: Position,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    ball: (i32, i32),
+) -> Position {
     Position {
         x: pos
             .x
-            .clamp(x, (x.saturating_add(width as i32) - ball).max(x)),
+            .clamp(x, (x.saturating_add(width as i32) - ball.0).max(x)),
         y: pos
             .y
-            .clamp(y, (y.saturating_add(height as i32) - ball).max(y)),
+            .clamp(y, (y.saturating_add(height as i32) - ball.1).max(y)),
     }
 }
 fn restore_position(app: &AppHandle) -> tauri::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
+            let position = app
+                .state::<Desktop>()
+                .state
+                .lock()
+                .ok()
+                .and_then(|s| s.preferences.position);
+            capsule.position(position.map(|p| (p.x, p.y)));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    restore_web_position(app)
+}
+#[cfg(not(target_os = "windows"))]
+fn restore_web_position(app: &AppHandle) -> tauri::Result<()> {
     let Some(window) = app.get_webview_window("floating") else {
         return Ok(());
     };
@@ -680,17 +1025,18 @@ fn restore_position(app: &AppHandle) -> tauri::Result<()> {
     if let Some(monitor) = monitor {
         let a = monitor.work_area();
         let ball = (BALL_SIZE * monitor.scale_factor()).ceil() as i32;
+        let ball_height = (BALL_HEIGHT * monitor.scale_factor()).ceil() as i32;
         let default = Position {
             x: a.position.x + a.size.width as i32 - ball - 24,
-            y: a.position.y + (a.size.height as i32 - ball) / 2,
+            y: a.position.y + (a.size.height as i32 - ball_height) / 2,
         };
-        let pos = clamp_position(
+        let pos = clamp_rect(
             saved.unwrap_or(default),
             a.position.x,
             a.position.y,
             a.size.width,
             a.size.height,
-            ball,
+            (ball, ball_height),
         );
         window.set_position(PhysicalPosition::new(pos.x, pos.y))?;
     }
@@ -719,11 +1065,24 @@ fn refresh_menu(app: &AppHandle) {
 fn emit_shell(app: &AppHandle) {
     if let Ok(info) = desktop_info(app.clone()) {
         let _ = app.emit("desktop:panel", info.clone());
+        #[cfg(target_os = "windows")]
+        if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
+            capsule.status(info.clone());
+        }
         let _ = app.emit("desktop:status", info);
     }
 }
 /// Expand the floating window into the compact panel, or collapse it back to the ball.
 fn set_panel(app: &AppHandle, open: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        set_native_panel(app, open)
+    }
+    #[cfg(not(target_os = "windows"))]
+    set_web_panel(app, open)
+}
+#[cfg(not(target_os = "windows"))]
+fn set_web_panel(app: &AppHandle, open: bool) -> Result<(), String> {
     let desktop = app.state::<Desktop>();
     {
         let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
@@ -735,6 +1094,7 @@ fn set_panel(app: &AppHandle, open: bool) -> Result<(), String> {
     let window = app.get_webview_window("floating").ok_or("悬浮球不可用")?;
     let scale = window.scale_factor().map_err(|error| error.to_string())?;
     let ball = (BALL_SIZE * scale).round() as i32;
+    let ball_height = (BALL_HEIGHT * scale).round() as i32;
     if open {
         let position = window.outer_position().map_err(|error| error.to_string())?;
         if let Ok(mut state) = desktop.state.lock() {
@@ -764,12 +1124,12 @@ fn set_panel(app: &AppHandle, open: bool) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         if let Some(area) = area {
             let gap = (PANEL_GAP * scale).round() as i32;
-            let position = panel_position(
+            let position = panel_rect(
                 Position {
                     x: position.x,
                     y: position.y,
                 },
-                ball,
+                (ball, ball_height),
                 (width as i32, height as i32),
                 area,
                 gap,
@@ -778,7 +1138,7 @@ fn set_panel(app: &AppHandle, open: bool) -> Result<(), String> {
         }
     } else {
         window
-            .set_size(PhysicalSize::new(ball as u32, ball as u32))
+            .set_size(PhysicalSize::new(ball as u32, ball_height as u32))
             .map_err(|error| error.to_string())?;
         let _ = restore_position(app);
         if let Ok(mut state) = desktop.state.lock() {
@@ -827,6 +1187,7 @@ fn snap_ball(app: &AppHandle) -> Result<(), String> {
     }
     let scale = window.scale_factor().map_err(|error| error.to_string())?;
     let ball = (BALL_SIZE * scale).round() as i32;
+    let ball_height = (BALL_HEIGHT * scale).round() as i32;
     let position = window.outer_position().map_err(|error| error.to_string())?;
     let monitor = window
         .current_monitor()
@@ -846,13 +1207,13 @@ fn snap_ball(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     };
     let threshold = (SNAP_DISTANCE * scale).round() as i32;
-    let snapped = snap_position(
+    let snapped = snap_rect(
         Position {
             x: position.x,
             y: position.y,
         },
         area,
-        ball,
+        (ball, ball_height),
         threshold,
     );
     if snapped.x != position.x || snapped.y != position.y {
@@ -868,6 +1229,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         #[cfg(target_os = "windows")]
         tauri::WindowEvent::ThemeChanged(theme) if window.label() == "main" => {
             let _ = window_vibrancy::apply_mica(window, Some(*theme == tauri::Theme::Dark));
+            emit_shell(window.app_handle());
         }
         #[cfg(target_os = "windows")]
         tauri::WindowEvent::ScaleFactorChanged { .. } if window.label() == "main" => {
@@ -880,7 +1242,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             if window.label() == "main" {
                 // Always make the fallback visible before hiding the details window.
                 let app = window.app_handle();
-                let ready = if let Some(ball) = app.get_webview_window("floating") {
+                let ready = if let Some(_ball) = app.get_webview_window("floating") {
                     if app
                         .state::<Desktop>()
                         .state
@@ -888,7 +1250,17 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                         .map(|s| s.floating && !s.hidden)
                         .unwrap_or(true)
                     {
-                        ball.show().is_ok()
+                        #[cfg(target_os = "windows")]
+                        {
+                            if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
+                                capsule.visible(true);
+                            }
+                            true
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            _ball.show().is_ok()
+                        }
                     } else {
                         true
                     }
@@ -906,27 +1278,45 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             if let Some(desktop) = window.app_handle().try_state::<Desktop>()
                 && let Ok(mut state) = desktop.state.lock()
                 // Panel placement must never overwrite the ball's saved position.
-                && !state.panel
+                && !cfg!(windows) && !state.panel
             {
                 state.preferences.position = Some(Position { x: pos.x, y: pos.y });
                 state.dirty = true;
             }
         }
         tauri::WindowEvent::Focused(false) if window.label() == "floating" => {
-            let app = window.app_handle();
-            let close = app
-                .try_state::<Desktop>()
-                .and_then(|desktop| {
-                    desktop
-                        .state
-                        .lock()
-                        .ok()
-                        .map(|state| state.panel && !state.pin)
-                })
-                .unwrap_or(false);
-            if close {
-                let _ = set_panel(app, false);
-            }
+            let app = window.app_handle().clone();
+            // Native capsule activation can precede its mouse-down message.
+            // Let that message (or an owned menu/dialog activation) settle first.
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(80));
+                if app
+                    .get_webview_window("floating")
+                    .is_some_and(|w| w.is_focused().unwrap_or(false))
+                {
+                    return;
+                }
+                #[cfg(target_os = "windows")]
+                if app
+                    .try_state::<crate::capsule::Capsule>()
+                    .is_some_and(|c| c.owns_focus())
+                {
+                    return;
+                }
+                let close = app
+                    .try_state::<Desktop>()
+                    .and_then(|desktop| {
+                        desktop
+                            .state
+                            .lock()
+                            .ok()
+                            .map(|state| state.panel && !state.pin && !state.native_interacting)
+                    })
+                    .unwrap_or(false);
+                if close {
+                    let _ = set_panel(&app, false);
+                }
+            });
         }
         tauri::WindowEvent::ScaleFactorChanged { .. } if window.label() == "floating" => {
             let app = window.app_handle();
@@ -986,6 +1376,16 @@ fn icon(phase: Option<Phase>) -> tauri::image::Image<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rectangular_capsules_use_their_height_for_bottom_edges_and_panel_anchors() {
+        let area = (-1920, 40, 1920, 1040);
+        let position = snap_rect(Position { x: -200, y: 1010 }, area, (160, 60), 48);
+        assert_eq!((position.x, position.y), (-160, 1020));
+        let panel = panel_rect(Position { x: -1900, y: 60 }, (160, 60), (450, 720), area, 8);
+        assert_eq!((panel.x, panel.y), (-1900, 128));
+        let narrow = clamp_rect(Position { x: 50, y: 100 }, 0, 0, 100, 40, (160, 60));
+        assert_eq!((narrow.x, narrow.y), (0, 0));
+    }
     #[test]
     fn tray_reuses_brand_pixels_and_only_overlays_the_status_badge() {
         let brand = icon(None);
@@ -1096,8 +1496,8 @@ mod tests {
             8,
         );
         assert_eq!((p.x, p.y), (300, 40));
-        assert_eq!(panel_size(1.0, Some(1040)), (420, 640));
-        assert_eq!(panel_size(2.0, Some(700)), (840, 652));
+        assert_eq!(panel_size(1.0, Some(1040)), (450, 720));
+        assert_eq!(panel_size(2.0, Some(700)), (900, 652));
     }
     #[test]
     fn hiding_the_ball_requires_another_entry_point() {

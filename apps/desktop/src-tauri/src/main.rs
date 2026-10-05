@@ -1,4 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#[cfg(target_os = "windows")]
+mod capsule;
 mod desktop;
 mod updates;
 
@@ -16,7 +18,9 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
             Err(error) => ("desktop:hosts-error", Value::String(error.clone())),
         }];
     }
-    if method.starts_with("creditEstimates.") || method.starts_with("wakeups.") { return vec![("desktop:data-changed", Value::String(method.into()))]; }
+    if method.starts_with("creditEstimates.") || method.starts_with("wakeups.") {
+        return vec![("desktop:data-changed", Value::String(method.into()))];
+    }
     if result.is_err() {
         // Sampling may have persisted a pending checkpoint before a later sync fails.
         if matches!(
@@ -99,7 +103,15 @@ fn main() {
             let root = std::env::var_os("AIEYES_DATA_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or(app.path().app_data_dir()?);
-            let runner = app.path().resource_dir()?.join("binaries").join(if cfg!(windows) { "aieyes-core.exe" } else { "aieyes-core" });
+            let runner = app
+                .path()
+                .resource_dir()?
+                .join("binaries")
+                .join(if cfg!(windows) {
+                    "aieyes-core.exe"
+                } else {
+                    "aieyes-core"
+                });
             aieyes_core::wakeups::set_runner_path(runner);
             app.manage(Shared(
                 Arc::new(Mutex::new(Engine::open(&root)?)),
@@ -123,13 +135,19 @@ fn main() {
             desktop::desktop_panel_pin,
             desktop::desktop_panel_page,
             desktop::desktop_panel_cursor_inside,
-            desktop::desktop_action
+            desktop::desktop_action,
+            desktop::desktop_panel_ready,
+            desktop::desktop_detail
         ])
         .build(tauri::generate_context!())
         .expect("Aieyes startup failed");
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
             desktop::save(app);
+            #[cfg(target_os = "windows")]
+            if let Some(capsule) = app.try_state::<capsule::Capsule>() {
+                capsule.stop();
+            }
         }
     });
 }

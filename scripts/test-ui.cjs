@@ -12,6 +12,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     const name = path.basename(new URL(req.url, 'http://localhost').pathname) || 'index.html';
     const file = path.join(root, name);
     if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
+    res.setHeader('Content-Security-Policy',JSON.parse(fs.readFileSync(path.join(root,'../src-tauri/tauri.conf.json'))).app.security.csp);
     res.setHeader('content-type', ({'.html':'text/html','.css':'text/css','.js':'application/javascript'})[path.extname(file)] || 'application/octet-stream');
     res.end(fs.readFileSync(file));
   });
@@ -41,7 +42,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
         core:{async invoke(command,args){
           if(command==='updates_info'||command==='updates_check')return {currentVersion:'0.1.1',latestVersion:'0.1.1',phase:command==='updates_check'?'current':'idle',message:command==='updates_check'?'当前已是最新版本 v0.1.1':'',automatic:true,prompt:false};
           if(command==='desktop_info')return structuredClone(window.desktopInfo);
-          if(command==='desktop_panel'||command==='desktop_panel_pin'||command==='desktop_action'){
+          if(command==='desktop_detail'||command==='desktop_panel'||command==='desktop_panel_pin'||command==='desktop_action'){
             window.desktopCalls.push({command,args:structuredClone(args)});
             if(command==='desktop_panel')window.desktopInfo.panelOpen=args.open;
             if(command==='desktop_panel_pin')window.desktopInfo.panelPinned=args.pinned;
@@ -78,6 +79,11 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await page.addInitScript(fixture);
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.locator('.stat-value').first().waitFor();
+    for(const [selector,size] of [['.titlebar-mark',16],['.brand .eye',34]]) {
+      const box=await page.locator(selector).boundingBox(),art=await page.locator(selector+' img').boundingBox();
+      assert.equal(box.width,size);assert.equal(box.height,size);
+      assert(art.x>=box.x&&art.y>=box.y&&art.x+art.width<=box.x+box.width&&art.y+art.height<=box.y+box.height,'Brand image stays inside chrome');
+    }
     fs.mkdirSync(output,{recursive:true});
     await page.screenshot({animations:'disabled',path:path.join(output,'overview-light.png'),fullPage:true});
     await page.emulateMedia({colorScheme:'dark'});
@@ -448,11 +454,14 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await floating.locator('[data-refresh=quotas]').click();
     await floating.waitForFunction(()=>window.engineCalls.some(c=>c.method==='quotas.refresh'));
     await floating.locator('#panel-detail').click();
-    await floating.waitForFunction(()=>window.desktopCalls.some(c=>c.command==='desktop_action'&&c.args.action==='open'));
+    await floating.waitForFunction(()=>window.desktopCalls.some(c=>c.command==='desktop_detail'));
     assert.equal(await floating.evaluate(()=>window.desktopInfo.panelOpen),false);
     await floating.mouse.move(1,1);
     await floating.waitForTimeout(800);
     await floating.locator('#ball').hover();
+    await floating.waitForTimeout(400);
+    assert.equal(await floating.evaluate(()=>window.desktopInfo.panelOpen),false);
+    await floating.locator('#ball').click();
     await floating.waitForFunction(()=>window.desktopInfo.panelOpen===true);
     await floating.keyboard.press('Escape');
     await floating.waitForFunction(()=>window.desktopInfo.panelOpen===false);

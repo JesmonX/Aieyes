@@ -69,3 +69,15 @@ body[data-view=panel] { display: block; justify-items: normal; user-select: text
 .panel-more-menu #panel-quit { width: 100%; height: auto; min-height: 34px; border-radius: var(--r-sm); color: var(--danger); border: 1px solid var(--border); }
 @media (prefers-reduced-transparency: reduce) { .panel-menu { backdrop-filter: none; } }
 @media (forced-colors: active) { .panel-more-menu, .panel-menu { background: Canvas; border-color: CanvasText; } }
+
+.panel-head .panel-mark { width:28px; height:28px; flex:0 0 28px; background:none; box-shadow:none; }
+.panel-head { padding:12px 16px; }
+.panel-body { padding:14px 16px; overscroll-behavior:contain; scrollbar-width:thin; }
+.panel-foot { padding:10px 16px; }
+#panel-refresh,.panel-foot button,.panel-more>summary { width:32px; height:32px; }
+.panel-tabs { flex:1; }
+.panel-tabs button { flex:1; min-height:30px; }
+.panel-body .card { border-radius:16px; box-shadow:var(--shadow-xs); }
+.panel-body .stat { box-shadow:var(--shadow-xs); }
+.panel-body .section-head { flex-wrap:wrap; }
+.panel-body .section-head h2 { margin-right:auto; }

@@ -1,6 +1,6 @@
 [package]
 name = "aieyes-desktop"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 default-run = "aieyes-desktop"
 
@@ -23,6 +23,7 @@ libloading = "0.7.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 window-vibrancy = "0.6.0"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_UI_Controls", "Win32_Graphics_Gdi", "Win32_Graphics_GdiPlus", "Win32_System_LibraryLoader"] }
 
 [features]
 release-tools = []

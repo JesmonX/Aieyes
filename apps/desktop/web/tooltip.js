@@ -20,6 +20,8 @@
   }
   function target(event) {
     const el = event.target instanceof Element ? event.target.closest('[title]') : null;
+    // The capsule is too small for an in-WebView tooltip; retain the OS tooltip.
+    if(el?.id==='ball')return null;
     return el && el.title.trim() ? el : null;
   }
   function place(el) {

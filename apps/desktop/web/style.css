@@ -444,3 +444,25 @@ body.editor-open { overflow: hidden; }
 .wake-task .actions { flex-wrap: wrap; }
 .wake-task h3 { overflow-wrap: anywhere; }
 #editor textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; }
+
+/* Brand assets have explicit boxes, independent of PNG intrinsic dimensions. */
+.titlebar-mark { width:16px; height:16px; flex:0 0 16px; }
+.brand .eye { width:34px; height:34px; flex:0 0 34px; min-width:0; }
+.brand-art { max-width:100%; max-height:100%; pointer-events:none; user-select:none; -webkit-user-drag:none; }
+button:hover,button:active { transform:none; }
+.credit-value,.sampling-row { display:grid; gap:6px; }
+.sampling-banner { display:flex; justify-content:space-between; gap:12px; width:100%; margin:0 0 14px; text-align:left; color:var(--accent); }
+.sampling-row { padding:12px 0; border-bottom:1px solid var(--border); }
+.active-filters { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+
+.quota-title { margin:0; align-items:center; list-style:none; min-height:32px; }
+.quota-title::-webkit-details-marker { display:none; }
+.quota-title h3 { margin:0; min-width:0; }
+.quota-chevron { color:var(--muted); margin-left:auto; }
+.quota-disclosure[open] .quota-chevron { transform:rotate(180deg); }
+.quota-content { padding-top:8px; }
+.quota-disclosure:not([open]) + .quota-content .quota-meta,
+.quota-disclosure:not([open]) + .quota-content .quota-reset { display:none; }
+.quota-disclosure:not([open]) + .quota-content .quota-windows { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.quota-window { min-width:0; }
+.quota-window .between { flex-wrap:wrap; gap:4px 8px; }

@@ -141,6 +141,7 @@ import Combine
             window.contentMinSize = NSSize(width: 490, height: 360)
             window.center(); estimateWindows[quota.id] = window
         }
+        window.title = quota.name + (model.creditEstimateMode ? " · credit 价值" : " · 7d 整周价值")
         window.contentView = NSHostingView(rootView: QuotaEstimateView(model: model, quota: quota, onClose: { [weak window] in window?.close() }))
         fitToVisibleScreen(window); window.deminiaturize(nil); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }

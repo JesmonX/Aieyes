@@ -7,7 +7,7 @@ function fixture(){
  const settings={accounts:[{id:'a',provider:'codex',name:'订阅账户',quotaEnabled:true}],sources:[{id:'s',provider:'codex',accountId:'a',name:'本机订阅',path:'/fixture',enabled:true}],hosts:[],modelMappings:{},proxy:{mode:'direct'},refreshSeconds:300,serverRefreshSeconds:10};
  window.testFeature={records:[],tasks:[],calls:[],failRemoval:false};
  window.__TAURI__={event:{async listen(){return()=>{};}},window:{getCurrentWindow:()=>({async isMaximized(){return false;},async onResized(){return()=>{};}})},core:{async invoke(command,args){
-  if(command==='desktop_info')return {platform:'windows',mode:'floating',effectiveMode:'floating',sessions:[],panelOpen:true};if(command==='desktop_panel_cursor_inside')return true;if(command!=='engine_call')return {};
+  if(command==='desktop_info')return {platform:'windows',mode:'floating',effectiveMode:'floating',summary:'Idle',sessions:[],panelOpen:true};if(command==='desktop_panel_cursor_inside')return true;if(command!=='engine_call')return {};
   const f=window.testFeature,{method,params}=args;f.calls.push({method,params});
   if(method==='hello')return {version:'test'};if(method==='settings.get')return settings;
   if(method==='dashboard')return {generatedAt:now,summary,quotas:[q],quotaOrder:['codex:a'],quotaEstimates:[],creditEstimates:f.records,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:[],pricingGaps:[]};
@@ -31,8 +31,41 @@ function fixture(){
  try{browser=await chromium.launch({headless:true});
  for(const surface of ['index.html','floating.html']){
   const page=await browser.newPage({viewport:{width:surface==='index.html'?1120:450,height:850}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
-  assert.equal(await page.getByText('1234.125',{exact:true}).count(),1);assert.equal(await page.getByText('Bank Reset · 2 次可用',{exact:true}).count(),1);
-  await page.locator('[data-credit-estimate]').click();await page.locator('#estimate-confirm').check();await page.locator('#estimate-start').click();await page.locator('#estimate-stop').waitFor();assert.match(await page.locator('#quota-dialog').textContent(),/500 credits：\$100.00 USD/);assert.match(await page.locator('#quota-dialog').textContent(),/1000 credits：\$200.00 USD/);await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();await page.locator('#quota-close').click();
+  assert.equal(await page.getByText('1234.13',{exact:true}).count(),1);assert.equal(await page.getByText('Bank Reset · 2 次可用',{exact:true}).count(),1);
+  assert.match(await page.locator('[data-credit-estimate]').textContent(),/^估算 credit 价值/);
+  assert.doesNotMatch(await page.locator('[data-credit-estimate]').textContent(),/500|1000/);
+  const decimals=[['1234.125','1234.13'],['1.005','1.01'],['10','10.00'],['0','0.00'],['-0.004','0.00'],['-1.005','-1.01'],['1e-3','0.00'],['9.999','10.00'],[null,'—'],['','—'],['NaN','—'],['12bad','—'],['Infinity','—']];
+  for(const [input,expected] of decimals)assert.equal(await page.evaluate(v=>creditAmount(v),input),expected);
+  const thresholds=[[100,'accent'],[30.01,'accent'],[30,'resource-warn'],[10,'resource-warn'],[9.99,'resource-high'],[0,'resource-high'],[null,'muted']];
+  for(const [remaining,tint] of thresholds){
+   const result=await page.evaluate(value=>{
+    const holder=document.createElement('div');holder.innerHTML=resourceBar(value,'7d 剩余额度',true);
+    return {color:holder.querySelector('span').style.background,amount:holder.firstChild.getAttribute('aria-valuenow'),text:quotaColor(value)};
+   },remaining);
+   assert.equal(result.color,'var(--'+tint+')');assert.equal(result.amount,remaining===null?null:String(remaining));
+  }
+  assert.equal(await page.evaluate(()=>resourceColor(95)),'var(--resource-high)','High CPU load must still be red');
+  assert.equal(await page.evaluate(()=>creditValue({status:'pending',valuePer1000:200})),'待确认');
+  await page.locator('.quota-disclosure summary').click();
+  await page.evaluate(()=>loadDashboard());
+  assert.equal(await page.locator('.quota-disclosure').evaluate(el=>el.open),false,'Refresh preserves collapsed quota');
+  await page.locator('.quota-disclosure summary').click();
+  await page.locator('[data-credit-estimate]').click();await page.locator('#estimate-confirm').check();await page.locator('#estimate-start').click();await page.locator('#estimate-stop').waitFor();assert.match(await page.locator('#quota-dialog').textContent(),/1000 credit ≈ \$200.00 USD/);assert.doesNotMatch(await page.locator('#quota-dialog').textContent(),/500 credits/);await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();await page.locator('#quota-close').click();
+  await page.locator('.credit-value').waitFor();
+  const previews=path.resolve(__dirname,'../.local/ui-previews');fs.mkdirSync(previews,{recursive:true});
+  for(const colorScheme of ['light','dark']){
+   await page.emulateMedia({colorScheme});await page.evaluate(()=>{document.querySelector('.panel-body')?.scrollTo(0,0);window.scrollTo(0,0);});
+   await page.screenshot({animations:'disabled',path:path.join(previews,'credit-'+surface+'-'+colorScheme+'.png')});
+  }
+  await page.emulateMedia({colorScheme:'light'});
+  if(surface==='floating.html'){
+   await page.evaluate(()=>{state.days=30;state.cost=true;render();});
+   await page.locator('.quota-disclosure summary').click();
+   await page.reload();await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
+   assert.equal(await page.evaluate(()=>state.days),30);assert.equal(await page.evaluate(()=>state.cost),true);
+   assert.equal(await page.locator('.quota-disclosure').evaluate(el=>el.open),false);
+   assert.equal(await page.evaluate(()=>testFeature.calls.some(c=>c.method==='creditEstimates.start')),false,'Recreating the panel does not start another sample');
+  }
   if(surface==='index.html'){
    await page.evaluate(()=>{state.page='settings';state.settingsTab='wakeups';renderSettings();});await page.locator('#wake-add:not([disabled])').waitFor();await page.locator('#wake-add').click();await page.locator('#wake-probe').click();await page.waitForFunction(()=>document.querySelector('#wake-model')?.value==='cheap-model');assert.equal(await page.locator('#wake-effort').inputValue(),'low');await page.locator('[name=times]').fill('08:00, 13:30');await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
    assert.equal(await page.evaluate(()=>testFeature.calls.filter(c=>c.method==='wakeups.deploy').length),0,'saving does not deploy');await page.locator('[data-wake-action=deploy]').click();await page.locator('[data-wake-action=disable]').waitFor();await page.locator('[data-wake-action=disable]').click();await page.locator('[data-wake-action=enable]').waitFor();await page.locator('[data-wake-action=enable]').click();await page.locator('[data-wake-action=status]').click();await page.getByText('已完成',{exact:true}).waitFor();await page.locator('#quota-close').click();

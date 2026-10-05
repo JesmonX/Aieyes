@@ -115,6 +115,25 @@ enum Format {
         if value >= 1_000 { return String(format: "%.1fK", value / 1_000) }
         return String(format: "%.0f", value)
     }
+    static func credits(_ value: String?) -> String {
+        guard let value else { return "—" }
+        let input=value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard input.range(of: #"^[+-]?[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?$"#, options:.regularExpression) != nil,
+              var decimal = Decimal(string: input, locale: Locale(identifier: "en_US_POSIX")), !decimal.isNaN else { return "—" }
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &decimal, 2, .plain)
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        formatter.minimumFractionDigits = 2; formatter.maximumFractionDigits = 2
+        return formatter.string(from: NSDecimalNumber(decimal: rounded)) ?? "—"
+    }
+    static func creditValue(_ estimate: QuotaEstimate) -> String {
+        if estimate.status == "pending" { return "待确认" }
+        guard let value=estimate.valuePer1000, value.isFinite else { return "样本不足" }
+        return "1000 credit ≈ " + money(value) + " USD"
+    }
     static func money(_ value: Double) -> String { String(format: "$%.2f", value) }
     static func percent(_ value: Double?) -> String { value.map { String(format: "%.1f%%", $0) } ?? "—" }
     static func bytes(_ value: Double?) -> String {

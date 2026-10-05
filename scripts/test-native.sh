@@ -14,3 +14,6 @@ swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Mo
 SPARKLE_FRAMEWORK="$PROJECT_DIR/.build/swift/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64"
 swiftc -module-cache-path .build/swift-module-cache -F "$SPARKLE_FRAMEWORK" -framework Sparkle -Xlinker -rpath -Xlinker "$SPARKLE_FRAMEWORK" apps/macos/Sources/Aieyes/Typography.swift apps/macos/Sources/Aieyes/AppUpdater.swift scripts/verify-updates.swift -o .build/verify-updates
 .build/verify-updates
+
+swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Models.swift scripts/verify-credit-format.swift -o .build/verify-credit-format
+.build/verify-credit-format

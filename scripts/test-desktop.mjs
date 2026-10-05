@@ -101,47 +101,29 @@ test('dragging snaps the ball without opening the panel; keyboard activation sti
   assert.equal(h.calls.filter(c=>c.command==='desktop_panel').length,0);
   await ball.dispatch('click',{detail:0}); await flush();
   assert.equal(h.calls.at(-1).command,'desktop_panel');
-  await ball.dispatch('contextmenu');
+  await h.document.dispatch('contextmenu',{target:{}});
   assert.equal(h.calls.at(-1).args.action,'menu');
 });
-test('hovering opens the panel, leaving closes it, and Esc or pin behave', async () => {
-  const h = harness('floating.js'); await flush();
-  const ball = h.element('#ball');
-  await ball.dispatch('pointerenter');
-  await h.runTimers(350); await flush();
-  assert.equal(h.calls.at(-1).command,'desktop_panel');
-  assert.equal(h.calls.at(-1).args.open,true);
-  assert.equal(h.document.body.dataset.view,'panel');
-  h.native.cursorInside = false;
-  await h.element('#panel').dispatch('pointerleave');
-  await h.runTimers(450); await flush();
-  assert.equal(h.info.panelOpen,false);
-  assert.equal(h.document.body.dataset.view,'ball');
-  // The hover that survives the window shrink must not reopen the panel immediately.
-  await ball.dispatch('pointerenter');
-  await h.runTimers(350); await flush();
-  assert.equal(h.calls.filter(c=>c.command==='desktop_panel'&&c.args.open).length,1);
-  await ball.dispatch('click',{detail:1}); await flush();
-  assert.equal(h.info.panelOpen,true);
-  await h.document.dispatch('keydown',{key:'Escape'}); await flush();
-  assert.equal(h.info.panelOpen,false);
-  await ball.dispatch('click',{detail:1}); await flush();
-  await h.element('#panel-pin').dispatch('click'); await flush();
-  assert.equal(h.info.panelPinned,true);
-  assert.equal(h.element('#panel-pin').dataset.pinned,'true');
-  assert.equal(h.element('#panel-pin')['aria-pressed'],'true');
-});
-test('hover is available again after dragging without requiring a click', async () => {
-  const h = harness('floating.js'); await flush();
+test('hover does not open; click, pin and Escape operate the panel', async () => {
+  const h=harness('floating.js');await flush();
   const ball=h.element('#ball');
-  await ball.dispatch('pointerenter');
-  await ball.dispatch('pointerdown',{button:0,clientX:20,clientY:20});
-  await ball.dispatch('pointermove',{buttons:1,clientX:34,clientY:20}); await flush();
-  await ball.dispatch('pointerup');
-  await ball.dispatch('click',{detail:1}); await flush();
+  await ball.dispatch('pointerenter');await h.runTimers(350);await flush();
   assert.equal(h.info.panelOpen,false);
-  await h.runTimers(650);
-  await h.runTimers(350); await flush();
+  await ball.dispatch('click',{detail:1});await flush();
+  assert.equal(h.info.panelOpen,true);
+  await h.element('#panel-pin').dispatch('click');await flush();
+  assert.equal(h.info.panelPinned,true);
+  await h.document.dispatch('keydown',{key:'Escape'});await flush();
+  assert.equal(h.info.panelOpen,false);
+  await ball.dispatch('click',{detail:1});await flush();
+  assert.equal(h.info.panelOpen,true);
+});
+test('drag capture cancellation never leaves the capsule stuck', async () => {
+  const h=harness('floating.js');await flush();
+  const ball=h.element('#ball');
+  await ball.dispatch('pointerdown',{button:0,clientX:20,clientY:20});
+  await h.document.dispatch('pointercancel');
+  await ball.dispatch('click',{detail:0});await flush();
   assert.equal(h.info.panelOpen,true);
 });
 test('the refresh menu runs scans, quotas, prices and host sampling', async () => {
@@ -154,16 +136,6 @@ test('the refresh menu runs scans, quotas, prices and host sampling', async () =
   await h.element('#panel-menu').dispatch('click',{target:{closest:()=>({dataset:{refresh:'quotas'}})}});
   assert.deepEqual(h.runs,['quotas']);
   assert.equal(h.element('#panel-menu').hidden,true);
-});
-test('hover closes after leaving both native rectangles without entering the panel', async () => {
-  const h = harness('floating.js'); await flush();
-  await h.element('#ball').dispatch('pointerenter');
-  await h.runTimers(350); await flush();
-  await h.runTimers(150);
-  assert.equal(h.info.panelOpen,true);
-  h.native.cursorInside = false;
-  for (let i = 0; i < 4; i++) { await h.runTimers(150); await flush(); }
-  assert.equal(h.info.panelOpen,false);
 });
 test('Escape closes the refresh menu before the panel and restores keyboard focus', async () => {
   const h = harness('floating.js'); await flush();

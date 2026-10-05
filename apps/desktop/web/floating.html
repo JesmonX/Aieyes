@@ -2,9 +2,9 @@
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aieyes 会话状态</title><link rel="stylesheet" href="tokens.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="floating.css"><link rel="stylesheet" href="panel.css"></head>
 <body data-view="ball">
-  <button id="ball" type="button" aria-label="打开 Aieyes 面板；拖动可移动，右键打开菜单" title="单击或悬停打开面板 · 拖动移动 · 右键菜单">
+  <button id="ball" type="button" aria-label="打开 Aieyes 面板；拖动可移动，右键打开菜单" title="单击打开面板 · 拖动移动 · 右键菜单">
     <span class="halo" aria-hidden="true"></span>
-    <img class="eye brand-art" src="brand.png" alt="" aria-hidden="true">
+    <img draggable="false" class="eye brand-art" src="brand.png" alt="" aria-hidden="true">
     <span id="phase" aria-live="polite">连接中</span><span id="count" hidden></span>
   </button>
   <div id="panel">
@@ -37,9 +37,8 @@
       <details id="panel-more" class="panel-more"><summary aria-label="更多操作" title="更多操作"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></summary><div class="panel-more-menu"><p>关闭面板后继续后台监测。</p><button type="button" id="panel-quit">退出 Aieyes</button></div></details>
     </footer>
   </div>
-  <script src="tooltip.js"></script>
+  <script src="webview-guards.js"></script><script src="tooltip.js"></script>
   <script src="sessions.js"></script>
-  <script>window.AIEYES_PANEL = true;</script>
   <script src="app.js"></script>
   <script src="floating.js"></script>
 </body>

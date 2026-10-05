@@ -7,6 +7,11 @@ enum Palette {
             ? NSColor(srgbRed: 0.55, green: 0.65, blue: 1, alpha: 1)
             : NSColor(srgbRed: 0.25, green: 0.36, blue: 0.82, alpha: 1)
     })
+    static func quota(_ used: Double) -> Color {
+        guard used.isFinite else { return .secondary }
+        let remaining = min(100, max(0, 100 - used))
+        return remaining < 10 ? .red : remaining <= 30 ? .orange : accent
+    }
     static let colors: [Color] = [accent, .teal, .purple, .orange, .pink, .cyan, .green, .indigo]
     static func model(_ name: String) -> Color {
         let hash = name.utf8.reduce(UInt32(2166136261)) { ($0 ^ UInt32($1)) &* 16777619 }
@@ -280,8 +285,8 @@ struct RootView: View {
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.creditEstimateMode = false; model.showEstimate?(quota) }, onCredits: { model.creditEstimateMode = true; model.showEstimate?(quota) }) } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.creditEstimateMode = false; model.showEstimate?(quota) }, onCredits: { model.creditEstimateMode = true; model.showEstimate?(quota) }) } } }
+            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.creditEstimateMode = false; model.showEstimate?(quota) }, onCredits: { model.creditEstimateMode = true; model.showEstimate?(quota) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.creditEstimateMode = false; model.showEstimate?(quota) }, onCredits: { model.creditEstimateMode = true; model.showEstimate?(quota) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } } }
         }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
     @ViewBuilder private var serverContent: some View {
@@ -493,10 +498,11 @@ struct QuotaCard: View {
     var estimate: QuotaEstimate?
     var onEstimate: (() -> Void)?
     var onCredits: (() -> Void)?
+    var creditEstimate: QuotaEstimate?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage private var expanded: Bool
-    init(quota: Quota, compact: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil, onCredits: (() -> Void)? = nil) {
-        self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits
+    init(quota: Quota, compact: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil) {
+        self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
         _expanded = AppStorage(wrappedValue: quota.provider != "agy", "quota.expanded." + quota.id)
     }
     var body: some View {
@@ -525,8 +531,8 @@ struct QuotaCard: View {
                     HStack(alignment: .top, spacing: 14) {
                         ForEach(quota.windows.filter { $0.groupLabel == group }.sorted { ($0.windowMinutes ?? 0) < ($1.windowMinutes ?? 0) }) { window in
                             VStack(alignment: .leading, spacing: 5) {
-                                HStack { Text(window.windowMinutes == 10080 ? "7d" : window.windowMinutes == 300 ? "5h" : window.name); Spacer(minLength: 2); Text(Format.percent(max(0, 100-window.usedPercent))).monospacedDigit() }.font(AppFont.secondary)
-                                ResourceBar(percent: 100-window.usedPercent, tint: window.usedPercent >= 90 ? .orange : Palette.accent)
+                                HStack { Text(window.windowMinutes == 10080 ? "7d" : window.windowMinutes == 300 ? "5h" : window.name); Spacer(minLength: 2); Text(Format.percent(max(0, 100-window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)) }.font(AppFont.secondary)
+                                ResourceBar(percent: 100-window.usedPercent, tint: Palette.quota(window.usedPercent))
                                 if expanded { Text(window.resetsAt.map { "重置 " + Format.date($0) } ?? "重置时间未知").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
                             }.frame(maxWidth: .infinity).accessibilityElement(children: .combine).accessibilityLabel(window.name + "，剩余 " + Format.percent(max(0, 100-window.usedPercent)))
                         }
@@ -553,10 +559,10 @@ struct QuotaCard: View {
             ForEach(quota.windows) { window in
                 VStack(spacing: 6) {
                     ViewThatFits(in: .horizontal) {
-                        HStack { Text(window.name); Spacer(minLength: 6); Text("剩余 " + Format.percent(max(0, 100 - window.usedPercent))).monospacedDigit() }
-                        VStack(alignment: .leading, spacing: 3) { Text(window.name); Text("剩余 " + Format.percent(max(0, 100 - window.usedPercent))).monospacedDigit() }.frame(maxWidth: .infinity, alignment: .leading)
+                        HStack { Text(window.name); Spacer(minLength: 6); Text("剩余 " + Format.percent(max(0, 100 - window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)) }
+                        VStack(alignment: .leading, spacing: 3) { Text(window.name); Text("剩余 " + Format.percent(max(0, 100 - window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)) }.frame(maxWidth: .infinity, alignment: .leading)
                     }.font(AppFont.secondary)
-                    ResourceBar(percent: 100 - window.usedPercent, tint: window.usedPercent >= 90 ? .orange : Palette.accent)
+                    ResourceBar(percent: 100 - window.usedPercent, tint: Palette.quota(window.usedPercent))
                     if expanded, let reset = window.resetsAt {
                         TimelineView(.periodic(from: .now, by: 60)) { context in
                             HStack {
@@ -582,9 +588,15 @@ struct QuotaCard: View {
             if quota.provider == "agy" && expanded { Text("整周估值需匹配的 Token 用量与模型组归属。").font(AppFont.secondary).foregroundStyle(.secondary) }
             if expanded && !sourceName.isEmpty { Text(sourceName).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
             if quota.provider == "codex" {
-                HStack { Text("Codex credits"); Spacer(); Text(quota.credits?.unlimited == true ? "无限" : quota.credits?.balance ?? (quota.credits?.hasCredits == true ? "有余额 · 数量未知" : "—")).monospacedDigit() }.font(AppFont.secondary)
+                HStack { Text("Codex credits"); Spacer(); Text(quota.credits?.unlimited == true ? "无限" : quota.credits?.balance.map { Format.credits($0) } ?? (quota.credits?.hasCredits == true ? "有余额 · 数量未知" : "—")).monospacedDigit() }.font(AppFont.secondary)
                 if let stamp = quota.creditsUpdatedAt { Text("更新于 \(Format.date(stamp))").font(AppFont.secondary).foregroundStyle(.secondary) }
-                if let onCredits { Button("估算 500 / 1000 credits 的 API 价值", action: onCredits).buttonStyle(.plain).foregroundStyle(Palette.accent).font(AppFont.secondary) }
+                if let onCredits { Button("估算 credit 价值", action: onCredits).buttonStyle(.plain).foregroundStyle(Palette.accent).font(AppFont.secondary) }
+            }
+            if let creditEstimate {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(Format.creditValue(creditEstimate)).monospacedDigit()
+                    Text(creditEstimate.statusLabel + " · API 等价价值").foregroundStyle(.secondary)
+                }.font(AppFont.secondary)
             }
             if expanded, let bank = quota.bankReset {
                 Divider().opacity(0.5)

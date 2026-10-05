@@ -83,11 +83,11 @@ struct QuotaEstimateView: View {
     private var eligible: Bool { if credits { return quota.credits?.balance != nil && quota.credits?.unlimited == false }; return quota.provider != "agy" && (windows.count == 1 || (quota.provider == "claude" && windows.contains { $0.id == "seven_day" || $0.name == "7d" })) }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack { VStack(alignment: .leading, spacing: 4) { Text(credits ? "Credits 价值" : "7d 整周价值").font(AppFont.title); Text(quota.name).foregroundStyle(.secondary) }; Spacer(); Button("关闭") { close() }.keyboardShortcut(.cancelAction) }
-            if quota.provider == "codex" { Picker("采样口径", selection: $model.creditEstimateMode) { Text("7d 整周").tag(false); Text("500 / 1000 credits").tag(true) }.pickerStyle(.segmented).disabled(busy) }
+            HStack { VStack(alignment: .leading, spacing: 4) { Text(credits ? "credit 价值" : "7d 整周价值").font(AppFont.title); Text(quota.name).foregroundStyle(.secondary) }; Spacer(); Button("关闭") { close() }.keyboardShortcut(.cancelAction) }
+            if quota.provider == "codex" { Picker("采样口径", selection: $model.creditEstimateMode) { Text("7d 整周").tag(false); Text("credit 价值").tag(true) }.pickerStyle(.segmented).disabled(busy) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(credits ? "按实际 credits 扣款与样本 API 等价成本，估算 500 和 1000 credits 的价值，不是可兑换余额。" : "按采样期间的 API 等价成本与额度消耗比例，估算一整周额度的价值。结果取决于模型组合，并非可兑换余额。").foregroundStyle(.secondary)
+                    Text(credits ? "按实际 credits 扣款与样本 API 等价成本，估算 credit 的 API 等价价值，不是可兑换余额。" : "按采样期间的 API 等价成本与额度消耗比例，估算一整周额度的价值。结果取决于模型组合，并非可兑换余额。").foregroundStyle(.secondary)
                     if let current {
                         result(current)
                         if current.status == "pending" {
@@ -127,15 +127,15 @@ struct QuotaEstimateView: View {
     }
     private func result(_ e: QuotaEstimate) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack { Text(e.statusLabel).foregroundStyle(e.status == "pending" ? .orange : Palette.accent); Spacer(); Text(e.kind == "credits" ? "500 credits：\(e.valuePer500.map(Format.money) ?? "—") USD\n1000 credits：\(e.valuePer1000.map(Format.money) ?? "—") USD" : e.weeklyValue.map { Format.money($0) + " USD" } ?? "—").font(AppFont.section).monospacedDigit() }
+            HStack { Text(e.statusLabel).foregroundStyle(e.status == "pending" ? .orange : Palette.accent); Spacer(); Text(e.kind == "credits" ? Format.creditValue(e) : e.weeklyValue.map { Format.money($0) + " USD" } ?? "—").font(AppFont.section).monospacedDigit() }
             Text(e.calculationNote).font(AppFont.secondary).foregroundStyle(.secondary)
             DisclosureGroup("计算依据") {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("\(Format.date(e.startedAt)) → \(Format.date(e.checkpointAt))")
-                    Text("\(e.windowName) · 消耗 \(e.kind == "credits" ? String(format: "%.3f credits", e.consumedCredits ?? 0) : Format.percent(e.consumedPercent)) · 样本成本 \(Format.money(e.cost)) USD")
+                    Text("\(e.windowName) · 消耗 \(e.kind == "credits" ? Format.credits(e.consumedCredits.map { String($0) }) + " credit" : Format.percent(e.consumedPercent)) · 样本成本 \(Format.money(e.cost)) USD")
                     Text("计价 Token：\(Format.compact(e.pricedTokens)) / \(Format.compact(e.totalTokens))")
                     Text(e.sourceNames.joined(separator: "、"))
-                    Text(e.kind == "credits" ? "每 N credits 估值 = 样本成本 × N ÷ 消耗 credits；结束后价格依据固定。" : "整周估值 = 样本 API 等价成本 × 100 ÷ 消耗百分点；结束后价格依据固定。")
+                    Text(e.kind == "credits" ? "1000 credit 估值 = 样本成本 × 1000 ÷ 消耗 credit；结束后价格依据固定。" : "整周估值 = 样本 API 等价成本 × 100 ÷ 消耗百分点；结束后价格依据固定。")
                     ForEach(e.prices ?? []) { price in
                         Text("缓存读取 \(price.cacheRead.map { Format.money($0 * 1_000_000) } ?? "—") · 缓存写入 \(price.cacheWrite.map { Format.money($0 * 1_000_000) } ?? "—") / 百万 Token")
                         Text("价格依据：" + price.id + " · " + Format.date(price.fetchedAt))

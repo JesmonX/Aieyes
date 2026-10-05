@@ -47,6 +47,7 @@ jobs:
       - name: JavaScript syntax
         shell: bash
         run: |
+          node --check apps/desktop/web/webview-guards.js
           node --check apps/desktop/web/app.js
           node --check apps/desktop/web/tooltip.js
           node --check apps/desktop/web/desktop.js
@@ -70,6 +71,9 @@ jobs:
           path: .local/ui-previews/*.png
           include-hidden-files: true
           if-no-files-found: ignore
+      - name: Windows shell tests
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
       - name: Optional Rust tests
         if: inputs.full_checks == true
         shell: bash
