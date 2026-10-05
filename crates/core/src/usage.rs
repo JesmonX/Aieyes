@@ -260,6 +260,19 @@ pub fn codex_quota(source: &Source, value: &Value, stamp: i64, origin: &str) -> 
             }
         }
     }
+    // Credits are shared balances, never a sum of model-specific buckets.
+    let primary = value.get("rateLimits").unwrap_or(value);
+    let credit = primary
+        .get("credits")
+        .filter(|v| v.is_object())
+        .or_else(|| {
+            maps.and_then(|m| m.get("codex"))
+                .and_then(|v| v.get("credits"))
+                .filter(|v| v.is_object())
+        });
+    q.credits = credit.and_then(|v| serde_json::from_value(v.clone()).ok());
+    q.credits_updated_at = q.credits.as_ref().map(|_| stamp);
+    q.credits_origin = q.credits.as_ref().map(|_| origin.into());
     q.bank_reset = value
         .get("rateLimitResetCredits")
         .filter(|v| v.is_object())

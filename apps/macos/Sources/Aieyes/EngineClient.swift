@@ -118,7 +118,7 @@ struct Acknowledgement: Decodable { }
     @Published private(set) var estimateBusy = Set<String>()
     @Published private(set) var estimateErrors: [String: String] = [:]
     // Dashboard estimates are global, even when usage is filtered by account/model.
-    var runningEstimates: [QuotaEstimate] { (dashboard.quotaEstimates ?? []).filter { $0.status == "active" || $0.status == "pending" } }
+    var runningEstimates: [QuotaEstimate] { ((dashboard.quotaEstimates ?? []) + (dashboard.creditEstimates ?? [])).filter { $0.status == "active" || $0.status == "pending" } }
     var samplingNeedsAttention: Bool { runningEstimates.contains { $0.status == "pending" } }
     var samplingSummary: String {
         let active = runningEstimates.filter { $0.status == "active" }.count
@@ -149,7 +149,9 @@ struct Acknowledgement: Decodable { }
     var showDetail: (() -> Void)?
     var showEstimate: ((Quota) -> Void)?
     var showSampling: (() -> Void)?
+    @Published var creditEstimateMode = false
     func openEstimate(_ estimate: QuotaEstimate) async {
+        creditEstimateMode = estimate.kind == "credits"
         do {
             // Use an unfiltered read so changing the usage filter cannot hide sampling controls.
             let snapshot: Dashboard = try await engine.call("dashboard", params: ["days": 1])
@@ -196,15 +198,15 @@ struct Acknowledgement: Decodable { }
         let _: [String] = try await engine.call("quotas.order.set", params: ["keys": keys])
         await reload()
     }
-    func estimateAction(_ action: String, params: [String: Any]) async throws {
-        let _: QuotaEstimate = try await engine.call("quotaEstimates." + action, params: params)
+    func estimateAction(_ action: String, params: [String: Any], credits: Bool = false) async throws {
+        let _: QuotaEstimate = try await engine.call((credits ? "creditEstimates." : "quotaEstimates.") + action, params: params)
         await reload()
     }
-    func performEstimate(_ action: String, accountKey: String, params: [String: Any]) async -> Bool {
+    func performEstimate(_ action: String, accountKey: String, params: [String: Any], credits: Bool = false) async -> Bool {
         guard !estimateBusy.contains(accountKey) else { return false }
         estimateBusy.insert(accountKey); estimateErrors[accountKey] = nil
         defer { estimateBusy.remove(accountKey) }
-        do { try await estimateAction(action, params: params); return true }
+        do { try await estimateAction(action, params: params, credits: credits); return true }
         catch { estimateErrors[accountKey] = error.localizedDescription; await reload(); return false }
     }
     func scan() async {

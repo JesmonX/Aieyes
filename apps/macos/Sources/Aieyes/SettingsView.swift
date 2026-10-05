@@ -31,7 +31,7 @@ struct SettingsView: View {
             }.padding(22)
             if let message = model.settingsMessage ?? model.message { HStack { Text(message).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.settingsMessage = nil; model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭提示") }.padding(.horizontal, 22).padding(.bottom, 10) }
             HStack(spacing: 6) {
-                ForEach([("sources", "数据源", "tray.full"), ("servers", "服务器", "server.rack"), ("prices", "价格", "dollarsign.circle"), ("general", "通用", "slider.horizontal.3")], id: \.0) { key, title, icon in
+                ForEach([("sources", "数据源", "tray.full"), ("servers", "服务器", "server.rack"), ("prices", "价格", "dollarsign.circle"), ("wakeups", "定时唤醒", "clock"), ("general", "通用", "slider.horizontal.3")], id: \.0) { key, title, icon in
                     Button { model.settingsTab = key } label: {
                         Label(title, systemImage: icon).font(.system(size: 15, weight: model.settingsTab == key ? .semibold : .regular)).frame(maxWidth: .infinity).padding(.vertical, 10)
                             .foregroundStyle(model.settingsTab == key ? Palette.accent : .secondary)
@@ -42,6 +42,7 @@ struct SettingsView: View {
             Divider().opacity(0.5)
             Group {
                 switch model.settingsTab {
+                case "wakeups": WakeupsView(model: model)
                 case "sources", "accounts": sources
                 case "servers": servers
                 case "prices": prices

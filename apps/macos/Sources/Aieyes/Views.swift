@@ -280,8 +280,8 @@ struct RootView: View {
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota) }) } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota) }) } } }
+            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.creditEstimateMode = false; model.showEstimate?(quota) }, onCredits: { model.creditEstimateMode = true; model.showEstimate?(quota) }) } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.creditEstimateMode = false; model.showEstimate?(quota) }, onCredits: { model.creditEstimateMode = true; model.showEstimate?(quota) }) } } }
         }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
     @ViewBuilder private var serverContent: some View {
@@ -492,10 +492,11 @@ struct QuotaCard: View {
     var sourceName = ""
     var estimate: QuotaEstimate?
     var onEstimate: (() -> Void)?
+    var onCredits: (() -> Void)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage private var expanded: Bool
-    init(quota: Quota, compact: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil) {
-        self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate
+    init(quota: Quota, compact: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil, onCredits: (() -> Void)? = nil) {
+        self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits
         _expanded = AppStorage(wrappedValue: quota.provider != "agy", "quota.expanded." + quota.id)
     }
     var body: some View {
@@ -580,6 +581,11 @@ struct QuotaCard: View {
             }
             if quota.provider == "agy" && expanded { Text("整周估值需匹配的 Token 用量与模型组归属。").font(AppFont.secondary).foregroundStyle(.secondary) }
             if expanded && !sourceName.isEmpty { Text(sourceName).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
+            if quota.provider == "codex" {
+                HStack { Text("Codex credits"); Spacer(); Text(quota.credits?.unlimited == true ? "无限" : quota.credits?.balance ?? (quota.credits?.hasCredits == true ? "有余额 · 数量未知" : "—")).monospacedDigit() }.font(AppFont.secondary)
+                if let stamp = quota.creditsUpdatedAt { Text("更新于 \(Format.date(stamp))").font(AppFont.secondary).foregroundStyle(.secondary) }
+                if let onCredits { Button("估算 500 / 1000 credits 的 API 价值", action: onCredits).buttonStyle(.plain).foregroundStyle(Palette.accent).font(AppFont.secondary) }
+            }
             if expanded, let bank = quota.bankReset {
                 Divider().opacity(0.5)
                 DisclosureGroup {
@@ -594,7 +600,7 @@ struct QuotaCard: View {
             if let error = quota.error {
                 Text(expanded ? error : "限额更新失败 · 展开查看").font(AppFont.secondary).foregroundStyle(.orange).help(error)
             }
-            if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.error == nil { Text("暂无限额数据").font(AppFont.secondary).foregroundStyle(.secondary) }
+            if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.error == nil && quota.credits == nil { Text("暂无限额数据").font(AppFont.secondary).foregroundStyle(.secondary) }
         }
     }
 }

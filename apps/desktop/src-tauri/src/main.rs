@@ -16,6 +16,7 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
             Err(error) => ("desktop:hosts-error", Value::String(error.clone())),
         }];
     }
+    if method.starts_with("creditEstimates.") || method.starts_with("wakeups.") { return vec![("desktop:data-changed", Value::String(method.into()))]; }
     if result.is_err() {
         // Sampling may have persisted a pending checkpoint before a later sync fails.
         if matches!(
@@ -98,6 +99,8 @@ fn main() {
             let root = std::env::var_os("AIEYES_DATA_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or(app.path().app_data_dir()?);
+            let runner = app.path().resource_dir()?.join("binaries").join(if cfg!(windows) { "aieyes-core.exe" } else { "aieyes-core" });
+            aieyes_core::wakeups::set_runner_path(runner);
             app.manage(Shared(
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),

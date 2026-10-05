@@ -8,6 +8,13 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Estimate {
+    pub kind: String,
+    pub baseline_balance: Option<String>,
+    pub checkpoint_balance: Option<String>,
+    pub consumed_credits: f64,
+    pub value_per500: Option<f64>,
+    pub value_per1000: Option<f64>,
+    pub checkpoint_windows: Vec<QuotaWindow>,
     pub id: String,
     pub account_key: String,
     pub window_id: String,
@@ -31,6 +38,46 @@ pub struct Estimate {
     pub weekly_value: Option<f64>,
     pub calculation_note: String,
     pub prices: Vec<Value>,
+}
+
+impl Estimate {
+    pub fn is_credit(&self) -> bool {
+        self.kind == "credits"
+    }
+}
+
+// Exact subtraction before converting the small delta to a display/valuation float.
+// Reject unsupported precision rather than rounding a balance into a false debit.
+pub fn credit_units(value: &str) -> Option<i128> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || fraction.len() > 18
+        || !whole.bytes().all(|c| c.is_ascii_digit())
+        || !fraction.bytes().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    whole
+        .parse::<i128>()
+        .ok()?
+        .checked_mul(1_000_000_000_000_000_000)?
+        .checked_add(if fraction.is_empty() {
+            0
+        } else {
+            fraction
+                .parse::<i128>()
+                .ok()?
+                .checked_mul(10_i128.pow(18 - fraction.len() as u32))?
+        })
+}
+fn credit_balance(q: &QuotaSnapshot) -> Option<&str> {
+    let c = q.credits.as_ref()?;
+    if c.unlimited {
+        return None;
+    }
+    let balance = c.balance.as_deref()?;
+    credit_units(balance)?;
+    Some(balance)
 }
 
 pub fn window_id(w: &QuotaWindow) -> &str {
@@ -136,7 +183,7 @@ impl Store {
     pub fn estimates(&self) -> Result<Vec<Estimate>> {
         let mut stmt = self
             .db
-            .prepare("SELECT payload FROM quota_estimates ORDER BY rowid DESC")?;
+            .prepare("SELECT payload FROM (SELECT payload FROM quota_estimates UNION ALL SELECT payload FROM credit_estimates) ORDER BY json_extract(payload,'$.startedAt') DESC")?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -148,7 +195,7 @@ impl Store {
         let raw: String = self
             .db
             .query_row(
-                "SELECT payload FROM quota_estimates WHERE id=?1",
+                "SELECT payload FROM quota_estimates WHERE id=?1 UNION ALL SELECT payload FROM credit_estimates WHERE id=?1",
                 [id],
                 |r| r.get(0),
             )
@@ -156,7 +203,12 @@ impl Store {
         Ok(serde_json::from_str(&raw)?)
     }
     pub(crate) fn save_estimate(&self, e: &Estimate) -> Result<()> {
-        self.db.execute("INSERT INTO quota_estimates VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET status=excluded.status,payload=excluded.payload",params![e.id,e.account_key,e.status,serde_json::to_string(e)?])?;
+        let table = if e.is_credit() {
+            "credit_estimates"
+        } else {
+            "quota_estimates"
+        };
+        self.db.execute(&format!("INSERT INTO {table} VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET status=excluded.status,payload=excluded.payload"),params![e.id,e.account_key,e.status,serde_json::to_string(e)?])?;
         Ok(())
     }
     pub fn reconcile_estimates(&self, settings: &Settings) -> Result<()> {
@@ -206,6 +258,10 @@ impl Store {
             .into_iter()
             .filter(|e| e.account_key == key && e.status == "active")
         {
+            if e.is_credit() {
+                self.observe_credit(&mut e, q)?;
+                continue;
+            }
             let w = q.windows.iter().find(|w| window_id(w) == e.window_id);
             let config = source_config(&self.settings()?, &e.source_ids, &e.account_key);
             let failure = if q.error.is_some() {
@@ -249,7 +305,17 @@ impl Store {
         e.excluded_api_tokens = 0;
         e.prices.clear();
         e.weekly_value = None;
+        e.value_per500 = None;
+        e.value_per1000 = None;
         e.consumed_percent = e.checkpoint_percent - e.baseline_percent;
+        e.consumed_credits = e
+            .baseline_balance
+            .as_deref()
+            .and_then(credit_units)
+            .zip(e.checkpoint_balance.as_deref().and_then(credit_units))
+            .and_then(|(a, b)| a.checked_sub(b))
+            .map(|n| n as f64 / 1e18)
+            .unwrap_or(0.0);
         let mut boundary = false;
         // EXISTS avoids multiplying events observed through several selected sources.
         let mut stmt = self.db.prepare("SELECT e.payload,e.cost,e.priced_tokens,e.price FROM events e WHERE e.provider=?1 AND e.account_id=?2 AND e.stamp>?3 AND e.stamp<=?4 AND EXISTS(SELECT 1 FROM event_sources s WHERE s.event_id=e.id AND s.source_id IN (SELECT value FROM json_each(?5)))")?;
@@ -299,12 +365,19 @@ impl Store {
             "暂无可计入的订阅用量"
         } else if e.priced_tokens != e.total_tokens {
             "缺少模型价格，请补全价格后重新计算本次采样"
-        } else if e.consumed_percent + 0.000001 < 5.0 {
+        } else if e.is_credit() && e.consumed_credits < 5.0 {
+            "样本不足：至少消耗 5 credits"
+        } else if !e.is_credit() && e.consumed_percent + 0.000001 < 5.0 {
             "样本不足：至少消耗 5 个百分点"
         } else if !e.cost.is_finite() || e.cost < 0.0 {
             "价格数据无效"
         } else {
-            e.weekly_value = Some(e.cost * 100.0 / e.consumed_percent);
+            if e.is_credit() {
+                e.value_per500 = Some(e.cost * 500.0 / e.consumed_credits);
+                e.value_per1000 = Some(e.cost * 1000.0 / e.consumed_credits);
+            } else {
+                e.weekly_value = Some(e.cost * 100.0 / e.consumed_percent);
+            }
             "手动采样估值 · 按本次模型组合估算"
         }
         .into();
@@ -317,6 +390,9 @@ impl Store {
         ids: Vec<String>,
         previous: Option<&str>,
     ) -> Result<Estimate> {
+        if window == "credits" {
+            return self.begin_credit(q, ids, previous);
+        }
         let w = q
             .windows
             .iter()
@@ -339,7 +415,7 @@ impl Store {
         if let Some(id) = previous {
             let mut old = self.estimate(id)?;
             ensure!(
-                old.account_key == key && old.status == "pending",
+                old.account_key == key && old.status == "pending" && !old.is_credit(),
                 "只有待确认采样可以开启新一段"
             );
             old.status = "completed".into();
@@ -350,7 +426,7 @@ impl Store {
             !self
                 .estimates()?
                 .iter()
-                .any(|e| e.account_key == key && e.status != "completed"),
+                .any(|e| e.account_key == key && e.status != "completed" && !e.is_credit()),
             "该账户已有采样，请先结束"
         );
         let stamp = std::time::SystemTime::now()
@@ -415,14 +491,28 @@ impl Engine {
         Ok(())
     }
     pub fn estimate_call(&mut self, method: &str, p: Value) -> Result<Value> {
-        if method == "quotaEstimates.list" {
-            return Ok(serde_json::to_value(self.store.estimates()?)?);
+        let credits = method.starts_with("creditEstimates.");
+        let action = method.split_once('.').map(|(_, a)| a).unwrap_or("");
+        if action == "list" {
+            return Ok(serde_json::to_value(
+                self.store
+                    .estimates()?
+                    .into_iter()
+                    .filter(|e| e.is_credit() == credits)
+                    .collect::<Vec<_>>(),
+            )?);
         }
         let id = p["id"].as_str().unwrap_or("");
-        if method == "quotaEstimates.get" {
+        if !id.is_empty() {
+            ensure!(
+                self.store.estimate(id)?.is_credit() == credits,
+                "采样类型不匹配"
+            );
+        }
+        if action == "get" {
             return Ok(serde_json::to_value(self.store.estimate(id)?)?);
         }
-        if method == "quotaEstimates.stop" {
+        if action == "stop" {
             let e = self.store.estimate(id)?;
             if e.status == "completed" {
                 return Ok(serde_json::to_value(e)?);
@@ -449,10 +539,7 @@ impl Engine {
             }
             return Ok(serde_json::to_value(self.store.finish_estimate(id)?)?);
         }
-        ensure!(
-            ["quotaEstimates.start", "quotaEstimates.restart"].contains(&method),
-            "未知估值操作"
-        );
+        ensure!(["start", "restart"].contains(&action), "未知估值操作");
         ensure!(
             p["confirmed"] == true,
             "请确认采样期间仅使用目标订阅，且已纳入所有用量来源"
@@ -466,10 +553,14 @@ impl Engine {
             .as_str()
             .or(old.as_ref().map(|e| e.account_key.as_str()))
             .context("请选择账户")?;
-        let window = p["windowId"]
-            .as_str()
-            .or(old.as_ref().map(|e| e.window_id.as_str()))
-            .context("请选择 7d 窗口")?;
+        let window = if credits {
+            "credits"
+        } else {
+            p["windowId"]
+                .as_str()
+                .or(old.as_ref().map(|e| e.window_id.as_str()))
+                .context("请选择 7d 窗口")?
+        };
         let mut ids: Vec<String> = if let Some(ids) = p.get("sourceIds") {
             serde_json::from_value(ids.clone())?
         } else {
@@ -494,5 +585,118 @@ impl Engine {
             ids,
             old.as_ref().map(|e| e.id.as_str()),
         )?)?)
+    }
+}
+
+impl Store {
+    fn observe_credit(&self, e: &mut Estimate, q: &QuotaSnapshot) -> Result<()> {
+        if q.error.is_none() && q.updated_at <= e.checkpoint_at {
+            return Ok(());
+        }
+        let balance = credit_balance(q);
+        let config = source_config(&self.settings()?, &e.source_ids, &e.account_key);
+        let restored = q.windows.len() != e.checkpoint_windows.len()
+            || e.checkpoint_windows.iter().any(|old| {
+                q.windows
+                    .iter()
+                    .find(|w| window_id(w) == window_id(old))
+                    .is_none_or(|w| {
+                        w.resets_at != old.resets_at
+                            || !w.used_percent.is_finite()
+                            || w.used_percent + 0.001 < old.used_percent
+                    })
+            });
+        let reason = if q.error.is_some() {
+            Some("credits 查询失败，请确认后开始新一段")
+        } else if config.as_ref().ok() != Some(&e.source_config) {
+            Some("数据源配置发生变化")
+        } else if balance.is_none() {
+            Some("credits 余额未知或变为无限额度")
+        } else if balance.and_then(credit_units)
+            > e.checkpoint_balance.as_deref().and_then(credit_units)
+        {
+            Some("credits 余额回升，可能已充值；请开始新一段")
+        } else if restored {
+            Some("订阅额度恢复或额度池变化；请确认仅消耗 credits 后开始新一段")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            e.status = "pending".into();
+            e.reason = reason.into();
+        } else {
+            e.checkpoint_at = q.updated_at;
+            e.checkpoint_balance = balance.map(str::to_owned);
+            e.checkpoint_windows = q.windows.clone();
+            self.calculate_estimate(e)?;
+        }
+        self.save_estimate(e)
+    }
+    fn begin_credit(
+        &self,
+        q: &QuotaSnapshot,
+        ids: Vec<String>,
+        previous: Option<&str>,
+    ) -> Result<Estimate> {
+        ensure!(q.provider == "codex", "仅 Codex 支持 credits 采样");
+        ensure!(
+            q.error.is_none() && q.origin != "log" && (now() - q.updated_at).abs() <= 120,
+            "需要新的实时 credits 快照"
+        );
+        let balance = credit_balance(q).context("需要明确、有限的 credits 余额")?;
+        let key = format!("{}:{}", q.provider, q.account_id);
+        let settings = self.settings()?;
+        let config = source_config(&settings, &ids, &key)?;
+        let tx = self.db.unchecked_transaction()?;
+        if let Some(id) = previous {
+            let mut old = self.estimate(id)?;
+            ensure!(
+                old.is_credit() && old.account_key == key && old.status == "pending",
+                "只有待确认的 credits 采样可以重开"
+            );
+            old.status = "completed".into();
+            old.ended_at = Some(old.checkpoint_at);
+            self.save_estimate(&old)?;
+        }
+        ensure!(
+            !self
+                .estimates()?
+                .iter()
+                .any(|e| e.is_credit() && e.account_key == key && e.status != "completed"),
+            "该账户已有 credits 采样，请先结束"
+        );
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let e = Estimate {
+            id: format!("credit-sample-{stamp}"),
+            kind: "credits".into(),
+            account_key: key,
+            window_id: "credits".into(),
+            window_name: "Credits".into(),
+            source_config: config,
+            source_names: ids
+                .iter()
+                .filter_map(|id| {
+                    settings
+                        .sources
+                        .iter()
+                        .find(|s| &s.id == id)
+                        .map(|s| s.name.clone())
+                })
+                .collect(),
+            source_ids: ids,
+            status: "active".into(),
+            started_at: q.updated_at,
+            checkpoint_at: q.updated_at,
+            baseline_balance: Some(balance.into()),
+            checkpoint_balance: Some(balance.into()),
+            checkpoint_windows: q.windows.clone(),
+            calculation_note: "样本不足：至少消耗 5 credits".into(),
+            ..Default::default()
+        };
+        self.save_estimate(&e)?;
+        tx.commit()?;
+        Ok(e)
     }
 }

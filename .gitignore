@@ -16,3 +16,5 @@ node_modules/
 *.pem
 *.key
 /apps/desktop/src-tauri/gen/
+
+/apps/desktop/src-tauri/binaries/aieyes-core*

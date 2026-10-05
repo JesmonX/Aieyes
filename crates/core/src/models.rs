@@ -286,9 +286,21 @@ pub struct Balance {
     pub topped_up: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CreditsSnapshot {
+    #[serde(alias = "has_credits")]
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct QuotaSnapshot {
+    pub credits: Option<CreditsSnapshot>,
+    pub credits_updated_at: Option<i64>,
+    pub credits_origin: Option<String>,
     pub source_id: String,
     pub account_id: String,
     pub provider: String,
@@ -359,6 +371,7 @@ pub struct Dashboard {
     pub quotas: Vec<QuotaSnapshot>,
     pub quota_order: Vec<String>,
     pub quota_estimates: Vec<crate::estimates::Estimate>,
+    pub credit_estimates: Vec<crate::estimates::Estimate>,
     pub sources: Vec<Value>,
     pub price_updated_at: Option<i64>,
 }

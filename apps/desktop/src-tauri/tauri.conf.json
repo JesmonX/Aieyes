@@ -1,10 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Aieyes",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "identifier": "app.aieyes.desktop",
   "build": {
-    "frontendDist": "../web"
+    "frontendDist": "../web",
+    "beforeBuildCommand": "node ../../scripts/prepare-wakeup.cjs"
   },
   "app": {
     "withGlobalTauri": true,
@@ -31,7 +32,10 @@
       "icons/icon.icns"
     ],
     "shortDescription": "Agent usage and SSH server monitor",
-    "category": "DeveloperTool"
+    "category": "DeveloperTool",
+    "resources": [
+      "binaries/*"
+    ]
   },
   "plugins": {
     "updater": {

@@ -254,7 +254,7 @@ import Combine
                 }
             }
             try await capture(TokenBreakdown(tokens: model.dashboard.summary.tokens, inline: true), size: NSSize(width: 414, height: 90), dark: false, to: root.appendingPathComponent("token-breakdown.png"))
-            for tab in ["sources", "servers", "prices", "general"] {
+            for tab in ["sources", "servers", "prices", "wakeups", "general"] {
                 model.settingsTab = tab
                 try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: false, to: root.appendingPathComponent("settings-\(tab).png"))
             }
@@ -278,6 +278,9 @@ import Combine
                 }
                 if let account = model.dashboard.quotas.first(where: { $0.provider == "codex" }) {
                     try await capture(QuotaEstimateView(model: model, quota: account), size: NSSize(width: 518, height: 620), dark: dark, to: root.appendingPathComponent("quota-estimate-\(dark ? "dark" : "light").png"))
+                    model.creditEstimateMode = true
+                    try await capture(QuotaEstimateView(model: model, quota: account), size: NSSize(width: 518, height: 620), dark: dark, to: root.appendingPathComponent("credit-estimate-\(dark ? "dark" : "light").png"))
+                    model.creditEstimateMode = false
                 }
             }
             try await capture(QuotaOrderView(model: model), size: NSSize(width: 488, height: 430), dark: false, to: root.appendingPathComponent("quota-order.png"))

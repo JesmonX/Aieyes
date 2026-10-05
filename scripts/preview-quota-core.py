@@ -15,7 +15,11 @@ usage=dict(key='',tokens=tokens,total=70000,cost=2.4,pricedTokens=70000,events=1
 price=dict(id='test-model',name='测试模型',input=0.00001,output=0.00003,cacheRead=0.000001,cacheWrite=0.00001,fetchedAt=stamp)
 estimate=dict(id='preview',accountKey='codex:codex',windowId='codex:secondary',windowName='7d',sourceIds=['codex-source'],sourceNames=['本机 Codex'],status='pending',reason='额度已重置或异常回升；确认后开始新一段',startedAt=stamp-3600,checkpointAt=stamp-600,endedAt=None,consumedPercent=12,cost=2.4,totalTokens=70000,pricedTokens=70000,weeklyValue=20,calculationNote='手动采样估值 · 按本次模型组合估算',prices=[price])
 dashboard=dict(generatedAt=stamp,summary=usage,days=[],heatmap=[],models=[],trendDays=[],dayModels=[],pricingGaps=[],modelOptions=[],quotas=quotas,quotaOrder=['codex:codex','agy:agy'],quotaEstimates=[estimate],sources=[])
+quotas[0].update(credits=dict(hasCredits=True,unlimited=False,balance='990.125'),creditsUpdatedAt=stamp)
+dashboard['creditEstimates']=[dict(estimate,id='credit-preview',kind='credits',windowId='credits',windowName='Credits',status='active',reason='',weeklyValue=None,consumedCredits=10,valuePer500=120,valuePer1000=240)]
+task=dict(id='wake-preview',name='每日订阅唤醒',sourceId='codex-source',times=['08:00','13:30'],model='测试模型',effort='low',prompt='Hi. Reply only OK.',binary='')
+wakeups=[dict(task=task,deployment=dict(task=task,deployedAt=stamp,enabled=True,state='deployed',timezone='CST +08:00',target='本机（模拟）',changed=False))]
 for line in sys.stdin:
     r=json.loads(line)
-    result={'settings.get':settings,'dashboard':dashboard,'prices.list':[price],'sessions.list':[]}.get(r['method'],{})
+    result={'settings.get':settings,'dashboard':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups}.get(r['method'],{})
     print(json.dumps(dict(jsonrpc='2.0',id=r['id'],result=result)),flush=True)

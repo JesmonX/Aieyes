@@ -96,6 +96,7 @@ jobs:
           python scripts/release.py check --tag "$RELEASE_TAG"
           cargo test --workspace --locked
           python scripts/test-collectors.py
+          python scripts/test-wakeups.py
           node --check apps/desktop/web/app.js
           node --check apps/desktop/web/tooltip.js
           node --check apps/desktop/web/multiselect.js
@@ -103,6 +104,7 @@ jobs:
           node --check apps/desktop/web/floating.js
           node --check apps/desktop/web/sessions.js
           node --check apps/desktop/web/updates.js
+          node --check apps/desktop/web/wakeups.js
           node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs
       - name: Desktop Rust tests
         if: runner.os != 'macOS'

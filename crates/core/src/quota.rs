@@ -139,7 +139,13 @@ pub fn quota_host(host: &Host, source: &Source) -> Host {
 }
 
 pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapshot> {
-    if source.provider == "codex" && (v.get("rateLimits").is_some() || v.get("primary").is_some()) {
+    if source.provider == "codex"
+        && !v.get("windows").is_some_and(Value::is_array)
+        && (v.get("rateLimits").is_some()
+            || v.get("primary").is_some()
+            || v.get("rateLimitsByLimitId").is_some()
+            || v.get("credits").is_some())
+    {
         return Ok(usage::codex_quota(source, v, now(), origin));
     }
     let mut q = QuotaSnapshot {
@@ -156,6 +162,12 @@ pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapsh
             .iter()
             .map(|w| serde_json::from_value(w.clone()))
             .collect::<Result<Vec<_>, _>>()?;
+        q.credits = v
+            .get("credits")
+            .filter(|v| v.is_object())
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        q.credits_updated_at = q.credits.as_ref().map(|_| now());
+        q.credits_origin = q.credits.as_ref().map(|_| origin.into());
         q.bank_reset = v.get("bankReset").filter(|v| v.is_object()).cloned();
     } else if source.provider == "agy" {
         parse_agy(&mut q, v)?;
@@ -207,7 +219,10 @@ pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapsh
     }
     q.bank_updated_at = q.bank_reset.as_ref().map(|_| now());
     anyhow::ensure!(
-        !q.windows.is_empty() || !q.balances.is_empty() || q.bank_reset.is_some(),
+        !q.windows.is_empty()
+            || !q.balances.is_empty()
+            || q.bank_reset.is_some()
+            || q.credits.is_some(),
         "查询结果中没有限额数据"
     );
     anyhow::ensure!(
@@ -238,6 +253,19 @@ fn resolve_codex(configured: &str) -> String {
 }
 
 fn codex(source: &Source, settings: &Settings) -> Result<Value> {
+    codex_rpc(
+        source,
+        settings,
+        "account/rateLimits/read",
+        json!({"excludeResetCreditDetails":false,"supportsLunaReserve":false}),
+    )
+}
+pub fn codex_rpc(
+    source: &Source,
+    settings: &Settings,
+    method: &str,
+    params: Value,
+) -> Result<Value> {
     let mut cmd = if let Some(id) = &source.host_id {
         let host = settings
             .hosts
@@ -329,11 +357,7 @@ fn codex(source: &Source, settings: &Settings) -> Result<Value> {
         };
         wait(1)?;
         writeln!(stdin, "{}", json!({"method":"initialized"}))?;
-        writeln!(
-            stdin,
-            "{}",
-            json!({"id":2,"method":"account/rateLimits/read","params":{"excludeResetCreditDetails":false,"supportsLunaReserve":false}})
-        )?;
+        writeln!(stdin, "{}", json!({"id":2,"method":method,"params":params}))?;
         stdin.flush()?;
         wait(2)
     })();

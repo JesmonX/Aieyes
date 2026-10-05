@@ -7,6 +7,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 if [ "${AIEYES_OFFLINE:-0}" = 1 ]; then export CARGO_NET_OFFLINE=true; fi
 cd "$PROJECT_DIR/apps/desktop"
 if [ "$BUILD_MODE" = debug ]; then
+  node ../../scripts/prepare-wakeup.cjs --debug
   cargo build --manifest-path src-tauri/Cargo.toml --locked --features custom-protocol
   echo "$PROJECT_DIR/apps/desktop/src-tauri/target/debug/aieyes-desktop"
 else

@@ -440,3 +440,7 @@ body.editor-open { overflow: hidden; }
 #update-dialog progress { width: 100%; }
 #update-message, #update-bytes { font-size: 14px; overflow-wrap: anywhere; }
 .update-settings .actions { margin-top: 12px; }
+
+.wake-task .actions { flex-wrap: wrap; }
+.wake-task h3 { overflow-wrap: anywhere; }
+#editor textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; }

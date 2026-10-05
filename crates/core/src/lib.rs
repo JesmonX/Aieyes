@@ -10,6 +10,7 @@ pub mod sessions;
 pub mod ssh;
 pub mod store;
 pub mod usage;
+pub mod wakeups;
 
 use anyhow::{Context, Result};
 use models::*;
@@ -31,7 +32,10 @@ impl Engine {
     }
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value> {
         match method {
-            name if name.starts_with("quotaEstimates.") => self.estimate_call(name, params),
+            name if name.starts_with("wakeups.") => self.wakeup_call(name, params),
+            name if name.starts_with("quotaEstimates.") || name.starts_with("creditEstimates.") => {
+                self.estimate_call(name, params)
+            }
             "quotas.order.set" => Ok(serde_json::to_value(
                 self.store
                     .set_quota_order(serde_json::from_value(params["keys"].clone())?)?,

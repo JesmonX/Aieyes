@@ -24,7 +24,9 @@ struct Balance: Codable, Identifiable {
     var currency: String, total: String, granted: String, toppedUp: String
     var id: String { currency }
 }
+struct CreditsBalance: Codable { var hasCredits: Bool, unlimited: Bool, balance: String? }
 struct Quota: Codable, Identifiable {
+    var credits: CreditsBalance?, creditsUpdatedAt: Double?
     var sourceId: String, accountId: String, provider: String, name: String, updatedAt: Double, origin: String
     var balances: [Balance]?, isAvailable: Bool?
     var windows: [QuotaWindow], bankReset: BankReset?, bankUpdatedAt: Double?, plan: String?, error: String?
@@ -51,7 +53,7 @@ struct Dashboard: Codable {
     var generatedAt: Double = 0, summary = Aggregate(), days: [Aggregate] = [], heatmap: [Aggregate] = [], models: [Aggregate] = []
     var trendDays: [Aggregate] = [], dayModels: [DayModel] = [], pricingGaps: [PricingGap] = []
     var modelOptions: [String]? = nil
-    var quotaOrder: [String]? = nil, quotaEstimates: [QuotaEstimate]? = nil
+    var quotaOrder: [String]? = nil, quotaEstimates: [QuotaEstimate]? = nil, creditEstimates: [QuotaEstimate]? = nil
     var quotas: [Quota] = [], sources: [SourceSummary] = [], priceUpdatedAt: Double?
 }
 struct ProxySettings: Codable, Equatable { var mode = "system", url = "" }
@@ -129,6 +131,7 @@ enum Format {
 }
 
 struct QuotaEstimate: Codable, Identifiable {
+    var kind: String?, consumedCredits: Double?, valuePer500: Double?, valuePer1000: Double?
     var id: String, accountKey: String, windowId: String, windowName: String
     var sourceIds: [String], sourceNames: [String], status: String, reason: String
     var startedAt: Double, checkpointAt: Double, endedAt: Double?

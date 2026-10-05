@@ -13,6 +13,21 @@ fn main() {
 }
 fn run() -> anyhow::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if let Some(i) = args.iter().position(|a| a == "--wake-service") {
+        let root = args
+            .get(i + 1)
+            .ok_or_else(|| anyhow::anyhow!("Missing runner root"))?;
+        return aieyes_core::wakeups::runner::service(std::path::Path::new(root));
+    }
+    if let Some(i) = args.iter().position(|a| a == "--wake-runner") {
+        let root = args
+            .get(i + 1)
+            .ok_or_else(|| anyhow::anyhow!("Missing runner root"))?;
+        return aieyes_core::wakeups::runner::run(
+            std::path::Path::new(root),
+            args.get(i + 2).map(String::as_str),
+        );
+    }
     let root = args
         .windows(2)
         .find(|a| a[0] == "--data-dir")

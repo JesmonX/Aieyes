@@ -30,7 +30,9 @@ impl Store {
         CREATE INDEX IF NOT EXISTS quota_history_account ON quota_history(account_key,stamp);
         CREATE TABLE IF NOT EXISTS quota_estimates(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS estimate_active ON quota_estimates(account_key) WHERE status IN ('active','pending');
-        PRAGMA user_version=3;")?;
+        CREATE TABLE IF NOT EXISTS credit_estimates(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS credit_estimate_active ON credit_estimates(account_key) WHERE status IN ('active','pending');
+        PRAGMA user_version=4;")?;
         Ok(Self { db })
     }
     pub fn settings(&self) -> Result<Settings> {
@@ -72,6 +74,7 @@ impl Store {
         }
     }
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
+        self.check_wakeup_settings(s)?;
         let mut normalized = s.clone();
         normalized.migrate();
         let s = &normalized;
@@ -421,9 +424,16 @@ impl Store {
                 next.error = q.error.clone();
             } else if old.updated_at > q.updated_at {
                 return Ok(());
-            } else if q.origin == "log" && old.bank_reset.is_some() {
-                next.bank_reset = old.bank_reset;
-                next.bank_updated_at = old.bank_updated_at.or(Some(old.updated_at));
+            } else if q.origin == "log" {
+                if old.bank_reset.is_some() {
+                    next.bank_reset = old.bank_reset;
+                    next.bank_updated_at = old.bank_updated_at.or(Some(old.updated_at));
+                }
+                if old.credits.is_some() && old.credits_origin.as_deref() != Some("log") {
+                    next.credits = old.credits;
+                    next.credits_origin = old.credits_origin;
+                    next.credits_updated_at = old.credits_updated_at.or(Some(old.updated_at));
+                }
             }
         }
         self.observe_estimates(q)?;
@@ -686,7 +696,9 @@ impl Store {
             d.quotas.push(quota);
         }
         d.quota_order = self.quota_order()?;
-        d.quota_estimates = self.estimates()?;
+        let samples = self.estimates()?;
+        d.credit_estimates = samples.iter().filter(|e| e.is_credit()).cloned().collect();
+        d.quota_estimates = samples.into_iter().filter(|e| !e.is_credit()).collect();
         d.quotas.sort_by(|a, b| {
             let rank = |q: &QuotaSnapshot| {
                 d.quota_order

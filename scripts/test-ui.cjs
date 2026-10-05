@@ -191,7 +191,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     assert.equal(await page.locator('.day>summary').first().evaluate(e=>e===document.activeElement),true);
 
     await page.locator('[data-page=settings]').click();
-    assert.deepEqual(await page.locator('[data-settings-tab]').allTextContents(),['数据源','服务器','价格','通用']);
+    assert.deepEqual(await page.locator('[data-settings-tab]').allTextContents(),['数据源','服务器','价格','定时唤醒','通用']);
     assert.equal(await page.locator('[data-add-query]').count(),0);
     await page.locator('[data-settings-tab=sources]').click();
     await page.locator('#add-item').click();
