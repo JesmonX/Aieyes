@@ -95,3 +95,35 @@ body[data-view=panel] { display: block; justify-items: normal; user-select: text
   .panel-body #live-sessions,.panel-body .filters,.panel-body .card { margin-bottom:10px; }
   .panel-body .quota-title { margin-bottom:8px; }
 }
+
+/* A 450 × 540 glance retains the current quota and today's two main numbers. */
+.panel-body { padding:8px 14px; }
+.panel-body #live-sessions { padding:5px 8px; margin-bottom:6px; }
+.panel-body .filters { padding:0; margin-bottom:6px; }
+.panel-body .filters select { min-height:28px; padding:3px 7px; }
+.panel-body .panel-summary .quota-card { padding:8px 10px; margin:0; }
+.panel-summary .quota-title { min-height:24px; margin:0; }
+.panel-summary .quota-content { padding-top:0; }
+.panel-summary .quota-content > :not(.quota-windows):not(.agy-groups) { display:none!important; }
+.panel-summary .quota-content > .quota-window:not(.quota-credits) { display:block!important; margin-top:4px; }
+.panel-summary .quota-windows,.panel-summary .agy-windows { display:grid!important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px!important; }
+.panel-summary .quota-window { margin-top:4px; }
+.panel-summary .quota-windows > :nth-child(n+3),.panel-summary .agy-group:nth-child(n+2),.panel-summary .agy-group > strong { display:none; }
+.panel-summary .quota-reset { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:12px; }
+.panel-summary .resource-bar { margin:4px 0; height:4px; }
+.panel-quota-summary .scope-note { display:block; margin:0 0 2px; }
+.quota-all { border:0; background:none; box-shadow:none; min-height:26px; padding:2px 0; font-size:13px; color:var(--accent); }
+.panel-body .overview-heading { margin:4px 0 6px; }
+.panel-body .overview-heading h2 { margin:0; }
+.panel-body #days { display:none; }
+.panel-body .stats { margin-bottom:6px; gap:8px; }
+.panel-body .stat { padding:10px 12px; box-shadow:none; }
+.panel-body .stat-value { font-size:26px; margin:4px 0 0; }
+.panel-body .panel-cache { display:flex; justify-content:space-between; gap:8px; padding:9px 10px; margin-bottom:6px; font-size:13px; }
+.panel-cache span { display:flex; gap:5px; align-items:baseline; }
+.panel-body .sampling-banner { margin:4px 0; padding:4px 0; min-height:26px; border:0; font-size:13px; }
+.panel-filter-summary { font-size:13px; margin-bottom:4px; }
+.panel-filter-summary .active-filters { margin-top:6px; }
+.panel-body .card { box-shadow:none; }
+.panel-body #message .error-list { max-height:70px; }
+.panel-quota-summary ~ .card { margin-top:6px; }

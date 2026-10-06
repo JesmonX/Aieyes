@@ -15,9 +15,9 @@
   --accent-ink: #ffffff;
 
   /* Window pane, then the three card tiers that sit on top of it. */
-  --window-base: linear-gradient(180deg, #eef2fb 0%, #e1e8f6 100%);
+  --window-base: #f7f8fb;
   --window-tint: rgba(246,248,253,.62);
-  --window-sheen: radial-gradient(ellipse 68% 52% at 4% -10%, rgba(104,120,236,.20), transparent 62%), radial-gradient(ellipse 58% 46% at 100% 106%, rgba(58,178,170,.14), transparent 58%);
+--window-sheen: none;
   --window-edge: rgba(255,255,255,.62);
   --panel: rgba(255,255,255,.76);
   --surface-strong: rgba(255,255,255,.88);
@@ -26,7 +26,7 @@
   --solid: #eef1f8;
   --soft: rgba(88,108,214,.10);
   --border: rgba(66,88,140,.17);
-  --card-border: #7b879d;
+  --card-border: #dfe4ed;
   --hairline-strong: rgba(70,90,138,.26);
   --highlight: rgba(255,255,255,.72);
   --shadow-xs: 0 1px 2px rgba(22,36,72,.07);
@@ -84,9 +84,9 @@
   :root {
     --ink: #e6ebf7; --muted: #a3aec6; --faint: #8794ad;
     --accent: #a3b3ff; --accent-deep: #8b9cfb; --accent-ink: #131a2a;
-    --window-base: linear-gradient(180deg, #1d2434 0%, #141a27 100%);
+    --window-base: #151a23;
     --window-tint: rgba(22,28,42,.58);
-    --window-sheen: radial-gradient(ellipse 68% 52% at 4% -10%, rgba(122,142,255,.22), transparent 62%), radial-gradient(ellipse 58% 46% at 100% 106%, rgba(58,190,180,.14), transparent 58%);
+--window-sheen: none;
     --window-edge: rgba(255,255,255,.08);
     --panel: rgba(41,51,72,.58);
     --surface-strong: rgba(46,58,82,.78);
@@ -95,7 +95,7 @@
     --solid: #171e2c;
     --soft: rgba(146,166,248,.14);
     --border: rgba(178,196,232,.14);
-    --card-border: #8794ad;
+    --card-border: #354052;
     --hairline-strong: rgba(178,196,232,.24);
     --highlight: rgba(255,255,255,.09);
     --shadow-xs: 0 1px 2px rgba(0,0,0,.24);

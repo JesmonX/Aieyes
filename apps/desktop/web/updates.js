@@ -71,6 +71,7 @@
   }
   async function later() { await run('updates_later'); dialog?.close(); }
   function unsavedForms() {
+    if(typeof settingsFormsDirty==='function'&&settingsFormsDirty())return true;
     return [...document.querySelectorAll('#general-form')].some(form => form.dataset.updateSavedValues && form.dataset.updateSavedValues !== JSON.stringify([...new FormData(form)]));
   }
   async function install() {

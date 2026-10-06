@@ -1,3 +1,4 @@
+const {discardEditor}=require('./ui-test-helpers.cjs');
 // Regression coverage for the cross-platform interaction review. Uses only in-memory IPC.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -82,7 +83,7 @@ function fixture() {
     await page.locator('#add-first-source').click();await page.locator('#field-provider').selectOption('deepseek');
     assert.equal(await page.locator('#field-isAccount').isChecked(),true);
     assert.match(await page.locator('#account-help').textContent(),/余额/);
-    await page.locator('#cancel-editor').click();assert.equal(await page.evaluate(()=>state.settings.sources.length),0);
+    await discardEditor(page);assert.equal(await page.evaluate(()=>state.settings.sources.length),0);
     await page.locator('[data-settings-tab=hosts]').click();await page.locator('[data-edit=host]').click();
     await page.locator('#field-name').focus();let advanced=false,save=false;
     for(let i=0;i<24;i++){
@@ -96,7 +97,7 @@ function fixture() {
     assert.equal(await page.locator('[data-edit=host]').evaluate(el=>el===document.activeElement),true,'Save must return focus to the rebuilt row');
     await page.evaluate(()=>{state.settings.sources=[{id:'remote',name:'远端记录',provider:'codex',path:'~/.codex',accountId:'',hostId:'host',enabled:true}];});
     await page.locator('[data-remove=host]').click();assert.match(await page.locator('#editor-fields').textContent(),/远端记录/);
-    assert.equal(await page.evaluate(()=>state.settings.hosts.length),1);await page.locator('#cancel-editor').click();
+    assert.equal(await page.evaluate(()=>state.settings.hosts.length),1);await discardEditor(page);
     await page.locator('[data-remove=host]').click();await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
     assert.deepEqual(await page.evaluate(()=>[state.settings.hosts.length,state.settings.sources[0].hostId,state.settings.sources[0].enabled]),[0,null,false]);
     assert.equal(await page.locator('#add-item').evaluate(el=>el===document.activeElement),true);
@@ -121,10 +122,11 @@ function fixture() {
     assert.equal(await page.evaluate(()=>state.lastSuccessfulUpdate),lastSuccess);assert.match(await page.locator('#message').textContent(),/远程记录读取失败/);
     await page.locator('[data-page=settings]').click();await page.locator('[data-settings-tab=prices]').click();await page.locator('#add-price').click();
     assert.equal(await page.locator('#field-id').count(),1);assert.deepEqual(await page.locator('#field-id').evaluate(el=>[...el.labels].map(label=>label.textContent)),['模型 ID']);
-    await page.locator('#cancel-editor').click();await page.locator('[data-settings-tab=prices]').focus();await page.keyboard.press('ArrowLeft');
+    await discardEditor(page);await page.locator('[data-settings-tab=prices]').focus();await page.keyboard.press('ArrowLeft');
     assert.equal(await page.locator('[data-settings-tab=hosts]').getAttribute('aria-selected'),'true');
     await page.evaluate(()=>{state.settings.hosts=structuredClone(review.settings.hosts);state.settings.hosts=[{id:'host',name:'训练服务器',target:'gpu-lab',enabled:true,details:[]}];});
     await page.locator('[data-page=servers]').click();await page.waitForFunction(()=>!state.serverBusy);
+    await page.locator('.server-card > summary').click();
     await page.locator('[data-metric="host:cpu"] > summary').click();await page.locator('[data-metric="host:cpu"] > summary').focus();await page.evaluate(()=>sample());
     assert.equal(await page.locator('[data-metric="host:cpu"] > summary').evaluate(el=>el===document.activeElement),true);
     assert.equal(await page.locator('[data-metric="host:cpu"]').evaluate(el=>el.open),true);
@@ -158,10 +160,10 @@ function fixture() {
     await panel.evaluate(async()=>{review.empty=false;review.settings.sources=[{id:'preview',name:'示例日志',provider:'codex',path:'~/.codex',enabled:false,accountId:''}];await reviewEmit('desktop:settings',null);});
     await panel.screenshot({animations:'disabled',path:path.join(previews,'floating-panel-fixed-light.png')});
     await panel.emulateMedia({colorScheme:'dark'});await panel.screenshot({animations:'disabled',path:path.join(previews,'floating-panel-fixed-dark.png')});await panel.emulateMedia({colorScheme:'light'});
-    await panel.evaluate(async()=>{review.empty=false;await loadDashboard();});await panel.locator('[data-agent-detail=panel-trend] > summary').click();await panel.locator('.daily > summary').click();await panel.locator('.day > summary').first().click();await panel.locator('.day > summary').first().focus();
+    await panel.evaluate(async()=>{review.empty=false;await loadDashboard();});await panel.locator('[data-agent-detail=panel-trend] > summary').click();await panel.locator('.daily > summary').click();await panel.locator('[data-day-toggle]').first().click();await panel.locator('[data-day-toggle]').first().focus();
     await panel.evaluate(()=>loadDashboard());assert.equal(await panel.locator('[data-agent-detail][open]').count(),3);
-    assert.equal(await panel.locator('.day > summary').first().evaluate(el=>el===document.activeElement),true);
-    await panel.locator('#days').selectOption('30');await panel.getByRole('heading',{name:'近 30 天用量',exact:true}).waitFor();
+    assert.equal(await panel.locator('[data-day-toggle]').first().evaluate(el=>el===document.activeElement),true);
+    assert.equal(await panel.evaluate(()=>state.days),1,'Glance always shows today; historical range belongs to details');
     await panel.evaluate(async()=>{
       review.settings.sources=[{id:'new-source',name:'另一窗口添加的来源',provider:'codex',path:'~/.codex',enabled:true,accountId:''}];
       await reviewEmit('desktop:settings',null);
@@ -170,7 +172,7 @@ function fixture() {
     await panel.locator('[data-page=servers]').click();await panel.waitForFunction(()=>!state.serverBusy);
     await panel.evaluate(async()=>{const rows=structuredClone(review.hosts);rows[0].sample.cpu[0].utilization=91;await reviewEmit('desktop:hosts',rows);});
     assert.equal(await panel.locator('.resource-ring strong').first().textContent(),'91.0%');
-    await panel.locator('[data-metric="host:cpu"] > summary').focus();
+    await panel.locator('.server-card > summary').click();await panel.locator('[data-metric="host:cpu"] > summary').focus();
     await panel.evaluate(()=>{window.previousCard=document.querySelector('.server-card');state.serverBusy=true;state.hosts[0].sample.timestamp=Date.now()/1000-11;reviewTimers.find(timer=>timer.ms===1000).fn();});
     assert.equal(await panel.locator('.host-status').textContent(),'数据已延迟');
     assert.equal(await panel.locator('.server-card').evaluate(el=>el===window.previousCard),true,'Aging must not recreate the server card');
@@ -195,7 +197,7 @@ function fixture() {
     assert.ok(saveButton.y+saveButton.height<=440,'Save stays reachable at minimum height');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.screenshot({animations:'disabled',path:path.join(previews,'editor-minimum-fixed.png')});
-    await page.locator('#cancel-editor').click();await page.locator('[data-page=servers]').click();await page.waitForFunction(()=>!state.serverBusy);
+    await discardEditor(page);await page.locator('[data-page=servers]').click();await page.waitForFunction(()=>!state.serverBusy);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.screenshot({animations:'disabled',path:path.join(previews,'servers-minimum-fixed.png')});
     await panel.close();assert.deepEqual(errors,[]);console.log('UI review interaction regressions passed');

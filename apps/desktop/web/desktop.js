@@ -18,6 +18,7 @@
     return info.reason || `当前使用${info.effectiveMode === 'floating' ? '悬浮球' : '系统状态栏'}。`;
   }
   async function navigate(page) {
+    if(page.startsWith("edit-account:")){await window.AieyesApp.ready;state.page="settings";state.settingsTab="sources";render();const index=state.settings.accounts.findIndex(a=>a.provider+":"+a.id===page.slice(13));if(index>=0)editAccount(index);return;}
     if (page === 'add-source' || page === 'add-host' || page === 'add-quota') {
       await window.AieyesApp.openSetupInMain(page === 'add-host' ? 'hosts' : page === 'add-quota' ? 'quota' : 'sources');
       return;
@@ -72,6 +73,10 @@
   async function boot() {
     if (!window.__TAURI__) return;
     try {
+      await window.__TAURI__.event.listen('desktop:quit-requested', async()=>{
+        if(document.querySelector('#editor')?.open){await invoke('desktop_action',{action:'settings'});notify('请先完成或放弃当前编辑，再退出应用','error');return;}
+        if(settingsFormsDirty()){await invoke('desktop_action',{action:'settings'});showEditor('退出前有未保存更改','<p>通用配置或模型映射仍有草稿。可取消返回保存，或明确放弃后退出。</p>',async()=>{await invoke('desktop_action',{action:'quit-confirmed'});});document.querySelector('#editor-form button[type=submit]').textContent='放弃更改并退出';document.querySelector('#cancel-editor').focus();}else await invoke('desktop_action',{action:'quit-confirmed'});
+      });
       await window.__TAURI__.event.listen('desktop:status', event => update(event.payload));
       await window.__TAURI__.event.listen('desktop:error', event => notify(String(event.payload)));
       await window.__TAURI__.event.listen('desktop:navigate', event => {

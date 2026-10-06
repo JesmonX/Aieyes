@@ -883,6 +883,7 @@ pub fn desktop_detail(app: AppHandle, view: Value) -> Result<(), String> {
 }
 pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
     match action {
+        value if value.starts_with("edit-account:") => show_main(app, value),
         "focus-panel" => set_panel(app, true),
         "refresh-floating" => refresh_floating(app),
         "toggle-panel" => {
@@ -938,6 +939,11 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         "hide-ball" => set_hidden(app, true),
         "show-ball" => set_hidden(app, false),
         "quit" => {
+            app.emit_to("main", "desktop:quit-requested", ())
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        }
+        "quit-confirmed" => {
             save(app);
             app.exit(0);
             Ok(())

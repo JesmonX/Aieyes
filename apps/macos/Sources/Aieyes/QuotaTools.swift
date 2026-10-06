@@ -76,7 +76,7 @@ struct QuotaEstimateView: View {
     @State private var selected = Set<String>()
     @State private var window = ""
     @State private var confirmed = false
-    private var credits: Bool { model.creditEstimateMode && quota.provider == "codex" }
+    @State var credits = false
     private var busy: Bool { model.estimateBusy.contains(quota.id) }
     private var error: String? { model.estimateErrors[quota.id] }
     private var sources: [AgentSource] { model.settings.sources.filter { $0.enabled && $0.provider == quota.provider && $0.accountId == quota.accountId && !["agy", "deepseek"].contains($0.provider) } }
@@ -93,7 +93,7 @@ struct QuotaEstimateView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack { VStack(alignment: .leading, spacing: 4) { Text(credits ? "credit 价值" : "5h / 7d 额度价值").font(AppFont.title); Text(quota.name).foregroundStyle(.secondary) }; Spacer(); Button("关闭") { close() }.keyboardShortcut(.cancelAction) }
-            if quota.provider == "codex" { Picker("采样口径", selection: $model.creditEstimateMode) { Text("额度价值").tag(false); Text("credit 价值").tag(true) }.pickerStyle(.segmented).disabled(busy) }
+            if quota.provider == "codex" { Picker("采样口径", selection: $credits) { Text("额度价值").tag(false); Text("credit 价值").tag(true) }.pickerStyle(.segmented).disabled(busy) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(credits ? "按实际 credits 扣款与样本 API 等价成本，估算 credit 的 API 等价价值，不是可兑换余额。" : "主要采样 5h 额度，显示 5h 价值、7d 同期换算及近期倍率估算。正常重置后自动接续，结果取决于本次模型组合。").foregroundStyle(.secondary)
@@ -104,7 +104,7 @@ struct QuotaEstimateView: View {
                             confirmation
                             Button("确认并开始新一段") { perform("restart", ["id": current.id, "confirmed": confirmed]) }.disabled(!confirmed || busy)
                         }
-                        Button(current.status == "pending" ? "结束并保留有效段" : "结束采样并计算") { perform("stop", ["id": current.id]) }.buttonStyle(.borderedProminent).disabled(busy)
+                        Button(current.status == "pending" ? "结束并保留有效段" : "结束并保存本段结果") { perform("stop", ["id": current.id]) }.buttonStyle(.borderedProminent).disabled(busy)
                     } else if eligible && !sources.isEmpty {
                         if !credits { Picker("主要额度池", selection: $window) {
                             ForEach(windows.filter { windows.count == 1 || $0.id == "seven_day" || $0.name == "7d" }) { Text($0.name).tag($0.id) }
@@ -130,7 +130,7 @@ struct QuotaEstimateView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 480)
         }.font(AppFont.body).disabled(model.installingUpdate).padding(24).frame(minWidth: 470, idealWidth: 520)
-        .onChange(of: model.creditEstimateMode) { _, _ in confirmed = false }
+        .onChange(of: credits) { _, _ in confirmed = false }
         .onAppear { selected = Set(sources.map(\.id)); window = windows.first?.id ?? "" }
     }
     private var confirmation: some View {
@@ -146,7 +146,7 @@ struct QuotaEstimateView: View {
     }
     private func resultHeader(_ e: QuotaEstimate) -> some View {
         HStack {
-            Text(e.statusLabel).foregroundStyle(e.status == "pending" ? Color.orange : Palette.accent)
+            Text(e.status == "active" ? ((e.fiveHourValue ?? e.weeklyValue ?? e.valuePer1000) == nil ? "正在积累样本" : "可输出估值 · 采样继续") : e.statusLabel).foregroundStyle(e.status == "pending" ? Color.orange : Palette.accent)
             Spacer()
             Text(resultValue(e)).font(AppFont.section).monospacedDigit()
         }
@@ -162,13 +162,13 @@ struct QuotaEstimateView: View {
     }
     private func fiveHourValues(_ e: QuotaEstimate) -> some View {
         let values: [(String, Double?)] = [
-            ("5h 价值", e.fiveHourValue),
-            ("7d 同期换算", e.weeklyDirectValue),
-            ("7d 近期倍率估算", e.weeklyRatioValue)
+            ("本段 5h API 等价值", e.fiveHourValue),
+            ("7d 推算 · 同期消耗比例", e.weeklyDirectValue),
+            ("7d 推算 · 近期容量倍率", e.weeklyRatioValue)
         ]
         return VStack(alignment: .leading, spacing: 8) {
             ForEach(values, id: \.0) { label, value in
-                HStack { Text(label); Spacer(); Text(amount(value)).monospacedDigit() }.font(AppFont.secondary)
+                HStack { Text(label); Spacer(); Text(amount(value)).monospacedDigit() }.font(label.hasPrefix("本段") ? AppFont.section : AppFont.secondary)
             }
             Text(capacityDescription(e.capacity)).font(AppFont.secondary).foregroundStyle(.secondary)
         }

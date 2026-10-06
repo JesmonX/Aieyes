@@ -28,6 +28,10 @@ for line in sys.stdin:
     response=dict(jsonrpc='2.0',id=req['id'])
     if method=='settings.get': response['result']=json.load(open(root+'/settings.json'))
     elif method=='dashboard':
+        if os.path.exists(root+'/fail-panel-query') and req.get('params',{}).get('days') == 1:
+            response['error']=dict(message='模拟今日面板查询失败')
+            print(json.dumps(response),flush=True)
+            continue
         if os.path.exists(root+'/hold-dashboard'):
             import time
             open(root+'/dashboard-started','w').close()
@@ -53,6 +57,7 @@ for line in sys.stdin:
         with open(root+'/dashboard.json','w') as stored: json.dump(dashboard,stored)
     elif method=='quotas.refresh': response['error']=dict(message='模拟限额连接失败')
     elif method=='prices.save': response['error']=dict(message='模拟价格保存失败')
+    elif method=='prices.recalculate' and os.path.exists(root+'/fail-reprice'): response['error']=dict(message='模拟重算失败')
     elif method=='hosts.sample': response['error']=dict(message='模拟采样连接失败')
     elif method=='credentials.save':
         target=root+'/'+hashlib.sha256(req['params']['sourceId'].encode()).hexdigest()+'.key'
@@ -250,7 +255,7 @@ for line in sys.stdin:
         await model.reload()
         precondition(model.dashboard.summary.total == 77 && model.menuDashboard.summary.total == 123_456)
         precondition(model.menuText == Format.compact(123_456))
-        precondition(model.dataTime == dashboard.generatedAt && model.statusText.contains("数据 " + Format.time(dashboard.generatedAt)))
+        precondition(model.dataTime == 0 && !model.statusText.contains(Format.time(dashboard.generatedAt)), "A query timestamp must not be presented as a record sync")
         let priorTime = model.dataTime
         let failures = Data(#"[{"id":"first","error":"first failed"},{"id":"second","error":"second failed"}]"#.utf8)
         try failures.write(to: root.appendingPathComponent("scan-result.json"))
@@ -282,6 +287,31 @@ for line in sys.stdin:
         model.applyRemoval(model.removalRequest("account", id: model.settingsDraft.accounts[0].key)!)
         precondition(model.settingsDraft.accounts[0].archived == true)
         model.discardSettingsDraft(); precondition(!model.settingsDirty)
+        // A secondary dashboard failure must preserve all previous applied snapshots.
+        let previousTotal = model.dashboard.summary.total, previousPanel = model.panelDashboard.summary.total, previousScope = model.appliedScope
+        model.selectedModel = "all"; model.range = 90
+        try Data().write(to: root.appendingPathComponent("fail-panel-query"))
+        let failedPanel = await model.reload()
+        precondition(!failedPanel && !model.dashboardPending && model.dashboardError == "模拟今日面板查询失败")
+        precondition(model.dashboard.summary.total == previousTotal && model.panelDashboard.summary.total == previousPanel && model.appliedScope == previousScope)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("fail-panel-query"))
+        await model.reload()
+        precondition(model.dashboard.summary.total == 123_456 && model.panelDashboard.summary.total == 123_456 && model.dashboardError == nil)
+        // Pending mapping input participates in save/reprice and survives failure.
+        model.mappingModel = "half"
+        let savesBeforeHalf = try calls("settings.save")
+        await model.saveAndReprice()
+        let savesAfterHalf = try calls("settings.save")
+        precondition(savesBeforeHalf == savesAfterHalf && model.mappingModel == "half" && model.settingsDirty)
+        model.mappingModel = "audit-alias"; model.mappingID = "provider/model"
+        try Data().write(to: root.appendingPathComponent("fail-reprice"))
+        await model.saveAndReprice()
+        precondition(model.settings.modelMappings["audit-alias"] == "provider/model" && model.mappingModel == "audit-alias" && model.mappingID == "provider/model")
+        precondition(model.settingsMessage?.contains("重算失败") == true)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("fail-reprice"))
+        await model.saveAndReprice()
+        precondition(model.mappingModel.isEmpty && model.mappingID.isEmpty && !model.settingsDirty)
+        print("Atomic filtered/today snapshots and mapping save/reprice failure recovery passed")
         print("Unfiltered menu metric, data-time semantics, per-source retry, and destructive draft confirmation checks passed")
         print("macOS draft rollback/commit, automatic quota retry, per-window visibility, model-options compatibility, staged credential commit/rollback, sampling failure throttling, and price failure checks passed")
     }

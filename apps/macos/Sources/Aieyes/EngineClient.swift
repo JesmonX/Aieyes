@@ -105,6 +105,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     @Published var dashboard = Dashboard()
     @Published private(set) var menuDashboard = Dashboard()
+    @Published private(set) var panelDashboard = Dashboard()
     @Published private(set) var refreshStates: [String: RefreshStatus] = [:]
     @Published private(set) var actionFailures: [ActionFailure] = []
     @Published private(set) var fallbackModelOptions: [String] = []
@@ -117,12 +118,20 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var settingsStartedAt: Date?
     @Published private(set) var repricing = false
     @Published var settingsMessage: String?
+    @Published var mappingModel = ""
+    @Published var mappingID = ""
     @Published private(set) var pendingAPIKeys: [String: String] = [:]
     @Published private(set) var pendingHostPasswords: [String: String] = [:]
     private var preparedHostPasswords: [String: (password: String, reference: String)] = [:]
     func stageHostPassword(_ password: String, hostID: String) { if !password.isEmpty { pendingHostPasswords[hostID] = password } }
     private var preparedCredentials: [String: (key: String, path: String)] = [:]
-    var settingsDirty: Bool { settingsDraft != settings || !pendingAPIKeys.isEmpty || !pendingHostPasswords.isEmpty }
+    var settingsChangeCount: Int {
+        let rows = settingsDraft.sources.filter { source in settings.sources.first { $0.id == source.id } != source }.count + settings.sources.filter { source in !settingsDraft.sources.contains { $0.id == source.id } }.count
+        let hosts = settingsDraft.hosts.filter { host in settings.hosts.first { $0.id == host.id } != host }.count + settings.hosts.filter { host in !settingsDraft.hosts.contains { $0.id == host.id } }.count
+        let accounts = settingsDraft.accounts.filter { account in settings.accounts.first { $0.key == account.key } != account }.count
+        return max(settingsDirty ? 1 : 0, rows + hosts + accounts + (settingsDraft.modelMappings != settings.modelMappings ? 1 : 0))
+    }
+    var settingsDirty: Bool { settingsDraft != settings || !pendingAPIKeys.isEmpty || !pendingHostPasswords.isEmpty || !mappingModel.isEmpty || !mappingID.isEmpty }
     func stageAPIKey(_ key: String?, sourceID: String) {
         let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty { pendingAPIKeys.removeValue(forKey: sourceID) }
@@ -130,6 +139,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         if preparedCredentials[sourceID]?.key != trimmed { preparedCredentials.removeValue(forKey: sourceID) }
     }
     @Published var requestedSourceProvider: String?
+    @Published var requestedAccountKey: String?
+    @Published var requestedDetailPage: String?
+    @Published var detailPage = "agent"
+    var showDetailPage: ((String) -> Void)?
     @Published var requestHostEditor = false
     @Published var hosts: [HostResult] = []
     @Published var prices: [ModelPrice] = []
@@ -179,18 +192,16 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private var lastHostError: String?
     var showSettings: (() -> Void)?
     var showDetail: (() -> Void)?
-    var showEstimate: ((Quota) -> Void)?
+    var showEstimate: ((Quota, Bool) -> Void)?
     var showSampling: (() -> Void)?
-    @Published var creditEstimateMode = false
     func openEstimate(_ estimate: QuotaEstimate) async {
-        creditEstimateMode = estimate.kind == "credits"
         do {
             // Use an unfiltered read so changing the usage filter cannot hide sampling controls.
             let snapshot: Dashboard = try await engine.call("dashboard", params: ["days": 1])
             guard let quota = snapshot.quotas.first(where: { $0.id == estimate.accountKey }) else {
                 estimateErrors[estimate.accountKey] = "此账户已归档或移除；仍可结束采样并保留有效段。"; return
             }
-            showEstimate?(quota)
+            showEstimate?(quota, estimate.kind == "credits")
         } catch { estimateErrors[estimate.accountKey] = error.localizedDescription }
     }
 
@@ -209,27 +220,37 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         catch { message = error.localizedDescription }
     }
     func openPricing() { settingsTab = "prices"; showSettings?() }
+    @Published private(set) var dashboardPending = false
+    @Published private(set) var dashboardError: String?
+    @Published private(set) var appliedScope = "今日 · 全部 Agent · 全部账户 · 全部来源 · 全部模型"
     private var dashboardRequest = 0
     @discardableResult func reload() async -> Bool {
         dashboardRequest += 1; let request = dashboardRequest
+        dashboardPending = true; dashboardError = nil
+        let scope = [range == 1 ? "今日" : "最近 \(range) 天", provider == "all" ? "全部 Agent" : Format.provider(provider), settings.accounts.first { $0.key == selectedAccount }?.name ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
         var params: [String: Any] = ["days":range]
         if provider != "all" { params["provider"] = provider }
         if selectedAccount == "none" { params["accountId"] = "" }
         else if let account = settings.accounts.first(where: { $0.key == selectedAccount }) { params["accountId"] = account.id; params["provider"] = account.provider }
         if selectedSource != "all" { params["sourceId"] = selectedSource }
         if selectedModel != "all" { params["model"] = selectedModel }
+        let todaySelected = range == 1, unfilteredSelected = params.count == 1 && range == 1
+        let allModelsSelected = selectedModel == "all"
         do {
             let next: Dashboard = try await engine.call("dashboard", params: params)
             guard request == dashboardRequest else { return true }
-            dashboard = next
-            let names = dashboard.dayModels.map(\.model)
-            fallbackModelOptions = Array(Set(selectedModel == "all" ? names : fallbackModelOptions + names)).sorted()
-            if range == 1 && provider == "all" && selectedAccount == "all" && selectedSource == "all" && selectedModel == "all" { menuDashboard = next; return true }
-            let unfiltered: Dashboard = try await engine.call("dashboard", params: ["days": 1])
+            var panel = next
+            if !todaySelected { var today = params; today["days"] = 1; panel = try await engine.call("dashboard", params: today) }
             guard request == dashboardRequest else { return true }
-            menuDashboard = unfiltered
+            let unfiltered: Dashboard = unfilteredSelected ? next : try await engine.call("dashboard", params: ["days": 1])
+            guard request == dashboardRequest else { return true }
+            // Publish all surfaces together so a failed secondary query cannot mix filter scopes.
+            dashboard = next; panelDashboard = panel; menuDashboard = unfiltered
+            appliedScope = scope; dashboardPending = false
+            let names = next.dayModels.map(\.model)
+            fallbackModelOptions = Array(Set(allModelsSelected ? names : fallbackModelOptions + names)).sorted()
             return true
-        } catch { if request == dashboardRequest { message = error.localizedDescription }; return false }
+        } catch { if request == dashboardRequest { dashboardPending = false; dashboardError = error.localizedDescription }; return false }
     }
     func saveQuotaOrder(_ keys: [String]) async throws {
         let _: [String] = try await engine.call("quotas.order.set", params: ["keys": keys])
@@ -259,13 +280,27 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         catch { estimateErrors[accountKey] = error.localizedDescription; await reload(); return false }
     }
     static let refreshLabels = ["scan": "同步记录", "quotas": "刷新限额", "prices": "同步价格", "hosts": "刷新服务器"]
-    var dataTime: Double { dashboard.generatedAt }
-    var statusText: String { statusText(at: dataTime) }
-    var serverStatusText: String { statusText(at: hosts.compactMap { $0.sample?.timestamp }.max() ?? 0) }
-    private func statusText(at stamp: Double) -> String {
-        let running = ["scan", "quotas", "prices", "hosts"].filter { refreshStates[$0]?.busy == true }.compactMap { Self.refreshLabels[$0] }
-        let state = !running.isEmpty ? running.joined(separator: "、") + "中…" : !actionFailures.isEmpty ? "同步失败" : "正常"
-        return (stamp > 0 ? "数据 " + Format.time(stamp) : "暂无数据时间") + " · " + state
+    var usageSources: [AgentSource] { settings.sources.filter { source in source.enabled && !["agy", "deepseek"].contains(source.provider) && (source.hostId == nil || settings.hosts.contains { $0.id == source.hostId && $0.enabled }) } }
+    var dataTime: Double {
+        let stamps = usageSources.map { source in dashboard.sources.first { $0.id == source.id }?.status?.updatedAt ?? 0 }
+        return stamps.min() ?? 0
+    }
+    var statusText: String {
+        let delayed = usageSources.filter { source in
+            guard let stamp = dashboard.sources.first(where: { $0.id == source.id })?.status?.updatedAt else { return true }
+            return Date().timeIntervalSince1970 - stamp > Double(max(60, settings.refreshSeconds * 2))
+        }.count
+        let failed = dashboard.sources.contains { $0.enabled && $0.status?.error != nil }
+        let prefix = dataTime > 0 ? "记录同步于 " + Format.time(dataTime) : usageSources.isEmpty ? "未接入用量来源" : "记录尚未全部同步"
+        return prefix + " · " + (busy ? "同步中…" : failed || !actionFailures.isEmpty ? "部分失败" : delayed > 0 ? "\(delayed) 个来源有延迟" : usageSources.isEmpty ? "等待接入" : "记录已同步")
+    }
+    var serverStatusText: String {
+        let enabled = settings.hosts.filter(\.enabled)
+        let updated = enabled.filter { host in
+            guard let result = hosts.first(where: { $0.id == host.id }), result.error == nil, let sample = result.sample else { return false }
+            return sample.errors.isEmpty && Date().timeIntervalSince1970 - sample.timestamp <= 10
+        }.count
+        return "\(updated)/\(enabled.count) 台已更新" + (serverBusy ? " · 采样中…" : updated < enabled.count ? " · 存在延迟或失败" : "")
     }
     func refreshLabel(_ key: String) -> String {
         let state = refreshStates[key] ?? RefreshStatus()
@@ -380,6 +415,12 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         defer { settingsSaving = false; settingsStage = ""; settingsStartedAt = nil }
         var next = settingsDraft
         do {
+            let from = mappingModel.trimmingCharacters(in: .whitespacesAndNewlines), to = mappingID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !from.isEmpty || !to.isEmpty {
+                guard !from.isEmpty && !to.isEmpty else { throw ClientError.message("请补全模型映射两端，输入已保留") }
+                guard next.modelMappings[from] == nil || next.modelMappings[from] == to else { throw ClientError.message("该模型已有映射，请先移除原映射再添加新值") }
+                next.modelMappings[from] = to
+            }
             if !pendingHostPasswords.isEmpty || !pendingAPIKeys.isEmpty { settingsStage = busy || quotaBusy ? "等待当前刷新完成" : "保存凭据" }
             for (id,password) in pendingHostPasswords {
                 guard let index = next.hosts.firstIndex(where: { $0.id == id }) else { continue }
@@ -407,13 +448,13 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 next.sources[index].path = path
             }
             let success = await save(next, refreshDashboard: refreshDashboard)
-            if success { settingsDraft = settings; pendingAPIKeys.removeAll(); preparedCredentials.removeAll(); pendingHostPasswords.removeAll(); preparedHostPasswords.removeAll() }
+            if success { mappingModel = ""; mappingID = ""; settingsDraft = settings; pendingAPIKeys.removeAll(); preparedCredentials.removeAll(); pendingHostPasswords.removeAll(); preparedHostPasswords.removeAll() }
             settingsMessage = success ? "已保存全部配置 · " + Format.time(Date().timeIntervalSince1970) : message ?? "保存失败"
             return success
         } catch { settingsMessage = error.localizedDescription; return false }
     }
     func discardSettingsDraft() {
-        settingsDraft = settings; settingsMessage = nil
+        settingsDraft = settings; settingsMessage = nil; mappingModel = ""; mappingID = ""
         pendingAPIKeys.removeAll(); preparedCredentials.removeAll()
         let references = preparedHostPasswords.values.map(\.reference)
         Task { for reference in references { let _: Acknowledgement? = try? await engine.call("hosts.credentials.delete", params: ["passwordRef":reference]) } }
@@ -454,12 +495,19 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             await loadPrices(); await reload(); message = "已保存价格 · " + Format.time(Date().timeIntervalSince1970); return true
         } catch { message = error.localizedDescription; return false }
     }
-    func reprice() async {
-        guard !repricing else { return }; repricing = true
-        defer { repricing = false }
-        do { let _: Acknowledgement = try await engine.call("prices.recalculate"); await reload(); message = "已按当前价格重算" }
-        catch { message = error.localizedDescription }
+    func saveAndReprice() async {
+        let mapping = (mappingModel, mappingID)
+        guard await saveSettingsDraft(refreshDashboard: false) else { return }
+        if await reprice() { settingsMessage = "已保存并按当前价格重算" }
+        else { mappingModel = mapping.0; mappingID = mapping.1; settingsMessage = "配置已保存，重算失败：" + (message ?? "请重试") }
     }
+    @discardableResult func reprice() async -> Bool {
+        guard !repricing else { return false }; repricing = true
+        defer { repricing = false }
+        do { let _: Acknowledgement = try await engine.call("prices.recalculate"); let loaded = await reload(); message = loaded ? "已按当前价格重算" : "重算已完成，概览读取失败，请重试查询"; return true }
+        catch { message = error.localizedDescription; return false }
+    }
+    private var resetConfirmations = Set<String>()
     func tick() {
         guard !installingUpdate, !settingsSaving, !repricing else { return }
         if panelVisible, !networkBusy, Date().timeIntervalSince(lastNetworkAttempt) >= 300 { Task { await testNetwork(force: false) } }
@@ -467,6 +515,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         
         if !serverBusy, !settings.hosts.isEmpty, Date().timeIntervalSince(lastMetrics) > Double(panelVisible && serverTabVisible ? 2 : settings.serverRefreshSeconds) {
             Task { await sampleHosts() }
+        }
+        if !busy, !quotaBusy, estimateBusy.isEmpty {
+            for quota in dashboard.quotas { for window in quota.windows {
+                if let reset = window.resetsAt, reset <= Date().timeIntervalSince1970 {
+                    let key = quota.id + ":" + String(reset)
+                    if resetConfirmations.insert(key).inserted { Task { await refreshQuotas(accountID: quota.accountId) }; return }
+                }
+            } }
         }
         if hasQuotaAccounts, !quotaBusy, quotaNextAttempt == nil || Date() >= quotaNextAttempt! { Task { await refreshQuotas() } }
         guard !busy else { return }

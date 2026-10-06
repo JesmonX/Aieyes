@@ -494,9 +494,9 @@ button:active:not(:disabled) { transform:scale(.985); }
 .active-filters button { display:flex; gap:6px; align-items:center; max-width:100%; overflow-wrap:anywhere; }
 .heat-key { display:inline-flex; gap:3px; vertical-align:middle; }
 .heat-key i { width:12px; height:12px; border:1px solid var(--border); border-radius:3px; background:color-mix(in srgb,var(--accent) calc(20% * var(--heat-level)),var(--solid)); }
-.stats { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .stats .cache-card { grid-column:span 2; }
-.cache-card .token-breakdown { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); margin-top:12px; }
+.cache-card .token-breakdown { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); margin:0; gap:14px; }
 .section-head .count { color:var(--muted); background:var(--surface-sunken); }
 .settings-tabs { flex-wrap:nowrap; overflow-x:auto; }
 .settings-tabs button { display:flex; flex-shrink:0; align-items:center; gap:6px; white-space:nowrap; }
@@ -527,3 +527,101 @@ nav [data-page=settings] { margin-top:12px; border-top:1px solid var(--border); 
 .quota-error .short-error { display:none; }
 .quota-disclosure:not([open]) + .quota-content .quota-error .error-detail { display:none; }
 .quota-disclosure:not([open]) + .quota-content .quota-error .short-error { display:inline; }
+
+/* Audit redesign: content width, rather than viewport width, governs metrics. */
+#content { container-type:inline-size; }
+.card,.stat { box-shadow:none; }
+.stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.stats .cache-card { grid-column:1 / -1; }
+.cache-card .token-breakdown > div { display:flex; flex-direction:column; align-items:flex-start; gap:6px; min-width:0; }
+.cache-card .token-breakdown strong { font-size:18px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.stat-value { font-size:30px; overflow-wrap:normal; }
+@container (min-width:1000px) { .stats { grid-template-columns:1fr 1fr 2fr; } .stats .cache-card { grid-column:auto; } .cache-card .token-breakdown { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@container (max-width:540px) { .cache-card .token-breakdown { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@container (max-width:350px) { .stats { grid-template-columns:1fr; } .cache-card .token-breakdown { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+.section-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
+.scope-note { color:var(--muted); font-size:13px; margin:0 0 8px; }
+#query-status { padding:10px 12px; margin-bottom:12px; background:var(--surface-sunken); border-radius:9px; }
+#query-status p { margin:0 0 6px; }
+#message { cursor:auto; position:relative; padding-right:48px; user-select:text; }
+.message-close { position:absolute; top:5px; right:5px; width:32px; height:32px; padding:4px; }
+.draft-state { margin:8px 0 0; color:var(--warn); }
+.discard-guard { position:sticky; bottom:0; padding:14px; background:var(--solid); border:1px solid var(--warn); border-radius:9px; }
+.discard-guard p { margin:0 0 8px; }
+.quota-disclosure:not([open]) + .quota-content .quota-reset { display:block; }
+.quota-reset { font-size:13px; }
+.all-quota-account { margin-bottom:18px; }
+@media (prefers-contrast:more) { :root { --card-border:var(--ink); } }
+
+.table-scroll { max-width:100%; overflow:auto; scrollbar-gutter:stable; }
+.table-scroll table { width:100%; border-collapse:collapse; font-size:14px; }
+.table-scroll th,.table-scroll td { padding:10px 8px; text-align:right; border-bottom:1px solid var(--card-border); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.table-scroll th:first-child { text-align:left; white-space:normal; min-width:140px; }
+.table-scroll thead th { position:sticky; top:0; background:var(--solid); z-index:1; }
+.table-scroll .day-model { display:table-row; }
+.table-scroll .day-model[hidden] { display:none; }
+.table-scroll .day-model th { max-width:280px; overflow-wrap:anywhere; }
+.table-scroll .day-model td:last-child { display:table-cell; }
+.copy-value { font-size:12px; min-height:28px; padding:2px 6px; }
+.legend > div,.legend details > div { display:grid; grid-template-columns:8px minmax(0,1fr) auto; gap:8px; padding:5px 0; }
+.legend .copy-value { grid-column:2 / -1; justify-self:start; }
+.legend strong small { display:block; color:var(--muted); font-weight:400; }
+.legend .model { white-space:normal; overflow-wrap:anywhere; user-select:text; }
+.model-key button { display:flex; gap:6px; align-items:center; border:0; box-shadow:none; background:none; text-align:left; overflow-wrap:anywhere; font-size:13px; }
+.model-key button[aria-pressed=false] { text-decoration:line-through; color:var(--muted); }
+.model-key i { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.heat-scroll { overflow-x:auto; padding:3px; }
+.heat-layout { display:flex; gap:6px; min-width:590px; }
+.heatmap { flex:1; display:grid; grid-auto-flow:column; grid-template-rows:repeat(7,10px); gap:3px; }
+.heatmap button,.heatmap > span { width:100%; min-width:8px; height:10px; min-height:10px; border:1px solid transparent; padding:0; border-radius:2px; box-shadow:none; }
+.heatmap button:focus-visible { z-index:2; outline:2px solid var(--ink); }
+.heat-weekdays { display:grid; grid-template-rows:repeat(7,10px); gap:3px; font-size:11px; line-height:10px; }
+.heat-months { display:grid; grid-template-columns:repeat(var(--weeks),minmax(0,1fr)); margin:0 0 6px 20px; min-width:570px; font-size:12px; }
+.heat-months span { overflow:visible; white-space:nowrap; }
+.heat-table .table-scroll { max-height:280px; }
+.exact-usage { font-variant-numeric:tabular-nums; user-select:text; }
+
+#background-task { position:fixed; right:20px; bottom:12px; z-index:65; max-width:calc(100vw - 40px); box-shadow:var(--shadow-overlay); }
+body:has(#background-task:not([hidden])) main { padding-bottom:70px; }
+body[data-view=panel] #background-task { bottom:60px; right:12px; font-size:13px; }
+
+.sidebar-collapsed .shell { grid-template-columns:72px minmax(0,1fr); }
+.sidebar-collapsed aside { padding-left:10px; padding-right:10px; }
+.sidebar-collapsed .brand { padding:12px 7px; }
+.sidebar-collapsed .brand > div,.sidebar-collapsed nav button span,.sidebar-collapsed .aside-foot { display:none; }
+.sidebar-collapsed nav button { justify-content:center; padding:10px; }
+#sidebar-toggle { align-self:flex-end; background:none; border:0; box-shadow:none; min-width:32px; }
+aside nav { display:flex; flex-direction:column; flex:1; }
+nav [data-page=settings] { margin-top:auto; }
+.account-group + .account-group { border-top:1px solid var(--card-border); padding-top:16px; margin-top:16px; }
+.account-group .list-row { padding-left:18px; }
+.account-group h3,.account-group p { margin:0; }
+.path-actions { grid-column:2; display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.path-status { font-size:13px; color:var(--muted); }
+input[name=path],input[name=identityFile],input[name=target] { font-family:var(--font-code); }
+.wake-more { position:relative; }
+.wake-more > summary { padding:6px 10px; min-height:34px; }
+.wake-more[open] { display:flex; flex-wrap:wrap; gap:6px; }
+.wake-times { border:1px solid var(--card-border); border-radius:9px; margin-bottom:14px; }
+.monitor-options { margin-top:12px; }
+
+.server-summary { list-style:none; }
+.server-card > .server-summary { display:block; margin:0; }
+.server-summary::-webkit-details-marker { display:none; }
+.server-summary-metrics { display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; font-size:14px; }
+.server-summary h2 { font-size:16px; }
+.server-card { padding:14px 16px; }
+.server-card:has([data-status="已暂停"]) .server-summary-metrics { color:var(--muted); }
+.server-card > summary ~ .server-gauges { margin-top:20px; }
+@container (min-width:700px) {
+  .server-card > .server-summary { display:grid; grid-template-columns:minmax(220px,1fr) minmax(0,1.5fr); align-items:center; gap:20px; }
+  .server-summary-metrics { margin-top:0; }
+}
+
+.quota-disclosure:not([open]) + .quota-content .agy-group:nth-child(n+2),
+.quota-disclosure:not([open]) + .quota-content .quota-windows > .quota-window:nth-child(n+3) { display:none; }
+
+.sidebar-collapsed .aside-foot { display:flex; }
+.sidebar-collapsed .aside-foot #activity { font-size:0; width:32px; min-height:32px; display:grid; place-items:center; }
+.sidebar-collapsed .aside-foot small { display:none; }
+.sidebar-collapsed #activity::before { margin:0; }

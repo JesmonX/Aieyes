@@ -2,9 +2,9 @@
 (() => {
   let snapshot = null, busy = false, attempted = 0, revision = 0;
   const label = result => !result ? '连接未测试' : result.status === 'unstable' ? '连接不稳定' : result.status === 'failed' ? '连接失败' : (result.mode === 'direct' ? '直连 ' : result.mode === 'system' ? '系统 ' : '代理 ') + result.averageMs + ' ms';
-  const detail = result => result ? result.sites.map(site => site.url+' · '+(site.latencyMs!=null?site.latencyMs+' ms':site.error)).join('\n')+'\n测试于 '+new Date(result.testedAt*1000).toLocaleString() : '测试当前应用连接方式';
+  const detail = result => result ? '应用出站连接测试（不代表 SSH 或所有账户可用）\n'+result.sites.map(site => site.url+' · '+(site.latencyMs!=null?site.latencyMs+' ms':site.error)).join('\n')+'\n测试于 '+new Date(result.testedAt*1000).toLocaleString() : '测试当前应用连接方式';
   function accept(next) { snapshot=Array.isArray(next?.sites)?next:null; draw(); }
-  function draw() { const button=document.querySelector('#panel-latency');if(button){button.textContent=busy?'测试中…':label(snapshot);button.title=detail(snapshot);button.disabled=busy;} }
+  function draw() { const button=document.querySelector('#panel-latency');if(button){button.textContent=busy?'出站测试中…':'出站 · '+label(snapshot);button.title=detail(snapshot);button.disabled=busy;} }
   async function refresh(force=false) {
     if(busy || (!force && Date.now()-attempted<300000))return;
     busy=true;attempted=Date.now();draw();

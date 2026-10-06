@@ -1,3 +1,4 @@
+const {discardEditor}=require('./ui-test-helpers.cjs');
 // New account/password, proxy, mapping, floating footer and 5h sampling flows.
 // All credentials and IPC are synthetic; no external services are contacted.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
@@ -56,15 +57,15 @@ function fixture(){
         await page.evaluate(()=>feature.unstable=true);await page.locator('#app-proxy-test').click();await page.waitForFunction(()=>document.querySelector('#app-proxy-result').textContent==='连接不稳定');
         const ordinarySaveStart=await page.evaluate(()=>{renderSettings();state.lastQuota=12345;return feature.calls.length;});
         await page.locator('#field-refreshSeconds').fill('600');await page.locator('#general-form button.primary').click();await page.waitForFunction(()=>feature.settings.refreshSeconds===600&&!state.busy&&!state.settingsSaving);
-        assert.deepEqual(await page.evaluate(start=>feature.calls.slice(start).map(c=>c.args?.method).filter(Boolean),ordinarySaveStart),['settings.save']);assert.equal(await page.evaluate(()=>state.lastQuota),12345);
+        assert.deepEqual(await page.evaluate(start=>feature.calls.slice(start).map(c=>c.args?.method).filter(Boolean),ordinarySaveStart),['settings.save']);assert.equal(await page.evaluate(()=>state.lastQuota),0,'Preserved proxy draft is saved and invalidates quota polling');
         await page.evaluate(async()=>{state.settingsTab='prices';state.prices=await api('prices.list');renderSettings();});await page.locator('#field-mappingModel').fill('日志别名');await page.locator('[data-map-price="provider/model-49"]').click();
         assert.equal(await page.locator('#field-mappingId').inputValue(),'provider/model-49');assert.equal(await page.locator('#field-mappingModel').inputValue(),'日志别名');assert(await page.locator('#field-mappingId').evaluate(el=>el===document.activeElement));
         assert.equal(await page.locator('#content form').first().getAttribute('id'),'mapping-form');assert.deepEqual(await page.evaluate(()=>feature.settings.modelMappings),{});
         await page.evaluate(()=>{renderSettings();document.querySelector('#content').scrollTop=0;});assert.equal(await page.locator('#reprice').textContent(),'保存并重算');assert(await page.locator('#reprice').evaluate(el=>el.getBoundingClientRect().bottom<window.innerHeight));
         const repriceStart=await page.evaluate(()=>{feature.delayReprice=true;return feature.calls.length;});await page.locator('#reprice').click();await page.waitForFunction(()=>feature.releaseReprice);assert(await page.locator('#reprice').isDisabled());
         await page.evaluate(()=>feature.releaseReprice());await page.waitForFunction(()=>!state.busy);assert.deepEqual(await page.evaluate(start=>feature.calls.slice(start).map(c=>c.args?.method).filter(Boolean),repriceStart),['settings.save','prices.recalculate','dashboard']);
-        await page.evaluate(()=>feature.holdDashboard=true);await page.locator('#field-mappingModel').fill('日志别名');await page.locator('#field-mappingId').fill('provider/model-49');await page.locator('#mapping-form > button').click();await page.waitForFunction(()=>feature.releaseDashboard&&!state.busy&&!state.settingsSaving);
-        assert.equal(await page.evaluate(()=>feature.settings.modelMappings['日志别名']),'provider/model-49');await page.evaluate(()=>{feature.holdDashboard=false;feature.releaseDashboard();});
+        await page.evaluate(()=>feature.holdDashboard=true);await page.locator('#field-mappingModel').fill('日志别名2');await page.locator('#field-mappingId').fill('provider/model-49');await page.locator('#mapping-form > button').click();await page.waitForFunction(()=>feature.releaseDashboard&&!state.busy&&!state.settingsSaving);
+        assert.equal(await page.evaluate(()=>feature.settings.modelMappings['日志别名2']),'provider/model-49');await page.evaluate(()=>{feature.holdDashboard=false;feature.releaseDashboard();});
         await page.screenshot({path:path.join(output,'index.html-settings-prices.png')});
         await page.evaluate(()=>{state.settingsTab='hosts';renderSettings();});await page.locator('[data-edit="host"]').click();await page.locator('#field-authMode').selectOption('password');await page.locator('#field-username').fill('fixture-user');await page.locator('#field-password').fill('fixture secret');
         await page.locator('#discover-devices').click();await page.waitForFunction(()=>feature.calls.some(c=>c.args?.method==='hosts.credentials.delete'));
@@ -77,12 +78,12 @@ function fixture(){
         await page.evaluate(()=>{feature.timers.find(t=>t.ms===500).fn();});assert.equal(await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='quotas.refresh').length),before);
         await page.evaluate(()=>feature.emit('operations:busy',{operationId:'other-window',busy:false}));
       }else{
-        await page.waitForFunction(()=>document.querySelector('#panel-latency').textContent==='系统 73 ms');assert(await page.locator('#panel-update .update-badge').isVisible());assert(!await page.locator('#panel-pin').isVisible());
+        await page.waitForFunction(()=>document.querySelector('#panel-latency').textContent==='出站 · 系统 73 ms');assert(await page.locator('#panel-update .update-badge').isVisible());assert(!await page.locator('#panel-pin').isVisible());
         await page.locator('#panel-update').click();await page.waitForFunction(()=>feature.calls.some(c=>c.command==='updates_panel_check'));assert(await page.locator('#panel-update .update-badge').isVisible());
         await page.locator('#panel-more > summary').click();assert(await page.locator('#panel-pin').isVisible());await page.locator('#panel-more > summary').click();
       }
       const disclosure=page.locator('[data-quota="custom:account"] .quota-disclosure');if(!await disclosure.evaluate(el=>el.open))await disclosure.locator('summary').click();
-      await page.locator('[data-estimate="custom:account"]').click();assert.equal(await page.locator('#estimate-window').inputValue(),'five');await page.locator('#estimate-confirm').check();await page.evaluate(()=>feature.delaySample=true);await page.locator('#estimate-start').click();
+      await page.locator('[data-estimate="custom:account"]:visible').click();assert.equal(await page.locator('#estimate-window').inputValue(),'five');await page.locator('#estimate-confirm').check();await page.evaluate(()=>feature.delaySample=true);await page.locator('#estimate-start').click();
       await page.waitForFunction(()=>feature.releaseSample);assert.match(await page.locator('#quota-progress').textContent(),/同步来源 · 本机.*秒/);assert(await page.locator('#estimate-start').isDisabled());
       await page.evaluate(()=>feature.releaseSample());await page.locator('#estimate-stop').waitFor();
       for(const value of ['$20.00 USD','$100.00 USD','$110.00 USD'])assert.equal(await page.locator('#quota-dialog').getByText(value,{exact:true}).count(),1);

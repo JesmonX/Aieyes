@@ -21,11 +21,24 @@ enum Palette {
         return remaining < 10 ? danger : remaining <= 30 ? warn : accent
     }
     static let colors: [Color] = [accent, .teal, .purple, .orange, .pink, .cyan, .green, .indigo]
+    private static var modelHues: [String: Double] = [:]
+    private static let modelLock = NSLock()
     static func model(_ name: String) -> Color {
+        modelLock.lock()
         let hash = name.utf8.reduce(UInt32(2166136261)) { ($0 ^ UInt32($1)) &* 16777619 }
+        var hue = Double(hash % 3600) / 3600
+        if let previous = modelHues[name] { hue = previous } else {
+            for _ in 0..<24 {
+                if !modelHues.values.contains(where: { min(abs($0 - hue), 1 - abs($0 - hue)) < 20.0 / 360 }) { break }
+                hue = (hue + 137.508 / 360).truncatingRemainder(dividingBy: 1)
+            }
+            modelHues[name] = hue
+        }
+        modelLock.unlock()
+        let identityHue = hue
         return Color(nsColor: NSColor(name: nil) { appearance in
             let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            return NSColor(hue: Double(hash % 3600) / 3600, saturation: dark ? 0.35 : 0.64, brightness: dark ? 0.95 : 0.5, alpha: 1)
+            return NSColor(hue: identityHue, saturation: dark ? 0.35 : 0.64, brightness: dark ? 0.95 : 0.5, alpha: 1)
         })
     }
 }

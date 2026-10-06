@@ -1,3 +1,4 @@
+const {discardEditor}=require('./ui-test-helpers.cjs');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
 function fixture(){
@@ -32,9 +33,10 @@ function fixture(){
  for(const surface of ['index.html','floating.html']){
   const page=await browser.newPage({viewport:{width:surface==='index.html'?1120:450,height:850}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
   assert.equal(await page.getByText('1234.13',{exact:true}).count(),1);assert.equal(await page.getByText('Bank Reset · 2 次可用',{exact:true}).count(),1);
-  if(surface==='floating.html')await page.locator('.quota-disclosure summary').click();
-  assert.match(await page.locator('[data-credit-estimate]').textContent(),/^估算 credit 价值/);
-  assert.doesNotMatch(await page.locator('[data-credit-estimate]').textContent(),/500|1000/);
+  if(surface==='floating.html')await page.locator('#all-quotas').click();
+  const card=()=>page.locator(surface==='floating.html'?'#quota-dialog .quota-card':'#content .quota-card');
+  assert.match(await card().locator('[data-credit-estimate]').textContent(),/^估算 credit 价值/);
+  assert.doesNotMatch(await card().locator('[data-credit-estimate]').textContent(),/500|1000/);
   const decimals=[['1234.125','1234.13'],['1.005','1.01'],['10','10.00'],['0','0.00'],['-0.004','0.00'],['-1.005','-1.01'],['1e-3','0.00'],['9.999','10.00'],[null,'—'],['','—'],['NaN','—'],['12bad','—'],['Infinity','—']];
   for(const [input,expected] of decimals)assert.equal(await page.evaluate(v=>creditAmount(v),input),expected);
   const thresholds=[[100,'accent'],[30.01,'accent'],[30,'resource-warn'],[10,'resource-warn'],[9.99,'resource-high'],[0,'resource-high'],[null,'muted']];
@@ -47,12 +49,13 @@ function fixture(){
   }
   assert.equal(await page.evaluate(()=>resourceColor(95)),'var(--resource-high)','High CPU load must still be red');
   assert.equal(await page.evaluate(()=>creditValue({status:'pending',valuePer1000:200})),'待确认');
-  if(await page.locator('.quota-disclosure').evaluate(el=>el.open))await page.locator('.quota-disclosure summary').click();
+  if(await card().locator('.quota-disclosure').evaluate(el=>el.open))await card().locator('.quota-disclosure summary').click();
   await page.evaluate(()=>loadDashboard());
-  assert.equal(await page.locator('.quota-disclosure').evaluate(el=>el.open),false,'Refresh preserves collapsed quota');
-  await page.locator('.quota-disclosure summary').click();
-  await page.locator('[data-credit-estimate]').click();await page.locator('#estimate-confirm').check();await page.locator('#estimate-start').click();await page.locator('#estimate-stop').waitFor();assert.match(await page.locator('#quota-dialog').textContent(),/1000 credit ≈ \$200.00 USD/);assert.doesNotMatch(await page.locator('#quota-dialog').textContent(),/500 credits/);await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();await page.locator('#quota-close').click();
-  await page.locator('.credit-value').waitFor();
+  assert.equal(await card().locator('.quota-disclosure').evaluate(el=>el.open),false,'Refresh preserves collapsed quota');
+  await card().locator('.quota-disclosure summary').click();
+  await page.locator('[data-credit-estimate]:visible').click();await page.locator('#estimate-confirm').check();await page.locator('#estimate-start').click();await page.locator('#estimate-stop').waitFor();assert.match(await page.locator('#quota-dialog').textContent(),/1000 credit ≈ \$200.00 USD/);assert.doesNotMatch(await page.locator('#quota-dialog').textContent(),/500 credits/);await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();await page.locator('#quota-close').click();
+  if(surface==='floating.html')await page.locator('#all-quotas').click();
+  await card().locator('.credit-value').waitFor();if(surface==='floating.html')await page.locator('#quota-close').click();
   const previews=path.resolve(__dirname,'../.local/ui-previews');fs.mkdirSync(previews,{recursive:true});
   for(const colorScheme of ['light','dark']){
    await page.emulateMedia({colorScheme});await page.evaluate(()=>{document.querySelector('.panel-body')?.scrollTo(0,0);window.scrollTo(0,0);});
@@ -61,16 +64,16 @@ function fixture(){
   await page.emulateMedia({colorScheme:'light'});
   if(surface==='floating.html'){
    await page.evaluate(()=>{state.days=30;state.cost=true;render();});
-   await page.locator('.quota-disclosure summary').click();
+   await page.locator('#content .quota-disclosure summary').click();
    await page.reload();await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
-   assert.equal(await page.evaluate(()=>state.days),30);assert.equal(await page.evaluate(()=>state.cost),true);
+   assert.equal(await page.evaluate(()=>state.days),1);assert.equal(await page.evaluate(()=>state.cost),true);
    assert.equal(await page.locator('.quota-disclosure').evaluate(el=>el.open),false);
    assert.equal(await page.evaluate(()=>testFeature.calls.some(c=>c.method==='creditEstimates.start')),false,'Recreating the panel does not start another sample');
   }
   if(surface==='index.html'){
-   await page.evaluate(()=>{state.page='settings';state.settingsTab='wakeups';renderSettings();});await page.locator('#wake-add:not([disabled])').waitFor();await page.locator('#wake-add').click();await page.locator('#wake-probe').click();await page.waitForFunction(()=>document.querySelector('#wake-model')?.value==='cheap-model');assert.equal(await page.locator('#wake-effort').inputValue(),'low');await page.locator('[name=times]').fill('08:00, 13:30');await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
-   assert.equal(await page.evaluate(()=>testFeature.calls.filter(c=>c.method==='wakeups.deploy').length),0,'saving does not deploy');await page.locator('[data-wake-action=deploy]').click();await page.locator('[data-wake-action=disable]').waitFor();await page.locator('[data-wake-action=disable]').click();await page.locator('[data-wake-action=enable]').waitFor();await page.locator('[data-wake-action=enable]').click();await page.locator('[data-wake-action=status]').click();await page.getByText('已完成',{exact:true}).waitFor();await page.locator('#quota-close').click();
-   await page.evaluate(()=>testFeature.failRemoval=true);await page.locator('[data-wake-action=remove]').click();await page.getByText('待移除',{exact:true}).waitFor();assert.match(await page.locator('#content').textContent(),/尚未确认移除/);await page.evaluate(()=>testFeature.failRemoval=false);await page.locator('[data-wake-action=remove]').click();await page.locator('[data-wake-action=delete]').waitFor();
+   await page.evaluate(()=>{state.page='settings';state.settingsTab='wakeups';renderSettings();});await page.locator('#wake-add:not([disabled])').waitFor();await page.locator('#wake-add').click();await page.locator('#wake-probe').click();await page.waitForFunction(()=>document.querySelector('#wake-model')?.value==='cheap-model');assert.equal(await page.locator('#wake-effort').inputValue(),'low');await page.locator('#wake-add-time').click();await page.locator('[data-wake-time="1"]').fill('13:30');await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
+   assert.equal(await page.evaluate(()=>testFeature.calls.filter(c=>c.method==='wakeups.deploy').length),0,'saving does not deploy');await page.locator('[data-wake-action=deploy]').click();await page.locator('.wake-more summary').click();await page.locator('[data-wake-action=disable]').waitFor();await page.locator('[data-wake-action=disable]').click();await page.locator('.wake-more summary').click();await page.locator('[data-wake-action=enable]').waitFor();await page.locator('[data-wake-action=enable]').click();await page.locator('[data-wake-action=status]').click();await page.locator('#quota-dialog').getByText('已完成',{exact:true}).waitFor();await page.locator('#quota-close').click();
+   await page.evaluate(()=>testFeature.failRemoval=true);await page.locator('.wake-more summary').click();await page.locator('[data-wake-action=remove]').click();await page.locator('#editor-form button[type=submit]').click();await page.getByText('待移除',{exact:true}).waitFor();assert.match(await page.locator('#content').textContent(),/尚未确认移除/);await discardEditor(page);await page.evaluate(()=>testFeature.failRemoval=false);await page.locator('.wake-more summary').click();await page.locator('[data-wake-action=remove]').click();await page.locator('#editor-form button[type=submit]').click();await page.locator('[data-wake-action=delete]').waitFor({state:'attached'});
    fs.mkdirSync(path.resolve(__dirname,'../.local/wakeup-review'),{recursive:true});await page.screenshot({path:path.resolve(__dirname,'../.local/wakeup-review/desktop.png')});
   }
   assert.deepEqual(errors,[]);await page.close();

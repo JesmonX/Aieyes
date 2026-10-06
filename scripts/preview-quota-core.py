@@ -41,11 +41,21 @@ if scenario:
     if scenario == 'single':
         settings['sources'] = settings['sources'][:1]; settings['accounts'] = settings['accounts'][:1]; quotas = quotas[:1]
     elif scenario == 'multi':
-        quotas = [dict(quotas[0], accountId='account-'+str(i), name='订阅账户 '+str(i+1)) for i in range(5)]
+        quotas = [dict(quotas[0], accountId='account-'+str(i), sourceId='source-'+str(i), name='订阅账户 '+str(i+1)) for i in range(5)]
         settings['accounts'] = [dict(id=q['accountId'], provider='codex', name=q['name'], quotaEnabled=True) for q in quotas]
+        settings['sources'] = [dict(source('codex'), id=q['sourceId'], accountId=q['accountId'], name='日志 '+str(i+1)) for i,q in enumerate(quotas)]
+        settings['hosts'] = [dict(host, id='host-'+str(i), name='训练服务器 '+str(i+1), metrics=['cpu','memory','gpu']) for i in range(5)]
+        hosts = [dict(id=h['id'], name=h['name'], sample=dict(timestamp=stamp, uptime=3600, load=[0.1], errors={}, cpu=[dict(id='cpu',utilization=20+i*12)], memory=dict(total=16000000000,available=8000000000,cached=0,buffers=0,swapTotal=0,swapFree=0),gpu=[dict(id='0',utilization=40+i*10)])) for i,h in enumerate(settings['hosts'])]
+        dashboard['quotaEstimates'] = [dict(estimate,accountKey='codex:account-0',sourceIds=['source-0'],sourceNames=['日志 1'])]
     elif scenario == 'long':
         long_name = '团队账户与训练服务器的长名称示例' * 4
         quotas[0]['name'] = long_name; settings['sources'][0]['name'] = long_name; settings['accounts'][0]['name'] = long_name
+        usage.update(total=2400000000,cost=100000.25,pricedTokens=2400000000,tokens=dict(input=1500000000,output=300000000,cacheRead=500000000,cacheWrite=100000000,reasoning=0))
+        dashboard['trendDays'] = [dict(usage,key=(date(2026,6,28)+timedelta(days=i)).isoformat()) for i in range(100)]
+        dashboard['heatmap'] = [dict(usage,key=(date(2025,10,7)+timedelta(days=i)).isoformat()) for i in range(365)]
+        dashboard['models'] = [dict(usage,key='provider/long-model-identifier-'+str(i),total=usage['total']/(i+1),cost=i+1) for i in range(12)]
+        dashboard['modelOptions'] = [m['key'] for m in dashboard['models']]
+        dashboard['dayModels'] = [dict(day=day['key'],model=m['key'],usage=m) for day in dashboard['trendDays'] for m in dashboard['models']]
     elif scenario == 'empty':
         settings['sources'] = []; settings['accounts'] = []; quotas = []
         dashboard['summary'] = dict(key='',tokens=dict(input=0,output=0,cacheRead=0,cacheWrite=0,reasoning=0),total=0,cost=0,pricedTokens=0,events=0)
@@ -53,6 +63,7 @@ if scenario:
     elif scenario == 'failure':
         for q in quotas: q['error'] = '连接失败：模拟账户凭据失效'
         hosts[0]['error'] = '连接失败：模拟 SSH 不可读取'
+    dashboard['sources'] = [dict(src,status=dict(updatedAt=stamp,error='模拟读取失败' if scenario == 'failure' else None)) for src in settings['sources']]
     dashboard['quotas'] = quotas
     dashboard['quotaOrder'] = [q['provider']+':'+q['accountId'] for q in quotas]
 for line in sys.stdin:

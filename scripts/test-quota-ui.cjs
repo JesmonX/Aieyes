@@ -1,3 +1,4 @@
+const {discardEditor}=require('./ui-test-helpers.cjs');
 // End-to-end quota UI flows on both desktop surfaces, with isolated in-memory IPC.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
@@ -34,25 +35,29 @@ function fixture(){
   for(const surface of ['index.html','floating.html']){
    const page=await browser.newPage({viewport:{width:surface==='floating.html'?450:1120,height:760}}),errors=[];
    page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
-   const agy=page.locator('[data-quota="agy:a"]');await agy.waitFor({state:'visible'});
+   if(surface==='floating.html')await page.locator('#all-quotas').click();
+   const agy=page.locator('[data-quota="agy:a"]:visible');await agy.waitFor({state:'visible'});
    assert.equal(await agy.locator('.agy-group').count(),3);
-   assert.equal(await agy.locator('.resource-bar:visible').count(),6,'collapsed agy keeps all groups visible');
-   assert.equal(await agy.locator('.quota-reset:visible').count(),0);
+   assert.equal(await agy.locator('.resource-bar:visible').count(),2,'collapsed agy shows the primary model group');
+   assert.equal(await agy.locator('.quota-reset:visible').count(),2);
    const before=(await agy.boundingBox()).height;await agy.locator('summary').click();assert.equal(await agy.locator('.quota-reset:visible').count(),6);
    assert((await agy.boundingBox()).height>before);await agy.locator('summary').click();
-   await page.locator('#order-quotas').click();await page.locator('[data-order="agy:a"] [data-direction="-1"]').click();
+   if(surface==='floating.html'){await page.locator('#quota-close').click();await page.evaluate(()=>openQuotaOrder());}else await page.locator('#order-quotas').click();await page.locator('[data-order="agy:a"] [data-direction="-1"]').click();
    await page.locator('[data-order="codex:c"]').dragTo(page.locator('[data-order="agy:a"]'));
    await page.locator('[data-order="agy:a"]').dragTo(page.locator('[data-order="codex:c"]'));
    await page.evaluate(()=>quotaFixture.fail=true);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>document.querySelector('#quota-tool-error').textContent.includes('保存失败'));
    assert(await page.locator('#quota-dialog').evaluate(e=>e.open));await page.evaluate(()=>quotaFixture.fail=false);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>!document.querySelector('#quota-dialog').open);
    assert.equal(await page.locator('[data-quota]').first().getAttribute('data-quota'),'agy:a');
-   if(!await page.locator('[data-quota="codex:c"] .quota-disclosure').evaluate(el=>el.open))await page.locator('[data-quota="codex:c"] .quota-disclosure summary').click();
-   await page.locator('[data-estimate="codex:c"]').click();assert(await page.locator('#estimate-start').isDisabled());await page.locator('#estimate-confirm').check();
+   if(surface==='floating.html')await page.locator('#all-quotas').click();
+   if(!await page.locator('[data-quota="codex:c"]:visible .quota-disclosure').evaluate(el=>el.open))await page.locator('[data-quota="codex:c"]:visible .quota-disclosure summary').click();
+   if(surface==='floating.html'&&!await page.locator('#quota-dialog').evaluate(e=>e.open))await page.locator('#all-quotas').click();
+   await page.locator('[data-estimate="codex:c"]:visible').click();assert(await page.locator('#estimate-start').isDisabled());await page.locator('#estimate-confirm').check();
    await page.locator('[name=estimate-source]').uncheck();await page.locator('#estimate-start').click();await page.waitForFunction(()=>document.querySelector('#quota-tool-error').textContent.includes('数据源'));
    await page.locator('[name=estimate-source]').check();await page.locator('#estimate-start').click();await page.locator('#estimate-stop').waitFor();assert.equal(await page.locator('#quota-dialog').getByText('$20.00 USD',{exact:true}).count(),1);
    await page.locator('#quota-dialog details summary').click();await page.screenshot({path:path.join(output,surface+'-estimate.png')});
    await page.keyboard.press('Escape');await page.waitForFunction(()=>!document.querySelector('#quota-dialog').open);if(surface==='floating.html')assert.equal(await page.evaluate(()=>quotaFixture.panelOpen),true,'Escape does not close underlying panel');
-   await page.locator('[data-estimate="codex:c"]').click();
+   if(surface==='floating.html'&&!await page.locator('#quota-dialog').evaluate(e=>e.open))await page.locator('#all-quotas').click();
+   await page.locator('[data-estimate="codex:c"]:visible').click();
    await page.evaluate(async()=>{quotaFixture.records[0].status='pending';quotaFixture.records[0].reason='检测到提前重置';await loadDashboard();});
    await page.locator('#estimate-restart').waitFor();assert(await page.locator('#estimate-restart').isDisabled());await page.locator('#estimate-confirm').check();await page.locator('#estimate-restart').click();await page.locator('#estimate-stop').waitFor();
    await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();assert.equal(await page.locator('#quota-dialog').getByText('已结束',{exact:true}).count(),1);

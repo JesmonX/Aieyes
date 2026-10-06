@@ -84,6 +84,7 @@ struct Host: Codable, Equatable, Identifiable {
     var details: [String]? = Host.detailOptions.map { $0.0 }
     var authMode: String?, username: String?, passwordRef: String?
     static let detailOptions = [("cpuTimes", "CPU 时间分布"), ("memoryCache", "内存缓存 / Buffer"), ("swap", "Swap"), ("fsAvailable", "文件系统可用空间"), ("fsType", "文件系统类型 / 设备"), ("inodes", "inode"), ("diskIops", "磁盘 IOPS"), ("diskBusy", "磁盘忙碌率"), ("networkTotals", "累计流量"), ("networkErrors", "网络错误 / 丢包"), ("gpuMemory", "GPU 显存"), ("gpuThermals", "GPU 温度 / 功耗")]
+    var connectionIdentity: String { [target, port.map(String.init) ?? "", identityFile, shell, preCommand, authMode ?? "ssh", username ?? "", passwordRef ?? ""].joined(separator: "\u{0}") }
     func shows(_ key: String) -> Bool { details?.contains(key) ?? true }
 }
 struct Settings: Codable, Equatable {
@@ -111,6 +112,13 @@ struct MetricSample: Codable {
 struct HostResult: Codable, Identifiable { var id: String, name: String, sample: MetricSample?, error: String? }
 
 enum Format {
+    static func resetCountdown(_ stamp: Double?, now: Date = Date()) -> String {
+        guard let stamp else { return "重置时间未知" }
+        guard stamp > now.timeIntervalSince1970 else { return "确认重置中" }
+        let minutes = Int(ceil((stamp - now.timeIntervalSince1970) / 60))
+        return (minutes >= 60 ? "\(minutes / 60) 小时 " : "") + "\(minutes % 60) 分后重置"
+    }
+
     static func compact(_ value: Double) -> String {
         if value >= 1_000_000_000 { return String(format: "%.2fB", value / 1_000_000_000) }
         if value >= 1_000_000 { return String(format: "%.2fM", value / 1_000_000) }

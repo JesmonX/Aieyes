@@ -8,6 +8,60 @@ use aieyes_core::Engine;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
+
+fn local_path(raw: &str) -> std::path::PathBuf {
+    if (raw == "~" || raw.starts_with("~/"))
+        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+    {
+        return std::path::PathBuf::from(home).join(raw.strip_prefix("~/").unwrap_or(""));
+    }
+    raw.into()
+}
+
+#[tauri::command]
+async fn select_local_path(
+    app: tauri::AppHandle,
+    directory: bool,
+    initial: String,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let initial = local_path(&initial);
+        let folder = if initial.is_dir() {
+            initial.as_path()
+        } else {
+            initial.parent().unwrap_or(std::path::Path::new("."))
+        };
+        let dialog = app
+            .dialog()
+            .file()
+            .set_directory(folder)
+            .set_title(if directory {
+                "选择数据目录"
+            } else {
+                "选择本机文件"
+            });
+        let selected = if directory {
+            dialog.blocking_pick_folder()
+        } else {
+            dialog.blocking_pick_file()
+        };
+        selected
+            .map(|file| {
+                file.into_path()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn check_local_path(path: String) -> bool {
+    local_path(&path).exists()
+}
 
 struct Shared(Arc<Mutex<Engine>>, Arc<Mutex<Engine>>, Arc<Mutex<Engine>>);
 
@@ -188,6 +242,7 @@ async fn engine_call(
 
 fn main() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let root = std::env::var_os("AIEYES_DATA_DIR")
@@ -216,6 +271,8 @@ fn main() {
         .on_window_event(desktop::on_window_event)
         .invoke_handler(tauri::generate_handler![
             engine_call,
+            select_local_path,
+            check_local_path,
             updates::updates_info,
             updates::updates_check,
             updates::updates_panel_check,

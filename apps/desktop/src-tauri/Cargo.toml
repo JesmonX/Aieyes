@@ -1,6 +1,6 @@
 [package]
 name = "aieyes-desktop"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2024"
 default-run = "aieyes-desktop"
 
@@ -17,6 +17,7 @@ semver = "1"
 tempfile = "3"
 minisign-verify = "0.2.5"
 base64 = "0.22"
+tauri-plugin-dialog = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libloading = "0.7.4"

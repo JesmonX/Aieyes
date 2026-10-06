@@ -7,11 +7,12 @@ import Combine
     var body: some Scene { SwiftUI.Settings { EmptyView() } }
 }
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate, NSToolbarDelegate {
     private var statusItem: NSStatusItem!
     private var statusLabel: NSHostingView<MenuActivityLabel>?
     private let popover = NSPopover()
     private var detailWindow: NSWindow?
+    private var pageControl: NSSegmentedControl?
     private var settingsWindow: NSWindow?
     private var samplingWindow: NSWindow?
     private var estimateWindows: [String: NSWindow] = [:]
@@ -38,7 +39,8 @@ import Combine
         AppUpdater.shared.start()
         model.showSettings = { [weak self] in self?.openSettings() }
         model.showDetail = { [weak self] in self?.openDetail() }
-        model.showEstimate = { [weak self] quota in self?.openEstimate(quota) }
+        model.showDetailPage = { [weak self] page in self?.openDetail(page: page) }
+        model.showEstimate = { [weak self] quota, credits in self?.openEstimate(quota, credits: credits) }
         model.showSampling = { [weak self] in self?.openSampling() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
@@ -90,19 +92,38 @@ import Combine
         button.setAccessibilityLabel(button.toolTip)
         popover.behavior = model.isPinned ? .applicationDefined : .transient
         settingsWindow?.isDocumentEdited = model.settingsDirty
+        pageControl?.selectedSegment = model.detailPage == "servers" ? 1 : 0
     }
-    private func openDetail() {
+    private func openDetail(page: String? = nil) {
+        if let page { model.requestedDetailPage = page; model.detailPage = page }
         popover.performClose(nil)
         if detailWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            let toolbar = NSToolbar(identifier: "AieyesDetailsToolbar"); toolbar.delegate = self; toolbar.displayMode = .iconOnly; window.toolbar = toolbar; window.toolbarStyle = .unified
             window.contentMinSize = NSSize(width: 760, height: 480)
             window.title = "Aieyes"; window.titlebarAppearsTransparent = true; window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: RootView(model: model, compact: false)); window.center(); window.delegate = self
+            window.contentView = NSHostingView(rootView: RootView(model: model, compact: false, page: page ?? model.detailPage)); window.center(); window.delegate = self
             window.setFrameAutosaveName("AieyesDetails"); detailWindow = window
         }
         if let window = detailWindow { fitToVisibleScreen(window) }
         detailWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); model.setWindowVisible(true, window: "detail")
     }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.init("pages"), .flexibleSpace, .init("refresh")] }
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarAllowedItemIdentifiers(toolbar) }
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        if identifier.rawValue == "pages" {
+            let control = NSSegmentedControl(labels: ["Agent", "服务器"], trackingMode: .selectOne, target: self, action: #selector(detailPageChanged(_:)))
+            control.selectedSegment = model.detailPage == "servers" ? 1 : 0; control.setAccessibilityLabel("详情页面"); pageControl = control; item.view = control; item.label = "页面"
+        } else if identifier.rawValue == "refresh" {
+            let button = NSPopUpButton(frame: .zero, pullsDown: true); button.addItem(withTitle: "刷新")
+            for (index, title) in ["同步记录", "刷新限额", "同步价格", "刷新服务器"].enumerated() { let entry = NSMenuItem(title: title, action: #selector(toolbarRefresh(_:)), keyEquivalent: ""); entry.tag = index; entry.target = self; button.menu?.addItem(entry) }
+            button.setAccessibilityLabel("刷新选项"); item.view = button; item.label = "刷新"
+        }
+        return item
+    }
+    @objc private func detailPageChanged(_ sender: NSSegmentedControl) { model.requestedDetailPage = sender.selectedSegment == 1 ? "servers" : "agent" }
+    @objc private func toolbarRefresh(_ sender: NSMenuItem) { Task { switch sender.tag { case 0: await model.scan(); case 1: await model.refreshQuotas(); case 2: await model.syncPrices(); default: await model.sampleHosts() } } }
     private func openSettings() {
         popover.performClose(nil)
         if settingsWindow == nil {
@@ -133,16 +154,17 @@ import Combine
         if response == .alertSecondButtonReturn { model.discardSettingsDraft(); return true }
         return false
     }
-    private func openEstimate(_ quota: Quota) {
+    private func openEstimate(_ quota: Quota, credits: Bool = false) {
+        let key = quota.id + (credits ? ":credits" : ":quota")
         popover.performClose(nil)
-        let window = estimateWindows[quota.id] ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 530, height: 600), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        if estimateWindows[quota.id] == nil {
-            window.title = quota.name + " · 额度估值"; window.isReleasedWhenClosed = false
+        let window = estimateWindows[key] ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 530, height: 600), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        if estimateWindows[key] == nil {
+            window.title = quota.name + (credits ? " · credit 价值" : " · 额度估值"); window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: 490, height: 360)
-            window.center(); estimateWindows[quota.id] = window
+            window.center(); estimateWindows[key] = window
         }
-        window.title = quota.name + " · 额度估值"
-        window.contentView = NSHostingView(rootView: QuotaEstimateView(model: model, quota: quota, onClose: { [weak window] in window?.close() }))
+        window.title = quota.name + (credits ? " · credit 价值" : " · 额度估值")
+        window.contentView = NSHostingView(rootView: QuotaEstimateView(model: model, quota: quota, onClose: { [weak window] in window?.close() }, credits: credits))
         fitToVisibleScreen(window); window.deminiaturize(nil); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func openSampling() {
@@ -263,6 +285,7 @@ import Combine
                 for dark in [false, true] { try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("settings-\(tab)-\(dark ? "dark" : "light").png")) }
             }
             for dark in [false, true] {
+                try await capture(RootView(model: model, compact: false, page: "servers"), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("servers-\(dark ? "dark" : "light").png"))
                 model.panelHeight = 540
                 try await capture(RootView(model: model), size: NSSize(width: 450, height: 540), dark: dark, to: root.appendingPathComponent("low-panel-\(dark ? "dark" : "light").png"))
                 model.panelHeight = 720
@@ -275,7 +298,7 @@ import Combine
                 }
             }
             model.settingsTab = "prices"
-            try await capture(SettingsView(model: model), size: NSSize(width: 620, height: 460), dark: false, to: root.appendingPathComponent("settings-prices-small.png"))
+            try await capture(SettingsView(model: model), size: NSSize(width: 620, height: 440), dark: false, to: root.appendingPathComponent("settings-prices-small.png"))
             let savedSources = model.settings.sources, savedDashboard = model.dashboard
             model.settings.sources = []; model.settingsDraft = model.settings; model.dashboard = Dashboard()
             model.panelHeight = 540
@@ -294,9 +317,7 @@ import Combine
                 }
                 if let account = model.dashboard.quotas.first(where: { $0.provider == "codex" }) {
                     try await capture(QuotaEstimateView(model: model, quota: account), size: NSSize(width: 518, height: 620), dark: dark, to: root.appendingPathComponent("quota-estimate-\(dark ? "dark" : "light").png"))
-                    model.creditEstimateMode = true
-                    try await capture(QuotaEstimateView(model: model, quota: account), size: NSSize(width: 518, height: 620), dark: dark, to: root.appendingPathComponent("credit-estimate-\(dark ? "dark" : "light").png"))
-                    model.creditEstimateMode = false
+                    try await capture(QuotaEstimateView(model: model, quota: account, credits: true), size: NSSize(width: 518, height: 620), dark: dark, to: root.appendingPathComponent("credit-estimate-\(dark ? "dark" : "light").png"))
                 }
             }
             try await capture(QuotaOrderView(model: model), size: NSSize(width: 488, height: 430), dark: false, to: root.appendingPathComponent("quota-order.png"))

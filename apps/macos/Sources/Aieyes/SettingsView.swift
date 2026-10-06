@@ -12,8 +12,9 @@ struct SettingsView: View {
     @State private var priceEditor: ModelPrice?
     @State private var search = ""
     @State private var removal: RemovalRequest?
-    @State private var mappingModel = ""
-    @State private var mappingID = ""
+    @State private var confirmDiscardConfig = false
+    private var mappingModel: String { get { model.mappingModel } nonmutating set { model.mappingModel = newValue } }
+    private var mappingID: String { get { model.mappingID } nonmutating set { model.mappingID = newValue } }
     @FocusState private var mappingFocused: Bool
     @MainActor init(model: AppModel) {
         self.model = model
@@ -24,24 +25,18 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("设置").font(AppFont.title)
                     if model.settingsSaving { TimelineView(.periodic(from: .now, by: 1)) { context in Text(model.settingsStage + " · " + String(Int(context.date.timeIntervalSince(model.settingsStartedAt ?? context.date))) + " 秒").font(AppFont.secondary).foregroundStyle(.secondary) } }
-                    else { Text(!model.settingsLoaded ? "正在读取配置…" : model.settingsDirty ? "有未保存的配置更改" : "配置编辑完成后，在此保存全部更改").font(AppFont.secondary).foregroundStyle(.secondary) }
+                    else { Text(!model.settingsLoaded ? "正在读取配置…" : model.settingsDirty ? "应用配置 · 未保存 \(model.settingsChangeCount) 项" : "应用配置 · 已保存").font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
                 Spacer()
                 if !model.settingsLoaded { Button("重试读取") { Task { await model.bootstrap() } } }
                 if model.settingsSaving { ProgressView().controlSize(.small) }
-                Button("放弃更改") { model.discardSettingsDraft() }.disabled(!model.settingsDirty || model.settingsSaving || model.repricing)
-                Button(model.settingsSaving ? "保存中…" : "保存") { Task { _ = await model.saveSettingsDraft() } }.buttonStyle(.borderedProminent).keyboardShortcut("s").disabled(!model.settingsDirty || model.settingsSaving || model.repricing)
+                Button("放弃更改") { confirmDiscardConfig = true }.disabled(!model.settingsDirty || model.settingsSaving || model.repricing)
+                Button(model.settingsSaving ? "保存中…" : "保存应用配置") { Task { _ = await model.saveSettingsDraft() } }.buttonStyle(.borderedProminent).keyboardShortcut("s").disabled(!model.settingsDirty || model.settingsSaving || model.repricing)
             }.padding(22)
             if let message = model.settingsMessage ?? model.message { HStack { Text(message).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.settingsMessage = nil; model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭提示") }.padding(.horizontal, 22).padding(.bottom, 10) }
-            HStack(spacing: 6) {
-                ForEach([("sources", "数据源", "tray.full"), ("servers", "服务器", "server.rack"), ("prices", "价格", "dollarsign.circle"), ("wakeups", "定时唤醒", "clock"), ("general", "通用", "slider.horizontal.3")], id: \.0) { key, title, icon in
-                    Button { model.settingsTab = key } label: {
-                        Label(title, systemImage: icon).font(.system(size: 15, weight: model.settingsTab == key ? .semibold : .regular)).frame(maxWidth: .infinity).padding(.vertical, 10)
-                            .foregroundStyle(model.settingsTab == key ? Palette.accent : .secondary)
-                            .background(model.settingsTab == key ? Palette.accent.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
-                    }.buttonStyle(.plain).accessibilityValue(model.settingsTab == key ? "已选中" : "")
-                }
-            }.padding(.horizontal, 22).padding(.bottom, 12)
+            Picker("设置分类", selection: $model.settingsTab) {
+                Text("数据源").tag("sources"); Text("服务器").tag("servers"); Text("价格").tag("prices"); Text("定时唤醒").tag("wakeups"); Text("通用").tag("general")
+            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 22).padding(.bottom, 12)
             Divider().opacity(0.5)
             Group {
                 switch model.settingsTab {
@@ -55,9 +50,11 @@ struct SettingsView: View {
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16).disabled(model.settingsSaving || model.repricing || !model.settingsLoaded)
         }
         .font(AppFont.body).disabled(model.installingUpdate)
+        .discardDraftConfirmation($confirmDiscardConfig) { model.discardSettingsDraft() }
         .frame(minWidth: 620, idealWidth: 760, minHeight: 440, idealHeight: 600).tint(Palette.accent)
         .onAppear { if model.settingsTab == "accounts" { model.settingsTab = "sources" }; if model.settingsTab == "connection" { model.settingsTab = "general" }; Task { await model.loadPrices() }; consumeEditorRequest() }
         .onChange(of: model.requestedSourceProvider) { _, _ in consumeEditorRequest() }
+        .onChange(of: model.requestedAccountKey) { _, _ in consumeEditorRequest() }
         .onChange(of: model.requestHostEditor) { _, _ in consumeEditorRequest() }
         .sheet(item: $removal) { request in
             DangerConfirmation(title: request.title, explanation: request.explanation, affected: request.affected, confirmLabel: request.kind == "account" ? "归档并保留历史" : "确认移除", cancel: { removal = nil }, confirm: { model.applyRemoval(request); removal = nil })
@@ -90,6 +87,7 @@ struct SettingsView: View {
         } }
     }
     private func consumeEditorRequest() {
+        if let key = model.requestedAccountKey { accountEditor = draft.accounts.first { $0.key == key }; model.requestedAccountKey = nil }
         if let provider = model.requestedSourceProvider {
             sourceEditor = AgentSource(provider: provider, path: provider == "codex" ? "~/.codex" : provider == "claude" ? "~/.claude" : "")
             model.requestedSourceProvider = nil
@@ -99,16 +97,13 @@ struct SettingsView: View {
     private var sources: some View {
         VStack(spacing: 12) {
             Form {
-                ForEach($model.settingsDraft.sources) { $source in
-                    HStack(spacing: 12) {
-                        Toggle("启用", isOn: $source.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
-                        VStack(alignment: .leading, spacing: 5) { Text(source.name).font(AppFont.section); Text(Format.provider(source.provider) + " · " + (source.accountId.isEmpty ? "无账户" : draft.accounts.first { $0.id == source.accountId && $0.provider == source.provider }?.name ?? source.accountId)).font(AppFont.secondary).foregroundStyle(.secondary) }
-                        if let error = model.dashboard.sources.first(where: { $0.id == source.id })?.status?.error { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
-                        Spacer()
-                        Button("编辑") { sourceEditor = source }
-                        Button { removal = model.removalRequest("source", id: source.id) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除数据源")
-                    }.padding(.vertical, 7)
+                ForEach(draft.accounts.filter { $0.archived != true }, id: \.key) { account in
+                    Section {
+                        HStack { VStack(alignment: .leading) { Text(account.name).font(AppFont.section); Text("共用 \(draft.sources.filter { $0.accountId == account.id && $0.provider == account.provider }.count) 个来源 · 账户名称与限额设置共同生效").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button("编辑账户") { accountEditor = account }.accessibilityLabel("编辑账户 " + account.name) }
+                        ForEach($model.settingsDraft.sources) { $source in if source.accountId == account.id && source.provider == account.provider { sourceRow($source) } }
+                    }
                 }
+                Section("未关联账户的来源") { ForEach($model.settingsDraft.sources) { $source in if source.accountId.isEmpty || !draft.accounts.contains(where: { $0.id == source.accountId && $0.provider == source.provider && $0.archived != true }) { sourceRow($source) } } }
                 if !unlinkedAccounts.isEmpty {
                     DisclosureGroup("未关联账户") { ForEach(unlinkedAccounts, id: \.key) { accountRow($0) } }
                 }
@@ -119,6 +114,20 @@ struct SettingsView: View {
             }.formStyle(.grouped)
             HStack { Button("添加数据源", systemImage: "plus") { sourceEditor = AgentSource() }; Spacer(); Button("保存并同步记录") { Task { if await model.saveSettingsDraft() { await model.scan() } } }.disabled(model.busy) }.padding(.horizontal, 8)
         }.padding(.vertical, 12)
+    }
+    private func sourceRow(_ binding: Binding<AgentSource>) -> some View {
+        let source = binding.wrappedValue, saved = model.settings.sources.first { $0.id == source.id }
+        return HStack(spacing: 12) {
+            Toggle("启用 " + source.name, isOn: binding.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(source.name).font(AppFont.body)
+                Text(source.hostId.flatMap { id in draft.hosts.first { $0.id == id }?.name } ?? "本机").font(AppFont.secondary).foregroundStyle(.secondary)
+                if saved != source { Text("待保存：" + (saved?.enabled == source.enabled ? "配置修改" : source.enabled ? "启用" : "停用") + " · " + (saved?.enabled == true ? "当前仍运行" : "当前未运行")).font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                if let status = model.dashboard.sources.first(where: { $0.id == source.id })?.status { Text(status.error ?? ("记录同步于 " + Format.date(status.updatedAt))).font(AppFont.secondary).foregroundStyle(status.error == nil ? Color.secondary : Palette.warn) }
+            }
+            Spacer(); Button("编辑") { sourceEditor = source }.accessibilityLabel("编辑来源 " + source.name)
+            Button { removal = model.removalRequest("source", id: source.id) } label: { Image(systemName: "minus.circle").frame(width: 32, height: 32) }.buttonStyle(.borderless).accessibilityLabel("移除来源 " + source.name)
+        }.padding(.vertical, 6)
     }
     private var unlinkedAccounts: [AgentAccount] {
         draft.accounts.filter { account in account.archived != true && !draft.sources.contains { $0.accountId == account.id && $0.provider == account.provider } }
@@ -137,14 +146,22 @@ struct SettingsView: View {
         VStack(spacing: 12) {
             Form {
                 ForEach($model.settingsDraft.hosts) { $host in HStack(spacing: 12) {
-                    Toggle("启用", isOn: $host.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
-                    VStack(alignment: .leading, spacing: 5) { Text(host.name.isEmpty ? host.target : host.name).font(AppFont.section); Text(host.target).font(AppFont.secondary).foregroundStyle(.secondary) }
-                    Spacer(); Button("编辑") { hostEditor = host }
-                    Button { removal = model.removalRequest("host", id: host.id) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除主机")
+                    Toggle("启用 " + (host.name.isEmpty ? host.target : host.name), isOn: $host.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                    VStack(alignment: .leading, spacing: 5) { Text(host.name.isEmpty ? host.target : host.name).font(AppFont.section); Text(host.target).font(AppFont.secondary).foregroundStyle(.secondary); if model.settings.hosts.first(where: { $0.id == host.id }) != host { Text("待保存：" + (host.enabled ? "启用" : "停用") + " · " + (model.settings.hosts.first(where: { $0.id == host.id })?.enabled == true ? "当前仍运行" : "当前未运行")).font(AppFont.secondary).foregroundStyle(Palette.warn) } }
+                    Spacer(); Button("编辑") { hostEditor = host }.accessibilityLabel("编辑服务器 " + (host.name.isEmpty ? host.target : host.name))
+                    Button { removal = model.removalRequest("host", id: host.id) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除主机").accessibilityLabel("移除服务器 " + (host.name.isEmpty ? host.target : host.name))
                 }.padding(.vertical, 7) }
             }.formStyle(.grouped)
             HStack { Button("添加 SSH 主机", systemImage: "plus") { hostEditor = Host() }; Spacer(); Button("保存并测试采样") { Task { if await model.saveSettingsDraft() { await model.sampleHosts(); if let e = model.hosts.first(where: { $0.error != nil })?.error { model.message = e } else { model.message = "采样完成" } } } }.disabled(model.serverBusy) }.padding(.horizontal, 8)
         }.padding(.vertical, 12)
+    }
+    private func applyMappingDraft() -> Bool {
+        let from = mappingModel.trimmingCharacters(in: .whitespacesAndNewlines), to = mappingID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if from.isEmpty && to.isEmpty { return true }
+        guard !from.isEmpty && !to.isEmpty else { model.settingsMessage = "请补全模型映射两端，输入已保留"; mappingFocused = true; return false }
+        guard draft.modelMappings[from] == nil || draft.modelMappings[from] == to else { model.settingsMessage = "该模型已有映射，请先移除原映射再添加新值"; return false }
+        draft.modelMappings[from] = to
+        return true
     }
     private var filteredPrices: [ModelPrice] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -153,15 +170,9 @@ struct SettingsView: View {
     private var prices: some View {
         ScrollViewReader { reader in Form {
             Section {
-                Text("价格条目与同步立即生效；模型映射随顶部“保存”提交。").font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                HStack { Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(model.repricing ? "重算中…" : "保存并重算") { Task { if await model.saveSettingsDraft(refreshDashboard: false) { await model.reprice() } } }.disabled(model.settingsSaving || model.repricing).accessibilityIdentifier("save-and-reprice") }
+                Text("价格条目立即生效；映射属于应用配置。“保存并重算”包含当前映射输入。唤醒任务独立保存。").font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                HStack { Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(model.repricing ? "重算中…" : "保存并重算") { Task { await model.saveAndReprice() } }.disabled(model.settingsSaving || model.repricing).accessibilityIdentifier("save-and-reprice") }
             }
-            Section("模型映射") {
-                VStack(spacing: 8) {
-                    HStack { TextField("日志中的模型名称", text: $mappingModel); Image(systemName: "arrow.right"); TextField("OpenRouter 模型 ID", text: $mappingID).focused($mappingFocused); Button("添加映射") { draft.modelMappings[mappingModel.trimmingCharacters(in: .whitespacesAndNewlines)] = mappingID.trimmingCharacters(in: .whitespacesAndNewlines); mappingModel = ""; mappingID = "" }.disabled(mappingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mappingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-                    ScrollView { LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in HStack { Text(key); Image(systemName: "arrow.right"); Text(draft.modelMappings[key] ?? ""); Spacer(); Button { draft.modelMappings.removeValue(forKey: key) } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain) }.font(AppFont.secondary) } }.padding(.vertical, 4) }.frame(maxHeight: 100)
-                }.padding(6)
-            }.id("model-mapping")
             if !model.dashboard.pricingGaps.isEmpty {
                 Section("所选时间范围 · 待计价模型") {
                     ScrollView {
@@ -178,6 +189,12 @@ struct SettingsView: View {
                     }.frame(height: 100)
                 }
             }
+            Section("模型映射") {
+                VStack(spacing: 8) {
+                    HStack { TextField("日志中的模型名称", text: $model.mappingModel); Image(systemName: "arrow.right"); TextField("OpenRouter 模型 ID", text: $model.mappingID).focused($mappingFocused); Button("添加映射") { if applyMappingDraft() { mappingModel = ""; mappingID = "" } }.disabled(mappingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mappingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                    ScrollView { LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in HStack { Text(key); Image(systemName: "arrow.right"); Text(draft.modelMappings[key] ?? ""); Spacer(); Button { draft.modelMappings.removeValue(forKey: key) } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain) }.font(AppFont.secondary) } }.padding(.vertical, 4) }.frame(maxHeight: 100)
+                }.padding(6)
+            }.id("model-mapping")
             HStack {
                 TextField("搜索模型", text: $search).textFieldStyle(.roundedBorder)
                 Button("同步 OpenRouter") { Task { await model.syncPrices() } }.disabled(model.busy)
@@ -186,7 +203,7 @@ struct SettingsView: View {
             Section("模型价格") { ForEach(filteredPrices) { price in
                 HStack { VStack(alignment: .leading, spacing: 4) { Text(price.id).font(AppFont.body); Text("输入 \(price.input.map { Format.money($0 * 1e6) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1e6) } ?? "—") / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button("一键映射") { mappingID = price.id; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }; Button("编辑") { priceEditor = price } }
             } }.overlay { if filteredPrices.isEmpty { Text(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步模型价格" : "无匹配模型").foregroundStyle(.secondary) } }
-        }.formStyle(.grouped) }
+        }.formStyle(.grouped).textFieldStyle(.roundedBorder) }
     }
     private var general: some View {
         Form {
@@ -264,6 +281,10 @@ struct ProxyFields: View {
 
 struct SourceEditor: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var initialDraft = ""
+    @State private var confirmDiscard = false
+    private var draftValue: String { draftSnapshot(source) + draftSnapshot(account) + accountChoice + String(asAccount) + apiKey }
+    private func cancel() { if !initialDraft.isEmpty && initialDraft != draftValue { confirmDiscard = true } else { dismiss() } }
     @State var source: AgentSource
     @State private var asAccount: Bool
     @State private var accountChoice: String
@@ -289,6 +310,23 @@ struct SourceEditor: View {
                 Picker("Agent", selection: $source.provider) {
                     Text("Codex").tag("codex"); Text("Claude Code").tag("claude"); Text("Antigravity").tag("antigravity"); Text("agy").tag("agy"); Text("DeepSeek").tag("deepseek"); Text("自定义").tag("custom")
                 }
+                if source.provider != "deepseek" {
+                    Picker("位置", selection: Binding(get: { source.hostId ?? "local" }, set: { source.hostId = $0 == "local" ? nil : $0 })) {
+                        Text("本机").tag("local"); ForEach(hosts) { Text($0.name.isEmpty ? $0.target : $0.name).tag($0.id) }
+                    }
+                }
+                if source.provider == "deepseek" {
+                    SecureField("API Key（留空保留）", text: $apiKey)
+                    Text("新 Key 随设置顶部的保存提交；留空保留已保存 Key。").font(AppFont.secondary).foregroundStyle(.secondary)
+                    DisclosureGroup("高级设置") { TextField("API Key 文件（可选）", text: $source.path) }
+                } else if source.provider != "agy" {
+                    HStack {
+                        TextField("数据目录", text: $source.path)
+                        if source.hostId == nil {
+                            Button("选择") { let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.showsHiddenFiles = true; if panel.runModal() == .OK, let url = panel.url { source.path = url.path } }
+                        }
+                    }
+                }
                 Toggle("关联账户与限额", isOn: $asAccount)
                 Text("多个数据源可以关联同一账户，共用账户身份和限额。").font(AppFont.secondary).foregroundStyle(.secondary)
                 if asAccount {
@@ -307,23 +345,7 @@ struct SourceEditor: View {
                     }
                     Toggle("归档账户", isOn: Binding(get: { account.archived == true }, set: { account.archived = $0 }))
                 }
-                if source.provider != "deepseek" {
-                    Picker("位置", selection: Binding(get: { source.hostId ?? "local" }, set: { source.hostId = $0 == "local" ? nil : $0 })) {
-                        Text("本机").tag("local"); ForEach(hosts) { Text($0.name.isEmpty ? $0.target : $0.name).tag($0.id) }
-                    }
-                }
-                if source.provider == "deepseek" {
-                    SecureField("API Key（留空保留）", text: $apiKey)
-                    Text("新 Key 随设置顶部的保存提交；留空保留已保存 Key。").font(AppFont.secondary).foregroundStyle(.secondary)
-                    DisclosureGroup("高级设置") { TextField("API Key 文件（可选）", text: $source.path) }
-                } else if source.provider != "agy" {
-                    HStack {
-                        TextField("数据目录", text: $source.path)
-                        if source.hostId == nil {
-                            Button("选择") { let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.showsHiddenFiles = true; if panel.runModal() == .OK, let url = panel.url { source.path = url.path } }
-                        }
-                    }
-                }
+                DisclosureGroup("高级连接选项 · CLI / 代理 / 前置命令") {
                 if source.provider == "agy" { TextField("agy 程序", text: Binding(get: { source.agyBinary ?? "agy" }, set: { source.agyBinary = $0 })) }
                 if source.provider == "codex" { TextField("Codex 程序", text: $source.codexBinary) }
                 if source.hostId != nil && asAccount {
@@ -332,14 +354,17 @@ struct SourceEditor: View {
                 if source.hostId == nil {
                     ProxyFields(proxy: Binding(get: { source.proxy ?? ProxySettings(mode: "inherit") }, set: { source.proxy = $0.mode == "inherit" ? nil : $0 }), inherit: true, inheritedProxy: appProxy, testURLs: testURLs)
                 }
+                }
                 if let error { Text(error).foregroundStyle(Palette.warn) }
-            }.formStyle(.grouped).disabled(saving)
+            }.formStyle(.grouped).textFieldStyle(.roundedBorder).disabled(saving)
             HStack {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("完成后，在设置中保存").font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
-                Button(saving ? "处理中…" : "完成") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving)
+                Button("取消") { cancel() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("应用后仍需保存应用配置").font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
+                Button(saving ? "处理中…" : "应用到草稿") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving)
             }.padding(20)
         }.font(AppFont.body).frame(width: 570, height: EditorLayout.height(660))
-        .interactiveDismissDisabled(saving)
+        .interactiveDismissDisabled(saving || initialDraft != draftValue)
+        .onAppear { if initialDraft.isEmpty { initialDraft = draftValue } }
+        .discardDraftConfirmation($confirmDiscard) { dismiss() }
         .onChange(of: accountChoice) { _, id in
             account = accounts.first { $0.id == id && $0.provider == source.provider } ?? AgentAccount(provider: source.provider, quotaEnabled: ["codex", "claude", "agy", "deepseek"].contains(source.provider))
         }
@@ -370,6 +395,10 @@ struct SourceEditor: View {
 
 struct AccountEditor: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var initialDraft = ""
+    @State private var confirmDiscard = false
+    private var draftValue: String { draftSnapshot(account) }
+    private func cancel() { if !initialDraft.isEmpty && initialDraft != draftValue { confirmDiscard = true } else { dismiss() } }
     @State var account: AgentAccount
     @State private var saving = false
     @State private var error: String?
@@ -388,26 +417,35 @@ struct AccountEditor: View {
                     }
                 }
                 if let error { Text(error).foregroundStyle(Palette.warn) }
-            }.formStyle(.grouped).disabled(saving)
+            }.formStyle(.grouped).textFieldStyle(.roundedBorder).disabled(saving)
             HStack {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("完成后，在设置中保存").font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
-                Button("完成") { Task {
+                Button("取消") { cancel() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("应用后仍需保存应用配置").font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
+                Button("应用到草稿") { Task {
                     saving = true; error = nil; defer { saving = false }
                     do { try await onSave(account) } catch { self.error = error.localizedDescription }
                 } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving || account.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding(20)
-        }.font(AppFont.body).frame(width: 560, height: EditorLayout.height(420)).interactiveDismissDisabled(saving)
+        }.font(AppFont.body).frame(width: 560, height: EditorLayout.height(420)).interactiveDismissDisabled(saving || initialDraft != draftValue)
+        .onAppear { if initialDraft.isEmpty { initialDraft = draftValue } }
+        .discardDraftConfirmation($confirmDiscard) { dismiss() }
     }
 }
 
 struct HostEditor: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var initialDraft = ""
+    @State private var confirmDiscard = false
+    private var draftValue: String { draftSnapshot(host) + password + devices }
+    private func cancel() { if !initialDraft.isEmpty && initialDraft != draftValue { confirmDiscard = true } else { dismiss() } }
     @State var host: Host
     @State var password = ""
     var onSave: (Host, String) -> Void
     @State private var devices = ""
     @State private var discovered: [String: [DeviceMetric]] = [:]
     @State private var discovering = false
+    @State private var discoveryRequest = UUID()
+    @State private var discoveryInfo: String?
+    private var connectionIdentity: String { host.connectionIdentity + password }
     @State private var discoveryError: String?
     private let discoveryEngine = EngineClient()
     private let groups = [("cpu","CPU"),("memory","内存"),("gpu","GPU"),("filesystems","文件系统"),("disk","磁盘 I/O"),("network","网络")]
@@ -421,7 +459,8 @@ struct HostEditor: View {
             + missing.map { SelectionOption(id: $0, label: $0, unavailable: true) }
     }
     private func discover() async {
-        discovering = true; defer { discovering = false }; discoveryError = nil
+        discovering = true; defer { discovering = false }; discoveryError = nil; discoveryInfo = nil
+        let request = UUID(), identity = connectionIdentity; discoveryRequest = request
         do {
             var testingHost = host
             var temporaryReference: String?
@@ -433,12 +472,14 @@ struct HostEditor: View {
             let data = try JSONEncoder().encode(testingHost)
             let object = try JSONSerialization.jsonObject(with: data)
             let sample: MetricSample = try await discoveryEngine.call("hosts.discover", params: ["host": object])
+            guard request == discoveryRequest, identity == connectionIdentity else { return }
+            discoveryInfo = "从 " + testingHost.target + " 读取 · " + Format.time(Date().timeIntervalSince1970)
             for (group, rows) in [("cpu",sample.cpu),("gpu",sample.gpu),("filesystems",sample.filesystems),("disk",sample.disk),("network",sample.network)] {
                 if let rows { discovered[group] = rows }
             }
             let failed = sample.errors.keys.sorted().map { key in (groups.first { $0.0 == key }?.1 ?? key) + "读取失败" }
             discoveryError = failed.isEmpty ? nil : failed.joined(separator: " · ")
-        } catch { discoveryError = error.localizedDescription }
+        } catch { if request == discoveryRequest, identity == connectionIdentity { discoveryError = error.localizedDescription } }
     }
     private func devicePicker(_ group: String, _ label: String) -> some View {
         let options = deviceOptions(group)
@@ -460,14 +501,16 @@ struct HostEditor: View {
                 }
                 TextField("用户名", text: Binding(get: { host.username ?? "" }, set: { host.username = $0 }), prompt: Text("跟随地址或 SSH 配置"))
                 if host.authMode == "password" { SecureField("密码（留空保留）", text: $password) }
-                else { TextField("密钥路径", text: $host.identityFile, prompt: Text("跟随 SSH 配置")) }
+                else { HStack { TextField("密钥路径", text: $host.identityFile, prompt: Text("跟随 SSH 配置")); Button("选择…") { let panel = NSOpenPanel(); panel.showsHiddenFiles = true; if panel.runModal() == .OK { host.identityFile = panel.url?.path ?? host.identityFile } } } }
+                Button(discovering ? "连接中…" : "连接并读取设备") { Task { await discover() } }.disabled(discovering || host.target.isEmpty)
+                DisclosureGroup("监控指标与设备 · 按需选择") {
                 Section {
                     MultiSelectPicker(title: "采集项目", options: groups.map { SelectionOption(id: $0.0, label: $0.1) }, selected: Set(host.metrics)) { selected, _ in
                         host.metrics = selected.sorted()
                     }
                 }
                 Section("设备") {
-                    Button(discovering ? "读取中…" : "读取设备") { Task { await discover() } }.disabled(discovering || host.target.isEmpty)
+                    if let discoveryInfo { Text(discoveryInfo).font(AppFont.secondary).foregroundStyle(.secondary) }
                     if let discoveryError { Text(discoveryError).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                     ForEach(groups.filter { $0.0 != "memory" }, id: \.0) { group, label in devicePicker(group, label) }
                 }
@@ -476,20 +519,28 @@ struct HostEditor: View {
                         host.details = selected.sorted()
                     }.disabled(host.metrics.isEmpty)
                 }
+                }
                 DisclosureGroup("高级设置") {
                     TextField("远程 shell", text: $host.shell)
                     Text("远程前置命令").foregroundStyle(.secondary)
                     TextEditor(text: $host.preCommand).font(.system(size: 14, design: .monospaced)).frame(height: 65)
                     TextField("设备表达式", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/")).help("留空显示全部设备")
                 }
-            }.formStyle(.grouped)
-            HStack { Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Text("完成后，在设置中保存").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("完成") { host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; onSave(host, password) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty) }.padding(20)
-        }.font(AppFont.body).frame(width: 620, height: EditorLayout.height(650)).onAppear { devices = host.devices.joined(separator: ", ") }
+            }.formStyle(.grouped).textFieldStyle(.roundedBorder)
+            HStack { Button("取消") { cancel() }.keyboardShortcut(.cancelAction); Spacer(); Text("应用后仍需保存应用配置").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("应用到草稿") { host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; onSave(host, password) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty) }.padding(20)
+        }.font(AppFont.body).frame(width: 620, height: EditorLayout.height(650)).onChange(of: connectionIdentity) { _, _ in discoveryRequest = UUID(); discovered = [:]; discoveryInfo = nil; discoveryError = "连接配置已更改，请重新读取设备" }
+        .onAppear { devices = host.devices.joined(separator: ", "); initialDraft = draftValue }
+        .interactiveDismissDisabled(initialDraft != draftValue)
+        .discardDraftConfirmation($confirmDiscard) { dismiss() }
     }
 }
 
 struct PriceEditor: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var initialDraft = ""
+    @State private var confirmDiscard = false
+    private var draftValue: String { draftSnapshot(price) + [input, output, cacheRead, cacheWrite].joined(separator: "|") }
+    private func cancel() { if !initialDraft.isEmpty && initialDraft != draftValue { confirmDiscard = true } else { dismiss() } }
     @State var price: ModelPrice
     var onSave: (ModelPrice) async throws -> Void
     @State private var input = ""
@@ -512,14 +563,15 @@ struct PriceEditor: View {
                 TextField("缓存读取", text: $cacheRead, prompt: Text("待定价")); TextField("缓存写入", text: $cacheWrite, prompt: Text("待定价"))
                 if !valid { Text("价格须为大于或等于 0 的数字；留空表示待定价。").foregroundStyle(Palette.warn) }
                 if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled).accessibilityLabel("保存失败，" + error) }
-            }.formStyle(.grouped).disabled(saving)
+            }.formStyle(.grouped).textFieldStyle(.roundedBorder).disabled(saving)
             HStack {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
+                Button("取消") { cancel() }.keyboardShortcut(.cancelAction).disabled(saving)
                 Spacer()
                 Button(saving ? "保存中…" : "保存价格") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving || !valid || price.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding(20)
-        }.font(AppFont.body).frame(width: 520, height: EditorLayout.height(470)).interactiveDismissDisabled(saving)
-            .onAppear { input = price.input.map { String($0 * 1e6) } ?? ""; output = price.output.map { String($0 * 1e6) } ?? ""; cacheRead = price.cacheRead.map { String($0 * 1e6) } ?? ""; cacheWrite = price.cacheWrite.map { String($0 * 1e6) } ?? "" }
+        }.font(AppFont.body).frame(width: 520, height: EditorLayout.height(470)).interactiveDismissDisabled(saving || initialDraft != draftValue)
+            .onAppear { input = price.input.map { String($0 * 1e6) } ?? ""; output = price.output.map { String($0 * 1e6) } ?? ""; cacheRead = price.cacheRead.map { String($0 * 1e6) } ?? ""; cacheWrite = price.cacheWrite.map { String($0 * 1e6) } ?? ""; initialDraft = draftValue }
+            .discardDraftConfirmation($confirmDiscard) { dismiss() }
     }
     private func save() async {
         guard !saving else { return }
@@ -547,5 +599,18 @@ struct DangerConfirmation: View {
             if !affected.isEmpty { ScrollView { VStack(alignment: .leading, spacing: 8) { ForEach(Array(affected.enumerated()), id: \.offset) { _, name in Text(name).frame(maxWidth: .infinity, alignment: .leading) } } }.frame(maxHeight: 180) }
             HStack { Spacer(); Button("取消", action: cancel).focused($cancelFocused).keyboardShortcut(.cancelAction); Button(confirmLabel, role: .destructive, action: confirm) }
         }.padding(24).frame(width: 460).onAppear { cancelFocused = true }
+    }
+}
+
+func draftSnapshot<T: Encodable>(_ value: T) -> String {
+    let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+    return (try? encoder.encode(value)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+}
+extension View {
+    func discardDraftConfirmation(_ presented: Binding<Bool>, discard: @escaping () -> Void) -> some View {
+        alert("放弃未保存的编辑？", isPresented: presented) {
+            Button("继续编辑", role: .cancel) { }
+            Button("放弃更改", role: .destructive, action: discard)
+        } message: { Text("此编辑器的输入尚未保存，放弃后无法恢复。") }
     }
 }

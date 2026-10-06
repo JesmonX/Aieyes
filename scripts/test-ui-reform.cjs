@@ -1,3 +1,4 @@
+const {discardEditor}=require('./ui-test-helpers.cjs');
 // 10-06 behavior and visual matrix. All data and RPC responses are synthetic.
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
@@ -50,10 +51,10 @@ function fixture(){
    const panel=surface==='floating.html';const page=await browser.newPage({viewport:panel?{width:450,height:540}:{width:1120,height:800}});page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.evaluate(()=>AieyesApp.ready);await page.waitForFunction(()=>!state.busy);
    const trigger=panel?'#panel-refresh':'#refresh',menu=panel?'#panel-menu':'#refresh-menu';
    await page.locator(trigger).focus();await page.keyboard.press('ArrowDown');assert.equal(await page.locator(menu+' [data-refresh]').count(),4);await page.keyboard.press('End');assert.equal(await page.locator(menu+' [data-refresh=hosts]').evaluate(el=>el===document.activeElement),true);await page.keyboard.press('Escape');assert.equal(await page.locator(trigger).evaluate(el=>el===document.activeElement),true);
-   const initial=await page.locator('#activity').textContent();assert.match(initial,/数据 /);
+   const initial=await page.locator('#activity').textContent();assert.match(initial,/记录/);
    await page.evaluate(()=>{reform.waitScan=true;window.pendingScan=scan();});assert.match(await page.locator('#activity').textContent(),/同步记录中/);await page.locator(trigger).click();assert.equal(await page.locator(menu+' [data-refresh=scan]').isDisabled(),true);await page.keyboard.press('Escape');
    await page.evaluate(async()=>{reform.waitScan=false;reform.releaseScan();await window.pendingScan;});assert.equal(await page.locator('#activity').textContent(),initial,'Success uses the dashboard timestamp, not completion time');
-   await page.evaluate(async()=>{reform.failures=[{id:'s1',error:'来源一失败'},{id:'s2',error:'来源二失败'}];await scan();});assert.equal(await page.locator('.error-row').count(),2);assert.match(await page.locator('#activity').textContent(),/同步失败/);
+   await page.evaluate(async()=>{reform.failures=[{id:'s1',error:'来源一失败'},{id:'s2',error:'来源二失败'}];await scan();});assert.equal(await page.locator('.error-row').count(),2);assert.match(await page.locator('#activity').textContent(),/部分失败/);
    await page.evaluate(()=>{reform.failures=[{id:'s2',error:'来源二失败'}];});await page.locator('[data-retry=scan]').first().click();await page.waitForFunction(()=>!state.busy);assert.equal(await page.locator('.error-row').count(),1);assert.equal(await page.evaluate(()=>reform.calls.filter(c=>c.method==='sources.scan').at(-1).params.sourceId),'s1');
    await page.evaluate(async()=>{reform.failures=[];await scan();});assert.equal(await page.locator('.error-row').count(),0);
    // Shared RPC feedback must survive a filtered dashboard invalidation and retries.
@@ -80,7 +81,7 @@ function fixture(){
    });
    assert.equal(await page.evaluate(()=>state.hosts.find(h=>h.id==='h1').sample.timestamp),1791260460,'Both windows receive host samples');
    assert.equal(await page.evaluate(()=>state.hosts.length),2,'Targeted host samples retain the other hosts');
-   await page.evaluate(async()=>{state.model='missing';await loadDashboard();});assert.equal(await page.locator('.stat').count(),0);assert.equal(await page.getByRole('button',{name:'清除全部',exact:true}).count(),1);await page.getByRole('button',{name:'清除全部',exact:true}).click();await page.waitForFunction(()=>state.dashboard.summary.total>0);
+   await page.evaluate(async()=>{state.model='missing';await loadDashboard();});assert.equal(await page.locator('.stat').count(),0);if(panel)await page.locator('.panel-filter-summary > summary').click();assert.equal(await page.getByRole('button',{name:'清除全部',exact:true}).count(),1);await page.getByRole('button',{name:'清除全部',exact:true}).click();await page.waitForFunction(()=>state.dashboard.summary.total>0);
    if(panel){
     assert.equal(await page.locator('[data-agent-detail=panel-trend]').evaluate(el=>el.open),false);
     assert.equal(await page.locator('.quota-disclosure').first().evaluate(el=>el.open),false);
@@ -97,7 +98,7 @@ function fixture(){
    }
    for(const scenario of ['empty','single','multi','long','failure'])for(const theme of ['light','dark']){
     await page.emulateMedia({colorScheme:theme});await page.evaluate(async scenario=>{notify('');reform.scenario=scenario;state.page='agent';state.settings=await api('settings.get');state.provider=state.accountKey=state.sourceId=state.model='';await loadDashboard();if(scenario==='failure'){reform.failures=[{id:'s1',error:'连接失败：模拟 SSH 与日志不可读取'}];await scan();}else{reform.failures=[];await scan();}},scenario);
-    if(scenario==='empty'){assert.equal(await page.locator('.stat').count(),0);assert.equal(await page.locator('.filters').count(),0);assert.equal(await page.locator('.onboarding').count(),1);}
+    if(scenario==='empty'){assert.equal(await page.locator('.stat').count(),0);assert.equal(await page.locator('.filters').count(),1);assert.equal(await page.locator('.onboarding').count(),1);}
     if(panel&&scenario==='single'){
      await page.screenshot({animations:'disabled',path:path.join(output,'panel-small-layout.png')});
      const footer=await page.locator('.panel-foot').boundingBox();
