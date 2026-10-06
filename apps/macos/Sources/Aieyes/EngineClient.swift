@@ -56,7 +56,11 @@ final class EngineClient: @unchecked Sendable {
     deinit { process?.terminate() }
 }
 enum ClientError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let text) = self { return text }; return nil } }
-struct Acknowledgement: Decodable { }
+struct Acknowledgement: Decodable { var id: String?, name: String?, error: String? }
+struct RefreshStatus { var busy = false; var succeededAt: Date?; var error: String? }
+struct ActionFailure: Identifiable { var action: String; var itemID: String? = nil; var name: String, reason: String; var id: String { action + ":" + (itemID ?? name) } }
+struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: String, explanation: String, affected: [String]; var id: String { kind + ":" + itemID } }
+
 
 @MainActor final class AppModel: ObservableObject {
     let engine = EngineClient()
@@ -83,6 +87,9 @@ struct Acknowledgement: Decodable { }
         sessionBusy = false
     }
     @Published var dashboard = Dashboard()
+    @Published private(set) var menuDashboard = Dashboard()
+    @Published private(set) var refreshStates: [String: RefreshStatus] = [:]
+    @Published private(set) var actionFailures: [ActionFailure] = []
     @Published private(set) var fallbackModelOptions: [String] = []
     var modelOptions: [String] { dashboard.modelOptions ?? fallbackModelOptions }
     @Published var settings = Settings()
@@ -178,7 +185,7 @@ struct Acknowledgement: Decodable { }
     }
     func openPricing() { settingsTab = "prices"; showSettings?() }
     private var dashboardRequest = 0
-    func reload() async {
+    @discardableResult func reload() async -> Bool {
         dashboardRequest += 1; let request = dashboardRequest
         var params: [String: Any] = ["days":range]
         if provider != "all" { params["provider"] = provider }
@@ -188,11 +195,15 @@ struct Acknowledgement: Decodable { }
         if selectedModel != "all" { params["model"] = selectedModel }
         do {
             let next: Dashboard = try await engine.call("dashboard", params: params)
-            guard request == dashboardRequest else { return }
+            guard request == dashboardRequest else { return true }
             dashboard = next
             let names = dashboard.dayModels.map(\.model)
             fallbackModelOptions = Array(Set(selectedModel == "all" ? names : fallbackModelOptions + names)).sorted()
-        } catch { if request == dashboardRequest { message = error.localizedDescription } }
+            let unfiltered: Dashboard = try await engine.call("dashboard", params: ["days": 1])
+            guard request == dashboardRequest else { return true }
+            menuDashboard = unfiltered
+            return true
+        } catch { if request == dashboardRequest { message = error.localizedDescription }; return false }
     }
     func saveQuotaOrder(_ keys: [String]) async throws {
         let _: [String] = try await engine.call("quotas.order.set", params: ["keys": keys])
@@ -209,47 +220,118 @@ struct Acknowledgement: Decodable { }
         do { try await estimateAction(action, params: params, credits: credits); return true }
         catch { estimateErrors[accountKey] = error.localizedDescription; await reload(); return false }
     }
-    func scan() async {
-        guard !busy else { return }; busy = true; activity = "同步记录"; defer { busy = false; activity = ""; lastScan = Date() }
-        do { let _: [Acknowledgement] = try await engine.call("sources.scan"); lastScan = Date(); await reload() }
-        catch { message = error.localizedDescription }
+    static let refreshLabels = ["scan": "同步记录", "quotas": "刷新限额", "prices": "同步价格", "hosts": "刷新服务器"]
+    var dataTime: Double { dashboard.generatedAt }
+    var statusText: String { statusText(at: dataTime) }
+    var serverStatusText: String { statusText(at: hosts.compactMap { $0.sample?.timestamp }.max() ?? 0) }
+    private func statusText(at stamp: Double) -> String {
+        let running = ["scan", "quotas", "prices", "hosts"].filter { refreshStates[$0]?.busy == true }.compactMap { Self.refreshLabels[$0] }
+        let state = !running.isEmpty ? running.joined(separator: "、") + "中…" : !actionFailures.isEmpty ? "同步失败" : "正常"
+        return (stamp > 0 ? "数据 " + Format.time(stamp) : "暂无数据时间") + " · " + state
     }
-    func refreshQuotas() async {
-        guard !quotaBusy, hasQuotaAccounts else { return }
-        quotaBusy = true; quotaError = nil
-        // Advance the retry deadline on every attempt, including failed requests.
+    func refreshLabel(_ key: String) -> String {
+        let state = refreshStates[key] ?? RefreshStatus()
+        return (Self.refreshLabels[key] ?? key) + " · " + (state.busy ? "进行中…" : state.error != nil ? "失败，可重试" : state.succeededAt.map { Format.time($0.timeIntervalSince1970) } ?? "尚未刷新")
+    }
+    private func beginRefresh(_ key: String) {
+        var state = refreshStates[key] ?? RefreshStatus(); state.busy = true; state.error = nil; refreshStates[key] = state
+    }
+    private func finishRefresh(_ key: String, failures: [ActionFailure], itemID: String? = nil) {
+        var state = refreshStates[key] ?? RefreshStatus(); state.busy = false; state.error = failures.first?.reason
+        if failures.isEmpty { state.succeededAt = Date() }
+        refreshStates[key] = state
+        actionFailures.removeAll { $0.action == key && (itemID == nil || $0.itemID == itemID) }; actionFailures += failures
+        state.error = actionFailures.first { $0.action == key }?.reason; refreshStates[key] = state
+    }
+    func retry(_ failure: ActionFailure) async {
+        switch failure.action {
+        case "scan": await scan(sourceID: failure.itemID)
+        case "quotas": await refreshQuotas(accountID: failure.itemID)
+        case "hosts": await sampleHosts(hostID: failure.itemID)
+        case "prices": await syncPrices()
+        default: await reload()
+        }
+    }
+    func scan(sourceID: String? = nil) async {
+        guard !busy, !quotaBusy else { return }; busy = true; activity = "同步记录"; beginRefresh("scan")
+        defer { busy = false; activity = ""; lastScan = Date() }
+        do {
+            let rows: [Acknowledgement] = try await engine.call("sources.scan", params: sourceID.map { ["sourceId": $0] } ?? [:])
+            let failures = rows.compactMap { row -> ActionFailure? in
+                guard let error = row.error else { return nil }
+                return ActionFailure(action: "scan", itemID: row.id, name: row.name ?? settings.sources.first { $0.id == row.id }?.name ?? "数据源", reason: error)
+            }
+            let loaded = await reload()
+            finishRefresh("scan", failures: failures + (loaded ? [] : [ActionFailure(action: "scan", name: "概览", reason: message ?? "读取失败")]), itemID: sourceID)
+        } catch { message = error.localizedDescription; finishRefresh("scan", failures: [ActionFailure(action: "scan", itemID: sourceID, name: "同步记录", reason: error.localizedDescription)], itemID: sourceID) }
+    }
+    func refreshQuotas(accountID: String? = nil) async {
+        guard !quotaBusy, !busy, hasQuotaAccounts else { return }
+        quotaBusy = true; quotaError = nil; beginRefresh("quotas")
         quotaNextAttempt = Date().addingTimeInterval(Double(max(30, settings.refreshSeconds)))
         defer { quotaBusy = false }
         do {
-            let result: [Quota] = try await engine.call("quotas.refresh")
-            let failures = result.compactMap(\.error)
-            if !failures.isEmpty { quotaError = failures.joined(separator: " · ") }
-            else if result.isEmpty { quotaError = "暂未获得限额数据，请检查关联数据源与账户设置。" }
-            await reload()
-        } catch { quotaError = error.localizedDescription }
+            let result: [Quota] = try await engine.call("quotas.refresh", params: accountID.map { ["accountId": $0] } ?? [:])
+            var failures = result.compactMap { row -> ActionFailure? in
+                guard let error = row.error else { return nil }
+                return ActionFailure(action: "quotas", itemID: row.accountId, name: row.name, reason: error)
+            }
+            if result.isEmpty { failures = [ActionFailure(action: "quotas", name: "账户限额", reason: "暂未获得限额数据，请检查关联数据源与账户设置。")] }
+            quotaError = failures.isEmpty ? nil : "部分账户读取失败，请逐项重试。"
+            let loaded = await reload()
+            finishRefresh("quotas", failures: failures + (loaded ? [] : [ActionFailure(action: "quotas", name: "概览", reason: message ?? "读取失败")]), itemID: accountID)
+        } catch { quotaError = error.localizedDescription; finishRefresh("quotas", failures: [ActionFailure(action: "quotas", itemID: accountID, name: "账户限额", reason: error.localizedDescription)], itemID: accountID) }
     }
-    func sampleHosts() async {
-        guard !serverBusy, !settings.hosts.isEmpty else { return }; serverBusy = true; defer { serverBusy = false; lastMetrics = Date() }
+    func sampleHosts(hostID: String? = nil) async {
+        guard !serverBusy, !settings.hosts.isEmpty else { return }; serverBusy = true; beginRefresh("hosts")
+        defer { serverBusy = false; lastMetrics = Date() }
         do {
-            let results: [HostResult] = try await metricsEngine.call("hosts.sample")
-            hosts = results.map { result in
+            let results: [HostResult] = try await metricsEngine.call("hosts.sample", params: hostID.map { ["hostId": $0] } ?? [:])
+            let next = results.map { result in
                 if result.error != nil, let old = hosts.first(where: { $0.id == result.id }) {
                     return HostResult(id: result.id, name: result.name, sample: result.sample ?? old.sample, error: result.error)
                 }
                 return result
             }
+            hosts = hostID == nil ? next : hosts.filter { $0.id != hostID } + next
             if !results.contains(where: { $0.error != nil }), let lastHostError {
-                if message == lastHostError { message = nil }
-                self.lastHostError = nil
+                if message == lastHostError { message = nil }; self.lastHostError = nil
             }
+            finishRefresh("hosts", failures: results.compactMap { row in row.error.map { ActionFailure(action: "hosts", itemID: row.id, name: row.name, reason: $0) } }, itemID: hostID)
         } catch {
-            let failure = error.localizedDescription
-            lastHostError = failure
-            message = failure
+            let failure = error.localizedDescription; lastHostError = failure; message = failure
             hosts = settings.hosts.map { host in
                 let previous = hosts.first { $0.id == host.id }
-                return HostResult(id: host.id, name: host.name.isEmpty ? host.target : host.name, sample: previous?.sample, error: host.enabled ? failure : nil)
+                return HostResult(id: host.id, name: host.name.isEmpty ? host.target : host.name, sample: previous?.sample, error: host.enabled && (hostID == nil || hostID == host.id) ? failure : previous?.error)
             }
+            finishRefresh("hosts", failures: [ActionFailure(action: "hosts", itemID: hostID, name: "服务器", reason: failure)], itemID: hostID)
+        }
+    }
+    func removalRequest(_ kind: String, id: String) -> RemovalRequest? {
+        if kind == "host", let host = settingsDraft.hosts.first(where: { $0.id == id }) {
+            let linked = settingsDraft.sources.filter { $0.hostId == id }.map(\.name)
+            return RemovalRequest(kind: kind, itemID: id, title: "移除服务器「" + (host.name.isEmpty ? host.target : host.name) + "」？", explanation: linked.isEmpty ? "历史用量会保留。此更改随顶部保存提交。" : "以下 \(linked.count) 个数据源将暂停，并需要重新选择服务器。此更改随顶部保存提交。", affected: linked)
+        }
+        if kind == "source", let source = settingsDraft.sources.first(where: { $0.id == id }) {
+            return RemovalRequest(kind: kind, itemID: id, title: "移除数据源「" + source.name + "」？", explanation: "已导入的历史用量会保留。以此来源查询限额的账户需要重新选择来源；此更改随顶部保存提交。", affected: settingsDraft.accounts.filter { $0.quotaSourceId == id }.map(\.name))
+        }
+        if kind == "account", let account = settingsDraft.accounts.first(where: { $0.key == id }) {
+            return RemovalRequest(kind: kind, itemID: id, title: "归档账户「" + account.name + "」？", explanation: "停止展示此账户的实时限额，保留历史用量；此更改随顶部保存提交，可从已归档账户恢复。", affected: [])
+        }
+        return nil
+    }
+    func applyRemoval(_ request: RemovalRequest) {
+        let id = request.itemID
+        switch request.kind {
+        case "source":
+            stageAPIKey(nil, sourceID: id); settingsDraft.sources.removeAll { $0.id == id }
+            for i in settingsDraft.accounts.indices where settingsDraft.accounts[i].quotaSourceId == id { settingsDraft.accounts[i].quotaSourceId = nil }
+        case "host":
+            settingsDraft.hosts.removeAll { $0.id == id }
+            for i in settingsDraft.sources.indices where settingsDraft.sources[i].hostId == id { settingsDraft.sources[i].hostId = nil; settingsDraft.sources[i].enabled = false }
+        case "account":
+            if let i = settingsDraft.accounts.firstIndex(where: { $0.key == id }) { settingsDraft.accounts[i].archived = true }
+        default: break
         }
     }
     func saveSettingsDraft() async -> Bool {
@@ -273,7 +355,7 @@ struct Acknowledgement: Decodable { }
             }
             let success = await save(next)
             if success { settingsDraft = settings; pendingAPIKeys.removeAll(); preparedCredentials.removeAll() }
-            settingsMessage = success ? "已保存全部配置" : message ?? "保存失败"
+            settingsMessage = success ? "已保存全部配置 · " + Format.time(Date().timeIntervalSince1970) : message ?? "保存失败"
             return success
         } catch { settingsMessage = error.localizedDescription; return false }
     }
@@ -297,16 +379,17 @@ struct Acknowledgement: Decodable { }
         } catch { message = error.localizedDescription; return false }
     }
     func syncPrices() async {
-        guard !busy else { return }; busy = true; activity = "同步价格"; defer { busy = false; activity = "" }
-        do { let _: Acknowledgement = try await engine.call("prices.sync"); prices = try await engine.call("prices.list"); await reload(); message = "价格已更新" }
-        catch { message = error.localizedDescription }
+        guard !busy, !quotaBusy else { return }; busy = true; activity = "同步价格"; beginRefresh("prices"); defer { busy = false; activity = "" }
+        do { let _: Acknowledgement = try await engine.call("prices.sync"); prices = try await engine.call("prices.list"); let loaded = await reload(); message = loaded ? "价格已更新" : message
+            finishRefresh("prices", failures: loaded ? [] : [ActionFailure(action: "prices", name: "概览", reason: message ?? "读取失败")]) }
+        catch { message = error.localizedDescription; finishRefresh("prices", failures: [ActionFailure(action: "prices", name: "价格", reason: error.localizedDescription)]) }
     }
     func loadPrices() async { do { prices = try await engine.call("prices.list") } catch { message = error.localizedDescription } }
     func savePrice(_ price: ModelPrice) async -> Bool {
         do {
             let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(price))
             let _: Acknowledgement = try await engine.call("prices.save", params: ["prices":[object]])
-            await loadPrices(); await reload(); return true
+            await loadPrices(); await reload(); message = "已保存价格 · " + Format.time(Date().timeIntervalSince1970); return true
         } catch { message = error.localizedDescription; return false }
     }
     func reprice() async {
@@ -326,8 +409,8 @@ struct Acknowledgement: Decodable { }
     }
     var menuText: String {
         switch settings.menuMetric {
-        case "tokens": return Format.compact(dashboard.summary.total)
-        case "quota": return dashboard.quotas.first?.windows.first.map { String(format: "%.0f%%", max(0, 100 - $0.usedPercent)) } ?? ""
+        case "tokens": return Format.compact(menuDashboard.summary.total)
+        case "quota": return menuDashboard.quotas.first?.windows.first.map { String(format: "%.0f%%", max(0, 100 - $0.usedPercent)) } ?? ""
         case "cpu": return hosts.first?.sample?.cpu?.first(where: { $0.id == "cpu" })?.utilization.map { String(format: "%.0f%%", $0) } ?? ""
         default: return ""
         }

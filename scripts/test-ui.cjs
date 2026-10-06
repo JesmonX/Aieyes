@@ -316,18 +316,18 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await page.locator('#field-appHost').fill('proxy.example');
     await page.locator('#field-appPort').fill('8443');
     await page.locator('#field-appProtocol').selectOption('https');
-    await page.locator('#connection-form button.primary').click();
+    await page.locator('#general-form button.primary').click();
     await page.waitForFunction(()=>!state.busy);
     assert.equal(await page.evaluate(()=>state.settings.proxy.url),'https://proxy.example:8443');
     await page.locator('#field-appPort').fill('0');
-    await page.locator('#connection-form button.primary').click();
+    await page.locator('#general-form button.primary').click();
     await page.waitForFunction(()=>!state.busy);
     assert.equal(await page.evaluate(()=>state.settings.proxy.url),'https://proxy.example:8443');
     await page.locator('[data-settings-tab=general]').click();
     assert.equal(await page.locator('#field-appPort').inputValue(),'8443');
     await page.locator('#field-appProtocol').selectOption('url');
     await page.locator('#field-appURL').fill('socks5://localhost:1080');
-    await page.locator('#connection-form button.primary').click();
+    await page.locator('#general-form button.primary').click();
     await page.waitForFunction(()=>!state.busy);
     assert.equal(await page.evaluate(()=>state.settings.proxy.url),'socks5://localhost:1080');
     await page.locator('#updates').click();
@@ -355,7 +355,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await page.screenshot({animations:'disabled',path:path.join(output,'prices-light.png'),fullPage:true});
 
     await page.locator('[data-page=agent]').click();
-    assert.equal(await page.locator('.stat').count(),4);
+    assert.equal(await page.locator('.stat').count(),3);
     assert.equal(await page.locator('.stat small').count(),0);
     assert.equal(await page.locator('#repair-pricing').count(),0);
     assert.equal(await page.getByRole('heading',{name:'数据来源',exact:true}).count(),0);
@@ -393,7 +393,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.evaluate(()=>window.scrollTo(0,0));
     await page.screenshot({animations:'disabled',path:path.join(output,'servers-dark-compact.png'),fullPage:true});
-    for(const [kind,label] of [['stale','数据延迟'],['partial','部分采集失败'],['failed','连接失败'],['paused','已暂停'],['waiting','等待采样']]){
+    for(const [kind,label] of [['stale','数据已延迟'],['partial','部分采集失败'],['failed','连接失败'],['paused','已暂停'],['waiting','等待采样']]){
       await page.evaluate(kind=>{state.settings.hosts[0].enabled=kind!=='paused';state.hosts=kind==='waiting'?[]:[{id:'host1',error:kind==='failed'?'连接失败':null,sample:{...window.fixtureHosts[0].sample,timestamp:Date.now()/1000-(kind==='stale'?20:0),errors:kind==='partial'?{gpu:'Unavailable'}:{}}}];renderServers();},kind);
       assert.equal(await page.locator('.host-status').textContent(),label);
     }
@@ -439,7 +439,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await floating.locator('.panel-stats .stat-value').first().waitFor();
     assert.equal(await floating.locator('.panel-stats .stat').count(),2);
     assert.equal(await floating.locator('#live-sessions').isVisible(),true);
-    assert.equal(await floating.locator('#trend').isVisible(),true);
+    assert.equal(await floating.locator('#trend').isVisible(),false);await floating.locator('[data-agent-detail=panel-trend] > summary').click();assert.equal(await floating.locator('#trend').isVisible(),true);
     assert.equal(await floating.evaluate(()=>window.engineCalls.filter(c=>c.method==='dashboard').length>0),true);
     await floating.screenshot({animations:'disabled',path:path.join(output,'floating-panel-light.png')});
     await floating.locator('.panel-tabs [data-page=servers]').click();

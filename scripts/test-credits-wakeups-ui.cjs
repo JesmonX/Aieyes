@@ -32,6 +32,7 @@ function fixture(){
  for(const surface of ['index.html','floating.html']){
   const page=await browser.newPage({viewport:{width:surface==='index.html'?1120:450,height:850}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
   assert.equal(await page.getByText('1234.13',{exact:true}).count(),1);assert.equal(await page.getByText('Bank Reset · 2 次可用',{exact:true}).count(),1);
+  if(surface==='floating.html')await page.locator('.quota-disclosure summary').click();
   assert.match(await page.locator('[data-credit-estimate]').textContent(),/^估算 credit 价值/);
   assert.doesNotMatch(await page.locator('[data-credit-estimate]').textContent(),/500|1000/);
   const decimals=[['1234.125','1234.13'],['1.005','1.01'],['10','10.00'],['0','0.00'],['-0.004','0.00'],['-1.005','-1.01'],['1e-3','0.00'],['9.999','10.00'],[null,'—'],['','—'],['NaN','—'],['12bad','—'],['Infinity','—']];
@@ -46,7 +47,7 @@ function fixture(){
   }
   assert.equal(await page.evaluate(()=>resourceColor(95)),'var(--resource-high)','High CPU load must still be red');
   assert.equal(await page.evaluate(()=>creditValue({status:'pending',valuePer1000:200})),'待确认');
-  await page.locator('.quota-disclosure summary').click();
+  if(await page.locator('.quota-disclosure').evaluate(el=>el.open))await page.locator('.quota-disclosure summary').click();
   await page.evaluate(()=>loadDashboard());
   assert.equal(await page.locator('.quota-disclosure').evaluate(el=>el.open),false,'Refresh preserves collapsed quota');
   await page.locator('.quota-disclosure summary').click();

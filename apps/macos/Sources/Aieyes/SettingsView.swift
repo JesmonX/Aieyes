@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var hostEditor: Host?
     @State private var priceEditor: ModelPrice?
     @State private var search = ""
+    @State private var removal: RemovalRequest?
     @State private var mappingModel = ""
     @State private var mappingID = ""
     @MainActor init(model: AppModel) {
@@ -56,6 +57,9 @@ struct SettingsView: View {
         .onAppear { if model.settingsTab == "accounts" { model.settingsTab = "sources" }; if model.settingsTab == "connection" { model.settingsTab = "general" }; Task { await model.loadPrices() }; consumeEditorRequest() }
         .onChange(of: model.requestedSourceProvider) { _, _ in consumeEditorRequest() }
         .onChange(of: model.requestHostEditor) { _, _ in consumeEditorRequest() }
+        .sheet(item: $removal) { request in
+            DangerConfirmation(title: request.title, explanation: request.explanation, affected: request.affected, confirmLabel: request.kind == "account" ? "归档并保留历史" : "确认移除", cancel: { removal = nil }, confirm: { model.applyRemoval(request); removal = nil })
+        }
         .sheet(item: $sourceEditor) { source in
             SourceEditor(source: source, hosts: draft.hosts, accounts: draft.accounts, sources: draft.sources, pendingAPIKey: model.pendingAPIKeys[source.id] ?? "") { item, account, apiKey in
                 var next = draft
@@ -92,15 +96,15 @@ struct SettingsView: View {
     }
     private var sources: some View {
         VStack(spacing: 12) {
-            List {
+            Form {
                 ForEach($model.settingsDraft.sources) { $source in
                     HStack(spacing: 12) {
                         Toggle("启用", isOn: $source.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
                         VStack(alignment: .leading, spacing: 5) { Text(source.name).font(AppFont.section); Text(Format.provider(source.provider) + " · " + (source.accountId.isEmpty ? "无账户" : draft.accounts.first { $0.id == source.accountId && $0.provider == source.provider }?.name ?? source.accountId)).font(AppFont.secondary).foregroundStyle(.secondary) }
-                        if let error = model.dashboard.sources.first(where: { $0.id == source.id })?.status?.error { Text(error).font(AppFont.secondary).foregroundStyle(.orange) }
+                        if let error = model.dashboard.sources.first(where: { $0.id == source.id })?.status?.error { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                         Spacer()
                         Button("编辑") { sourceEditor = source }
-                        Button { model.stageAPIKey(nil, sourceID: source.id); draft.sources.removeAll { $0.id == source.id }; for i in draft.accounts.indices where draft.accounts[i].quotaSourceId == source.id { draft.accounts[i].quotaSourceId = nil } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除数据源")
+                        Button { removal = model.removalRequest("source", id: source.id) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除数据源")
                     }.padding(.vertical, 7)
                 }
                 if !unlinkedAccounts.isEmpty {
@@ -110,7 +114,7 @@ struct SettingsView: View {
                 if !archived.isEmpty {
                     DisclosureGroup("已归档账户") { ForEach(archived, id: \.key) { accountRow($0) } }
                 }
-            }.listStyle(.inset)
+            }.formStyle(.grouped)
             HStack { Button("添加数据源", systemImage: "plus") { sourceEditor = AgentSource() }; Spacer(); Button("保存并同步记录") { Task { if await model.saveSettingsDraft() { await model.scan() } } }.disabled(model.busy) }.padding(.horizontal, 8)
         }.padding(.vertical, 12)
     }
@@ -121,24 +125,22 @@ struct SettingsView: View {
         HStack {
             Text(account.name); Spacer(); Button("编辑") { accountEditor = account }
             Button(account.archived == true ? "恢复" : "归档") {
-                Task {
-                    var next = draft
-                    if let i = next.accounts.firstIndex(where: { $0.key == account.key }) { next.accounts[i].archived = account.archived != true }
-                    draft = next
-                }
+                if account.archived == true {
+                    if let i = draft.accounts.firstIndex(where: { $0.key == account.key }) { draft.accounts[i].archived = false }
+                } else { removal = model.removalRequest("account", id: account.key) }
             }
         }.padding(.vertical, 6)
     }
     private var servers: some View {
         VStack(spacing: 12) {
-            List {
+            Form {
                 ForEach($model.settingsDraft.hosts) { $host in HStack(spacing: 12) {
                     Toggle("启用", isOn: $host.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
                     VStack(alignment: .leading, spacing: 5) { Text(host.name.isEmpty ? host.target : host.name).font(AppFont.section); Text(host.target).font(AppFont.secondary).foregroundStyle(.secondary) }
                     Spacer(); Button("编辑") { hostEditor = host }
-                    Button { draft.hosts.removeAll { $0.id == host.id }; for i in draft.sources.indices where draft.sources[i].hostId == host.id { draft.sources[i].hostId = nil; draft.sources[i].enabled = false } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除主机")
+                    Button { removal = model.removalRequest("host", id: host.id) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除主机")
                 }.padding(.vertical, 7) }
-            }.listStyle(.inset)
+            }.formStyle(.grouped)
             HStack { Button("添加 SSH 主机", systemImage: "plus") { hostEditor = Host() }; Spacer(); Button("保存并测试采样") { Task { if await model.saveSettingsDraft() { await model.sampleHosts(); if let e = model.hosts.first(where: { $0.error != nil })?.error { model.message = e } else { model.message = "采样完成" } } } }.disabled(model.serverBusy) }.padding(.horizontal, 8)
         }.padding(.vertical, 12)
     }
@@ -147,10 +149,10 @@ struct SettingsView: View {
         return model.prices.filter { query.isEmpty || $0.id.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
     }
     private var prices: some View {
-        ScrollView { VStack(spacing: 12) {
-            Text("价格条目与同步立即生效；模型映射随顶部“保存”提交。").font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+        Form {
+            Section { Text("价格条目与同步立即生效；模型映射随顶部“保存”提交。").font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
             if !model.dashboard.pricingGaps.isEmpty {
-                GroupBox("所选时间范围 · 待计价模型") {
+                Section("所选时间范围 · 待计价模型") {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 10) {
                             ForEach(model.dashboard.pricingGaps) { gap in
@@ -170,22 +172,22 @@ struct SettingsView: View {
                 Button("同步 OpenRouter") { Task { await model.syncPrices() } }.disabled(model.busy)
                 Button("添加价格") { priceEditor = ModelPrice() }
             }
-            List(filteredPrices) { price in
+            Section("模型价格") { ForEach(filteredPrices) { price in
                 HStack { VStack(alignment: .leading, spacing: 4) { Text(price.id).font(AppFont.body); Text("输入 \(price.input.map { Format.money($0 * 1e6) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1e6) } ?? "—") / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button("编辑") { priceEditor = price } }
-            }.listStyle(.inset).frame(height: 200).overlay { if filteredPrices.isEmpty { Text(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步模型价格" : "无匹配模型").foregroundStyle(.secondary) } }
-            GroupBox("模型映射") {
+            } }.overlay { if filteredPrices.isEmpty { Text(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步模型价格" : "无匹配模型").foregroundStyle(.secondary) } }
+            Section("模型映射") {
                 VStack(spacing: 8) {
                     HStack { TextField("日志中的模型名称", text: $mappingModel); Image(systemName: "arrow.right"); TextField("OpenRouter 模型 ID", text: $mappingID); Button("添加映射") { draft.modelMappings[mappingModel.trimmingCharacters(in: .whitespacesAndNewlines)] = mappingID.trimmingCharacters(in: .whitespacesAndNewlines); mappingModel = ""; mappingID = "" }.disabled(mappingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mappingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
                     ScrollView { LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in HStack { Text(key); Image(systemName: "arrow.right"); Text(draft.modelMappings[key] ?? ""); Spacer(); Button { draft.modelMappings.removeValue(forKey: key) } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain) }.font(AppFont.secondary) } }.padding(.vertical, 4) }.frame(maxHeight: 100)
                 }.padding(6)
             }
-            HStack { Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("保存配置并重算") { Task { if await model.saveSettingsDraft() { await model.reprice() } } } }
-        }.padding(12) }
+            HStack { Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("保存并重算") { Task { if await model.saveSettingsDraft() { await model.reprice() } } } }
+        }.formStyle(.grouped)
     }
     private var general: some View {
         Form {
             Section("菜单栏") {
-                Picker("显示内容", selection: $model.settingsDraft.menuMetric) { Text("图标").tag("icon"); Text("当前范围 Token").tag("tokens"); Text("首个账号剩余额度").tag("quota"); Text("首台服务器 CPU").tag("cpu") }
+                Picker("显示内容", selection: $model.settingsDraft.menuMetric) { Text("图标").tag("icon"); Text("今日全部 Token").tag("tokens"); Text("首个账户剩余额度").tag("quota"); Text("首台服务器 CPU").tag("cpu") }
             }
             Section("刷新") {
                 TextField("Agent 间隔（秒）", value: $model.settingsDraft.refreshSeconds, format: .number)
@@ -296,7 +298,7 @@ struct SourceEditor: View {
                 if source.hostId == nil {
                     ProxyFields(proxy: Binding(get: { source.proxy ?? ProxySettings(mode: "inherit") }, set: { source.proxy = $0.mode == "inherit" ? nil : $0 }), inherit: true)
                 }
-                if let error { Text(error).foregroundStyle(.orange) }
+                if let error { Text(error).foregroundStyle(Palette.warn) }
             }.formStyle(.grouped).disabled(saving)
             HStack {
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("完成后，在设置中保存").font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
@@ -351,7 +353,7 @@ struct AccountEditor: View {
                         Text("自动 · 优先本机").tag(""); ForEach(linked) { Text($0.name).tag($0.id) }
                     }
                 }
-                if let error { Text(error).foregroundStyle(.orange) }
+                if let error { Text(error).foregroundStyle(Palette.warn) }
             }.formStyle(.grouped).disabled(saving)
             HStack {
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("完成后，在设置中保存").font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
@@ -419,7 +421,7 @@ struct HostEditor: View {
                 }
                 Section("设备") {
                     Button(discovering ? "读取中…" : "读取设备") { Task { await discover() } }.disabled(discovering || host.target.isEmpty)
-                    if let discoveryError { Text(discoveryError).font(AppFont.secondary).foregroundStyle(.orange) }
+                    if let discoveryError { Text(discoveryError).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                     ForEach(groups.filter { $0.0 != "memory" }, id: \.0) { group, label in devicePicker(group, label) }
                 }
                 Section {
@@ -461,8 +463,8 @@ struct PriceEditor: View {
                 TextField("显示名称", text: $price.name)
                 TextField("输入", text: $input, prompt: Text("待定价")); TextField("输出", text: $output, prompt: Text("待定价"))
                 TextField("缓存读取", text: $cacheRead, prompt: Text("待定价")); TextField("缓存写入", text: $cacheWrite, prompt: Text("待定价"))
-                if !valid { Text("价格须为大于或等于 0 的数字；留空表示待定价。").foregroundStyle(.orange) }
-                if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled).accessibilityLabel("保存失败，" + error) }
+                if !valid { Text("价格须为大于或等于 0 的数字；留空表示待定价。").foregroundStyle(Palette.warn) }
+                if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled).accessibilityLabel("保存失败，" + error) }
             }.formStyle(.grouped).disabled(saving)
             HStack {
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
@@ -485,4 +487,18 @@ struct PriceEditor: View {
 
 enum EditorLayout {
     static func height(_ preferred: CGFloat) -> CGFloat { min(preferred, max(350, ((NSApp.keyWindow?.screen ?? NSScreen.main)?.visibleFrame.height ?? 800) - 110)) }
+}
+
+struct DangerConfirmation: View {
+    var title: String, explanation: String, affected: [String], confirmLabel: String
+    var cancel: () -> Void, confirm: () -> Void
+    @FocusState private var cancelFocused: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title).font(AppFont.section)
+            Text(explanation).font(AppFont.body).fixedSize(horizontal: false, vertical: true)
+            if !affected.isEmpty { ScrollView { VStack(alignment: .leading, spacing: 8) { ForEach(Array(affected.enumerated()), id: \.offset) { _, name in Text(name).frame(maxWidth: .infinity, alignment: .leading) } } }.frame(maxHeight: 180) }
+            HStack { Spacer(); Button("取消", action: cancel).focused($cancelFocused).keyboardShortcut(.cancelAction); Button(confirmLabel, role: .destructive, action: confirm) }
+        }.padding(24).frame(width: 460).onAppear { cancelFocused = true }
+    }
 }

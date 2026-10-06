@@ -8,9 +8,9 @@ body { display:grid; place-items:center; font-family:var(--font-body,"Segoe UI",
 #ball:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 #ball .eye { flex:0 0 24px; width:24px; height:24px; pointer-events:none; }
 #ball .halo { display:none; }
-#phase { display:flex; align-items:center; gap:4px; font-size:12px; line-height:18px; white-space:nowrap; pointer-events:none; }
+#phase { display:flex; align-items:center; gap:4px; font-size:13px; line-height:18px; white-space:nowrap; pointer-events:none; }
 #phase::before { content:""; width:5px; height:5px; border-radius:50%; background:var(--phase-color,#91a0b7); }
-#count { margin-left:auto; font-size:12px; font-variant-numeric:tabular-nums; pointer-events:none; }
+#count { margin-left:auto; font-size:13px; font-variant-numeric:tabular-nums; pointer-events:none; }
 [hidden] { display:none!important; }
 body[data-phase=working] { --phase-color:#2c9d88; }
 body[data-phase=thinking] { --phase-color:#ac78dd; }

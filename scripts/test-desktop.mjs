@@ -11,20 +11,20 @@ function harness(file, initial = {}) {
   const windowCalls = [];
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
-      textContent:'', innerHTML:'', value:'', hidden:false, dataset:{}, listeners:new Map(),
-      addEventListener(name, fn) { this.listeners.set(name, fn); },
+      textContent:'', innerHTML:'', value:'', hidden:false, remove(){}, after(){}, dataset:{}, listeners:new Map(),
+      addEventListener(name, fn) { this.listeners.set(name, [...(this.listeners.get(name) || []), fn]); },
       setAttribute(name, value) { this[name] = value; },
       focus() { document.activeElement = this; },
       contains(other) { return other === this || other?.parent === this; },
       querySelector: selector => element(selector),
       querySelectorAll() { return this.children || []; },
-      async dispatch(name, fields = {}) { await this.listeners.get(name)?.({preventDefault(){},...fields}); },
+      async dispatch(name, fields = {}) { const event={defaultPrevented:false,stopped:false,preventDefault(){this.defaultPrevented=true;},stopPropagation(){},stopImmediatePropagation(){this.stopped=true;},...fields}; for(const fn of this.listeners.get(name)||[]){await fn(event);if(event.stopped)break;} },
     });
     return elements.get(id);
   }
   const document = {body:element('body'),documentElement:element('html'),activeElement:null,querySelector:element,listeners:new Map(),
-    addEventListener(name, fn) { this.listeners.set(name, fn); },
-    async dispatch(name, fields = {}) { await this.listeners.get(name)?.({preventDefault(){},...fields}); },
+    addEventListener(name, fn) { this.listeners.set(name, [...(this.listeners.get(name) || []), fn]); },
+    async dispatch(name, fields = {}) { const event={defaultPrevented:false,stopped:false,preventDefault(){this.defaultPrevented=true;},stopPropagation(){},stopImmediatePropagation(){this.stopped=true;},...fields}; for(const fn of this.listeners.get(name)||[]){await fn(event);if(event.stopped)break;} },
   };
   const info = {mode:'auto',effectiveMode:'floating',platform:'windows',summary:'思考中 · 2 个会话',phase:'thinking',activeCount:2,sessions:[],page:'agent',panelOpen:false,panelPinned:false,hidden:false,...initial};
   const native = {
@@ -52,7 +52,7 @@ function harness(file, initial = {}) {
     window, document, state, console,
     Date: class extends Date { static now() { return now; } },
     notify: e => notices.push(e),
-    render(){}, drawTrend(){},
+    render(){}, drawTrend(){}, flushRender(){}, updateActivity(){},
     loadDashboard: async () => {},
     scan: async () => { runs.push('scan'); },
     quotas: async () => { runs.push('quotas'); },
@@ -66,7 +66,9 @@ function harness(file, initial = {}) {
   };
   vm.createContext(sandbox);
   element('#panel-menu').hidden = true;
+  vm.runInContext(read('icons.js'), sandbox, {filename:'icons.js'});
   vm.runInContext(read('sessions.js'), sandbox, {filename:'sessions.js'});
+  vm.runInContext(read('refresh.js'), sandbox, {filename:'refresh.js'});
   vm.runInContext(read(file), sandbox, {filename:file});
   return {window,document,element,events,calls,notices,runs,state,info,windowCalls,native,timers,
     get dragCount(){return dragCount;},

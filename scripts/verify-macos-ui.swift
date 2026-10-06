@@ -13,6 +13,7 @@ import Foundation
         settings.sources[0].path = committedKey.path
         var dashboard = Dashboard()
         dashboard.modelOptions = ["alpha", "beta"]
+        dashboard.generatedAt = 1_790_000_000; dashboard.summary.total = 123_456
         let encoder = JSONEncoder()
         try encoder.encode(settings).write(to: root.appendingPathComponent("settings.json"))
         try encoder.encode(dashboard).write(to: root.appendingPathComponent("dashboard.json"))
@@ -26,7 +27,12 @@ for line in sys.stdin:
     with open(root+'/calls.jsonl','a') as log: log.write(json.dumps(req)+'\n')
     response=dict(jsonrpc='2.0',id=req['id'])
     if method=='settings.get': response['result']=json.load(open(root+'/settings.json'))
-    elif method=='dashboard': response['result']=json.load(open(root+'/dashboard.json'))
+    elif method=='dashboard':
+        response['result']=json.load(open(root+'/dashboard.json'))
+        if req.get('params',{}).get('model'): response['result']['summary']['total']=77
+    elif method=='sources.scan':
+        rows=json.load(open(root+'/scan-result.json')) if os.path.exists(root+'/scan-result.json') else []
+        response['result']=[r for r in rows if not req.get('params',{}).get('sourceId') or r['id']==req['params']['sourceId']]
     elif method=='settings.save' and req['params']['refreshSeconds'] < 5: response['error']=dict(message='刷新间隔无效')
     elif method.startswith('quotaEstimates.'):
         import time
@@ -172,6 +178,44 @@ for line in sys.stdin:
         let failedRestart = await model.performEstimate("restart", accountKey: estimate.accountKey, params: [:])
         precondition(!failedRestart && model.samplingNeedsAttention && model.estimateErrors[estimate.accountKey] == "模拟采样同步失败")
         precondition(!model.panelVisible && model.estimateBusy.isEmpty)
+        // Menu data is unfiltered and always today, even for an empty filtered view.
+        model.settings.menuMetric = "tokens"; model.selectedModel = "alpha"; model.range = 30
+        await model.reload()
+        precondition(model.dashboard.summary.total == 77 && model.menuDashboard.summary.total == 123_456)
+        precondition(model.menuText == Format.compact(123_456))
+        precondition(model.dataTime == dashboard.generatedAt && model.statusText.contains("数据 " + Format.time(dashboard.generatedAt)))
+        let priorTime = model.dataTime
+        let failures = Data(#"[{"id":"first","error":"first failed"},{"id":"second","error":"second failed"}]"#.utf8)
+        try failures.write(to: root.appendingPathComponent("scan-result.json"))
+        await model.scan()
+        precondition(model.actionFailures.filter { $0.action == "scan" }.count == 2)
+        precondition(model.refreshStates["scan"]?.busy == false && model.refreshStates["scan"]?.error != nil)
+        precondition(model.dataTime == priorTime, "Failure must not replace the data timestamp with completion time")
+        try Data("[]".utf8).write(to: root.appendingPathComponent("scan-result.json"))
+        await model.retry(model.actionFailures.first { $0.itemID == "first" }!)
+        precondition(model.actionFailures.filter { $0.action == "scan" }.map(\.itemID) == ["second"], "Targeted retry must preserve other failed sources")
+        await model.scan()
+        precondition(!model.actionFailures.contains { $0.action == "scan" } && model.refreshStates["scan"]?.succeededAt != nil)
+        let requests = try String(contentsOf: root.appendingPathComponent("calls.jsonl"), encoding: .utf8).split(separator: "\n").compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+        precondition(requests.contains { $0["method"] as? String == "sources.scan" && ($0["params"] as? [String: Any])?["sourceId"] as? String == "first" })
+        model.settingsDraft = model.settings
+        model.settingsDraft.hosts = [Host(id: "linked-host", name: "Linked", target: "example.invalid")]
+        model.settingsDraft.sources[0].hostId = "linked-host"; model.settingsDraft.sources[0].enabled = true
+        model.settingsDraft.accounts[0].quotaSourceId = model.settingsDraft.sources[0].id
+        let beforeConfirmation = model.settingsDraft
+        let removal = model.removalRequest("host", id: "linked-host")!
+        precondition(removal.affected == [model.settingsDraft.sources[0].name] && model.settingsDraft == beforeConfirmation, "Preparing or cancelling confirmation must leave the draft untouched")
+        model.applyRemoval(removal)
+        precondition(model.settingsDraft.hosts.isEmpty && model.settingsDraft.sources[0].hostId == nil && !model.settingsDraft.sources[0].enabled)
+        precondition(model.settings.hosts != model.settingsDraft.hosts, "Removal must remain a draft until Save")
+        let sourceRemoval = model.removalRequest("source", id: model.settingsDraft.sources[0].id)!
+        precondition(sourceRemoval.affected == [model.settingsDraft.accounts[0].name])
+        model.applyRemoval(sourceRemoval)
+        precondition(model.settingsDraft.sources.isEmpty && model.settingsDraft.accounts[0].quotaSourceId == nil)
+        model.applyRemoval(model.removalRequest("account", id: model.settingsDraft.accounts[0].key)!)
+        precondition(model.settingsDraft.accounts[0].archived == true)
+        model.discardSettingsDraft(); precondition(!model.settingsDirty)
+        print("Unfiltered menu metric, data-time semantics, per-source retry, and destructive draft confirmation checks passed")
         print("macOS draft rollback/commit, automatic quota retry, per-window visibility, model-options compatibility, staged credential commit/rollback, sampling failure throttling, and price failure checks passed")
     }
 }

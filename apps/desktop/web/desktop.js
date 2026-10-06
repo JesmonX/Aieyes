@@ -40,6 +40,7 @@
       maximize.innerHTML = maximized ? '<svg viewBox="0 0 16 16"><path d="M6 3h7v7M3 6h7v7H3Z"/></svg>' : '<svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9"/></svg>';
     }
     document.querySelector('#window-minimize').onclick = () => native.minimize().catch(e=>notify(String(e)));
+    // Tauri's drag-region handler owns double-click maximize; onResized updates the icon.
     maximize.onclick = () => native.toggleMaximize().then(updateMaximized).catch(e=>notify(String(e)));
     document.querySelector('#window-close').onclick = () => native.close().catch(e=>notify(String(e)));
     await native.onResized(() => updateMaximized().catch(e=>notify(String(e))));

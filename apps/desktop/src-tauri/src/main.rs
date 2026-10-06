@@ -53,6 +53,38 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
     events
 }
 
+fn refresh_key(method: &str) -> Option<&'static str> {
+    match method {
+        "sources.scan" => Some("scan"),
+        "quotas.refresh" => Some("quotas"),
+        "prices.sync" => Some("prices"),
+        "hosts.sample" => Some("hosts"),
+        _ => None,
+    }
+}
+fn refresh_feedback(
+    method: &str,
+    result: &Result<Value, String>,
+    item_id: Option<&str>,
+) -> Option<Value> {
+    let key = refresh_key(method)?;
+    let failures: Vec<Value> = match result {
+        Ok(rows) => rows.as_array().into_iter().flatten().filter(|row| row["error"].is_string()).map(|row| {
+            serde_json::json!({"id":row["id"], "accountId":row["accountId"], "name":row["name"], "error":row["error"]})
+        }).collect(),
+        Err(error) => vec![serde_json::json!({"id":item_id,"accountId":if key == "quotas" { item_id } else { None },"name":"刷新失败","error":error})],
+    };
+    let success = failures.is_empty().then(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    });
+    Some(
+        serde_json::json!({"key":key,"busy":false,"itemId":item_id,"success":success,"failures":failures}),
+    )
+}
+
 #[tauri::command]
 async fn engine_call(
     method: String,
@@ -68,6 +100,16 @@ async fn engine_call(
         return Err("正在安装更新，请稍候".into());
     }
     let changed = method.clone();
+    let refresh_item = ["sourceId", "accountId", "hostId"]
+        .iter()
+        .find_map(|key| params[*key].as_str())
+        .map(str::to_owned);
+    if let Some(key) = refresh_key(&method) {
+        let _ = app.emit(
+            "desktop:refresh-status",
+            serde_json::json!({"key":key,"busy":true}),
+        );
+    }
     let engine = if method.starts_with("hosts.") {
         state.1.clone()
     } else {
@@ -88,6 +130,9 @@ async fn engine_call(
     .await
     .map_err(|e| e.to_string())
     .and_then(|result| result);
+    if let Some(feedback) = refresh_feedback(&changed, &result, refresh_item.as_deref()) {
+        let _ = app.emit("desktop:refresh-status", feedback);
+    }
     // Keep both webviews current without starting a second poller or broadcasting
     // settings that may contain credentials, proxy URLs, or shell commands.
     for (event, payload) in update_events(&changed, &result) {
@@ -157,6 +202,25 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn refresh_feedback_is_shared_without_leaking_settings_or_losing_failures() {
+        let rows = json!([{"id":"first","error":"unavailable","private":"hidden"},{"id":"second","result":{}}]);
+        let feedback = refresh_feedback("sources.scan", &Ok(rows), Some("first")).unwrap();
+        assert_eq!(feedback["busy"], false);
+        assert_eq!(feedback["itemId"], "first");
+        assert!(feedback["success"].is_null());
+        assert_eq!(feedback["failures"].as_array().unwrap().len(), 1);
+        assert!(feedback.to_string().find("hidden").is_none());
+        assert!(
+            refresh_feedback("prices.sync", &Ok(json!({})), None).unwrap()["success"].is_number()
+        );
+        assert!(refresh_feedback("settings.get", &Ok(json!({"private":"hidden"})), None).is_none());
+        assert_eq!(
+            refresh_feedback("hosts.sample", &Err("disconnected".into()), None).unwrap()["failures"]
+                [0]["error"],
+            "disconnected"
+        );
+    }
     #[test]
     fn sampling_failure_invalidates_pending_state_without_claiming_success() {
         let events = update_events("quotaEstimates.stop", &Err("sync failed".into()));

@@ -11,7 +11,11 @@ use windows::{
         Graphics::{Gdi::*, GdiPlus::*},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Controls::*, HiDpi::GetDpiForWindow, Input::KeyboardAndMouse::*, WindowsAndMessaging::*,
+            Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
+            Controls::*,
+            HiDpi::GetDpiForWindow,
+            Input::KeyboardAndMouse::*,
+            WindowsAndMessaging::*,
         },
     },
     core::{PCWSTR, PWSTR, w},
@@ -414,6 +418,10 @@ unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
+        WM_SETTINGCHANGE | WM_THEMECHANGED => {
+            let _ = InvalidateRect(Some(hwnd), None, false);
+            LRESULT(0)
+        }
         WM_PAINT => {
             paint(hwnd, surface);
             LRESULT(0)
@@ -534,7 +542,28 @@ unsafe fn save_position(hwnd: HWND, surface: &Surface) {
         crate::desktop::capsule_moved(&surface.app, rect.left, rect.top);
     }
 }
+// System contrast colors use COLORREF (BGR); GDI+ takes opaque ARGB.
+unsafe fn system_argb(index: SYS_COLOR_INDEX) -> u32 {
+    let color = GetSysColor(index);
+    0xff000000 | ((color & 0xff) << 16) | (color & 0xff00) | ((color >> 16) & 0xff)
+}
+unsafe fn high_contrast() -> bool {
+    let mut settings = HIGHCONTRASTW {
+        cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,
+        ..Default::default()
+    };
+    SystemParametersInfoW(
+        SPI_GETHIGHCONTRAST,
+        settings.cbSize,
+        Some((&mut settings as *mut HIGHCONTRASTW).cast()),
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+    )
+    .is_ok()
+        && settings.dwFlags.contains(HCF_HIGHCONTRASTON)
+}
+// No timers or breathing animation: the native capsule is always motion-reduced.
 unsafe fn paint(hwnd: HWND, surface: &Surface) {
+    let contrast = high_contrast();
     let mut ps = PAINTSTRUCT::default();
     let dc = BeginPaint(hwnd, &mut ps);
     let mut graphics = null_mut();
@@ -544,7 +573,9 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
         GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
         GdipGraphicsClear(
             graphics,
-            if surface.dark.get() {
+            if contrast {
+                system_argb(COLOR_WINDOW)
+            } else if surface.dark.get() {
                 0xff202735
             } else {
                 0xfff6f8fc
@@ -557,7 +588,9 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
         GdipAddPathArc(outline, 100.5, 0.5, 43.0, 43.0, 270.0, 180.0);
         GdipClosePathFigure(outline);
         GdipCreatePen1(
-            if surface.dark.get() {
+            if contrast {
+                system_argb(COLOR_WINDOWTEXT)
+            } else if surface.dark.get() {
                 0xff455167
             } else {
                 0xffd3dbea
@@ -577,6 +610,7 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             "tool" => ("执行工具", 0xff629cef),
             "complete" => ("已完成", 0xff44ad76),
             "interrupted" => ("已中断", 0xffd9a44c),
+            "unknown" => ("待确认", 0xffd9a44c),
             _ => ("空闲", 0xff91a0b7),
         };
         let label = if info["recovery"] == "failed" {
@@ -600,19 +634,28 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             GdipDisposeImage(bitmap.cast());
         }
         let mut brush = null_mut();
-        GdipCreateSolidFill(color, &mut brush);
+        GdipCreateSolidFill(
+            if contrast {
+                system_argb(COLOR_WINDOWTEXT)
+            } else {
+                color
+            },
+            &mut brush,
+        );
         GdipFillEllipse(graphics, brush.cast(), 39.0, 19.0, 6.0, 6.0);
         GdipDeleteBrush(brush.cast());
         let mut family = null_mut();
         let mut font = null_mut();
         let mut format = null_mut();
         GdipCreateFontFamilyFromName(w!("Segoe UI"), null_mut(), &mut family);
-        GdipCreateFont(family, 12.0, FontStyleRegular.0, UnitPixel, &mut font);
+        GdipCreateFont(family, 13.0, FontStyleRegular.0, UnitPixel, &mut font);
         GdipCreateStringFormat(0, 0, &mut format);
         GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
         GdipSetTextRenderingHint(graphics, TextRenderingHintAntiAliasGridFit);
         GdipCreateSolidFill(
-            if surface.dark.get() {
+            if contrast {
+                system_argb(COLOR_WINDOWTEXT)
+            } else if surface.dark.get() {
                 0xffedf2fc
             } else {
                 0xff243049

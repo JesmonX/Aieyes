@@ -15,8 +15,8 @@ struct SamplingManagementView: View {
                             Spacer(); Text(estimate.statusLabel).foregroundStyle(estimate.status == "pending" ? .orange : .teal)
                         }
                         Text(estimate.calculationNote).font(AppFont.secondary)
-                        if !estimate.reason.isEmpty { Text(estimate.reason).foregroundStyle(.orange) }
-                        if let error = model.estimateErrors[estimate.accountKey] { Text(error).foregroundStyle(.orange) }
+                        if !estimate.reason.isEmpty { Text(estimate.reason).foregroundStyle(Palette.warn) }
+                        if let error = model.estimateErrors[estimate.accountKey] { Text(error).foregroundStyle(Palette.warn) }
                         HStack {
                             Button("查看与管理") { Task { await model.openEstimate(estimate) } }
                             Spacer()
@@ -52,7 +52,7 @@ struct QuotaOrderView: View {
                     }.buttonStyle(.borderless).padding(.vertical, 4)
                 }.onMove { from, to in withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { keys.move(fromOffsets: from, toOffset: to) } }
             }.frame(minHeight: 150, maxHeight: 300)
-            if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+            if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
             HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button(saving ? "保存中…" : "保存顺序") {
                 saving = true
                 Task { do { try await model.saveQuotaOrder(keys); dismiss() } catch { self.error = error.localizedDescription }; saving = false }
@@ -91,7 +91,7 @@ struct QuotaEstimateView: View {
                     if let current {
                         result(current)
                         if current.status == "pending" {
-                            Text(current.reason).foregroundStyle(.orange)
+                            Text(current.reason).foregroundStyle(Palette.warn)
                             confirmation
                             Button("确认并开始新一段") { perform("restart", ["id": current.id, "confirmed": confirmed]) }.disabled(!confirmed || busy)
                         }
@@ -111,7 +111,7 @@ struct QuotaEstimateView: View {
                         Text(sources.isEmpty ? "需要可采集 Token 的关联数据源。agy 限额查询本身不提供用量历史。" : credits ? "需要明确且有限的 credits 余额；请刷新账户限额。" : "此额度池缺少可靠的模型映射，暂不支持估值。").foregroundStyle(.secondary)
                     }
                     if busy { HStack { ProgressView().controlSize(.small); Text("正在同步用量与限额…") }.font(AppFont.secondary) }
-                    if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+                    if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
                     if records.contains(where: { $0.status == "completed" }) {
                         Divider(); Text("采样历史").font(AppFont.section)
                         ForEach(records.filter { $0.status == "completed" }) { result($0) }
@@ -141,7 +141,7 @@ struct QuotaEstimateView: View {
                         Text("价格依据：" + price.id + " · " + Format.date(price.fetchedAt))
                         Text("每百万 Token USD：输入 \(price.input.map { Format.money($0 * 1_000_000) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1_000_000) } ?? "—")")
                     }
-                    if !e.reason.isEmpty { Text(e.reason).foregroundStyle(.orange) }
+                    if !e.reason.isEmpty { Text(e.reason).foregroundStyle(Palette.warn) }
                 }.font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
             }
         }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))

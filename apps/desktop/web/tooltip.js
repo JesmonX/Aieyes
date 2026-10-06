@@ -5,7 +5,7 @@
 (() => {
   if (globalThis.AieyesHint) return;
   const DELAY = 520, EDGE = 10, GAP = 9, MIN_ROOM = 26;
-  let bubble = null, current = null, timer = 0, text = '';
+  let bubble = null, current = null, timer = 0, text = '', description = null;
 
   const prefersReduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
@@ -13,7 +13,7 @@
     if (bubble && bubble.isConnected) return bubble;
     bubble = document.createElement('div');
     bubble.className = 'hint';
-    bubble.setAttribute('role', 'tooltip');
+    bubble.setAttribute('role', 'tooltip');bubble.id='aieyes-tooltip';
     bubble.hidden = true;
     document.body.appendChild(bubble);
     return bubble;
@@ -37,6 +37,7 @@
     clearTimeout(timer); timer = 0;
     if (current) {
       // Only restore a value we removed and nobody has replaced since.
+      if(description===null)current.removeAttribute('aria-describedby');else current.setAttribute('aria-describedby',description);
       if (!current.hasAttribute('title') && text) current.setAttribute('title', text);
       current = null;
     }
@@ -49,7 +50,7 @@
   function show(el) {
     text = el.getAttribute('title');
     if (!text || !text.trim()) { hide(); return; }
-    current = el;
+    current = el;description=el.getAttribute('aria-describedby');el.setAttribute('aria-describedby', [description,'aieyes-tooltip'].filter(Boolean).join(' '));
     el.removeAttribute('title');            // suppress the native tooltip while ours is up
     const tip = node();
     tip.textContent = text.trim();
@@ -73,7 +74,7 @@
     if (!current || current.contains(event.relatedTarget)) return;
     if (current.contains(event.target) || current === event.target) hide();
   });
-  document.addEventListener('focusin', event => { const el = target(event); if (el) arm(el); });
+  document.addEventListener('focusin', event => { const el = target(event); if (el) { hide();show(el); } });
   document.addEventListener('focusout', hide);
   document.addEventListener('pointerdown', hide, true);
   document.addEventListener('scroll', hide, true);

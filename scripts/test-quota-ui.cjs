@@ -46,6 +46,7 @@ function fixture(){
    await page.evaluate(()=>quotaFixture.fail=true);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>document.querySelector('#quota-tool-error').textContent.includes('保存失败'));
    assert(await page.locator('#quota-dialog').evaluate(e=>e.open));await page.evaluate(()=>quotaFixture.fail=false);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>!document.querySelector('#quota-dialog').open);
    assert.equal(await page.locator('[data-quota]').first().getAttribute('data-quota'),'agy:a');
+   if(!await page.locator('[data-quota="codex:c"] .quota-disclosure').evaluate(el=>el.open))await page.locator('[data-quota="codex:c"] .quota-disclosure summary').click();
    await page.locator('[data-estimate="codex:c"]').click();assert(await page.locator('#estimate-start').isDisabled());await page.locator('#estimate-confirm').check();
    await page.locator('[name=estimate-source]').uncheck();await page.locator('#estimate-start').click();await page.waitForFunction(()=>document.querySelector('#quota-tool-error').textContent.includes('数据源'));
    await page.locator('[name=estimate-source]').check();await page.locator('#estimate-start').click();await page.locator('#estimate-stop').waitFor();assert.equal(await page.locator('#quota-dialog').getByText('$20.00 USD',{exact:true}).count(),1);

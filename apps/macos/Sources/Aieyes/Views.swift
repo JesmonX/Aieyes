@@ -1,24 +1,6 @@
 import SwiftUI
 import Charts
 
-enum Palette {
-    static let accent = Color(nsColor: NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.55, green: 0.65, blue: 1, alpha: 1)
-            : NSColor(srgbRed: 0.25, green: 0.36, blue: 0.82, alpha: 1)
-    })
-    static func quota(_ used: Double) -> Color {
-        guard used.isFinite else { return .secondary }
-        let remaining = min(100, max(0, 100 - used))
-        return remaining < 10 ? .red : remaining <= 30 ? .orange : accent
-    }
-    static let colors: [Color] = [accent, .teal, .purple, .orange, .pink, .cyan, .green, .indigo]
-    static func model(_ name: String) -> Color {
-        let hash = name.utf8.reduce(UInt32(2166136261)) { ($0 ^ UInt32($1)) &* 16777619 }
-        return Color(hue: Double(hash % 3600) / 3600, saturation: 0.64, brightness: 0.8)
-    }
-}
-
 struct Surface<Content: View>: View {
     var title: String?
     @ViewBuilder var content: Content
@@ -28,9 +10,46 @@ struct Surface<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(16)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(LinearGradient(colors: [Palette.accent.opacity(0.22), .teal.opacity(0.08), .purple.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing)))
-        .shadow(color: Palette.accent.opacity(0.045), radius: 10, y: 4)
+        .modifier(NeutralCard())
+    }
+}
+
+private struct AccessibleSurfacePreview: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    var previewAccessibleSurfaces: Bool {
+        get { self[AccessibleSurfacePreview.self] }
+        set { self[AccessibleSurfacePreview.self] = newValue }
+    }
+}
+struct NeutralCard: ViewModifier {
+    @Environment(\.previewAccessibleSurfaces) private var previewAccessible
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    func body(content: Content) -> some View {
+        content.background {
+            if previewAccessible || reduceTransparency || contrast == .increased { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(Color(nsColor: .controlBackgroundColor)) }
+            else { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(.regularMaterial) }
+        }
+        .overlay(RoundedRectangle(cornerRadius: Palette.radiusCard).strokeBorder(Palette.cardBorder, lineWidth: previewAccessible || contrast == .increased ? 2 : 1))
+        .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
+    }
+}
+struct AttentionNotice: View {
+    var reason: String, action: String, perform: () -> Void
+    var body: some View {
+        HStack(spacing: 8) { Image(systemName: "exclamationmark.triangle"); Text(reason).font(AppFont.secondary).fixedSize(horizontal: false, vertical: true); Spacer(minLength: 0); Button(action, action: perform) }
+            .foregroundStyle(Palette.warn).padding(10).overlay(RoundedRectangle(cornerRadius: Palette.radiusControl).strokeBorder(Palette.warn))
+    }
+}
+struct ActionFailureList: View {
+    @ObservedObject var model: AppModel
+    var body: some View {
+        ScrollView { VStack(alignment: .leading, spacing: 8) {
+            ForEach(model.actionFailures) { failure in
+                HStack(alignment: .top, spacing: 8) { VStack(alignment: .leading, spacing: 3) { Text(failure.name).fontWeight(.semibold); Text(failure.reason).textSelection(.enabled) }; Spacer(minLength: 0); Button("重试") { Task { await model.retry(failure) } }.accessibilityLabel("重试" + failure.name).disabled(model.refreshStates[failure.action]?.busy == true) }
+                if failure.id != model.actionFailures.last?.id { Divider() }
+            }
+        }.font(AppFont.secondary).padding(10) }.frame(maxHeight: 180).modifier(NeutralCard())
     }
 }
 
@@ -53,7 +72,8 @@ struct RootView: View {
             Divider().opacity(0.55)
             ScrollView {
                 VStack(alignment: .leading, spacing: compact ? 14 : 22) {
-                    if let message = model.message {
+                    if !model.actionFailures.isEmpty { ActionFailureList(model: model) }
+                    if let message = model.message, !model.actionFailures.contains(where: { $0.reason == message }) {
                         HStack(spacing: 8) {
                             Text(message).font(AppFont.secondary).textSelection(.enabled)
                             Spacer(); Button { model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
@@ -70,7 +90,7 @@ struct RootView: View {
         .background {
             ZStack {
                 Rectangle().fill(.ultraThinMaterial)
-                LinearGradient(colors: [Palette.accent.opacity(0.10), .clear, Color.teal.opacity(0.07), Color.purple.opacity(0.06)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                Color(nsColor: .windowBackgroundColor).opacity(0.5)
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: tab)
@@ -93,20 +113,24 @@ struct RootView: View {
                 .pickerStyle(.segmented).labelsHidden().frame(maxWidth: compact ? .infinity : 230)
             if !compact { Spacer() }
             Menu {
-                Button("同步记录") { Task { await model.scan() } }.disabled(model.busy)
-                Button("刷新限额") { Task { await model.refreshQuotas() } }.disabled(model.quotaBusy)
-                Button("同步价格") { Task { await model.syncPrices() } }.disabled(model.busy)
-                Button("刷新服务器") { Task { await model.sampleHosts() } }.disabled(model.serverBusy)
+                Button(model.refreshLabel("scan")) { Task { await model.scan() } }.disabled(model.busy || model.quotaBusy)
+                Button(model.refreshLabel("quotas")) { Task { await model.refreshQuotas() } }.disabled(model.quotaBusy || model.busy)
+                Button(model.refreshLabel("prices")) { Task { await model.syncPrices() } }.disabled(model.busy || model.quotaBusy)
+                Button(model.refreshLabel("hosts")) { Task { await model.sampleHosts() } }.disabled(model.serverBusy)
             } label: {
-                if model.busy || model.serverBusy || model.quotaBusy { ProgressView().controlSize(.regular).frame(width: 18) }
-                else { Image(systemName: "arrow.clockwise").font(AppFont.secondary) }
+                Image(systemName: "arrow.clockwise").font(AppFont.secondary)
             }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("刷新").accessibilityLabel("刷新选项")
         }.padding(.horizontal, compact ? 18 : 28).padding(.vertical, 16)
     }
     private var footer: some View {
         HStack(spacing: 8) {
-            Text(model.busy ? model.activity : model.dashboard.generatedAt > 0 ? Format.time(model.dashboard.generatedAt) : "正在加载")
-                .font(AppFont.secondary).foregroundStyle(.secondary)
+            Button { Task { if tab == "servers" { await model.sampleHosts() } else { await model.scan() } } } label: {
+                HStack(spacing: 6) {
+                    if model.busy || model.quotaBusy || model.serverBusy { ProgressView().controlSize(.mini).accessibilityLabel("进行中") }
+                    else { Circle().fill(model.actionFailures.isEmpty ? Palette.ok : Palette.danger).frame(width: 7, height: 7) }
+                    Text(tab == "servers" ? model.serverStatusText : model.statusText).font(AppFont.secondary).foregroundStyle(.secondary)
+                }
+            }.help(tab == "servers" ? "服务器采样时间；点击刷新服务器" : "数据生成时间；点击同步记录")
             Spacer()
             if compact {
                 Button { model.isPinned.toggle() } label: { Image(systemName: model.isPinned ? "pin.fill" : "pin").frame(width: 30, height: 30).contentShape(Rectangle()) }.help(model.isPinned ? "取消固定" : "固定面板").accessibilityLabel("固定面板").accessibilityValue(model.isPinned ? "已固定" : "未固定")
@@ -118,8 +142,10 @@ struct RootView: View {
         }.buttonStyle(.plain).padding(.horizontal, compact ? 18 : 28).padding(.vertical, 12)
     }
     @ViewBuilder private var agentContent: some View {
-        if model.settings.sources.isEmpty { connectionGuide }
         sessionStrip
+        if model.sessionsUnavailable || model.sessions.contains(where: { $0.phase == .unknown }) { AttentionNotice(reason: "待确认：会话状态可能不完整", action: "重试读取") { Task { await model.refreshSessions() } } }
+        if model.settings.sources.isEmpty { connectionGuide }
+        if hasUsageData || hasActiveFilters {
         HStack(spacing: 8) {
             Picker("Agent", selection: $model.provider) {
                 Text("全部 Agent").tag("all")
@@ -141,7 +167,11 @@ struct RootView: View {
             }
         }.controlSize(.regular)
         activeFilters
+        }
         if !model.dashboard.quotas.isEmpty || !displayedQuotaAccounts.isEmpty { quotaSection }
+        if model.samplingNeedsAttention { AttentionNotice(reason: "待确认：采样需要确认用量来源", action: "管理采样") { model.showSampling?() } }
+        if hasUsageData {
+        if model.dashboard.summary.total > model.dashboard.summary.pricedTokens { AttentionNotice(reason: "计价未完成：部分 Token 缺少价格", action: "补充价格") { model.openPricing() } }
         HStack(alignment: .firstTextBaseline) {
             Text(model.range == 1 ? "今日概览" : "使用概览").font(.system(size: compact ? 20 : 22, weight: .semibold))
             Spacer()
@@ -149,28 +179,19 @@ struct RootView: View {
                 Text("今日").tag(1); Text("最近 7 天").tag(7); Text("最近 30 天").tag(30); Text("最近 90 天").tag(90); Text("最近一年").tag(365)
             }.labelsHidden().fixedSize().controlSize(.regular)
         }
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: compact ? 2 : 4), spacing: 10) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: compact ? 2 : 3), spacing: 10) {
             StatCard(title: "总 Token", value: Format.compact(model.dashboard.summary.total), detail: "", icon: "sparkle", accent: Palette.accent)
             StatCard(title: "API 等价成本", value: model.dashboard.summary.pricedTokens > 0 ? Format.money(model.dashboard.summary.cost) : "—", detail: "", icon: "dollarsign.circle", accent: .teal, pricingIncomplete: model.dashboard.summary.total > 0 && model.dashboard.summary.pricedTokens < model.dashboard.summary.total, onPricing: { model.openPricing() })
-            if !compact {
-                StatCard(title: "缓存命中率", value: Format.percent(model.dashboard.summary.tokens.cacheRate.map { $0 * 100 }), detail: "", icon: "square.3.layers.3d", accent: .purple)
-                TokenBreakdownCard(tokens: model.dashboard.summary.tokens)
-            }
+            if !compact { CacheSummaryCard(tokens: model.dashboard.summary.tokens) }
         }
+        if compact { CacheSummaryCard(tokens: model.dashboard.summary.tokens) }
         if compact {
-            TokenBreakdown(tokens: model.dashboard.summary.tokens, inline: true)
-        }
-        if !hasUsageData {
-            Surface(title: "暂无用量记录") {
-                Text(model.settings.sources.isEmpty ? "添加数据源后，趋势与模型明细会显示在这里。" : "当前筛选范围没有记录，可调整筛选或同步记录后再查看。")
-                    .font(AppFont.secondary).foregroundStyle(.secondary)
-            }
-        } else if compact {
             Surface {
-                HStack { Text("近 7 天用量").font(.system(size: 15, weight: .semibold)); Spacer(); EmptyView() }
+                DisclosureGroup("近 \(max(7, model.range)) 天用量") {
                 UsageChart(days: recentDays, rows: recentRows, cost: false).frame(height: 85)
                 ModelKey(rows: recentRows)
                 DailyUsage(days: recentDays, rows: recentRows, compact: true)
+                }
             }
             Button { model.showDetail?() } label: { HStack { Text("用量详情"); Spacer(); Image(systemName: "arrow.up.right") }.font(AppFont.secondary) }.buttonStyle(.plain)
         } else {
@@ -185,7 +206,11 @@ struct RootView: View {
             Surface(title: "每日明细") { DailyUsage(days: model.dashboard.trendDays, rows: model.dashboard.dayModels, compact: false, cost: costMode) }
             Surface(title: "过去 365 天") { Heatmap(days: model.dashboard.heatmap, cost: costMode) }
         }
+        } else if !model.settings.sources.isEmpty {
+            Surface(title: "暂无用量记录") { Text("当前筛选范围没有记录，可清除筛选或同步记录后再查看。").font(AppFont.secondary).foregroundStyle(.secondary); Button("同步记录") { Task { await model.scan() } }.disabled(model.busy || model.quotaBusy) }
+        }
     }
+    private var hasActiveFilters: Bool { model.provider != "all" || model.selectedAccount != "all" || model.selectedSource != "all" || model.selectedModel != "all" || model.range != 1 }
     private var hasUsageData: Bool {
         model.dashboard.summary.total > 0 || model.dashboard.trendDays.contains { $0.total > 0 } || model.dashboard.heatmap.contains { $0.total > 0 }
     }
@@ -204,8 +229,12 @@ struct RootView: View {
         Button("SSH 主机", systemImage: "server.rack") { model.settingsTab = "servers"; model.requestHostEditor = true; model.showSettings?() }
     }
     @ViewBuilder private var activeFilters: some View {
-        if model.selectedSource != "all" || model.selectedModel != "all" {
+        if hasActiveFilters {
             VStack(alignment: .leading, spacing: 6) {
+                if model.provider != "all" { filterChip("Agent：" + Format.provider(model.provider)) { model.provider = "all" } }
+                if model.selectedAccount != "all" { filterChip("账户：" + (model.selectedAccount == "none" ? "未关联账户" : model.settings.accounts.first { $0.key == model.selectedAccount }?.name ?? model.selectedAccount)) { model.selectedAccount = "all" } }
+                if model.range != 1 { filterChip("最近 \(model.range) 天") { model.range = 1 } }
+                Button("清除全部") { model.provider = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; model.selectedModel = "all"; model.range = 1 }
                 if model.selectedSource != "all" {
                     filterChip("数据源：" + (model.settings.sources.first { $0.id == model.selectedSource }?.name ?? model.selectedSource)) { model.selectedSource = "all" }
                 }
@@ -220,7 +249,7 @@ struct RootView: View {
             Button(action: clear) { Image(systemName: "xmark.circle.fill").frame(width: 28, height: 28) }.buttonStyle(.plain).accessibilityLabel("清除" + title)
         }.padding(.leading, 10).background(Palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
-    private var recentDays: [Aggregate] { Array(model.dashboard.trendDays.suffix(7)) }
+    private var recentDays: [Aggregate] { Array(model.dashboard.trendDays.suffix(max(7, model.range))) }
     private var selectableSources: [AgentSource] {
         let account = model.settings.accounts.first { $0.key == model.selectedAccount }
         return model.settings.sources.filter { source in
@@ -243,25 +272,25 @@ struct RootView: View {
                         ActivityIndicator(phase: session.phase)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(session.source).lineLimit(1)
-                            Text(URL(fileURLWithPath: session.id).deletingPathExtension().lastPathComponent.suffix(8)).font(.system(size: 14, design: .monospaced)).foregroundStyle(.secondary)
+                            TimelineView(.periodic(from: .now, by: 60)) { context in
+                                Text("会话 " + String(URL(fileURLWithPath: session.id).deletingPathExtension().lastPathComponent.prefix(8)) + " · " + Format.relative(session.updatedAt, now: context.date)).font(AppFont.secondary).foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
                         Text(session.phase.rawValue).foregroundStyle(session.phase.color)
                     }
                 }
                 if model.sessions.isEmpty { Text(model.sessionsUnavailable ? "读取失败" : "暂无会话动态").foregroundStyle(.secondary) }
-                Text("本机 Codex · 日志状态").font(AppFont.secondary).foregroundStyle(.secondary)
             }.padding(.top, 12)
         } label: {
             HStack(spacing: 9) {
                 ActivityIndicator(phase: model.sessionPhase)
-                Text(model.sessionSummary).font(.system(size: 15, weight: .medium))
+                Text(model.sessionSummary).font(.system(size: 15, weight: .medium)).help("本机 Codex · 日志状态")
                 Spacer()
                 if let phase = model.sessionPhase { Text(phase.rawValue).font(AppFont.secondary).foregroundStyle(phase.color) }
             }
         }
-        .padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder((model.sessionPhase?.color ?? Palette.accent).opacity(0.22)))
+        .padding(14).modifier(NeutralCard())
     }
     private var displayedQuotaAccounts: [AgentAccount] {
         model.quotaAccounts.filter { account in
@@ -270,7 +299,7 @@ struct RootView: View {
     }
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("账户限额").font(.system(size: compact ? 20 : 22, weight: .semibold)); if model.dashboard.quotas.count > 1 { Text("\(model.dashboard.quotas.count)").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button { orderingQuotas = true } label: { Image(systemName: "arrow.up.arrow.down") }.help("调整账户顺序").accessibilityLabel("调整账户顺序"); Button(model.quotaBusy ? "读取中…" : "刷新") { Task { await model.refreshQuotas() } }.font(AppFont.secondary).disabled(model.quotaBusy) }
+            HStack { Text("账户限额").font(.system(size: compact ? 20 : 22, weight: .semibold)); if !displayedQuotaAccounts.isEmpty { Text("\(displayedQuotaAccounts.count)").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button { orderingQuotas = true } label: { Image(systemName: "arrow.up.arrow.down") }.help("调整账户顺序").accessibilityLabel("调整账户顺序"); Button(model.quotaBusy ? "读取中…" : "刷新限额") { Task { await model.refreshQuotas() } }.font(AppFont.secondary).disabled(model.quotaBusy) }
             ForEach(displayedQuotaAccounts.filter { account in
                 !model.dashboard.quotas.contains { $0.provider == account.provider && $0.accountId == account.id }
             }, id: \.key) { account in
@@ -281,7 +310,7 @@ struct RootView: View {
             }
             if let error = model.quotaError {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(error).font(AppFont.secondary).foregroundStyle(.orange).textSelection(.enabled)
+                    Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled)
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
@@ -293,7 +322,7 @@ struct RootView: View {
         HStack { VStack(alignment: .leading, spacing: 4) { Text("服务器").font(.system(size: compact ? 20 : 22, weight: .semibold, design: .default)); Text("\(model.settings.hosts.filter(\.enabled).count) 台主机").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button { model.settingsTab = "servers"; model.showSettings?() } label: { Image(systemName: "plus") }.help("添加主机") }
         if model.settings.hosts.isEmpty { EmptyCard(icon: "server.rack", title: "添加服务器", subtitle: "", action: { model.settingsTab = "servers"; model.showSettings?() }) }
         ForEach(model.settings.hosts) { host in
-            ServerCard(host: host, result: model.hosts.first(where: { $0.id == host.id }), compact: compact)
+            ServerCard(host: host, result: model.hosts.first(where: { $0.id == host.id }), compact: compact, onRefresh: { Task { await model.sampleHosts(hostID: host.id) } })
         }
     }
 }
@@ -322,6 +351,20 @@ struct TokenBreakdown: View {
         }
     }
 }
+struct CacheSummaryCard: View {
+    var tokens: Tokens
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack { Text("缓存命中率").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Text(Format.percent(tokens.cacheRate.map { $0 * 100 })).font(AppFont.section).monospacedDigit() }
+            HStack(alignment: .top, spacing: 10) {
+                ForEach([("输入", tokens.input), ("输出", tokens.output), ("缓存", tokens.cacheRead + tokens.cacheWrite)], id: \.0) { title, value in
+                    VStack(alignment: .leading, spacing: 4) { Text(title).font(AppFont.secondary).foregroundStyle(.secondary); Text(Format.compact(value)).font(AppFont.section).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8) }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).modifier(NeutralCard())
+    }
+}
+
 struct TokenBreakdownCard: View {
     var tokens: Tokens
     var body: some View {
@@ -329,8 +372,7 @@ struct TokenBreakdownCard: View {
             Text("Token 明细").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
             TokenBreakdown(tokens: tokens)
         }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(LinearGradient(colors: [Color.orange.opacity(0.14), Color.orange.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.orange.opacity(0.16)))
+            .modifier(NeutralCard())
     }
 }
 
@@ -344,7 +386,7 @@ struct StatCard: View {
             HStack(spacing: 6) {
                 Text(title).font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
                 if pricingIncomplete {
-                    Button(action: onPricing) { Image(systemName: "exclamationmark.circle").foregroundStyle(.orange) }
+                    Button(action: onPricing) { Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.warn) }
                         .buttonStyle(.plain)
                         .help("计价覆盖未达 100%，部分模型缺少价格。请设置模型价格以补齐成本。")
                         .accessibilityLabel("计价未完成，设置模型价格")
@@ -353,8 +395,7 @@ struct StatCard: View {
             Text(value).contentTransition(.numericText()).font(.system(size: 24, weight: .semibold, design: .default)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.9)
             if !detail.isEmpty { Text(detail).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
         }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(LinearGradient(colors: [accent.opacity(0.14), accent.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(accent.opacity(0.16)))
+            .modifier(NeutralCard())
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: value)
     }
 }
@@ -503,7 +544,7 @@ struct QuotaCard: View {
     @AppStorage private var expanded: Bool
     init(quota: Quota, compact: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil) {
         self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
-        _expanded = AppStorage(wrappedValue: quota.provider != "agy", "quota.expanded." + quota.id)
+        _expanded = AppStorage(wrappedValue: !compact && quota.provider != "agy", "quota.expanded." + quota.id)
     }
     var body: some View {
         fullCard
@@ -515,7 +556,7 @@ struct QuotaCard: View {
                 if expanded { HStack { Text("赠送 " + balance.granted); Spacer(); Text("充值 " + balance.toppedUp) }.font(AppFont.secondary).foregroundStyle(.secondary) }
             }
         } }
-        if quota.isAvailable == false { Text("余额不足").font(AppFont.secondary).foregroundStyle(.orange) }
+        if quota.isAvailable == false { Text("余额不足").font(AppFont.secondary).foregroundStyle(Palette.warn) }
     }
     private var agyGroups: [String] {
         quota.windows.reduce(into: [String]()) { result, w in
@@ -576,10 +617,10 @@ struct QuotaCard: View {
             }
             }
             }
-            if let onEstimate, (quota.provider != "agy" && quota.windows.contains(where: { $0.windowMinutes == 10080 })) || estimate != nil {
+            if let onEstimate, (!compact || expanded || estimate != nil), (quota.provider != "agy" && quota.windows.contains(where: { $0.windowMinutes == 10080 })) || estimate != nil {
                 Button(action: onEstimate) {
                     HStack { Label(estimate == nil ? "估算整周价值" : "7d 整周估值", systemImage: "chart.line.uptrend.xyaxis"); Spacer();
-                        if let value = estimate?.weeklyValue { Text(Format.money(value) + " USD").monospacedDigit(); if estimate?.status == "pending" { Text("待确认").foregroundStyle(.orange) } }
+                        if let value = estimate?.weeklyValue { Text(Format.money(value) + " USD").monospacedDigit(); if estimate?.status == "pending" { Text("待确认").foregroundStyle(Palette.warn) } }
                         else if let estimate { Text(estimate.statusLabel).foregroundStyle(.secondary) }
                         Image(systemName: "chevron.right").font(AppFont.secondary)
                     }.font(AppFont.secondary).contentShape(Rectangle())
@@ -589,8 +630,8 @@ struct QuotaCard: View {
             if expanded && !sourceName.isEmpty { Text(sourceName).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
             if quota.provider == "codex" {
                 HStack { Text("Codex credits"); Spacer(); Text(quota.credits?.unlimited == true ? "无限" : quota.credits?.balance.map { Format.credits($0) } ?? (quota.credits?.hasCredits == true ? "有余额 · 数量未知" : "—")).monospacedDigit() }.font(AppFont.secondary)
-                if let stamp = quota.creditsUpdatedAt { Text("更新于 \(Format.date(stamp))").font(AppFont.secondary).foregroundStyle(.secondary) }
-                if let onCredits { Button("估算 credit 价值", action: onCredits).buttonStyle(.plain).foregroundStyle(Palette.accent).font(AppFont.secondary) }
+                if expanded, let stamp = quota.creditsUpdatedAt { Text("更新于 \(Format.date(stamp))").font(AppFont.secondary).foregroundStyle(.secondary) }
+                if let onCredits, !compact || expanded || creditEstimate != nil { Button("估算 credit 价值", action: onCredits).buttonStyle(.plain).foregroundStyle(Palette.accent).font(AppFont.secondary) }
             }
             if let creditEstimate {
                 VStack(alignment: .leading, spacing: 4) {
@@ -610,7 +651,7 @@ struct QuotaCard: View {
                 }
             }
             if let error = quota.error {
-                Text(expanded ? error : "限额更新失败 · 展开查看").font(AppFont.secondary).foregroundStyle(.orange).help(error)
+                Text(expanded ? error : "限额更新失败 · 展开查看").font(AppFont.secondary).foregroundStyle(Palette.warn).help(error)
             }
             if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.error == nil && quota.credits == nil { Text("暂无限额数据").font(AppFont.secondary).foregroundStyle(.secondary) }
         }
@@ -619,9 +660,10 @@ struct QuotaCard: View {
 
 struct ServerCard: View {
     var host: Host, result: HostResult?, compact: Bool
+    var onRefresh: () -> Void = {}
     @AppStorage private var expanded: Bool
-    init(host: Host, result: HostResult?, compact: Bool) {
-        self.host = host; self.result = result; self.compact = compact
+    init(host: Host, result: HostResult?, compact: Bool, onRefresh: @escaping () -> Void = {}) {
+        self.host = host; self.result = result; self.compact = compact; self.onRefresh = onRefresh
         _expanded = AppStorage(wrappedValue: true, "server.expanded." + host.id)
     }
     var body: some View {
@@ -694,7 +736,7 @@ struct ServerCard: View {
                         HStack { Text("负载 " + sample.load.map { String(format: "%.2f", $0) }.joined(separator: " / ")); Spacer(); TimelineView(.periodic(from: .now, by: 1)) { context in Text("" + Date(timeIntervalSince1970: sample.timestamp).formatted(.dateTime.hour().minute().second()) + (context.date.timeIntervalSince1970 - sample.timestamp > 10 ? " · 数据已延迟" : "")) } }.font(AppFont.secondary).foregroundStyle(.secondary)
                     }.padding(.top, 14)
                 } else if host.enabled { Text(result?.error == nil ? "等待首次采样" : "连接失败").font(AppFont.secondary).foregroundStyle(.secondary).padding(.top, 10) }
-                if let error = result?.error { Text(error).font(AppFont.secondary).foregroundStyle(.orange).padding(.top, 6) }
+                if let error = result?.error { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn).padding(.top, 6) }
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "server.rack").font(.system(size: 20)).foregroundStyle(Palette.accent)
@@ -705,7 +747,7 @@ struct ServerCard: View {
                     Spacer()
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         let label = status(at: context.date)
-                        HStack(spacing: 6) { Circle().fill(label == "正常" ? Color.teal : label == "已暂停" ? Color.gray : label == "连接失败" ? Color.red : Color.orange).frame(width: 6, height: 6); Text(label).font(AppFont.secondary).foregroundStyle(.secondary) }
+                        HStack(spacing: 6) { Circle().fill(label == "正常" ? Palette.ok : label == "已暂停" ? Color.gray : label == "连接失败" ? Palette.danger : Palette.warn).frame(width: 6, height: 6); Text(label).font(AppFont.secondary).foregroundStyle(.secondary) }
                     }
 
                 }
@@ -719,9 +761,9 @@ struct ServerCard: View {
                         compactMetric("内存", percent: memory.total > 0 ? (memory.total - memory.available) / memory.total * 100 : nil)
                     }
                 }
-                if !sample.errors.isEmpty { Text("部分指标采集失败").font(AppFont.secondary).foregroundStyle(.orange) }
+                if !sample.errors.isEmpty { Text("部分指标采集失败").font(AppFont.secondary).foregroundStyle(Palette.warn) }
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    if context.date.timeIntervalSince1970 - sample.timestamp > 10 { Text("数据已延迟").font(AppFont.secondary).foregroundStyle(.orange) }
+                    if context.date.timeIntervalSince1970 - sample.timestamp > 10 { AttentionNotice(reason: "数据已延迟", action: "刷新服务器", perform: onRefresh) }
                 }
             }
         }
@@ -759,7 +801,7 @@ struct ResourceRing: View {
         HStack(spacing: 12) {
             ZStack {
                 Circle().stroke(.primary.opacity(0.07), lineWidth: 7)
-                if let value, value > 0 { Circle().trim(from: 0, to: value / 100).stroke(value >= 90 ? Color.red : value >= 70 ? Color.orange : Palette.accent, style: StrokeStyle(lineWidth: 7, lineCap: .round)).rotationEffect(.degrees(-90)) }
+                if let value, value > 0 { Circle().trim(from: 0, to: value / 100).stroke(value >= 90 ? Palette.danger : value >= 70 ? Palette.warn : Palette.accent, style: StrokeStyle(lineWidth: 7, lineCap: .round)).rotationEffect(.degrees(-90)) }
                 Text(Format.percent(value)).font(.system(size: 14, weight: .semibold)).monospacedDigit()
             }.frame(width: 72, height: 72)
             Text(title).font(.system(size: 14, weight: .medium)).lineLimit(1)

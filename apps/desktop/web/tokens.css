@@ -26,6 +26,7 @@
   --solid: #eef1f8;
   --soft: rgba(88,108,214,.10);
   --border: rgba(66,88,140,.17);
+  --card-border: #7b879d;
   --hairline-strong: rgba(70,90,138,.26);
   --highlight: rgba(255,255,255,.72);
   --shadow-xs: 0 1px 2px rgba(22,36,72,.07);
@@ -33,7 +34,7 @@
   --shadow-lift: 0 2px 5px rgba(22,36,72,.06), 0 22px 46px -22px rgba(22,36,72,.42);
   --shadow-float: 0 14px 30px -16px rgba(22,36,72,.24), 0 44px 100px -44px rgba(22,36,72,.5);
 
-  --ok: #2c9d80;
+  --ok: #176e58;
   --warn: #895712;
   --danger: #b83245;
 
@@ -42,11 +43,23 @@
   --r-xs: 7px;
   --r-sm: 10px;
   --r-md: 13px;
-  --r-lg: 17px;
-  --r-xl: 21px;
-  --r-2xl: 26px;
+  --r-lg: 16px;
+  --r-xl: 16px;
+  --r-2xl: 20px;
   --r-pill: 999px;
-  --radius: var(--r-xl);
+  --font-body: 15px;
+  --font-secondary: 14px;
+  --font-section: 16px;
+  --font-title: 22px;
+  --font-panel-title: 20px;
+  --space-card: 16px;
+  --space-section: 20px;
+  --radius-card: 16px;
+  --radius-overlay: 20px;
+  --radius-control: 9px;
+  --shadow-card: var(--shadow-xs);
+  --shadow-overlay: var(--shadow-float);
+  --radius: var(--radius-card);
 
   --ease: cubic-bezier(.22,.61,.36,1);
   --ease-soft: cubic-bezier(.33,1,.68,1);
@@ -82,13 +95,14 @@
     --solid: #171e2c;
     --soft: rgba(146,166,248,.14);
     --border: rgba(178,196,232,.14);
+    --card-border: #8794ad;
     --hairline-strong: rgba(178,196,232,.24);
     --highlight: rgba(255,255,255,.09);
     --shadow-xs: 0 1px 2px rgba(0,0,0,.24);
     --shadow: 0 1px 2px rgba(0,0,0,.28), 0 12px 28px -18px rgba(0,0,0,.6);
     --shadow-lift: 0 2px 6px rgba(0,0,0,.32), 0 26px 52px -24px rgba(0,0,0,.7);
     --shadow-float: 0 16px 34px -18px rgba(0,0,0,.6), 0 50px 110px -46px rgba(0,0,0,.8);
-    --ok: #5cc4a4; --warn: #e0b062; --danger: #ef7d88;
+    --ok: #5cc4a4; --warn: #e0b062; --danger: #ff929c;
     color-scheme: dark;
   }
 }
@@ -100,7 +114,7 @@
   :root {
     --ink: CanvasText; --muted: CanvasText; --faint: CanvasText; --accent: LinkText; --accent-ink: Canvas;
     --panel: Canvas; --surface-strong: Canvas; --surface-soft: Canvas; --surface-sunken: Canvas;
-    --solid: Canvas; --soft: Canvas; --border: ButtonText; --hairline-strong: ButtonText;
+    --card-border: CanvasText; --solid: Canvas; --soft: Canvas; --border: ButtonText; --hairline-strong: ButtonText;
     --highlight: Canvas; --shadow-xs: none; --shadow: none; --shadow-lift: none; --shadow-float: none;
     --window-base: Canvas; --window-tint: Canvas; --window-sheen: none; --window-edge: Canvas;
   }

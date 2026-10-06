@@ -67,7 +67,14 @@ function fixture() {
         const style=getComputedStyle(document.documentElement),rgb=name=>style.getPropertyValue(name).trim().slice(1).match(/../g).map(v=>parseInt(v,16));
         const lum=values=>values.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;}).reduce((n,v,i)=>n+v*[.2126,.7152,.0722][i],0);
         const contrast=(a,b)=>(Math.max(lum(a),lum(b))+.05)/(Math.min(lum(a),lum(b))+.05);
-        return [...['--muted','--faint','--warn','--danger'].map(name=>[name,contrast(rgb(name),rgb('--solid'))]),['primary',contrast(rgb('--accent-ink'),rgb('--accent').map(v=>v*.97+255*.03))]];
+        const canvas=document.createElement('canvas'),ctx=canvas.getContext('2d');
+        // Model colors are data graphics: check many hashes against the surface.
+        for(let i=0;i<10000;i++){
+          ctx.fillStyle=color('contrast-model-'+i);ctx.fillRect(0,0,1,1);
+          const ratio=contrast([...ctx.getImageData(0,0,1,1).data].slice(0,3),rgb('--solid'));
+          if(ratio<3)throw new Error('Model graphic contrast '+ratio);
+        }
+        return [...['--muted','--faint','--ok','--warn','--danger'].map(name=>[name,contrast(rgb(name),rgb('--solid'))]),['primary',contrast(rgb('--accent-ink'),rgb('--accent').map(v=>v*.97+255*.03))]];
       });
       for(const [name,value] of contrasts)assert.ok(value>=4.5,`${colorScheme} ${name} contrast ${value}`);
     }
@@ -108,7 +115,7 @@ function fixture() {
       await quotas();
     });
     assert.equal(await page.evaluate(()=>state.lastSuccessfulUpdate),lastSuccess);
-    assert.equal(await page.locator('#activity').getAttribute('data-status'),'partial');
+    assert.equal(await page.locator('#activity').getAttribute('data-status'),'error');
     assert.match(await page.locator('.quotas').textContent(),/账户凭证失效/);
     await page.evaluate(async()=>{review.failScan=false;review.scanRows=[{id:'remote',error:'远程记录读取失败'}];await scan();});
     assert.equal(await page.evaluate(()=>state.lastSuccessfulUpdate),lastSuccess);assert.match(await page.locator('#message').textContent(),/远程记录读取失败/);
@@ -131,10 +138,17 @@ function fixture() {
     assert.equal(await page.locator('.resource-ring strong').first().textContent(),'77.0%');
     assert.ok(await page.evaluate(stamp=>state.hosts[0].lastAttemptAt>=stamp,beforeFailure));
     await page.evaluate(async()=>{review.failHosts=false;await sample();});
-    assert.equal(await page.locator('#message').isVisible(),false,'A successful host retry clears its obsolete failure');
+    assert.doesNotMatch(await page.locator('#message').textContent(),/测试采样 RPC 失败/,'A successful host retry clears its obsolete failure');
     const panel=await browser.newPage({viewport:{width:420,height:640}});panel.on('pageerror',error=>errors.push(String(error)));await panel.addInitScript(fixture);
     await panel.goto(base+'/floating.html');await panel.locator('#ball').click();
     assert.equal(await panel.locator('#panel').evaluate(el=>el.clientWidth),420,'Panel must fill its window');
+    await panel.evaluate(()=>reviewEmit('desktop:refresh-status',{key:'scan',busy:true}));
+    assert.match(await panel.locator('#activity').textContent(),/同步记录中/);
+    await panel.locator('#panel-refresh').click();assert.equal(await panel.locator('[data-refresh=scan]').isDisabled(),true);await panel.keyboard.press('Escape');
+    await panel.evaluate(()=>reviewEmit('desktop:refresh-status',{key:'scan',busy:false,success:null,failures:[{id:'remote',error:'另一窗口同步失败'}]}));
+    assert.match(await panel.locator('.error-list').textContent(),/另一窗口同步失败/);
+    await panel.evaluate(()=>reviewEmit('desktop:refresh-status',{key:'scan',busy:false,success:Date.now(),failures:[]}));
+    assert.equal(await panel.locator('.error-list').count(),0);
     await panel.locator('#panel-more > summary').click();await panel.locator('#panel-quit').waitFor();
     await panel.keyboard.press('Escape');assert.equal(await panel.locator('#panel-more').evaluate(el=>el.open),false);
     assert.equal(await panel.locator('body').getAttribute('data-view'),'panel','Esc dismisses More before the panel');
@@ -144,8 +158,8 @@ function fixture() {
     await panel.evaluate(async()=>{review.empty=false;review.settings.sources=[{id:'preview',name:'示例日志',provider:'codex',path:'~/.codex',enabled:false,accountId:''}];await reviewEmit('desktop:settings',null);});
     await panel.screenshot({animations:'disabled',path:path.join(previews,'floating-panel-fixed-light.png')});
     await panel.emulateMedia({colorScheme:'dark'});await panel.screenshot({animations:'disabled',path:path.join(previews,'floating-panel-fixed-dark.png')});await panel.emulateMedia({colorScheme:'light'});
-    await panel.evaluate(async()=>{review.empty=false;await loadDashboard();});await panel.locator('.daily > summary').click();await panel.locator('.day > summary').first().click();await panel.locator('.day > summary').first().focus();
-    await panel.evaluate(()=>loadDashboard());assert.equal(await panel.locator('[data-agent-detail][open]').count(),2);
+    await panel.evaluate(async()=>{review.empty=false;await loadDashboard();});await panel.locator('[data-agent-detail=panel-trend] > summary').click();await panel.locator('.daily > summary').click();await panel.locator('.day > summary').first().click();await panel.locator('.day > summary').first().focus();
+    await panel.evaluate(()=>loadDashboard());assert.equal(await panel.locator('[data-agent-detail][open]').count(),3);
     assert.equal(await panel.locator('.day > summary').first().evaluate(el=>el===document.activeElement),true);
     await panel.locator('#days').selectOption('30');await panel.getByRole('heading',{name:'近 30 天用量',exact:true}).waitFor();
     await panel.evaluate(async()=>{
@@ -158,7 +172,7 @@ function fixture() {
     assert.equal(await panel.locator('.resource-ring strong').first().textContent(),'91.0%');
     await panel.locator('[data-metric="host:cpu"] > summary').focus();
     await panel.evaluate(()=>{window.previousCard=document.querySelector('.server-card');state.serverBusy=true;state.hosts[0].sample.timestamp=Date.now()/1000-11;reviewTimers.find(timer=>timer.ms===1000).fn();});
-    assert.equal(await panel.locator('.host-status').textContent(),'数据延迟');
+    assert.equal(await panel.locator('.host-status').textContent(),'数据已延迟');
     assert.equal(await panel.locator('.server-card').evaluate(el=>el===window.previousCard),true,'Aging must not recreate the server card');
     assert.equal(await panel.locator('[data-metric="host:cpu"] > summary').evaluate(el=>el===document.activeElement),true);
     await panel.evaluate(async()=>{state.serverBusy=false;await reviewEmit('desktop:hosts-error','后台采样 RPC 失败');});

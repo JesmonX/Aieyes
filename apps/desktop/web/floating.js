@@ -111,41 +111,7 @@
     if (more?.open && !more.contains(event.target)) more.open = false;
   });
 
-  document.querySelector('#panel-refresh').addEventListener('click', () => {
-    const menu = document.querySelector('#panel-menu');
-    menu.hidden = !menu.hidden;
-    const more = document.querySelector('#panel-more');
-    if (more) more.open = false;
-    document.querySelector('#panel-refresh').setAttribute('aria-expanded', String(!menu.hidden));
-  });
-  document.querySelector('#panel-refresh').addEventListener('keydown', event => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      const menu = document.querySelector('#panel-menu');
-      menu.hidden = false;
-      document.querySelector('#panel-refresh').setAttribute('aria-expanded', 'true');
-      const buttons = [...menu.querySelectorAll('button')];
-      buttons[event.key === 'ArrowDown' ? 0 : buttons.length - 1]?.focus();
-    }
-  });
-  document.querySelector('#panel-menu').addEventListener('keydown', event => {
-    const buttons = [...document.querySelector('#panel-menu').querySelectorAll('button')];
-    const index = buttons.indexOf(document.activeElement);
-    let next;
-    if (event.key === 'ArrowDown') next = (index + 1) % buttons.length;
-    if (event.key === 'ArrowUp') next = (index + buttons.length - 1) % buttons.length;
-    if (event.key === 'Home') next = 0;
-    if (event.key === 'End') next = buttons.length - 1;
-    if (next !== undefined) { event.preventDefault(); buttons[next]?.focus(); }
-  });
-  document.querySelector('#panel-menu').addEventListener('click', event => {
-    const button = event.target.closest('[data-refresh]');
-    if (!button) return;
-    closeMenu();
-    const runs = { scan, quotas, prices: syncPrices, hosts: sample };
-    const run = runs[button.dataset.refresh];
-    if (typeof run === 'function') run();
-  });
+  bindRefreshMenu('panel-refresh','panel-menu');
   document.querySelector('#panel-pin').addEventListener('click', async () => {
     try { applyPanel(await invoke('desktop_panel_pin', { pinned: !pinned })); } catch (error) { failure(error); }
   });

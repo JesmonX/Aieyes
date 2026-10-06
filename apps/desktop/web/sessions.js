@@ -16,8 +16,15 @@
     summary.textContent = info.summary;
     list.innerHTML = info.sessions.map(s => {
       const [symbol, label] = phases[s.phase] || phases.unknown;
-      return `<div class="live-row"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(s.source || 'Codex')}</strong><small>会话 ${escape(s.id.slice(0,8))} · ${new Date(s.updatedAt*1000).toLocaleTimeString('zh-CN')}</small></div><span>${label}</span></div>`;
+      return `<div class="live-row"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(s.source || 'Codex')}</strong><small>会话 ${escape(s.id.slice(0,8))} · ${new Intl.RelativeTimeFormat(undefined,{numeric:'auto'}).format(-Math.max(0,Math.round((Date.now()/1000-s.updatedAt)/60)),'minute')}</small></div><span>${label}</span></div>`;
     }).join('') || '<p class="muted">暂无活跃会话</p>';
-    warning.hidden = !info.unavailable;
+    warning.hidden = true;
+    let notice=document.querySelector('#session-attention');
+    const uncertain=info.unavailable || info.sessions.some(s=>s.phase==='unknown');
+    if(uncertain){
+      if(!notice){notice=document.createElement('div');notice.id='session-attention';document.querySelector('#live-sessions').after(notice);}
+      notice.className='attention';notice.innerHTML=uiIcon('attention')+'<span>待确认：会话状态可能不完整</span><button type="button">重试读取</button>';
+      notice.querySelector('button').onclick=async()=>{const button=notice.querySelector('button');button.disabled=true;try{renderLiveSessions(await window.__TAURI__.core.invoke('desktop_info'));}catch(error){button.disabled=false;notice.querySelector('span').textContent=String(error);}};
+    }else notice?.remove();
   };
 })();

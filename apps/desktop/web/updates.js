@@ -29,7 +29,7 @@
     catch (error) { status = {...status, phase:'error', message:String(error)}; updateView(); }
   }
   function bindSettings() {
-    document.querySelectorAll('#connection-form,#general-form').forEach(form => { form.dataset.updateSavedValues = JSON.stringify([...new FormData(form)]); });
+    document.querySelectorAll('#general-form').forEach(form => { form.dataset.updateSavedValues = JSON.stringify([...new FormData(form)]); });
     const check = document.querySelector('#updates');
     if (check) check.onclick = () => run('updates_check');
     const view = document.querySelector('#update-view');
@@ -66,7 +66,7 @@
   }
   async function later() { await run('updates_later'); dialog?.close(); }
   function unsavedForms() {
-    return [...document.querySelectorAll('#connection-form,#general-form')].some(form => form.dataset.updateSavedValues && form.dataset.updateSavedValues !== JSON.stringify([...new FormData(form)]));
+    return [...document.querySelectorAll('#general-form')].some(form => form.dataset.updateSavedValues && form.dataset.updateSavedValues !== JSON.stringify([...new FormData(form)]));
   }
   async function install() {
     if (busy()) return;

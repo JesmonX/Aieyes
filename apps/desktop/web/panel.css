@@ -13,7 +13,7 @@ body[data-view=panel] { display: block; justify-items: normal; user-select: text
 .panel-tabs { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-sunken); }
 .panel-tabs button { min-height: 26px; padding: 3px 12px; border: 0; border-radius: calc(var(--r-sm) - 3px); background: transparent; color: var(--muted); font-size: 14px; box-shadow: none; }
 .panel-tabs button:hover { transform: none; background: var(--soft); color: var(--ink); box-shadow: none; }
-.panel-tabs button.active { background: var(--surface-strong); color: var(--accent); box-shadow: var(--shadow), inset 0 0 0 1px var(--border); }
+.panel-tabs button.active { background: var(--accent); color: var(--accent-ink); font-weight:600; box-shadow:none; }
 .panel-refresh-wrap { position: relative; margin-left: auto; }
 #panel-refresh { display: grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); box-shadow: none; }
 #panel-refresh:hover { transform: none; background: var(--soft); color: var(--ink); box-shadow: none; }
@@ -76,8 +76,15 @@ body[data-view=panel] { display: block; justify-items: normal; user-select: text
 .panel-foot { padding:10px 16px; }
 #panel-refresh,.panel-foot button,.panel-more>summary { width:32px; height:32px; }
 .panel-tabs { flex:1; }
-.panel-tabs button { flex:1; min-height:30px; }
+.panel-tabs button { flex:1; min-height:28px; }
 .panel-body .card { border-radius:16px; box-shadow:var(--shadow-xs); }
 .panel-body .stat { box-shadow:var(--shadow-xs); }
 .panel-body .section-head { flex-wrap:wrap; }
 .panel-body .section-head h2 { margin-right:auto; }
+@media (max-height:600px) {
+  .panel-head { padding-top:8px; padding-bottom:8px; }
+  .panel-foot { padding-top:8px; padding-bottom:8px; }
+  .panel-body { padding-top:10px; }
+  .panel-body #live-sessions,.panel-body .filters,.panel-body .card { margin-bottom:10px; }
+  .panel-body .quota-title { margin-bottom:8px; }
+}

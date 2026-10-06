@@ -21,21 +21,24 @@ struct WakeupsView: View {
     @State private var records: [WakeRecord] = []
     @State private var statuses: [String: WakeStatus] = [:]
     @State private var editing: WakeTask?
+    @State private var removal: WakeRecord?
     @State private var busy = false
     @State private var error: String?
     private let engine = EngineClient()
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("定时唤醒").font(AppFont.title)
+        Form {
+            Section("定时唤醒") {
                 Text("部署到本机或 SSH Linux 服务器，使用目标机器已登录的订阅 CLI。按目标机器时区执行，错过时刻不补发；退出 Aieyes 后继续运行。").foregroundStyle(.secondary)
                 Text("任务草稿独立保存，修改后需要更新部署。本机任务在用户登录期间执行。").font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack { Button("新建任务") { editing = WakeTask() }.buttonStyle(.borderedProminent); Button("刷新列表") { Task { await load() } }; if busy { ProgressView().controlSize(.small) } }
-                if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+                if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
                 if records.isEmpty { Text("尚未配置定时任务").foregroundStyle(.secondary) }
-                ForEach(records) { record in taskCard(record) }
-            }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
-        }.font(AppFont.body).disabled(busy || model.installingUpdate).task { await load() }
+            }
+            ForEach(records) { record in Section { taskCard(record) } }
+        }.formStyle(.grouped).font(AppFont.body).disabled(busy || model.installingUpdate).task { await load() }
+        .sheet(item: $removal) { record in
+            DangerConfirmation(title: record.deployment == nil ? "删除任务草稿？" : "移除自动任务？", explanation: record.deployment == nil ? "删除「" + record.task.name + "」的任务草稿。" : "将从目标机器移除「" + record.task.name + "」的定时部署，后续自动唤醒会停止。运行历史保留。", affected: [], confirmLabel: "确认移除", cancel: { removal = nil }, confirm: { removal = nil; perform(record.deployment == nil ? "delete" : "remove", record.id) })
+        }
         .sheet(item: $editing) { task in
             WakeEditor(model: model, task: task, deployed: records.first { $0.id == task.id }?.deployment != nil) { value in
                 let _: WakeRecord = try await engine.call("wakeups.save", params: ["task": value.parameters])
@@ -50,17 +53,17 @@ struct WakeupsView: View {
             if let d = r.deployment { Text(d.target + " · " + (statuses[r.id]?.timezone ?? d.timezone) + (d.changed ? " · 有尚未部署的更改" : "")).font(AppFont.secondary).foregroundStyle(.secondary) }
             HStack {
                 Button("编辑") { editing = r.task }
-                Button(r.deployment == nil ? "部署" : "更新部署") { perform("deploy", r.id) }
+                Button(r.deployment == nil ? "部署" : "更新部署") { perform("deploy", r.id) }.buttonStyle(.borderedProminent)
                 if let d = r.deployment { Button(d.enabled ? "停用" : "启用") { perform(d.enabled ? "disable" : "enable", r.id) }; Button("立即运行") { perform("run", r.id) }; Button("状态与记录") { perform("status", r.id) } }
             }
-            HStack { Spacer(); Button(r.deployment == nil ? "删除草稿" : "移除自动任务") { perform(r.deployment == nil ? "delete" : "remove", r.id) } }
+            HStack { Spacer(); Button(r.deployment == nil ? "删除草稿" : "移除自动任务", role: .destructive) { removal = r }.foregroundStyle(Palette.danger) }
             if let status = statuses[r.id] {
                 Text((status.installed ? "系统任务存在" : "系统任务缺失") + " · 下次 " + Format.date(status.nextRunAt)).font(AppFont.secondary)
                 DisclosureGroup("最近运行记录（\(status.history.count)）") {
                     ForEach(status.history) { run in VStack(alignment: .leading) { Text(Format.date(run.startedAt) + " · " + run.label); Text(run.model + " / " + (run.effort.isEmpty ? "默认" : run.effort)).foregroundStyle(.secondary) }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4) }
                 }
             }
-        }.padding(16).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }.padding(.vertical, 8)
     }
     private func load() async {
         do { records = try await engine.call("wakeups.list") } catch { self.error = error.localizedDescription }
@@ -117,7 +120,7 @@ struct WakeEditor: View {
                     TextEditor(text: $task.prompt).frame(height: 80).overlay(RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.2)))
                 }.textFieldStyle(.roundedBorder)
             }.frame(maxHeight: 490)
-            if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+            if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
             HStack { if busy { ProgressView().controlSize(.small) }; Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button("保存草稿") { submit() }.buttonStyle(.borderedProminent).disabled(task.sourceId.isEmpty || task.model.isEmpty) }
         }.padding(24).frame(width: 550).font(AppFont.body).disabled(busy).onAppear { times = task.times.joined(separator: ", "); if task.sourceId.isEmpty { task.sourceId = sources.first?.id ?? "" } }
         .onChange(of: task.sourceId) { _, _ in capabilities = nil }

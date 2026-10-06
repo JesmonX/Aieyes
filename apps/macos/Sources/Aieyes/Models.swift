@@ -145,6 +145,10 @@ enum Format {
         guard let stamp, stamp > 0 else { return "—" }
         return Date(timeIntervalSince1970: stamp).formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour().minute())
     }
+    static func relative(_ date: Date, now: Date = Date()) -> String {
+        let formatter = RelativeDateTimeFormatter(); formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: now)
+    }
     static func time(_ stamp: Double) -> String { Date(timeIntervalSince1970: stamp).formatted(date: .omitted, time: .shortened) }
     static func provider(_ key: String) -> String { ["codex":"Codex", "claude":"Claude Code", "antigravity":"Antigravity", "agy":"agy", "deepseek":"DeepSeek", "custom":"自定义" ][key] ?? key }
 }

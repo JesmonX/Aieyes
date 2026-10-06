@@ -85,7 +85,7 @@ import Combine
         let width = label.fittingSize.width
         statusItem.length = width
         label.frame = NSRect(x: 0, y: 0, width: width, height: button.bounds.height)
-        button.toolTip = "Aieyes · " + model.sessionSummary + (model.sessionPhase.map { " · " + $0.rawValue } ?? "")
+        button.toolTip = "Aieyes · 今日全部数据 · " + model.sessionSummary + (model.sessionPhase.map { " · " + $0.rawValue } ?? "")
         if !model.runningEstimates.isEmpty { button.toolTip = (button.toolTip ?? "Aieyes") + " · " + model.samplingSummary }
         button.setAccessibilityLabel(button.toolTip)
         popover.behavior = model.isPinned ? .applicationDefined : .transient
@@ -107,7 +107,7 @@ import Combine
         popover.performClose(nil)
         if settingsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 600), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-            window.title = "Aieyes 设置"; window.isReleasedWhenClosed = false; window.delegate = self
+            window.title = "Aieyes 设置"; window.titlebarAppearsTransparent = true; window.isReleasedWhenClosed = false; window.delegate = self
             window.contentMinSize = NSSize(width: 620, height: 440)
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
             if let screen = NSScreen.main { window.setContentSize(NSSize(width: min(760, screen.visibleFrame.width - 40), height: min(600, screen.visibleFrame.height - 70))) }
@@ -137,11 +137,11 @@ import Combine
         popover.performClose(nil)
         let window = estimateWindows[quota.id] ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 530, height: 600), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         if estimateWindows[quota.id] == nil {
-            window.title = quota.name + " · 7d 整周价值"; window.isReleasedWhenClosed = false
+            window.title = quota.name + " · 额度估值"; window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: 490, height: 360)
             window.center(); estimateWindows[quota.id] = window
         }
-        window.title = quota.name + (model.creditEstimateMode ? " · credit 价值" : " · 7d 整周价值")
+        window.title = quota.name + " · 额度估值"
         window.contentView = NSHostingView(rootView: QuotaEstimateView(model: model, quota: quota, onClose: { [weak window] in window?.close() }))
         fitToVisibleScreen(window); window.deminiaturize(nil); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
@@ -247,6 +247,7 @@ import Combine
             await model.reload()
             await model.loadPrices()
             await model.refreshSessions()
+            if ProcessInfo.processInfo.environment["AIEYES_UI_SCENARIO"] != nil { await model.scan(); await model.refreshQuotas(); await model.sampleHosts() }
             let root = URL(fileURLWithPath: directory)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             for dark in [false, true] {
@@ -257,15 +258,27 @@ import Combine
             try await capture(TokenBreakdown(tokens: model.dashboard.summary.tokens, inline: true), size: NSSize(width: 414, height: 90), dark: false, to: root.appendingPathComponent("token-breakdown.png"))
             for tab in ["sources", "servers", "prices", "wakeups", "general"] {
                 model.settingsTab = tab
-                try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: false, to: root.appendingPathComponent("settings-\(tab).png"))
+                for dark in [false, true] { try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("settings-\(tab)-\(dark ? "dark" : "light").png")) }
+            }
+            for dark in [false, true] {
+                model.panelHeight = 540
+                try await capture(RootView(model: model), size: NSSize(width: 450, height: 540), dark: dark, to: root.appendingPathComponent("low-panel-\(dark ? "dark" : "light").png"))
+                model.panelHeight = 720
+                try await capture(RootView(model: model, compact: false), size: NSSize(width: 760, height: 480), dark: dark, to: root.appendingPathComponent("minimum-detail-\(dark ? "dark" : "light").png"))
+                try await capture(RootView(model: model).environment(\.previewAccessibleSurfaces, true), size: NSSize(width: 450, height: 720), dark: dark, to: root.appendingPathComponent("increased-contrast-\(dark ? "dark" : "light").png"))
+                for (kind, id) in [("host", model.settings.hosts.first?.id), ("source", model.settings.sources.first?.id), ("account", model.settings.accounts.first?.key)] {
+                    if let id, let request = model.removalRequest(kind, id: id) {
+                        try await capture(DangerConfirmation(title: request.title, explanation: request.explanation, affected: request.affected, confirmLabel: "确认移除", cancel: {}, confirm: {}), size: NSSize(width: 510, height: 340), dark: dark, to: root.appendingPathComponent("confirm-\(kind)-\(dark ? "dark" : "light").png"))
+                    }
+                }
             }
             model.settingsTab = "prices"
             try await capture(SettingsView(model: model), size: NSSize(width: 620, height: 460), dark: false, to: root.appendingPathComponent("settings-prices-small.png"))
-            let savedSources = model.settings.sources
-            model.settings.sources = []; model.settingsDraft = model.settings
+            let savedSources = model.settings.sources, savedDashboard = model.dashboard
+            model.settings.sources = []; model.settingsDraft = model.settings; model.dashboard = Dashboard()
             model.panelHeight = 540
             try await capture(RootView(model: model), size: NSSize(width: 450, height: 540), dark: false, to: root.appendingPathComponent("onboarding-small.png"))
-            model.settings.sources = savedSources; model.settingsDraft = model.settings
+            model.settings.sources = savedSources; model.settingsDraft = model.settings; model.dashboard = savedDashboard
             model.selectedSource = savedSources.first?.id ?? "all"
             model.selectedModel = model.dashboard.modelOptions?.first ?? "gpt-review"
             try await capture(RootView(model: model), size: NSSize(width: 450, height: 540), dark: false, to: root.appendingPathComponent("filtered-panel-small.png"))
@@ -295,8 +308,8 @@ import Combine
             if let source = model.settings.sources.first(where: { $0.hostId != nil }) {
                 try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent("remote-source.png"))
             }
-        } catch { fputs("\(error.localizedDescription)\n", stderr) }
-        NSApp.terminate(nil)
+        } catch { fputs("\(error.localizedDescription)\n", stderr); model.engine.stop(); model.metricsEngine.stop(); exit(1) }
+        model.engine.stop(); model.metricsEngine.stop(); NSApp.terminate(nil)
     }
 }
 

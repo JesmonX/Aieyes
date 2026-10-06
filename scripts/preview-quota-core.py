@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Synthetic RPC fixture for native --render. No files, credentials or network reads."""
 import json
+import os
+from datetime import date, timedelta
 import sys
 import time
 stamp = int(time.time())
@@ -19,7 +21,40 @@ quotas[0].update(credits=dict(hasCredits=True,unlimited=False,balance='990.125')
 dashboard['creditEstimates']=[dict(estimate,id='credit-preview',kind='credits',windowId='credits',windowName='Credits',status='active',reason='',weeklyValue=None,consumedCredits=10,valuePer500=120,valuePer1000=240)]
 task=dict(id='wake-preview',name='每日订阅唤醒',sourceId='codex-source',times=['08:00','13:30'],model='测试模型',effort='low',prompt='Hi. Reply only OK.',binary='')
 wakeups=[dict(task=task,deployment=dict(task=task,deployedAt=stamp,enabled=True,state='deployed',timezone='CST +08:00',target='本机（模拟）',changed=False))]
+# Optional 10-06 regression scenarios; the default preserves the quota fixture.
+scenario = os.environ.get('AIEYES_UI_SCENARIO', '')
+hosts = []
+if scenario:
+    settings['modelMappings'] = {'log-model-'+str(i):'provider/model-'+str(i) for i in range(30)}
+    host = dict(id='preview-host', name='训练服务器', target='fixture.invalid', identityFile='', shell='/bin/bash', preCommand='', enabled=True, metrics=['cpu'], devices=[], details=[])
+    settings['hosts'] = [host]
+    settings['sources'][0]['hostId'] = host['id']
+    hosts = [dict(id=host['id'], name=host['name'], sample=dict(timestamp=stamp, uptime=3600, load=[0.1], errors={}, cpu=[dict(id='cpu', utilization=42)]))]
+    dashboard['quotaEstimates'] = []; dashboard['creditEstimates'] = []
+    dashboard['trendDays'] = [dict(usage, key=(date(2026,10,1)+timedelta(days=i)).isoformat()) for i in range(7)]
+    dashboard['heatmap'] = dashboard['trendDays']
+    dashboard['models'] = [dict(usage, key='test-model')]
+    dashboard['modelOptions'] = ['test-model']
+    dashboard['dayModels'] = [dict(day=day['key'], model='test-model', usage=usage) for day in dashboard['trendDays']]
+    if scenario == 'single':
+        settings['sources'] = settings['sources'][:1]; settings['accounts'] = settings['accounts'][:1]; quotas = quotas[:1]
+    elif scenario == 'multi':
+        quotas = [dict(quotas[0], accountId='account-'+str(i), name='订阅账户 '+str(i+1)) for i in range(5)]
+        settings['accounts'] = [dict(id=q['accountId'], provider='codex', name=q['name'], quotaEnabled=True) for q in quotas]
+    elif scenario == 'long':
+        long_name = '团队账户与训练服务器的长名称示例' * 4
+        quotas[0]['name'] = long_name; settings['sources'][0]['name'] = long_name; settings['accounts'][0]['name'] = long_name
+    elif scenario == 'empty':
+        settings['sources'] = []; settings['accounts'] = []; quotas = []
+        dashboard['summary'] = dict(key='',tokens=dict(input=0,output=0,cacheRead=0,cacheWrite=0,reasoning=0),total=0,cost=0,pricedTokens=0,events=0)
+        for key in ['trendDays','heatmap','models','dayModels','modelOptions']: dashboard[key] = []
+    elif scenario == 'failure':
+        for q in quotas: q['error'] = '连接失败：模拟账户凭据失效'
+        hosts[0]['error'] = '连接失败：模拟 SSH 不可读取'
+    dashboard['quotas'] = quotas
+    dashboard['quotaOrder'] = [q['provider']+':'+q['accountId'] for q in quotas]
 for line in sys.stdin:
     r=json.loads(line)
-    result={'settings.get':settings,'dashboard':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups}.get(r['method'],{})
+    scan = [dict(id=src['id'], error='连接失败：模拟日志不可读取') for src in settings['sources']] if scenario == 'failure' else []
+    result={'settings.get':settings,'dashboard':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts}.get(r['method'],{})
     print(json.dumps(dict(jsonrpc='2.0',id=r['id'],result=result)),flush=True)
