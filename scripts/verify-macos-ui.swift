@@ -239,7 +239,10 @@ for line in sys.stdin:
         precondition(model.runningEstimates.count == 1 && model.samplingSummary.contains("采样中"))
         model.selectedAccount = "deepseek:fixture"
         precondition(model.runningEstimates.count == 1, "Menu sampling badge must not depend on usage filters")
-        let failedRestart = await model.performEstimate("restart", accountKey: estimate.accountKey, params: [:])
+        let restarting = Task { await model.performEstimate("restart", accountKey: estimate.accountKey, params: ["id": estimate.id]) }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        precondition(model.estimateStages[estimate.accountKey] == "同步来源 · 测试来源", "Actions addressed by estimate ID must route progress to the record's account")
+        let failedRestart = await restarting.value
         precondition(!failedRestart && model.samplingNeedsAttention && model.estimateErrors[estimate.accountKey] == "模拟采样同步失败")
         precondition(!model.panelVisible && model.estimateBusy.isEmpty)
         // Menu data is unfiltered and always today, even for an empty filtered view.

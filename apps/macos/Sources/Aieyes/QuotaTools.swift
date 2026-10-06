@@ -138,36 +138,79 @@ struct QuotaEstimateView: View {
     }
     private func result(_ e: QuotaEstimate) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack { Text(e.statusLabel).foregroundStyle(e.status == "pending" ? .orange : Palette.accent); Spacer(); Text(e.kind == "credits" ? Format.creditValue(e) : e.valuationMode == "fiveHour" ? "5h / 7d" : e.weeklyValue.map { Format.money($0) + " USD" } ?? "—").font(AppFont.section).monospacedDigit() }
-            if e.valuationMode == "fiveHour" {
-                ForEach([("5h 价值", e.fiveHourValue), ("7d 同期换算", e.weeklyDirectValue), ("7d 近期倍率估算", e.weeklyRatioValue)], id: \.0) { label, value in
-                    HStack { Text(label); Spacer(); Text(value.map { Format.money($0) + " USD" } ?? "—").monospacedDigit() }.font(AppFont.secondary)
-                }
-                Text(e.capacity?.ratio.map { "容量倍率 " + String(format: "%.2f", $0) + " · " + (e.capacity?.note ?? "") + " · " + String(e.capacity?.samples ?? 0) + " 个样本 · " + Format.date(e.capacity?.updatedAt) } ?? "倍率学习中").font(AppFont.secondary).foregroundStyle(.secondary)
-            }
+            resultHeader(e)
+            if e.valuationMode == "fiveHour" { fiveHourValues(e) }
             Text(e.calculationNote).font(AppFont.secondary).foregroundStyle(.secondary)
-            DisclosureGroup("计算依据") {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("\(Format.date(e.startedAt)) → \(Format.date(e.checkpointAt))")
-                    Text("\(e.windowName) · 消耗 \(e.kind == "credits" ? Format.credits(e.consumedCredits.map { String($0) }) + " credit" : Format.percent(e.consumedPercent)) · 样本成本 \(Format.money(e.cost)) USD")
-                    Text("计价 Token：\(Format.compact(e.pricedTokens)) / \(Format.compact(e.totalTokens))")
-                    Text(e.sourceNames.joined(separator: "、"))
-                    if let segments = e.segments, !segments.isEmpty {
-                        Text("已保存 \(segments.count) 个有效片段")
-                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
-                            Text("\(Format.date(segment.startedAt)) → \(Format.date(segment.endedAt)) · 5h 消耗 \(Format.percent(segment.fivePercent)) · \(Format.money(segment.cost))")
-                        }
-                    }
-                    Text(e.kind == "credits" ? "1000 credit 估值 = 样本成本 × 1000 ÷ 消耗 credit；结束后价格依据固定。" : e.valuationMode == "fiveHour" ? "5h / 7d 同期价值 = 有效成本 × 100 ÷ 对应消耗百分点；7d 倍率估算 = 5h 价值 × 近期容量倍率。结束后价格与倍率固定。" : "整周估值 = 样本 API 等价成本 × 100 ÷ 消耗百分点；结束后价格依据固定。")
-                    ForEach(e.prices ?? []) { price in
-                        Text("缓存读取 \(price.cacheRead.map { Format.money($0 * 1_000_000) } ?? "—") · 缓存写入 \(price.cacheWrite.map { Format.money($0 * 1_000_000) } ?? "—") / 百万 Token")
-                        Text("价格依据：" + price.id + " · " + Format.date(price.fetchedAt))
-                        Text("每百万 Token USD：输入 \(price.input.map { Format.money($0 * 1_000_000) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1_000_000) } ?? "—")")
-                    }
-                    if !e.reason.isEmpty { Text(e.reason).foregroundStyle(Palette.warn) }
-                }.font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-            }
+            DisclosureGroup("计算依据") { calculationDetails(e) }
         }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+    private func resultHeader(_ e: QuotaEstimate) -> some View {
+        HStack {
+            Text(e.statusLabel).foregroundStyle(e.status == "pending" ? Color.orange : Palette.accent)
+            Spacer()
+            Text(resultValue(e)).font(AppFont.section).monospacedDigit()
+        }
+    }
+    private func resultValue(_ e: QuotaEstimate) -> String {
+        if e.kind == "credits" { return Format.creditValue(e) }
+        if e.valuationMode == "fiveHour" { return "5h / 7d" }
+        return amount(e.weeklyValue)
+    }
+    private func amount(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return Format.money(value) + " USD"
+    }
+    private func fiveHourValues(_ e: QuotaEstimate) -> some View {
+        let values: [(String, Double?)] = [
+            ("5h 价值", e.fiveHourValue),
+            ("7d 同期换算", e.weeklyDirectValue),
+            ("7d 近期倍率估算", e.weeklyRatioValue)
+        ]
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(values, id: \.0) { label, value in
+                HStack { Text(label); Spacer(); Text(amount(value)).monospacedDigit() }.font(AppFont.secondary)
+            }
+            Text(capacityDescription(e.capacity)).font(AppFont.secondary).foregroundStyle(.secondary)
+        }
+    }
+    private func capacityDescription(_ capacity: CapacityInfo?) -> String {
+        guard let capacity, let ratio = capacity.ratio else { return "倍率学习中" }
+        let value = "容量倍率 " + String(format: "%.2f", ratio)
+        let samples = String(capacity.samples) + " 个样本"
+        return [value, capacity.note, samples, Format.date(capacity.updatedAt)].joined(separator: " · ")
+    }
+    private func calculationDetails(_ e: QuotaEstimate) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("\(Format.date(e.startedAt)) → \(Format.date(e.checkpointAt))")
+            Text("\(e.windowName) · 消耗 \(consumption(e)) · 样本成本 \(Format.money(e.cost)) USD")
+            Text("计价 Token：\(Format.compact(e.pricedTokens)) / \(Format.compact(e.totalTokens))")
+            Text(e.sourceNames.joined(separator: "、"))
+            if let segments = e.segments, !segments.isEmpty {
+                Text("已保存 \(segments.count) 个有效片段")
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    Text("\(Format.date(segment.startedAt)) → \(Format.date(segment.endedAt)) · 5h 消耗 \(Format.percent(segment.fivePercent)) · \(Format.money(segment.cost))")
+                }
+            }
+            Text(calculationRule(e))
+            ForEach(e.prices ?? []) { price in priceDetails(price) }
+            if !e.reason.isEmpty { Text(e.reason).foregroundStyle(Palette.warn) }
+        }.font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func consumption(_ e: QuotaEstimate) -> String {
+        if e.kind == "credits" { return Format.credits(e.consumedCredits.map { String($0) }) + " credit" }
+        return Format.percent(e.consumedPercent)
+    }
+    private func calculationRule(_ e: QuotaEstimate) -> String {
+        if e.kind == "credits" { return "1000 credit 估值 = 样本成本 × 1000 ÷ 消耗 credit；结束后价格依据固定。" }
+        if e.valuationMode == "fiveHour" { return "5h / 7d 同期价值 = 有效成本 × 100 ÷ 对应消耗百分点；7d 倍率估算 = 5h 价值 × 近期容量倍率。结束后价格与倍率固定。" }
+        return "整周估值 = 样本 API 等价成本 × 100 ÷ 消耗百分点；结束后价格依据固定。"
+    }
+    private func priceDetails(_ price: ModelPrice) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("缓存读取 \(price.cacheRead.map { Format.money($0 * 1_000_000) } ?? "—") · 缓存写入 \(price.cacheWrite.map { Format.money($0 * 1_000_000) } ?? "—") / 百万 Token")
+            Text("价格依据：" + price.id + " · " + Format.date(price.fetchedAt))
+            Text("每百万 Token USD：输入 \(price.input.map { Format.money($0 * 1_000_000) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1_000_000) } ?? "—")")
+        }
     }
     private func close() { if let onClose { onClose() } else { dismiss() } }
     private func perform(_ action: String, _ params: [String: Any]) {

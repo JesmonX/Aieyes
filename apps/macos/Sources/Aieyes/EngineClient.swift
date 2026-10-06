@@ -236,7 +236,16 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         await reload()
     }
     func estimateAction(_ action: String, params: [String: Any], credits: Bool = false) async throws {
-        let accountKey = params["accountKey"] as? String ?? ((dashboard.quotaEstimates ?? []) + (dashboard.creditEstimates ?? [])).first { $0.id == params["id"] as? String }?.accountKey ?? ""
+        let accountKey: String
+        if let requestedKey = params["accountKey"] as? String {
+            accountKey = requestedKey
+        } else if let estimateID = params["id"] as? String {
+            let quotaKey = dashboard.quotaEstimates?.first(where: { $0.id == estimateID })?.accountKey
+            let creditKey = dashboard.creditEstimates?.first(where: { $0.id == estimateID })?.accountKey
+            accountKey = quotaKey ?? creditKey ?? ""
+        } else {
+            accountKey = ""
+        }
         var operation = params; operation["operationId"] = UUID().uuidString
         let _: QuotaEstimate = try await engine.call((credits ? "creditEstimates." : "quotaEstimates.") + action, params: operation, onProgress: { [weak self] stage in Task { @MainActor in guard let self, self.estimateBusy.contains(accountKey) else { return }; self.estimateStages[accountKey] = stage } })
         await reload()
