@@ -115,7 +115,7 @@ body[data-view=panel] { display: block; justify-items: normal; user-select: text
 .quota-all { border:0; background:none; box-shadow:none; min-height:26px; padding:2px 0; font-size:13px; color:var(--accent); }
 .panel-body .overview-heading { margin:4px 0 6px; }
 .panel-body .overview-heading h2 { margin:0; }
-.panel-body #days { display:none; }
+.panel-body #days { min-height:28px; padding:3px 7px; }
 .panel-body .stats { margin-bottom:6px; gap:8px; }
 .panel-body .stat { padding:10px 12px; box-shadow:none; }
 .panel-body .stat-value { font-size:26px; margin:4px 0 0; }

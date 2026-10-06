@@ -115,7 +115,7 @@ struct RootView: View {
             VStack(spacing: 14) {
                 HStack { Text("实时账户限额").font(AppFont.section); Spacer(); Button("关闭") { showingAccounts = false }.keyboardShortcut(.cancelAction) }
                 ForEach(model.dashboard.quotas) { quota in
-                    QuotaCard(quota: quota, compact: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id })
+                    QuotaCard(quota: quota, compact: true, collapsible: canCollapse(quota), estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id })
                     HStack { Button("置顶 " + quota.name) { pinnedAccount = quota.id; showingAccounts = false }; Button("编辑账户") { editAccount(quota.id) } }
                 }
                 ForEach(displayedQuotaAccounts.filter { account in !model.dashboard.quotas.contains { $0.id == account.key } }, id: \.key) { account in
@@ -190,14 +190,6 @@ struct RootView: View {
         }.controlSize(.regular)
         activeFilters
 
-        if compact {
-            if let quota = model.dashboard.quotas.first(where: { $0.id == (model.selectedAccount == "all" ? pinnedAccount : model.selectedAccount) }) ?? model.dashboard.quotas.first {
-                PanelQuotaSummary(quota: quota) { showingAccounts = true }
-            }
-            if !displayedQuotaAccounts.isEmpty || !model.dashboard.quotas.isEmpty {
-                Button("查看全部 \(max(displayedQuotaAccounts.count, model.dashboard.quotas.count)) 个账户") { showingAccounts = true }.buttonStyle(.plain).foregroundStyle(Palette.accent).font(.system(size: 13))
-            }
-        }
         if model.dashboardPending || model.dashboardError != nil {
             VStack(alignment: .leading, spacing: 4) {
                 Text((model.dashboardPending ? "正在更新，仍显示上一结果：" : "更新失败，仍显示上一结果：") + model.appliedScope).font(AppFont.secondary)
@@ -205,25 +197,24 @@ struct RootView: View {
             }.foregroundStyle(.secondary)
         }
         HStack(alignment: .firstTextBaseline) {
-            Text(compact || model.range == 1 ? "今日概览" : "用量分析").font(.system(size: compact ? 17 : 22, weight: .semibold))
+            Text(model.range == 1 ? "今日概览" : "使用概览").font(.system(size: compact ? 17 : 22, weight: .semibold))
             Spacer()
-            if !compact { Picker("时间范围", selection: $model.range) { Text("今日").tag(1); Text("最近 7 天").tag(7); Text("最近 30 天").tag(30); Text("最近 90 天").tag(90); Text("最近一年").tag(365) }.labelsHidden().fixedSize() }
+            Group { Picker("时间范围", selection: $model.range) { Text("今日").tag(1); Text("最近 7 天").tag(7); Text("最近 30 天").tag(30); Text("最近 90 天").tag(90); Text("最近一年").tag(365) }.labelsHidden().fixedSize() }
         }
         if hasUsageData {
             HStack(spacing: 10) {
-                StatCard(title: "总 Token", value: Format.compact(usageDashboard.summary.total), detail: "", icon: "sparkle", accent: Palette.accent)
+                if compact { FloatingTokenCard(total: usageDashboard.summary.total, tokens: usageDashboard.summary.tokens) } else { StatCard(title: "总 Token", value: Format.compact(usageDashboard.summary.total), detail: "", icon: "sparkle", accent: Palette.accent) }
                 StatCard(title: "API 等价成本", value: usageDashboard.summary.total == 0 || usageDashboard.summary.pricedTokens > 0 ? Format.money(usageDashboard.summary.cost) : "—", detail: "", icon: "dollarsign.circle", accent: Palette.accent, pricingIncomplete: usageDashboard.summary.total > usageDashboard.summary.pricedTokens, onPricing: { model.openPricing() })
             }
-            if compact {
-                HStack { Text("缓存 Token"); Text(Format.compact(usageDashboard.summary.tokens.cacheRead + usageDashboard.summary.tokens.cacheWrite)).monospacedDigit(); Spacer(); Text("读取命中率"); Text(Format.percent(usageDashboard.summary.tokens.cacheRate.map { $0 * 100 })).monospacedDigit() }.font(.system(size: 13)).padding(8).modifier(NeutralCard()).help("缓存 Token = 读取 + 写入；读取命中率 = 缓存读取 ÷ 全部输入")
-            } else { CacheSummaryCard(tokens: usageDashboard.summary.tokens) }
+            if !compact { CacheSummaryCard(tokens: usageDashboard.summary.tokens) }
         } else if !model.settings.sources.isEmpty { usageEmptyState }
+        quotaSection
         if !model.runningEstimates.isEmpty {
             Button { model.showSampling?() } label: { HStack { Text(model.samplingSummary); Spacer(); Text("管理采样"); Image(systemName: "chevron.right") }.font(AppFont.secondary) }.buttonStyle(.plain).foregroundStyle(model.samplingNeedsAttention ? Palette.warn : Palette.accent)
         }
         if hasUsageData {
             if compact {
-                DisclosureGroup("近 7 天趋势与每日明细") { UsageChart(days: recentDays, rows: recentRows, cost: false).frame(minHeight: 220); DailyUsage(days: recentDays, rows: recentRows, compact: true) }.font(AppFont.secondary)
+                DisclosureGroup("近 \(max(7, model.range)) 天趋势与每日明细") { UsageChart(days: recentDays, rows: recentRows, cost: false).frame(minHeight: 220); DailyUsage(days: recentDays, rows: recentRows, compact: true) }.font(AppFont.secondary)
                 Button("用量详情") { model.showDetailPage?("agent") }.buttonStyle(.plain).foregroundStyle(Palette.accent)
             } else {
                 Text("日期、来源、模型筛选作用于用量分析；今日视图的趋势仍为近 7 天，热力图为过去 365 天。").font(AppFont.secondary).foregroundStyle(.secondary)
@@ -232,11 +223,10 @@ struct RootView: View {
                     HStack(alignment: .top, spacing: 18) { trendSurface.frame(minWidth: 450); modelSurface.frame(minWidth: 350) }
                     VStack(spacing: 18) { trendSurface; modelSurface }
                 }
-                quotaSection
                 Surface(title: "每日明细 · 可选择与复制精确数值") { DailyUsage(days: model.dashboard.trendDays, rows: model.dashboard.dayModels, compact: false, cost: costMode) }
                 Surface(title: "过去 365 天") { Heatmap(days: model.dashboard.heatmap, cost: costMode) }
             }
-        } else if !compact { quotaSection }
+        }
     }
     private var trendSurface: some View { Surface(title: "每日用量 · 按模型") { UsageChart(days: model.dashboard.trendDays, rows: model.dashboard.dayModels, cost: costMode).frame(minHeight: 230) } }
     private var modelSurface: some View { Surface(title: "所选范围 · 模型分布") { ModelChart(models: model.dashboard.models, cost: costMode).frame(minHeight: 230) } }
@@ -290,7 +280,7 @@ struct RootView: View {
             Button(action: clear) { Image(systemName: "xmark.circle.fill").frame(width: 28, height: 28) }.buttonStyle(.plain).accessibilityLabel("清除" + title)
         }.padding(.leading, 10).background(Palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
-    private var recentDays: [Aggregate] { Array(usageDashboard.trendDays.suffix(compact ? 7 : max(7, model.range))) }
+    private var recentDays: [Aggregate] { Array(usageDashboard.trendDays.suffix(max(7, model.range))) }
     private var selectableSources: [AgentSource] {
         let account = model.settings.accounts.first { $0.key == model.selectedAccount }
         return model.settings.sources.filter { source in
@@ -338,6 +328,7 @@ struct RootView: View {
             (model.provider == "all" || model.provider == account.provider) && (model.selectedAccount == "all" || model.selectedAccount == account.key)
         }
     }
+    private func canCollapse(_ quota: Quota) -> Bool { model.settings.accounts.filter { $0.archived != true && $0.provider == quota.provider }.count > 1 }
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { Text("实时账户限额").font(.system(size: compact ? 20 : 22, weight: .semibold)); if !displayedQuotaAccounts.isEmpty { Text("\(displayedQuotaAccounts.count)").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button { orderingQuotas = true } label: { Image(systemName: "arrow.up.arrow.down") }.help("调整账户顺序").accessibilityLabel("调整账户顺序"); Button(model.quotaBusy ? "读取中…" : "刷新限额") { Task { await model.refreshQuotas() } }.font(AppFont.secondary).disabled(model.quotaBusy) }
@@ -355,8 +346,8 @@ struct RootView: View {
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } } }
+            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: canCollapse(quota), estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: canCollapse(quota), estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } } }
         }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
     private var filteredHosts: [Host] {
@@ -467,7 +458,7 @@ struct UsageChart: View {
             .frame(height: 180).focusable().onKeyPress(.leftArrow) { move(-1); return .handled }.onKeyPress(.rightArrow) { move(1); return .handled }
             .accessibilityLabel("每日用量，左右方向键选择日期，下方提供精确读数")
             if let day = days.first(where: { $0.key == selected }) {
-                Text(day.key + " · " + (cost ? String(format: "%.6f USD", day.cost) : String(format: "%.0f Token", day.total))).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
+                Text(day.key + " · " + (cost ? String(format: "%.6f USD", day.cost) : Format.compact(day.total) + " Token")).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
             }
             DisclosureGroup("模型图例 · 点击显示或隐藏") {
                 FlowLayout { ForEach(models, id: \.self) { name in Button { if hidden.contains(name) { hidden.remove(name) } else { hidden.insert(name) } } label: { Label(name, systemImage: hidden.contains(name) ? "eye.slash" : "eye").font(AppFont.secondary).strikethrough(hidden.contains(name)) }.buttonStyle(.plain).help(name).accessibilityLabel((hidden.contains(name) ? "显示模型 " : "隐藏模型 ") + name) } }
@@ -499,13 +490,14 @@ struct DailyUsage: View {
     var days: [Aggregate], rows: [DayModel], compact: Bool
     var cost = false
     private func exact(_ usage: Aggregate) -> String { String(format: "%.0f Token · %.6f USD", usage.total, usage.cost) + " · 读取命中率 " + Format.percent(usage.tokens.cacheRate.map { $0 * 100 }) }
+    private func display(_ usage: Aggregate) -> String { Format.compact(usage.total) + " Token · " + String(format: "%.6f USD", usage.cost) + " · 读取命中率 " + Format.percent(usage.tokens.cacheRate.map { $0 * 100 }) }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(days.reversed()) { day in
                 DisclosureGroup {
-                    Text(exact(day)).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
+                    Text(display(day)).help(exact(day)).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
                     ForEach(rows.filter { $0.day == day.key }) { row in
-                        VStack(alignment: .leading, spacing: 4) { Text(row.model).fontWeight(.medium).textSelection(.enabled); Text(exact(row.usage)).monospacedDigit().textSelection(.enabled) }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                        VStack(alignment: .leading, spacing: 4) { Text(row.model).fontWeight(.medium).textSelection(.enabled); Text(display(row.usage)).help(exact(row.usage)).monospacedDigit().textSelection(.enabled) }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                             .accessibilityElement(children: .combine).accessibilityLabel(day.key + " · " + row.model + " · " + exact(row.usage))
                             .contextMenu { Button("复制模型与精确数值") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(day.key + "\t" + row.model + "\t" + exact(row.usage), forType: .string) } }
                     }
@@ -551,7 +543,7 @@ struct Heatmap: View {
         return (Calendar.current.component(.weekday, from: date) + 5) % 7
     }
     private var maximum: Double { max(1, days.map { cost ? $0.cost : $0.total }.max() ?? 1) }
-    private func label(_ day: Aggregate) -> String { day.key + " · " + (cost ? String(format: "%.6f USD", day.cost) : String(format: "%.0f Token", day.total)) }
+    private func label(_ day: Aggregate) -> String { day.key + " · " + (cost ? String(format: "%.6f USD", day.cost) : Format.compact(day.total) + " Token") }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             GeometryReader { proxy in
@@ -583,7 +575,7 @@ struct Heatmap: View {
             DisclosureGroup("年度数据表 · 精确值") {
                 Table(days) {
                     TableColumn("日期", value: \.key)
-                    TableColumn("Token") { day in Text(String(format: "%.0f", day.total)).textSelection(.enabled) }
+                    TableColumn("Token") { day in Text(Format.compact(day.total)).help(String(format: "%.0f Token", day.total)).textSelection(.enabled) }
                     TableColumn("API 等价成本 USD") { day in Text(String(format: "%.6f", day.cost)).textSelection(.enabled) }
                 }.frame(height: 260)
             }.font(AppFont.secondary)
@@ -595,16 +587,18 @@ struct Heatmap: View {
 struct QuotaCard: View {
     var quota: Quota
     var compact = false
+    var collapsible = false
     var sourceName = ""
     var estimate: QuotaEstimate?
     var onEstimate: (() -> Void)?
     var onCredits: (() -> Void)?
     var creditEstimate: QuotaEstimate?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage private var expanded: Bool
-    init(quota: Quota, compact: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil) {
-        self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
-        _expanded = AppStorage(wrappedValue: !compact && quota.provider != "agy", "quota.expanded." + (compact ? "panel." : "detail.") + quota.id)
+    @AppStorage private var storedExpanded: Bool
+    private var expanded: Bool { !collapsible || storedExpanded }
+    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil) {
+        self.collapsible = collapsible; self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
+        _storedExpanded = AppStorage(wrappedValue: true, "quota.expanded.v2." + (compact ? "panel." : "detail.") + quota.id)
     }
     var body: some View {
         fullCard
@@ -644,16 +638,17 @@ struct QuotaCard: View {
     }
     private var fullCard: some View {
         Surface {
-            Button { withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)) { expanded.toggle() } } label: {
+            Button { withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)) { if collapsible { storedExpanded.toggle() } } } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 3) { Text(quota.name).font(.system(size: 14, weight: .semibold)); if expanded { Text(quota.plan.map { "\(Format.provider(quota.provider)) · \($0.capitalized)" } ?? Format.provider(quota.provider)).font(AppFont.secondary).foregroundStyle(.secondary) } }
                 Spacer()
                 if quota.provider == "agy" { Text("剩余额度").font(AppFont.secondary).foregroundStyle(.secondary) }
                 if expanded && quota.updatedAt > 0 { Text("\(quota.origin == "log" ? "记录" : "更新") \(Format.date(quota.updatedAt))").font(AppFont.secondary).foregroundStyle(.secondary) }
-                Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 14, weight: .semibold)).foregroundStyle(.secondary)
+                if collapsible { Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 14, weight: .semibold)).foregroundStyle(.secondary) }
             }.contentShape(Rectangle())
-            }.buttonStyle(.plain).help(expanded ? "折叠限额" : "展开限额")
+            }.buttonStyle(.plain).help(collapsible ? (expanded ? "折叠限额" : "展开限额") : quota.name)
                 .accessibilityLabel(quota.name + (expanded ? "，折叠限额" : "，展开限额"))
+            if expanded {
             balanceContent
             if quota.provider == "agy" { agyWindows }
             else if !quota.windows.isEmpty { LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: expanded ? 1 : 2), alignment: .leading, spacing: expanded ? 14 : 8) {
@@ -689,14 +684,13 @@ struct QuotaCard: View {
             if quota.provider == "agy" && expanded { Text("整周估值需匹配的 Token 用量与模型组归属。").font(AppFont.secondary).foregroundStyle(.secondary) }
             if expanded && !sourceName.isEmpty { Text(sourceName).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
             if quota.provider == "codex" {
-                HStack { Text("Codex credits"); Spacer(); Text(quota.credits?.unlimited == true ? "无限" : quota.credits?.balance.map { Format.credits($0) } ?? (quota.credits?.hasCredits == true ? "有余额 · 数量未知" : "—")).monospacedDigit() }.font(AppFont.secondary)
-                if expanded, let stamp = quota.creditsUpdatedAt { Text("更新于 \(Format.date(stamp))").font(AppFont.secondary).foregroundStyle(.secondary) }
-                if let onCredits, !compact || expanded || creditEstimate != nil { Button("估算 credit 价值", action: onCredits).buttonStyle(.plain).foregroundStyle(Palette.accent).font(AppFont.secondary) }
-            }
-            if let creditEstimate {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(Format.creditValue(creditEstimate)).monospacedDigit()
-                    Text(creditEstimate.statusLabel + " · API 等价价值").foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text(Format.creditBalance(quota.credits, estimate: creditEstimate)).monospacedDigit().fixedSize(horizontal: false, vertical: true)
+                        .help(quota.creditsUpdatedAt.map { "更新于 " + Format.date($0) } ?? "尚未取得 credits 信息")
+                    Spacer(minLength: 0)
+                    if let onCredits {
+                        Button(action: onCredits) { HStack(spacing: 3) { Text((creditEstimate.map { $0.statusLabel + " · " } ?? "") + "估值"); Image(systemName: "chevron.right") } }.buttonStyle(.plain).foregroundStyle(Palette.accent).fixedSize()
+                    }
                 }.font(AppFont.secondary)
             }
             if expanded, let bank = quota.bankReset {
@@ -714,6 +708,7 @@ struct QuotaCard: View {
                 Text(expanded ? error : "限额更新失败 · 展开查看").font(AppFont.secondary).foregroundStyle(Palette.warn).help(error)
             }
             if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.error == nil && quota.credits == nil { Text("暂无限额数据").font(AppFont.secondary).foregroundStyle(.secondary) }
+            }
         }
     }
 }

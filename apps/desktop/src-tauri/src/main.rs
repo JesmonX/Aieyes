@@ -2,6 +2,8 @@
 #[cfg(target_os = "windows")]
 mod capsule;
 mod desktop;
+#[cfg(target_os = "windows")]
+mod passive_window;
 mod updates;
 
 use aieyes_core::Engine;

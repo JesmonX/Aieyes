@@ -142,7 +142,7 @@ test('the refresh menu runs scans, quotas, prices and host sampling', async () =
 test('Escape closes the refresh menu before the panel and restores keyboard focus', async () => {
   const h = harness('floating.js'); await flush();
   await h.element('#ball').dispatch('click',{detail:0}); await flush();
-  assert.equal(h.document.activeElement,h.element('.panel-tabs button.active'));
+  assert.equal(h.document.activeElement,null,'Opening the floating panel does not take keyboard focus');
   await h.element('#panel-refresh').dispatch('click');
   await h.document.dispatch('keydown',{key:'Escape'}); await flush();
   assert.equal(h.element('#panel-menu').hidden,true);

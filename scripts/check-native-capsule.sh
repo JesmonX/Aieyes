@@ -30,6 +30,8 @@ pub mod desktop {
 }
 #[path = '''+json.dumps(str(project/'apps/desktop/src-tauri/src/capsule.rs'))+''']
 pub mod capsule;
+#[path = '''+json.dumps(str(project/'apps/desktop/src-tauri/src/passive_window.rs'))+''']
+pub mod passive_window;
 ''')
 PY
 CARGO_TARGET_DIR="$PROJECT_DIR/.build/windows-capsule-typecheck" cargo check --manifest-path .build/capsule-typecheck/Cargo.toml --target x86_64-pc-windows-gnu --offline

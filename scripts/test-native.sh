@@ -19,3 +19,6 @@ swiftc -module-cache-path .build/swift-module-cache -F "$SPARKLE_FRAMEWORK" -fra
 
 swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Models.swift scripts/verify-credit-format.swift -o .build/verify-credit-format
 .build/verify-credit-format
+
+swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/PassivePanel.swift scripts/verify-passive-panel.swift -o .build/verify-passive-panel
+.build/verify-passive-panel

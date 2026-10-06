@@ -86,3 +86,12 @@
 - 验证：核心 Rust 22 项（4 项来源查询 + 18 项回归，含新增 SSH 回归）通过；`cargo clippy --workspace --all-targets -- -D warnings` 通过；Tauri 桌面 6 项单测通过（含贴边、面板位置与隐藏入口三项新增）且 Clippy 严格检查通过；Node 16 项（桌面 9、多选 4、发布 3）通过；浏览器集成回归通过，新增悬浮球页面检查（单击与悬停展开、面板内容、服务器页、固定、刷新菜单、Esc 关闭、浅深色截图 `floating-panel-light.png` / `floating-panel-dark.png`）；采集器 4 项通过；`cargo fmt` 检查通过。
 - 本轮在 macOS 宿主完成上述检查，未包含 Windows 原生窗口行为：悬停展开的真实指针时序、贴边与多屏 DPI、隐藏恢复、Mica 与全屏场景仍需目标系统验收。发布版本一致性检查需要 Python 3.11+，本机为 3.9.6，未在本轮运行（CI 执行）。
 
+
+## 2026-10-06：双端概览与账户布局局部回退
+
+- macOS 原生端和 Windows/Tauri 小窗、主窗口统一为概览 → 全部账户 → 趋势与细分。概览保留总 Token、API 等价成本两卡；小窗 Token 附命中率并点击浮出细分，主窗口细分直接在下一行显示。日期范围继续作用于概览。
+- 同一 Agent 多账户时才允许用户逐个完整折叠，使用 `quota.expanded.v2` 保存主动选择；单账户始终展开。credit 与估值入口同排，显示当前余额对应的 API 等价美元价值，额度估值行参照 macOS 的无边框样式。
+- 可见 Token 统一 K/M/B，精确值保留在悬停说明或复制中。新增千／百万／十亿舍入边界、credit 零值／未知／无限／待确认／样本不足、日期及折叠状态恢复验收。
+- Web 完整 `npm run test:ui` 通过；桌面 Rust 19 项测试及 Clippy `-D warnings` 通过；Swift 应用构建通过。原生模型、会话、设置和更新检查通过；新增 credit 余额换算／压缩格式检查和非激活窗口显示／关闭检查通过。
+- 原生五场景浅深色、低高度、最小主窗口与高对比度截图矩阵通过，产物位于 `.local/layout-update/macos/`；Web 截图位于 `.local/ui-audit-implementation/`。已查看单账户、长名称、大 Token 及余额估值布局。
+- macOS 实际窗口检查确认显示／关闭非激活面板时，前台应用和 key window 不变；尚未完成双端跨应用连续键入与真实鼠标点击的端到端验收。Windows 胶囊及非激活窗口模块的真实 Win32 绑定类型检查通过；完整 Windows 交叉编译因宿主缺少 `x86_64-w64-mingw32-gcc` 中止，不能据此声称 Windows 实机焦点行为已验证。

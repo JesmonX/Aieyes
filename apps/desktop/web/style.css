@@ -625,3 +625,29 @@ input[name=path],input[name=identityFile],input[name=target] { font-family:var(-
 .sidebar-collapsed .aside-foot #activity { font-size:0; width:32px; min-height:32px; display:grid; place-items:center; }
 .sidebar-collapsed .aside-foot small { display:none; }
 .sidebar-collapsed #activity::before { margin:0; }
+
+/* Overview and account hierarchy shared by both surfaces. */
+.stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+#content > .cache-card { margin-bottom:20px; }
+.quota-disclosure:not([open]) + .quota-content { display:none; }
+.quota-disclosure[data-collapsible=false] > summary { cursor:default; }
+.credit-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:10px; font-size:13px; }
+.credit-row > span { min-width:0; overflow-wrap:anywhere; }
+.credit-estimate-entry { display:flex; align-items:center; gap:4px; flex-shrink:0; border:0; background:transparent; padding:4px 0; color:var(--accent); box-shadow:none; font-size:13px; }
+.credit-estimate-entry svg,.estimate-entry svg { width:14px; height:14px; flex-shrink:0; }
+.token-summary { position:relative; min-width:0; }
+#token-summary { display:block; width:100%; height:100%; padding:0; border:0; background:none; text-align:left; color:inherit; box-shadow:none; }
+#token-summary:hover { transform:none; }
+#token-summary .stat { height:100%; box-sizing:border-box; }
+.token-rate { font-size:13px; color:var(--muted); white-space:nowrap; }
+.token-hint { position:absolute; bottom:3px; left:15px; font-size:11px; color:var(--muted); opacity:0; }
+#token-summary:hover .token-hint,#token-summary:focus-visible .token-hint { opacity:1; }
+#token-popover { position:absolute; top:calc(100% + 6px); left:0; width:min(360px,calc(100vw - 36px)); z-index:80; border:1px solid var(--border); border-radius:var(--r-md); background:var(--solid); box-shadow:var(--shadow-float); }
+#token-popover .stat { margin:0; }
+#token-popover .token-breakdown { grid-template-columns:repeat(2,minmax(0,1fr)); }
+
+@container (max-width:350px) { .stats { grid-template-columns:1fr; } }
+
+.panel-body #token-summary .stat { padding-bottom:22px; }
+.quota-content > .estimate-entry { border:0; background:none; box-shadow:none; padding:6px 0; }
+.quota-content > .estimate-entry > span { display:flex; align-items:center; gap:5px; }

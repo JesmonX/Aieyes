@@ -32,10 +32,9 @@ function fixture(){
  try{browser=await chromium.launch({headless:true});
  for(const surface of ['index.html','floating.html']){
   const page=await browser.newPage({viewport:{width:surface==='index.html'?1120:450,height:850}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
-  assert.equal(await page.getByText('1234.13',{exact:true}).count(),1);assert.equal(await page.getByText('Bank Reset · 2 次可用',{exact:true}).count(),1);
-  if(surface==='floating.html')await page.locator('#all-quotas').click();
-  const card=()=>page.locator(surface==='floating.html'?'#quota-dialog .quota-card':'#content .quota-card');
-  assert.match(await card().locator('[data-credit-estimate]').textContent(),/^估算 credit 价值/);
+  assert.equal(await page.getByText('1234.13 credits',{exact:true}).count(),1);assert.equal(await page.getByText('Bank Reset · 2 次可用',{exact:true}).count(),1);
+  const card=()=>page.locator('#content .quota-card');
+  assert.match(await card().locator('[data-credit-estimate]').textContent(),/^估值/);
   assert.doesNotMatch(await card().locator('[data-credit-estimate]').textContent(),/500|1000/);
   const decimals=[['1234.125','1234.13'],['1.005','1.01'],['10','10.00'],['0','0.00'],['-0.004','0.00'],['-1.005','-1.01'],['1e-3','0.00'],['9.999','10.00'],[null,'—'],['','—'],['NaN','—'],['12bad','—'],['Infinity','—']];
   for(const [input,expected] of decimals)assert.equal(await page.evaluate(v=>creditAmount(v),input),expected);
@@ -51,11 +50,10 @@ function fixture(){
   assert.equal(await page.evaluate(()=>creditValue({status:'pending',valuePer1000:200})),'待确认');
   if(await card().locator('.quota-disclosure').evaluate(el=>el.open))await card().locator('.quota-disclosure summary').click();
   await page.evaluate(()=>loadDashboard());
-  assert.equal(await card().locator('.quota-disclosure').evaluate(el=>el.open),false,'Refresh preserves collapsed quota');
+  assert.equal(await card().locator('.quota-disclosure').evaluate(el=>el.open),true,'Single account remains expanded after refresh');
   await card().locator('.quota-disclosure summary').click();
   await page.locator('[data-credit-estimate]:visible').click();await page.locator('#estimate-confirm').check();await page.locator('#estimate-start').click();await page.locator('#estimate-stop').waitFor();assert.match(await page.locator('#quota-dialog').textContent(),/1000 credit ≈ \$200.00 USD/);assert.doesNotMatch(await page.locator('#quota-dialog').textContent(),/500 credits/);await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();await page.locator('#quota-close').click();
-  if(surface==='floating.html')await page.locator('#all-quotas').click();
-  await card().locator('.credit-value').waitFor();if(surface==='floating.html')await page.locator('#quota-close').click();
+  await page.waitForFunction(()=>document.querySelector('#content .credit-row')?.textContent.includes('≈'));assert.match(await card().locator('.credit-row').textContent(),/余额 1234.13 credits ≈ \$246.83 USD/);
   const previews=path.resolve(__dirname,'../.local/ui-previews');fs.mkdirSync(previews,{recursive:true});
   for(const colorScheme of ['light','dark']){
    await page.emulateMedia({colorScheme});await page.evaluate(()=>{document.querySelector('.panel-body')?.scrollTo(0,0);window.scrollTo(0,0);});
@@ -66,8 +64,8 @@ function fixture(){
    await page.evaluate(()=>{state.days=30;state.cost=true;render();});
    await page.locator('#content .quota-disclosure summary').click();
    await page.reload();await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
-   assert.equal(await page.evaluate(()=>state.days),1);assert.equal(await page.evaluate(()=>state.cost),true);
-   assert.equal(await page.locator('.quota-disclosure').evaluate(el=>el.open),false);
+   assert.equal(await page.evaluate(()=>state.days),30);assert.equal(await page.evaluate(()=>state.cost),true);
+   assert.equal(await page.locator('.quota-disclosure').evaluate(el=>el.open),true);
    assert.equal(await page.evaluate(()=>testFeature.calls.some(c=>c.method==='creditEstimates.start')),false,'Recreating the panel does not start another sample');
   }
   if(surface==='index.html'){

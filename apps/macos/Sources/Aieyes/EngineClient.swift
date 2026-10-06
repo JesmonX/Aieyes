@@ -234,13 +234,12 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         else if let account = settings.accounts.first(where: { $0.key == selectedAccount }) { params["accountId"] = account.id; params["provider"] = account.provider }
         if selectedSource != "all" { params["sourceId"] = selectedSource }
         if selectedModel != "all" { params["model"] = selectedModel }
-        let todaySelected = range == 1, unfilteredSelected = params.count == 1 && range == 1
+        let unfilteredSelected = params.count == 1 && range == 1
         let allModelsSelected = selectedModel == "all"
         do {
             let next: Dashboard = try await engine.call("dashboard", params: params)
             guard request == dashboardRequest else { return true }
-            var panel = next
-            if !todaySelected { var today = params; today["days"] = 1; panel = try await engine.call("dashboard", params: today) }
+            let panel = next
             guard request == dashboardRequest else { return true }
             let unfiltered: Dashboard = unfilteredSelected ? next : try await engine.call("dashboard", params: ["days": 1])
             guard request == dashboardRequest else { return true }

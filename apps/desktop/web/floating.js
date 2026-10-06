@@ -42,13 +42,14 @@
       closeMenu();
       const more = document.querySelector('#panel-more');
       if (more) more.open = false;
+      if(typeof closeTokenSummary==='function')closeTokenSummary();
       if (panel.contains(focused)) ball.focus({preventScroll:true});
     }
     if (!was && panelOpen) {
       window.AieyesNetwork?.refresh();
       if (typeof render === 'function') render();
       requestAnimationFrame(() => { if (typeof drawTrend === 'function') drawTrend(); });
-      panel.querySelector('.panel-tabs button.active')?.focus({preventScroll:true});
+      // Mouse-opened floating surfaces preserve the other application's keyboard focus.
       const refresh=window.AieyesApp?.refreshPanel;
       if(refresh)refresh().catch(error=>failure(error));
     }

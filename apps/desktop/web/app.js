@@ -3,7 +3,7 @@ const $ = (s) => document.querySelector(s);
    popover; the same renderers feed both surfaces. */
 const PANEL = Boolean(document.querySelector('#panel'));
 const escapeHTML = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const compact = n => n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : Math.round(n || 0).toString();
+const compact = n => n >= 999995000 ? (n / 1e9).toFixed(2) + 'B' : n >= 999950 ? (n / 1e6).toFixed(2) + 'M' : n >= 999.5 ? (n / 1e3).toFixed(1) + 'K' : Math.round(n || 0).toString();
 const money = n => '$' + (n || 0).toFixed(2);
 function creditAmount(value) {
   if (value == null || String(value).trim() === '') return '—';
@@ -101,7 +101,7 @@ function endRefresh(key,error,itemId=null){const r=state.refreshState[key];r.bus
 const timeLabel = stamp => new Date(stamp).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
 let pendingRender=false;
 function interactionOpen() {
-  return Boolean($('#editor')?.open||$('#quota-dialog')?.open||$('#panel-more')?.open||($('#panel-menu')&&!$('#panel-menu').hidden)||($('#refresh-menu')&&!$('#refresh-menu').hidden));
+  return Boolean(($('#token-popover')&&!$('#token-popover').hidden)||$('#editor')?.open||$('#quota-dialog')?.open||$('#panel-more')?.open||($('#panel-menu')&&!$('#panel-menu').hidden)||($('#refresh-menu')&&!$('#refresh-menu').hidden));
 }
 function flushRender() {
   if(pendingRender&&!interactionOpen()){pendingRender=false;render();}
@@ -109,10 +109,10 @@ function flushRender() {
 document.addEventListener('click',()=>setTimeout(flushRender,0));
 document.addEventListener('keydown',()=>setTimeout(flushRender,0));
 window.addEventListener('storage',event=>{
-  if(!event.key?.startsWith('quota.expanded.'+(PANEL?'panel.':'detail.')))return;
-  const key=event.key.slice(('quota.expanded.'+(PANEL?'panel.':'detail.')).length);
+  if(!event.key?.startsWith('quota.expanded.v2.'+(PANEL?'panel.':'detail.')))return;
+  const key=event.key.slice(('quota.expanded.v2.'+(PANEL?'panel.':'detail.')).length);
   const detail=document.querySelector('[data-quota="'+CSS.escape(key)+'"] .quota-disclosure');
-  if(detail)detail.open=event.newValue==='true';
+  if(detail&&detail.dataset.collapsible==='true')detail.open=event.newValue!=='false';
 });
 // Keep the user's place when live values replace their markup.
 function focusSelector(element) {
@@ -130,7 +130,7 @@ function rememberView() {
     scrollers:[...document.querySelectorAll('#content .daily-table,#content .prices-list')].map(el=>({className:el.className,top:el.scrollTop,left:el.scrollLeft}))};
 }
 function restoreView(view) {
-  for(const key of view.closed??[]){const el=document.querySelector('[data-agent-detail="'+CSS.escape(key)+'"]');if(el)el.open=false;}
+  for(const key of view.closed??[]){const el=document.querySelector('[data-agent-detail="'+CSS.escape(key)+'"]');if(el&&el.dataset.collapsible!=='false')el.open=false;}
   for(const [attribute,value] of view.opened){const el=document.querySelector(`[${attribute}="${CSS.escape(value)}"]`);if(el){el.open=true;if(el.tagName==='TBODY'){el.setAttribute('open','');el.querySelector('[data-day-toggle]')?.setAttribute('aria-expanded','true');el.querySelectorAll('.day-model').forEach(row=>row.hidden=false);}}}
   if(view.focus)document.querySelector(view.focus)?.focus({preventScroll:true});
   for(const item of view.scrollers){const el=[...document.querySelectorAll('#content .daily-table,#content .prices-list')].find(el=>el.className===item.className);if(el){el.scrollTop=item.top;el.scrollLeft=item.left;}}
@@ -162,11 +162,6 @@ function openSampling() {
 function quotaSection(d) {
   const quotas=d.quotas??[],missing=state.settings.accounts.filter(a=>!a.archived&&a.quotaEnabled&&(!state.provider||a.provider===state.provider)&&(!state.accountKey||state.accountKey===a.provider+':'+a.id)&&!quotas.some(q=>q.provider===a.provider&&q.accountId===a.id));
   if(!quotas.length&&!missing.length)return '';
-  if(PANEL){
-    const preferred=state.accountKey||localStorage.getItem('quota.pinned')||d.quotaOrder?.[0],q=quotas.find(q=>q.provider+':'+q.accountId===preferred)??quotas[0];
-    const count=quotas.length+missing.length;
-    return '<div class="panel-quota-summary"><span class="scope-note">实时账户限额</span>'+(q?'<div class="panel-summary">'+quotaCard(q,true)+'</div>':'<p>尚未读取当前账户限额</p>')+'<button id="all-quotas" class="quota-all">查看全部 '+count+' 个账户</button></div>';
-  }
   return `<div class="section-head"><h2>账户限额 <span class="count">${quotas.length+missing.length}</span></h2><div class="section-actions"><button id="order-quotas" title="调整账户顺序" aria-label="调整账户顺序">${uiIcon('sort')}</button><button id="read-quotas" ${state.quotaBusy||state.refreshState.quotas?.busy?'disabled':''} title="重新查询各账户的实时限额">${state.quotaBusy||state.refreshState.quotas?.busy?'读取中…':'刷新限额'}</button></div></div><p class="scope-note">实时账户限额 · 不随历史日期或模型筛选变化</p><div class="quotas">${quotas.map(q=>quotaCard(q)).join('')}${missing.map(a=>{
     const enabled=state.settings.sources.some(src=>src.enabled&&src.provider===a.provider&&src.accountId===a.id&&(!src.hostId||state.settings.hosts.some(h=>h.id===src.hostId&&h.enabled)));
     const text=!enabled?'关联并启用数据源后可读取限额':state.quotaBusy?'正在读取账户限额…':state.quotaError?'读取失败，可重试刷新限额':'尚未读取限额，可点击刷新限额';
@@ -199,7 +194,6 @@ function renderQueryStatus(){
   if($('#query-restore'))$('#query-restore').onclick=()=>changeFilters(state.appliedFilters);
 }
 async function loadDashboard() {
-  if(PANEL)state.days=1;
   savePanelView();
   if(state.accountKey && state.accountKey!=='none' && !state.settings.accounts.some(a=>a.provider+':'+a.id===state.accountKey))state.accountKey='';
   if(state.sourceId && !state.settings.sources.some(s=>s.id===state.sourceId))state.sourceId='';
@@ -294,6 +288,28 @@ function render() {
 }
 function attention(reason,action,id){return `<div class="attention" role="status">${uiIcon('attention')}<span>${escapeHTML(reason)}</span><button id="${id}" type="button">${action}</button></div>`;}
 function bindAttention(){if($('#pricing-attention'))$('#pricing-attention').onclick=openPricing;if($('#sampling-attention'))$('#sampling-attention').onclick=openSampling;}
+
+function creditRow(q, record) {
+  const balance=q.credits?.unlimited?'无限':q.credits?.balance!=null?creditAmount(q.credits.balance)+' credits':q.credits?.hasCredits?'数量未知':'—';
+  const amount=Number(q.credits?.balance), value=record?.valuePer1000;
+  const valid=!q.credits?.unlimited&&q.credits?.balance!=null&&creditAmount(q.credits.balance)!=='—'&&Number.isFinite(amount)&&record?.status!=='pending'&&Number.isFinite(value)&&Number.isFinite(amount*value/1000);
+  return `<div class="credit-row"><span title="${q.creditsUpdatedAt?'更新于 '+date(q.creditsUpdatedAt):'尚未取得 credits 信息'}">余额 <strong>${balance}${valid?' ≈ '+money(Math.round((amount*value/1000+Number.EPSILON*Math.abs(amount*value/1000))*100)/100)+' USD':''}</strong></span><button class="credit-estimate-entry" data-credit-estimate="${escapeHTML(q.provider+':'+q.accountId)}">${record?estimateStatus(record)+' · ':''}估值 ${uiIcon('right')}</button></div>`;
+}
+function tokenSummary(summary) {
+  return `<div class="token-summary"><button type="button" id="token-summary" aria-expanded="false" aria-controls="token-popover" aria-label="总 Token，点击查看详情">${stat('总 Token',compact(summary.total)+' <span class="token-rate">('+pct(cacheRate(summary.tokens))+')</span>','','✧')}<span class="token-hint">点击查看详情</span></button><div id="token-popover" role="region" aria-label="Token 细分" hidden>${cacheCard(summary.tokens).replace('class="stat cache-card"','class="card cache-card"')}</div></div>`;
+}
+function closeTokenSummary() {
+  const popover=$('#token-popover');if(popover)popover.hidden=true;
+  $('#token-summary')?.setAttribute('aria-expanded','false');
+}
+function bindTokenSummary() {
+  const button=$('#token-summary');if(!button)return;
+  button.onmousedown=event=>event.preventDefault();
+  button.onclick=()=>{const popover=$('#token-popover');popover.hidden=!popover.hidden;button.setAttribute('aria-expanded',String(!popover.hidden));};
+}
+document.addEventListener('pointerdown',event=>{if(!event.target.closest('.token-summary'))closeTokenSummary();});
+document.addEventListener('keydown',event=>{if(event.key==='Escape')closeTokenSummary();});
+
 function cacheCard(t){return `<div class="stat cache-card"><div class="token-breakdown">${[['普通输入',t.input],['输出',t.output],['缓存读取',t.cacheRead],['缓存写入',t.cacheWrite]].map(([label,value])=>`<div><span>${label}</span><strong title="${value.toLocaleString()} Token">${compact(value)}</strong></div>`).join('')}<div class="cache-hit"><span title="缓存读取 ÷（普通输入＋缓存读取＋缓存写入）">读取命中率</span><strong>${pct(cacheRate(t))}</strong></div></div></div>`;}
 
 const cacheRate = t => { const input=t.input+t.cacheRead+t.cacheWrite; return input ? t.cacheRead/input*100 : null; };
@@ -318,10 +334,10 @@ function renderAgent() {
   $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${state.settings.accounts.filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select><select id="source" aria-label="数据源">${option('','全部数据源',state.sourceId)}${sources.map(s=>option(s.id,s.name,state.sourceId)).join('')}</select><select id="model" aria-label="模型">${option('','全部模型',state.model)}${[...new Set([...(d.modelOptions??trendModels),...(state.model?[state.model]:[])])].map(m=>option(m,m,state.model)).join('')}</select></div>
   ${s.total>0&&s.pricedTokens<s.total?attention('计价未完成：部分 Token 缺少价格','补充价格','pricing-attention'):''}
   <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':`最近 ${n} 天`,state.days)).join('')}</select></div>
-  <div class="stats">${stat('总 Token',compact(s.total),'','✧')}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens||!s.total?money(s.cost):'—','','$')}${cacheCard(t)}</div>
+  <div class="stats">${stat('总 Token',compact(s.total),'','✧')}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens||!s.total?money(s.cost):'—','','$')}</div>${cacheCard(t)}${quotaSection(d)}
   <div class="section-head"><h2>${state.days===1?'近 7 天趋势':'使用趋势'}</h2><label class="mode"><input type="checkbox" id="cost-mode" ${state.cost?'checked':''}> 按 API 等价成本</label></div>
   <div class="chart-row"><div class="card"><h2>每日用量 · 按模型</h2><canvas id="trend" aria-label="按模型堆叠的每日用量，下方有逐日数据"></canvas><div class="model-key">${trendModels.map(m=>`<button data-trend-model="${escapeHTML(m)}" aria-label="显示或隐藏模型 ${escapeHTML(m)}"><i style="background:${color(m)}"></i>${escapeHTML(m)}</button>`).join('')}</div></div><div class="card"><h2>所选范围 · 模型分布</h2>${modelDistribution(models)}</div></div>
-  ${samplingBanner(d)}${quotaSection(d)}<div class="card"><details class="daily" data-agent-detail="daily"><summary><h2>每日模型与缓存命中率</h2></summary>${dailyTable(d.trendDays,d.dayModels)}</details></div>
+  ${samplingBanner(d)}<div class="card"><details class="daily" data-agent-detail="daily"><summary><h2>每日模型与缓存命中率</h2></summary>${dailyTable(d.trendDays,d.dayModels)}</details></div>
   <div class="card"><h2>过去 365 天</h2>${heatmapHTML(d.heatmap)}</div>
   `;
   bindSetup();
@@ -340,10 +356,9 @@ function renderAgent() {
 function renderAgentPanel(d) {
   const view=rememberView(),s=d.summary,t=s.tokens,trendTitle=`近 ${Math.max(7,state.days)} 天用量`;
   $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${state.settings.accounts.filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select></div>
-  ${quotaSection(d)}
   <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':`最近 ${n} 天`,state.days)).join('')}</select></div>
-  <div class="stats panel-stats">${stat('总 Token',compact(s.total),'','✧')}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens||!s.total?money(s.cost):'—','','$')}</div>
-  <div class="card panel-cache"><span title="缓存读取 ${t.cacheRead.toLocaleString()} Token；缓存写入 ${t.cacheWrite.toLocaleString()} Token">缓存 Token <strong>${compact(t.cacheRead+t.cacheWrite)}</strong></span><span title="缓存读取 ÷（普通输入＋缓存读取＋缓存写入）">读取命中率 <strong>${pct(cacheRate(t))}</strong></span></div>
+  <div class="stats panel-stats">${tokenSummary(s)}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens||!s.total?money(s.cost):'—','','$')}</div>
+  ${quotaSection(d)}
   ${samplingBanner(d)}
   <div class="card"><details data-agent-detail="panel-trend"><summary><h2>${trendTitle}</h2><span class="muted">展开趋势</span></summary><canvas id="trend" class="panel-chart" aria-label="${trendTitle}，按模型的每日用量"></canvas><div class="model-key">${[...new Set(d.dayModels.map(r=>r.model))].sort().map(m=>`<button data-trend-model="${escapeHTML(m)}" aria-label="显示或隐藏模型 ${escapeHTML(m)}"><i style="background:${color(m)}"></i>${escapeHTML(m)}</button>`).join('')}</div><details class="daily" data-agent-detail="daily"><summary><h2>每日明细</h2></summary>${dailyTable(d.trendDays,d.dayModels)}</details></details></div>
   <button id="open-detail" class="panel-wide" title="打开完整详情窗口">用量详情</button>`;
@@ -351,7 +366,7 @@ function renderAgentPanel(d) {
   $('#account').onchange=async e=>{state.accountKey=e.target.value;state.sourceId='';await changeFilters();};
   $('#days').onchange=async e=>{state.days=Number(e.target.value);await changeFilters();};
   if($('#read-quotas'))$('#read-quotas').onclick=()=>quotas();
-  bindQuotaTools();bindAttention();
+  bindQuotaTools();bindAttention();bindTokenSummary();
   if($('#repair-pricing'))$('#repair-pricing').onclick=openPricing;
   $('#open-detail').onclick=openDetail;
   bindSetup();shortenEmptyUsage(d);restoreView(view);
@@ -359,7 +374,7 @@ function renderAgentPanel(d) {
 }
 function shortenEmptyUsage(d) {
   if(d.summary.total||(d.trendDays??[]).some(day=>day.total)||(d.heatmap??[]).some(day=>day.total))return;
-  $('#content .stats')?.remove();$('#content .panel-cache')?.remove();
+  $('#content .stats')?.remove();$('#content > .cache-card')?.remove();
   if(!state.settings.sources.length){$('#content .chart-row')?.remove();$('#trend')?.closest('.card')?.remove();$('#content .daily')?.closest('.card')?.remove();$('#content .heatmap')?.closest('.card')?.remove();$('#cost-mode')?.closest('.section-head')?.remove();return;}
   const trend=$('#trend'),chart=trend?.closest('.chart-row')??trend?.closest('.card');
   if(chart){
@@ -374,20 +389,21 @@ function shortenEmptyUsage(d) {
   $('#content .heatmap')?.closest('.card')?.remove();
 }
 function dailyTable(days,rows) {
-  return `<div class="daily-table table-scroll"><table><thead><tr><th scope="col">日期 / 模型</th><th scope="col">Token</th><th scope="col">读取命中率</th><th scope="col">已计价成本 USD</th></tr></thead>${[...days].reverse().map(day=>`<tbody data-agent-detail="day:${escapeHTML(day.key)}"><tr class="day"><th scope="row"><button data-day-toggle="${day.key}" aria-expanded="false" aria-label="展开 ${day.key} 的模型明细">${day.key}</button></th><td title="${day.total} Token">${day.total.toLocaleString()}</td><td>${pct(cacheRate(day.tokens))}</td><td>${day.pricedTokens||!day.total?day.cost.toFixed(6):'—'}</td></tr>${rows.filter(r=>r.day===day.key).map(r=>`<tr class="day-model" hidden><th scope="row"><span>${escapeHTML(r.model)}</span><button data-copy-value="${escapeHTML(r.model+'\t'+r.usage.total+' Token\t'+r.usage.cost+' USD')}" aria-label="复制 ${escapeHTML(r.model)}">复制</button></th><td>${r.usage.total.toLocaleString()}</td><td>${pct(cacheRate(r.usage.tokens))}</td><td>${r.usage.pricedTokens?r.usage.cost.toFixed(6):'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
+  return `<div class="daily-table table-scroll"><table><thead><tr><th scope="col">日期 / 模型</th><th scope="col">Token</th><th scope="col">读取命中率</th><th scope="col">已计价成本 USD</th></tr></thead>${[...days].reverse().map(day=>`<tbody data-agent-detail="day:${escapeHTML(day.key)}"><tr class="day"><th scope="row"><button data-day-toggle="${day.key}" aria-expanded="false" aria-label="展开 ${day.key} 的模型明细">${day.key}</button></th><td title="${day.total} Token">${compact(day.total)}</td><td>${pct(cacheRate(day.tokens))}</td><td>${day.pricedTokens||!day.total?day.cost.toFixed(6):'—'}</td></tr>${rows.filter(r=>r.day===day.key).map(r=>`<tr class="day-model" hidden><th scope="row"><span>${escapeHTML(r.model)}</span><button data-copy-value="${escapeHTML(r.model+'\t'+r.usage.total+' Token\t'+r.usage.cost+' USD')}" aria-label="复制 ${escapeHTML(r.model)}">复制</button></th><td title="${r.usage.total} Token">${compact(r.usage.total)}</td><td>${pct(cacheRate(r.usage.tokens))}</td><td>${r.usage.pricedTokens?r.usage.cost.toFixed(6):'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
 }
 
 function quotaCard(q,glance=false) {
   const key=q.provider+':'+q.accountId, latest=(state.dashboard?.quotaEstimates??[]).find(e=>e.accountKey===key), credit=(state.dashboard?.creditEstimates??[]).find(e=>e.accountKey===key);
   const windowHTML=w=>`<div class="quota-window"><div class="between tiny"><span>${escapeHTML(w.name)}</span><strong style="color:${quotaColor(Number.isFinite(w.usedPercent)?resourcePercent(100-w.usedPercent):null)}">剩余 ${pct(Number.isFinite(w.usedPercent)?resourcePercent(100-w.usedPercent):null)}</strong></div>${resourceBar(Number.isFinite(w.usedPercent)?100-w.usedPercent:null,w.name+'剩余额度',true)}<div class="tiny muted quota-reset" data-reset-at="${w.resetsAt??0}">${AieyesUI.resetText(w.resetsAt)} · ${date(w.resetsAt)}</div></div>`;
-  let expanded=!PANEL&&q.provider!=='agy';try{const stored=localStorage.getItem('quota.expanded.'+(PANEL?'panel.':'detail.')+key);if(stored!=null)expanded=stored==='true';}catch(_){}
-  if(glance)expanded=false;
+  const collapsible=state.settings.accounts.filter(a=>!a.archived&&a.provider===q.provider).length>1;
+  let expanded=true;try{const stored=localStorage.getItem('quota.expanded.v2.'+(PANEL?'panel.':'detail.')+key);if(collapsible&&stored!=null)expanded=stored==='true';}catch(_){}
+
   let windows='<div class="quota-windows">'+q.windows.map(windowHTML).join('')+'</div>';
   if(q.provider==='agy'){
     const groups=new Map();for(const w of q.windows){const group=w.groupName||w.name.split(' · ').slice(0,-1).join(' · ');if(!groups.has(group))groups.set(group,[]);groups.get(group).push(w);}
     windows=`<div class="agy-groups">${[...groups].map(([group,rows])=>`<div class="agy-group"><strong>${escapeHTML(group)}</strong><div class="agy-windows">${rows.sort((a,b)=>(a.windowMinutes??0)-(b.windowMinutes??0)).map(w=>windowHTML({...w,name:w.windowMinutes===10080?'7d':w.windowMinutes===300?'5h':w.name})).join('')}</div></div>`).join('')}</div>`;
   }
-  return `<div class="card quota-card" data-quota="${escapeHTML(key)}"><details class="quota-disclosure" data-agent-detail="quota:${escapeHTML(key)}" ${expanded?'open':''}><summary class="quota-title"><h3>${escapeHTML(q.name)}</h3><span class="quota-chevron" aria-hidden="true">${uiIcon('chevron')}</span></summary></details><div class="quota-content"><div class="between tiny muted quota-meta"><span>${escapeHTML(providers[q.provider]??q.provider)}${q.plan?' · '+escapeHTML(q.plan):''}</span><span>${q.origin==='log'?'记录':'更新'} ${date(q.updatedAt)}</span></div>${(q.balances??[]).map(b=>`<div class="quota-window"><div class="between"><span>可用余额</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted balance-detail"><span>赠送 ${escapeHTML(b.granted)}</span><span>充值 ${escapeHTML(b.toppedUp)}</span></div></div>`).join('')}${q.provider==='codex'?`<div class="quota-window quota-credits${q.credits?'':' unavailable-credits'}"><div class="between"><span>Codex credits</span><strong>${q.credits?.unlimited?'无限':q.credits?.balance!=null?creditAmount(q.credits.balance):q.credits?.hasCredits?'有余额 · 数量未知':'—'}</strong></div><span class="tiny muted quota-credit-time">${q.creditsUpdatedAt?date(q.creditsUpdatedAt):'尚未取得 credits 信息'}${q.error?' · 更新失败':''}</span></div><button class="estimate-entry${credit?' sampling-entry':''}" data-credit-estimate="${escapeHTML(key)}">估算 credit 价值 ${uiIcon('right')}</button>${credit?`<div class="credit-value tiny"><strong>${creditValue(credit)}</strong><span class="muted">${estimateStatus(credit)} · API 等价价值</span></div>`:''}`:''}${q.isAvailable===false?'<p class="error">当前余额不足以调用 API</p>':''}${windows}${q.bankReset?`<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>Bank Reset · ${q.bankReset.availableCount} 次可用</summary>${(q.bankReset.credits??[]).map(c=>`<div class="between tiny muted"><span>${escapeHTML(c.title??'Reset Credit')}</span><span>到期 ${date(c.expiresAt)}</span></div>`).join('')}</details>`:''}${q.error?`<p class="error quota-error" title="${escapeHTML(q.error)}"><span class="error-detail">${escapeHTML(q.error)}</span><span class="short-error">限额更新失败 · 展开查看</span></p>`:''}${(q.provider!=='agy'&&q.windows.some(w=>w.windowMinutes===300||w.windowMinutes===10080))||latest?`<button class="estimate-entry${latest?' sampling-entry':''}" data-estimate="${escapeHTML(key)}"><span>${latest?.valuationMode==='fiveHour'?'5h / 7d 估值':latest?'7d 整周估值':'估算额度价值'}</span><strong>${latest?escapeHTML(AieyesUI.estimateLabel(latest))+(latest.status==='pending'?' · 待确认':''):uiIcon('right')}</strong></button>`:''}</div></div>`;
+  return `<div class="card quota-card" data-quota="${escapeHTML(key)}"><details class="quota-disclosure" data-collapsible="${collapsible}" data-agent-detail="quota:${escapeHTML(key)}" ${expanded?'open':''}><summary class="quota-title"><h3>${escapeHTML(q.name)}</h3>${collapsible?`<span class="quota-chevron" aria-hidden="true">${uiIcon('chevron')}</span>`:''}</summary></details><div class="quota-content"><div class="between tiny muted quota-meta"><span>${escapeHTML(providers[q.provider]??q.provider)}${q.plan?' · '+escapeHTML(q.plan):''}</span><span>${q.origin==='log'?'记录':'更新'} ${date(q.updatedAt)}</span></div>${(q.balances??[]).map(b=>`<div class="quota-window"><div class="between"><span>可用余额</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted balance-detail"><span>赠送 ${escapeHTML(b.granted)}</span><span>充值 ${escapeHTML(b.toppedUp)}</span></div></div>`).join('')}${q.isAvailable===false?'<p class="error">当前余额不足以调用 API</p>':''}${windows}${q.bankReset?`<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>Bank Reset · ${q.bankReset.availableCount} 次可用</summary>${(q.bankReset.credits??[]).map(c=>`<div class="between tiny muted"><span>${escapeHTML(c.title??'Reset Credit')}</span><span>到期 ${date(c.expiresAt)}</span></div>`).join('')}</details>`:''}${q.error?`<p class="error quota-error" title="${escapeHTML(q.error)}"><span class="error-detail">${escapeHTML(q.error)}</span><span class="short-error">限额更新失败 · 展开查看</span></p>`:''}${(q.provider!=='agy'&&q.windows.some(w=>w.windowMinutes===300||w.windowMinutes===10080))||latest?`<button class="estimate-entry${latest?' sampling-entry':''}" data-estimate="${escapeHTML(key)}"><span>${uiIcon('trend')} ${latest?.valuationMode==='fiveHour'?'5h / 7d 估值':latest?'7d 整周估值':'估算额度价值'}</span><strong>${latest?escapeHTML(AieyesUI.estimateLabel(latest))+(latest.status==='pending'?' · 待确认':''):''}</strong>${uiIcon('right')}</button>`:''}${q.provider==='codex'?creditRow(q,credit):''}</div></div>`;
 }
 
 function drawTrend() {
@@ -987,8 +1003,8 @@ function bindQuotaTools(){
   if($('#all-quotas'))$('#all-quotas').onclick=()=>openAllQuotas();
   document.querySelectorAll('.quota-disclosure').forEach(detail=>{
     detail.querySelector('summary').onclick=event=>{
-      event.preventDefault();if(detail.closest('.panel-summary')){openAllQuotas(detail.closest('[data-quota]').dataset.quota);return;}detail.open=!detail.open;
-      try{localStorage.setItem('quota.expanded.'+(PANEL?'panel.':'detail.')+detail.closest('[data-quota]').dataset.quota,String(detail.open));}catch(_){}
+      event.preventDefault();if(detail.dataset.collapsible!=='true')return;detail.open=!detail.open;
+      try{localStorage.setItem('quota.expanded.v2.'+(PANEL?'panel.':'detail.')+detail.closest('[data-quota]').dataset.quota,String(detail.open));}catch(_){}
     };
   });
   document.querySelectorAll('[data-manage-sampling]').forEach(button=>button.onclick=openSampling);

@@ -435,6 +435,14 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
     let builder = builder.transparent(true);
     let window = builder.build()?;
     configure_webview(&window);
+    #[cfg(target_os = "windows")]
+    if let Ok(hwnd) = window.hwnd() {
+        // Recreating the renderer may call this from a worker; subclass on its UI thread.
+        let handle = hwnd.0 as usize;
+        window.run_on_main_thread(move || {
+            crate::passive_window::configure(windows::Win32::Foundation::HWND(handle as *mut _));
+        })?;
+    }
     Ok(())
 }
 fn configure_webview(_window: &tauri::WebviewWindow) {
@@ -518,9 +526,11 @@ fn set_native_panel(app: &AppHandle, open: bool) -> Result<(), String> {
         window
             .set_size(PhysicalSize::new(width, height))
             .map_err(|e| e.to_string())?;
+        let handle = window.hwnd().map_err(|e| e.to_string())?.0 as usize;
         window
-            .show()
-            .and_then(|_| window.set_focus())
+            .run_on_main_thread(move || {
+                crate::passive_window::show(windows::Win32::Foundation::HWND(handle as *mut _));
+            })
             .map_err(|e| e.to_string())?;
     } else {
         window.hide().map_err(|e| e.to_string())?;

@@ -84,9 +84,9 @@ function fixture(){
    await page.evaluate(async()=>{state.model='missing';await loadDashboard();});assert.equal(await page.locator('.stat').count(),0);if(panel)await page.locator('.panel-filter-summary > summary').click();assert.equal(await page.getByRole('button',{name:'清除全部',exact:true}).count(),1);await page.getByRole('button',{name:'清除全部',exact:true}).click();await page.waitForFunction(()=>state.dashboard.summary.total>0);
    if(panel){
     assert.equal(await page.locator('[data-agent-detail=panel-trend]').evaluate(el=>el.open),false);
-    assert.equal(await page.locator('.quota-disclosure').first().evaluate(el=>el.open),false);
+    assert.equal(await page.locator('.quota-disclosure').first().evaluate(el=>el.open),true);
     for(const row of await page.locator('.quota-windows .quota-window > .between').all()){
-     assert.equal(await row.isVisible(),true,'Collapsed quotas retain window names and remaining percentages');
+     assert.equal(await row.isVisible(),true,'Single account shows all window names and remaining percentages');
      assert.match(await row.textContent(),/剩余 \d/);
     }
    }

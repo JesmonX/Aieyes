@@ -10,7 +10,7 @@ import Combine
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate, NSToolbarDelegate {
     private var statusItem: NSStatusItem!
     private var statusLabel: NSHostingView<MenuActivityLabel>?
-    private let popover = NSPopover()
+    private let popover = MenuPanel()
     private var detailWindow: NSWindow?
     private var pageControl: NSSegmentedControl?
     private var settingsWindow: NSWindow?
@@ -53,8 +53,10 @@ import Combine
             button.addSubview(label); statusLabel = label
             updateTitle()
         }
-        popover.behavior = .transient; popover.animates = true; popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: RootView(model: model))
+        popover.behavior = .transient; popover.onClose = { [weak self] in self?.model.setWindowVisible(false, window: "panel") }
+        let panelController = NSViewController()
+        panelController.view = PassiveHostingView(rootView: RootView(model: model))
+        popover.contentViewController = panelController
         popover.contentSize = NSSize(width: 450, height: 720)
         model.objectWillChange.sink { [weak self] _ in DispatchQueue.main.async { self?.updateTitle() } }.store(in: &cancellables)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
@@ -75,7 +77,7 @@ import Combine
         else {
             model.panelHeight = min(720, max(360, (button.window?.screen?.visibleFrame.height ?? 800) - 34))
             popover.contentSize = NSSize(width: 450, height: model.panelHeight)
-            NSApp.activate(ignoringOtherApps: true); popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); model.setWindowVisible(true, window: "panel") }
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); model.setWindowVisible(true, window: "panel") }
     }
     func popoverDidClose(_ notification: Notification) { model.setWindowVisible(false, window: "panel") }
     @objc private func detailAction() { openDetail() }

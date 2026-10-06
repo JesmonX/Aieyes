@@ -101,7 +101,7 @@ impl Capsule {
                     tooltip_text: RefCell::new(Vec::new()),
                 });
                 let result = CreateWindowExW(
-                    WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+                    WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
                     class.lpszClassName,
                     w!("Aieyes · 单击打开面板，右键菜单"),
                     WS_POPUP,
@@ -379,6 +379,9 @@ unsafe extern "system" fn window_proc(
     if msg == WM_NCCREATE {
         let create = &*(lparam.0 as *const CREATESTRUCTW);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+    }
+    if msg == WM_MOUSEACTIVATE {
+        return LRESULT(MA_NOACTIVATE as isize);
     }
     let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Surface;
     if pointer.is_null() {

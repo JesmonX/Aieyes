@@ -120,9 +120,9 @@ enum Format {
     }
 
     static func compact(_ value: Double) -> String {
-        if value >= 1_000_000_000 { return String(format: "%.2fB", value / 1_000_000_000) }
-        if value >= 1_000_000 { return String(format: "%.2fM", value / 1_000_000) }
-        if value >= 1_000 { return String(format: "%.1fK", value / 1_000) }
+        if value >= 999_995_000 { return String(format: "%.2fB", value / 1_000_000_000) }
+        if value >= 999_950 { return String(format: "%.2fM", value / 1_000_000) }
+        if value >= 999.5 { return String(format: "%.1fK", value / 1_000) }
         return String(format: "%.0f", value)
     }
     static func credits(_ value: String?) -> String {
@@ -138,6 +138,20 @@ enum Format {
         formatter.usesGroupingSeparator = false
         formatter.minimumFractionDigits = 2; formatter.maximumFractionDigits = 2
         return formatter.string(from: NSDecimalNumber(decimal: rounded)) ?? "—"
+    }
+    static func creditBalance(_ balance: CreditsBalance?, estimate: QuotaEstimate?) -> String {
+        if balance?.unlimited == true { return "余额 无限" }
+        guard let raw = balance?.balance else { return balance?.hasCredits == true ? "余额 数量未知" : "余额 —" }
+        let formatted = credits(raw)
+        var text = "余额 " + formatted + (formatted == "—" ? "" : " credits")
+        if formatted != "—", let amount = Double(raw), amount.isFinite, let estimate, estimate.status != "pending", let unit = estimate.valuePer1000, unit.isFinite, (amount * unit / 1000).isFinite {
+            if let decimal = Decimal(string: raw), let rate = Decimal(string: String(unit)) {
+                var value = decimal * rate / 1000, rounded = Decimal()
+                NSDecimalRound(&rounded, &value, 2, .plain)
+                text += " ≈ $" + credits(NSDecimalNumber(decimal: rounded).stringValue) + " USD"
+            }
+        }
+        return text
     }
     static func creditValue(_ estimate: QuotaEstimate) -> String {
         if estimate.status == "pending" { return "待确认" }
