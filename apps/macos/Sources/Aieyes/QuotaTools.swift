@@ -17,6 +17,9 @@ struct SamplingManagementView: View {
                         Text(estimate.calculationNote).font(AppFont.secondary)
                         if !estimate.reason.isEmpty { Text(estimate.reason).foregroundStyle(Palette.warn) }
                         if let error = model.estimateErrors[estimate.accountKey] { Text(error).foregroundStyle(Palette.warn) }
+                        if model.estimateBusy.contains(estimate.accountKey) { TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text((model.estimateStages[estimate.accountKey] ?? "准备同步") + " · " + String(Int(context.date.timeIntervalSince(model.estimateStartedAt[estimate.accountKey] ?? context.date))) + " 秒").font(AppFont.secondary)
+                        } }
                         HStack {
                             Button("查看与管理") { Task { await model.openEstimate(estimate) } }
                             Spacer()
@@ -77,17 +80,23 @@ struct QuotaEstimateView: View {
     private var busy: Bool { model.estimateBusy.contains(quota.id) }
     private var error: String? { model.estimateErrors[quota.id] }
     private var sources: [AgentSource] { model.settings.sources.filter { $0.enabled && $0.provider == quota.provider && $0.accountId == quota.accountId && !["agy", "deepseek"].contains($0.provider) } }
-    private var windows: [QuotaWindow] { quota.windows.filter { $0.windowMinutes == 10080 } }
+    private var windows: [QuotaWindow] {
+        let five = quota.windows.filter { $0.windowMinutes == 300 }
+        if five.count == 1 { return five }
+        if let overall = five.first(where: { $0.stableId == "five_hour" }) { return [overall] }
+        let weekly = quota.windows.filter { $0.windowMinutes == 10080 }
+        return weekly.count == 1 ? weekly : weekly.filter { $0.stableId == "seven_day" }
+    }
     private var records: [QuotaEstimate] { (credits ? (model.dashboard.creditEstimates ?? []) : (model.dashboard.quotaEstimates ?? [])).filter { $0.accountKey == quota.id } }
     private var current: QuotaEstimate? { records.first { $0.status != "completed" } }
-    private var eligible: Bool { if credits { return quota.credits?.balance != nil && quota.credits?.unlimited == false }; return quota.provider != "agy" && (windows.count == 1 || (quota.provider == "claude" && windows.contains { $0.id == "seven_day" || $0.name == "7d" })) }
+    private var eligible: Bool { if credits { return quota.credits?.balance != nil && quota.credits?.unlimited == false }; return quota.provider != "agy" && !windows.isEmpty }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack { VStack(alignment: .leading, spacing: 4) { Text(credits ? "credit 价值" : "7d 整周价值").font(AppFont.title); Text(quota.name).foregroundStyle(.secondary) }; Spacer(); Button("关闭") { close() }.keyboardShortcut(.cancelAction) }
-            if quota.provider == "codex" { Picker("采样口径", selection: $model.creditEstimateMode) { Text("7d 整周").tag(false); Text("credit 价值").tag(true) }.pickerStyle(.segmented).disabled(busy) }
+            HStack { VStack(alignment: .leading, spacing: 4) { Text(credits ? "credit 价值" : "5h / 7d 额度价值").font(AppFont.title); Text(quota.name).foregroundStyle(.secondary) }; Spacer(); Button("关闭") { close() }.keyboardShortcut(.cancelAction) }
+            if quota.provider == "codex" { Picker("采样口径", selection: $model.creditEstimateMode) { Text("额度价值").tag(false); Text("credit 价值").tag(true) }.pickerStyle(.segmented).disabled(busy) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(credits ? "按实际 credits 扣款与样本 API 等价成本，估算 credit 的 API 等价价值，不是可兑换余额。" : "按采样期间的 API 等价成本与额度消耗比例，估算一整周额度的价值。结果取决于模型组合，并非可兑换余额。").foregroundStyle(.secondary)
+                    Text(credits ? "按实际 credits 扣款与样本 API 等价成本，估算 credit 的 API 等价价值，不是可兑换余额。" : "主要采样 5h 额度，显示 5h 价值、7d 同期换算及近期倍率估算。正常重置后自动接续，结果取决于本次模型组合。").foregroundStyle(.secondary)
                     if let current {
                         result(current)
                         if current.status == "pending" {
@@ -97,7 +106,7 @@ struct QuotaEstimateView: View {
                         }
                         Button(current.status == "pending" ? "结束并保留有效段" : "结束采样并计算") { perform("stop", ["id": current.id]) }.buttonStyle(.borderedProminent).disabled(busy)
                     } else if eligible && !sources.isEmpty {
-                        if !credits { Picker("7d 额度池", selection: $window) {
+                        if !credits { Picker("主要额度池", selection: $window) {
                             ForEach(windows.filter { windows.count == 1 || $0.id == "seven_day" || $0.name == "7d" }) { Text($0.name).tag($0.id) }
                         } }
                         Text("纳入的用量来源").font(AppFont.section)
@@ -105,12 +114,14 @@ struct QuotaEstimateView: View {
                             Toggle(source.name, isOn: Binding(get: { selected.contains(source.id) }, set: { if $0 { selected.insert(source.id) } else { selected.remove(source.id) } })).disabled(busy)
                         }
                         confirmation
-                        Text(credits ? "建议开始后新建会话，至少消耗 5 credits 且价格完整后输出估值。充值或包含额度恢复后需要开始新一段。" : "建议开始后新建会话。跨起始边界的累计用量会使本次结果不可用；至少消耗 5 个百分点后输出估值。").font(AppFont.secondary).foregroundStyle(.secondary)
+                        Text(credits ? "建议开始后新建会话，至少消耗 5 credits 且价格完整后输出估值。充值或包含额度恢复后需要开始新一段。" : "建议开始后新建会话。跨起始边界的累计用量会使本次结果不可用；5h 至少消耗 5 个百分点后输出估值；7d 同期消耗较少时会标注样本较少。").font(AppFont.secondary).foregroundStyle(.secondary)
                         Button("开始采样") { perform("start", ["accountKey": quota.id, "windowId": credits ? "credits" : window, "sourceIds": Array(selected), "confirmed": confirmed]) }.buttonStyle(.borderedProminent).disabled(!confirmed || selected.isEmpty || (!credits && window.isEmpty) || busy)
                     } else {
                         Text(sources.isEmpty ? "需要可采集 Token 的关联数据源。agy 限额查询本身不提供用量历史。" : credits ? "需要明确且有限的 credits 余额；请刷新账户限额。" : "此额度池缺少可靠的模型映射，暂不支持估值。").foregroundStyle(.secondary)
                     }
-                    if busy { HStack { ProgressView().controlSize(.small); Text("正在同步用量与限额…") }.font(AppFont.secondary) }
+                    if busy { TimelineView(.periodic(from: .now, by: 1)) { context in
+                        HStack { ProgressView().controlSize(.small); Text((model.estimateStages[quota.id] ?? "准备同步") + " · " + String(Int(context.date.timeIntervalSince(model.estimateStartedAt[quota.id] ?? context.date))) + " 秒") }.font(AppFont.secondary)
+                    } }
                     if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
                     if records.contains(where: { $0.status == "completed" }) {
                         Divider(); Text("采样历史").font(AppFont.section)
@@ -120,14 +131,20 @@ struct QuotaEstimateView: View {
             }.frame(maxHeight: 480)
         }.font(AppFont.body).disabled(model.installingUpdate).padding(24).frame(minWidth: 470, idealWidth: 520)
         .onChange(of: model.creditEstimateMode) { _, _ in confirmed = false }
-        .onAppear { selected = Set(sources.map(\.id)); window = windows.first(where: { $0.id == "seven_day" || $0.name == "7d" })?.id ?? windows.first?.id ?? "" }
+        .onAppear { selected = Set(sources.map(\.id)); window = windows.first?.id ?? "" }
     }
     private var confirmation: some View {
         Toggle(credits ? "我确认本段仅消耗 credits，所有设备用量均已纳入；不混用包含额度、API 或中转。" : "我确认采样期间只使用目标订阅，所有设备的用量均已纳入所选来源；不混用 API / 中转。", isOn: $confirmed).fixedSize(horizontal: false, vertical: true)
     }
     private func result(_ e: QuotaEstimate) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack { Text(e.statusLabel).foregroundStyle(e.status == "pending" ? .orange : Palette.accent); Spacer(); Text(e.kind == "credits" ? Format.creditValue(e) : e.weeklyValue.map { Format.money($0) + " USD" } ?? "—").font(AppFont.section).monospacedDigit() }
+            HStack { Text(e.statusLabel).foregroundStyle(e.status == "pending" ? .orange : Palette.accent); Spacer(); Text(e.kind == "credits" ? Format.creditValue(e) : e.valuationMode == "fiveHour" ? "5h / 7d" : e.weeklyValue.map { Format.money($0) + " USD" } ?? "—").font(AppFont.section).monospacedDigit() }
+            if e.valuationMode == "fiveHour" {
+                ForEach([("5h 价值", e.fiveHourValue), ("7d 同期换算", e.weeklyDirectValue), ("7d 近期倍率估算", e.weeklyRatioValue)], id: \.0) { label, value in
+                    HStack { Text(label); Spacer(); Text(value.map { Format.money($0) + " USD" } ?? "—").monospacedDigit() }.font(AppFont.secondary)
+                }
+                Text(e.capacity?.ratio.map { "容量倍率 " + String(format: "%.2f", $0) + " · " + (e.capacity?.note ?? "") + " · " + String(e.capacity?.samples ?? 0) + " 个样本 · " + Format.date(e.capacity?.updatedAt) } ?? "倍率学习中").font(AppFont.secondary).foregroundStyle(.secondary)
+            }
             Text(e.calculationNote).font(AppFont.secondary).foregroundStyle(.secondary)
             DisclosureGroup("计算依据") {
                 VStack(alignment: .leading, spacing: 5) {
@@ -135,7 +152,13 @@ struct QuotaEstimateView: View {
                     Text("\(e.windowName) · 消耗 \(e.kind == "credits" ? Format.credits(e.consumedCredits.map { String($0) }) + " credit" : Format.percent(e.consumedPercent)) · 样本成本 \(Format.money(e.cost)) USD")
                     Text("计价 Token：\(Format.compact(e.pricedTokens)) / \(Format.compact(e.totalTokens))")
                     Text(e.sourceNames.joined(separator: "、"))
-                    Text(e.kind == "credits" ? "1000 credit 估值 = 样本成本 × 1000 ÷ 消耗 credit；结束后价格依据固定。" : "整周估值 = 样本 API 等价成本 × 100 ÷ 消耗百分点；结束后价格依据固定。")
+                    if let segments = e.segments, !segments.isEmpty {
+                        Text("已保存 \(segments.count) 个有效片段")
+                        ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                            Text("\(Format.date(segment.startedAt)) → \(Format.date(segment.endedAt)) · 5h 消耗 \(Format.percent(segment.fivePercent)) · \(Format.money(segment.cost))")
+                        }
+                    }
+                    Text(e.kind == "credits" ? "1000 credit 估值 = 样本成本 × 1000 ÷ 消耗 credit；结束后价格依据固定。" : e.valuationMode == "fiveHour" ? "5h / 7d 同期价值 = 有效成本 × 100 ÷ 对应消耗百分点；7d 倍率估算 = 5h 价值 × 近期容量倍率。结束后价格与倍率固定。" : "整周估值 = 样本 API 等价成本 × 100 ÷ 消耗百分点；结束后价格依据固定。")
                     ForEach(e.prices ?? []) { price in
                         Text("缓存读取 \(price.cacheRead.map { Format.money($0 * 1_000_000) } ?? "—") · 缓存写入 \(price.cacheWrite.map { Format.money($0 * 1_000_000) } ?? "—") / 百万 Token")
                         Text("价格依据：" + price.id + " · " + Format.date(price.fetchedAt))

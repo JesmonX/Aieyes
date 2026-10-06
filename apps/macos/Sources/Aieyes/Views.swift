@@ -55,6 +55,7 @@ struct ActionFailureList: View {
 
 struct RootView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var updater = AppUpdater.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var compact = true
     @State private var tab = "agent"
@@ -132,12 +133,15 @@ struct RootView: View {
                 }
             }.help(tab == "servers" ? "服务器采样时间；点击刷新服务器" : "数据生成时间；点击同步记录")
             Spacer()
+            Button { Task { await model.testNetwork() } } label: { Text(model.networkBusy ? "测试中…" : model.networkTest?.label ?? "连接未测试").font(.system(size: 12)).lineLimit(1) }.help(model.networkTest?.detail ?? "测试当前应用连接方式").disabled(model.networkBusy)
             if compact {
-                Button { model.isPinned.toggle() } label: { Image(systemName: model.isPinned ? "pin.fill" : "pin").frame(width: 30, height: 30).contentShape(Rectangle()) }.help(model.isPinned ? "取消固定" : "固定面板").accessibilityLabel("固定面板").accessibilityValue(model.isPinned ? "已固定" : "未固定")
+                Button { updater.check() } label: {
+                    Image(systemName: "arrow.down.circle").frame(width: 30, height: 30).overlay(alignment: .topTrailing) { if updater.hasUpdate { Text("!").font(.system(size: 11, weight: .bold)).foregroundStyle(.orange) } }
+                }.help(updater.hasUpdate ? "发现新版本 · 查看更新" : "检查更新").accessibilityLabel(updater.hasUpdate ? "发现新版本，查看更新" : "检查更新").disabled(updater.phase == "checking")
                 Button { model.showDetail?() } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 30, height: 30).contentShape(Rectangle()) }.help("打开详情").accessibilityLabel("打开详情")
             }
             Button { model.showSettings?() } label: { Image(systemName: "gearshape").frame(width: 30, height: 30).contentShape(Rectangle()) }.help("设置").accessibilityLabel("设置").keyboardShortcut(",")
-            Menu { Text("关闭窗口后继续在菜单栏运行"); Divider(); Button("退出 Aieyes") { NSApplication.shared.terminate(nil) }.keyboardShortcut("q") } label: { Image(systemName: "ellipsis").frame(width: 30, height: 30).contentShape(Rectangle()) }
+            Menu { if compact { Button(model.isPinned ? "取消固定面板" : "固定面板") { model.isPinned.toggle() }; Divider() }; Text("关闭窗口后继续在菜单栏运行"); Divider(); Button("退出 Aieyes") { NSApplication.shared.terminate(nil) }.keyboardShortcut("q") } label: { Image(systemName: "ellipsis").frame(width: 30, height: 30).contentShape(Rectangle()) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("更多操作").help("关闭窗口后继续后台；在此退出应用")
         }.buttonStyle(.plain).padding(.horizontal, compact ? 18 : 28).padding(.vertical, 12)
     }
@@ -336,16 +340,16 @@ struct TokenBreakdown: View {
             HStack(alignment: .top, spacing: 12) {
                 ForEach(values, id: \.0) { label, value in
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(label == "缓存" ? "缓存（命中率 " + Format.percent(tokens.cacheRate.map { $0 * 100 }) + "）" : label)
+                        Text(label)
                             .font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        Text(Format.compact(value)).font(.system(size: 18, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.9)
+                        Text(Format.compact(value) + (label == "缓存" ? "（" + Format.percent(tokens.cacheRate.map { $0 * 100 }) + "）" : "")).font(.system(size: 18, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.9)
                     }.frame(minWidth: label == "缓存" ? 170 : nil, maxWidth: .infinity, alignment: .leading)
                 }
             }
         } else {
             VStack(spacing: 5) {
                 ForEach(values, id: \.0) { label, value in
-                    HStack { Text(label).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Text(Format.compact(value)).font(.system(size: 16, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.9) }
+                    HStack { Text(label).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Text(Format.compact(value) + (label == "缓存" ? "（" + Format.percent(tokens.cacheRate.map { $0 * 100 }) + "）" : "")).font(.system(size: 16, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.9) }
                 }
             }
         }
@@ -355,10 +359,9 @@ struct CacheSummaryCard: View {
     var tokens: Tokens
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("缓存命中率").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Text(Format.percent(tokens.cacheRate.map { $0 * 100 })).font(AppFont.section).monospacedDigit() }
             HStack(alignment: .top, spacing: 10) {
                 ForEach([("输入", tokens.input), ("输出", tokens.output), ("缓存", tokens.cacheRead + tokens.cacheWrite)], id: \.0) { title, value in
-                    VStack(alignment: .leading, spacing: 4) { Text(title).font(AppFont.secondary).foregroundStyle(.secondary); Text(Format.compact(value)).font(AppFont.section).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8) }.frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 4) { Text(title).font(AppFont.secondary).foregroundStyle(.secondary); Text(Format.compact(value) + (title == "缓存" ? "（" + Format.percent(tokens.cacheRate.map { $0 * 100 }) + "）" : "")).font(AppFont.section).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8) }.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).modifier(NeutralCard())
@@ -617,10 +620,10 @@ struct QuotaCard: View {
             }
             }
             }
-            if let onEstimate, (!compact || expanded || estimate != nil), (quota.provider != "agy" && quota.windows.contains(where: { $0.windowMinutes == 10080 })) || estimate != nil {
+            if let onEstimate, (!compact || expanded || estimate != nil), (quota.provider != "agy" && quota.windows.contains(where: { $0.windowMinutes == 300 || $0.windowMinutes == 10080 })) || estimate != nil {
                 Button(action: onEstimate) {
-                    HStack { Label(estimate == nil ? "估算整周价值" : "7d 整周估值", systemImage: "chart.line.uptrend.xyaxis"); Spacer();
-                        if let value = estimate?.weeklyValue { Text(Format.money(value) + " USD").monospacedDigit(); if estimate?.status == "pending" { Text("待确认").foregroundStyle(Palette.warn) } }
+                    HStack { Label(estimate == nil ? "估算额度价值" : estimate?.valuationMode == "fiveHour" ? "5h / 7d 估值" : "7d 整周估值", systemImage: "chart.line.uptrend.xyaxis"); Spacer();
+                        if let value = estimate?.fiveHourValue ?? estimate?.weeklyValue { Text(Format.money(value) + " USD").monospacedDigit(); if estimate?.status == "pending" { Text("待确认").foregroundStyle(Palette.warn) } }
                         else if let estimate { Text(estimate.statusLabel).foregroundStyle(.secondary) }
                         Image(systemName: "chevron.right").font(AppFont.secondary)
                     }.font(AppFont.secondary).contentShape(Rectangle())

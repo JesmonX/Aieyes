@@ -28,7 +28,7 @@ final class EngineClient: @unchecked Sendable {
         process = p; input = stdin.fileHandleForWriting; output = stdout.fileHandleForReading; buffer.removeAll()
     }
 
-    func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self) async throws -> T {
+    func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> T {
         let payload = try JSONSerialization.data(withJSONObject: params)
         return try await withCheckedThrowingContinuation { continuation in
             queue.async {
@@ -40,7 +40,9 @@ final class EngineClient: @unchecked Sendable {
                     while true {
                         if let end = self.buffer.firstIndex(of: 10) {
                             let line = self.buffer[..<end]; self.buffer.removeSubrange(...end)
-                            guard let response = try JSONSerialization.jsonObject(with: line) as? [String: Any], response["id"] as? Int == self.nextID else { continue }
+                            guard let response = try JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+                            if response["method"] as? String == "operations.progress", let progress = response["params"] as? [String: Any], let stage = progress["stage"] as? String { onProgress?(stage); continue }
+                            guard response["id"] as? Int == self.nextID else { continue }
                             if let error = response["error"] as? [String: Any] { throw ClientError.message(error["message"] as? String ?? "查询失败") }
                             let result = try JSONSerialization.data(withJSONObject: response["result"] ?? [:], options: .fragmentsAllowed)
                             continuation.resume(returning: try JSONDecoder().decode(T.self, from: result)); return
@@ -65,6 +67,21 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 @MainActor final class AppModel: ObservableObject {
     let engine = EngineClient()
     let metricsEngine = EngineClient()
+    let networkEngine = EngineClient()
+    @Published var networkTest: NetworkTest?
+    @Published var networkBusy = false
+    private var lastNetworkAttempt = Date.distantPast
+    private var networkRevision = 0
+    func testNetwork(force: Bool = true) async {
+        guard !networkBusy else { return }; networkBusy = true; lastNetworkAttempt = Date()
+        let revision = networkRevision
+        defer { networkBusy = false }
+        do {
+            let measured: NetworkTest = try await networkEngine.call("network.test", params: ["force":force])
+            if revision == networkRevision { networkTest = measured }
+        } catch { if revision == networkRevision { message = error.localizedDescription } }
+    }
+
     private let sessionMonitor = SessionMonitor()
     @Published var sessions: [LiveSession] = []
     @Published var sessionsUnavailable = false
@@ -96,10 +113,16 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var settingsDraft = Settings()
     @Published var settingsLoaded = false
     @Published var settingsSaving = false
+    @Published var settingsStage = ""
+    @Published var settingsStartedAt: Date?
+    @Published private(set) var repricing = false
     @Published var settingsMessage: String?
     @Published private(set) var pendingAPIKeys: [String: String] = [:]
+    @Published private(set) var pendingHostPasswords: [String: String] = [:]
+    private var preparedHostPasswords: [String: (password: String, reference: String)] = [:]
+    func stageHostPassword(_ password: String, hostID: String) { if !password.isEmpty { pendingHostPasswords[hostID] = password } }
     private var preparedCredentials: [String: (key: String, path: String)] = [:]
-    var settingsDirty: Bool { settingsDraft != settings || !pendingAPIKeys.isEmpty }
+    var settingsDirty: Bool { settingsDraft != settings || !pendingAPIKeys.isEmpty || !pendingHostPasswords.isEmpty }
     func stageAPIKey(_ key: String?, sourceID: String) {
         let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty { pendingAPIKeys.removeValue(forKey: sourceID) }
@@ -123,6 +146,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var isPinned = false
     @Published var installingUpdate = false
     @Published private(set) var estimateBusy = Set<String>()
+    @Published var estimateStages: [String: String] = [:]
+    @Published var estimateStartedAt: [String: Date] = [:]
     @Published private(set) var estimateErrors: [String: String] = [:]
     // Dashboard estimates are global, even when usage is filtered by account/model.
     var runningEstimates: [QuotaEstimate] { ((dashboard.quotaEstimates ?? []) + (dashboard.creditEstimates ?? [])).filter { $0.status == "active" || $0.status == "pending" } }
@@ -199,6 +224,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             dashboard = next
             let names = dashboard.dayModels.map(\.model)
             fallbackModelOptions = Array(Set(selectedModel == "all" ? names : fallbackModelOptions + names)).sorted()
+            if range == 1 && provider == "all" && selectedAccount == "all" && selectedSource == "all" && selectedModel == "all" { menuDashboard = next; return true }
             let unfiltered: Dashboard = try await engine.call("dashboard", params: ["days": 1])
             guard request == dashboardRequest else { return true }
             menuDashboard = unfiltered
@@ -210,13 +236,16 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         await reload()
     }
     func estimateAction(_ action: String, params: [String: Any], credits: Bool = false) async throws {
-        let _: QuotaEstimate = try await engine.call((credits ? "creditEstimates." : "quotaEstimates.") + action, params: params)
+        let accountKey = params["accountKey"] as? String ?? ((dashboard.quotaEstimates ?? []) + (dashboard.creditEstimates ?? [])).first { $0.id == params["id"] as? String }?.accountKey ?? ""
+        var operation = params; operation["operationId"] = UUID().uuidString
+        let _: QuotaEstimate = try await engine.call((credits ? "creditEstimates." : "quotaEstimates.") + action, params: operation, onProgress: { [weak self] stage in Task { @MainActor in guard let self, self.estimateBusy.contains(accountKey) else { return }; self.estimateStages[accountKey] = stage } })
         await reload()
     }
     func performEstimate(_ action: String, accountKey: String, params: [String: Any], credits: Bool = false) async -> Bool {
         guard !estimateBusy.contains(accountKey) else { return false }
         estimateBusy.insert(accountKey); estimateErrors[accountKey] = nil
-        defer { estimateBusy.remove(accountKey) }
+        estimateStartedAt[accountKey] = Date(); estimateStages[accountKey] = busy || quotaBusy ? "等待当前刷新" : "准备同步"
+        defer { estimateBusy.remove(accountKey); estimateStages.removeValue(forKey: accountKey); estimateStartedAt.removeValue(forKey: accountKey) }
         do { try await estimateAction(action, params: params, credits: credits); return true }
         catch { estimateErrors[accountKey] = error.localizedDescription; await reload(); return false }
     }
@@ -253,7 +282,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         }
     }
     func scan(sourceID: String? = nil) async {
-        guard !busy, !quotaBusy else { return }; busy = true; activity = "同步记录"; beginRefresh("scan")
+        guard !busy, !quotaBusy, estimateBusy.isEmpty else { return }; busy = true; activity = "同步记录"; beginRefresh("scan")
         defer { busy = false; activity = ""; lastScan = Date() }
         do {
             let rows: [Acknowledgement] = try await engine.call("sources.scan", params: sourceID.map { ["sourceId": $0] } ?? [:])
@@ -266,7 +295,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         } catch { message = error.localizedDescription; finishRefresh("scan", failures: [ActionFailure(action: "scan", itemID: sourceID, name: "同步记录", reason: error.localizedDescription)], itemID: sourceID) }
     }
     func refreshQuotas(accountID: String? = nil) async {
-        guard !quotaBusy, !busy, hasQuotaAccounts else { return }
+        guard !quotaBusy, !busy, estimateBusy.isEmpty, hasQuotaAccounts else { return }
         quotaBusy = true; quotaError = nil; beginRefresh("quotas")
         quotaNextAttempt = Date().addingTimeInterval(Double(max(30, settings.refreshSeconds)))
         defer { quotaBusy = false }
@@ -327,6 +356,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             stageAPIKey(nil, sourceID: id); settingsDraft.sources.removeAll { $0.id == id }
             for i in settingsDraft.accounts.indices where settingsDraft.accounts[i].quotaSourceId == id { settingsDraft.accounts[i].quotaSourceId = nil }
         case "host":
+            pendingHostPasswords.removeValue(forKey: id)
+            if let reference = preparedHostPasswords.removeValue(forKey: id)?.reference { Task { let _: Acknowledgement? = try? await engine.call("hosts.credentials.delete", params: ["passwordRef":reference]) } }
             settingsDraft.hosts.removeAll { $0.id == id }
             for i in settingsDraft.sources.indices where settingsDraft.sources[i].hostId == id { settingsDraft.sources[i].hostId = nil; settingsDraft.sources[i].enabled = false }
         case "account":
@@ -334,12 +365,25 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         default: break
         }
     }
-    func saveSettingsDraft() async -> Bool {
-        guard !settingsSaving else { return false }
-        settingsSaving = true; settingsMessage = nil
-        defer { settingsSaving = false }
+    func saveSettingsDraft(refreshDashboard: Bool = true) async -> Bool {
+        guard !settingsSaving, !repricing else { return false }
+        settingsSaving = true; settingsMessage = nil; settingsStartedAt = Date(); settingsStage = "准备保存"
+        defer { settingsSaving = false; settingsStage = ""; settingsStartedAt = nil }
         var next = settingsDraft
         do {
+            if !pendingHostPasswords.isEmpty || !pendingAPIKeys.isEmpty { settingsStage = busy || quotaBusy ? "等待当前刷新完成" : "保存凭据" }
+            for (id,password) in pendingHostPasswords {
+                guard let index = next.hosts.firstIndex(where: { $0.id == id }) else { continue }
+                let reference: String
+                if let prepared = preparedHostPasswords[id], prepared.password == password { reference = prepared.reference }
+                else {
+                    let result: [String: String] = try await engine.call("hosts.credentials.save", params: ["password": password])
+                    guard let created = result["passwordRef"] else { throw ClientError.message("密码保存失败") }
+                    if let obsolete = preparedHostPasswords[id]?.reference { let _: Acknowledgement? = try? await engine.call("hosts.credentials.delete", params: ["passwordRef":obsolete]) }
+                    reference = created; preparedHostPasswords[id] = (password,reference)
+                }
+                next.hosts[index].passwordRef = reference
+            }
             for id in pendingAPIKeys.keys.sorted() {
                 guard let index = next.sources.firstIndex(where: { $0.id == id && $0.provider == "deepseek" }), let key = pendingAPIKeys[id] else { continue }
                 let path: String
@@ -353,8 +397,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 }
                 next.sources[index].path = path
             }
-            let success = await save(next)
-            if success { settingsDraft = settings; pendingAPIKeys.removeAll(); preparedCredentials.removeAll() }
+            let success = await save(next, refreshDashboard: refreshDashboard)
+            if success { settingsDraft = settings; pendingAPIKeys.removeAll(); preparedCredentials.removeAll(); pendingHostPasswords.removeAll(); preparedHostPasswords.removeAll() }
             settingsMessage = success ? "已保存全部配置 · " + Format.time(Date().timeIntervalSince1970) : message ?? "保存失败"
             return success
         } catch { settingsMessage = error.localizedDescription; return false }
@@ -362,19 +406,28 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func discardSettingsDraft() {
         settingsDraft = settings; settingsMessage = nil
         pendingAPIKeys.removeAll(); preparedCredentials.removeAll()
+        let references = preparedHostPasswords.values.map(\.reference)
+        Task { for reference in references { let _: Acknowledgement? = try? await engine.call("hosts.credentials.delete", params: ["passwordRef":reference]) } }
+        pendingHostPasswords.removeAll(); preparedHostPasswords.removeAll()
     }
-    func save(_ draft: Settings) async -> Bool {
+    func save(_ draft: Settings, refreshDashboard: Bool = true) async -> Bool {
         do {
             let data = try JSONEncoder().encode(draft)
             let params = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-            let _: Acknowledgement = try await engine.call("settings.save", params: params)
-            let quotaConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.proxy != draft.proxy
+            settingsStage = busy || quotaBusy ? "等待当前刷新完成" : "保存配置"
+            let _: Acknowledgement = try await engine.call("settings.save", params: params, onProgress: { [weak self] stage in Task { @MainActor in guard let self, self.settingsSaving else { return }; self.settingsStage = stage } })
+            let historyConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.modelMappings != draft.modelMappings
+            let quotaConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.proxy != draft.proxy
+            if settings.proxy != draft.proxy || settings.proxyTestUrls != draft.proxyTestUrls { networkRevision += 1; networkTest = nil; lastNetworkAttempt = .distantPast }
             settings = draft
             if quotaConfigurationChanged { quotaNextAttempt = nil }
             if selectedAccount != "all" && selectedAccount != "none" && !settings.accounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
             if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
-            message = "已保存"; await reload()
-            if hasQuotaAccounts && quotaNextAttempt == nil { Task { await refreshQuotas() } }
+            message = "已保存"
+            if refreshDashboard { Task {
+                if historyConfigurationChanged { await reload() }
+                if hasQuotaAccounts && quotaNextAttempt == nil { await refreshQuotas() }
+            } }
             return true
         } catch { message = error.localizedDescription; return false }
     }
@@ -393,11 +446,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         } catch { message = error.localizedDescription; return false }
     }
     func reprice() async {
+        guard !repricing else { return }; repricing = true
+        defer { repricing = false }
         do { let _: Acknowledgement = try await engine.call("prices.recalculate"); await reload(); message = "已按当前价格重算" }
         catch { message = error.localizedDescription }
     }
     func tick() {
-        guard !installingUpdate else { return }
+        guard !installingUpdate, !settingsSaving, !repricing else { return }
+        if panelVisible, !networkBusy, Date().timeIntervalSince(lastNetworkAttempt) >= 300 { Task { await testNetwork(force: false) } }
         if !sessionBusy, Date().timeIntervalSince(lastSessionRead) >= 5 { Task { await refreshSessions() } }
         
         if !serverBusy, !settings.hosts.isEmpty, Date().timeIntervalSince(lastMetrics) > Double(panelVisible && serverTabVisible ? 2 : settings.serverRefreshSeconds) {

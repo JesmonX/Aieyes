@@ -1,3 +1,5 @@
+pub mod capacity;
+pub mod credentials;
 pub mod estimates;
 pub mod import;
 pub mod metrics;
@@ -21,6 +23,8 @@ pub struct Engine {
     pub store: store::Store,
     previous_metrics: HashMap<String, Value>,
     sessions: sessions::SessionMonitor,
+    progress: Option<Box<dyn FnMut(Value) + Send>>,
+    network_cache: HashMap<String, network::NetworkTest>,
 }
 impl Engine {
     pub fn open(root: &Path) -> Result<Self> {
@@ -28,7 +32,81 @@ impl Engine {
             store: store::Store::open(root)?,
             previous_metrics: HashMap::new(),
             sessions: sessions::SessionMonitor::default(),
+            progress: None,
+            network_cache: HashMap::new(),
         })
+    }
+    pub fn call_with_progress(
+        &mut self,
+        method: &str,
+        params: Value,
+        progress: Box<dyn FnMut(Value) + Send>,
+    ) -> Result<Value> {
+        self.progress = Some(progress);
+        let result = self.call(method, params);
+        self.progress = None;
+        result
+    }
+    pub(crate) fn progress(&mut self, stage: &str) {
+        if let Some(callback) = &mut self.progress {
+            callback(json!({"stage":stage}));
+        }
+    }
+    pub(crate) fn read_quotas(&self, params: &Value) -> Result<Vec<QuotaSnapshot>> {
+        let settings = self.store.settings()?;
+        let mut result = Vec::new();
+        for account in settings.accounts.iter().filter(|a| {
+            a.quota_enabled
+                && !a.archived
+                && params["accountId"].as_str().is_none_or(|id| a.id == id)
+                && params["accountKey"]
+                    .as_str()
+                    .is_none_or(|key| format!("{}:{}", a.provider, a.id) == key)
+        }) {
+            let mut sources: Vec<_> = settings
+                .sources
+                .iter()
+                .filter(|s| {
+                    s.enabled
+                        && s.provider == account.provider
+                        && s.account_id == account.id
+                        && params["sourceId"].as_str().is_none_or(|id| s.id == id)
+                        && s.host_id.as_ref().is_none_or(|id| {
+                            settings.hosts.iter().any(|h| &h.id == id && h.enabled)
+                        })
+                })
+                .collect();
+            sources.sort_by_key(|s| {
+                (
+                    account.quota_source_id.as_ref() != Some(&s.id),
+                    s.host_id.is_some(),
+                )
+            });
+            let mut last = None;
+            for source in sources {
+                match quota::read(source, &settings) {
+                    Ok(mut q) => {
+                        q.name = account.name.clone();
+                        last = Some(q);
+                        break;
+                    }
+                    Err(e) => {
+                        last = Some(QuotaSnapshot {
+                            source_id: source.id.clone(),
+                            account_id: account.id.clone(),
+                            provider: account.provider.clone(),
+                            name: account.name.clone(),
+                            error: Some(e.to_string()),
+                            ..Default::default()
+                        })
+                    }
+                }
+            }
+            if let Some(q) = last {
+                result.push(q);
+            }
+        }
+        Ok(result)
     }
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value> {
         match method {
@@ -46,6 +124,54 @@ impl Engine {
             ))?),
             "hello" => {
                 Ok(json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1}))
+            }
+            "hosts.credentials.save" => Ok(
+                json!({"passwordRef": credentials::save(params["password"].as_str().context("请输入服务器密码")?)?}),
+            ),
+            "hosts.credentials.delete" => {
+                credentials::delete(params["passwordRef"].as_str().context("密码引用缺失")?)?;
+                Ok(json!({"deleted":true}))
+            }
+            "network.test" | "network.status" => {
+                let settings = self.store.settings()?;
+                let proxy: ProxyConfig = params
+                    .get("proxy")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()?
+                    .unwrap_or(settings.proxy);
+                let urls: Vec<String> = params
+                    .get("urls")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()?
+                    .unwrap_or(settings.proxy_test_urls);
+                let key =
+                    serde_json::to_string(&(&proxy.mode, network::effective_proxy(&proxy), &urls))?;
+                if method == "network.status" {
+                    return Ok(serde_json::to_value(self.network_cache.get(&key))?);
+                }
+                if params["force"] != true
+                    && let Some(result) = self
+                        .network_cache
+                        .get(&key)
+                        .filter(|r| now() - r.tested_at < 300)
+                {
+                    return Ok(serde_json::to_value(result)?);
+                }
+                let result = network::test(&proxy, &urls)?;
+                if params.get("proxy").is_none() && params.get("urls").is_none() {
+                    let current = self.store.settings()?;
+                    let current_key = serde_json::to_string(&(
+                        &current.proxy.mode,
+                        network::effective_proxy(&current.proxy),
+                        &current.proxy_test_urls,
+                    ))?;
+                    anyhow::ensure!(current_key == key, "连接设置已变化，请重新测试");
+                }
+                if self.network_cache.len() > 20 {
+                    self.network_cache.clear();
+                }
+                self.network_cache.insert(key, result.clone());
+                Ok(serde_json::to_value(result)?)
             }
             "credentials.save" => {
                 use std::io::Write;
@@ -96,6 +222,7 @@ impl Engine {
             }
             "settings.get" => Ok(serde_json::to_value(self.store.settings()?)?),
             "settings.save" => {
+                self.progress("保存配置");
                 let s: Settings = serde_json::from_value(params)?;
                 self.store.save_settings(&s)?;
                 Ok(json!({"saved":true}))
@@ -107,23 +234,60 @@ impl Engine {
             "sources.scan" => {
                 let settings = self.store.settings()?;
                 let mut results = Vec::new();
+                let remote: Vec<_> = settings
+                    .sources
+                    .iter()
+                    .filter(|s| {
+                        s.enabled
+                            && s.host_id.is_some()
+                            && !["agy", "deepseek"].contains(&s.provider.as_str())
+                            && params["sourceId"].as_str().is_none_or(|id| s.id == id)
+                            && params["sourceIds"]
+                                .as_array()
+                                .is_none_or(|ids| ids.iter().any(|id| id.as_str() == Some(&s.id)))
+                    })
+                    .collect();
+                let mut fetched = HashMap::new();
+                for batch in remote.chunks(3) {
+                    let reads = std::thread::scope(|scope| {
+                        let jobs: Vec<_> = batch
+                            .iter()
+                            .map(|source| {
+                                let settings = &settings;
+                                scope.spawn(move || {
+                                    let result = settings
+                                        .hosts
+                                        .iter()
+                                        .find(|h| Some(&h.id) == source.host_id.as_ref())
+                                        .context("主机不存在")
+                                        .and_then(|host| {
+                                            ssh::python(
+                                                host,
+                                                ssh::HISTORY_SCRIPT,
+                                                &[source.path.clone(), source.provider.clone()],
+                                            )
+                                        });
+                                    (source.id.clone(), result)
+                                })
+                            })
+                            .collect();
+                        jobs.into_iter()
+                            .map(|job| job.join().unwrap())
+                            .collect::<Vec<_>>()
+                    });
+                    fetched.extend(reads);
+                }
                 for source in settings.sources.iter().filter(|s| {
                     s.enabled
                         && !["agy", "deepseek"].contains(&s.provider.as_str())
                         && params["sourceId"].as_str().is_none_or(|id| s.id == id)
+                        && params["sourceIds"]
+                            .as_array()
+                            .is_none_or(|ids| ids.iter().any(|id| id.as_str() == Some(&s.id)))
                 }) {
-                    let result = if let Some(id) = &source.host_id {
+                    let result = if source.host_id.is_some() {
                         (|| -> Result<Value> {
-                            let host = settings
-                                .hosts
-                                .iter()
-                                .find(|h| &h.id == id)
-                                .context("主机不存在")?;
-                            let data = ssh::python(
-                                host,
-                                ssh::HISTORY_SCRIPT,
-                                &[source.path.clone(), source.provider.clone()],
-                            )?;
+                            let data = fetched.remove(&source.id).context("远程读取结果缺失")??;
                             let prices = self.store.prices()?;
                             let tx = self.store.db.unchecked_transaction()?;
                             let mut count = 0;
@@ -195,59 +359,12 @@ impl Engine {
                 ids.dedup();
                 // Only opt-in sampling adds a history sync before a live observation.
                 // A failed source pauses its samples; the ordinary quota query can still run.
-                for id in ids {
-                    let _ = self.sync_estimate_sources(&[id]);
+                if !ids.is_empty() {
+                    let _ = self.sync_estimate_sources(&ids);
                 }
-                let settings = self.store.settings()?;
-                let mut result = Vec::new();
-                for account in settings.accounts.iter().filter(|a| {
-                    a.quota_enabled
-                        && !a.archived
-                        && params["accountId"].as_str().is_none_or(|id| a.id == id)
-                }) {
-                    let mut sources: Vec<_> = settings
-                        .sources
-                        .iter()
-                        .filter(|s| {
-                            s.enabled
-                                && s.provider == account.provider
-                                && s.account_id == account.id
-                                && params["sourceId"].as_str().is_none_or(|id| s.id == id)
-                                && s.host_id.as_ref().is_none_or(|id| {
-                                    settings.hosts.iter().any(|h| &h.id == id && h.enabled)
-                                })
-                        })
-                        .collect();
-                    sources.sort_by_key(|s| {
-                        (
-                            account.quota_source_id.as_ref() != Some(&s.id),
-                            s.host_id.is_some(),
-                        )
-                    });
-                    let mut last = None;
-                    for source in sources {
-                        match quota::read(source, &settings) {
-                            Ok(mut q) => {
-                                q.name = account.name.clone();
-                                last = Some(q);
-                                break;
-                            }
-                            Err(e) => {
-                                last = Some(QuotaSnapshot {
-                                    source_id: source.id.clone(),
-                                    account_id: account.id.clone(),
-                                    provider: account.provider.clone(),
-                                    name: account.name.clone(),
-                                    error: Some(e.to_string()),
-                                    ..Default::default()
-                                })
-                            }
-                        }
-                    }
-                    if let Some(q) = last {
-                        self.store.quota(&q)?;
-                        result.push(q);
-                    }
+                let result = self.read_quotas(&params)?;
+                for q in &result {
+                    self.store.quota(q)?;
                 }
                 Ok(serde_json::to_value(result)?)
             }

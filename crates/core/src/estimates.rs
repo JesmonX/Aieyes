@@ -8,6 +8,18 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Estimate {
+    pub valuation_mode: String,
+    pub quota_plan: Option<String>,
+    pub segment_started_at: i64,
+    pub weekly_window_id: String,
+    pub weekly_reset_at: i64,
+    pub weekly_baseline_percent: f64,
+    pub weekly_checkpoint_percent: f64,
+    pub segments: Vec<EstimateSegment>,
+    pub five_hour_value: Option<f64>,
+    pub weekly_direct_value: Option<f64>,
+    pub weekly_ratio_value: Option<f64>,
+    pub capacity: crate::capacity::Capacity,
     pub kind: String,
     pub baseline_balance: Option<String>,
     pub checkpoint_balance: Option<String>,
@@ -38,6 +50,22 @@ pub struct Estimate {
     pub weekly_value: Option<f64>,
     pub calculation_note: String,
     pub prices: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EstimateSegment {
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub five_percent: f64,
+    pub weekly_percent: Option<f64>,
+    pub cost: f64,
+    pub total_tokens: u64,
+    pub priced_tokens: u64,
+    pub excluded_api_tokens: u64,
+    pub prices: Vec<Value>,
+    pub valid: bool,
+    pub note: String,
 }
 
 impl Estimate {
@@ -86,15 +114,17 @@ pub fn window_id(w: &QuotaWindow) -> &str {
 
 // Sub-pools overlap; without an explicit mapping we must not reuse all-account usage.
 pub fn eligible(q: &QuotaSnapshot, w: &QuotaWindow) -> bool {
-    w.window_minutes == Some(10080)
-        && (q
-            .windows
-            .iter()
-            .filter(|v| v.window_minutes == Some(10080))
-            .count()
-            == 1
-            || (q.provider == "claude" && (w.id == "seven_day" || w.name == "7d")))
-        && q.provider != "agy"
+    (w.window_minutes == Some(300)
+        && crate::capacity::overall(q, 300).is_some_and(|v| window_id(v) == window_id(w)))
+        || (w.window_minutes == Some(10080)
+            && (q
+                .windows
+                .iter()
+                .filter(|v| v.window_minutes == Some(10080))
+                .count()
+                == 1
+                || (q.provider == "claude" && (w.id == "seven_day" || w.name == "7d")))
+            && q.provider != "agy")
 }
 
 fn source_config(settings: &Settings, ids: &[String], account_key: &str) -> Result<String> {
@@ -181,9 +211,18 @@ impl Store {
         Ok(unique)
     }
     pub fn estimates(&self) -> Result<Vec<Estimate>> {
-        let mut stmt = self
-            .db
-            .prepare("SELECT payload FROM (SELECT payload FROM quota_estimates UNION ALL SELECT payload FROM credit_estimates) ORDER BY json_extract(payload,'$.startedAt') DESC")?;
+        self.read_estimates(false)
+    }
+    fn active_estimates(&self) -> Result<Vec<Estimate>> {
+        self.read_estimates(true)
+    }
+    fn read_estimates(&self, active_only: bool) -> Result<Vec<Estimate>> {
+        let sql = if active_only {
+            "SELECT payload FROM (SELECT payload FROM quota_estimates WHERE status='active' UNION ALL SELECT payload FROM credit_estimates WHERE status='active') ORDER BY json_extract(payload,'$.startedAt') DESC"
+        } else {
+            "SELECT payload FROM (SELECT payload FROM quota_estimates UNION ALL SELECT payload FROM credit_estimates) ORDER BY json_extract(payload,'$.startedAt') DESC"
+        };
+        let mut stmt = self.db.prepare(sql)?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -213,7 +252,7 @@ impl Store {
     }
     pub fn reconcile_estimates(&self, settings: &Settings) -> Result<()> {
         for mut e in self
-            .estimates()?
+            .active_estimates()?
             .into_iter()
             .filter(|e| e.status == "active")
         {
@@ -237,7 +276,7 @@ impl Store {
     }
     pub fn pause_source_estimates(&self, source: &str) -> Result<()> {
         for mut e in self
-            .estimates()?
+            .active_estimates()?
             .into_iter()
             .filter(|e| e.status == "active" && e.source_ids.iter().any(|id| id == source))
         {
@@ -254,12 +293,16 @@ impl Store {
         }
         let key = format!("{}:{}", q.provider, q.account_id);
         for mut e in self
-            .estimates()?
+            .active_estimates()?
             .into_iter()
             .filter(|e| e.account_key == key && e.status == "active")
         {
             if e.is_credit() {
                 self.observe_credit(&mut e, q)?;
+                continue;
+            }
+            if e.valuation_mode == "fiveHour" {
+                self.observe_five_hour(&mut e, q)?;
                 continue;
             }
             let w = q.windows.iter().find(|w| window_id(w) == e.window_id);
@@ -298,6 +341,9 @@ impl Store {
         Ok(())
     }
     pub fn calculate_estimate(&self, e: &mut Estimate) -> Result<()> {
+        if e.valuation_mode == "fiveHour" {
+            return self.calculate_five_hour(e);
+        }
         let (provider, account) = e.account_key.split_once(':').context("账户格式错误")?;
         e.cost = 0.0;
         e.total_tokens = 0;
@@ -397,7 +443,7 @@ impl Store {
             .windows
             .iter()
             .find(|w| window_id(w) == window || w.name == window)
-            .context("7d 窗口不存在")?;
+            .context("额度窗口不存在")?;
         ensure!(eligible(q, w), "此额度池缺少可靠的模型映射，暂不支持估值");
         ensure!(
             q.error.is_none() && q.origin != "log" && (now() - q.updated_at).abs() <= 120,
@@ -432,7 +478,25 @@ impl Store {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos();
+        let five_hour = w.window_minutes == Some(300);
+        let weekly = crate::capacity::overall(q, 10080)
+            .filter(|w| crate::capacity::valid(w) && w.resets_at.is_some_and(|t| t > q.updated_at));
         let e = Estimate {
+            quota_plan: q.plan.clone(),
+            valuation_mode: if five_hour {
+                "fiveHour".into()
+            } else {
+                String::new()
+            },
+            segment_started_at: q.updated_at,
+            weekly_window_id: if five_hour {
+                weekly.map(window_id).unwrap_or("").into()
+            } else {
+                String::new()
+            },
+            weekly_reset_at: weekly.and_then(|w| w.resets_at).unwrap_or(0),
+            weekly_baseline_percent: weekly.map(|w| w.used_percent).unwrap_or(0.0),
+            weekly_checkpoint_percent: weekly.map(|w| w.used_percent).unwrap_or(0.0),
             id: format!("sample-{stamp}"),
             account_key: key,
             window_id: window_id(w).into(),
@@ -477,14 +541,195 @@ impl Store {
     }
 }
 
+impl Store {
+    fn current_segment(&self, e: &Estimate) -> Result<EstimateSegment> {
+        let mut part = e.clone();
+        part.valuation_mode.clear();
+        part.started_at = e.segment_started_at;
+        self.calculate_estimate(&mut part)?;
+        Ok(EstimateSegment {
+            started_at: part.started_at,
+            ended_at: part.checkpoint_at,
+            five_percent: part.consumed_percent,
+            weekly_percent: (!e.weekly_window_id.is_empty())
+                .then_some(e.weekly_checkpoint_percent - e.weekly_baseline_percent),
+            cost: part.cost,
+            total_tokens: part.total_tokens,
+            priced_tokens: part.priced_tokens,
+            excluded_api_tokens: part.excluded_api_tokens,
+            prices: part.prices,
+            valid: !part.calculation_note.contains("边界")
+                && part.priced_tokens == part.total_tokens
+                && part.cost.is_finite()
+                && part.cost >= 0.0
+                && (part.total_tokens > 0 || part.consumed_percent <= 0.0),
+            note: part.calculation_note,
+        })
+    }
+    fn calculate_five_hour(&self, e: &mut Estimate) -> Result<()> {
+        let current = self.current_segment(e)?;
+        let mut parts = e.segments.clone();
+        parts.push(current);
+        e.cost = 0.0;
+        e.total_tokens = 0;
+        e.priced_tokens = 0;
+        e.excluded_api_tokens = 0;
+        e.consumed_percent = 0.0;
+        e.prices.clear();
+        e.five_hour_value = None;
+        e.weekly_direct_value = None;
+        e.weekly_ratio_value = None;
+        e.weekly_value = None;
+        let (mut week_cost, mut week_percent) = (0.0, 0.0);
+        let mut valid = true;
+        for part in &parts {
+            e.cost += part.cost;
+            e.total_tokens += part.total_tokens;
+            e.priced_tokens += part.priced_tokens;
+            e.excluded_api_tokens += part.excluded_api_tokens;
+            e.consumed_percent += part.five_percent;
+            if let Some(percent) = part.weekly_percent {
+                week_percent += percent;
+                week_cost += part.cost;
+            }
+            for price in &part.prices {
+                if !e.prices.contains(price) {
+                    e.prices.push(price.clone());
+                }
+            }
+            valid &= part.valid;
+        }
+        e.capacity = self.capacity(&e.account_key, now())?;
+        e.calculation_note = if !valid {
+            parts
+                .iter()
+                .find(|p| !p.valid)
+                .map(|p| p.note.clone())
+                .unwrap_or_default()
+        } else if e.total_tokens == 0 {
+            "暂无可计入的订阅用量".into()
+        } else if e.consumed_percent + 0.000001 < 5.0 {
+            "样本不足：5h 至少消耗 5 个百分点".into()
+        } else {
+            e.five_hour_value = Some(e.cost * 100.0 / e.consumed_percent);
+            if week_percent > 0.000001 {
+                e.weekly_direct_value = Some(week_cost * 100.0 / week_percent);
+                e.weekly_value = e.weekly_direct_value;
+            }
+            e.weekly_ratio_value = e
+                .five_hour_value
+                .zip(e.capacity.ratio)
+                .map(|(value, ratio)| value * ratio);
+            if week_percent > 0.0 && week_percent < 5.0 {
+                "5h 采样估值 · 7d 同期样本较少".into()
+            } else {
+                "5h 采样估值 · 正常重置后自动接续".into()
+            }
+        };
+        Ok(())
+    }
+    fn observe_five_hour(&self, e: &mut Estimate, q: &QuotaSnapshot) -> Result<()> {
+        if q.error.is_none() && q.updated_at <= e.checkpoint_at {
+            return Ok(());
+        }
+        let primary = crate::capacity::overall(q, 300).filter(|w| window_id(w) == e.window_id);
+        let weekly =
+            crate::capacity::overall(q, 10080).filter(|w| window_id(w) == e.weekly_window_id);
+        let config = source_config(&self.settings()?, &e.source_ids, &e.account_key);
+        let mut failure = if q.error.is_some() {
+            Some("限额查询失败，已保留有效片段")
+        } else if e.quota_plan != q.plan {
+            Some("订阅方案发生变化，请确认后开始新一段")
+        } else if config.as_ref().ok() != Some(&e.source_config) {
+            Some("账户或用量来源已变化")
+        } else if q.updated_at - e.checkpoint_at > 18000 {
+            Some("超过 5h 未取得有效快照，无法确认额度周期")
+        } else {
+            None
+        };
+        if failure.is_none() {
+            if let Some(w) = primary.filter(|w| {
+                crate::capacity::valid(w) && w.resets_at.is_some_and(|t| t > q.updated_at)
+            }) {
+                let reset = w.resets_at != Some(e.reset_at) || q.updated_at >= e.reset_at;
+                let weekly_reset = !e.weekly_window_id.is_empty()
+                    && weekly.is_some_and(|w| {
+                        w.resets_at != Some(e.weekly_reset_at) || q.updated_at >= e.weekly_reset_at
+                    });
+                if !e.weekly_window_id.is_empty()
+                    && weekly.is_none_or(|w| {
+                        !crate::capacity::valid(w) || w.resets_at.is_none_or(|t| t <= q.updated_at)
+                    })
+                {
+                    failure = Some("7d 额度池已变化或不可用");
+                } else if (reset && q.updated_at < e.reset_at)
+                    || (weekly_reset && q.updated_at < e.weekly_reset_at)
+                {
+                    failure = Some("额度提前重置，请确认后开始新一段");
+                } else if reset || weekly_reset {
+                    let segment = self.current_segment(e)?;
+                    if segment.ended_at > segment.started_at {
+                        e.segments.push(segment);
+                    }
+                    e.segment_started_at = q.updated_at;
+                    e.baseline_percent = w.used_percent;
+                    e.checkpoint_percent = w.used_percent;
+                    e.reset_at = w.resets_at.unwrap();
+                    e.checkpoint_at = q.updated_at;
+                    if let Some(week) = crate::capacity::overall(q, 10080) {
+                        e.weekly_window_id = window_id(week).into();
+                        e.weekly_reset_at = week.resets_at.unwrap_or(0);
+                        e.weekly_baseline_percent = week.used_percent;
+                        e.weekly_checkpoint_percent = week.used_percent;
+                    }
+                } else if w.used_percent + 0.000001 < e.checkpoint_percent
+                    || weekly
+                        .is_some_and(|w| w.used_percent + 0.000001 < e.weekly_checkpoint_percent)
+                {
+                    failure = Some("额度异常回升，请确认后开始新一段");
+                } else {
+                    e.checkpoint_at = q.updated_at;
+                    e.checkpoint_percent = w.used_percent;
+                    if let Some(week) = weekly {
+                        e.weekly_checkpoint_percent = week.used_percent;
+                    }
+                }
+            } else {
+                failure = Some("5h 额度池已变化或不可用");
+            }
+        }
+        if let Some(reason) = failure {
+            e.status = "pending".into();
+            e.reason = reason.into();
+        }
+        self.calculate_five_hour(e)?;
+        self.save_estimate(e)
+    }
+}
+
 impl Engine {
     pub(crate) fn sync_estimate_sources(&mut self, ids: &[String]) -> Result<()> {
-        for id in ids {
-            let value = self.call("sources.scan", json!({"sourceId":id}))?;
+        for batch in ids.chunks(3) {
+            let settings = self.store.settings()?;
+            let names = batch
+                .iter()
+                .map(|id| {
+                    settings
+                        .sources
+                        .iter()
+                        .find(|s| &s.id == id)
+                        .map(|s| s.name.as_str())
+                        .unwrap_or(id)
+                })
+                .collect::<Vec<_>>()
+                .join("、");
+            self.progress(&format!("同步来源 · {names}"));
+            let value = self.call("sources.scan", json!({"sourceIds":batch}))?;
             ensure!(
-                value.as_array().is_some_and(
-                    |rows| !rows.is_empty() && rows.iter().all(|r| r.get("error").is_none())
-                ),
+                value
+                    .as_array()
+                    .is_some_and(|rows| rows.len() == batch.len()
+                        && rows.iter().all(|r| r.get("error").is_none())),
                 "用量同步失败，请重试；尚未提交采样边界"
             );
         }
@@ -523,20 +768,22 @@ impl Engine {
             self.sync_estimate_sources(&e.source_ids)?;
             if e.status == "active" {
                 let (_, account) = e.account_key.split_once(':').context("账户格式错误")?;
-                let result = self.call("quotas.refresh", json!({"accountId":account}))?;
-                ensure!(
-                    result
-                        .as_array()
-                        .is_some_and(|rows| rows.iter().any(|r| format!(
-                            "{}:{}",
-                            r["provider"].as_str().unwrap_or(""),
-                            r["accountId"].as_str().unwrap_or("")
-                        ) == e.account_key
-                            && r["error"].is_null())),
-                    "限额查询失败，已保留采样，请重试或确认后开始新一段"
-                );
+                self.progress("读取实时限额");
+                let results =
+                    self.read_quotas(&json!({"accountId":account,"accountKey":e.account_key}))?;
+                let q = results
+                    .iter()
+                    .find(|q| format!("{}:{}", q.provider, q.account_id) == e.account_key)
+                    .context("未读取到账户限额")?;
+                if q.error.is_some() {
+                    self.store.quota(q)?;
+                    anyhow::bail!("限额查询失败，已保留有效采样，请重试");
+                }
+                self.progress("补齐尾部记录");
                 self.sync_estimate_sources(&e.source_ids)?;
+                self.store.quota(q)?;
             }
+            self.progress("保存采样结果");
             return Ok(serde_json::to_value(self.store.finish_estimate(id)?)?);
         }
         ensure!(["start", "restart"].contains(&action), "未知估值操作");
@@ -559,7 +806,7 @@ impl Engine {
             p["windowId"]
                 .as_str()
                 .or(old.as_ref().map(|e| e.window_id.as_str()))
-                .context("请选择 7d 窗口")?
+                .context("请选择额度窗口")?
         };
         let mut ids: Vec<String> = if let Some(ids) = p.get("sourceIds") {
             serde_json::from_value(ids.clone())?
@@ -573,12 +820,14 @@ impl Engine {
         source_config(&self.store.settings()?, &ids, key)?;
         self.sync_estimate_sources(&ids)?;
         let (_, account) = key.split_once(':').context("账户格式错误")?;
-        let results: Vec<QuotaSnapshot> =
-            serde_json::from_value(self.call("quotas.refresh", json!({"accountId":account}))?)?;
+        self.progress("读取实时限额");
+        let results = self.read_quotas(&json!({"accountId":account,"accountKey":key}))?;
         let q = results
             .iter()
             .find(|q| format!("{}:{}", q.provider, q.account_id) == key)
             .context("未读取到账户限额")?;
+        self.store.quota(q)?;
+        self.progress("保存采样起点");
         Ok(serde_json::to_value(self.store.begin_estimate(
             q,
             window,

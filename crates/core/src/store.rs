@@ -18,6 +18,7 @@ impl Store {
         CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,provider TEXT NOT NULL,account_id TEXT NOT NULL,model TEXT NOT NULL,stamp INTEGER NOT NULL,payload TEXT NOT NULL,cost REAL NOT NULL,priced_tokens INTEGER NOT NULL,price TEXT);
         CREATE INDEX IF NOT EXISTS events_stamp ON events(stamp);
+        CREATE INDEX IF NOT EXISTS events_model ON events(model);
         CREATE TABLE IF NOT EXISTS event_sources(event_id TEXT NOT NULL REFERENCES events(id),source_id TEXT NOT NULL,PRIMARY KEY(event_id,source_id));
         CREATE INDEX IF NOT EXISTS event_sources_source ON event_sources(source_id,event_id);
         CREATE TABLE IF NOT EXISTS source_identities(source_id TEXT NOT NULL,provider TEXT NOT NULL,account_id TEXT NOT NULL,PRIMARY KEY(source_id,provider,account_id));
@@ -32,8 +33,11 @@ impl Store {
         CREATE UNIQUE INDEX IF NOT EXISTS estimate_active ON quota_estimates(account_key) WHERE status IN ('active','pending');
         CREATE TABLE IF NOT EXISTS credit_estimates(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS credit_estimate_active ON credit_estimates(account_key) WHERE status IN ('active','pending');
-        PRAGMA user_version=4;")?;
-        Ok(Self { db })
+        CREATE TABLE IF NOT EXISTS capacity_samples(account_key TEXT NOT NULL,stamp INTEGER NOT NULL,five REAL NOT NULL,week REAL NOT NULL,PRIMARY KEY(account_key,stamp));
+        PRAGMA user_version=5;")?;
+        let store = Self { db };
+        store.bootstrap_capacity()?;
+        Ok(store)
     }
     pub fn settings(&self) -> Result<Settings> {
         let raw: Option<String> = self
@@ -80,6 +84,21 @@ impl Store {
         let s = &normalized;
         let mut ids = std::collections::HashSet::new();
         for h in &s.hosts {
+            anyhow::ensure!(
+                ["ssh", "password"].contains(&h.auth_mode.as_str()),
+                "请选择登录方式"
+            );
+            anyhow::ensure!(
+                !h.username.starts_with('-') && !h.username.chars().any(char::is_whitespace),
+                "用户名格式不正确"
+            );
+            if h.auth_mode == "password" {
+                anyhow::ensure!(!h.password_ref.is_empty(), "请输入服务器密码");
+                anyhow::ensure!(
+                    !h.username.is_empty() || h.target.contains('@'),
+                    "请输入服务器用户名"
+                );
+            }
             anyhow::ensure!(
                 !h.id.is_empty() && ids.insert(format!("host:{}", h.id)),
                 "主机 ID 重复或为空"
@@ -175,6 +194,7 @@ impl Store {
             (10..=86400).contains(&s.refresh_seconds),
             "Agent 刷新间隔范围为 10–86400 秒"
         );
+        crate::network::validate_test_urls(&s.proxy_test_urls)?;
         anyhow::ensure!(
             (2..=86400).contains(&s.server_refresh_seconds),
             "服务器刷新间隔范围为 2–86400 秒"
@@ -185,9 +205,37 @@ impl Store {
                 r.get(0)
             })
             .optional()?;
+        let previous = previous
+            .map(|raw| serde_json::from_str::<Settings>(&raw))
+            .transpose()?;
+        let changed_models: Vec<String> = s
+            .model_mappings
+            .keys()
+            .chain(previous.iter().flat_map(|old| old.model_mappings.keys()))
+            .filter(|key| {
+                previous
+                    .as_ref()
+                    .and_then(|old| old.model_mappings.get(*key))
+                    != s.model_mappings.get(*key)
+            })
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let obsolete: Vec<String> = previous
+            .iter()
+            .flat_map(|old| &old.hosts)
+            .filter(|h| {
+                !h.password_ref.is_empty()
+                    && !s
+                        .hosts
+                        .iter()
+                        .any(|next| next.password_ref == h.password_ref)
+            })
+            .map(|h| h.password_ref.clone())
+            .collect();
         let tx = self.db.unchecked_transaction()?;
         if let Some(previous) = previous {
-            let previous: Settings = serde_json::from_str(&previous)?;
             // Archiving retains the namespace used to deduplicate imported records.
             // Protect history from destructive deletion by older clients as well.
             for account in &previous.accounts {
@@ -228,9 +276,14 @@ impl Store {
             }
         }
         tx.execute("INSERT INTO kv VALUES('settings',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[serde_json::to_string(s)?])?;
-        self.reprice_in_transaction(s, true)?;
+        if !changed_models.is_empty() {
+            self.reprice_in_transaction(s, true, Some(&changed_models))?;
+        }
         self.reconcile_estimates(s)?;
         tx.commit()?;
+        for reference in obsolete {
+            let _ = crate::credentials::delete(&reference);
+        }
         Ok(())
     }
     pub fn prices(&self) -> Result<Vec<ModelPrice>> {
@@ -329,17 +382,26 @@ impl Store {
     }
     pub fn reprice(&self, settings: &Settings, only_unpriced: bool) -> Result<u64> {
         let tx = self.db.unchecked_transaction()?;
-        let count = self.reprice_in_transaction(settings, only_unpriced)?;
+        let count = self.reprice_in_transaction(settings, only_unpriced, None)?;
         tx.commit()?;
         Ok(count)
     }
-    fn reprice_in_transaction(&self, settings: &Settings, only_unpriced: bool) -> Result<u64> {
+    fn reprice_in_transaction(
+        &self,
+        settings: &Settings,
+        only_unpriced: bool,
+        models: Option<&[String]>,
+    ) -> Result<u64> {
         let prices = self.prices()?;
-        let mut query = self
-            .db
-            .prepare("SELECT id,payload,price,priced_tokens FROM events")?;
+        let sql = if models.is_some() {
+            "SELECT id,payload,price,priced_tokens FROM events WHERE model IN (SELECT value FROM json_each(?1))"
+        } else {
+            "SELECT id,payload,price,priced_tokens FROM events WHERE ?1 IS NULL"
+        };
+        let mut query = self.db.prepare(sql)?;
+        let selected = models.map(serde_json::to_string).transpose()?;
         let rows = query
-            .query_map([], |r| {
+            .query_map([selected], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
@@ -368,6 +430,12 @@ impl Store {
                 self.db.execute(
                     "UPDATE events SET cost=?1,priced_tokens=?2,price=?3 WHERE id=?4",
                     params![c, n, serde_json::to_string(&p)?, id],
+                )?;
+                count += 1;
+            } else if !only_unpriced {
+                self.db.execute(
+                    "UPDATE events SET cost=0,priced_tokens=0,price=NULL WHERE id=?1",
+                    [&id],
                 )?;
                 count += 1;
             }
@@ -436,6 +504,7 @@ impl Store {
                 }
             }
         }
+        self.learn_capacity(q)?;
         self.observe_estimates(q)?;
         if q.error.is_none() && q.origin != "log" {
             self.db.execute(

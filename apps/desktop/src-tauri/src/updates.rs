@@ -321,6 +321,15 @@ pub async fn updates_check(app: AppHandle, window: tauri::WebviewWindow) -> Resu
     check(&app, true).await
 }
 #[tauri::command]
+pub async fn updates_panel_check(app: AppHandle) -> Result<Status, String> {
+    let status = updates_info(app.clone());
+    if status.phase == "available" || status.busy() {
+        let _ = app.emit("updates:open", ());
+        return Ok(status);
+    }
+    check(&app, true).await
+}
+#[tauri::command]
 pub fn updates_preferences(
     app: AppHandle,
     window: tauri::WebviewWindow,

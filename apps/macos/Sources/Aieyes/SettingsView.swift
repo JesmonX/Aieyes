@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var removal: RemovalRequest?
     @State private var mappingModel = ""
     @State private var mappingID = ""
+    @FocusState private var mappingFocused: Bool
     @MainActor init(model: AppModel) {
         self.model = model
     }
@@ -22,13 +23,14 @@ struct SettingsView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("设置").font(AppFont.title)
-                    Text(!model.settingsLoaded ? "正在读取配置…" : model.settingsDirty ? "有未保存的配置更改" : "配置编辑完成后，在此保存全部更改").font(AppFont.secondary).foregroundStyle(.secondary)
+                    if model.settingsSaving { TimelineView(.periodic(from: .now, by: 1)) { context in Text(model.settingsStage + " · " + String(Int(context.date.timeIntervalSince(model.settingsStartedAt ?? context.date))) + " 秒").font(AppFont.secondary).foregroundStyle(.secondary) } }
+                    else { Text(!model.settingsLoaded ? "正在读取配置…" : model.settingsDirty ? "有未保存的配置更改" : "配置编辑完成后，在此保存全部更改").font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
                 Spacer()
                 if !model.settingsLoaded { Button("重试读取") { Task { await model.bootstrap() } } }
                 if model.settingsSaving { ProgressView().controlSize(.small) }
-                Button("放弃更改") { model.discardSettingsDraft() }.disabled(!model.settingsDirty || model.settingsSaving)
-                Button(model.settingsSaving ? "保存中…" : "保存") { Task { _ = await model.saveSettingsDraft() } }.buttonStyle(.borderedProminent).keyboardShortcut("s").disabled(!model.settingsDirty || model.settingsSaving)
+                Button("放弃更改") { model.discardSettingsDraft() }.disabled(!model.settingsDirty || model.settingsSaving || model.repricing)
+                Button(model.settingsSaving ? "保存中…" : "保存") { Task { _ = await model.saveSettingsDraft() } }.buttonStyle(.borderedProminent).keyboardShortcut("s").disabled(!model.settingsDirty || model.settingsSaving || model.repricing)
             }.padding(22)
             if let message = model.settingsMessage ?? model.message { HStack { Text(message).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.settingsMessage = nil; model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭提示") }.padding(.horizontal, 22).padding(.bottom, 10) }
             HStack(spacing: 6) {
@@ -50,7 +52,7 @@ struct SettingsView: View {
                 case "general", "connection": general
                 default: sources
                 }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16).disabled(model.settingsSaving || !model.settingsLoaded)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16).disabled(model.settingsSaving || model.repricing || !model.settingsLoaded)
         }
         .font(AppFont.body).disabled(model.installingUpdate)
         .frame(minWidth: 620, idealWidth: 760, minHeight: 440, idealHeight: 600).tint(Palette.accent)
@@ -61,7 +63,7 @@ struct SettingsView: View {
             DangerConfirmation(title: request.title, explanation: request.explanation, affected: request.affected, confirmLabel: request.kind == "account" ? "归档并保留历史" : "确认移除", cancel: { removal = nil }, confirm: { model.applyRemoval(request); removal = nil })
         }
         .sheet(item: $sourceEditor) { source in
-            SourceEditor(source: source, hosts: draft.hosts, accounts: draft.accounts, sources: draft.sources, pendingAPIKey: model.pendingAPIKeys[source.id] ?? "") { item, account, apiKey in
+            SourceEditor(source: source, hosts: draft.hosts, accounts: draft.accounts, sources: draft.sources, pendingAPIKey: model.pendingAPIKeys[source.id] ?? "", appProxy: model.settingsDraft.proxy, testURLs: model.settingsDraft.proxyTestUrls) { item, account, apiKey in
                 var next = draft
                 if let i = next.sources.firstIndex(where: { $0.id == item.id }) { next.sources[i] = item } else { next.sources.append(item) }
                 if let account {
@@ -78,9 +80,9 @@ struct SettingsView: View {
                 draft = next; accountEditor = nil
             }
         }
-        .sheet(item: $hostEditor) { host in HostEditor(host: host) { item in
+        .sheet(item: $hostEditor) { host in HostEditor(host: host, password: model.pendingHostPasswords[host.id] ?? "") { item, password in
             if let i = draft.hosts.firstIndex(where: { $0.id == item.id }) { draft.hosts[i] = item } else { draft.hosts.append(item) }
-            hostEditor = nil
+            model.stageHostPassword(password, hostID: item.id); hostEditor = nil
         } }
         .sheet(item: $priceEditor) { price in PriceEditor(price: price) { item in
             guard await model.savePrice(item) else { throw ClientError.message(model.message ?? "保存失败") }
@@ -149,8 +151,17 @@ struct SettingsView: View {
         return model.prices.filter { query.isEmpty || $0.id.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
     }
     private var prices: some View {
-        Form {
-            Section { Text("价格条目与同步立即生效；模型映射随顶部“保存”提交。").font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
+        ScrollViewReader { reader in Form {
+            Section {
+                Text("价格条目与同步立即生效；模型映射随顶部“保存”提交。").font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                HStack { Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(model.repricing ? "重算中…" : "保存并重算") { Task { if await model.saveSettingsDraft(refreshDashboard: false) { await model.reprice() } } }.disabled(model.settingsSaving || model.repricing).accessibilityIdentifier("save-and-reprice") }
+            }
+            Section("模型映射") {
+                VStack(spacing: 8) {
+                    HStack { TextField("日志中的模型名称", text: $mappingModel); Image(systemName: "arrow.right"); TextField("OpenRouter 模型 ID", text: $mappingID).focused($mappingFocused); Button("添加映射") { draft.modelMappings[mappingModel.trimmingCharacters(in: .whitespacesAndNewlines)] = mappingID.trimmingCharacters(in: .whitespacesAndNewlines); mappingModel = ""; mappingID = "" }.disabled(mappingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mappingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                    ScrollView { LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in HStack { Text(key); Image(systemName: "arrow.right"); Text(draft.modelMappings[key] ?? ""); Spacer(); Button { draft.modelMappings.removeValue(forKey: key) } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain) }.font(AppFont.secondary) } }.padding(.vertical, 4) }.frame(maxHeight: 100)
+                }.padding(6)
+            }.id("model-mapping")
             if !model.dashboard.pricingGaps.isEmpty {
                 Section("所选时间范围 · 待计价模型") {
                     ScrollView {
@@ -173,16 +184,9 @@ struct SettingsView: View {
                 Button("添加价格") { priceEditor = ModelPrice() }
             }
             Section("模型价格") { ForEach(filteredPrices) { price in
-                HStack { VStack(alignment: .leading, spacing: 4) { Text(price.id).font(AppFont.body); Text("输入 \(price.input.map { Format.money($0 * 1e6) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1e6) } ?? "—") / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button("编辑") { priceEditor = price } }
+                HStack { VStack(alignment: .leading, spacing: 4) { Text(price.id).font(AppFont.body); Text("输入 \(price.input.map { Format.money($0 * 1e6) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1e6) } ?? "—") / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button("一键映射") { mappingID = price.id; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }; Button("编辑") { priceEditor = price } }
             } }.overlay { if filteredPrices.isEmpty { Text(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步模型价格" : "无匹配模型").foregroundStyle(.secondary) } }
-            Section("模型映射") {
-                VStack(spacing: 8) {
-                    HStack { TextField("日志中的模型名称", text: $mappingModel); Image(systemName: "arrow.right"); TextField("OpenRouter 模型 ID", text: $mappingID); Button("添加映射") { draft.modelMappings[mappingModel.trimmingCharacters(in: .whitespacesAndNewlines)] = mappingID.trimmingCharacters(in: .whitespacesAndNewlines); mappingModel = ""; mappingID = "" }.disabled(mappingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mappingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-                    ScrollView { LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in HStack { Text(key); Image(systemName: "arrow.right"); Text(draft.modelMappings[key] ?? ""); Spacer(); Button { draft.modelMappings.removeValue(forKey: key) } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain) }.font(AppFont.secondary) } }.padding(.vertical, 4) }.frame(maxHeight: 100)
-                }.padding(6)
-            }
-            HStack { Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("保存并重算") { Task { if await model.saveSettingsDraft() { await model.reprice() } } } }
-        }.formStyle(.grouped)
+        }.formStyle(.grouped) }
     }
     private var general: some View {
         Form {
@@ -193,7 +197,10 @@ struct SettingsView: View {
                 TextField("Agent 间隔（秒）", value: $model.settingsDraft.refreshSeconds, format: .number)
                 TextField("服务器后台间隔（秒）", value: $model.settingsDraft.serverRefreshSeconds, format: .number)
             }
-            Section("连接") { ProxyFields(proxy: $model.settingsDraft.proxy) }
+            Section("连接") {
+                ProxyFields(proxy: $model.settingsDraft.proxy, testURLs: model.settingsDraft.proxyTestUrls)
+                TextField("测试地址（逗号分隔）", text: Binding(get: { (model.settingsDraft.proxyTestUrls ?? ["https://api.github.com/rate_limit", "https://openrouter.ai"]).joined(separator: ", ") }, set: { model.settingsDraft.proxyTestUrls = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }))
+            }
             Section("更新") { UpdateSettingsView() }
         }.formStyle(.grouped)
     }
@@ -203,9 +210,26 @@ struct ProxyFields: View {
     @Binding var proxy: ProxySettings
     var inherit = false
     @State private var address: ProxyAddressDraft
-    init(proxy: Binding<ProxySettings>, inherit: Bool = false) {
-        _proxy = proxy; self.inherit = inherit
+    var inheritedProxy = ProxySettings()
+    var testURLs: [String]?
+    @State private var result: NetworkTest?
+    @State private var testing = false
+    @State private var testError: String?
+    @State private var testEngine = EngineClient()
+    init(proxy: Binding<ProxySettings>, inherit: Bool = false, inheritedProxy: ProxySettings = ProxySettings(), testURLs: [String]? = nil) {
+        _proxy = proxy; self.inherit = inherit; self.inheritedProxy = inheritedProxy; self.testURLs = testURLs
         _address = State(initialValue: ProxyAddressDraft(url: proxy.wrappedValue.url))
+    }
+    private func testConnection() async {
+        testing = true; testError = nil
+        defer { testing = false }
+        do {
+            let effective = proxy.mode == "inherit" ? inheritedProxy : proxy
+            let data = try JSONEncoder().encode(effective)
+            var params: [String: Any] = ["proxy": try JSONSerialization.jsonObject(with: data), "force":true]
+            if let testURLs { params["urls"] = testURLs }
+            result = try await testEngine.call("network.test", params: params)
+        } catch { testError = error.localizedDescription }
     }
     var body: some View {
         Group {
@@ -220,7 +244,16 @@ struct ProxyFields: View {
                 if address.scheme == "url" { TextField("代理 URL", text: $address.customURL) }
                 else { TextField("Host", text: $address.host); TextField("端口", text: $address.port) }
             }
+            HStack {
+                Button(testing ? "测试中…" : "测试连接") { Task { await testConnection() } }.disabled(testing)
+                if let result { Text(result.label).help(result.detail).foregroundStyle(result.status == "ok" ? Color.secondary : Color.orange) }
+            }
+            if let testError { Text(testError).foregroundStyle(.orange) }
         }
+        .disabled(testing)
+        .onChange(of: address) { _, _ in result = nil; testError = nil }
+        .onChange(of: proxy.mode) { _, _ in result = nil; testError = nil }
+        .onChange(of: testURLs) { _, _ in result = nil; testError = nil }
         .onChange(of: address.scheme) { old, scheme in
             if scheme == "url", old != "url" { var prior = address; prior.scheme = old; address.customURL = prior.url }
         }
@@ -239,10 +272,11 @@ struct SourceEditor: View {
     @State private var saving = false
     @State private var error: String?
     var hosts: [Host], accounts: [AgentAccount], sources: [AgentSource]
+    var appProxy = ProxySettings(), testURLs: [String]?
     var onSave: (AgentSource, AgentAccount?, String?) async throws -> Void
-    init(source: AgentSource, hosts: [Host], accounts: [AgentAccount], sources: [AgentSource] = [], pendingAPIKey: String = "", onSave: @escaping (AgentSource, AgentAccount?, String?) async throws -> Void) {
+    init(source: AgentSource, hosts: [Host], accounts: [AgentAccount], sources: [AgentSource] = [], pendingAPIKey: String = "", appProxy: ProxySettings = ProxySettings(), testURLs: [String]? = nil, onSave: @escaping (AgentSource, AgentAccount?, String?) async throws -> Void) {
         _apiKey = State(initialValue: pendingAPIKey)
-        _source = State(initialValue: source); self.hosts = hosts; self.accounts = accounts; self.sources = sources; self.onSave = onSave
+        _source = State(initialValue: source); self.hosts = hosts; self.accounts = accounts; self.sources = sources; self.onSave = onSave; self.appProxy = appProxy; self.testURLs = testURLs
         _asAccount = State(initialValue: !source.accountId.isEmpty || (!sources.contains { $0.id == source.id } && ["agy", "deepseek"].contains(source.provider)))
         _accountChoice = State(initialValue: source.accountId.isEmpty ? "new" : source.accountId)
         _account = State(initialValue: accounts.first { $0.id == source.accountId && $0.provider == source.provider } ?? AgentAccount(provider: source.provider, quotaEnabled: ["codex", "claude", "agy", "deepseek"].contains(source.provider)))
@@ -296,7 +330,7 @@ struct SourceEditor: View {
                     Section("限额查询前置命令") { TextEditor(text: $source.quotaPreCommand).font(.system(size: 14, design: .monospaced)).frame(height: 75).help("留空继承主机前置命令") }
                 }
                 if source.hostId == nil {
-                    ProxyFields(proxy: Binding(get: { source.proxy ?? ProxySettings(mode: "inherit") }, set: { source.proxy = $0.mode == "inherit" ? nil : $0 }), inherit: true)
+                    ProxyFields(proxy: Binding(get: { source.proxy ?? ProxySettings(mode: "inherit") }, set: { source.proxy = $0.mode == "inherit" ? nil : $0 }), inherit: true, inheritedProxy: appProxy, testURLs: testURLs)
                 }
                 if let error { Text(error).foregroundStyle(Palette.warn) }
             }.formStyle(.grouped).disabled(saving)
@@ -369,7 +403,8 @@ struct AccountEditor: View {
 struct HostEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var host: Host
-    var onSave: (Host) -> Void
+    @State var password = ""
+    var onSave: (Host, String) -> Void
     @State private var devices = ""
     @State private var discovered: [String: [DeviceMetric]] = [:]
     @State private var discovering = false
@@ -388,7 +423,14 @@ struct HostEditor: View {
     private func discover() async {
         discovering = true; defer { discovering = false }; discoveryError = nil
         do {
-            let data = try JSONEncoder().encode(host)
+            var testingHost = host
+            var temporaryReference: String?
+            if host.authMode == "password", !password.isEmpty {
+                let saved: [String: String] = try await discoveryEngine.call("hosts.credentials.save", params: ["password": password])
+                temporaryReference = saved["passwordRef"]; testingHost.passwordRef = temporaryReference
+            }
+            defer { if let reference = temporaryReference { Task { let _: Acknowledgement? = try? await discoveryEngine.call("hosts.credentials.delete", params: ["passwordRef": reference]) } } }
+            let data = try JSONEncoder().encode(testingHost)
             let object = try JSONSerialization.jsonObject(with: data)
             let sample: MetricSample = try await discoveryEngine.call("hosts.discover", params: ["host": object])
             for (group, rows) in [("cpu",sample.cpu),("gpu",sample.gpu),("filesystems",sample.filesystems),("disk",sample.disk),("network",sample.network)] {
@@ -413,7 +455,12 @@ struct HostEditor: View {
                 TextField("名称", text: $host.name)
                 TextField("SSH 别名或地址", text: $host.target, prompt: Text("my-server 或 user@host"))
                 TextField("端口", text: Binding(get: { host.port.map(String.init) ?? "" }, set: { host.port = Int($0) }), prompt: Text("跟随 SSH 配置"))
-                TextField("密钥路径", text: $host.identityFile, prompt: Text("跟随 SSH 配置"))
+                Picker("登录方式", selection: Binding(get: { host.authMode ?? "ssh" }, set: { host.authMode = $0 })) {
+                    Text("SSH 配置 / 密钥").tag("ssh"); Text("账号密码").tag("password")
+                }
+                TextField("用户名", text: Binding(get: { host.username ?? "" }, set: { host.username = $0 }), prompt: Text("跟随地址或 SSH 配置"))
+                if host.authMode == "password" { SecureField("密码（留空保留）", text: $password) }
+                else { TextField("密钥路径", text: $host.identityFile, prompt: Text("跟随 SSH 配置")) }
                 Section {
                     MultiSelectPicker(title: "采集项目", options: groups.map { SelectionOption(id: $0.0, label: $0.1) }, selected: Set(host.metrics)) { selected, _ in
                         host.metrics = selected.sorted()
@@ -436,7 +483,7 @@ struct HostEditor: View {
                     TextField("设备表达式", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/")).help("留空显示全部设备")
                 }
             }.formStyle(.grouped)
-            HStack { Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Text("完成后，在设置中保存").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("完成") { host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; onSave(host) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty) }.padding(20)
+            HStack { Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Text("完成后，在设置中保存").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("完成") { host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; onSave(host, password) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty) }.padding(20)
         }.font(AppFont.body).frame(width: 620, height: EditorLayout.height(650)).onAppear { devices = host.devices.joined(separator: ", ") }
     }
 }

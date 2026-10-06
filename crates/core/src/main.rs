@@ -12,6 +12,9 @@ fn main() {
     }
 }
 fn run() -> anyhow::Result<()> {
+    if aieyes_core::credentials::askpass()? {
+        return Ok(());
+    }
     let args: Vec<_> = std::env::args().skip(1).collect();
     if let Some(i) = args.iter().position(|a| a == "--wake-service") {
         let root = args
@@ -50,7 +53,7 @@ fn run() -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    let mut out = io::BufWriter::new(io::stdout().lock());
+    let mut out = io::BufWriter::new(io::stdout());
     for line in io::stdin().lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -62,7 +65,13 @@ fn run() -> anyhow::Result<()> {
                 let id = v.get("id").cloned().unwrap_or(Value::Null);
                 match v["method"].as_str() {
                     Some(method) => {
-                        match engine.call(method, v.get("params").cloned().unwrap_or(json!({}))) {
+                        let operation = v["params"]["operationId"].clone();
+                        match engine.call_with_progress(method, v.get("params").cloned().unwrap_or(json!({})), Box::new(move |mut progress| {
+                            progress["operationId"] = operation.clone();
+                            let mut stdout = io::stdout().lock();
+                            let _ = serde_json::to_writer(&mut stdout, &json!({"jsonrpc":"2.0","method":"operations.progress","params":progress}));
+                            let _ = stdout.write_all(b"\n"); let _ = stdout.flush();
+                        })) {
                             Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
                             Err(e) => {
                                 json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":e.to_string()}})

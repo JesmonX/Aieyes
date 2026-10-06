@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
-struct Shared(Arc<Mutex<Engine>>, Arc<Mutex<Engine>>);
+struct Shared(Arc<Mutex<Engine>>, Arc<Mutex<Engine>>, Arc<Mutex<Engine>>);
 
 fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static str, Value)> {
     if method == "hosts.sample" {
@@ -43,6 +43,7 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
             | "quotas.refresh"
             | "prices.save"
             | "prices.sync"
+            | "prices.recalculate"
             | "quotas.order.set"
             | "quotaEstimates.start"
             | "quotaEstimates.stop"
@@ -100,6 +101,29 @@ async fn engine_call(
         return Err("正在安装更新，请稍候".into());
     }
     let changed = method.clone();
+    let network_broadcast =
+        method == "network.test" && params.get("proxy").is_none() && params.get("urls").is_none();
+    let operation_id = params["operationId"].clone();
+    let sampling = matches!(
+        method.as_str(),
+        "quotaEstimates.start"
+            | "quotaEstimates.stop"
+            | "quotaEstimates.restart"
+            | "creditEstimates.start"
+            | "creditEstimates.stop"
+            | "creditEstimates.restart"
+    );
+    if sampling {
+        let _ = app.emit(
+            "operations:busy",
+            serde_json::json!({"operationId":operation_id,"busy":true}),
+        );
+        let _ = app.emit(
+            "operations:progress",
+            serde_json::json!({"operationId":operation_id,"stage":"等待当前刷新"}),
+        );
+    }
+    let finished_operation_id = operation_id.clone();
     let refresh_item = ["sourceId", "accountId", "hostId"]
         .iter()
         .find_map(|key| params[*key].as_str())
@@ -110,7 +134,9 @@ async fn engine_call(
             serde_json::json!({"key":key,"busy":true}),
         );
     }
-    let engine = if method.starts_with("hosts.") {
+    let engine = if method.starts_with("network.") {
+        state.2.clone()
+    } else if method.starts_with("hosts.") {
         state.1.clone()
     } else {
         state.0.clone()
@@ -125,11 +151,27 @@ async fn engine_call(
         {
             return Err("正在安装更新，请稍候".into());
         }
-        engine.call(&method, params).map_err(|e| e.to_string())
+        let progress_app = guarded_app.clone();
+        engine
+            .call_with_progress(
+                &method,
+                params,
+                Box::new(move |mut progress| {
+                    progress["operationId"] = operation_id.clone();
+                    let _ = progress_app.emit("operations:progress", progress);
+                }),
+            )
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())
     .and_then(|result| result);
+    if sampling {
+        let _ = app.emit(
+            "operations:busy",
+            serde_json::json!({"operationId":finished_operation_id,"busy":false}),
+        );
+    }
     if let Some(feedback) = refresh_feedback(&changed, &result, refresh_item.as_deref()) {
         let _ = app.emit("desktop:refresh-status", feedback);
     }
@@ -137,6 +179,9 @@ async fn engine_call(
     // settings that may contain credentials, proxy URLs, or shell commands.
     for (event, payload) in update_events(&changed, &result) {
         let _ = app.emit(event, payload);
+    }
+    if network_broadcast && let Ok(snapshot) = &result {
+        let _ = app.emit("desktop:network", snapshot);
     }
     result
 }
@@ -157,8 +202,10 @@ fn main() {
                 } else {
                     "aieyes-core"
                 });
+            aieyes_core::credentials::set_helper(runner.clone());
             aieyes_core::wakeups::set_runner_path(runner);
             app.manage(Shared(
+                Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
             ));
@@ -171,6 +218,7 @@ fn main() {
             engine_call,
             updates::updates_info,
             updates::updates_check,
+            updates::updates_panel_check,
             updates::updates_install,
             updates::updates_preferences,
             updates::updates_later,

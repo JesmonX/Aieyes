@@ -2,7 +2,103 @@ use crate::models::ProxyConfig;
 #[cfg(target_os = "macos")]
 use crate::process;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::{process::Command, time::Duration};
+
+pub fn default_test_urls() -> Vec<String> {
+    ["https://api.github.com/rate_limit", "https://openrouter.ai"]
+        .map(str::to_owned)
+        .to_vec()
+}
+pub fn validate_test_urls(urls: &[String]) -> Result<()> {
+    anyhow::ensure!((1..=5).contains(&urls.len()), "请配置 1–5 个测试地址");
+    for value in urls {
+        let url = reqwest::Url::parse(value).context("测试地址格式不正确")?;
+        anyhow::ensure!(
+            ["http", "https"].contains(&url.scheme())
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none(),
+            "测试地址需要为 HTTP/HTTPS URL"
+        );
+    }
+    Ok(())
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SiteLatency {
+    pub url: String,
+    pub latency_ms: Option<u64>,
+    pub error: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkTest {
+    pub tested_at: i64,
+    pub mode: String,
+    pub average_ms: Option<u64>,
+    pub status: String,
+    pub sites: Vec<SiteLatency>,
+}
+pub fn test(proxy: &ProxyConfig, urls: &[String]) -> Result<NetworkTest> {
+    validate_test_urls(urls)?;
+    let client = client(proxy)?;
+    let sites = std::thread::scope(|scope| {
+        let jobs: Vec<_> = urls
+            .iter()
+            .map(|url| {
+                let client = &client;
+                scope.spawn(move || {
+                    let started = std::time::Instant::now();
+                    let result = client.get(url).timeout(Duration::from_secs(8)).send();
+                    match result {
+                        Ok(response) if response.status().is_success() => SiteLatency {
+                            url: url.clone(),
+                            latency_ms: Some(started.elapsed().as_millis() as u64),
+                            error: None,
+                        },
+                        Ok(response) => SiteLatency {
+                            url: url.clone(),
+                            latency_ms: None,
+                            error: Some(format!("HTTP {}", response.status().as_u16())),
+                        },
+                        Err(error) => SiteLatency {
+                            url: url.clone(),
+                            latency_ms: None,
+                            error: Some(
+                                if error.is_timeout() {
+                                    "连接超时"
+                                } else {
+                                    "连接失败"
+                                }
+                                .into(),
+                            ),
+                        },
+                    }
+                })
+            })
+            .collect();
+        jobs.into_iter()
+            .map(|j| j.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let successful: Vec<_> = sites.iter().filter_map(|s| s.latency_ms).collect();
+    let status = if successful.len() == sites.len() {
+        "ok"
+    } else if successful.is_empty() {
+        "failed"
+    } else {
+        "unstable"
+    };
+    Ok(NetworkTest {
+        tested_at: crate::models::now(),
+        mode: proxy.mode.clone(),
+        average_ms: (!successful.is_empty())
+            .then(|| successful.iter().sum::<u64>() / successful.len() as u64),
+        status: status.into(),
+        sites,
+    })
+}
 
 pub fn effective_proxy(proxy: &ProxyConfig) -> ProxyConfig {
     if proxy.mode != "system" {

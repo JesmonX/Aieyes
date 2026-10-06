@@ -136,6 +136,9 @@ pub struct Host {
     pub target: String,
     pub port: Option<u16>,
     pub identity_file: String,
+    pub auth_mode: String,
+    pub username: String,
+    pub password_ref: String,
     pub shell: String,
     pub pre_command: String,
     pub enabled: bool,
@@ -151,6 +154,9 @@ impl Default for Host {
             target: String::new(),
             port: None,
             identity_file: String::new(),
+            auth_mode: "ssh".into(),
+            username: String::new(),
+            password_ref: String::new(),
             shell: crate::ssh::DEFAULT_SHELL.into(),
             pre_command: String::new(),
             enabled: true,
@@ -193,6 +199,7 @@ pub struct Settings {
     pub menu_metric: String,
     pub github_repository: String,
     pub model_mappings: std::collections::BTreeMap<String, String>,
+    pub proxy_test_urls: Vec<String>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -210,6 +217,7 @@ impl Default for Settings {
             menu_metric: "icon".into(),
             github_repository: String::new(),
             model_mappings: Default::default(),
+            proxy_test_urls: crate::network::default_test_urls(),
         }
     }
 }

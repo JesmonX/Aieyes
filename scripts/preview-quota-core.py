@@ -16,9 +16,11 @@ tokens=dict(input=30000,output=12000,cacheRead=28000,cacheWrite=0,reasoning=0)
 usage=dict(key='',tokens=tokens,total=70000,cost=2.4,pricedTokens=70000,events=14)
 price=dict(id='test-model',name='测试模型',input=0.00001,output=0.00003,cacheRead=0.000001,cacheWrite=0.00001,fetchedAt=stamp)
 estimate=dict(id='preview',accountKey='codex:codex',windowId='codex:secondary',windowName='7d',sourceIds=['codex-source'],sourceNames=['本机 Codex'],status='pending',reason='额度已重置或异常回升；确认后开始新一段',startedAt=stamp-3600,checkpointAt=stamp-600,endedAt=None,consumedPercent=12,cost=2.4,totalTokens=70000,pricedTokens=70000,weeklyValue=20,calculationNote='手动采样估值 · 按本次模型组合估算',prices=[price])
+estimate.update(valuationMode='fiveHour',windowId='codex:primary',windowName='5h',status='active',reason='',fiveHourValue=20,weeklyDirectValue=100,weeklyRatioValue=110,calculationNote='5h 采样估值 · 7d 同期样本较少',capacity=dict(ratio=5.5,samples=6,weeklyPercent=12,updatedAt=stamp),segments=[])
 dashboard=dict(generatedAt=stamp,summary=usage,days=[],heatmap=[],models=[],trendDays=[],dayModels=[],pricingGaps=[],modelOptions=[],quotas=quotas,quotaOrder=['codex:codex','agy:agy'],quotaEstimates=[estimate],sources=[])
 quotas[0].update(credits=dict(hasCredits=True,unlimited=False,balance='990.125'),creditsUpdatedAt=stamp)
 dashboard['creditEstimates']=[dict(estimate,id='credit-preview',kind='credits',windowId='credits',windowName='Credits',status='active',reason='',weeklyValue=None,consumedCredits=10,valuePer500=120,valuePer1000=240)]
+dashboard['creditEstimates'][0]['valuationMode']=''
 task=dict(id='wake-preview',name='每日订阅唤醒',sourceId='codex-source',times=['08:00','13:30'],model='测试模型',effort='low',prompt='Hi. Reply only OK.',binary='')
 wakeups=[dict(task=task,deployment=dict(task=task,deployedAt=stamp,enabled=True,state='deployed',timezone='CST +08:00',target='本机（模拟）',changed=False))]
 # Optional 10-06 regression scenarios; the default preserves the quota fixture.
@@ -56,5 +58,6 @@ if scenario:
 for line in sys.stdin:
     r=json.loads(line)
     scan = [dict(id=src['id'], error='连接失败：模拟日志不可读取') for src in settings['sources']] if scenario == 'failure' else []
-    result={'settings.get':settings,'dashboard':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts}.get(r['method'],{})
+    network=dict(testedAt=stamp,mode='system',averageMs=73,status='ok',sites=[dict(url='https://api.github.com/rate_limit',latencyMs=60,error=None),dict(url='https://openrouter.ai',latencyMs=86,error=None)])
+    result={'settings.get':settings,'dashboard':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts,'network.test':network,'network.status':network}.get(r['method'],{})
     print(json.dumps(dict(jsonrpc='2.0',id=r['id'],result=result)),flush=True)

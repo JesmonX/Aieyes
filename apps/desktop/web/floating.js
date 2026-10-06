@@ -34,6 +34,7 @@
     if (pin) {
       pin.dataset.pinned = String(pinned);
       pin.setAttribute('aria-pressed', String(pinned));
+      pin.textContent = pinned ? "取消固定面板" : "固定面板";
       pin.title = pinned ? '取消固定' : '固定面板';
       pin.setAttribute('aria-label', pin.title);
     }
@@ -44,6 +45,7 @@
       if (panel.contains(focused)) ball.focus({preventScroll:true});
     }
     if (!was && panelOpen) {
+      window.AieyesNetwork?.refresh();
       if (typeof render === 'function') render();
       requestAnimationFrame(() => { if (typeof drawTrend === 'function') drawTrend(); });
       panel.querySelector('.panel-tabs button.active')?.focus({preventScroll:true});
@@ -112,7 +114,7 @@
   });
 
   bindRefreshMenu('panel-refresh','panel-menu');
-  document.querySelector('#panel-pin').addEventListener('click', async () => {
+  document.querySelector('#panel-pin')?.addEventListener('click', async () => {
     try { applyPanel(await invoke('desktop_panel_pin', { pinned: !pinned })); } catch (error) { failure(error); }
   });
   document.querySelector('#panel-detail').addEventListener('click', () => { setPanel(false); if(typeof openDetail==='function')openDetail();else action('open'); });

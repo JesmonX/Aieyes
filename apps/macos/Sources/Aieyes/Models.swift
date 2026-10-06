@@ -82,6 +82,7 @@ struct Host: Codable, Equatable, Identifiable {
     var id = UUID().uuidString, name = "", target = "", port: Int?, identityFile = "", shell = "/bin/bash", preCommand = "", enabled = true
     var metrics = ["cpu", "memory", "gpu", "filesystems", "disk", "network"], devices: [String] = []
     var details: [String]? = Host.detailOptions.map { $0.0 }
+    var authMode: String?, username: String?, passwordRef: String?
     static let detailOptions = [("cpuTimes", "CPU 时间分布"), ("memoryCache", "内存缓存 / Buffer"), ("swap", "Swap"), ("fsAvailable", "文件系统可用空间"), ("fsType", "文件系统类型 / 设备"), ("inodes", "inode"), ("diskIops", "磁盘 IOPS"), ("diskBusy", "磁盘忙碌率"), ("networkTotals", "累计流量"), ("networkErrors", "网络错误 / 丢包"), ("gpuMemory", "GPU 显存"), ("gpuThermals", "GPU 温度 / 功耗")]
     func shows(_ key: String) -> Bool { details?.contains(key) ?? true }
 }
@@ -89,6 +90,7 @@ struct Settings: Codable, Equatable {
     var version = 2, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
     var refreshSeconds = 300, serverRefreshSeconds = 10, menuMetric = "icon", githubRepository = ""
     var modelMappings: [String: String] = [:]
+    var proxyTestUrls: [String]?
 }
 struct ModelPrice: Codable, Identifiable {
     var id = "", name = "", input: Double?, output: Double?, cacheRead: Double?, cacheWrite: Double?, fetchedAt: Double = 0
@@ -161,5 +163,24 @@ struct QuotaEstimate: Codable, Identifiable {
     var consumedPercent: Double, cost: Double, totalTokens: Double, pricedTokens: Double
     var weeklyValue: Double?, calculationNote: String
     var prices: [ModelPrice]?
+    var valuationMode: String?, fiveHourValue: Double?, weeklyDirectValue: Double?, weeklyRatioValue: Double?
+    var capacity: CapacityInfo?, segments: [EstimateSegment]?
     var statusLabel: String { ["active":"采样中", "pending":"待确认", "completed":"已结束"][status] ?? status }
+}
+
+struct CapacityInfo: Codable {
+    var ratio: Double?
+    var samples = 0
+    var weeklyPercent: Double = 0
+    var updatedAt: Double = 0
+    var note: String { updatedAt > 0 && Date().timeIntervalSince1970 - updatedAt > 14 * 86400 ? "历史倍率" : weeklyPercent < 5 ? "倍率样本较少" : "近期倍率" }
+}
+struct EstimateSegment: Codable {
+    var startedAt: Double, endedAt: Double, fivePercent: Double, weeklyPercent: Double?, cost: Double
+}
+struct NetworkSite: Codable { var url: String, latencyMs: Double?, error: String? }
+struct NetworkTest: Codable {
+    var testedAt: Double, mode: String, averageMs: Double?, status: String, sites: [NetworkSite]
+    var label: String { status == "unstable" ? "连接不稳定" : status == "failed" ? "连接失败" : (mode == "direct" ? "直连 " : mode == "system" ? "系统 " : "代理 ") + String(Int(averageMs ?? 0)) + " ms" }
+    var detail: String { sites.map { $0.url + " · " + ($0.latencyMs.map { String(Int($0)) + " ms" } ?? $0.error ?? "失败") }.joined(separator: "\n") + "\n测试于 " + Format.date(testedAt) }
 }

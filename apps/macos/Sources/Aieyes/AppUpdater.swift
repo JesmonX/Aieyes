@@ -6,6 +6,7 @@ import Sparkle
 @MainActor final class AppUpdater: NSObject, ObservableObject, SPUUserDriver, SPUUpdaterDelegate, NSWindowDelegate {
     static let shared = AppUpdater()
     @Published private(set) var phase = "idle"
+    @Published private(set) var hasUpdate = false
     @Published private(set) var message = ""
     @Published private(set) var latestVersion = ""
     @Published private(set) var notes = ""
@@ -101,6 +102,7 @@ import Sparkle
         guard !appcastItem.isInformationOnlyUpdate else {
             phase = "error"; message = "此版本暂未提供可安装的更新包"; reply(.dismiss); return
         }
+        hasUpdate = true
         latestVersion = appcastItem.displayVersionString; notes = appcastItem.itemDescription ?? ""
         phase = "available"; message = "发现新版本 v\(latestVersion)"; choice = reply; cancellation = nil
         if !manual && defaults.string(forKey: "updates.deferredVersion") == latestVersion && defaults.double(forKey: "updates.deferUntil") > Date().timeIntervalSince1970 {
@@ -111,6 +113,7 @@ import Sparkle
     func showUpdateReleaseNotes(with downloadData: SPUDownloadData) { }
     func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) { }
     func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
+        hasUpdate = false
         let info = (error as NSError).userInfo
         let reason = (info[SPUNoUpdateFoundReasonKey] as? NSNumber)?.intValue
         if let item = info[SPULatestAppcastItemFoundKey] as? SUAppcastItem { latestVersion = item.displayVersionString }
@@ -142,7 +145,7 @@ import Sparkle
         phase = "installing"; message = applicationTerminated ? "正在安装更新…" : "正在等待应用退出；如取消过退出，可重试重启。"
         retryTermination = applicationTerminated ? nil : retryTerminatingApplication
     }
-    func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) { phase = "installed"; message = "更新已安装"; acknowledgement() }
+    func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) { hasUpdate = false; phase = "installed"; message = "更新已安装"; acknowledgement() }
     func dismissUpdateInstallation() { finishedInstallationAttempt?(); readyToInstall = false; choice = nil; cancellation = nil; retryTermination = nil; wantsPresentation = false }
     func showUpdateInFocus() { present() }
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {

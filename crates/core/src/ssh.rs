@@ -17,7 +17,11 @@ pub fn command(host: &Host, remote: &str) -> Result<Command> {
     cmd.args([
         "-T",
         "-o",
-        "BatchMode=yes",
+        if host.auth_mode == "password" {
+            "BatchMode=no"
+        } else {
+            "BatchMode=yes"
+        },
         "-o",
         "ConnectTimeout=10",
         "-o",
@@ -25,6 +29,27 @@ pub fn command(host: &Host, remote: &str) -> Result<Command> {
         "-o",
         "ServerAliveCountMax=2",
     ]);
+    if !host.username.is_empty() {
+        cmd.arg("-l").arg(&host.username);
+    }
+    if host.auth_mode == "password" {
+        // Validate accessibility before spawning so a missing/locked secret is a
+        // useful error instead of an opaque SSH authentication failure.
+        crate::credentials::read(&host.password_ref)?;
+        cmd.args([
+            "-o",
+            "PreferredAuthentications=password",
+            "-o",
+            "PubkeyAuthentication=no",
+            "-o",
+            "NumberOfPasswordPrompts=1",
+            "-o",
+            "StrictHostKeyChecking=yes",
+        ]);
+        cmd.env("SSH_ASKPASS", crate::credentials::helper()?)
+            .env("SSH_ASKPASS_REQUIRE", "force")
+            .env("AIEYES_SSH_ASKPASS_REF", &host.password_ref);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -37,7 +62,15 @@ pub fn command(host: &Host, remote: &str) -> Result<Command> {
             "SSH 连接缓存目录不可用"
         );
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
-        let identity = format!("{}:{:?}:{}", host.target, host.port, host.identity_file);
+        let identity = format!(
+            "{}:{:?}:{}:{}:{}:{}",
+            host.target,
+            host.port,
+            host.identity_file,
+            host.auth_mode,
+            host.username,
+            host.password_ref
+        );
         let path = root.join(&hash(&identity)[..16]);
         cmd.args(["-o", "ControlMaster=auto", "-o", "ControlPersist=60", "-o"]);
         cmd.arg(format!("ControlPath={}", path.display()));

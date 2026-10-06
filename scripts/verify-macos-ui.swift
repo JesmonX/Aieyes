@@ -28,6 +28,11 @@ for line in sys.stdin:
     response=dict(jsonrpc='2.0',id=req['id'])
     if method=='settings.get': response['result']=json.load(open(root+'/settings.json'))
     elif method=='dashboard':
+        if os.path.exists(root+'/hold-dashboard'):
+            import time
+            open(root+'/dashboard-started','w').close()
+            deadline=time.monotonic()+10
+            while not os.path.exists(root+'/release-dashboard') and time.monotonic()<deadline: time.sleep(0.01)
         response['result']=json.load(open(root+'/dashboard.json'))
         if req.get('params',{}).get('model'): response['result']['summary']['total']=77
     elif method=='sources.scan':
@@ -36,6 +41,7 @@ for line in sys.stdin:
     elif method=='settings.save' and req['params']['refreshSeconds'] < 5: response['error']=dict(message='刷新间隔无效')
     elif method.startswith('quotaEstimates.'):
         import time
+        print(json.dumps(dict(jsonrpc='2.0',method='operations.progress',params=dict(stage='同步来源 · 测试来源'))),flush=True)
         time.sleep(0.15)
         estimate=json.load(open(root+'/estimate.json'))
         dashboard=json.load(open(root+'/dashboard.json'))
@@ -52,6 +58,14 @@ for line in sys.stdin:
         target=root+'/'+hashlib.sha256(req['params']['sourceId'].encode()).hexdigest()+'.key'
         with open(target,'x') as keyfile: keyfile.write(req['params']['apiKey'])
         response['result']=dict(path=target)
+    elif method=='hosts.credentials.save':
+        import time
+        reference='ssh-fixture-'+str(time.time_ns())
+        with open(root+'/'+reference,'x') as stored: stored.write(req['params']['password'])
+        response['result']=dict(passwordRef=reference)
+    elif method=='hosts.credentials.delete':
+        os.remove(root+'/'+req['params']['passwordRef']); response['result']={}
+    elif method=='network.test': response['result']=dict(testedAt=1790000000,mode='system',averageMs=73,status='ok',sites=[])
     elif method=='quotas.order.set': response['result']=req['params']['keys']
     elif method=='settings.save':
         with open(root+'/settings.json','w') as config: json.dump(req['params'],config)
@@ -66,7 +80,7 @@ for line in sys.stdin:
         setenv("AIEYES_UI_FIXTURE", root.path, 1)
         setenv("AIEYES_DATA_DIR", root.path, 1)
         let model = AppModel(autostart: false)
-        defer { model.engine.stop(); model.metricsEngine.stop() }
+        defer { model.engine.stop(); model.metricsEngine.stop(); model.networkEngine.stop() }
         await model.bootstrap()
         precondition(model.settings == settings && model.settingsDraft == settings && !model.settingsDirty)
         let legacyWindow = try JSONDecoder().decode(QuotaWindow.self, from: Data(#"{"id":"","name":"Claude · 7d","usedPercent":20,"windowMinutes":10080,"groupName":""}"#.utf8))
@@ -96,8 +110,17 @@ for line in sys.stdin:
         model.discardSettingsDraft()
         precondition(!model.settingsDirty)
         model.settingsDraft.refreshSeconds = 60
+        let dashboardsBeforeSaving = try calls("dashboard")
+        let quotaDeadlineBeforeSaving = model.quotaNextAttempt
         let accepted = await model.saveSettingsDraft()
         precondition(accepted && !model.settingsDirty && model.settings.refreshSeconds == 60)
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let dashboardsAfterSaving = try calls("dashboard")
+        precondition(dashboardsAfterSaving == dashboardsBeforeSaving && model.quotaNextAttempt == quotaDeadlineBeforeSaving, "Refresh interval saves must not reload history or reset quota polling")
+        let dashboardReadsBeforeReload = try calls("dashboard")
+        await model.reload()
+        let dashboardReadsAfterReload = try calls("dashboard")
+        precondition(dashboardReadsAfterReload == dashboardReadsBeforeReload + 1, "The unfiltered one-day dashboard must be reused for menu data")
         model.settings.accounts[0].quotaEnabled = false
         model.settingsDraft = model.settings
         model.settingsDraft.accounts[0].quotaEnabled = true
@@ -106,6 +129,19 @@ for line in sys.stdin:
         try await Task.sleep(nanoseconds: 80_000_000)
         let queriesAfterEnabling = try calls("quotas.refresh")
         precondition(queriesAfterEnabling == 2, "Enabling quota queries must trigger an immediate first read")
+        try Data().write(to: root.appendingPathComponent("hold-dashboard"))
+        model.settingsDraft.sources[0].name = "Renamed fixture"
+        let saveStarted = Date()
+        let backgroundSaved = await model.saveSettingsDraft()
+        precondition(backgroundSaved && !model.settingsSaving && Date().timeIntervalSince(saveStarted) < 2, "Save feedback must not await a slow dashboard")
+        for _ in 0..<100 {
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("dashboard-started").path) { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        precondition(FileManager.default.fileExists(atPath: root.appendingPathComponent("dashboard-started").path), "Source configuration changes must still refresh the dashboard in the background")
+        try Data().write(to: root.appendingPathComponent("release-dashboard"))
+        await model.reload()
+        try FileManager.default.removeItem(at: root.appendingPathComponent("hold-dashboard"))
         model.setWindowVisible(true, window: "detail")
         model.setServerVisible(true, window: "detail")
         model.setWindowVisible(true, window: "panel")
@@ -150,6 +186,33 @@ for line in sys.stdin:
         let persisted = try JSONDecoder().decode(Settings.self, from: Data(contentsOf: root.appendingPathComponent("settings.json")))
         precondition(persisted.sources[0].path == model.settings.sources[0].path)
         model.settings.hosts = [Host(id: "fixture-host", name: "Fixture", target: "example.invalid")]
+        model.settingsDraft = model.settings
+        model.settingsDraft.hosts[0].authMode = "password"
+        model.settingsDraft.hosts[0].username = "fixture-user"
+        model.stageHostPassword("fixture-password", hostID: "fixture-host")
+        let stagedPasswordWrites = try calls("hosts.credentials.save")
+        precondition(stagedPasswordWrites == 0)
+        model.settingsDraft.refreshSeconds = 1
+        let passwordRejected = await model.saveSettingsDraft()
+        precondition(!passwordRejected && model.settings.hosts[0].passwordRef == nil && model.settingsDraft.hosts[0].passwordRef == nil)
+        let passwordRetry = await model.saveSettingsDraft()
+        let passwordWritesAfterRetry = try calls("hosts.credentials.save")
+        precondition(!passwordRetry && passwordWritesAfterRetry == 1)
+        model.stageHostPassword("replacement-fixture-password", hostID: "fixture-host")
+        let replacementRejected = await model.saveSettingsDraft()
+        let obsoletePasswordDeletes = try calls("hosts.credentials.delete")
+        precondition(!replacementRejected && obsoletePasswordDeletes == 1)
+        model.settingsDraft.refreshSeconds = 60
+        let passwordCommitted = await model.saveSettingsDraft()
+        precondition(passwordCommitted && model.pendingHostPasswords.isEmpty && model.settings.hosts[0].passwordRef != nil)
+        let storedHost = try JSONDecoder().decode(Settings.self, from: Data(contentsOf: root.appendingPathComponent("settings.json"))).hosts[0]
+        let encodedHost = String(data: try encoder.encode(storedHost), encoding: .utf8)!
+        precondition(!encodedHost.contains("replacement-fixture-password"))
+        await model.testNetwork()
+        precondition(model.networkTest?.label == "系统 73 ms")
+        model.settingsDraft.proxy.mode = "direct"
+        let proxyCommitted = await model.saveSettingsDraft()
+        precondition(proxyCommitted && model.networkTest == nil)
         let previousSample = MetricSample(timestamp: Date().timeIntervalSince1970 - 5, uptime: 10, load: [0], errors: [:])
         model.hosts = [HostResult(id: "fixture-host", name: "Fixture", sample: previousSample, error: nil)]
         await model.sampleHosts()
@@ -164,9 +227,10 @@ for line in sys.stdin:
         let estimate = QuotaEstimate(id: "sample", accountKey: "codex:fixture", windowId: "seven_day", windowName: "7d", sourceIds: [], sourceNames: [], status: "active", reason: "", startedAt: 1, checkpointAt: 2, endedAt: nil, consumedPercent: 1, cost: 1, totalTokens: 100, pricedTokens: 100, weeklyValue: nil, calculationNote: "测试采样")
         try encoder.encode(estimate).write(to: root.appendingPathComponent("estimate.json"))
         model.setWindowVisible(true, window: "panel")
-        let sampling = Task { await model.performEstimate("start", accountKey: estimate.accountKey, params: [:]) }
+        let sampling = Task { await model.performEstimate("start", accountKey: estimate.accountKey, params: ["accountKey":estimate.accountKey]) }
         try await Task.sleep(nanoseconds: 30_000_000)
         precondition(model.estimateBusy.contains(estimate.accountKey))
+        precondition(model.estimateStages[estimate.accountKey] == "同步来源 · 测试来源")
         let duplicate = await model.performEstimate("start", accountKey: estimate.accountKey, params: [:])
         precondition(!duplicate)
         model.setWindowVisible(false, window: "panel")

@@ -30,7 +30,7 @@ import Combine
         AppUpdater.shared.prepareInstallation = { [weak self] finalizing in
             guard let self, await self.prepareUpdate() else { return false }
             // Saving a draft can yield to another window's operation; recheck before suspending work.
-            guard !self.model.busy, !self.model.quotaBusy, !self.model.serverBusy, !self.model.settingsSaving, self.model.estimateBusy.isEmpty else { return false }
+            guard !self.model.busy, !self.model.quotaBusy, !self.model.serverBusy, !self.model.settingsSaving, !self.model.repricing, self.model.estimateBusy.isEmpty else { return false }
             self.model.installingUpdate = finalizing
             return true
         }
@@ -117,7 +117,7 @@ import Combine
         settingsWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func prepareUpdate() async -> Bool {
-        guard !model.busy, !model.quotaBusy, !model.serverBusy, !model.settingsSaving, model.estimateBusy.isEmpty else { return false }
+        guard !model.busy, !model.quotaBusy, !model.serverBusy, !model.settingsSaving, !model.repricing, model.estimateBusy.isEmpty else { return false }
         guard settingsWindow?.attachedSheet == nil else { settingsWindow?.makeKeyAndOrderFront(nil); return false }
         guard model.settingsDirty else { return true }
         openSettings()
@@ -169,7 +169,7 @@ import Combine
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard sender === settingsWindow else { return true }
         if approvingSettingsClose { approvingSettingsClose = false; return true }
-        guard !model.settingsSaving, sender.attachedSheet == nil else { return false }
+        guard !model.settingsSaving, !model.repricing, sender.attachedSheet == nil else { return false }
         guard model.settingsDirty else { return true }
         let alert = NSAlert()
         alert.messageText = "保存配置更改？"
@@ -201,8 +201,9 @@ import Combine
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if settingsWindow?.attachedSheet != nil { settingsWindow?.makeKeyAndOrderFront(nil); return .terminateCancel }
-        guard model != nil, model.settingsDirty else { return .terminateNow }
-        guard !model.settingsSaving else { return .terminateCancel }
+        guard model != nil else { return .terminateNow }
+        guard !model.settingsSaving, !model.repricing else { return .terminateCancel }
+        guard model.settingsDirty else { return .terminateNow }
         openSettings()
         guard let window = settingsWindow, window.attachedSheet == nil else { return .terminateCancel }
         let alert = NSAlert()
@@ -247,6 +248,7 @@ import Combine
             await model.reload()
             await model.loadPrices()
             await model.refreshSessions()
+            await model.testNetwork()
             if ProcessInfo.processInfo.environment["AIEYES_UI_SCENARIO"] != nil { await model.scan(); await model.refreshQuotas(); await model.sampleHosts() }
             let root = URL(fileURLWithPath: directory)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -303,7 +305,7 @@ import Combine
                 try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent(provider + "-source.png"))
             }
             if let host = model.settings.hosts.first {
-                try await capture(HostEditor(host: host, onSave: { _ in }), size: NSSize(width: 620, height: 650), dark: false, to: root.appendingPathComponent("host-editor.png"))
+                try await capture(HostEditor(host: host, onSave: { _, _ in }), size: NSSize(width: 620, height: 650), dark: false, to: root.appendingPathComponent("host-editor.png"))
             }
             if let source = model.settings.sources.first(where: { $0.hostId != nil }) {
                 try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent("remote-source.png"))

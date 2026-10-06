@@ -99,9 +99,10 @@ function fixture(){
     await page.emulateMedia({colorScheme:theme});await page.evaluate(async scenario=>{notify('');reform.scenario=scenario;state.page='agent';state.settings=await api('settings.get');state.provider=state.accountKey=state.sourceId=state.model='';await loadDashboard();if(scenario==='failure'){reform.failures=[{id:'s1',error:'连接失败：模拟 SSH 与日志不可读取'}];await scan();}else{reform.failures=[];await scan();}},scenario);
     if(scenario==='empty'){assert.equal(await page.locator('.stat').count(),0);assert.equal(await page.locator('.filters').count(),0);assert.equal(await page.locator('.onboarding').count(),1);}
     if(panel&&scenario==='single'){
+     await page.screenshot({animations:'disabled',path:path.join(output,'panel-small-layout.png')});
      const footer=await page.locator('.panel-foot').boundingBox();
      for(const value of await page.locator('.stat-value').all()){
-      const box=await value.boundingBox();assert.ok(box.y+box.height<=footer.y,'Today values fit above the footer at 450×540');
+      const box=await value.boundingBox();assert.ok(box.y+box.height<=footer.y,`Today values fit above the footer at 450×540: ${JSON.stringify({box,footer})}`);
      }
     }
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,`${surface}/${scenario}/${theme} horizontal overflow`);

@@ -1,6 +1,6 @@
 [package]
 name = "aieyes-core"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2024"
 
 [dependencies]
@@ -13,6 +13,8 @@ serde_json = "1.0.151"
 sha2 = "0.10.9"
 walkdir = "2.5.0"
 libc = "0.2.189"
+keyring = "4.2"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+keyring-core = "1.0"

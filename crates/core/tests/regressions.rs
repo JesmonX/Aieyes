@@ -374,6 +374,9 @@ fn settings_and_repricing_roll_back_together_if_price_update_fails() {
     db.db.execute_batch("CREATE TRIGGER reject_reprice BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'test write failure'); END;").unwrap();
     let mut draft = settings.clone();
     draft.refresh_seconds = 600;
+    draft
+        .model_mappings
+        .insert("model-a".into(), "model-a".into());
     assert!(db.save_settings(&draft).is_err());
     assert_eq!(
         db.settings().unwrap().refresh_seconds,

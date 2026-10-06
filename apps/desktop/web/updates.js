@@ -1,5 +1,4 @@
 (() => {
-  if (window.AIEYES_PANEL === true) return;
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
   let status = {currentVersion: '', phase:'idle', message:'', automatic:true, prompt:false};
@@ -9,7 +8,13 @@
   function settingsHTML() {
     return `<div class="card update-settings"><h2>应用更新</h2><p id="update-current">当前版本 ${escape(status.currentVersion ? 'v'+status.currentVersion : '读取中…')}</p><label class="quota-confirm"><input id="updates-automatic" type="checkbox" ${status.automatic?'checked':''}>启动时及每天检查更新</label><div class="actions"><button id="updates" ${busy()?'disabled':''}>${status.phase==='checking'?'检查中…':'检查更新'}</button><button id="update-view" ${status.phase==='available'?'':'hidden'}>查看更新</button></div><p id="update-result" role="status">${escape(status.message)}</p></div>`;
   }
+  function hasUpdate() {
+    const parts=v=>String(v??'').replace(/^v/,'').split('.').map(Number),latest=parts(status.latestVersion),current=parts(status.currentVersion);
+    return latest.length===3 && current.length===3 && latest.every(Number.isFinite) && current.every(Number.isFinite) && latest.some((n,i)=>n>current[i]&&latest.slice(0,i).every((v,j)=>v===current[j]));
+  }
   function updateView() {
+    const panel=document.querySelector('#panel-update');
+    if(panel){panel.disabled=status.phase==='checking';panel.title=hasUpdate()?'发现新版本 · 查看更新':status.message||'检查更新';panel.setAttribute('aria-label',hasUpdate()?'发现新版本，查看更新':'检查更新');panel.querySelector('.update-badge').hidden=!hasUpdate();}
     const current = document.querySelector('#update-current');
     if (current) current.textContent = `当前版本 ${status.currentVersion?'v'+status.currentVersion:'读取中…'}`;
     const result = document.querySelector('#update-result');
@@ -39,7 +44,7 @@
     updateView();
   }
   function maybePresent() {
-    if (status.prompt && status.phase === 'available' && document.hasFocus() && !document.querySelector('dialog[open]')) present();
+    if (!PANEL && status.prompt && status.phase === 'available' && document.hasFocus() && !document.querySelector('dialog[open]')) present();
   }
   function renderDialog() {
     dialog.querySelector('#update-versions').textContent = `当前版本 v${status.currentVersion} → 新版本 v${status.latestVersion ?? '—'}`;
@@ -71,7 +76,7 @@
   async function install() {
     if (busy()) return;
     if (status.phase === 'error') { await run('updates_check'); return; }
-    if (state.busy || state.settingsSaving || state.serverBusy || state.quotaBusy || editorSaving || document.querySelector('#quota-dialog')?.dataset.busy || document.querySelector('#editor')?.open || unsavedForms()) {
+    if (state.busy || state.settingsSaving || state.serverBusy || state.quotaBusy || state.estimateBusy || state.sharedEstimateOperations?.size || editorSaving || document.querySelector('#quota-dialog')?.dataset.busy || document.querySelector('#editor')?.open || unsavedForms()) {
       status.message = '请先完成当前操作并保存设置，再点击更新。'; renderDialog(); return;
     }
     submitting = true; renderDialog();
@@ -84,6 +89,8 @@
   document.addEventListener('close', () => queueMicrotask(maybePresent), true);
   async function boot() {
     if (!window.__TAURI__) return;
+    await window.__TAURI__.event.listen('updates:open',()=>{if(!PANEL)present();});
+    const panel=document.querySelector('#panel-update');if(panel)panel.onclick=async()=>{await invoke('desktop_action',{action:'open'});await run('updates_panel_check');};
     await window.__TAURI__.event.listen('updates:status', event => accept(event.payload));
     accept(await invoke('updates_info'));
     if (state.page === 'settings' && state.settingsTab === 'general') renderSettings();
