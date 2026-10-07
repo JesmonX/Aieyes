@@ -85,6 +85,13 @@ struct RootView: View {
         _sessionsExpanded = AppStorage(wrappedValue: false, scope + "sessionsExpanded")
     }
     var body: some View {
+        usageObservedContent
+            .onChange(of: tab) { _, value in if !compact { model.detailPage = value }; model.setServerVisible(value == "servers", window: compact ? "panel" : "detail"); if value == "servers" { Task { await model.sampleHosts() } } }
+            .onChange(of: model.requestedDetailPage) { _, page in if !compact, let page { tab = page; model.requestedDetailPage = nil } }
+            .onAppear { if !compact, let page = model.requestedDetailPage { tab = page; model.requestedDetailPage = nil }; model.setServerVisible(tab == "servers", window: compact ? "panel" : "detail") }
+    }
+    // Keep each modifier chain small enough for release-build type checking.
+    private var rootLayout: some View {
         VStack(spacing: 0) {
             if compact { header }
             Divider().opacity(0.55)
@@ -103,6 +110,9 @@ struct RootView: View {
             Divider().opacity(0.55)
             footer
         }
+    }
+    private var styledContent: some View {
+        rootLayout
         .frame(width: compact ? 450 : nil, height: compact ? model.panelHeight : nil)
         .frame(minWidth: compact ? nil : 760, minHeight: compact ? nil : 480)
         .background { rootBackground }
@@ -110,18 +120,21 @@ struct RootView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: tab)
         .font(AppFont.body).disabled(model.installingUpdate)
         .tint(Palette.accent)
+    }
+    private var accountObservedContent: some View {
+        styledContent
         .onAppear { initializePanelAccounts() }
         .onChange(of: model.settings) { _, _ in initializePanelAccounts() }
         .onChange(of: model.dashboard.generatedAt) { _, _ in initializePanelAccounts() }
         .onChange(of: model.dashboard.quotaOrder) { _, _ in initializePanelAccounts() }
+    }
+    private var usageObservedContent: some View {
+        accountObservedContent
         .onChange(of: model.provider) { _, _ in model.selectedModel = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; Task { await model.reload() } }
         .onChange(of: model.selectedAccount) { _, _ in model.selectedSource = "all"; Task { await model.reload() } }
         .onChange(of: model.selectedSource) { _, _ in Task { await model.reload() } }
         .onChange(of: model.selectedModel) { _, _ in Task { await model.reload() } }
         .onChange(of: model.range) { _, _ in Task { await model.reload() } }
-        .onChange(of: tab) { _, value in if !compact { model.detailPage = value }; model.setServerVisible(value == "servers", window: compact ? "panel" : "detail"); if value == "servers" { Task { await model.sampleHosts() } } }
-        .onChange(of: model.requestedDetailPage) { _, page in if !compact, let page { tab = page; model.requestedDetailPage = nil } }
-        .onAppear { if !compact, let page = model.requestedDetailPage { tab = page; model.requestedDetailPage = nil }; model.setServerVisible(tab == "servers", window: compact ? "panel" : "detail") }
     }
     @ViewBuilder private var rootBackground: some View {
         if compact {
