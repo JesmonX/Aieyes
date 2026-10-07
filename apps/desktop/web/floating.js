@@ -43,7 +43,7 @@
       const more = document.querySelector('#panel-more');
       if (more) more.open = false;
       if(typeof closeTokenSummary==='function')closeTokenSummary();
-      if (panel.contains(focused)) ball.focus({preventScroll:true});
+      if (!info?.nativeCapsule && panel.contains(focused)) ball.focus({preventScroll:true});
     }
     if (!was && panelOpen) {
       window.AieyesNetwork?.refresh();

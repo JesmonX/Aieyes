@@ -5,7 +5,7 @@
 (() => {
   if (globalThis.AieyesHint) return;
   const DELAY = 520, EDGE = 10, GAP = 9, MIN_ROOM = 26;
-  let bubble = null, current = null, timer = 0, text = '', description = null;
+  let bubble = null, current = null, pending = null, timer = 0, text = '', description = null;
 
   const prefersReduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
@@ -19,10 +19,10 @@
     return bubble;
   }
   function target(event) {
-    const el = event.target instanceof Element ? event.target.closest('[title]') : null;
+    const el = event.target instanceof Element ? event.target.closest('[title],[data-hint]') : null;
     // The capsule is too small for an in-WebView tooltip; retain the OS tooltip.
     if(el?.id==='ball')return null;
-    return el && el.title.trim() ? el : null;
+    return el && (el.getAttribute('title') || el.dataset.hint || '').trim() ? el : null;
   }
   function place(el) {
     const box = el.getBoundingClientRect(), tip = node().getBoundingClientRect();
@@ -34,11 +34,9 @@
     node().style.top = `${Math.round(Math.max(EDGE, top))}px`;
   }
   function hide() {
-    clearTimeout(timer); timer = 0;
+    clearTimeout(timer); timer = 0; pending = null;
     if (current) {
-      // Only restore a value we removed and nobody has replaced since.
       if(description===null)current.removeAttribute('aria-describedby');else current.setAttribute('aria-describedby',description);
-      if (!current.hasAttribute('title') && text) current.setAttribute('title', text);
       current = null;
     }
     if (bubble && !bubble.hidden) {
@@ -48,10 +46,12 @@
     }
   }
   function show(el) {
-    text = el.getAttribute('title');
+    if (!el.isConnected) { hide(); return; }
+    text = el.getAttribute('title') || el.dataset.hint;
     if (!text || !text.trim()) { hide(); return; }
     current = el;description=el.getAttribute('aria-describedby');el.setAttribute('aria-describedby', [description,'aieyes-tooltip'].filter(Boolean).join(' '));
-    el.removeAttribute('title');            // suppress the native tooltip while ours is up
+    el.dataset.hint = text;
+    el.removeAttribute('title');
     const tip = node();
     tip.textContent = text.trim();
     tip.hidden = false;
@@ -62,7 +62,11 @@
     if (current === el) return;
     hide();
     if (!el) return;
-    timer = setTimeout(() => { timer = 0; show(el); }, DELAY);
+    // Suppress the OS tooltip before its own delay starts, not after ours fires.
+    el.dataset.hint = el.getAttribute('title') || el.dataset.hint;
+    el.removeAttribute('title');
+    pending = el;
+    timer = setTimeout(() => { timer = 0; pending = null; show(el); }, DELAY);
   }
   document.addEventListener('pointerover', event => {
     const el = target(event);
@@ -71,8 +75,9 @@
     arm(el);
   });
   document.addEventListener('pointerout', event => {
-    if (!current || current.contains(event.relatedTarget)) return;
-    if (current.contains(event.target) || current === event.target) hide();
+    const active = current || pending;
+    if (!active || active.contains(event.relatedTarget)) return;
+    if (active.contains(event.target)) hide();
   });
   document.addEventListener('focusin', event => { const el = target(event); if (el) { hide();show(el); } });
   document.addEventListener('focusout', hide);
@@ -81,5 +86,18 @@
   window.addEventListener('blur', hide);
   document.addEventListener('keydown', event => { if (event.key === 'Escape') hide(); });
   window.addEventListener('resize', () => { if (current) place(current); });
+  // Controls can update their title while hovered (refresh status, live values).
+  // Keep one owner of the hint and never allow the native title to reappear.
+  new MutationObserver(records => {
+    for (const record of records) {
+      const el = record.target;
+      if (record.type === 'attributes' && el.hasAttribute('title') && el.dataset.hint !== undefined && el.id !== 'ball') {
+        el.dataset.hint = el.getAttribute('title');
+        el.removeAttribute('title');
+        if (current === el) { text = el.dataset.hint; node().textContent = text; place(el); }
+      }
+    }
+    if ((current && !current.isConnected) || (pending && !pending.isConnected)) hide();
+  }).observe(document.documentElement, {subtree:true, childList:true, attributes:true, attributeFilter:['title']});
   globalThis.AieyesHint = { hide };
 })();

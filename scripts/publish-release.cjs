@@ -11,8 +11,10 @@ try {
   if (error.status !== 404) throw error;
 }
 const notes = (await github.rest.repos.generateReleaseNotes({...repo, tag_name: tag})).data.body;
+const changeFile = path.join('docs', 'release-notes', `${tag}.md`);
+const changes = fs.existsSync(changeFile) ? fs.readFileSync(changeFile, 'utf8').trim() + '\n\n' : '';
 const macSigning = process.env.MACOS_SIGNING_IDENTITY ? 'macOS is Developer ID signed and notarized.' : 'macOS uses ad-hoc signing; first installation may require approval in System Settings.';
-const body = `macOS 14+: choose x64 for Intel, arm64 for Apple Silicon. Windows: x64 NSIS installer. Linux: x64 DEB / AppImage.\n\n${macSigning} Windows is unsigned. Update packages are cryptographically signed. SHA256SUMS covers installers and update feeds.\n\nInstall this updater-enabled version once manually; subsequent versions can be installed inside Aieyes.\n\n${notes}`;
+const body = `${changes}macOS 14+: choose x64 for Intel, arm64 for Apple Silicon. Windows: x64 NSIS installer. Linux: x64 DEB / AppImage.\n\n${macSigning} Windows is unsigned. Update packages are cryptographically signed. SHA256SUMS covers installers and update feeds.\n\nInstall this updater-enabled version once manually; subsequent versions can be installed inside Aieyes.\n\n${notes}`;
 if (!release) release = (await github.rest.repos.createRelease({...repo, tag_name: tag, name: `Aieyes ${tag}`, body, draft: true, prerelease: false})).data;
 const release_id = release.id;
 const old = await github.paginate(github.rest.repos.listReleaseAssets, {...repo, release_id});

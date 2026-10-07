@@ -168,6 +168,14 @@ test('Escape closes the refresh menu before the panel and restores keyboard focu
   assert.equal(h.info.panelOpen,false);
   assert.equal(h.document.activeElement,h.element('#ball'));
 });
+test('native Windows panel close never focuses the hidden Web capsule', async () => {
+  const h=harness('floating.js',{nativeCapsule:true,panelOpen:true});
+  await flush();await flush();
+  const input=h.element('#panel-input');input.parent=h.element('#panel');input.focus();
+  await h.document.dispatch('keydown',{key:'Escape'});await flush();
+  assert.equal(h.info.panelOpen,false);
+  assert.notEqual(h.document.activeElement,h.element('#ball'));
+});
 test('refresh menu arrow keys move between its actions', async () => {
   const h = harness('floating.js'); await flush();
   const items=['scan','quotas','prices','hosts'].map(id=>h.element(id));

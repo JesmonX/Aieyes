@@ -3,9 +3,9 @@
    --solid, --soft, --shadow) stay defined because app.js reads --border,
    --muted, --accent and --resource-* from the DOM at runtime. */
 :root {
-  --font-ui: "Segoe UI Variable Text", "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-  --font-code: "Cascadia Code", "Cascadia Mono", ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+  --font-display: var(--font-ui);
+  --font-code: "Cascadia Mono", Consolas, ui-monospace, "SF Mono", "Liberation Mono", monospace;
 
   --ink: #1b2434;
   --muted: #5a6883;
@@ -51,7 +51,7 @@
   --font-section: 16px;
   --font-title: 22px;
   --font-panel-title: 20px;
-  --font-panel-body: 14px;
+  --font-panel-body: 15px;
   --font-entry: 13px;
   --font-panel-caption: 12px;
   --font-panel-number: 26px;

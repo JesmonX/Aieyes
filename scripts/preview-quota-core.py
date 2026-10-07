@@ -5,7 +5,7 @@ import os
 from datetime import date, timedelta
 import sys
 import time
-stamp = int(time.time())
+stamp = int(os.environ.get('AIEYES_UI_STAMP', time.time()))
 def source(provider):
     return dict(id=provider+'-source',name=provider+' · 测试来源',provider=provider,accountId=provider,path='/tmp/aieyes-preview-missing',enabled=True,quotaCommand='',quotaPreCommand='',codexBinary='codex',agyBinary='agy')
 def window(key,name,used,minutes=10080,group=None):
@@ -66,6 +66,10 @@ if scenario:
     dashboard['sources'] = [dict(src,status=dict(updatedAt=stamp,error='模拟读取失败' if scenario == 'failure' else None)) for src in settings['sources']]
     dashboard['quotas'] = quotas
     dashboard['quotaOrder'] = [q['provider']+':'+q['accountId'] for q in quotas]
+# The browser and native renderer consume exactly the same synthetic data.
+if '--fixture' in sys.argv:
+    print(json.dumps(dict(settings=settings, dashboard=dashboard, prices=[price], hosts=hosts, wakeups=wakeups)))
+    sys.exit(0)
 for line in sys.stdin:
     r=json.loads(line)
     if r['method'] == 'dashboard' and r.get('params', {}).get('model') == 'ui-filter-failure':

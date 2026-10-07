@@ -30,6 +30,7 @@ enum Command {
     Status(Value),
     Visible(bool),
     Position(Option<(i32, i32)>),
+    WatchPanel(Option<usize>),
     Stop,
 }
 pub struct Capsule {
@@ -46,6 +47,9 @@ struct Surface {
     dark: Cell<bool>,
     actions: mpsc::Sender<String>,
     tooltip: Cell<Option<HWND>>,
+    panel: Cell<Option<usize>>,
+    mouse_hook: Cell<Option<HHOOK>>,
+    menu_active: Cell<bool>,
     tooltip_text: RefCell<Vec<u16>>,
 }
 impl Capsule {
@@ -100,6 +104,9 @@ impl Capsule {
                     dark: Cell::new(false),
                     actions,
                     tooltip: Cell::new(None),
+                    panel: Cell::new(None),
+                    mouse_hook: Cell::new(None),
+                    menu_active: Cell::new(false),
                     tooltip_text: RefCell::new(Vec::new()),
                 });
                 let result = CreateWindowExW(
@@ -143,6 +150,7 @@ impl Capsule {
                         );
                         tooltip(hwnd, &surface, "Aieyes · 单击打开面板，右键菜单", true);
                         let _ = ready.send(Result::Ok(hwnd.0 as usize));
+                        HOOK_SURFACE.with(|slot| slot.set(&*surface));
                         let mut message = MSG::default();
                         while GetMessageW(&mut message, None, 0, 0).0 > 0 {
                             let _ = TranslateMessage(&message);
@@ -153,6 +161,10 @@ impl Capsule {
                         let _ = ready.send(Err(error.to_string()));
                     }
                 }
+                if let Some(hook) = surface.mouse_hook.take() {
+                    let _ = UnhookWindowsHookEx(hook);
+                }
+                HOOK_SURFACE.with(|slot| slot.set(std::ptr::null()));
                 // Surface and all GDI+ resources belong to this thread.
                 drop(surface);
                 GdiplusShutdown(token);
@@ -179,11 +191,11 @@ impl Capsule {
     pub fn position(&self, position: Option<(i32, i32)>) {
         self.send(Command::Position(position));
     }
+    pub fn watch_panel(&self, hwnd: Option<usize>) {
+        self.send(Command::WatchPanel(hwnd));
+    }
     pub fn stop(&self) {
         self.send(Command::Stop);
-    }
-    pub fn owns_focus(&self) -> bool {
-        unsafe { GetForegroundWindow().0 as usize == self.hwnd }
     }
     pub fn geometry(&self) -> Result<(i32, i32, u32, u32, f64), String> {
         unsafe {
@@ -200,6 +212,33 @@ impl Capsule {
         }
     }
 }
+thread_local! {
+    static HOOK_SURFACE: Cell<*const Surface> = const { Cell::new(std::ptr::null()) };
+}
+
+// Runs on the capsule message thread. Never wait for the renderer or consume
+// input here: the original click must still reach the other application.
+unsafe extern "system" fn outside_click(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 && matches!(wparam.0 as u32, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN) {
+        HOOK_SURFACE.with(|slot| {
+            if let Some(surface) = slot.get().as_ref()
+                && let Some(panel) = surface.panel.get()
+                && !surface.menu_active.get()
+            {
+                let point = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
+                let target = WindowFromPoint(point);
+                let root = GetAncestor(target, GA_ROOT);
+                let owner = GetAncestor(target, GA_ROOTOWNER);
+                let capsule = surface.app.try_state::<Capsule>().map(|c| c.hwnd).unwrap_or(0);
+                if ![root.0 as usize, owner.0 as usize].iter().any(|h| *h == panel || *h == capsule) {
+                    dispatch(surface, "dismiss-panel");
+                }
+            }
+        });
+    }
+    CallNextHookEx(None, code, wparam, lparam)
+}
+
 fn dispatch(surface: &Surface, action: &str) {
     let _ = surface.actions.send(action.to_owned());
 }
@@ -348,6 +387,7 @@ unsafe fn native_menu(hwnd: HWND, surface: &Surface) {
     let mut point = POINT::default();
     let _ = GetCursorPos(&mut point);
     let _ = SetForegroundWindow(hwnd);
+    surface.menu_active.set(true);
     let selected = TrackPopupMenu(
         menu,
         TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -358,6 +398,7 @@ unsafe fn native_menu(hwnd: HWND, surface: &Surface) {
         None,
     )
     .0;
+    surface.menu_active.set(false);
     let _ = DestroyMenu(menu);
     let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
     crate::desktop::native_interaction(&surface.app, false);
@@ -415,6 +456,17 @@ unsafe extern "system" fn window_proc(
                         place(hwnd, position, false);
                         reshape(hwnd);
                         save_position(hwnd, surface);
+                    }
+                    Command::WatchPanel(panel) => {
+                        surface.panel.set(panel);
+                        if panel.is_some() && surface.mouse_hook.get().is_none() {
+                            match SetWindowsHookExW(WH_MOUSE_LL, Some(outside_click), GetModuleHandleW(None).ok().map(Into::into), 0) {
+                                Result::Ok(hook) => surface.mouse_hook.set(Some(hook)),
+                                Err(error) => { let _ = surface.app.emit("desktop:error", &error.to_string()); }
+                            }
+                        } else if panel.is_none() && let Some(hook) = surface.mouse_hook.take() {
+                            let _ = UnhookWindowsHookEx(hook);
+                        }
                     }
                     Command::Stop => {
                         let _ = DestroyWindow(hwnd);
@@ -588,7 +640,7 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             } else if surface.press.get().is_some() {
                 if surface.dark.get() { 0xff494951 } else { 0xffe4e4e9 }
             } else if surface.hover.get() {
-                if surface.dark.get() { 0xff3b3b43 } else { 0xffeeeeF2 }
+                if surface.dark.get() { 0xff3b3b43 } else { 0xffeeeef2 }
             } else if surface.dark.get() {
                 0xff29292e
             } else {
@@ -659,7 +711,9 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
         let mut family = null_mut();
         let mut font = null_mut();
         let mut format = null_mut();
-        GdipCreateFontFamilyFromName(w!("Segoe UI"), null_mut(), &mut family);
+        if GdipCreateFontFamilyFromName(w!("Microsoft YaHei UI"), null_mut(), &mut family) != GDI_OK {
+            GdipCreateFontFamilyFromName(w!("Segoe UI"), null_mut(), &mut family);
+        }
         GdipCreateFont(family, 13.0, FontStyleRegular.0, UnitPixel, &mut font);
         GdipCreateStringFormat(0, 0, &mut format);
         GdipSetStringFormatLineAlign(format, StringAlignmentCenter);

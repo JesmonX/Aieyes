@@ -89,7 +89,11 @@ jobs:
             test -n "$AIEYES_UPDATER_PUBLIC_KEY" || { echo 'Configure AIEYES_UPDATER_PUBLIC_KEY repository variable'; exit 1; }
           fi
           mkdir -p dist
-          git log -15 --pretty=format:'%s' > dist/release-notes.txt
+          if [ -f "docs/release-notes/$RELEASE_TAG.md" ]; then
+            cp "docs/release-notes/$RELEASE_TAG.md" dist/release-notes.txt
+          else
+            git log -15 --pretty=format:'%s' > dist/release-notes.txt
+          fi
       - name: Shared checks
         shell: bash
         run: |
@@ -110,12 +114,13 @@ jobs:
         if: runner.os != 'macOS'
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
       - name: Browser integration
-        if: runner.os == 'Linux'
+        if: runner.os != 'macOS'
         run: |
           npm ci --prefix apps/desktop
           cd apps/desktop
           npx playwright install --with-deps chromium
           npm run test:ui
+          node ../../scripts/test-windows-ui.cjs
       - name: Install Tauri CLI
         if: runner.os != 'macOS'
         run: npm install --global @tauri-apps/cli@2.12.1
@@ -146,6 +151,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/build-desktop.ps1 release
+      - name: Windows native panel interaction
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-windows-panel.ps1
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Windows'
+        with:
+          name: windows-ui-evidence
+          path: .local/windows-ui-sync/
+          include-hidden-files: true
+          if-no-files-found: warn
       - name: Linux packages
         if: runner.os == 'Linux'
         run: sh scripts/build-desktop.sh release
@@ -197,7 +213,11 @@ jobs:
           merge-multiple: true
       - run: |
           mkdir -p dist
-          git log -15 --pretty=format:'%s' > dist/release-notes.txt
+          if [ -f "docs/release-notes/$RELEASE_TAG.md" ]; then
+            cp "docs/release-notes/$RELEASE_TAG.md" dist/release-notes.txt
+          else
+            git log -15 --pretty=format:'%s' > dist/release-notes.txt
+          fi
           python scripts/release.py updates --tag "$RELEASE_TAG"
           python scripts/release.py checksums --tag "$RELEASE_TAG"
       - name: Upload complete draft and publish

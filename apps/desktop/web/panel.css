@@ -3,7 +3,7 @@ body[data-view=ball]::before,body[data-view=ball] #panel,body[data-view=panel] #
 body[data-view=panel] { display:block; justify-items:normal; user-select:text; }
 #panel { width:100%; min-width:0; display:flex; flex-direction:column; height:100vh; }
 .panel-head { margin:0; flex-shrink:0; display:flex; align-items:center; gap:9px; padding:8px 14px; border-bottom:1px solid var(--border); }
-.panel-mark { display:grid; place-items:center; width:28px; height:28px; flex:0 0 28px; }
+.panel-mark { display:grid; place-items:center; width:34px; height:34px; flex:0 0 34px; }
 .panel-tabs { display:flex; flex:1; gap:2px; padding:3px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface-sunken); }
 .panel-tabs button { flex:1; min-height:28px; padding:3px 12px; border:0; border-radius:6px; background:transparent; color:var(--muted); font-size:var(--font-panel-body); box-shadow:none; }
 .panel-tabs button:hover { transform:none; background:var(--soft); color:var(--ink); }
@@ -22,7 +22,7 @@ body[data-view=panel] { display:block; justify-items:normal; user-select:text; }
 .panel-more-menu p { margin:4px 10px 6px; color:var(--muted); font-size:var(--font-panel-body); }
 .panel-more-menu #panel-quit { color:var(--danger); }
 #panel-pin[data-pinned=true] { color:var(--accent); background:var(--soft); }
-.panel-body { flex:1; min-height:0; overflow:auto; padding:8px 14px; overscroll-behavior:contain; scrollbar-width:thin; }
+.panel-body { flex:1; min-height:0; overflow:auto; padding:12px; overscroll-behavior:contain; scrollbar-width:thin; }
 .panel-foot { display:flex; flex-direction:column; gap:2px; padding:5px 14px; flex-shrink:0; border-top:1px solid var(--border); }
 .panel-connection { width:100%; min-width:0; }
 .panel-foot #activity { display:block; min-width:0; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:var(--font-panel-caption); line-height:16px; }
@@ -48,7 +48,7 @@ body[data-view=panel] { display:block; justify-items:normal; user-select:text; }
 .panel-body .quota-window { margin-top:8px; }
 .panel-body .quotas { grid-template-columns:1fr; }
 .panel-body .track { margin:7px 0; }
-.panel-chart { height:118px; }
+.panel-chart { height:180px; }
 .panel-body .daily-table { max-height:280px; }
 .panel-body .resource-ring { width:60px; height:60px; }
 .panel-body .server-gauges { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }

@@ -58,17 +58,20 @@ jobs:
           node --check apps/desktop/web/multiselect.js
       - run: node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs
       - name: Browser integration
-        if: runner.os == 'Linux'
+        shell: bash
         run: |
           npm ci --prefix apps/desktop
           cd apps/desktop
           npx playwright install --with-deps chromium
           npm run test:ui
+          node ../../scripts/test-windows-ui.cjs
       - uses: actions/upload-artifact@v4
-        if: always() && runner.os == 'Linux'
+        if: always()
         with:
-          name: UI-previews
-          path: .local/ui-previews/*.png
+          name: UI-previews-${{ runner.os }}
+          path: |
+            .local/ui-previews/*.png
+            .local/windows-ui-sync/browser/*
           include-hidden-files: true
           if-no-files-found: ignore
       - name: Windows shell tests
@@ -86,6 +89,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/build-desktop.ps1 release
+      - name: Windows native panel interaction
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-windows-panel.ps1
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Windows'
+        with:
+          name: Windows-native-panel-results
+          path: .local/windows-ui-sync/native/*
+          include-hidden-files: true
+          if-no-files-found: warn
       - name: Linux packages
         if: runner.os == 'Linux'
         run: sh scripts/build-desktop.sh release

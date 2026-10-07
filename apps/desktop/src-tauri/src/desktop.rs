@@ -68,6 +68,12 @@ struct ShellState {
     panel_generation: u64,
     recovery: String,
 }
+#[cfg(not(target_os = "windows"))]
+impl ShellState {
+    fn can_dismiss_panel(&self) -> bool {
+        self.panel && !self.pin && !self.native_interacting
+    }
+}
 pub struct Desktop {
     path: PathBuf,
     state: Mutex<ShellState>,
@@ -259,7 +265,13 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     let floating = MenuItem::with_id(app, "floating", "使用悬浮球", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset-position", "重置悬浮球位置", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, HIDE_MENU_ID, "暂时隐藏悬浮球", false, None::<&str>)?;
-    let refresh = MenuItem::with_id(app, "refresh-floating", "重建面板（用于界面无响应）", true, None::<&str>)?;
+    let refresh = MenuItem::with_id(
+        app,
+        "refresh-floating",
+        "重建面板（用于界面无响应）",
+        true,
+        None::<&str>,
+    )?;
     let toggle = MenuItem::with_id(app, "toggle-panel", "打开／收起面板", true, None::<&str>)?;
     let pin = MenuItem::with_id(app, "toggle-pin", "固定／取消固定面板", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Aieyes", true, None::<&str>)?;
@@ -440,7 +452,7 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
     configure_webview(&window);
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
-        // Recreating the renderer may call this from a worker; subclass on its UI thread.
+        // Recreating the renderer may call this from a worker; configure on its UI thread.
         let handle = hwnd.0 as usize;
         window.run_on_main_thread(move || {
             crate::passive_window::configure(windows::Win32::Foundation::HWND(handle as *mut _));
@@ -482,15 +494,82 @@ pub(crate) fn capsule_moved(app: &AppHandle, x: i32, y: i32) {
     if open {
         let app = app.clone();
         std::thread::spawn(move || {
-            let _ = set_native_panel(&app, true);
+            let generation = app
+                .state::<Desktop>()
+                .state
+                .lock()
+                .map(|s| s.panel_generation)
+                .unwrap_or(0);
+            let _ = request_native_panel(&app, PanelRequest::Restore(generation));
         });
+    }
+}
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy)]
+enum PanelRequest {
+    Set(bool),
+    Toggle,
+    Dismiss,
+    Restore(u64),
+}
+#[cfg(any(target_os = "windows", test))]
+impl PanelRequest {
+    fn resolve(self, open: bool, pinned: bool, interacting: bool, generation: u64) -> Option<bool> {
+        match self {
+            Self::Set(value) => Some(value),
+            Self::Toggle => Some(!open),
+            Self::Dismiss => (open && !pinned && !interacting).then_some(false),
+            Self::Restore(expected) => (expected == generation).then_some(open),
+        }
     }
 }
 #[cfg(target_os = "windows")]
 fn set_native_panel(app: &AppHandle, open: bool) -> Result<(), String> {
-    let window = app
-        .get_webview_window("floating")
-        .ok_or("面板不可用，可右键刷新悬浮窗")?;
+    request_native_panel(app, PanelRequest::Set(open))
+}
+#[cfg(target_os = "windows")]
+fn request_native_panel(app: &AppHandle, request: PanelRequest) -> Result<(), String> {
+    let app = app.clone();
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    let owner = app.clone();
+    // Tauri executes inline on the UI thread. Resolve toggles/dismissals here,
+    // not before enqueueing, so interleaved tray and capsule input stays ordered.
+    owner
+        .run_on_main_thread(move || {
+            let result = (|| {
+                let desired = {
+                    let desktop = app.state::<Desktop>();
+                    let state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+                    request.resolve(
+                        state.panel,
+                        state.pin,
+                        state.native_interacting,
+                        state.panel_generation,
+                    )
+                };
+                if let Some(open) = desired {
+                    set_native_panel_on_ui(&app, open)?;
+                }
+                Ok(())
+            })();
+            let _ = send.send(result);
+        })
+        .map_err(|e| e.to_string())?;
+    receive.recv().map_err(|e| e.to_string())?
+}
+#[cfg(target_os = "windows")]
+fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("floating") else {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        if state.recovery == "refreshing" {
+            state.panel = open;
+            drop(state);
+            emit_shell(app);
+            return Ok(());
+        }
+        return Err("面板不可用，可右键刷新悬浮窗".into());
+    };
     if open {
         let capsule = app
             .try_state::<crate::capsule::Capsule>()
@@ -529,14 +608,11 @@ fn set_native_panel(app: &AppHandle, open: bool) -> Result<(), String> {
         window
             .set_size(PhysicalSize::new(width, height))
             .map_err(|e| e.to_string())?;
-        let handle = window.hwnd().map_err(|e| e.to_string())?.0 as usize;
-        window
-            .run_on_main_thread(move || {
-                crate::passive_window::show(windows::Win32::Foundation::HWND(handle as *mut _));
-            })
-            .map_err(|e| e.to_string())?;
-    } else {
-        window.hide().map_err(|e| e.to_string())?;
+    }
+    let handle = window.hwnd().map_err(|e| e.to_string())?.0 as usize;
+    crate::passive_window::set_visible(windows::Win32::Foundation::HWND(handle as *mut _), open)?;
+    if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
+        capsule.watch_panel(open.then_some(handle));
     }
     app.state::<Desktop>()
         .state
@@ -550,7 +626,7 @@ fn set_native_panel(app: &AppHandle, open: bool) -> Result<(), String> {
 /// Recreate the renderer, never the core or the native capsule. The menu callback
 /// must return before Windows starts constructing another WebView2 controller.
 fn refresh_floating(app: &AppHandle) -> Result<(), String> {
-    let (generation, open) = {
+    let (generation, _open) = {
         let desktop = app.state::<Desktop>();
         let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
         if state.recovery == "refreshing" {
@@ -561,6 +637,10 @@ fn refresh_floating(app: &AppHandle) -> Result<(), String> {
         (state.panel_generation, state.panel)
     };
     emit_shell(app);
+    #[cfg(target_os = "windows")]
+    if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
+        capsule.watch_panel(None);
+    }
     let app = app.clone();
     std::thread::spawn(move || {
         let result = (|| -> Result<(), String> {
@@ -576,7 +656,9 @@ fn refresh_floating(app: &AppHandle) -> Result<(), String> {
             }
             create_floating(&app, generation).map_err(|e| e.to_string())?;
             #[cfg(target_os = "windows")]
-            set_native_panel(&app, open)?;
+            {
+                request_native_panel(&app, PanelRequest::Restore(generation))?;
+            }
             #[cfg(not(target_os = "windows"))]
             {
                 app.state::<Desktop>()
@@ -585,7 +667,7 @@ fn refresh_floating(app: &AppHandle) -> Result<(), String> {
                     .map_err(|_| "显示状态不可用")?
                     .panel = false;
                 restore_position(&app).map_err(|e| e.to_string())?;
-                set_panel(&app, open)?;
+                set_panel(&app, _open)?;
                 let visible = app
                     .state::<Desktop>()
                     .state
@@ -688,7 +770,12 @@ fn update(app: &AppHandle, snapshot: Snapshot, supported: Option<bool>) {
             let _ = tray.set_title(Some(&summary));
         }
         if phase_changed || new_tray {
-            let _ = tray.set_icon(Some(icon(snapshot.phase(), app.get_webview_window("main").and_then(|w| w.theme().ok()).is_some_and(|t| t == tauri::Theme::Dark))));
+            let _ = tray.set_icon(Some(icon(
+                snapshot.phase(),
+                app.get_webview_window("main")
+                    .and_then(|w| w.theme().ok())
+                    .is_some_and(|t| t == tauri::Theme::Dark),
+            )));
         }
     }
     if let Ok(mut state) = desktop.state.lock() {
@@ -764,10 +851,18 @@ pub fn desktop_appearance(app: AppHandle, theme: String, accent: String) -> Resu
         "system" => None,
         _ => return Err("无效的主题".into()),
     };
-    if !["indigo", "blue", "teal", "purple"].contains(&accent.as_str()) { return Err("无效的强调色".into()); }
-    app.state::<Desktop>().state.lock().map_err(|_| "显示状态不可用")?.accent = accent;
+    if !["indigo", "blue", "teal", "purple"].contains(&accent.as_str()) {
+        return Err("无效的强调色".into());
+    }
+    app.state::<Desktop>()
+        .state
+        .lock()
+        .map_err(|_| "显示状态不可用")?
+        .accent = accent;
     app.set_theme(theme);
-    for window in app.webview_windows().values() { let _ = window.set_theme(theme); }
+    for window in app.webview_windows().values() {
+        let _ = window.set_theme(theme);
+    }
     #[cfg(target_os = "windows")]
     if let Some(window) = app.get_webview_window("main") {
         let dark = window.theme().ok().map(|theme| theme == tauri::Theme::Dark);
@@ -884,15 +979,37 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
     match action {
         value if value.starts_with("edit-account:") => show_main(app, value),
         "focus-panel" => set_panel(app, true),
+        "dismiss-panel" => {
+            #[cfg(target_os = "windows")]
+            return request_native_panel(app, PanelRequest::Dismiss);
+            #[cfg(not(target_os = "windows"))]
+            {
+                let close = app
+                    .state::<Desktop>()
+                    .state
+                    .lock()
+                    .map_err(|_| "显示状态不可用")?
+                    .can_dismiss_panel();
+                if close {
+                    set_panel(app, false)?;
+                }
+                Ok(())
+            }
+        }
         "refresh-floating" => refresh_floating(app),
         "toggle-panel" => {
-            let open = app
-                .state::<Desktop>()
-                .state
-                .lock()
-                .map_err(|_| "显示状态不可用")?
-                .panel;
-            set_panel(app, !open)
+            #[cfg(target_os = "windows")]
+            return request_native_panel(app, PanelRequest::Toggle);
+            #[cfg(not(target_os = "windows"))]
+            {
+                let open = app
+                    .state::<Desktop>()
+                    .state
+                    .lock()
+                    .map_err(|_| "显示状态不可用")?
+                    .panel;
+                set_panel(app, !open)
+            }
         }
         "toggle-count" => {
             {
@@ -907,7 +1024,9 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
             }
             let info = desktop_info(app.clone())?;
             #[cfg(target_os = "windows")]
-            if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() { capsule.status(info.clone()); }
+            if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
+                capsule.status(info.clone());
+            }
             let _ = app.emit("desktop:status", info);
             Ok(())
         }
@@ -1253,7 +1372,12 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             let _ = window_vibrancy::apply_mica(window, Some(*theme == tauri::Theme::Dark));
             let app = window.app_handle();
             if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                let phase = app.state::<Desktop>().state.lock().ok().and_then(|state| state.snapshot.phase());
+                let phase = app
+                    .state::<Desktop>()
+                    .state
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.snapshot.phase());
                 let _ = tray.set_icon(Some(icon(phase, *theme == tauri::Theme::Dark)));
             }
             emit_shell(window.app_handle());
@@ -1311,22 +1435,15 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 state.dirty = true;
             }
         }
+        #[cfg(not(target_os = "windows"))]
         tauri::WindowEvent::Focused(false) if window.label() == "floating" => {
             let app = window.app_handle().clone();
-            // Native capsule activation can precede its mouse-down message.
-            // Let that message (or an owned menu/dialog activation) settle first.
+            // Let an owned menu/dialog activation settle before dismissing the Web capsule.
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(80));
                 if app
                     .get_webview_window("floating")
                     .is_some_and(|w| w.is_focused().unwrap_or(false))
-                {
-                    return;
-                }
-                #[cfg(target_os = "windows")]
-                if app
-                    .try_state::<crate::capsule::Capsule>()
-                    .is_some_and(|c| c.owns_focus())
                 {
                     return;
                 }
@@ -1337,7 +1454,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                             .state
                             .lock()
                             .ok()
-                            .map(|state| state.panel && !state.pin && !state.native_interacting)
+                            .map(|state| state.can_dismiss_panel())
                     })
                     .unwrap_or(false);
                 if close {
@@ -1406,6 +1523,32 @@ fn icon(phase: Option<Phase>, dark: bool) -> tauri::image::Image<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn panel_requests_resolve_at_execution_and_ignore_stale_rebuilds() {
+        assert_eq!(
+            PanelRequest::Set(true).resolve(false, false, false, 1),
+            Some(true)
+        );
+        assert_eq!(
+            PanelRequest::Toggle.resolve(true, false, false, 1),
+            Some(false)
+        );
+        assert_eq!(
+            PanelRequest::Dismiss.resolve(true, false, false, 1),
+            Some(false)
+        );
+        assert_eq!(PanelRequest::Dismiss.resolve(true, true, false, 1), None);
+        assert_eq!(PanelRequest::Dismiss.resolve(true, false, true, 1), None);
+        assert_eq!(PanelRequest::Dismiss.resolve(false, false, false, 1), None);
+        assert_eq!(
+            PanelRequest::Restore(1).resolve(false, false, false, 1),
+            Some(false)
+        );
+        assert_eq!(
+            PanelRequest::Restore(1).resolve(true, false, false, 2),
+            None
+        );
+    }
     #[test]
     fn rectangular_capsules_use_their_height_for_bottom_edges_and_panel_anchors() {
         let area = (-1920, 40, 1920, 1040);

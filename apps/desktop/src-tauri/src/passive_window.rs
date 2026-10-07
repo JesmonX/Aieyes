@@ -1,45 +1,28 @@
-//! Keep mouse interaction with the floating panel from activating the application.
+//! Show without stealing focus, but allow deliberate interaction to activate the panel.
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-    UI::{
-        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
-        WindowsAndMessaging::{
-            GWL_EXSTYLE, GetWindowLongPtrW, MA_NOACTIVATE, SW_SHOWNOACTIVATE, SetWindowLongPtrW,
-            ShowWindow, WM_MOUSEACTIVATE, WM_NCDESTROY, WS_EX_NOACTIVATE,
-        },
+    Foundation::HWND,
+    UI::WindowsAndMessaging::{
+        GWL_EXSTYLE, GetWindowLongPtrW, IsWindowVisible, SW_HIDE, SW_SHOWNOACTIVATE,
+        SetWindowLongPtrW, ShowWindow, WS_EX_NOACTIVATE,
     },
 };
-const SUBCLASS_ID: usize = 0xA1E;
 
 pub fn configure(hwnd: HWND) {
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE.0 as isize);
-        let _ = SetWindowSubclass(hwnd, Some(window_proc), SUBCLASS_ID, 0);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style & !(WS_EX_NOACTIVATE.0 as isize));
     }
 }
 
-pub fn show(hwnd: HWND) {
+/// Both directions use the same native API. Mixing native ShowWindow with a
+/// cached framework hide can leave an invisible WebView intercepting the desktop.
+/// Must run on the window's UI thread.
+pub fn set_visible(hwnd: HWND, open: bool) -> Result<(), String> {
     unsafe {
-        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-    }
-}
-
-unsafe extern "system" fn window_proc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    id: usize,
-    _: usize,
-) -> LRESULT {
-    unsafe {
-        if message == WM_MOUSEACTIVATE {
-            return LRESULT(MA_NOACTIVATE as isize);
+        let _ = ShowWindow(hwnd, if open { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        if IsWindowVisible(hwnd).as_bool() != open {
+            return Err("无法更改面板窗口可见性".into());
         }
-        if message == WM_NCDESTROY {
-            let _ = RemoveWindowSubclass(hwnd, Some(window_proc), id);
-        }
-        DefSubclassProc(hwnd, message, wparam, lparam)
     }
+    Ok(())
 }
