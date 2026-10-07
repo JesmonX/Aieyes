@@ -1,5 +1,17 @@
 /* Shared UI semantics. Query timestamps deliberately never imply a successful sync. */
 window.AieyesUI = {
+  panelAccounts(settings, order = []) {
+    let selected = {};
+    try { const value=JSON.parse(localStorage.getItem('aieyes.panel.accounts.v1')||'{}');if(value&&typeof value==='object'&&!Array.isArray(value))selected=value; } catch (_) {}
+    const eligible=(settings?.accounts??[]).filter(a=>!a.archived&&a.quotaEnabled);
+    const sorted=[...eligible].sort((a,b)=>{const rank=a=>{const i=order.indexOf(a.provider+':'+a.id);return i<0?Number.MAX_SAFE_INTEGER:i;};return rank(a)-rank(b);});
+    for(const provider of new Set([...eligible.map(a=>a.provider),...Object.keys(selected)])) {
+      const keys=sorted.filter(a=>a.provider===provider).map(a=>a.provider+':'+a.id);
+      selected[provider]=[...new Set((Array.isArray(selected[provider])?selected[provider]:keys).filter(k=>keys.includes(k)))].slice(0,5);
+    }
+    try { localStorage.setItem('aieyes.panel.accounts.v1',JSON.stringify(selected)); } catch (_) {}
+    return selected;
+  },
   usageSources(settings) {
     return (settings?.sources ?? []).filter(s => s.enabled && !['agy','deepseek'].includes(s.provider) &&
       (!s.hostId || settings.hosts.some(h => h.id === s.hostId && h.enabled)));
@@ -16,11 +28,30 @@ window.AieyesUI = {
       failed: statuses.filter(s => s?.error).length
     };
   },
-  resetText(stamp, now = Date.now() / 1000) {
-    if (!stamp) return '重置时间未知';
-    if (stamp <= now) return '确认重置中';
-    const minutes = Math.ceil((stamp - now) / 60), hours = Math.floor(minutes / 60);
-    return (hours ? hours + ' 小时 ' : '') + minutes % 60 + ' 分后重置';
+  resetDisplayTime(stamp, windowMinutes, now = Date.now() / 1000) {
+    if (Number.isFinite(stamp) && stamp > now) return stamp;
+    return Number.isFinite(windowMinutes) && windowMinutes > 0 ? now + windowMinutes * 60 : null;
+  },
+  resetText(stamp, now = Date.now() / 1000, windowMinutes) {
+    const target = this.resetDisplayTime(stamp, windowMinutes, now);
+    if (target == null) return Number.isFinite(stamp) && stamp > 0 ? '确认重置中' : '重置时间未知';
+    const minutes = Math.ceil((target - now) / 60), parts = [];
+    if (!Number.isSafeInteger(minutes) || minutes <= 0) return '重置时间未知';
+    if (minutes >= 1440) parts.push(Math.floor(minutes / 1440) + ' 天');
+    if (minutes % 1440 >= 60) parts.push(Math.floor(minutes % 1440 / 60) + ' 小时');
+    if (minutes % 60) parts.push(minutes % 60 + ' 分');
+    return parts.join(' ') + '后重置';
+  },
+  quotaReset(window, now = Date.now() / 1000) {
+    const text = this.resetText(window.resetsAt, now, window.windowMinutes);
+    const stamp = this.resetDisplayTime(window.resetsAt, window.windowMinutes, now), date = new Date(stamp * 1000);
+    if (stamp == null || !Number.isFinite(date.getTime())) return text;
+    const pad = n => String(n).padStart(2, '0');
+    return text + ' · ' + pad(date.getMonth()+1) + '/' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+  },
+  subscription(plan) {
+    const name = String(plan ?? '').trim();
+    return ({plus:'Plus',pro:'Pro',free:'Free',max:'Max',team:'Team',business:'Business',enterprise:'Enterprise',api:'API'})[name.toLowerCase()] ?? name;
   },
   estimateLabel(record) {
     if (!record) return '';

@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var hostEditor: Host?
     @State private var priceEditor: ModelPrice?
     @State private var search = ""
+    @AppStorage("menu.showCount") private var showMenuCount = false
     @State private var removal: RemovalRequest?
     @State private var confirmDiscardConfig = false
     private var mappingModel: String { get { model.mappingModel } nonmutating set { model.mappingModel = newValue } }
@@ -23,16 +24,16 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("设置").font(AppFont.title)
                     if model.settingsSaving { TimelineView(.periodic(from: .now, by: 1)) { context in Text(model.settingsStage + " · " + String(Int(context.date.timeIntervalSince(model.settingsStartedAt ?? context.date))) + " 秒").font(AppFont.secondary).foregroundStyle(.secondary) } }
                     else { Text(!model.settingsLoaded ? "正在读取配置…" : model.settingsDirty ? "应用配置 · 未保存 \(model.settingsChangeCount) 项" : "应用配置 · 已保存").font(AppFont.secondary).foregroundStyle(.secondary) }
+                    Text("编辑器更新草稿，顶部保存全部；价格与定时唤醒独立保存。").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if !model.settingsLoaded { Button("重试读取") { Task { await model.bootstrap() } } }
                 if model.settingsSaving { ProgressView().controlSize(.small) }
                 Button("放弃更改") { confirmDiscardConfig = true }.disabled(!model.settingsDirty || model.settingsSaving || model.repricing)
                 Button(model.settingsSaving ? "保存中…" : "保存应用配置") { Task { _ = await model.saveSettingsDraft() } }.buttonStyle(.borderedProminent).keyboardShortcut("s").disabled(!model.settingsDirty || model.settingsSaving || model.repricing)
-            }.padding(22)
+            }.padding(.horizontal, 22).padding(.vertical, 12)
             if let message = model.settingsMessage ?? model.message { HStack { Text(message).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.settingsMessage = nil; model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭提示") }.padding(.horizontal, 22).padding(.bottom, 10) }
             Picker("设置分类", selection: $model.settingsTab) {
                 Text("数据源").tag("sources"); Text("服务器").tag("servers"); Text("价格").tag("prices"); Text("定时唤醒").tag("wakeups"); Text("通用").tag("general")
@@ -99,7 +100,7 @@ struct SettingsView: View {
             Form {
                 ForEach(draft.accounts.filter { $0.archived != true }, id: \.key) { account in
                     Section {
-                        HStack { VStack(alignment: .leading) { Text(account.name).font(AppFont.section); Text("共用 \(draft.sources.filter { $0.accountId == account.id && $0.provider == account.provider }.count) 个来源 · 账户名称与限额设置共同生效").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button("编辑账户") { accountEditor = account }.accessibilityLabel("编辑账户 " + account.name) }
+                        accountHeader(account)
                         ForEach($model.settingsDraft.sources) { $source in if source.accountId == account.id && source.provider == account.provider { sourceRow($source) } }
                     }
                 }
@@ -115,12 +116,27 @@ struct SettingsView: View {
             HStack { Button("添加数据源", systemImage: "plus") { sourceEditor = AgentSource() }; Spacer(); Button("保存并同步记录") { Task { if await model.saveSettingsDraft() { await model.scan() } } }.disabled(model.busy) }.padding(.horizontal, 8)
         }.padding(.vertical, 12)
     }
+    private func accountHeader(_ account: AgentAccount) -> some View {
+        let sourceCount = draft.sources.filter { $0.accountId == account.id && $0.provider == account.provider }.count
+        return HStack {
+            ProviderMark(provider: account.provider)
+            VStack(alignment: .leading) {
+                Text(account.name).font(AppFont.section)
+                Text(Format.provider(account.provider)).font(AppFont.secondary).foregroundStyle(.secondary)
+                Text("共用 \(sourceCount) 个来源 · 账户名称与限额设置共同生效").font(AppFont.secondary).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("编辑账户") { accountEditor = account }.accessibilityLabel("编辑账户 " + account.name)
+        }
+    }
     private func sourceRow(_ binding: Binding<AgentSource>) -> some View {
         let source = binding.wrappedValue, saved = model.settings.sources.first { $0.id == source.id }
         return HStack(spacing: 12) {
             Toggle("启用 " + source.name, isOn: binding.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            ProviderMark(provider: source.provider)
             VStack(alignment: .leading, spacing: 4) {
                 Text(source.name).font(AppFont.body)
+                Text(Format.provider(source.provider)).font(AppFont.secondary).foregroundStyle(.secondary)
                 Text(source.hostId.flatMap { id in draft.hosts.first { $0.id == id }?.name } ?? "本机").font(AppFont.secondary).foregroundStyle(.secondary)
                 if saved != source { Text("待保存：" + (saved?.enabled == source.enabled ? "配置修改" : source.enabled ? "启用" : "停用") + " · " + (saved?.enabled == true ? "当前仍运行" : "当前未运行")).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                 if let status = model.dashboard.sources.first(where: { $0.id == source.id })?.status { Text(status.error ?? ("记录同步于 " + Format.date(status.updatedAt))).font(AppFont.secondary).foregroundStyle(status.error == nil ? Color.secondary : Palette.warn) }
@@ -134,7 +150,7 @@ struct SettingsView: View {
     }
     private func accountRow(_ account: AgentAccount) -> some View {
         HStack {
-            Text(account.name); Spacer(); Button("编辑") { accountEditor = account }
+            ProviderMark(provider: account.provider); VStack(alignment: .leading) { Text(account.name); Text(Format.provider(account.provider)).font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button("编辑") { accountEditor = account }
             Button(account.archived == true ? "恢复" : "归档") {
                 if account.archived == true {
                     if let i = draft.accounts.firstIndex(where: { $0.key == account.key }) { draft.accounts[i].archived = false }
@@ -208,6 +224,8 @@ struct SettingsView: View {
     private var general: some View {
         Form {
             Section("菜单栏") {
+                Toggle("显示活跃会话计数（本机，立即生效）", isOn: $showMenuCount)
+                Text("菜单栏口径：今日全部数据，不受面板和详情筛选影响。").font(AppFont.secondary).foregroundStyle(.secondary)
                 Picker("显示内容", selection: $model.settingsDraft.menuMetric) { Text("图标").tag("icon"); Text("今日全部 Token").tag("tokens"); Text("首个账户剩余额度").tag("quota"); Text("首台服务器 CPU").tag("cpu") }
             }
             Section("刷新") {
@@ -555,7 +573,7 @@ struct PriceEditor: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack { Text("模型价格").font(AppFont.title); Spacer(); Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary) }
                 Text("保存此价格后立即生效，不需要再保存设置。").font(AppFont.secondary).foregroundStyle(.secondary)
-            }.padding(22)
+            }.padding(.horizontal, 22).padding(.vertical, 12)
             Form {
                 TextField("模型 ID", text: $price.id, prompt: Text("openai/model-name"))
                 TextField("显示名称", text: $price.name)

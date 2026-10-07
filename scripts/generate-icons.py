@@ -20,9 +20,10 @@ def main():
         template = (pathlib.Path(directory) / "template-64.png").read_bytes()
         rgba = (pathlib.Path(directory) / "brand.rgba").read_bytes()
         images = {s: (pathlib.Path(directory) / f"{s}.png").read_bytes() for s in SIZES}
-    (ROOT / "apps/macos/Resources/Brand.png").write_bytes(images[128])
+        brands = {s: (pathlib.Path(directory) / f"brand-{s}.png").read_bytes() for s in SIZES}
+    (ROOT / "apps/macos/Resources/Brand.png").write_bytes(brands[128])
     (ROOT / "apps/macos/Resources/BrandTemplate.png").write_bytes(template)
-    (ROOT / "apps/desktop/web/brand.png").write_bytes(images[128])
+    (ROOT / "apps/desktop/web/brand.png").write_bytes(brands[128])
     (ROOT / "apps/desktop/src-tauri/icons/brand.rgba").write_bytes(rgba)
     icons = ROOT / "apps/desktop/src-tauri/icons"
     icons.mkdir(parents=True, exist_ok=True)
@@ -47,7 +48,9 @@ def main():
     previews.mkdir(parents=True, exist_ok=True)
     for size in (16, 32, 64, 256, 512):
         (previews / f"aieyes-{size}.png").write_bytes(images[size])
-    print("Generated platform icons and docs/icon-design previews")
+    for size in (16, 32, 64, 128, 256):
+        (previews / f"brand-{size}.png").write_bytes(brands[size])
+    print("Generated platform application icons, transparent brand marks and previews")
 
 
 if __name__ == "__main__":

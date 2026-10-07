@@ -4,7 +4,10 @@
   const label = result => !result ? '连接未测试' : result.status === 'unstable' ? '连接不稳定' : result.status === 'failed' ? '连接失败' : (result.mode === 'direct' ? '直连 ' : result.mode === 'system' ? '系统 ' : '代理 ') + result.averageMs + ' ms';
   const detail = result => result ? '应用出站连接测试（不代表 SSH 或所有账户可用）\n'+result.sites.map(site => site.url+' · '+(site.latencyMs!=null?site.latencyMs+' ms':site.error)).join('\n')+'\n测试于 '+new Date(result.testedAt*1000).toLocaleString() : '测试当前应用连接方式';
   function accept(next) { snapshot=Array.isArray(next?.sites)?next:null; draw(); }
-  function draw() { const button=document.querySelector('#panel-latency');if(button){button.textContent=busy?'出站测试中…':'出站 · '+label(snapshot);button.title=detail(snapshot);button.disabled=busy;} }
+  function draw() {
+    const button=document.querySelector('#panel-latency');if(button){button.textContent=busy?'出站测试中…':'测试出站连接';button.title=detail(snapshot);button.disabled=busy;}
+    const activity=document.querySelector('#activity');if(activity&&PANEL){const base=activity.textContent.split(' · 出站 · ')[0],text=base+' · 出站 · '+(busy?'测试中…':label(snapshot));activity.textContent=text;activity.title=text+'\n'+detail(snapshot);activity.setAttribute('aria-label',text+'；点击刷新'+(state.page==='servers'?'服务器':'记录'));}
+  }
   async function refresh(force=false) {
     if(busy || (!force && Date.now()-attempted<300000))return;
     busy=true;attempted=Date.now();draw();
@@ -12,7 +15,7 @@
     try { const measured=await api('network.test',{force});if(revision===testedRevision)accept(measured); } catch(error) { if(revision===testedRevision&&typeof notify==='function')notify(String(error),'error'); }
     finally { busy=false;draw(); }
   }
-  window.AieyesNetwork={label,detail,refresh,invalidate(){revision++;snapshot=null;attempted=0;draw();}};
+  window.AieyesNetwork={label,detail,refresh,draw,invalidate(){revision++;snapshot=null;attempted=0;draw();}};
   Promise.resolve(appReady).then(async()=>{
     await window.__TAURI__.event.listen('desktop:network',({payload})=>{attempted=Date.now();accept(payload);});
     try{accept(await api('network.status'));}catch{accept(null);}

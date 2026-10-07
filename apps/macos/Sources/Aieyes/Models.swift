@@ -1,5 +1,22 @@
 import Foundation
 
+enum PanelAccountPreference {
+    static func selections(_ json: String, accounts: [AgentAccount], order: [String]) -> [String: [String]] {
+        var result = (try? JSONDecoder().decode([String: [String]].self, from: Data(json.utf8))) ?? [:]
+        let eligible = accounts.filter { $0.archived != true && $0.quotaEnabled }
+        let sorted = eligible.sorted { (order.firstIndex(of: $0.key) ?? Int.max) < (order.firstIndex(of: $1.key) ?? Int.max) }
+        for provider in Set(eligible.map(\.provider)).union(result.keys) {
+            let keys = sorted.filter { $0.provider == provider }.map(\.key)
+            // A missing preference takes the first five; an explicit [] hides this Agent.
+            result[provider] = Array((result[provider] ?? keys).filter { keys.contains($0) }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.prefix(5))
+        }
+        return result
+    }
+    static func encode(_ selections: [String: [String]]) -> String {
+        String(data: (try? JSONEncoder().encode(selections)) ?? Data("{}".utf8), encoding: .utf8) ?? "{}"
+    }
+}
+
 struct Tokens: Codable {
     var input: Double = 0, output: Double = 0, cacheRead: Double = 0, cacheWrite: Double = 0, reasoning: Double = 0
     var allInput: Double { input + cacheRead + cacheWrite }
@@ -112,11 +129,43 @@ struct MetricSample: Codable {
 struct HostResult: Codable, Identifiable { var id: String, name: String, sample: MetricSample?, error: String? }
 
 enum Format {
-    static func resetCountdown(_ stamp: Double?, now: Date = Date()) -> String {
-        guard let stamp else { return "重置时间未知" }
-        guard stamp > now.timeIntervalSince1970 else { return "确认重置中" }
-        let minutes = Int(ceil((stamp - now.timeIntervalSince1970) / 60))
-        return (minutes >= 60 ? "\(minutes / 60) 小时 " : "") + "\(minutes % 60) 分后重置"
+    // A dormant window does not start another countdown until a new reset is reported.
+    // The derived date is display-only; refresh and sampling retain the original timestamp.
+    static func resetDisplayTime(_ stamp: Double?, windowMinutes: Int? = nil, now: Date = Date()) -> Double? {
+        if let stamp, stamp.isFinite, stamp > now.timeIntervalSince1970 { return stamp }
+        guard let windowMinutes, windowMinutes > 0 else { return nil }
+        return now.timeIntervalSince1970 + Double(windowMinutes) * 60
+    }
+    static func resetCountdown(_ stamp: Double?, windowMinutes: Int? = nil, now: Date = Date()) -> String {
+        guard let target = resetDisplayTime(stamp, windowMinutes: windowMinutes, now: now) else {
+            return stamp.map { $0.isFinite && $0 > 0 ? "确认重置中" : "重置时间未知" } ?? "重置时间未知"
+        }
+        let rawMinutes = ceil((target - now.timeIntervalSince1970) / 60)
+        guard rawMinutes.isFinite, rawMinutes > 0, rawMinutes < Double(Int.max) else { return "重置时间未知" }
+        let minutes = Int(rawMinutes)
+        var parts: [String] = []
+        if minutes >= 1440 { parts.append("\(minutes / 1440) 天") }
+        if minutes % 1440 >= 60 { parts.append("\(minutes % 1440 / 60) 小时") }
+        if minutes % 60 > 0 { parts.append("\(minutes % 60) 分") }
+        return parts.joined(separator: " ") + "后重置"
+    }
+    static func quotaReset(_ window: QuotaWindow, now: Date = Date()) -> String {
+        let countdown = resetCountdown(window.resetsAt, windowMinutes: window.windowMinutes, now: now)
+        guard let stamp = resetDisplayTime(window.resetsAt, windowMinutes: window.windowMinutes, now: now) else { return countdown }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "MM/dd HH:mm"
+        return countdown + " · " + formatter.string(from: Date(timeIntervalSince1970: stamp))
+    }
+    static func subscription(_ plan: String) -> String {
+        let name = plan.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ["plus":"Plus", "pro":"Pro", "free":"Free", "max":"Max", "team":"Team", "business":"Business", "enterprise":"Enterprise", "api":"API"][name.lowercased()] ?? name
+    }
+    static func creditPrimary(_ balance: CreditsBalance?) -> String {
+        if balance?.unlimited == true { return "无限" }
+        guard let raw = balance?.balance else { return balance?.hasCredits == true ? "数量未知" : "—" }
+        return credits(raw)
     }
 
     static func compact(_ value: Double) -> String {

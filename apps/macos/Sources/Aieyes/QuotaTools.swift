@@ -35,6 +35,7 @@ struct SamplingManagementView: View {
 
 struct QuotaOrderView: View {
     @ObservedObject var model: AppModel
+    var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var keys: [String] = []
@@ -48,6 +49,7 @@ struct QuotaOrderView: View {
                 ForEach(keys, id: \.self) { key in
                     HStack {
                         Image(systemName: "line.3.horizontal").foregroundStyle(.secondary)
+                        ProviderMark(provider: key.components(separatedBy: ":").first ?? "custom")
                         Text(model.settings.accounts.first { $0.key == key }?.name ?? key)
                         Spacer()
                         Button { move(key, -1) } label: { Image(systemName: "arrow.up") }.disabled(keys.first == key).accessibilityLabel("上移账户")
@@ -56,15 +58,49 @@ struct QuotaOrderView: View {
                 }.onMove { from, to in withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { keys.move(fromOffsets: from, toOffset: to) } }
             }.frame(minHeight: 150, maxHeight: 300)
             if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
-            HStack { Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction); Button(saving ? "保存中…" : "保存顺序") {
+            HStack { Spacer(); Button("取消") { close() }.keyboardShortcut(.cancelAction); Button(saving ? "保存中…" : "保存顺序") {
                 saving = true
-                Task { do { try await model.saveQuotaOrder(keys); dismiss() } catch { self.error = error.localizedDescription }; saving = false }
+                Task { do { try await model.saveQuotaOrder(keys); close() } catch { self.error = error.localizedDescription }; saving = false }
             }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }.disabled(saving)
         }.font(AppFont.body).padding(24).frame(width: 440).onAppear { keys = model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key) }
     }
+    private func close() { if let onClose { onClose() } else { dismiss() } }
     private func move(_ key: String, _ offset: Int) {
         guard let i = keys.firstIndex(of: key), keys.indices.contains(i + offset) else { return }
         withAnimation(reduceMotion ? nil : .spring(response: 0.3)) { keys.swapAt(i, i + offset) }
+    }
+}
+
+struct PanelAccountsView: View {
+    @ObservedObject var model: AppModel
+    var onClose: () -> Void
+    @AppStorage("panel.accounts.v1") private var stored = "{}"
+    @State private var selected: [String: [String]] = [:]
+    @FocusState private var cancelFocused: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("面板显示账户").font(AppFont.title)
+            Text("每个 Agent 可选择 0～5 个账户。仅影响本机面板，详情与采集保留全部账户。").font(AppFont.secondary).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(Array(Set(model.quotaAccounts.map(\.provider))).sorted(), id: \.self) { provider in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack { ProviderIdentity(provider: provider); Text("· \(selected[provider]?.count ?? 0)/5") }.font(AppFont.section)
+                            ForEach(model.quotaAccounts.filter { $0.provider == provider }, id: \.key) { account in
+                                Toggle(account.name, isOn: Binding(get: { selected[provider]?.contains(account.key) == true }, set: { enabled in
+                                    var keys = selected[provider] ?? []
+                                    if enabled && keys.count < 5 { keys.append(account.key) } else if !enabled { keys.removeAll { $0 == account.key } }
+                                    selected[provider] = keys
+                                })).disabled(selected[provider]?.contains(account.key) != true && (selected[provider]?.count ?? 0) >= 5)
+                            }
+                        }
+                    }
+                    if model.quotaAccounts.isEmpty { Text("尚无可显示限额的账户").foregroundStyle(.secondary) }
+                }.padding(4)
+            }
+            HStack { Spacer(); Button("取消", action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button("保存面板选择") { stored = PanelAccountPreference.encode(selected); onClose() }.buttonStyle(.borderedProminent) }
+        }.padding(24).font(AppFont.body).frame(width: 440, height: 480).tint(Palette.accent)
+            .onAppear { selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); cancelFocused = true }
     }
 }
 

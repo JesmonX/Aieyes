@@ -5,6 +5,22 @@ import { readFileSync } from 'node:fs';
 
 const read = name => readFileSync(new URL(`../apps/desktop/web/${name}`, import.meta.url), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test('panel account choices cap each Agent and preserve explicit empty choices', () => {
+  const data=new Map(),window={};
+  vm.runInNewContext(read('ui-state.js'),{window,localStorage:{getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value)}});
+  const accounts=[...Array.from({length:20},(_,i)=>({provider:'codex',id:'c'+i,quotaEnabled:true})),...Array.from({length:6},(_,i)=>({provider:'claude',id:'a'+i,quotaEnabled:true}))];
+  const order=accounts.map(a=>a.provider+':'+a.id).reverse(),settings={accounts};
+  const defaults=window.AieyesUI.panelAccounts(settings,order);
+  assert.deepEqual([...defaults.codex],['codex:c19','codex:c18','codex:c17','codex:c16','codex:c15']);
+  assert.equal(defaults.claude.length,5);
+  data.set('aieyes.panel.accounts.v1',JSON.stringify({codex:[],claude:['claude:a0','claude:a0','claude:missing','claude:a1']}));
+  assert.equal(window.AieyesUI.panelAccounts(settings,order).codex.length,0);
+  assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).claude],['claude:a0','claude:a1']);
+  accounts.at(-6).archived=true;
+  assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).claude],['claude:a1']);
+  accounts.filter(a=>a.provider==='claude').forEach(a=>a.archived=true);
+  assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).claude],[]);
+});
 function harness(file, initial = {}) {
   const elements = new Map(), events = new Map(), calls = [], notices = [], runs = [], timers = new Map();
   let dragCount = 0, maximized = false, timerId = 0, now = 1000;
@@ -28,7 +44,6 @@ function harness(file, initial = {}) {
   };
   const info = {mode:'auto',effectiveMode:'floating',platform:'windows',summary:'思考中 · 2 个会话',phase:'thinking',activeCount:2,sessions:[],page:'agent',panelOpen:false,panelPinned:false,hidden:false,...initial};
   const native = {
-    cursorInside:true,
     async startDragging(){dragCount++;},
     async isMaximized(){return maximized;},
     async toggleMaximize(){maximized=!maximized;windowCalls.push('maximize');},
@@ -41,7 +56,6 @@ function harness(file, initial = {}) {
       calls.push({command,args});
       if (command === 'desktop_panel') { info.panelOpen = args.open; return {...info}; }
       if (command === 'desktop_panel_pin') { info.panelPinned = args.pinned; return {...info}; }
-      if (command === 'desktop_panel_cursor_inside') return native.cursorInside;
       return info;
     }},
     event:{async listen(name, fn) { events.set(name, fn); return () => {}; }},

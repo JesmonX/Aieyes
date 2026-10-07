@@ -1,6 +1,6 @@
 /* Aieyes surface system — one translucent, rounded "vibrancy" language shared by
    Windows, Linux and the browser previews. Legacy token names (--panel, --border,
-   --solid, --soft, --shadow, --radius) stay defined because app.js reads --border,
+   --solid, --soft, --shadow) stay defined because app.js reads --border,
    --muted, --accent and --resource-* from the DOM at runtime. */
 :root {
   --font-ui: "Segoe UI Variable Text", "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
@@ -11,13 +11,14 @@
   --muted: #5a6883;
   --faint: #596781;
   --accent: #5566d9;
+  --balance-blue: #1e5ebf;
   --accent-deep: #4553c4;
   --accent-ink: #ffffff;
 
   /* Window pane, then the three card tiers that sit on top of it. */
   --window-base: #f7f8fb;
   --window-tint: rgba(246,248,253,.62);
---window-sheen: none;
+
   --window-edge: rgba(255,255,255,.62);
   --panel: rgba(255,255,255,.76);
   --surface-strong: rgba(255,255,255,.88);
@@ -43,8 +44,6 @@
   --r-xs: 7px;
   --r-sm: 10px;
   --r-md: 13px;
-  --r-lg: 16px;
-  --r-xl: 16px;
   --r-2xl: 20px;
   --r-pill: 999px;
   --font-body: 15px;
@@ -52,6 +51,11 @@
   --font-section: 16px;
   --font-title: 22px;
   --font-panel-title: 20px;
+  --font-panel-body: 14px;
+  --font-entry: 13px;
+  --font-panel-caption: 12px;
+  --font-panel-number: 26px;
+  --count-badge: rgba(88,108,214,.12);
   --space-card: 16px;
   --space-section: 20px;
   --radius-card: 16px;
@@ -59,7 +63,6 @@
   --radius-control: 9px;
   --shadow-card: var(--shadow-xs);
   --shadow-overlay: var(--shadow-float);
-  --radius: var(--radius-card);
 
   --ease: cubic-bezier(.22,.61,.36,1);
   --ease-soft: cubic-bezier(.33,1,.68,1);
@@ -83,10 +86,10 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --ink: #e6ebf7; --muted: #a3aec6; --faint: #8794ad;
-    --accent: #a3b3ff; --accent-deep: #8b9cfb; --accent-ink: #131a2a;
+    --accent: #a3b3ff; --accent-deep: #8b9cfb; --accent-ink: #131a2a; --balance-blue: #8cbcff;
     --window-base: #151a23;
     --window-tint: rgba(22,28,42,.58);
---window-sheen: none;
+
     --window-edge: rgba(255,255,255,.08);
     --panel: rgba(41,51,72,.58);
     --surface-strong: rgba(46,58,82,.78);
@@ -102,6 +105,7 @@
     --shadow: 0 1px 2px rgba(0,0,0,.28), 0 12px 28px -18px rgba(0,0,0,.6);
     --shadow-lift: 0 2px 6px rgba(0,0,0,.32), 0 26px 52px -24px rgba(0,0,0,.7);
     --shadow-float: 0 16px 34px -18px rgba(0,0,0,.6), 0 50px 110px -46px rgba(0,0,0,.8);
+    --count-badge: rgba(146,166,248,.18);
     --ok: #5cc4a4; --warn: #e0b062; --danger: #ff929c;
     color-scheme: dark;
   }
@@ -112,10 +116,40 @@
 }
 @media (forced-colors: active) {
   :root {
-    --ink: CanvasText; --muted: CanvasText; --faint: CanvasText; --accent: LinkText; --accent-ink: Canvas;
-    --panel: Canvas; --surface-strong: Canvas; --surface-soft: Canvas; --surface-sunken: Canvas;
+    --ink: CanvasText; --muted: CanvasText; --faint: CanvasText; --accent: LinkText; --accent-ink: Canvas; --balance-blue: LinkText;
+    --count-badge: Canvas; --panel: Canvas; --surface-strong: Canvas; --surface-soft: Canvas; --surface-sunken: Canvas;
     --card-border: CanvasText; --solid: Canvas; --soft: Canvas; --border: ButtonText; --hairline-strong: ButtonText;
     --highlight: Canvas; --shadow-xs: none; --shadow: none; --shadow-lift: none; --shadow-float: none;
-    --window-base: Canvas; --window-tint: Canvas; --window-sheen: none; --window-edge: Canvas;
+    --window-base: Canvas; --window-tint: Canvas; --window-edge: Canvas;
   }
 }
+
+/* BEGIN GENERATED PHASE COLORS */
+:root {
+  --phase-idle: #8491a7;
+  --phase-working: #17957f;
+  --phase-thinking: #8f57c6;
+  --phase-tool: #3f7fd6;
+  --phase-complete: #219355;
+  --phase-interrupted: #b1761f;
+  --phase-unknown: #895712;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --phase-idle: #91a0b7;
+  --phase-working: #2c9d88;
+  --phase-thinking: #ac78dd;
+  --phase-tool: #629cef;
+  --phase-complete: #44ad76;
+  --phase-interrupted: #d9a44c;
+  --phase-unknown: #e0b062;
+} }
+@media (forced-colors: active) { :root {
+  --phase-idle: CanvasText;
+  --phase-working: CanvasText;
+  --phase-thinking: CanvasText;
+  --phase-tool: CanvasText;
+  --phase-complete: CanvasText;
+  --phase-interrupted: CanvasText;
+  --phase-unknown: CanvasText;
+} }
+/* END GENERATED PHASE COLORS */

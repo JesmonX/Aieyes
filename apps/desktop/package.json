@@ -2,7 +2,7 @@
   "name": "aieyes-desktop-checks",
   "private": true,
   "scripts": {
-    "test:ui": "node ../../scripts/test-ui.cjs && node ../../scripts/test-ui-review.cjs && node ../../scripts/test-quota-ui.cjs && node ../../scripts/test-updates-ui.cjs && node ../../scripts/test-credits-wakeups-ui.cjs && node ../../scripts/test-ui-reform.cjs && node ../../scripts/test-improvements-ui.cjs && node ../../scripts/test-ui-audit.cjs"
+    "test:ui": "node ../../scripts/test-reset-display.cjs && node ../../scripts/test-ui.cjs && node ../../scripts/test-ui-review.cjs && node ../../scripts/test-quota-ui.cjs && node ../../scripts/test-updates-ui.cjs && node ../../scripts/test-credits-wakeups-ui.cjs && node ../../scripts/test-ui-reform.cjs && node ../../scripts/test-improvements-ui.cjs && node ../../scripts/test-ui-audit.cjs"
   },
   "devDependencies": {
     "playwright": "1.62.0"

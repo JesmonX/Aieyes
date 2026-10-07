@@ -9,7 +9,7 @@ stamp = int(time.time())
 def source(provider):
     return dict(id=provider+'-source',name=provider+' · 测试来源',provider=provider,accountId=provider,path='/tmp/aieyes-preview-missing',enabled=True,quotaCommand='',quotaPreCommand='',codexBinary='codex',agyBinary='agy')
 def window(key,name,used,minutes=10080,group=None):
-    return dict(id=key,name=name,usedPercent=used,windowMinutes=minutes,resetsAt=stamp+86400,groupName=group)
+    return dict(id=key,name=name,usedPercent=used,windowMinutes=minutes,resetsAt=stamp+minutes*60,groupName=group)
 settings=dict(version=2,sources=[source('codex'),source('agy')],accounts=[dict(id=p,name=n,provider=p,quotaEnabled=True) for p,n in [('codex','个人订阅'),('agy','工作空间 · agy')]],hosts=[],proxy=dict(mode='system',url=''),refreshSeconds=300,serverRefreshSeconds=10,menuMetric='icon',githubRepository='',modelMappings={})
 quotas=[dict(sourceId=p+'-source',accountId=p,provider=p,name=n,updatedAt=stamp,origin='live',windows=ws) for p,n,ws in [('codex','个人订阅',[window('codex:primary','5h',35,300),window('codex:secondary','7d',42)]),('agy','工作空间 · agy',[window(g+':'+str(m),g+' · '+('7d' if m==10080 else '5h'),v,m,g) for g,v in [('Claude Opus',28),('Claude Sonnet',65),('Gemini Pro',94)] for m in [300,10080]])]]
 tokens=dict(input=30000,output=12000,cacheRead=28000,cacheWrite=0,reasoning=0)
@@ -18,7 +18,7 @@ price=dict(id='test-model',name='测试模型',input=0.00001,output=0.00003,cach
 estimate=dict(id='preview',accountKey='codex:codex',windowId='codex:secondary',windowName='7d',sourceIds=['codex-source'],sourceNames=['本机 Codex'],status='pending',reason='额度已重置或异常回升；确认后开始新一段',startedAt=stamp-3600,checkpointAt=stamp-600,endedAt=None,consumedPercent=12,cost=2.4,totalTokens=70000,pricedTokens=70000,weeklyValue=20,calculationNote='手动采样估值 · 按本次模型组合估算',prices=[price])
 estimate.update(valuationMode='fiveHour',windowId='codex:primary',windowName='5h',status='active',reason='',fiveHourValue=20,weeklyDirectValue=100,weeklyRatioValue=110,calculationNote='5h 采样估值 · 7d 同期样本较少',capacity=dict(ratio=5.5,samples=6,weeklyPercent=12,updatedAt=stamp),segments=[])
 dashboard=dict(generatedAt=stamp,summary=usage,days=[],heatmap=[],models=[],trendDays=[],dayModels=[],pricingGaps=[],modelOptions=[],quotas=quotas,quotaOrder=['codex:codex','agy:agy'],quotaEstimates=[estimate],sources=[])
-quotas[0].update(credits=dict(hasCredits=True,unlimited=False,balance='990.125'),creditsUpdatedAt=stamp)
+quotas[0].update(plan='plus',credits=dict(hasCredits=True,unlimited=False,balance='990.125'),creditsUpdatedAt=stamp)
 dashboard['creditEstimates']=[dict(estimate,id='credit-preview',kind='credits',windowId='credits',windowName='Credits',status='active',reason='',weeklyValue=None,consumedCredits=10,valuePer500=120,valuePer1000=240)]
 dashboard['creditEstimates'][0]['valuationMode']=''
 task=dict(id='wake-preview',name='每日订阅唤醒',sourceId='codex-source',times=['08:00','13:30'],model='测试模型',effort='low',prompt='Hi. Reply only OK.',binary='')
@@ -40,8 +40,8 @@ if scenario:
     dashboard['dayModels'] = [dict(day=day['key'], model='test-model', usage=usage) for day in dashboard['trendDays']]
     if scenario == 'single':
         settings['sources'] = settings['sources'][:1]; settings['accounts'] = settings['accounts'][:1]; quotas = quotas[:1]
-    elif scenario == 'multi':
-        quotas = [dict(quotas[0], accountId='account-'+str(i), sourceId='source-'+str(i), name='订阅账户 '+str(i+1)) for i in range(5)]
+    elif scenario in ['multi', 'capacity']:
+        quotas = [dict(quotas[0], accountId='account-'+str(i), sourceId='source-'+str(i), name='订阅账户 '+str(i+1)) for i in range(20 if scenario == 'capacity' else 5)]
         settings['accounts'] = [dict(id=q['accountId'], provider='codex', name=q['name'], quotaEnabled=True) for q in quotas]
         settings['sources'] = [dict(source('codex'), id=q['sourceId'], accountId=q['accountId'], name='日志 '+str(i+1)) for i,q in enumerate(quotas)]
         settings['hosts'] = [dict(host, id='host-'+str(i), name='训练服务器 '+str(i+1), metrics=['cpu','memory','gpu']) for i in range(5)]
@@ -68,6 +68,9 @@ if scenario:
     dashboard['quotaOrder'] = [q['provider']+':'+q['accountId'] for q in quotas]
 for line in sys.stdin:
     r=json.loads(line)
+    if r['method'] == 'dashboard' and r.get('params', {}).get('model') == 'ui-filter-failure':
+        print(json.dumps(dict(jsonrpc='2.0', id=r['id'], error=dict(code=-32000, message='模拟筛选查询失败'))), flush=True)
+        continue
     scan = [dict(id=src['id'], error='连接失败：模拟日志不可读取') for src in settings['sources']] if scenario == 'failure' else []
     network=dict(testedAt=stamp,mode='system',averageMs=73,status='ok',sites=[dict(url='https://api.github.com/rate_limit',latencyMs=60,error=None),dict(url='https://openrouter.ai',latencyMs=86,error=None)])
     result={'settings.get':settings,'dashboard':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts,'network.test':network,'network.status':network}.get(r['method'],{})

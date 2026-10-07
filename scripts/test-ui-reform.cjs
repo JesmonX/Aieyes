@@ -1,4 +1,4 @@
-const {discardEditor}=require('./ui-test-helpers.cjs');
+const {discardEditor,commitSettings}=require('./ui-test-helpers.cjs');
 // 10-06 behavior and visual matrix. All data and RPC responses are synthetic.
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
@@ -23,7 +23,7 @@ function fixture(){
   const r=reform;r.calls.push({method:args.method,params:structuredClone(args.params)});
   switch(args.method){
    case 'hello':return {version:'fixture'};
-   case 'settings.get':return settings();
+   case 'settings.get':{const current=settings(),saved=r.saved.at(-1);return saved?{...structuredClone(saved),sources:current.sources,accounts:current.accounts,hosts:current.hosts}:current;}
    case 'settings.save':r.saved.push(args.params);return {};
    case 'sources.scan':if(r.waitScan)await new Promise(resolve=>r.releaseScan=resolve);return r.failures.filter(row=>!args.params.sourceId||row.id===args.params.sourceId);
    case 'quotas.refresh':return [quota];
@@ -91,8 +91,8 @@ function fixture(){
     }
    }
    else{
-    await page.keyboard.press('Control+,');assert.equal(await page.locator('#general-form').count(),0);await page.locator('[data-settings-tab=general]').click();assert.equal(await page.locator('#general-form button.primary').count(),1);assert.equal(await page.locator('#connection-form').count(),0);
-    await page.locator('#field-refreshSeconds').fill('180');await page.locator('#general-form button.primary').click();await page.waitForFunction(()=>!state.busy);assert.match(await page.locator('.saved-feedback').textContent(),/已保存/);
+    await page.keyboard.press('Control+,');assert.equal(await page.locator('#general-form').count(),0);await page.locator('[data-settings-tab=general]').click();assert.equal(await page.locator('#settings-save-all').count(),1);assert.equal(await page.locator('#connection-form').count(),0);
+    await page.locator('#field-refreshSeconds').fill('180');await page.locator('#settings-save-all').click();await page.waitForFunction(()=>!state.busy);assert.match(await page.locator('.settings-draft-label').textContent(),/已保存/);assert.equal(await page.evaluate(()=>state.settings.refreshSeconds),180);assert.equal(await page.evaluate(()=>reform.saved.at(-1).refreshSeconds),180);
     await page.locator('[data-settings-tab=hosts]').click();await page.locator('[data-remove=h1]').click();assert.match(await page.locator('#editor-fields').textContent(),/本机 Codex/);assert.equal(await page.locator('#cancel-editor').evaluate(el=>el===document.activeElement),true);await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>state.settings.hosts.length),1);
     await page.keyboard.press('Control+Shift+D');
    }

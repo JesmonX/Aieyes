@@ -31,11 +31,12 @@
     </div>
     <footer class="panel-foot">
       <div class="panel-connection"><span id="activity" aria-live="polite">正在加载</span>
-      <button type="button" id="panel-latency" aria-label="测试代理连接" title="测试当前应用连接方式">连接未测试</button></div>
+      </div><div class="panel-actions">
       <button type="button" id="panel-update" aria-label="检查更新" title="检查更新"><svg viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5"/></svg><span class="update-badge" hidden>!</span></button>
       <button type="button" id="panel-detail" aria-label="打开详情" title="打开详情（Ctrl+Shift+D）"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8M10 20H4v-6"/></svg></button>
       <button type="button" id="panel-settings" aria-label="设置" title="设置（Ctrl+,）"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg></button>
-      <details id="panel-more" class="panel-more"><summary aria-label="更多操作" title="更多操作"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></summary><div class="panel-more-menu"><p>关闭面板后继续后台监测。</p><button type="button" id="panel-pin" data-pinned="false" aria-pressed="false">固定面板</button><button type="button" id="panel-quit">退出 Aieyes</button></div></details>
+      <details id="panel-more" class="panel-more"><summary aria-label="更多操作" title="更多操作"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></summary><div class="panel-more-menu"><p>关闭面板后继续后台监测。</p><button type="button" id="panel-accounts">面板显示账户…</button><button type="button" id="panel-latency">测试出站连接</button><button type="button" id="panel-pin" data-pinned="false" aria-pressed="false">固定面板</button><button type="button" id="panel-quit">退出 Aieyes</button></div></details>
+      </div>
     </footer>
   </div>
   <script src="icons.js"></script><script src="webview-guards.js"></script><script src="tooltip.js"></script>

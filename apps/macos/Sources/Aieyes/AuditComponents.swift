@@ -1,5 +1,58 @@
 import SwiftUI
 
+struct ProviderMark: View {
+    var provider: String
+    private static let images: [String: NSImage] = {
+        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("desktop/web")
+        return ["codex", "claude", "antigravity", "deepseek"].reduce(into: [:]) { result, key in
+            let name = "provider-" + key
+            let url = Bundle.main.url(forResource: name, withExtension: "png") ?? source.appendingPathComponent(name + ".png")
+            if let image = NSImage(contentsOf: url) { result[key] = image }
+        }
+    }()
+    var body: some View {
+        Group {
+            if let image = Self.images[provider == "agy" ? "antigravity" : provider] {
+                Image(nsImage: image).resizable().renderingMode(provider == "codex" ? .template : .original).scaledToFit()
+            } else { Image(systemName: "terminal").resizable().scaledToFit().foregroundStyle(.secondary) }
+        }.frame(width: 36, height: 36).help(Format.provider(provider)).accessibilityLabel(Format.provider(provider))
+    }
+}
+struct ProviderIdentity: View {
+    var provider: String
+    var body: some View { HStack(spacing: 5) { ProviderMark(provider: provider); Text(Format.provider(provider)) } }
+}
+struct SubscriptionBadge: View {
+    var plan: String
+    var body: some View {
+        Text(Format.subscription(plan)).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .foregroundStyle(Palette.accent).background(Palette.accent.opacity(0.12), in: Capsule())
+            .help(plan).accessibilityLabel("订阅 " + Format.subscription(plan))
+    }
+}
+struct CreditBalanceLabel: View {
+    var balance: CreditsBalance?
+    var estimate: QuotaEstimate?
+    var compact = false
+    var body: some View {
+        HStack(spacing: 4) {
+            Label("余额", systemImage: "c.circle").foregroundStyle(Palette.balanceBlue)
+            Text(compact ? Format.creditPrimary(balance) : String(Format.creditBalance(balance, estimate: estimate).dropFirst(3)))
+                .monospacedDigit().lineLimit(compact ? 1 : nil)
+        }.font(AppFont.secondary).help(Format.creditBalance(balance, estimate: estimate))
+    }
+}
+struct QuotaResetLabel: View {
+    var window: QuotaWindow
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            Text(Format.quotaReset(window, now: context.date)).font(AppFont.secondary).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        }
+    }
+}
+
 /// Wrapping chips preserve their intrinsic label width without shrinking numeric content.
 struct FlowLayout: Layout {
     var spacing: CGFloat = 6
@@ -20,30 +73,5 @@ struct FlowLayout: Layout {
             points.append(CGPoint(x: x, y: y)); x += size.width + spacing; height = max(height, size.height)
         }
         return (CGSize(width: width, height: y + height), points)
-    }
-}
-
-struct PanelQuotaSummary: View {
-    var quota: Quota
-    var open: () -> Void
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button(action: open) {
-                HStack { Text(quota.name).fontWeight(.semibold).lineLimit(1); Spacer(); Text("实时账户限额").foregroundStyle(.secondary); Image(systemName: "chevron.right") }
-            }.buttonStyle(.plain).accessibilityLabel("查看 " + quota.name + " 的实时限额")
-            if let balance = quota.balances?.first { Text(balance.currency + " " + balance.total).font(AppFont.section).monospacedDigit() }
-            HStack(spacing: 12) {
-                ForEach(Array(quota.windows.prefix(2))) { window in
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack { Text(window.windowMinutes == 300 ? "5h" : window.windowMinutes == 10080 ? "7d" : window.name).lineLimit(1); Spacer(); Text(Format.percent(max(0, 100 - window.usedPercent))).monospacedDigit() }
-                        ResourceBar(percent: 100 - window.usedPercent, tint: Palette.quota(window.usedPercent))
-                    }.frame(maxWidth: .infinity)
-                }
-            }
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                Text(quota.error == nil ? Format.resetCountdown(quota.windows.compactMap(\.resetsAt).min(), now: context.date) : "限额更新失败 · 查看详情")
-                    .font(.system(size: 13)).foregroundStyle(quota.error == nil ? Color.secondary : Palette.warn)
-            }
-        }.font(AppFont.secondary).padding(10).modifier(NeutralCard())
     }
 }

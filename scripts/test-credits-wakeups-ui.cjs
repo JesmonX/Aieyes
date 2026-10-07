@@ -4,11 +4,11 @@ const {chromium}=require('../apps/desktop/node_modules/playwright');
 function fixture(){
  window.setInterval=()=>0;
  const now=Date.now()/1000,summary={tokens:{input:0,output:0,cacheRead:0,cacheWrite:0},total:0,cost:0,pricedTokens:0,events:0};
- const q={provider:'codex',accountId:'a',sourceId:'s',name:'订阅账户',updatedAt:now,origin:'live',windows:[],credits:{hasCredits:true,unlimited:false,balance:'1234.125'},creditsUpdatedAt:now,bankReset:{availableCount:2,credits:[]}};
+ const q={provider:'codex',accountId:'a',sourceId:'s',name:'订阅账户',plan:'pro',updatedAt:now,origin:'live',windows:[],credits:{hasCredits:true,unlimited:false,balance:'1234.125'},creditsUpdatedAt:now,bankReset:{availableCount:2,credits:[]}};
  const settings={accounts:[{id:'a',provider:'codex',name:'订阅账户',quotaEnabled:true}],sources:[{id:'s',provider:'codex',accountId:'a',name:'本机订阅',path:'/fixture',enabled:true}],hosts:[],modelMappings:{},proxy:{mode:'direct'},refreshSeconds:300,serverRefreshSeconds:10};
  window.testFeature={records:[],tasks:[],calls:[],failRemoval:false};
  window.__TAURI__={event:{async listen(){return()=>{};}},window:{getCurrentWindow:()=>({async isMaximized(){return false;},async onResized(){return()=>{};}})},core:{async invoke(command,args){
-  if(command==='desktop_info')return {platform:'windows',mode:'floating',effectiveMode:'floating',summary:'Idle',sessions:[],panelOpen:true};if(command==='desktop_panel_cursor_inside')return true;if(command!=='engine_call')return {};
+  if(command==='desktop_info')return {platform:'windows',mode:'floating',effectiveMode:'floating',summary:'Idle',sessions:[],panelOpen:true};if(command!=='engine_call')return {};
   const f=window.testFeature,{method,params}=args;f.calls.push({method,params});
   if(method==='hello')return {version:'test'};if(method==='settings.get')return settings;
   if(method==='dashboard')return {generatedAt:now,summary,quotas:[q],quotaOrder:['codex:a'],quotaEstimates:[],creditEstimates:f.records,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:[],pricingGaps:[]};
@@ -50,7 +50,26 @@ function fixture(){
   assert.equal(await page.evaluate(()=>creditValue({status:'pending',valuePer1000:200})),'待确认');
   if(await card().locator('.quota-disclosure').evaluate(el=>el.open))await card().locator('.quota-disclosure summary').click();
   await page.evaluate(()=>loadDashboard());
-  assert.equal(await card().locator('.quota-disclosure').evaluate(el=>el.open),true,'Single account remains expanded after refresh');
+  assert.equal(await card().locator('.quota-disclosure').evaluate(el=>el.open),false,'Single account preserves its collapsed summary after refresh');assert(!await card().locator('.credit-row').isVisible());
+  assert(await card().locator('.quota-credit-summary').isVisible());
+  const titleBox=await card().locator('.quota-title h3').boundingBox(),balanceBox=await card().locator('.quota-credit-summary').boundingBox();
+  assert(balanceBox.x>=titleBox.x+titleBox.width-1 && Math.abs((balanceBox.y+balanceBox.height/2)-(titleBox.y+titleBox.height/2))<3,'Collapsed credits stay to the right of the title on the same line');
+  assert.equal(await card().locator('.quota-credit-summary .credit-label').evaluate(el=>getComputedStyle(el).color),'rgb(30, 94, 191)');
+  assert.equal(await card().locator('.quota-title .provider-mark img').evaluate(img=>img.complete&&img.naturalWidth>0),true,'Provider icon is bundled and loads');
+  assert.equal(await card().locator('.subscription-badge').textContent(),'Pro');
+  const edgeCases=await page.evaluate(()=>{
+    const holder=document.createElement('div');holder.style.width='414px';document.body.append(holder);
+    const cases=[{hasCredits:true,unlimited:false,balance:'0'},{hasCredits:true,unlimited:true},{hasCredits:true,unlimited:false},{hasCredits:false,unlimited:false},{hasCredits:true,unlimited:false,balance:'123456789.125'}];
+    try { return cases.map(credits=>{
+      holder.innerHTML=quotaCard({...state.dashboard.quotas[0],name:'非常长的订阅账户名称用于检查折叠标题和余额在同一行',credits});
+      const title=holder.querySelector('.quota-title'),label=holder.querySelector('.quota-credit-summary'),value=label.querySelector('strong'),a=title.getBoundingClientRect(),b=label.getBoundingClientRect();
+      return {text:value.textContent,sameLine:b.top>=a.top&&b.bottom<=a.bottom,withinCard:b.right<=a.right};
+    }); } finally {holder.remove();}
+  });
+  assert.deepEqual(edgeCases.map(c=>c.text),['0.00','无限','数量未知','—','123456789.13']);assert(edgeCases.every(c=>c.sameLine&&c.withinCard));
+  const foldedPreviews=path.resolve(__dirname,'../.local/ui-previews');fs.mkdirSync(foldedPreviews,{recursive:true});
+  for(const colorScheme of ['light','dark']){await page.emulateMedia({colorScheme});await page.screenshot({animations:'disabled',path:path.join(foldedPreviews,'credit-folded-'+surface+'-'+colorScheme+'.png')});}
+  await page.emulateMedia({colorScheme:'light'});
   await card().locator('.quota-disclosure summary').click();
   await page.locator('[data-credit-estimate]:visible').click();await page.locator('#estimate-confirm').check();await page.locator('#estimate-start').click();await page.locator('#estimate-stop').waitFor();assert.match(await page.locator('#quota-dialog').textContent(),/1000 credit ≈ \$200.00 USD/);assert.doesNotMatch(await page.locator('#quota-dialog').textContent(),/500 credits/);await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();await page.locator('#quota-close').click();
   await page.waitForFunction(()=>document.querySelector('#content .credit-row')?.textContent.includes('≈'));assert.match(await card().locator('.credit-row').textContent(),/余额 1234.13 credits ≈ \$246.83 USD/);
@@ -65,7 +84,7 @@ function fixture(){
    await page.locator('#content .quota-disclosure summary').click();
    await page.reload();await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
    assert.equal(await page.evaluate(()=>state.days),30);assert.equal(await page.evaluate(()=>state.cost),true);
-   assert.equal(await page.locator('.quota-disclosure').evaluate(el=>el.open),true);
+   assert.equal(await page.locator('.quota-disclosure').evaluate(el=>el.open),false,'Panel reconstruction restores the collapsed summary');
    assert.equal(await page.evaluate(()=>testFeature.calls.some(c=>c.method==='creditEstimates.start')),false,'Recreating the panel does not start another sample');
   }
   if(surface==='index.html'){

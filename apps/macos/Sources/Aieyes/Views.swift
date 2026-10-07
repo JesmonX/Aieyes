@@ -17,19 +17,26 @@ struct Surface<Content: View>: View {
 }
 
 private struct AccessibleSurfacePreview: EnvironmentKey { static let defaultValue = false }
+private struct TranslucentPanel: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
+    var translucentPanel: Bool {
+        get { self[TranslucentPanel.self] }
+        set { self[TranslucentPanel.self] = newValue }
+    }
     var previewAccessibleSurfaces: Bool {
         get { self[AccessibleSurfacePreview.self] }
         set { self[AccessibleSurfacePreview.self] = newValue }
     }
 }
 struct NeutralCard: ViewModifier {
+    @Environment(\.translucentPanel) private var translucentPanel
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     func body(content: Content) -> some View {
         content.background {
             if previewAccessible || reduceTransparency || contrast == .increased { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(Color(nsColor: .controlBackgroundColor)) }
+            else if translucentPanel { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(Color(nsColor: .controlBackgroundColor).opacity(0.35)) }
             else { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(.regularMaterial) }
         }
         .overlay(RoundedRectangle(cornerRadius: Palette.radiusCard).strokeBorder(Palette.cardBorder.opacity(previewAccessible || contrast == .increased ? 1 : 0.22), lineWidth: previewAccessible || contrast == .increased ? 2 : 1))
@@ -58,16 +65,24 @@ struct RootView: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var updater = AppUpdater.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     var compact = true
-    @State private var tab = "agent"
+    @AppStorage private var tab: String
     @State private var costMode = false
-    @State private var orderingQuotas = false
-    @State private var showingAccounts = false
-    @State private var serverFilter = "all"
-    @AppStorage("quota.pinned") private var pinnedAccount = ""
+    @AppStorage private var serverFilter: String
+    @AppStorage private var trendExpanded: Bool
+    @AppStorage private var sessionsExpanded: Bool
+    @AppStorage("panel.accounts.v1") private var panelAccounts = "{}"
     private var usageDashboard: Dashboard { compact ? model.panelDashboard : model.dashboard }
     init(model: AppModel, compact: Bool = true, page: String = "agent") {
-        self.model = model; self.compact = compact; _tab = State(initialValue: page)
+        self.model = model; self.compact = compact
+        let scope = compact ? "panel." : "detail."
+        _tab = AppStorage(wrappedValue: page, scope + "page")
+        _serverFilter = AppStorage(wrappedValue: "all", scope + "serverFilter")
+        _trendExpanded = AppStorage(wrappedValue: false, scope + "trendExpanded")
+        _sessionsExpanded = AppStorage(wrappedValue: false, scope + "sessionsExpanded")
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -90,17 +105,15 @@ struct RootView: View {
         }
         .frame(width: compact ? 450 : nil, height: compact ? model.panelHeight : nil)
         .frame(minWidth: compact ? nil : 760, minHeight: compact ? nil : 480)
-        .background {
-            ZStack {
-                Rectangle().fill(.ultraThinMaterial)
-                Color(nsColor: .windowBackgroundColor).opacity(0.5)
-            }
-        }
+        .background { rootBackground }
+        .environment(\.translucentPanel, compact)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: tab)
         .font(AppFont.body).disabled(model.installingUpdate)
         .tint(Palette.accent)
-        .sheet(isPresented: $orderingQuotas) { QuotaOrderView(model: model) }
-        .sheet(isPresented: $showingAccounts) { allAccounts }
+        .onAppear { initializePanelAccounts() }
+        .onChange(of: model.settings) { _, _ in initializePanelAccounts() }
+        .onChange(of: model.dashboard.generatedAt) { _, _ in initializePanelAccounts() }
+        .onChange(of: model.dashboard.quotaOrder) { _, _ in initializePanelAccounts() }
         .onChange(of: model.provider) { _, _ in model.selectedModel = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; Task { await model.reload() } }
         .onChange(of: model.selectedAccount) { _, _ in model.selectedSource = "all"; Task { await model.reload() } }
         .onChange(of: model.selectedSource) { _, _ in Task { await model.reload() } }
@@ -110,29 +123,26 @@ struct RootView: View {
         .onChange(of: model.requestedDetailPage) { _, page in if !compact, let page { tab = page; model.requestedDetailPage = nil } }
         .onAppear { if !compact, let page = model.requestedDetailPage { tab = page; model.requestedDetailPage = nil }; model.setServerVisible(tab == "servers", window: compact ? "panel" : "detail") }
     }
-    private var allAccounts: some View {
-        ScrollView {
-            VStack(spacing: 14) {
-                HStack { Text("实时账户限额").font(AppFont.section); Spacer(); Button("关闭") { showingAccounts = false }.keyboardShortcut(.cancelAction) }
-                ForEach(model.dashboard.quotas) { quota in
-                    QuotaCard(quota: quota, compact: true, collapsible: canCollapse(quota), estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id })
-                    HStack { Button("置顶 " + quota.name) { pinnedAccount = quota.id; showingAccounts = false }; Button("编辑账户") { editAccount(quota.id) } }
-                }
-                ForEach(displayedQuotaAccounts.filter { account in !model.dashboard.quotas.contains { $0.id == account.key } }, id: \.key) { account in
-                    Surface(title: account.name) { Text(model.quotaBusy ? "正在读取账户限额…" : model.quotaError == nil ? "等待首次限额查询" : "暂时无法读取限额，可重试").foregroundStyle(.secondary); Button("编辑账户") { editAccount(account.key) } }
-                }
-                Button("刷新限额") { Task { await model.refreshQuotas() } }.disabled(model.quotaBusy)
-            }.padding(20)
-        }.frame(width: 460, height: 520)
+    @ViewBuilder private var rootBackground: some View {
+        if compact {
+            // NSPopover already supplies behind-window vibrancy. Avoid stacking blur layers.
+            Color(nsColor: .windowBackgroundColor).opacity(reduceTransparency || contrast == .increased || previewAccessible ? 1 : 0.12)
+        } else {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                Color(nsColor: .windowBackgroundColor).opacity(0.5)
+            }
+        }
     }
-    private func editAccount(_ key: String) { showingAccounts = false; model.requestedAccountKey = key; model.settingsTab = "sources"; model.showSettings?() }
+    private func initializePanelAccounts() {
+        guard compact && model.dashboard.generatedAt > 0 && !CommandLine.arguments.contains("--render") else { return }
+        panelAccounts = PanelAccountPreference.encode(PanelAccountPreference.selections(panelAccounts, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []))
+    }
     private var header: some View {
         HStack(spacing: 12) {
             BrandMark().frame(width: 34, height: 34)
-            if !compact { VStack(alignment: .leading, spacing: 1) { Text("Aieyes").font(AppFont.section); EmptyView() } }
             Picker("页面", selection: $tab) { Text("Agent").tag("agent"); Text("服务器").tag("servers") }
-                .pickerStyle(.segmented).labelsHidden().frame(maxWidth: compact ? .infinity : 230)
-            if !compact { Spacer() }
+                .pickerStyle(.segmented).labelsHidden().frame(maxWidth: .infinity)
             Menu {
                 Button(model.refreshLabel("scan")) { Task { await model.scan() } }.disabled(model.busy || model.quotaBusy)
                 Button(model.refreshLabel("quotas")) { Task { await model.refreshQuotas() } }.disabled(model.quotaBusy || model.busy)
@@ -143,27 +153,30 @@ struct RootView: View {
             }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("刷新").accessibilityLabel("刷新选项")
         }.padding(.horizontal, compact ? 18 : 28).padding(.vertical, compact ? 8 : 16)
     }
+    private var footerStatus: String { (tab == "servers" ? model.serverStatusText : model.statusText) + " · 出站 · " + (model.networkBusy ? "测试中…" : model.networkTest?.label ?? "连接未测试") }
     private var footer: some View {
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: compact ? 3 : 8) {
             Button { Task { if tab == "servers" { await model.sampleHosts() } else { await model.scan() } } } label: {
                 HStack(spacing: 6) {
-                    if model.busy || model.quotaBusy || model.serverBusy { ProgressView().controlSize(.mini).accessibilityLabel("进行中") }
-                    else { Circle().fill(!model.actionFailures.isEmpty ? Palette.danger : (tab == "servers" ? model.serverStatusText.contains("延迟") : model.statusText.contains("延迟") || model.dataTime == 0) ? Palette.warn : Palette.ok).frame(width: 7, height: 7) }
-                    Text(tab == "servers" ? model.serverStatusText : model.statusText).font(AppFont.secondary).foregroundStyle(.secondary)
+                    Circle().fill(model.busy || model.quotaBusy || model.serverBusy ? Palette.accent : !model.actionFailures.isEmpty ? Palette.danger : (tab == "servers" ? model.serverStatusText.contains("延迟") : model.statusText.contains("延迟") || model.dataTime == 0) ? Palette.warn : Palette.ok).frame(width: 7, height: 7)
+                    Text(footerStatus).font(.system(size: compact ? 12 : 14)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.accessibilityLabel(footerStatus + (tab == "servers" ? "，点击刷新服务器" : "，点击同步记录"))
+                .help(footerStatus + "\n应用出站测试不代表 SSH 或所有账户可用。\n" + (model.networkTest?.detail ?? "可从更多菜单测试出站连接"))
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                if compact {
+                    Button { updater.check() } label: { Image(systemName: "arrow.down.circle").frame(width: 28, height: 28).overlay(alignment: .topTrailing) { if updater.hasUpdate { Text("!").font(.system(size: 11, weight: .bold)).foregroundStyle(Palette.warn) } } }.help(updater.hasUpdate ? "发现新版本 · 查看更新" : "检查更新").accessibilityLabel(updater.hasUpdate ? "发现新版本，查看更新" : "检查更新").disabled(updater.phase == "checking")
+                    Button { model.showDetailPage?(tab) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("打开详情").accessibilityLabel("打开详情")
                 }
-            }.help(tab == "servers" ? "服务器采样时间；点击刷新服务器" : "记录最后成功同步时间；点击同步记录")
-            Spacer()
-            Button { Task { await model.testNetwork() } } label: { Text(model.networkBusy ? "出站测试中…" : "出站 · " + (model.networkTest?.label ?? "连接未测试")).font(.system(size: 12)).lineLimit(1) }.help("应用出站连接测试，不代表 SSH 或所有账户可用。\n" + (model.networkTest?.detail ?? "测试当前应用连接方式")).disabled(model.networkBusy)
-            if compact {
-                Button { updater.check() } label: {
-                    Image(systemName: "arrow.down.circle").frame(width: 30, height: 30).overlay(alignment: .topTrailing) { if updater.hasUpdate { Text("!").font(.system(size: 11, weight: .bold)).foregroundStyle(.orange) } }
-                }.help(updater.hasUpdate ? "发现新版本 · 查看更新" : "检查更新").accessibilityLabel(updater.hasUpdate ? "发现新版本，查看更新" : "检查更新").disabled(updater.phase == "checking")
-                Button { model.showDetailPage?(tab) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 30, height: 30).contentShape(Rectangle()) }.help("打开详情").accessibilityLabel("打开详情")
+                Button { model.showSettings?() } label: { Image(systemName: "gearshape").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("设置").accessibilityLabel("设置").keyboardShortcut(",")
+                Menu {
+                    if compact { Button("面板显示账户…") { model.showPanelAccounts?() }; Button(model.isPinned ? "取消固定面板" : "固定面板") { model.isPinned.toggle() }; Divider() }
+                    Button(model.networkBusy ? "出站测试中…" : "测试出站连接") { Task { await model.testNetwork() } }.disabled(model.networkBusy)
+                    Text("关闭窗口后继续在菜单栏运行"); Divider(); Button("退出 Aieyes") { NSApplication.shared.terminate(nil) }.keyboardShortcut("q")
+                } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28).contentShape(Rectangle()) }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("更多操作").help("面板账户、固定、出站测试与退出")
             }
-            Button { model.showSettings?() } label: { Image(systemName: "gearshape").frame(width: 30, height: 30).contentShape(Rectangle()) }.help("设置").accessibilityLabel("设置").keyboardShortcut(",")
-            Menu { if compact { Button(model.isPinned ? "取消固定面板" : "固定面板") { model.isPinned.toggle() }; Divider() }; Text("关闭窗口后继续在菜单栏运行"); Divider(); Button("退出 Aieyes") { NSApplication.shared.terminate(nil) }.keyboardShortcut("q") } label: { Image(systemName: "ellipsis").frame(width: 30, height: 30).contentShape(Rectangle()) }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("更多操作").help("关闭窗口后继续后台；在此退出应用")
-        }.buttonStyle(.plain).padding(.horizontal, compact ? 18 : 28).padding(.vertical, 12)
+        }.buttonStyle(.plain).padding(.horizontal, compact ? 18 : 28).padding(.vertical, compact ? 5 : 10)
     }
     @ViewBuilder private var agentContent: some View {
         sessionStrip
@@ -214,8 +227,8 @@ struct RootView: View {
         }
         if hasUsageData {
             if compact {
-                DisclosureGroup("近 \(max(7, model.range)) 天趋势与每日明细") { UsageChart(days: recentDays, rows: recentRows, cost: false).frame(minHeight: 220); DailyUsage(days: recentDays, rows: recentRows, compact: true) }.font(AppFont.secondary)
-                Button("用量详情") { model.showDetailPage?("agent") }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+                DisclosureGroup("近 \(max(7, model.range)) 天趋势与每日明细", isExpanded: $trendExpanded) { UsageChart(days: recentDays, rows: recentRows, cost: false).frame(minHeight: 220); DailyUsage(days: recentDays, rows: recentRows, compact: true) }.font(AppFont.secondary)
+                Button { model.showDetailPage?("agent") } label: { Text("用量详情").frame(maxWidth: .infinity) }.buttonStyle(.bordered).accessibilityLabel("打开用量详情")
             } else {
                 Text("日期、来源、模型筛选作用于用量分析；今日视图的趋势仍为近 7 天，热力图为过去 365 天。").font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack { Text(model.range == 1 ? "近 7 天趋势" : "使用趋势").font(AppFont.section); Spacer(); Picker("统计指标", selection: $costMode) { Text("Token").tag(false); Text("API 等价成本").tag(true) }.pickerStyle(.segmented).frame(width: 230) }
@@ -296,7 +309,7 @@ struct RootView: View {
         return usageDashboard.dayModels.filter { dates.contains($0.day) }
     }
     private var sessionStrip: some View {
-        DisclosureGroup {
+        DisclosureGroup(isExpanded: $sessionsExpanded) {
             VStack(spacing: 12) {
                 ForEach(model.sessions) { session in
                     HStack(spacing: 10) {
@@ -324,14 +337,15 @@ struct RootView: View {
         .padding(compact ? 4 : 14).modifier(NeutralCard())
     }
     private var displayedQuotaAccounts: [AgentAccount] {
-        model.quotaAccounts.filter { account in
-            (model.provider == "all" || model.provider == account.provider) && (model.selectedAccount == "all" || model.selectedAccount == account.key)
+        let selections = PanelAccountPreference.selections(panelAccounts, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])
+        return model.quotaAccounts.filter { account in
+            (model.provider == "all" || model.provider == account.provider) && (model.selectedAccount == "all" || model.selectedAccount == account.key) && (!compact || selections[account.provider]?.contains(account.key) == true)
         }
     }
-    private func canCollapse(_ quota: Quota) -> Bool { model.settings.accounts.filter { $0.archived != true && $0.provider == quota.provider }.count > 1 }
+    private var displayedQuotas: [Quota] { model.dashboard.quotas.filter { quota in !compact || displayedQuotaAccounts.contains { $0.key == quota.id } } }
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("实时账户限额").font(.system(size: compact ? 20 : 22, weight: .semibold)); if !displayedQuotaAccounts.isEmpty { Text("\(displayedQuotaAccounts.count)").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button { orderingQuotas = true } label: { Image(systemName: "arrow.up.arrow.down") }.help("调整账户顺序").accessibilityLabel("调整账户顺序"); Button(model.quotaBusy ? "读取中…" : "刷新限额") { Task { await model.refreshQuotas() } }.font(AppFont.secondary).disabled(model.quotaBusy) }
+            HStack { Text("实时账户限额").font(.system(size: compact ? 20 : 22, weight: .semibold)); if !displayedQuotaAccounts.isEmpty { Text("\(displayedQuotaAccounts.count)").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button { model.showQuotaOrder?() } label: { Image(systemName: "arrow.up.arrow.down") }.help("调整账户顺序").accessibilityLabel("调整账户顺序"); Button(model.quotaBusy ? "读取中…" : "刷新限额") { Task { await model.refreshQuotas() } }.font(AppFont.secondary).disabled(model.quotaBusy) }
             ForEach(displayedQuotaAccounts.filter { account in
                 !model.dashboard.quotas.contains { $0.provider == account.provider && $0.accountId == account.id }
             }, id: \.key) { account in
@@ -340,14 +354,15 @@ struct RootView: View {
                     Text(model.quotaBusy ? "正在读取账户限额…" : model.quotaError == nil ? "等待首次限额查询" : "暂时无法读取限额").font(AppFont.secondary).foregroundStyle(.secondary)
                 }
             }
+            if compact && displayedQuotaAccounts.isEmpty { Text("当前面板未显示账户，可在更多中选择；详情保留全部账户。").font(AppFont.secondary).foregroundStyle(.secondary) }
             if let error = model.quotaError {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled)
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: canCollapse(quota), estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: canCollapse(quota), estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } } }
+            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } } }
         }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
     private var filteredHosts: [Host] {
@@ -628,7 +643,7 @@ struct QuotaCard: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 HStack { Text(window.windowMinutes == 10080 ? "7d" : window.windowMinutes == 300 ? "5h" : window.name); Spacer(minLength: 2); Text(Format.percent(max(0, 100-window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)) }.font(AppFont.secondary)
                                 ResourceBar(percent: 100-window.usedPercent, tint: Palette.quota(window.usedPercent))
-                                TimelineView(.periodic(from: .now, by: 60)) { context in Text(Format.resetCountdown(window.resetsAt, now: context.date)).font(AppFont.secondary).foregroundStyle(.secondary).help(Format.date(window.resetsAt)) }
+                                QuotaResetLabel(window: window)
                             }.frame(maxWidth: .infinity).accessibilityElement(children: .combine).accessibilityLabel(window.name + "，剩余 " + Format.percent(max(0, 100-window.usedPercent)))
                         }
                     }
@@ -636,18 +651,45 @@ struct QuotaCard: View {
             }
         }
     }
-    private var fullCard: some View {
-        Surface {
+    private var headerAccessibility: String {
+        var text = Format.provider(quota.provider) + "，" + quota.name
+        if let plan = quota.plan { text += "，订阅 " + Format.subscription(plan) }
+        if !expanded && quota.provider == "codex" { text += "，" + Format.creditBalance(quota.credits, estimate: creditEstimate) }
+        text += expanded ? "，折叠限额" : "，展开限额"
+        return text
+    }
+    @ViewBuilder private var cardHeader: some View {
             Button { withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)) { if collapsible { storedExpanded.toggle() } } } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) { Text(quota.name).font(.system(size: 14, weight: .semibold)); if expanded { Text(quota.plan.map { "\(Format.provider(quota.provider)) · \($0.capitalized)" } ?? Format.provider(quota.provider)).font(AppFont.secondary).foregroundStyle(.secondary) } }
-                Spacer()
-                if quota.provider == "agy" { Text("剩余额度").font(AppFont.secondary).foregroundStyle(.secondary) }
-                if expanded && quota.updatedAt > 0 { Text("\(quota.origin == "log" ? "记录" : "更新") \(Format.date(quota.updatedAt))").font(AppFont.secondary).foregroundStyle(.secondary) }
+            HStack(spacing: 8) {
+                ProviderMark(provider: quota.provider)
+                Text(quota.name).font(.system(size: 14, weight: .semibold)).lineLimit(1).help(quota.name)
+                if let plan = quota.plan, !Format.subscription(plan).isEmpty { SubscriptionBadge(plan: plan).frame(maxWidth: 70) }
+                Spacer(minLength: 0)
+                if !expanded && quota.provider == "codex" { CreditBalanceLabel(balance: quota.credits, estimate: creditEstimate, compact: true).layoutPriority(1) }
                 if collapsible { Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 14, weight: .semibold)).foregroundStyle(.secondary) }
             }.contentShape(Rectangle())
             }.buttonStyle(.plain).help(collapsible ? (expanded ? "折叠限额" : "展开限额") : quota.name)
-                .accessibilityLabel(quota.name + (expanded ? "，折叠限额" : "，展开限额"))
+                .accessibilityLabel(headerAccessibility)
+            if expanded {
+                HStack { Text(Format.provider(quota.provider)); Spacer(); if quota.updatedAt > 0 { Text("\(quota.origin == "log" ? "记录" : "更新") \(Format.date(quota.updatedAt))") } }.font(AppFont.secondary).foregroundStyle(.secondary)
+            }
+    }
+    private var fullCard: some View {
+        Surface {
+            cardHeader
+            if !expanded {
+                balanceContent
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(Array(quota.windows.prefix(2))) { window in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(window.windowMinutes == 300 ? "5h" : window.windowMinutes == 10080 ? "7d" : window.name).font(AppFont.secondary).lineLimit(2)
+                            Text("剩余 " + Format.percent(max(0, 100 - window.usedPercent))).font(AppFont.secondary).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent))
+                            ResourceBar(percent: 100 - window.usedPercent, tint: Palette.quota(window.usedPercent))
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                if quota.error != nil { Text("限额更新失败 · 展开查看").font(AppFont.secondary).foregroundStyle(Palette.warn) }
+            }
             if expanded {
             balanceContent
             if quota.provider == "agy" { agyWindows }
@@ -659,15 +701,7 @@ struct QuotaCard: View {
                         VStack(alignment: .leading, spacing: 3) { Text(window.name); Text("剩余 " + Format.percent(max(0, 100 - window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)) }.frame(maxWidth: .infinity, alignment: .leading)
                     }.font(AppFont.secondary)
                     ResourceBar(percent: 100 - window.usedPercent, tint: Palette.quota(window.usedPercent))
-                    if let reset = window.resetsAt {
-                        TimelineView(.periodic(from: .now, by: 60)) { context in
-                            HStack {
-                                Text(Format.resetCountdown(reset, now: context.date)).help(Format.date(reset))
-                                Spacer()
-
-                            }.font(AppFont.secondary).foregroundStyle(.secondary)
-                        }
-                    }
+                    QuotaResetLabel(window: window).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             }
@@ -685,7 +719,7 @@ struct QuotaCard: View {
             if expanded && !sourceName.isEmpty { Text(sourceName).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
             if quota.provider == "codex" {
                 HStack(spacing: 8) {
-                    Text(Format.creditBalance(quota.credits, estimate: creditEstimate)).monospacedDigit().fixedSize(horizontal: false, vertical: true)
+                    CreditBalanceLabel(balance: quota.credits, estimate: creditEstimate).fixedSize(horizontal: false, vertical: true)
                         .help(quota.creditsUpdatedAt.map { "更新于 " + Format.date($0) } ?? "尚未取得 credits 信息")
                     Spacer(minLength: 0)
                     if let onCredits {
@@ -727,9 +761,9 @@ struct ServerCard: View {
                 if let sample = result?.sample {
                     VStack(alignment: .leading, spacing: 16) {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 14)], spacing: 14) {
-                            if sample.cpu != nil { ResourceRing(title: "CPU", percent: sample.cpu?.first(where: { $0.id == "cpu" })?.utilization) }
-                            if let memory = sample.memory { ResourceRing(title: "内存", percent: memory.total > 0 ? (memory.total - memory.available) / memory.total * 100 : nil) }
-                            ForEach(sample.gpu ?? []) { gpu in ResourceRing(title: "GPU " + gpu.id, percent: gpu.utilization) }
+                            if sample.cpu != nil { ResourceRing(title: "CPU", percent: sample.cpu?.first(where: { $0.id == "cpu" })?.utilization, compact: compact) }
+                            if let memory = sample.memory { ResourceRing(title: "内存", percent: memory.total > 0 ? (memory.total - memory.available) / memory.total * 100 : nil, compact: compact) }
+                            ForEach(sample.gpu ?? []) { gpu in ResourceRing(title: "GPU " + gpu.id, percent: gpu.utilization, compact: compact) }
                         }
 
                         if let cpus = sample.cpu {
@@ -847,6 +881,7 @@ struct MetricHeading: View {
 
 struct ResourceRing: View {
     var title: String, percent: Double?
+    var compact = false
     private var value: Double? { percent.flatMap { $0.isFinite ? min(100, max(0, $0)) : nil } }
     var body: some View {
         HStack(spacing: 12) {
@@ -854,9 +889,9 @@ struct ResourceRing: View {
                 Circle().stroke(.primary.opacity(0.07), lineWidth: 7)
                 if let value, value > 0 { Circle().trim(from: 0, to: value / 100).stroke(value >= 90 ? Palette.danger : value >= 70 ? Palette.warn : Palette.accent, style: StrokeStyle(lineWidth: 7, lineCap: .round)).rotationEffect(.degrees(-90)) }
                 Text(Format.percent(value)).font(.system(size: 14, weight: .semibold)).monospacedDigit()
-            }.frame(width: 72, height: 72)
-            Text(title).font(.system(size: 14, weight: .medium)).lineLimit(1)
-        }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .ignore).accessibilityLabel(title + " " + Format.percent(value))
+            }.frame(width: compact ? 60 : 72, height: compact ? 60 : 72)
+            VStack(alignment: .leading, spacing: 3) { Text(title).font(.system(size: 14, weight: .medium)).lineLimit(2); if let value, value >= 90 { Text("高负载").font(AppFont.secondary).foregroundStyle(Palette.danger) } }
+        }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .ignore).accessibilityLabel(title + " " + Format.percent(value) + (value.map { $0 >= 90 } == true ? "，高负载" : ""))
     }
 }
 
@@ -869,7 +904,7 @@ struct ResourceBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(.primary.opacity(0.07))
                 if let percent, percent.isFinite {
-                    Capsule().fill(tint ?? (percent >= 90 ? .red : percent >= 70 ? .orange : Palette.accent))
+                    Capsule().fill(tint ?? (percent >= 90 ? Palette.danger : percent >= 70 ? Palette.warn : Palette.accent))
                         .frame(width: proxy.size.width * min(1, max(0, percent / 100)))
                 }
             }

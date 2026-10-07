@@ -3,7 +3,7 @@
   const invoke = (name, args) => window.__TAURI__.core.invoke(name, args);
   const ball = document.querySelector('#ball');
   const panel = document.querySelector('#panel');
-  const labels = {working:'进行中',thinking:'思考中',tool:'执行工具',complete:'已完成',interrupted:'已中断',unknown:'待确认'};
+  const labels = {idle:'空闲',working:'进行中',thinking:'思考中',tool:'执行工具',complete:'已完成',interrupted:'已中断',unknown:'待确认'};
   const SUPPRESS = 250;
   let start = null, dragged = false, info = null;
   let panelOpen = false, pinned = false, suppress = 0;
@@ -120,24 +120,28 @@
   });
   document.querySelector('#panel-detail').addEventListener('click', () => { setPanel(false); if(typeof openDetail==='function')openDetail();else action('open'); });
   document.querySelector('#panel-settings').addEventListener('click', () => { setPanel(false); action('settings'); });
+  document.querySelector('#panel-accounts')?.addEventListener('click',()=>{const more=document.querySelector('#panel-more');if(more)more.open=false;window.AieyesApp?.openPanelAccounts();});
   document.querySelector('#panel-quit').addEventListener('click', () => action('quit'));
   document.querySelector('#panel-more')?.addEventListener('toggle', event => {
     if (event.target.open) closeMenu();
   });
 
-  function update(next) {
+  window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(info)update(info,false);});
+  function update(next, applyOpen = true) {
     info = next;
     document.body.dataset.phase = next.phase || 'idle';
     document.body.dataset.active = String(next.activeCount > 0);
     document.body.dataset.platform = next.platform || '';
-    document.querySelector('#phase').textContent = next.unavailable ? '状态不全' : (labels[next.phase] || '空闲');
+    document.querySelector('#phase').textContent = next.recovery==='failed'?'恢复失败':next.recovery==='refreshing'?'恢复中':next.unavailable ? '状态不全' : (labels[next.phase] || '空闲');
     const count = document.querySelector('#count');
     count.textContent = next.activeCount > 99 ? '99+' : String(next.activeCount);
-    count.hidden = !next.activeCount;
+    count.hidden = !next.activeCount || !next.showCount;
+    count.setAttribute('aria-label',next.activeCount+' 个活跃会话');
+    if(typeof phaseColor==='function')document.body.style.setProperty('--phase-color',phaseColor(next.phase||'idle'));
     ball.title = `Aieyes · ${next.summary}\n单击打开面板 · 拖动移动 · 右键菜单`;
     ball.setAttribute('aria-label', ball.title);
     if (typeof renderLiveSessions === 'function') renderLiveSessions(next);
-    if (next.panelOpen !== undefined || next.panelPinned !== undefined) applyPanel(next);
+    if (applyOpen && (next.panelOpen !== undefined || next.panelPinned !== undefined)) applyPanel(next);
   }
   async function boot() {
     try {

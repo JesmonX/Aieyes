@@ -7,12 +7,12 @@ function fixture(){
   const now=Math.floor(Date.now()/1000),tokens={input:0,output:0,cacheRead:0,cacheWrite:0};
   const summary={tokens,total:0,cost:0,pricedTokens:0,events:0};
   const win=(id,name,minutes,groupName)=>({id,name,windowMinutes:minutes,usedPercent:35,resetsAt:now+10000,groupName});
-  const rows=[{provider:'codex',accountId:'c',name:'个人订阅',sourceId:'c',updatedAt:now,origin:'live',windows:[win('weekly','7d',10080)]},{provider:'agy',accountId:'a',name:'工作空间 agy',sourceId:'a',updatedAt:now,origin:'live',windows:['Claude Opus','Claude Sonnet','Gemini Pro'].flatMap(g=>[win(g+':5h',g+' · 5h',300,g),win(g+':7d',g+' · 7d',10080,g)])}];
+  const rows=[{provider:'codex',accountId:'c',name:'个人订阅',plan:'plus',sourceId:'c',updatedAt:now,origin:'live',windows:[win('weekly','7d',10080)]},{provider:'agy',accountId:'a',name:'工作空间 agy',sourceId:'a',updatedAt:now,origin:'live',windows:['Claude Opus','Claude Sonnet','Gemini Pro'].flatMap(g=>[win(g+':5h',g+' · 5h',300,g),win(g+':7d',g+' · 7d',10080,g)])}];
   const settings={accounts:rows.map(q=>({id:q.accountId,name:q.name,provider:q.provider,quotaEnabled:true})),sources:rows.map(q=>({id:q.accountId,name:q.name,provider:q.provider,accountId:q.accountId,enabled:true,path:'/fixture'})),hosts:[],modelMappings:{},proxy:{mode:'system',url:''},refreshSeconds:300,serverRefreshSeconds:10};
   window.quotaFixture={rows,settings,order:['codex:c','agy:a'],records:[],calls:[],fail:false,panelOpen:true};
   const info=()=>({platform:'windows',material:'opaque',mode:'floating',effectiveMode:'floating',sessions:[],summary:'暂无活跃会话',panelOpen:window.quotaFixture.panelOpen,panelPinned:true,hidden:false});
   window.__TAURI__={event:{async listen(){return ()=>{};}},window:{getCurrentWindow:()=>({async isMaximized(){return false;},async onResized(){return ()=>{};}})},core:{async invoke(command,args){
-    const f=window.quotaFixture;if(command==='desktop_info')return info();if(command==='desktop_panel'){f.panelOpen=args.open;return info();}if(command==='desktop_panel_cursor_inside')return true;if(command!=='engine_call')return {};
+    const f=window.quotaFixture;if(command==='desktop_info')return info();if(command==='desktop_panel'){f.panelOpen=args.open;return info();}if(command!=='engine_call')return {};
     const {method,params}=args;f.calls.push({method,params});
     if(method==='hello')return {version:'test'};if(method==='settings.get')return structuredClone(settings);
     if(method==='dashboard')return {generatedAt:now,summary,quotas:[...rows].sort((a,b)=>f.order.indexOf(a.provider+':'+a.accountId)-f.order.indexOf(b.provider+':'+b.accountId)),quotaOrder:f.order,quotaEstimates:f.records,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:[],pricingGaps:[]};
@@ -39,7 +39,23 @@ function fixture(){
    assert.equal(await agy.locator('.agy-group').count(),3);
    assert.equal(await agy.locator('.resource-bar:visible').count(),6,'single account shows all model groups');
    assert.equal(await agy.locator('.quota-reset:visible').count(),6);
-   await agy.locator('.quota-title').click();assert.equal(await agy.locator('.quota-reset:visible').count(),6,'single account cannot collapse');
+   const codex=page.locator('[data-quota="codex:c"]:visible');
+   assert.equal(await codex.locator('.subscription-badge').textContent(),'Plus');
+   assert.equal(await agy.locator('.provider-mark').getAttribute('data-provider'),'agy');
+   const resetCheck=await page.evaluate(()=>{
+     const now=1800000000,window=quotaFixture.rows[0].windows[0],original=JSON.stringify(window),node=document.querySelector('[data-quota="codex:c"] [data-reset-at]');
+     node.dataset.resetAt=String(now-1);node.dataset.windowMinutes='10080';
+     updateResetDisplays(now);const first=node.textContent;updateResetDisplays(now+86400);const later=node.textContent;
+     node.dataset.resetAt=String(now+3600);updateResetDisplays(now);const refreshed=node.textContent;
+     node.dataset.resetAt=String(window.resetsAt);node.dataset.windowMinutes=String(window.windowMinutes);updateResetDisplays();
+     return {first,later,refreshed,unchanged:JSON.stringify(window)===original};
+   });
+   assert.match(resetCheck.first,/^7 天后重置 · \d{2}\/\d{2} \d{2}:\d{2}$/);assert.match(resetCheck.later,/^7 天后重置 · /);assert.notEqual(resetCheck.first,resetCheck.later);assert.match(resetCheck.refreshed,/^1 小时后重置 · \d{2}\/\d{2} \d{2}:\d{2}$/);assert(resetCheck.unchanged);
+   const icons=await page.evaluate(async()=>{
+     const holder=document.createElement('div');holder.innerHTML=['codex','claude','antigravity','agy','deepseek','custom'].map(providerMark).join('');document.body.append(holder);
+     try { await Promise.all([...holder.querySelectorAll('img')].map(img=>img.decode()));return {images:holder.querySelectorAll('img').length,fallback:holder.querySelectorAll('svg').length}; } finally {holder.remove();}
+   });assert.deepEqual(icons,{images:5,fallback:1});
+   await agy.locator('.quota-title').click();assert.equal(await agy.locator('.quota-reset:visible').count(),0,'Collapsed accounts hide reset details');assert.equal(await agy.locator('.resource-bar:visible').count(),2,'Collapsed accounts retain two key windows');await agy.locator('.quota-title').click();assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Expanding restores all model groups');
    await page.locator('#order-quotas').click();await page.locator('[data-order="agy:a"] [data-direction="-1"]').click();
    await page.locator('[data-order="codex:c"]').dragTo(page.locator('[data-order="agy:a"]'));
    await page.locator('[data-order="agy:a"]').dragTo(page.locator('[data-order="codex:c"]'));

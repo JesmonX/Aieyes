@@ -3,13 +3,13 @@ import SwiftUI
 
 // Only lifecycle metadata is retained; prompts and tool arguments are never displayed.
 enum SessionPhase: String {
-    case working = "进行中", thinking = "思考中", tool = "执行工具", complete = "已完成", interrupted = "已中断", unknown = "状态待确认"
+    case idle = "空闲", working = "进行中", thinking = "思考中", tool = "执行工具", complete = "已完成", interrupted = "已中断", unknown = "状态待确认"
     var active: Bool { self == .working || self == .thinking || self == .tool }
     var color: Color {
-        switch self { case .working: return .teal; case .thinking: return .purple; case .tool: return .blue; case .complete: return .green; case .interrupted: return .orange; case .unknown: return .secondary }
+        switch self { case .idle: return .secondary; case .working: return .teal; case .thinking: return .purple; case .tool: return .blue; case .complete: return .green; case .interrupted: return .orange; case .unknown: return .secondary }
     }
     var symbol: String {
-        switch self { case .working: return "waveform"; case .thinking: return "sparkles"; case .tool: return "gearshape.2"; case .complete: return "checkmark"; case .interrupted: return "pause.fill"; case .unknown: return "questionmark" }
+        switch self { case .idle: return "circle.dotted"; case .working: return "waveform"; case .thinking: return "sparkles"; case .tool: return "gearshape.2"; case .complete: return "checkmark"; case .interrupted: return "pause.fill"; case .unknown: return "questionmark" }
     }
 }
 struct LiveSession: Identifiable {
@@ -104,11 +104,12 @@ struct ActivityIndicator: View {
 }
 struct MenuActivityLabel: View {
     @ObservedObject var model: AppModel
+    @AppStorage("menu.showCount") private var showCount = false
     var body: some View {
         HStack(spacing: 5) {
             BrandMark(template: true).frame(width: 22, height: 22)
             ActivityIndicator(phase: model.sessionPhase)
-            if model.activeSessions.count > 0 { Text("\(model.activeSessions.count)").monospacedDigit() }
+            if showCount && model.activeSessions.count > 0 { Text("\(model.activeSessions.count)").monospacedDigit().padding(.horizontal, 5).background(.quaternary, in: Capsule()).accessibilityLabel("\(model.activeSessions.count) 个活跃会话") }
             if !model.menuText.isEmpty { Text(model.menuText).monospacedDigit() }
             if !model.runningEstimates.isEmpty {
                 Image(systemName: model.samplingNeedsAttention ? "pause.circle.fill" : "record.circle")
@@ -128,7 +129,7 @@ struct BrandMark: View {
         let name = template ? "BrandTemplate" : "Brand"
         let sourceResources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources")
         let url = Bundle.main.url(forResource: name, withExtension: "png") ?? sourceResources.appendingPathComponent(name + ".png")
-        let image = NSImage(contentsOf: url) ?? NSImage(named: NSImage.applicationIconName) ?? NSImage()
+        let image = NSImage(contentsOf: url) ?? NSImage(systemSymbolName: "eye", accessibilityDescription: "Aieyes") ?? NSImage()
         image.isTemplate = template
         return image
     }

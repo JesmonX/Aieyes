@@ -1,4 +1,4 @@
-const {discardEditor}=require('./ui-test-helpers.cjs');
+const {discardEditor,commitSettings}=require('./ui-test-helpers.cjs');
 // Regression coverage for the cross-platform interaction review. Uses only in-memory IPC.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -95,12 +95,12 @@ function fixture() {
     await page.keyboard.press('Tab');assert.equal(await page.locator('#field-shell').evaluate(el=>el===document.activeElement),true);
     await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
     assert.equal(await page.locator('[data-edit=host]').evaluate(el=>el===document.activeElement),true,'Save must return focus to the rebuilt row');
-    await page.evaluate(()=>{state.settings.sources=[{id:'remote',name:'远端记录',provider:'codex',path:'~/.codex',accountId:'',hostId:'host',enabled:true}];});
+    await page.evaluate(()=>{state.settings.sources=[{id:'remote',name:'远端记录',provider:'codex',path:'~/.codex',accountId:'',hostId:'host',enabled:true}];review.settings=structuredClone(state.settings);state.settingsDraft=null;state.settingsBaseline=null;renderSettings();});
     await page.locator('[data-remove=host]').click();assert.match(await page.locator('#editor-fields').textContent(),/远端记录/);
     assert.equal(await page.evaluate(()=>state.settings.hosts.length),1);await discardEditor(page);
-    await page.locator('[data-remove=host]').click();await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
+    await page.locator('[data-remove=host]').click();await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);await commitSettings(page);
     assert.deepEqual(await page.evaluate(()=>[state.settings.hosts.length,state.settings.sources[0].hostId,state.settings.sources[0].enabled]),[0,null,false]);
-    assert.equal(await page.locator('#add-item').evaluate(el=>el===document.activeElement),true);
+    assert.equal(await page.locator('.settings-draft-label').evaluate(el=>el===document.activeElement),true);
     await page.evaluate(()=>{review.empty=false;});await page.locator('[data-page=agent]').click();await page.evaluate(()=>loadDashboard());
     await page.locator('#model').selectOption('Model A');await page.waitForFunction(()=>state.dashboard.dayModels.every(row=>row.model==='Model A'));
     assert.deepEqual(await page.locator('#model option').allTextContents(),['全部模型','Model A','Model B']);
@@ -160,8 +160,9 @@ function fixture() {
     await panel.evaluate(async()=>{review.empty=false;review.settings.sources=[{id:'preview',name:'示例日志',provider:'codex',path:'~/.codex',enabled:false,accountId:''}];await reviewEmit('desktop:settings',null);});
     await panel.screenshot({animations:'disabled',path:path.join(previews,'floating-panel-fixed-light.png')});
     await panel.emulateMedia({colorScheme:'dark'});await panel.screenshot({animations:'disabled',path:path.join(previews,'floating-panel-fixed-dark.png')});await panel.emulateMedia({colorScheme:'light'});
-    await panel.evaluate(async()=>{review.empty=false;await loadDashboard();});await panel.locator('[data-agent-detail=panel-trend] > summary').click();await panel.locator('.daily > summary').click();await panel.locator('[data-day-toggle]').first().click();await panel.locator('[data-day-toggle]').first().focus();
-    await panel.evaluate(()=>loadDashboard());assert.equal(await panel.locator('[data-agent-detail][open]').count(),3);
+    assert.equal(await panel.locator('body').getAttribute('data-view'),'panel','Changing theme preserves the current panel state');
+    await panel.evaluate(async()=>{review.empty=false;await loadDashboard();});await panel.locator('[data-agent-detail=panel-trend] > summary').click();await panel.locator('[data-day-toggle]').first().click();await panel.locator('[data-day-toggle]').first().focus();
+    await panel.evaluate(()=>loadDashboard());assert.equal(await panel.locator('[data-agent-detail][open]').count(),2);
     assert.equal(await panel.locator('[data-day-toggle]').first().evaluate(el=>el===document.activeElement),true);
     assert.equal(await panel.evaluate(()=>state.days),1,'Glance always shows today; historical range belongs to details');
     await panel.evaluate(async()=>{

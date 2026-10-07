@@ -42,6 +42,7 @@ struct Surface {
     info: RefCell<Value>,
     press: Cell<Option<(POINT, RECT)>>,
     dragged: Cell<bool>,
+    hover: Cell<bool>,
     dark: Cell<bool>,
     actions: mpsc::Sender<String>,
     tooltip: Cell<Option<HWND>>,
@@ -95,6 +96,7 @@ impl Capsule {
                     info: RefCell::new(Value::Null),
                     press: Cell::new(None),
                     dragged: Cell::new(false),
+                    hover: Cell::new(false),
                     dark: Cell::new(false),
                     actions,
                     tooltip: Cell::new(None),
@@ -323,7 +325,7 @@ unsafe fn native_menu(hwnd: HWND, surface: &Surface) {
             },
             "toggle-pin",
         ),
-        ("刷新悬浮窗", "refresh-floating"),
+        ("重建面板（用于界面无响应）", "refresh-floating"),
         ("打开主窗口", "open"),
         ("设置…", "settings"),
         ("重置位置", "reset-position"),
@@ -437,11 +439,22 @@ unsafe extern "system" fn window_proc(
             let _ = GetWindowRect(hwnd, &mut rect);
             surface.press.set(Some((point, rect)));
             surface.dragged.set(false);
+            let _ = InvalidateRect(Some(hwnd), None, false);
             crate::desktop::native_interaction(&surface.app, true);
             SetCapture(hwnd);
             LRESULT(0)
         }
+        WM_MOUSELEAVE => {
+            surface.hover.set(false);
+            let _ = InvalidateRect(Some(hwnd), None, false);
+            LRESULT(0)
+        }
         WM_MOUSEMOVE => {
+            if !surface.hover.replace(true) {
+                let mut tracking = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
+                let _ = TrackMouseEvent(&mut tracking);
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            }
             if let Some((start, rect)) = surface.press.get() {
                 let mut point = POINT::default();
                 let _ = GetCursorPos(&mut point);
@@ -467,6 +480,7 @@ unsafe extern "system" fn window_proc(
             let dragged = surface.dragged.get();
             let _ = ReleaseCapture();
             surface.dragged.set(false);
+            let _ = InvalidateRect(Some(hwnd), None, false);
             crate::desktop::native_interaction(&surface.app, false);
             if pressed {
                 if dragged {
@@ -483,6 +497,7 @@ unsafe extern "system" fn window_proc(
         WM_CAPTURECHANGED | WM_CANCELMODE => {
             surface.press.set(None);
             surface.dragged.set(false);
+            let _ = InvalidateRect(Some(hwnd), None, false);
             crate::desktop::native_interaction(&surface.app, false);
             LRESULT(0)
         }
@@ -490,16 +505,8 @@ unsafe extern "system" fn window_proc(
             native_menu(hwnd, surface);
             LRESULT(0)
         }
-        WM_KEYDOWN => {
-            if wparam.0 == VK_RETURN.0 as usize || wparam.0 == VK_SPACE.0 as usize {
-                dispatch(surface, "toggle-panel");
-            } else if wparam.0 == VK_APPS.0 as usize
-                || (wparam.0 == VK_F10.0 as usize && GetKeyState(VK_SHIFT.0 as i32) < 0)
-            {
-                native_menu(hwnd, surface);
-            }
-            LRESULT(0)
-        }
+        // WS_EX_NOACTIVATE is deliberately not a keyboard focus target.
+        // Keyboard users enter through the system tray or the main window.
         WM_DPICHANGED => {
             let suggested = &*(lparam.0 as *const RECT);
             let _ = SetWindowPos(
@@ -578,6 +585,10 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             graphics,
             if contrast {
                 system_argb(COLOR_WINDOW)
+            } else if surface.press.get().is_some() {
+                if surface.dark.get() { 0xff303b50 } else { 0xffe4e9f5 }
+            } else if surface.hover.get() {
+                if surface.dark.get() { 0xff293348 } else { 0xffedf1f9 }
             } else if surface.dark.get() {
                 0xff202735
             } else {
@@ -603,19 +614,17 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             &mut pen,
         );
         GdipDrawPath(graphics, pen, outline);
+        if surface.press.get().is_some() { GdipTranslateWorldTransform(graphics, 0.0, 1.0, MatrixOrderPrepend); }
         GdipDeletePen(pen);
         GdipDeletePath(outline);
         let info = surface.info.borrow().clone();
         let phase = info["phase"].as_str().unwrap_or("idle");
-        let (label, color) = match phase {
-            "working" => ("进行中", 0xff2c9d88),
-            "thinking" => ("思考中", 0xffac78dd),
-            "tool" => ("执行工具", 0xff629cef),
-            "complete" => ("已完成", 0xff44ad76),
-            "interrupted" => ("已中断", 0xffd9a44c),
-            "unknown" => ("待确认", 0xffd9a44c),
-            _ => ("空闲", 0xff91a0b7),
+        let label = match phase {
+            "working" => "进行中", "thinking" => "思考中", "tool" => "执行工具",
+            "complete" => "已完成", "interrupted" => "已中断", "unknown" => "待确认", _ => "空闲",
         };
+        let [r, g, b] = crate::phase_colors::rgb(phase, surface.dark.get());
+        let color = 0xff000000 | ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
         let label = if info["recovery"] == "failed" {
             "恢复失败"
         } else if info["recovery"] == "refreshing" {
@@ -681,7 +690,13 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             brush.cast(),
         );
         let count = info["activeCount"].as_u64().unwrap_or(0);
-        if count > 0 {
+        if count > 0 && info["showCount"].as_bool().unwrap_or(false) {
+            let mut badge = null_mut();
+            GdipCreateSolidFill(if contrast { system_argb(COLOR_HIGHLIGHT) } else if surface.dark.get() { 0xff39435d } else { 0xffe0e5f5 }, &mut badge);
+            GdipFillEllipse(graphics, badge.cast(), 109.0, 12.0, 25.0, 20.0);
+            GdipDeleteBrush(badge.cast());
+            if contrast { GdipDeleteBrush(brush.cast()); GdipCreateSolidFill(system_argb(COLOR_HIGHLIGHTTEXT), &mut brush); }
+            GdipSetStringFormatAlign(format, StringAlignmentCenter);
             let count = if count > 99 {
                 "99+".into()
             } else {
@@ -694,7 +709,7 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
                 text.len() as i32,
                 font,
                 &RectF {
-                    X: 111.0,
+                    X: 108.0,
                     Y: 0.0,
                     Width: 29.0,
                     Height: 44.0,

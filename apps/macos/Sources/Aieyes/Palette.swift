@@ -8,6 +8,7 @@ enum Palette {
         })
     }
     static let accent = adaptive(0x5566d9, 0xa3b3ff)
+    static let balanceBlue = adaptive(0x1e5ebf, 0x8cbcff)
     static let ok = adaptive(0x176e58, 0x5cc4a4)
     static let warn = adaptive(0x895712, 0xe0b062)
     static let danger = adaptive(0xb83245, 0xff929c)

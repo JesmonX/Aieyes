@@ -21,8 +21,8 @@ use tauri::{
 const TRAY_ID: &str = "aieyes-status";
 const HIDE_MENU_ID: &str = "hide";
 /// Linux WebView capsule size in logical pixels; Windows uses its own native window.
-const BALL_SIZE: f64 = 160.0;
-const BALL_HEIGHT: f64 = 60.0;
+const BALL_SIZE: f64 = 144.0;
+const BALL_HEIGHT: f64 = 44.0;
 /// Panel size in logical pixels; height is clamped to the monitor work area.
 const PANEL_WIDTH: f64 = 450.0;
 const PANEL_HEIGHT: f64 = 720.0;
@@ -48,6 +48,7 @@ struct Position {
 struct Preferences {
     mode: Mode,
     position: Option<Position>,
+    show_count: bool,
 }
 struct ShellState {
     preferences: Preferences,
@@ -257,7 +258,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     let floating = MenuItem::with_id(app, "floating", "使用悬浮球", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset-position", "重置悬浮球位置", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, HIDE_MENU_ID, "暂时隐藏悬浮球", false, None::<&str>)?;
-    let refresh = MenuItem::with_id(app, "refresh-floating", "刷新悬浮窗", true, None::<&str>)?;
+    let refresh = MenuItem::with_id(app, "refresh-floating", "重建面板（用于界面无响应）", true, None::<&str>)?;
     let toggle = MenuItem::with_id(app, "toggle-panel", "打开／收起面板", true, None::<&str>)?;
     let pin = MenuItem::with_id(app, "toggle-pin", "固定／取消固定面板", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Aieyes", true, None::<&str>)?;
@@ -639,7 +640,7 @@ fn create_tray(app: &AppHandle, desktop: &Desktop) -> tauri::Result<()> {
         return Ok(());
     }
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon(None))
+        .icon(icon(None, false))
         .tooltip("Aieyes")
         .menu(&desktop.menu)
         // Linux uses the native menu; tray click events are not emitted there.
@@ -685,7 +686,7 @@ fn update(app: &AppHandle, snapshot: Snapshot, supported: Option<bool>) {
             let _ = tray.set_title(Some(&summary));
         }
         if phase_changed || new_tray {
-            let _ = tray.set_icon(Some(icon(snapshot.phase())));
+            let _ = tray.set_icon(Some(icon(snapshot.phase(), app.get_webview_window("main").and_then(|w| w.theme().ok()).is_some_and(|t| t == tauri::Theme::Dark))));
         }
     }
     if let Ok(mut state) = desktop.state.lock() {
@@ -768,7 +769,7 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
-        "panelPage": state.panel_page, "nativeCapsule": cfg!(windows),
+        "showCount": state.preferences.show_count, "panelPage": state.panel_page, "nativeCapsule": cfg!(windows),
         "recovery": state.recovery, "generation": state.panel_generation,
         "dark": dark,
     }))
@@ -817,41 +818,6 @@ pub fn desktop_panel_page(app: AppHandle, page: String) -> Result<(), String> {
         .panel_page = page;
     emit_shell(&app);
     Ok(())
-}
-
-fn contains_point(point: (f64, f64), pos: Position, size: (u32, u32)) -> bool {
-    point.0 >= f64::from(pos.x)
-        && point.1 >= f64::from(pos.y)
-        && point.0 < f64::from(pos.x) + f64::from(size.0)
-        && point.1 < f64::from(pos.y) + f64::from(size.1)
-}
-
-/// Hover does not focus the panel. The cursor can leave directly from the old
-/// ball position without ever generating a pointerleave event in the panel.
-#[tauri::command]
-pub fn desktop_panel_cursor_inside(app: AppHandle) -> Result<bool, String> {
-    let anchor = {
-        let desktop = app.state::<Desktop>();
-        let state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
-        if !state.panel {
-            return Ok(false);
-        }
-        state.panel_anchor
-    };
-    let window = app.get_webview_window("floating").ok_or("悬浮球不可用")?;
-    let point = window.cursor_position().map_err(|e| e.to_string())?;
-    let pos = window.outer_position().map_err(|e| e.to_string())?;
-    let size = window.outer_size().map_err(|e| e.to_string())?;
-    let point = (point.x, point.y);
-    if contains_point(
-        point,
-        Position { x: pos.x, y: pos.y },
-        (size.width, size.height),
-    ) {
-        return Ok(true);
-    }
-    let ball = (BALL_SIZE * window.scale_factor().map_err(|e| e.to_string())?).round() as u32;
-    Ok(anchor.is_some_and(|pos| contains_point(point, pos, (ball, ball))))
 }
 
 #[tauri::command]
@@ -904,6 +870,23 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
                 .map_err(|_| "显示状态不可用")?
                 .panel;
             set_panel(app, !open)
+        }
+        "toggle-count" => {
+            {
+                let desktop = app.state::<Desktop>();
+                let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+                let previous = state.preferences.show_count;
+                state.preferences.show_count = !previous;
+                if let Err(error) = write_preferences(&desktop.path, &state.preferences) {
+                    state.preferences.show_count = previous;
+                    return Err(format!("显示偏好保存失败：{error}"));
+                }
+            }
+            let info = desktop_info(app.clone())?;
+            #[cfg(target_os = "windows")]
+            if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() { capsule.status(info.clone()); }
+            let _ = app.emit("desktop:status", info);
+            Ok(())
         }
         "toggle-pin" => {
             let pin = app
@@ -1242,9 +1225,14 @@ fn snap_ball(app: &AppHandle) -> Result<(), String> {
 
 pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     match event {
-        #[cfg(target_os = "windows")]
         tauri::WindowEvent::ThemeChanged(theme) if window.label() == "main" => {
+            #[cfg(target_os = "windows")]
             let _ = window_vibrancy::apply_mica(window, Some(*theme == tauri::Theme::Dark));
+            let app = window.app_handle();
+            if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                let phase = app.state::<Desktop>().state.lock().ok().and_then(|state| state.snapshot.phase());
+                let _ = tray.set_icon(Some(icon(phase, *theme == tauri::Theme::Dark)));
+            }
             emit_shell(window.app_handle());
         }
         #[cfg(target_os = "windows")]
@@ -1359,15 +1347,18 @@ pub fn save(app: &AppHandle) {
         state.dirty = false;
     }
 }
-fn icon(phase: Option<Phase>) -> tauri::image::Image<'static> {
-    let color = match phase {
-        Some(Phase::Working) => [40, 164, 150, 255],
-        Some(Phase::Thinking) => [161, 104, 221, 255],
-        Some(Phase::Tool) => [70, 130, 230, 255],
-        Some(Phase::Complete) => [49, 165, 101, 255],
-        Some(Phase::Interrupted) => [217, 148, 52, 255],
-        _ => [132, 145, 167, 255],
+fn icon(phase: Option<Phase>, dark: bool) -> tauri::image::Image<'static> {
+    let key = match phase {
+        Some(Phase::Working) => "working",
+        Some(Phase::Thinking) => "thinking",
+        Some(Phase::Tool) => "tool",
+        Some(Phase::Complete) => "complete",
+        Some(Phase::Interrupted) => "interrupted",
+        Some(Phase::Unknown) => "unknown",
+        None => "idle",
     };
+    let [r, g, b] = crate::phase_colors::rgb(key, dark);
+    let color = [r, g, b, 255];
     let mut rgba = include_bytes!("../icons/brand.rgba").to_vec();
     // Live state is a separate top-right badge, not a recoloring of the brand.
     if phase.is_some() {
@@ -1395,17 +1386,17 @@ mod tests {
     #[test]
     fn rectangular_capsules_use_their_height_for_bottom_edges_and_panel_anchors() {
         let area = (-1920, 40, 1920, 1040);
-        let position = snap_rect(Position { x: -200, y: 1010 }, area, (160, 60), 48);
-        assert_eq!((position.x, position.y), (-160, 1020));
-        let panel = panel_rect(Position { x: -1900, y: 60 }, (160, 60), (450, 720), area, 8);
-        assert_eq!((panel.x, panel.y), (-1900, 128));
-        let narrow = clamp_rect(Position { x: 50, y: 100 }, 0, 0, 100, 40, (160, 60));
+        let position = snap_rect(Position { x: -170, y: 1010 }, area, (144, 44), 48);
+        assert_eq!((position.x, position.y), (-144, 1036));
+        let panel = panel_rect(Position { x: -1900, y: 60 }, (144, 44), (450, 720), area, 8);
+        assert_eq!((panel.x, panel.y), (-1900, 112));
+        let narrow = clamp_rect(Position { x: 50, y: 100 }, 0, 0, 100, 40, (144, 44));
         assert_eq!((narrow.x, narrow.y), (0, 0));
     }
     #[test]
     fn tray_reuses_brand_pixels_and_only_overlays_the_status_badge() {
-        let brand = icon(None);
-        let active = icon(Some(Phase::Working));
+        let brand = icon(None, false);
+        let active = icon(Some(Phase::Working), false);
         assert_eq!(brand.rgba(), include_bytes!("../icons/brand.rgba"));
         assert_eq!(brand.rgba().len(), 4096);
         assert_eq!(&brand.rgba()[12 * 32 * 4..], &active.rgba()[12 * 32 * 4..]);
@@ -1520,15 +1511,6 @@ mod tests {
         assert!(can_hide(true, true));
         assert!(!can_hide(true, false));
         assert!(!can_hide(false, true));
-    }
-    #[test]
-    fn hover_hit_testing_supports_negative_monitors_and_excludes_far_edges() {
-        let pos = Position { x: -1920, y: 40 };
-        assert!(contains_point((-1919.5, 41.0), pos, (420, 640)));
-        assert!(contains_point((-1920.0, 40.0), pos, (420, 640)));
-        assert!(!contains_point((-1500.0, 40.0), pos, (420, 640)));
-        assert!(!contains_point((-1920.0, 680.0), pos, (420, 640)));
-        assert!(!contains_point((0.0, 40.0), pos, (420, 640)));
     }
     #[test]
     fn main_window_fits_small_high_dpi_work_areas_without_enlarging_user_sizes() {

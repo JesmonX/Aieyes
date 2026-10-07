@@ -56,7 +56,7 @@ function fixture() {
     await page.locator('#field-refreshSeconds').fill('123');await page.locator('#update-view').click();await page.locator('#update-install').click();
     assert.match(await page.locator('#update-message').textContent(),/保存设置/);
     assert.equal(await page.evaluate(()=>updateTest.calls.filter(x=>x==='updates_install').length),0);
-    await page.locator('#update-later').click();await page.locator('#general-form button.primary').click();await page.waitForFunction(()=>!state.busy);
+    await page.locator('#update-later').click();await page.locator('#settings-save-all').click();await page.waitForFunction(()=>!state.busy);
     await page.locator('#update-view').click();await page.locator('#update-install').click();
     await page.waitForFunction(()=>document.querySelector('#update-message').textContent.includes('签名校验失败'));
     assert.equal(await page.evaluate(()=>updateTest.calls.filter(x=>x==='updates_install').length),1);

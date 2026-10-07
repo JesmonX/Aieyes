@@ -2,6 +2,7 @@
 #[cfg(target_os = "windows")]
 mod capsule;
 mod desktop;
+mod phase_colors;
 #[cfg(target_os = "windows")]
 mod passive_window;
 mod updates;
@@ -286,7 +287,6 @@ fn main() {
             desktop::desktop_panel,
             desktop::desktop_panel_pin,
             desktop::desktop_panel_page,
-            desktop::desktop_panel_cursor_inside,
             desktop::desktop_action,
             desktop::desktop_panel_ready,
             desktop::desktop_detail

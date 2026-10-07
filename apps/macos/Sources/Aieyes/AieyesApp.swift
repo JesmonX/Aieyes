@@ -15,6 +15,10 @@ import Combine
     private var pageControl: NSSegmentedControl?
     private var settingsWindow: NSWindow?
     private var samplingWindow: NSWindow?
+    private var quotaOrderWindow: NSWindow?
+    private var panelAccountsWindow: NSWindow?
+    private var globalClickMonitor: Any?
+    private var localEventMonitor: Any?
     private var estimateWindows: [String: NSWindow] = [:]
     private var approvingSettingsClose = false
     private var cancellables = Set<AnyCancellable>()
@@ -23,6 +27,7 @@ import Combine
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         if let index = CommandLine.arguments.firstIndex(of: "--render"), CommandLine.arguments.count > index + 1 {
+            UserDefaults.standard.setVolatileDomain(["panel.accounts.v1": "{}", "panel.page": "agent", "detail.page": "agent", "panel.trendExpanded": false, "panel.sessionsExpanded": false, "panel.serverFilter": "all", "menu.showCount": false], forName: UserDefaults.argumentDomain)
             model = AppModel(autostart: false)
             Task { await renderSnapshots(to: CommandLine.arguments[index + 1]) }
             return
@@ -42,6 +47,8 @@ import Combine
         model.showDetailPage = { [weak self] page in self?.openDetail(page: page) }
         model.showEstimate = { [weak self] quota, credits in self?.openEstimate(quota, credits: credits) }
         model.showSampling = { [weak self] in self?.openSampling() }
+        model.showQuotaOrder = { [weak self] in self?.openQuotaOrder() }
+        model.showPanelAccounts = { [weak self] in self?.openPanelAccounts() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.target = self; button.action = #selector(togglePopover)
@@ -53,16 +60,41 @@ import Combine
             button.addSubview(label); statusLabel = label
             updateTitle()
         }
-        popover.behavior = .transient; popover.animates = true; popover.delegate = self
+        // Own dismissal explicitly: transient popovers can lose outside dismissal
+        // after a sheet, and can close on status mouse-down then reopen on mouse-up.
+        popover.behavior = .applicationDefined; popover.animates = true; popover.delegate = self
         popover.contentViewController = NSHostingController(rootView: RootView(model: model))
         popover.contentSize = NSSize(width: 450, height: 720)
         model.objectWillChange.sink { [weak self] _ in DispatchQueue.main.async { self?.updateTitle() } }.store(in: &cancellables)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            Task { @MainActor in self?.dismissOutsidePanel() }
+        }
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .keyDown, event.window === self.detailWindow, event.modifierFlags.contains(.command), let key = event.charactersIgnoringModifiers, ["1", "2"].contains(key) {
+                self.model.requestedDetailPage = key == "1" ? "agent" : "servers"; return nil
+            }
+            guard self.popover.isShown else { return event }
+            if event.type == .keyDown {
+                if event.keyCode == 53, event.window === self.popover.contentViewController?.view.window { self.popover.performClose(nil); return nil }
+            } else if let window = event.window,
+                      window !== self.popover.contentViewController?.view.window,
+                      window !== self.statusItem.button?.window,
+                      window.level.rawValue < NSWindow.Level.popUpMenu.rawValue {
+                // A popup menu tracks in its own window; selecting an item must
+                // not tear down its parent popover before the action is delivered.
+                self.dismissOutsidePanel()
+            }
+            return event
+        }
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationDeactivated), name: NSApplication.didResignActiveNotification, object: nil)
         if CommandLine.arguments.contains("--show-detail") { openDetail() }
     }
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
         if NSApp.currentEvent?.type == .rightMouseUp {
+            popover.performClose(nil)
             let menu = NSMenu()
             menu.addItem(withTitle: "打开详情", action: #selector(detailAction), keyEquivalent: "").target = self
             menu.addItem(withTitle: "设置…", action: #selector(settingsAction), keyEquivalent: ",").target = self
@@ -75,8 +107,10 @@ import Combine
         else {
             model.panelHeight = min(720, max(360, (button.window?.screen?.visibleFrame.height ?? 800) - 34))
             popover.contentSize = NSSize(width: 450, height: model.panelHeight)
-            NSApp.activate(ignoringOtherApps: true); popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); model.setWindowVisible(true, window: "panel") }
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); model.setWindowVisible(true, window: "panel") }
     }
+    private func dismissOutsidePanel() { if popover.isShown && !model.isPinned { popover.performClose(nil) } }
+    @objc private func applicationDeactivated() { dismissOutsidePanel() }
     func popoverDidClose(_ notification: Notification) { model.setWindowVisible(false, window: "panel") }
     @objc private func detailAction() { openDetail() }
     @objc private func settingsAction() { openSettings() }
@@ -90,12 +124,12 @@ import Combine
         button.toolTip = "Aieyes · 今日全部数据 · " + model.sessionSummary + (model.sessionPhase.map { " · " + $0.rawValue } ?? "")
         if !model.runningEstimates.isEmpty { button.toolTip = (button.toolTip ?? "Aieyes") + " · " + model.samplingSummary }
         button.setAccessibilityLabel(button.toolTip)
-        popover.behavior = model.isPinned ? .applicationDefined : .transient
         settingsWindow?.isDocumentEdited = model.settingsDirty
         pageControl?.selectedSegment = model.detailPage == "servers" ? 1 : 0
     }
     private func openDetail(page: String? = nil) {
         if let page { model.requestedDetailPage = page; model.detailPage = page }
+        else if detailWindow == nil, let saved = UserDefaults.standard.string(forKey: "detail.page"), ["agent", "servers"].contains(saved) { model.detailPage = saved }
         popover.performClose(nil)
         if detailWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -114,7 +148,7 @@ import Combine
         let item = NSToolbarItem(itemIdentifier: identifier)
         if identifier.rawValue == "pages" {
             let control = NSSegmentedControl(labels: ["Agent", "服务器"], trackingMode: .selectOne, target: self, action: #selector(detailPageChanged(_:)))
-            control.selectedSegment = model.detailPage == "servers" ? 1 : 0; control.setAccessibilityLabel("详情页面"); pageControl = control; item.view = control; item.label = "页面"
+            control.selectedSegment = model.detailPage == "servers" ? 1 : 0; control.setAccessibilityLabel("详情页面，Command 1 切换 Agent，Command 2 切换服务器"); control.toolTip = "Agent（⌘1） · 服务器（⌘2）"; pageControl = control; item.view = control; item.label = "页面"
         } else if identifier.rawValue == "refresh" {
             let button = NSPopUpButton(frame: .zero, pullsDown: true); button.addItem(withTitle: "刷新")
             for (index, title) in ["同步记录", "刷新限额", "同步价格", "刷新服务器"].enumerated() { let entry = NSMenuItem(title: title, action: #selector(toolbarRefresh(_:)), keyEquivalent: ""); entry.tag = index; entry.target = self; button.menu?.addItem(entry) }
@@ -178,6 +212,26 @@ import Combine
         }
         if let window = samplingWindow { fitToVisibleScreen(window); window.deminiaturize(nil); window.makeKeyAndOrderFront(nil) }
         NSApp.activate(ignoringOtherApps: true)
+    }
+    private func openQuotaOrder() {
+        popover.performClose(nil)
+        if quotaOrderWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 488, height: 430), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "调整账户顺序"; window.isReleasedWhenClosed = false; window.center(); quotaOrderWindow = window
+        }
+        guard let window = quotaOrderWindow else { return }
+        window.contentView = NSHostingView(rootView: QuotaOrderView(model: model, onClose: { [weak window] in window?.close() }))
+        fitToVisibleScreen(window); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    }
+    private func openPanelAccounts() {
+        popover.performClose(nil)
+        if panelAccountsWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 488, height: 528), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "面板显示账户"; window.isReleasedWhenClosed = false; window.center(); panelAccountsWindow = window
+        }
+        guard let window = panelAccountsWindow else { return }
+        window.contentView = NSHostingView(rootView: PanelAccountsView(model: model, onClose: { [weak window] in window?.close() }))
+        fitToVisibleScreen(window); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func fitToVisibleScreen(_ window: NSWindow) {
         guard let screen = window.screen ?? NSScreen.main else { return }
@@ -246,12 +300,17 @@ import Combine
         return .terminateLater
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
-    func applicationWillTerminate(_ notification: Notification) { model?.engine.stop(); model?.metricsEngine.stop() }
-    private func capture<V: View>(_ content: V, size: NSSize, dark: Bool, to url: URL) async throws {
-        let view = NSHostingView(rootView: content.frame(width: size.width, height: size.height).background(Color(nsColor: .windowBackgroundColor)).environment(\.colorScheme, dark ? .dark : .light))
+    func applicationWillTerminate(_ notification: Notification) {
+        if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }; if let localEventMonitor { NSEvent.removeMonitor(localEventMonitor) }
+        model?.engine.stop(); model?.metricsEngine.stop()
+    }
+    private func capture<V: View>(_ content: V, size: NSSize, dark: Bool, to url: URL, opaqueBackground: Bool = true) async throws {
+        let view = NSHostingView(rootView: content.frame(width: size.width, height: size.height).background(opaqueBackground ? Color(nsColor: .windowBackgroundColor) : Color.clear).environment(\.colorScheme, dark ? .dark : .light))
         view.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.isOpaque = opaqueBackground
+        window.backgroundColor = opaqueBackground ? .windowBackgroundColor : .clear
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = view
         window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
@@ -275,9 +334,18 @@ import Combine
             let root = URL(fileURLWithPath: directory)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             for dark in [false, true] {
+                try await capture(RootView(model: model), size: NSSize(width: 450, height: 720), dark: dark, to: root.appendingPathComponent("translucent-panel-\(dark ? "dark" : "light").png"), opaqueBackground: false)
+                try await capture(RootView(model: model).environment(\.previewAccessibleSurfaces, true), size: NSSize(width: 450, height: 720), dark: dark, to: root.appendingPathComponent("opaque-panel-\(dark ? "dark" : "light").png"), opaqueBackground: false)
                 for compact in [true, false] {
                     try await capture(RootView(model: model, compact: compact), size: NSSize(width: compact ? 450 : 1080, height: compact ? 720 : 1000), dark: dark, to: root.appendingPathComponent("\(compact ? "menubar" : "dashboard")-\(dark ? "dark" : "light").png"))
                 }
+                let sessions = model.sessions, unavailable = model.sessionsUnavailable
+                model.sessionsUnavailable = false
+                for phase in [SessionPhase.idle, .working, .thinking, .tool, .complete, .interrupted, .unknown] {
+                    model.sessions = phase == .idle ? [] : [LiveSession(id: "preview", source: "Codex", phase: phase, updatedAt: Date())]
+                    try await capture(MenuActivityLabel(model: model), size: NSSize(width: 180, height: 28), dark: dark, to: root.appendingPathComponent("menu-symbol-\(phase.symbol)-\(dark ? "dark" : "light").png"))
+                }
+                model.sessions = sessions; model.sessionsUnavailable = unavailable
             }
             try await capture(TokenBreakdown(tokens: model.dashboard.summary.tokens, inline: true), size: NSSize(width: 414, height: 90), dark: false, to: root.appendingPathComponent("token-breakdown.png"))
             for tab in ["sources", "servers", "prices", "wakeups", "general"] {
@@ -308,6 +376,11 @@ import Combine
             model.selectedModel = model.dashboard.modelOptions?.first ?? "gpt-review"
             try await capture(RootView(model: model), size: NSSize(width: 450, height: 540), dark: false, to: root.appendingPathComponent("filtered-panel-small.png"))
             model.selectedSource = "all"; model.selectedModel = "all"; model.panelHeight = 720
+            model.selectedModel = "ui-filter-failure"
+            await model.reload()
+            try await capture(RootView(model: model, compact: false), size: NSSize(width: 760, height: 480), dark: false, to: root.appendingPathComponent("filter-failed.png"))
+            model.selectedModel = "all"; await model.reload()
+            try await capture(RootView(model: model, compact: false), size: NSSize(width: 760, height: 480), dark: false, to: root.appendingPathComponent("filter-restored.png"))
             if let quota = model.dashboard.quotas.first {
                 try await capture(QuotaCard(quota: quota), size: NSSize(width: 420, height: 450), dark: false, to: root.appendingPathComponent("single-quota.png"))
             }
@@ -319,6 +392,17 @@ import Combine
                     try await capture(QuotaEstimateView(model: model, quota: account), size: NSSize(width: 518, height: 620), dark: dark, to: root.appendingPathComponent("quota-estimate-\(dark ? "dark" : "light").png"))
                     try await capture(QuotaEstimateView(model: model, quota: account, credits: true), size: NSSize(width: 518, height: 620), dark: dark, to: root.appendingPathComponent("credit-estimate-\(dark ? "dark" : "light").png"))
                 }
+            }
+            try await capture(PanelAccountsView(model: model, onClose: {}), size: NSSize(width: 488, height: 528), dark: false, to: root.appendingPathComponent("panel-accounts.png"))
+            if let quota = model.dashboard.quotas.first {
+                var overrides = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+                overrides["quota.expanded.v2.panel." + quota.id] = false
+                UserDefaults.standard.setVolatileDomain(overrides, forName: UserDefaults.argumentDomain)
+                try await capture(QuotaCard(quota: quota, compact: true, collapsible: true), size: NSSize(width: 414, height: 200), dark: false, to: root.appendingPathComponent("quota-folded-summary.png"))
+                try await capture(QuotaCard(quota: quota, compact: true, collapsible: true), size: NSSize(width: 414, height: 200), dark: true, to: root.appendingPathComponent("quota-folded-summary-dark.png"))
+                var dormant = quota
+                for index in dormant.windows.indices { dormant.windows[index].resetsAt = Date().timeIntervalSince1970 - 86400 }
+                try await capture(QuotaCard(quota: dormant), size: NSSize(width: 414, height: 450), dark: false, to: root.appendingPathComponent("quota-dormant-reset.png"))
             }
             try await capture(QuotaOrderView(model: model), size: NSSize(width: 488, height: 430), dark: false, to: root.appendingPathComponent("quota-order.png"))
             for provider in ["agy", "deepseek"] {

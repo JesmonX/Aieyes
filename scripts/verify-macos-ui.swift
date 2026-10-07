@@ -2,6 +2,18 @@ import Foundation
 
 @main struct VerifyMacUI {
     @MainActor static func main() async throws {
+        let panelAccounts = (0..<20).map { AgentAccount(id: "a\($0)", name: "账户 \($0)", provider: "codex", quotaEnabled: true) }
+        let order = panelAccounts.reversed().map(\.key)
+        let defaults = PanelAccountPreference.selections("{}", accounts: panelAccounts, order: order)
+        precondition(defaults["codex"] == Array(order.prefix(5)))
+        let empty = PanelAccountPreference.selections("{\"codex\":[]}", accounts: panelAccounts, order: order)
+        precondition(empty["codex"]?.isEmpty == true)
+        let malformed = PanelAccountPreference.selections("invalid", accounts: panelAccounts, order: order)
+        precondition(malformed["codex"]?.count == 5)
+        let chosen = PanelAccountPreference.selections(PanelAccountPreference.encode(["codex": ["codex:a19", "codex:a19", "codex:missing", "codex:a0"]]), accounts: panelAccounts, order: order)
+        precondition(chosen["codex"] == ["codex:a19", "codex:a0"])
+        let archivedAccounts = panelAccounts.map { var account = $0; account.archived = true; return account }
+        precondition(PanelAccountPreference.selections(PanelAccountPreference.encode(chosen), accounts: archivedAccounts, order: order)["codex"]?.isEmpty == true)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("aieyes-ui-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

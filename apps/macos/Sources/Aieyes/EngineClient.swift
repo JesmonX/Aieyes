@@ -126,10 +126,19 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func stageHostPassword(_ password: String, hostID: String) { if !password.isEmpty { pendingHostPasswords[hostID] = password } }
     private var preparedCredentials: [String: (key: String, path: String)] = [:]
     var settingsChangeCount: Int {
-        let rows = settingsDraft.sources.filter { source in settings.sources.first { $0.id == source.id } != source }.count + settings.sources.filter { source in !settingsDraft.sources.contains { $0.id == source.id } }.count
-        let hosts = settingsDraft.hosts.filter { host in settings.hosts.first { $0.id == host.id } != host }.count + settings.hosts.filter { host in !settingsDraft.hosts.contains { $0.id == host.id } }.count
-        let accounts = settingsDraft.accounts.filter { account in settings.accounts.first { $0.key == account.key } != account }.count
-        return max(settingsDirty ? 1 : 0, rows + hosts + accounts + (settingsDraft.modelMappings != settings.modelMappings ? 1 : 0))
+        var rows = Set<String>()
+        for source in settingsDraft.sources where settings.sources.first(where: { $0.id == source.id }) != source { rows.insert("source:" + source.id) }
+        for source in settings.sources where !settingsDraft.sources.contains(where: { $0.id == source.id }) { rows.insert("source:" + source.id) }
+        for host in settingsDraft.hosts where settings.hosts.first(where: { $0.id == host.id }) != host { rows.insert("host:" + host.id) }
+        for host in settings.hosts where !settingsDraft.hosts.contains(where: { $0.id == host.id }) { rows.insert("host:" + host.id) }
+        for account in settingsDraft.accounts where settings.accounts.first(where: { $0.key == account.key }) != account { rows.insert("account:" + account.key) }
+        for account in settings.accounts where !settingsDraft.accounts.contains(where: { $0.key == account.key }) { rows.insert("account:" + account.key) }
+        for id in pendingAPIKeys.keys { rows.insert("source:" + id) }; for id in pendingHostPasswords.keys { rows.insert("host:" + id) }
+        var general = settingsDraft
+        general.sources = settings.sources; general.hosts = settings.hosts; general.accounts = settings.accounts; general.modelMappings = settings.modelMappings
+        if general != settings { rows.insert("general") }
+        if settingsDraft.modelMappings != settings.modelMappings || !mappingModel.isEmpty || !mappingID.isEmpty { rows.insert("mappings") }
+        return rows.count
     }
     var settingsDirty: Bool { settingsDraft != settings || !pendingAPIKeys.isEmpty || !pendingHostPasswords.isEmpty || !mappingModel.isEmpty || !mappingID.isEmpty }
     func stageAPIKey(_ key: String?, sourceID: String) {
@@ -194,6 +203,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var showDetail: (() -> Void)?
     var showEstimate: ((Quota, Bool) -> Void)?
     var showSampling: (() -> Void)?
+    var showQuotaOrder: (() -> Void)?
+    var showPanelAccounts: (() -> Void)?
     func openEstimate(_ estimate: QuotaEstimate) async {
         do {
             // Use an unfiltered read so changing the usage filter cannot hide sampling controls.

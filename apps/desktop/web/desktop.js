@@ -11,6 +11,7 @@
     if (mode && document.activeElement !== mode) mode.value = info.mode;
     const effective = document.querySelector('#desktop-effective');
     if (effective) effective.textContent = effectiveText(info);
+    const count=document.querySelector('#desktop-count');if(count)count.checked=!!info.showCount;
     const hide = document.querySelector('#hide-ball');
     if (hide && document.activeElement !== hide) hide.textContent = info.hidden ? '恢复显示悬浮球' : '暂时隐藏悬浮球';
   }
@@ -49,12 +50,13 @@
   }
   window.AieyesDesktop = {
     settingsHTML() {
-      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="auto">跟随系统</option><option value="floating">悬浮球</option><option value="tray">系统状态栏 / 托盘</option></select></div><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">悬浮胶囊单击打开面板，悬停查看状态，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，重启应用也会恢复。</p><div class="between"><button type="button" id="reset-ball">重置悬浮球位置</button><button type="button" id="hide-ball">暂时隐藏悬浮球</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
+      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="auto">跟随系统</option><option value="floating">悬浮球</option><option value="tray">系统状态栏 / 托盘</option></select></div><label class="quota-confirm"><input type="checkbox" id="desktop-count">显示活跃会话计数（本机，立即生效）</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">悬浮胶囊单击打开面板，悬停查看状态，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，重启应用也会恢复。</p><div class="between"><button type="button" id="reset-ball">重置悬浮球位置</button><button type="button" id="hide-ball">暂时隐藏悬浮球</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
     },
     bindSettings() {
       const select = document.querySelector('#desktop-mode');
       if (!select) return;
       select.value = current?.mode || 'auto';
+      const count=document.querySelector('#desktop-count');if(count){count.checked=!!current?.showCount;count.onchange=async()=>{count.disabled=true;try{await invoke('desktop_action',{action:'toggle-count'});update(await invoke('desktop_info'));}catch(error){count.checked=!!current?.showCount;notify(String(error));}finally{count.disabled=false;}};}
       select.onchange = async () => {
         select.disabled = true;
         try { update(await invoke('desktop_mode',{mode:select.value})); }

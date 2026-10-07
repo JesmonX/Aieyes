@@ -1,22 +1,26 @@
 /* Linux fallback capsule; Windows uses the matching native Win32 surface. */
 :root { color-scheme:light dark; background:transparent; --capsule-bg:#f6f8fc; --capsule-ink:#243049; }
 html,body { margin:0; width:100%; height:100%; overflow:hidden; background:transparent; user-select:none; }
-body { display:grid; place-items:center; font-family:var(--font-body,"Segoe UI",system-ui,sans-serif); }
-#ball { position:relative; width:144px; height:44px; min-height:0; display:flex; flex-direction:row; align-items:center; gap:8px; padding:0 12px; border:1px solid var(--border); border-radius:22px; background:var(--capsule-bg); color:var(--capsule-ink); box-shadow:0 2px 8px #15213826; cursor:grab; touch-action:none; }
+body { display:grid; place-items:normal; font-family:var(--font-ui,"Segoe UI",system-ui,sans-serif); }
+#ball { position:relative; width:144px; height:44px; min-height:0; display:flex; flex-direction:row; align-items:center; gap:3px; padding:0 10px 0 12px; border:1px solid var(--border); border-radius:22px; background:var(--capsule-bg); color:var(--capsule-ink); box-shadow:0 2px 8px #15213826; cursor:grab; touch-action:none; }
 #ball:hover { background:var(--surface-strong); transform:none; }
-#ball:active { cursor:grabbing; transform:none; }
+#ball:active { cursor:grabbing; transform:none; background:var(--soft); box-shadow:inset 0 0 0 2px var(--border); }
 #ball:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 #ball .eye { flex:0 0 24px; width:24px; height:24px; pointer-events:none; }
 #ball .halo { display:none; }
-#phase { display:flex; align-items:center; gap:4px; font-size:13px; line-height:18px; white-space:nowrap; pointer-events:none; }
+#phase { display:flex; align-items:center; gap:4px; font-size:var(--font-entry); line-height:18px; white-space:nowrap; pointer-events:none; }
 #phase::before { content:""; width:5px; height:5px; border-radius:50%; background:var(--phase-color,#91a0b7); }
-#count { margin-left:auto; font-size:13px; font-variant-numeric:tabular-nums; pointer-events:none; }
+#count { margin-left:auto; width:25px; flex:0 0 25px; line-height:20px; text-align:center; border-radius:var(--r-pill); padding:0; background:var(--count-badge); font-size:var(--font-entry); font-variant-numeric:tabular-nums; pointer-events:none; }
 [hidden] { display:none!important; }
-body[data-phase=working] { --phase-color:#2c9d88; }
-body[data-phase=thinking] { --phase-color:#ac78dd; }
-body[data-phase=tool] { --phase-color:#629cef; }
-body[data-phase=complete] { --phase-color:#44ad76; }
-body[data-phase=interrupted] { --phase-color:#d9a44c; }
+body[data-phase=working] { --phase-color:var(--phase-working); }
+body[data-phase=thinking] { --phase-color:var(--phase-thinking); }
+body[data-phase=tool] { --phase-color:var(--phase-tool); }
+body[data-phase=complete] { --phase-color:var(--phase-complete); }
+body[data-phase=interrupted] { --phase-color:var(--phase-interrupted); }
 @media(prefers-color-scheme:dark) { :root { --capsule-bg:#202735; --capsule-ink:#edf2fc; } }
 @media(forced-colors:active) { #ball { background:Canvas; color:CanvasText; border:1px solid CanvasText; box-shadow:none; } }
 body[data-native-capsule=true] #ball { display:none; }
+
+body[data-phase=idle] { --phase-color:var(--phase-idle); }
+body[data-phase=unknown] { --phase-color:var(--phase-unknown); }
+@media(forced-colors:active) { #count { border:1px solid CanvasText; } }

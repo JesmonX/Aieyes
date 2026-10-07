@@ -5,6 +5,7 @@ set -eu
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$PROJECT_DIR"
 export PATH="$HOME/.cargo/bin:$PATH"
+python3 scripts/sync-phase-colors.py --check
 python3 - <<'PY'
 from pathlib import Path
 import json
@@ -30,6 +31,8 @@ pub mod desktop {
 }
 #[path = '''+json.dumps(str(project/'apps/desktop/src-tauri/src/capsule.rs'))+''']
 pub mod capsule;
+#[path = '''+json.dumps(str(project/'apps/desktop/src-tauri/src/phase_colors.rs'))+''']
+pub mod phase_colors;
 #[path = '''+json.dumps(str(project/'apps/desktop/src-tauri/src/passive_window.rs'))+''']
 pub mod passive_window;
 ''')
