@@ -133,6 +133,26 @@ fn panel_rect(
     };
     let below = ball_pos.y + ball.1 + gap;
     let above = ball_pos.y - panel_height - gap;
+    // A tall panel cannot fit above/below a capsule midway down a small screen.
+    // Prefer the free horizontal side before clamping into the capsule itself.
+    if below + panel_height > y + height as i32 && above < y {
+        let right = ball_pos.x + ball.0 + gap;
+        let left_side = ball_pos.x - panel_width - gap;
+        let side = if left_side >= x {
+            Some(left_side)
+        } else if right + panel_width <= x + width as i32 {
+            Some(right)
+        } else {
+            None
+        };
+        if let Some(side) = side {
+            return Position {
+                x: side,
+                y: (ball_pos.y + ball.1 / 2 - panel_height / 2)
+                    .clamp(y, (y + height as i32 - panel_height).max(y)),
+            };
+        }
+    }
     let mut top = if ball_pos.y + ball.1 / 2 < y + height as i32 / 2 {
         below
     } else {
@@ -1671,6 +1691,32 @@ mod tests {
         assert_eq!((p.x, p.y), (300, 40));
         assert_eq!(panel_size(1.0, Some(1040)), (450, 720));
         assert_eq!(panel_size(2.0, Some(700)), (900, 652));
+    }
+    #[test]
+    fn tall_panel_uses_free_side_without_covering_capsule() {
+        for scale in [1, 2] {
+            let ball = Position {
+                x: 856 * scale,
+                y: 338 * scale,
+            };
+            let p = panel_rect(
+                ball,
+                (144 * scale, 44 * scale),
+                (450 * scale, 720 * scale),
+                (0, 0, 1024 * scale as u32, 768 * scale as u32),
+                8 * scale,
+            );
+            assert!(p.x + 450 * scale + 8 * scale <= ball.x);
+            assert!(p.y >= 0 && p.y + 720 * scale <= 768 * scale);
+        }
+        let p = panel_rect(
+            Position { x: -1000, y: 338 },
+            (144, 44),
+            (450, 720),
+            (-1024, 0, 1024, 768),
+            8,
+        );
+        assert!(p.x >= -1000 + 144 + 8);
     }
     #[test]
     fn hiding_the_ball_requires_another_entry_point() {

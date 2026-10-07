@@ -105,10 +105,13 @@ try {
     # Check actual desktop pixels for a surviving frame/shadow, not only HWND flags.
     $bitmap=[Drawing.Bitmap]::FromFile((Join-Path $out 'closed.png'))
     try {
-      $different=0;$total=0;$expected=$background.BackColor.ToArgb()
+      $different=0;$total=0;$expected=$background.BackColor.ToArgb();$capsuleRect=Bounds $script:capsule
       for($x=$former.Left;$x -lt $former.Right;$x+=4) {for($y=$former.Top;$y -lt $former.Bottom;$y+=4) {
+        # The capsule deliberately remains visible, including its own shadow.
+        if($x -ge $capsuleRect.Left-8 -and $x -le $capsuleRect.Right+8 -and $y -ge $capsuleRect.Top-8 -and $y -le $capsuleRect.Bottom+8){continue}
         if($x -ge 0 -and $y -ge 0 -and $x -lt $bitmap.Width -and $y -lt $bitmap.Height){$total++;if($bitmap.GetPixel($x,$y).ToArgb() -ne $expected){$different++}}
       }}
+      $result.pixelSamples=$total;$result.differentPixels=$different
       Assert-That ($total -gt 0 -and $different/$total -lt .005) 'closed panel leaves no visible surface or frame'
     } finally {$bitmap.Dispose()}
     for($i=0;$i -lt 12;$i++) {Capsule-Click;Wait-For {Panel-Visible} 'repeat open';Capsule-Click;Wait-For {-not (Panel-Visible)} 'repeat close'}

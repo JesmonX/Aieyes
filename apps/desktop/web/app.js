@@ -502,6 +502,8 @@ function drawTrend() {
   canvas.onmousemove=e=>{const i=Math.floor((e.offsetX-left)/space);if(days[i])describe(i);};
   canvas.onfocus=()=>describe(selected);
   canvas.onkeydown=e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();selected=e.key==='Home'?0:e.key==='End'?days.length-1:Math.max(0,Math.min(days.length-1,(state.trendDayIndex??selected)+(e.key==='ArrowLeft'?-1:1)));describe(selected);}else if(e.key==='Enter'&&days[state.trendDayIndex??selected])showUsageDay(days[state.trendDayIndex??selected]);};
+  // A background redraw or metric switch keeps the user's selected date readable.
+  if(state.trendDayIndex!=null&&days.length)describe(selected);
 
 }
 function resourcePercent(value) { return Number.isFinite(value)?Math.max(0,Math.min(100,value)):null; }
