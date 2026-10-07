@@ -24,6 +24,14 @@ public static class PanelProbe {
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags,uint x,uint y,uint data,UIntPtr extra);
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h,uint message,IntPtr w,IntPtr l);
+  [DllImport("user32.dll")] public static extern bool GetMenuItemRect(IntPtr owner,IntPtr menu,uint item,out Rect rect);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetMenuString(IntPtr menu,uint item,StringBuilder text,int size,uint flags);
+  public static IntPtr FindMenu(uint pid) {
+    IntPtr found=IntPtr.Zero;
+    EnumWindows((h,p)=>{uint owner;GetWindowThreadProcessId(h,out owner);if(owner!=pid||!IsWindowVisible(h))return true;
+      var text=new StringBuilder(256);GetClassName(h,text,256);if(text.ToString()=="#32768"){found=h;return false;}return true;},IntPtr.Zero);return found;
+  }
   public static IntPtr Find(uint pid,string name,bool byClass) {
     IntPtr found=IntPtr.Zero;
     EnumWindows((h,p)=>{uint owner;GetWindowThreadProcessId(h,out owner);if(owner!=pid)return true;
@@ -65,6 +73,25 @@ function Bounds([IntPtr]$Handle) {
 }
 function Capsule-Click([bool]$Right=$false) {
     $r=Bounds $script:capsule;Click-At ($r.Left+($r.Right-$r.Left)/2) ($r.Top+($r.Bottom-$r.Top)/2) $Right
+}
+function Open-CapsuleMenu {
+    Capsule-Click $true
+    Wait-For { [PanelProbe]::FindMenu($app.Id) -ne [IntPtr]::Zero } 'capsule menu appears'
+}
+function Choose-MenuItem([uint32]$Index,[string]$Expected) {
+    Open-CapsuleMenu
+    $popup=[PanelProbe]::FindMenu($app.Id)
+    # MN_GETHMENU obtains the actual popup menu; do not assume keyboard activation
+    # of a WS_EX_NOACTIVATE capsule or a fixed menu row height on different DPI.
+    $menu=[PanelProbe]::SendMessage($popup,0x1e1,[IntPtr]::Zero,[IntPtr]::Zero)
+    $label=New-Object Text.StringBuilder 256
+    $null=[PanelProbe]::GetMenuString($menu,$Index,$label,256,0x400)
+    Assert-That ($label.ToString() -eq $Expected) "native menu item: $Expected"
+    $rect=New-Object PanelProbe+Rect
+    Assert-That ([PanelProbe]::GetMenuItemRect([IntPtr]::Zero,$menu,$Index,[ref]$rect)) "locate native menu item: $Expected"
+    Click-At (($rect.Left+$rect.Right)/2) (($rect.Top+$rect.Bottom)/2)
+    Wait-For { [PanelProbe]::FindMenu($app.Id) -eq [IntPtr]::Zero } 'menu selection completes'
+    Pump 200
 }
 function Panel-Visible { $script:panel=[PanelProbe]::Find($app.Id,'Aieyes 面板',$false);return $script:panel -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:panel) }
 function Screenshot([string]$Name) {
@@ -117,25 +144,31 @@ try {
     for($i=0;$i -lt 12;$i++) {Capsule-Click;Wait-For {Panel-Visible} 'repeat open';Capsule-Click;Wait-For {-not (Panel-Visible)} 'repeat close'}
     Assert-That (-not (Panel-Visible)) 'repeated capsule toggles end fully hidden'
     Capsule-Click;Wait-For {Panel-Visible} 'open before menu'
-    Capsule-Click $true;[System.Windows.Forms.SendKeys]::SendWait('{ESC}');Pump 200
+    Open-CapsuleMenu;Click-At 25 200;Wait-For { [PanelProbe]::FindMenu($app.Id) -eq [IntPtr]::Zero } 'outside click cancels menu';Pump 200
     Assert-That (Panel-Visible) 'canceling capsule menu preserves open panel'
     # Select the second item: pin; then prove outside clicks no longer dismiss.
-    Capsule-Click $true;[System.Windows.Forms.SendKeys]::SendWait('{HOME}{DOWN}{ENTER}');Pump 200
+    Choose-MenuItem 1 '固定面板'
     Click-At 25 200;Assert-That (Panel-Visible) 'pinned panel survives outside click'
-    Capsule-Click $true;[System.Windows.Forms.SendKeys]::SendWait('{HOME}{DOWN}{ENTER}');Pump 200
+    Choose-MenuItem 1 '取消固定面板'
     Click-At 25 200;Wait-For {-not (Panel-Visible)} 'unpin restores outside dismissal'
     Capsule-Click;Wait-For {Panel-Visible} 'open before renderer rebuild'
     $oldPanel=$script:panel
-    Capsule-Click $true;[System.Windows.Forms.SendKeys]::SendWait('{HOME}{DOWN}{DOWN}{ENTER}')
+    Choose-MenuItem 2 '重建面板（用于界面无响应）'
     Wait-For {(Panel-Visible) -and $script:panel -ne $oldPanel} 'rebuild creates a new visible panel'
     Capsule-Click;Wait-For {-not (Panel-Visible)} 'rebuilt panel closes'
     $result.status='passed'
 } catch {
     $result.status='failed';$result.reason=$_.ToString();Screenshot 'failure';throw
 } finally {
-    $result | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $out 'result.json')
     if($background){$background.Close();$background.Dispose()}
-    if($app -and -not $app.HasExited){Stop-Process -Id $app.Id -Force}
+    if($app -and -not $app.HasExited){
+        & taskkill /PID $app.Id /T /F 2>&1 | Out-Null
+        $null=$app.WaitForExit(5000)
+    }
     $env:AIEYES_DATA_DIR=$oldData
-    Remove-Item -Recurse -Force $testData
+    for($attempt=0;$attempt -lt 20;$attempt++) {
+        try {Remove-Item -Recurse -Force $testData;break}
+        catch {if($attempt -eq 19){$result.cleanupWarning=$_.ToString();Write-Warning 'Temporary test directory is still locked'}else{Pump 100}}
+    }
+    $result | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $out 'result.json')
 }
