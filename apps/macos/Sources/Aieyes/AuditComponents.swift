@@ -25,7 +25,7 @@ struct ProviderIdentity: View {
 struct SubscriptionBadge: View {
     var plan: String
     var body: some View {
-        Text(Format.subscription(plan)).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+        Text(Format.subscription(plan)).font(.system(size: 14, weight: .semibold)).lineLimit(1)
             .padding(.horizontal, 6).padding(.vertical, 3)
             .foregroundStyle(Palette.accent).background(Palette.accent.opacity(0.12), in: Capsule())
             .help(plan).accessibilityLabel("订阅 " + Format.subscription(plan))
@@ -73,5 +73,23 @@ struct FlowLayout: Layout {
             points.append(CGPoint(x: x, y: y)); x += size.width + spacing; height = max(height, size.height)
         }
         return (CGSize(width: width, height: y + height), points)
+    }
+}
+
+struct EstimateSummary: View {
+    var records: [QuotaEstimate]
+    var credits = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(EstimatePresentation.entries(records, credits: credits)) { entry in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.label + " ≈ " + Format.money(entry.value) + " USD").monospacedDigit().foregroundStyle(Palette.accent)
+                    if entry.historical { Text("历史采样 · " + Format.date(entry.record.checkpointAt) + (entry.record.originalEstimateId == nil ? "" : " · 已修正")).foregroundStyle(.secondary) }
+                }
+            }
+            if let latest = EstimatePresentation.canonical(records).first, !latest.hasValue || latest.status == "pending" {
+                Text("最新采样 · " + latest.statusLabel + " · " + latest.issueLabel).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading)
     }
 }

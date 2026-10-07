@@ -3,7 +3,7 @@ import Foundation
 @main struct VerifyResetFormat {
     static func main() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let cases: [(Double, String)] = [(1, "1 分后重置"), (59 * 60, "59 分后重置"), (59 * 60 + 1, "1 小时后重置"), (60 * 60, "1 小时后重置"), (24 * 3600, "1 天后重置"), (26 * 3600 + 15 * 60, "1 天 2 小时 15 分后重置"), (7 * 86400, "7 天后重置")]
+        let cases: [(Double, String)] = [(1, "1 分后重置"), (59 * 60, "59 分后重置"), (59 * 60 + 1, "1 小时后重置"), (60 * 60, "1 小时后重置"), (24 * 3600, "1 天后重置"), (26 * 3600 + 15 * 60, "1 天 2 小时后重置"), (7 * 86400, "7 天后重置"), (23 * 3600 + 59 * 60, "23 小时 59 分后重置"), (86400 + 60, "1 天后重置"), (86400 + 3600 + 60, "1 天 1 小时后重置")]
         for (delta, expected) in cases {
             precondition(Format.resetCountdown(now.timeIntervalSince1970 + delta, now: now) == expected)
         }

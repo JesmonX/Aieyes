@@ -54,6 +54,8 @@ pub struct UsageEvent {
     pub billing: BillingEvidence,
     #[serde(default)]
     pub interval_start: Option<i64>,
+    #[serde(default)]
+    pub interval_evidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -189,6 +191,7 @@ impl Default for Host {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub appearance: Appearance,
     pub version: u32,
     pub sources: Vec<Source>,
     pub accounts: Vec<Account>,
@@ -204,6 +207,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            appearance: Appearance::default(),
             version: 1,
             sources: vec![],
             accounts: vec![],
@@ -218,6 +222,21 @@ impl Default for Settings {
             github_repository: String::new(),
             model_mappings: Default::default(),
             proxy_test_urls: crate::network::default_test_urls(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Appearance {
+    pub theme: String,
+    pub accent: String,
+}
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            theme: "system".into(),
+            accent: "indigo".into(),
         }
     }
 }
@@ -264,6 +283,8 @@ impl Settings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ParseState {
+    pub parser_version: u32,
+    pub task_started_at: Option<i64>,
     pub session_id: String,
     pub model: String,
     pub last_cumulative: Option<Tokens>,

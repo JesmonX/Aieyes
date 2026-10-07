@@ -18,6 +18,7 @@ class Collectors(unittest.TestCase):
                 {"type": "session_meta", "payload": {"id": "s", "base_instructions": "private-text"}},
                 {"type": "turn_context", "payload": {"model": "test", "cwd": "private-path"}},
                 {"type": "response_item", "payload": {"text": "private-text"}},
+                {"type": "event_msg", "timestamp": "2026-10-03T00:00:00Z", "payload": {"type": "task_started", "prompt": "private-text"}},
                 {"type": "event_msg", "timestamp": "2026-10-03T00:00:00Z", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 10}}, "rate_limits": None}},
             ]
             path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
@@ -27,7 +28,8 @@ class Collectors(unittest.TestCase):
             text = output.getvalue()
             self.assertNotIn("private-text", text)
             self.assertNotIn("private-path", text)
-            self.assertEqual(len(json.loads(text)["files"][0]["events"]), 3)
+            self.assertEqual(len(json.loads(text)["files"][0]["events"]), 4)
+            self.assertEqual(json.loads(text)["files"][0]["events"][2]["payload"], {"type": "task_started"})
 
     def test_remote_quota_returns_only_usage_and_sanitizes_errors(self):
         module = runpy.run_path(str(SCRIPTS / "remote_quota.py"))

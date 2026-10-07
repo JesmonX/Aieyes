@@ -13,6 +13,7 @@ test('panel account choices cap each Agent and preserve explicit empty choices',
   const defaults=window.AieyesUI.panelAccounts(settings,order);
   assert.deepEqual([...defaults.codex],['codex:c19','codex:c18','codex:c17','codex:c16','codex:c15']);
   assert.equal(defaults.claude.length,5);
+  data.delete('aieyes.panel.accounts.v2');
   data.set('aieyes.panel.accounts.v1',JSON.stringify({codex:[],claude:['claude:a0','claude:a0','claude:missing','claude:a1']}));
   assert.equal(window.AieyesUI.panelAccounts(settings,order).codex.length,0);
   assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).claude],['claude:a0','claude:a1']);

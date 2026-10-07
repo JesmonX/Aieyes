@@ -1,6 +1,8 @@
 use crate::models::*;
 use serde_json::Value;
 
+pub const PARSER_VERSION: u32 = 2;
+
 fn count(v: &Value, name: &str) -> u64 {
     v.get(name).and_then(Value::as_u64).unwrap_or(0)
 }
@@ -45,6 +47,7 @@ fn event(
             evidence: state.model_provider.clone(),
         },
         interval_start: None,
+        interval_evidence: String::new(),
     }
 }
 
@@ -58,6 +61,7 @@ pub fn event_id(provider: &str, source_id: &str, account_id: &str, identity: &st
 }
 
 pub fn parse(source: &Source, state: &mut ParseState, v: &Value) -> Option<UsageEvent> {
+    state.parser_version = PARSER_VERSION;
     match source.provider.as_str() {
         "codex" => parse_codex(source, state, v),
         "claude" => parse_claude(source, state, v),
@@ -68,6 +72,14 @@ pub fn parse(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usage
 fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<UsageEvent> {
     let payload = &v["payload"];
     match v["type"].as_str()? {
+        "event_msg" if payload["type"] == "task_started" => {
+            state.task_started_at = timestamp(&v["timestamp"]);
+            None
+        }
+        "event_msg" if payload["type"] == "task_complete" || payload["type"] == "turn_aborted" => {
+            state.task_started_at = None;
+            None
+        }
         "session_meta" => {
             state.session_started_at =
                 timestamp(&payload["timestamp"]).or_else(|| timestamp(&v["timestamp"]));
@@ -89,7 +101,7 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             if state.last_cumulative.as_ref() == Some(&cumulative) {
                 return None;
             }
-            let interval_start = (state.last_timestamp > 0)
+            let mut interval_start = (state.last_timestamp > 0)
                 .then_some(state.last_timestamp)
                 .or(state.session_started_at);
             let (tokens, attribution) = match &state.last_cumulative {
@@ -106,6 +118,16 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                     }
                 }
             };
+            // A task boundary is only stronger evidence when this whole delta is
+            // exactly the last request. Never relocate an accumulated summary.
+            let task_boundary = state.task_started_at.filter(|start| {
+                *start <= stamp
+                    && interval_start.is_none_or(|old| *start > old)
+                    && codex_tokens(&payload["info"]["last_token_usage"]).as_ref() == Some(&tokens)
+            });
+            if let Some(start) = task_boundary {
+                interval_start = Some(start);
+            }
             state.last_cumulative = Some(cumulative.clone());
             state.last_timestamp = stamp;
             if tokens.total() == 0 {
@@ -132,6 +154,9 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                 attribution,
             );
             parsed.interval_start = interval_start;
+            if task_boundary.is_some() {
+                parsed.interval_evidence = "task-request-v2".into();
+            }
             Some(parsed)
         }
         _ => None,

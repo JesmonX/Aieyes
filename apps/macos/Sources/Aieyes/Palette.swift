@@ -7,7 +7,16 @@ enum Palette {
             return NSColor(srgbRed: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255, alpha: 1)
         })
     }
-    static let accent = adaptive(0x5566d9, 0xa3b3ff)
+    static var accent: Color {
+        let pair: (UInt32, UInt32)
+        switch UserDefaults.standard.string(forKey: "appearance.accent") {
+        case "blue": pair = (0x2166be, 0x8bbcff)
+        case "teal": pair = (0x16745f, 0x65ceae)
+        case "purple": pair = (0x8054b7, 0xccabff)
+        default: pair = (0x5566d9, 0xa3b3ff)
+        }
+        return adaptive(pair.0, pair.1)
+    }
     static let balanceBlue = adaptive(0x1e5ebf, 0x8cbcff)
     static let ok = adaptive(0x176e58, 0x5cc4a4)
     static let warn = adaptive(0x895712, 0xe0b062)

@@ -1,16 +1,43 @@
 /* Shared UI semantics. Query timestamps deliberately never imply a successful sync. */
 window.AieyesUI = {
-  panelAccounts(settings, order = []) {
-    let selected = {};
-    try { const value=JSON.parse(localStorage.getItem('aieyes.panel.accounts.v1')||'{}');if(value&&typeof value==='object'&&!Array.isArray(value))selected=value; } catch (_) {}
-    const eligible=(settings?.accounts??[]).filter(a=>!a.archived&&a.quotaEnabled);
-    const sorted=[...eligible].sort((a,b)=>{const rank=a=>{const i=order.indexOf(a.provider+':'+a.id);return i<0?Number.MAX_SAFE_INTEGER:i;};return rank(a)-rank(b);});
-    for(const provider of new Set([...eligible.map(a=>a.provider),...Object.keys(selected)])) {
-      const keys=sorted.filter(a=>a.provider===provider).map(a=>a.provider+':'+a.id);
-      selected[provider]=[...new Set((Array.isArray(selected[provider])?selected[provider]:keys).filter(k=>keys.includes(k)))].slice(0,5);
+  panelPreference() {
+    try {
+      const current = JSON.parse(localStorage.getItem('aieyes.panel.accounts.v2') || 'null');
+      if (current?.version === 2 && current.providers) return current;
+      const old = JSON.parse(localStorage.getItem('aieyes.panel.accounts.v1') || '{}');
+      const next = {version:2, providers:{}};
+      for (const [provider,keys] of Object.entries(old || {})) if (Array.isArray(keys)) next.providers[provider] = {mode:'custom',keys};
+      localStorage.setItem('aieyes.panel.accounts.v2', JSON.stringify(next));
+      return next;
+    } catch (_) { return {version:2,providers:{}}; }
+  },
+  panelAccounts(settings, order = [], preference = this.panelPreference()) {
+    const selected = {}, eligible=(settings?.accounts??[]).filter(a=>!a.archived&&a.quotaEnabled);
+    const rank=a=>{const i=order.indexOf(a.provider+':'+a.id);return i<0?Number.MAX_SAFE_INTEGER:i;};
+    const sorted=[...eligible].sort((a,b)=>rank(a)-rank(b));
+    for(const provider of new Set([...eligible.map(a=>a.provider),...Object.keys(preference.providers)])) {
+      const keys=sorted.filter(a=>a.provider===provider).map(a=>a.provider+':'+a.id), choice=preference.providers[provider];
+      const saved=Array.isArray(choice?.keys)?choice.keys:[];
+      let values=choice?.mode==='custom'?saved.filter(k=>keys.includes(k)):keys;
+      if(choice?.mode==='custom'&&saved.length&&!values.length)values=keys;
+      selected[provider]=[...new Set(values)].slice(0,5);
     }
-    try { localStorage.setItem('aieyes.panel.accounts.v1',JSON.stringify(selected)); } catch (_) {}
     return selected;
+  },
+  canonicalEstimates(records = []) {
+    const replaced = new Set(records.map(e=>e.originalEstimateId).filter(Boolean));
+    return records.filter(e=>!replaced.has(e.id)).sort((a,b)=>b.startedAt-a.startedAt || (b.repairedAt||0)-(a.repairedAt||0));
+  },
+  estimateIssue(record) {
+    if (record.status==='pending') return record.reason || '待确认';
+    return ({boundary:'用量边界待确认',noUsage:'暂无有效用量',unpriced:'模型价格不完整',insufficientUsage:'尚未达到采样阈值',invalidPrice:'价格数据无效'})[record.calculationStatus] || record.calculationNote || '尚无估值';
+  },
+  estimateEntries(records = [], credits = false) {
+    const all=this.canonicalEstimates(records);
+    return (credits ? [['valuePer1000','1000 credits']] : [['fiveHourValue','5h'],['weeklyValue','7d 整周'],['weeklyRatioValue','7d 容量倍率']]).flatMap(([field,label])=>{
+      const record=all.find(e=>e.status!=='pending'&&Number.isFinite(e[field]));
+      return record?[{field,label:field==='weeklyValue'&&record.valuationMode==='fiveHour'?'7d 同期':label,value:record[field],record,historical:record!==all[0]||record.status==='completed'}]:[];
+    });
   },
   usageSources(settings) {
     return (settings?.sources ?? []).filter(s => s.enabled && !['agy','deepseek'].includes(s.provider) &&
@@ -39,7 +66,7 @@ window.AieyesUI = {
     if (!Number.isSafeInteger(minutes) || minutes <= 0) return '重置时间未知';
     if (minutes >= 1440) parts.push(Math.floor(minutes / 1440) + ' 天');
     if (minutes % 1440 >= 60) parts.push(Math.floor(minutes % 1440 / 60) + ' 小时');
-    if (minutes % 60) parts.push(minutes % 60 + ' 分');
+    if (minutes < 1440 && minutes % 60) parts.push(minutes % 60 + ' 分');
     return parts.join(' ') + '后重置';
   },
   quotaReset(window, now = Date.now() / 1000) {
@@ -57,7 +84,7 @@ window.AieyesUI = {
     if (!record) return '';
     const five = record.valuationMode === 'fiveHour';
     const value = five ? record.fiveHourValue : record.weeklyValue;
-    return (five ? '5h' : '7d 整周') + (value == null ? ' · 样本积累中' : ' ≈ $' + value.toFixed(2) + ' USD');
+    return (five ? '5h' : '7d 整周') + (value == null ? ' · ' + this.estimateIssue(record) : ' ≈ $' + value.toFixed(2) + ' USD');
   },
   targetTimeLocal(time, zone, now = new Date()) {
     if (!zone) return '目标时区待读取';

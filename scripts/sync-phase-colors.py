@@ -8,8 +8,8 @@ root = Path(__file__).resolve().parents[1]
 table = json.loads((root / 'docs/ui-phase-colors.json').read_text())
 begin, end = '/* BEGIN GENERATED PHASE COLORS */', '/* END GENERATED PHASE COLORS */'
 css = begin + '\n:root {\n' + ''.join(f'  --phase-{key}: #{value["light"]};\n' for key, value in table.items()) + '}\n'
-css += '@media (prefers-color-scheme: dark) { :root {\n' + ''.join(f'  --phase-{key}: #{value["dark"]};\n' for key, value in table.items()) + '} }\n'
-css += '@media (forced-colors: active) { :root {\n' + ''.join(f'  --phase-{key}: CanvasText;\n' for key in table) + '} }\n' + end
+css += ':root[data-theme=dark] {\n' + ''.join(f'  --phase-{key}: #{value["dark"]};\n' for key, value in table.items()) + '}\n'
+css += '@media (forced-colors: active) { :root:root {\n' + ''.join(f'  --phase-{key}: CanvasText;\n' for key in table) + '} }\n' + end
 path = root / 'apps/desktop/web/tokens.css'
 old = path.read_text()
 updated = old[:old.index(begin)] + css + old[old.index(end) + len(end):] if begin in old else old.rstrip() + '\n\n' + css + '\n'

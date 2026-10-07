@@ -27,12 +27,16 @@ import Combine
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         if let index = CommandLine.arguments.firstIndex(of: "--render"), CommandLine.arguments.count > index + 1 {
-            UserDefaults.standard.setVolatileDomain(["panel.accounts.v1": "{}", "panel.page": "agent", "detail.page": "agent", "panel.trendExpanded": false, "panel.sessionsExpanded": false, "panel.serverFilter": "all", "menu.showCount": false], forName: UserDefaults.argumentDomain)
+            UserDefaults.standard.setVolatileDomain(["panel.accounts.v1": "{}", "panel.accounts.v2": "{\"version\":2,\"providers\":{}}", "panel.page": "agent", "detail.page": "agent", "panel.trendExpanded": false, "panel.sessionsExpanded": false, "panel.serverFilter": "all", "menu.showCount": false], forName: UserDefaults.argumentDomain)
             model = AppModel(autostart: false)
             Task { await renderSnapshots(to: CommandLine.arguments[index + 1]) }
             return
         }
         model = AppModel()
+        model.$settings.map(\.appearance).removeDuplicates().sink { appearance in
+            UserDefaults.standard.set(appearance?.accent ?? "indigo", forKey: "appearance.accent")
+            NSApp.appearance = appearance?.theme == "dark" ? NSAppearance(named: .darkAqua) : appearance?.theme == "light" ? NSAppearance(named: .aqua) : nil
+        }.store(in: &cancellables)
         AppUpdater.shared.prepareInstallation = { [weak self] finalizing in
             guard let self, await self.prepareUpdate() else { return false }
             // Saving a draft can yield to another window's operation; recheck before suspending work.

@@ -586,13 +586,13 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             if contrast {
                 system_argb(COLOR_WINDOW)
             } else if surface.press.get().is_some() {
-                if surface.dark.get() { 0xff303b50 } else { 0xffe4e9f5 }
+                if surface.dark.get() { 0xff494951 } else { 0xffe4e4e9 }
             } else if surface.hover.get() {
-                if surface.dark.get() { 0xff293348 } else { 0xffedf1f9 }
+                if surface.dark.get() { 0xff3b3b43 } else { 0xffeeeeF2 }
             } else if surface.dark.get() {
-                0xff202735
+                0xff29292e
             } else {
-                0xfff6f8fc
+                0xfff6f6f8
             },
         );
         let mut outline = null_mut();
@@ -605,9 +605,9 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             if contrast {
                 system_argb(COLOR_WINDOWTEXT)
             } else if surface.dark.get() {
-                0xff455167
+                0xff565660
             } else {
-                0xffd3dbea
+                0xffd5d5dd
             },
             1.0,
             UnitPixel,
@@ -668,9 +668,9 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             if contrast {
                 system_argb(COLOR_WINDOWTEXT)
             } else if surface.dark.get() {
-                0xffedf2fc
+                0xffefeff2
             } else {
-                0xff243049
+                0xff252528
             },
             &mut brush,
         );
@@ -692,7 +692,12 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
         let count = info["activeCount"].as_u64().unwrap_or(0);
         if count > 0 && info["showCount"].as_bool().unwrap_or(false) {
             let mut badge = null_mut();
-            GdipCreateSolidFill(if contrast { system_argb(COLOR_HIGHLIGHT) } else if surface.dark.get() { 0xff39435d } else { 0xffe0e5f5 }, &mut badge);
+            GdipCreateSolidFill(if contrast { system_argb(COLOR_HIGHLIGHT) } else { match (info["accent"].as_str().unwrap_or("indigo"), surface.dark.get()) {
+                ("blue",true)=>0xff344961,("blue",false)=>0xffdce9f8,
+                ("teal",true)=>0xff314d45,("teal",false)=>0xffdceee8,
+                ("purple",true)=>0xff4b3e60,("purple",false)=>0xffeee3fa,
+                (_,true)=>0xff40425a,(_,false)=>0xffe4e5f5,
+            } }, &mut badge);
             GdipFillEllipse(graphics, badge.cast(), 109.0, 12.0, 25.0, 20.0);
             GdipDeleteBrush(badge.cast());
             if contrast { GdipDeleteBrush(brush.cast()); GdipCreateSolidFill(system_argb(COLOR_HIGHLIGHTTEXT), &mut brush); }

@@ -223,6 +223,14 @@ struct SettingsView: View {
     }
     private var general: some View {
         Form {
+            Section("外观") {
+                Picker("主题", selection: Binding(get: { model.settingsDraft.appearance?.theme ?? "system" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.theme = value; model.settingsDraft.appearance = appearance })) {
+                    Text("跟随系统").tag("system"); Text("浅色").tag("light"); Text("深色").tag("dark")
+                }
+                Picker("强调色", selection: Binding(get: { model.settingsDraft.appearance?.accent ?? "indigo" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.accent = value; model.settingsDraft.appearance = appearance })) {
+                    Text("靛蓝").tag("indigo"); Text("蓝").tag("blue"); Text("青绿").tag("teal"); Text("紫").tag("purple")
+                }
+            }
             Section("菜单栏") {
                 Toggle("显示活跃会话计数（本机，立即生效）", isOn: $showMenuCount)
                 Text("菜单栏口径：今日全部数据，不受面板和详情筛选影响。").font(AppFont.secondary).foregroundStyle(.secondary)

@@ -120,3 +120,5 @@ swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Mo
 应用使用直接的状态与操作文案。演示数据不混入真实统计；项目不包含真实登录凭据或服务器私钥。
 
 本轮 UI 实施与验收细则见 [2026-10-07 UI 优化实施](docs/ui-review-and-optimization-2026-10-07-implementation.md)。
+
+采样误判修复、历史结果恢复、自动账户选择和主题配置见 [采样修复与统一外观](docs/sampling-repair-and-appearance.md)。

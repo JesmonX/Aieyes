@@ -1,19 +1,36 @@
 import Foundation
 
 enum PanelAccountPreference {
+    struct Choice: Codable { var mode = "auto"; var keys: [String] = [] }
+    struct Preference: Codable { var version = 2; var providers: [String: Choice] = [:] }
+    static func decode(_ json: String) -> Preference {
+        let data = Data(json.utf8)
+        if let value = try? JSONDecoder().decode(Preference.self, from: data) { return value }
+        let legacy = (try? JSONDecoder().decode([String: [String]].self, from: data)) ?? [:]
+        return Preference(providers: legacy.mapValues { Choice(mode: "custom", keys: $0) })
+    }
+    static func migrated(_ json: String) -> String {
+        String(data: (try? JSONEncoder().encode(decode(json))) ?? Data(), encoding: .utf8) ?? "{}"
+    }
+    static func automatic(_ json: String, provider: String) -> Bool { decode(json).providers[provider]?.mode != "custom" }
     static func selections(_ json: String, accounts: [AgentAccount], order: [String]) -> [String: [String]] {
-        var result = (try? JSONDecoder().decode([String: [String]].self, from: Data(json.utf8))) ?? [:]
+        let preference = decode(json)
         let eligible = accounts.filter { $0.archived != true && $0.quotaEnabled }
         let sorted = eligible.sorted { (order.firstIndex(of: $0.key) ?? Int.max) < (order.firstIndex(of: $1.key) ?? Int.max) }
-        for provider in Set(eligible.map(\.provider)).union(result.keys) {
+        var result: [String: [String]] = [:]
+        for provider in Set(eligible.map(\.provider)).union(preference.providers.keys) {
             let keys = sorted.filter { $0.provider == provider }.map(\.key)
-            // A missing preference takes the first five; an explicit [] hides this Agent.
-            result[provider] = Array((result[provider] ?? keys).filter { keys.contains($0) }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.prefix(5))
+            let choice = preference.providers[provider] ?? Choice()
+            var selected = choice.mode == "auto" ? keys : choice.keys.filter { keys.contains($0) }
+            if choice.mode == "custom" && !choice.keys.isEmpty && selected.isEmpty { selected = keys }
+            result[provider] = Array(selected.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.prefix(5))
         }
         return result
     }
-    static func encode(_ selections: [String: [String]]) -> String {
-        String(data: (try? JSONEncoder().encode(selections)) ?? Data("{}".utf8), encoding: .utf8) ?? "{}"
+    static func encode(_ selections: [String: [String]], automatic: Set<String> = []) -> String {
+        var value = Preference(providers: selections.mapValues { Choice(mode: "custom", keys: $0) })
+        for provider in automatic { value.providers[provider] = Choice() }
+        return String(data: (try? JSONEncoder().encode(value)) ?? Data(), encoding: .utf8) ?? "{}"
     }
 }
 
@@ -104,7 +121,12 @@ struct Host: Codable, Equatable, Identifiable {
     var connectionIdentity: String { [target, port.map(String.init) ?? "", identityFile, shell, preCommand, authMode ?? "ssh", username ?? "", passwordRef ?? ""].joined(separator: "\u{0}") }
     func shows(_ key: String) -> Bool { details?.contains(key) ?? true }
 }
+struct AppearanceSettings: Codable, Equatable {
+    var theme = "system", accent = "indigo"
+}
 struct Settings: Codable, Equatable {
+    var appearance: AppearanceSettings?
+
     var version = 2, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
     var refreshSeconds = 300, serverRefreshSeconds = 10, menuMetric = "icon", githubRepository = ""
     var modelMappings: [String: String] = [:]
@@ -146,7 +168,7 @@ enum Format {
         var parts: [String] = []
         if minutes >= 1440 { parts.append("\(minutes / 1440) 天") }
         if minutes % 1440 >= 60 { parts.append("\(minutes % 1440 / 60) 小时") }
-        if minutes % 60 > 0 { parts.append("\(minutes % 60) 分") }
+        if minutes < 1440 && minutes % 60 > 0 { parts.append("\(minutes % 60) 分") }
         return parts.joined(separator: " ") + "后重置"
     }
     static func quotaReset(_ window: QuotaWindow, now: Date = Date()) -> String {
@@ -204,7 +226,7 @@ enum Format {
     }
     static func creditValue(_ estimate: QuotaEstimate) -> String {
         if estimate.status == "pending" { return "待确认" }
-        guard let value=estimate.valuePer1000, value.isFinite else { return "样本不足" }
+        guard let value=estimate.valuePer1000, value.isFinite else { return estimate.issueLabel }
         return "1000 credit ≈ " + money(value) + " USD"
     }
     static func money(_ value: Double) -> String { String(format: "$%.2f", value) }
@@ -227,6 +249,14 @@ enum Format {
 }
 
 struct QuotaEstimate: Codable, Identifiable {
+    var calculationStatus: String?, calculationVersion: Int?, originalEstimateId: String?, repairedAt: Double?
+    var hasValue: Bool { [fiveHourValue, weeklyValue, valuePer1000].compactMap { $0 }.contains { $0.isFinite } }
+    var issueLabel: String {
+        if status == "pending" { return "待确认" }
+        if let code = calculationStatus, let label = ["boundary":"用量边界待确认", "noUsage":"暂无有效用量", "unpriced":"模型价格不完整", "insufficientUsage":"尚未达到采样阈值", "invalidPrice":"价格数据无效"][code] { return label }
+        return calculationNote.isEmpty ? "尚无估值" : calculationNote
+    }
+
     var kind: String?, consumedCredits: Double?, valuePer500: Double?, valuePer1000: Double?
     var id: String, accountKey: String, windowId: String, windowName: String
     var sourceIds: [String], sourceNames: [String], status: String, reason: String
@@ -254,4 +284,29 @@ struct NetworkTest: Codable {
     var testedAt: Double, mode: String, averageMs: Double?, status: String, sites: [NetworkSite]
     var label: String { status == "unstable" ? "连接不稳定" : status == "failed" ? "连接失败" : (mode == "direct" ? "直连 " : mode == "system" ? "系统 " : "代理 ") + String(Int(averageMs ?? 0)) + " ms" }
     var detail: String { sites.map { $0.url + " · " + ($0.latencyMs.map { String(Int($0)) + " ms" } ?? $0.error ?? "失败") }.joined(separator: "\n") + "\n测试于 " + Format.date(testedAt) }
+}
+
+enum EstimatePresentation {
+    struct Entry: Identifiable {
+        var id: String, label: String, value: Double, record: QuotaEstimate
+        var historical: Bool
+    }
+    static func canonical(_ records: [QuotaEstimate]) -> [QuotaEstimate] {
+        let replaced = Set(records.compactMap(\.originalEstimateId))
+        return records.filter { !replaced.contains($0.id) }.sorted {
+            $0.startedAt == $1.startedAt ? ($0.repairedAt ?? 0) > ($1.repairedAt ?? 0) : $0.startedAt > $1.startedAt
+        }
+    }
+    static func entries(_ records: [QuotaEstimate], credits: Bool = false) -> [Entry] {
+        let all = canonical(records)
+        let fields: [(String, String, KeyPath<QuotaEstimate, Double?>)] = credits
+            ? [("credits", "1000 credits", \.valuePer1000)]
+            : [("five", "5h", \.fiveHourValue), ("week", "7d 同期 / 整周", \.weeklyValue), ("ratio", "7d 容量倍率", \.weeklyRatioValue)]
+        return fields.compactMap { id, label, path in
+            guard let record = all.first(where: { $0.status != "pending" && $0[keyPath: path]?.isFinite == true }), let value = record[keyPath: path] else { return nil }
+            let title = id == "week" ? (record.valuationMode == "fiveHour" ? "7d 同期" : "7d 整周") : label
+            return Entry(id: id, label: title, value: value, record: record, historical: record.id != all.first?.id || record.status == "completed")
+        }
+    }
+    static func credit(_ records: [QuotaEstimate]) -> QuotaEstimate? { entries(records, credits: true).first?.record }
 }

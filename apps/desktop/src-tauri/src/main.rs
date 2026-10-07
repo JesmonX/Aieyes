@@ -105,6 +105,7 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
             | "quotaEstimates.start"
             | "quotaEstimates.stop"
             | "quotaEstimates.restart"
+            | "quotaEstimates.repair"
     ) {
         events.push(("desktop:data-changed", Value::String(method.into())));
     }
@@ -169,6 +170,8 @@ async fn engine_call(
             | "creditEstimates.start"
             | "creditEstimates.stop"
             | "creditEstimates.restart"
+            | "creditEstimates.repair"
+            | "quotaEstimates.repair"
     );
     if sampling {
         let _ = app.emit(
@@ -283,6 +286,7 @@ fn main() {
             updates::updates_preferences,
             updates::updates_later,
             desktop::desktop_info,
+            desktop::desktop_appearance,
             desktop::desktop_mode,
             desktop::desktop_panel,
             desktop::desktop_panel_pin,

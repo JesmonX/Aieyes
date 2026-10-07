@@ -74,8 +74,9 @@ struct QuotaOrderView: View {
 struct PanelAccountsView: View {
     @ObservedObject var model: AppModel
     var onClose: () -> Void
-    @AppStorage("panel.accounts.v1") private var stored = "{}"
+    @AppStorage("panel.accounts.v2") private var stored = "{}"
     @State private var selected: [String: [String]] = [:]
+    @State private var automatic = Set<String>()
     @FocusState private var cancelFocused: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -85,9 +86,10 @@ struct PanelAccountsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(Set(model.quotaAccounts.map(\.provider))).sorted(), id: \.self) { provider in
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack { ProviderIdentity(provider: provider); Text("· \(selected[provider]?.count ?? 0)/5") }.font(AppFont.section)
+                            HStack { ProviderIdentity(provider: provider); Text("· \(selected[provider]?.count ?? 0)/5"); Spacer(); Button(automatic.contains(provider) ? "自动选择" : "恢复默认显示") { automatic.insert(provider); selected[provider] = PanelAccountPreference.selections("{}", accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[provider] }.font(AppFont.secondary) }.font(AppFont.section)
                             ForEach(model.quotaAccounts.filter { $0.provider == provider }, id: \.key) { account in
                                 Toggle(account.name, isOn: Binding(get: { selected[provider]?.contains(account.key) == true }, set: { enabled in
+                                    automatic.remove(provider)
                                     var keys = selected[provider] ?? []
                                     if enabled && keys.count < 5 { keys.append(account.key) } else if !enabled { keys.removeAll { $0 == account.key } }
                                     selected[provider] = keys
@@ -98,9 +100,9 @@ struct PanelAccountsView: View {
                     if model.quotaAccounts.isEmpty { Text("尚无可显示限额的账户").foregroundStyle(.secondary) }
                 }.padding(4)
             }
-            HStack { Spacer(); Button("取消", action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button("保存面板选择") { stored = PanelAccountPreference.encode(selected); onClose() }.buttonStyle(.borderedProminent) }
+            HStack { Spacer(); Button("取消", action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button("保存面板选择") { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.borderedProminent) }
         }.padding(24).font(AppFont.body).frame(width: 440, height: 480).tint(Palette.accent)
-            .onAppear { selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); cancelFocused = true }
+            .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: "panel.accounts.v1") ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); cancelFocused = true }
     }
 }
 
@@ -177,6 +179,8 @@ struct QuotaEstimateView: View {
             resultHeader(e)
             if e.valuationMode == "fiveHour" { fiveHourValues(e) }
             Text(e.calculationNote).font(AppFont.secondary).foregroundStyle(.secondary)
+            if e.originalEstimateId != nil { Text("已修正 · 原采样记录保留").font(AppFont.secondary).foregroundStyle(.secondary) }
+            else if e.status == "completed" && !e.hasValue { Button("按原记录修复估值") { perform("repair", ["id": e.id]) }.disabled(busy) }
             DisclosureGroup("计算依据") { calculationDetails(e) }
         }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }

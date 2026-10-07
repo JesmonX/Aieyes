@@ -78,6 +78,14 @@ impl Store {
         }
     }
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
+        anyhow::ensure!(
+            ["system", "light", "dark"].contains(&s.appearance.theme.as_str()),
+            "无效的外观主题"
+        );
+        anyhow::ensure!(
+            ["indigo", "blue", "teal", "purple"].contains(&s.appearance.accent.as_str()),
+            "无效的强调色"
+        );
         self.check_wakeup_settings(s)?;
         let mut normalized = s.clone();
         normalized.migrate();
@@ -355,10 +363,17 @@ impl Store {
             {
                 next.billing = prior.billing.clone();
             }
-            next.interval_start = match (next.interval_start, prior.interval_start) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (a, b) => a.or(b),
-            };
+            let verified = next.interval_evidence == "task-request-v2";
+            let prior_verified = prior.interval_evidence == "task-request-v2";
+            if prior_verified && !verified {
+                next.interval_start = prior.interval_start;
+                next.interval_evidence = prior.interval_evidence;
+            } else if !verified || prior_verified {
+                next.interval_start = match (next.interval_start, prior.interval_start) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+            }
             next.account_id = prior.account_id;
             next.timestamp = next.timestamp.min(prior.timestamp);
             next.source_id = prior.source_id;

@@ -83,8 +83,7 @@
   color: var(--ink);
   color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+:root[data-theme=dark] {
     --ink: #e6ebf7; --muted: #a3aec6; --faint: #8794ad;
     --accent: #a3b3ff; --accent-deep: #8b9cfb; --accent-ink: #131a2a; --balance-blue: #8cbcff;
     --window-base: #151a23;
@@ -108,7 +107,6 @@
     --count-badge: rgba(146,166,248,.18);
     --ok: #5cc4a4; --warn: #e0b062; --danger: #ff929c;
     color-scheme: dark;
-  }
 }
 /* Without vibrancy the surfaces must stand on their own. */
 @media (prefers-reduced-transparency: reduce) {
@@ -134,7 +132,7 @@
   --phase-interrupted: #b1761f;
   --phase-unknown: #895712;
 }
-@media (prefers-color-scheme: dark) { :root {
+:root[data-theme=dark] {
   --phase-idle: #91a0b7;
   --phase-working: #2c9d88;
   --phase-thinking: #ac78dd;
@@ -142,8 +140,8 @@
   --phase-complete: #44ad76;
   --phase-interrupted: #d9a44c;
   --phase-unknown: #e0b062;
-} }
-@media (forced-colors: active) { :root {
+}
+@media (forced-colors: active) { :root:root {
   --phase-idle: CanvasText;
   --phase-working: CanvasText;
   --phase-thinking: CanvasText;

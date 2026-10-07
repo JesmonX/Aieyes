@@ -3,7 +3,7 @@ const sandbox={window:{},Date,localStorage:{getItem(){return null;},setItem(){}}
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../apps/desktop/web/ui-state.js'),'utf8'),sandbox);
 const ui=sandbox.window.AieyesUI,now=1800000000;
-for(const [seconds,text] of [[1,'1 分后重置'],[59*60,'59 分后重置'],[59*60+1,'1 小时后重置'],[3600,'1 小时后重置'],[86400,'1 天后重置'],[26*3600+15*60,'1 天 2 小时 15 分后重置'],[7*86400,'7 天后重置']])assert.equal(ui.resetText(now+seconds,now),text);
+for(const [seconds,text] of [[1,'1 分后重置'],[59*60,'59 分后重置'],[59*60+1,'1 小时后重置'],[3600,'1 小时后重置'],[86400,'1 天后重置'],[26*3600+15*60,'1 天 2 小时后重置'],[7*86400,'7 天后重置'],[23*3600+59*60,'23 小时 59 分后重置'],[86400+60,'1 天后重置'],[86400+3600+60,'1 天 1 小时后重置']])assert.equal(ui.resetText(now+seconds,now),text);
 for(const [windowMinutes,text] of [[300,'5 小时后重置'],[10080,'7 天后重置']]) {
   const snapshot={resetsAt:now-1,windowMinutes},original=JSON.stringify(snapshot);
   for(const elapsed of [0,60,30*86400]) {

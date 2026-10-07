@@ -73,7 +73,13 @@ fn scan_file(
     let key = path.to_string_lossy();
     let cursor = store.cursor(&source.id, &key)?;
     let (offset, mut state) = match cursor {
-        Some((s, o, p)) if s == signature && o <= len => (o, p),
+        Some((s, o, p))
+            if s == signature
+                && o <= len
+                && (source.provider != "codex" || p.parser_version == usage::PARSER_VERSION) =>
+        {
+            (o, p)
+        }
         _ => (
             0,
             ParseState {

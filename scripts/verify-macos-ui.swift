@@ -14,6 +14,11 @@ import Foundation
         precondition(chosen["codex"] == ["codex:a19", "codex:a0"])
         let archivedAccounts = panelAccounts.map { var account = $0; account.archived = true; return account }
         precondition(PanelAccountPreference.selections(PanelAccountPreference.encode(chosen), accounts: archivedAccounts, order: order)["codex"]?.isEmpty == true)
+        let renamed = [AgentAccount(id: "replacement", name: "替换账户", provider: "agy", quotaEnabled: true)]
+        let stale = PanelAccountPreference.encode(["agy": ["agy:removed"]])
+        precondition(PanelAccountPreference.selections(stale, accounts: renamed, order: [])["agy"] == ["agy:replacement"])
+        precondition(PanelAccountPreference.selections(PanelAccountPreference.encode(["agy": []]), accounts: renamed, order: [])["agy"] == [])
+        precondition(PanelAccountPreference.selections(PanelAccountPreference.encode(["agy": []], automatic: ["agy"]), accounts: renamed, order: [])["agy"] == ["agy:replacement"])
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("aieyes-ui-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

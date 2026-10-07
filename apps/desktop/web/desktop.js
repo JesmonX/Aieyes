@@ -50,7 +50,7 @@
   }
   window.AieyesDesktop = {
     settingsHTML() {
-      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="auto">跟随系统</option><option value="floating">悬浮球</option><option value="tray">系统状态栏 / 托盘</option></select></div><label class="quota-confirm"><input type="checkbox" id="desktop-count">显示活跃会话计数（本机，立即生效）</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">悬浮胶囊单击打开面板，悬停查看状态，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，重启应用也会恢复。</p><div class="between"><button type="button" id="reset-ball">重置悬浮球位置</button><button type="button" id="hide-ball">暂时隐藏悬浮球</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
+      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="auto">跟随系统</option><option value="floating">悬浮球</option><option value="tray">系统状态栏 / 托盘</option></select></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">显示活跃会话计数（本机，立即生效）</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">悬浮胶囊单击打开面板，悬停查看状态，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，重启应用也会恢复。</p><div class="between"><button type="button" id="reset-ball">重置悬浮球位置</button><button type="button" id="hide-ball">暂时隐藏悬浮球</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
     },
     bindSettings() {
       const select = document.querySelector('#desktop-mode');

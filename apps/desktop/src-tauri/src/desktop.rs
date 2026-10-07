@@ -51,6 +51,7 @@ struct Preferences {
     show_count: bool,
 }
 struct ShellState {
+    accent: String,
     preferences: Preferences,
     snapshot: Snapshot,
     floating: bool,
@@ -281,6 +282,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     app.manage(Desktop {
         path,
         state: Mutex::new(ShellState {
+            accent: "indigo".into(),
             preferences,
             snapshot: Snapshot::default(),
             floating: false,
@@ -755,6 +757,26 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn desktop_appearance(app: AppHandle, theme: String, accent: String) -> Result<(), String> {
+    let theme = match theme.as_str() {
+        "dark" => Some(tauri::Theme::Dark),
+        "light" => Some(tauri::Theme::Light),
+        "system" => None,
+        _ => return Err("无效的主题".into()),
+    };
+    if !["indigo", "blue", "teal", "purple"].contains(&accent.as_str()) { return Err("无效的强调色".into()); }
+    app.state::<Desktop>().state.lock().map_err(|_| "显示状态不可用")?.accent = accent;
+    app.set_theme(theme);
+    for window in app.webview_windows().values() { let _ = window.set_theme(theme); }
+    #[cfg(target_os = "windows")]
+    if let Some(window) = app.get_webview_window("main") {
+        let dark = window.theme().ok().map(|theme| theme == tauri::Theme::Dark);
+        let _ = window_vibrancy::apply_mica(&window, dark);
+    }
+    emit_shell(&app);
+    Ok(())
+}
+#[tauri::command]
 pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
     let dark = app
         .get_webview_window("main")
@@ -772,6 +794,7 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "showCount": state.preferences.show_count, "panelPage": state.panel_page, "nativeCapsule": cfg!(windows),
         "recovery": state.recovery, "generation": state.panel_generation,
         "dark": dark,
+        "accent": state.accent,
     }))
 }
 #[tauri::command]

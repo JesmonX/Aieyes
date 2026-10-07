@@ -8,6 +8,12 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Estimate {
+    pub calculation_status: String,
+    pub calculation_version: u32,
+    pub original_estimate_id: Option<String>,
+    pub repaired_at: Option<i64>,
+    #[serde(skip)]
+    repair_prices: Option<Vec<Value>>,
     pub valuation_mode: String,
     pub quota_plan: Option<String>,
     pub segment_started_at: i64,
@@ -55,6 +61,7 @@ pub struct Estimate {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct EstimateSegment {
+    pub calculation_status: String,
     pub started_at: i64,
     pub ended_at: i64,
     pub five_percent: f64,
@@ -71,6 +78,12 @@ pub struct EstimateSegment {
 impl Estimate {
     pub fn is_credit(&self) -> bool {
         self.kind == "credits"
+    }
+    pub fn has_value(&self) -> bool {
+        [self.five_hour_value, self.weekly_value, self.value_per1000]
+            .into_iter()
+            .flatten()
+            .any(|v| v.is_finite())
     }
 }
 
@@ -220,7 +233,7 @@ impl Store {
         let sql = if active_only {
             "SELECT payload FROM (SELECT payload FROM quota_estimates WHERE status='active' UNION ALL SELECT payload FROM credit_estimates WHERE status='active') ORDER BY json_extract(payload,'$.startedAt') DESC"
         } else {
-            "SELECT payload FROM (SELECT payload FROM quota_estimates UNION ALL SELECT payload FROM credit_estimates) ORDER BY json_extract(payload,'$.startedAt') DESC"
+            "SELECT payload FROM (SELECT payload FROM quota_estimates UNION ALL SELECT payload FROM credit_estimates) ORDER BY json_extract(payload,'$.startedAt') DESC, COALESCE(json_extract(payload,'$.repairedAt'),0) DESC"
         };
         let mut stmt = self.db.prepare(sql)?;
         let rows = stmt
@@ -341,6 +354,7 @@ impl Store {
         Ok(())
     }
     pub fn calculate_estimate(&self, e: &mut Estimate) -> Result<()> {
+        e.calculation_version = 2;
         if e.valuation_mode == "fiveHour" {
             return self.calculate_five_hour(e);
         }
@@ -383,7 +397,7 @@ impl Store {
             },
         )?;
         for row in rows {
-            let (raw, cost, priced, price) = row?;
+            let (raw, mut cost, mut priced, mut price) = row?;
             let event: UsageEvent = serde_json::from_str(&raw)?;
             if event.billing.category == "api" {
                 e.excluded_api_tokens += event.tokens.total();
@@ -396,6 +410,25 @@ impl Store {
                 continue;
             }
             e.total_tokens += event.tokens.total();
+            if let Some(frozen) = &e.repair_prices {
+                let observed: Option<Value> =
+                    price.as_deref().map(serde_json::from_str).transpose()?;
+                let matched = observed.as_ref().and_then(|p| {
+                    frozen.iter().find(|f| *f == p).or_else(|| {
+                        let mut candidates = frozen.iter().filter(|f| f["id"] == p["id"]);
+                        let first = candidates.next();
+                        if candidates.next().is_none() {
+                            first
+                        } else {
+                            None
+                        }
+                    })
+                });
+                let model_price: Option<ModelPrice> =
+                    matched.cloned().map(serde_json::from_value).transpose()?;
+                (cost, priced) = crate::pricing::estimate(&event.tokens, model_price.as_ref());
+                price = matched.map(serde_json::to_string).transpose()?;
+            }
             e.priced_tokens += priced;
             e.cost += cost;
             if let Some(raw) = price {
@@ -406,18 +439,25 @@ impl Store {
             }
         }
         e.calculation_note = if boundary {
+            e.calculation_status = "boundary".into();
             "存在跨采样边界的累计用量，请在开始采样后新建会话再试"
         } else if e.total_tokens == 0 {
+            e.calculation_status = "noUsage".into();
             "暂无可计入的订阅用量"
         } else if e.priced_tokens != e.total_tokens {
+            e.calculation_status = "unpriced".into();
             "缺少模型价格，请补全价格后重新计算本次采样"
         } else if e.is_credit() && e.consumed_credits < 5.0 {
+            e.calculation_status = "insufficientUsage".into();
             "样本不足：至少消耗 5 credits"
         } else if !e.is_credit() && e.consumed_percent + 0.000001 < 5.0 {
+            e.calculation_status = "insufficientUsage".into();
             "样本不足：至少消耗 5 个百分点"
         } else if !e.cost.is_finite() || e.cost < 0.0 {
+            e.calculation_status = "invalidPrice".into();
             "价格数据无效"
         } else {
+            e.calculation_status = "ready".into();
             if e.is_credit() {
                 e.value_per500 = Some(e.cost * 500.0 / e.consumed_credits);
                 e.value_per1000 = Some(e.cost * 1000.0 / e.consumed_credits);
@@ -482,6 +522,8 @@ impl Store {
         let weekly = crate::capacity::overall(q, 10080)
             .filter(|w| crate::capacity::valid(w) && w.resets_at.is_some_and(|t| t > q.updated_at));
         let e = Estimate {
+            calculation_status: "insufficientUsage".into(),
+            calculation_version: 2,
             quota_plan: q.plan.clone(),
             valuation_mode: if five_hour {
                 "fiveHour".into()
@@ -539,6 +581,47 @@ impl Store {
         self.save_estimate(&e)?;
         Ok(e)
     }
+
+    pub fn repair_estimate(&self, id: &str) -> Result<Estimate> {
+        let original = self.estimate(id)?;
+        ensure!(
+            original.status == "completed",
+            "请先结束采样，再修复历史记录"
+        );
+        ensure!(original.original_estimate_id.is_none(), "此记录已是修正版");
+        let repaired_id = format!("{id}-repair-v2");
+        if let Ok(existing) = self.estimate(&repaired_id) {
+            return Ok(existing);
+        }
+        ensure!(!original.has_value(), "此记录已有有效估值，无需修复");
+        let mut repaired = original.clone();
+        repaired.repair_prices = Some(original.prices.clone());
+        for (index, segment) in original.segments.iter().enumerate() {
+            if segment.valid {
+                continue;
+            }
+            let mut part = original.clone();
+            part.repair_prices = Some(original.prices.clone());
+            part.segment_started_at = segment.started_at;
+            part.checkpoint_at = segment.ended_at;
+            part.baseline_percent = 0.0;
+            part.checkpoint_percent = segment.five_percent;
+            part.weekly_baseline_percent = 0.0;
+            part.weekly_checkpoint_percent = segment.weekly_percent.unwrap_or(0.0);
+            repaired.segments[index] = self.current_segment(&part)?;
+        }
+        self.calculate_estimate(&mut repaired)?;
+        ensure!(
+            repaired.has_value(),
+            "无法修复：{}",
+            repaired.calculation_note
+        );
+        repaired.id = repaired_id;
+        repaired.original_estimate_id = Some(original.id);
+        repaired.repaired_at = Some(now());
+        self.save_estimate(&repaired)?;
+        Ok(repaired)
+    }
 }
 
 impl Store {
@@ -558,12 +641,13 @@ impl Store {
             priced_tokens: part.priced_tokens,
             excluded_api_tokens: part.excluded_api_tokens,
             prices: part.prices,
-            valid: !part.calculation_note.contains("边界")
+            valid: part.calculation_status != "boundary"
                 && part.priced_tokens == part.total_tokens
                 && part.cost.is_finite()
                 && part.cost >= 0.0
                 && (part.total_tokens > 0 || part.consumed_percent <= 0.0),
             note: part.calculation_note,
+            calculation_status: part.calculation_status,
         })
     }
     fn calculate_five_hour(&self, e: &mut Estimate) -> Result<()> {
@@ -599,18 +683,28 @@ impl Store {
             }
             valid &= part.valid;
         }
-        e.capacity = self.capacity(&e.account_key, now())?;
+        if e.repair_prices.is_none() {
+            e.capacity = self.capacity(&e.account_key, now())?;
+        }
         e.calculation_note = if !valid {
+            e.calculation_status = parts
+                .iter()
+                .find(|p| !p.valid)
+                .map(|p| p.calculation_status.clone())
+                .unwrap_or_default();
             parts
                 .iter()
                 .find(|p| !p.valid)
                 .map(|p| p.note.clone())
                 .unwrap_or_default()
         } else if e.total_tokens == 0 {
+            e.calculation_status = "noUsage".into();
             "暂无可计入的订阅用量".into()
         } else if e.consumed_percent + 0.000001 < 5.0 {
+            e.calculation_status = "insufficientUsage".into();
             "样本不足：5h 至少消耗 5 个百分点".into()
         } else {
+            e.calculation_status = "ready".into();
             e.five_hour_value = Some(e.cost * 100.0 / e.consumed_percent);
             if week_percent > 0.000001 {
                 e.weekly_direct_value = Some(week_cost * 100.0 / week_percent);
@@ -756,6 +850,19 @@ impl Engine {
         }
         if action == "get" {
             return Ok(serde_json::to_value(self.store.estimate(id)?)?);
+        }
+        if action == "repair" {
+            let original = self.store.estimate(id)?;
+            if let Ok(existing) = self.store.estimate(&format!("{id}-repair-v2")) {
+                return Ok(serde_json::to_value(existing)?);
+            }
+            ensure!(
+                original.status == "completed" && !original.has_value(),
+                "仅支持修复已结束且无估值的记录"
+            );
+            self.sync_estimate_sources(&original.source_ids)?;
+            self.progress("按原价格修复采样边界");
+            return Ok(serde_json::to_value(self.store.repair_estimate(id)?)?);
         }
         if action == "stop" {
             let e = self.store.estimate(id)?;
@@ -918,6 +1025,8 @@ impl Store {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos();
         let e = Estimate {
+            calculation_status: "insufficientUsage".into(),
+            calculation_version: 2,
             id: format!("credit-sample-{stamp}"),
             kind: "credits".into(),
             account_key: key,

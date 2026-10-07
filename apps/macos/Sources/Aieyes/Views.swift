@@ -74,7 +74,7 @@ struct RootView: View {
     @AppStorage private var serverFilter: String
     @AppStorage private var trendExpanded: Bool
     @AppStorage private var sessionsExpanded: Bool
-    @AppStorage("panel.accounts.v1") private var panelAccounts = "{}"
+    @AppStorage("panel.accounts.v2") private var panelAccounts = "{}"
     private var usageDashboard: Dashboard { compact ? model.panelDashboard : model.dashboard }
     init(model: AppModel, compact: Bool = true, page: String = "agent") {
         self.model = model; self.compact = compact
@@ -148,8 +148,8 @@ struct RootView: View {
         }
     }
     private func initializePanelAccounts() {
-        guard compact && model.dashboard.generatedAt > 0 && !CommandLine.arguments.contains("--render") else { return }
-        panelAccounts = PanelAccountPreference.encode(PanelAccountPreference.selections(panelAccounts, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []))
+        guard compact && model.settingsLoaded && model.dashboard.generatedAt > 0 && !CommandLine.arguments.contains("--render") else { return }
+        if panelAccounts == "{}" { panelAccounts = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: "panel.accounts.v1") ?? "{}") }
     }
     private var header: some View {
         HStack(spacing: 12) {
@@ -374,8 +374,8 @@ struct RootView: View {
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }) } } }
+            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } } }
         }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
     private var filteredHosts: [Host] {
@@ -621,10 +621,14 @@ struct QuotaCard: View {
     var onEstimate: (() -> Void)?
     var onCredits: (() -> Void)?
     var creditEstimate: QuotaEstimate?
+    var quotaHistory: [QuotaEstimate] = []
+    var creditHistory: [QuotaEstimate] = []
+    private var bestCredit: QuotaEstimate? { EstimatePresentation.credit(creditHistory) ?? creditEstimate }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage private var storedExpanded: Bool
     private var expanded: Bool { !collapsible || storedExpanded }
-    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil) {
+    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = []) {
+        self.quotaHistory = quotaHistory; self.creditHistory = creditHistory
         self.collapsible = collapsible; self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
         _storedExpanded = AppStorage(wrappedValue: true, "quota.expanded.v2." + (compact ? "panel." : "detail.") + quota.id)
     }
@@ -676,9 +680,9 @@ struct QuotaCard: View {
             HStack(spacing: 8) {
                 ProviderMark(provider: quota.provider)
                 Text(quota.name).font(.system(size: 14, weight: .semibold)).lineLimit(1).help(quota.name)
-                if let plan = quota.plan, !Format.subscription(plan).isEmpty { SubscriptionBadge(plan: plan).frame(maxWidth: 70) }
+                if let plan = quota.plan, !Format.subscription(plan).isEmpty { SubscriptionBadge(plan: plan).frame(maxWidth: 120) }
                 Spacer(minLength: 0)
-                if !expanded && quota.provider == "codex" { CreditBalanceLabel(balance: quota.credits, estimate: creditEstimate, compact: true).layoutPriority(1) }
+                if !expanded && quota.provider == "codex" { CreditBalanceLabel(balance: quota.credits, estimate: bestCredit, compact: true).layoutPriority(1) }
                 if collapsible { Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 14, weight: .semibold)).foregroundStyle(.secondary) }
             }.contentShape(Rectangle())
             }.buttonStyle(.plain).help(collapsible ? (expanded ? "折叠限额" : "展开限额") : quota.name)
@@ -722,17 +726,16 @@ struct QuotaCard: View {
             if let onEstimate, (!compact || expanded || estimate != nil), (quota.provider != "agy" && quota.windows.contains(where: { $0.windowMinutes == 300 || $0.windowMinutes == 10080 })) || estimate != nil {
                 Button(action: onEstimate) {
                     HStack { Label(estimate == nil ? "估算额度价值" : estimate?.valuationMode == "fiveHour" ? "5h / 7d 估值" : "7d 整周估值", systemImage: "chart.line.uptrend.xyaxis"); Spacer();
-                        if let value = estimate?.valuationMode == "fiveHour" ? estimate?.fiveHourValue : estimate?.weeklyValue { Text((estimate?.valuationMode == "fiveHour" ? "5h ≈ " : "7d 整周 ≈ ") + Format.money(value) + " USD").monospacedDigit(); if estimate?.status == "pending" { Text("待确认").foregroundStyle(Palette.warn) } }
-                        else if let estimate { Text(estimate.statusLabel).foregroundStyle(.secondary) }
                         Image(systemName: "chevron.right").font(AppFont.secondary)
                     }.font(AppFont.secondary).contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(Palette.accent)
             }
+            EstimateSummary(records: quotaHistory.isEmpty ? [estimate].compactMap { $0 } : quotaHistory)
             if quota.provider == "agy" && expanded { Text("整周估值需匹配的 Token 用量与模型组归属。").font(AppFont.secondary).foregroundStyle(.secondary) }
             if expanded && !sourceName.isEmpty { Text(sourceName).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
             if quota.provider == "codex" {
                 HStack(spacing: 8) {
-                    CreditBalanceLabel(balance: quota.credits, estimate: creditEstimate).fixedSize(horizontal: false, vertical: true)
+                    CreditBalanceLabel(balance: quota.credits, estimate: bestCredit).fixedSize(horizontal: false, vertical: true)
                         .help(quota.creditsUpdatedAt.map { "更新于 " + Format.date($0) } ?? "尚未取得 credits 信息")
                     Spacer(minLength: 0)
                     if let onCredits {
@@ -740,6 +743,7 @@ struct QuotaCard: View {
                     }
                 }.font(AppFont.secondary)
             }
+            if quota.provider == "codex" { EstimateSummary(records: creditHistory.isEmpty ? [creditEstimate].compactMap { $0 } : creditHistory, credits: true) }
             if expanded, let bank = quota.bankReset {
                 Divider().opacity(0.5)
                 DisclosureGroup {

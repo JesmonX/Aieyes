@@ -40,6 +40,8 @@ for path in sorted(files):
                     event = {"type": kind, "timestamp": value.get("timestamp"), "payload": {"timestamp": payload.get("timestamp"), "id": payload.get("id", payload.get("session_id")), "model_provider": payload.get("model_provider")}}
                 elif kind == "turn_context":
                     event = {"type": kind, "payload": {"model": payload.get("model")}}
+                elif kind == "event_msg" and payload.get("type") in ("task_started", "task_complete", "turn_aborted"):
+                    event = {"type": kind, "timestamp": value.get("timestamp"), "payload": {"type": payload["type"]}}
                 elif kind == "event_msg" and payload.get("type") == "token_count":
                     event = {"type": kind, "timestamp": value.get("timestamp"), "payload": {
                         "type": "token_count", "info": payload.get("info"), "rate_limits": payload.get("rate_limits")}}
@@ -57,4 +59,3 @@ for path in sorted(files):
                 events.append(event)
     result.append({"path": path, "events": events})
 print(json.dumps({"files": result}, separators=(",", ":")))
-
