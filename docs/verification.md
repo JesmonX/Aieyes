@@ -95,3 +95,9 @@
 - Web 完整 `npm run test:ui` 通过；桌面 Rust 19 项测试及 Clippy `-D warnings` 通过；Swift 应用构建通过。原生模型、会话、设置和更新检查通过；新增 credit 余额换算／压缩格式检查和非激活窗口显示／关闭检查通过。
 - 原生五场景浅深色、低高度、最小主窗口与高对比度截图矩阵通过，产物位于 `.local/layout-update/macos/`；Web 截图位于 `.local/ui-audit-implementation/`。已查看单账户、长名称、大 Token 及余额估值布局。
 - macOS 实际窗口检查确认显示／关闭非激活面板时，前台应用和 key window 不变；尚未完成双端跨应用连续键入与真实鼠标点击的端到端验收。Windows 胶囊及非激活窗口模块的真实 Win32 绑定类型检查通过；完整 Windows 交叉编译因宿主缺少 `x86_64-w64-mingw32-gcc` 中止，不能据此声称 Windows 实机焦点行为已验证。
+
+## 2026-10-07：恢复 macOS 系统弹出窗
+
+- 菜单栏小窗恢复 `NSPopover` 与 `NSHostingController`，由系统提供圆角、阴影、定位与关闭行为，打开后允许成为键盘窗口。
+- Token 详情改用 SwiftUI 系统 popover，保留点击展开与非模态交互，移除自定义非激活面板及其专用检查。概览、账户折叠、credit 排布和 K/M/B 展示保持不变。
+- `dist/Aieyes.app` 开发构建及签名校验通过。独立 AppKit 实测系统 `NSPopover` 可打开、`canBecomeKey == true`，文本输入控件可成为 first responder。
