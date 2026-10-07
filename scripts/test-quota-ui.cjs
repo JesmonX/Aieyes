@@ -57,8 +57,12 @@ function fixture(){
    });assert.deepEqual(icons,{images:5,fallback:1});
    await agy.locator('.quota-title').click();assert.equal(await agy.locator('.quota-reset:visible').count(),0,'Collapsed accounts hide reset details');assert.equal(await agy.locator('.resource-bar:visible').count(),2,'Collapsed accounts retain two key windows');await agy.locator('.quota-title').click();assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Expanding restores all model groups');
    await page.locator('#order-quotas').click();await page.locator('[data-order="agy:a"] [data-direction="-1"]').click();
-   await page.locator('[data-order="codex:c"]').dragTo(page.locator('[data-order="agy:a"]'));
-   await page.locator('[data-order="agy:a"]').dragTo(page.locator('[data-order="codex:c"]'));
+   // A single mouse jump can leave Chromium's native drag unfinished,
+   // swallowing the following save click. Check each drop before proceeding.
+   await page.locator('[data-order="codex:c"]').dragTo(page.locator('[data-order="agy:a"]'),{steps:10});
+   await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='codex:c');
+   await page.locator('[data-order="agy:a"]').dragTo(page.locator('[data-order="codex:c"]'),{steps:10});
+   await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='agy:a');
    await page.evaluate(()=>quotaFixture.fail=true);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>document.querySelector('#quota-tool-error').textContent.includes('保存失败'));
    assert(await page.locator('#quota-dialog').evaluate(e=>e.open));await page.evaluate(()=>quotaFixture.fail=false);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>!document.querySelector('#quota-dialog').open);
    assert.equal(await page.locator('[data-quota]').first().getAttribute('data-quota'),'agy:a');
