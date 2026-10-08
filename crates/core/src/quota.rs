@@ -572,6 +572,143 @@ fn codex_rpc_result(reply: Value) -> Result<Value> {
     reply.get("result").cloned().context("Codex 返回数据为空")
 }
 
+fn agy(source: &Source, settings: &Settings) -> Result<Value> {
+    let binary = if source.agy_binary.is_empty() {
+        "agy"
+    } else {
+        &source.agy_binary
+    };
+    let mut cmd = if let Some(id) = &source.host_id {
+        let host = settings
+            .hosts
+            .iter()
+            .find(|h| &h.id == id)
+            .context("主机不存在")?;
+        ssh::command(
+            &quota_host(host, source),
+            &format!(
+                "exec {} --print /usage --output-format json --print-timeout 30s",
+                process::quote(binary)
+            ),
+        )?
+    } else {
+        let local = home().join(".local/bin/agy");
+        let resolved = if binary == "agy" && local.is_file() {
+            local
+        } else {
+            expand(binary)
+        };
+        let mut c = process::cli_command(&resolved.to_string_lossy());
+        c.args([
+            "--print",
+            "/usage",
+            "--output-format",
+            "json",
+            "--print-timeout",
+            "30s",
+        ]);
+        c.current_dir(std::env::temp_dir());
+        network::apply_env(&mut c, source.proxy.as_ref().unwrap_or(&settings.proxy));
+        c
+    };
+    cmd.stderr(Stdio::null());
+    let bytes = process::run(cmd, vec![], Duration::from_secs(40))
+        .context("agy 查询失败，请确认已安装并登录 agy")?;
+    let line = bytes
+        .split(|b| *b == b'\n')
+        .rev()
+        .find(|l| !l.is_empty())
+        .context("agy 没有返回数据")?;
+    serde_json::from_slice(line).context("agy 返回格式不正确，请更新 agy")
+}
+
+fn parse_agy(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
+    anyhow::ensure!(
+        v["status"] == "SUCCESS" && v["command"]["name"] == "usage",
+        "agy 未返回额度，请在终端登录并运行 /usage"
+    );
+    let groups = v["command"]["data"]["groups"]
+        .as_array()
+        .context("agy 未返回模型组额度")?;
+    for group in groups {
+        for bucket in group["buckets"]
+            .as_array()
+            .context("agy 模型组格式不正确")?
+        {
+            if bucket["disabled"] == true {
+                continue;
+            }
+            if let Some(remaining) = bucket["remaining_fraction"].as_f64() {
+                anyhow::ensure!((0.0..=1.0).contains(&remaining), "agy 剩余额度格式不正确");
+                let window = bucket["window"].as_str().unwrap_or("");
+                let label = match window {
+                    "weekly" => "7d",
+                    "5h" => "5h",
+                    _ => bucket["name"].as_str().unwrap_or(window),
+                };
+                q.windows.push(QuotaWindow {
+                    id: format!(
+                        "{}:{window}",
+                        group["id"]
+                            .as_str()
+                            .or(group["name"].as_str())
+                            .unwrap_or("agy")
+                    ),
+                    group_id: group["id"]
+                        .as_str()
+                        .or(group["name"].as_str())
+                        .unwrap_or("agy")
+                        .into(),
+                    group_name: group["name"].as_str().unwrap_or("agy").into(),
+                    name: format!("{} · {}", group["name"].as_str().unwrap_or("agy"), label),
+                    used_percent: (1.0 - remaining) * 100.0,
+                    window_minutes: match window {
+                        "weekly" => Some(10080),
+                        "5h" => Some(300),
+                        _ => None,
+                    },
+                    resets_at: timestamp(&bucket["reset_time"]),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn deepseek(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
+    anyhow::ensure!(
+        source.host_id.is_none(),
+        "DeepSeek 余额请使用本机数据源和 API Key"
+    );
+    let key = if source.path.trim().is_empty() {
+        std::env::var("DEEPSEEK_API_KEY").context("请在数据源中填写 DeepSeek API Key")?
+    } else {
+        std::fs::read_to_string(expand(&source.path)).context("无法读取 DeepSeek API Key 文件")?
+    };
+    let key = key.trim();
+    anyhow::ensure!(
+        !key.is_empty() && !key.contains(['\n', '\r']),
+        "DeepSeek API Key 格式不正确"
+    );
+    let response = network::client(source.proxy.as_ref().unwrap_or(&settings.proxy))?
+        .get("https://api.deepseek.com/user/balance")
+        .bearer_auth(key)
+        .send()
+        .map_err(|_| anyhow::anyhow!("DeepSeek 余额连接失败"))?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "DeepSeek 余额查询失败（HTTP {}）",
+        response.status().as_u16()
+    );
+    normalize(
+        source,
+        &response
+            .json::<Value>()
+            .context("DeepSeek 余额响应格式不正确")?,
+        "live",
+    )
+}
+
 #[cfg(test)]
 mod codex_rpc_tests {
     use super::*;
@@ -742,141 +879,4 @@ mod codex_rpc_tests {
             assert!(!error.contains("secret-token"));
         }
     }
-}
-
-fn agy(source: &Source, settings: &Settings) -> Result<Value> {
-    let binary = if source.agy_binary.is_empty() {
-        "agy"
-    } else {
-        &source.agy_binary
-    };
-    let mut cmd = if let Some(id) = &source.host_id {
-        let host = settings
-            .hosts
-            .iter()
-            .find(|h| &h.id == id)
-            .context("主机不存在")?;
-        ssh::command(
-            &quota_host(host, source),
-            &format!(
-                "exec {} --print /usage --output-format json --print-timeout 30s",
-                process::quote(binary)
-            ),
-        )?
-    } else {
-        let local = home().join(".local/bin/agy");
-        let resolved = if binary == "agy" && local.is_file() {
-            local
-        } else {
-            expand(binary)
-        };
-        let mut c = process::cli_command(&resolved.to_string_lossy());
-        c.args([
-            "--print",
-            "/usage",
-            "--output-format",
-            "json",
-            "--print-timeout",
-            "30s",
-        ]);
-        c.current_dir(std::env::temp_dir());
-        network::apply_env(&mut c, source.proxy.as_ref().unwrap_or(&settings.proxy));
-        c
-    };
-    cmd.stderr(Stdio::null());
-    let bytes = process::run(cmd, vec![], Duration::from_secs(40))
-        .context("agy 查询失败，请确认已安装并登录 agy")?;
-    let line = bytes
-        .split(|b| *b == b'\n')
-        .rev()
-        .find(|l| !l.is_empty())
-        .context("agy 没有返回数据")?;
-    serde_json::from_slice(line).context("agy 返回格式不正确，请更新 agy")
-}
-
-fn parse_agy(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
-    anyhow::ensure!(
-        v["status"] == "SUCCESS" && v["command"]["name"] == "usage",
-        "agy 未返回额度，请在终端登录并运行 /usage"
-    );
-    let groups = v["command"]["data"]["groups"]
-        .as_array()
-        .context("agy 未返回模型组额度")?;
-    for group in groups {
-        for bucket in group["buckets"]
-            .as_array()
-            .context("agy 模型组格式不正确")?
-        {
-            if bucket["disabled"] == true {
-                continue;
-            }
-            if let Some(remaining) = bucket["remaining_fraction"].as_f64() {
-                anyhow::ensure!((0.0..=1.0).contains(&remaining), "agy 剩余额度格式不正确");
-                let window = bucket["window"].as_str().unwrap_or("");
-                let label = match window {
-                    "weekly" => "7d",
-                    "5h" => "5h",
-                    _ => bucket["name"].as_str().unwrap_or(window),
-                };
-                q.windows.push(QuotaWindow {
-                    id: format!(
-                        "{}:{window}",
-                        group["id"]
-                            .as_str()
-                            .or(group["name"].as_str())
-                            .unwrap_or("agy")
-                    ),
-                    group_id: group["id"]
-                        .as_str()
-                        .or(group["name"].as_str())
-                        .unwrap_or("agy")
-                        .into(),
-                    group_name: group["name"].as_str().unwrap_or("agy").into(),
-                    name: format!("{} · {}", group["name"].as_str().unwrap_or("agy"), label),
-                    used_percent: (1.0 - remaining) * 100.0,
-                    window_minutes: match window {
-                        "weekly" => Some(10080),
-                        "5h" => Some(300),
-                        _ => None,
-                    },
-                    resets_at: timestamp(&bucket["reset_time"]),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-fn deepseek(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
-    anyhow::ensure!(
-        source.host_id.is_none(),
-        "DeepSeek 余额请使用本机数据源和 API Key"
-    );
-    let key = if source.path.trim().is_empty() {
-        std::env::var("DEEPSEEK_API_KEY").context("请在数据源中填写 DeepSeek API Key")?
-    } else {
-        std::fs::read_to_string(expand(&source.path)).context("无法读取 DeepSeek API Key 文件")?
-    };
-    let key = key.trim();
-    anyhow::ensure!(
-        !key.is_empty() && !key.contains(['\n', '\r']),
-        "DeepSeek API Key 格式不正确"
-    );
-    let response = network::client(source.proxy.as_ref().unwrap_or(&settings.proxy))?
-        .get("https://api.deepseek.com/user/balance")
-        .bearer_auth(key)
-        .send()
-        .map_err(|_| anyhow::anyhow!("DeepSeek 余额连接失败"))?;
-    anyhow::ensure!(
-        response.status().is_success(),
-        "DeepSeek 余额查询失败（HTTP {}）",
-        response.status().as_u16()
-    );
-    normalize(
-        source,
-        &response
-            .json::<Value>()
-            .context("DeepSeek 余额响应格式不正确")?,
-        "live",
-    )
 }
