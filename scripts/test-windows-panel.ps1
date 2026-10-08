@@ -54,9 +54,13 @@ function Pump([int]$Milliseconds=100) {
     $until=[DateTime]::UtcNow.AddMilliseconds($Milliseconds)
     do {[System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 10} while([DateTime]::UtcNow -lt $until)
 }
-function Wait-For([scriptblock]$Check,[string]$Label) {
-    $until=[DateTime]::UtcNow.AddSeconds(15)
-    do {if (& $Check) {return}; Pump 50} while([DateTime]::UtcNow -lt $until)
+function Wait-For([scriptblock]$Check,[string]$Label,[int]$TimeoutSeconds=15) {
+    $until=[DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        if ($app -and $app.HasExited) {throw "Application exited during ${Label}: exit code $($app.ExitCode); see app-stderr.log"}
+        if (& $Check) {return}
+        Pump 50
+    } while([DateTime]::UtcNow -lt $until)
     throw "Timeout: $Label"
 }
 function Assert-That([bool]$Condition,[string]$Label) {
@@ -102,13 +106,19 @@ function Screenshot([string]$Name) {
     finally {$graphics.Dispose();$bitmap.Dispose()}
 }
 $oldData=$env:AIEYES_DATA_DIR
+$oldWebviewData=$env:WEBVIEW2_USER_DATA_FOLDER
 $testData=Join-Path ([IO.Path]::GetTempPath()) ('aieyes-panel-'+[guid]::NewGuid())
 New-Item -ItemType Directory $testData | Out-Null
 $env:AIEYES_DATA_DIR=$testData
+$env:WEBVIEW2_USER_DATA_FOLDER=Join-Path $testData 'webview2'
 $app=$null;$background=$null
 try {
-    $app=Start-Process -FilePath (Resolve-Path $Binary) -PassThru
-    Wait-For { $script:capsule=[PanelProbe]::Find($app.Id,'AieyesNativeCapsule',$true);$script:capsule -ne [IntPtr]::Zero } 'native capsule startup'
+    $startup=[Diagnostics.Stopwatch]::StartNew()
+    $app=Start-Process -FilePath (Resolve-Path $Binary) -PassThru -RedirectStandardOutput (Join-Path $out 'app-stdout.log') -RedirectStandardError (Join-Path $out 'app-stderr.log')
+    # A fresh runner initializes both WebViews before creating the capsule.
+    # Give cold startup its own budget; keep interaction deadlines at 15 seconds.
+    Wait-For { $script:capsule=[PanelProbe]::Find($app.Id,'AieyesNativeCapsule',$true);$script:capsule -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:capsule) } 'native capsule startup' 60
+    $result.startupMilliseconds=$startup.ElapsedMilliseconds
     $result.dpi=[PanelProbe]::GetDpiForWindow($script:capsule)
     $background=New-Object System.Windows.Forms.Form
     $background.Text='Aieyes isolated background input target';$background.FormBorderStyle='None';$background.WindowState='Maximized';$background.BackColor=[Drawing.Color]::FromArgb(49,67,83)
@@ -158,7 +168,9 @@ try {
     Capsule-Click;Wait-For {-not (Panel-Visible)} 'rebuilt panel closes'
     $result.status='passed'
 } catch {
-    $result.status='failed';$result.reason=$_.ToString();Screenshot 'failure';throw
+    $result.status='failed';$result.reason=$_.ToString()
+    if($app){$result.processExited=$app.HasExited;if($app.HasExited){$result.exitCode=$app.ExitCode}}
+    Screenshot 'failure';throw
 } finally {
     if($background){$background.Close();$background.Dispose()}
     if($app -and -not $app.HasExited){
@@ -166,6 +178,7 @@ try {
         $null=$app.WaitForExit(5000)
     }
     $env:AIEYES_DATA_DIR=$oldData
+    $env:WEBVIEW2_USER_DATA_FOLDER=$oldWebviewData
     for($attempt=0;$attempt -lt 20;$attempt++) {
         try {Remove-Item -Recurse -Force $testData;break}
         catch {if($attempt -eq 19){$result.cleanupWarning=$_.ToString();Write-Warning 'Temporary test directory is still locked'}else{Pump 100}}
