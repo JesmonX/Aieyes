@@ -108,7 +108,8 @@ def codex_rpc(m, method, params):
             env.pop(key, None)
     if proxy.get('mode') == 'custom':
         env.update({k: proxy['url'] for k in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')})
-    argv = shell_argv(m, [m['binary'], 'app-server', '--stdio'])
+    # Stdio is the default, including CLI versions without the --stdio alias.
+    argv = shell_argv(m, [m['binary'], 'app-server'])
     process = subprocess.Popen(argv, env=env, cwd=str(pathlib.Path.home()), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
     replies = queue.Queue()
     def reader():
@@ -117,7 +118,8 @@ def codex_rpc(m, method, params):
                 replies.put(json.loads(line))
             except ValueError:
                 pass
-    threading.Thread(target=reader, daemon=True).start()
+    reader_thread = threading.Thread(target=reader, daemon=True)
+    reader_thread.start()
     def send(v):
         process.stdin.write(json.dumps(v) + '\n')
         process.stdin.flush()
@@ -137,8 +139,14 @@ def codex_rpc(m, method, params):
         send({'id': 2, 'method': method, 'params': params})
         return wait(2)
     finally:
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.wait()
+        reader_thread.join()
+        process.stdin.close()
+        process.stdout.close()
 
 
 def resolve(m):

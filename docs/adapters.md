@@ -4,7 +4,9 @@
 
 Codex CLI 0.160.0 的 `session_meta`、`turn_context`、`event_msg/token_count` 已用本机日志核对。数据库只保存身份、时间、模型与统计字段，不保存对话正文。
 
-Codex 限额通过 `codex app-server --stdio` 的 `account/rateLimits/read` 读取，协议由本机 CLI 的 `generate-json-schema --experimental` 生成。客户端不发送 `account/rateLimitResetCredit/consume`。Bank Reset 使用 `rateLimitResetCredits.availableCount`，明细数组长度不代表可用次数。快照保留独立的 Bank Reset 更新时间。
+Codex 限额通过 `codex app-server`（默认 stdio）的 `account/rateLimits/read` 读取，协议由 CLI 的 `generate-json-schema --experimental` 生成。避免使用旧版 CLI 不支持的 `--stdio` 别名；若旧版接口明确拒绝对象参数并返回 `expected unit`，同一连接以空参数重试一次。客户端不发送 `account/rateLimitResetCredit/consume`。Bank Reset 使用 `rateLimitResetCredits.availableCount`，明细数组长度不代表可用次数。快照保留独立的 Bank Reset 更新时间。
+
+查询失败会显示初始化／读取限额等阶段、SSH／本地位置、自然退出码或 RPC 错误码，并识别启动参数、SSH 认证、配置、订阅登录与网络错误。stderr 有限采集并持续排空，仅显示固定分类，不回显代理凭据、远端脚本输出或服务端原始错误内容。程序主动清理子进程不记为自然退出。
 
 Claude Code 使用 `assistant.message.usage`，按会话、请求与消息 ID 合并流式响应；普通输入、缓存读取和缓存写入分别计数。错误消息和 synthetic 模型不计入用量。
 

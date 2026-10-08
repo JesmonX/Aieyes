@@ -7,6 +7,7 @@ import pathlib
 import shlex
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -18,6 +19,23 @@ wake=importlib.util.module_from_spec(spec);spec.loader.exec_module(wake)
 class WakeTests(unittest.TestCase):
     def manifest(self, binary='fake'):
         return dict(version=1,id='wake-test',accountKey='codex:test',provider='codex',model='model',effort='low',binary=binary,args=['exec','-m','model','-c','model_reasoning_effort="low"',"hi; $(touch never)"],configPath='/fixture',preCommand='',shell='/bin/bash',proxy={'mode':'direct'},times=[datetime.datetime.now().strftime('%H:%M')],enabled=True)
+
+    @unittest.skipUnless(os.name == 'posix', 'Remote runner requires a POSIX host')
+    def test_codex_rpc_uses_default_stdio_for_older_cli(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            script = pathlib.Path(temporary) / 'fake-codex.py'
+            script.write_text('''import json, sys
+assert sys.argv[1:] == ['app-server'], 'unsupported transport argument'
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' in request:
+        print(json.dumps({'id': request['id'], 'result': {'ok': True}}), flush=True)
+''')
+            # Keep the actual process/stdio exchange; prepend Python to avoid
+            # depending on executable shebang support or a real Codex install.
+            with patch.object(wake, 'shell_argv', side_effect=lambda m, args: [sys.executable, *args]):
+                result = wake.codex_rpc(self.manifest(str(script)), 'account/read', {'refreshToken': False})
+            self.assertEqual(result, {'ok': True})
 
     @unittest.skipUnless(os.name == "posix", "Remote runner integration requires a POSIX host")
     def test_sourced_environment_and_banner_are_isolated(self):

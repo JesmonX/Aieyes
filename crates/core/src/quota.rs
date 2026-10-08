@@ -7,7 +7,7 @@ use crate::{
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     process::{Command, Stdio},
     sync::mpsc,
     time::{Duration, Instant},
@@ -265,7 +265,7 @@ pub fn codex_rpc(
     method: &str,
     params: Value,
 ) -> Result<Value> {
-    let mut cmd = if let Some(id) = &source.host_id {
+    let cmd = if let Some(id) = &source.host_id {
         let host = settings
             .hosts
             .iter()
@@ -288,7 +288,7 @@ pub fn codex_rpc(
         ssh::command(
             &quota_host(host, source),
             &format!(
-                "export CODEX_HOME={}\nexec {} app-server --stdio",
+                "export CODEX_HOME={}\nexec {} app-server",
                 home_expr,
                 process::quote(if source.codex_binary.is_empty() {
                     "codex"
@@ -299,7 +299,8 @@ pub fn codex_rpc(
         )?
     } else {
         let mut c = process::cli_command(&resolve_codex(&source.codex_binary));
-        c.args(["app-server", "--stdio"]);
+        // Stdio is the default. Older CLIs reject the newer --stdio alias.
+        c.arg("app-server");
         let root = expand(&source.path);
         let root = if root
             .file_name()
@@ -313,13 +314,61 @@ pub fn codex_rpc(
         network::apply_env(&mut c, source.proxy.as_ref().unwrap_or(&settings.proxy));
         c
     };
+    run_codex_rpc(
+        cmd,
+        source.host_id.is_some(),
+        method,
+        params,
+        Duration::from_secs(30),
+    )
+}
+
+fn run_codex_rpc(
+    mut cmd: Command,
+    remote: bool,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<Value> {
+    let location = if remote { "SSH" } else { "本地" };
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     process::prepare(&mut cmd);
-    let mut child = cmd.spawn().context("启动 Codex 查询失败")?;
+    let mut child = cmd.spawn().map_err(|error| {
+        let reason = match error.kind() {
+            std::io::ErrorKind::NotFound => "未找到可执行文件，请检查 CLI 路径和 PATH",
+            std::io::ErrorKind::PermissionDenied => "没有执行权限",
+            _ => "请检查 CLI 路径和运行环境",
+        };
+        anyhow::anyhow!(
+            "启动 Codex 查询失败（{location}，系统错误 {}）：{reason}",
+            error
+                .raw_os_error()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "未知".into())
+        )
+    })?;
+    let mut stderr = child.stderr.take().context("打开 Codex 错误输出失败")?;
+    let (error_tx, error_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        // Drain even after the capture limit, so verbose CLIs cannot deadlock.
+        let mut captured = Vec::new();
+        let mut buffer = [0; 4096];
+        while let Ok(n) = stderr.read(&mut buffer) {
+            if n == 0 {
+                break;
+            }
+            let keep = n.min(65536usize.saturating_sub(captured.len()));
+            captured.extend_from_slice(&buffer[..keep]);
+        }
+        let _ = error_tx.send(captured);
+    });
+    let mut stage = "初始化";
+    // Keep stdin alive until after recording the natural exit status. Closing it
+    // here would make a live server exit cleanly and disguise our own cleanup.
+    let mut stdin = child.stdin.take().context("打开 Codex 输入失败")?;
     let result = (|| -> Result<Value> {
-        let mut stdin = child.stdin.take().context("打开 Codex 输入失败")?;
         let stdout = child.stdout.take().context("打开 Codex 输出失败")?;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -339,29 +388,360 @@ pub fn codex_rpc(
         )?;
         stdin.flush()?;
         let wait = |id: i64| -> Result<Value> {
-            let deadline = Instant::now() + Duration::from_secs(30);
+            let deadline = Instant::now() + timeout;
             loop {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 let v = rx.recv_timeout(remaining).map_err(|e| match e {
                     mpsc::RecvTimeoutError::Timeout => anyhow::anyhow!("Codex 查询超时"),
-                    mpsc::RecvTimeoutError::Disconnected => anyhow::anyhow!("Codex 查询进程已退出"),
+                    mpsc::RecvTimeoutError::Disconnected => anyhow::anyhow!("Codex 查询连接已断开"),
                 })?;
                 if v["id"] == id {
-                    if v.get("error").is_some() {
-                        anyhow::bail!("Codex 限额读取失败");
-                    }
-                    return v.get("result").cloned().context("Codex 返回数据为空");
+                    return Ok(v);
                 }
             }
         };
-        wait(1)?;
+        codex_rpc_result(wait(1)?)?;
+        stage = match method {
+            "account/rateLimits/read" => "读取限额",
+            "account/read" => "读取账户",
+            "model/list" => "读取模型",
+            _ => "读取数据",
+        };
         writeln!(stdin, "{}", json!({"method":"initialized"}))?;
         writeln!(stdin, "{}", json!({"id":2,"method":method,"params":params}))?;
         stdin.flush()?;
-        wait(2)
+        let reply = wait(2)?;
+        // Older versions model this read-only request as unit/null, while newer
+        // ones accept options. Retry only this exact parameter-shape rejection.
+        if method == "account/rateLimits/read"
+            && params.is_object()
+            && matches!(reply["error"]["code"].as_i64(), Some(-32600 | -32602))
+            && reply["error"]["message"]
+                .as_str()
+                .is_some_and(|s| s.contains("expected unit"))
+        {
+            writeln!(stdin, "{}", json!({"id":3,"method":method,"params":null}))?;
+            stdin.flush()?;
+            return codex_rpc_result(wait(3)?);
+        }
+        codex_rpc_result(reply)
     })();
+    // EOF may arrive just before the OS publishes the exit status. Record the
+    // natural status before cleanup, never the SIGKILL/taskkill we initiate.
+    let mut status = child.try_wait().ok().flatten();
+    if result.is_err() && status.is_none() {
+        let deadline = Instant::now() + Duration::from_millis(100);
+        while status.is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+            status = child.try_wait().ok().flatten();
+        }
+    }
     process::kill(&mut child);
-    result
+    result.map_err(|error| {
+        let stderr = error_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_or_default();
+        let reason = if let Some(reason) = codex_error_reason(&String::from_utf8_lossy(&stderr)) {
+            reason.to_owned()
+        } else if let Some(status) = status.filter(|s| !s.success()) {
+            process::classify_error(&String::from_utf8_lossy(&stderr), status.code())
+        } else {
+            String::new()
+        };
+        let exit = status
+            .map(|s| {
+                s.code()
+                    .map(|n| format!("，退出码 {n}"))
+                    .unwrap_or_else(|| "，被信号终止".into())
+            })
+            .unwrap_or_default();
+        let detail = if reason.is_empty() {
+            String::new()
+        } else {
+            format!("；{reason}")
+        };
+        anyhow::anyhow!("Codex {stage}失败（{location}{exit}）：{error}{detail}")
+    })
+}
+
+// Only fixed labels and numeric codes leave the query process. Provider errors
+// and shell output can contain credentials, proxy URLs, or private config text.
+fn codex_error_reason(message: &str) -> Option<&'static str> {
+    let message = message.to_ascii_lowercase();
+    let categories: &[(&[&str], &str)] = &[
+        (
+            &[
+                "unexpected argument",
+                "unrecognized option",
+                "unknown option",
+                "unrecognized subcommand",
+            ],
+            "Codex CLI 启动参数不兼容，请检查版本",
+        ),
+        (
+            &[
+                "command not found",
+                "not recognized as an internal",
+                "not recognized as the name",
+            ],
+            "未找到 Codex 或其运行依赖，请检查 CLI 路径和 PATH",
+        ),
+        (
+            &[
+                "error loading config",
+                "failed to load config",
+                "error parsing",
+                "toml parse error",
+            ],
+            "Codex 配置解析失败，请检查所选配置目录",
+        ),
+        (
+            &[
+                "not logged in",
+                "not authenticated",
+                "authentication required",
+                "requires chatgpt",
+                "requires a chatgpt",
+                "only available for chatgpt",
+            ],
+            "需要 ChatGPT 订阅登录，请检查所选配置目录的登录方式",
+        ),
+        (
+            &[
+                "401 unauthorized",
+                "status code 401",
+                "http 401",
+                "token expired",
+                "token has expired",
+                "refresh token",
+            ],
+            "Codex 登录已失效，请在查询所在机器重新登录",
+        ),
+        (
+            &["403 forbidden", "status code 403", "http 403"],
+            "Codex 服务拒绝访问，请检查账户权限和查询所在机器的网络",
+        ),
+        (
+            &["407 proxy", "proxy authentication"],
+            "代理认证失败，请检查查询所在机器的代理",
+        ),
+        (
+            &[
+                "error sending request",
+                "connection refused",
+                "dns error",
+                "failed to lookup address",
+                "certificate verify",
+                "invalid peer certificate",
+                "connection reset",
+            ],
+            "Codex 服务连接失败，请检查查询所在机器的网络和代理",
+        ),
+        (
+            &["timed out", "timeout"],
+            "Codex 服务连接超时，请检查查询所在机器的网络和代理",
+        ),
+    ];
+    categories.iter().find_map(|(patterns, label)| {
+        patterns
+            .iter()
+            .any(|p| message.contains(p))
+            .then_some(*label)
+    })
+}
+
+fn codex_rpc_error(error: &Value) -> String {
+    let code = error["code"].as_i64();
+    let reason = match code {
+        Some(-32601) => "此 Codex CLI 不支持该查询接口，请升级 CLI",
+        Some(-32602) => "此 Codex CLI 不接受查询参数，请检查版本兼容性",
+        _ => codex_error_reason(error["message"].as_str().unwrap_or(""))
+            .unwrap_or("Codex 拒绝查询，请检查登录方式、配置目录和网络"),
+    };
+    format!(
+        "RPC {}：{reason}",
+        code.map(|c| c.to_string())
+            .unwrap_or_else(|| "未知错误".into())
+    )
+}
+
+fn codex_rpc_result(reply: Value) -> Result<Value> {
+    if let Some(error) = reply.get("error").filter(|e| !e.is_null()) {
+        anyhow::bail!(codex_rpc_error(error));
+    }
+    reply.get("result").cloned().context("Codex 返回数据为空")
+}
+
+#[cfg(test)]
+mod codex_rpc_tests {
+    use super::*;
+
+    // Spawn this test executable as the fake CLI on every OS, including Windows.
+    // No Python, account credentials, SSH connection, or real CLI is required.
+    fn fixture_command(case: &str) -> Command {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--ignored",
+            "--exact",
+            "quota::codex_rpc_tests::fixture",
+            "--nocapture",
+        ]);
+        command.env("AIEYES_CODEX_RPC_FIXTURE", case);
+        command
+    }
+
+    #[test]
+    #[ignore = "subprocess fixture"]
+    fn fixture() {
+        let case = std::env::var("AIEYES_CODEX_RPC_FIXTURE").unwrap();
+        match case.as_str() {
+            "exit" => {
+                eprintln!("unexpected argument '--stdio' found; secret-token");
+                std::process::exit(2);
+            }
+            "ssh" => {
+                eprintln!("private-host: Permission denied (publickey). secret-token");
+                std::process::exit(255);
+            }
+            "clean-exit" => std::process::exit(0),
+            _ => {}
+        }
+        for line in std::io::stdin().lock().lines() {
+            let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            let Some(id) = value["id"].as_i64() else {
+                continue;
+            };
+            let reply = match (case.as_str(), id) {
+                ("init-error", 1) => {
+                    json!({"id":id,"error":{"code":-32602,"message":"secret-token"}})
+                }
+                (_, 1) => json!({"id":1,"result":{}}),
+                ("legacy", 2) => {
+                    assert!(value["params"].is_object());
+                    json!({"id":id,"error":{"code":-32600,"message":"Invalid request: invalid type: map, expected unit"}})
+                }
+                ("legacy", 3) => {
+                    assert_eq!(value["method"], "account/rateLimits/read");
+                    assert!(value["params"].is_null());
+                    json!({"id":id,"result":{"legacy":true}})
+                }
+                ("auth", 2) => {
+                    json!({"id":id,"error":{"code":-32600,"message":"codex account authentication required to read rate limits secret-token"}})
+                }
+                ("timeout", 2) => {
+                    std::thread::sleep(Duration::from_secs(10));
+                    continue;
+                }
+                ("noisy", 2) => {
+                    eprint!("{}", "secret-token".repeat(12000));
+                    json!({"id":id,"result":{"ok":true}})
+                }
+                (_, 2) => json!({"id":id,"result":{"ok":true}}),
+                _ => panic!("unexpected retry"),
+            };
+            println!("ignored banner");
+            println!("{}", json!({"method":"notification"}));
+            println!("{reply}");
+            std::io::stdout().flush().unwrap();
+        }
+    }
+
+    fn query(case: &str, remote: bool) -> Result<Value> {
+        run_codex_rpc(
+            fixture_command(case),
+            remote,
+            "account/rateLimits/read",
+            json!({"excludeResetCreditDetails":false}),
+            Duration::from_secs(2),
+        )
+    }
+
+    #[test]
+    fn startup_exit_and_ssh_auth_errors_keep_codes_without_private_output() {
+        for (case, remote, expected) in [
+            ("exit", false, "启动参数不兼容"),
+            ("ssh", true, "SSH 认证失败"),
+        ] {
+            let error = query(case, remote).unwrap_err().to_string();
+            assert!(error.contains("初始化失败"), "{error}");
+            assert!(
+                error.contains(if remote {
+                    "SSH，退出码 255"
+                } else {
+                    "本地，退出码 2"
+                }),
+                "{error}"
+            );
+            assert!(error.contains(expected), "{error}");
+            assert!(!error.contains("secret-token") && !error.contains("private-host"));
+        }
+        let error = query("clean-exit", true).unwrap_err().to_string();
+        assert!(error.contains("退出码 0"), "{error}");
+        assert!(!error.contains("命令执行失败（0）"), "{error}");
+    }
+
+    #[test]
+    fn rpc_errors_keep_stage_and_code_and_never_retry_authentication() {
+        for (case, expected) in [("init-error", "初始化失败"), ("auth", "读取限额失败")]
+        {
+            let error = query(case, false).unwrap_err().to_string();
+            assert!(
+                error.contains(expected) && error.contains("RPC -3260"),
+                "{error}"
+            );
+            assert!(
+                !error.contains("secret-token") && !error.contains("退出码"),
+                "{error}"
+            );
+            if case == "auth" {
+                assert!(error.contains("ChatGPT 订阅登录"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn old_cli_unit_params_fallback_and_verbose_success_are_supported() {
+        assert_eq!(query("legacy", true).unwrap(), json!({"legacy":true}));
+        assert_eq!(query("noisy", false).unwrap(), json!({"ok":true}));
+    }
+
+    #[test]
+    fn timeout_does_not_report_our_cleanup_as_a_natural_exit() {
+        let error = run_codex_rpc(
+            fixture_command("timeout"),
+            false,
+            "account/rateLimits/read",
+            json!({}),
+            Duration::from_secs(2),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("读取限额失败") && error.contains("查询超时"),
+            "{error}"
+        );
+        assert!(
+            !error.contains("退出码") && !error.contains("被信号终止"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn errors_use_safe_categories_instead_of_raw_server_messages() {
+        for (message, expected) in [
+            ("HTTP 401 secret-token", "登录已失效"),
+            (
+                "error sending request for https://private:secret-token@host",
+                "服务连接失败",
+            ),
+            ("TOML parse error: secret-token", "配置解析失败"),
+            ("unknown secret-token", "Codex 拒绝查询"),
+        ] {
+            let error = codex_rpc_error(&json!({"code":-32603,"message":message}));
+            assert!(error.contains(expected), "{error}");
+            assert!(!error.contains("secret-token"));
+        }
+    }
 }
 
 fn agy(source: &Source, settings: &Settings) -> Result<Value> {

@@ -165,7 +165,7 @@ mod windows_tests {
         );
     }
 }
-fn classify_error(stderr: &str, code: Option<i32>) -> String {
+pub(crate) fn classify_error(stderr: &str, code: Option<i32>) -> String {
     for (pattern, message) in [
         ("Operation not permitted", "网络连接被系统拒绝"),
         ("Could not resolve hostname", "无法解析 SSH 主机"),
