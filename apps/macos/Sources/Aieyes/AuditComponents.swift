@@ -46,7 +46,7 @@ struct CreditBalanceLabel: View {
 struct QuotaResetLabel: View {
     var window: QuotaWindow
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
+        SurfaceTimeline(interval: 30) { context in
             Text(Format.quotaReset(window, now: context.date)).font(AppFont.secondary).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
         }

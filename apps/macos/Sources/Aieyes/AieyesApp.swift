@@ -23,6 +23,7 @@ import Combine
     private var approvingSettingsClose = false
     private var cancellables = Set<AnyCancellable>()
     private var model: AppModel!
+    private var titleUpdatePending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -67,9 +68,10 @@ import Combine
         // Own dismissal explicitly: transient popovers can lose outside dismissal
         // after a sheet, and can close on status mouse-down then reopen on mouse-up.
         popover.behavior = .applicationDefined; popover.animates = true; popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: RootView(model: model))
+        popover.contentViewController = PanelContainer(model: model)
         popover.contentSize = NSSize(width: 450, height: 720)
-        model.objectWillChange.sink { [weak self] _ in DispatchQueue.main.async { self?.updateTitle() } }.store(in: &cancellables)
+        model.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification).sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
             Task { @MainActor in self?.dismissOutsidePanel() }
@@ -120,16 +122,26 @@ import Combine
     @objc private func settingsAction() { openSettings() }
     @objc private func samplingAction() { openSampling() }
     @objc private func wake() { Task { await model.scan() } }
+    private func scheduleTitleUpdate() {
+        guard !titleUpdatePending else { return }
+        titleUpdatePending = true
+        DispatchQueue.main.async { [weak self] in
+            self?.titleUpdatePending = false; self?.updateTitle()
+        }
+    }
     private func updateTitle() {
         guard let button = statusItem.button, let label = statusLabel else { return }
-        let width = label.fittingSize.width
-        statusItem.length = width
-        label.frame = NSRect(x: 0, y: 0, width: width, height: button.bounds.height)
-        button.toolTip = "Aieyes · 今日全部数据 · " + model.sessionSummary + (model.sessionPhase.map { " · " + $0.rawValue } ?? "")
-        if !model.runningEstimates.isEmpty { button.toolTip = (button.toolTip ?? "Aieyes") + " · " + model.samplingSummary }
-        button.setAccessibilityLabel(button.toolTip)
-        settingsWindow?.isDocumentEdited = model.settingsDirty
-        pageControl?.selectedSegment = model.detailPage == "servers" ? 1 : 0
+        let scale = button.window?.backingScaleFactor ?? 2
+        let width = ceil(label.fittingSize.width * scale) / scale
+        if statusItem.length != width { statusItem.length = width }
+        let frame = NSRect(x: 0, y: 0, width: width, height: button.bounds.height)
+        if label.frame != frame { label.frame = frame }
+        var tooltip = "Aieyes · 今日全部数据 · " + model.sessionSummary + (model.sessionPhase.map { " · " + $0.rawValue } ?? "")
+        if !model.runningEstimates.isEmpty { tooltip += " · " + model.samplingSummary }
+        if button.toolTip != tooltip { button.toolTip = tooltip; button.setAccessibilityLabel(tooltip) }
+        if let window = settingsWindow, window.isDocumentEdited != model.settingsDirty { window.isDocumentEdited = model.settingsDirty }
+        let page = model.detailPage == "servers" ? 1 : 0
+        if pageControl?.selectedSegment != page { pageControl?.selectedSegment = page }
     }
     private func openDetail(page: String? = nil) {
         if let page { model.requestedDetailPage = page; model.detailPage = page }
@@ -272,6 +284,10 @@ import Combine
     }
     func windowWillClose(_ notification: Notification) {
         if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(false, window: "detail") }
+    }
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === detailWindow else { return }
+        model.setWindowVisible(window.occlusionState.contains(.visible) && !window.isMiniaturized, window: "detail")
     }
     func windowDidMiniaturize(_ notification: Notification) {
         if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(false, window: "detail") }

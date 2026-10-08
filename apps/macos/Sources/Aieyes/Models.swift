@@ -132,7 +132,7 @@ struct Settings: Codable, Equatable {
     var modelMappings: [String: String] = [:]
     var proxyTestUrls: [String]?
 }
-struct ModelPrice: Codable, Identifiable {
+struct ModelPrice: Codable, Equatable, Identifiable {
     var id = "", name = "", input: Double?, output: Double?, cacheRead: Double?, cacheWrite: Double?, fetchedAt: Double = 0
 }
 struct DeviceMetric: Codable, Identifiable {

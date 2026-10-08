@@ -134,6 +134,10 @@ pub fn effective_proxy(proxy: &ProxyConfig) -> ProxyConfig {
     proxy.clone()
 }
 pub fn client(proxy: &ProxyConfig) -> Result<reqwest::blocking::Client> {
+    Ok(client_builder(proxy)?.build()?)
+}
+
+pub(crate) fn client_builder(proxy: &ProxyConfig) -> Result<reqwest::blocking::ClientBuilder> {
     let proxy = effective_proxy(proxy);
     let mut builder = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -148,7 +152,7 @@ pub fn client(proxy: &ProxyConfig) -> Result<reqwest::blocking::Client> {
         }
         _ => {}
     }
-    Ok(builder.build()?)
+    Ok(builder)
 }
 
 pub fn open_release_page() -> Result<()> {

@@ -11,6 +11,7 @@ pub mod quota;
 pub mod sessions;
 pub mod ssh;
 pub mod store;
+pub mod update_transport;
 pub mod usage;
 pub mod wakeups;
 

@@ -37,6 +37,9 @@ fn run() -> anyhow::Result<()> {
         .map(|a| PathBuf::from(&a[1]))
         .or_else(|| std::env::var_os("AIEYES_DATA_DIR").map(PathBuf::from))
         .unwrap_or_else(default_root);
+    if args.iter().any(|arg| arg == "--update-transport") {
+        return aieyes_core::update_transport::serve(&root);
+    }
     let mut engine = Engine::open(&root)?;
     if let Some(i) = args.iter().position(|a| a == "--call") {
         let method = args

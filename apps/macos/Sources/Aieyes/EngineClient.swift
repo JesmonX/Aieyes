@@ -63,11 +63,63 @@ struct RefreshStatus { var busy = false; var succeededAt: Date?; var error: Stri
 struct ActionFailure: Identifiable { var action: String; var itemID: String? = nil; var name: String, reason: String; var id: String { action + ":" + (itemID ?? name) } }
 struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: String, explanation: String, affected: [String]; var id: String { kind + ":" + itemID } }
 
+/// Local catalogue reads must not queue behind scans or remote quota requests.
+@MainActor final class PriceCatalog: ObservableObject {
+    @Published private(set) var prices: [ModelPrice] = []
+    @Published private(set) var filtered: [ModelPrice] = []
+    @Published private(set) var loading = false
+    @Published private(set) var loaded = false
+    @Published private(set) var error: String?
+    @Published var query = "" { didSet { if query != oldValue { filter() } } }
+    private let fetch: () async throws -> [ModelPrice]
+    private var pending: Task<Void, Never>?
+    private var revision = 0
+
+    init(fetch: (() async throws -> [ModelPrice])? = nil) {
+        let reader = EngineClient()
+        self.fetch = fetch ?? { try await reader.call("prices.list") }
+    }
+    func replace(_ values: [ModelPrice]) {
+        revision += 1
+        if prices != values { prices = values; filter() }
+        loaded = true; error = nil
+    }
+    private func filter() {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = term.isEmpty ? prices : prices.filter { $0.id.localizedCaseInsensitiveContains(term) || $0.name.localizedCaseInsensitiveContains(term) }
+        if filtered != next { filtered = next }
+    }
+    func load(force: Bool = false) async {
+        if force { revision += 1; loaded = false }
+        if let pending { await pending.value; return }
+        guard !loaded else { return }
+        loading = true; error = nil
+        let work = Task { @MainActor in
+            defer { pending = nil; loading = false }
+            while !Task.isCancelled {
+                let requested = revision
+                do {
+                    let next = try await fetch()
+                    // A save/sync during an outstanding read requires a fresh snapshot.
+                    guard requested == revision else { continue }
+                    replace(next); break
+                } catch {
+                    guard requested == revision else { continue }
+                    self.error = error.localizedDescription; break
+                }
+            }
+        }
+        pending = work
+        await work.value
+    }
+}
+
 
 @MainActor final class AppModel: ObservableObject {
     let engine = EngineClient()
     let metricsEngine = EngineClient()
     let networkEngine = EngineClient()
+    let priceCatalog = PriceCatalog()
     @Published var networkTest: NetworkTest?
     @Published var networkBusy = false
     private var lastNetworkAttempt = Date.distantPast
@@ -154,7 +206,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var showDetailPage: ((String) -> Void)?
     @Published var requestHostEditor = false
     @Published var hosts: [HostResult] = []
-    @Published var prices: [ModelPrice] = []
+    var prices: [ModelPrice] { get { priceCatalog.prices } set { priceCatalog.replace(newValue) } }
     @Published var provider = "all"
     @Published var selectedSource = "all"
     @Published var selectedAccount = "all"
@@ -180,9 +232,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         return [(active > 0 ? "\(active) 项采样中" : nil), (pending > 0 ? "\(pending) 项待确认" : nil)].compactMap { $0 }.joined(separator: " · ")
     }
     @Published var panelHeight: CGFloat = 720
-    private var visibleWindows = Set<String>()
+    @Published private(set) var visibleWindows = Set<String>()
+    func isWindowVisible(_ window: String) -> Bool { visibleWindows.contains(window) }
     var panelVisible: Bool { !visibleWindows.isEmpty }
     func setWindowVisible(_ visible: Bool, window: String) {
+        guard visibleWindows.contains(window) != visible else { return }
         if visible { visibleWindows.insert(window) } else { visibleWindows.remove(window) }
     }
     private var visibleServerWindows = Set<String>()
@@ -493,16 +547,16 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     func syncPrices() async {
         guard !busy, !quotaBusy else { return }; busy = true; activity = "同步价格"; beginRefresh("prices"); defer { busy = false; activity = "" }
-        do { let _: Acknowledgement = try await engine.call("prices.sync"); prices = try await engine.call("prices.list"); let loaded = await reload(); message = loaded ? "价格已更新" : message
+        do { let _: Acknowledgement = try await engine.call("prices.sync"); await loadPrices(force: true); if let error = priceCatalog.error { throw ClientError.message(error) }; let loaded = await reload(); message = loaded ? "价格已更新" : message
             finishRefresh("prices", failures: loaded ? [] : [ActionFailure(action: "prices", name: "概览", reason: message ?? "读取失败")]) }
         catch { message = error.localizedDescription; finishRefresh("prices", failures: [ActionFailure(action: "prices", name: "价格", reason: error.localizedDescription)]) }
     }
-    func loadPrices() async { do { prices = try await engine.call("prices.list") } catch { message = error.localizedDescription } }
+    func loadPrices(force: Bool = false) async { await priceCatalog.load(force: force) }
     func savePrice(_ price: ModelPrice) async -> Bool {
         do {
             let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(price))
             let _: Acknowledgement = try await engine.call("prices.save", params: ["prices":[object]])
-            await loadPrices(); await reload(); message = "已保存价格 · " + Format.time(Date().timeIntervalSince1970); return true
+            await loadPrices(force: true); if let error = priceCatalog.error { throw ClientError.message("价格已保存，但刷新失败：" + error) }; await reload(); message = "已保存价格 · " + Format.time(Date().timeIntervalSince1970); return true
         } catch { message = error.localizedDescription; return false }
     }
     func saveAndReprice() async {

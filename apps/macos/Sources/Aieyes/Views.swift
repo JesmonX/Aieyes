@@ -63,12 +63,12 @@ struct ActionFailureList: View {
 
 struct RootView: View {
     @ObservedObject var model: AppModel
-    @ObservedObject private var updater = AppUpdater.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     var compact = true
+    var nativePanelBackground = false
     @AppStorage private var tab: String
     @State private var costMode = false
     @AppStorage private var serverFilter: String
@@ -76,8 +76,8 @@ struct RootView: View {
     @AppStorage private var sessionsExpanded: Bool
     @AppStorage("panel.accounts.v2") private var panelAccounts = "{}"
     private var usageDashboard: Dashboard { compact ? model.panelDashboard : model.dashboard }
-    init(model: AppModel, compact: Bool = true, page: String = "agent") {
-        self.model = model; self.compact = compact
+    init(model: AppModel, compact: Bool = true, page: String = "agent", nativePanelBackground: Bool = false) {
+        self.model = model; self.compact = compact; self.nativePanelBackground = nativePanelBackground
         let scope = compact ? "panel." : "detail."
         _tab = AppStorage(wrappedValue: page, scope + "page")
         _serverFilter = AppStorage(wrappedValue: "all", scope + "serverFilter")
@@ -117,6 +117,7 @@ struct RootView: View {
         .frame(minWidth: compact ? nil : 760, minHeight: compact ? nil : 480)
         .background { rootBackground }
         .environment(\.translucentPanel, compact)
+        .environment(\.surfaceActive, model.isWindowVisible(compact ? "panel" : "detail"))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: tab)
         .font(AppFont.body).disabled(model.installingUpdate)
         .tint(Palette.accent)
@@ -139,7 +140,7 @@ struct RootView: View {
     @ViewBuilder private var rootBackground: some View {
         if compact {
             // NSPopover already supplies behind-window vibrancy. Avoid stacking blur layers.
-            Color(nsColor: .windowBackgroundColor).opacity(reduceTransparency || contrast == .increased || previewAccessible ? 1 : 0.12)
+            if !nativePanelBackground { Color(nsColor: .windowBackgroundColor).opacity(reduceTransparency || contrast == .increased || previewAccessible ? 1 : 0.12) }
         } else {
             ZStack {
                 Rectangle().fill(.ultraThinMaterial)
@@ -179,7 +180,7 @@ struct RootView: View {
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
                 if compact {
-                    Button { updater.check() } label: { Image(systemName: "arrow.down.circle").frame(width: 28, height: 28).overlay(alignment: .topTrailing) { if updater.hasUpdate { Text("!").font(.system(size: 11, weight: .bold)).foregroundStyle(Palette.warn) } } }.help(updater.hasUpdate ? "发现新版本 · 查看更新" : "检查更新").accessibilityLabel(updater.hasUpdate ? "发现新版本，查看更新" : "检查更新").disabled(updater.phase == "checking")
+                    UpdateMenuButton()
                     Button { model.showDetailPage?(tab) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("打开详情").accessibilityLabel("打开详情")
                 }
                 Button { model.showSettings?() } label: { Image(systemName: "gearshape").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("设置").accessibilityLabel("设置").keyboardShortcut(",")
@@ -329,7 +330,7 @@ struct RootView: View {
                         ActivityIndicator(phase: session.phase)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(session.source).lineLimit(1)
-                            TimelineView(.periodic(from: .now, by: 60)) { context in
+                            SurfaceTimeline(interval: 60) { context in
                                 Text("会话 " + String(URL(fileURLWithPath: session.id).deletingPathExtension().lastPathComponent.prefix(8)) + " · " + Format.relative(session.updatedAt, now: context.date)).font(AppFont.secondary).foregroundStyle(.secondary)
                             }
                         }
@@ -519,15 +520,26 @@ struct DailyUsage: View {
     var cost = false
     private func exact(_ usage: Aggregate) -> String { String(format: "%.0f Token · %.6f USD", usage.total, usage.cost) + " · 读取命中率 " + Format.percent(usage.tokens.cacheRate.map { $0 * 100 }) }
     private func display(_ usage: Aggregate) -> String { Format.compact(usage.total) + " Token · " + String(format: "%.6f USD", usage.cost) + " · 读取命中率 " + Format.percent(usage.tokens.cacheRate.map { $0 * 100 }) }
+    private func modelRow(_ row: DayModel, day: String) -> some View {
+        let value = exact(row.usage)
+        let label = day + " · " + row.model + " · " + value
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(row.model).fontWeight(.medium).textSelection(.enabled)
+            Text(display(row.usage)).help(value).monospacedDigit().textSelection(.enabled)
+        }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+            .accessibilityElement(children: .combine).accessibilityLabel(label)
+            .contextMenu { Button("复制模型与精确数值") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(day + "\t" + row.model + "\t" + value, forType: .string)
+            } }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(days.reversed()) { day in
                 DisclosureGroup {
                     Text(display(day)).help(exact(day)).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
                     ForEach(rows.filter { $0.day == day.key }) { row in
-                        VStack(alignment: .leading, spacing: 4) { Text(row.model).fontWeight(.medium).textSelection(.enabled); Text(display(row.usage)).help(exact(row.usage)).monospacedDigit().textSelection(.enabled) }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                            .accessibilityElement(children: .combine).accessibilityLabel(day.key + " · " + row.model + " · " + exact(row.usage))
-                            .contextMenu { Button("复制模型与精确数值") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(day.key + "\t" + row.model + "\t" + exact(row.usage), forType: .string) } }
+                        modelRow(row, day: day.key)
                     }
                     if day.total == 0 { Text("当日用量为零").font(AppFont.secondary).foregroundStyle(.secondary) }
                 } label: { HStack { Text(day.key); Spacer(); Text(cost ? Format.money(day.cost) + " USD" : Format.compact(day.total) + " Token").monospacedDigit() }.font(AppFont.secondary) }
@@ -839,7 +851,7 @@ struct ServerCard: View {
                             } label: { MetricHeading(icon: "network", title: "网络", value: "\(networks.count) 个网卡") }
                         }
                         ForEach(sample.errors.keys.sorted(), id: \.self) { key in metricRow(["gpu":"GPU", "cpu":"CPU", "memory":"内存", "filesystems":"文件系统", "disk":"磁盘 I/O", "network":"网络"][key] ?? key, "采集失败") }
-                        HStack { Text("负载 " + sample.load.map { String(format: "%.2f", $0) }.joined(separator: " / ")); Spacer(); TimelineView(.periodic(from: .now, by: 1)) { context in Text("" + Date(timeIntervalSince1970: sample.timestamp).formatted(.dateTime.hour().minute().second()) + (context.date.timeIntervalSince1970 - sample.timestamp > 10 ? " · 数据已延迟" : "")) } }.font(AppFont.secondary).foregroundStyle(.secondary)
+                        HStack { Text("负载 " + sample.load.map { String(format: "%.2f", $0) }.joined(separator: " / ")); Spacer(); SurfaceTimeline(interval: 1) { context in Text("" + Date(timeIntervalSince1970: sample.timestamp).formatted(.dateTime.hour().minute().second()) + (context.date.timeIntervalSince1970 - sample.timestamp > 10 ? " · 数据已延迟" : "")) } }.font(AppFont.secondary).foregroundStyle(.secondary)
                     }.padding(.top, 14)
                 } else if host.enabled { Text(result?.error == nil ? "等待首次采样" : "连接失败").font(AppFont.secondary).foregroundStyle(.secondary).padding(.top, 10) }
                 if let error = result?.error { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn).padding(.top, 6) }
@@ -851,7 +863,7 @@ struct ServerCard: View {
                         if expanded { Text(host.target).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).help(host.target) }
                     }
                     Spacer()
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                    SurfaceTimeline(interval: 1) { context in
                         let label = status(at: context.date)
                         HStack(spacing: 6) { Circle().fill(label == "正常" ? Palette.ok : label == "已暂停" ? Color.gray : label == "连接失败" ? Palette.danger : Palette.warn).frame(width: 6, height: 6); Text(label).font(AppFont.secondary).foregroundStyle(.secondary) }
                     }
@@ -935,12 +947,17 @@ struct ResourceBar: View {
 struct OverlayScrollStyle: NSViewRepresentable {
     final class Anchor: NSView {
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); configure() }
+        private var configurationPending = false
         func configure() {
+            guard !configurationPending else { return }
+            configurationPending = true
             DispatchQueue.main.async { [weak self] in
-                guard let scroll = self?.enclosingScrollView else { return }
-                scroll.scrollerStyle = .overlay
-                scroll.autohidesScrollers = true
-                scroll.drawsBackground = false
+                guard let self else { return }
+                self.configurationPending = false
+                guard let scroll = self.enclosingScrollView else { return }
+                if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
+                if !scroll.autohidesScrollers { scroll.autohidesScrollers = true }
+                if scroll.drawsBackground { scroll.drawsBackground = false }
             }
         }
     }

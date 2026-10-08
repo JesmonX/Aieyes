@@ -92,11 +92,12 @@ actor SessionMonitor {
 struct ActivityIndicator: View {
     var phase: SessionPhase?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.surfaceActive) private var surfaceActive
     var body: some View {
         Image(systemName: phase?.symbol ?? "circle.dotted")
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(phase?.color ?? .secondary)
-            .symbolEffect(.pulse, options: .repeating, isActive: phase?.active == true && !reduceMotion)
+            .symbolEffect(.pulse, options: .repeating, isActive: phase?.active == true && !reduceMotion && surfaceActive)
             .frame(width: 22, height: 22)
             .background((phase?.color ?? .secondary).opacity(0.12), in: Circle())
             .accessibilityLabel(phase?.rawValue ?? "无活跃会话")
@@ -134,4 +135,22 @@ struct BrandMark: View {
         return image
     }
     var body: some View { Image(nsImage: template ? Self.monochrome : Self.full).resizable().scaledToFit().accessibilityLabel("Aieyes") }
+}
+
+private struct SurfaceActiveKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+    var surfaceActive: Bool {
+        get { self[SurfaceActiveKey.self] }
+        set { self[SurfaceActiveKey.self] = newValue }
+    }
+}
+struct SurfaceTimeContext { let date: Date }
+struct SurfaceTimeline<Content: View>: View {
+    var interval: TimeInterval
+    @ViewBuilder var content: (SurfaceTimeContext) -> Content
+    @Environment(\.surfaceActive) private var active
+    var body: some View {
+        if active { TimelineView(.periodic(from: .now, by: interval)) { content(SurfaceTimeContext(date: $0.date)) } }
+        else { content(SurfaceTimeContext(date: .now)) }
+    }
 }

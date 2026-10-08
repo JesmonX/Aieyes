@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var catalog: PriceCatalog
     private var draft: Settings {
         get { model.settingsDraft }
         nonmutating set { model.settingsDraft = newValue }
@@ -10,7 +11,6 @@ struct SettingsView: View {
     @State private var accountEditor: AgentAccount?
     @State private var hostEditor: Host?
     @State private var priceEditor: ModelPrice?
-    @State private var search = ""
     @AppStorage("menu.showCount") private var showMenuCount = false
     @State private var removal: RemovalRequest?
     @State private var confirmDiscardConfig = false
@@ -19,6 +19,7 @@ struct SettingsView: View {
     @FocusState private var mappingFocused: Bool
     @MainActor init(model: AppModel) {
         self.model = model
+        self.catalog = model.priceCatalog
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -53,7 +54,8 @@ struct SettingsView: View {
         .font(AppFont.body).disabled(model.installingUpdate)
         .discardDraftConfirmation($confirmDiscardConfig) { model.discardSettingsDraft() }
         .frame(minWidth: 620, idealWidth: 760, minHeight: 440, idealHeight: 600).tint(Palette.accent)
-        .onAppear { if model.settingsTab == "accounts" { model.settingsTab = "sources" }; if model.settingsTab == "connection" { model.settingsTab = "general" }; Task { await model.loadPrices() }; consumeEditorRequest() }
+        .onAppear { if model.settingsTab == "accounts" { model.settingsTab = "sources" }; if model.settingsTab == "connection" { model.settingsTab = "general" }; consumeEditorRequest() }
+        .task(id: model.settingsTab) { if model.settingsTab == "prices" { await catalog.load() } }
         .onChange(of: model.requestedSourceProvider) { _, _ in consumeEditorRequest() }
         .onChange(of: model.requestedAccountKey) { _, _ in consumeEditorRequest() }
         .onChange(of: model.requestHostEditor) { _, _ in consumeEditorRequest() }
@@ -179,12 +181,8 @@ struct SettingsView: View {
         draft.modelMappings[from] = to
         return true
     }
-    private var filteredPrices: [ModelPrice] {
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.prices.filter { query.isEmpty || $0.id.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query) }
-    }
     private var prices: some View {
-        ScrollViewReader { reader in Form {
+        ScrollViewReader { reader in ScrollView { LazyVStack(alignment: .leading, spacing: 14) {
             Section {
                 Text("价格条目立即生效；映射属于应用配置。“保存并重算”包含当前映射输入。唤醒任务独立保存。").font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 HStack { Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(model.repricing ? "重算中…" : "保存并重算") { Task { await model.saveAndReprice() } }.disabled(model.settingsSaving || model.repricing).accessibilityIdentifier("save-and-reprice") }
@@ -212,14 +210,25 @@ struct SettingsView: View {
                 }.padding(6)
             }.id("model-mapping")
             HStack {
-                TextField("搜索模型", text: $search).textFieldStyle(.roundedBorder)
-                Button("同步 OpenRouter") { Task { await model.syncPrices() } }.disabled(model.busy)
+                TextField("搜索模型", text: $catalog.query).textFieldStyle(.roundedBorder)
+                Button("同步 OpenRouter") { Task { await model.syncPrices() } }.disabled(model.busy || model.quotaBusy)
                 Button("添加价格") { priceEditor = ModelPrice() }
             }
-            Section("模型价格") { ForEach(filteredPrices) { price in
-                HStack { VStack(alignment: .leading, spacing: 4) { Text(price.id).font(AppFont.body); Text("输入 \(price.input.map { Format.money($0 * 1e6) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1e6) } ?? "—") / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button("一键映射") { mappingID = price.id; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }; Button("编辑") { priceEditor = price } }
-            } }.overlay { if filteredPrices.isEmpty { Text(search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步模型价格" : "无匹配模型").foregroundStyle(.secondary) } }
-        }.formStyle(.grouped).textFieldStyle(.roundedBorder) }
+            HStack {
+                Text("模型价格 · \(catalog.filtered.count) 项").font(AppFont.section)
+                Spacer()
+                if catalog.loading { ProgressView().controlSize(.small); Text("读取本地价格…").font(AppFont.secondary) }
+            }
+            if let error = catalog.error {
+                HStack { Text(error).foregroundStyle(Palette.warn); Spacer(); Button("重试读取") { Task { await catalog.load(force: true) } } }.font(AppFont.secondary)
+            }
+            ForEach(catalog.filtered) { price in
+                PriceCatalogRow(price: price, map: { mappingID = price.id; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }, edit: { priceEditor = price }).equatable()
+            }
+            if !catalog.loading && catalog.error == nil && catalog.filtered.isEmpty {
+                Text(catalog.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步模型价格" : "无匹配模型").foregroundStyle(.secondary).frame(maxWidth: .infinity).padding()
+            }
+        }.padding(16) }.textFieldStyle(.roundedBorder) }
     }
     private var general: some View {
         Form {
@@ -246,6 +255,24 @@ struct SettingsView: View {
             }
             Section("更新") { UpdateSettingsView() }
         }.formStyle(.grouped)
+    }
+}
+
+struct PriceCatalogRow: View, Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.price == rhs.price }
+    let price: ModelPrice
+    var map: () -> Void
+    var edit: () -> Void
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(price.id).font(AppFont.body)
+                Text("输入 \(price.input.map { Format.money($0 * 1e6) } ?? "—") · 输出 \(price.output.map { Format.money($0 * 1e6) } ?? "—") / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("一键映射", action: map)
+            Button("编辑", action: edit).accessibilityLabel("编辑价格 " + price.id)
+        }.padding(12).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
