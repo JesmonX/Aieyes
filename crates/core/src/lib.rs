@@ -4,6 +4,7 @@ pub mod capacity;
 pub mod codex_auth;
 pub mod credentials;
 pub mod estimates;
+pub mod file_lock;
 pub mod import;
 pub mod metrics;
 pub mod models;

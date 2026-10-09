@@ -1,5 +1,5 @@
 //! Per-account polling shared by all UI windows and engine lanes.
-use crate::{Engine, models::Account};
+use crate::{Engine, file_lock::FileLock, models::Account};
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
@@ -47,12 +47,11 @@ impl Engine {
                 .truncate(false)
                 .write(true)
                 .open(root.join(format!("quota-{filename}.lock")))?;
-            if let Err(error) = lock.try_lock() {
-                if matches!(error, std::fs::TryLockError::WouldBlock) {
-                    continue;
-                }
-                return Err(error.into());
-            }
+            let _lock = match FileLock::try_exclusive(lock) {
+                Ok(lock) => lock,
+                Err(std::fs::TryLockError::WouldBlock) => continue,
+                Err(error) => return Err(error.into()),
+            };
             let attempt_key = format!("quota-attempt:{key}");
             let last: Option<i64> = self
                 .store
@@ -129,7 +128,9 @@ mod tests {
             .write(true)
             .open(root.path().join(format!("quota-{filename}.lock")))
             .unwrap();
-        lock.try_lock().unwrap();
+        // Model a descriptor inherited by a subprocess started by a parallel test.
+        let _inherited_lock = lock.try_clone().unwrap();
+        let lock = FileLock::try_exclusive(lock).unwrap();
         assert!(
             engine
                 .call("quotas.refresh", json!({"accountKey":"custom:fast"}))

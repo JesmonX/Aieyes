@@ -87,7 +87,7 @@ pub fn task_uses(account: &Account, settings: &Settings, record: &crate::wakeups
                 || (d.source.provider == account.provider && d.source.account_id == account.id)
         })
 }
-pub fn lock_tasks(store: &Store) -> Result<std::fs::File> {
+pub fn lock_tasks(store: &Store) -> Result<crate::file_lock::FileLock> {
     let root = std::path::Path::new(store.db.path().context("数据目录不可用")?)
         .parent()
         .context("数据目录不可用")?;
@@ -96,9 +96,8 @@ pub fn lock_tasks(store: &Store) -> Result<std::fs::File> {
         .truncate(false)
         .write(true)
         .open(root.join("account-tasks.lock"))?;
-    file.try_lock()
-        .map_err(|_| anyhow::anyhow!("有账户任务正在部署或删除，请稍后重试"))?;
-    Ok(file)
+    crate::file_lock::FileLock::try_exclusive(file)
+        .map_err(|_| anyhow::anyhow!("有账户任务正在部署或删除，请稍后重试"))
 }
 pub fn ensure_not_deleting(store: &Store, account: &Account) -> Result<()> {
     ensure!(

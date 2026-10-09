@@ -140,7 +140,7 @@ pub fn atomic(path: &Path, value: &Value) -> Result<()> {
     let _ = fs::remove_file(&temp);
     result.map_err(|_| anyhow::anyhow!("无法安全保存凭据或管理记录"))
 }
-pub fn lock(root: &Path) -> Result<File> {
+pub fn lock(root: &Path) -> Result<crate::file_lock::FileLock> {
     let state = root.join(".aieyes/state");
     private_dir(&state)?;
     let path = state.join("coordinator.lock");
@@ -153,9 +153,8 @@ pub fn lock(root: &Path) -> Result<File> {
         options.mode(0o600);
     }
     let f = options.open(path)?;
-    f.try_lock()
-        .map_err(|_| anyhow::anyhow!("此 Codex 目录有正在执行的账号操作，请稍后重试"))?;
-    Ok(f)
+    crate::file_lock::FileLock::try_exclusive(f)
+        .map_err(|_| anyhow::anyhow!("此 Codex 目录有正在执行的账号操作，请稍后重试"))
 }
 fn claims(token: &str) -> Value {
     token

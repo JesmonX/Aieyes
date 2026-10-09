@@ -311,7 +311,7 @@ fn login(
     device: bool,
     replacement: Option<Profile>,
     before: Value,
-    _lock: std::fs::File,
+    _lock: crate::file_lock::FileLock,
 ) {
     let profile = files::new_id();
     let result = (|| -> Result<Value> {
