@@ -302,13 +302,20 @@ struct AccountsSettingsView: View {
     @ViewBuilder private var cleanupSection: some View {
         if !cleanup.isEmpty {
             Section("已解除管理的远端任务") {
-                ForEach(cleanup) { row in
-                    DisclosureGroup(row.name + " · 远端可能仍在运行") {
-                        ForEach(row.tasks) { task in Text(task.name + " · " + task.machine + " · " + (task.root ?? "")).textSelection(.enabled) }
-                    }
-                }
+                ForEach(cleanup) { record in cleanupRecord(record) }
             }
         }
+    }
+    private func cleanupRecord(_ record: AccountCleanupRecord) -> some View {
+        DisclosureGroup {
+            ForEach(record.tasks) { task in cleanupTask(task) }
+        } label: {
+            Text("\(record.name) · 远端可能仍在运行")
+        }
+    }
+    private func cleanupTask(_ task: AccountCleanupTask) -> some View {
+        let description: String = "\(task.name) · \(task.machine) · \(task.root ?? "")"
+        return Text(description).textSelection(.enabled)
     }
     private func restore(_ account: AgentAccount) {
         Task {
