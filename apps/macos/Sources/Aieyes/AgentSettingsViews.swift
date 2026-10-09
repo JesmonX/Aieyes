@@ -225,70 +225,98 @@ struct AccountsSettingsView: View {
     @State private var cleanup: [AccountCleanupRecord] = []
     @State private var sourceToManage: AgentSource?
     @State private var authIntent = "login"
+    private var visibleAgents: [AgentConfiguration] {
+        model.agentConfigurations.filter { config in
+            config.enabled || model.settings.accounts.contains { $0.provider == config.provider && $0.archived != true }
+        }
+    }
+    private var archivedAccounts: [AgentAccount] { model.settings.accounts.filter { $0.archived == true } }
     var body: some View {
         Form {
-            Section {
-                HStack {
-                    Spacer()
-                    Button(model.accountStatusBusy ? "检查中…" : "刷新设备状态") { Task { await model.loadAccountStatuses(refresh: true) } }.disabled(model.accountStatusBusy)
-                }
-                Text("一个账户就是一个实际账号，可在多台机器登录。“已登录”表示机器保存了该账号的登录；“使用中”表示当前选用该账号。离线状态以上次检查为准。").font(AppFont.secondary).foregroundStyle(.secondary)
-                if let message = model.deploymentSyncMessage { HStack { Text(message); Button("重试同步") { model.synchronizeAccountDeployments() } } }
-            }
-            ForEach(model.agentConfigurations.filter { config in config.enabled || model.settings.accounts.contains { $0.provider == config.provider && $0.archived != true } }) { agent in
-                Section {
-                    HStack {
-                        Label { Text(Format.provider(agent.provider)).font(AppFont.section) } icon: { ProviderMark(provider: agent.provider) }
-                        Spacer()
-                        Button("添加账户", systemImage: "plus") { adding = agent }.disabled(!agent.enabled)
-                    }
-                    ForEach(model.settings.accounts.filter { $0.provider == agent.provider && $0.archived != true }, id: \.key) { account in
-                        HStack {
-                            VStack(alignment: .leading) { Text(account.name); Text(model.accountCounts(account)).font(AppFont.secondary).foregroundStyle(.secondary) }
-                            Spacer(); Button("设置") { selectedAccount = account }
-                        }
-                    }
-                    if !model.settings.accounts.contains(where: { $0.provider == agent.provider && $0.archived != true }) { Text("尚未添加账户").foregroundStyle(.secondary) }
-                    Divider()
-                    ForEach(model.accountMachineIDs(agent.provider), id: \.self) { machine in
-                        HStack {
-                            Text(model.machineName(machine)); Spacer()
-                            Text(currentAccount(agent.provider, machine: machine)).font(AppFont.secondary).foregroundStyle(.secondary)
-                            if agent.provider == "codex", let source = managementSource(agent.provider, machine: machine) {
-                                let loggedIn = model.accountStatuses.contains { $0.accountKey.hasPrefix("codex:") && $0.sourceId == source.id && ($0.current == true || $0.credential == true) }
-                                if loggedIn { Button("切换账户") { authIntent = "switch"; sourceToManage = source } }
-                                else { Button("登录") { authIntent = "login"; sourceToManage = source } }
-                            }
-                        }
-                    }
-                }
-            }
-            if model.settings.accounts.contains(where: { $0.archived == true }) {
-                Section("已归档账户") {
-                    ForEach(model.settings.accounts.filter { $0.archived == true }, id: \.key) { account in
-                        HStack {
-                            Text(Format.provider(account.provider) + " · " + account.name); Spacer()
-                            Button("恢复") { Task { var next = model.settings; if let index = next.accounts.firstIndex(where: { $0.key == account.key }) { next.accounts[index].archived = false }; do { try await model.persistConfiguration(next) } catch { model.settingsMessage = error.localizedDescription } } }
-                            Button("删除账户", role: .destructive) { deleting = account }
-                        }
-                    }
-                }
-            }
-            if !cleanup.isEmpty {
-                Section("已解除管理的远端任务") {
-                    ForEach(cleanup) { row in
-                        DisclosureGroup(row.name + " · 远端可能仍在运行") {
-                            ForEach(row.tasks) { task in Text(task.name + " · " + task.machine + " · " + (task.root ?? "")).textSelection(.enabled) }
-                        }
-                    }
-                }
-            }
+            statusSection
+            ForEach(visibleAgents) { agent in agentSection(agent) }
+            archivedSection
+            cleanupSection
         }.formStyle(.grouped)
         .task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? []; await model.loadAccountStatuses(refresh: true) }
         .sheet(item: $adding, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { agent in AccountConnectionView(model: model, initialProvider: agent.provider) }
         .sheet(item: $selectedAccount) { account in AccountDevicesView(model: model, account: account) }
         .sheet(item: $sourceToManage, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { source in AccountConnectionView(model: model, initialSourceID: source.id, intent: authIntent) }
         .sheet(item: $deleting, onDismiss: { Task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? [] } }) { account in DeleteArchivedAccountView(model: model, account: account) }
+    }
+    private var statusSection: some View {
+        Section {
+            HStack {
+                Spacer()
+                Button(model.accountStatusBusy ? "检查中…" : "刷新设备状态") { Task { await model.loadAccountStatuses(refresh: true) } }.disabled(model.accountStatusBusy)
+            }
+            Text("一个账户就是一个实际账号，可在多台机器登录。“已登录”表示机器保存了该账号的登录；“使用中”表示当前选用该账号。离线状态以上次检查为准。").font(AppFont.secondary).foregroundStyle(.secondary)
+            if let message = model.deploymentSyncMessage { HStack { Text(message); Button("重试同步") { model.synchronizeAccountDeployments() } } }
+        }
+    }
+    private func agentSection(_ agent: AgentConfiguration) -> some View {
+        let accounts = model.settings.accounts.filter { $0.provider == agent.provider && $0.archived != true }
+        return Section {
+            HStack {
+                Label { Text(Format.provider(agent.provider)).font(AppFont.section) } icon: { ProviderMark(provider: agent.provider) }
+                Spacer()
+                Button("添加账户", systemImage: "plus") { adding = agent }.disabled(!agent.enabled)
+            }
+            ForEach(accounts, id: \.key) { account in
+                HStack {
+                    VStack(alignment: .leading) { Text(account.name); Text(model.accountCounts(account)).font(AppFont.secondary).foregroundStyle(.secondary) }
+                    Spacer(); Button("设置") { selectedAccount = account }
+                }
+            }
+            if accounts.isEmpty { Text("尚未添加账户").foregroundStyle(.secondary) }
+            Divider()
+            ForEach(model.accountMachineIDs(agent.provider), id: \.self) { machine in
+                machineRow(agent, machine: machine)
+            }
+        }
+    }
+    private func machineRow(_ agent: AgentConfiguration, machine: String) -> some View {
+        HStack {
+            Text(model.machineName(machine)); Spacer()
+            Text(currentAccount(agent.provider, machine: machine)).font(AppFont.secondary).foregroundStyle(.secondary)
+            if agent.provider == "codex", let source = managementSource(agent.provider, machine: machine) {
+                let loggedIn = model.accountStatuses.contains { $0.accountKey.hasPrefix("codex:") && $0.sourceId == source.id && ($0.current == true || $0.credential == true) }
+                if loggedIn { Button("切换账户") { authIntent = "switch"; sourceToManage = source } }
+                else { Button("登录") { authIntent = "login"; sourceToManage = source } }
+            }
+        }
+    }
+    @ViewBuilder private var archivedSection: some View {
+        if !archivedAccounts.isEmpty {
+            Section("已归档账户") {
+                ForEach(archivedAccounts, id: \.key) { account in
+                    HStack {
+                        Text(Format.provider(account.provider) + " · " + account.name); Spacer()
+                        Button("恢复") { restore(account) }
+                        Button("删除账户", role: .destructive) { deleting = account }
+                    }
+                }
+            }
+        }
+    }
+    @ViewBuilder private var cleanupSection: some View {
+        if !cleanup.isEmpty {
+            Section("已解除管理的远端任务") {
+                ForEach(cleanup) { row in
+                    DisclosureGroup(row.name + " · 远端可能仍在运行") {
+                        ForEach(row.tasks) { task in Text(task.name + " · " + task.machine + " · " + (task.root ?? "")).textSelection(.enabled) }
+                    }
+                }
+            }
+        }
+    }
+    private func restore(_ account: AgentAccount) {
+        Task {
+            var next = model.settings
+            if let index = next.accounts.firstIndex(where: { $0.key == account.key }) { next.accounts[index].archived = false }
+            do { try await model.persistConfiguration(next) }
+            catch { model.settingsMessage = error.localizedDescription }
+        }
     }
     private func managementSource(_ provider: String, machine: String) -> AgentSource? {
         let sources = model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && $0.enabled }
@@ -435,18 +463,48 @@ struct DeleteArchivedAccountView: View {
     @State private var loaded = false
     @State private var force = false
     @State private var error: String?
+    private var visibleTasks: [AccountCleanupTask] { failed.isEmpty ? tasks : failed }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("删除归档账户「" + account.name + "」").font(AppFont.title)
             Text("账户配置与关联任务将移除；历史记录和机器上的凭证保留，不退出 Agent。")
-            ScrollView { VStack(alignment: .leading) { ForEach(failed.isEmpty ? tasks : failed) { task in Text(task.name + " · " + task.machine + (task.error.map { " · " + $0 } ?? "")) } } }
-            if !tasks.isEmpty { Toggle("强制删除（设备已弃用或无法连接）", isOn: $force).disabled(busy) }
-            if force { Text("无法保证远端任务停止。强制删除后将解除本地管理，不再自动重试；未清理设备和部署位置会保留供查看。").foregroundStyle(Palette.warn) }
-            if let error { Text(error).foregroundStyle(Palette.warn) }
-            if busy { ProgressView("正在清理关联任务…") }
-            HStack { Button("取消") { dismiss() }.disabled(busy); Spacer(); Button(force ? "确认强制删除" : "停止任务并删除账户", role: .destructive) { remove() }.disabled(busy || !loaded) }
+            taskList
+            deletionStatus
+            deletionControls
         }.padding(24).frame(width: 600, height: 430).interactiveDismissDisabled(busy)
-        .task { do { let result: AccountDeletionPreview = try await model.engine.call("accounts.deletion.preview", params: ["accountKey":account.key]); tasks = result.tasks; loaded = true } catch { self.error = error.localizedDescription } }
+        .task { await loadPreview() }
+    }
+    private var taskList: some View {
+        ScrollView {
+            VStack(alignment: .leading) {
+                ForEach(visibleTasks) { task in Text(taskDescription(task)) }
+            }
+        }
+    }
+    private func taskDescription(_ task: AccountCleanupTask) -> String {
+        let location = task.name + " · " + task.machine
+        guard let error = task.error else { return location }
+        return location + " · " + error
+    }
+    @ViewBuilder private var deletionStatus: some View {
+        if !tasks.isEmpty { Toggle("强制删除（设备已弃用或无法连接）", isOn: $force).disabled(busy) }
+        if force { Text("无法保证远端任务停止。强制删除后将解除本地管理，不再自动重试；未清理设备和部署位置会保留供查看。").foregroundStyle(Palette.warn) }
+        if let error { Text(error).foregroundStyle(Palette.warn) }
+        if busy { ProgressView("正在清理关联任务…") }
+    }
+    private var deletionControls: some View {
+        HStack {
+            Button("取消") { dismiss() }.disabled(busy)
+            Spacer()
+            Button(force ? "确认强制删除" : "停止任务并删除账户", role: .destructive) { remove() }.disabled(busy || !loaded)
+        }
+    }
+    private func loadPreview() async {
+        do {
+            let result: AccountDeletionPreview = try await model.engine.call("accounts.deletion.preview", params: ["accountKey": account.key])
+            tasks = result.tasks
+            loaded = true
+        } catch { self.error = error.localizedDescription }
     }
     private func remove() {
         busy = true; error = nil
