@@ -98,7 +98,24 @@ def call(m, args, cwd=None, timeout=20):
         raise ValueError('CLI 调用超时')
 
 
+def auth_helper():
+    global _AUTH_HELPER
+    if '_AUTH_HELPER' not in globals():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('aieyes_codex_auth', pathlib.Path(__file__).with_name('codex_auth.py'))
+        _AUTH_HELPER = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_AUTH_HELPER)
+    return _AUTH_HELPER
+
+
+def auth_location(m):
+    return dict(path=m['configPath'], binary=m['binary'], proxy=m.get('proxy'))
+
+
 def codex_rpc(m, method, params):
+    if m.get('codexProfileId'):
+        info = auth_helper().call(dict(version=1, location=auth_location(m), method='model.list', params=dict(profileId=m['codexProfileId'].split(':', 1)[1])))
+        return info['models'] if method == 'model/list' else info
     env = dict(os.environ, CODEX_HOME=m['configPath'])
     for key in CLEAR_ENV:
         env.pop(key, None)
@@ -166,7 +183,7 @@ def auth(m):
         v = json.loads(call(m, ['auth', 'status']))
         if not v.get('loggedIn') or v.get('authMethod') not in ('claude.ai', 'oauth_token'):
             raise ValueError('目标 Claude CLI 未使用订阅登录')
-    if m['provider'] == 'agy':
+    if m['provider'] in ('agy', 'antigravity'):
         if pathlib.Path(m['configPath']) != pathlib.Path.home() / '.gemini/antigravity-cli':
             raise ValueError('agy 唤醒仅支持目标用户的默认登录目录')
         rows = [json.loads(l) for l in call(m, ['--print', '/usage', '--output-format', 'json', '--print-timeout', '20s'], timeout=25).splitlines() if l.startswith('{')]
@@ -191,7 +208,7 @@ def probe(m):
             models.append({'id': row.get('model') or row.get('id'), 'efforts': [v['reasoningEffort'] for v in row.get('supportedReasoningEfforts', [])], 'defaultEffort': row.get('defaultReasoningEffort')})
     elif m['provider'] == 'claude' and ('--safe-mode' not in help_text or '--tools' not in help_text):
         raise ValueError('请升级 Claude Code CLI')
-    if m['provider'] == 'agy':
+    if m['provider'] in ('agy', 'antigravity'):
         for line in call(m, ['models']).splitlines():
             if '\t' not in line:
                 continue
@@ -267,7 +284,14 @@ def tick(root, manual=None):
             cwd = root / 'work' / m['id']
             private_dir(cwd)
             auth(m)
-            output = call(m, m['args'], cwd, 120)
+            if m.get('codexProfileId'):
+                with auth_helper().with_credentials(auth_location(m), m['codexProfileId'].split(':', 1)[1]) as managed:
+                    bound = dict(m, configPath=str(managed))
+                    output = call(bound, bound['args'], cwd, 120)
+            else:
+                if m['provider'] == 'codex' and (pathlib.Path(m['configPath']) / '.aieyes/state/home.json').exists():
+                    raise ValueError('旧唤醒任务需绑定账号后重新部署')
+                output = call(m, m['args'], cwd, 120)
             rows = []
             for line in output.splitlines():
                 try:
@@ -312,6 +336,11 @@ def history(root, identifier):
 
 
 def manage(request):
+    global _AUTH_HELPER
+    if request.get('authHelper'):
+        import types
+        _AUTH_HELPER = types.ModuleType('aieyes_codex_auth')
+        exec(compile(request['authHelper'], '<aieyes-codex-auth>', 'exec'), _AUTH_HELPER.__dict__)
     action = request['action']
     if action == 'probe':
         return probe(request['manifest'])
@@ -329,6 +358,8 @@ def manage(request):
         script = root / 'runner.py'
         old_script = script.read_text() if script.exists() else None
         atomic(script, request['script'])
+        if request.get('authHelper'):
+            atomic(root / 'codex_auth.py', request['authHelper'])
         path = root / 'tasks' / (m['id'] + '.json')
         old = path.read_text() if path.exists() else None
         atomic(path, json.dumps(m))

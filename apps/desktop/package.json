@@ -2,7 +2,8 @@
   "name": "aieyes-desktop-checks",
   "private": true,
   "scripts": {
-    "test:ui": "node ../../scripts/test-reset-display.cjs && node ../../scripts/test-server-summary.cjs && node ../../scripts/test-ui.cjs && node ../../scripts/test-ui-review.cjs && node ../../scripts/test-quota-ui.cjs && node ../../scripts/test-updates-ui.cjs && node ../../scripts/test-credits-wakeups-ui.cjs && node ../../scripts/test-ui-reform.cjs && node ../../scripts/test-improvements-ui.cjs && node ../../scripts/test-ui-audit.cjs && node ../../scripts/test-sampling-theme-ui.cjs"
+    "test:theme": "node ../../scripts/test-theme-sync-ui.cjs",
+    "test:ui": "node ../../scripts/test-codex-auth-ui.cjs && node ../../scripts/test-reset-display.cjs && node ../../scripts/test-server-summary.cjs && node ../../scripts/test-ui.cjs && node ../../scripts/test-ui-review.cjs && node ../../scripts/test-quota-ui.cjs && node ../../scripts/test-antigravity-ui.cjs && node ../../scripts/test-updates-ui.cjs && node ../../scripts/test-credits-wakeups-ui.cjs && node ../../scripts/test-ui-reform.cjs && node ../../scripts/test-improvements-ui.cjs && node ../../scripts/test-ui-audit.cjs && node ../../scripts/test-sampling-theme-ui.cjs"
   },
   "devDependencies": {
     "playwright": "1.62.0"

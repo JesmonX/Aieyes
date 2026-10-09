@@ -34,8 +34,9 @@ impl Store {
         CREATE TABLE IF NOT EXISTS credit_estimates(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL);
         CREATE UNIQUE INDEX IF NOT EXISTS credit_estimate_active ON credit_estimates(account_key) WHERE status IN ('active','pending');
         CREATE TABLE IF NOT EXISTS capacity_samples(account_key TEXT NOT NULL,stamp INTEGER NOT NULL,five REAL NOT NULL,week REAL NOT NULL,PRIMARY KEY(account_key,stamp));
-        PRAGMA user_version=5;")?;
+        ")?;
         let store = Self { db };
+        store.migrate_antigravity()?;
         store.bootstrap_capacity()?;
         Ok(store)
     }
@@ -49,7 +50,22 @@ impl Store {
         match raw {
             Some(s) => {
                 let mut settings: Settings = serde_json::from_str(&s)?;
-                settings.migrate();
+                crate::providers::normalize_settings(&mut settings);
+                let mut stmt = self
+                    .db
+                    .prepare("SELECT value FROM kv WHERE key LIKE 'deleted-account:%'")?;
+                let values = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                settings.deleted_accounts = values
+                    .iter()
+                    .map(|raw| {
+                        let mut account: Account = serde_json::from_str(raw)?;
+                        account.archived = true;
+                        account.quota_enabled = false;
+                        Ok(account)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 Ok(settings)
             }
             None => {
@@ -57,7 +73,11 @@ impl Store {
                 for (provider, name, dir) in [
                     ("codex", "Codex · 本机", ".codex"),
                     ("claude", "Claude Code · 本机", ".claude"),
-                    ("agy", "agy · 本机", ".gemini/antigravity-cli"),
+                    (
+                        "antigravity",
+                        "Antigravity · 本机",
+                        ".gemini/antigravity-cli",
+                    ),
                 ] {
                     let root = home().join(dir);
                     if root.is_dir() {
@@ -71,13 +91,19 @@ impl Store {
                         });
                     }
                 }
-                settings.migrate();
+                crate::providers::normalize_settings(&mut settings);
                 self.save_settings(&settings)?;
                 Ok(settings)
             }
         }
     }
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
+        self.save_settings_checked(s, false)
+    }
+    pub(crate) fn save_auth_settings(&self, s: &Settings) -> Result<()> {
+        self.save_settings_checked(s, true)
+    }
+    fn save_settings_checked(&self, s: &Settings, verified_auth_change: bool) -> Result<()> {
         anyhow::ensure!(
             ["system", "light", "dark"].contains(&s.appearance.theme.as_str()),
             "无效的外观主题"
@@ -86,9 +112,32 @@ impl Store {
             ["indigo", "blue", "teal", "purple"].contains(&s.appearance.accent.as_str()),
             "无效的强调色"
         );
-        self.check_wakeup_settings(s)?;
         let mut normalized = s.clone();
-        normalized.migrate();
+        crate::providers::normalize_settings(&mut normalized);
+        let previous: Option<String> = self
+            .db
+            .query_row("SELECT value FROM kv WHERE key='settings'", [], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        let previous = previous
+            .map(|raw| serde_json::from_str::<Settings>(&raw))
+            .transpose()?;
+        if !verified_auth_change {
+            for account in &mut normalized.accounts {
+                if previous.as_ref().is_some_and(|old| {
+                    old.accounts.iter().any(|a| {
+                        a.provider == account.provider
+                            && a.id == account.id
+                            && a.name != account.name
+                    })
+                }) {
+                    account.pending_name = false;
+                }
+            }
+        }
+        crate::codex_auth::validate_settings(&normalized)?;
+        self.check_wakeup_settings(&normalized)?;
         let s = &normalized;
         let mut ids = std::collections::HashSet::new();
         for h in &s.hosts {
@@ -124,16 +173,29 @@ impl Store {
         }
         for account in &s.accounts {
             anyhow::ensure!(
+                account
+                    .quota_refresh_seconds
+                    .is_none_or(|n| (30..=86400).contains(&n)),
+                "账户查询间隔范围为 30–86400 秒"
+            );
+            anyhow::ensure!(
                 !account.id.trim().is_empty()
                     && ids.insert(format!("account:{}:{}", account.provider, account.id)),
                 "账户标识重复或为空"
             );
             anyhow::ensure!(!account.name.trim().is_empty(), "请输入账户名称");
+            let mut devices = std::collections::HashSet::new();
+            for device in &account.device_settings {
+                anyhow::ensure!(
+                    !device.machine_id.is_empty() && devices.insert(&device.machine_id),
+                    "账户设备设置重复或缺少设备"
+                );
+            }
             if let Some(id) = &account.quota_source_id {
                 anyhow::ensure!(
                     s.sources.iter().any(|src| &src.id == id
                         && src.provider == account.provider
-                        && src.account_id == account.id),
+                        && account.uses_source(src)),
                     "限额查询位置需关联此账户"
                 );
             }
@@ -151,7 +213,7 @@ impl Store {
                 "请选择同一 Agent 的账户，或选择无账户"
             );
             anyhow::ensure!(
-                ["agy", "deepseek"].contains(&source.provider.as_str())
+                ["antigravity", "agy", "deepseek"].contains(&source.provider.as_str())
                     || !source.path.trim().is_empty(),
                 "请输入数据目录"
             );
@@ -207,15 +269,6 @@ impl Store {
             (2..=86400).contains(&s.server_refresh_seconds),
             "服务器刷新间隔范围为 2–86400 秒"
         );
-        let previous: Option<String> = self
-            .db
-            .query_row("SELECT value FROM kv WHERE key='settings'", [], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        let previous = previous
-            .map(|raw| serde_json::from_str::<Settings>(&raw))
-            .transpose()?;
         let changed_models: Vec<String> = s
             .model_mappings
             .keys()
@@ -242,11 +295,29 @@ impl Store {
             })
             .map(|h| h.password_ref.clone())
             .collect();
-        let tx = self.db.unchecked_transaction()?;
+        let transaction = if self.db.is_autocommit() {
+            Some(self.db.unchecked_transaction()?)
+        } else {
+            None
+        };
+        let tx = &self.db;
         if let Some(previous) = previous {
             // Archiving retains the namespace used to deduplicate imported records.
             // Protect history from destructive deletion by older clients as well.
             for account in &previous.accounts {
+                if let Some(next) = s
+                    .accounts
+                    .iter()
+                    .find(|a| a.id == account.id && a.provider == account.provider)
+                {
+                    anyhow::ensure!(
+                        verified_auth_change
+                            || account.profile_refs().is_empty()
+                            || (account.quota_profile_id == next.quota_profile_id
+                                && account.profile_refs() == next.profile_refs()),
+                        "账号档案关联已改变，请重新读取配置并通过账号管理修改"
+                    );
+                }
                 if !s
                     .accounts
                     .iter()
@@ -257,11 +328,31 @@ impl Store {
                         params![account.provider, account.id],
                         |row| row.get(0),
                     )?;
-                    anyhow::ensure!(!has_history, "该账户存在历史记录，请归档账户以保留历史");
+                    let explicit_removal: bool = tx.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM kv WHERE key=?1)",
+                        [format!(
+                            "deleted-account:{}:{}",
+                            account.provider, account.id
+                        )],
+                        |r| r.get(0),
+                    )?;
+                    anyhow::ensure!(
+                        !has_history || (verified_auth_change && explicit_removal),
+                        "该账户存在历史记录，请归档账户以保留历史"
+                    );
                 }
             }
             for source in &s.sources {
                 if let Some(old) = previous.sources.iter().find(|old| old.id == source.id) {
+                    if old.codex_home_id.is_some() {
+                        anyhow::ensure!(
+                            old.codex_home_id == source.codex_home_id
+                                && old.path == source.path
+                                && old.host_id == source.host_id
+                                && old.provider == source.provider,
+                            "受管理 Codex 来源的 home 与路径不能通过普通配置覆盖，请使用账号管理"
+                        );
+                    }
                     if old.provider != source.provider {
                         tx.execute("DELETE FROM event_sources WHERE source_id=?1", [&source.id])?;
                         tx.execute("DELETE FROM events WHERE NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=events.id)", [])?;
@@ -287,9 +378,36 @@ impl Store {
         if !changed_models.is_empty() {
             self.reprice_in_transaction(s, true, Some(&changed_models))?;
         }
+        // Mark installed jobs dirty locally; network updates run on a separate lane.
+        for mut record in self.wakeups()? {
+            if let Some(deployed) = &record.deployment
+                && let Some(source) = s.sources.iter().find(|v| v.id == deployed.source.id)
+            {
+                let current_account = s.accounts.iter().find(|a| {
+                    a.provider == deployed.source.provider && a.id == deployed.source.account_id
+                });
+                let previous_command = crate::accounts::pre_command(
+                    &Settings {
+                        hosts: deployed.host.clone().into_iter().collect(),
+                        ..Default::default()
+                    },
+                    None,
+                    &deployed.source,
+                );
+                if crate::accounts::pre_command(s, current_account, source) != previous_command
+                    && deployed.state != "pending-removal"
+                {
+                    record.deployment.as_mut().unwrap().state = "settings-pending".into();
+                    self.save_wakeup(&record)?;
+                }
+            }
+        }
         self.reconcile_estimates(s)?;
-        tx.commit()?;
-        for reference in obsolete {
+        let owns_transaction = transaction.is_some();
+        if let Some(transaction) = transaction {
+            transaction.commit()?;
+        }
+        for reference in obsolete.into_iter().filter(|_| owns_transaction) {
             let _ = crate::credentials::delete(&reference);
         }
         Ok(())
@@ -320,22 +438,46 @@ impl Store {
     ) -> Result<bool> {
         let mut next = e.clone();
         if let Some(identity) = &e.import_identity {
-            let mut query = self.db.prepare("SELECT account_id FROM source_identities WHERE source_id=?1 AND provider=?2 ORDER BY rowid")?;
+            let mut query = self.db.prepare("SELECT provider,account_id FROM source_identities WHERE source_id=?1 AND (provider=?2 OR (?2='antigravity' AND provider='agy')) ORDER BY rowid")?;
             let scopes = query
                 .query_map(params![e.source_id, e.provider], |row| {
-                    row.get::<_, String>(0)
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             // Only reuse an event previously observed by this source. Unrelated
             // no-account sources and separate accounts keep independent identities.
-            for account_id in scopes {
-                let id = crate::usage::event_id(&e.provider, &e.source_id, &account_id, identity);
+            for (provider, account_id) in scopes {
+                let id = crate::usage::event_id(&provider, &e.source_id, &account_id, identity);
                 let observed: bool = self.db.query_row(
                     "SELECT EXISTS(SELECT 1 FROM event_sources WHERE event_id=?1 AND source_id=?2)",
                     params![id, e.source_id],
                     |row| row.get(0),
                 )?;
                 if observed {
+                    next.id = id;
+                    break;
+                }
+            }
+        }
+        // A newly added copy of a migrated account also uses its legacy hash namespace.
+        if next.id == e.id
+            && crate::providers::antigravity(&e.provider)
+            && !e.account_id.is_empty()
+            && let Some(identity) = &e.import_identity
+        {
+            let canonical_key = format!("antigravity:{}", e.account_id);
+            for (legacy, canonical) in &settings.account_aliases {
+                if canonical != &canonical_key {
+                    continue;
+                }
+                let Some(account) = legacy.strip_prefix("agy:") else {
+                    continue;
+                };
+                let id = crate::usage::event_id("agy", &e.source_id, account, identity);
+                let exists: bool = self.db.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM events WHERE id=?1 AND provider='antigravity' AND account_id=?2)",
+                        params![id, e.account_id], |r| r.get(0))?;
+                if exists {
                     next.id = id;
                     break;
                 }
@@ -564,14 +706,24 @@ impl Store {
             .earliest()
             .map(|v| v.timestamp())
             .unwrap_or(now() - 366 * 86400);
-        let mut query=self.db.prepare("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<=?2 AND (?3 IS NULL OR provider=?3) AND (?4 IS NULL OR account_id=?4) AND (?5 IS NULL OR model=?5) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
+        let settings = self.settings()?;
+        let shared = serde_json::to_string(
+            &settings
+                .sources
+                .iter()
+                .filter(|s| s.codex_home_id.is_some())
+                .map(|s| &s.id)
+                .collect::<Vec<_>>(),
+        )?;
+        let mut query=self.db.prepare("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<=?2 AND (?3 IS NULL OR provider=?3) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7))))) AND (?5 IS NULL OR model=?5) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
         let mut rows = query.query(params![
             from,
             now(),
             f.provider,
             f.account_id,
             f.model,
-            f.source_id
+            f.source_id,
+            shared
         ])?;
         let mut d = Dashboard {
             generated_at: now(),
@@ -584,7 +736,7 @@ impl Store {
             .unwrap_or(from);
         let mut options = self.db.prepare(
             "SELECT DISTINCT model FROM events e WHERE stamp>=?1 AND stamp<=?2
-             AND (?3 IS NULL OR provider=?3) AND (?4 IS NULL OR account_id=?4)
+             AND (?3 IS NULL OR provider=?3) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))))
              AND (?5 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?5))
              ORDER BY model",
         )?;
@@ -595,7 +747,8 @@ impl Store {
                     d.generated_at,
                     f.provider,
                     f.account_id,
-                    f.source_id
+                    f.source_id,
+                    shared
                 ],
                 |row| row.get(0),
             )?
@@ -736,9 +889,7 @@ impl Store {
             let linked: Vec<_> = settings
                 .sources
                 .iter()
-                .filter(|s| {
-                    s.enabled && s.provider == account.provider && s.account_id == account.id
-                })
+                .filter(|s| s.enabled && account.uses_source(s))
                 .collect();
             if linked.is_empty() {
                 continue;
@@ -812,10 +963,13 @@ impl Store {
                     row.get::<_, String>(0)
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
+            if source.codex_home_id.is_some() {
+                account_ids.clear();
+            }
             if !account_ids.contains(&source.account_id) {
                 account_ids.push(source.account_id.clone());
             }
-            d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":source.enabled,"accountId":source.account_id,"accountIds":account_ids,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok())}));
+            d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":source.enabled,"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok())}));
         }
         d.price_updated_at =
             self.db
@@ -904,7 +1058,7 @@ fn local_account_id(provider: &str, root: &Path) -> String {
             }
             String::new()
         }
-        "agy" => "agy-local".into(),
+        "agy" | "antigravity" => "agy-local".into(),
         _ => String::new(),
     }
 }

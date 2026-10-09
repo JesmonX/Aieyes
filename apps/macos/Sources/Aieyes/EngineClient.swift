@@ -7,6 +7,9 @@ final class EngineClient: @unchecked Sendable {
     private var output: FileHandle?
     private var buffer = Data()
     private var nextID = 0
+    private let configuration: EngineClient?
+    init(configurationOnly: Bool = false) { configuration = configurationOnly ? nil : EngineClient(configurationOnly: true) }
+    private static let configurationMethods: Set<String> = ["settings.get", "settings.patch", "settings.save", "agents.set", "sources.configure", "sources.remove", "accounts.connect", "accounts.create", "accounts.status.get", "accounts.deletion.preview", "accounts.cleanup.list"]
 
     private func start() throws {
         if process?.isRunning == true { return }
@@ -29,6 +32,9 @@ final class EngineClient: @unchecked Sendable {
     }
 
     func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> T {
+        if Self.configurationMethods.contains(method), let configuration {
+            return try await configuration.call(method, params: params, as: type, onProgress: onProgress)
+        }
         let payload = try JSONSerialization.data(withJSONObject: params)
         return try await withCheckedThrowingContinuation { continuation in
             queue.async {
@@ -54,7 +60,7 @@ final class EngineClient: @unchecked Sendable {
             }
         }
     }
-    func stop() { process?.terminate() }
+    func stop() { configuration?.stop(); process?.terminate() }
     deinit { process?.terminate() }
 }
 enum ClientError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let text) = self { return text }; return nil } }
@@ -117,6 +123,12 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 
 @MainActor final class AppModel: ObservableObject {
     let engine = EngineClient()
+    let accountEngine = EngineClient()
+    @Published var accountStatuses: [AccountDeviceStatus] = []
+    @Published var accountStatusBusy = false
+    @Published var deploymentSyncMessage: String?
+    var deploymentSyncTask: Task<Void, Never>?
+    var settingsRefreshTask: Task<Void, Never>?
     let metricsEngine = EngineClient()
     let networkEngine = EngineClient()
     let priceCatalog = PriceCatalog()
@@ -255,7 +267,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private var lastHostError: String?
     var showSettings: (() -> Void)?
     var showDetail: (() -> Void)?
-    var showEstimate: ((Quota, Bool) -> Void)?
+    var showEstimate: ((Quota, Bool, String?) -> Void)?
     var showSampling: (() -> Void)?
     var showQuotaOrder: (() -> Void)?
     var showPanelAccounts: (() -> Void)?
@@ -266,7 +278,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             guard let quota = snapshot.quotas.first(where: { $0.id == estimate.accountKey }) else {
                 estimateErrors[estimate.accountKey] = "此账户已归档或移除；仍可结束采样并保留有效段。"; return
             }
-            showEstimate?(quota, estimate.kind == "credits")
+            showEstimate?(quota, estimate.kind == "credits", estimate.groupId)
         } catch { estimateErrors[estimate.accountKey] = error.localizedDescription }
     }
 
@@ -279,7 +291,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     func bootstrap() async {
         do {
-            settings = try await engine.call("settings.get"); settingsDraft = settings; settingsLoaded = true
+            settings = try await engine.call("settings.get"); PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:]); settingsDraft = settings; settingsLoaded = true
             await reload(); await scan(); await refreshQuotas()
         }
         catch { message = error.localizedDescription }
@@ -344,7 +356,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         catch { estimateErrors[accountKey] = error.localizedDescription; await reload(); return false }
     }
     static let refreshLabels = ["scan": "同步记录", "quotas": "刷新限额", "prices": "同步价格", "hosts": "刷新服务器"]
-    var usageSources: [AgentSource] { settings.sources.filter { source in source.enabled && !["agy", "deepseek"].contains(source.provider) && (source.hostId == nil || settings.hosts.contains { $0.id == source.hostId && $0.enabled }) } }
+    var usageSources: [AgentSource] { settings.sources.filter { source in source.enabled && source.provider != "deepseek" && (source.hostId == nil || settings.hosts.contains { $0.id == source.hostId && $0.enabled }) } }
     var dataTime: Double {
         let stamps = usageSources.map { source in dashboard.sources.first { $0.id == source.id }?.status?.updatedAt ?? 0 }
         return stamps.min() ?? 0
@@ -402,13 +414,16 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             finishRefresh("scan", failures: failures + (loaded ? [] : [ActionFailure(action: "scan", name: "概览", reason: message ?? "读取失败")]), itemID: sourceID)
         } catch { message = error.localizedDescription; finishRefresh("scan", failures: [ActionFailure(action: "scan", itemID: sourceID, name: "同步记录", reason: error.localizedDescription)], itemID: sourceID) }
     }
-    func refreshQuotas(accountID: String? = nil) async {
+    func refreshQuotas(accountID: String? = nil, dueOnly: Bool = false) async {
         guard !quotaBusy, !busy, estimateBusy.isEmpty, hasQuotaAccounts else { return }
         quotaBusy = true; quotaError = nil; beginRefresh("quotas")
-        quotaNextAttempt = Date().addingTimeInterval(Double(max(30, settings.refreshSeconds)))
+        quotaNextAttempt = Date().addingTimeInterval(5)
         defer { quotaBusy = false }
         do {
-            let result: [Quota] = try await engine.call("quotas.refresh", params: accountID.map { ["accountId": $0] } ?? [:])
+            var params: [String: Any] = ["dueOnly": dueOnly]
+            if let accountID { params["accountId"] = accountID }
+            let result: [Quota] = try await engine.call("quotas.refresh", params: params)
+            if dueOnly && result.isEmpty { finishRefresh("quotas", failures: []); return }
             var failures = result.compactMap { row -> ActionFailure? in
                 guard let error = row.error else { return nil }
                 return ActionFailure(action: "quotas", itemID: row.accountId, name: row.name, reason: error)
@@ -447,13 +462,13 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func removalRequest(_ kind: String, id: String) -> RemovalRequest? {
         if kind == "host", let host = settingsDraft.hosts.first(where: { $0.id == id }) {
             let linked = settingsDraft.sources.filter { $0.hostId == id }.map(\.name)
-            return RemovalRequest(kind: kind, itemID: id, title: "移除服务器「" + (host.name.isEmpty ? host.target : host.name) + "」？", explanation: linked.isEmpty ? "历史用量会保留。此更改随顶部保存提交。" : "以下 \(linked.count) 个数据源将暂停，并需要重新选择服务器。此更改随顶部保存提交。", affected: linked)
+            return RemovalRequest(kind: kind, itemID: id, title: "移除服务器「" + (host.name.isEmpty ? host.target : host.name) + "」？", explanation: linked.isEmpty ? "历史用量会保留。确认后立即生效。" : "以下 \(linked.count) 个数据源将暂停，并需要重新选择服务器。确认后立即生效。", affected: linked)
         }
         if kind == "source", let source = settingsDraft.sources.first(where: { $0.id == id }) {
-            return RemovalRequest(kind: kind, itemID: id, title: "移除数据源「" + source.name + "」？", explanation: "已导入的历史用量会保留。以此来源查询限额的账户需要重新选择来源；此更改随顶部保存提交。", affected: settingsDraft.accounts.filter { $0.quotaSourceId == id }.map(\.name))
+            return RemovalRequest(kind: kind, itemID: id, title: "移除数据源「" + source.name + "」？", explanation: "已导入的历史用量会保留。以此来源查询限额的账户需要重新选择来源；确认后立即生效。", affected: settingsDraft.accounts.filter { $0.quotaSourceId == id }.map(\.name))
         }
         if kind == "account", let account = settingsDraft.accounts.first(where: { $0.key == id }) {
-            return RemovalRequest(kind: kind, itemID: id, title: "归档账户「" + account.name + "」？", explanation: "停止展示此账户的实时限额，保留历史用量；此更改随顶部保存提交，可从已归档账户恢复。", affected: [])
+            return RemovalRequest(kind: kind, itemID: id, title: "归档账户「" + account.name + "」？", explanation: "停止展示此账户的实时限额，保留历史用量；确认后立即生效，可从已归档账户恢复。", affected: [])
         }
         return nil
     }
@@ -473,14 +488,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         default: break
         }
     }
-    func saveSettingsDraft(refreshDashboard: Bool = true) async -> Bool {
+    func saveSettingsDraft(refreshDashboard: Bool = true, includeMappings: Bool = true) async -> Bool {
         guard !settingsSaving, !repricing else { return false }
         settingsSaving = true; settingsMessage = nil; settingsStartedAt = Date(); settingsStage = "准备保存"
         defer { settingsSaving = false; settingsStage = ""; settingsStartedAt = nil }
         var next = settingsDraft
         do {
             let from = mappingModel.trimmingCharacters(in: .whitespacesAndNewlines), to = mappingID.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !from.isEmpty || !to.isEmpty {
+            if includeMappings && (!from.isEmpty || !to.isEmpty) {
                 guard !from.isEmpty && !to.isEmpty else { throw ClientError.message("请补全模型映射两端，输入已保留") }
                 guard next.modelMappings[from] == nil || next.modelMappings[from] == to else { throw ClientError.message("该模型已有映射，请先移除原映射再添加新值") }
                 next.modelMappings[from] = to
@@ -512,8 +527,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 next.sources[index].path = path
             }
             let success = await save(next, refreshDashboard: refreshDashboard)
-            if success { mappingModel = ""; mappingID = ""; settingsDraft = settings; pendingAPIKeys.removeAll(); preparedCredentials.removeAll(); pendingHostPasswords.removeAll(); preparedHostPasswords.removeAll() }
-            settingsMessage = success ? "已保存全部配置 · " + Format.time(Date().timeIntervalSince1970) : message ?? "保存失败"
+            if success { if includeMappings { mappingModel = ""; mappingID = "" }; settingsDraft = settings; pendingAPIKeys.removeAll(); preparedCredentials.removeAll(); pendingHostPasswords.removeAll(); preparedHostPasswords.removeAll() }
+            settingsMessage = success ? "已保存配置 · " + Format.time(Date().timeIntervalSince1970) : message ?? "保存失败"
             return success
         } catch { settingsMessage = error.localizedDescription; return false }
     }
@@ -524,23 +539,39 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         Task { for reference in references { let _: Acknowledgement? = try? await engine.call("hosts.credentials.delete", params: ["passwordRef":reference]) } }
         pendingHostPasswords.removeAll(); preparedHostPasswords.removeAll()
     }
+    func toggleTheme(currentlyDark: Bool) async {
+        guard settingsLoaded, !settingsSaving else { return }
+        settingsSaving = true
+        defer { settingsSaving = false }
+        var next = settings
+        var appearance = next.appearance ?? AppearanceSettings()
+        appearance.theme = currentlyDark ? "light" : "dark"
+        next.appearance = appearance
+        guard await save(next, refreshDashboard: false) else { return }
+        // Preserve unrelated edits in the settings window.
+        var draftAppearance = settingsDraft.appearance ?? AppearanceSettings()
+        draftAppearance.theme = settings.appearance?.theme ?? appearance.theme
+        settingsDraft.appearance = draftAppearance
+    }
     func save(_ draft: Settings, refreshDashboard: Bool = true) async -> Bool {
         do {
             let data = try JSONEncoder().encode(draft)
             let params = try JSONSerialization.jsonObject(with: data) as! [String: Any]
             settingsStage = busy || quotaBusy ? "等待当前刷新完成" : "保存配置"
-            let _: Acknowledgement = try await engine.call("settings.save", params: params, onProgress: { [weak self] stage in Task { @MainActor in guard let self, self.settingsSaving else { return }; self.settingsStage = stage } })
+            let baseline = try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings))
+            let saved: Settings = try await engine.call("settings.patch", params: ["base": baseline, "settings": params], onProgress: { [weak self] stage in Task { @MainActor in guard let self, self.settingsSaving else { return }; self.settingsStage = stage } })
             let historyConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.modelMappings != draft.modelMappings
             let quotaConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.proxy != draft.proxy
             if settings.proxy != draft.proxy || settings.proxyTestUrls != draft.proxyTestUrls { networkRevision += 1; networkTest = nil; lastNetworkAttempt = .distantPast }
-            settings = draft
+            for account in saved.accounts where !settings.accounts.contains(where: { $0.key == account.key }) { PanelAccountPreference.includeNew(account, accounts: saved.accounts) }
+            settings = saved
             if quotaConfigurationChanged { quotaNextAttempt = nil }
-            if selectedAccount != "all" && selectedAccount != "none" && !settings.accounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
+            if selectedAccount != "all" && selectedAccount != "none" && !settings.historicalAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
             if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
             message = "已保存"
             if refreshDashboard { Task {
                 if historyConfigurationChanged { await reload() }
-                if hasQuotaAccounts && quotaNextAttempt == nil { await refreshQuotas() }
+                if hasQuotaAccounts && quotaNextAttempt == nil { await refreshQuotas(dueOnly: true) }
             } }
             return true
         } catch { message = error.localizedDescription; return false }
@@ -588,7 +619,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 }
             } }
         }
-        if hasQuotaAccounts, !quotaBusy, quotaNextAttempt == nil || Date() >= quotaNextAttempt! { Task { await refreshQuotas() } }
+        if hasQuotaAccounts, !quotaBusy, quotaNextAttempt == nil || Date() >= quotaNextAttempt! { Task { await refreshQuotas(dueOnly: true) } }
         guard !busy else { return }
         if Date().timeIntervalSince(lastScan) > Double(settings.refreshSeconds) { Task { await scan() }; return }
     }

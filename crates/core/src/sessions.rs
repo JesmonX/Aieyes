@@ -107,7 +107,10 @@ impl SessionMonitor {
                 } else {
                     root
                 };
-                for entry in walkdir::WalkDir::new(root).into_iter() {
+                for entry in walkdir::WalkDir::new(root)
+                    .into_iter()
+                    .filter_entry(|e| e.file_name() != ".aieyes")
+                {
                     let entry = match entry {
                         Ok(e) => e,
                         Err(_) => {

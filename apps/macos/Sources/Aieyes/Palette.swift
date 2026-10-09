@@ -7,9 +7,10 @@ enum Palette {
             return NSColor(srgbRed: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255, alpha: 1)
         })
     }
-    static var accent: Color {
+    static var accent: Color { accent(named: UserDefaults.standard.string(forKey: "appearance.accent") ?? "indigo") }
+    static func accent(named name: String) -> Color {
         let pair: (UInt32, UInt32)
-        switch UserDefaults.standard.string(forKey: "appearance.accent") {
+        switch name {
         case "blue": pair = (0x2166be, 0x8bbcff)
         case "teal": pair = (0x16745f, 0x65ceae)
         case "purple": pair = (0x8054b7, 0xccabff)
@@ -17,7 +18,7 @@ enum Palette {
         }
         return adaptive(pair.0, pair.1)
     }
-    static let balanceBlue = adaptive(0x1e5ebf, 0x8cbcff)
+    static var balanceBlue: Color { accent }
     static let ok = adaptive(0x176e58, 0x5cc4a4)
     static let warn = adaptive(0x895712, 0xe0b062)
     static let danger = adaptive(0xb83245, 0xff929c)
@@ -30,7 +31,7 @@ enum Palette {
         let remaining = min(100, max(0, 100 - used))
         return remaining < 10 ? danger : remaining <= 30 ? warn : accent
     }
-    static let colors: [Color] = [accent, .teal, .purple, .orange, .pink, .cyan, .green, .indigo]
+    static var colors: [Color] { [accent, .teal, .purple, .orange, .pink, .cyan, .green, .indigo] }
     private static var modelHues: [String: Double] = [:]
     private static let modelLock = NSLock()
     static func model(_ name: String) -> Color {
@@ -51,4 +52,15 @@ enum Palette {
             return NSColor(hue: identityHue, saturation: dark ? 0.35 : 0.64, brightness: dark ? 0.95 : 0.5, alpha: 1)
         })
     }
+}
+
+/// Observe accent changes in every window, including independently hosted sheets.
+private struct AieyesAccent: ViewModifier {
+    @AppStorage("appearance.accent") private var name = "indigo"
+    func body(content: Content) -> some View {
+        content.tint(Palette.accent(named: name)).accentColor(Palette.accent(named: name))
+    }
+}
+extension View {
+    func aieyesAccent() -> some View { modifier(AieyesAccent()) }
 }

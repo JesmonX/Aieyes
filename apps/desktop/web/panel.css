@@ -9,8 +9,8 @@ body[data-view=panel] { display:block; justify-items:normal; user-select:text; }
 .panel-tabs button:hover { transform:none; background:var(--soft); color:var(--ink); }
 .panel-tabs button.active { background:var(--accent); color:var(--accent-ink); font-weight:600; }
 .panel-refresh-wrap,.panel-more { position:relative; }
-#panel-refresh,.panel-actions > button,.panel-more > summary { display:grid; place-items:center; width:28px; height:28px; min-height:0; padding:0; border:0; border-radius:50%; background:transparent; color:var(--muted); box-shadow:none; }
-#panel-refresh:hover,.panel-actions > button:hover,.panel-more > summary:hover { transform:none; background:var(--soft); color:var(--ink); }
+#panel-refresh,.panel-head [data-theme-toggle],.panel-actions > button,.panel-more > summary { display:grid; place-items:center; width:28px; height:28px; min-height:0; padding:0; border:0; border-radius:50%; background:transparent; color:var(--muted); box-shadow:none; }
+#panel-refresh:hover,.panel-head [data-theme-toggle]:hover,.panel-actions > button:hover,.panel-more > summary:hover { transform:none; background:var(--soft); color:var(--ink); }
 .panel-head svg,.panel-foot svg { width:15px; height:15px; }
 .panel-more > summary { list-style:none; }
 .panel-more > summary::-webkit-details-marker { display:none; }

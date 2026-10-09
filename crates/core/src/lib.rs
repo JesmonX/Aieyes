@@ -1,4 +1,7 @@
+pub mod accounts;
+pub mod antigravity;
 pub mod capacity;
+pub mod codex_auth;
 pub mod credentials;
 pub mod estimates;
 pub mod import;
@@ -7,8 +10,11 @@ pub mod models;
 pub mod network;
 pub mod pricing;
 pub mod process;
+pub mod providers;
 pub mod quota;
+mod quota_schedule;
 pub mod sessions;
+pub mod settings;
 pub mod ssh;
 pub mod store;
 pub mod update_transport;
@@ -64,6 +70,19 @@ impl Engine {
                     .as_str()
                     .is_none_or(|key| format!("{}:{}", a.provider, a.id) == key)
         }) {
+            if !account.profile_refs().is_empty() {
+                let snapshot =
+                    codex_auth::read_quota_at(account, &settings, params["sourceId"].as_str())
+                        .unwrap_or_else(|e| QuotaSnapshot {
+                            account_id: account.id.clone(),
+                            provider: account.provider.clone(),
+                            name: account.name.clone(),
+                            error: Some(e.to_string()),
+                            ..Default::default()
+                        });
+                result.push(snapshot);
+                continue;
+            }
             let mut sources: Vec<_> = settings
                 .sources
                 .iter()
@@ -109,8 +128,32 @@ impl Engine {
         }
         Ok(result)
     }
-    pub fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+    pub fn call(&mut self, method: &str, mut params: Value) -> Result<Value> {
+        if method != "hello" && method != "settings.get" {
+            let aliases = self.store.settings()?.account_aliases;
+            if method == "settings.save" {
+                params["accountAliases"] = serde_json::to_value(&aliases)?;
+            }
+            providers::normalize_value(&mut params, &aliases);
+            if method == "quotas.order.set"
+                && let Some(keys) = params["keys"].as_array_mut()
+            {
+                for key in keys {
+                    if let Some(value) = key.as_str() {
+                        *key = json!(providers::account_key(value, &aliases));
+                    }
+                }
+            }
+        }
         match method {
+            "accounts.create"
+            | "accounts.status.get"
+            | "accounts.status.refresh"
+            | "accounts.deletion.preview"
+            | "accounts.delete"
+            | "accounts.cleanup.list"
+            | "accounts.deployments.sync" => self.account_call(method, params),
+            name if name.starts_with("codexAuth.") => self.codex_auth_call(name, params),
             name if name.starts_with("wakeups.") => self.wakeup_call(name, params),
             name if name.starts_with("quotaEstimates.") || name.starts_with("creditEstimates.") => {
                 self.estimate_call(name, params)
@@ -221,6 +264,15 @@ impl Engine {
                     &[serde_json::to_string(&Host::default().metrics)?],
                 )
             }
+            "settings.patch" => Ok(serde_json::to_value(self.store.patch_settings(
+                &params["base"],
+                &params["settings"],
+                false,
+            )?)?),
+            "agents.set" => self.configure_agent(params),
+            "sources.configure" => self.configure_source(params, false),
+            "sources.remove" => self.configure_source(params, true),
+            "accounts.connect" => self.connect_account(params),
             "settings.get" => Ok(serde_json::to_value(self.store.settings()?)?),
             "settings.save" => {
                 self.progress("保存配置");
@@ -241,7 +293,7 @@ impl Engine {
                     .filter(|s| {
                         s.enabled
                             && s.host_id.is_some()
-                            && !["agy", "deepseek"].contains(&s.provider.as_str())
+                            && s.provider != "deepseek"
                             && params["sourceId"].as_str().is_none_or(|id| s.id == id)
                             && params["sourceIds"]
                                 .as_array()
@@ -280,7 +332,7 @@ impl Engine {
                 }
                 for source in settings.sources.iter().filter(|s| {
                     s.enabled
-                        && !["agy", "deepseek"].contains(&s.provider.as_str())
+                        && s.provider != "deepseek"
                         && params["sourceId"].as_str().is_none_or(|id| s.id == id)
                         && params["sourceIds"]
                             .as_array()
@@ -344,31 +396,7 @@ impl Engine {
                 }
                 Ok(json!(results))
             }
-            "quotas.refresh" => {
-                let samples = self.store.estimates()?;
-                let mut ids: Vec<String> = samples
-                    .iter()
-                    .filter(|e| {
-                        e.status == "active"
-                            && params["accountId"].as_str().is_none_or(|id| {
-                                e.account_key.split_once(':').is_some_and(|(_, a)| a == id)
-                            })
-                    })
-                    .flat_map(|e| e.source_ids.clone())
-                    .collect();
-                ids.sort();
-                ids.dedup();
-                // Only opt-in sampling adds a history sync before a live observation.
-                // A failed source pauses its samples; the ordinary quota query can still run.
-                if !ids.is_empty() {
-                    let _ = self.sync_estimate_sources(&ids);
-                }
-                let result = self.read_quotas(&params)?;
-                for q in &result {
-                    self.store.quota(q)?;
-                }
-                Ok(serde_json::to_value(result)?)
-            }
+            "quotas.refresh" => self.refresh_scheduled_quotas(params),
             "prices.list" => Ok(serde_json::to_value(self.store.prices()?)?),
             "prices.sync" => {
                 let settings = self.store.settings()?;

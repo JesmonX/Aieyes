@@ -14,6 +14,13 @@ use std::{
 };
 
 pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
+    let mut configured = source.clone();
+    let account = settings
+        .accounts
+        .iter()
+        .find(|a| a.provider == source.provider && a.id == source.account_id);
+    configured.quota_pre_command = crate::accounts::pre_command(settings, account, source);
+    let source = &configured;
     anyhow::ensure!(!source.account_id.is_empty(), "此数据源未关联账户");
     if !source.quota_command.trim().is_empty() {
         let mut cmd = if let Some(id) = &source.host_id {
@@ -22,7 +29,7 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
                 .iter()
                 .find(|h| &h.id == id)
                 .context("主机不存在")?;
-            ssh::command(&quota_host(host, source), &source.quota_command)?
+            ssh::account_command(&quota_host(host, source), &source.quota_command)?
         } else {
             let mut c = Command::new(if cfg!(windows) {
                 "powershell"
@@ -57,7 +64,7 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
         return normalize(source, &v, "command");
     }
     match source.provider.as_str() {
-        "agy" => normalize(source, &agy(source, settings)?, "live"),
+        "agy" | "antigravity" => normalize(source, &agy(source, settings)?, "live"),
         "deepseek" => deepseek(source, settings),
         "codex" => {
             let v = codex(source, settings)?;
@@ -69,7 +76,7 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
                 .iter()
                 .find(|h| Some(&h.id) == source.host_id.as_ref())
                 .context("主机不存在")?;
-            let v = ssh::python(
+            let v = ssh::account_python(
                 &quota_host(host, source),
                 include_str!("../../../scripts/remote_quota.py"),
                 std::slice::from_ref(&source.path),
@@ -131,9 +138,7 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
 /// A source override only applies to provider requests; history and metrics keep the host setup.
 pub fn quota_host(host: &Host, source: &Source) -> Host {
     let mut host = host.clone();
-    if !source.quota_pre_command.trim().is_empty() {
-        host.pre_command = source.quota_pre_command.clone();
-    }
+    host.pre_command = source.quota_pre_command.clone();
     host
 }
 
@@ -150,7 +155,7 @@ pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapsh
     let mut q = QuotaSnapshot {
         source_id: source.id.clone(),
         account_id: source.account_id.clone(),
-        provider: source.provider.clone(),
+        provider: crate::providers::canonical(&source.provider).into(),
         name: source.name.clone(),
         updated_at: now(),
         origin: origin.into(),
@@ -168,7 +173,7 @@ pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapsh
         q.credits_updated_at = q.credits.as_ref().map(|_| now());
         q.credits_origin = q.credits.as_ref().map(|_| origin.into());
         q.bank_reset = v.get("bankReset").filter(|v| v.is_object()).cloned();
-    } else if source.provider == "agy" {
+    } else if crate::providers::antigravity(&source.provider) {
         parse_agy(&mut q, v)?;
     } else if source.provider == "deepseek" {
         q.is_available = Some(
@@ -233,7 +238,7 @@ pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapsh
     Ok(q)
 }
 
-fn resolve_codex(configured: &str) -> String {
+pub(crate) fn resolve_codex(configured: &str) -> String {
     if configured != "codex" && !configured.is_empty() {
         return expand(configured).to_string_lossy().into();
     }
@@ -285,7 +290,7 @@ pub fn codex_rpc(
                 process::quote(path)
             }
         };
-        ssh::command(
+        ssh::account_command(
             &quota_host(host, source),
             &format!(
                 "export CODEX_HOME={}\nexec {} app-server",
@@ -584,7 +589,7 @@ fn agy(source: &Source, settings: &Settings) -> Result<Value> {
             .iter()
             .find(|h| &h.id == id)
             .context("主机不存在")?;
-        ssh::command(
+        ssh::account_command(
             &quota_host(host, source),
             &format!(
                 "exec {} --print /usage --output-format json --print-timeout 30s",

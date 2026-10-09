@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct WakeTask: Codable, Identifiable, Equatable {
+    var codexProfileId: String?
     var id = "", name = "订阅唤醒", sourceId = "", times = ["08:00"], model = "", effort = "low"
     var prompt = "Hi. Reply only OK. Do not use any tools.", binary = ""
     var parameters: [String: Any] { (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(self))) as? [String: Any] ?? [:] }
@@ -51,7 +52,7 @@ struct WakeupsView: View {
     }
     private func taskCard(_ r: WakeRecord) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack { Text(r.task.name).font(AppFont.section); Spacer(); Text(r.deployment.map { $0.state == "pending-removal" ? "待移除" : $0.state == "deployment-unconfirmed" ? "部署待确认" : $0.enabled ? "已部署" : "已停用" } ?? "未部署").foregroundStyle(.secondary) }
+            HStack { Text(r.task.name).font(AppFont.section); Spacer(); Text(r.deployment.map { $0.state == "settings-pending" ? "部署待同步" : $0.state == "pending-removal" ? "待移除" : $0.state == "deployment-unconfirmed" ? "部署待确认" : $0.enabled ? "已部署" : "已停用" } ?? "未部署").foregroundStyle(.secondary) }
             Text("\(r.task.times.joined(separator: "、")) · \(r.task.model) · \(r.task.effort.isEmpty ? "模型默认 effort" : r.task.effort)").textSelection(.enabled)
             if let d = r.deployment { Text(d.target + " · " + (statuses[r.id]?.timezone ?? d.timezone) + (d.changed ? " · 有尚未部署的更改" : "")).font(AppFont.secondary).foregroundStyle(.secondary) }
             HStack {
@@ -106,7 +107,7 @@ struct WakeEditor: View {
     @State private var busy = false
     @State private var error: String?
     private let engine = EngineClient()
-    private var sources: [AgentSource] { model.settings.sources.filter { source in source.enabled && !source.accountId.isEmpty && ["codex","claude","agy"].contains(source.provider) && (source.hostId == nil || model.settings.hosts.contains { h in h.id == source.hostId && h.enabled }) } }
+    private var sources: [AgentSource] { model.settings.sources.filter { source in source.enabled && (!source.accountId.isEmpty || source.codexHomeId != nil) && ["codex","claude","antigravity"].contains(source.provider) && (source.hostId == nil || model.settings.hosts.contains { h in h.id == source.hostId && h.enabled }) } }
     private var efforts: [String] { capabilities?.models.first { $0.id == task.model }?.efforts ?? capabilities?.efforts ?? ["low","medium","high","xhigh","max","ultra"] }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -115,6 +116,12 @@ struct WakeEditor: View {
                 VStack(alignment: .leading, spacing: 12) {
                     TextField("名称", text: $task.name)
                     Picker("账户与运行位置", selection: $task.sourceId) { Text("请选择数据源").tag(""); ForEach(sources) { source in Text(source.name + " · " + (source.hostId.flatMap { id in model.settings.hosts.first { $0.id == id }?.name } ?? "本机")).tag(source.id) } }.disabled(deployed)
+                    if let home = sources.first(where: { $0.id == task.sourceId })?.codexHomeId {
+                        Picker("执行账号", selection: Binding(get: { task.codexProfileId ?? "" }, set: { task.codexProfileId = $0.isEmpty ? nil : $0; capabilities = nil })) {
+                            Text("请选择已关联的额度账户").tag("")
+                            ForEach(model.settings.accounts.filter { $0.archived != true && $0.profileRefs.contains { $0.hasPrefix(home + ":") } }, id: \.id) { Text($0.name).tag($0.profileRefs.first { $0.hasPrefix(home + ":") } ?? "") }
+                        }.disabled(deployed)
+                    }
                     Text("使用已保存的数据源；切换运行位置前需要移除旧部署。").font(AppFont.secondary).foregroundStyle(.secondary)
                     ForEach(task.times.indices, id: \.self) { index in
                         HStack { Text("目标时刻"); TextField("HH:mm", text: $task.times[index]).frame(width: 80); Text(localTime(task.times[index])).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("移除") { task.times.remove(at: index) }.accessibilityLabel("移除时刻 " + task.times[index]) }
@@ -142,7 +149,7 @@ struct WakeEditor: View {
         }.padding(24).frame(width: 550).font(AppFont.body).disabled(busy).onAppear { if task.sourceId.isEmpty { task.sourceId = sources.first?.id ?? "" }; initialDraft = draftSnapshot(task) }
         .interactiveDismissDisabled(busy || initialDraft != draftSnapshot(task))
         .discardDraftConfirmation($confirmDiscard) { dismiss() }
-        .onChange(of: task.sourceId) { _, _ in capabilities = nil }
+        .onChange(of: task.sourceId) { _, _ in capabilities = nil; task.codexProfileId = nil }
         .onChange(of: task.model) { _, _ in if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
     }
     private func localTime(_ time: String) -> String {

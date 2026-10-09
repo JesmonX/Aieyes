@@ -483,7 +483,7 @@ fn legacy_accounts_migrate_and_shared_quota_has_one_identity() {
     })
     .unwrap();
     let settings = db.settings().unwrap();
-    assert_eq!(settings.version, 2);
+    assert_eq!(settings.version, 4);
     assert_eq!(settings.accounts.len(), 1);
     db.quota(&usage::codex_quota(
         &b,
@@ -659,11 +659,11 @@ fn quota_precommand_inherits_or_overrides_and_stops_on_failure() {
         ..Default::default()
     };
     let mut s = source("remote");
-    assert_eq!(quota::quota_host(&host, &s).pre_command, host.pre_command);
+    assert!(quota::quota_host(&host, &s).pre_command.is_empty());
     s.quota_pre_command = "export TEST_PROXY=source\necho banner".into();
     let query_host = quota::quota_host(&host, &s);
     assert_eq!(host.pre_command, "export TEST_PROXY=host");
-    let ssh = ssh::command(&query_host, "printf '%s' \"$TEST_PROXY\"").unwrap();
+    let ssh = ssh::account_command(&query_host, "printf '%s' \"$TEST_PROXY\"").unwrap();
     let remote = ssh.get_args().last().unwrap().to_str().unwrap();
     let mut shell = Command::new("/bin/sh");
     shell.args(["-c", remote]);
@@ -672,7 +672,7 @@ fn quota_precommand_inherits_or_overrides_and_stops_on_failure() {
         b"source"
     );
     s.quota_pre_command = "false".into();
-    let ssh = ssh::command(&quota::quota_host(&host, &s), "printf should-not-run").unwrap();
+    let ssh = ssh::account_command(&quota::quota_host(&host, &s), "printf should-not-run").unwrap();
     let mut shell = Command::new("/bin/sh");
     shell.args(["-c", ssh.get_args().last().unwrap().to_str().unwrap()]);
     assert!(process::run(shell, vec![], Duration::from_secs(3)).is_err());

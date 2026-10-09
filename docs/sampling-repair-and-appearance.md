@@ -16,7 +16,9 @@ Codex 旧解析器把会话元数据时间或上一次累计用量时间作为�
 
 ## 外观
 
-设置增加 `appearance: { theme, accent }`。theme 为 system/light/dark，accent 为 indigo/blue/teal/purple；默认跟随系统、靛蓝。通过现有草稿保存流程应用，所有窗口同步；Windows 原生悬浮入口同步明暗与强调色，语义状态颜色不变。
+设置增加 `appearance: { theme, accent }`。theme 为 system/light/dark，accent 为 indigo/blue/teal/purple；默认跟随系统、靛蓝。通用设置的主题和强调色选择即时保存，所有窗口同步；Windows 原生悬浮入口同步明暗与强调色，语义状态颜色不变。
+
+主面板和菜单栏／悬浮面板提供太阳／月亮按钮，根据当前显示切换浅色或深色并保存到同一份配置；跟随系统仍可在通用设置选择。按钮只保存主题，保留其他未保存输入，保存失败时保留原主题。macOS 显式同步弹出面板、内容视图与所在窗口的外观，并监听应用的有效外观，避免面板继承菜单栏锚点的主题。Web 窗口接收主题变化时同步本地设置及未修改的表单字段，避免下一次重绘恢复旧主题。
 
 桌面端控件统一采用当前 macOS 面板的圆角、分段切换、输入框、下拉、弹层与卡片层级。保留悬停、按下、展开与入场动效，并遵循减少动态效果、减少透明度和强制颜色设置。订阅标签增至 14，长名称限制在合理宽度内。
 
@@ -28,6 +30,8 @@ Codex 旧解析器把会话元数据时间或上一次累计用量时间作为�
 - `python3 scripts/test-collectors.py`：SSH 生命周期元数据白名单和内容隔离。
 - `sh scripts/test-native.sh`：原生逻辑、账户选择与重置格式回归。
 - `npm --prefix apps/desktop run test:ui`：桌面交互、历史金额、修复入口、账户替换、八种主题组合与保存。
+- `npm --prefix apps/desktop run test:theme`：先构建 debug 核心，再验证两个浏览器窗口的主题双向同步、重绘、跟随系统、草稿保留、保存失败及重新打开。
+- `sh scripts/test-native-theme.sh`：先执行 `sh scripts/build-macos.sh debug`，再验证真实 macOS 弹出面板及 SwiftUI 明暗同步、与锚点相反的主题、重新打开与外观变化。
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked`：桌面壳状态与广播回归。
 
 本轮在 macOS 上执行核心、Swift、Tauri 和 Chromium 验证，并生成浅深色原生与桌面截图。Windows/Linux 的系统材质、原生悬浮窗口与实际多屏交互仍需对应系统实机验收。本机数据库备份、修复记录和截图放在被 Git 忽略的 `.local/` 下。

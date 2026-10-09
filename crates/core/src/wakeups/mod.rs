@@ -24,6 +24,7 @@ pub fn set_runner_path(path: PathBuf) {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Task {
+    pub codex_profile_id: Option<String>,
     pub id: String,
     pub name: String,
     pub source_id: String,
@@ -36,6 +37,7 @@ pub struct Task {
 impl Default for Task {
     fn default() -> Self {
         Self {
+            codex_profile_id: None,
             id: String::new(),
             name: String::new(),
             source_id: String::new(),
@@ -50,6 +52,8 @@ impl Default for Task {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
+    #[serde(default)]
+    pub codex_profile_id: Option<String>,
     pub version: u32,
     pub id: String,
     pub account_key: String,
@@ -93,13 +97,13 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         raws.iter().map(|s| Ok(serde_json::from_str(s)?)).collect()
     }
-    fn wakeup(&self, id: &str) -> Result<Record> {
+    pub(crate) fn wakeup(&self, id: &str) -> Result<Record> {
         self.wakeups()?
             .into_iter()
             .find(|r| r.task.id == id)
             .context("任务不存在")
     }
-    fn save_wakeup(&self, record: &Record) -> Result<()> {
+    pub(crate) fn save_wakeup(&self, record: &Record) -> Result<()> {
         self.db.execute(
             "INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             rusqlite::params![
@@ -114,16 +118,25 @@ impl Store {
             if let Some(d) = r.deployment {
                 ensure!(
                     s.sources.iter().any(|v| v.id == d.source.id
-                        && v.account_id == d.source.account_id
-                        && v.provider == d.source.provider
+                        && (v.account_id == d.source.account_id
+                            || (v.codex_home_id.is_some()
+                                && v.codex_home_id == d.source.codex_home_id
+                                && d.task.codex_profile_id.is_some()))
+                        && crate::providers::canonical(&v.provider)
+                            == crate::providers::canonical(&d.source.provider)
                         && v.host_id == d.source.host_id),
                     "请先移除关联的定时唤醒部署，再删除来源或更换账户/主机"
                 );
                 ensure!(
                     s.accounts.iter().any(|a| a.id == d.source.account_id
-                        && a.provider == d.source.provider
-                        && !a.archived),
-                    "请先移除账户的定时唤醒部署，再归档或删除账户"
+                        && crate::providers::canonical(&a.provider)
+                            == crate::providers::canonical(&d.source.provider)
+                        && (d.task.codex_profile_id.is_none()
+                            || d.task
+                                .codex_profile_id
+                                .as_deref()
+                                .is_some_and(|r| a.has_profile(r)))),
+                    "请先移除账户的定时唤醒部署，再归档、删除或重新绑定账户"
                 );
                 if let Some(h) = d.host {
                     ensure!(
@@ -203,14 +216,28 @@ fn validate(task: &mut Task) -> Result<()> {
     task.times.dedup();
     Ok(())
 }
-fn source_for<'a>(s: &'a Settings, id: &str) -> Result<&'a Source> {
+fn source_for(s: &Settings, id: &str, profile: Option<&str>) -> Result<Source> {
     let source = s
         .sources
         .iter()
         .find(|v| v.id == id && v.enabled)
-        .context("请选择已启用的目标数据源")?;
+        .context("请选择已启用的目标数据源")?
+        .clone();
+    let mut source = source;
+    if source.codex_home_id.is_some() {
+        let reference = profile.context("请选择此共享来源的唤醒账号")?;
+        let (bound, _) = crate::codex_auth::source_for_profile(s, reference)?;
+        ensure!(bound.id == source.id, "唤醒档案与来源不匹配");
+        source.account_id = s
+            .accounts
+            .iter()
+            .find(|a| a.has_profile(reference) && !a.archived)
+            .context("请先将账号档案关联到额度账户")?
+            .id
+            .clone();
+    }
     ensure!(
-        ["codex", "claude", "agy"].contains(&source.provider.as_str()),
+        ["codex", "claude", "antigravity", "agy"].contains(&source.provider.as_str()),
         "此 CLI 暂不支持订阅唤醒"
     );
     ensure!(
@@ -250,7 +277,7 @@ fn manifest(task: &Task, source: &Source, settings: &Settings) -> Result<Manifes
     } else {
         match source.provider.as_str() {
             "codex" => source.codex_binary.as_str(),
-            "agy" => source.agy_binary.as_str(),
+            "agy" | "antigravity" => source.agy_binary.as_str(),
             _ => "claude",
         }
     };
@@ -264,15 +291,15 @@ fn manifest(task: &Task, source: &Source, settings: &Settings) -> Result<Manifes
     } else {
         binary
     };
+    let account = settings
+        .accounts
+        .iter()
+        .find(|a| a.provider == source.provider && a.id == source.account_id);
     let pre = source
         .host_id
         .as_ref()
         .and_then(|id| settings.hosts.iter().find(|h| &h.id == id));
-    let pre_command = if source.quota_pre_command.trim().is_empty() {
-        pre.map(|h| h.pre_command.clone()).unwrap_or_default()
-    } else {
-        source.quota_pre_command.clone()
-    };
+    let pre_command = crate::accounts::pre_command(settings, account, source);
     let args = match source.provider.as_str() {
         "codex" => vec![
             "exec",
@@ -324,7 +351,7 @@ fn manifest(task: &Task, source: &Source, settings: &Settings) -> Result<Manifes
         })
         .chain(["--".into(), task.prompt.clone()])
         .collect(),
-        "agy" => vec![
+        "agy" | "antigravity" => vec![
             "--print",
             &task.prompt,
             "--mode",
@@ -349,7 +376,12 @@ fn manifest(task: &Task, source: &Source, settings: &Settings) -> Result<Manifes
         _ => anyhow::bail!("不支持的 CLI"),
     };
     Ok(Manifest {
-        version: 1,
+        codex_profile_id: task.codex_profile_id.clone(),
+        version: if task.codex_profile_id.is_some() {
+            2
+        } else {
+            1
+        },
         id: task.id.clone(),
         account_key: format!("{}:{}", source.provider, source.account_id),
         provider: source.provider.clone(),
@@ -418,6 +450,7 @@ fn agy_models(output: &str) -> Vec<Value> {
 }
 
 fn remote(host: &Host, mut request: Value) -> Result<Value> {
+    request["authHelper"] = json!(include_str!("../../../../scripts/remote_codex_auth.py"));
     // Deployment/control does not need the provider's proxy pre-command.
     if request["action"] == "deploy" {
         request["script"] = json!(include_str!("../../../../scripts/remote_wakeup.py"));
@@ -442,10 +475,23 @@ fn root(engine: &Engine) -> Result<PathBuf> {
 }
 fn public_record(r: &Record) -> Value {
     // Never expose copied Host/source configuration in a deployment status response.
-    json!({"task":r.task,"deployment":r.deployment.as_ref().map(|d|json!({"task":d.task,"deployedAt":d.deployed_at,"enabled":d.enabled,"state":d.state,"timezone":d.timezone,"target":d.host.as_ref().map(|h|h.name.as_str()).unwrap_or("本机"),"changed":serde_json::to_value(&r.task).ok()!=serde_json::to_value(&d.task).ok()}))})
+    json!({"task":r.task,"deployment":r.deployment.as_ref().map(|d|json!({"task":d.task,"deployedAt":d.deployed_at,"enabled":d.enabled,"state":d.state,"timezone":d.timezone,"target":d.host.as_ref().map(|h|h.name.as_str()).unwrap_or("本机"),"changed":d.state == "settings-pending" || serde_json::to_value(&r.task).ok()!=serde_json::to_value(&d.task).ok()}))})
 }
 impl Engine {
     pub fn wakeup_call(&mut self, method: &str, p: Value) -> Result<Value> {
+        let action = method.split_once('.').map(|(_, a)| a).unwrap_or("");
+        let _task_lock = if [
+            "save", "deploy", "remove", "delete", "enable", "disable", "run",
+        ]
+        .contains(&action)
+        {
+            Some(crate::accounts::lock_tasks(&self.store)?)
+        } else {
+            None
+        };
+        self.wakeup_call_unlocked(method, p)
+    }
+    pub(crate) fn wakeup_call_unlocked(&mut self, method: &str, p: Value) -> Result<Value> {
         let action = method.split_once('.').map(|(_, a)| a).unwrap_or("");
         if action == "list" {
             return Ok(json!(
@@ -461,7 +507,14 @@ impl Engine {
             let mut task: Task =
                 serde_json::from_value(p.get("task").cloned().unwrap_or(p.clone()))?;
             validate(&mut task)?;
-            source_for(&settings, &task.source_id)?;
+            let source = source_for(&settings, &task.source_id, task.codex_profile_id.as_deref())?;
+            if let Some(account) = settings
+                .accounts
+                .iter()
+                .find(|a| a.provider == source.provider && a.id == source.account_id)
+            {
+                crate::accounts::ensure_not_deleting(&self.store, account)?;
+            }
             let old = self
                 .store
                 .wakeups()?
@@ -469,7 +522,8 @@ impl Engine {
                 .find(|r| r.task.id == task.id);
             if let Some(d) = old.as_ref().and_then(|r| r.deployment.as_ref()) {
                 ensure!(
-                    d.task.source_id == task.source_id,
+                    d.task.source_id == task.source_id
+                        && d.task.codex_profile_id == task.codex_profile_id,
                     "更换部署位置前请先移除旧部署"
                 );
             }
@@ -486,15 +540,15 @@ impl Engine {
             if task.id.is_empty() {
                 task.id = "wake-probe".into();
             }
-            let source = source_for(&settings, &task.source_id)?;
-            let m = manifest(&task, source, &settings)?;
+            let source = source_for(&settings, &task.source_id, task.codex_profile_id.as_deref())?;
+            let m = manifest(&task, &source, &settings)?;
             let mut info = if let Some(id) = &source.host_id {
                 remote(
                     settings.hosts.iter().find(|h| &h.id == id).unwrap(),
                     json!({"action":"probe","manifest":m}),
                 )?
             } else {
-                self.local_probe(&m, source, &settings)?
+                self.local_probe(&m, &source, &settings)?
             };
             let prices = self.store.prices()?;
             let mut rows: Vec<Value> = info["models"].as_array().cloned().unwrap_or_default();
@@ -532,8 +586,28 @@ impl Engine {
             return Ok(json!({"deleted":true}));
         }
         if action == "deploy" {
-            let source = source_for(&settings, &r.task.source_id)?.clone();
-            let m = manifest(&r.task, &source, &settings)?;
+            let deploying_task = if p["useDeployedTask"] == true {
+                r.deployment
+                    .as_ref()
+                    .map(|d| d.task.clone())
+                    .unwrap_or_else(|| r.task.clone())
+            } else {
+                r.task.clone()
+            };
+            let source = source_for(
+                &settings,
+                &deploying_task.source_id,
+                deploying_task.codex_profile_id.as_deref(),
+            )?;
+            if let Some(account) = settings
+                .accounts
+                .iter()
+                .find(|a| a.provider == source.provider && a.id == source.account_id)
+            {
+                crate::accounts::ensure_not_deleting(&self.store, account)?;
+            }
+            let mut m = manifest(&deploying_task, &source, &settings)?;
+            m.enabled = p["preserveEnabled"].as_bool().unwrap_or(true);
             let host = source
                 .host_id
                 .as_ref()
@@ -549,7 +623,7 @@ impl Engine {
                 .map(|_| format!("~/.local/share/aieyes-wakeups/{namespace}"))
                 .unwrap_or_else(|| local_root.to_string_lossy().into());
             let mut pending = r.deployment.clone().unwrap_or(Deployment {
-                task: r.task.clone(),
+                task: deploying_task.clone(),
                 source: source.clone(),
                 host: host.clone(),
                 root: intended_root,
@@ -570,17 +644,44 @@ impl Engine {
             } else {
                 scheduler::deploy(&local_root, &m)?
             };
+            let tx = rusqlite::Transaction::new_unchecked(
+                &self.store.db,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            let latest = self.store.settings()?;
+            let command_changed = latest
+                .sources
+                .iter()
+                .find(|s| s.id == source.id)
+                .is_none_or(|s| {
+                    let account = latest
+                        .accounts
+                        .iter()
+                        .find(|a| a.id == source.account_id && a.provider == source.provider);
+                    crate::accounts::pre_command(&latest, account, s) != m.pre_command
+                });
+            let mut deployed_source = source;
+            deployed_source.quota_pre_command = m.pre_command.clone();
             r.deployment = Some(Deployment {
-                task: r.task.clone(),
-                source,
-                host,
+                task: deploying_task.clone(),
+                source: deployed_source,
+                host: host.map(|mut h| {
+                    h.pre_command = m.pre_command.clone();
+                    h
+                }),
                 root: result["root"].as_str().context("部署目录缺失")?.into(),
                 deployed_at: now(),
-                enabled: true,
-                state: "deployed".into(),
+                enabled: m.enabled,
+                state: if command_changed {
+                    "settings-pending"
+                } else {
+                    "deployed"
+                }
+                .into(),
                 timezone: result["timezone"].as_str().unwrap_or("目标机器时区").into(),
             });
             self.store.save_wakeup(&r)?;
+            tx.commit()?;
             return Ok(public_record(&r));
         }
         let d = r.deployment.as_mut().context("任务尚未部署")?;
@@ -620,12 +721,21 @@ impl Engine {
         if source.provider == "codex" {
             let mut source = source.clone();
             source.codex_binary = m.binary.clone();
-            let account = quota::codex_rpc(
-                &source,
-                settings,
-                "account/read",
-                json!({"refreshToken":false}),
-            )?;
+            let account = if let Some(reference) = &m.codex_profile_id {
+                crate::codex_auth::backend(
+                    &source,
+                    settings,
+                    "model.list",
+                    &json!({"profileId":reference.split_once(':').context("档案引用无效")?.1}),
+                )?
+            } else {
+                quota::codex_rpc(
+                    &source,
+                    settings,
+                    "account/read",
+                    json!({"refreshToken":false}),
+                )?
+            };
             ensure!(
                 matches!(
                     account["account"]["type"].as_str(),
@@ -633,12 +743,16 @@ impl Engine {
                 ),
                 "Codex 唤醒需要 ChatGPT 订阅登录"
             );
-            let v = quota::codex_rpc(
-                &source,
-                settings,
-                "model/list",
-                json!({"includeHidden":false}),
-            )?;
+            let v = if m.codex_profile_id.is_some() {
+                account["models"].clone()
+            } else {
+                quota::codex_rpc(
+                    &source,
+                    settings,
+                    "model/list",
+                    json!({"includeHidden":false}),
+                )?
+            };
             for row in v["data"].as_array().into_iter().flatten() {
                 models.push(json!({"id":row["model"].as_str().or(row["id"].as_str()).unwrap_or(""),"efforts":row["supportedReasoningEfforts"].as_array().map(|a|a.iter().filter_map(|v|v["reasoningEffort"].as_str()).collect::<Vec<_>>()).unwrap_or_default(),"defaultEffort":row["defaultReasoningEffort"]}));
             }
@@ -658,7 +772,7 @@ impl Engine {
                 "请升级 Claude Code CLI"
             );
         }
-        if source.provider == "agy" {
+        if crate::providers::antigravity(&source.provider) {
             let output = runner::invoke(m, &["models".into()], &std::env::temp_dir(), 20)?;
             models = agy_models(&String::from_utf8_lossy(&output));
         }
@@ -742,6 +856,72 @@ mod tests {
         s.sources.clear();
         assert!(e.store.save_settings(&s).is_err());
         assert!(e.wakeup_call("wakeups.delete", json!({"id":id})).is_err());
+    }
+    #[test]
+    fn account_command_changes_mark_deployments_pending_without_touching_remote_or_enabling_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = Engine::open(dir.path()).unwrap();
+        let source = Source {
+            id: "s".into(),
+            provider: "claude".into(),
+            account_id: "a".into(),
+            path: "~/.claude".into(),
+            host_id: Some("remote".into()),
+            ..Default::default()
+        };
+        let host = Host {
+            id: "remote".into(),
+            target: "fixture.invalid".into(),
+            ..Default::default()
+        };
+        let mut settings = Settings {
+            sources: vec![source.clone()],
+            hosts: vec![host.clone()],
+            accounts: vec![Account {
+                id: "a".into(),
+                name: "A".into(),
+                provider: "claude".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        e.store.save_settings(&settings).unwrap();
+        let task = Task {
+            id: "job".into(),
+            source_id: "s".into(),
+            model: "fixture-model".into(),
+            ..Default::default()
+        };
+        let record = Record {
+            task: task.clone(),
+            deployment: Some(Deployment {
+                task: task.clone(),
+                source: source.clone(),
+                host: Some(host),
+                root: "~/fixture".into(),
+                deployed_at: 1,
+                enabled: false,
+                state: "deployed".into(),
+                timezone: "UTC".into(),
+            }),
+        };
+        e.store.save_wakeup(&record).unwrap();
+        settings.accounts[0].device_settings = vec![AccountDeviceSettings {
+            machine_id: "remote".into(),
+            pre_command: "export ACCOUNT_PROXY=fixture".into(),
+        }];
+        e.store.save_settings(&settings).unwrap();
+        let record = e.store.wakeup("job").unwrap();
+        assert_eq!(
+            record.deployment.as_ref().unwrap().state,
+            "settings-pending"
+        );
+        assert!(!record.deployment.as_ref().unwrap().enabled);
+        assert_eq!(
+            manifest(&task, &source, &settings).unwrap().pre_command,
+            "export ACCOUNT_PROXY=fixture"
+        );
+        assert_eq!(public_record(&record)["deployment"]["changed"], true);
     }
     #[test]
     fn response_requires_terminal_success_not_just_exit_zero() {

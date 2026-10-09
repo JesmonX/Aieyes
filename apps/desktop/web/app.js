@@ -1,3 +1,4 @@
+const historicalAccounts = () => [...(state.settings?.accounts??[]), ...(state.settings?.deletedAccounts??[])];
 const $ = (s) => document.querySelector(s);
 /* The floating window expands into a compact panel that mirrors the macOS menu bar
    popover; the same renderers feed both surfaces. */
@@ -26,7 +27,7 @@ const pct = n => n == null ? '—' : n.toFixed(1) + '%';
 const bytes = n => { if (!Number.isFinite(n) || n < 0) return '—'; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return n.toFixed(i ? 1 : 0) + [' B',' KiB',' MiB',' GiB',' TiB'][i]; };
 const speed = n => n == null ? '—' : bytes(n) + '/s';
 const date = n => n ? new Date(n * 1000).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}) : '—';
-const providers = {codex:'Codex',claude:'Claude Code',antigravity:'Antigravity',agy:'agy',deepseek:'DeepSeek',custom:'自定义'};
+const providers = {codex:'Codex',claude:'Claude Code',antigravity:'Antigravity',agy:'Antigravity',deepseek:'DeepSeek',custom:'自定义'};
 function providerMark(provider) {
   const key=provider==='agy'?'antigravity':provider,known=['codex','claude','antigravity','deepseek'].includes(key),name=escapeHTML(providers[provider]??provider);
   return `<span class="provider-mark" data-provider="${escapeHTML(provider)}" title="${name}" aria-label="${name}">${known?`<img src="provider-${key}.png" alt="" width="36" height="36">`:uiIcon('terminal')}</span>`;
@@ -124,7 +125,7 @@ window.addEventListener('storage',event=>{
 function focusSelector(element) {
   if(!element||element===document.body)return null;
   if(element.id)return '#'+CSS.escape(element.id);
-  const attributes=['data-account-settings','data-heat-day','data-trend-model','data-copy-value','data-day-toggle','data-credit-estimate','data-manage-sampling','data-estimate','data-page','data-settings-tab','data-edit','data-remove','data-price','data-edit-account','data-remove-account','data-restore-account','data-enable','data-gap-map','data-gap-price','data-host-status'];
+  const attributes=['data-account-settings','data-heat-day','data-trend-model','data-copy-value','data-day-toggle','data-credit-estimate','data-manage-sampling','data-estimate','data-page','data-settings-tab','data-edit','data-remove','data-price','data-account-edit','data-account-options','data-device-command','data-account-login','data-device-manage','data-account-delete','data-account-connect','data-account-restore','data-source-advanced','data-agent-advanced','data-enable','data-gap-map','data-gap-price','data-host-status'];
   for(const attribute of attributes)if(element.hasAttribute(attribute))return `[${attribute}="${CSS.escape(element.getAttribute(attribute))}"]`;
   if(element.tagName==='SUMMARY')for(const attribute of ['data-agent-detail','data-metric'])if(element.parentElement.hasAttribute(attribute))return `[${attribute}="${CSS.escape(element.parentElement.getAttribute(attribute))}"] > summary`;
   return null;
@@ -145,11 +146,10 @@ function restoreView(view) {
 }
 async function openSetup(kind='sources') {
   if(PANEL){try{await window.__TAURI__.core.invoke('desktop_action',{action:kind==='hosts'?'add-host':kind==='quota'?'add-quota':'add-source'});}catch(error){notify(String(error),'error');}return;}
-  state.page='settings';state.settingsTab=kind==='hosts'?'hosts':'sources';render();editItem();
-  if(kind==='quota'){$('#field-provider').value='deepseek';$('#field-provider').dispatchEvent(new Event('change'));}
+  state.page='settings';state.settingsTab=kind==='hosts'?'hosts':kind==='quota'?'accounts':'sources';render();if(kind==='hosts')editItem();
 }
 function onboarding() {
-  return `<div class="card onboarding"><h2>连接你的第一个数据源</h2><p class="muted">从本机日志查看用量，关联账户查询余额与限额，或连接 SSH 主机。</p><div class="actions"><button id="add-first-source" class="primary" title="添加本机 Agent 日志数据源">本机日志</button><button id="add-first-quota">账户限额</button><button id="add-first-host">SSH 主机</button></div></div>`;
+  return `<div class="card onboarding"><h2>启用你的第一个 Agent</h2><p class="muted">启用 Agent 并选择机器，在账户中添加登录或 API Key。</p><div class="actions"><button id="add-first-source" class="primary" title="选择 Agent 与机器">设置 Agents</button><button id="add-first-quota">账户限额</button><button id="add-first-host">SSH 主机</button></div></div>`;
 }
 function bindSetup() { if($('#add-first-source'))$('#add-first-source').onclick=()=>openSetup();if($('#add-first-host'))$('#add-first-host').onclick=()=>openSetup('hosts');if($('#add-first-quota'))$('#add-first-quota').onclick=()=>openSetup('quota'); }
 function samplingBanner(d) {
@@ -160,9 +160,9 @@ function samplingBanner(d) {
 function openSampling() {
   if(state.estimateBusy){notify("后台采样操作仍在进行，可从任务入口返回");return;}
   const records=[...(state.dashboard.quotaEstimates??[]),...(state.dashboard.creditEstimates??[])].filter(e=>e.status!=='completed');
-  const rows=records.map((e,i)=>'<div class="sampling-row"><strong>'+escapeHTML(state.settings.accounts.find(a=>a.provider+':'+a.id===e.accountKey)?.name??e.accountKey)+'</strong><span>'+(e.kind==='credits'?'credit 价值':e.valuationMode==='fiveHour'?'5h / 7d 额度价值':'7d 整周价值')+' · '+estimateStatus(e)+'</span>'+(e.reason?'<p class="error">'+escapeHTML(e.reason)+'</p>':'')+'<div class="actions"><button data-sampling-open="'+i+'">查看与管理</button><button data-sampling-stop="'+i+'">结束采样</button></div></div>').join('');
+  const rows=records.map((e,i)=>'<div class="sampling-row"><strong>'+escapeHTML(historicalAccounts().find(a=>a.provider+':'+a.id===e.accountKey)?.name??e.accountKey)+'</strong><span>'+(e.kind==='credits'?'credit 价值':e.valuationMode==='fiveHour'?'5h / 7d 额度价值':'7d 整周价值')+' · '+estimateStatus(e)+'</span>'+(e.reason?'<p class="error">'+escapeHTML(e.reason)+'</p>':'')+'<div class="actions"><button data-sampling-open="'+i+'">查看与管理</button><button data-sampling-stop="'+i+'">结束采样</button></div></div>').join('');
   quotaDialog('管理采样','<p class="muted">关闭窗口后采样继续。只有结束采样才会停止记录。</p>'+(rows||'<p>当前没有进行中的采样</p>'));
-  document.querySelectorAll('[data-sampling-open]').forEach(b=>b.onclick=()=>{const e=records[Number(b.dataset.samplingOpen)];openQuotaEstimate(e.accountKey,e.kind==='credits'?'credits':'weekly');});
+  document.querySelectorAll('[data-sampling-open]').forEach(b=>b.onclick=()=>{const e=records[Number(b.dataset.samplingOpen)];openQuotaEstimate(e.accountKey,e.kind==='credits'?'credits':'weekly',e.groupId??'');});
   document.querySelectorAll('[data-sampling-stop]').forEach(b=>b.onclick=async()=>{const e=records[Number(b.dataset.samplingStop)];if(await quotaAction((e.kind==='credits'?'creditEstimates.':'quotaEstimates.')+'stop',{id:e.id}))openSampling();});
 }
 function quotaSection(d) {
@@ -170,7 +170,7 @@ function quotaSection(d) {
   const quotas=(d.quotas??[]).filter(visible),missing=state.settings.accounts.filter(a=>visible(a)&&!a.archived&&a.quotaEnabled&&(!state.provider||a.provider===state.provider)&&(!state.accountKey||state.accountKey===a.provider+':'+a.id)&&!quotas.some(q=>q.provider===a.provider&&q.accountId===a.id));
   if(!quotas.length&&!missing.length)return PANEL&&state.settings.accounts.some(a=>!a.archived&&a.quotaEnabled)?'<p class="muted panel-account-empty">当前面板未显示账户，可在更多中选择；详情保留全部账户。</p>':'';
   return `<div class="section-head quota-heading"><h2 title="实时账户限额 · 不随历史日期或模型筛选变化">实时账户限额 <span class="count">${quotas.length+missing.length}</span></h2><div class="section-actions"><button id="order-quotas" title="调整账户顺序" aria-label="调整账户顺序">${uiIcon('sort')}</button><button id="read-quotas" ${state.quotaBusy||state.refreshState.quotas?.busy?'disabled':''} title="重新查询各账户的实时限额">${state.quotaBusy||state.refreshState.quotas?.busy?'读取中…':'刷新限额'}</button></div></div><div class="quotas">${quotas.map(q=>quotaCard(q)).join('')}${missing.map(a=>{
-    const enabled=state.settings.sources.some(src=>src.enabled&&src.provider===a.provider&&src.accountId===a.id&&(!src.hostId||state.settings.hosts.some(h=>h.id===src.hostId&&h.enabled)));
+    const enabled=state.settings.sources.some(src=>src.enabled&&src.provider===a.provider&&(src.accountId===a.id||src.codexHomeId&&window.AieyesAgentSettings.profiles(a).some(r=>r.startsWith(src.codexHomeId+':')))&&(!src.hostId||state.settings.hosts.some(h=>h.id===src.hostId&&h.enabled)));
     const text=!enabled?'关联并启用数据源后可读取限额':state.quotaBusy?'正在读取账户限额…':state.quotaError?'读取失败，可重试刷新限额':'尚未读取限额，可点击刷新限额';
     return `<div class="card quota-placeholder"><h3>${providerMark(a.provider)} ${escapeHTML(a.name)}</h3><p class="muted" role="status">${text}</p>${enabled&&state.quotaError?`<p class="error">${escapeHTML(state.quotaError)}</p>`:''}</div>`;
   }).join('')}</div>`;
@@ -192,7 +192,7 @@ async function job(label, fn, refreshKey=null, refreshItem=null) {
 }
 const filterKeys=['provider','accountKey','sourceId','model','days'];
 const filterSnapshot=()=>Object.fromEntries(filterKeys.map(k=>[k,state[k]]));
-function appliedScope(){const f=state.appliedFilters??filterSnapshot();return [f.days===1?'今日':'最近 '+f.days+' 天',providers[f.provider]??'全部 Agent',state.settings.accounts.find(a=>a.provider+':'+a.id===f.accountKey)?.name??(f.accountKey==='none'?'未关联账户':'全部账户'),state.settings.sources.find(s=>s.id===f.sourceId)?.name??'全部来源',f.model||'全部模型'].join(' · ');}
+function appliedScope(){const f=state.appliedFilters??filterSnapshot();return [f.days===1?'今日':'最近 '+f.days+' 天',providers[f.provider]??'全部 Agent',historicalAccounts().find(a=>a.provider+':'+a.id===f.accountKey)?.name??(f.accountKey==='none'?'未关联账户':'全部账户'),state.settings.sources.find(s=>s.id===f.sourceId)?.name??'全部来源',f.model||'全部模型'].join(' · ');}
 async function changeFilters(values={}){Object.assign(state,values);try{await loadDashboard();}catch(_){} }
 function renderQueryStatus(){
   let el=$('#query-status');if(!el){el=document.createElement('div');el.id='query-status';el.setAttribute('role','status');$('#content .filters')?.after(el);}
@@ -203,9 +203,9 @@ function renderQueryStatus(){
 }
 async function loadDashboard() {
   savePanelView();
-  if(state.accountKey && state.accountKey!=='none' && !state.settings.accounts.some(a=>a.provider+':'+a.id===state.accountKey))state.accountKey='';
+  if(state.accountKey && state.accountKey!=='none' && !historicalAccounts().some(a=>a.provider+':'+a.id===state.accountKey))state.accountKey='';
   if(state.sourceId && !state.settings.sources.some(s=>s.id===state.sourceId))state.sourceId='';
-  const account=state.settings.accounts.find(a=>a.provider+':'+a.id===state.accountKey);
+  const account=historicalAccounts().find(a=>a.provider+':'+a.id===state.accountKey);
   const request=++state.dashboardRequest,requested=filterSnapshot();state.dashboardPending=true;state.dashboardError='';if(state.page==='agent')renderQueryStatus();
   try {
   const dashboard = await api('dashboard',{provider:account?.provider || state.provider || null,accountId:state.accountKey==='none'?'':account?.id ?? null,sourceId:state.sourceId || null,model:state.model || null,days:state.days});
@@ -230,12 +230,12 @@ async function scan(sourceId) {
   await job('同步记录',async()=>{try{const rows=await api('sources.scan',typeof sourceId==='string'?{sourceId}:{});await loadDashboard();const error=batchError(rows,'同步记录');if(error)throw error;}finally{state.lastScan=Date.now();}},'scan',typeof sourceId==='string'?sourceId:null);
 }
 function hasQuotaSources() {
-  return state.settings.accounts.some(a => !a.archived && a.quotaEnabled && state.settings.sources.some(s => s.enabled && s.provider === a.provider && s.accountId === a.id && (!s.hostId || state.settings.hosts.some(h => h.id === s.hostId && h.enabled))));
+  return state.settings.accounts.some(a => !a.archived && a.quotaEnabled && state.settings.sources.some(s => s.enabled && s.provider === a.provider && (s.accountId === a.id || s.codexHomeId && window.AieyesAgentSettings.profiles(a).some(r=>r.startsWith(s.codexHomeId+':'))) && (!s.hostId || state.settings.hosts.some(h => h.id === s.hostId && h.enabled))));
 }
-async function quotas(accountId) {
+async function quotas(accountId,dueOnly=false) {
   if(state.estimateBusy||state.sharedEstimateOperations?.size||state.busy||state.settingsSaving||['scan','quotas','prices'].some(key=>state.refreshState[key]?.busy))return;
   state.quotaBusy=true;state.quotaError='';if(state.page==='agent')render();
-  try { await job('读取限额',async()=>{try{const rows=await api('quotas.refresh',typeof accountId==='string'?{accountId}:{});await loadDashboard();const error=batchError(rows,'读取限额');if(error)throw error;}catch(error){state.quotaError=error.failures?'部分账户读取失败，请逐项重试。':error.message??String(error);throw error;}finally{state.lastQuota=Date.now();}},'quotas',typeof accountId==='string'?accountId:null); }
+  try { await job('读取限额',async()=>{try{const rows=await api('quotas.refresh',{...(typeof accountId==='string'?{accountId}:{}),dueOnly});await loadDashboard();const error=batchError(rows,'读取限额');if(error)throw error;}catch(error){state.quotaError=error.failures?'部分账户读取失败，请逐项重试。':error.message??String(error);throw error;}finally{state.lastQuota=Date.now();}},'quotas',typeof accountId==='string'?accountId:null); }
   finally {state.quotaBusy=false;if(state.page==='agent')render();}
 }
 async function syncPrices(){await job('同步价格',async()=>{await api('prices.sync');state.prices=await api('prices.list');await loadDashboard();if(state.page==='settings')renderSettings();notify('价格已更新');},'prices');}
@@ -266,9 +266,8 @@ async function saveSettings(next,{refresh=true}={}) {
   state.settingsSaving = true;
   const previous=state.settings;
   try {
-    await api('settings.save', next);
-    state.settings = next;
-    window.AieyesTheme?.apply(next.appearance);
+    const saved=await api('settings.patch', {base:previous,settings:next});
+    window.AieyesAgentSettings.accept(saved);
     if(JSON.stringify([previous.accounts,previous.sources,previous.hosts,previous.proxy])!==JSON.stringify([next.accounts,next.sources,next.hosts,next.proxy]))state.lastQuota=0;
   } finally { state.settingsSaving = false; }
   markSaved();
@@ -298,9 +297,8 @@ function settingsChangeCount(){
 }
 function updateSettingsSaveBar(){
   const count=settingsChangeCount(),bar=$('#settings-save-bar');if(!bar)return;
-  bar.dataset.dirty=String(count>0);bar.querySelector('.settings-draft-label').textContent=state.settingsCommitting?'正在保存应用配置…':count?'应用配置 · 未保存 '+count+' 项':'应用配置 · 已保存';
-  $('#settings-save-all').disabled=!count||state.settingsCommitting||state.busy||editorSaving;
-  $('#settings-discard-all').disabled=!count||state.settingsCommitting||state.busy||editorSaving;
+  bar.dataset.dirty=String(count>0);bar.querySelector('.settings-draft-label').textContent=state.settingsCommitting?'正在保存应用配置…':count?'当前表单有未保存输入':'账户修改自动保存；目录与服务器在编辑器中保存';
+
 }
 function collectGeneralDraft(next){
   captureSettingsForms();const values=settingsForms.get('general-form')?.values;if(!values)return next;
@@ -310,13 +308,13 @@ function collectGeneralDraft(next){
   for(const [key,min,label] of [['refreshSeconds',10,'Agent'],['serverRefreshSeconds',2,'服务器']]){const value=Number(data.get(key));if(!Number.isInteger(value)||value<min||value>86400)throw new Error(label+' 刷新间隔范围为 '+min+'–86400 秒，草稿已保留');next[key]=value;}
   return next;
 }
-async function saveAllSettings({clearForms=true,refresh=true}={}){
+async function saveAllSettings({clearForms=true,refresh=true,section=state.settingsTab}={}){
   if(state.settingsCommitting)throw new Error('配置正在保存');
-  const next=mappingDraft(collectGeneralDraft(structuredClone(draftSettings()))),preparedHosts=[];
+  const next=section==='prices'?mappingDraft(structuredClone(state.settings)):section==='general'?collectGeneralDraft(structuredClone(state.settings)):structuredClone(draftSettings()),preparedHosts=[];
+  const controls=[...document.querySelectorAll('#general-form input,#general-form select,#general-form textarea')].map(c=>[c,c.disabled]);
+  controls.forEach(([c])=>c.disabled=true);
   state.settingsCommitting=true;updateSettingsSaveBar();
   try{
-    const current=await api('settings.get');
-    if(configKey(current)!==state.settingsBaseline){state.settings=structuredClone(current);throw new Error('配置已在其他窗口修改。草稿已保留，请放弃草稿后重新编辑，避免覆盖其他更改。');}
     for(const [id,key] of pendingAPIKeys){const source=next.sources.find(s=>s.id===id);if(!source||source.provider!=='deepseek')continue;
       let saved=preparedAPIKeys.get(id);if(!saved||saved.key!==key){const result=await api('credentials.save',{sourceId:id+'-draft-'+crypto.randomUUID(),apiKey:key});if(!result.path)throw new Error('未获得凭据保存路径');saved={key,path:result.path};preparedAPIKeys.set(id,saved);}source.path=saved.path;
     }
@@ -324,13 +322,13 @@ async function saveAllSettings({clearForms=true,refresh=true}={}){
     await saveSettings(next,{refresh:false});
     pendingAPIKeys.clear();pendingHostPasswords.clear();preparedAPIKeys.clear();
     const committed=await api('settings.get').catch(()=>next);state.settings=committed;state.settingsDraft=structuredClone(committed);state.settingsBaseline=configKey(committed);
-    if(clearForms)settingsForms.clear();
+    if(clearForms)settingsForms.delete(section==='prices'?'mapping-form':'general-form');
     else { const general=settingsForms.get('general-form');if(general){general.baseline=structuredClone(general.values);const form=$('#general-form');if(form)form.dataset.draftBaseline=JSON.stringify(general.baseline);} }
-    if(refresh)await loadDashboard().catch(error=>notify('配置已保存，概览刷新失败：'+String(error),'error'));
+    if(refresh)void loadDashboard().catch(error=>notify('配置已保存，概览刷新失败：'+String(error),'error'));
     if(state.page==='settings')renderSettings(!clearForms);
     return true;
   }catch(error){for(const passwordRef of preparedHosts)await api('hosts.credentials.delete',{passwordRef}).catch(()=>{});throw error;}
-  finally{state.settingsCommitting=false;updateSettingsSaveBar();}
+  finally{state.settingsCommitting=false;controls.forEach(([c,disabled])=>{if(c.isConnected)c.disabled=disabled;});updateSettingsSaveBar();}
 }
 function discardAllSettings(){
   state.settingsDraft=null;state.settingsBaseline=null;settingsForms.clear();pendingAPIKeys.clear();pendingHostPasswords.clear();preparedAPIKeys.clear();state.saveError='';renderSettings(false);
@@ -367,8 +365,10 @@ function creditBalance(q, record, compact=false) {
   const full=balance+(valid?' ≈ '+money(Math.round((amount*value/1000+Number.EPSILON*Math.abs(amount*value/1000))*100)/100)+' USD':'');
   return `<span class="credit-balance" title="${escapeHTML('余额 '+full+' · '+(q.creditsUpdatedAt?'更新于 '+date(q.creditsUpdatedAt):'尚未取得 credits 信息'))}"><span class="credit-label">${uiIcon('credit')}余额</span> <strong>${compact?balance.replace(/ credits$/,''):full}</strong></span>`;
 }
-function creditRow(q, record) {
-  return `<div class="credit-row">${creditBalance(q,record)}<button class="credit-estimate-entry" data-credit-estimate="${escapeHTML(q.provider+':'+q.accountId)}">${record?estimateStatus(record)+' · ':''}估值 ${uiIcon('right')}</button></div>`;
+function creditRow(q,record,history=[]) {
+  const amount=AieyesUI.compactMoney(record?.status==='pending'?null:record?.valuePer1000);
+  const title=record?`1000 credits ≈ ${money(record.valuePer1000)} USD · ${estimateStatus(record)} · ${date(record.checkpointAt)}`:'尚无有效采样';
+  return `<div class="credit-row">${creditBalance(q,record)}</div><button class="credit-estimate-entry estimate-entry" data-credit-estimate="${escapeHTML(q.provider+':'+q.accountId)}" title="${escapeHTML(title)}">${uiIcon('trend')}<span>credits估值（当前1000credits≈${amount}）</span>${uiIcon('right')}</button>${estimateNotice(history,true)}`;
 }
 function tokenSummary(summary) {
   return `<div class="token-summary"><button type="button" id="token-summary" aria-expanded="false" aria-controls="token-popover" aria-label="总 Token，点击查看详情">${stat('总 Token',compact(summary.total)+' <span class="token-rate">('+pct(cacheRate(summary.tokens))+')</span>','','✧')}<span class="token-hint">点击查看详情</span></button><div id="token-popover" role="region" aria-label="Token 细分" hidden>${cacheCard(summary.tokens).replace('class="stat cache-card"','class="card cache-card"')}</div></div>`;
@@ -402,11 +402,11 @@ function renderAgent() {
   if(PANEL){renderAgentPanel(d);return;}
   const view=rememberView();
   const s=d.summary,t=s.tokens,models=d.models;
-  const account=state.settings.accounts.find(a=>a.provider+':'+a.id===state.accountKey);
+  const account=historicalAccounts().find(a=>a.provider+':'+a.id===state.accountKey);
   const sources=state.settings.sources.filter(src=>{const ids=d.sources.find(s=>s.id===src.id)?.accountIds??[src.accountId];return (!state.provider||src.provider===state.provider)&&(!state.accountKey||(state.accountKey==='none'?ids.includes(''):src.provider===account?.provider&&ids.includes(account?.id)));});
   const trendModels=[...new Set(d.dayModels.map(r=>r.model))].sort();
   $('#title').textContent='Agent 概览';
-  $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${state.settings.accounts.filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select><select id="source" aria-label="数据源">${option('','全部数据源',state.sourceId)}${sources.map(s=>option(s.id,s.name,state.sourceId)).join('')}</select><select id="model" aria-label="模型">${option('','全部模型',state.model)}${[...new Set([...(d.modelOptions??trendModels),...(state.model?[state.model]:[])])].map(m=>option(m,m,state.model)).join('')}</select></div>
+  $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).filter(([key])=>key!=='agy').map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${historicalAccounts().filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select><select id="source" aria-label="数据源">${option('','全部数据源',state.sourceId)}${sources.map(s=>option(s.id,s.name,state.sourceId)).join('')}</select><select id="model" aria-label="模型">${option('','全部模型',state.model)}${[...new Set([...(d.modelOptions??trendModels),...(state.model?[state.model]:[])])].map(m=>option(m,m,state.model)).join('')}</select></div>
   ${s.total>0&&s.pricedTokens<s.total?attention('计价未完成：部分 Token 缺少价格','补充价格','pricing-attention'):''}
   <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':n===365?'最近一年':`最近 ${n} 天`,state.days)).join('')}</select></div>
   <div class="stats">${stat('总 Token',compact(s.total),'','✧')}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens||!s.total?money(s.cost):'—','','$')}</div>${cacheCard(t)}${quotaSection(d)}
@@ -431,7 +431,7 @@ function renderAgent() {
 function panelTrendExpanded(){try{return localStorage.getItem('aieyes.panel.trend')==='true';}catch(_){return false;}}
 function renderAgentPanel(d) {
   const view=rememberView(),s=d.summary,t=s.tokens,trendTitle=`近 ${Math.max(7,state.days)} 天趋势与每日明细`;
-  $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${state.settings.accounts.filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select></div>
+  $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).filter(([key])=>key!=='agy').map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${historicalAccounts().filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select></div>
   <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':n===365?'最近一年':`最近 ${n} 天`,state.days)).join('')}</select></div>
   <div class="stats panel-stats">${tokenSummary(s)}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens||!s.total?money(s.cost):'—','','$')}</div>
   ${quotaSection(d)}
@@ -455,7 +455,7 @@ function shortenEmptyUsage(d) {
   if(!state.settings.sources.length){$('#content .chart-row')?.remove();$('#trend')?.closest('.card')?.remove();$('#content .daily')?.closest('.card')?.remove();$('#content .heatmap')?.closest('.card')?.remove();$('#cost-mode')?.closest('.section-head')?.remove();return;}
   const trend=$('#trend'),chart=trend?.closest('.chart-row')??trend?.closest('.card');
   if(chart){
-    const usage=AieyesUI.usageSources(state.settings),fresh=AieyesUI.freshness(state.settings,d),filtered=Boolean(state.provider||state.accountKey||state.sourceId||state.model),onlyQuota=state.settings.sources.every(s=>['agy','deepseek'].includes(s.provider));
+    const usage=AieyesUI.usageSources(state.settings),fresh=AieyesUI.freshness(state.settings,d),filtered=Boolean(state.provider||state.accountKey||state.sourceId||state.model),onlyQuota=state.settings.sources.every(s=>s.provider==='deepseek');
     const title=onlyQuota?'此来源提供账户限额':fresh.failed?'记录同步失败':filtered?'没有匹配的用量记录':!fresh.timestamp?'尚未同步用量记录':'此时间范围暂无用量';
     const description=onlyQuota?'可在实时账户区查看余额与限额；接入日志后即可分析用量。':fresh.failed?'请在对应来源查看错误并重试，已有记录仍保留。':filtered?'尝试清除筛选或扩大时间范围。':!fresh.timestamp?'来源已配置，首次同步后将显示统计。':'可以扩大日期范围查看历史，或同步最新日志。';
     const empty=document.createElement('div');empty.className='card empty-usage';empty.innerHTML='<h2>'+title+'</h2><p class="muted">'+description+'</p><div class="actions">'+(onlyQuota?'<button id="empty-add-source">添加日志来源</button>':'<button id="empty-sync">同步记录</button><button id="empty-range">扩大到最近一年</button>'+(filtered?'<button id="empty-clear">清除筛选</button>':''))+'</div>';chart.replaceWith(empty);
@@ -473,6 +473,19 @@ function estimateSummary(records, credits=false) {
   const entries=AieyesUI.estimateEntries(records,credits), latest=AieyesUI.canonicalEstimates(records)[0];
   return '<div class="estimate-summary">'+entries.map(e=>`<div><span class="estimate-amount">${escapeHTML(e.label)} ≈ ${money(e.value)} USD</span>${e.historical?`<small>历史采样 · ${date(e.record.checkpointAt)}${e.record.originalEstimateId?' · 已修正':''}</small>`:''}</div>`).join('')+(latest&&(![latest.fiveHourValue,latest.weeklyValue,latest.valuePer1000].some(Number.isFinite)||latest.status==='pending')?`<p class="muted">最新采样 · ${estimateStatus(latest)} · ${escapeHTML(AieyesUI.estimateIssue(latest))}</p>`:'')+'</div>';
 }
+function estimateNotice(records,credits=false) {
+  const latest=AieyesUI.canonicalEstimates(records)[0],entries=AieyesUI.estimateEntries(records,credits),notes=[];
+  if(entries.some(e=>e.historical))notes.push('历史采样');
+  if(entries.some(e=>e.record.originalEstimateId))notes.push('已修正');
+  if(latest&&(!(credits?[latest.valuePer1000]:[latest.fiveHourValue,latest.weeklyValue,latest.weeklyRatioValue]).some(Number.isFinite)||latest.status==='pending'))notes.push('最新采样 · '+estimateStatus(latest)+' · '+AieyesUI.estimateIssue(latest));
+  return notes.length?`<div class="estimate-notice muted">${escapeHTML(notes.join(' · '))}</div>`:'';
+}
+function estimateEntry(q,records,group='') {
+  const entries=AieyesUI.estimateEntries(records),latest=AieyesUI.canonicalEstimates(records)[0];
+  const title=entries.map(e=>`${e.label} ≈ ${money(e.value)} USD${e.historical?' · 历史采样':''} · ${date(e.record.checkpointAt)}`).join('；') || '开始采样以估算额度价值';
+  const label=AieyesUI.estimateLine(records);
+  return `<button class="estimate-entry quota-estimate-entry${latest?' sampling-entry':''}" data-estimate="${escapeHTML(q.provider+':'+q.accountId)}" data-estimate-group="${escapeHTML(group)}" title="${escapeHTML(title+'；7d 顺序：容量倍率 / 同期消耗（旧记录为整周）')}">${uiIcon('trend')}<span class="estimate-inline">${escapeHTML(label)}</span>${uiIcon('right')}</button>${estimateNotice(records)}`;
+}
 function quotaCard(q) {
   const key=q.provider+':'+q.accountId, records=(state.dashboard?.quotaEstimates??[]).filter(e=>e.accountKey===key), credits=(state.dashboard?.creditEstimates??[]).filter(e=>e.accountKey===key), latest=AieyesUI.canonicalEstimates(records)[0], credit=AieyesUI.estimateEntries(credits,true)[0]?.record ?? credits[0];
   const windowHTML=w=>`<div class="quota-window"><div class="between tiny"><span>${escapeHTML(w.name)}</span><strong style="color:${quotaColor(Number.isFinite(w.usedPercent)?resourcePercent(100-w.usedPercent):null)}">剩余 ${pct(Number.isFinite(w.usedPercent)?resourcePercent(100-w.usedPercent):null)}</strong></div>${resourceBar(Number.isFinite(w.usedPercent)?100-w.usedPercent:null,w.name+'剩余额度',true)}<div class="tiny muted quota-reset" data-reset-at="${w.resetsAt??0}" data-window-minutes="${w.windowMinutes??''}" data-used-percent="${Number.isFinite(w.usedPercent)?w.usedPercent:''}">${AieyesUI.quotaReset(w)}</div></div>`;
@@ -480,11 +493,11 @@ function quotaCard(q) {
   let expanded=true;try{const stored=localStorage.getItem('quota.expanded.v2.'+(PANEL?'panel.':'detail.')+key);if(collapsible&&stored!=null)expanded=stored==='true';}catch(_){}
 
   let windows='<div class="quota-windows">'+q.windows.map(windowHTML).join('')+'</div>';
-  if(q.provider==='agy'){
+  if(['antigravity','agy'].includes(q.provider)){
     const groups=new Map();for(const w of q.windows){const group=w.groupName||w.name.split(' · ').slice(0,-1).join(' · ');if(!groups.has(group))groups.set(group,[]);groups.get(group).push(w);}
-    windows=`<div class="agy-groups">${[...groups].map(([group,rows])=>`<div class="agy-group"><strong>${escapeHTML(group)}</strong><div class="agy-windows">${rows.sort((a,b)=>(a.windowMinutes??0)-(b.windowMinutes??0)).map(w=>windowHTML({...w,name:w.windowMinutes===10080?'7d':w.windowMinutes===300?'5h':w.name})).join('')}</div></div>`).join('')}</div>`;
+    windows=`<div class="agy-groups">${[...groups].map(([group,rows])=>`<div class="agy-group"><strong>${escapeHTML(group)}</strong><div class="agy-windows">${rows.sort((a,b)=>(a.windowMinutes??0)-(b.windowMinutes??0)).map(w=>windowHTML({...w,name:w.windowMinutes===10080?'7d':w.windowMinutes===300?'5h':w.name})).join('')}</div>${estimateEntry(q,records.filter(e=>e.groupId===(rows[0]?.groupId||group)),rows[0]?.groupId||group)}</div>`).join('')}</div>`;
   }
-  return `<div class="card quota-card" data-quota="${escapeHTML(key)}"><details class="quota-disclosure" data-collapsible="${collapsible}" data-agent-detail="quota:${escapeHTML(key)}" ${expanded?'open':''}><summary class="quota-title"><h3>${providerMark(q.provider)}<span class="quota-name" title="${escapeHTML(q.name)}">${escapeHTML(q.name)}</span></h3>${subscriptionBadge(q.plan)}${q.provider==='codex'?`<span class="quota-credit-summary">${creditBalance(q,credit,true)}</span>`:''}${collapsible?`<span class="quota-chevron" aria-hidden="true">${uiIcon('chevron')}</span>`:''}</summary></details><div class="quota-content"><div class="between tiny muted quota-meta"><span>${escapeHTML(providers[q.provider]??q.provider)}</span><span>${q.origin==='log'?'记录':'更新'} ${date(q.updatedAt)}</span></div>${(q.balances??[]).map(b=>`<div class="quota-window"><div class="between"><span>可用余额</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted balance-detail"><span>赠送 ${escapeHTML(b.granted)}</span><span>充值 ${escapeHTML(b.toppedUp)}</span></div></div>`).join('')}${q.isAvailable===false?'<p class="error">当前余额不足以调用 API</p>':''}${windows}${q.bankReset?`<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>Bank Reset · ${q.bankReset.availableCount} 次可用</summary>${(q.bankReset.credits??[]).map(c=>`<div class="between tiny muted"><span>${escapeHTML(c.title??'Reset Credit')}</span><span>到期 ${date(c.expiresAt)}</span></div>`).join('')}</details>`:''}${q.error?`<p class="error quota-error" title="${escapeHTML(q.error)}"><span class="error-detail">${escapeHTML(q.error)}</span><span class="short-error">限额更新失败 · 展开查看</span></p>`:''}${(q.provider!=='agy'&&q.windows.some(w=>w.windowMinutes===300||w.windowMinutes===10080))||latest?`<button class="estimate-entry${latest?' sampling-entry':''}" data-estimate="${escapeHTML(key)}"><span>${uiIcon('trend')} ${latest?.valuationMode==='fiveHour'?'5h / 7d 估值':latest?'7d 整周估值':'估算额度价值'}</span><strong></strong>${uiIcon('right')}</button>`:''}${estimateSummary(records)}${q.provider==='codex'?creditRow(q,credit)+estimateSummary(credits,true):''}</div></div>`;
+  return `<div class="card quota-card" data-quota="${escapeHTML(key)}"><details class="quota-disclosure" data-collapsible="${collapsible}" data-agent-detail="quota:${escapeHTML(key)}" ${expanded?'open':''}><summary class="quota-title"><h3>${providerMark(q.provider)}<span class="quota-name" title="${escapeHTML(q.name)}">${escapeHTML(q.name)}</span></h3>${subscriptionBadge(q.plan)}${q.provider==='codex'?`<span class="quota-credit-summary">${creditBalance(q,credit,true)}</span>`:''}${collapsible?`<span class="quota-chevron" aria-hidden="true">${uiIcon('chevron')}</span>`:''}</summary></details><div class="quota-content"><div class="between tiny muted quota-meta"><span>${escapeHTML(providers[q.provider]??q.provider)}</span><span>${q.origin==='log'?'记录':'更新'} ${date(q.updatedAt)}</span></div>${(q.balances??[]).map(b=>`<div class="quota-window"><div class="between"><span>可用余额</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted balance-detail"><span>赠送 ${escapeHTML(b.granted)}</span><span>充值 ${escapeHTML(b.toppedUp)}</span></div></div>`).join('')}${q.isAvailable===false?'<p class="error">当前余额不足以调用 API</p>':''}${windows}${q.bankReset?`<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>Bank Reset · ${q.bankReset.availableCount} 次可用</summary>${(q.bankReset.credits??[]).map(c=>`<div class="between tiny muted"><span>${escapeHTML(c.title??'Reset Credit')}</span><span>到期 ${date(c.expiresAt)}</span></div>`).join('')}</details>`:''}${q.error?`<p class="error quota-error" title="${escapeHTML(q.error)}"><span class="error-detail">${escapeHTML(q.error)}</span><span class="short-error">限额更新失败 · 展开查看</span></p>`:''}${!['antigravity','agy'].includes(q.provider)&&(q.windows.some(w=>w.windowMinutes===300||w.windowMinutes===10080)||latest)?estimateEntry(q,records):''}${q.provider==='codex'?creditRow(q,credit,credits):''}</div></div>`;
 }
 
 function drawTrend() {
@@ -548,13 +561,24 @@ function uptimeText(seconds) {
   if(!Number.isSafeInteger(minutes))return '—';
   return [minutes>=1440?Math.floor(minutes/1440)+' 天':null,minutes>=60?Math.floor(minutes%1440/60)+' 小时':null,minutes%60+' 分'].filter(v=>v!=null).join(' ');
 }
+function capacityPair(used,total) {
+  const scale=Math.max(Number.isFinite(total)?total:0,Number.isFinite(used)?used:0),units=['B','KiB','MiB','GiB','TiB','PiB'];
+  const power=scale>0?Math.min(units.length-1,Math.max(0,Math.floor(Math.log(scale)/Math.log(1024)))):0;
+  const number=n=>Number.isFinite(n)?(n/1024**power).toFixed(1).replace(/\.0$/,''):'—';
+  return number(used)+'/'+number(total)+' '+units[power];
+}
+function resourceStrip(title,percent,detail='') {
+  const value=resourcePercent(percent),label=(detail?detail+' · ':'')+(value==null?'—':Math.round(value)+'%');
+  return `<div class="server-resource-strip" title="${escapeHTML(title+' '+label)}"><div class="resource-strip-heading"><span>${escapeHTML(title)}</span><strong${value>=90?' class="error"':''}>${escapeHTML(label)}</strong></div>${resourceBar(value,title+' '+label)}</div>`;
+}
 function serverSummary(host,sample) {
   const enabled=key=>(host.metrics??Object.keys(groups)).includes(key), memory=sample?.memory;
   const gpus=hostDevices(host,'gpu',sample?.gpu), networks=hostDevices(host,'network',sample?.network);
   const system=(enabled('cpu')?resourceRing('CPU',sample?.cpu?.find(c=>c.id==='cpu')?.utilization):'')+
     (enabled('memory')?resourceRing('内存',capacityPercent(usedCapacity(memory?.total,memory?.available),memory?.total),`${bytes(usedCapacity(memory?.total,memory?.available))} / ${bytes(memory?.total)}`):'');
-  const gpuCards=gpus.map(g=>`<div class="server-gpu" data-gpu="${escapeHTML(g.id)}"><div class="server-gpu-title"><strong>GPU ${escapeHTML(g.id)}</strong><span>${escapeHTML(g.name??'—')}</span></div><div class="server-gpu-metrics">${resourceRing('利用率',g.utilization)}${hostShows(host,'gpuMemory')?resourceRing('显存',capacityPercent(g.memoryUsedMiB,g.memoryTotalMiB),`${bytes(g.memoryUsedMiB==null?null:g.memoryUsedMiB*1048576)} / ${bytes(g.memoryTotalMiB==null?null:g.memoryTotalMiB*1048576)}`):''}</div></div>`).join('');
-  return `<div class="server-summary-metrics">${system?`<div class="server-system-metrics">${system}</div>`:''}${gpuCards?`<div class="server-gpu-list">${gpuCards}</div>`:enabled('gpu')?`<span class="muted">GPU ${sample?.gpu?'无已选设备':'—'}</span>`:''}<div class="server-summary-facts">${hostShows(host,'uptime')?`<span data-host-uptime>连续运行 <strong>${uptimeText(sample?.uptime)}</strong></span>`:''}${hostShows(host,'networkTotals')&&enabled('network')?(networks.length?networks.map(n=>`<span class="server-network-total" data-network-total="${escapeHTML(n.id)}"><span>${escapeHTML(n.id)} 累计</span><strong>↓ ${bytes(n.rxBytes)} · ↑ ${bytes(n.txBytes)}</strong></span>`).join(''):`<span>累计流量 ${sample?.network?'无已选网卡':'—'}</span>`):''}<span class="server-sample-time muted">采样 ${date(sample?.timestamp)}${!host.enabled?' · 已暂停，保留旧读数':''}</span></div></div>`;
+  const gpuCards=gpus.map(g=>`<div class="server-gpu" data-gpu="${escapeHTML(g.id)}"><div class="server-gpu-title"><strong>GPU ${escapeHTML(g.id)}</strong><span title="${escapeHTML(g.name??'—')}">${escapeHTML(g.name??'—')}</span></div><div class="server-gpu-metrics" data-memory="${hostShows(host,'gpuMemory')}">${resourceStrip('利用率',g.utilization)}${hostShows(host,'gpuMemory')?resourceStrip('显存',capacityPercent(g.memoryUsedMiB,g.memoryTotalMiB),capacityPair(g.memoryUsedMiB==null?null:g.memoryUsedMiB*1048576,g.memoryTotalMiB==null?null:g.memoryTotalMiB*1048576)):''}</div></div>`).join('');
+  const filesystems=hostDevices(host,'filesystems',sample?.filesystems),fsSummary=enabled('filesystems')?`<div class="server-filesystems"><span class="muted">文件系统</span><div class="server-filesystem-list">${filesystems.length?filesystems.map(fs=>`<div data-filesystem="${escapeHTML(fs.id)}">${resourceStrip(fs.id,capacityPercent(fs.used,fs.total),capacityPair(fs.used,fs.total))}</div>`).join(''):`<span class="muted">${sample?.filesystems?'无已选挂载点':'—'}</span>`}</div></div>`:'';
+  return `<div class="server-summary-metrics">${system?`<div class="server-system-metrics">${system}</div>`:''}${gpuCards?`<div class="server-gpu-list">${gpuCards}</div>`:enabled('gpu')?`<span class="muted">GPU ${sample?.gpu?'无已选设备':'—'}</span>`:''}${fsSummary}<div class="server-summary-facts">${hostShows(host,'uptime')?`<span data-host-uptime>连续运行 <strong>${uptimeText(sample?.uptime)}</strong></span>`:''}${hostShows(host,'networkTotals')&&enabled('network')?(networks.length?networks.map(n=>`<span class="server-network-total" data-network-total="${escapeHTML(n.id)}"><span>${escapeHTML(n.id)} 累计</span><strong>↓ ${bytes(n.rxBytes)} · ↑ ${bytes(n.txBytes)}</strong></span>`).join(''):`<span>累计流量 ${sample?.network?'无已选网卡':'—'}</span>`):''}<span class="server-sample-time muted">采样 ${date(sample?.timestamp)}${!host.enabled?' · 已暂停，保留旧读数':''}</span></div></div>`;
 }
 function renderServers() {
   const view=rememberView();
@@ -575,7 +599,7 @@ function serverGroup(key,label,value,host) {
   else content=value.map(d=>{
     if(key==='cpu')return (d.id==='cpu'?'':meter(d.id,pct(resourcePercent(d.utilization)),d.utilization))+(show('cpuTimes')?row(d.id+' user / system',`${pct(d.userPercent)} / ${pct(d.systemPercent)}`)+row('iowait / steal',`${pct(d.iowaitPercent)} / ${pct(d.stealPercent)}`):'');
     if(key==='gpu')return show('gpuThermals')?row(`GPU ${d.id} 温度 / 功耗`,`${d.temperature==null?'—':d.temperature+'°C'} / ${d.powerWatts==null?'—':d.powerWatts+' W'}`):'';
-    if(key==='filesystems')return meter(d.id,`${bytes(d.used)} / ${bytes(d.total)}`,capacityPercent(d.used,d.total))+(show('fsAvailable')?row('可用',bytes(d.available)):'')+(show('fsType')?row(d.device??'',escapeHTML(d.type??'')):'')+(show('inodes')?meter('inode',pct(capacityPercent(usedCapacity(d.inodes,d.inodesFree),d.inodes)),capacityPercent(usedCapacity(d.inodes,d.inodesFree),d.inodes)):'');
+    if(key==='filesystems')return (show('fsAvailable')||show('fsType')||show('inodes')?row(d.id,''):'')+(show('fsAvailable')?row('可用',bytes(d.available)):'')+(show('fsType')?row(d.device??'',escapeHTML(d.type??'')):'')+(show('inodes')?meter('inode',pct(capacityPercent(usedCapacity(d.inodes,d.inodesFree),d.inodes)),capacityPercent(usedCapacity(d.inodes,d.inodesFree),d.inodes)):'');
     if(key==='disk')return row(d.id,`读 ${speed(d.readBytesPerSecond)} · 写 ${speed(d.writeBytesPerSecond)}`)+(show('diskIops')?row('IOPS 读 / 写',`${d.readIops==null?'—':compact(d.readIops)} / ${d.writeIops==null?'—':compact(d.writeIops)}`):'')+(show('diskBusy')?meter('忙碌率',pct(resourcePercent(d.busyMsPerSecond==null?null:d.busyMsPerSecond/10)),d.busyMsPerSecond==null?null:d.busyMsPerSecond/10):'');
     return row(d.id,`↓ ${speed(d.rxBytesPerSecond)} · ↑ ${speed(d.txBytesPerSecond)}`)+(show('networkErrors')?row('错误 / 丢包',`${compact((d.rxErrors??0)+(d.txErrors??0))} / ${compact((d.rxDrops??0)+(d.txDrops??0))}`):'');
   }).join('');
@@ -596,12 +620,18 @@ function bindPrices() {
 function sourceError(id) {
   const error=state.dashboard?.sources.find(s=>s.id===id)?.status?.error;
   const source=state.settings.sources.find(s=>s.id===id),status=state.dashboard?.sources.find(s=>s.id===id)?.status;
-  return error?`<span class="error" role="status">${escapeHTML(error)}</span>`:`<small>${['agy','deepseek'].includes(source?.provider)?'限额查询来源':status?.updatedAt?'记录同步于 '+date(status.updatedAt):'尚未同步用量记录'}</small>`;
-}
-function accountRows(accounts) {
-  return accounts.map(a=>{const i=draftSettings().accounts.indexOf(a);return `<div class="list-row">${providerMark(a.provider)}<div class="row-body">${escapeHTML(a.name)}<small>${escapeHTML(providers[a.provider]??a.provider)}</small></div><button data-edit-account="${i}" aria-label="编辑账户 ${escapeHTML(a.name)}" title="编辑账户">编辑</button>${a.archived?`<button data-restore-account="${i}" aria-label="恢复账户 ${escapeHTML(a.name)}" title="把归档账户恢复为正常状态">恢复</button>`:`<button data-remove-account="${i}" aria-label="归档账户 ${escapeHTML(a.name)}" title="归档账户并保留历史">归档</button>`}</div>`;}).join('');
+  return error?`<span class="error" role="status">${escapeHTML(error)}</span>`:`<small>${source?.provider==='deepseek'?'限额查询来源':status?.updatedAt?'记录同步于 '+date(status.updatedAt):'尚未同步用量记录'}</small>`;
 }
 const settingsForms = new Map();
+let generalSaveTimer;
+function scheduleGeneralSave() {
+  clearTimeout(generalSaveTimer);state.generalSavePending=true;
+  generalSaveTimer=setTimeout(async()=>{
+    if(state.settingsCommitting||state.settingsSaving){scheduleGeneralSave();return;}
+    try {await saveAllSettings({section:'general'});} catch(error){notify(error.message??String(error),'error');}
+    finally {state.generalSavePending=false;}
+  },250);
+}
 function captureSettingsForms() {
   for(const form of document.querySelectorAll('#general-form,#mapping-form')) {
     const values=AieyesUI.formValues(form),existing=settingsForms.get(form.id);
@@ -615,7 +645,7 @@ function bindSettingsDrafts(){
     if(draft)AieyesUI.restoreForm(form,draft.values);
     const update=()=>{captureSettingsForms();const d=settingsForms.get(form.id);form.dataset.dirty=String(JSON.stringify(d.values)!==JSON.stringify(d.baseline));const label=form.querySelector('.draft-state');if(label)label.textContent=form.dataset.dirty==='true'?'未保存 · 切页保留草稿':'';updateSettingsSaveBar();};
     const label=document.createElement('p');label.className='draft-state';label.setAttribute('role','status');form.append(label);
-    form.addEventListener('input',update);form.addEventListener('change',update);update();
+    form.addEventListener('input',update);form.addEventListener('change',()=>{update();if(form.id==='general-form')scheduleGeneralSave();});update();
   }
 }
 function resetSettingsForm(id){const form=document.getElementById(id);if(form){const values=AieyesUI.formValues(form);settingsForms.set(id,{values,baseline:values});form.dataset.draftBaseline=JSON.stringify(values);form.dataset.dirty='false';form.querySelector('.draft-state')?.replaceChildren();}else settingsForms.delete(id);}
@@ -629,35 +659,22 @@ function mappingDraft(next) {
 }
 function renderSettings(capture=true) {
   if(capture)captureSettingsForms();const view=rememberView();
-  if(state.settingsTab==='accounts')state.settingsTab='sources';
+  if(state.settingsTab==='codexAuth')state.settingsTab='accounts';
   if(state.settingsTab==='connection')state.settingsTab='general';
-  const tabs={sources:'数据源',hosts:'服务器',prices:'价格',wakeups:'定时唤醒',general:'通用'};
+  const tabs={sources:'Agents',hosts:'服务器',prices:'价格',accounts:'账户',wakeups:'定时唤醒',general:'通用'};
   let body='';const s=draftSettings();
-  if(state.settingsTab==='sources'||state.settingsTab==='hosts'){
+  if(state.settingsTab==='sources')body=window.AieyesAgentSettings.agentsHTML();
+  else if(state.settingsTab==='accounts')body=window.AieyesAgentSettings.accountsHTML();
+  else if(state.settingsTab==='hosts'){
     const isSource=state.settingsTab==='sources',list=isSource?s.sources:s.hosts;
-    body=`<div class="card">${list.map(item=>`<div class="list-row"><input type="checkbox" role="switch" data-enable="${escapeHTML(item.id)}" ${item.enabled?'checked':''} aria-label="启用 ${escapeHTML(item.name)}">${isSource?providerMark(item.provider):''}<div class="row-body">${escapeHTML(item.name||item.target)}<small>${escapeHTML(isSource?`${providers[item.provider]} · ${item.accountId ? (s.accounts.find(a=>a.id===item.accountId&&a.provider===item.provider)?.name??item.accountId) : "无账户"}`:item.target)}</small>${isSource?sourceError(item.id):''}</div><button data-edit="${escapeHTML(item.id)}" aria-label="编辑 ${escapeHTML(item.name||item.target)}" title="编辑此项">编辑</button><button data-remove="${escapeHTML(item.id)}" aria-label="移除 ${escapeHTML(item.name)}" title="移除此项">${uiIcon('minus')}</button></div>`).join('')||'<div class="empty">添加第一个'+(isSource?'数据源':'主机')+'</div>'}${savedFeedback(state.settingsTab)}</div><button id="add-item" class="primary" title="新建数据源或服务器">${uiIcon('plus')} 添加${isSource?'数据源':'主机'}</button>`;
-    if(isSource){
-      const parser=document.createElement('div');parser.innerHTML=body;
-      const rows=[...parser.querySelectorAll('.list-row')],card=parser.querySelector('.card');card.replaceChildren();
-      for(const account of s.accounts.filter(a=>!a.archived)){
-        const group=document.createElement('section');group.className='account-group';const linked=s.sources.filter(src=>src.provider===account.provider&&src.accountId===account.id);
-        group.innerHTML='<div class="section-head"><div><h3>'+providerMark(account.provider)+' '+escapeHTML(account.name)+'</h3><p class="muted tiny">共用 '+linked.length+' 个来源 · 账户名称与限额设置共同生效</p></div><button data-edit-account="'+s.accounts.indexOf(account)+'" aria-label="编辑账户 '+escapeHTML(account.name)+'">编辑账户</button></div>';
-        for(const source of linked){const row=rows.find(row=>row.querySelector('[data-edit]')?.dataset.edit===source.id);if(row)group.append(row);}card.append(group);
-      }
-      const ungrouped=rows.filter(row=>!row.isConnected&&!row.closest('.account-group'));if(ungrouped.length){const group=document.createElement('section');group.className='account-group';group.innerHTML='<h3>未关联账户的来源</h3>';group.append(...ungrouped);card.append(group);}
-      body=parser.innerHTML;
-      const orphan=s.accounts.filter(a=>!a.archived&&!s.sources.some(src=>src.accountId===a.id&&src.provider===a.provider)),archived=s.accounts.filter(a=>a.archived);
-      if(orphan.length)body+=`<details class="card account-history"><summary>未关联账户</summary>${accountRows(orphan)}</details>`;
-      if(archived.length)body+=`<details class="card account-history"><summary>已归档账户</summary>${accountRows(archived)}</details>`;
-    }
-  }else if(state.settingsTab==='prices')body='<div class="between"><p class="muted save-model-note">价格条目与同步立即生效；模型映射随顶部保存全部提交。</p><button id="reprice" type="button" title="保存设置并按当前价格重新计算历史成本">保存并重算</button></div>'+gapList()+`<form id="mapping-form" class="card"><h2>模型映射</h2>${Object.entries(s.modelMappings).map(([from,to])=>`<div class="list-row tiny"><span>${escapeHTML(from)} → ${escapeHTML(to)}</span><button type="button" data-unmap="${escapeHTML(from)}" aria-label="移除 ${escapeHTML(from)} 的模型映射">${uiIcon('minus')}</button></div>`).join('')}${field('mappingModel','日志模型名称')}${field('mappingId','OpenRouter 模型 ID')}<button>添加映射</button></form>`+`<div class="price-toolbar"><input id="price-search" type="search" aria-label="搜索模型" placeholder="搜索模型" value="${escapeHTML(state.priceSearch)}"><button id="sync-prices" title="从项目 Release 同步 OpenRouter 价格表">同步 OpenRouter</button><button id="add-price" title="手动添加一个模型价格">添加价格</button>${savedFeedback('prices')}</div><div class="card prices-list">${priceRows()}</div><span class="muted tiny">USD / 百万 Token</span>`;
+    body=`<div class="card">${list.map(item=>`<div class="list-row"><input type="checkbox" role="switch" data-enable="${escapeHTML(item.id)}" ${item.enabled?'checked':''} aria-label="启用 ${escapeHTML(item.name)}">${isSource?providerMark(item.provider):''}<div class="row-body">${escapeHTML(item.name||item.target)}<small>${escapeHTML(isSource?`${providers[item.provider]} · ${item.accountId ? (s.accounts.find(a=>a.id===item.accountId&&a.provider===item.provider)?.name??item.accountId) : item.codexHomeId ? "共享历史" : "无账户"}`:item.target)}</small>${isSource?sourceError(item.id):''}</div><button data-edit="${escapeHTML(item.id)}" aria-label="编辑 ${escapeHTML(item.name||item.target)}" title="编辑此项">编辑</button><button data-remove="${escapeHTML(item.id)}" aria-label="移除 ${escapeHTML(item.name)}" title="移除此项">${uiIcon('minus')}</button></div>`).join('')||'<div class="empty">添加第一个'+(isSource?'数据源':'主机')+'</div>'}${savedFeedback(state.settingsTab)}</div><button id="add-item" class="primary" title="新建数据源或服务器">${uiIcon('plus')} 添加${isSource?'数据源':'主机'}</button>`;
+  }else if(state.settingsTab==='prices')body='<div class="between"><p class="muted save-model-note">价格与模型映射保存后生效。</p><button id="reprice" type="button" title="保存设置并按当前价格重新计算历史成本">保存并重算</button></div>'+gapList()+`<form id="mapping-form" class="card"><h2>模型映射</h2>${Object.entries(s.modelMappings).map(([from,to])=>`<div class="list-row tiny"><span>${escapeHTML(from)} → ${escapeHTML(to)}</span><button type="button" data-unmap="${escapeHTML(from)}" aria-label="移除 ${escapeHTML(from)} 的模型映射">${uiIcon('minus')}</button></div>`).join('')}${field('mappingModel','日志模型名称')}${field('mappingId','OpenRouter 模型 ID')}<button>添加映射</button></form>`+`<div class="price-toolbar"><input id="price-search" type="search" aria-label="搜索模型" placeholder="搜索模型" value="${escapeHTML(state.priceSearch)}"><button id="sync-prices" title="从项目 Release 同步 OpenRouter 价格表">同步 OpenRouter</button><button id="add-price" title="手动添加一个模型价格">添加价格</button>${savedFeedback('prices')}</div><div class="card prices-list">${priceRows()}</div><span class="muted tiny">USD / 百万 Token</span>`;
   else if(state.settingsTab==='wakeups')body=window.AieyesWakeups?.html()??'<p>正在加载…</p>';
-  else body=(window.AieyesDesktop?.settingsHTML() || '')+`<form id="general-form" class="card"><h2>外观</h2>${select('appearanceTheme','主题',[['system','跟随系统'],['light','浅色'],['dark','深色']],s.appearance?.theme??'system')}${select('appearanceAccent','强调色',[['indigo','靛蓝'],['blue','蓝'],['teal','青绿'],['purple','紫']],s.appearance?.accent??'indigo')}<h2>网络与刷新</h2>${proxyFields('app',s.proxy)}${field('proxyTestUrls','测试地址（逗号分隔）',(s.proxyTestUrls??['https://api.github.com/rate_limit','https://openrouter.ai']).join(', '))}<h3>刷新</h3>${field('refreshSeconds','Agent 间隔（秒）',s.refreshSeconds,'','number')}${field('serverRefreshSeconds','服务器间隔（秒）',s.serverRefreshSeconds,'','number')}<p class="muted tiny">修改保留为草稿，请使用顶部保存全部。</p></form>${window.AieyesUpdates?.settingsHTML() ?? '<div class="card"><p>正在读取更新信息…</p></div>'}`;
-  $('#content').innerHTML=`<div class="settings-save-bar" id="settings-save-bar"><div><p class="settings-draft-label" role="status" tabindex="-1"></p><p class="muted tiny">编辑器更新草稿，顶部保存全部；价格、定时唤醒与本机显示偏好独立保存。</p></div><button type="button" id="settings-discard-all">放弃更改</button><button type="button" class="primary" id="settings-save-all">保存应用配置</button></div><div class="settings-tabs" role="tablist" aria-label="设置分类">${Object.entries(tabs).map(([k,v])=>`<button id="settings-tab-${k}" data-settings-tab="${k}" role="tab" aria-controls="settings-panel" aria-selected="${state.settingsTab===k}" tabindex="${state.settingsTab===k?0:-1}" class="${state.settingsTab===k?'active':''}">${uiIcon(k)}<span>${v}</span></button>`).join('')}</div><div id="settings-panel" class="settings-block" role="tabpanel" aria-labelledby="settings-tab-${state.settingsTab}">${body}</div>`;
+  else body=(window.AieyesDesktop?.settingsHTML() || '')+`<form id="general-form" class="card"><h2>外观</h2>${select('appearanceTheme','主题',[['system','跟随系统'],['light','浅色'],['dark','深色']],s.appearance?.theme??'system')}${select('appearanceAccent','强调色',[['indigo','靛蓝'],['blue','蓝'],['teal','青绿'],['purple','紫']],s.appearance?.accent??'indigo')}<h2>网络与刷新</h2>${proxyFields('app',s.proxy)}${field('proxyTestUrls','测试地址（逗号分隔）',(s.proxyTestUrls??['https://api.github.com/rate_limit','https://openrouter.ai']).join(', '))}<h3>刷新</h3>${field('refreshSeconds','Agent 间隔（秒）',s.refreshSeconds,'','number')}${field('serverRefreshSeconds','服务器间隔（秒）',s.serverRefreshSeconds,'','number')}<p class="muted tiny">选择项即时保存；文本修改后离开输入框保存。</p></form>${window.AieyesUpdates?.settingsHTML() ?? '<div class="card"><p>正在读取更新信息…</p></div>'}`;
+  $('#content').innerHTML=`<div class="settings-save-bar" id="settings-save-bar"><p class="settings-draft-label" role="status"></p></div><div class="settings-tabs" role="tablist" aria-label="设置分类">${Object.entries(tabs).map(([k,v])=>`<button id="settings-tab-${k}" data-settings-tab="${k}" role="tab" aria-controls="settings-panel" aria-selected="${state.settingsTab===k}" tabindex="${state.settingsTab===k?0:-1}" class="${state.settingsTab===k?'active':''}">${uiIcon(k)}<span>${v}</span></button>`).join('')}</div><div id="settings-panel" class="settings-block" role="tabpanel" aria-labelledby="settings-tab-${state.settingsTab}">${body}</div>`;
   bindSettingsDrafts();window.AieyesDesktop?.bindSettings();updateSettingsSaveBar();
-  $('#settings-save-all').onclick=()=>job('保存应用配置',()=>saveAllSettings());
-  $('#settings-discard-all').onclick=()=>{showEditor('放弃配置更改','<p>放弃全部未保存的配置草稿？当前运行配置继续生效。</p>',async()=>discardAllSettings());$('#editor-form button[type=submit]').textContent='放弃更改';$('#editor-form button[type=submit]').classList.add('danger');};
   if(state.settingsTab==='wakeups')window.AieyesWakeups?.bind();
+  if(['sources','accounts'].includes(state.settingsTab))window.AieyesAgentSettings.bind();
   document.querySelectorAll('[data-settings-tab]').forEach(button=>{
     button.onclick=async()=>{
       state.settingsTab=button.dataset.settingsTab;renderSettings();
@@ -670,19 +687,6 @@ function renderSettings(capture=true) {
       if(next==null)return;event.preventDefault();buttons[next].focus();buttons[next].click();
     };
   });
-  document.querySelectorAll('[data-edit-account]').forEach(b=>b.onclick=()=>editAccount(Number(b.dataset.editAccount)));
-  document.querySelectorAll('[data-remove-account]').forEach(b=>b.onclick=()=>{
-    const a=s.accounts[Number(b.dataset.removeAccount)];
-    showEditor('归档账户',`<p>归档「${escapeHTML(a.name)}」并保留历史？保存全部后生效，可从已归档账户恢复。</p>`,async()=>{
-      const next=structuredClone(draftSettings());next.accounts.find(row=>row.id===a.id&&row.provider===a.provider).archived=true;
-      stageSettings(next);renderSettings();
-    });
-    $('#editor-form button[type=submit]').textContent='归档并保留历史';$('#editor-form button[type=submit]').classList.add('danger');$('#cancel-editor').focus();
-  });
-  document.querySelectorAll('[data-restore-account]').forEach(b=>b.onclick=()=>job('恢复账户草稿',async()=>{
-    const next=structuredClone(draftSettings());next.accounts[Number(b.dataset.restoreAccount)].archived=false;
-    stageSettings(next);renderSettings();
-  }));
   document.querySelectorAll('[data-gap-price]').forEach(b=>b.onclick=()=>{const g=state.dashboard.pricingGaps[Number(b.dataset.gapPrice)];editPrice(state.prices.find(p=>p.id===(g.priceId??g.model))??{id:g.priceId??g.model,name:g.model});});
   document.querySelectorAll('[data-gap-map]').forEach(b=>b.onclick=()=>{const g=state.dashboard.pricingGaps[Number(b.dataset.gapMap)];$('#field-mappingModel').value=g.model;$('#field-mappingId').value=g.priceId??'';$('#field-mappingId').focus();});
   const items=state.settingsTab==='sources'?s.sources:s.hosts;
@@ -690,25 +694,28 @@ function renderSettings(capture=true) {
   document.querySelectorAll('[data-enable]').forEach(b=>b.onchange=async()=>{
     const list=state.settingsTab==='sources'?'sources':'hosts',next=structuredClone(draftSettings());
     next[list].find(i=>i.id===b.dataset.enable).enabled=b.checked;b.disabled=true;
-    try { await job('更新草稿',()=>stageSettings(next)); }
-    finally { b.checked=draftSettings()[list].find(i=>i.id===b.dataset.enable)?.enabled??false;b.disabled=false; }
+    try { await window.AieyesAgentSettings.commit(next); }
+    catch(error){notify(String(error),'error');} finally { b.checked=draftSettings()[list].find(i=>i.id===b.dataset.enable)?.enabled??false;b.disabled=false; }
   });
   document.querySelectorAll('[data-remove]').forEach(button=>button.onclick=()=>{
     const kind=state.settingsTab,id=button.dataset.remove,item=draftSettings()[kind].find(row=>row.id===id);
     const linked=kind==='hosts'?draftSettings().sources.filter(src=>src.hostId===id):[];
-    const impact=linked.length?`<p>保存全部后，以下 ${linked.length} 个数据源将暂停，并需要重新选择服务器：</p><ul>${linked.map(src=>`<li>${escapeHTML(src.name)}</li>`).join('')}</ul>`:'<p>已导入的用量历史会保留。重新连接时需要再次添加配置。</p>';
+    const impact=linked.length?`<p>保存后，以下 ${linked.length} 个数据源将暂停，并需要重新选择服务器：</p><ul>${linked.map(src=>`<li>${escapeHTML(src.name)}</li>`).join('')}</ul>`:'<p>已导入的用量历史会保留。重新连接时需要再次添加配置。</p>';
     showEditor(kind==='hosts'?'移除服务器':'移除数据源',`<p>确认移除「${escapeHTML(item.name||item.target)}」？</p>${impact}`,async()=>{
-      const next=structuredClone(draftSettings());next[kind]=next[kind].filter(row=>row.id!==id);
-      if(kind==='hosts')for(const src of next.sources)if(src.hostId===id){src.hostId=null;src.enabled=false;}
+      const next=structuredClone(state.settings);next[kind]=next[kind].filter(row=>row.id!==id);
+      if(kind==='hosts'){
+        for(const src of next.sources)if(src.hostId===id){src.hostId=null;src.enabled=false;}
+        for(const agent of next.agents??[])agent.machineIds=agent.machineIds.filter(machine=>machine!==id);
+      }
       if(kind==='sources')for(const account of next.accounts)if(account.quotaSourceId===id)account.quotaSourceId=null;
-      stageSettings(next);renderSettings();notify(linked.length?`待保存：移除服务器，${linked.length} 个关联数据源将暂停`:'待保存：移除配置，历史记录将保留');
+      await window.AieyesAgentSettings.commit(next);renderSettings(false);notify(linked.length?`已移除服务器，${linked.length} 个关联数据源将暂停`:'已移除配置，历史记录将保留');
     });
     const submit=$('#editor-form button[type=submit]');submit.textContent='确认移除';submit.classList.add('danger');
     $('#cancel-editor').focus();
   });
   if($('#add-item'))$('#add-item').onclick=()=>editItem();
 
-  if($('#general-form'))$('#general-form').onsubmit=e=>{e.preventDefault();updateSettingsSaveBar();};
+  if($('#general-form'))$('#general-form').onsubmit=e=>{e.preventDefault();scheduleGeneralSave();};
   window.AieyesUpdates?.bindSettings();
   if($('#sync-prices'))$('#sync-prices').onclick=syncPrices;
   if($('#add-price'))$('#add-price').onclick=()=>editPrice();
@@ -716,7 +723,7 @@ function renderSettings(capture=true) {
   if($('#price-search'))$('#price-search').oninput=e=>{state.priceSearch=e.target.value;$('.prices-list').innerHTML=priceRows();bindPrices();};
   if($('#general-form'))bindProxy('app');
   if($('#mapping-form'))$('#mapping-form').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);if(!f.get('mappingModel')?.trim()||!f.get('mappingId')?.trim()){notify('请输入日志模型名称和 OpenRouter 模型 ID','error');return;}job('更新映射草稿',async()=>{const next=structuredClone(draftSettings());mappingDraft(next);stageSettings(next);$('#mapping-form').reset();resetSettingsForm('mapping-form');renderSettings();});};
-  document.querySelectorAll('[data-unmap]').forEach(b=>b.onclick=()=>job('更新映射草稿',async()=>{const next=structuredClone(draftSettings());delete next.modelMappings[b.dataset.unmap];stageSettings(next);renderSettings();}));
+  document.querySelectorAll('[data-unmap]').forEach(b=>b.onclick=()=>job('更新映射草稿',async()=>{const next=structuredClone(draftSettings());delete next.modelMappings[b.dataset.unmap];stageSettings(next);await saveAllSettings();renderSettings(false);}));
   if($('#reprice'))$('#reprice').onclick=()=>job('保存并重算',async()=>{const button=$('#reprice');state.repricing=true;button.disabled=true;button.textContent='保存并重算中…';try{await saveAllSettings({clearForms:false,refresh:false});await api('prices.recalculate');$('#mapping-form').reset();resetSettingsForm('mapping-form');await loadDashboard();renderSettings();notify('已保存并按当前价格重算');}finally{state.repricing=false;const current=$('#reprice');if(current){current.disabled=false;current.textContent='保存并重算';}}});
   restoreView(view);if(state.repricing&&$('#reprice')){$('#reprice').disabled=true;$('#reprice').textContent='保存并重算中…';}
 }
@@ -772,16 +779,8 @@ document.addEventListener('keydown',event=>{
   event.preventDefault();controls[next].focus();
 });
 function editAccount(index) {
-  const a=structuredClone(index==null?{id:crypto.randomUUID(),name:'',provider:'codex',quotaEnabled:true,quotaSourceId:null}:draftSettings().accounts[index]);
-  const linked=draftSettings().sources.filter(s=>s.accountId===a.id&&s.provider===a.provider);
-  showEditor('账户',field('name','账户名称',a.name,'个人账户 / 工作账户')+select('provider','Agent',Object.entries(providers),a.provider)+select('quotaEnabled','账户限额',[['yes','显示并查询'],['no','仅统计用量']],a.quotaEnabled?'yes':'no')+select('quotaSourceId','优先查询位置',[['','自动 · 优先本机'],...linked.map(s=>[s.id,s.name])],a.quotaSourceId??'')+'',async f=>{
-    a.name=f.get('name').trim();if(!a.name)throw new Error('请输入账户名称');if(!linked.length)a.provider=f.get('provider');a.quotaEnabled=f.get('quotaEnabled')==='yes';a.quotaSourceId=f.get('quotaSourceId')||null;
-    const next=structuredClone(draftSettings());if(index==null)next.accounts.push(a);else next.accounts[index]=a;
-    stageSettings(next);renderSettings();
-  });
-  $('#editor').dataset.kind='account';$('#editor-form button[type=submit]').textContent='更新草稿';
-  $('#field-provider').disabled=linked.length>0;
-  $('#field-provider').onchange=e=>{$('#field-quotaEnabled').value=['codex','claude','agy','deepseek'].includes(e.target.value)?'yes':'no';};
+  if(index==null)window.AieyesAgentSettings.addAccount();
+  else window.AieyesAgentSettings.openDetails(state.settings.accounts[index]);
 }
 function proxyParts(url) {
   try {
@@ -832,83 +831,40 @@ function proxyValue(f,prefix) {
   return {mode,url};
 }
 function editItem(existing){
-  const source=state.settingsTab==='sources';
-  const item=structuredClone(existing??(source?{id:crypto.randomUUID(),name:'',provider:'codex',accountId:'',path:'~/.codex',hostId:null,enabled:true,quotaCommand:'',quotaPreCommand:'',codexBinary:'codex',agyBinary:'agy',proxy:null}:{id:crypto.randomUUID(),name:'',target:'',authMode:'ssh',username:'',passwordRef:'',port:null,identityFile:'',shell:'/bin/bash',preCommand:'',enabled:true,metrics:Object.keys(groups),devices:[],details:Object.keys(detailOptions)}));
-  const accountOptions=provider=>[['__new__','新建账户'],...draftSettings().accounts.filter(a=>a.provider===provider&&(!a.archived||a.id===item.accountId)).map(a=>[a.id,a.name+(a.archived?'（已归档）':'')])];
-  const account=draftSettings().accounts.find(a=>a.id===item.accountId&&a.provider===item.provider);
-  const body=source?field('name','名称',item.name)+select('provider','Agent',Object.entries(providers),item.provider)+`<label class="account-toggle"><input type="checkbox" name="isAccount" id="field-isAccount" ${item.accountId?'checked':''} aria-describedby="account-help">关联账户与限额</label><p id="account-help" class="muted tiny account-help">数据源用于读取记录；关联账户后可查询限额或余额。同一账户的名称与限额设置由关联它的数据源共用。</p><div id="account-fields"><h3>账户与限额</h3>${select('accountId','账户',accountOptions(item.provider),item.accountId||'__new__')}${field('accountName','账户名称',account?.name??'')}${select('quotaEnabled','账户限额',[['yes','显示并查询'],['no','仅统计用量']],account?.quotaEnabled?'yes':'no')}${select('accountArchived','账户状态',[['no','正常'],['yes','已归档']],account?.archived?'yes':'no')}${select('quotaSourceId','优先查询位置',[['','自动 · 优先本机']],account?.quotaSourceId??'')}</div>`+select('hostId','位置',[['','本机'],...draftSettings().hosts.map(h=>[h.id,h.name||h.target])],item.hostId??'')+field('path','数据目录',item.path)+field('codexBinary','Codex 程序',item.codexBinary)+field('agyBinary','agy 程序',item.agyBinary??'agy')+`<div id="deepseek-key">${field('apiKey','API Key（留空保留）',pendingAPIKeys.get(item.id)??'','','password')}</div><div id="remote-quota">${textarea('quotaPreCommand','限额查询前置命令',item.quotaPreCommand)}</div><div id="local-proxy">${proxyFields('source',item.proxy,true)}</div>`:
-    field('name','名称',item.name)+field('target','SSH 别名或地址',item.target,'my-server 或 user@host')+field('port','端口',item.port??'','跟随 SSH 配置','number')+select('authMode','登录方式',[['ssh','SSH 配置 / 密钥'],['password','账号密码']],item.authMode??'ssh')+field('username','用户名',item.username??'','跟随地址或 SSH 配置')+`<div id="host-password">${field('password','密码（留空保留）',pendingHostPasswords.get(item.id)??'','','password')}</div><div id="host-key">${field('identityFile','密钥路径',item.identityFile,'跟随 SSH 配置')}</div>`+`<section class="host-selectors"><div id="metric-select"></div><div class="section-head"><h3>设备</h3><button type="button" id="discover-devices" title="通过 SSH 读取远端设备列表">读取设备</button></div><p id="discovery-status" class="error" role="status" hidden></p><div id="device-selects" class="device-selects"></div><div id="detail-select"></div></section><details class="advanced"><summary>高级设置</summary>${field('shell','远程 shell',item.shell)+textarea('preCommand','远程前置命令',item.preCommand)+field('devices','设备表达式',item.devices.join(', '),'network:eth0, gpu:0, filesystems:/')}</details>`;
-  showEditor(source?'数据源':'SSH 主机',body,async f=>{
-    const next=structuredClone(draftSettings());
-    if(source){
-      for(const k of ['name','provider','path','codexBinary','agyBinary','quotaPreCommand'])item[k]=f.get(k);
-      item.accountId='';
-      if(f.has('isAccount')){
-        const selected=f.get('accountId');let a=next.accounts.find(a=>a.id===selected&&a.provider===item.provider);
-        if(!a){if(selected!=='__new__')throw new Error('请选择账户');a={id:crypto.randomUUID(),provider:item.provider,archived:false};next.accounts.push(a);}
-        a.name=f.get('accountName').trim()||item.name.trim()||providers[item.provider];
-        a.quotaEnabled=f.get('quotaEnabled')==='yes';a.archived=f.get('accountArchived')==='yes';a.quotaSourceId=f.get('quotaSourceId')||null;item.accountId=a.id;
-      }
-      if(!['agy','deepseek'].includes(item.provider)&&!item.path?.trim())throw new Error('请输入数据目录');
-      item.hostId=f.get('hostId')||null;item.proxy=proxyValue(f,'source');if(!item.name)item.name=providers[item.provider];
-      if(item.provider==='deepseek'){item.hostId=null;if(f.get('apiKey')?.trim())pendingAPIKeys.set(item.id,f.get('apiKey').trim());}
-    }else{for(const k of ['name','target','identityFile','shell','preCommand','authMode','username'])item[k]=f.get(k);if(item.authMode==='password'&&f.get('password'))pendingHostPasswords.set(item.id,f.get('password'));item.port=f.get('port')?Number(f.get('port')):null;item.devices=f.get('devices').split(',').map(s=>s.trim()).filter(Boolean);if(!item.name)item.name=item.target;}
-    const items=source?next.sources:next.hosts,index=items.findIndex(i=>i.id===item.id);if(index<0)items.push(item);else items[index]=item;
-    if(source)for(const a of next.accounts)if(a.quotaSourceId===item.id&&(a.id!==item.accountId||a.provider!==item.provider))a.quotaSourceId=null;
-    stageSettings(next);renderSettings();
+  if(state.settingsTab==='sources')return window.AieyesAgentSettings.advanced(existing,existing?.provider||'codex');
+  const base=structuredClone(state.settings),item=structuredClone(existing??{id:crypto.randomUUID(),name:'',target:'',authMode:'ssh',username:'',passwordRef:'',port:null,identityFile:'',shell:'/bin/bash',preCommand:'',enabled:true,metrics:Object.keys(groups),devices:[],details:Object.keys(detailOptions)});
+  let preparedPassword=null;
+  const body=field('name','名称',item.name)+field('target','SSH 别名或地址',item.target,'my-server 或 user@host')+field('port','端口',item.port??'','跟随 SSH 配置','number')+select('authMode','登录方式',[['ssh','SSH 配置 / 密钥'],['password','账号密码']],item.authMode??'ssh')+field('username','用户名',item.username??'','跟随地址或 SSH 配置')+`<div id="host-password">${field('password','密码（留空保留）',pendingHostPasswords.get(item.id)??'','','password')}</div><div id="host-key">${field('identityFile','密钥路径',item.identityFile,'跟随 SSH 配置')}</div>`+`<section class="host-selectors"><div id="metric-select"></div><div class="section-head"><h3>设备</h3><button type="button" id="discover-devices" title="通过 SSH 读取远端设备列表">读取设备</button></div><p id="discovery-status" class="error" role="status" hidden></p><div id="device-selects" class="device-selects"></div><div id="detail-select"></div></section><details class="advanced"><summary>高级设置</summary>${field('shell','远程 shell',item.shell)+field('devices','设备表达式',item.devices.join(', '),'network:eth0, gpu:0, filesystems:/')}</details>`;
+  showEditor('SSH 主机',body,async f=>{
+    const next=structuredClone(base);
+    for(const k of ['name','target','identityFile','shell','authMode','username'])item[k]=f.get(k);
+    item.port=f.get('port')?Number(f.get('port')):null;item.devices=f.get('devices').split(',').map(s=>s.trim()).filter(Boolean);if(!item.name)item.name=item.target;
+    if(item.authMode==='password'&&f.get('password')){
+      if(!preparedPassword||preparedPassword.value!==f.get('password'))preparedPassword={value:f.get('password'),...await api('hosts.credentials.save',{password:f.get('password')})};
+      item.passwordRef=preparedPassword.passwordRef;
+    }
+    const index=next.hosts.findIndex(h=>h.id===item.id);if(index<0)next.hosts.push(item);else next.hosts[index]=item;
+    await window.AieyesAgentSettings.commit(next,base);renderSettings(false);
   });
-  $('#editor').dataset.kind=source?'source':'host';$('#editor-form button[type=submit]').textContent='更新草稿';
-  if(source){
-    const providerRow=$('#field-provider').closest('.form-row'),hostRow=$('#field-hostId').closest('.form-row'),pathRow=$('#field-path').closest('.form-row');providerRow.after(hostRow);hostRow.after(pathRow);
-    const advanced=document.createElement('details');advanced.className='advanced';advanced.innerHTML='<summary>高级连接选项 · CLI / 代理 / 前置命令</summary>';$('#editor-fields').append(advanced);
-    for(const el of [$('#field-codexBinary').closest('.form-row'),$('#field-agyBinary').closest('.form-row'),$('#remote-quota'),$('#local-proxy')])advanced.append(el);
-  }else{
-    const selectors=$('.host-selectors'),advanced=document.createElement('details');advanced.className='monitor-options';advanced.open=Boolean(existing);advanced.innerHTML='<summary>监控指标与设备 · 按需选择</summary>';selectors.before(advanced);advanced.append(selectors);
-    const connect=$('#discover-devices');advanced.before(connect);connect.textContent='连接并读取设备';
-  }
-  bindPathSelection(source);
-
-  if(!source){bindHostSelectors(item);const auth=()=>{$('#host-password').hidden=$('#field-authMode').value!=='password';$('#host-key').hidden=!$('#host-password').hidden;};$('#field-authMode').onchange=auth;auth();}
-  else {
-    bindProxy('source');
-    const update=()=>{
-      const provider=$('#field-provider').value,asAccount=$('#field-isAccount').checked;
-      $('#account-fields').hidden=!asAccount;
-      const accountId=$('#field-accountId').value,linked=draftSettings().sources.filter(src=>src.id!==item.id&&src.provider===provider&&src.accountId===accountId);
-      $('#account-help').textContent=['agy','deepseek'].includes(provider)?'此服务通过关联账户显示限额或余额。取消关联后不会查询账户信息。':'数据源用于读取记录；关联账户后可查询限额，并汇总同一账户的用量。';
-      if(asAccount&&linked.length)$('#account-help').textContent+=` 当前账户还关联 ${linked.length} 个数据源，修改账户名称或限额设置会同时生效。`;
-      $('#deepseek-key').hidden=provider!=='deepseek';$('#field-agyBinary').closest('.form-row').hidden=provider!=='agy';$('#field-path').closest('.form-row').hidden=provider==='agy';
-      document.querySelector('label[for=field-path]').textContent=provider==='deepseek'?'API Key 文件（可选）':'数据目录';$('#field-hostId').closest('.form-row').hidden=provider==='deepseek';
-      $('#remote-quota').hidden=!$('#field-hostId').value||!asAccount;$('#local-proxy').hidden=!!$('#field-hostId').value;$('#field-codexBinary').closest('.form-row').hidden=provider!=='codex';
-      $('#field-quotaSourceId').closest('.form-row').hidden=$('#field-quotaEnabled').value!=='yes';
-    };
-    const selectAccount=()=>{
-      const provider=$('#field-provider').value,id=$('#field-accountId').value,a=draftSettings().accounts.find(a=>a.id===id&&a.provider===provider);
-      $('#field-accountName').value=a?.name??'';$('#field-accountArchived').value=a?.archived?'yes':'no';$('#field-quotaEnabled').value=(a?a.quotaEnabled:['codex','claude','agy','deepseek'].includes(provider))?'yes':'no';
-      const linked=draftSettings().sources.filter(s=>s.provider===provider&&s.accountId===id&&s.id!==item.id);
-      $('#field-quotaSourceId').innerHTML=[['','自动 · 优先本机'],...linked.map(s=>[s.id,s.name]),[item.id,item.name||'此数据源']].map(([k,v])=>option(k,v,a?.quotaSourceId??'')).join('');update();
-    };
-    $('#field-isAccount').onchange=$('#field-hostId').onchange=$('#field-quotaEnabled').onchange=update;$('#field-accountId').onchange=selectAccount;
-    $('#field-provider').onchange=e=>{
-      const provider=e.target.value;if(!existing&&['agy','deepseek'].includes(provider))$('#field-isAccount').checked=true;if(provider==='deepseek'){$('#field-hostId').value='';$('#field-path').value='';}$('#field-apiKey').value='';
-      $('#field-accountId').innerHTML=accountOptions(provider).map(([k,v])=>option(k,v,'__new__')).join('');
-      if(['~/.codex','~/.claude',''].includes($('#field-path').value))$('#field-path').value=provider==='codex'?'~/.codex':provider==='claude'?'~/.claude':'';selectAccount();
-    };selectAccount();
-  }
+  $('#editor').dataset.kind='host';
+  const selectors=$('.host-selectors'),advanced=document.createElement('details');advanced.className='monitor-options';advanced.open=Boolean(existing);advanced.innerHTML='<summary>监控指标与设备 · 按需选择</summary>';selectors.before(advanced);advanced.append(selectors);
+  const connect=$('#discover-devices');advanced.before(connect);connect.textContent='连接并读取设备';
+  bindPathSelection(false);bindHostSelectors(item);
+  const auth=()=>{$('#host-password').hidden=$('#field-authMode').value!=='password';$('#host-key').hidden=!$('#host-password').hidden;};$('#field-authMode').onchange=auth;auth();
 }
 function bindPathSelection(source){
   const input=source?$('#field-path'):$('#field-identityFile');if(!input)return;
   const row=input.closest('.form-row'),controls=document.createElement('div');controls.className='path-actions';controls.innerHTML='<button type="button" class="path-pick">选择…</button><button type="button" class="path-check">检测路径</button><span class="path-status" role="status"></span>';row.append(controls);
   const remote=()=>source&&Boolean($('#field-hostId')?.value);
-  controls.querySelector('.path-pick').onclick=async()=>{try{const result=await window.__TAURI__.core.invoke('select_local_path',{directory:source&&$('#field-provider').value!=='deepseek',initial:input.value});if(result){input.value=result;input.dispatchEvent(new Event('input',{bubbles:true}));}}catch(e){controls.querySelector('.path-status').textContent=String(e);}};
+  controls.querySelector('.path-pick').onclick=async()=>{try{const result=await window.__TAURI__.core.invoke('select_local_path',{directory:source&&$('#field-provider')?.value!=='deepseek',initial:input.value});if(result){input.value=result;input.dispatchEvent(new Event('input',{bubbles:true}));}}catch(e){controls.querySelector('.path-status').textContent=String(e);}};
   controls.querySelector('.path-check').onclick=async()=>{const status=controls.querySelector('.path-status');try{status.textContent=await window.__TAURI__.core.invoke('check_local_path',{path:input.value})?'路径存在':'路径不存在，请检查';}catch(e){status.textContent=String(e);}};
   const update=()=>{controls.querySelectorAll('button').forEach(b=>b.hidden=remote());controls.querySelector('.path-status').textContent=remote()?'远程路径 · '+(draftSettings().hosts.find(h=>h.id===$('#field-hostId').value)?.name??'SSH 主机'):'';};$('#field-hostId')?.addEventListener('change',update);update();
 }
 function bindHostSelectors(item) {
   const selectors=AieyesSelect;editorExtraSnapshot=()=>[item.metrics,item.details];
   let discovered={}, deviceControls=[],discoveryRevision=0;
-  const discoveryIdentity=()=>JSON.stringify(['target','port','identityFile','shell','preCommand','authMode','username','password'].map(k=>$('#field-'+k)?.value));
-  for(const key of ['target','port','identityFile','shell','preCommand','authMode','username','password'])$('#field-'+key)?.addEventListener('input',()=>{discoveryRevision++;discovered={};redrawDevices();$('#discovery-status').hidden=false;$('#discovery-status').textContent='连接配置已更改，请重新读取设备';});
+  const discoveryIdentity=()=>JSON.stringify(['target','port','identityFile','shell','authMode','username','password'].map(k=>$('#field-'+k)?.value));
+  for(const key of ['target','port','identityFile','shell','authMode','username','password'])$('#field-'+key)?.addEventListener('input',()=>{discoveryRevision++;discovered={};redrawDevices();$('#discovery-status').hidden=false;$('#discovery-status').textContent='连接配置已更改，请重新读取设备';});
   const tokens=()=>selectors.parse($('#field-devices').value);
   const detailGroup={cpuTimes:'cpu',memoryCache:'memory',swap:'memory',fsAvailable:'filesystems',fsType:'filesystems',inodes:'filesystems',diskIops:'disk',diskBusy:'disk',networkTotals:'network',networkErrors:'network',gpuMemory:'gpu',gpuThermals:'gpu'};
   item.details ??= Object.keys(detailOptions);
@@ -939,7 +895,7 @@ function bindHostSelectors(item) {
     const button=$('#discover-devices'), status=$('#discovery-status');
     button.disabled=true;button.textContent='读取中…';status.hidden=true;
     const form=$('#editor-form'), f=new FormData(form), host={...item},identity=discoveryIdentity(),revision=++discoveryRevision;
-    for(const key of ['target','identityFile','shell','preCommand','authMode','username'])host[key]=f.get(key);
+    for(const key of ['target','identityFile','shell','authMode','username'])host[key]=f.get(key);
     host.port=f.get('port')?Number(f.get('port')):null;
     let temporaryReference;
     try {
@@ -976,7 +932,43 @@ $('#activity').onclick=()=>state.page==='servers'?sample():scan();$('#activity')
 document.addEventListener('keydown',e=>{if(!(e.ctrlKey||e.metaKey)||$('#editor')?.open||$('#quota-dialog')?.open)return;if(e.key.toLowerCase()==='s'&&state.page==='settings'&&!PANEL){e.preventDefault();if(settingsFormsDirty())job('保存应用配置',()=>saveAllSettings());return;}if(e.key===','){e.preventDefault();if(PANEL)window.__TAURI__.core.invoke('desktop_action',{action:'settings'});else{state.page='settings';render();}}if(e.shiftKey&&e.key.toLowerCase()==='d'){e.preventDefault();if(PANEL)openDetail();else{state.page='agent';render();}}});
 // Error text remains selectable; only the explicit close control dismisses it.
 new ResizeObserver(()=>{if(state.page==='agent')drawTrend();}).observe($('#content'));
-window.addEventListener('aieyes:appearance',()=>{if(state.page==='agent'){if(interactionOpen())pendingRender=true;else render();}});
+function syncSharedAppearance(appearance) {
+  if(!state.settings||!appearance)return;
+  const previous=state.settings.appearance??{theme:'system',accent:'indigo'};
+  state.settings.appearance={...appearance};
+  if(state.settingsDraft){
+    const draft=state.settingsDraft.appearance??{...previous};
+    for(const key of ['theme','accent'])if(draft[key]===previous[key])draft[key]=appearance[key];
+    state.settingsDraft.appearance=draft;state.settingsBaseline=configKey(state.settings);
+  }
+  const form=$('#general-form');
+  if(form){
+    const record=settingsForms.get('general-form'), baseline=JSON.parse(form.dataset.draftBaseline||'{}');
+    for(const key of ['theme','accent']){
+      const name=key==='theme'?'appearanceTheme':'appearanceAccent',input=form.elements.namedItem(name);
+      if(input&&input.value===previous[key]){input.value=appearance[key];baseline[name]=appearance[key];if(record){record.values[name]=appearance[key];record.baseline[name]=appearance[key];}}
+    }
+    form.dataset.draftBaseline=JSON.stringify(baseline);
+  }
+}
+window.addEventListener('aieyes:appearance',event=>{
+  // Adopt a sibling window's saved preference before rendering from local state.
+  syncSharedAppearance(event.detail);
+  if(state.page==='agent'&&state.dashboard){if(interactionOpen())pendingRender=true;else render();}
+});
+async function toggleTheme() {
+  if(!state.settings||state.themeSaving||state.settingsSaving||state.settingsCommitting)return;
+  state.themeSaving=true;window.AieyesTheme.setBusy(true);
+  try {
+    const base=structuredClone(state.settings),next=structuredClone(base);
+    next.appearance={...(base.appearance??{accent:'indigo'}),theme:document.documentElement.dataset.theme==='dark'?'light':'dark'};
+    const saved=await api('settings.patch',{base,settings:next});
+    syncSharedAppearance(saved.appearance);window.AieyesTheme.apply(saved.appearance);
+    if($('#message')?.textContent.startsWith('主题保存失败：'))notify('');
+  } catch(error) { notify('主题保存失败：'+String(error),'error'); }
+  finally { state.themeSaving=false;window.AieyesTheme.setBusy(false); }
+}
+document.addEventListener('click',event=>{if(event.target.closest('[data-theme-toggle]'))void toggleTheme();});
 let externalRefresh=null,externalPending=false,externalSettings=false,externalQuotaCheck=false,externalScanCheck=false;
 function refreshExternalData(settings=false,method='') {
   externalPending=true;externalSettings ||= settings;externalQuotaCheck ||= method==='quotas.refresh';externalScanCheck ||= method==='sources.scan';
@@ -984,7 +976,7 @@ function refreshExternalData(settings=false,method='') {
   externalRefresh=(async()=>{
     while(externalPending){
       externalPending=false;const readSettings=externalSettings,checkQuotas=externalQuotaCheck,checkScan=externalScanCheck;externalSettings=false;externalQuotaCheck=false;externalScanCheck=false;
-      if(readSettings||!state.settings)state.settings=await api('settings.get');
+      if(readSettings||!state.settings){const saved=await api('settings.get');syncSharedAppearance(saved.appearance);state.settings=saved;window.AieyesTheme?.apply(saved.appearance);}migrateProviderState();
       await loadDashboard();
       if(readSettings&&PANEL&&state.page!=='agent')render();
       const scannedSources=(state.dashboard?.sources??[]).filter(source=>state.settings.sources.some(row=>row.id===source.id&&row.enabled&&(!row.hostId||state.settings.hosts.some(host=>host.id===row.hostId&&host.enabled)))).map(source=>({id:source.id,error:source.status?.error}));
@@ -1020,17 +1012,22 @@ async function listenForSharedState() {
   await events.listen('desktop:hosts',({payload})=>{applyHostSamples(state.hostRefreshItem?[...state.hosts.filter(row=>row.id!==state.hostRefreshItem),...payload]:payload);});
   await events.listen('desktop:hosts-error',({payload})=>{applyHostFailure(payload,state.hostRefreshItem);});
   await events.listen('desktop:data-changed',({payload})=>{
-    if(PANEL&&payload==='settings.save')return; // desktop:settings owns this invalidation.
-    if(PANEL||(!state.busy&&!state.settingsSaving&&!state.settingsCommitting&&!editorSaving))return refreshExternalData(payload==='settings.save',payload);
+    if(PANEL&&['settings.save','settings.patch','agents.set','sources.configure','sources.remove','accounts.connect','accounts.create','accounts.delete','codexAuth.enable','codexAuth.adopt','codexAuth.login.status','codexAuth.profiles.bind','codexAuth.profiles.remove'].includes(payload))return; // desktop:settings owns this invalidation.
+    if(PANEL||(!state.busy&&!state.settingsSaving&&!state.settingsCommitting&&!editorSaving))return refreshExternalData(['settings.save','settings.patch','agents.set','sources.configure','sources.remove','accounts.connect','accounts.create','accounts.delete','codexAuth.enable','codexAuth.adopt','codexAuth.login.status','codexAuth.profiles.bind','codexAuth.profiles.remove'].includes(payload),payload);
   });
+}
+function migrateProviderState() {
+  AieyesUI.migrateProviderPreferences(state.settings);
+  if(state.provider==='agy')state.provider='antigravity';
+  if(state.accountKey?.startsWith('agy:'))state.accountKey=state.settings.accountAliases?.[state.accountKey]??'antigravity:'+state.accountKey.slice(4);
 }
 async function boot(){
   try{
     if(!window.__TAURI__)throw new Error('通过 Aieyes 桌面应用打开');
     await listenForSharedState();
     const info=await api('hello'),version=$('#app-version');if(version)version.textContent=info.version;
-    state.settings=await api('settings.get');await loadDashboard();
-    if(PANEL){render();updateActivity();requestAnimationFrame(()=>{try{$('.panel-body').scrollTop=Number(localStorage.getItem('aieyes.panel.scroll')||0);}catch(_){}});return;}await scan();if(hasQuotaSources())await quotas();
+    state.settings=await api('settings.get');migrateProviderState();await loadDashboard();
+    if(PANEL){render();updateActivity();requestAnimationFrame(()=>{try{$('.panel-body').scrollTop=Number(localStorage.getItem('aieyes.panel.scroll')||0);}catch(_){}});return;}await scan();if(hasQuotaSources())await quotas(undefined,true);
   }catch(error){notify(String(error),'error');$('#activity').textContent='连接已断开';$('#activity').dataset.status='error';}
 }
 window.AieyesApp={
@@ -1047,7 +1044,7 @@ if(!PANEL)setInterval(()=>{
   if(state.settingsCommitting||window.AieyesUpdates?.busy||$('#editor').open||state.estimateBusy||state.sharedEstimateOperations?.size||$('#quota-dialog')?.dataset.busy||state.busy||state.settingsSaving)return;
   const expired=state.dashboard?.quotas.flatMap(q=>q.windows.map(w=>({q,w,key:q.provider+':'+q.accountId+':'+w.resetsAt}))).find(({w,key})=>w.resetsAt&&w.resetsAt*1000<=Date.now()&&!resetConfirmations.has(key));
   if(expired){resetConfirmations.add(expired.key);quotas(expired.q.accountId);return;}
-  if(hasQuotaSources()&&(!state.lastQuota||Date.now()-state.lastQuota>state.settings.refreshSeconds*1000)){quotas();return;}
+  if(hasQuotaSources()&&(!state.lastQuota||Date.now()-state.lastQuota>5000)){quotas(undefined,true);return;}
   if(Date.now()-state.lastScan>state.settings.refreshSeconds*1000){scan();return;}
 },500);
 // Age visible samples even while an RPC is slow or the panel receives no new events.
@@ -1072,8 +1069,8 @@ async function quotaAction(action,params){
   const dialog=$('#quota-dialog'),controls=[...dialog.querySelectorAll('button:not(#quota-close),input,select')].map(el=>[el,el.disabled]);
   dialog.dataset.busy='true';state.estimateBusy=true;controls.forEach(([el])=>el.disabled=true);dialog.oncancel=null;$('#quota-tool-error').hidden=true;
   const operationId=crypto.randomUUID(),started=Date.now();
-  state.estimateOperation={key:dialog.dataset.estimateKey,kind:dialog.dataset.estimateKind,status:'running'};
-  let background=$('#background-task');if(!background){background=document.createElement('button');background.id='background-task';background.setAttribute('role','status');document.body.append(background);}background.hidden=false;background.onclick=()=>{if(state.estimateBusy||state.estimateOperation?.status==='error'){if(!dialog.open)dialog.showModal();}else if(state.estimateOperation?.key){openQuotaEstimate(state.estimateOperation.key,state.estimateOperation.kind);background.hidden=true;}else{openSampling();background.hidden=true;}};
+  state.estimateOperation={key:dialog.dataset.estimateKey,kind:dialog.dataset.estimateKind,group:dialog.dataset.estimateGroup,status:'running'};
+  let background=$('#background-task');if(!background){background=document.createElement('button');background.id='background-task';background.setAttribute('role','status');document.body.append(background);}background.hidden=false;background.onclick=()=>{if(state.estimateBusy||state.estimateOperation?.status==='error'){if(!dialog.open)dialog.showModal();}else if(state.estimateOperation?.key){openQuotaEstimate(state.estimateOperation.key,state.estimateOperation.kind,state.estimateOperation.group);background.hidden=true;}else{openSampling();background.hidden=true;}};
   let progress=dialog.querySelector('#quota-progress');if(!progress){progress=document.createElement('p');progress.id='quota-progress';progress.setAttribute('role','status');dialog.querySelector('.quota-dialog-body').append(progress);}
   let stage='等待当前刷新';const update=()=>{progress.textContent=stage+' · '+Math.floor((Date.now()-started)/1000)+' 秒 · 可关闭窗口，后台继续';background.textContent='后台处理中 · '+stage+' · 查看';};update();const timer=setInterval(update,1000);
   let unlisten=()=>{};
@@ -1084,11 +1081,11 @@ async function quotaAction(action,params){
 function refreshQuotaDialog(){
   const dialog=$('#quota-dialog'),key=dialog?.dataset.estimateKey;
   if(!dialog?.open||!key||dialog.dataset.busy)return;
-  const kind=dialog.dataset.estimateKind??'weekly';
+  const kind=dialog.dataset.estimateKind??'weekly',group=dialog.dataset.estimateGroup??'';
   const records=JSON.stringify((state.dashboard[kind==='credits'?'creditEstimates':'quotaEstimates']??[]).filter(e=>e.accountKey===key));
   if(records===dialog.dataset.records)return;
   const expanded=dialog.querySelector('details')?.open,focus=document.activeElement?.id;
-  openQuotaEstimate(key,kind);
+  openQuotaEstimate(key,kind,group);
   if(expanded&&dialog.querySelector('details'))dialog.querySelector('details').open=true;
   if(focus)document.getElementById(focus)?.focus({preventScroll:true});
 }
@@ -1098,7 +1095,7 @@ function bindQuotaTools(){
   $('#content > .active-filters')?.remove();$('#content > .panel-filter-summary')?.remove();
   if(hasActiveFilters()) {
     const filters=document.createElement('div');filters.className='active-filters';
-    for(const [key,label] of [['provider',providers[state.provider]],['accountKey',state.accountKey==='none'?'未关联账户':state.settings.accounts.find(a=>a.provider+':'+a.id===state.accountKey)?.name??state.accountKey],['sourceId',state.settings.sources.find(s=>s.id===state.sourceId)?.name??state.sourceId],['model',state.model]]) {
+    for(const [key,label] of [['provider',providers[state.provider]],['accountKey',state.accountKey==='none'?'未关联账户':historicalAccounts().find(a=>a.provider+':'+a.id===state.accountKey)?.name??state.accountKey],['sourceId',state.settings.sources.find(s=>s.id===state.sourceId)?.name??state.sourceId],['model',state.model]]) {
       if(!state[key])continue;
       const button=document.createElement('button');button.innerHTML=escapeHTML(label)+uiIcon('x');button.setAttribute('aria-label','清除筛选：'+label);
       button.onclick=()=>{state[key]='';if(key==='provider'){state.accountKey='';state.sourceId='';state.model='';}if(key==='accountKey')state.sourceId='';changeFilters();};filters.append(button);
@@ -1116,7 +1113,7 @@ function bindQuotaTools(){
   document.querySelectorAll('[data-manage-sampling]').forEach(button=>button.onclick=openSampling);
   if($('#order-quotas'))$('#order-quotas').onclick=openQuotaOrder;
   document.querySelectorAll('[data-credit-estimate]').forEach(b=>b.onclick=()=>openQuotaEstimate(b.dataset.creditEstimate,'credits'));
-  document.querySelectorAll('[data-estimate]').forEach(b=>b.onclick=()=>openQuotaEstimate(b.dataset.estimate));
+  document.querySelectorAll('[data-estimate]').forEach(b=>b.onclick=()=>openQuotaEstimate(b.dataset.estimate,"weekly",b.dataset.estimateGroup));
 }
 function openPanelAccounts(){
   if(!PANEL||state.estimateBusy)return;
@@ -1137,7 +1134,7 @@ function openQuotaOrder(){
   quotaDialog('调整账户顺序','<p class="muted">拖动账户，或使用上下按钮。顺序应用于所有限额面板。</p><div id="quota-order-list"></div><button class="primary" id="quota-order-save">保存顺序</button>');
   function draw(focus){
     const positions=new Map([...document.querySelectorAll('[data-order]')].map(row=>[row.dataset.order,row.getBoundingClientRect().top]));
-    $('#quota-order-list').innerHTML=keys.map((key,i)=>`<div class="quota-order-row" draggable="true" data-order="${escapeHTML(key)}"><span aria-hidden="true">${uiIcon('grip')}</span><span class="order-account">${providerMark(key.split(':')[0])}${escapeHTML(state.settings.accounts.find(a=>a.provider+':'+a.id===key)?.name??key)}</span><button type="button" data-direction="-1" aria-label="上移账户" ${i===0?'disabled':''}>${uiIcon('up')}</button><button type="button" data-direction="1" aria-label="下移账户" ${i===keys.length-1?'disabled':''}>${uiIcon('down')}</button></div>`).join('');
+    $('#quota-order-list').innerHTML=keys.map((key,i)=>`<div class="quota-order-row" draggable="true" data-order="${escapeHTML(key)}"><span aria-hidden="true">${uiIcon('grip')}</span><span class="order-account">${providerMark(key.split(':')[0])}${escapeHTML(historicalAccounts().find(a=>a.provider+':'+a.id===key)?.name??key)}</span><button type="button" data-direction="-1" aria-label="上移账户" ${i===0?'disabled':''}>${uiIcon('up')}</button><button type="button" data-direction="1" aria-label="下移账户" ${i===keys.length-1?'disabled':''}>${uiIcon('down')}</button></div>`).join('');
     for(const row of document.querySelectorAll('[data-order]')){
       row.ondragstart=e=>{document.querySelectorAll('[data-order]').forEach(el=>el.getAnimations().forEach(animation=>animation.cancel()));dragged=row.dataset.order;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragged);};row.ondragend=()=>{dragged=null;document.querySelectorAll('.drop-target').forEach(el=>el.classList.remove('drop-target'));};row.ondragover=e=>{e.preventDefault();row.classList.add('drop-target');};row.ondragleave=()=>row.classList.remove('drop-target');
       row.ondrop=e=>{e.preventDefault();if(!dragged||dragged===row.dataset.order)return;const to=keys.indexOf(row.dataset.order);keys.splice(keys.indexOf(dragged),1);keys.splice(to,0,dragged);dragged=null;requestAnimationFrame(()=>draw());};
@@ -1148,20 +1145,22 @@ function openQuotaOrder(){
   }
   draw();$('#quota-order-save').onclick=async()=>{if(await quotaAction('quotas.order.set',{keys})){$('#quota-dialog').close();flushRender();}};
 }
-function openQuotaEstimate(key,kind="weekly"){
+function openQuotaEstimate(key,kind="weekly",group=""){
   if(state.estimateBusy){const dialog=$('#quota-dialog');if(dialog&&!dialog.open)dialog.showModal();return;}
   const credits=kind==='credits';
   const q=state.dashboard.quotas.find(q=>q.provider+':'+q.accountId===key);if(!q)return;
   const records=(state.dashboard[credits?'creditEstimates':'quotaEstimates']??[]).filter(e=>e.accountKey===key),current=records.find(e=>e.status!=='completed');
-  const allFive=q.windows.filter(w=>w.windowMinutes===300),allWeek=q.windows.filter(w=>w.windowMinutes===10080),windows=allFive.length===1?allFive:q.provider==='claude'&&allFive.some(w=>w.id==='five_hour')?allFive.filter(w=>w.id==='five_hour'):allWeek.length===1?allWeek:allWeek.filter(w=>q.provider==='claude'&&w.id==='seven_day'),eligible=credits?(q.provider==='codex'&&q.credits?.balance!=null&&!q.credits.unlimited):q.provider!=='agy'&&windows.length>0;
-  const sources=state.settings.sources.filter(s=>s.enabled&&s.provider===q.provider&&s.accountId===q.accountId&&!['agy','deepseek'].includes(s.provider));
+  const windows=AieyesUI.estimateWindows(q),eligible=credits?(q.provider==='codex'&&q.credits?.balance!=null&&!q.credits.unlimited):windows.some(w=>!group||(w.groupId||w.groupName)===group);
+  const history=records.filter(e=>e.status==='completed'&&(!group||!e.groupId||e.groupId===group));
+  const sources=state.settings.sources.filter(s=>s.enabled&&s.provider===q.provider&&s.accountId===q.accountId&&s.provider!=='deepseek');
   const confirmation='<label class="quota-confirm"><input type="checkbox" id="estimate-confirm">'+(credits?'我确认本段仅消耗 credits，所有设备的用量均已纳入；不混用包含额度、API 或中转。':'我确认采样期间只使用目标订阅，所有设备用量均已纳入所选来源；不混用 API / 中转。')+'</label>';
-  const result=e=>`<div class="estimate-result"><div class="between"><strong>${estimateStatus(e)}</strong><strong>${credits?`${creditValue(e)}`:e.valuationMode==='fiveHour'?'5h / 7d':e.weeklyValue!=null?money(e.weeklyValue)+' USD':'—'}</strong></div>${e.valuationMode==='fiveHour'?estimateValues(e):''}<p class="muted">${escapeHTML(e.calculationNote)}</p>${e.originalEstimateId?'<p class="muted">已修正 · 原采样记录保留</p>':e.status==='completed'&&!AieyesUI.estimateEntries([e],credits).length?`<button type="button" data-estimate-repair="${escapeHTML(e.id)}">按原记录修复估值</button>`:''}<details><summary>计算依据</summary><p>${date(e.startedAt)} → ${date(e.checkpointAt)}<br>${escapeHTML(e.windowName)} · 消耗 ${credits?creditAmount(e.consumedCredits)+' credit':pct(e.consumedPercent)} · 样本成本 ${money(e.cost)} USD<br>计价 Token：${compact(e.pricedTokens)} / ${compact(e.totalTokens)}<br>${escapeHTML(e.sourceNames.join('、'))}</p><p class="tiny muted">${credits?'1000 credit 的 API 等价价值 = 样本成本 × 1000 ÷ 消耗 credit':e.valuationMode==='fiveHour'?'5h / 7d 同期价值 = 有效成本 × 100 ÷ 对应消耗百分点；7d 倍率估算 = 5h 价值 × 近期容量倍率':'整周估值 = 样本 API 等价成本 × 100 ÷ 消耗百分点'}；结束后价格与倍率固定。</p>${(e.segments??[]).length?`<p class="tiny muted">已保存 ${e.segments.length} 个有效片段</p>`:''}${e.reason?`<p class="error">${escapeHTML(e.reason)}</p>`:''}${(e.prices??[]).length?`<p class="tiny muted">价格快照：${e.prices.map(p=>escapeHTML(p.id)+' · '+date(p.fetchedAt)).join('；')}</p>`:''}</details></div>`;
-  const setup=eligible&&sources.length?`${credits?'':`<label>主要额度池<select id="estimate-window">${windows.filter(w=>windows.length===1||w.id==='seven_day'||w.name==='7d').map(w=>option(w.id||w.name,w.name,'')).join('')}</select></label>`}<p>纳入的用量来源</p>${sources.map(s=>`<label class="quota-confirm"><input type="checkbox" name="estimate-source" value="${escapeHTML(s.id)}" checked>${escapeHTML(s.name)}</label>`).join('')}${confirmation}<p class="tiny muted">建议开始后新建会话。至少消耗 ${credits?'5 credits':'5 个百分点'}后输出估值；跨采样边界的累计用量会使本次结果不可用。</p><button class="primary" id="estimate-start" disabled>开始采样</button>`:'<p class="muted">需要可采集 Token 的关联数据源及可靠的额度池映射。agy 限额查询本身不提供用量历史，此额度池暂不支持估值。</p>';
-  quotaDialog(q.name+(credits?' · credit 价值':' · 5h / 7d 额度价值'),`<p class="muted">按本次模型组合的 API 等价成本与额度消耗比例估算，不是可兑换余额。</p>${current?result(current)+(current.status==='pending'?confirmation+'<button id="estimate-restart" disabled>确认并开始新一段</button>':'')+`<button class="primary" id="estimate-stop">${current.status==='pending'?'结束并保留有效段':'结束并保存本段结果'}</button>`:setup}${records.some(e=>e.status==='completed')?'<h3>采样历史</h3>'+records.filter(e=>e.status==='completed').map(result).join(''):''}`);
-  $('#quota-dialog').dataset.estimateKind=kind;$('#quota-dialog').dataset.estimateKey=key;$('#quota-dialog').dataset.records=JSON.stringify(records);
+  const result=e=>`<div class="estimate-result">${e.groupId?`<strong>${escapeHTML(q.windows.find(w=>(w.groupId||w.groupName)===e.groupId)?.groupName||e.groupId)}</strong>`:['antigravity','agy'].includes(q.provider)?'<strong>账户总体 · 旧记录</strong>':''}<div class="between"><strong>${estimateStatus(e)}</strong><strong>${credits?`${creditValue(e)}`:e.valuationMode==='fiveHour'?'5h / 7d':e.weeklyValue!=null?money(e.weeklyValue)+' USD':'—'}</strong></div>${e.valuationMode==='fiveHour'?estimateValues(e):''}<p class="muted">${escapeHTML(e.calculationNote)}</p>${e.originalEstimateId?'<p class="muted">已修正 · 原采样记录保留</p>':e.status==='completed'&&!AieyesUI.estimateEntries([e],credits).length?`<button type="button" data-estimate-repair="${escapeHTML(e.id)}">按原记录修复估值</button>`:''}<details><summary>计算依据</summary><p>${date(e.startedAt)} → ${date(e.checkpointAt)}<br>${escapeHTML(e.windowName)} · 消耗 ${credits?creditAmount(e.consumedCredits)+' credit':pct(e.consumedPercent)} · 样本成本 ${money(e.cost)} USD<br>计价 Token：${compact(e.pricedTokens)} / ${compact(e.totalTokens)}<br>${escapeHTML(e.sourceNames.join('、'))}</p><p class="tiny muted">${credits?'1000 credit 的 API 等价价值 = 样本成本 × 1000 ÷ 消耗 credit':e.valuationMode==='fiveHour'?'5h / 7d 同期价值 = 有效成本 × 100 ÷ 对应消耗百分点；7d 倍率估算 = 5h 价值 × 近期容量倍率':'整周估值 = 样本 API 等价成本 × 100 ÷ 消耗百分点'}；结束后价格与倍率固定。</p>${(e.segments??[]).length?`<p class="tiny muted">已保存 ${e.segments.length} 个有效片段</p>`:''}${e.reason?`<p class="error">${escapeHTML(e.reason)}</p>`:''}${(e.prices??[]).length?`<p class="tiny muted">价格快照：${e.prices.map(p=>escapeHTML(p.id)+' · '+date(p.fetchedAt)).join('；')}</p>`:''}</details></div>`;
+  const setup=eligible&&sources.length?`${credits?'':`<label>主要额度池<select id="estimate-window">${windows.map(w=>option(w.id||w.name,w.name,windows.find(x=>(x.groupId||x.groupName)===group)?.id??'')).join('')}</select></label>`}<p>纳入的用量来源</p>${sources.map(s=>`<label class="quota-confirm"><input type="checkbox" name="estimate-source" value="${escapeHTML(s.id)}" checked>${escapeHTML(s.name)}</label>`).join('')}${confirmation}<p class="tiny muted">建议开始后新建会话。至少消耗 ${credits?'5 credits':'5 个百分点'}后输出估值；跨采样边界的累计用量会使本次结果不可用。</p><button class="primary" id="estimate-start" disabled>开始采样</button>`:'<p class="muted">需要可采集 Token 的关联数据源及可靠的额度池映射。请检查数据目录、账户关联和模型映射。</p>';
+  quotaDialog(q.name+(credits?' · credit 价值':' · 5h / 7d 额度价值'),`<p class="muted">按本次模型组合的 API 等价成本与额度消耗比例估算，不是可兑换余额。</p>${current?(current.groupId&&group&&current.groupId!==group?'<p class="muted">当前账户正在采样其他模型组；每个账户同时保留一段采样。</p>':'')+result(current)+(current.status==='pending'?confirmation+'<button id="estimate-restart" disabled>确认并开始新一段</button>':'')+`<button class="primary" id="estimate-stop">${current.status==='pending'?'结束并保留有效段':'结束并保存本段结果'}</button>`:setup}${history.length?'<h3>采样历史</h3>'+history.map(result).join(''):''}`);
+  $('#quota-dialog').dataset.estimateGroup=group;$('#quota-dialog').dataset.estimateKind=kind;$('#quota-dialog').dataset.estimateKey=key;$('#quota-dialog').dataset.records=JSON.stringify(records);
+  if($('#estimate-window'))$('#estimate-window').onchange=()=>{group=windows.find(w=>(w.id||w.name)===$('#estimate-window').value)?.groupId??'';$('#quota-dialog').dataset.estimateGroup=group;};
   const confirm=$('#estimate-confirm');if(confirm)confirm.onchange=()=>{const b=$('#estimate-start')??$('#estimate-restart');if(b)b.disabled=!confirm.checked;};
-  const act=async(action,params)=>{if(await quotaAction((credits?'creditEstimates.':'quotaEstimates.')+action,params)){if($('#quota-dialog').open)openQuotaEstimate(key,kind);}else {const message=$('#quota-tool-error').textContent;refreshQuotaDialog();$('#quota-tool-error').textContent=message;$('#quota-tool-error').hidden=false;}};
+  const act=async(action,params)=>{if(await quotaAction((credits?'creditEstimates.':'quotaEstimates.')+action,params)){if($('#quota-dialog').open)openQuotaEstimate(key,kind,group);}else {const message=$('#quota-tool-error').textContent;refreshQuotaDialog();$('#quota-tool-error').textContent=message;$('#quota-tool-error').hidden=false;}};
   document.querySelectorAll('[data-estimate-repair]').forEach(button=>button.onclick=()=>act('repair',{id:button.dataset.estimateRepair}));
   if($('#estimate-start'))$('#estimate-start').onclick=()=>act('start',{accountKey:key,windowId:credits?'credits':$('#estimate-window').value,sourceIds:[...document.querySelectorAll('[name=estimate-source]:checked')].map(el=>el.value),confirmed:confirm.checked});
   if($('#estimate-stop'))$('#estimate-stop').onclick=()=>act('stop',{id:current.id});

@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Estimate {
+    pub group_id: Option<String>,
     pub calculation_status: String,
     pub calculation_version: u32,
     pub original_estimate_id: Option<String>,
@@ -127,6 +128,15 @@ pub fn window_id(w: &QuotaWindow) -> &str {
 
 // Sub-pools overlap; without an explicit mapping we must not reuse all-account usage.
 pub fn eligible(q: &QuotaSnapshot, w: &QuotaWindow) -> bool {
+    if crate::providers::antigravity(&q.provider) {
+        let group = crate::antigravity::window_group(w);
+        return crate::antigravity::group_kind(group).is_some()
+            && w.window_minutes.is_some_and(|m| {
+                [300, 10080].contains(&m)
+                    && crate::capacity::window(q, m, group)
+                        .is_some_and(|v| window_id(v) == window_id(w))
+            });
+    }
     (w.window_minutes == Some(300)
         && crate::capacity::overall(q, 300).is_some_and(|v| window_id(v) == window_id(w)))
         || (w.window_minutes == Some(10080)
@@ -140,7 +150,11 @@ pub fn eligible(q: &QuotaSnapshot, w: &QuotaWindow) -> bool {
             && q.provider != "agy")
 }
 
-fn source_config(settings: &Settings, ids: &[String], account_key: &str) -> Result<String> {
+pub(crate) fn source_config(
+    settings: &Settings,
+    ids: &[String],
+    account_key: &str,
+) -> Result<String> {
     let mut values = Vec::new();
     ensure!(!ids.is_empty(), "请选择用量数据源");
     for id in ids {
@@ -150,13 +164,14 @@ fn source_config(settings: &Settings, ids: &[String], account_key: &str) -> Resu
             .find(|s| &s.id == id)
             .context("采样数据源已删除")?;
         ensure!(
+            s.codex_home_id.is_none(),
+            "共享 Codex 历史不按账号归属，不能用于单账号额度估值"
+        );
+        ensure!(
             s.enabled && format!("{}:{}", s.provider, s.account_id) == account_key,
             "采样数据源已停用或账户关联发生变化"
         );
-        ensure!(
-            !["agy", "deepseek"].contains(&s.provider.as_str()),
-            "该数据源没有可采集的 Token 用量"
-        );
+        ensure!(s.provider != "deepseek", "该数据源没有可采集的 Token 用量");
         let host = s
             .host_id
             .as_ref()
@@ -226,7 +241,7 @@ impl Store {
     pub fn estimates(&self) -> Result<Vec<Estimate>> {
         self.read_estimates(false)
     }
-    fn active_estimates(&self) -> Result<Vec<Estimate>> {
+    pub(crate) fn active_estimates(&self) -> Result<Vec<Estimate>> {
         self.read_estimates(true)
     }
     fn read_estimates(&self, active_only: bool) -> Result<Vec<Estimate>> {
@@ -376,7 +391,9 @@ impl Store {
             .and_then(|(a, b)| a.checked_sub(b))
             .map(|n| n as f64 / 1e18)
             .unwrap_or(0.0);
+        let settings = self.settings()?;
         let mut boundary = false;
+        let mut unmapped_group = false;
         // EXISTS avoids multiplying events observed through several selected sources.
         let mut stmt = self.db.prepare("SELECT e.payload,e.cost,e.priced_tokens,e.price FROM events e WHERE e.provider=?1 AND e.account_id=?2 AND e.stamp>?3 AND e.stamp<=?4 AND EXISTS(SELECT 1 FROM event_sources s WHERE s.event_id=e.id AND s.source_id IN (SELECT value FROM json_each(?5)))")?;
         let rows = stmt.query_map(
@@ -403,7 +420,24 @@ impl Store {
                 e.excluded_api_tokens += event.tokens.total();
                 continue;
             }
-            if (event.provider == "codex" || event.attribution == "session-summary")
+            if let Some(group) = e.group_id.as_deref() {
+                let model = settings
+                    .model_mappings
+                    .get(&event.model)
+                    .map(String::as_str)
+                    .unwrap_or(&event.model);
+                match crate::antigravity::group_for_model(model) {
+                    Some(kind) if Some(kind) == crate::antigravity::group_kind(group) => {}
+                    Some(_) => continue,
+                    None => {
+                        unmapped_group = true;
+                        continue;
+                    }
+                }
+            }
+            if (event.provider == "codex"
+                || event.attribution == "session-summary"
+                || event.interval_evidence == "antigravity-step-v1")
                 && event.interval_start.is_none_or(|t| t < e.started_at)
             {
                 boundary = true;
@@ -438,7 +472,10 @@ impl Store {
                 }
             }
         }
-        e.calculation_note = if boundary {
+        e.calculation_note = if unmapped_group {
+            e.calculation_status = "unmappedGroup".into();
+            "存在无法归属额度组的模型，请补全模型映射后重新计算"
+        } else if boundary {
             e.calculation_status = "boundary".into();
             "存在跨采样边界的累计用量，请在开始采样后新建会话再试"
         } else if e.total_tokens == 0 {
@@ -519,9 +556,15 @@ impl Store {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos();
         let five_hour = w.window_minutes == Some(300);
-        let weekly = crate::capacity::overall(q, 10080)
+        let group = if crate::providers::antigravity(&q.provider) {
+            Some(crate::antigravity::window_group(w).to_owned())
+        } else {
+            None
+        };
+        let weekly = crate::capacity::window(q, 10080, group.as_deref().unwrap_or(""))
             .filter(|w| crate::capacity::valid(w) && w.resets_at.is_some_and(|t| t > q.updated_at));
         let e = Estimate {
+            group_id: group,
             calculation_status: "insufficientUsage".into(),
             calculation_version: 2,
             quota_plan: q.plan.clone(),
@@ -641,7 +684,7 @@ impl Store {
             priced_tokens: part.priced_tokens,
             excluded_api_tokens: part.excluded_api_tokens,
             prices: part.prices,
-            valid: part.calculation_status != "boundary"
+            valid: !["boundary", "unmappedGroup"].contains(&part.calculation_status.as_str())
                 && part.priced_tokens == part.total_tokens
                 && part.cost.is_finite()
                 && part.cost >= 0.0
@@ -684,7 +727,11 @@ impl Store {
             valid &= part.valid;
         }
         if e.repair_prices.is_none() {
-            e.capacity = self.capacity(&e.account_key, now())?;
+            e.capacity = self.capacity_for_group(
+                &e.account_key,
+                e.group_id.as_deref().unwrap_or(""),
+                now(),
+            )?;
         }
         e.calculation_note = if !valid {
             e.calculation_status = parts
@@ -726,9 +773,10 @@ impl Store {
         if q.error.is_none() && q.updated_at <= e.checkpoint_at {
             return Ok(());
         }
-        let primary = crate::capacity::overall(q, 300).filter(|w| window_id(w) == e.window_id);
-        let weekly =
-            crate::capacity::overall(q, 10080).filter(|w| window_id(w) == e.weekly_window_id);
+        let primary = crate::capacity::window(q, 300, e.group_id.as_deref().unwrap_or(""))
+            .filter(|w| window_id(w) == e.window_id);
+        let weekly = crate::capacity::window(q, 10080, e.group_id.as_deref().unwrap_or(""))
+            .filter(|w| window_id(w) == e.weekly_window_id);
         let config = source_config(&self.settings()?, &e.source_ids, &e.account_key);
         let mut failure = if q.error.is_some() {
             Some("限额查询失败，已保留有效片段")
@@ -770,7 +818,9 @@ impl Store {
                     e.checkpoint_percent = w.used_percent;
                     e.reset_at = w.resets_at.unwrap();
                     e.checkpoint_at = q.updated_at;
-                    if let Some(week) = crate::capacity::overall(q, 10080) {
+                    if let Some(week) =
+                        crate::capacity::window(q, 10080, e.group_id.as_deref().unwrap_or(""))
+                    {
                         e.weekly_window_id = window_id(week).into();
                         e.weekly_reset_at = week.resets_at.unwrap_or(0);
                         e.weekly_baseline_percent = week.used_percent;

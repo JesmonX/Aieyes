@@ -11,6 +11,7 @@ import Combine
     private var statusItem: NSStatusItem!
     private var statusLabel: NSHostingView<MenuActivityLabel>?
     private let popover = NSPopover()
+    private var appearanceController: AppAppearanceController?
     private var detailWindow: NSWindow?
     private var pageControl: NSSegmentedControl?
     private var settingsWindow: NSWindow?
@@ -34,9 +35,9 @@ import Combine
             return
         }
         model = AppModel()
-        model.$settings.map(\.appearance).removeDuplicates().sink { appearance in
-            UserDefaults.standard.set(appearance?.accent ?? "indigo", forKey: "appearance.accent")
-            NSApp.appearance = appearance?.theme == "dark" ? NSAppearance(named: .darkAqua) : appearance?.theme == "light" ? NSAppearance(named: .aqua) : nil
+        appearanceController = AppAppearanceController(popover: popover)
+        model.$settings.map(\.appearance).removeDuplicates().sink { [weak self] appearance in
+            self?.appearanceController?.apply(theme: appearance?.theme ?? "system", accent: appearance?.accent ?? "indigo")
         }.store(in: &cancellables)
         AppUpdater.shared.prepareInstallation = { [weak self] finalizing in
             guard let self, await self.prepareUpdate() else { return false }
@@ -50,7 +51,7 @@ import Combine
         model.showSettings = { [weak self] in self?.openSettings() }
         model.showDetail = { [weak self] in self?.openDetail() }
         model.showDetailPage = { [weak self] page in self?.openDetail(page: page) }
-        model.showEstimate = { [weak self] quota, credits in self?.openEstimate(quota, credits: credits) }
+        model.showEstimate = { [weak self] quota, credits, group in self?.openEstimate(quota, credits: credits, group: group) }
         model.showSampling = { [weak self] in self?.openSampling() }
         model.showQuotaOrder = { [weak self] in self?.openQuotaOrder() }
         model.showPanelAccounts = { [weak self] in self?.openPanelAccounts() }
@@ -69,6 +70,7 @@ import Combine
         // after a sheet, and can close on status mouse-down then reopen on mouse-up.
         popover.behavior = .applicationDefined; popover.animates = true; popover.delegate = self
         popover.contentViewController = PanelContainer(model: model)
+        appearanceController?.updatePanel()
         popover.contentSize = NSSize(width: 450, height: 720)
         model.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification).sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
@@ -113,6 +115,7 @@ import Combine
         else {
             model.panelHeight = min(720, max(360, (button.window?.screen?.visibleFrame.height ?? 800) - 34))
             popover.contentSize = NSSize(width: 450, height: model.panelHeight)
+            appearanceController?.updatePanel()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); model.setWindowVisible(true, window: "panel") }
     }
     private func dismissOutsidePanel() { if popover.isShown && !model.isPinned { popover.performClose(nil) } }
@@ -204,7 +207,7 @@ import Combine
         if response == .alertSecondButtonReturn { model.discardSettingsDraft(); return true }
         return false
     }
-    private func openEstimate(_ quota: Quota, credits: Bool = false) {
+    private func openEstimate(_ quota: Quota, credits: Bool = false, group: String? = nil) {
         let key = quota.id + (credits ? ":credits" : ":quota")
         popover.performClose(nil)
         let window = estimateWindows[key] ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 530, height: 600), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -214,7 +217,7 @@ import Combine
             window.center(); estimateWindows[key] = window
         }
         window.title = quota.name + (credits ? " · credit 价值" : " · 额度估值")
-        window.contentView = NSHostingView(rootView: QuotaEstimateView(model: model, quota: quota, onClose: { [weak window] in window?.close() }, credits: credits))
+        window.contentView = NSHostingView(rootView: QuotaEstimateView(model: model, quota: quota, onClose: { [weak window] in window?.close() }, credits: credits, initialGroup: group))
         fitToVisibleScreen(window); window.deminiaturize(nil); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
     private func openSampling() {
@@ -322,7 +325,7 @@ import Combine
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) {
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }; if let localEventMonitor { NSEvent.removeMonitor(localEventMonitor) }
-        model?.engine.stop(); model?.metricsEngine.stop()
+        model?.accountEngine.stop(); model?.engine.stop(); model?.metricsEngine.stop()
     }
     private func capture<V: View>(_ content: V, size: NSSize, dark: Bool, to url: URL, opaqueBackground: Bool = true) async throws {
         let view = NSHostingView(rootView: content.frame(width: size.width, height: size.height).background(opaqueBackground ? Color(nsColor: .windowBackgroundColor) : Color.clear).environment(\.colorScheme, dark ? .dark : .light))
@@ -368,9 +371,12 @@ import Combine
                 model.sessions = sessions; model.sessionsUnavailable = unavailable
             }
             try await capture(TokenBreakdown(tokens: model.dashboard.summary.tokens, inline: true), size: NSSize(width: 414, height: 90), dark: false, to: root.appendingPathComponent("token-breakdown.png"))
-            for tab in ["sources", "servers", "prices", "wakeups", "general"] {
+            for tab in ["sources", "accounts", "servers", "prices", "wakeups", "general"] {
                 model.settingsTab = tab
                 for dark in [false, true] { try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("settings-\(tab)-\(dark ? "dark" : "light").png")) }
+            }
+            if let account = model.settings.accounts.first {
+                for dark in [false, true] { try await capture(AccountDevicesView(model: model, account: account), size: NSSize(width: 680, height: 650), dark: dark, to: root.appendingPathComponent("account-devices-\(dark ? "dark" : "light").png")) }
             }
             for dark in [false, true] {
                 try await capture(RootView(model: model, compact: false, page: "servers"), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("servers-\(dark ? "dark" : "light").png"))
@@ -418,8 +424,8 @@ import Combine
                 try await capture(QuotaCard(quota: quota), size: NSSize(width: 420, height: 450), dark: false, to: root.appendingPathComponent("single-quota.png"))
             }
             for dark in [false, true] {
-                if let agy = model.dashboard.quotas.first(where: { $0.provider == "agy" }) {
-                    try await capture(QuotaCard(quota: agy, compact: true), size: NSSize(width: 414, height: 340), dark: dark, to: root.appendingPathComponent("agy-compact-\(dark ? "dark" : "light").png"))
+                if let agy = model.dashboard.quotas.first(where: { $0.provider == "antigravity" }) {
+                    try await capture(QuotaCard(quota: agy, compact: true, onEstimate: { _ in }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == agy.id }), size: NSSize(width: 414, height: 460), dark: dark, to: root.appendingPathComponent("agy-compact-\(dark ? "dark" : "light").png"))
                 }
                 if let account = model.dashboard.quotas.first(where: { $0.provider == "codex" }) {
                     try await capture(QuotaEstimateView(model: model, quota: account), size: NSSize(width: 518, height: 620), dark: dark, to: root.appendingPathComponent("quota-estimate-\(dark ? "dark" : "light").png"))
@@ -440,18 +446,18 @@ import Combine
                 try await capture(QuotaCard(quota: dormant), size: NSSize(width: 414, height: 450), dark: false, to: root.appendingPathComponent("quota-full-window-reset.png"))
             }
             try await capture(QuotaOrderView(model: model), size: NSSize(width: 488, height: 430), dark: false, to: root.appendingPathComponent("quota-order.png"))
-            for provider in ["agy", "deepseek"] {
+            for provider in ["antigravity", "deepseek"] {
                 let source = AgentSource(name: Format.provider(provider), provider: provider, path: "")
-                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent(provider + "-source.png"))
+                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, onSave: { _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent(provider + "-source.png"))
             }
             if let host = model.settings.hosts.first {
                 try await capture(HostEditor(host: host, onSave: { _, _ in }), size: NSSize(width: 620, height: 650), dark: false, to: root.appendingPathComponent("host-editor.png"))
             }
             if let source = model.settings.sources.first(where: { $0.hostId != nil }) {
-                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, accounts: model.settings.accounts, onSave: { _, _, _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent("remote-source.png"))
+                try await capture(SourceEditor(source: source, hosts: model.settings.hosts, onSave: { _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent("remote-source.png"))
             }
-        } catch { fputs("\(error.localizedDescription)\n", stderr); model.engine.stop(); model.metricsEngine.stop(); exit(1) }
-        model.engine.stop(); model.metricsEngine.stop(); NSApp.terminate(nil)
+        } catch { fputs("\(error.localizedDescription)\n", stderr); model.accountEngine.stop(); model.engine.stop(); model.metricsEngine.stop(); exit(1) }
+        model.accountEngine.stop(); model.engine.stop(); model.metricsEngine.stop(); NSApp.terminate(nil)
     }
 }
 

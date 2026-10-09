@@ -18,17 +18,38 @@ pub fn paths(source: &Source) -> Result<Vec<PathBuf>> {
         return Ok(vec![root]);
     }
     let roots = match source.provider.as_str() {
-        "codex" if root.join("sessions").exists() => ["sessions", "archived_sessions"]
-            .iter()
-            .map(|p| root.join(p))
-            .filter(|p| p.exists())
-            .collect(),
+        "codex"
+            if (source.codex_home_id.is_some()
+                || root.file_name().is_some_and(|p| p == ".codex")
+                || [
+                    "sessions",
+                    "archived_sessions",
+                    "auth.json",
+                    "config.toml",
+                    ".aieyes",
+                ]
+                .iter()
+                .any(|p| root.join(p).exists()))
+                && !root
+                    .file_name()
+                    .is_some_and(|p| p == "sessions" || p == "archived_sessions") =>
+        {
+            ["sessions", "archived_sessions"]
+                .iter()
+                .map(|p| root.join(p))
+                .filter(|p| p.exists())
+                .collect()
+        }
         "claude" if root.join("projects").exists() => vec![root.join("projects")],
         _ => vec![root],
     };
     let mut files = Vec::new();
     for dir in roots {
-        for entry in walkdir::WalkDir::new(dir).follow_links(false) {
+        for entry in walkdir::WalkDir::new(dir)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| e.file_name() != ".aieyes")
+        {
             let e = entry.context("读取数据目录失败")?;
             if e.file_type().is_file() && e.path().extension().is_some_and(|s| s == "jsonl") {
                 files.push(e.path().to_path_buf());
@@ -40,6 +61,11 @@ pub fn paths(source: &Source) -> Result<Vec<PathBuf>> {
 }
 
 pub fn scan(store: &Store, settings: &Settings, source: &Source) -> Result<Value> {
+    if crate::providers::antigravity(&source.provider)
+        && crate::antigravity::directory(&expand(&source.path)).is_some()
+    {
+        return crate::antigravity::scan(store, settings, source);
+    }
     let prices = store.prices()?;
     let files = paths(source)?;
     let mut count = 0;

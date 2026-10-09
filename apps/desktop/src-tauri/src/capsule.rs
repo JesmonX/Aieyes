@@ -219,7 +219,12 @@ thread_local! {
 // Runs on the capsule message thread. Never wait for the renderer or consume
 // input here: the original click must still reach the other application.
 unsafe extern "system" fn outside_click(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 && matches!(wparam.0 as u32, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN) {
+    if code >= 0
+        && matches!(
+            wparam.0 as u32,
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+        )
+    {
         HOOK_SURFACE.with(|slot| {
             if let Some(surface) = slot.get().as_ref()
                 && let Some(panel) = surface.panel.get()
@@ -229,8 +234,15 @@ unsafe extern "system" fn outside_click(code: i32, wparam: WPARAM, lparam: LPARA
                 let target = WindowFromPoint(point);
                 let root = GetAncestor(target, GA_ROOT);
                 let owner = GetAncestor(target, GA_ROOTOWNER);
-                let capsule = surface.app.try_state::<Capsule>().map(|c| c.hwnd).unwrap_or(0);
-                if ![root.0 as usize, owner.0 as usize].iter().any(|h| *h == panel || *h == capsule) {
+                let capsule = surface
+                    .app
+                    .try_state::<Capsule>()
+                    .map(|c| c.hwnd)
+                    .unwrap_or(0);
+                if ![root.0 as usize, owner.0 as usize]
+                    .iter()
+                    .any(|h| *h == panel || *h == capsule)
+                {
                     dispatch(surface, "dismiss-panel");
                 }
             }
@@ -460,11 +472,20 @@ unsafe extern "system" fn window_proc(
                     Command::WatchPanel(panel) => {
                         surface.panel.set(panel);
                         if panel.is_some() && surface.mouse_hook.get().is_none() {
-                            match SetWindowsHookExW(WH_MOUSE_LL, Some(outside_click), GetModuleHandleW(None).ok().map(Into::into), 0) {
+                            match SetWindowsHookExW(
+                                WH_MOUSE_LL,
+                                Some(outside_click),
+                                GetModuleHandleW(None).ok().map(Into::into),
+                                0,
+                            ) {
                                 Result::Ok(hook) => surface.mouse_hook.set(Some(hook)),
-                                Err(error) => { let _ = surface.app.emit("desktop:error", &error.to_string()); }
+                                Err(error) => {
+                                    let _ = surface.app.emit("desktop:error", &error.to_string());
+                                }
                             }
-                        } else if panel.is_none() && let Some(hook) = surface.mouse_hook.take() {
+                        } else if panel.is_none()
+                            && let Some(hook) = surface.mouse_hook.take()
+                        {
                             let _ = UnhookWindowsHookEx(hook);
                         }
                     }
@@ -503,7 +524,12 @@ unsafe extern "system" fn window_proc(
         }
         WM_MOUSEMOVE => {
             if !surface.hover.replace(true) {
-                let mut tracking = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
+                let mut tracking = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
                 let _ = TrackMouseEvent(&mut tracking);
                 let _ = InvalidateRect(Some(hwnd), None, false);
             }
@@ -638,9 +664,17 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             if contrast {
                 system_argb(COLOR_WINDOW)
             } else if surface.press.get().is_some() {
-                if surface.dark.get() { 0xff494951 } else { 0xffe4e4e9 }
+                if surface.dark.get() {
+                    0xff494951
+                } else {
+                    0xffe4e4e9
+                }
             } else if surface.hover.get() {
-                if surface.dark.get() { 0xff3b3b43 } else { 0xffeeeef2 }
+                if surface.dark.get() {
+                    0xff3b3b43
+                } else {
+                    0xffeeeef2
+                }
             } else if surface.dark.get() {
                 0xff29292e
             } else {
@@ -666,14 +700,21 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
             &mut pen,
         );
         GdipDrawPath(graphics, pen, outline);
-        if surface.press.get().is_some() { GdipTranslateWorldTransform(graphics, 0.0, 1.0, MatrixOrderPrepend); }
+        if surface.press.get().is_some() {
+            GdipTranslateWorldTransform(graphics, 0.0, 1.0, MatrixOrderPrepend);
+        }
         GdipDeletePen(pen);
         GdipDeletePath(outline);
         let info = surface.info.borrow().clone();
         let phase = info["phase"].as_str().unwrap_or("idle");
         let label = match phase {
-            "working" => "进行中", "thinking" => "思考中", "tool" => "执行工具",
-            "complete" => "已完成", "interrupted" => "已中断", "unknown" => "待确认", _ => "空闲",
+            "working" => "进行中",
+            "thinking" => "思考中",
+            "tool" => "执行工具",
+            "complete" => "已完成",
+            "interrupted" => "已中断",
+            "unknown" => "待确认",
+            _ => "空闲",
         };
         let [r, g, b] = crate::phase_colors::rgb(phase, surface.dark.get());
         let color = 0xff000000 | ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
@@ -711,7 +752,8 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
         let mut family = null_mut();
         let mut font = null_mut();
         let mut format = null_mut();
-        if GdipCreateFontFamilyFromName(w!("Microsoft YaHei UI"), null_mut(), &mut family) != GDI_OK {
+        if GdipCreateFontFamilyFromName(w!("Microsoft YaHei UI"), null_mut(), &mut family) != GDI_OK
+        {
             GdipCreateFontFamilyFromName(w!("Segoe UI"), null_mut(), &mut family);
         }
         GdipCreateFont(family, 13.0, FontStyleRegular.0, UnitPixel, &mut font);
@@ -746,15 +788,32 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
         let count = info["activeCount"].as_u64().unwrap_or(0);
         if count > 0 && info["showCount"].as_bool().unwrap_or(false) {
             let mut badge = null_mut();
-            GdipCreateSolidFill(if contrast { system_argb(COLOR_HIGHLIGHT) } else { match (info["accent"].as_str().unwrap_or("indigo"), surface.dark.get()) {
-                ("blue",true)=>0xff344961,("blue",false)=>0xffdce9f8,
-                ("teal",true)=>0xff314d45,("teal",false)=>0xffdceee8,
-                ("purple",true)=>0xff4b3e60,("purple",false)=>0xffeee3fa,
-                (_,true)=>0xff40425a,(_,false)=>0xffe4e5f5,
-            } }, &mut badge);
+            GdipCreateSolidFill(
+                if contrast {
+                    system_argb(COLOR_HIGHLIGHT)
+                } else {
+                    match (
+                        info["accent"].as_str().unwrap_or("indigo"),
+                        surface.dark.get(),
+                    ) {
+                        ("blue", true) => 0xff344961,
+                        ("blue", false) => 0xffdce9f8,
+                        ("teal", true) => 0xff314d45,
+                        ("teal", false) => 0xffdceee8,
+                        ("purple", true) => 0xff4b3e60,
+                        ("purple", false) => 0xffeee3fa,
+                        (_, true) => 0xff40425a,
+                        (_, false) => 0xffe4e5f5,
+                    }
+                },
+                &mut badge,
+            );
             GdipFillEllipse(graphics, badge.cast(), 109.0, 12.0, 25.0, 20.0);
             GdipDeleteBrush(badge.cast());
-            if contrast { GdipDeleteBrush(brush.cast()); GdipCreateSolidFill(system_argb(COLOR_HIGHLIGHTTEXT), &mut brush); }
+            if contrast {
+                GdipDeleteBrush(brush.cast());
+                GdipCreateSolidFill(system_argb(COLOR_HIGHLIGHTTEXT), &mut brush);
+            }
             GdipSetStringFormatAlign(format, StringAlignmentCenter);
             let count = if count > 99 {
                 "99+".into()

@@ -36,7 +36,7 @@ fn event(
         import_identity: Some(identity),
         source_id: source.id.clone(),
         account_id: source.account_id.clone(),
-        provider: source.provider.clone(),
+        provider: crate::providers::canonical(&source.provider).into(),
         session_id: state.session_id.clone(),
         timestamp: stamp,
         model,
@@ -223,6 +223,8 @@ fn parse_normalized(source: &Source, state: &mut ParseState, v: &Value) -> Optio
         format!("{}:{id}", state.session_id),
         "import",
     );
+    parsed.interval_start = timestamp(&v["intervalStart"]);
+    parsed.interval_evidence = v["intervalEvidence"].as_str().unwrap_or("").into();
     if let Some(category @ ("api" | "subscription")) = v["billing"]["category"].as_str() {
         parsed.billing = BillingEvidence {
             category: category.into(),
@@ -236,7 +238,7 @@ pub fn codex_quota(source: &Source, value: &Value, stamp: i64, origin: &str) -> 
     let mut q = QuotaSnapshot {
         source_id: source.id.clone(),
         account_id: source.account_id.clone(),
-        provider: source.provider.clone(),
+        provider: crate::providers::canonical(&source.provider).into(),
         name: source.name.clone(),
         updated_at: stamp,
         origin: origin.into(),

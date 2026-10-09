@@ -230,8 +230,8 @@ struct UpdateSettingsView: View {
             Text("当前版本 v\(updater.currentVersion)")
             Toggle("启动时及每天检查更新", isOn: $updater.automatic)
             HStack { Button(updater.phase == "checking" ? "检查中…" : "检查更新") { updater.check() }.disabled(updater.busy); if updater.phase == "checking" { Button("取消检查") { updater.cancelDownload() } }; if updater.phase == "available" || (updater.busy && updater.phase != "checking") { Button(updater.busy ? "查看进度" : "查看更新") { updater.check() } } }
-            if !updater.message.isEmpty { Text(updater.message).font(AppFont.secondary).foregroundStyle(updater.phase == "error" ? .orange : .secondary).textSelection(.enabled) }
-        }.font(AppFont.body)
+            if !updater.message.isEmpty { Text(updater.message).font(AppFont.secondary).foregroundStyle(updater.phase == "error" ? Palette.warn : Color.secondary).textSelection(.enabled) }
+        }.aieyesAccent().font(AppFont.body)
     }
 }
 struct UpdateWindowView: View {
@@ -241,7 +241,7 @@ struct UpdateWindowView: View {
             Text("Aieyes 更新").font(AppFont.title)
             Text("当前版本 v\(updater.currentVersion) → 新版本 v\(updater.latestVersion)").font(AppFont.section)
             ScrollView { Text(updater.notes.isEmpty ? "此版本包含改进与修复。" : updater.notes).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }.frame(maxHeight: .infinity)
-            Text(updater.message).font(AppFont.secondary).foregroundStyle(updater.phase == "error" ? .orange : .secondary)
+            Text(updater.message).font(AppFont.secondary).foregroundStyle(updater.phase == "error" ? Palette.warn : Color.secondary)
             if updater.phase == "downloading" { UpdateProgressView(progress: updater.progress) }
             HStack {
                 if updater.phase == "downloading" { Button("取消下载") { updater.cancelDownload() } }
@@ -253,7 +253,7 @@ struct UpdateWindowView: View {
                     else { Button("重新检查") { updater.check() } }
                 }
             }
-        }.font(AppFont.body).padding(24)
+        }.aieyesAccent().font(AppFont.body).padding(24)
     }
 }
 
@@ -273,7 +273,7 @@ struct UpdateMenuButton: View {
     var body: some View {
         Button { updater.check() } label: {
             Image(systemName: "arrow.down.circle").frame(width: 28, height: 28)
-                .overlay(alignment: .topTrailing) { if updater.hasUpdate { Text("!").font(.system(size: 11, weight: .bold)).foregroundStyle(.orange) } }
+                .overlay(alignment: .topTrailing) { if updater.hasUpdate { Text("!").font(.system(size: 11, weight: .bold)).foregroundStyle(Palette.warn) } }
         }.help(updater.hasUpdate ? "发现新版本 · 查看更新" : "检查更新")
             .accessibilityLabel(updater.hasUpdate ? "发现新版本，查看更新" : "检查更新")
             .disabled(updater.phase == "checking")

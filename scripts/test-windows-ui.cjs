@@ -64,10 +64,10 @@ function installFixture(data) {
           assert.equal(await hint.getAttribute('title'),null);assert.equal(await page.locator('.hint:visible').innerText(),'更新后的提示');
           await hint.evaluate(el=>el.remove());await page.waitForTimeout(200);assert.equal(await page.locator('.hint:visible').count(),0);
         }
-        for(const tab of ['sources','hosts','prices','wakeups','general']) {
+        for(const tab of ['sources','accounts','hosts','prices','wakeups','general']) {
           await page.evaluate(tab=>{state.page='settings';state.settingsTab=tab;state.prices=__fixture.prices;render();},tab);
           await shot(`settings-${tab}`);
-          assert.equal(await page.locator('#settings-save-all').innerText(),'保存应用配置');
+          assert.equal(await page.locator('#settings-save-all').count(),0);assert.match(await page.locator('.settings-draft-label').innerText(),/即时保存|未保存输入/);
         }
         await page.evaluate(()=>{state.page='servers';render();});await shot('servers');
         await page.setViewportSize({width:640,height:440});await shot('minimum');

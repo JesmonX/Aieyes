@@ -18,6 +18,7 @@ function fixture(){
   if(method==='hello')return {version:'test'};
   if(method==='settings.get')return structuredClone(samplingFixture.settings);
   if(method==='settings.save'){samplingFixture.settings=structuredClone(params);return {};}
+  if(method==='settings.patch'){samplingFixture.settings=structuredClone(params.settings);return structuredClone(samplingFixture.settings);}
   if(method==='dashboard')return {generatedAt:now,summary:empty,quotas:[q,{...q,provider:'agy',accountId:'new',sourceId:'agy',name:'Agy',credits:null,plan:null}],quotaEstimates:samplingFixture.records,creditEstimates:samplingFixture.credits,quotaOrder:['codex:a','agy:new'],modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:[],pricingGaps:[]};
   if(method==='quotaEstimates.repair'){const fixed={...broken,id:'broken-repair-v2',originalEstimateId:'broken',repairedAt:now,fiveHourValue:6.7979,weeklyValue:43.5067,weeklyRatioValue:43.12,calculationStatus:'ready',calculationNote:'已修正'};samplingFixture.records.unshift(fixed);return fixed;}
   if(method==='creditEstimates.repair'){const fixed={...credit,id:'credit-repair-v2',originalEstimateId:'credit',valuePer1000:40.69585,calculationStatus:'ready',repairedAt:now};samplingFixture.credits.unshift(fixed);return fixed;}
@@ -56,7 +57,10 @@ function fixture(){
   await page.emulateMedia({colorScheme:'light'});assert.equal(await page.locator('html').getAttribute('data-theme'),'dark','Explicit dark remains dark on a light system');
   if(surface==='index.html'){
    await page.evaluate(()=>{samplingFixture.settings=structuredClone(state.settings);state.page='settings';state.settingsTab='general';render();});
-   await page.locator('[name=appearanceTheme]').selectOption('light');await page.locator('[name=appearanceAccent]').selectOption('teal');await page.locator('#settings-save-all').click();await page.waitForFunction(()=>!state.settingsCommitting);
+   await page.locator('[name=appearanceTheme]').selectOption('light');
+   await page.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&samplingFixture.settings.appearance?.theme==='light');
+   await page.locator('[name=appearanceAccent]').selectOption('teal');
+   await page.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&samplingFixture.settings.appearance?.accent==='teal');
    assert.deepEqual(await page.evaluate(()=>samplingFixture.settings.appearance),{theme:'light',accent:'teal'});assert.equal(await page.locator('html').getAttribute('data-theme'),'light');
    await page.screenshot({path:path.join(out,'settings-theme.png')});
   }

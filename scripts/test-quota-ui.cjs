@@ -44,13 +44,14 @@ function fixture(){
    assert.equal(await agy.locator('.provider-mark').getAttribute('data-provider'),'agy');
    const resetCheck=await page.evaluate(()=>{
      const now=1800000000,window=quotaFixture.rows[0].windows[0],original=JSON.stringify(window),node=document.querySelector('[data-quota="codex:c"] [data-reset-at]');
-     node.dataset.resetAt=String(now-1);node.dataset.windowMinutes='10080';
+     node.dataset.resetAt=String(now-1);
      updateResetDisplays(now);const first=node.textContent;updateResetDisplays(now+86400);const later=node.textContent;
+     node.dataset.resetAt='0';updateResetDisplays(now);const missing=node.textContent;
      node.dataset.resetAt=String(now+3600);updateResetDisplays(now);const refreshed=node.textContent;
-     node.dataset.resetAt=String(window.resetsAt);node.dataset.windowMinutes=String(window.windowMinutes);updateResetDisplays();
-     return {first,later,refreshed,unchanged:JSON.stringify(window)===original};
+     node.dataset.resetAt=String(window.resetsAt);updateResetDisplays();
+     return {first,later,missing,refreshed,unchanged:JSON.stringify(window)===original};
    });
-   assert.match(resetCheck.first,/^7 天后重置 · \d{2}\/\d{2} \d{2}:\d{2}$/);assert.match(resetCheck.later,/^7 天后重置 · /);assert.notEqual(resetCheck.first,resetCheck.later);assert.match(resetCheck.refreshed,/^1 小时后重置 · \d{2}\/\d{2} \d{2}:\d{2}$/);assert(resetCheck.unchanged);
+   assert.equal(resetCheck.first,'确认重置中');assert.equal(resetCheck.later,'确认重置中');assert.equal(resetCheck.missing,'重置时间未知');assert.match(resetCheck.refreshed,/^1 小时后重置 · \d{2}\/\d{2} \d{2}:\d{2}$/);assert(resetCheck.unchanged);
    const fullWindowCheck=await page.evaluate(()=>{
      const clock=Date.now,now=Math.floor(clock()/1000),q=state.dashboard.quotas.find(q=>q.provider==='codex'),saved=q.windows;
      const nodes=()=>[...document.querySelectorAll('[data-quota="codex:c"] [data-reset-at]')];
@@ -63,14 +64,21 @@ function fixture(){
        q.windows[0].usedPercent=0.001;renderAgent();const activated=nodes()[0].textContent;
        q.windows[0].usedPercent=0;q.windows[1].usedPercent=0;renderAgent();const full=nodes().map(n=>n.textContent);
        q.windows[0].usedPercent=null;renderAgent();quotaTimers.find(t=>t.ms===30000).fn();const missing=nodes()[0].textContent;
-       return {initial,later,unchanged,activated,full,missing};
+       Date.now=()=>(now+7200)*1000;quotaTimers.find(t=>t.ms===30000).fn();const expired=nodes()[0].textContent;
+       q.windows[0].resetsAt=null;renderAgent();const unknown=nodes()[0].textContent;quotaTimers.find(t=>t.ms===30000).fn();const unknownLater=nodes()[0].textContent;
+       q.windows[0].usedPercent=0;q.windows[1].resetsAt=null;renderAgent();const fullUnknown=nodes().map(n=>n.textContent);
+       quotaTimers.find(t=>t.ms===30000).fn();const fullUnknownLater=nodes().map(n=>n.textContent);
+       q.windows[0].resetsAt=now+9000;renderAgent();const refreshed=nodes()[0].textContent;
+       return {initial,later,unchanged,activated,full,missing,expired,unknown,unknownLater,fullUnknown,fullUnknownLater,refreshed};
      } finally {Date.now=clock;q.windows=saved;renderAgent();}
    });
-   assert.match(fullWindowCheck.initial[0],/^5 小时后重置 · /);assert.match(fullWindowCheck.initial[1],/^2 天后重置 · /);
-   assert.match(fullWindowCheck.later[0],/^5 小时后重置 · /);assert.notEqual(fullWindowCheck.initial[0],fullWindowCheck.later[0]);
+   assert.match(fullWindowCheck.initial[0],/^2 小时后重置 · /);assert.match(fullWindowCheck.initial[1],/^2 天后重置 · /);
+   assert.match(fullWindowCheck.later[0],/^1 小时后重置 · /);assert.equal(fullWindowCheck.initial[0].split(' · ')[1],fullWindowCheck.later[0].split(' · ')[1]);
    assert.match(fullWindowCheck.later[1],/^1 天 23 小时后重置 · /);assert(fullWindowCheck.unchanged);
    assert.match(fullWindowCheck.activated,/^1 小时后重置 · /);assert.match(fullWindowCheck.missing,/^1 小时后重置 · /);
-   assert.match(fullWindowCheck.full[0],/^5 小时后重置 · /);assert.match(fullWindowCheck.full[1],/^7 天后重置 · /);
+   assert.match(fullWindowCheck.full[0],/^1 小时后重置 · /);assert.match(fullWindowCheck.full[1],/^1 天 23 小时后重置 · /);
+   assert.equal(fullWindowCheck.expired,'确认重置中');assert.equal(fullWindowCheck.unknown,'重置时间未知');assert.equal(fullWindowCheck.unknownLater,'重置时间未知');assert.match(fullWindowCheck.refreshed,/^30 分后重置 · /);
+   assert.deepEqual(fullWindowCheck.fullUnknown,['5h','7d']);assert.deepEqual(fullWindowCheck.fullUnknownLater,['5h','7d']);
    const icons=await page.evaluate(async()=>{
      const holder=document.createElement('div');holder.innerHTML=['codex','claude','antigravity','agy','deepseek','custom'].map(providerMark).join('');document.body.append(holder);
      try { await Promise.all([...holder.querySelectorAll('img')].map(img=>img.decode()));return {images:holder.querySelectorAll('img').length,fallback:holder.querySelectorAll('svg').length}; } finally {holder.remove();}
@@ -80,7 +88,7 @@ function fixture(){
    // A single mouse jump can leave Chromium's native drag unfinished,
    // swallowing the following save click. Check each drop before proceeding.
    await page.locator('[data-order="codex:c"]').dragTo(page.locator('[data-order="agy:a"]'),{steps:10});
-   await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='codex:c');
+   await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='codex:c');await page.evaluate(()=>Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))));
    await page.locator('[data-order="agy:a"]').dragTo(page.locator('[data-order="codex:c"]'),{steps:10});
    await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='agy:a');
    await page.evaluate(()=>quotaFixture.fail=true);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>document.querySelector('#quota-tool-error').textContent.includes('保存失败'));

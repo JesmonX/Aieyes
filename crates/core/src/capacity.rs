@@ -19,7 +19,7 @@ struct Baseline {
 }
 
 pub fn overall(q: &QuotaSnapshot, minutes: i64) -> Option<&QuotaWindow> {
-    if q.provider == "agy" {
+    if crate::providers::antigravity(&q.provider) {
         return None;
     }
     let windows: Vec<_> = q
@@ -40,15 +40,32 @@ pub fn overall(q: &QuotaSnapshot, minutes: i64) -> Option<&QuotaWindow> {
     }
     None
 }
+pub fn window<'a>(q: &'a QuotaSnapshot, minutes: i64, group: &str) -> Option<&'a QuotaWindow> {
+    if group.is_empty() {
+        return overall(q, minutes);
+    }
+    let mut rows = q.windows.iter().filter(|w| {
+        w.window_minutes == Some(minutes) && crate::antigravity::window_group(w) == group
+    });
+    let first = rows.next();
+    if rows.next().is_none() { first } else { None }
+}
+pub fn scope_key(account: &str, group: &str) -> String {
+    if group.is_empty() {
+        account.into()
+    } else {
+        format!("{account}#group:{}", hash(group))
+    }
+}
 pub fn valid(w: &QuotaWindow) -> bool {
     w.used_percent.is_finite() && (0.0..=100.0).contains(&w.used_percent)
 }
-fn comparable(a: &QuotaSnapshot, b: &QuotaSnapshot) -> bool {
+fn comparable(a: &QuotaSnapshot, b: &QuotaSnapshot, group: &str) -> bool {
     a.plan == b.plan
         && b.updated_at > a.updated_at
         && b.updated_at - a.updated_at <= 18000
         && [300, 10080].into_iter().all(|minutes| {
-            match (overall(a, minutes), overall(b, minutes)) {
+            match (window(a, minutes, group), window(b, minutes, group)) {
                 (Some(old), Some(new)) => {
                     valid(old)
                         && valid(new)
@@ -63,10 +80,27 @@ fn comparable(a: &QuotaSnapshot, b: &QuotaSnapshot) -> bool {
 }
 impl Store {
     pub fn learn_capacity(&self, q: &QuotaSnapshot) -> Result<()> {
+        if crate::providers::antigravity(&q.provider) {
+            let groups: std::collections::BTreeSet<_> = q
+                .windows
+                .iter()
+                .map(crate::antigravity::window_group)
+                .filter(|g| crate::antigravity::group_kind(g).is_some())
+                .collect();
+            for group in groups {
+                self.learn_capacity_group(q, group)?;
+            }
+            Ok(())
+        } else {
+            self.learn_capacity_group(q, "")
+        }
+    }
+    fn learn_capacity_group(&self, q: &QuotaSnapshot, group: &str) -> Result<()> {
         if q.origin == "log" || q.account_id.is_empty() {
             return Ok(());
         }
-        let key = format!("capacity:{}:{}", q.provider, q.account_id);
+        let account = scope_key(&format!("{}:{}", q.provider, q.account_id), group);
+        let key = format!("capacity:{account}");
         let raw: Option<String> = self
             .db
             .query_row("SELECT value FROM kv WHERE key=?1", [&key], |r| r.get(0))
@@ -82,21 +116,20 @@ impl Store {
         if q.error.is_some()
             || ![300, 10080]
                 .into_iter()
-                .all(|m| overall(q, m).is_some_and(valid))
+                .all(|m| window(q, m, group).is_some_and(valid))
         {
             self.db.execute("DELETE FROM kv WHERE key=?1", [&key])?;
             return Ok(());
         }
         let first = old
             .as_ref()
-            .filter(|s| comparable(&s.last, q))
+            .filter(|s| comparable(&s.last, q, group))
             .map(|s| s.first.clone())
             .unwrap_or_else(|| q.clone());
-        let five =
-            overall(q, 300).unwrap().used_percent - overall(&first, 300).unwrap().used_percent;
-        let week =
-            overall(q, 10080).unwrap().used_percent - overall(&first, 10080).unwrap().used_percent;
-        let account = format!("{}:{}", q.provider, q.account_id);
+        let five = window(q, 300, group).unwrap().used_percent
+            - window(&first, 300, group).unwrap().used_percent;
+        let week = window(q, 10080, group).unwrap().used_percent
+            - window(&first, 10080, group).unwrap().used_percent;
         if old.as_ref().is_some_and(|s| s.last.plan != q.plan) {
             self.db.execute(
                 "DELETE FROM capacity_samples WHERE account_key=?1",
@@ -125,6 +158,10 @@ impl Store {
         Ok(())
     }
     pub fn capacity(&self, account: &str, at: i64) -> Result<Capacity> {
+        self.capacity_for_group(account, "", at)
+    }
+    pub fn capacity_for_group(&self, account: &str, group: &str, at: i64) -> Result<Capacity> {
+        let account = scope_key(account, group);
         let mut stmt = self.db.prepare("SELECT stamp,five,week FROM capacity_samples WHERE account_key=?1 AND stamp>=?2 AND stamp<=?3 ORDER BY stamp")?;
         let rows = stmt.query_map(params![account, at - 90 * 86400, at], |r| {
             Ok((
@@ -149,7 +186,7 @@ impl Store {
     }
     pub fn bootstrap_capacity(&self) -> Result<()> {
         if self.db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM kv WHERE key='capacity.initialized')",
+            "SELECT EXISTS(SELECT 1 FROM kv WHERE key='capacity.initialized.v2')",
             [],
             |r| r.get::<_, bool>(0),
         )? {
@@ -165,7 +202,7 @@ impl Store {
             self.learn_capacity(&serde_json::from_str(&raw)?)?;
         }
         self.db.execute(
-            "INSERT OR IGNORE INTO kv VALUES('capacity.initialized','true')",
+            "INSERT OR IGNORE INTO kv VALUES('capacity.initialized.v2','true')",
             [],
         )?;
         Ok(())

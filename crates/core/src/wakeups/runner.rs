@@ -114,7 +114,7 @@ pub(crate) fn response_ok(provider: &str, output: &[u8]) -> bool {
             "claude" => {
                 v["type"] == "result" && v["is_error"] == false && v["subtype"] == "success"
             }
-            "agy" => {
+            "agy" | "antigravity" => {
                 v["status"] == "SUCCESS"
                     || (v["event"] == "result" && v["result"]["status"] == "SUCCESS")
             }
@@ -131,7 +131,7 @@ pub(crate) fn auth_check(m: &Manifest, cwd: &Path) -> Result<()> {
             "目标 Claude CLI 未使用订阅登录"
         );
     }
-    if m.provider == "agy" {
+    if crate::providers::antigravity(&m.provider) {
         // agy has no documented custom authentication-root switch.
         ensure!(
             Path::new(&m.config_path) == store::home().join(".gemini/antigravity-cli"),
@@ -242,7 +242,30 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                     let cwd = root.join("work").join(&m.id);
                     let result = private_dir(&cwd)
                         .and_then(|_| auth_check(&m, &cwd))
-                        .and_then(|_| invoke(&m, &m.args, &cwd, 120))
+                        .and_then(|_| {
+                            if let Some(reference) = &m.codex_profile_id {
+                                let (_, profile) =
+                                    reference.split_once(':').context("账号档案引用无效")?;
+                                let loc = crate::codex_auth::local::Location {
+                                    path: m.config_path.clone(),
+                                    binary: m.binary.clone(),
+                                    proxy: m.proxy.clone(),
+                                };
+                                crate::codex_auth::local::with_credentials(&loc, profile, |path| {
+                                    let mut bound = m.clone();
+                                    bound.config_path = path.to_string_lossy().into();
+                                    invoke(&bound, &bound.args, &cwd, 120)
+                                })
+                            } else {
+                                ensure!(
+                                    !Path::new(&m.config_path)
+                                        .join(".aieyes/state/home.json")
+                                        .exists(),
+                                    "旧唤醒任务需绑定账号后重新部署"
+                                );
+                                invoke(&m, &m.args, &cwd, 120)
+                            }
+                        })
                         .and_then(|bytes| {
                             ensure!(response_ok(&m.provider, &bytes), "模型没有返回成功完成事件");
                             Ok(())

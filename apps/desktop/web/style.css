@@ -41,9 +41,9 @@ button:disabled { opacity: .45; cursor: default; transform: none; box-shadow: no
 .primary {
   border-color: transparent; color: var(--accent-ink);
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 97%, white), var(--accent));
-  box-shadow: 0 1px 2px rgba(28,42,104,.22), inset 0 1px 0 rgba(255,255,255,.28);
+  box-shadow: 0 1px 2px color-mix(in srgb,var(--accent) 22%,transparent), inset 0 1px 0 rgba(255,255,255,.28);
 }
-.primary:hover { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 97%, white), var(--accent)); box-shadow: 0 2px 6px rgba(28,42,104,.26), 0 12px 24px -14px rgba(28,42,104,.6), inset 0 1px 0 rgba(255,255,255,.3); }
+.primary:hover { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 97%, white), var(--accent)); box-shadow: 0 2px 6px color-mix(in srgb,var(--accent) 26%,transparent), 0 12px 24px -14px color-mix(in srgb,var(--accent) 60%,transparent), inset 0 1px 0 rgba(255,255,255,.3); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 input, select, textarea {
@@ -290,7 +290,7 @@ body[data-platform=windows] #titlebar { border-radius: var(--window-radius) var(
 }
 .window-controls button:hover { background: var(--soft); color: var(--ink); transform: none; box-shadow: none; }
 .window-controls button:active { transform: scale(.93); }
-#window-close:hover { background: linear-gradient(180deg, #e8545f, #d33b47); color: #fff; }
+#window-close:hover { background: var(--danger); color: #fff; }
 .window-controls svg { width: 13px; height: 13px; stroke-width: 1.2; pointer-events: none; }
 body[data-platform=windows] .shell { min-height: calc(100vh - var(--titlebar-h)); }
 body[data-platform=windows] aside { top: var(--titlebar-h); height: calc(100vh - var(--titlebar-h)); border-bottom-left-radius: var(--window-radius); }
@@ -636,8 +636,9 @@ input[name=path],input[name=identityFile],input[name=target] { font-family:var(-
 .server-gpu { min-width:0; }
 .server-gpu-title { display:flex; align-items:baseline; gap:8px; margin-bottom:6px; }
 .server-gpu-title > strong { flex-shrink:0; }
-.server-gpu-title > span { color:var(--muted); overflow-wrap:anywhere; min-width:0; }
-.server-gpu-metrics { display:flex; flex-wrap:wrap; gap:8px 14px; }
+.server-gpu-title > span { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.server-gpu-metrics { display:grid; grid-template-columns:minmax(80px,0.8fr) minmax(0,1.8fr); gap:12px; }
+.server-gpu-metrics[data-memory=false] { grid-template-columns:1fr; }
 .server-gpu-metrics > .resource-gauge { flex:1 1 130px; }
 .server-summary-metrics .resource-ring { width:48px; height:48px; }
 .server-summary-metrics .resource-ring strong { font-size:11px; }
@@ -717,7 +718,7 @@ input[name=path],input[name=identityFile],input[name=target] { font-family:var(-
 .quota-title .quota-chevron { flex-shrink:0; margin-left:0; }
 .quota-credit-summary { flex-shrink:0; max-width:55%; font-size:var(--font-secondary); }
 .quota-disclosure[open] .quota-credit-summary { display:none; }
-.credit-label { display:inline-flex; align-items:center; gap:4px; color:var(--balance-blue); white-space:nowrap; }
+.credit-label { display:inline-flex; align-items:center; gap:4px; color:var(--accent); white-space:nowrap; }
 .credit-label .ui-icon { width:15px; height:15px; flex-basis:15px; }
 .credit-balance { display:inline-flex; align-items:center; gap:4px; min-width:0; }
 .quota-credit-summary .credit-balance { max-width:100%; }
@@ -727,3 +728,44 @@ input[name=path],input[name=identityFile],input[name=target] { font-family:var(-
 @media (prefers-reduced-motion:no-preference) { #activity,.stat-value { transition:color var(--t-base) var(--ease),opacity var(--t-base) var(--ease); } }
 
 .resource-alert { display:block; color:var(--danger); font-size:var(--font-secondary); }
+
+/* Compact resource strips and clickable valuation summaries. */
+.quota-card { min-width:0; container-type:inline-size; }
+.server-resource-strip { min-width:0; display:grid; gap:3px; }
+.resource-strip-heading { display:flex; align-items:baseline; gap:5px; line-height:17px; min-width:0; }
+.resource-strip-heading > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.resource-strip-heading > strong { margin-left:auto; white-space:nowrap; font-size:12px; font-weight:500; font-variant-numeric:tabular-nums; }
+.server-resource-strip .resource-bar { margin:0; height:4px; }
+.server-filesystem-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(290px,100%),1fr)); gap:9px 16px; margin-top:6px; }
+.server-filesystem-list > div { min-width:0; }
+.quota-content .estimate-entry { display:flex; width:100%; gap:5px; min-height:30px; margin-top:6px; font-size:clamp(11px,3.5cqi,13px); border:0; background:none; box-shadow:none; padding:6px 0; }
+.quota-content .estimate-entry > span { flex:1; display:block; min-width:0; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.estimate-notice { font-size:12px; margin-top:3px; overflow-wrap:anywhere; }
+.quota-disclosure:not([open]) + .quota-content .estimate-entry,
+.quota-disclosure:not([open]) + .quota-content .estimate-notice { display:none; }
+
+/* Agent setup keeps the common controls visible; machine-specific paths stay advanced. */
+.agent-setup h2{display:flex;align-items:center;gap:8px;margin:0}
+.agent-machines{display:flex;flex-wrap:wrap;gap:12px 24px;border:0;padding:8px 0;margin:12px 0}
+.agent-machines legend{color:var(--muted);font-size:13px;margin-bottom:8px}
+.agent-machines label,.agent-setup .actions label{display:flex;align-items:center;gap:8px;margin:0}
+.agent-machines input,.agent-setup input[type=checkbox]{width:auto}
+
+.account-machine-summary{border-top:1px solid var(--border);margin-top:12px;padding-top:8px}.account-command-preview{white-space:pre-wrap;overflow-wrap:anywhere;padding:10px;background:var(--bg);border-radius:8px}.account-agent-group h2{display:flex;align-items:center;gap:8px}
+
+/* Account edits remain readable at normal and compact settings widths. */
+.account-config > label { display:grid; grid-template-columns:160px minmax(0,1fr); align-items:center; gap:12px; margin:14px 0; }
+.account-config > label > input,.account-config > label > select { width:100%; min-width:0; }
+.account-config > label:has([data-account-archive]) { display:flex; }
+.account-config > label > input[type=checkbox] { width:17px; }
+.account-config .actions { gap:12px; margin:12px 0; }
+.account-config .actions label { display:flex; align-items:center; gap:6px; }
+details:has([data-command-field]) > label { display:grid; gap:8px; margin:12px 0; }
+[data-command-field] { width:100%; min-height:90px; font-family:var(--font-code); }
+.agent-machines > .list-row { border:0; padding:4px 0; }
+.agent-setup > .between > label { display:flex; align-items:center; gap:8px; }
+@media(max-width:700px) { .account-config > label { grid-template-columns:1fr; gap:6px; } }
+
+.header-actions { display:flex; align-items:center; gap:10px; }
+[data-theme-toggle] { display:grid; place-items:center; width:32px; height:32px; min-height:0; padding:0; flex-shrink:0; }
+[data-theme-toggle] svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }

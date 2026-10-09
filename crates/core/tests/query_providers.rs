@@ -89,13 +89,10 @@ fn balances_are_persisted_and_last_success_survives_an_error() {
 fn query_only_sources_do_not_scan_credential_files() {
     let temp = tempfile::tempdir().unwrap();
     let mut engine = Engine::open(temp.path()).unwrap();
-    let sources = vec![
-        query_source("agy"),
-        Source {
-            id: "balance".into(),
-            ..query_source("deepseek")
-        },
-    ];
+    let sources = vec![Source {
+        id: "balance".into(),
+        ..query_source("deepseek")
+    }];
     let accounts = sources
         .iter()
         .map(|s| Account {

@@ -40,7 +40,7 @@ window.AieyesUI = {
     });
   },
   usageSources(settings) {
-    return (settings?.sources ?? []).filter(s => s.enabled && !['agy','deepseek'].includes(s.provider) &&
+    return (settings?.sources ?? []).filter(s => s.enabled && s.provider!=='deepseek' &&
       (!s.hostId || settings.hosts.some(h => h.id === s.hostId && h.enabled)));
   },
   freshness(settings, dashboard, now = Date.now() / 1000) {
@@ -55,15 +55,13 @@ window.AieyesUI = {
       failed: statuses.filter(s => s?.error).length
     };
   },
-  resetDisplayTime(stamp, windowMinutes, now = Date.now() / 1000, usedPercent) {
-    // Full windows are dormant independently of other windows on the account.
-    // Derive only the display date; keep the source timestamp for scheduling.
-    if (Number.isFinite(usedPercent) && usedPercent === 0 && Number.isFinite(windowMinutes) && windowMinutes > 0) return now + windowMinutes * 60;
-    if (Number.isFinite(stamp) && stamp > now) return stamp;
-    return Number.isFinite(windowMinutes) && windowMinutes > 0 ? now + windowMinutes * 60 : null;
+  resetDisplayTime(stamp, now = Date.now() / 1000) {
+    // A zero usage percentage does not establish whether a window has started.
+    // Only the source timestamp can establish its next reset.
+    return Number.isFinite(stamp) && stamp > 0 && stamp > now ? stamp : null;
   },
-  resetText(stamp, now = Date.now() / 1000, windowMinutes, usedPercent) {
-    const target = this.resetDisplayTime(stamp, windowMinutes, now, usedPercent);
+  resetText(stamp, now = Date.now() / 1000) {
+    const target = this.resetDisplayTime(stamp, now);
     if (target == null) return Number.isFinite(stamp) && stamp > 0 ? '确认重置中' : '重置时间未知';
     const minutes = Math.ceil((target - now) / 60), parts = [];
     if (!Number.isSafeInteger(minutes) || minutes <= 0) return '重置时间未知';
@@ -73,15 +71,52 @@ window.AieyesUI = {
     return parts.join(' ') + '后重置';
   },
   quotaReset(window, now = Date.now() / 1000) {
-    const text = this.resetText(window.resetsAt, now, window.windowMinutes, window.usedPercent);
-    const stamp = this.resetDisplayTime(window.resetsAt, window.windowMinutes, now, window.usedPercent), date = new Date(stamp * 1000);
+    if (!(Number.isFinite(window.resetsAt) && window.resetsAt > 0) && window.usedPercent === 0) {
+      if (window.windowMinutes === 300) return '5h';
+      if (window.windowMinutes === 10080) return '7d';
+    }
+    const text = this.resetText(window.resetsAt, now);
+    const stamp = this.resetDisplayTime(window.resetsAt, now), date = new Date(stamp * 1000);
     if (stamp == null || !Number.isFinite(date.getTime())) return text;
     const pad = n => String(n).padStart(2, '0');
     return text + ' · ' + pad(date.getMonth()+1) + '/' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
   },
   subscription(plan) {
     const name = String(plan ?? '').trim();
-    return ({plus:'Plus',pro:'Pro',free:'Free',max:'Max',team:'Team',business:'Business',enterprise:'Enterprise',api:'API'})[name.toLowerCase()] ?? name;
+    return ({plus:'Plus',pro:'Pro',free:'Free',max:'Max',team:'Team',business:'Business',enterprise:'Enterprise',api:'API'})[name.toLowerCase()] ?? (name ? name[0].toLocaleUpperCase()+name.slice(1) : '');
+  },
+  compactMoney(value) {
+    if (!Number.isFinite(value)) return '—';
+    for (const [size,suffix] of [[1e12,'T'],[1e9,'B'],[1e6,'M'],[1e3,'K']]) if (Math.abs(value)>=size*0.999995) return '$'+(value/size).toFixed(2)+suffix;
+    return '$'+value.toFixed(2);
+  },
+  estimateWindows(q) {
+    const windows=q.windows??[];
+    if(['antigravity','agy'].includes(q.provider)) {
+      const groups=[...new Set(windows.map(w=>w.groupId||w.groupName||''))];
+      return groups.filter(g=>['gemini','gemini models','claude-gpt','claude and gpt models'].includes(g.toLowerCase())).flatMap(g=>{
+        const rows=windows.filter(w=>(w.groupId||w.groupName)===g);
+        const five=rows.filter(w=>w.windowMinutes===300),week=rows.filter(w=>w.windowMinutes===10080);
+        return five.length===1?five:!five.length&&week.length===1?week:[];
+      });
+    }
+    const five=windows.filter(w=>w.windowMinutes===300),week=windows.filter(w=>w.windowMinutes===10080);
+    return five.length===1?five:q.provider==='claude'&&five.some(w=>w.id==='five_hour')?five.filter(w=>w.id==='five_hour'):week.length===1?week:week.filter(w=>q.provider==='claude'&&w.id==='seven_day');
+  },
+  estimateLine(records=[]) {
+    const entries=this.estimateEntries(records), value=field=>entries.find(e=>e.field===field)?.value;
+    return '5h ≈ '+this.compactMoney(value('fiveHourValue'))+'  7d ≈ '+this.compactMoney(value('weeklyRatioValue'))+'/'+this.compactMoney(value('weeklyValue'));
+  },
+  migrateProviderPreferences(settings) {
+    const aliases=settings?.accountAliases??{}, key=s=>aliases[s]??(s.startsWith('agy:')?'antigravity:'+s.slice(4):s);
+    try {
+      const marker=JSON.stringify(aliases); if(localStorage.getItem('aieyes.antigravity.preferences')===marker)return;
+      const pref=this.panelPreference(), old=pref.providers.agy;
+      if(old){const current=pref.providers.antigravity;pref.providers.antigravity=current?{mode:current.mode==='custom'||old.mode==='custom'?'custom':'auto',keys:[...new Set([...(current.keys??[]),...(old.keys??[])].map(key))].slice(0,5)}:{...old,keys:(old.keys??[]).map(key)};delete pref.providers.agy;localStorage.setItem('aieyes.panel.accounts.v2',JSON.stringify(pref));}
+      for(const name of Object.keys(localStorage)){if(name.startsWith('quota.expanded.v2.')&&name.includes('.agy:')){const i=name.indexOf('.agy:')+1,next=name.slice(0,i)+key(name.slice(i));if(localStorage.getItem(next)==null)localStorage.setItem(next,localStorage.getItem(name));}}
+      const view=JSON.parse(localStorage.getItem('aieyes.panel.view')||'{}');if(view.provider==='agy')view.provider='antigravity';if(view.accountKey)view.accountKey=key(view.accountKey);localStorage.setItem('aieyes.panel.view',JSON.stringify(view));
+      localStorage.setItem('aieyes.antigravity.preferences',marker);
+    } catch(_) {}
   },
   estimateLabel(record) {
     if (!record) return '';

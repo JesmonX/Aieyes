@@ -2,9 +2,9 @@
 #[cfg(target_os = "windows")]
 mod capsule;
 mod desktop;
-mod phase_colors;
 #[cfg(target_os = "windows")]
 mod passive_window;
+mod phase_colors;
 mod updates;
 
 use aieyes_core::Engine;
@@ -66,7 +66,29 @@ fn check_local_path(path: String) -> bool {
     local_path(&path).exists()
 }
 
-struct Shared(Arc<Mutex<Engine>>, Arc<Mutex<Engine>>, Arc<Mutex<Engine>>);
+struct Shared(
+    Arc<Mutex<Engine>>,
+    Arc<Mutex<Engine>>,
+    Arc<Mutex<Engine>>,
+    Arc<Mutex<Engine>>,
+    Arc<Mutex<Engine>>,
+);
+
+impl Shared {
+    fn engine_for(&self, method: &str) -> Arc<Mutex<Engine>> {
+        if aieyes_core::settings::is_configuration_method(method) {
+            self.3.clone()
+        } else if method.starts_with("accounts.") {
+            self.4.clone()
+        } else if method.starts_with("network.") {
+            self.2.clone()
+        } else if method.starts_with("hosts.") {
+            self.1.clone()
+        } else {
+            self.0.clone()
+        }
+    }
+}
 
 fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static str, Value)> {
     if method == "hosts.sample" {
@@ -74,6 +96,23 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
             Ok(rows) => ("desktop:hosts", rows.clone()),
             Err(error) => ("desktop:hosts-error", Value::String(error.clone())),
         }];
+    }
+    if method == "accounts.delete" {
+        let mut events = vec![(
+            "desktop:data-changed",
+            Value::String("wakeups.remove".into()),
+        )];
+        if result.as_ref().is_ok_and(|v| v["deleted"] == true) {
+            events.push(("desktop:settings", Value::Null));
+            events.push(("desktop:data-changed", Value::String(method.into())));
+        }
+        return events;
+    }
+    if method == "accounts.deployments.sync" {
+        return vec![(
+            "desktop:data-changed",
+            Value::String("wakeups.deploy".into()),
+        )];
     }
     if method.starts_with("creditEstimates.") || method.starts_with("wakeups.") {
         return vec![("desktop:data-changed", Value::String(method.into()))];
@@ -88,14 +127,46 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
         }
         return vec![];
     }
+    if method == "codexAuth.login.status"
+        && !result
+            .as_ref()
+            .is_ok_and(|value| value["accountId"].is_string())
+    {
+        return vec![];
+    }
     let mut events = vec![];
-    if method == "settings.save" {
+    if matches!(
+        method,
+        "settings.save"
+            | "settings.patch"
+            | "agents.set"
+            | "sources.configure"
+            | "sources.remove"
+            | "accounts.connect"
+            | "accounts.create"
+            | "codexAuth.adopt"
+            | "codexAuth.login.status"
+            | "codexAuth.enable"
+            | "codexAuth.profiles.bind"
+            | "codexAuth.profiles.remove"
+    ) {
         // Broadcast invalidation only, never settings or credentials.
         events.push(("desktop:settings", Value::Null));
     }
     if matches!(
         method,
         "settings.save"
+            | "settings.patch"
+            | "agents.set"
+            | "sources.configure"
+            | "sources.remove"
+            | "accounts.connect"
+            | "accounts.create"
+            | "codexAuth.adopt"
+            | "codexAuth.login.status"
+            | "codexAuth.enable"
+            | "codexAuth.profiles.bind"
+            | "codexAuth.profiles.remove"
             | "sources.scan"
             | "quotas.refresh"
             | "prices.save"
@@ -194,13 +265,7 @@ async fn engine_call(
             serde_json::json!({"key":key,"busy":true}),
         );
     }
-    let engine = if method.starts_with("network.") {
-        state.2.clone()
-    } else if method.starts_with("hosts.") {
-        state.1.clone()
-    } else {
-        state.0.clone()
-    };
+    let engine = state.engine_for(&method);
     let guarded_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mut engine = engine.lock().map_err(|_| "核心连接已断开".to_string())?;
@@ -269,6 +334,8 @@ fn main() {
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
+                Arc::new(Mutex::new(Engine::open(&root)?)),
+                Arc::new(Mutex::new(Engine::open(&root)?)),
             ));
             updates::setup(app.handle(), &root);
             desktop::setup(app, &root)?;
@@ -312,6 +379,42 @@ fn main() {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn configuration_lane_is_independent_of_long_remote_work() {
+        let root = tempfile::tempdir().unwrap();
+        let main = Engine::open(root.path()).unwrap();
+        main.store
+            .save_settings(&aieyes_core::models::Settings::default())
+            .unwrap();
+        let shared = Shared(
+            Arc::new(Mutex::new(main)),
+            Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
+            Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
+            Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
+            Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
+        );
+        let _blocked = shared.0.lock().unwrap();
+        let lane = shared.engine_for("agents.set");
+        let start = std::time::Instant::now();
+        let mut fast = lane
+            .try_lock()
+            .expect("configuration queued behind remote work");
+        fast.call(
+            "agents.set",
+            json!({"provider":"claude","enabled":true,"machineIds":["local"]}),
+        )
+        .unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_millis(500));
+        assert!(Arc::ptr_eq(
+            &shared.engine_for("accounts.create"),
+            &shared.3
+        ));
+        assert!(Arc::ptr_eq(
+            &shared.engine_for("accounts.delete"),
+            &shared.4
+        ));
+    }
 
     #[test]
     fn refresh_feedback_is_shared_without_leaking_settings_or_losing_failures() {

@@ -75,6 +75,7 @@ pub struct ProxyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Source {
+    pub codex_home_id: Option<String>,
     pub id: String,
     pub name: String,
     pub provider: String,
@@ -91,6 +92,7 @@ pub struct Source {
 impl Default for Source {
     fn default() -> Self {
         Self {
+            codex_home_id: None,
             id: String::new(),
             name: String::new(),
             provider: "codex".into(),
@@ -110,6 +112,12 @@ impl Default for Source {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Account {
+    pub pending_name: bool,
+    pub quota_refresh_seconds: Option<u64>,
+    pub device_settings: Vec<AccountDeviceSettings>,
+    pub identity_key: Option<String>,
+    pub connections: Vec<AccountConnection>,
+    pub quota_profile_id: Option<String>,
     pub id: String,
     pub name: String,
     pub provider: String,
@@ -120,6 +128,12 @@ pub struct Account {
 impl Default for Account {
     fn default() -> Self {
         Self {
+            pending_name: false,
+            quota_refresh_seconds: None,
+            device_settings: vec![],
+            identity_key: None,
+            connections: vec![],
+            quota_profile_id: None,
             id: String::new(),
             name: String::new(),
             provider: "codex".into(),
@@ -128,6 +142,55 @@ impl Default for Account {
             archived: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AccountConnection {
+    pub source_id: String,
+    pub profile_id: Option<String>,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AccountDeviceSettings {
+    pub machine_id: String,
+    pub pre_command: String,
+}
+
+impl Account {
+    pub fn profile_refs(&self) -> Vec<&str> {
+        let mut refs = Vec::new();
+        for r in self.quota_profile_id.iter().chain(
+            self.connections
+                .iter()
+                .filter_map(|c| c.profile_id.as_ref()),
+        ) {
+            if !refs.contains(&r.as_str()) {
+                refs.push(r.as_str());
+            }
+        }
+        refs
+    }
+    pub fn has_profile(&self, reference: &str) -> bool {
+        self.profile_refs().contains(&reference)
+    }
+    pub fn uses_source(&self, source: &Source) -> bool {
+        self.provider == source.provider
+            && (source.account_id == self.id
+                || source.codex_home_id.as_ref().is_some_and(|home| {
+                    self.profile_refs()
+                        .iter()
+                        .any(|r| r.starts_with(&format!("{home}:")))
+                }))
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AgentConfiguration {
+    pub provider: String,
+    pub enabled: bool,
+    pub machine_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +255,9 @@ impl Default for Host {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub deleted_accounts: Vec<Account>,
+    pub agents: Vec<AgentConfiguration>,
+    pub account_aliases: std::collections::BTreeMap<String, String>,
     pub appearance: Appearance,
     pub version: u32,
     pub sources: Vec<Source>,
@@ -208,7 +274,10 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            deleted_accounts: vec![],
+            agents: vec![],
             appearance: Appearance::default(),
+            account_aliases: Default::default(),
             version: 1,
             sources: vec![],
             accounts: vec![],
@@ -260,7 +329,7 @@ impl Settings {
                             source.name.clone()
                         },
                         provider: source.provider.clone(),
-                        quota_enabled: ["codex", "claude", "agy", "deepseek"]
+                        quota_enabled: ["codex", "claude", "antigravity", "agy", "deepseek"]
                             .contains(&source.provider.as_str())
                             || !source.quota_command.is_empty(),
                         ..Default::default()
@@ -269,6 +338,91 @@ impl Settings {
             }
             self.version = 2;
         }
+        for provider in ["codex", "claude", "antigravity", "deepseek", "custom"] {
+            if !self.agents.iter().any(|a| a.provider == provider) {
+                let sources: Vec<_> = self
+                    .sources
+                    .iter()
+                    .filter(|s| crate::providers::canonical(&s.provider) == provider && s.enabled)
+                    .collect();
+                let mut machine_ids: Vec<String> = sources
+                    .iter()
+                    .map(|s| s.host_id.clone().unwrap_or_else(|| "local".into()))
+                    .collect();
+                machine_ids.sort();
+                machine_ids.dedup();
+                self.agents.push(AgentConfiguration {
+                    provider: provider.into(),
+                    enabled: !sources.is_empty(),
+                    machine_ids,
+                });
+            }
+        }
+        for account in &mut self.accounts {
+            account.connections.retain(|c| c.profile_id.is_some());
+            for source in &self.sources {
+                if source.provider == account.provider
+                    && !source.account_id.is_empty()
+                    && source.account_id == account.id
+                {
+                    account.connections.push(AccountConnection {
+                        source_id: source.id.clone(),
+                        profile_id: None,
+                    });
+                }
+                if let Some(reference) = &account.quota_profile_id
+                    && source
+                        .codex_home_id
+                        .as_ref()
+                        .is_some_and(|h| reference.starts_with(&format!("{h}:")))
+                    && !account
+                        .connections
+                        .iter()
+                        .any(|c| c.profile_id.as_ref() == Some(reference))
+                {
+                    account.connections.push(AccountConnection {
+                        source_id: source.id.clone(),
+                        profile_id: Some(reference.clone()),
+                    });
+                }
+            }
+        }
+        if self.version < 4 {
+            for account in &mut self.accounts {
+                let mut commands: std::collections::BTreeMap<
+                    String,
+                    std::collections::BTreeSet<String>,
+                > = Default::default();
+                for source in self.sources.iter().filter(|s| account.uses_source(s)) {
+                    if let Some(machine) = &source.host_id {
+                        let legacy = if source.quota_pre_command.trim().is_empty() {
+                            self.hosts
+                                .iter()
+                                .find(|h| &h.id == machine)
+                                .map(|h| h.pre_command.clone())
+                                .unwrap_or_default()
+                        } else {
+                            source.quota_pre_command.clone()
+                        };
+                        commands.entry(machine.clone()).or_default().insert(legacy);
+                    }
+                }
+                for (machine_id, values) in commands {
+                    if values.len() == 1
+                        && !account
+                            .device_settings
+                            .iter()
+                            .any(|d| d.machine_id == machine_id)
+                    {
+                        account.device_settings.push(AccountDeviceSettings {
+                            machine_id,
+                            pre_command: values.into_iter().next().unwrap(),
+                        });
+                    }
+                }
+            }
+        }
+        self.version = self.version.max(4);
     }
     pub fn quota_enabled(&self, source: &Source) -> bool {
         !source.account_id.is_empty()

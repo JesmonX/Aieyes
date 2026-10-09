@@ -6,7 +6,7 @@ enum SessionPhase: String {
     case idle = "空闲", working = "进行中", thinking = "思考中", tool = "执行工具", complete = "已完成", interrupted = "已中断", unknown = "状态待确认"
     var active: Bool { self == .working || self == .thinking || self == .tool }
     var color: Color {
-        switch self { case .idle: return .secondary; case .working: return .teal; case .thinking: return .purple; case .tool: return .blue; case .complete: return .green; case .interrupted: return .orange; case .unknown: return .secondary }
+        switch self { case .idle: return .secondary; case .working: return Palette.accent; case .thinking: return Palette.accent; case .tool: return Palette.accent; case .complete: return Palette.ok; case .interrupted: return Palette.warn; case .unknown: return .secondary }
     }
     var symbol: String {
         switch self { case .idle: return "circle.dotted"; case .working: return "waveform"; case .thinking: return "sparkles"; case .tool: return "gearshape.2"; case .complete: return "checkmark"; case .interrupted: return "pause.fill"; case .unknown: return "questionmark" }
@@ -114,7 +114,7 @@ struct MenuActivityLabel: View {
             if !model.menuText.isEmpty { Text(model.menuText).monospacedDigit() }
             if !model.runningEstimates.isEmpty {
                 Image(systemName: model.samplingNeedsAttention ? "pause.circle.fill" : "record.circle")
-                    .foregroundStyle(model.samplingNeedsAttention ? .orange : .teal)
+                    .foregroundStyle(model.samplingNeedsAttention ? Palette.warn : Palette.ok)
                     .accessibilityLabel(model.samplingSummary)
                 if model.runningEstimates.count > 1 { Text("\(model.runningEstimates.count)").monospacedDigit() }
             }

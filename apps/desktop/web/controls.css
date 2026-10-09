@@ -35,7 +35,7 @@ input[type=checkbox][role=switch] { appearance:none; position:relative; width:34
 input[type=checkbox][role=switch]::after { content:''; position:absolute; top:2px; left:2px; width:15px; height:15px; border-radius:50%; background:#fff; box-shadow:0 1px 3px #00000035; transition:transform .18s var(--ease-spring); }
 input[type=checkbox][role=switch]:checked { background:var(--accent); border-color:transparent; }
 input[type=checkbox][role=switch]:checked::after { transform:translateX(13px); }
-nav button.active { color:var(--ink); background:var(--control-selected); box-shadow:var(--shadow-xs); }
+nav button.active { color:var(--accent); background:var(--control-selected); box-shadow:var(--shadow-xs); }
 .panel-tabs { position:relative; isolation:isolate; margin:0 auto; flex:0 1 160px; border:0; background:var(--surface-sunken); padding:2px; gap:0; }
 .panel-tabs::before { content:''; position:absolute; z-index:-1; inset:2px auto 2px 2px; width:calc(50% - 2px); border-radius:7px; background:var(--control-selected); box-shadow:0 1px 3px #0000001a; transition:transform .22s var(--ease-spring); }
 .panel-tabs:has([data-page=servers].active)::before { transform:translateX(100%); }
@@ -70,7 +70,7 @@ dialog[open] { animation:control-reveal .22s var(--ease-soft); }
 /* SwiftUI uses a single system text family throughout forms and segmented controls. */
 .settings-tabs { display:flex; gap:0; padding:2px; border:0; border-radius:var(--radius-control); background:var(--surface-sunken); }
 .settings-tabs button { flex:1; justify-content:center; min-height:30px; padding:4px 10px; border:0; border-radius:7px; box-shadow:none; font-size:var(--font-secondary); background:transparent; }
-.settings-tabs button.active { background:var(--control-selected); color:var(--ink); box-shadow:var(--shadow-xs); }
+.settings-tabs button.active { background:var(--control-selected); color:var(--accent); box-shadow:var(--shadow-xs); }
 .settings-tabs button svg { display:none; }
 .model-key button,.legend,.form-row > label,.stat-label,.stat small { font-size:var(--font-secondary); }
 #trend-reading { font-size:var(--font-secondary); font-variant-numeric:tabular-nums; user-select:text; }

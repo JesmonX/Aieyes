@@ -19,6 +19,21 @@ import Foundation
         precondition(PanelAccountPreference.selections(stale, accounts: renamed, order: [])["agy"] == ["agy:replacement"])
         precondition(PanelAccountPreference.selections(PanelAccountPreference.encode(["agy": []]), accounts: renamed, order: [])["agy"] == [])
         precondition(PanelAccountPreference.selections(PanelAccountPreference.encode(["agy": []], automatic: ["agy"]), accounts: renamed, order: [])["agy"] == ["agy:replacement"])
+        let preferenceSuite = "aieyes-antigravity-" + UUID().uuidString
+        let preferences = UserDefaults(suiteName: preferenceSuite)!
+        defer { preferences.removePersistentDomain(forName: preferenceSuite) }
+        preferences.set(PanelAccountPreference.encode(["agy": ["agy:shared"], "antigravity": ["antigravity:shared"]]), forKey: "panel.accounts.v2")
+        preferences.set(false, forKey: "quota.expanded.v2.panel.agy:shared")
+        let aliases = ["agy:shared": "antigravity:legacy-shared"]
+        PanelAccountPreference.migrateAntigravity(aliases, defaults: preferences)
+        let migrated = PanelAccountPreference.decode(preferences.string(forKey: "panel.accounts.v2")!)
+        precondition(migrated.providers["agy"] == nil)
+        precondition(migrated.providers["antigravity"]?.keys == ["antigravity:shared", "antigravity:legacy-shared"])
+        precondition(preferences.object(forKey: "quota.expanded.v2.panel.antigravity:legacy-shared") as? Bool == false)
+        let savedPreference = preferences.string(forKey: "panel.accounts.v2")
+        PanelAccountPreference.migrateAntigravity(aliases, defaults: preferences)
+        precondition(preferences.string(forKey: "panel.accounts.v2") == savedPreference)
+        precondition(Format.subscription("ultra") == "Ultra")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("aieyes-ui-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -59,7 +74,8 @@ for line in sys.stdin:
     elif method=='sources.scan':
         rows=json.load(open(root+'/scan-result.json')) if os.path.exists(root+'/scan-result.json') else []
         response['result']=[r for r in rows if not req.get('params',{}).get('sourceId') or r['id']==req['params']['sourceId']]
-    elif method=='settings.save' and req['params']['refreshSeconds'] < 5: response['error']=dict(message='刷新间隔无效')
+    elif method=='settings.patch' and os.path.exists(root+'/fail-theme'): response['error']=dict(message='模拟主题保存失败')
+    elif method=='settings.patch' and req['params']['settings']['refreshSeconds'] < 5: response['error']=dict(message='刷新间隔无效')
     elif method.startswith('quotaEstimates.'):
         import time
         print(json.dumps(dict(jsonrpc='2.0',method='operations.progress',params=dict(stage='同步来源 · 测试来源'))),flush=True)
@@ -89,9 +105,9 @@ for line in sys.stdin:
         os.remove(root+'/'+req['params']['passwordRef']); response['result']={}
     elif method=='network.test': response['result']=dict(testedAt=1790000000,mode='system',averageMs=73,status='ok',sites=[])
     elif method=='quotas.order.set': response['result']=req['params']['keys']
-    elif method=='settings.save':
-        with open(root+'/settings.json','w') as config: json.dump(req['params'],config)
-        response['result']={}
+    elif method=='settings.patch':
+        with open(root+'/settings.json','w') as config: json.dump(req['params']['settings'],config)
+        response['result']=req['params']['settings']
     elif method in ['sources.scan','prices.list','hosts.sample']: response['result']=[]
     else: response['result']={}
     print(json.dumps(response),flush=True)
@@ -316,9 +332,9 @@ for line in sys.stdin:
         precondition(model.dashboard.summary.total == 123_456 && model.panelDashboard.summary.total == 123_456 && model.dashboardError == nil)
         // Pending mapping input participates in save/reprice and survives failure.
         model.mappingModel = "half"
-        let savesBeforeHalf = try calls("settings.save")
+        let savesBeforeHalf = try calls("settings.patch")
         await model.saveAndReprice()
-        let savesAfterHalf = try calls("settings.save")
+        let savesAfterHalf = try calls("settings.patch")
         precondition(savesBeforeHalf == savesAfterHalf && model.mappingModel == "half" && model.settingsDirty)
         model.mappingModel = "audit-alias"; model.mappingID = "provider/model"
         try Data().write(to: root.appendingPathComponent("fail-reprice"))
@@ -328,6 +344,18 @@ for line in sys.stdin:
         try FileManager.default.removeItem(at: root.appendingPathComponent("fail-reprice"))
         await model.saveAndReprice()
         precondition(model.mappingModel.isEmpty && model.mappingID.isEmpty && !model.settingsDirty)
+        model.settingsDraft.refreshSeconds = 321
+        await model.toggleTheme(currentlyDark: false)
+        precondition(model.settings.appearance?.theme == "dark" && model.settingsDraft.appearance?.theme == "dark")
+        precondition(model.settingsDraft.refreshSeconds == 321 && model.settings.refreshSeconds != 321)
+        let savedTheme = model.settings.appearance
+        try Data().write(to: root.appendingPathComponent("fail-theme"))
+        await model.toggleTheme(currentlyDark: true)
+        precondition(model.settings.appearance == savedTheme && model.settingsDraft.appearance == savedTheme && !model.settingsSaving)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("fail-theme"))
+        await model.toggleTheme(currentlyDark: true)
+        precondition(model.settings.appearance?.theme == "light" && model.settingsDraft.refreshSeconds == 321)
+        print("Theme quick toggle saves globally, preserves unrelated drafts and retains theme after failure")
         print("Atomic filtered/today snapshots and mapping save/reprice failure recovery passed")
         print("Unfiltered menu metric, data-time semantics, per-source retry, and destructive draft confirmation checks passed")
         print("macOS draft rollback/commit, automatic quota retry, per-window visibility, model-options compatibility, staged credential commit/rollback, sampling failure throttling, and price failure checks passed")

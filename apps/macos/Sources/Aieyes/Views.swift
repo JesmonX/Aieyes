@@ -120,7 +120,7 @@ struct RootView: View {
         .environment(\.surfaceActive, model.isWindowVisible(compact ? "panel" : "detail"))
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: tab)
         .font(AppFont.body).disabled(model.installingUpdate)
-        .tint(Palette.accent)
+        .aieyesAccent()
     }
     private var accountObservedContent: some View {
         styledContent
@@ -179,6 +179,7 @@ struct RootView: View {
                 .help(footerStatus + "\n应用出站测试不代表 SSH 或所有账户可用。\n" + (model.networkTest?.detail ?? "可从更多菜单测试出站连接"))
             HStack(spacing: 8) {
                 Spacer(minLength: 0)
+                ThemeToggleButton(model: model)
                 if compact {
                     UpdateMenuButton()
                     Button { model.showDetailPage?(tab) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("打开详情").accessibilityLabel("打开详情")
@@ -198,11 +199,11 @@ struct RootView: View {
         HStack(spacing: 8) {
             Picker("Agent", selection: $model.provider) {
                 Text("全部 Agent").tag("all")
-                ForEach(["codex", "claude", "antigravity", "agy", "deepseek", "custom"], id: \.self) { Text(Format.provider($0)).tag($0) }
+                ForEach(["codex", "claude", "antigravity", "deepseek", "custom"], id: \.self) { Text(Format.provider($0)).tag($0) }
             }.labelsHidden()
             Picker("账户", selection: $model.selectedAccount) {
                 Text("全部账户").tag("all"); Text("未关联账户").tag("none")
-                ForEach(model.settings.accounts.filter { model.provider == "all" || $0.provider == model.provider }, id: \.key) { Text($0.name).tag($0.key) }
+                ForEach(model.settings.historicalAccounts.filter { model.provider == "all" || $0.provider == model.provider }, id: \.key) { Text($0.name).tag($0.key) }
             }.labelsHidden()
             if !compact {
                 Picker("数据源", selection: $model.selectedSource) {
@@ -258,7 +259,7 @@ struct RootView: View {
     private var trendSurface: some View { Surface(title: "每日用量 · 按模型") { UsageChart(days: model.dashboard.trendDays, rows: model.dashboard.dayModels, cost: costMode).frame(minHeight: 230) } }
     private var modelSurface: some View { Surface(title: "所选范围 · 模型分布") { ModelChart(models: model.dashboard.models, cost: costMode).frame(minHeight: 230) } }
     private var usageEmptyState: some View {
-        let onlyQuota = model.settings.sources.allSatisfy { ["agy", "deepseek"].contains($0.provider) }
+        let onlyQuota = model.settings.sources.allSatisfy { $0.provider == "deepseek" }
         let failed = model.dashboard.sources.contains { $0.enabled && $0.status?.error != nil }
         return Surface(title: onlyQuota ? "此来源提供账户限额" : failed ? "记录同步失败" : hasActiveFilters ? "没有匹配的用量记录" : model.dataTime == 0 ? "尚未同步用量记录" : "此时间范围暂无用量") {
             Text(onlyQuota ? "查看实时余额与限额；接入日志后即可分析用量。" : failed ? "请检查对应来源的错误后重试。" : "保留筛选与日期入口，可同步记录或扩大范围。").font(AppFont.secondary).foregroundStyle(.secondary)
@@ -270,7 +271,7 @@ struct RootView: View {
         model.dashboard.summary.total > 0 || model.dashboard.trendDays.contains { $0.total > 0 } || model.dashboard.heatmap.contains { $0.total > 0 }
     }
     private var connectionGuide: some View {
-        Surface(title: "连接你的第一个数据源") {
+        Surface(title: "启用你的第一个 Agent") {
             Text("接入日志查看用量，或连接账户查看限额与余额。").font(AppFont.secondary).foregroundStyle(.secondary)
             ViewThatFits(in: .horizontal) {
                 HStack { connectionButtons }
@@ -279,8 +280,8 @@ struct RootView: View {
         }
     }
     @ViewBuilder private var connectionButtons: some View {
-        Button("本机日志", systemImage: "folder") { model.settingsTab = "sources"; model.requestedSourceProvider = "codex"; model.showSettings?() }
-        Button("账户限额", systemImage: "person.crop.circle") { model.settingsTab = "sources"; model.requestedSourceProvider = "deepseek"; model.showSettings?() }
+        Button("设置 Agents", systemImage: "folder") { model.settingsTab = "sources"; model.showSettings?() }
+        Button("账户限额", systemImage: "person.crop.circle") { model.settingsTab = "accounts"; model.showSettings?() }
         Button("SSH 主机", systemImage: "server.rack") { model.settingsTab = "servers"; model.requestHostEditor = true; model.showSettings?() }
     }
     @ViewBuilder private var activeFilters: some View {
@@ -292,7 +293,7 @@ struct RootView: View {
     private var filterChips: some View {
             FlowLayout {
                 if model.provider != "all" { filterChip("Agent：" + Format.provider(model.provider)) { model.provider = "all" } }
-                if model.selectedAccount != "all" { filterChip("账户：" + (model.selectedAccount == "none" ? "未关联账户" : model.settings.accounts.first { $0.key == model.selectedAccount }?.name ?? model.selectedAccount)) { model.selectedAccount = "all" } }
+                if model.selectedAccount != "all" { filterChip("账户：" + (model.selectedAccount == "none" ? "未关联账户" : model.settings.historicalAccounts.first { $0.key == model.selectedAccount }?.name ?? model.selectedAccount)) { model.selectedAccount = "all" } }
                 if model.range != 1 { filterChip("最近 \(model.range) 天") { model.range = 1 } }
                 Button("清除全部") { model.provider = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; model.selectedModel = "all"; model.range = 1 }
                 if model.selectedSource != "all" {
@@ -309,7 +310,7 @@ struct RootView: View {
     }
     private var recentDays: [Aggregate] { Array(usageDashboard.trendDays.suffix(max(7, model.range))) }
     private var selectableSources: [AgentSource] {
-        let account = model.settings.accounts.first { $0.key == model.selectedAccount }
+        let account = model.settings.historicalAccounts.first { $0.key == model.selectedAccount }
         return model.settings.sources.filter { source in
             guard model.provider == "all" || source.provider == model.provider else { return false }
             if model.selectedAccount == "all" { return true }
@@ -375,8 +376,8 @@ struct RootView: View {
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { model.showEstimate?(quota, false) }, onCredits: { model.showEstimate?(quota, true) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } } }
+            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } } }
         }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
     private var filteredHosts: [Host] {
@@ -395,6 +396,20 @@ struct RootView: View {
         ForEach(filteredHosts) { host in
             ServerCard(host: host, result: model.hosts.first(where: { $0.id == host.id }), compact: compact, onRefresh: { Task { await model.sampleHosts(hostID: host.id) } })
         }
+    }
+}
+
+struct ThemeToggleButton: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.colorScheme) private var colorScheme
+    private var dark: Bool { colorScheme == .dark }
+    private var label: String { dark ? "切换到浅色模式" : "切换到深色模式" }
+    var body: some View {
+        Button { Task { await model.toggleTheme(currentlyDark: dark) } } label: {
+            Image(systemName: dark ? "sun.max" : "moon")
+                .frame(width: 28, height: 28).contentShape(Rectangle())
+        }.help(label).accessibilityLabel(label)
+            .disabled(!model.settingsLoaded || model.settingsSaving)
     }
 }
 
@@ -630,7 +645,7 @@ struct QuotaCard: View {
     var collapsible = false
     var sourceName = ""
     var estimate: QuotaEstimate?
-    var onEstimate: (() -> Void)?
+    var onEstimate: ((String?) -> Void)?
     var onCredits: (() -> Void)?
     var creditEstimate: QuotaEstimate?
     var quotaHistory: [QuotaEstimate] = []
@@ -639,7 +654,7 @@ struct QuotaCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage private var storedExpanded: Bool
     private var expanded: Bool { !collapsible || storedExpanded }
-    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: (() -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = []) {
+    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = []) {
         self.quotaHistory = quotaHistory; self.creditHistory = creditHistory
         self.collapsible = collapsible; self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
         _storedExpanded = AppStorage(wrappedValue: true, "quota.expanded.v2." + (compact ? "panel." : "detail.") + quota.id)
@@ -675,6 +690,10 @@ struct QuotaCard: View {
                                 QuotaResetLabel(window: window)
                             }.frame(maxWidth: .infinity).accessibilityElement(children: .combine).accessibilityLabel(window.name + "，剩余 " + Format.percent(max(0, 100-window.usedPercent)))
                         }
+                    }
+                    if let onEstimate {
+                        let groupId = quota.windows.first { $0.groupLabel == group }?.groupId ?? group
+                        EstimateEntry(records: quotaHistory.filter { $0.groupId == groupId }) { onEstimate(groupId) }
                     }
                 }
             }
@@ -721,7 +740,7 @@ struct QuotaCard: View {
             }
             if expanded {
             balanceContent
-            if quota.provider == "agy" { agyWindows }
+            if ["antigravity", "agy"].contains(quota.provider) { agyWindows }
             else if !quota.windows.isEmpty { LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: expanded ? 1 : 2), alignment: .leading, spacing: expanded ? 14 : 8) {
             ForEach(quota.windows) { window in
                 VStack(spacing: 6) {
@@ -735,27 +754,15 @@ struct QuotaCard: View {
             }
             }
             }
-            if let onEstimate, (!compact || expanded || estimate != nil), (quota.provider != "agy" && quota.windows.contains(where: { $0.windowMinutes == 300 || $0.windowMinutes == 10080 })) || estimate != nil {
-                Button(action: onEstimate) {
-                    HStack { Label(estimate == nil ? "估算额度价值" : estimate?.valuationMode == "fiveHour" ? "5h / 7d 估值" : "7d 整周估值", systemImage: "chart.line.uptrend.xyaxis"); Spacer();
-                        Image(systemName: "chevron.right").font(AppFont.secondary)
-                    }.font(AppFont.secondary).contentShape(Rectangle())
-                }.buttonStyle(.plain).foregroundStyle(Palette.accent)
+            if let onEstimate, !["antigravity", "agy"].contains(quota.provider), quota.windows.contains(where: { $0.windowMinutes == 300 || $0.windowMinutes == 10080 }) || estimate != nil {
+                EstimateEntry(records: quotaHistory.isEmpty ? [estimate].compactMap { $0 } : quotaHistory) { onEstimate(nil) }
             }
-            EstimateSummary(records: quotaHistory.isEmpty ? [estimate].compactMap { $0 } : quotaHistory)
-            if quota.provider == "agy" && expanded { Text("整周估值需匹配的 Token 用量与模型组归属。").font(AppFont.secondary).foregroundStyle(.secondary) }
             if expanded && !sourceName.isEmpty { Text(sourceName).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
             if quota.provider == "codex" {
-                HStack(spacing: 8) {
-                    CreditBalanceLabel(balance: quota.credits, estimate: bestCredit).fixedSize(horizontal: false, vertical: true)
-                        .help(quota.creditsUpdatedAt.map { "更新于 " + Format.date($0) } ?? "尚未取得 credits 信息")
-                    Spacer(minLength: 0)
-                    if let onCredits {
-                        Button(action: onCredits) { HStack(spacing: 3) { Text((creditEstimate.map { $0.statusLabel + " · " } ?? "") + "估值"); Image(systemName: "chevron.right") } }.buttonStyle(.plain).foregroundStyle(Palette.accent).fixedSize()
-                    }
-                }.font(AppFont.secondary)
+                CreditBalanceLabel(balance: quota.credits, estimate: bestCredit).fixedSize(horizontal: false, vertical: true)
+                    .help(quota.creditsUpdatedAt.map { "更新于 " + Format.date($0) } ?? "尚未取得 credits 信息")
+                if let onCredits { EstimateEntry(records: creditHistory.isEmpty ? [creditEstimate].compactMap { $0 } : creditHistory, credits: true, action: onCredits) }
             }
-            if quota.provider == "codex" { EstimateSummary(records: creditHistory.isEmpty ? [creditEstimate].compactMap { $0 } : creditHistory, credits: true) }
             if expanded, let bank = quota.bankReset {
                 Divider().opacity(0.5)
                 DisclosureGroup {
@@ -837,8 +844,7 @@ struct ServerCard: View {
                             let filesystems = host.selectedDevices("filesystems", rows)
                             DisclosureGroup {
                                 ForEach(filesystems) { fs in VStack(alignment: .leading, spacing: 4) {
-                                    metricRow(fs.id, "\(Format.bytes(fs.used)) / \(Format.bytes(fs.total))")
-                                    if let total = fs.total, let used = fs.used, total > 0 { ResourceBar(percent: used / total * 100) }
+                                    Text(fs.id).font(AppFont.secondary).lineLimit(1).truncationMode(.middle).help(fs.id)
                                     if host.shows("fsAvailable") { metricRow("可用", Format.bytes(fs.available)) }
                                     if host.shows("fsType") { metricRow(fs.device ?? "", fs.type ?? "") }
                                     if host.shows("inodes"), let total = fs.inodes, let free = fs.inodesFree, total > 0 { metricRow("inode", Format.percent((total - free) / total * 100)) }
@@ -911,16 +917,27 @@ struct ServerResourceSummary: View {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 Text("GPU " + gpu.id).fontWeight(.medium).fixedSize()
-                                Text(gpu.name ?? "—").foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                Text(gpu.name ?? "—").foregroundStyle(.secondary).lineLimit(1).help(gpu.name ?? "—")
                             }.font(AppFont.secondary)
-                            HStack(alignment: .top, spacing: 10) {
-                                ResourceRing(title: "利用率", percent: gpu.utilization, compact: true)
+                            HStack(alignment: .top, spacing: 12) {
+                                ResourceStrip(title: "利用率", percent: gpu.utilization).frame(width: host.shows("gpuMemory") ? 86 : nil)
                                 if host.shows("gpuMemory") {
-                                    ResourceRing(title: "显存", percent: Format.capacityPercent(gpu.memoryUsedMiB, gpu.memoryTotalMiB), compact: true,
-                                                 detail: "\(Format.bytes(gpu.memoryUsedMiB.map { $0 * 1048576 })) / \(Format.bytes(gpu.memoryTotalMiB.map { $0 * 1048576 }))")
+                                    ResourceStrip(title: "显存", percent: Format.capacityPercent(gpu.memoryUsedMiB, gpu.memoryTotalMiB),
+                                                  detail: Format.capacityPair(gpu.memoryUsedMiB.map { $0 * 1048576 }, gpu.memoryTotalMiB.map { $0 * 1048576 }))
                                 }
                             }
+
                         }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            if host.metrics.contains("filesystems") {
+                let filesystems = host.selectedDevices("filesystems", sample?.filesystems)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("文件系统").font(AppFont.secondary).foregroundStyle(.secondary)
+                    if filesystems.isEmpty { Text(sample?.filesystems == nil ? "—" : "无已选挂载点").font(AppFont.secondary).foregroundStyle(.secondary) }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 290), alignment: .leading)], spacing: 9) {
+                        ForEach(filesystems) { fs in ResourceStrip(title: fs.id, percent: Format.capacityPercent(fs.used, fs.total), detail: Format.capacityPair(fs.used, fs.total)) }
                     }
                 }
             }
@@ -938,6 +955,24 @@ struct ServerResourceSummary: View {
                 }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ResourceStrip: View {
+    var title: String, percent: Double?
+    var detail = ""
+    private var value: Double? { percent.flatMap { $0.isFinite ? min(100, max(0, $0)) : nil } }
+    private var label: String { (detail.isEmpty ? "" : detail + " · ") + (value.map { String(format: "%.0f%%", $0) } ?? "—") }
+    var body: some View {
+        VStack(spacing: 3) {
+            HStack(spacing: 5) {
+                Text(title).font(AppFont.secondary).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                Text(label).font(.system(size: 12)).monospacedDigit().lineLimit(1).fixedSize().foregroundStyle((value ?? 0) >= 90 ? Palette.danger : Color.primary)
+            }.frame(height: 17)
+            ResourceBar(percent: value)
+        }.frame(maxWidth: .infinity, alignment: .leading).help(title + " " + label)
+            .accessibilityElement(children: .ignore).accessibilityLabel(title + " " + label)
     }
 }
 

@@ -93,3 +93,35 @@ struct EstimateSummary: View {
         }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+struct EstimateEntry: View {
+    var records: [QuotaEstimate]
+    var credits = false
+    var action: () -> Void
+    private var entries: [EstimatePresentation.Entry] { EstimatePresentation.entries(records, credits: credits) }
+    private var latest: QuotaEstimate? { EstimatePresentation.canonical(records).first }
+    private var label: String {
+        if credits { return "credits估值（当前1000credits≈" + Format.compactMoney(entries.first?.value) + "）" }
+        return EstimatePresentation.summary(records)
+    }
+    private var help: String {
+        entries.map { $0.label + " ≈ " + Format.money($0.value) + " USD · " + ($0.historical ? "历史采样 · " : "") + Format.date($0.record.checkpointAt) }.joined(separator: "\n") + (credits ? "" : "\n7d 顺序：容量倍率 / 同期消耗（旧记录为整周）")
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Button(action: action) {
+                HStack(spacing: 5) {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                    Text(label).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85).layoutPriority(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                }.font(.system(size: 13)).frame(minHeight: 30).contentShape(Rectangle())
+            }.buttonStyle(.plain).foregroundStyle(Palette.accent).help(help).accessibilityLabel(label + "，" + help)
+            if entries.contains(where: { $0.record.originalEstimateId != nil }) { Text("已修正").font(.system(size: 12)).foregroundStyle(.secondary) }
+            if entries.contains(where: \.historical) { Text("历史采样").font(.system(size: 12)).foregroundStyle(.secondary).help(help) }
+            if let latest, !latest.hasValue || latest.status == "pending" {
+                Text("最新采样 · " + latest.statusLabel + " · " + latest.issueLabel).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+}

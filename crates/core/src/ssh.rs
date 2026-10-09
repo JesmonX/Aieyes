@@ -7,6 +7,12 @@ use anyhow::Result;
 use std::{process::Command, time::Duration};
 
 pub fn command(host: &Host, remote: &str) -> Result<Command> {
+    command_inner(host, remote, false)
+}
+pub fn account_command(host: &Host, remote: &str) -> Result<Command> {
+    command_inner(host, remote, true)
+}
+fn command_inner(host: &Host, remote: &str, include_account_command: bool) -> Result<Command> {
     anyhow::ensure!(
         !host.target.is_empty()
             && !host.target.starts_with('-')
@@ -95,7 +101,7 @@ pub fn command(host: &Host, remote: &str) -> Result<Command> {
     if !login {
         script.push_str(PATH_FALLBACK);
     }
-    if !host.pre_command.trim().is_empty() {
+    if include_account_command && !host.pre_command.trim().is_empty() {
         script.push_str("{\n");
         script.push_str(&host.pre_command);
         script.push_str("\n} </dev/null >&2\n");
@@ -121,12 +127,23 @@ fn login_shell(shell: &str) -> bool {
     !matches!(shell.rsplit('/').next().unwrap_or(shell), "sh" | "dash")
 }
 pub fn python(host: &Host, script: &str, args: &[String]) -> Result<serde_json::Value> {
+    python_inner(host, script, args, false)
+}
+pub fn account_python(host: &Host, script: &str, args: &[String]) -> Result<serde_json::Value> {
+    python_inner(host, script, args, true)
+}
+fn python_inner(
+    host: &Host,
+    script: &str,
+    args: &[String],
+    account: bool,
+) -> Result<serde_json::Value> {
     let remote = format!(
         "exec python3 - {}",
         args.iter().map(|s| quote(s)).collect::<Vec<_>>().join(" ")
     );
     let output = process::run(
-        command(host, &remote)?,
+        command_inner(host, &remote, account)?,
         script.as_bytes().to_vec(),
         Duration::from_secs(45),
     )?;

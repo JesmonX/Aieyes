@@ -12,6 +12,28 @@ enum PanelAccountPreference {
     static func migrated(_ json: String) -> String {
         String(data: (try? JSONEncoder().encode(decode(json))) ?? Data(), encoding: .utf8) ?? "{}"
     }
+    static func migrateAntigravity(_ aliases: [String: String], defaults: UserDefaults = .standard) {
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let marker = (try? encoder.encode(aliases)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        guard defaults.string(forKey: "antigravity.preferences.v1") != marker else { return }
+        func key(_ value: String) -> String { aliases[value] ?? (value.hasPrefix("agy:") ? "antigravity:" + value.dropFirst(4) : value) }
+        var pref = decode(defaults.string(forKey: "panel.accounts.v2") ?? defaults.string(forKey: "panel.accounts.v1") ?? "{}")
+        if let old = pref.providers.removeValue(forKey: "agy") {
+            let current = pref.providers["antigravity"]
+            let values = ((current?.keys ?? []) + old.keys).map(key)
+            var seen = Set<String>()
+            pref.providers["antigravity"] = Choice(mode: current?.mode == "custom" || old.mode == "custom" ? "custom" : "auto", keys: Array(values.filter { seen.insert($0).inserted }.prefix(5)))
+            defaults.set(String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8), forKey: "panel.accounts.v2")
+        }
+        for (name, value) in defaults.dictionaryRepresentation() where name.hasPrefix("quota.expanded.v2.") {
+            if let range = name.range(of: ".agy:") {
+                let start = name.index(after: range.lowerBound), next = String(name[..<start]) + key(String(name[start...]))
+                if defaults.object(forKey: next) == nil { defaults.set(value, forKey: next) }
+            }
+        }
+        for name in ["panel.provider", "detail.provider"] where defaults.string(forKey: name) == "agy" { defaults.set("antigravity", forKey: name) }
+        defaults.set(marker, forKey: "antigravity.preferences.v1")
+    }
     static func automatic(_ json: String, provider: String) -> Bool { decode(json).providers[provider]?.mode != "custom" }
     static func selections(_ json: String, accounts: [AgentAccount], order: [String]) -> [String: [String]] {
         let preference = decode(json)
@@ -26,6 +48,16 @@ enum PanelAccountPreference {
             result[provider] = Array(selected.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.prefix(5))
         }
         return result
+    }
+    static func includeNew(_ account: AgentAccount, accounts: [AgentAccount]) {
+        let defaults = UserDefaults.standard
+        let raw = defaults.string(forKey: "panel.accounts.v2") ?? migrated(defaults.string(forKey: "panel.accounts.v1") ?? "{}")
+        var pref = decode(raw)
+        guard pref.providers[account.provider]?.mode == "custom" else { return }
+        var keys = selections(raw, accounts: accounts, order: [])[account.provider] ?? []
+        guard keys.count < 5, !keys.contains(account.key), account.archived != true else { return }
+        keys.append(account.key); pref.providers[account.provider] = Choice(mode: "custom", keys: keys)
+        defaults.set(String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8), forKey: "panel.accounts.v2")
     }
     static func encode(_ selections: [String: [String]], automatic: Set<String> = []) -> String {
         var value = Preference(providers: selections.mapValues { Choice(mode: "custom", keys: $0) })
@@ -47,6 +79,8 @@ struct QuotaWindow: Codable, Identifiable {
     var name: String, usedPercent: Double, windowMinutes: Int?, resetsAt: Double?
     var stableId: String?, groupId: String?, groupName: String?
     var id: String { stableId.flatMap { $0.isEmpty ? nil : $0 } ?? name }
+    var estimateGroup: String { groupId.flatMap { $0.isEmpty ? nil : $0 } ?? groupLabel }
+    var supportsEstimate: Bool { ["gemini", "gemini models", "claude-gpt", "claude and gpt models"].contains(estimateGroup.lowercased()) }
     var groupLabel: String { groupName.flatMap { $0.isEmpty ? nil : $0 } ?? name.components(separatedBy: " · ").dropLast().joined(separator: " · ") }
     enum CodingKeys: String, CodingKey { case name, usedPercent, windowMinutes, resetsAt, groupId, groupName; case stableId = "id" }
 }
@@ -77,7 +111,26 @@ struct PricingGap: Codable, Identifiable {
     var id: String { model }
     var missing: String { [("输入", tokens.input), ("输出", tokens.output), ("缓存读取", tokens.cacheRead), ("缓存写入", tokens.cacheWrite)].filter { $0.1 > 0 }.map { $0.0 }.joined(separator: "、") }
 }
+struct AccountConnection: Codable, Equatable { var sourceId: String; var profileId: String? }
+struct AgentConfiguration: Codable, Equatable, Identifiable {
+    var provider: String, enabled: Bool, machineIds: [String]
+    var id: String { provider }
+}
+struct AccountDeviceSettings: Codable, Equatable { var machineId: String; var preCommand: String }
+struct AccountDeviceStatus: Codable, Identifiable {
+    var accountKey: String, sourceId: String, machineId: String
+    var current: Bool?, credential: Bool?, checkedAt: Double?, attemptedAt: Double?, error: String?, note: String?
+    var id: String { accountKey + ":" + sourceId }
+}
 struct AgentAccount: Codable, Equatable, Identifiable {
+    var pendingName: Bool?
+    var quotaRefreshSeconds: Int?
+    var deviceSettings: [AccountDeviceSettings]?
+    var connections: [AccountConnection]?
+    var identityKey: String?
+    var profileRefs: [String] { Array(Set(([quotaProfileId].compactMap { $0 }) + (connections ?? []).compactMap(\.profileId))).sorted() }
+    func uses(_ source: AgentSource) -> Bool { provider == source.provider && (source.accountId == id || source.codexHomeId.map { home in profileRefs.contains { $0.hasPrefix(home + ":") } } == true) }
+    var quotaProfileId: String?
     var id = UUID().uuidString, name = "", provider = "codex", quotaEnabled = true
     var quotaSourceId: String?
     var archived: Bool?
@@ -109,6 +162,7 @@ struct ProxyAddressDraft: Equatable {
     }
 }
 struct AgentSource: Codable, Equatable, Identifiable {
+    var codexHomeId: String?
     var id = UUID().uuidString, name = "", provider = "codex", accountId = ""
     var path = "~/.codex", hostId: String?, enabled = true, quotaCommand = "", quotaPreCommand = "", codexBinary = "codex", agyBinary: String? = "agy", proxy: ProxySettings?
 }
@@ -131,6 +185,11 @@ struct AppearanceSettings: Codable, Equatable {
     var theme = "system", accent = "indigo"
 }
 struct Settings: Codable, Equatable {
+    var deletedAccounts: [AgentAccount]?
+    var historicalAccounts: [AgentAccount] { accounts + (deletedAccounts ?? []) }
+    var agents: [AgentConfiguration]?
+    var accountAliases: [String: String]?
+
     var appearance: AppearanceSettings?
 
     var version = 2, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
@@ -178,18 +237,14 @@ enum Format {
         parts.append("\(minutes % 60) 分")
         return parts.joined(separator: " ")
     }
-    // A dormant window does not start another countdown until a new reset is reported.
-    // The derived date is display-only; refresh and sampling retain the original timestamp.
-    static func resetDisplayTime(_ stamp: Double?, windowMinutes: Int? = nil, usedPercent: Double? = nil, now: Date = Date()) -> Double? {
-        if let usedPercent, usedPercent.isFinite, usedPercent == 0, let windowMinutes, windowMinutes > 0 {
-            return now.timeIntervalSince1970 + Double(windowMinutes) * 60
-        }
-        if let stamp, stamp.isFinite, stamp > now.timeIntervalSince1970 { return stamp }
-        guard let windowMinutes, windowMinutes > 0 else { return nil }
-        return now.timeIntervalSince1970 + Double(windowMinutes) * 60
+    // A zero usage percentage does not establish whether a window has started.
+    // Only the source timestamp can establish its next reset.
+    static func resetDisplayTime(_ stamp: Double?, now: Date = Date()) -> Double? {
+        guard let stamp, stamp.isFinite, stamp > 0, stamp > now.timeIntervalSince1970 else { return nil }
+        return stamp
     }
-    static func resetCountdown(_ stamp: Double?, windowMinutes: Int? = nil, usedPercent: Double? = nil, now: Date = Date()) -> String {
-        guard let target = resetDisplayTime(stamp, windowMinutes: windowMinutes, usedPercent: usedPercent, now: now) else {
+    static func resetCountdown(_ stamp: Double?, now: Date = Date()) -> String {
+        guard let target = resetDisplayTime(stamp, now: now) else {
             return stamp.map { $0.isFinite && $0 > 0 ? "确认重置中" : "重置时间未知" } ?? "重置时间未知"
         }
         let rawMinutes = ceil((target - now.timeIntervalSince1970) / 60)
@@ -202,8 +257,12 @@ enum Format {
         return parts.joined(separator: " ") + "后重置"
     }
     static func quotaReset(_ window: QuotaWindow, now: Date = Date()) -> String {
-        let countdown = resetCountdown(window.resetsAt, windowMinutes: window.windowMinutes, usedPercent: window.usedPercent, now: now)
-        guard let stamp = resetDisplayTime(window.resetsAt, windowMinutes: window.windowMinutes, usedPercent: window.usedPercent, now: now) else { return countdown }
+        if !(window.resetsAt.map { $0.isFinite && $0 > 0 } ?? false), window.usedPercent == 0 {
+            if window.windowMinutes == 300 { return "5h" }
+            if window.windowMinutes == 10080 { return "7d" }
+        }
+        let countdown = resetCountdown(window.resetsAt, now: now)
+        guard let stamp = resetDisplayTime(window.resetsAt, now: now) else { return countdown }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .autoupdatingCurrent
@@ -212,7 +271,7 @@ enum Format {
     }
     static func subscription(_ plan: String) -> String {
         let name = plan.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ["plus":"Plus", "pro":"Pro", "free":"Free", "max":"Max", "team":"Team", "business":"Business", "enterprise":"Enterprise", "api":"API"][name.lowercased()] ?? name
+        return ["plus":"Plus", "pro":"Pro", "free":"Free", "max":"Max", "team":"Team", "business":"Business", "enterprise":"Enterprise", "api":"API"][name.lowercased()] ?? (name.prefix(1).uppercased() + name.dropFirst())
     }
     static func creditPrimary(_ balance: CreditsBalance?) -> String {
         if balance?.unlimited == true { return "无限" }
@@ -259,6 +318,22 @@ enum Format {
         guard let value=estimate.valuePer1000, value.isFinite else { return estimate.issueLabel }
         return "1000 credit ≈ " + money(value) + " USD"
     }
+    static func compactMoney(_ value: Double?) -> String {
+        guard let value, value.isFinite else { return "—" }
+        for (size, suffix) in [(1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")] where abs(value) >= size * 0.999995 { return String(format: "$%.2f", value / size) + suffix }
+        return money(value)
+    }
+    static func capacityPair(_ used: Double?, _ total: Double?) -> String {
+        let maximum = max(used.flatMap { $0.isFinite ? $0 : nil } ?? 0, total.flatMap { $0.isFinite ? $0 : nil } ?? 0)
+        let units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+        let power = maximum > 0 ? min(units.count - 1, max(0, Int(log(maximum) / log(1024)))) : 0
+        func number(_ value: Double?) -> String {
+            guard let value, value.isFinite else { return "—" }
+            let text = String(format: "%.1f", value / pow(1024, Double(power)))
+            return text.hasSuffix(".0") ? String(text.dropLast(2)) : text
+        }
+        return number(used) + "/" + number(total) + " " + units[power]
+    }
     static func money(_ value: Double) -> String { String(format: "$%.2f", value) }
     static func percent(_ value: Double?) -> String { value.map { String(format: "%.1f%%", $0) } ?? "—" }
     static func bytes(_ value: Double?) -> String {
@@ -276,10 +351,12 @@ enum Format {
         return formatter.localizedString(for: date, relativeTo: now)
     }
     static func time(_ stamp: Double) -> String { Date(timeIntervalSince1970: stamp).formatted(date: .omitted, time: .shortened) }
-    static func provider(_ key: String) -> String { ["codex":"Codex", "claude":"Claude Code", "antigravity":"Antigravity", "agy":"agy", "deepseek":"DeepSeek", "custom":"自定义" ][key] ?? key }
+    static func provider(_ key: String) -> String { ["codex":"Codex", "claude":"Claude Code", "antigravity":"Antigravity", "agy":"Antigravity", "deepseek":"DeepSeek", "custom":"自定义" ][key] ?? key }
 }
 
 struct QuotaEstimate: Codable, Identifiable {
+    var groupId: String?
+
     var calculationStatus: String?, calculationVersion: Int?, originalEstimateId: String?, repairedAt: Double?
     var hasValue: Bool { [fiveHourValue, weeklyValue, valuePer1000].compactMap { $0 }.contains { $0.isFinite } }
     var issueLabel: String {
@@ -339,5 +416,15 @@ enum EstimatePresentation {
             return Entry(id: id, label: title, value: value, record: record, historical: record.id != all.first?.id || record.status == "completed")
         }
     }
+    static func summary(_ records: [QuotaEstimate]) -> String {
+        let values = entries(records)
+        func value(_ id: String) -> String { Format.compactMoney(values.first { $0.id == id }?.value) }
+        return "5h ≈ " + value("five") + "  7d ≈ " + value("ratio") + "/" + value("week")
+    }
     static func credit(_ records: [QuotaEstimate]) -> QuotaEstimate? { entries(records, credits: true).first?.record }
 }
+
+struct AccountCleanupTask: Decodable, Identifiable { var id: String, name: String, machine: String; var root: String?, error: String? }
+struct AccountDeletionPreview: Decodable { var tasks: [AccountCleanupTask] }
+struct AccountCleanupResult: Decodable { var deleted: Bool?, settings: Settings?, failedTasks: [AccountCleanupTask]? }
+struct AccountCleanupRecord: Decodable, Identifiable { var accountKey: String, name: String, tasks: [AccountCleanupTask]; var id: String { accountKey } }

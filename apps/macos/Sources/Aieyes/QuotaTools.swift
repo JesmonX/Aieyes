@@ -12,7 +12,7 @@ struct SamplingManagementView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text(model.settings.accounts.first { $0.key == estimate.accountKey }?.name ?? estimate.accountKey).font(AppFont.section)
-                            Spacer(); Text(estimate.statusLabel).foregroundStyle(estimate.status == "pending" ? .orange : .teal)
+                            Spacer(); Text(estimate.statusLabel).foregroundStyle(estimate.status == "pending" ? Palette.warn : Palette.ok)
                         }
                         Text(estimate.calculationNote).font(AppFont.secondary)
                         if !estimate.reason.isEmpty { Text(estimate.reason).foregroundStyle(Palette.warn) }
@@ -29,7 +29,7 @@ struct SamplingManagementView: View {
                     }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
             }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
-        }.font(AppFont.body).disabled(model.installingUpdate)
+        }.aieyesAccent().font(AppFont.body).disabled(model.installingUpdate)
     }
 }
 
@@ -62,7 +62,7 @@ struct QuotaOrderView: View {
                 saving = true
                 Task { do { try await model.saveQuotaOrder(keys); close() } catch { self.error = error.localizedDescription }; saving = false }
             }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }.disabled(saving)
-        }.font(AppFont.body).padding(24).frame(width: 440).onAppear { keys = model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key) }
+        }.aieyesAccent().font(AppFont.body).padding(24).frame(width: 440).onAppear { keys = model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key) }
     }
     private func close() { if let onClose { onClose() } else { dismiss() } }
     private func move(_ key: String, _ offset: Int) {
@@ -101,7 +101,7 @@ struct PanelAccountsView: View {
                 }.padding(4)
             }
             HStack { Spacer(); Button("取消", action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button("保存面板选择") { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.borderedProminent) }
-        }.padding(24).font(AppFont.body).frame(width: 440, height: 480).tint(Palette.accent)
+        }.padding(24).font(AppFont.body).frame(width: 440, height: 480).aieyesAccent()
             .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: "panel.accounts.v1") ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); cancelFocused = true }
     }
 }
@@ -115,11 +115,15 @@ struct QuotaEstimateView: View {
     @State private var window = ""
     @State private var confirmed = false
     @State var credits = false
+    var initialGroup: String? = nil
     private var busy: Bool { model.estimateBusy.contains(quota.id) }
     private var error: String? { model.estimateErrors[quota.id] }
-    private var sources: [AgentSource] { model.settings.sources.filter { $0.enabled && $0.provider == quota.provider && $0.accountId == quota.accountId && !["agy", "deepseek"].contains($0.provider) } }
+    private var sources: [AgentSource] { model.settings.sources.filter { $0.enabled && $0.provider == quota.provider && $0.accountId == quota.accountId && $0.provider != "deepseek" } }
     private var windows: [QuotaWindow] {
         let five = quota.windows.filter { $0.windowMinutes == 300 }
+        if ["antigravity", "agy"].contains(quota.provider) {
+            return quota.windows.filter { w in w.supportsEstimate && (w.windowMinutes == 300 || (w.windowMinutes == 10080 && !quota.windows.contains { $0.estimateGroup == w.estimateGroup && $0.windowMinutes == 300 })) }
+        }
         if five.count == 1 { return five }
         if let overall = five.first(where: { $0.stableId == "five_hour" }) { return [overall] }
         let weekly = quota.windows.filter { $0.windowMinutes == 10080 }
@@ -127,7 +131,7 @@ struct QuotaEstimateView: View {
     }
     private var records: [QuotaEstimate] { (credits ? (model.dashboard.creditEstimates ?? []) : (model.dashboard.quotaEstimates ?? [])).filter { $0.accountKey == quota.id } }
     private var current: QuotaEstimate? { records.first { $0.status != "completed" } }
-    private var eligible: Bool { if credits { return quota.credits?.balance != nil && quota.credits?.unlimited == false }; return quota.provider != "agy" && !windows.isEmpty }
+    private var eligible: Bool { if credits { return quota.credits?.balance != nil && quota.credits?.unlimited == false }; return windows.contains { initialGroup == nil || $0.estimateGroup == initialGroup } }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack { VStack(alignment: .leading, spacing: 4) { Text(credits ? "credit 价值" : "5h / 7d 额度价值").font(AppFont.title); Text(quota.name).foregroundStyle(.secondary) }; Spacer(); Button("关闭") { close() }.keyboardShortcut(.cancelAction) }
@@ -136,6 +140,7 @@ struct QuotaEstimateView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(credits ? "按实际 credits 扣款与样本 API 等价成本，估算 credit 的 API 等价价值，不是可兑换余额。" : "主要采样 5h 额度，显示 5h 价值、7d 同期换算及近期倍率估算。正常重置后自动接续，结果取决于本次模型组合。").foregroundStyle(.secondary)
                     if let current {
+                        if let group = current.groupId, let initialGroup, group != initialGroup { Text("当前账户正在采样其他模型组；每个账户同时保留一段采样。").foregroundStyle(.secondary) }
                         result(current)
                         if current.status == "pending" {
                             Text(current.reason).foregroundStyle(Palette.warn)
@@ -145,7 +150,7 @@ struct QuotaEstimateView: View {
                         Button(current.status == "pending" ? "结束并保留有效段" : "结束并保存本段结果") { perform("stop", ["id": current.id]) }.buttonStyle(.borderedProminent).disabled(busy)
                     } else if eligible && !sources.isEmpty {
                         if !credits { Picker("主要额度池", selection: $window) {
-                            ForEach(windows.filter { windows.count == 1 || $0.id == "seven_day" || $0.name == "7d" }) { Text($0.name).tag($0.id) }
+                            ForEach(windows) { Text($0.name).tag($0.id) }
                         } }
                         Text("纳入的用量来源").font(AppFont.section)
                         ForEach(sources) { source in
@@ -155,7 +160,7 @@ struct QuotaEstimateView: View {
                         Text(credits ? "建议开始后新建会话，至少消耗 5 credits 且价格完整后输出估值。充值或包含额度恢复后需要开始新一段。" : "建议开始后新建会话。跨起始边界的累计用量会使本次结果不可用；5h 至少消耗 5 个百分点后输出估值；7d 同期消耗较少时会标注样本较少。").font(AppFont.secondary).foregroundStyle(.secondary)
                         Button("开始采样") { perform("start", ["accountKey": quota.id, "windowId": credits ? "credits" : window, "sourceIds": Array(selected), "confirmed": confirmed]) }.buttonStyle(.borderedProminent).disabled(!confirmed || selected.isEmpty || (!credits && window.isEmpty) || busy)
                     } else {
-                        Text(sources.isEmpty ? "需要可采集 Token 的关联数据源。agy 限额查询本身不提供用量历史。" : credits ? "需要明确且有限的 credits 余额；请刷新账户限额。" : "此额度池缺少可靠的模型映射，暂不支持估值。").foregroundStyle(.secondary)
+                        Text(sources.isEmpty ? "需要可采集 Token 的关联数据源，请检查数据目录和账户关联。" : credits ? "需要明确且有限的 credits 余额；请刷新账户限额。" : "此额度池缺少可靠的模型映射，暂不支持估值。").foregroundStyle(.secondary)
                     }
                     if busy { TimelineView(.periodic(from: .now, by: 1)) { context in
                         HStack { ProgressView().controlSize(.small); Text((model.estimateStages[quota.id] ?? "准备同步") + " · " + String(Int(context.date.timeIntervalSince(model.estimateStartedAt[quota.id] ?? context.date))) + " 秒") }.font(AppFont.secondary)
@@ -163,19 +168,21 @@ struct QuotaEstimateView: View {
                     if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
                     if records.contains(where: { $0.status == "completed" }) {
                         Divider(); Text("采样历史").font(AppFont.section)
-                        ForEach(records.filter { $0.status == "completed" }) { result($0) }
+                        ForEach(records.filter { $0.status == "completed" && (initialGroup == nil || $0.groupId == nil || $0.groupId == initialGroup) }) { result($0) }
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 480)
-        }.font(AppFont.body).disabled(model.installingUpdate).padding(24).frame(minWidth: 470, idealWidth: 520)
+        }.aieyesAccent().font(AppFont.body).disabled(model.installingUpdate).padding(24).frame(minWidth: 470, idealWidth: 520)
         .onChange(of: credits) { _, _ in confirmed = false }
-        .onAppear { selected = Set(sources.map(\.id)); window = windows.first?.id ?? "" }
+        .onAppear { selected = Set(sources.map(\.id)); window = windows.first { ($0.groupId ?? $0.groupName) == initialGroup }?.id ?? windows.first?.id ?? "" }
     }
     private var confirmation: some View {
         Toggle(credits ? "我确认本段仅消耗 credits，所有设备用量均已纳入；不混用包含额度、API 或中转。" : "我确认采样期间只使用目标订阅，所有设备的用量均已纳入所选来源；不混用 API / 中转。", isOn: $confirmed).fixedSize(horizontal: false, vertical: true)
     }
     private func result(_ e: QuotaEstimate) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let group = e.groupId { Text(quota.windows.first { $0.estimateGroup == group }?.groupLabel ?? group).font(AppFont.section) }
+            else if ["antigravity", "agy"].contains(quota.provider) { Text("账户总体 · 旧记录").font(AppFont.section) }
             resultHeader(e)
             if e.valuationMode == "fiveHour" { fiveHourValues(e) }
             Text(e.calculationNote).font(AppFont.secondary).foregroundStyle(.secondary)
@@ -186,7 +193,7 @@ struct QuotaEstimateView: View {
     }
     private func resultHeader(_ e: QuotaEstimate) -> some View {
         HStack {
-            Text(e.status == "active" ? ((e.fiveHourValue ?? e.weeklyValue ?? e.valuePer1000) == nil ? "正在积累样本" : "可输出估值 · 采样继续") : e.statusLabel).foregroundStyle(e.status == "pending" ? Color.orange : Palette.accent)
+            Text(e.status == "active" ? ((e.fiveHourValue ?? e.weeklyValue ?? e.valuePer1000) == nil ? "正在积累样本" : "可输出估值 · 采样继续") : e.statusLabel).foregroundStyle(e.status == "pending" ? Palette.warn : Palette.accent)
             Spacer()
             Text(resultValue(e)).font(AppFont.section).monospacedDigit()
         }

@@ -9,15 +9,15 @@ stamp = int(os.environ.get('AIEYES_UI_STAMP', time.time()))
 def source(provider):
     return dict(id=provider+'-source',name=provider+' · 测试来源',provider=provider,accountId=provider,path='/tmp/aieyes-preview-missing',enabled=True,quotaCommand='',quotaPreCommand='',codexBinary='codex',agyBinary='agy')
 def window(key,name,used,minutes=10080,group=None):
-    return dict(id=key,name=name,usedPercent=used,windowMinutes=minutes,resetsAt=stamp+minutes*60,groupName=group)
-settings=dict(version=2,sources=[source('codex'),source('agy')],accounts=[dict(id=p,name=n,provider=p,quotaEnabled=True) for p,n in [('codex','个人订阅'),('agy','工作空间 · agy')]],hosts=[],proxy=dict(mode='system',url=''),refreshSeconds=300,serverRefreshSeconds=10,menuMetric='icon',githubRepository='',modelMappings={})
-quotas=[dict(sourceId=p+'-source',accountId=p,provider=p,name=n,updatedAt=stamp,origin='live',windows=ws) for p,n,ws in [('codex','个人订阅',[window('codex:primary','5h',35,300),window('codex:secondary','7d',42)]),('agy','工作空间 · agy',[window(g+':'+str(m),g+' · '+('7d' if m==10080 else '5h'),v,m,g) for g,v in [('Claude Opus',28),('Claude Sonnet',65),('Gemini Pro',94)] for m in [300,10080]])]]
+    return dict(id=key,name=name,usedPercent=used,windowMinutes=minutes,resetsAt=stamp+minutes*60,groupName=group,groupId=group)
+settings=dict(version=2,sources=[source('codex'),source('antigravity')],accounts=[dict(id=p,name=n,provider=p,quotaEnabled=True) for p,n in [('codex','个人订阅'),('antigravity','Antigravity 工作空间')]],hosts=[],proxy=dict(mode='system',url=''),refreshSeconds=300,serverRefreshSeconds=10,menuMetric='icon',githubRepository='',modelMappings={})
+quotas=[dict(sourceId=p+'-source',accountId=p,provider=p,name=n,updatedAt=stamp,origin='live',windows=ws) for p,n,ws in [('codex','个人订阅',[window('codex:primary','5h',35,300),window('codex:secondary','7d',42)]),('antigravity','Antigravity 工作空间',[window(g+':'+str(m),g+' · '+('7d' if m==10080 else '5h'),v,m,g) for g,v in [('Claude and GPT Models',28),('Gemini Models',65)] for m in [300,10080]])]]
 tokens=dict(input=30000,output=12000,cacheRead=28000,cacheWrite=0,reasoning=0)
 usage=dict(key='',tokens=tokens,total=70000,cost=2.4,pricedTokens=70000,events=14)
 price=dict(id='test-model',name='测试模型',input=0.00001,output=0.00003,cacheRead=0.000001,cacheWrite=0.00001,fetchedAt=stamp)
 estimate=dict(id='preview',accountKey='codex:codex',windowId='codex:secondary',windowName='7d',sourceIds=['codex-source'],sourceNames=['本机 Codex'],status='pending',reason='额度已重置或异常回升；确认后开始新一段',startedAt=stamp-3600,checkpointAt=stamp-600,endedAt=None,consumedPercent=12,cost=2.4,totalTokens=70000,pricedTokens=70000,weeklyValue=20,calculationNote='手动采样估值 · 按本次模型组合估算',prices=[price])
-estimate.update(valuationMode='fiveHour',windowId='codex:primary',windowName='5h',status='active',reason='',fiveHourValue=20,weeklyDirectValue=100,weeklyRatioValue=110,calculationNote='5h 采样估值 · 7d 同期样本较少',capacity=dict(ratio=5.5,samples=6,weeklyPercent=12,updatedAt=stamp),segments=[])
-dashboard=dict(generatedAt=stamp,summary=usage,days=[],heatmap=[],models=[],trendDays=[],dayModels=[],pricingGaps=[],modelOptions=[],quotas=quotas,quotaOrder=['codex:codex','agy:agy'],quotaEstimates=[estimate],sources=[])
+estimate.update(valuationMode='fiveHour',windowId='codex:primary',windowName='5h',status='active',reason='',fiveHourValue=20,weeklyValue=100,weeklyDirectValue=100,weeklyRatioValue=110,calculationNote='5h 采样估值 · 7d 同期样本较少',capacity=dict(ratio=5.5,samples=6,weeklyPercent=12,updatedAt=stamp),segments=[])
+dashboard=dict(generatedAt=stamp,summary=usage,days=[],heatmap=[],models=[],trendDays=[],dayModels=[],pricingGaps=[],modelOptions=[],quotas=quotas,quotaOrder=['codex:codex','antigravity:antigravity'],quotaEstimates=[estimate],sources=[])
 quotas[0].update(plan='plus',credits=dict(hasCredits=True,unlimited=False,balance='990.125'),creditsUpdatedAt=stamp)
 dashboard['creditEstimates']=[dict(estimate,id='credit-preview',kind='credits',windowId='credits',windowName='Credits',status='active',reason='',weeklyValue=None,consumedCredits=10,valuePer500=120,valuePer1000=240)]
 dashboard['creditEstimates'][0]['valuationMode']=''
@@ -38,7 +38,13 @@ if scenario:
     dashboard['models'] = [dict(usage, key='test-model')]
     dashboard['modelOptions'] = ['test-model']
     dashboard['dayModels'] = [dict(day=day['key'], model='test-model', usage=usage) for day in dashboard['trendDays']]
-    if scenario == 'single':
+    if scenario == 'compact':
+        GiB = 1024**3
+        host.update(metrics=['cpu','memory','gpu','filesystems'],details=['gpuMemory','gpuThermals','fsAvailable','fsType','inodes'])
+        hosts[0]['sample'].update(memory=dict(total=32*GiB,available=24*GiB),gpu=[dict(id='0',name='NVIDIA A100 80GB PCIe',utilization=87,memoryUsedMiB=61440,memoryTotalMiB=81920),dict(id='1',name='NVIDIA RTX 4090',utilization=0,memoryUsedMiB=0,memoryTotalMiB=24576)],filesystems=[dict(id='/',used=25*GiB,total=100*GiB,available=75*GiB,type='ext4'),dict(id='/data',used=0,total=GiB,available=GiB)])
+        dashboard['quotaEstimates'] = [estimate,dict(estimate,id='gemini-preview',accountKey='antigravity:antigravity',groupId='Gemini Models',sourceIds=['antigravity-source'],windowName='Gemini Models · 5h')]
+        dashboard['creditEstimates'] = [dict(estimate,id='credit-preview',kind='credits',valuationMode='',windowId='credits',windowName='Credits',status='active',weeklyValue=None,fiveHourValue=None,consumedCredits=10,valuePer1000=240)]
+    elif scenario == 'single':
         settings['sources'] = settings['sources'][:1]; settings['accounts'] = settings['accounts'][:1]; quotas = quotas[:1]
     elif scenario in ['multi', 'capacity']:
         quotas = [dict(quotas[0], accountId='account-'+str(i), sourceId='source-'+str(i), name='订阅账户 '+str(i+1)) for i in range(20 if scenario == 'capacity' else 5)]
@@ -90,5 +96,6 @@ for line in sys.stdin:
         continue
     scan = [dict(id=src['id'], error='连接失败：模拟日志不可读取') for src in settings['sources']] if scenario == 'failure' else []
     network=dict(testedAt=stamp,mode='system',averageMs=73,status='ok',sites=[dict(url='https://api.github.com/rate_limit',latencyMs=60,error=None),dict(url='https://openrouter.ai',latencyMs=86,error=None)])
-    result={'settings.get':settings,'dashboard':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts,'network.test':network,'network.status':network}.get(r['method'],{})
+    statuses = [dict(accountKey=a['provider']+':'+a['id'],sourceId=s['id'],machineId=s.get('hostId') or 'local',current=i == 0 and s.get('accountId') == a['id'],credential=s.get('accountId') == a['id'],checkedAt=stamp) for i,a in enumerate(settings['accounts']) for s in settings['sources'] if s['provider']==a['provider']]
+    result={'accounts.status.get':statuses,'accounts.status.refresh':next((v for v in statuses if v['accountKey']==r.get('params',{}).get('accountKey') and v['sourceId']==r.get('params',{}).get('sourceId')),{}),'accounts.cleanup.list':[],'accounts.deployments.sync':{'failedTasks':[]},'accounts.deletion.preview':{'tasks':[]},'settings.get':settings,'dashboard':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts,'network.test':network,'network.status':network}.get(r['method'],{})
     print(json.dumps(dict(jsonrpc='2.0',id=r['id'],result=result)),flush=True)
