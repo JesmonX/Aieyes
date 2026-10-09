@@ -377,11 +377,11 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     assert.equal(await page.locator('#repair-pricing').count(),0);
 
     const sampleData={timestamp:Date.now()/1000,load:[0.3,0.4,0.5],errors:{},cpu:[{id:'cpu',utilization:42},{id:'cpu0',utilization:96}],memory:{total:16000000000,available:4000000000,cached:1000000000,buffers:50000000,swapTotal:0,swapFree:0},gpu:[{id:'0',name:'Training GPU',utilization:91,memoryUsedMiB:7500,memoryTotalMiB:10000,temperature:70,powerWatts:210},{id:'1',name:'Offline GPU',utilization:null,memoryUsedMiB:null,memoryTotalMiB:null}],filesystems:[{id:'/',used:50,total:100,available:50},{id:'/empty',used:0,total:0}],disk:[{id:'nvme0n1',readBytesPerSecond:1024,writeBytesPerSecond:2048,busyMsPerSecond:1200}],network:[{id:'eth0',rxBytesPerSecond:2048,txBytesPerSecond:4096}]};
-    await page.evaluate(sample=>{window.fixtureHosts=[{id:'host1',sample}];state.settings.hosts[0].enabled=true;state.settings.hosts[0].details=Object.keys(detailOptions);state.settings.hosts[0].metrics=Object.keys(groups);},sampleData);
+    await page.evaluate(sample=>{window.fixtureHosts=[{id:'host1',sample}];state.settings.hosts[0].enabled=true;state.settings.hosts[0].details=Object.keys(detailOptions);state.settings.hosts[0].metrics=Object.keys(groups);state.settings.hosts[0].devices=[];},sampleData);
     await page.locator('[data-page=servers]').click();
     await page.waitForFunction(()=>!state.serverBusy);
-    assert.equal(await page.locator('.resource-ring').count(),4);
-    assert.deepEqual(await page.locator('.resource-ring strong').allTextContents(),['42.0%','75.0%','91.0%','—']);
+    assert.equal(await page.locator('.resource-ring').count(),6);
+    assert.deepEqual(await page.locator('.resource-ring strong').allTextContents(),['42.0%','75.0%','91.0%','75.0%','—','—']);
     assert.equal(await page.locator('.host-status').textContent(),'正常');
     await page.locator('.server-card > summary').click();
     for(const group of ['cpu','memory','gpu','filesystems','disk','network'])await page.locator(`[data-metric="host1:${group}"]>summary`).click();

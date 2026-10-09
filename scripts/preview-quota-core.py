@@ -63,6 +63,19 @@ if scenario:
     elif scenario == 'failure':
         for q in quotas: q['error'] = '连接失败：模拟账户凭据失效'
         hosts[0]['error'] = '连接失败：模拟 SSH 不可读取'
+    # Shared server summary fixtures cover different card capacities and missing readings.
+    if scenario in ['single', 'multi', 'long', 'capacity']:
+        for i, h in enumerate(settings['hosts']):
+            h['metrics'] = ['cpu', 'memory', 'gpu', 'network']
+            h['details'] = ['uptime', 'cpuTimes', 'memoryCache', 'swap', 'gpuMemory', 'gpuThermals', 'networkTotals', 'networkErrors']
+            sample = hosts[i]['sample']
+            sample.update(uptime=90061, cpu=[dict(id='cpu', utilization=42), dict(id='cpu0', utilization=75)],
+                          memory=dict(total=32*1024**3, available=24*1024**3, cached=1024**3, buffers=0, swapTotal=0, swapFree=0),
+                          network=[dict(id='eth0', rxBytes=3*1024**3, txBytes=1024**3, rxBytesPerSecond=1024, txBytesPerSecond=2048)])
+            sample['gpu'] = [dict(id='0', name='NVIDIA RTX 4090', utilization=0, memoryUsedMiB=0, memoryTotalMiB=24576, temperature=35, powerWatts=20)]
+            if scenario != 'single':
+                sample['gpu'] += [dict(id='1', name='NVIDIA A100 80GB PCIe', utilization=87, memoryUsedMiB=61440, memoryTotalMiB=81920, temperature=68, powerWatts=270),
+                                  dict(id='2', name='缺失读数的显卡', utilization=None, memoryUsedMiB=None, memoryTotalMiB=0)]
     dashboard['sources'] = [dict(src,status=dict(updatedAt=stamp,error='模拟读取失败' if scenario == 'failure' else None)) for src in settings['sources']]
     dashboard['quotas'] = quotas
     dashboard['quotaOrder'] = [q['provider']+':'+q['accountId'] for q in quotas]

@@ -55,12 +55,15 @@ window.AieyesUI = {
       failed: statuses.filter(s => s?.error).length
     };
   },
-  resetDisplayTime(stamp, windowMinutes, now = Date.now() / 1000) {
+  resetDisplayTime(stamp, windowMinutes, now = Date.now() / 1000, usedPercent) {
+    // Full windows are dormant independently of other windows on the account.
+    // Derive only the display date; keep the source timestamp for scheduling.
+    if (Number.isFinite(usedPercent) && usedPercent === 0 && Number.isFinite(windowMinutes) && windowMinutes > 0) return now + windowMinutes * 60;
     if (Number.isFinite(stamp) && stamp > now) return stamp;
     return Number.isFinite(windowMinutes) && windowMinutes > 0 ? now + windowMinutes * 60 : null;
   },
-  resetText(stamp, now = Date.now() / 1000, windowMinutes) {
-    const target = this.resetDisplayTime(stamp, windowMinutes, now);
+  resetText(stamp, now = Date.now() / 1000, windowMinutes, usedPercent) {
+    const target = this.resetDisplayTime(stamp, windowMinutes, now, usedPercent);
     if (target == null) return Number.isFinite(stamp) && stamp > 0 ? '确认重置中' : '重置时间未知';
     const minutes = Math.ceil((target - now) / 60), parts = [];
     if (!Number.isSafeInteger(minutes) || minutes <= 0) return '重置时间未知';
@@ -70,8 +73,8 @@ window.AieyesUI = {
     return parts.join(' ') + '后重置';
   },
   quotaReset(window, now = Date.now() / 1000) {
-    const text = this.resetText(window.resetsAt, now, window.windowMinutes);
-    const stamp = this.resetDisplayTime(window.resetsAt, window.windowMinutes, now), date = new Date(stamp * 1000);
+    const text = this.resetText(window.resetsAt, now, window.windowMinutes, window.usedPercent);
+    const stamp = this.resetDisplayTime(window.resetsAt, window.windowMinutes, now, window.usedPercent), date = new Date(stamp * 1000);
     if (stamp == null || !Number.isFinite(date.getTime())) return text;
     const pad = n => String(n).padStart(2, '0');
     return text + ' · ' + pad(date.getMonth()+1) + '/' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());

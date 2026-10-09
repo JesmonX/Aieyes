@@ -117,9 +117,15 @@ struct Host: Codable, Equatable, Identifiable {
     var metrics = ["cpu", "memory", "gpu", "filesystems", "disk", "network"], devices: [String] = []
     var details: [String]? = Host.detailOptions.map { $0.0 }
     var authMode: String?, username: String?, passwordRef: String?
-    static let detailOptions = [("cpuTimes", "CPU 时间分布"), ("memoryCache", "内存缓存 / Buffer"), ("swap", "Swap"), ("fsAvailable", "文件系统可用空间"), ("fsType", "文件系统类型 / 设备"), ("inodes", "inode"), ("diskIops", "磁盘 IOPS"), ("diskBusy", "磁盘忙碌率"), ("networkTotals", "累计流量"), ("networkErrors", "网络错误 / 丢包"), ("gpuMemory", "GPU 显存"), ("gpuThermals", "GPU 温度 / 功耗")]
+    static let detailOptions = [("uptime", "连续运行时间"), ("cpuTimes", "CPU 时间分布"), ("memoryCache", "内存缓存 / Buffer"), ("swap", "Swap"), ("fsAvailable", "文件系统可用空间"), ("fsType", "文件系统类型 / 设备"), ("inodes", "inode"), ("diskIops", "磁盘 IOPS"), ("diskBusy", "磁盘忙碌率"), ("networkTotals", "累计流量"), ("networkErrors", "网络错误 / 丢包"), ("gpuMemory", "GPU 显存"), ("gpuThermals", "GPU 温度 / 功耗")]
     var connectionIdentity: String { [target, port.map(String.init) ?? "", identityFile, shell, preCommand, authMode ?? "ssh", username ?? "", passwordRef ?? ""].joined(separator: "\u{0}") }
     func shows(_ key: String) -> Bool { details?.contains(key) ?? true }
+    // Also filter retained samples immediately when the device selection changes.
+    func selectedDevices(_ group: String, _ rows: [DeviceMetric]?) -> [DeviceMetric] {
+        guard metrics.contains(group) else { return [] }
+        let selected = Set(devices.filter { $0.hasPrefix(group + ":") })
+        return (rows ?? []).filter { selected.isEmpty || (group == "cpu" && $0.id == "cpu") || selected.contains(group + ":" + $0.id) }
+    }
 }
 struct AppearanceSettings: Codable, Equatable {
     var theme = "system", accent = "indigo"
@@ -143,23 +149,47 @@ struct DeviceMetric: Codable, Identifiable {
     var rxBytes: Double?, txBytes: Double?, rxBytesPerSecond: Double?, txBytesPerSecond: Double?, rxErrors: Double?, txErrors: Double?, rxDrops: Double?, txDrops: Double?
     var readBytesPerSecond: Double?, writeBytesPerSecond: Double?, readIops: Double?, writeIops: Double?, busyMsPerSecond: Double?
 }
-struct MemoryMetric: Codable { var total: Double, available: Double, cached: Double, buffers: Double, swapTotal: Double, swapFree: Double }
+struct MemoryMetric: Codable {
+    var total: Double?, available: Double?, cached: Double?, buffers: Double?, swapTotal: Double?, swapFree: Double?
+    var used: Double? { Format.usedCapacity(total, available) }
+    var swapUsed: Double? { Format.usedCapacity(swapTotal, swapFree) }
+}
 struct MetricSample: Codable {
-    var timestamp: Double, uptime: Double, load: [Double], errors: [String: String]
+    var timestamp: Double, uptime: Double?, load: [Double], errors: [String: String]
     var cpu: [DeviceMetric]?, memory: MemoryMetric?, gpu: [DeviceMetric]?, filesystems: [DeviceMetric]?, disk: [DeviceMetric]?, network: [DeviceMetric]?
 }
 struct HostResult: Codable, Identifiable { var id: String, name: String, sample: MetricSample?, error: String? }
 
 enum Format {
+    static func usedCapacity(_ total: Double?, _ available: Double?) -> Double? {
+        guard let total, let available, total.isFinite, available.isFinite else { return nil }
+        return total - available
+    }
+    static func capacityPercent(_ used: Double?, _ total: Double?) -> Double? {
+        guard let used, let total, used.isFinite, total.isFinite, total > 0 else { return nil }
+        return used / total * 100
+    }
+    static func uptime(_ seconds: Double?) -> String {
+        guard let seconds, seconds.isFinite, seconds >= 0, seconds / 60 < Double(Int.max) else { return "—" }
+        let minutes = Int(seconds / 60)
+        var parts: [String] = []
+        if minutes >= 1440 { parts.append("\(minutes / 1440) 天") }
+        if minutes >= 60 { parts.append("\(minutes % 1440 / 60) 小时") }
+        parts.append("\(minutes % 60) 分")
+        return parts.joined(separator: " ")
+    }
     // A dormant window does not start another countdown until a new reset is reported.
     // The derived date is display-only; refresh and sampling retain the original timestamp.
-    static func resetDisplayTime(_ stamp: Double?, windowMinutes: Int? = nil, now: Date = Date()) -> Double? {
+    static func resetDisplayTime(_ stamp: Double?, windowMinutes: Int? = nil, usedPercent: Double? = nil, now: Date = Date()) -> Double? {
+        if let usedPercent, usedPercent.isFinite, usedPercent == 0, let windowMinutes, windowMinutes > 0 {
+            return now.timeIntervalSince1970 + Double(windowMinutes) * 60
+        }
         if let stamp, stamp.isFinite, stamp > now.timeIntervalSince1970 { return stamp }
         guard let windowMinutes, windowMinutes > 0 else { return nil }
         return now.timeIntervalSince1970 + Double(windowMinutes) * 60
     }
-    static func resetCountdown(_ stamp: Double?, windowMinutes: Int? = nil, now: Date = Date()) -> String {
-        guard let target = resetDisplayTime(stamp, windowMinutes: windowMinutes, now: now) else {
+    static func resetCountdown(_ stamp: Double?, windowMinutes: Int? = nil, usedPercent: Double? = nil, now: Date = Date()) -> String {
+        guard let target = resetDisplayTime(stamp, windowMinutes: windowMinutes, usedPercent: usedPercent, now: now) else {
             return stamp.map { $0.isFinite && $0 > 0 ? "确认重置中" : "重置时间未知" } ?? "重置时间未知"
         }
         let rawMinutes = ceil((target - now.timeIntervalSince1970) / 60)
@@ -172,8 +202,8 @@ enum Format {
         return parts.joined(separator: " ") + "后重置"
     }
     static func quotaReset(_ window: QuotaWindow, now: Date = Date()) -> String {
-        let countdown = resetCountdown(window.resetsAt, windowMinutes: window.windowMinutes, now: now)
-        guard let stamp = resetDisplayTime(window.resetsAt, windowMinutes: window.windowMinutes, now: now) else { return countdown }
+        let countdown = resetCountdown(window.resetsAt, windowMinutes: window.windowMinutes, usedPercent: window.usedPercent, now: now)
+        guard let stamp = resetDisplayTime(window.resetsAt, windowMinutes: window.windowMinutes, usedPercent: window.usedPercent, now: now) else { return countdown }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .autoupdatingCurrent
@@ -232,7 +262,8 @@ enum Format {
     static func money(_ value: Double) -> String { String(format: "$%.2f", value) }
     static func percent(_ value: Double?) -> String { value.map { String(format: "%.1f%%", $0) } ?? "—" }
     static func bytes(_ value: Double?) -> String {
-        guard let value else { return "—" }
+        guard let value, value.isFinite, value >= 0, value < Double(Int64.max) else { return "—" }
+        if value == 0 { return "0 B" }
         return ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .binary)
     }
     static func speed(_ value: Double?) -> String { value.map { bytes($0) + "/s" } ?? "—" }

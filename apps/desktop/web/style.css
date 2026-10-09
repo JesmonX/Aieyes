@@ -630,14 +630,30 @@ input[name=path],input[name=identityFile],input[name=target] { font-family:var(-
 .server-summary { list-style:none; }
 .server-card > .server-summary { display:block; margin:0; }
 .server-summary::-webkit-details-marker { display:none; }
-.server-summary-metrics { display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; font-size:var(--font-secondary); }
+.server-summary-metrics { display:grid; gap:10px; margin-top:12px; font-size:var(--font-secondary); color:var(--ink); }
+.server-system-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr)); gap:10px; }
+.server-gpu-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr)); gap:10px 16px; }
+.server-gpu { min-width:0; }
+.server-gpu-title { display:flex; align-items:baseline; gap:8px; margin-bottom:6px; }
+.server-gpu-title > strong { flex-shrink:0; }
+.server-gpu-title > span { color:var(--muted); overflow-wrap:anywhere; min-width:0; }
+.server-gpu-metrics { display:flex; flex-wrap:wrap; gap:8px 14px; }
+.server-gpu-metrics > .resource-gauge { flex:1 1 130px; }
+.server-summary-metrics .resource-ring { width:48px; height:48px; }
+.server-summary-metrics .resource-ring strong { font-size:11px; }
+.server-summary-metrics .resource-gauge { gap:8px; }
+.server-summary-metrics h3 { margin:0; font-size:var(--font-secondary); }
+.server-summary-facts { display:flex; flex-wrap:wrap; gap:6px 16px; color:var(--muted); }
+.server-summary-facts strong { font-weight:500; font-variant-numeric:tabular-nums; }
+.server-network-total { display:flex; flex-wrap:wrap; gap:4px 8px; min-width:0; overflow-wrap:anywhere; }
+.server-sample-time { flex-basis:100%; }
+.server-heading > div { min-width:0; overflow-wrap:anywhere; }
+.server-heading .host-status { flex-shrink:0; }
 .server-summary h2 { font-size:16px; }
 .server-card { padding:14px 16px; }
 .server-card:has([data-status="已暂停"]) .server-summary-metrics { color:var(--muted); }
-.server-card > summary ~ .server-gauges { margin-top:20px; }
 @container (min-width:700px) {
-  .server-card > .server-summary { display:grid; grid-template-columns:minmax(220px,1fr) minmax(0,1.5fr); align-items:center; gap:20px; }
-  .server-summary-metrics { margin-top:0; }
+  .server-system-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 
 .quota-disclosure:not([open]) + .quota-content .agy-group:nth-child(n+2),

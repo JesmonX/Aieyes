@@ -568,9 +568,9 @@ struct HostEditor: View {
                     ForEach(groups.filter { $0.0 != "memory" }, id: \.0) { group, label in devicePicker(group, label) }
                 }
                 Section {
-                    MultiSelectPicker(title: "显示细分项", options: Host.detailOptions.filter { host.metrics.contains(detailGroups[$0.0] ?? "") }.map { SelectionOption(id: $0.0, label: $0.1) }, selected: Set(host.details ?? Host.detailOptions.map { $0.0 })) { selected, _ in
+                    MultiSelectPicker(title: "显示细分项", options: Host.detailOptions.filter { $0.0 == "uptime" || host.metrics.contains(detailGroups[$0.0] ?? "") }.map { SelectionOption(id: $0.0, label: $0.1) }, selected: Set(host.details ?? Host.detailOptions.map { $0.0 })) { selected, _ in
                         host.details = selected.sorted()
-                    }.disabled(host.metrics.isEmpty)
+                    }
                 }
                 }
                 DisclosureGroup("高级设置") {

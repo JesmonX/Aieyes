@@ -32,6 +32,29 @@ import Foundation
         precondition(Format.resetDisplayTime(window.resetsAt, windowMinutes: 300, now: now) == window.resetsAt)
         precondition(Format.subscription("plus") == "Plus" && Format.subscription(" pro ") == "Pro")
         precondition(Format.subscription("Special Plan") == "Special Plan")
+        let full = QuotaWindow(name: "5h", usedPercent: 0, windowMinutes: 300, resetsAt: now.timeIntervalSince1970 + 7200)
+        let weekly = QuotaWindow(name: "7d", usedPercent: 20, windowMinutes: 10080, resetsAt: now.timeIntervalSince1970 + 172800)
+        let snapshot = try! JSONEncoder().encode([full, weekly])
+        for delta: Double in [0, 60, 3600] {
+            let clock = now.addingTimeInterval(delta)
+            precondition(Format.quotaReset(full, now: clock).hasPrefix("5 小时后重置 · "))
+            precondition(Format.resetDisplayTime(full.resetsAt, windowMinutes: 300, usedPercent: 0, now: clock) == clock.timeIntervalSince1970 + 18000)
+            precondition(Format.resetDisplayTime(weekly.resetsAt, windowMinutes: 10080, usedPercent: 20, now: clock) == weekly.resetsAt)
+        }
+        precondition(Format.quotaReset(weekly, now: now.addingTimeInterval(3600)).hasPrefix("1 天 23 小时后重置 · "))
+        precondition(try! JSONDecoder().decode([QuotaWindow].self, from: snapshot).map(\.resetsAt) == [full, weekly].map(\.resetsAt))
+        for used in [Double.nan, .infinity, -1, 0.001, 20] {
+            var active = full; active.usedPercent = used
+            precondition(Format.quotaReset(active, now: now).hasPrefix("2 小时后重置 · "))
+        }
+        for used: Double in [0, 0.001, 10, 0] {
+            var active = full; active.usedPercent = used
+            precondition(Format.quotaReset(active, now: now.addingTimeInterval(3600)).hasPrefix(used == 0 ? "5 小时后重置 · " : "1 小时后重置 · "))
+        }
+        var bothFull = weekly; bothFull.usedPercent = 0
+        precondition(Format.quotaReset(bothFull, now: now).hasPrefix("7 天后重置 · "))
+        var noDuration = full; noDuration.windowMinutes = nil
+        precondition(Format.quotaReset(noDuration, now: now).hasPrefix("2 小时后重置 · "))
         print("Native reset durations, dormant cycles, local dates, refresh transitions and subscription labels passed")
     }
 }

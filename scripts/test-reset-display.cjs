@@ -25,4 +25,21 @@ for(const provider of ['codex','claude','antigravity','deepseek']) {
   const png=fs.readFileSync(path.resolve(__dirname,'../apps/desktop/web/provider-'+provider+'.png'));
   assert.equal(png.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
 }
+const windows=[{resetsAt:now+2*3600,windowMinutes:300,usedPercent:0},{resetsAt:now+2*86400,windowMinutes:10080,usedPercent:20}];
+const original=JSON.stringify(windows);
+for(const elapsed of [0,60,3600]) {
+  assert.match(ui.quotaReset(windows[0],now+elapsed),/^5 小时后重置 · /);
+  assert.equal(ui.resetDisplayTime(windows[0].resetsAt,300,now+elapsed,0),now+elapsed+5*3600);
+  assert.equal(ui.resetDisplayTime(windows[1].resetsAt,10080,now+elapsed,20),windows[1].resetsAt);
+}
+assert.match(ui.quotaReset(windows[1],now+3600),/^1 天 23 小时后重置/);
+assert.equal(JSON.stringify(windows),original);
+for(const usedPercent of [undefined,null,NaN,Infinity,-1,0.001,20]) {
+  assert.match(ui.quotaReset({...windows[0],usedPercent},now),/^2 小时后重置/);
+}
+for(const usedPercent of [0,0.001,10,0]) {
+  assert.match(ui.quotaReset({...windows[0],usedPercent},now+3600),usedPercent===0?/^5 小时后重置/:/^1 小时后重置/);
+}
+assert.match(ui.quotaReset({...windows[1],usedPercent:0},now+3600),/^7 天后重置/);
+assert.match(ui.quotaReset({...windows[0],windowMinutes:null},now),/^2 小时后重置/);
 console.log('Web reset durations, dormant windows, dates, refresh transitions, subscription names and bundled icons passed');

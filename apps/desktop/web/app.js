@@ -23,7 +23,7 @@ function creditValue(record) {
   return Number.isFinite(record.valuePer1000) ? '1000 credit ≈ '+money(record.valuePer1000)+' USD' : AieyesUI.estimateIssue(record);
 }
 const pct = n => n == null ? '—' : n.toFixed(1) + '%';
-const bytes = n => { if (n == null) return '—'; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return n.toFixed(i ? 1 : 0) + [' B',' KiB',' MiB',' GiB',' TiB'][i]; };
+const bytes = n => { if (!Number.isFinite(n) || n < 0) return '—'; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return n.toFixed(i ? 1 : 0) + [' B',' KiB',' MiB',' GiB',' TiB'][i]; };
 const speed = n => n == null ? '—' : bytes(n) + '/s';
 const date = n => n ? new Date(n * 1000).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}) : '—';
 const providers = {codex:'Codex',claude:'Claude Code',antigravity:'Antigravity',agy:'agy',deepseek:'DeepSeek',custom:'自定义'};
@@ -44,7 +44,7 @@ const color = name => {
 };
 
 const groups = {cpu:'CPU',memory:'内存',gpu:'GPU',filesystems:'文件系统',disk:'磁盘 I/O',network:'网络'};
-const detailOptions={cpuTimes:'CPU 时间分布',memoryCache:'内存缓存 / Buffer',swap:'Swap',fsAvailable:'文件系统可用空间',fsType:'文件系统类型 / 设备',inodes:'inode',diskIops:'磁盘 IOPS',diskBusy:'磁盘忙碌率',networkTotals:'累计流量',networkErrors:'网络错误 / 丢包',gpuMemory:'GPU 显存',gpuThermals:'GPU 温度 / 功耗'};
+const detailOptions={uptime:'连续运行时间',cpuTimes:'CPU 时间分布',memoryCache:'内存缓存 / Buffer',swap:'Swap',fsAvailable:'文件系统可用空间',fsType:'文件系统类型 / 设备',inodes:'inode',diskIops:'磁盘 IOPS',diskBusy:'磁盘忙碌率',networkTotals:'累计流量',networkErrors:'网络错误 / 丢包',gpuMemory:'GPU 显存',gpuThermals:'GPU 温度 / 功耗'};
 const state = {page:'agent',settingsTab:'sources',priceSearch:'',settings:null,settingsDraft:null,settingsBaseline:null,settingsCommitting:false,dashboard:null,hosts:[],prices:[],provider:'',sourceId:'',accountKey:'',model:'',days:1,cost:false,busy:false,settingsSaving:false,serverBusy:false,lastScan:0,lastMetrics:0,lastQuota:0,lastSuccessfulUpdate:0,quotaBusy:false,estimateBusy:false,quotaError:'',refreshState:{},savedAt:0,savedSection:'',saveError:'',dashboardRequest:0,panelOpen:false,panelPage:'agent'};
 function savePanelView() {
   if(!PANEL)return;
@@ -475,7 +475,7 @@ function estimateSummary(records, credits=false) {
 }
 function quotaCard(q) {
   const key=q.provider+':'+q.accountId, records=(state.dashboard?.quotaEstimates??[]).filter(e=>e.accountKey===key), credits=(state.dashboard?.creditEstimates??[]).filter(e=>e.accountKey===key), latest=AieyesUI.canonicalEstimates(records)[0], credit=AieyesUI.estimateEntries(credits,true)[0]?.record ?? credits[0];
-  const windowHTML=w=>`<div class="quota-window"><div class="between tiny"><span>${escapeHTML(w.name)}</span><strong style="color:${quotaColor(Number.isFinite(w.usedPercent)?resourcePercent(100-w.usedPercent):null)}">剩余 ${pct(Number.isFinite(w.usedPercent)?resourcePercent(100-w.usedPercent):null)}</strong></div>${resourceBar(Number.isFinite(w.usedPercent)?100-w.usedPercent:null,w.name+'剩余额度',true)}<div class="tiny muted quota-reset" data-reset-at="${w.resetsAt??0}" data-window-minutes="${w.windowMinutes??''}">${AieyesUI.quotaReset(w)}</div></div>`;
+  const windowHTML=w=>`<div class="quota-window"><div class="between tiny"><span>${escapeHTML(w.name)}</span><strong style="color:${quotaColor(Number.isFinite(w.usedPercent)?resourcePercent(100-w.usedPercent):null)}">剩余 ${pct(Number.isFinite(w.usedPercent)?resourcePercent(100-w.usedPercent):null)}</strong></div>${resourceBar(Number.isFinite(w.usedPercent)?100-w.usedPercent:null,w.name+'剩余额度',true)}<div class="tiny muted quota-reset" data-reset-at="${w.resetsAt??0}" data-window-minutes="${w.windowMinutes??''}" data-used-percent="${Number.isFinite(w.usedPercent)?w.usedPercent:''}">${AieyesUI.quotaReset(w)}</div></div>`;
   const collapsible=true;
   let expanded=true;try{const stored=localStorage.getItem('quota.expanded.v2.'+(PANEL?'panel.':'detail.')+key);if(collapsible&&stored!=null)expanded=stored==='true';}catch(_){}
 
@@ -535,30 +535,52 @@ function updateHostStatuses() {
     if(element.dataset.status!==status){element.dataset.status=status;element.querySelector('[data-host-status-label]').textContent=status;}
   }
 }
+function hostShows(host,key) { return host.details==null||host.details.includes(key); }
+function hostDevices(host,key,rows) {
+  if(!(host.metrics??Object.keys(groups)).includes(key))return [];
+  const selected=(host.devices??[]).filter(token=>token.startsWith(key+':'));
+  return (rows??[]).filter(d=>!selected.length||(key==='cpu'&&d.id==='cpu')||selected.includes(key+':'+d.id));
+}
+function usedCapacity(total,available) { return Number.isFinite(total)&&Number.isFinite(available)?total-available:null; }
+function uptimeText(seconds) {
+  if(!Number.isFinite(seconds)||seconds<0)return '—';
+  const minutes=Math.floor(seconds/60);
+  if(!Number.isSafeInteger(minutes))return '—';
+  return [minutes>=1440?Math.floor(minutes/1440)+' 天':null,minutes>=60?Math.floor(minutes%1440/60)+' 小时':null,minutes%60+' 分'].filter(v=>v!=null).join(' ');
+}
+function serverSummary(host,sample) {
+  const enabled=key=>(host.metrics??Object.keys(groups)).includes(key), memory=sample?.memory;
+  const gpus=hostDevices(host,'gpu',sample?.gpu), networks=hostDevices(host,'network',sample?.network);
+  const system=(enabled('cpu')?resourceRing('CPU',sample?.cpu?.find(c=>c.id==='cpu')?.utilization):'')+
+    (enabled('memory')?resourceRing('内存',capacityPercent(usedCapacity(memory?.total,memory?.available),memory?.total),`${bytes(usedCapacity(memory?.total,memory?.available))} / ${bytes(memory?.total)}`):'');
+  const gpuCards=gpus.map(g=>`<div class="server-gpu" data-gpu="${escapeHTML(g.id)}"><div class="server-gpu-title"><strong>GPU ${escapeHTML(g.id)}</strong><span>${escapeHTML(g.name??'—')}</span></div><div class="server-gpu-metrics">${resourceRing('利用率',g.utilization)}${hostShows(host,'gpuMemory')?resourceRing('显存',capacityPercent(g.memoryUsedMiB,g.memoryTotalMiB),`${bytes(g.memoryUsedMiB==null?null:g.memoryUsedMiB*1048576)} / ${bytes(g.memoryTotalMiB==null?null:g.memoryTotalMiB*1048576)}`):''}</div></div>`).join('');
+  return `<div class="server-summary-metrics">${system?`<div class="server-system-metrics">${system}</div>`:''}${gpuCards?`<div class="server-gpu-list">${gpuCards}</div>`:enabled('gpu')?`<span class="muted">GPU ${sample?.gpu?'无已选设备':'—'}</span>`:''}<div class="server-summary-facts">${hostShows(host,'uptime')?`<span data-host-uptime>连续运行 <strong>${uptimeText(sample?.uptime)}</strong></span>`:''}${hostShows(host,'networkTotals')&&enabled('network')?(networks.length?networks.map(n=>`<span class="server-network-total" data-network-total="${escapeHTML(n.id)}"><span>${escapeHTML(n.id)} 累计</span><strong>↓ ${bytes(n.rxBytes)} · ↑ ${bytes(n.txBytes)}</strong></span>`).join(''):`<span>累计流量 ${sample?.network?'无已选网卡':'—'}</span>`):''}<span class="server-sample-time muted">采样 ${date(sample?.timestamp)}${!host.enabled?' · 已暂停，保留旧读数':''}</span></div></div>`;
+}
 function renderServers() {
   const view=rememberView();
   $('#content').innerHTML = `<div class="section-head"><span class="muted">${state.settings.hosts.length} 台主机</span><select id="server-filter" aria-label="服务器筛选">${[['all','全部'],['errors','异常'],['paused','已暂停']].map(([key,label])=>option(key,label,state.serverFilter??'all')).join('')}</select><button id="sample" title="立即采样所有已启用的服务器">刷新服务器</button></div>${state.settings.hosts.filter(h=>!state.serverFilter||state.serverFilter==='all'||(state.serverFilter==='paused'?!h.enabled:h.enabled&&hostStatus(h,state.hosts.find(r=>r.id===h.id))!=='正常')).map(h=>{
-    const result=state.hosts.find(r=>r.id===h.id),s=result?.sample,cpu=s?.cpu?.find(c=>c.id==='cpu'),status=hostStatus(h,result);
-    return `<details class="card server-card" data-agent-detail="host:${escapeHTML(h.id)}"><summary class="server-summary"><div class="between"><div><h2 style="margin:0">${escapeHTML(h.name||h.target)}</h2><div class="sub">${escapeHTML(h.target)}</div></div><button type="button" class="host-status" data-host-status="${escapeHTML(h.id)}" data-status="${status}"><i aria-hidden="true"></i><span data-host-status-label>${status}</span></button></div><div class="server-summary-metrics">${(h.metrics??Object.keys(groups)).includes('cpu')?'<span>CPU <strong>'+pct(cpu?.utilization)+'</strong></span>':''}${(h.metrics??Object.keys(groups)).includes('memory')?'<span>内存 <strong>'+pct(s?.memory?capacityPercent(s.memory.total-s.memory.available,s.memory.total):null)+'</strong></span>':''}${(h.metrics??Object.keys(groups)).includes('gpu')?'<span>GPU <strong>'+pct(s?.gpu?.some(g=>g.utilization!=null)?Math.max(...s.gpu.flatMap(g=>g.utilization==null?[]:[g.utilization])):null)+'</strong> / '+(s?.gpu?.length??0)+' 卡</span>':''}<span class="muted">采样 ${date(s?.timestamp)}${!h.enabled?' · 已暂停，保留旧读数':''}</span></div></summary>${s ? `<div class="server-gauges">${s.cpu?resourceRing('CPU',cpu?.utilization):''}${s.memory?resourceRing('内存',capacityPercent(s.memory.total-s.memory.available,s.memory.total),`${bytes(s.memory.total-s.memory.available)} / ${bytes(s.memory.total)}`):''}${(s.gpu??[]).map(g=>resourceRing(`GPU ${g.id}`,g.utilization,g.name??'')).join('')}</div>${Object.entries(groups).filter(([key])=>s[key]).map(([key,label])=>serverGroup(key,label,s[key],h)).join('')}<div class="between tiny muted"><span>负载 ${s.load.map(n=>n.toFixed(2)).join(' / ')}</span><span>${date(s.timestamp)}</span></div>${Object.keys(s.errors??{}).map(k=>`<p class="error">${groups[k]??escapeHTML(k)} · 采集失败</p>`).join('')}`:''}${result?.error?`<p class="error">${escapeHTML(result.error)}</p>`:''}</details>`;
+    const result=state.hosts.find(r=>r.id===h.id),s=result?.sample,status=hostStatus(h,result);
+    return `<details class="card server-card" data-agent-detail="host:${escapeHTML(h.id)}"><summary class="server-summary"><div class="between server-heading"><div><h2 style="margin:0">${escapeHTML(h.name||h.target)}</h2><div class="sub">${escapeHTML(h.target)}</div></div><button type="button" class="host-status" data-host-status="${escapeHTML(h.id)}" data-status="${status}"><i aria-hidden="true"></i><span data-host-status-label>${status}</span></button></div>${serverSummary(h,s)}</summary>${s ? `${Object.entries(groups).filter(([key])=>(h.metrics??Object.keys(groups)).includes(key)&&s[key]).map(([key,label])=>serverGroup(key,label,key==='memory'?s[key]:hostDevices(h,key,s[key]),h)).join('')}<div class="tiny muted">负载 ${(s.load??[]).map(n=>n.toFixed(2)).join(' / ')}</div>${Object.keys(s.errors??{}).filter(k=>(h.metrics??Object.keys(groups)).includes(k)).map(k=>`<p class="error">${groups[k]??escapeHTML(k)} · 采集失败</p>`).join('')}`:''}${result?.error?`<p class="error">${escapeHTML(result.error)}</p>`:''}</details>`;
   }).join('')||'<div class="card empty"><button id="add-first-host" class="primary" title="新建第一台服务器">添加服务器</button></div>'}`;
   restoreView(view);
   $('#sample').onclick=sample;$('#server-filter').onchange=e=>{state.serverFilter=e.target.value;savePanelView();renderServers();};updateHostStatuses();
   bindSetup();
 }
 function serverGroup(key,label,value,host) {
-  const show=key=>host.details==null||host.details.includes(key);
+  const show=key=>hostShows(host,key);
   const row=(name,value)=>`<div class="metric-row"><span>${escapeHTML(name)}</span><strong>${value}</strong></div>`;
   const meter=(name,value,percent)=>row(name,value)+resourceBar(percent,name);
   let content='';
-  if(key==='memory')content=row('可用',bytes(value.available))+(show('memoryCache')?row('缓存 / Buffer',`${bytes(value.cached)} / ${bytes(value.buffers)}`):'')+(show('swap')?meter('Swap',`${bytes(value.swapTotal-value.swapFree)} / ${bytes(value.swapTotal)}`,capacityPercent(value.swapTotal-value.swapFree,value.swapTotal)):'');
+  if(key==='memory')content=row('可用',bytes(value.available))+(show('memoryCache')?row('缓存 / Buffer',`${bytes(value.cached)} / ${bytes(value.buffers)}`):'')+(show('swap')?meter('Swap',`${bytes(usedCapacity(value.swapTotal,value.swapFree))} / ${bytes(value.swapTotal)}`,capacityPercent(usedCapacity(value.swapTotal,value.swapFree),value.swapTotal)):'');
   else content=value.map(d=>{
-    if(key==='cpu')return meter(d.id,pct(resourcePercent(d.utilization)),d.utilization)+(show('cpuTimes')?row('user / system',`${pct(d.userPercent)} / ${pct(d.systemPercent)}`)+row('iowait / steal',`${pct(d.iowaitPercent)} / ${pct(d.stealPercent)}`):'');
-    if(key==='gpu')return meter(d.name??`GPU ${d.id}`,pct(resourcePercent(d.utilization)),d.utilization)+(show('gpuMemory')?meter('显存',`${bytes(d.memoryUsedMiB==null?null:d.memoryUsedMiB*1048576)} / ${bytes(d.memoryTotalMiB==null?null:d.memoryTotalMiB*1048576)}`,capacityPercent(d.memoryUsedMiB,d.memoryTotalMiB)):'')+(show('gpuThermals')?row('温度 / 功耗',`${d.temperature==null?'—':d.temperature+'°C'} / ${d.powerWatts==null?'—':d.powerWatts+' W'}`):'');
-    if(key==='filesystems')return meter(d.id,`${bytes(d.used)} / ${bytes(d.total)}`,capacityPercent(d.used,d.total))+(show('fsAvailable')?row('可用',bytes(d.available)):'')+(show('fsType')?row(d.device??'',escapeHTML(d.type??'')):'')+(show('inodes')?meter('inode',pct(capacityPercent(d.inodes-d.inodesFree,d.inodes)),capacityPercent(d.inodes-d.inodesFree,d.inodes)):'');
+    if(key==='cpu')return (d.id==='cpu'?'':meter(d.id,pct(resourcePercent(d.utilization)),d.utilization))+(show('cpuTimes')?row(d.id+' user / system',`${pct(d.userPercent)} / ${pct(d.systemPercent)}`)+row('iowait / steal',`${pct(d.iowaitPercent)} / ${pct(d.stealPercent)}`):'');
+    if(key==='gpu')return show('gpuThermals')?row(`GPU ${d.id} 温度 / 功耗`,`${d.temperature==null?'—':d.temperature+'°C'} / ${d.powerWatts==null?'—':d.powerWatts+' W'}`):'';
+    if(key==='filesystems')return meter(d.id,`${bytes(d.used)} / ${bytes(d.total)}`,capacityPercent(d.used,d.total))+(show('fsAvailable')?row('可用',bytes(d.available)):'')+(show('fsType')?row(d.device??'',escapeHTML(d.type??'')):'')+(show('inodes')?meter('inode',pct(capacityPercent(usedCapacity(d.inodes,d.inodesFree),d.inodes)),capacityPercent(usedCapacity(d.inodes,d.inodesFree),d.inodes)):'');
     if(key==='disk')return row(d.id,`读 ${speed(d.readBytesPerSecond)} · 写 ${speed(d.writeBytesPerSecond)}`)+(show('diskIops')?row('IOPS 读 / 写',`${d.readIops==null?'—':compact(d.readIops)} / ${d.writeIops==null?'—':compact(d.writeIops)}`):'')+(show('diskBusy')?meter('忙碌率',pct(resourcePercent(d.busyMsPerSecond==null?null:d.busyMsPerSecond/10)),d.busyMsPerSecond==null?null:d.busyMsPerSecond/10):'');
-    return row(d.id,`↓ ${speed(d.rxBytesPerSecond)} · ↑ ${speed(d.txBytesPerSecond)}`)+(show('networkTotals')?row('累计接收 / 发送',`${bytes(d.rxBytes)} / ${bytes(d.txBytes)}`):'')+(show('networkErrors')?row('错误 / 丢包',`${compact((d.rxErrors??0)+(d.txErrors??0))} / ${compact((d.rxDrops??0)+(d.txDrops??0))}`):'');
+    return row(d.id,`↓ ${speed(d.rxBytesPerSecond)} · ↑ ${speed(d.txBytesPerSecond)}`)+(show('networkErrors')?row('错误 / 丢包',`${compact((d.rxErrors??0)+(d.txErrors??0))} / ${compact((d.rxDrops??0)+(d.txDrops??0))}`):'');
   }).join('');
-  return `<details class="metric-section" data-metric="${escapeHTML(host.id+':'+key)}"><summary>${label}</summary><div class="metric-detail">${content}</div></details>`;
+  if(!content)return '';
+  return `<details class="metric-section" data-metric="${escapeHTML(host.id+':'+key)}"><summary>${label}明细</summary><div class="metric-detail">${content}</div></details>`;
 }
 function field(name,label,value='',placeholder='',type='text') {return `<div class="form-row"><label for="field-${name}">${label}</label><input id="field-${name}" name="${name}" type="${type}" value="${escapeHTML(value)}" placeholder="${escapeHTML(placeholder)}"></div>`;}
 function select(name,label,entries,current) {return `<div class="form-row"><label for="field-${name}">${label}</label><select id="field-${name}" name="${name}">${entries.map(([k,v])=>option(k,v,current)).join('')}</select></div>`;}
@@ -909,7 +931,7 @@ function bindHostSelectors(item) {
   const metrics=selectors.mount($('#metric-select'),{title:'采集项目',options:()=>Object.entries(groups).map(([id,label])=>({id,label})),selected:()=>item.metrics,
     onChange:values=>{item.metrics=values;deviceControls.forEach(c=>c.refresh());details.refresh();}});
   // Disabled categories retain their saved detail values; only enabled categories are editable.
-  const details=selectors.mount($('#detail-select'),{title:'显示细分项',options:()=>Object.entries(detailOptions).filter(([id])=>item.metrics.includes(detailGroup[id])).map(([id,label])=>({id,label})),selected:()=>item.details,disabled:()=>!item.metrics.length,
+  const details=selectors.mount($('#detail-select'),{title:'显示细分项',options:()=>Object.entries(detailOptions).filter(([id])=>id==='uptime'||item.metrics.includes(detailGroup[id])).map(([id,label])=>({id,label})),selected:()=>item.details,
     onChange:values=>{item.details=values;}});
   editorSelectors.push(metrics,details);redrawDevices();
   $('#field-devices').onchange=redrawDevices;
@@ -1030,7 +1052,7 @@ if(!PANEL)setInterval(()=>{
 },500);
 // Age visible samples even while an RPC is slow or the panel receives no new events.
 setInterval(updateHostStatuses,1000);
-function updateResetDisplays(now=Date.now()/1000) { for(const el of document.querySelectorAll('[data-reset-at]'))el.textContent=AieyesUI.quotaReset({resetsAt:Number(el.dataset.resetAt),windowMinutes:Number(el.dataset.windowMinutes)},now); }
+function updateResetDisplays(now=Date.now()/1000) { for(const el of document.querySelectorAll('[data-reset-at]'))el.textContent=AieyesUI.quotaReset({resetsAt:Number(el.dataset.resetAt),windowMinutes:Number(el.dataset.windowMinutes),usedPercent:el.dataset.usedPercent?.trim()?Number(el.dataset.usedPercent):undefined},now); }
 setInterval(()=>{updateResetDisplays();updateActivity();},30000);
 function estimateValues(e){
   const rows=[['本段 5h API 等价值',e.fiveHourValue],['7d 推算 · 同期消耗比例',e.weeklyDirectValue],['7d 推算 · 近期容量倍率',e.weeklyRatioValue]];

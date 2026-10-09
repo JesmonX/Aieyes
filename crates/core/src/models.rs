@@ -168,6 +168,7 @@ impl Default for Host {
                 .collect(),
             devices: vec![],
             details: [
+                "uptime",
                 "cpuTimes",
                 "memoryCache",
                 "swap",

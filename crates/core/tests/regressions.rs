@@ -1,6 +1,23 @@
 use aieyes_core::{import, models::*, store::Store, usage};
 use serde_json::json;
 
+#[test]
+fn host_uptime_default_preserves_explicit_legacy_details() {
+    assert!(Host::default().details.contains(&"uptime".into()));
+    let legacy: Host = serde_json::from_value(json!({"id":"legacy"})).unwrap();
+    assert!(legacy.details.contains(&"uptime".into()));
+    for details in [json!([]), json!(["gpuMemory", "networkTotals"])] {
+        let host: Host =
+            serde_json::from_value(json!({"id":"legacy", "details":details, "metrics":[]}))
+                .unwrap();
+        assert_eq!(serde_json::to_value(&host).unwrap()["details"], details);
+        assert!(!host.details.contains(&"uptime".into()));
+    }
+    let host: Host = serde_json::from_value(json!({"metrics":[], "details":["uptime"]})).unwrap();
+    assert_eq!(host.details, ["uptime"]);
+    assert!(host.metrics.is_empty());
+}
+
 fn source(id: &str) -> Source {
     Source {
         id: id.into(),

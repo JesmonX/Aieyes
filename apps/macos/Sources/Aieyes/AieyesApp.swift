@@ -374,6 +374,19 @@ import Combine
             }
             for dark in [false, true] {
                 try await capture(RootView(model: model, compact: false, page: "servers"), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("servers-\(dark ? "dark" : "light").png"))
+                if let host = model.settings.hosts.first {
+                    for compact in [false, true] {
+                        let key = "server.expanded." + (compact ? "panel." : "detail.") + host.id
+                        let previous = UserDefaults.standard.object(forKey: key)
+                        defer { if let previous { UserDefaults.standard.set(previous, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) } }
+                        for expanded in [false, true] {
+                            UserDefaults.standard.set(expanded, forKey: key)
+                            let card = ServerCard(host: host, result: model.hosts.first { $0.id == host.id }, compact: compact)
+                            let name = "server-" + (compact ? "panel" : "minimum") + (expanded ? "-expanded" : "-folded") + (dark ? "-dark" : "-light") + ".png"
+                            try await capture(card, size: NSSize(width: compact ? 360 : 620, height: expanded ? 900 : 640), dark: dark, to: root.appendingPathComponent(name))
+                        }
+                    }
+                }
                 model.panelHeight = 540
                 try await capture(RootView(model: model), size: NSSize(width: 450, height: 540), dark: dark, to: root.appendingPathComponent("low-panel-\(dark ? "dark" : "light").png"))
                 model.panelHeight = 720
@@ -423,6 +436,8 @@ import Combine
                 var dormant = quota
                 for index in dormant.windows.indices { dormant.windows[index].resetsAt = Date().timeIntervalSince1970 - 86400 }
                 try await capture(QuotaCard(quota: dormant), size: NSSize(width: 414, height: 450), dark: false, to: root.appendingPathComponent("quota-dormant-reset.png"))
+                dormant.windows = [QuotaWindow(name: "5h", usedPercent: 0, windowMinutes: 300, resetsAt: Date().timeIntervalSince1970 + 7200), QuotaWindow(name: "7d", usedPercent: 20, windowMinutes: 10080, resetsAt: Date().timeIntervalSince1970 + 172800)]
+                try await capture(QuotaCard(quota: dormant), size: NSSize(width: 414, height: 450), dark: false, to: root.appendingPathComponent("quota-full-window-reset.png"))
             }
             try await capture(QuotaOrderView(model: model), size: NSSize(width: 488, height: 430), dark: false, to: root.appendingPathComponent("quota-order.png"))
             for provider in ["agy", "deepseek"] {

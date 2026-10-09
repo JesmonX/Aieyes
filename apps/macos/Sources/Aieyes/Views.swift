@@ -787,74 +787,7 @@ struct ServerCard: View {
     var body: some View {
         Surface(spacing: 8, padding: 12) {
             DisclosureGroup(isExpanded: $expanded) {
-                if let sample = result?.sample {
-                    VStack(alignment: .leading, spacing: 16) {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 14)], spacing: 14) {
-                            if sample.cpu != nil { ResourceRing(title: "CPU", percent: sample.cpu?.first(where: { $0.id == "cpu" })?.utilization, compact: compact) }
-                            if let memory = sample.memory { ResourceRing(title: "内存", percent: memory.total > 0 ? (memory.total - memory.available) / memory.total * 100 : nil, compact: compact) }
-                            ForEach(sample.gpu ?? []) { gpu in ResourceRing(title: "GPU " + gpu.id, percent: gpu.utilization, compact: compact) }
-                        }
-
-                        if let cpus = sample.cpu {
-                            DisclosureGroup {
-                                ForEach(cpus.filter { $0.id != "cpu" }) { cpu in
-                                    VStack(spacing: 4) {
-                                        metricRow(cpu.id, Format.percent(cpu.utilization))
-                                        ResourceBar(percent: cpu.utilization)
-                                    }.padding(.vertical, 3)
-                                }
-                                if host.shows("cpuTimes"), let cpu = cpus.first(where: { $0.id == "cpu" }) { metricRow("user / system", "\(Format.percent(cpu.userPercent)) / \(Format.percent(cpu.systemPercent))"); metricRow("iowait / steal", "\(Format.percent(cpu.iowaitPercent)) / \(Format.percent(cpu.stealPercent))") }
-                            } label: { MetricHeading(icon: "cpu", title: "CPU", value: Format.percent(cpus.first(where: { $0.id == "cpu" })?.utilization), percent: cpus.first(where: { $0.id == "cpu" })?.utilization) }
-                        }
-                        if let m = sample.memory {
-                            DisclosureGroup {
-                                metricRow("可用", Format.bytes(m.available)); if host.shows("memoryCache") { metricRow("缓存 / Buffer", "\(Format.bytes(m.cached)) / \(Format.bytes(m.buffers))") }
-                                if host.shows("swap") { metricRow("Swap", "\(Format.bytes(m.swapTotal - m.swapFree)) / \(Format.bytes(m.swapTotal))"); ResourceBar(percent: m.swapTotal > 0 ? (m.swapTotal - m.swapFree) / m.swapTotal * 100 : nil) }
-                            } label: { MetricHeading(icon: "memorychip", title: "内存", value: "\(Format.bytes(m.total - m.available)) / \(Format.bytes(m.total))", percent: m.total > 0 ? (m.total - m.available) / m.total * 100 : nil) }
-                        }
-                        if let gpus = sample.gpu {
-                            ForEach(gpus) { gpu in
-                                DisclosureGroup {
-                                    metricRow(gpu.name ?? "GPU \(gpu.id)", "")
-                                    if host.shows("gpuMemory") {
-                                        metricRow("显存", "\(Format.bytes(gpu.memoryUsedMiB.map { $0 * 1048576 })) / \(Format.bytes(gpu.memoryTotalMiB.map { $0 * 1048576 }))")
-                                        if let used = gpu.memoryUsedMiB, let total = gpu.memoryTotalMiB, total > 0 { ResourceBar(percent: used / total * 100) }
-                                    }
-                                    if host.shows("gpuThermals") { metricRow("温度 / 功耗", "\(gpu.temperature.map { String(format: "%.0f°C", $0) } ?? "—") / \(gpu.powerWatts.map { String(format: "%.1f W", $0) } ?? "—")") }
-                                } label: { MetricHeading(icon: "rectangle.3.group", title: "GPU \(gpu.id)", value: Format.percent(gpu.utilization), percent: gpu.utilization) }
-                            }
-                        }
-                        if let filesystems = sample.filesystems {
-                            DisclosureGroup {
-                                ForEach(filesystems) { fs in VStack(alignment: .leading, spacing: 4) {
-                                    metricRow(fs.id, "\(Format.bytes(fs.used)) / \(Format.bytes(fs.total))")
-                                    if let total = fs.total, let used = fs.used, total > 0 { ResourceBar(percent: used / total * 100) }
-                                    if host.shows("fsAvailable") { metricRow("可用", Format.bytes(fs.available)) }
-                                    if host.shows("fsType") { metricRow(fs.device ?? "", fs.type ?? "") }
-                                    if host.shows("inodes"), let total = fs.inodes, let free = fs.inodesFree, total > 0 { metricRow("inode", Format.percent((total - free) / total * 100)) }
-                                }.padding(.vertical, 4) }
-                            } label: { MetricHeading(icon: "internaldrive", title: "文件系统", value: "\(filesystems.count) 个挂载点") }
-                        }
-                        if let disks = sample.disk {
-                            DisclosureGroup {
-                                ForEach(disks) { disk in VStack(spacing: 4) { metricRow(disk.id, "读 \(Format.speed(disk.readBytesPerSecond))"); metricRow("", "写 \(Format.speed(disk.writeBytesPerSecond))"); if host.shows("diskIops") { metricRow("IOPS 读 / 写", "\(disk.readIops.map(Format.compact) ?? "—") / \(disk.writeIops.map(Format.compact) ?? "—")") }; if host.shows("diskBusy") { metricRow("忙碌率", Format.percent(disk.busyMsPerSecond.map { min(100, max(0, $0 / 10)) })); ResourceBar(percent: disk.busyMsPerSecond.map { $0 / 10 }) } }.padding(.vertical, 3) }
-                            } label: { MetricHeading(icon: "arrow.left.arrow.right", title: "磁盘 I/O", value: "\(disks.count) 个设备") }
-                        }
-                        if let networks = sample.network {
-                            DisclosureGroup {
-                                ForEach(networks) { net in VStack(spacing: 4) {
-                                    metricRow(net.id, "↓ \(Format.speed(net.rxBytesPerSecond))")
-                                    metricRow("", "↑ \(Format.speed(net.txBytesPerSecond))")
-                                    if host.shows("networkTotals") { metricRow("累计接收 / 发送", "\(Format.bytes(net.rxBytes)) / \(Format.bytes(net.txBytes))") }
-                                    if host.shows("networkErrors") { metricRow("错误 / 丢包", "\(Format.compact((net.rxErrors ?? 0) + (net.txErrors ?? 0))) / \(Format.compact((net.rxDrops ?? 0) + (net.txDrops ?? 0)))") }
-                                }.padding(.vertical, 3) }
-                            } label: { MetricHeading(icon: "network", title: "网络", value: "\(networks.count) 个网卡") }
-                        }
-                        ForEach(sample.errors.keys.sorted(), id: \.self) { key in metricRow(["gpu":"GPU", "cpu":"CPU", "memory":"内存", "filesystems":"文件系统", "disk":"磁盘 I/O", "network":"网络"][key] ?? key, "采集失败") }
-                        HStack { Text("负载 " + sample.load.map { String(format: "%.2f", $0) }.joined(separator: " / ")); Spacer(); SurfaceTimeline(interval: 1) { context in Text("" + Date(timeIntervalSince1970: sample.timestamp).formatted(.dateTime.hour().minute().second()) + (context.date.timeIntervalSince1970 - sample.timestamp > 10 ? " · 数据已延迟" : "")) } }.font(AppFont.secondary).foregroundStyle(.secondary)
-                    }.padding(.top, 14)
-                } else if host.enabled { Text(result?.error == nil ? "等待首次采样" : "连接失败").font(AppFont.secondary).foregroundStyle(.secondary).padding(.top, 10) }
-                if let error = result?.error { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn).padding(.top, 6) }
+                EmptyView()
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "server.rack").font(.system(size: 20)).foregroundStyle(Palette.accent)
@@ -870,18 +803,75 @@ struct ServerCard: View {
 
                 }
             }
-            if !expanded {
-                HStack(spacing: 14) {
-                    if host.metrics.contains("cpu") { compactMetric("CPU", percent: result?.sample?.cpu?.first(where: { $0.id == "cpu" })?.utilization) }
-                    if host.metrics.contains("memory") { compactMetric("内存", percent: result?.sample?.memory.flatMap { $0.total > 0 ? ($0.total - $0.available) / $0.total * 100 : nil }) }
-                    if host.metrics.contains("gpu") { compactMetric("GPU / \(result?.sample?.gpu?.count ?? 0) 卡", percent: result?.sample?.gpu?.compactMap(\.utilization).max()) }
-                }.opacity(host.enabled ? 1 : 0.65)
-                HStack {
-                    Text("采样于 " + Format.time(result?.sample?.timestamp ?? 0) + (host.enabled ? "" : " · 已暂停，保留旧读数"))
-                    Spacer()
-                    if host.enabled { Button("刷新", action: onRefresh).accessibilityLabel("刷新服务器 " + (host.name.isEmpty ? host.target : host.name)) }
-                }.font(AppFont.secondary).foregroundStyle(.secondary)
+            ServerResourceSummary(host: host, sample: result?.sample)
+                .opacity(host.enabled ? 1 : 0.65)
+            if expanded {
+                if let sample = result?.sample {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if host.metrics.contains("cpu"), let rows = sample.cpu {
+                            let cpus = host.selectedDevices("cpu", rows)
+                            DisclosureGroup {
+                                ForEach(cpus.filter { $0.id != "cpu" }) { cpu in
+                                    VStack(spacing: 4) {
+                                        metricRow(cpu.id, Format.percent(cpu.utilization))
+                                        ResourceBar(percent: cpu.utilization)
+                                    }.padding(.vertical, 3)
+                                }
+                                if host.shows("cpuTimes"), let cpu = cpus.first(where: { $0.id == "cpu" }) { metricRow("user / system", "\(Format.percent(cpu.userPercent)) / \(Format.percent(cpu.systemPercent))"); metricRow("iowait / steal", "\(Format.percent(cpu.iowaitPercent)) / \(Format.percent(cpu.stealPercent))") }
+                            } label: { MetricHeading(icon: "cpu", title: "CPU 明细", value: "") }
+                        }
+                        if host.metrics.contains("memory"), let m = sample.memory {
+                            DisclosureGroup {
+                                metricRow("可用", Format.bytes(m.available)); if host.shows("memoryCache") { metricRow("缓存 / Buffer", "\(Format.bytes(m.cached)) / \(Format.bytes(m.buffers))") }
+                                if host.shows("swap") { metricRow("Swap", "\(Format.bytes(m.swapUsed)) / \(Format.bytes(m.swapTotal))"); ResourceBar(percent: Format.capacityPercent(m.swapUsed, m.swapTotal)) }
+                            } label: { MetricHeading(icon: "memorychip", title: "内存明细", value: "") }
+                        }
+                        if host.shows("gpuThermals") {
+                            ForEach(host.selectedDevices("gpu", sample.gpu)) { gpu in
+                                DisclosureGroup {
+                                    metricRow("温度 / 功耗", "\(gpu.temperature.map { String(format: "%.0f°C", $0) } ?? "—") / \(gpu.powerWatts.map { String(format: "%.1f W", $0) } ?? "—")")
+                                } label: { MetricHeading(icon: "rectangle.3.group", title: "GPU \(gpu.id) 明细", value: "") }
+                            }
+                        }
+                        if host.metrics.contains("filesystems"), let rows = sample.filesystems {
+                            let filesystems = host.selectedDevices("filesystems", rows)
+                            DisclosureGroup {
+                                ForEach(filesystems) { fs in VStack(alignment: .leading, spacing: 4) {
+                                    metricRow(fs.id, "\(Format.bytes(fs.used)) / \(Format.bytes(fs.total))")
+                                    if let total = fs.total, let used = fs.used, total > 0 { ResourceBar(percent: used / total * 100) }
+                                    if host.shows("fsAvailable") { metricRow("可用", Format.bytes(fs.available)) }
+                                    if host.shows("fsType") { metricRow(fs.device ?? "", fs.type ?? "") }
+                                    if host.shows("inodes"), let total = fs.inodes, let free = fs.inodesFree, total > 0 { metricRow("inode", Format.percent((total - free) / total * 100)) }
+                                }.padding(.vertical, 4) }
+                            } label: { MetricHeading(icon: "internaldrive", title: "文件系统", value: "\(filesystems.count) 个挂载点") }
+                        }
+                        if host.metrics.contains("disk"), let rows = sample.disk {
+                            let disks = host.selectedDevices("disk", rows)
+                            DisclosureGroup {
+                                ForEach(disks) { disk in VStack(spacing: 4) { metricRow(disk.id, "读 \(Format.speed(disk.readBytesPerSecond))"); metricRow("", "写 \(Format.speed(disk.writeBytesPerSecond))"); if host.shows("diskIops") { metricRow("IOPS 读 / 写", "\(disk.readIops.map(Format.compact) ?? "—") / \(disk.writeIops.map(Format.compact) ?? "—")") }; if host.shows("diskBusy") { metricRow("忙碌率", Format.percent(disk.busyMsPerSecond.map { min(100, max(0, $0 / 10)) })); ResourceBar(percent: disk.busyMsPerSecond.map { $0 / 10 }) } }.padding(.vertical, 3) }
+                            } label: { MetricHeading(icon: "arrow.left.arrow.right", title: "磁盘 I/O", value: "\(disks.count) 个设备") }
+                        }
+                        if host.metrics.contains("network"), let rows = sample.network {
+                            let networks = host.selectedDevices("network", rows)
+                            DisclosureGroup {
+                                ForEach(networks) { net in VStack(spacing: 4) {
+                                    metricRow(net.id, "↓ \(Format.speed(net.rxBytesPerSecond))")
+                                    metricRow("", "↑ \(Format.speed(net.txBytesPerSecond))")
+                                    if host.shows("networkErrors") { metricRow("错误 / 丢包", "\(Format.compact((net.rxErrors ?? 0) + (net.txErrors ?? 0))) / \(Format.compact((net.rxDrops ?? 0) + (net.txDrops ?? 0)))") }
+                                }.padding(.vertical, 3) }
+                            } label: { MetricHeading(icon: "network", title: "网络", value: "\(networks.count) 个网卡") }
+                        }
+                        ForEach(sample.errors.keys.filter { host.metrics.contains($0) }.sorted(), id: \.self) { key in metricRow(["gpu":"GPU", "cpu":"CPU", "memory":"内存", "filesystems":"文件系统", "disk":"磁盘 I/O", "network":"网络"][key] ?? key, "采集失败") }
+                        HStack { Text("负载 " + sample.load.map { String(format: "%.2f", $0) }.joined(separator: " / ")); Spacer(); SurfaceTimeline(interval: 1) { context in Text("" + Date(timeIntervalSince1970: sample.timestamp).formatted(.dateTime.hour().minute().second()) + (context.date.timeIntervalSince1970 - sample.timestamp > 10 ? " · 数据已延迟" : "")) } }.font(AppFont.secondary).foregroundStyle(.secondary)
+                    }.padding(.top, 14)
+                } else if host.enabled { Text(result?.error == nil ? "等待首次采样" : "连接失败").font(AppFont.secondary).foregroundStyle(.secondary).padding(.top, 10) }
+                if let error = result?.error { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn).padding(.top, 6) }
             }
+            HStack {
+                Text("采样于 " + Format.time(result?.sample?.timestamp ?? 0) + (host.enabled ? "" : " · 已暂停，保留旧读数"))
+                Spacer()
+                if host.enabled { Button("刷新", action: onRefresh).accessibilityLabel("刷新服务器 " + (host.name.isEmpty ? host.target : host.name)) }
+            }.font(AppFont.secondary).foregroundStyle(.secondary)
         }
     }
     private func status(at date: Date) -> String {
@@ -891,36 +881,97 @@ struct ServerCard: View {
         if date.timeIntervalSince1970 - sample.timestamp > 10 { return "数据延迟" }
         return sample.errors.isEmpty ? "正常" : "部分采集失败"
     }
-    private func compactMetric(_ title: String, percent: Double?) -> some View {
-        HStack(spacing: 6) { Text(title).foregroundStyle(.secondary); Text(Format.percent(percent)).monospacedDigit() }
-            .font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading)
-    }
     private func metricRow(_ key: String, _ value: String) -> some View { HStack { Text(key).lineLimit(1).truncationMode(.middle); Spacer(minLength: 8); Text(value).monospacedDigit() }.font(AppFont.secondary).foregroundStyle(.secondary).padding(.vertical, 2) }
 }
 struct MetricHeading: View {
     var icon: String, title: String, value: String
-    var percent: Double? = nil
     var body: some View {
-        VStack(spacing: 7) {
-            HStack(spacing: 8) { Image(systemName: icon).frame(width: 15).foregroundStyle(.secondary); Text(title); Spacer(); Text(value).monospacedDigit().foregroundStyle(.secondary) }.font(.system(size: 14, weight: .medium))
-            if let percent { ResourceBar(percent: percent) }
-        }
+        HStack(spacing: 8) { Image(systemName: icon).frame(width: 15).foregroundStyle(.secondary); Text(title); Spacer(); Text(value).monospacedDigit().foregroundStyle(.secondary) }.font(.system(size: 14, weight: .medium))
+    }
+}
+
+struct ServerResourceSummary: View {
+    var host: Host, sample: MetricSample?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), alignment: .leading)], alignment: .leading, spacing: 10) {
+                if host.metrics.contains("cpu") {
+                    ResourceRing(title: "CPU", percent: sample?.cpu?.first { $0.id == "cpu" }?.utilization, compact: true)
+                }
+                if host.metrics.contains("memory") {
+                    ResourceRing(title: "内存", percent: Format.capacityPercent(sample?.memory?.used, sample?.memory?.total), compact: true,
+                                 detail: "\(Format.bytes(sample?.memory?.used)) / \(Format.bytes(sample?.memory?.total))")
+                }
+            }
+            if host.metrics.contains("gpu") {
+                let gpus = host.selectedDevices("gpu", sample?.gpu)
+                if gpus.isEmpty { Text(sample?.gpu == nil ? "GPU —" : "GPU 无已选设备").font(AppFont.secondary).foregroundStyle(.secondary) }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 290), alignment: .leading)], alignment: .leading, spacing: 10) {
+                    ForEach(gpus) { gpu in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text("GPU " + gpu.id).fontWeight(.medium).fixedSize()
+                                Text(gpu.name ?? "—").foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            }.font(AppFont.secondary)
+                            HStack(alignment: .top, spacing: 10) {
+                                ResourceRing(title: "利用率", percent: gpu.utilization, compact: true)
+                                if host.shows("gpuMemory") {
+                                    ResourceRing(title: "显存", percent: Format.capacityPercent(gpu.memoryUsedMiB, gpu.memoryTotalMiB), compact: true,
+                                                 detail: "\(Format.bytes(gpu.memoryUsedMiB.map { $0 * 1048576 })) / \(Format.bytes(gpu.memoryTotalMiB.map { $0 * 1048576 }))")
+                                }
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            if host.shows("uptime") {
+                Text("连续运行 " + Format.uptime(sample?.uptime)).font(AppFont.secondary).monospacedDigit().foregroundStyle(.secondary)
+            }
+            if host.shows("networkTotals"), host.metrics.contains("network") {
+                let networks = host.selectedDevices("network", sample?.network)
+                if networks.isEmpty { Text(sample?.network == nil ? "累计流量 —" : "累计流量 无已选网卡").font(AppFont.secondary).foregroundStyle(.secondary) }
+                ForEach(networks) { net in
+                    ViewThatFits(in: .horizontal) {
+                        HStack { Text(net.id + " 累计"); Text("↓ \(Format.bytes(net.rxBytes)) · ↑ \(Format.bytes(net.txBytes))").monospacedDigit() }
+                        VStack(alignment: .leading, spacing: 3) { Text(net.id + " 累计"); Text("↓ \(Format.bytes(net.rxBytes)) · ↑ \(Format.bytes(net.txBytes))").monospacedDigit() }
+                    }.font(AppFont.secondary).foregroundStyle(.secondary)
+                }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 struct ResourceRing: View {
     var title: String, percent: Double?
     var compact = false
+    var detail = ""
     private var value: Double? { percent.flatMap { $0.isFinite ? min(100, max(0, $0)) : nil } }
+    private var accessibilityText: String {
+        var text = title + " " + Format.percent(value)
+        if !detail.isEmpty { text += "，" + detail }
+        if let value, value >= 90 { text += "，高负载" }
+        return text
+    }
+    private var ring: some View {
+        ZStack {
+            Circle().stroke(.primary.opacity(0.07), lineWidth: 5)
+            if let value, value > 0 {
+                Circle().trim(from: 0, to: value / 100)
+                    .stroke(value >= 90 ? Palette.danger : value >= 70 ? Palette.warn : Palette.accent, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            Text(Format.percent(value)).font(.system(size: compact ? 10 : 14, weight: .semibold)).monospacedDigit()
+        }.frame(width: compact ? 48 : 72, height: compact ? 48 : 72)
+    }
     var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle().stroke(.primary.opacity(0.07), lineWidth: 7)
-                if let value, value > 0 { Circle().trim(from: 0, to: value / 100).stroke(value >= 90 ? Palette.danger : value >= 70 ? Palette.warn : Palette.accent, style: StrokeStyle(lineWidth: 7, lineCap: .round)).rotationEffect(.degrees(-90)) }
-                Text(Format.percent(value)).font(.system(size: 14, weight: .semibold)).monospacedDigit()
-            }.frame(width: compact ? 60 : 72, height: compact ? 60 : 72)
-            VStack(alignment: .leading, spacing: 3) { Text(title).font(.system(size: 14, weight: .medium)).lineLimit(2); if let value, value >= 90 { Text("高负载").font(AppFont.secondary).foregroundStyle(Palette.danger) } }
-        }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .ignore).accessibilityLabel(title + " " + Format.percent(value) + (value.map { $0 >= 90 } == true ? "，高负载" : ""))
+        HStack(spacing: 8) {
+            ring
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(AppFont.secondary).fontWeight(.medium)
+                if !detail.isEmpty { Text(detail).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                if let value, value >= 90 { Text("高负载").font(AppFont.secondary).foregroundStyle(Palette.danger) }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .ignore).accessibilityLabel(accessibilityText)
     }
 }
 

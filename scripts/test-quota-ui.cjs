@@ -3,7 +3,7 @@ const {discardEditor}=require('./ui-test-helpers.cjs');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
 function fixture(){
-  window.setInterval=()=>0;
+  window.quotaTimers=[];window.setInterval=(fn,ms)=>{quotaTimers.push({fn,ms});return quotaTimers.length;};
   const now=Math.floor(Date.now()/1000),tokens={input:0,output:0,cacheRead:0,cacheWrite:0};
   const summary={tokens,total:0,cost:0,pricedTokens:0,events:0};
   const win=(id,name,minutes,groupName)=>({id,name,windowMinutes:minutes,usedPercent:35,resetsAt:now+10000,groupName});
@@ -51,6 +51,26 @@ function fixture(){
      return {first,later,refreshed,unchanged:JSON.stringify(window)===original};
    });
    assert.match(resetCheck.first,/^7 天后重置 · \d{2}\/\d{2} \d{2}:\d{2}$/);assert.match(resetCheck.later,/^7 天后重置 · /);assert.notEqual(resetCheck.first,resetCheck.later);assert.match(resetCheck.refreshed,/^1 小时后重置 · \d{2}\/\d{2} \d{2}:\d{2}$/);assert(resetCheck.unchanged);
+   const fullWindowCheck=await page.evaluate(()=>{
+     const clock=Date.now,now=Math.floor(clock()/1000),q=state.dashboard.quotas.find(q=>q.provider==='codex'),saved=q.windows;
+     const nodes=()=>[...document.querySelectorAll('[data-quota="codex:c"] [data-reset-at]')];
+     try {
+       Date.now=()=>now*1000;
+       q.windows=[{name:'5h',usedPercent:0,windowMinutes:300,resetsAt:now+7200},{name:'7d',usedPercent:20,windowMinutes:10080,resetsAt:now+172800}];
+       const snapshot=JSON.stringify(q.windows);renderAgent();const initial=nodes().map(n=>n.textContent);
+       Date.now=()=>(now+3600)*1000;quotaTimers.find(t=>t.ms===30000).fn();const later=nodes().map(n=>n.textContent);
+       const unchanged=JSON.stringify(q.windows)===snapshot;
+       q.windows[0].usedPercent=0.001;renderAgent();const activated=nodes()[0].textContent;
+       q.windows[0].usedPercent=0;q.windows[1].usedPercent=0;renderAgent();const full=nodes().map(n=>n.textContent);
+       q.windows[0].usedPercent=null;renderAgent();quotaTimers.find(t=>t.ms===30000).fn();const missing=nodes()[0].textContent;
+       return {initial,later,unchanged,activated,full,missing};
+     } finally {Date.now=clock;q.windows=saved;renderAgent();}
+   });
+   assert.match(fullWindowCheck.initial[0],/^5 小时后重置 · /);assert.match(fullWindowCheck.initial[1],/^2 天后重置 · /);
+   assert.match(fullWindowCheck.later[0],/^5 小时后重置 · /);assert.notEqual(fullWindowCheck.initial[0],fullWindowCheck.later[0]);
+   assert.match(fullWindowCheck.later[1],/^1 天 23 小时后重置 · /);assert(fullWindowCheck.unchanged);
+   assert.match(fullWindowCheck.activated,/^1 小时后重置 · /);assert.match(fullWindowCheck.missing,/^1 小时后重置 · /);
+   assert.match(fullWindowCheck.full[0],/^5 小时后重置 · /);assert.match(fullWindowCheck.full[1],/^7 天后重置 · /);
    const icons=await page.evaluate(async()=>{
      const holder=document.createElement('div');holder.innerHTML=['codex','claude','antigravity','agy','deepseek','custom'].map(providerMark).join('');document.body.append(holder);
      try { await Promise.all([...holder.querySelectorAll('img')].map(img=>img.decode()));return {images:holder.querySelectorAll('img').length,fallback:holder.querySelectorAll('svg').length}; } finally {holder.remove();}

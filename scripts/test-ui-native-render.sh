@@ -21,10 +21,11 @@ for scenario in ['empty','single','multi','long','failure','capacity']:
         assert (root/scenario/'quota-folded-summary.png').stat().st_size > 1000
         assert (root/scenario/'quota-folded-summary-dark.png').stat().st_size > 1000
         assert (root/scenario/'quota-dormant-reset.png').stat().st_size > 1000
+        assert (root/scenario/'quota-full-window-reset.png').stat().st_size > 1000
     for theme in ['light','dark']:
         for symbol in ['circle.dotted','waveform','sparkles','gearshape.2','checkmark','pause.fill','questionmark']:
             assert (root/scenario/('menu-symbol-'+symbol+'-'+theme+'.png')).stat().st_size > 1000
-        for surface in ['dashboard','menubar','low-panel','minimum-detail','increased-contrast','settings-prices','settings-general','servers']:
+        for surface in ['server-panel-folded', 'server-panel-expanded', 'server-minimum-folded', 'server-minimum-expanded', 'dashboard','menubar','low-panel','minimum-detail','increased-contrast','settings-prices','settings-general','servers']:
             assert (root/scenario/(surface+'-'+theme+'.png')).stat().st_size > 1000
 print('Native six-state light/dark, settings, minimum size, reduced transparency and increased contrast screenshots passed')
 PY
