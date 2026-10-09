@@ -37,6 +37,65 @@ pub struct Capsule {
     hwnd: usize,
     tx: mpsc::Sender<Command>,
 }
+struct CapsuleFont {
+    collection: *mut GpFontCollection,
+    family: *mut GpFontFamily,
+    font: *mut GpFont,
+}
+impl CapsuleFont {
+    unsafe fn new() -> Self {
+        let mut result = Self {
+            collection: null_mut(),
+            family: null_mut(),
+            font: null_mut(),
+        };
+        let bytes = include_bytes!("../../web/fonts/HarmonyOS_Sans_SC_Regular.ttf");
+        if GdipNewPrivateFontCollection(&mut result.collection) == GDI_OK
+            && GdipPrivateAddMemoryFont(
+                result.collection,
+                bytes.as_ptr().cast(),
+                bytes.len() as i32,
+            ) == GDI_OK
+        {
+            GdipCreateFontFamilyFromName(
+                w!("HarmonyOS Sans SC"),
+                result.collection,
+                &mut result.family,
+            );
+        }
+        if result.family.is_null() {
+            GdipCreateFontFamilyFromName(w!("Microsoft YaHei UI"), null_mut(), &mut result.family);
+        }
+        if result.family.is_null() {
+            GdipGetGenericFontFamilySansSerif(&mut result.family);
+        }
+        if !result.family.is_null() {
+            GdipCreateFont(
+                result.family,
+                13.0,
+                FontStyleRegular.0,
+                UnitPixel,
+                &mut result.font,
+            );
+        }
+        result
+    }
+}
+impl Drop for CapsuleFont {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.font.is_null() {
+                GdipDeleteFont(self.font);
+            }
+            if !self.family.is_null() {
+                GdipDeleteFontFamily(self.family);
+            }
+            if !self.collection.is_null() {
+                GdipDeletePrivateFontCollection(&mut self.collection);
+            }
+        }
+    }
+}
 struct Surface {
     app: AppHandle,
     rx: mpsc::Receiver<Command>,
@@ -51,6 +110,7 @@ struct Surface {
     mouse_hook: Cell<Option<HHOOK>>,
     menu_active: Cell<bool>,
     tooltip_text: RefCell<Vec<u16>>,
+    font: CapsuleFont,
 }
 impl Capsule {
     pub fn start(app: AppHandle, position: Option<(i32, i32)>) -> Result<Self, String> {
@@ -108,6 +168,7 @@ impl Capsule {
                     mouse_hook: Cell::new(None),
                     menu_active: Cell::new(false),
                     tooltip_text: RefCell::new(Vec::new()),
+                    font: CapsuleFont::new(),
                 });
                 let result = CreateWindowExW(
                     WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
@@ -497,6 +558,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_SETTINGCHANGE | WM_THEMECHANGED => {
+            crate::desktop::refresh_materials(&surface.app);
             let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
@@ -749,14 +811,8 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
         );
         GdipFillEllipse(graphics, brush.cast(), 39.0, 19.0, 6.0, 6.0);
         GdipDeleteBrush(brush.cast());
-        let mut family = null_mut();
-        let mut font = null_mut();
+        let font = surface.font.font;
         let mut format = null_mut();
-        if GdipCreateFontFamilyFromName(w!("Microsoft YaHei UI"), null_mut(), &mut family) != GDI_OK
-        {
-            GdipCreateFontFamilyFromName(w!("Segoe UI"), null_mut(), &mut family);
-        }
-        GdipCreateFont(family, 13.0, FontStyleRegular.0, UnitPixel, &mut font);
         GdipCreateStringFormat(0, 0, &mut format);
         GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
         GdipSetTextRenderingHint(graphics, TextRenderingHintAntiAliasGridFit);
@@ -838,8 +894,6 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
         }
         GdipDeleteBrush(brush.cast());
         GdipDeleteStringFormat(format);
-        GdipDeleteFont(font);
-        GdipDeleteFontFamily(family);
         GdipDeleteGraphics(graphics);
     }
     let _ = EndPaint(hwnd, &ps);

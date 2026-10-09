@@ -30,7 +30,7 @@ function fixture(){
   const initial={version:4,sources:[],accounts:[],hosts:[],appearance:{theme:'light',accent:'teal'}};
   await rpc('settings.save',initial);
   const web=path.join(project,'apps/desktop/web'),out=path.join(project,'.local/theme-sync');fs.mkdirSync(out,{recursive:true});
-  const server=http.createServer((req,res)=>{const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html'})[path.extname(file)]||'image/png');res.end(fs.readFileSync(file));});
+  const server=http.createServer((req,res)=>{if(require('./ui-test-helpers.cjs').serveFont(req,res))return;const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html'})[path.extname(file)]||'image/png');res.end(fs.readFileSync(file));});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
   try {
     browser=await chromium.launch({headless:true});const context=await browser.newContext({colorScheme:'light'}),errors=[];

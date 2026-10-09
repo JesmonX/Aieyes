@@ -1,3 +1,8 @@
+/* Original, unmodified HarmonyOS Sans files; provenance and license: fonts/. */
+@font-face { font-family:"Aieyes HarmonyOS Sans SC"; src:url("fonts/HarmonyOS_Sans_SC_Regular.ttf") format("truetype"); font-weight:400; font-style:normal; font-display:swap; }
+@font-face { font-family:"Aieyes HarmonyOS Sans SC"; src:url("fonts/HarmonyOS_Sans_SC_Medium.ttf") format("truetype"); font-weight:500; font-style:normal; font-display:swap; }
+@font-face { font-family:"Aieyes HarmonyOS Sans SC"; src:url("fonts/HarmonyOS_Sans_SC_Bold.ttf") format("truetype"); font-weight:600 900; font-style:normal; font-display:swap; }
+
 /* Aieyes surface system — one translucent, rounded "vibrancy" language shared by
    Windows, Linux and the browser previews. Legacy token names (--panel, --border,
    --solid, --soft, --shadow) stay defined because app.js reads --border,
@@ -7,30 +12,30 @@
   --font-display: var(--font-ui);
   --font-code: "Cascadia Mono", Consolas, ui-monospace, "SF Mono", "Liberation Mono", monospace;
 
-  --ink: #1b2434;
-  --muted: #5a6883;
-  --faint: #596781;
+  --ink: #252528;
+  --muted: #6b6b73;
+  --faint: #62626b;
   --accent: #5566d9;
   --balance-blue: var(--accent);
   --accent-deep: #4553c4;
   --accent-ink: #ffffff;
 
   /* Window pane, then the three card tiers that sit on top of it. */
-  --window-base: #f7f8fb;
-  --window-tint: rgba(246,248,253,.62);
+  --window-base: #fafafa;
+  --window-tint: rgba(250,250,250,.68);
 
   --window-edge: rgba(255,255,255,.62);
-  --panel: rgba(255,255,255,.76);
-  --surface-strong: rgba(255,255,255,.88);
-  --surface-soft: rgba(255,255,255,.44);
-  --surface-sunken: rgba(116,132,176,.10);
-  --solid: #eef1f8;
+  --panel: #f0f0f0;
+  --surface-strong: #e8e8ea;
+  --surface-soft: rgba(255,255,255,.45);
+  --surface-sunken: rgba(110,110,125,.10);
+  --solid: #f0f0f3;
   --soft: rgba(88,108,214,.10);
-  --border: rgba(66,88,140,.17);
+  --border: rgba(90,90,110,.18);
   --card-border: #dfe4ed;
   --hairline-strong: rgba(70,90,138,.26);
-  --highlight: rgba(255,255,255,.72);
-  --shadow-xs: 0 1px 2px rgba(22,36,72,.07);
+  --highlight: rgba(255,255,255,.7);
+  --shadow-xs: 0 1px 2px #0000000d;
   --shadow: 0 1px 2px rgba(22,36,72,.05), 0 10px 26px -18px rgba(22,36,72,.34);
   --shadow-lift: 0 2px 5px rgba(22,36,72,.06), 0 22px 46px -22px rgba(22,36,72,.42);
   --shadow-float: 0 14px 30px -16px rgba(22,36,72,.24), 0 44px 100px -44px rgba(22,36,72,.5);
@@ -55,6 +60,19 @@
   --font-entry: 13px;
   --font-panel-caption: 12px;
   --font-panel-number: 26px;
+  --font-number: 28px;
+  --font-caption: 12px;
+  --font-panel-overview: 17px;
+  --weight-strong: 600;
+  --control-height: 28px;
+  --control-compact-height: 26px;
+  --input-height: 32px;
+  --icon-button-size: 28px;
+  --progress-height: 7px;
+  --progress-track: color-mix(in srgb, var(--ink) 7%, transparent);
+  --content-padding: 30px 34px 40px;
+  --sidebar-width: 214px;
+  --sidebar-compact-width: 72px;
   --count-badge: rgba(88,108,214,.12);
   --space-card: 16px;
   --space-section: 20px;
@@ -82,42 +100,81 @@
   -moz-osx-font-smoothing: grayscale;
   color: var(--ink);
   color-scheme: light;
+  --capsule-bg: #f6f6f8;
+  --capsule-ink: #252528;
+  --control-selected: rgba(255,255,255,.96);
 }
 :root[data-theme=dark] {
-    --ink: #e6ebf7; --muted: #a3aec6; --faint: #8794ad;
+    --ink: #efeff2; --muted: #b6b6c0; --faint: #a4a4ae;
     --accent: #a3b3ff; --accent-deep: #8b9cfb; --accent-ink: #131a2a; --balance-blue: var(--accent);
-    --window-base: #151a23;
-    --window-tint: rgba(22,28,42,.58);
+    --window-base: #222226;
+    --window-tint: rgba(32,32,36,.72);
 
     --window-edge: rgba(255,255,255,.08);
-    --panel: rgba(41,51,72,.58);
-    --surface-strong: rgba(46,58,82,.78);
-    --surface-soft: rgba(39,49,70,.34);
-    --surface-sunken: rgba(158,178,225,.08);
-    --solid: #171e2c;
+    --panel: rgba(58,58,64,.62);
+    --surface-strong: rgba(66,66,73,.92);
+    --surface-soft: rgba(72,72,80,.4);
+    --surface-sunken: rgba(0,0,0,.18);
+    --solid: #29292e;
     --soft: rgba(146,166,248,.14);
-    --border: rgba(178,196,232,.14);
+    --border: rgba(220,220,240,.16);
     --card-border: #354052;
     --hairline-strong: rgba(178,196,232,.24);
-    --highlight: rgba(255,255,255,.09);
-    --shadow-xs: 0 1px 2px rgba(0,0,0,.24);
+    --highlight: rgba(255,255,255,.08);
+    --shadow-xs: 0 1px 2px #00000040;
     --shadow: 0 1px 2px rgba(0,0,0,.28), 0 12px 28px -18px rgba(0,0,0,.6);
     --shadow-lift: 0 2px 6px rgba(0,0,0,.32), 0 26px 52px -24px rgba(0,0,0,.7);
     --shadow-float: 0 16px 34px -18px rgba(0,0,0,.6), 0 50px 110px -46px rgba(0,0,0,.8);
     --count-badge: rgba(146,166,248,.18);
     --ok: #5cc4a4; --warn: #e0b062; --danger: #ff929c;
     color-scheme: dark;
+  --control-selected: #62626b;
+  --capsule-bg: #29292e;
+  --capsule-ink: #efeff2;
 }
+
+:root[data-accent=blue] { --accent:#2166be; --accent-deep:#19559f; }
+:root[data-accent=teal] { --accent:#16745f; --accent-deep:#105b4a; }
+:root[data-accent=purple] { --accent:#8054b7; --accent-deep:#694199; }
+:root[data-accent=blue]:where([data-theme=dark]) { --accent:#8bbcff; --accent-deep:#73a6ed; }
+:root[data-accent=teal]:where([data-theme=dark]) { --accent:#65ceae; --accent-deep:#52b597; }
+:root[data-accent=purple]:where([data-theme=dark]) { --accent:#ccabff; --accent-deep:#b792ed; }
+:root { --soft:color-mix(in srgb,var(--accent) 10%,transparent); --count-badge:var(--soft); }
+
+/* Windows content follows macOS logical geometry; navigation occupies its own column. */
+:root[data-platform=windows] {
+  --font-ui:"Aieyes HarmonyOS Sans SC","Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI",sans-serif;
+  --font-display:var(--font-ui);
+  --font-number:24px; --font-panel-number:24px; --weight-strong:700;
+  --progress-height:4px; --content-padding:24px; --window-radius:8px;
+}
+/* Only enable alpha surfaces after the HWND has successfully acquired a backdrop. */
+:root[data-platform=windows]:where([data-material=acrylic],[data-material=blur]) {
+  --window-tint:rgba(250,250,250,.18);
+  --panel:rgba(255,255,255,.35); --surface-soft:rgba(255,255,255,.18);
+  --surface-strong:rgba(244,244,247,.88); --control-selected:rgba(255,255,255,.92);
+  --muted:#52525b; --faint:#52525b;
+}
+:root[data-platform=windows]:where([data-theme=dark]):where([data-material=acrylic],[data-material=blur]) {
+  --window-tint:rgba(32,32,36,.28);
+  --panel:rgba(58,58,64,.35); --surface-soft:rgba(72,72,80,.18);
+  --surface-strong:rgba(55,55,62,.94); --control-selected:rgba(98,98,107,.92);
+  --muted:#c5c5cf; --faint:#bcbcc6;
+}
+:root[data-platform=windows]:where([data-surface=panel]):where([data-material=acrylic],[data-material=blur]) { --window-tint:rgba(250,250,250,.12); }
+:root[data-platform=windows]:where([data-surface=panel][data-theme=dark]):where([data-material=acrylic],[data-material=blur]) { --window-tint:rgba(32,32,36,.20); }
+:root[data-platform=windows][data-maximized=true] { --window-radius:0px; }
+
 /* Without vibrancy the surfaces must stand on their own. */
 @media (prefers-reduced-transparency: reduce) {
-  :root { --panel: var(--solid); --window-tint: var(--solid); --surface-strong: var(--solid); --surface-soft: var(--solid); --surface-sunken: var(--solid); --soft: rgba(120,140,200,.16); }
+  :root:root { --panel: var(--solid); --window-tint: var(--solid); --surface-strong: var(--solid); --surface-soft: var(--solid); --surface-sunken: var(--solid); --soft: rgba(120,140,200,.16); }
 }
 @media (forced-colors: active) {
-  :root {
+  :root:root {
     --ink: CanvasText; --muted: CanvasText; --faint: CanvasText; --accent: LinkText; --accent-ink: Canvas; --balance-blue: LinkText;
     --count-badge: Canvas; --panel: Canvas; --surface-strong: Canvas; --surface-soft: Canvas; --surface-sunken: Canvas;
     --card-border: CanvasText; --solid: Canvas; --soft: Canvas; --border: ButtonText; --hairline-strong: ButtonText;
-    --highlight: Canvas; --shadow-xs: none; --shadow: none; --shadow-lift: none; --shadow-float: none;
+    --control-selected: Highlight; --highlight: Canvas; --shadow-xs: none; --shadow: none; --shadow-lift: none; --shadow-float: none;
     --window-base: Canvas; --window-tint: Canvas; --window-edge: Canvas;
   }
 }

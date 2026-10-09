@@ -26,6 +26,7 @@ pub trait Manager { fn try_state<T>(&self) -> Option<T> { None } }
 impl Manager for AppHandle {}
 pub mod desktop {
     pub fn action(_: &crate::AppHandle, _: &str) -> Result<(), String> { Ok(()) }
+    pub fn refresh_materials(_: &crate::AppHandle) {}
     pub fn native_interaction(_: &crate::AppHandle, _: bool) {}
     pub fn capsule_moved(_: &crate::AppHandle, _: i32, _: i32) {}
 }
@@ -35,6 +36,8 @@ pub mod capsule;
 pub mod phase_colors;
 #[path = '''+json.dumps(str(project/'apps/desktop/src-tauri/src/passive_window.rs'))+''']
 pub mod passive_window;
+#[path = '''+json.dumps(str(project/'apps/desktop/src-tauri/src/material.rs'))+''']
+pub mod material;
 ''')
 PY
-CARGO_TARGET_DIR="$PROJECT_DIR/.build/windows-capsule-typecheck" cargo check --manifest-path .build/capsule-typecheck/Cargo.toml --target x86_64-pc-windows-gnu --offline
+CARGO_TARGET_DIR="$PROJECT_DIR/.build/windows-capsule-typecheck" cargo check --manifest-path .build/capsule-typecheck/Cargo.toml --target x86_64-pc-windows-gnu --tests --offline

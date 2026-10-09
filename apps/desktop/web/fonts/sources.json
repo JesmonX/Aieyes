@@ -1,0 +1,25 @@
+{
+  "repository": "openharmony/resources",
+  "revision": "9c3252997df79002beb67c13903755651215f9cd",
+  "license": "https://raw.githubusercontent.com/openharmony/resources/9c3252997df79002beb67c13903755651215f9cd/LICENSE_Fonts",
+  "fonts": [
+    {
+      "file": "HarmonyOS_Sans_SC_Regular.ttf",
+      "source": "https://raw.githubusercontent.com/openharmony/resources/9c3252997df79002beb67c13903755651215f9cd/fonts/HarmonyOS_Sans_SC_Regular.ttf",
+      "bytes": 8261060,
+      "sha256": "2deabf97eaf17958dc24746b922779d9913008526daf1c853903547505a8f9ca"
+    },
+    {
+      "file": "HarmonyOS_Sans_SC_Medium.ttf",
+      "source": "https://raw.githubusercontent.com/openharmony/resources/9c3252997df79002beb67c13903755651215f9cd/fonts/HarmonyOS_Sans_SC_Medium.ttf",
+      "bytes": 8227216,
+      "sha256": "564b0d89943402e4b90fe764bc5726fee12ddbd7d4f681f5150b5b8271e685e8"
+    },
+    {
+      "file": "HarmonyOS_Sans_SC_Bold.ttf",
+      "source": "https://raw.githubusercontent.com/openharmony/resources/9c3252997df79002beb67c13903755651215f9cd/fonts/HarmonyOS_Sans_SC_Bold.ttf",
+      "bytes": 8158924,
+      "sha256": "9aa37f5edd6bf15af8b8b1655b8455753cd61abaf5d53454d4966261923b6c61"
+    }
+  ]
+}

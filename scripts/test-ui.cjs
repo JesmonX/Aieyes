@@ -9,7 +9,7 @@ const root = path.resolve(__dirname, '../apps/desktop/web');
 const output = path.resolve(__dirname, '../.local/ui-previews');
 
 (async () => {
-  const server = http.createServer((req, res) => {
+  const server = http.createServer((req, res) => {if(require('./ui-test-helpers.cjs').serveFont(req,res))return;
     const name = path.basename(new URL(req.url, 'http://localhost').pathname) || 'index.html';
     const file = path.join(root, name);
     if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return; }

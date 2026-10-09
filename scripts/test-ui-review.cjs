@@ -1,4 +1,4 @@
-const {discardEditor,commitSettings}=require('./ui-test-helpers.cjs');
+const {discardEditor}=require('./ui-test-helpers.cjs');
 // Regression coverage for the cross-platform interaction review. Uses only in-memory IPC.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -27,6 +27,7 @@ function fixture() {
       case 'hello':return {version:'test'};
       case 'settings.get':return structuredClone(r.settings);
       case 'settings.save':r.settings=structuredClone(args.params);r.saved.push(structuredClone(args.params));return {};
+      case 'settings.patch':r.settings=structuredClone(args.params.settings);r.saved.push(structuredClone(r.settings));return structuredClone(r.settings);
       case 'sources.scan':if(r.failScan)throw new Error('测试扫描失败');return r.scanRows;
       case 'quotas.refresh':if(r.failQuota)throw new Error('测试限额失败');return r.quotaRows;
       case 'hosts.sample':if(r.failHosts)throw new Error('测试采样 RPC 失败');return structuredClone(r.hosts);
@@ -43,7 +44,7 @@ function fixture() {
   }}};
 }
 (async()=>{
-  const server=http.createServer((req,res)=>{
+  const server=http.createServer((req,res)=>{if(require('./ui-test-helpers.cjs').serveFont(req,res))return;
     const name=path.basename(new URL(req.url,'http://localhost').pathname)||'index.html';
     const file=path.join(root,name);
     if(!fs.existsSync(file)){res.writeHead(404);res.end();return;}
@@ -80,10 +81,12 @@ function fixture() {
       for(const [name,value] of contrasts)assert.ok(value>=4.5,`${colorScheme} ${name} contrast ${value}`);
     }
     await page.emulateMedia({colorScheme:'light'});
-    await page.locator('#add-first-source').click();await page.locator('#field-provider').selectOption('deepseek');
-    assert.equal(await page.locator('#field-isAccount').isChecked(),true);
-    assert.match(await page.locator('#account-help').textContent(),/余额/);
-    await discardEditor(page);assert.equal(await page.evaluate(()=>state.settings.sources.length),0);
+    await page.locator('#add-first-source').click();
+    assert.equal(await page.locator('[data-settings-tab=sources]').getAttribute('aria-selected'),'true');
+    assert.equal(await page.locator('[data-agent-enable=deepseek]').isChecked(),false);
+    assert.match(await page.locator('.agent-setup').filter({has:page.locator('[data-agent-enable=deepseek]')}).textContent(),/API Key.*余额/);
+    assert.equal(await page.locator('#editor[open]').count(),0);
+    assert.equal(await page.evaluate(()=>state.settings.sources.length),0);
     await page.locator('[data-settings-tab=hosts]').click();await page.locator('[data-edit=host]').click();
     await page.locator('#field-name').focus();let advanced=false,save=false;
     for(let i=0;i<24;i++){
@@ -98,9 +101,9 @@ function fixture() {
     await page.evaluate(()=>{state.settings.sources=[{id:'remote',name:'远端记录',provider:'codex',path:'~/.codex',accountId:'',hostId:'host',enabled:true}];review.settings=structuredClone(state.settings);state.settingsDraft=null;state.settingsBaseline=null;renderSettings();});
     await page.locator('[data-remove=host]').click();assert.match(await page.locator('#editor-fields').textContent(),/远端记录/);
     assert.equal(await page.evaluate(()=>state.settings.hosts.length),1);await discardEditor(page);
-    await page.locator('[data-remove=host]').click();await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);await commitSettings(page);
+    await page.locator('[data-remove=host]').click();await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open&&!state.settingsSaving);
     assert.deepEqual(await page.evaluate(()=>[state.settings.hosts.length,state.settings.sources[0].hostId,state.settings.sources[0].enabled]),[0,null,false]);
-    assert.equal(await page.locator('.settings-draft-label').evaluate(el=>el===document.activeElement),true);
+    assert.equal(await page.locator('#add-item').evaluate(el=>el===document.activeElement),true,'Removing the last host returns focus to Add host');
     await page.evaluate(()=>{review.empty=false;});await page.locator('[data-page=agent]').click();await page.evaluate(()=>loadDashboard());
     await page.locator('#model').selectOption('Model A');await page.waitForFunction(()=>state.dashboard.dayModels.every(row=>row.model==='Model A'));
     assert.deepEqual(await page.locator('#model option').allTextContents(),['全部模型','Model A','Model B']);

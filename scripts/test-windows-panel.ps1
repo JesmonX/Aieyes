@@ -1,5 +1,5 @@
 # Interactive Windows regression against the built app. Isolated data, no real accounts.
-param([string]$Binary = "$PSScriptRoot/../apps/desktop/src-tauri/target/release/aieyes-desktop.exe")
+param([string]$Binary = "$PSScriptRoot/../apps/desktop/src-tauri/target/release/aieyes-desktop.exe", [switch]$VerifyMaterials)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type @'
@@ -105,6 +105,39 @@ function Screenshot([string]$Name) {
     try {$graphics.CopyFromScreen($bounds.Location,[System.Drawing.Point]::Empty,$bounds.Size);$bitmap.Save((Join-Path $out "$Name.png"))}
     finally {$graphics.Dispose();$bitmap.Dispose()}
 }
+# Opt-in on an interactive Windows desktop with transparency enabled. This checks
+# actual changing desktop pixels, which WebView screenshots cannot validate.
+function Verify-Backdrop([IntPtr]$Handle,[string]$Name) {
+    $rect=Bounds $Handle
+    $width=$rect.Right-$rect.Left;$height=$rect.Bottom-$rect.Top
+    $captures=@();$original=$background.BackColor
+    try {
+        foreach($color in @([Drawing.Color]::FromArgb(218,105,100),[Drawing.Color]::FromArgb(65,118,222))) {
+            $background.BackColor=$color;$background.Refresh();Pump 800
+            $bitmap=New-Object Drawing.Bitmap $width,$height
+            $graphics=[Drawing.Graphics]::FromImage($bitmap)
+            try {$graphics.CopyFromScreen($rect.Left,$rect.Top,0,0,[Drawing.Size]::new($width,$height))}
+            finally {$graphics.Dispose()}
+            $captures+=,$bitmap
+            $bitmap.Save((Join-Path $out "$Name-backdrop-$($captures.Count).png"))
+        }
+        $changed=0;$total=0
+        # Empty strips inside the window avoid text, counters and animated cards.
+        $inset=[Math]::Max(6,[int](6*[PanelProbe]::GetDpiForWindow($Handle)/96))
+        foreach($x in @($inset,($width-$inset-1))) {
+            for($y=80;$y -lt $height-80;$y+=9) {
+                $a=$captures[0].GetPixel($x,$y);$b=$captures[1].GetPixel($x,$y)
+                if(([Math]::Abs([int]$a.R-[int]$b.R)+[Math]::Abs([int]$a.G-[int]$b.G)+[Math]::Abs([int]$a.B-[int]$b.B)) -gt 9){$changed++}
+                $total++
+            }
+        }
+        $result["$Name-backdrop"]=@{samples=$total;changed=$changed}
+        Assert-That ($total -gt 0 -and $changed/$total -gt .25) "$Name visibly responds to desktop background changes"
+    } finally {
+        foreach($capture in $captures){$capture.Dispose()}
+        $background.BackColor=$original;$background.Refresh();Pump 200
+    }
+}
 $oldData=$env:AIEYES_DATA_DIR
 $oldWebviewData=$env:WEBVIEW2_USER_DATA_FOLDER
 $testData=Join-Path ([IO.Path]::GetTempPath()) ('aieyes-panel-'+[guid]::NewGuid())
@@ -166,6 +199,14 @@ try {
     Choose-MenuItem 2 '重建面板（用于界面无响应）'
     Wait-For {(Panel-Visible) -and $script:panel -ne $oldPanel} 'rebuild creates a new visible panel'
     Capsule-Click;Wait-For {-not (Panel-Visible)} 'rebuilt panel closes'
+    if($VerifyMaterials) {
+        Capsule-Click;Wait-For {Panel-Visible} 'open for native material check'
+        Verify-Backdrop $script:panel 'floating'
+        Capsule-Click;Wait-For {-not (Panel-Visible)} 'close after native material check'
+        Choose-MenuItem 3 '打开主窗口'
+        Wait-For { $script:main=[PanelProbe]::Find($app.Id,'Aieyes',$false);$script:main -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:main) } 'main window appears'
+        Verify-Backdrop $script:main 'main'
+    }
     $result.status='passed'
 } catch {
     $result.status='failed';$result.reason=$_.ToString()

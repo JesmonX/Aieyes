@@ -27,7 +27,7 @@ function fixture(){
  }}};
 }
 (async()=>{
- const root=path.resolve(__dirname,'../apps/desktop/web'),server=http.createServer((req,res)=>{const file=path.join(root,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404);return res.end();}res.setHeader('content-type',({'.js':'application/javascript','.css':'text/css','.html':'text/html'})[path.extname(file)]||'text/plain');res.end(fs.readFileSync(file));});
+ const root=path.resolve(__dirname,'../apps/desktop/web'),server=http.createServer((req,res)=>{if(require('./ui-test-helpers.cjs').serveFont(req,res))return;const file=path.join(root,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404);return res.end();}res.setHeader('content-type',({'.js':'application/javascript','.css':'text/css','.html':'text/html'})[path.extname(file)]||'text/plain');res.end(fs.readFileSync(file));});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
  try{browser=await chromium.launch({headless:true});
  for(const surface of ['index.html','floating.html']){

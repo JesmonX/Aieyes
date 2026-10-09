@@ -5,7 +5,9 @@
   function update(info) {
     current = info;
     document.body.dataset.platform = info.platform;
-    document.documentElement.dataset.material = info.material || 'opaque';
+    document.documentElement.dataset.platform = info.platform;
+    document.documentElement.dataset.material = info.materials?.main || info.material || 'opaque';
+    window.AieyesTheme?.loadFonts?.();
     renderLiveSessions(info);
     const mode = document.querySelector('#desktop-mode');
     if (mode && document.activeElement !== mode) mode.value = info.mode;
@@ -37,6 +39,7 @@
     const maximize = document.querySelector('#window-maximize');
     async function updateMaximized() {
       const maximized = await native.isMaximized();
+      document.documentElement.dataset.maximized = String(maximized);
       const label = maximized ? '还原' : '最大化';
       maximize.setAttribute('aria-label', label); maximize.title = label;
       maximize.innerHTML = maximized ? '<svg viewBox="0 0 16 16"><path d="M6 3h7v7M3 6h7v7H3Z"/></svg>' : '<svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9"/></svg>';

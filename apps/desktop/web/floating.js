@@ -132,6 +132,9 @@
     document.body.dataset.phase = next.phase || 'idle';
     document.body.dataset.active = String(next.activeCount > 0);
     document.body.dataset.platform = next.platform || '';
+    document.documentElement.dataset.platform = next.platform || '';
+    document.documentElement.dataset.material = next.materials?.floating || 'opaque';
+    window.AieyesTheme?.loadFonts?.();
     document.querySelector('#phase').textContent = next.recovery==='failed'?'恢复失败':next.recovery==='refreshing'?'恢复中':next.unavailable ? '状态不全' : (labels[next.phase] || '空闲');
     const count = document.querySelector('#count');
     count.textContent = next.activeCount > 99 ? '99+' : String(next.activeCount);
@@ -152,6 +155,7 @@
       document.body.dataset.nativeCapsule=String(!!initial.nativeCapsule);
       update(initial);
       if(typeof appReady!=='undefined')await appReady;
+      await window.AieyesTheme?.loadFonts?.();
       await invoke('desktop_panel_ready',{generation:window.AIEYES_SHELL_GENERATION??0});
     } catch (error) { failure(error); }
   }

@@ -35,7 +35,7 @@ function fixture(){
  }}};
 }
 (async()=>{
- fs.mkdirSync(out,{recursive:true});const server=http.createServer((req,res)=>{const f=path.join(root,path.basename(new URL(req.url,'http://test').pathname)||'index.html');res.setHeader('content-type',f.endsWith('.js')?'application/javascript':f.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(f));});await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
+ fs.mkdirSync(out,{recursive:true});const server=http.createServer((req,res)=>{if(require('./ui-test-helpers.cjs').serveFont(req,res))return;const f=path.join(root,path.basename(new URL(req.url,'http://test').pathname)||'index.html');res.setHeader('content-type',f.endsWith('.js')?'application/javascript':f.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(f));});await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
  try{browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1120,height:800}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);await page.evaluate(()=>AieyesApp.ready);
  // General changes save on blur; account forms retain their input on failure.
  await page.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});await page.locator('#field-refreshSeconds').fill('987');await page.locator('#field-refreshSeconds').blur();await page.waitForFunction(()=>!state.settingsCommitting&&audit.settings.refreshSeconds===987);

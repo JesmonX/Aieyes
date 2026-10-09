@@ -1,9 +1,9 @@
 {
   "idle": {"light": "8491a7", "dark": "91a0b7", "mac": "secondary"},
-  "working": {"light": "17957f", "dark": "2c9d88", "mac": "teal"},
-  "thinking": {"light": "8f57c6", "dark": "ac78dd", "mac": "purple"},
-  "tool": {"light": "3f7fd6", "dark": "629cef", "mac": "blue"},
-  "complete": {"light": "219355", "dark": "44ad76", "mac": "green"},
-  "interrupted": {"light": "b1761f", "dark": "d9a44c", "mac": "orange"},
+  "working": {"light": "17957f", "dark": "2c9d88", "mac": "Palette.accent"},
+  "thinking": {"light": "8f57c6", "dark": "ac78dd", "mac": "Palette.accent"},
+  "tool": {"light": "3f7fd6", "dark": "629cef", "mac": "Palette.accent"},
+  "complete": {"light": "219355", "dark": "44ad76", "mac": "Palette.ok"},
+  "interrupted": {"light": "b1761f", "dark": "d9a44c", "mac": "Palette.warn"},
   "unknown": {"light": "895712", "dark": "e0b062", "mac": "secondary"}
 }

@@ -4,8 +4,8 @@
 <key>CFBundleName</key><string>Aieyes</string>
 <key>CFBundleDisplayName</key><string>Aieyes</string>
 <key>CFBundleIdentifier</key><string>app.aieyes.desktop</string>
-<key>CFBundleVersion</key><string>22</string>
-<key>CFBundleShortVersionString</key><string>0.1.21</string>
+<key>CFBundleVersion</key><string>23</string>
+<key>CFBundleShortVersionString</key><string>0.1.22</string>
 <key>CFBundleExecutable</key><string>Aieyes</string>
 <key>CFBundleIconFile</key><string>AppIcon.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>

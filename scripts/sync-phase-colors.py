@@ -26,7 +26,8 @@ if '--check' in sys.argv:
     assert rustpath.read_text() == rust, 'Rust phase table is stale'
     swift = (root / 'apps/macos/Sources/Aieyes/SessionActivity.swift').read_text()
     for key, value in table.items():
-        assert f'case .{key}: return .{value["mac"]}' in swift, f'macOS mapping missing: {key}'
+        color = value["mac"] if "." in value["mac"] else "." + value["mac"]
+        assert f'case .{key}: return {color}' in swift, f'macOS mapping missing: {key}'
     print('Seven-phase CSS/Rust colors and macOS semantic mappings agree')
 else:
     path.write_text(updated)

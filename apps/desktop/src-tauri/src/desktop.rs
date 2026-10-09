@@ -74,6 +74,26 @@ impl ShellState {
         self.panel && !self.pin && !self.native_interacting
     }
 }
+struct WindowMaterial {
+    kind: &'static str,
+    #[cfg(target_os = "windows")]
+    applied: Option<(usize, bool, bool)>,
+}
+impl Default for WindowMaterial {
+    fn default() -> Self {
+        Self {
+            kind: "opaque",
+            #[cfg(target_os = "windows")]
+            applied: None,
+        }
+    }
+}
+#[derive(Default)]
+struct Materials {
+    main: WindowMaterial,
+    floating: WindowMaterial,
+}
+
 pub struct Desktop {
     path: PathBuf,
     state: Mutex<ShellState>,
@@ -81,7 +101,7 @@ pub struct Desktop {
     status_item: MenuItem<tauri::Wry>,
     hide_item: MenuItem<tauri::Wry>,
     tray_available: AtomicBool,
-    material: &'static str,
+    materials: Mutex<Materials>,
 }
 
 // Never hide the only usable entry point when tray support is absent.
@@ -252,21 +272,62 @@ fn fit_main_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     Ok(())
 }
 
-fn main_window_material(_app: &tauri::App) -> &'static str {
-    #[cfg(target_os = "windows")]
-    if let Some(window) = _app.get_webview_window("main") {
-        let dark = window.theme().ok().map(|theme| theme == tauri::Theme::Dark);
-        // The direct API reports unsupported Windows versions; Tauri's effects list
-        // does not fall through on errors. Keep the web surface opaque on failure.
-        if window_vibrancy::apply_mica(&window, dark).is_ok() {
-            return "mica";
+#[cfg(target_os = "windows")]
+fn apply_window_material(window: &tauri::WebviewWindow) -> bool {
+    let Some(desktop) = window.app_handle().try_state::<Desktop>() else {
+        return false;
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        return false;
+    };
+    let dark = window.theme().ok() == Some(tauri::Theme::Dark);
+    let effects = crate::material::effects_enabled();
+    let identity = (hwnd.0 as usize, dark, effects);
+    {
+        let Ok(materials) = desktop.materials.lock() else {
+            return false;
+        };
+        let current = if window.label() == "main" {
+            &materials.main
+        } else {
+            &materials.floating
+        };
+        if current.applied == Some(identity) {
+            return false;
         }
     }
-    "opaque"
+    let kind = crate::material::apply(windows::Win32::Foundation::HWND(hwnd.0 as _), dark, effects);
+    if let Ok(mut materials) = desktop.materials.lock() {
+        let current = if window.label() == "main" {
+            &mut materials.main
+        } else {
+            &mut materials.floating
+        };
+        current.kind = kind;
+        current.applied = Some(identity);
+    }
+    true
+}
+
+/// Called by application appearance and Windows setting-change broadcasts.
+/// Cache the HWND/theme/accessibility tuple to avoid a WM_THEMECHANGED feedback loop.
+#[cfg(target_os = "windows")]
+pub(crate) fn refresh_materials(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let mut changed = false;
+        for label in ["main", "floating"] {
+            if let Some(window) = handle.get_webview_window(label) {
+                changed |= apply_window_material(&window);
+            }
+        }
+        if changed {
+            emit_shell(&handle);
+        }
+    });
 }
 
 pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let material = main_window_material(app);
     let path = root.join("desktop.json");
     let preferences = std::fs::read(&path)
         .ok()
@@ -335,7 +396,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         status_item,
         hide_item: hide,
         tray_available: AtomicBool::new(false),
-        material,
+        materials: Mutex::new(Materials::default()),
     });
     create_floating(app.handle(), 0)?;
     #[cfg(target_os = "windows")]
@@ -437,6 +498,9 @@ fn tray_supported() -> bool {
 }
 
 fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
+    if let Ok(mut materials) = app.state::<Desktop>().materials.lock() {
+        materials.floating = WindowMaterial::default();
+    }
     let builder =
         WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("floating.html".into()))
             .title("Aieyes 面板")
@@ -474,8 +538,10 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
     if let Ok(hwnd) = window.hwnd() {
         // Recreating the renderer may call this from a worker; configure on its UI thread.
         let handle = hwnd.0 as usize;
+        let app = app.clone();
         window.run_on_main_thread(move || {
             crate::passive_window::configure(windows::Win32::Foundation::HWND(handle as *mut _));
+            refresh_materials(&app);
         })?;
     }
     Ok(())
@@ -884,10 +950,7 @@ pub fn desktop_appearance(app: AppHandle, theme: String, accent: String) -> Resu
         let _ = window.set_theme(theme);
     }
     #[cfg(target_os = "windows")]
-    if let Some(window) = app.get_webview_window("main") {
-        let dark = window.theme().ok().map(|theme| theme == tauri::Theme::Dark);
-        let _ = window_vibrancy::apply_mica(&window, dark);
-    }
+    refresh_materials(&app);
     emit_shell(&app);
     Ok(())
 }
@@ -899,8 +962,10 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         .is_some_and(|t| t == tauri::Theme::Dark);
     let desktop = app.state::<Desktop>();
     let state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+    let materials = desktop.materials.lock().map_err(|_| "材质状态不可用")?;
     Ok(json!({
-        "platform": std::env::consts::OS, "material": desktop.material, "mode": state.preferences.mode,
+        "materials": {"main": materials.main.kind, "floating": materials.floating.kind},
+        "platform": std::env::consts::OS, "material": materials.main.kind, "mode": state.preferences.mode,
         "effectiveMode": if state.floating { "floating" } else { "tray" },
         "trayAvailable": desktop.tray_available.load(Ordering::Relaxed), "reason": state.reason,
         "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
@@ -1386,10 +1451,18 @@ fn snap_ball(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    #[cfg(target_os = "windows")]
+    if matches!(
+        event,
+        tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+    ) && let Ok(hwnd) = window.hwnd()
+    {
+        crate::material::reshape(windows::Win32::Foundation::HWND(hwnd.0 as _));
+    }
     match event {
         tauri::WindowEvent::ThemeChanged(theme) if window.label() == "main" => {
             #[cfg(target_os = "windows")]
-            let _ = window_vibrancy::apply_mica(window, Some(*theme == tauri::Theme::Dark));
+            refresh_materials(window.app_handle());
             let app = window.app_handle();
             if let Some(tray) = app.tray_by_id(TRAY_ID) {
                 let phase = app

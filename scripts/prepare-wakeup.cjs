@@ -1,4 +1,5 @@
 // Bundle a native headless runner without a WebView or a Python dependency.
+require('./check-bundled-fonts.cjs')();
 const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..'),debug=process.argv.includes('--debug');
 const args=['build','--manifest-path',path.join(root,'Cargo.toml'),'--bin','aieyes-core','--locked'];

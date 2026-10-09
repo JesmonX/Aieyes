@@ -4,6 +4,8 @@ mod capsule;
 mod desktop;
 #[cfg(target_os = "windows")]
 mod passive_window;
+#[cfg(target_os = "windows")]
+mod material;
 mod phase_colors;
 mod updates;
 

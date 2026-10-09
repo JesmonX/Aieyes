@@ -1,6 +1,6 @@
 {
   "app": {
-    "windows": [{ "label": "main", "title": "Aieyes", "width": 1120, "height": 800, "minWidth": 640, "minHeight": 440, "visible": false, "decorations": false, "transparent": true, "shadow": true }]
+    "windows": [{ "label": "main", "title": "Aieyes", "width": 1294, "height": 840, "minWidth": 640, "minHeight": 440, "visible": false, "decorations": false, "transparent": true, "shadow": true }]
   },
   "bundle": {
     "targets": ["nsis"],

@@ -1,5 +1,7 @@
 # Windows 界面刷新
 
+本文记录 2026-10-04 的历史实现。当前字体、尺寸、原生 Acrylic / Blur 与验证结果见 [Windows 外观对齐（2026-10-09）](windows-appearance.md)。
+
 2026-10-04 对 Tauri 桌面界面做了一次大范围视觉与动效更新，目标是半透明、圆润的桌面观感。改动全部位于 `apps/desktop/web/`，Windows 与 Linux 共用同一套资源，Rust 侧未改动。
 
 ## 设计语言

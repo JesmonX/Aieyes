@@ -6,7 +6,7 @@ function modelDistribution(models){
   const sum=ranked.reduce((n,m)=>n+(state.cost?m.cost:m.total),0),top=ranked.slice(0,5),other=ranked.slice(5);
   const slices=[...top,...(other.length?[{key:'其他',total:other.reduce((n,m)=>n+m.total,0),cost:other.reduce((n,m)=>n+m.cost,0)}]:[])];
   let cursor=0;const stops=slices.map(m=>{const start=cursor;cursor+=sum?(state.cost?m.cost:m.total)/sum*360:0;return `${m.key==='其他'?'var(--muted)':color(m.key)} ${start}deg ${cursor}deg`;});
-  const row=m=>`<div><span class="color" style="background:${color(m.key)}"></span><span class="model" title="${escapeHTML(m.key)}">${escapeHTML(m.key)}</span><strong title="${state.cost?m.cost.toFixed(6)+' USD':m.total.toLocaleString()+' Token'}">${state.cost?money(m.cost):compact(m.total)} <small>${pct(sum?(state.cost?m.cost:m.total)/sum*100:0)}</small></strong><button class="copy-value" data-copy-value="${escapeHTML(m.key+'\t'+m.total+' Token\t'+m.cost+' USD')}" aria-label="复制 ${escapeHTML(m.key)} 的精确数值">复制</button></div>`;
+  const row=m=>`<div><span class="color" style="background:${color(m.key)}"></span><span class="model" title="${escapeHTML(m.key)}">${escapeHTML(m.key)}</span><strong title="${state.cost?m.cost.toFixed(6)+' USD':m.total.toLocaleString()+' Token'}">${state.cost?money(m.cost):compact(m.total)} <small>${pct(sum?(state.cost?m.cost:m.total)/sum*100:0)}</small></strong></div>`;
   return `<div class="pie-wrap"><div class="donut" role="img" aria-label="前五模型与其他，精确数据见右侧列表" style="background:conic-gradient(${sum?stops.join(','):'var(--border) 0deg 360deg'})"><div class="donut-inner">${models.length}<small>模型</small></div></div><div class="legend">${top.map(row).join('')}${other.length?`<details><summary>其他 ${other.length} 个模型 · ${state.cost?money(other.reduce((n,m)=>n+m.cost,0)):compact(other.reduce((n,m)=>n+m.total,0))} · ${pct(sum?other.reduce((n,m)=>n+(state.cost?m.cost:m.total),0)/sum*100:0)}</summary>${other.map(row).join('')}</details>`:''}</div></div>`;
 }
 function heatmapHTML(days){
@@ -16,7 +16,6 @@ function heatmapHTML(days){
 }
 function bindAnalysis(){
   document.querySelectorAll('[data-trend-model]').forEach(b=>{b.setAttribute('aria-pressed',String(!hiddenTrendModels.has(b.dataset.trendModel)));b.onclick=()=>{const name=b.dataset.trendModel;hiddenTrendModels.has(name)?hiddenTrendModels.delete(name):hiddenTrendModels.add(name);b.setAttribute('aria-pressed',String(!hiddenTrendModels.has(name)));drawTrend();};});
-  document.querySelectorAll('[data-copy-value]').forEach(b=>b.onclick=async()=>{try{await navigator.clipboard.writeText(b.dataset.copyValue);notify('已复制精确数值');}catch(_){notify('无法写入剪贴板，可直接选择表格文字复制','error');}});
   const cells=[...document.querySelectorAll('[data-heat-day]')];
   const focus=index=>{index=Math.max(0,Math.min(cells.length-1,index));cells.forEach((b,i)=>b.tabIndex=i===index?0:-1);cells[index]?.focus();};
   for(const [index,cell] of cells.entries()){

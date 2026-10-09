@@ -263,3 +263,18 @@ test('Windows titlebar minimizes, restores, and requests close rather than quit'
   await h.element('#window-close').onclick();
   assert.match(h.notices.at(-1),/关闭失败/);
 });
+
+
+test('each surface uses its own material and follows accessibility fallback status', async () => {
+  for(const [file,surface] of [['desktop.js','main'],['floating.js','floating']]) {
+    const h=harness(file,{material:'mica',materials:{main:'acrylic',floating:'blur'}});await flush();
+    assert.equal(h.document.documentElement.dataset.platform,'windows');
+    assert.equal(h.document.documentElement.dataset.material,surface==='main'?'acrylic':'blur');
+    h.events.get('desktop:status')({payload:{...h.info,materials:{main:'opaque',floating:'opaque'}}});
+    assert.equal(h.document.documentElement.dataset.material,'opaque');
+    h.events.get('desktop:status')({payload:{...h.info,materials:{main:'acrylic',floating:'opaque'}}});
+    assert.equal(h.document.documentElement.dataset.material,surface==='main'?'acrylic':'opaque');
+  }
+  const legacy=harness('floating.js',{material:'mica'});await flush();
+  assert.equal(legacy.document.documentElement.dataset.material,'opaque','legacy main material never enables panel transparency');
+});
