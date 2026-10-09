@@ -20,7 +20,7 @@ function fixture(){
     if(command!=='engine_call')return {};
     const {method,params}=args;
     if(method==='hello')return {version:'1.2.3'};if(method==='settings.get')return structuredClone(settings);
-    if(method==='settings.save'){if(f.saveFails)throw new Error('模拟保存失败');Object.assign(settings,structuredClone(params));return {};}
+    if(method==='settings.patch'){if(f.saveFails)throw new Error('模拟保存失败');Object.assign(settings,structuredClone(params.settings));return structuredClone(settings);}
     if(method==='hosts.credentials.save')return {passwordRef:'ssh-fixture-'+f.calls.length};if(method==='hosts.credentials.delete')return {};
     if(method==='hosts.discover')return {cpu:[{id:'cpu'}],errors:{}};
     if(method==='prices.list')return Array.from({length:50},(_,i)=>({id:'provider/model-'+i,name:'模型 '+i,input:0.00001,output:0.00003}));
@@ -56,22 +56,26 @@ function fixture(){
         const probe=await page.evaluate(()=>feature.calls.find(c=>c.args?.method==='network.test').args.params);assert.equal(probe.proxy.url,'http://127.0.0.1:7890');assert.deepEqual(probe.urls,['https://fixture.invalid/a','https://fixture.invalid/b']);
         await page.evaluate(()=>feature.unstable=true);await page.locator('#app-proxy-test').click();await page.waitForFunction(()=>document.querySelector('#app-proxy-result').textContent==='连接不稳定');
         const ordinarySaveStart=await page.evaluate(()=>{renderSettings();state.lastQuota=12345;return feature.calls.length;});
-        await page.locator('#field-refreshSeconds').fill('600');await page.locator('#settings-save-all').click();await page.waitForFunction(()=>feature.settings.refreshSeconds===600&&!state.busy&&!state.settingsSaving);
-        assert.deepEqual(await page.evaluate(start=>feature.calls.slice(start).map(c=>c.args?.method).filter(Boolean),ordinarySaveStart),['settings.get','settings.save','settings.get','dashboard']);assert.equal(await page.evaluate(()=>state.lastQuota),0,'Preserved proxy draft is saved and invalidates quota polling');
+        await page.locator('#field-refreshSeconds').fill('600');await commitSettings(page);await page.waitForFunction(()=>feature.settings.refreshSeconds===600&&!state.busy&&!state.settingsSaving);
+        assert.deepEqual(await page.evaluate(start=>feature.calls.slice(start).map(c=>c.args?.method).filter(Boolean),ordinarySaveStart),['settings.patch','settings.get','dashboard']);assert.equal(await page.evaluate(()=>state.lastQuota),0,'Preserved proxy draft is saved and invalidates quota polling');
         await page.evaluate(async()=>{state.settingsTab='prices';state.prices=await api('prices.list');renderSettings();});await page.locator('#field-mappingModel').fill('日志别名');await page.locator('[data-map-price="provider/model-49"]').click();
         assert.equal(await page.locator('#field-mappingId').inputValue(),'provider/model-49');assert.equal(await page.locator('#field-mappingModel').inputValue(),'日志别名');assert(await page.locator('#field-mappingId').evaluate(el=>el===document.activeElement));
         assert.equal(await page.locator('#content form').first().getAttribute('id'),'mapping-form');assert.deepEqual(await page.evaluate(()=>feature.settings.modelMappings),{});
         await page.evaluate(()=>{renderSettings();document.querySelector('#content').scrollTop=0;});assert.equal(await page.locator('#reprice').textContent(),'保存并重算');assert(await page.locator('#reprice').evaluate(el=>el.getBoundingClientRect().bottom<window.innerHeight));
         const repriceStart=await page.evaluate(()=>{feature.delayReprice=true;return feature.calls.length;});await page.locator('#reprice').click();await page.waitForFunction(()=>feature.releaseReprice);assert(await page.locator('#reprice').isDisabled());
-        await page.evaluate(()=>feature.releaseReprice());await page.waitForFunction(()=>!state.busy);assert.deepEqual(await page.evaluate(start=>feature.calls.slice(start).map(c=>c.args?.method).filter(Boolean),repriceStart),['settings.get','settings.save','settings.get','prices.recalculate','dashboard']);
-        await page.evaluate(()=>feature.holdDashboard=true);await page.locator('#field-mappingModel').fill('日志别名2');await page.locator('#field-mappingId').fill('provider/model-49');await page.locator('#mapping-form > button').click();await page.waitForFunction(()=>!state.busy);await page.locator('#settings-save-all').click();await page.waitForFunction(()=>feature.releaseDashboard&&!state.settingsSaving);
-        assert.equal(await page.evaluate(()=>feature.settings.modelMappings['日志别名2']),'provider/model-49');assert(await page.locator('#settings-save-all').isDisabled());await page.evaluate(()=>{feature.holdDashboard=false;feature.releaseDashboard();});await page.waitForFunction(()=>!state.busy);
+        await page.evaluate(()=>feature.releaseReprice());await page.waitForFunction(()=>!state.busy);assert.deepEqual(await page.evaluate(start=>feature.calls.slice(start).map(c=>c.args?.method).filter(Boolean),repriceStart),['settings.patch','settings.get','prices.recalculate','dashboard']);
+        await page.evaluate(()=>feature.holdDashboard=true);await page.locator('#field-mappingModel').fill('日志别名2');await page.locator('#field-mappingId').fill('provider/model-49');await page.locator('#mapping-form > button').click();await page.waitForFunction(()=>feature.releaseDashboard&&!state.busy&&!state.settingsSaving&&!state.settingsCommitting);
+        assert.equal(await page.evaluate(()=>feature.settings.modelMappings['日志别名2']),'provider/model-49');assert.equal(await page.locator('#field-mappingModel').isDisabled(),false,'A slow dashboard does not block further settings edits');await page.evaluate(()=>{feature.holdDashboard=false;feature.releaseDashboard();});await page.waitForFunction(()=>!state.busy);
+        await page.locator('[data-unmap="日志别名2"]').click();await page.waitForFunction(()=>!state.busy);assert.equal(await page.evaluate(()=>feature.settings.modelMappings['日志别名2']),undefined,'Removing a mapping persists immediately');
         await page.screenshot({path:path.join(output,'index.html-settings-prices.png')});
         await page.evaluate(()=>{state.settingsTab='hosts';renderSettings();});await page.locator('[data-edit="host"]').click();await page.locator('#field-authMode').selectOption('password');await page.locator('#field-username').fill('fixture-user');await page.locator('#field-password').fill('fixture secret');
         await page.locator('#discover-devices').click();await page.waitForFunction(()=>feature.calls.some(c=>c.args?.method==='hosts.credentials.delete'));
-        await page.evaluate(()=>feature.saveFails=true);await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);await page.locator('#settings-save-all').click();await page.waitForFunction(()=>!state.busy);assert.match(await page.locator('#message').textContent(),/模拟保存失败/);
-        assert.equal(await page.evaluate(()=>feature.settings.hosts[0].passwordRef),undefined);assert.equal(await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='hosts.credentials.delete').length),2);
-        await page.evaluate(()=>feature.saveFails=false);await page.locator('#settings-save-all').click();await page.waitForFunction(()=>!state.busy);await page.waitForFunction(()=>!document.querySelector('#editor').open);
+        await page.evaluate(()=>feature.saveFails=true);await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!editorSaving);assert.match(await page.locator('#editor-error').textContent(),/模拟保存失败/);
+        assert.equal(await page.locator('#editor[open]').count(),1);assert.equal(await page.locator('#field-password').inputValue(),'fixture secret');
+        assert.equal(await page.evaluate(()=>feature.settings.hosts[0].passwordRef),undefined);assert.equal(await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='hosts.credentials.delete').length),1);
+        const credentialSaves=await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='hosts.credentials.save').length);
+        await page.evaluate(()=>feature.saveFails=false);await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
+        assert.equal(await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='hosts.credentials.save').length),credentialSaves,'Retry reuses the prepared credential');
         const host=await page.evaluate(()=>feature.settings.hosts[0]);assert.equal(host.authMode,'password');assert.equal(host.username,'fixture-user');assert(host.passwordRef.startsWith('ssh-fixture-'));assert(!JSON.stringify(host).includes('fixture secret'));
         await page.evaluate(()=>{state.page='agent';render();feature.emit('operations:busy',{operationId:'other-window',busy:true});state.lastQuota=0;feature.timers.find(t=>t.ms===500).fn();});
         const before=await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='quotas.refresh').length);
@@ -90,6 +94,6 @@ function fixture(){
       await page.screenshot({path:path.join(output,surface+'-five-hour.png')});await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();await page.locator('#quota-close').click();
       assert.deepEqual(errors,[]);await page.screenshot({path:path.join(output,surface+'-panel.png')});await page.close();
     }
-    console.log('New features: password cleanup, proxy tests, mapping focus, top save/reprice, saves independent of dashboard latency, footer update/latency, cross-window sampling guard and three 5h/7d values passed');
+    console.log('New features: password cleanup, proxy tests, mapping focus/persistence, automatic save/reprice, saves independent of dashboard latency, footer update/latency, cross-window sampling guard and three 5h/7d values passed');
   }finally{await browser?.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

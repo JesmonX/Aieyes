@@ -54,7 +54,7 @@ function fixture(){
   assert(await card().locator('.quota-credit-summary').isVisible());
   const titleBox=await card().locator('.quota-title h3').boundingBox(),balanceBox=await card().locator('.quota-credit-summary').boundingBox();
   assert(balanceBox.x>=titleBox.x+titleBox.width-1 && Math.abs((balanceBox.y+balanceBox.height/2)-(titleBox.y+titleBox.height/2))<3,'Collapsed credits stay to the right of the title on the same line');
-  assert.equal(await card().locator('.quota-credit-summary .credit-label').evaluate(el=>getComputedStyle(el).color),'rgb(30, 94, 191)');
+  assert.equal(await card().locator('.quota-credit-summary .credit-label').evaluate(el=>getComputedStyle(el).color),await page.evaluate(()=>{const probe=document.createElement('span');probe.style.color='var(--accent)';document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();return color;}));
   assert.equal(await card().locator('.quota-title .provider-mark img').evaluate(img=>img.complete&&img.naturalWidth>0),true,'Provider icon is bundled and loads');
   assert.equal(await card().locator('.subscription-badge').textContent(),'Pro');
   const edgeCases=await page.evaluate(()=>{

@@ -1,3 +1,4 @@
+const {commitSettings}=require('./ui-test-helpers.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -30,7 +31,7 @@ function fixture() {
     switch(args.method){
       case 'hello':return {version:'1.2.3'};
       case 'settings.get':return structuredClone(settings);
-      case 'settings.save':Object.assign(settings,args.params);return {};
+      case 'settings.patch':if(t.saveFails)throw new Error('模拟自动保存失败');Object.assign(settings,structuredClone(args.params.settings));return structuredClone(settings);
       case 'dashboard':return {summary:usage,quotas:[],sources:[],models:[],dayModels:[],modelOptions:[],trendDays:[],heatmap:[],pricingGaps:[]};
       case 'sources.scan':case 'prices.list':return [];
       default:return {};
@@ -53,10 +54,10 @@ function fixture() {
     assert.match(await page.locator('#update-versions').textContent(),/1\.2\.3.*1\.2\.4/);
     assert.equal(await page.locator('#update-notes script').count(),0);
     await page.locator('#update-later').click();assert.equal(await page.locator('#update-dialog[open]').count(),0);
-    await page.locator('#field-refreshSeconds').fill('123');await page.locator('#update-view').click();await page.locator('#update-install').click();
+    await page.evaluate(()=>updateTest.saveFails=true);await page.locator('#field-refreshSeconds').fill('123');await commitSettings(page);assert.equal(await page.evaluate(()=>state.settings.refreshSeconds),300);await page.locator('#update-view').click();await page.locator('#update-install').click();
     assert.match(await page.locator('#update-message').textContent(),/保存设置/);
     assert.equal(await page.evaluate(()=>updateTest.calls.filter(x=>x==='updates_install').length),0);
-    await page.locator('#update-later').click();await page.locator('#settings-save-all').click();await page.waitForFunction(()=>!state.busy);
+    await page.locator('#update-later').click();await page.evaluate(()=>updateTest.saveFails=false);await page.locator('#field-refreshSeconds').fill('124');await commitSettings(page);await page.waitForFunction(()=>state.settings.refreshSeconds===124);
     await page.locator('#update-view').click();await page.locator('#update-install').click();
     await page.waitForFunction(()=>document.querySelector('#update-message').textContent.includes('签名校验失败'));
     assert.equal(await page.evaluate(()=>updateTest.calls.filter(x=>x==='updates_install').length),1);
