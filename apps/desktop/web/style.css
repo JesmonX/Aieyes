@@ -425,7 +425,7 @@ body.editor-open { overflow: hidden; }
 .agy-windows .quota-window { margin-top: 6px; }
 .agy-windows .between { flex-wrap: wrap; gap: 3px; }
 .agy-windows .resource-bar { margin: 6px 0; }
-.estimate-entry { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 12px; color: var(--accent); font-size: var(--font-secondary); }
+.estimate-entry { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 12px; color: var(--accent); font-size: var(--font-secondary); text-align: left; }
 #quota-dialog { width: min(510px,calc(100vw - 24px)); max-height: calc(100vh - 24px); padding: 20px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface-strong); color: var(--ink); box-shadow: var(--shadow-lift); backdrop-filter: blur(28px) saturate(1.4); }
 #quota-dialog::backdrop { background: rgba(10,20,40,.28); backdrop-filter: blur(4px); }
 .quota-dialog-body { display: grid; gap: 12px; }
