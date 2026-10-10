@@ -326,6 +326,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await page.evaluate(sample=>{window.fixtureHosts=[{id:'host1',sample}];state.settings.hosts[0].enabled=true;state.settings.hosts[0].details=Object.keys(detailOptions);state.settings.hosts[0].metrics=Object.keys(groups);state.settings.hosts[0].devices=[];},sampleData);
     await page.locator('[data-page=servers]').click();
     await page.waitForFunction(()=>!state.serverBusy);
+    await page.waitForFunction(()=>document.querySelector('.resource-ring strong')?.textContent==='42.0%');
     assert.equal(await page.locator('.resource-ring').count(),2);
     assert.deepEqual(await page.locator('.resource-ring strong').allTextContents(),['42.0%','75.0%']);
     assert.equal(await page.locator('.host-status').textContent(),'正常');
