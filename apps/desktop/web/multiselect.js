@@ -4,15 +4,16 @@
   const parse = text => unique(String(text).split(',').map(s => s.trim()).filter(Boolean));
   function deviceIds(tokens, group) {
     return tokens.filter(s => s.startsWith(group + ':')).map(s => s.slice(group.length + 1))
-      .filter(id => id !== '__none__' && !(group === 'cpu' && id === 'cpu'));
+      .filter(id => id !== '__none__' && id !== '__all__' && !(group === 'cpu' && id === 'cpu'));
   }
   function deviceSelected(tokens, group, ids) {
-    return tokens.some(s => s.startsWith(group + ':')) ? deviceIds(tokens, group) : [...ids];
+    if(tokens.includes(group+':__all__'))return [...ids];
+    return tokens.some(s => s.startsWith(group + ':')) ? deviceIds(tokens, group) : [...ids].filter(id=>group!=='filesystems'||recommendedFilesystem(id));
   }
   function writeDevices(tokens, group, selected, all = false) {
     const remaining = tokens.filter(s => !s.startsWith(group + ':'));
-    const ids = unique(selected).filter(id => id !== '__none__' && !(group === 'cpu' && id === 'cpu'));
-    return [...remaining, ...(all ? [] : (ids.length ? ids : ['__none__']).map(id => group + ':' + id))];
+    const ids = unique(selected).filter(id => id !== '__none__' && id !== '__all__' && !(group === 'cpu' && id === 'cpu'));
+    return [...remaining, ...(all ? (group==='filesystems'?['filesystems:__all__']:[]) : (ids.length ? ids : ['__none__']).map(id => group + ':' + id))];
   }
   function applySelection(selected, targets, action) {
     const result = new Set(selected);
@@ -125,5 +126,8 @@
     search.oninput = renderOptions;
     refresh(); return controller;
   }
-  globalThis.AieyesSelect = {parse, deviceIds, deviceSelected, writeDevices, applySelection, filterOptions, mount};
+  function recommendedFilesystem(id,type='') {
+    const path=id.toLowerCase();return !['tmpfs','devtmpfs','squashfs','overlay','proc','procfs','sysfs','devfs','autofs','cgroup','cgroup2'].includes(type.toLowerCase())&&!['/snap','/var/lib/snapd/snap','/run','/efi','/boot/efi','/dev','/proc','/sys','/system/volumes/preboot','/system/volumes/vm','/system/volumes/update','/system/volumes/xarts','/system/volumes/iscpreboot','/system/volumes/hardware'].some(p=>path===p||path.startsWith(p+'/'));
+  }
+  globalThis.AieyesSelect = {recommendedFilesystem,parse, deviceIds, deviceSelected, writeDevices, applySelection, filterOptions, mount};
 })();

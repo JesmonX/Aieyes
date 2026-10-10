@@ -208,18 +208,200 @@ def running(root):
     return sorted(result, key=lambda v: v['pid'])
 
 
+def process_auth_usage(args, env, started, system=pathlib.Path('/etc/codex/config.toml')):
+    """Return only a classification; never return/log argv, URLs, or keys."""
+    profile, overrides, index = None, [], 1
+    while index < len(args):
+        arg = args[index]
+        if arg == '--': break
+        if arg in ('--profile', '-p', '--config', '-c'):
+            index += 1
+            if index >= len(args): return 'unknownProfile'
+            if arg in ('--profile', '-p'): profile = args[index]
+            else: overrides.append(args[index])
+        elif arg.startswith('--profile='): profile = arg.split('=', 1)[1]
+        elif arg.startswith('-p') and len(arg) > 2: profile = arg[2:].removeprefix('=')
+        elif arg.startswith('--config='): overrides.append(arg.split('=', 1)[1])
+        elif arg.startswith('-c') and len(arg) > 2: overrides.append(arg[2:].removeprefix('='))
+        index += 1
+    fallback = 'unknownProfile' if profile is not None else 'account'
+    def merge(base, layer):
+        for key, value in layer.items():
+            if isinstance(value, dict) and isinstance(base.get(key), dict): merge(base[key], value)
+            else: base[key] = copy.deepcopy(value)
+    def load(path, check_launch=False):
+        try:
+            with path.open('rb') as file:
+                metadata = os.fstat(file.fileno())
+                if metadata.st_size > 1024*1024 or (check_launch and started is not None and metadata.st_mtime > started + 1):
+                    raise ValueError('unconfirmed config')
+                text = file.read(1024*1024+1)
+                if len(text) > 1024*1024: raise ValueError('unconfirmed config')
+                return parse_toml(text.decode())
+        except FileNotFoundError: return None
+    def override(config, text):
+        key, value = text.split('=', 1)
+        table = parse_toml(key.strip() + ' = 0')
+        keys = []
+        while isinstance(table, dict):
+            if len(table) != 1: raise ValueError('invalid key')
+            name, table = next(iter(table.items())); keys.append(name)
+        try: value = parse_toml('value = ' + value.strip())['value']
+        except ValueError: value = value.strip()
+        for key in keys[:-1]:
+            if not isinstance(config.get(key), dict): config[key] = {}
+            config = config[key]
+        config[keys[-1]] = value
+    def classify(config):
+        provider = config.get('model_provider', 'openai')
+        if provider == 'openai': return 'account'
+        table = config.get('model_providers', {}).get(provider)
+        if not isinstance(table, dict): return 'unknownProfile'
+        required = table.get('requires_openai_auth', False)
+        if required is True: return 'account'
+        if required is not False: return 'unknownProfile'
+        url = urllib.parse.urlparse(table.get('base_url', ''))
+        token = table.get('experimental_bearer_token')
+        key = env.get(table.get('env_key', ''))
+        credential = any(isinstance(v, str) and v.strip() for v in (token, key))
+        return 'independentApi' if url.scheme in ('http', 'https') and url.hostname and credential else 'unknownProfile'
+    import copy
+    import urllib.parse
+    try:
+        home = pathlib.Path(env['CODEX_HOME']) if env.get('CODEX_HOME') else pathlib.Path(env['HOME']) / '.codex'
+        if not home.is_absolute(): return fallback
+        config, incomplete_base = {}, False
+        for path in (system, home / 'config.toml'):
+            try: merge(config, load(path) or {})
+            except (OSError, ValueError): config, incomplete_base = {}, True
+        alternatives = []
+        if profile is not None:
+            if not re.fullmatch(r'[A-Za-z0-9_-]+', profile): return 'unknownProfile'
+            file = load(home / (profile + '.config.toml'), check_launch=True)
+            legacy = config.get('profiles', {}).get(profile)
+            if file is None and legacy is None: return 'unknownProfile'
+            for layer in (file, legacy):
+                if layer is not None:
+                    value = copy.deepcopy(config); merge(value, layer); alternatives.append(value)
+        else: alternatives.append(config)
+        answers = set()
+        for config in alternatives:
+            for text in overrides: override(config, text)
+            usage = classify(config)
+            if usage == 'unknownProfile' and profile is None: return fallback
+            if incomplete_base:
+                selected = config.get('model_provider')
+                explicit = config.get('model_providers', {}).get(selected, {}).get('requires_openai_auth') is False
+                if not (usage == 'independentApi' and explicit or selected == 'openai'): return fallback
+            answers.add(usage)
+        return answers.pop() if len(answers) == 1 else 'unknownProfile'
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return fallback
+
+
+def switch_running(confirmed=(), proc_root=pathlib.Path('/proc'), preserved=None):
+    """Switch scope covers this user's app trees, independently of CODEX_HOME."""
+    rows = []
+    try:
+        boot = next(int(line.split()[1]) for line in (proc_root / 'stat').read_text().splitlines() if line.startswith('btime '))
+        ticks = os.sysconf('SC_CLK_TCK')
+    except (OSError, ValueError, StopIteration): boot, ticks = None, None
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        name = ''
+        try:
+            if entry.stat().st_uid != os.getuid():
+                continue
+            name = (entry / 'comm').read_text().strip().lower()
+            try:
+                executable = str((entry / 'exe').readlink())
+                name = pathlib.Path(executable).name.lower()
+            except OSError:
+                executable = name
+            stat = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+            if stat[0] == 'Z':
+                continue
+            usage = 'account'
+            if name == 'codex':
+                try:
+                    args = (entry / 'cmdline').read_bytes().rstrip(b'\0').decode().split('\0')
+                    env = dict(item.decode().split('=', 1) for item in (entry / 'environ').read_bytes().split(b'\0') if b'=' in item)
+                    usage = process_auth_usage(args, env, boot + int(stat[19]) / ticks if boot is not None else None)
+                except (OSError, ValueError): pass
+            rows.append(dict(pid=int(entry.name), parentPid=int(stat[1]), name=name,
+                             fingerprint=revision([entry.name, stat[19], executable, usage]), canClose=True, authUsage=usage))
+        except (OSError, ValueError, IndexError):
+            if entry.exists() and name.startswith(('codex', 'chatgpt')):
+                rows.append(dict(pid=int(entry.name), name=name, fingerprint='unknown', canClose=False))
+    known = {'codex', 'chatgpt', 'codex-code-mode-host'}
+    independent = {p['pid'] for p in rows if p.get('authUsage') == 'independentApi'}
+    while True:
+        expanded = independent | {p['pid'] for p in rows if p['name'] != 'codex' and p.get('parentPid') in independent}
+        if independent == expanded: break
+        independent = expanded
+    ancestors = set()
+    for row in rows:
+        if row['pid'] not in independent: continue
+        parent = row.get('parentPid')
+        while parent and parent not in ancestors:
+            ancestors.add(parent)
+            parent = next((p.get('parentPid') for p in rows if p['pid'] == parent), None)
+    selected = {p['pid'] for p in rows if p['pid'] not in independent and p['canClose'] and (p['name'] in known or any(
+        old['pid'] == p['pid'] and old['fingerprint'] == p['fingerprint'] for old in confirmed))}
+    while True:
+        expanded = selected | {p['pid'] for p in rows if p['pid'] not in independent and p.get('parentPid') in selected}
+        if expanded == selected:
+            break
+        selected = expanded
+    result = []
+    for p in rows:
+        usage = p.pop('authUsage', 'account')
+        if p['pid'] not in independent and p['pid'] not in selected and p['name'] not in known and not p['name'].startswith(('codex-', 'chatgpt-')):
+            continue
+        p['canClose'] = p['canClose'] and p['pid'] in selected
+        if not p['canClose']:
+            p['blockingReason'] = '无法确认辅助进程归属，请手动关闭后重新检查'
+        if usage == 'unknownProfile':
+            p.update(canClose=False, blockingReason='无法确认此进程的 profile 认证方式，请手动处理后重新检查')
+        if p['pid'] in ancestors:
+            p.update(canClose=False, blockingReason='此进程仍承载独立 API 实例，请先分离或手动关闭后重新检查')
+        if p['name'] == 'chatgpt': p['name'] = 'ChatGPT 应用'
+        if p['name'] == 'codex': p['name'] = 'Codex'
+        if p['pid'] in independent:
+            p.update(canClose=False, blockingReason='已确认使用独立 API 凭据，将保留')
+            if preserved is not None: preserved.append(p)
+        else: result.append(p)
+    return sorted(result, key=lambda p: p['pid'])
+
+
 def close_processes(root, expected):
-    actual = running(root)
-    if actual != expected:
-        raise ValueError('运行进程已变化，请重新检查后切换')
-    if any(not p['canClose'] for p in actual):
-        raise ValueError('无法确认部分进程所属目录，请手动关闭 Codex 后重试')
-    for p in actual:
-        os.kill(p['pid'], signal.SIGTERM)
+    if any(not p['canClose'] for p in expected):
+        raise ValueError('无法确认部分进程归属，请手动关闭 Codex 和 ChatGPT 后重试')
+    def checked():
+        actual = switch_running(expected)
+        if any(not p['canClose'] for p in actual):
+            raise ValueError('进程认证方式或依赖已变化，账号未切换，请重新检查')
+        if any(not any(p['pid'] == old['pid'] and p['fingerprint'] == old['fingerprint'] for old in expected) for p in actual):
+            raise ValueError('Codex / ChatGPT 已重新启动或运行进程已变化，请重新检查后切换')
+        return actual
+    def depth(p):
+        seen = set()
+        while p.get('parentPid') and p['pid'] not in seen:
+            seen.add(p['pid'])
+            parent = next((v for v in expected if v['pid'] == p['parentPid']), None)
+            if parent is None: break
+            p = parent
+        return len(seen)
+    checked()
+    for p in sorted(expected, key=lambda p: (depth(p), p['pid'])):
+        if any(v['pid'] == p['pid'] for v in checked()):
+            try: os.kill(p['pid'], signal.SIGTERM)
+            except ProcessLookupError: pass
     end = time.monotonic() + 10
-    while running(root):
+    while checked():
         if time.monotonic() >= end:
-            raise ValueError('Codex 未退出或已自动重启，账号未切换')
+            raise ValueError('Codex / ChatGPT 未退出，账号未切换，请手动关闭后重新检查')
         time.sleep(.25)
 
 
@@ -227,12 +409,31 @@ def config(root):
     path = safe(root / 'config.toml')
     if not path.exists():
         return {}
+    return parse_toml(path.read_text())
+
+
+def parse_toml(text):
     try:
         import tomllib
     except ImportError:
-        raise ValueError('账号管理需要 Python 3.11 或更新版本来读取 Codex 配置') from None
+        # Remote payloads include Tomli; source-tree runs use the same vendored code.
+        sources = globals().get('_aieyes_tomli_sources')
+        if sources:
+            import types
+            package = types.ModuleType('_aieyes_tomli')
+            package.__path__ = []
+            sys.modules['_aieyes_tomli'] = package
+            for name in ('_types', '_re', '_parser', '__init__'):
+                key = '_aieyes_tomli' + ('.' + name if name != '__init__' else '')
+                module = package if name == '__init__' else types.ModuleType(key)
+                module.__package__ = '_aieyes_tomli'
+                sys.modules[key] = module
+                exec(compile(sources[name], '<aieyes-tomli/' + name + '>', 'exec'), module.__dict__)
+            tomllib = package
+        else:
+            from vendor import tomli as tomllib
     try:
-        return tomllib.loads(path.read_text())
+        return tomllib.loads(text)
     except ValueError:
         raise ValueError('Codex 配置格式无效') from None
 
@@ -649,7 +850,8 @@ def call(request):
             require_file(root)
             p = profile(root, params['profileId'])
             op = uuid.uuid4().hex
-            value = dict(operationId=op, status='prepared', profileId=p['id'], revision=revision(snapshot(root)), processes=running(root), expiresAt=int(time.time()) + 120)
+            preserved = []
+            value = dict(operationId=op, status='prepared', profileId=p['id'], revision=revision(snapshot(root)), processes=switch_running(preserved=preserved), preservedProcesses=preserved, expiresAt=int(time.time()) + 120)
             atomic(operation(root, op), value)
             return value
         if method == 'switch.commit':
@@ -669,7 +871,7 @@ def call(request):
             if record['revision'] != revision(snapshot(root)):
                 raise ValueError('凭据已更新，请重新检查后切换')
             if record['processes'] and not params.get('closeProcesses'):
-                raise ValueError('Codex 正在运行，尚未授权关闭')
+                raise ValueError('Codex / ChatGPT 正在运行，尚未授权关闭')
             close_processes(root, record['processes'])
             p = profile(root, record['profileId'])
             auth = current_auth(root, p)
@@ -677,8 +879,8 @@ def call(request):
             with Rpc(loc, layout(root, p['id'], 'query')) as rpc:
                 rpc.login(auth)
                 rpc.call('account/rateLimits/read', None)
-            if running(root):
-                raise ValueError('Codex 已重新启动，账号未切换')
+            if switch_running():
+                raise ValueError('Codex / ChatGPT 已重新启动，账号未切换')
             if record['revision'] != revision(snapshot(root)):
                 raise ValueError('验证期间凭据已改变，请重新检查后切换')
             old = read(root / 'auth.json') if (root / 'auth.json').exists() else None
@@ -691,7 +893,7 @@ def call(request):
             if (read(root / 'auth.json') if (root / 'auth.json').exists() else None) != old:
                 raise ValueError('外部凭据已变化，账号未切换')
             atomic(root / 'auth.json', auth)
-            record.update(status='succeeded', message='账号已切换，请重新打开 Codex 并恢复会话')
+            record.update(status='succeeded', message='账号已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话')
             atomic(operation(root, op), record)
             return record
         if method == 'profiles.remove':

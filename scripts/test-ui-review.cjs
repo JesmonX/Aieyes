@@ -122,7 +122,7 @@ function fixture() {
     assert.equal(await page.locator('#activity').getAttribute('data-status'),'error');
     assert.match(await page.locator('.quotas').textContent(),/账户凭证失效/);
     await page.evaluate(async()=>{review.failScan=false;review.scanRows=[{id:'remote',error:'远程记录读取失败'}];await scan();});
-    assert.equal(await page.evaluate(()=>state.lastSuccessfulUpdate),lastSuccess);assert.match(await page.locator('#message').textContent(),/远程记录读取失败/);
+    assert.equal(await page.evaluate(()=>state.lastSuccessfulUpdate),lastSuccess);await page.locator('[data-refresh-status=scan]').click();assert.match(await page.locator('#refresh-status-popover').textContent(),/远程记录读取失败/);await page.keyboard.press('Escape');
     await page.locator('[data-page=settings]').click();await page.locator('[data-settings-tab=prices]').click();await page.locator('#add-price').click();
     assert.equal(await page.locator('#field-id').count(),1);assert.deepEqual(await page.locator('#field-id').evaluate(el=>[...el.labels].map(label=>label.textContent)),['模型 ID']);
     await discardEditor(page);await page.locator('[data-settings-tab=prices]').focus();await page.keyboard.press('ArrowLeft');
@@ -137,8 +137,10 @@ function fixture() {
       const sample=structuredClone(review.hosts[0].sample);sample.cpu[0].utilization=77;
       applyHostSamples([{id:'host',error:'部分采样暂不可用',sample}]);
     });
+    await page.waitForFunction(()=>document.querySelector('.resource-ring strong')?.textContent==='77.0%');
     assert.equal(await page.locator('.resource-ring strong').first().textContent(),'77.0%','An error row retains its own valid sample');
     const beforeFailure=Date.now();await page.evaluate(async()=>{review.failHosts=true;await sample();});
+    await page.waitForFunction(()=>document.querySelector('.server-card')?.textContent.includes('测试采样 RPC 失败'));
     assert.match(await page.locator('.server-card').textContent(),/测试采样 RPC 失败/);
     assert.equal(await page.locator('.resource-ring strong').first().textContent(),'77.0%');
     assert.ok(await page.evaluate(stamp=>state.hosts[0].lastAttemptAt>=stamp,beforeFailure));
@@ -151,9 +153,9 @@ function fixture() {
     assert.match(await panel.locator('#activity').textContent(),/同步记录中/);
     await panel.locator('#panel-refresh').click();assert.equal(await panel.locator('[data-refresh=scan]').isDisabled(),true);await panel.keyboard.press('Escape');
     await panel.evaluate(()=>reviewEmit('desktop:refresh-status',{key:'scan',busy:false,success:null,failures:[{id:'remote',error:'另一窗口同步失败'}]}));
-    assert.match(await panel.locator('.error-list').textContent(),/另一窗口同步失败/);
+    await panel.locator('[data-refresh-status=scan]').click();assert.match(await panel.locator('#refresh-status-popover').textContent(),/另一窗口同步失败/);
     await panel.evaluate(()=>reviewEmit('desktop:refresh-status',{key:'scan',busy:false,success:Date.now(),failures:[]}));
-    assert.equal(await panel.locator('.error-list').count(),0);
+    assert.equal(await panel.locator('#refresh-status-popover .error-row').count(),0);await panel.keyboard.press('Escape');
     await panel.locator('#panel-more > summary').click();await panel.locator('#panel-quit').waitFor();
     await panel.keyboard.press('Escape');assert.equal(await panel.locator('#panel-more').evaluate(el=>el.open),false);
     assert.equal(await panel.locator('body').getAttribute('data-view'),'panel','Esc dismisses More before the panel');
@@ -175,6 +177,7 @@ function fixture() {
     assert.equal(await panel.evaluate(()=>state.settings.sources[0].id),'new-source');
     await panel.locator('[data-page=servers]').click();await panel.waitForFunction(()=>!state.serverBusy);
     await panel.evaluate(async()=>{const rows=structuredClone(review.hosts);rows[0].sample.cpu[0].utilization=91;await reviewEmit('desktop:hosts',rows);});
+    await panel.waitForFunction(()=>document.querySelector('.resource-ring strong')?.textContent==='91.0%');
     assert.equal(await panel.locator('.resource-ring strong').first().textContent(),'91.0%');
     await panel.locator('.server-card > summary').click();await panel.locator('[data-metric="host:cpu"] > summary').focus();
     await panel.evaluate(()=>{window.previousCard=document.querySelector('.server-card');state.serverBusy=true;state.hosts[0].sample.timestamp=Date.now()/1000-11;reviewTimers.find(timer=>timer.ms===1000).fn();});
@@ -183,6 +186,7 @@ function fixture() {
     assert.equal(await panel.locator('[data-metric="host:cpu"] > summary').evaluate(el=>el===document.activeElement),true);
     await panel.evaluate(async()=>{state.serverBusy=false;await reviewEmit('desktop:hosts-error','后台采样 RPC 失败');});
     assert.equal(await panel.locator('.host-status').textContent(),'连接失败');
+    await panel.waitForFunction(()=>document.querySelector('.resource-ring strong')?.textContent==='91.0%');
     assert.equal(await panel.locator('.resource-ring strong').first().textContent(),'91.0%');
     const panelSuccess=await panel.evaluate(()=>state.lastSuccessfulUpdate);
     await panel.evaluate(async()=>{review.quotaRows=[{provider:'deepseek',accountId:'a',name:'余额',windows:[],error:'账户凭证失效'}];await reviewEmit('desktop:data-changed','quotas.refresh');});
@@ -190,9 +194,9 @@ function fixture() {
     assert.equal(await panel.evaluate(()=>state.lastSuccessfulUpdate),panelSuccess);
     await panel.evaluate(async()=>{review.settings.hosts=[];await reviewEmit('desktop:settings',null);});
     await panel.locator('#add-first-host').click();assert.ok((await panel.evaluate(()=>review.actions)).includes('add-host'));
-    await page.evaluate(async()=>{state.page='agent';state.lastMetrics=Date.now()-3000;await reviewEmit('desktop:status',{panelOpen:true,panelPage:'servers',platform:'windows',sessions:[],summary:'暂无活跃会话',mode:'auto',effectiveMode:'floating'});});
+    await page.evaluate(async()=>{state.page='agent';state.lastMetrics=Date.now();await reviewEmit('desktop:status',{panelOpen:true,panelPage:'servers',platform:'windows',sessions:[],summary:'暂无活跃会话',mode:'auto',effectiveMode:'floating'});});
     const hostCalls=await page.evaluate(()=>review.calls.filter(method=>method==='hosts.sample').length);
-    await page.evaluate(()=>{state.page='settings';state.settingsTab='hosts';render();editItem();reviewTimers.find(timer=>timer.ms===500).fn();});await page.waitForFunction(()=>!state.serverBusy);
+    await page.evaluate(()=>{state.page='settings';state.settingsTab='hosts';render();editItem();state.lastMetrics=Date.now()-3000;runScheduledRefreshes();});await page.waitForFunction(()=>!state.serverBusy);
     assert.equal(await page.locator('#editor').evaluate(el=>el.open),true);
     assert.equal(await page.evaluate(()=>review.calls.filter(method=>method==='hosts.sample').length),hostCalls+1,'An open server panel keeps the main sampler at the foreground cadence');
     await page.setViewportSize({width:640,height:440});

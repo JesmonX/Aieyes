@@ -254,6 +254,40 @@ impl Default for Host {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+pub struct LocalMonitor {
+    pub enabled: bool,
+    pub metrics: Vec<String>,
+    pub devices: Vec<String>,
+    pub details: Vec<String>,
+}
+impl Default for LocalMonitor {
+    fn default() -> Self {
+        let host = Host::default();
+        Self {
+            enabled: true,
+            metrics: host.metrics,
+            devices: host.devices,
+            details: host.details,
+        }
+    }
+}
+impl LocalMonitor {
+    pub fn host(&self) -> Host {
+        Host {
+            id: "local".into(),
+            name: "本机".into(),
+            target: "本机".into(),
+            enabled: self.enabled,
+            metrics: self.metrics.clone(),
+            devices: self.devices.clone(),
+            details: self.details.clone(),
+            ..Host::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub deleted_accounts: Vec<Account>,
     pub agents: Vec<AgentConfiguration>,
@@ -265,7 +299,10 @@ pub struct Settings {
     pub hosts: Vec<Host>,
     pub proxy: ProxyConfig,
     pub refresh_seconds: u64,
+    pub history_refresh_seconds: u64,
     pub server_refresh_seconds: u64,
+    pub server_foreground_refresh_seconds: u64,
+    pub local_monitor: LocalMonitor,
     pub menu_metric: String,
     pub github_repository: String,
     pub model_mappings: std::collections::BTreeMap<String, String>,
@@ -287,7 +324,10 @@ impl Default for Settings {
                 url: String::new(),
             },
             refresh_seconds: 300,
+            history_refresh_seconds: 300,
             server_refresh_seconds: 10,
+            server_foreground_refresh_seconds: 2,
+            local_monitor: LocalMonitor::default(),
             menu_metric: "icon".into(),
             github_repository: String::new(),
             model_mappings: Default::default(),
@@ -422,7 +462,15 @@ impl Settings {
                 }
             }
         }
-        self.version = self.version.max(4);
+        if self.version < 5 {
+            self.history_refresh_seconds = self.refresh_seconds;
+        }
+        self.version = self.version.max(5);
+    }
+    pub fn monitored_hosts(&self) -> Vec<Host> {
+        std::iter::once(self.local_monitor.host())
+            .chain(self.hosts.clone())
+            .collect()
     }
     pub fn quota_enabled(&self, source: &Source) -> bool {
         !source.account_id.is_empty()
@@ -481,7 +529,20 @@ pub struct CreditsSnapshot {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+pub struct AccountIdentity {
+    pub key: String,
+    pub email: String,
+    pub subscription: Option<String>,
+    pub checked_at: i64,
+    pub subscription_checked_at: Option<i64>,
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct QuotaSnapshot {
+    pub identity: Option<AccountIdentity>,
+    pub metadata_error: Option<String>,
     pub credits: Option<CreditsSnapshot>,
     pub credits_updated_at: Option<i64>,
     pub credits_origin: Option<String>,

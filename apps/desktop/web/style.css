@@ -318,6 +318,18 @@ body.editor-open { overflow: hidden; }
 .dialog-foot { border-top: 1px solid var(--border); }
 #editor-fields { padding: 8px 23px 20px; overflow: auto; }
 
+#codex-switch { inset: 16px; width: min(580px, calc(100vw - 32px)); max-height: calc(100vh - 88px); overflow: hidden; }
+#codex-switch[open] { display: flex; flex-direction: column; }
+#codex-switch::backdrop { background: rgb(18 26 44 / 28%); backdrop-filter: blur(4px); }
+.codex-switch-body { padding: 0 23px 12px; min-height: 0; overflow: auto; }
+.codex-switch-body p { overflow-wrap: anywhere; }
+.codex-switch-body .warning { color: var(--warn); }
+.codex-switch-processes { max-height: 210px; overflow: auto; padding-left: 22px; }
+.codex-switch-processes li { margin-bottom: 10px; overflow-wrap: anywhere; }
+.codex-switch-processes small { display: block; }
+#codex-switch .dialog-foot { display: flex; gap: 8px; flex-wrap: wrap; }
+#codex-switch [data-auth=commit] { margin-left: auto; }
+
 /* --- Popover multiselect ------------------------------------------------ */
 .multi-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 38px; text-align: left; font-size: var(--font-secondary); }
 .multi-trigger::after { content: '⌄'; font-size: 17px; line-height: 1; color: var(--faint); transition: transform var(--t-base) var(--ease); }
@@ -783,3 +795,33 @@ body[data-platform=windows] .server-summary-metrics .resource-ring strong { font
 @media(forced-colors:active) { html body::before { background:Canvas; box-shadow:none; } }
 body:not([data-platform=windows]) .font-notice { display:none; }
 .font-license-text { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:var(--font-secondary); }
+
+/* Refresh feedback occupies a fixed slot beside its section title. */
+.heading-refresh { display:inline-grid; place-items:center; width:24px; height:24px; min-height:0; padding:0; border:0; background:transparent; box-shadow:none; color:var(--muted); vertical-align:middle; font:18px system-ui; flex-shrink:0; }
+.heading-refresh[data-busy=true] > span { animation:refresh-spin 1s linear infinite; }
+.heading-refresh[data-error=true] { color:var(--warn); }
+@keyframes refresh-spin { to { transform:rotate(360deg); } }
+@media(prefers-reduced-motion:reduce) { .heading-refresh[data-busy=true] > span { animation:none; opacity:.6; } }
+#refresh-status-popover { border:1px solid var(--border); border-radius:12px; background:var(--solid); color:var(--ink); padding:18px; width:min(440px,90vw); max-height:65vh; overflow:auto; box-shadow:0 12px 40px #0003; }
+#message { position:fixed; z-index:30; top:60px; right:18px; width:min(480px,calc(100vw - 36px)); max-height:50vh; overflow:auto; }
+.agent-machines { display:block; padding:0; margin:18px 0 0; }
+.agent-machines > .list-row { display:flex; width:100%; min-height:48px; padding:12px 4px; gap:16px; border-top:1px solid var(--border); }
+.agent-machines > .list-row label { min-width:0; }
+.agent-setup input[role=switch] { appearance:none; width:34px; height:20px; flex:0 0 34px; border:0; border-radius:20px; background:var(--muted); position:relative; cursor:pointer; transition:background .15s; }
+.agent-setup input[role=switch]::after { content:''; position:absolute; top:3px; left:3px; width:14px; height:14px; border-radius:50%; background:white; transition:transform .15s; }
+.agent-setup input[role=switch]:checked { background:var(--accent); }
+.agent-setup input[role=switch]:checked::after { transform:translateX(14px); }
+.agent-setup input:disabled { opacity:.45; cursor:default; }
+
+/* Device virtualization keeps the original stacked metric rows. Spacers must
+   not inherit row padding or become browser scroll anchors. */
+.metric-detail > .metric-device { display:block; padding:0; }
+.metric-device > div:not(.resource-bar) { display:flex; justify-content:space-between; gap:12px; padding:5px 0; overflow-wrap:anywhere; }
+.metric-device > .resource-bar { display:block; padding:0; margin:4px 0 12px; }
+.metric-detail > .metric-spacer { display:block; padding:0; overflow-anchor:none; }
+
+/* Account identity remains readable without widening compact quota cards. */
+.quota-heading-label{display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.quota-email{font-size:11px;font-weight:400;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;user-select:text}
+.account-identity,#agy-login-identity{overflow-wrap:anywhere;user-select:text}
+.quota-identity-note{margin:4px 0}

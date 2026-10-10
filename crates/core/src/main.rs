@@ -40,6 +40,7 @@ fn run() -> anyhow::Result<()> {
     if args.iter().any(|arg| arg == "--update-transport") {
         return aieyes_core::update_transport::serve(&root);
     }
+    aieyes_core::process::install_query_shutdown_handler();
     let mut engine = Engine::open(&root)?;
     if let Some(i) = args.iter().position(|a| a == "--call") {
         let method = args

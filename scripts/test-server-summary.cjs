@@ -61,9 +61,10 @@ function fixture(){
    assert.equal(await card.locator('.resource-ring').count(),2,'Opening keeps exactly one resource overview');
    assert.equal(await card.locator('[data-metric="summary-host:gpu"] .resource-bar').count(),0);
    assert.equal(await card.locator('[data-metric="summary-host:cpu"] .resource-bar[aria-label="cpu"]').count(),0);
-   assert.equal(await card.locator('[data-metric="summary-host:cpu"] .resource-bar[aria-label="cpu0"]').count(),1);
+   assert.equal(await card.locator('[data-metric="summary-host:cpu"] .resource-bar[aria-label="cpu0"]').count(),0,'Collapsed groups allocate no device rows');
    assert.equal(await card.locator('[data-metric="summary-host:network"]').textContent().then(t=>t.includes('累计')),false);
    await card.locator('[data-metric="summary-host:cpu"] > summary').click();
+   await card.locator('[data-metric="summary-host:cpu"] .resource-bar[aria-label="cpu0"]').waitFor();
    await page.evaluate(()=>sample());assert(await card.evaluate(el=>el.open));assert(await card.locator('[data-metric="summary-host:cpu"]').evaluate(el=>el.open));
    await summary.click();await page.evaluate(()=>sample());assert.equal(await card.evaluate(el=>el.open),false);
    await page.evaluate(()=>{state.settings.hosts[0].devices=['gpu:1','network:ib0','cpu:__none__','filesystems:/data'];renderServers();});

@@ -41,18 +41,17 @@ pub fn rates(current: &Value, previous: Option<&Value>) -> Value {
         if let (Some(rows), Some(prior)) = (out[group].as_array_mut(), old[group].as_array()) {
             for row in rows {
                 if let Some(p) = prior.iter().find(|p| p["id"] == row["id"]) {
-                    let valid=fields.iter().all(|(key,_)|matches!((row[*key].as_u64(),p[*key].as_u64()),(Some(a),Some(b))if a>=b));
-                    if !valid {
-                        continue;
-                    }
                     for (key, dest) in &fields {
-                        let delta =
-                            (row[*key].as_u64().unwrap() - p[*key].as_u64().unwrap()) as f64;
-                        row[*dest] = json!(if group == "cpu" { delta } else { delta / dt });
+                        if let (Some(a), Some(b)) = (row[*key].as_u64(), p[*key].as_u64())
+                            && a >= b
+                        {
+                            let delta = (a - b) as f64;
+                            row[*dest] = json!(if group == "cpu" { delta } else { delta / dt });
+                        }
                     }
                     if group == "cpu" {
                         let total = row["totalDelta"].as_f64().unwrap_or(0.0);
-                        if total > 0.0 {
+                        if total > 0.0 && row["idleDelta"].as_f64().is_some() {
                             row["utilization"] = json!(
                                 ((1.0 - row["idleDelta"].as_f64().unwrap_or(0.0) / total) * 100.0)
                                     .clamp(0.0, 100.0)
@@ -63,7 +62,9 @@ pub fn rates(current: &Value, previous: Option<&Value>) -> Value {
                                 ("iowaitDelta", "iowaitPercent"),
                                 ("stealDelta", "stealPercent"),
                             ] {
-                                row[dest] = json!(row[key].as_f64().unwrap_or(0.0) / total * 100.0);
+                                if let Some(delta) = row[key].as_f64() {
+                                    row[dest] = json!(delta / total * 100.0);
+                                }
                             }
                         }
                     }

@@ -450,7 +450,7 @@ fn agy_models(output: &str) -> Vec<Value> {
 }
 
 fn remote(host: &Host, mut request: Value) -> Result<Value> {
-    request["authHelper"] = json!(include_str!("../../../../scripts/remote_codex_auth.py"));
+    request["authHelper"] = json!(String::from_utf8(crate::codex_auth::remote::script())?);
     // Deployment/control does not need the provider's proxy pre-command.
     if request["action"] == "deploy" {
         request["script"] = json!(include_str!("../../../../scripts/remote_wakeup.py"));

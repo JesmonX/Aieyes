@@ -74,6 +74,9 @@ pub fn find_price<'a>(
     prices: &'a [ModelPrice],
     mappings: &std::collections::BTreeMap<String, String>,
 ) -> Option<&'a ModelPrice> {
+    if crate::antigravity::unknown_model(model) {
+        return None;
+    }
     if let Some(id) = mappings.get(model) {
         return prices.iter().find(|p| &p.id == id);
     }

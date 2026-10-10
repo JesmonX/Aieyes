@@ -483,7 +483,7 @@ fn legacy_accounts_migrate_and_shared_quota_has_one_identity() {
     })
     .unwrap();
     let settings = db.settings().unwrap();
-    assert_eq!(settings.version, 4);
+    assert_eq!(settings.version, 5);
     assert_eq!(settings.accounts.len(), 1);
     db.quota(&usage::codex_quota(
         &b,

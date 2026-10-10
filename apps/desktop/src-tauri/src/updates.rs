@@ -383,6 +383,9 @@ pub async fn updates_install(
         inner.status.total = None;
         (update, inner.target.clone())
     };
+    app.state::<Updates>()
+        .installing
+        .store(true, Ordering::SeqCst);
     update.timeout = Some(Duration::from_secs(900));
     change(&app, |_| {});
     let result: Result<(), String> = async {
@@ -421,6 +424,13 @@ pub async fn updates_install(
             let engines = installing_app.state::<crate::Shared>();
             let _core = engines.0.lock().map_err(|_| "核心不可用")?;
             let _metrics = engines.1.lock().map_err(|_| "采样核心不可用")?;
+            let _network = engines.2.lock().map_err(|_| "网络检测核心不可用")?;
+            let _configuration = engines.3.lock().map_err(|_| "配置核心不可用")?;
+            let _accounts = engines.4.lock().map_err(|_| "账户核心不可用")?;
+            let _queries = engines.5.lock().map_err(|_| "查询核心不可用")?;
+            if aieyes_core::agy_auth::busy() {
+                return Err("Antigravity 登录尚未完成，请完成或取消授权后再更新".into());
+            }
             #[cfg(target_os = "linux")]
             if target.ends_with("-deb") {
                 return install_deb(&bytes);

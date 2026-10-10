@@ -16,9 +16,9 @@ extension AppModel {
         settingsRefreshTask?.cancel()
         settingsRefreshTask = Task {
             do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !installingUpdate else { return }
             await reload()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !installingUpdate else { return }
             await refreshQuotas()
         }
         synchronizeAccountDeployments()
@@ -33,23 +33,35 @@ extension AppModel {
             } catch { deploymentSyncMessage = "配置已保存，唤醒部署待同步：" + error.localizedDescription }
         }
     }
-    func loadAccountStatuses(refresh: Bool = false) async {
-        guard !accountStatusBusy else { return }
-        accountStatusBusy = true; defer { accountStatusBusy = false }
-        do { accountStatuses = try await engine.call("accounts.status.get") }
-        catch { settingsMessage = error.localizedDescription; return }
-        guard refresh else { return }
-        let accounts = settings.accounts.filter { $0.archived != true }
-        for account in accounts {
-            for source in settings.sources.filter({ $0.provider == account.provider && $0.enabled }) {
-                if let host = source.hostId, !settings.hosts.contains(where: { $0.id == host && $0.enabled }) { continue }
-                if Task.isCancelled { return }
-                do {
-                    let row: AccountDeviceStatus = try await accountEngine.call("accounts.status.refresh", params: ["accountKey":account.key,"sourceId":source.id])
+    /// Refresh the switched home without waiting for unrelated SSH checks. Repeated requests
+    /// coalesce, and a switch invalidates observations that started before it.
+    func refreshCodexAccountStatuses(sourceID: String, using reader: EngineClient) async -> Bool {
+        accountStatusRevision += 1
+        accountSourceStatusRequests[sourceID] = accountStatusRevision
+        if let pending = accountSourceStatusTasks[sourceID] { return await pending.value }
+        let work = Task { @MainActor in
+            defer { accountSourceStatusTasks[sourceID] = nil }
+            while !Task.isCancelled {
+                let requested = accountSourceStatusRequests[sourceID]
+                var rows: [AccountDeviceStatus] = [], succeeded = true
+                guard settings.sources.contains(where: { $0.id == sourceID && $0.provider == "codex" && $0.enabled }) else { return false }
+                for account in settings.accounts.filter({ $0.provider == "codex" }) {
+                    do {
+                        let row: AccountDeviceStatus = try await reader.call("accounts.status.refresh", params: ["accountKey":account.key,"sourceId":sourceID])
+                        rows.append(row)
+                        if row.error != nil { succeeded = false }
+                    } catch { succeeded = false }
+                }
+                if requested != accountSourceStatusRequests[sourceID] { continue }
+                for row in rows where settings.accounts.contains(where: { $0.key == row.accountKey }) {
                     accountStatuses.removeAll { $0.id == row.id }; accountStatuses.append(row)
-                } catch { /* The per-device result is retained; a concurrent settings edit invalidates it. */ }
+                }
+                return succeeded
             }
+            return false
         }
+        accountSourceStatusTasks[sourceID] = work
+        return await work.value
     }
     func accountMachineIDs(_ provider: String, includePaused: Bool = false) -> [String] {
         let config = agentConfigurations.first { $0.provider == provider }
@@ -60,6 +72,7 @@ extension AppModel {
     func machineName(_ id: String) -> String { id == "local" ? "本机" : settings.hosts.first { $0.id == id }.map { $0.name.isEmpty ? $0.target : $0.name } ?? "已移除设备" }
     func accountDeviceSummary(_ account: AgentAccount, machine: String) -> String {
         let rows = accountStatuses.filter { $0.accountKey == account.key && $0.machineId == machine }
+        if let summary = rows.first(where: { $0.identity != nil })?.identitySummary ?? rows.compactMap(\.identitySummary).first { return summary }
         let current = rows.contains { $0.current == true }, credential = rows.contains { $0.credential == true }
         let uncertain = rows.isEmpty || rows.contains { $0.error != nil || $0.current == nil || $0.credential == nil }
         let loginText = current || credential ? "已登录" : (!rows.isEmpty && rows.allSatisfy { $0.current == false && $0.credential == false } ? "未登录" : "登录待确认")
@@ -89,7 +102,7 @@ extension AppModel {
         var next = settings
         next.appearance = settingsDraft.appearance; next.proxy = settingsDraft.proxy
         next.proxyTestUrls = settingsDraft.proxyTestUrls; next.menuMetric = settingsDraft.menuMetric
-        next.refreshSeconds = settingsDraft.refreshSeconds; next.serverRefreshSeconds = settingsDraft.serverRefreshSeconds
+        next.historyRefreshSeconds = settingsDraft.historyRefreshSeconds; next.serverForegroundRefreshSeconds = settingsDraft.serverForegroundRefreshSeconds; next.localMonitor = settingsDraft.localMonitor; next.refreshSeconds = settingsDraft.refreshSeconds; next.serverRefreshSeconds = settingsDraft.serverRefreshSeconds
         guard next != settings else { return }
         do { try await persistConfiguration(next) } catch { settingsMessage = error.localizedDescription }
     }
@@ -195,6 +208,7 @@ struct AgentDirectoriesView: View {
                 if let error { Text(error).foregroundStyle(Palette.danger).textSelection(.enabled) }
             }.formStyle(.grouped).disabled(busy)
         }.frame(width: 600, height: 480).aieyesAccent().interactiveDismissDisabled(busy)
+        .updateOperation("Agent 目录配置", active: busy)
         .sheet(item: $editing) { source in
             SourceEditor(source: source, hosts: model.settings.hosts, appProxy: model.settings.proxy, testURLs: model.settings.proxyTestUrls) { item in
                 var params: [String: Any] = ["source": try JSONSerialization.jsonObject(with: JSONEncoder().encode(item))]
@@ -225,6 +239,7 @@ struct AccountsSettingsView: View {
     @State private var cleanup: [AccountCleanupRecord] = []
     @State private var sourceToManage: AgentSource?
     @State private var authIntent = "login"
+    @State private var agySource: AgentSource?
     private var visibleAgents: [AgentConfiguration] {
         model.agentConfigurations.filter { config in
             config.enabled || model.settings.accounts.contains { $0.provider == config.provider && $0.archived != true }
@@ -241,6 +256,7 @@ struct AccountsSettingsView: View {
         .task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? []; await model.loadAccountStatuses(refresh: true) }
         .sheet(item: $adding, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { agent in AccountConnectionView(model: model, initialProvider: agent.provider) }
         .sheet(item: $selectedAccount) { account in AccountDevicesView(model: model, account: account) }
+        .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
         .sheet(item: $sourceToManage, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { source in AccountConnectionView(model: model, initialSourceID: source.id, intent: authIntent) }
         .sheet(item: $deleting, onDismiss: { Task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? [] } }) { account in DeleteArchivedAccountView(model: model, account: account) }
     }
@@ -264,7 +280,8 @@ struct AccountsSettingsView: View {
             }
             ForEach(accounts, id: \.key) { account in
                 HStack {
-                    VStack(alignment: .leading) { Text(account.name); Text(model.accountCounts(account)).font(AppFont.secondary).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading) { Text(account.name); Text(model.accountCounts(account)).font(AppFont.secondary).foregroundStyle(.secondary)
+                        if let identity = model.accountStatuses.first(where: { $0.accountKey == account.key && $0.current == true && $0.identity != nil })?.identity { Text(identity.summary).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) } }
                     Spacer(); Button("设置") { selectedAccount = account }
                 }
             }
@@ -279,6 +296,7 @@ struct AccountsSettingsView: View {
         HStack {
             Text(model.machineName(machine)); Spacer()
             Text(currentAccount(agent.provider, machine: machine)).font(AppFont.secondary).foregroundStyle(.secondary)
+            if agent.provider == "antigravity", let source = managementSource(agent.provider, machine: machine) { Button("登录 / 检查") { agySource = source } }
             if agent.provider == "codex", let source = managementSource(agent.provider, machine: machine) {
                 let loggedIn = model.accountStatuses.contains { $0.accountKey.hasPrefix("codex:") && $0.sourceId == source.id && ($0.current == true || $0.credential == true) }
                 if loggedIn { Button("切换账户") { authIntent = "switch"; sourceToManage = source } }
@@ -333,6 +351,7 @@ struct AccountsSettingsView: View {
         let names = model.settings.accounts.filter { account in account.provider == provider && model.accountStatuses.contains { $0.accountKey == account.key && $0.machineId == machine && $0.current == true } }.map(\.name)
         if !names.isEmpty { return "正在使用 " + names.joined(separator: "、") }
         let rows = model.accountStatuses.filter { $0.accountKey.hasPrefix(provider + ":") && $0.machineId == machine }
+        if let summary = rows.first(where: { $0.identity != nil })?.identitySummary ?? rows.compactMap(\.identitySummary).first { return summary }
         if rows.contains(where: { $0.credential == true }) { return "已登录，尚未选用" }
         return rows.isEmpty || rows.contains(where: { $0.current == nil || $0.credential == nil || $0.error != nil }) ? "登录状态待确认" : "未登录"
     }
@@ -347,6 +366,7 @@ struct AccountDevicesView: View {
     @State private var error: String?
     @State private var loginSource: AgentSource?
     @State private var authIntent = "login"
+    @State private var agySource: AgentSource?
     @State private var saveTask: Task<Void, Never>?
     @State private var pendingSaveCount = 0
     @State private var intervalText = ""
@@ -378,6 +398,7 @@ struct AccountDevicesView: View {
                             HStack {
                                 VStack(alignment: .leading) { Text(source.name); Text(source.path).font(AppFont.secondary).foregroundStyle(.secondary) }
                                 Spacer()
+                                if account.provider == "antigravity", source.accountId == account.id { Button("登录 / 检查") { agySource = source }.disabled(!source.enabled) }
                                 if account.provider == "codex" {
                                     if status?.current == true { Text("正在使用").foregroundStyle(.secondary) }
                                     else if status?.credential == true { Button("切换到此账户") { openLogin(source, intent: "switch") }.disabled(!source.enabled || !model.accountMachineIDs(account.provider).contains(machine)) }
@@ -404,9 +425,11 @@ struct AccountDevicesView: View {
                 if let message = model.deploymentSyncMessage { HStack { Text(message); Button("重试同步") { model.synchronizeAccountDeployments() } } }
             }.formStyle(.grouped)
         }.frame(width: 680, height: 650).aieyesAccent().interactiveDismissDisabled(busy || error != nil || focusedField != nil)
+        .updateDraftGuard("账户设置", snapshot: draftSnapshot(account) + intervalText + draftSnapshot(commands), dirty: account != current || !commands.isEmpty || intervalText != (current.quotaRefreshSeconds.map(String.init) ?? ""), saving: busy, save: { focusedField = nil; guard saveEditedText(force: true) else { return false }; await saveTask?.value; if error == nil { dismiss(); return true }; return false }, discard: { dismiss() })
         .onAppear { intervalText = account.quotaRefreshSeconds.map(String.init) ?? "" }
         .onChange(of: current.name) { old, value in if focusedField != "name" && account.name == old { account.name = value } }
         .onChange(of: focusedField) { old, _ in if old != nil { saveEditedText() } }
+        .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
         .sheet(item: $loginSource, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { source in AccountConnectionView(model: model, account: current, initialSourceID: source.id, intent: authIntent) }
     }
     private func openLogin(_ source: AgentSource, intent: String) {
@@ -479,6 +502,7 @@ struct DeleteArchivedAccountView: View {
             deletionStatus
             deletionControls
         }.padding(24).frame(width: 600, height: 430).interactiveDismissDisabled(busy)
+        .updateDraftGuard("删除归档账户", snapshot: "", dirty: false, saving: busy, save: { false }, discard: { dismiss() })
         .task { await loadPreview() }
     }
     private var taskList: some View {
@@ -525,6 +549,7 @@ struct DeleteArchivedAccountView: View {
 
 struct AccountConnectionView: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var agySource: AgentSource?
     @ObservedObject var model: AppModel
     var account: AgentAccount?
     var initialProvider: String? = nil
@@ -539,9 +564,9 @@ struct AccountConnectionView: View {
     private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && $0.enabled && ($0.accountId.isEmpty || $0.accountId == (account?.id ?? "")) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text(account == nil ? "添加账户" : "连接机器").font(AppFont.title); Spacer(); Button("完成") { dismiss() }.disabled(busy) }.padding(.horizontal, 20).padding(.top, 20)
+            HStack { Text(intent == "switch" ? "切换账户" : account == nil ? "添加账户" : "连接机器").font(AppFont.title); Spacer(); Button("完成") { dismiss() }.disabled(busy) }.padding(.horizontal, 20).padding(.top, 20)
             Text(Format.provider(provider)).font(AppFont.section).padding(.horizontal, 20)
-            if provider == "codex" { CodexAccountsView(model: model, targetAccountID: account?.id, initialSourceID: initialSourceID, intent: intent) }
+            if provider == "codex" { CodexAccountsView(model: model, targetAccountID: account?.id, initialSourceID: initialSourceID, intent: intent, onBusyChanged: { busy = $0 }) }
             else {
                 Form {
                     if provider == "deepseek" {
@@ -549,7 +574,7 @@ struct AccountConnectionView: View {
                         Text("Key 保存在本机，只用于查询账户余额。").foregroundStyle(.secondary)
                     } else {
                         Section("已有登录的机器 · 可多选") {
-                            ForEach(sources) { source in Toggle(source.name, isOn: Binding(get: { selection.contains(source.id) }, set: { if $0 { selection.insert(source.id) } else { selection.remove(source.id) } })) }
+                            ForEach(sources) { source in HStack { Toggle(source.name, isOn: Binding(get: { selection.contains(source.id) }, set: { if $0 { selection.insert(source.id) } else { selection.remove(source.id) } })); if provider == "antigravity" { Button("登录 / 检查") { agySource = source } } } }
                             if sources.isEmpty { Text("没有可用位置，请先在 Agents 选择机器；同一目录只能连接一个当前登录账户。").foregroundStyle(.secondary) }
                         }
                     }
@@ -559,6 +584,8 @@ struct AccountConnectionView: View {
                 }.formStyle(.grouped).disabled(busy)
             }
         }.frame(width: 640, height: 620).interactiveDismissDisabled(busy)
+        .updateDraftGuard("账户连接", snapshot: provider + draftSnapshot(selection.sorted()) + apiKey, dirty: !selection.isEmpty || !apiKey.isEmpty, saving: busy, save: { await save(); return error == nil }, discard: { dismiss() })
+        .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
         .onAppear { provider = account?.provider ?? initialProvider ?? (initialSourceID != nil ? "codex" : model.agentConfigurations.first(where: { $0.enabled })?.provider ?? "") }
         .onChange(of: provider) { _, _ in selection = []; error = nil }
     }

@@ -14,6 +14,7 @@ use std::{
 
 pub struct Rpc {
     child: Child,
+    _registration: process::ChildRegistration,
     input: ChildStdin,
     messages: Receiver<Value>,
     next: u64,
@@ -68,6 +69,7 @@ impl Rpc {
             .stderr(Stdio::null());
         process::prepare(&mut command);
         let mut child = command.spawn().context("无法启动 Codex，请检查 CLI 路径")?;
+        let registration = process::track_child(&mut child)?;
         let input = child.stdin.take().context("无法打开 Codex 输入")?;
         let stdout = child.stdout.take().context("无法打开 Codex 输出")?;
         let (tx, messages) = mpsc::sync_channel(64);
@@ -93,6 +95,7 @@ impl Rpc {
         });
         let mut rpc = Self {
             child,
+            _registration: registration,
             input,
             messages,
             next: 0,

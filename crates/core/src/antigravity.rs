@@ -165,14 +165,28 @@ fn generators(db: &Connection) -> Result<BTreeMap<u64, String>> {
     }
     Ok(models)
 }
+#[derive(Default)]
+pub struct DatabaseRead {
+    pub events: Vec<Value>,
+    pub issues: Vec<Value>,
+}
+
+pub fn unknown_model(model: &str) -> bool {
+    model.starts_with("antigravity-unknown-")
+}
+
 pub fn read_database(path: &Path) -> Result<Vec<Value>> {
+    Ok(read_database_detailed(path)?.events)
+}
+
+pub fn read_database_detailed(path: &Path) -> Result<DatabaseRead> {
     let db = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .context("无法只读打开 Antigravity 会话数据库")?;
     db.busy_timeout(std::time::Duration::from_secs(2))?;
-    db.execute_batch("BEGIN")?; // One consistent snapshot, including committed WAL records.
+    db.execute_batch("BEGIN")?;
     let models = generators(&db)?;
     let session: String =
         db.query_row("SELECT cascade_id FROM trajectory_meta LIMIT 1", [], |r| {
@@ -181,47 +195,92 @@ pub fn read_database(path: &Path) -> Result<Vec<Value>> {
     ensure!(!session.is_empty(), "Antigravity 会话标识缺失");
     let mut query =
         db.prepare("SELECT idx,status,metadata FROM steps WHERE length(metadata)>0 ORDER BY idx")?;
-    let mut events = Vec::new();
-    for row in query.query_map([], |r| {
-        Ok((
-            r.get::<_, u64>(0)?,
-            r.get::<_, i64>(1)?,
-            r.get::<_, Vec<u8>>(2)?,
-        ))
-    })? {
-        let (index, status, raw) = row?;
-        let f = fields(&raw)?;
-        let Some(stats) = data(&f, 9) else { continue };
-        let stats = fields(stats)?;
-        let end = stamp(&f, 8)?.max(stamp(&f, 7)?);
-        if status != 3 && end == 0 {
-            continue;
+    let rows = query
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, u64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    // A numeric model ID is usable only when this database associates it with
+    // exactly one actual generator model. Never infer from the previous step.
+    let mut identities: BTreeMap<u64, std::collections::BTreeSet<String>> = BTreeMap::new();
+    for (index, _, raw) in &rows {
+        if let Some(model) = models.get(index)
+            && let Ok(f) = fields(raw)
+            && let Some(stats) = data(&f, 9)
+            && let Ok(stats) = fields(stats)
+            && number(&stats, 1) > 0
+        {
+            identities
+                .entry(number(&stats, 1))
+                .or_default()
+                .insert(model.clone());
         }
-        let tokens = Tokens {
-            input: number(&stats, 2),
-            output: number(&stats, 3),
-            cache_read: number(&stats, 5),
-            cache_write: number(&stats, 4),
-            reasoning: number(&stats, 9),
-        };
-        if tokens.total() == 0 {
-            continue;
-        }
-        ensure!(
-            tokens.reasoning <= tokens.output,
-            "Antigravity 推理 Token 口径无效"
-        );
-        let start = stamp(&f, 1)?;
-        ensure!(start > 0 && end >= start, "Antigravity 调用时间范围缺失");
-        let model = models
-            .get(&index)
-            .context("Antigravity 调用缺少实际模型；请更新 CLI 后重试")?;
-        let id = text(&stats, 7)
-            .or_else(|| text(&stats, 11))
-            .unwrap_or_else(|| format!("step:{index}"));
-        events.push(json!({"id":id,"sessionId":session,"timestamp":end,"intervalStart":start,"intervalEvidence":"antigravity-step-v1","model":model,"tokens":tokens}));
     }
-    Ok(events)
+    let mut result = DatabaseRead::default();
+    for (index, status, raw) in rows {
+        let event = (|| -> Result<Option<Value>> {
+            let f = fields(&raw)?;
+            let Some(stats) = data(&f, 9) else {
+                return Ok(None);
+            };
+            let stats = fields(stats)?;
+            let end = stamp(&f, 8)?.max(stamp(&f, 7)?);
+            if status != 3 && end == 0 {
+                return Ok(None);
+            }
+            let tokens = Tokens {
+                input: number(&stats, 2),
+                output: number(&stats, 3),
+                cache_read: number(&stats, 5),
+                cache_write: number(&stats, 4),
+                reasoning: number(&stats, 9),
+            };
+            if tokens.total() == 0 {
+                return Ok(None);
+            }
+            ensure!(
+                tokens.reasoning <= tokens.output,
+                "Antigravity 推理 Token 口径无效"
+            );
+            let start = stamp(&f, 1)?;
+            ensure!(start > 0 && end >= start, "Antigravity 调用时间范围缺失");
+            let numeric = number(&stats, 1);
+            let model = models
+                .get(&index)
+                .cloned()
+                .or_else(|| {
+                    identities
+                        .get(&numeric)
+                        .filter(|names| names.len() == 1)
+                        .and_then(|names| names.first().cloned())
+                })
+                .unwrap_or_else(|| format!("antigravity-unknown-{numeric}"));
+            let id = text(&stats, 7)
+                .or_else(|| text(&stats, 11))
+                .unwrap_or_else(|| format!("step:{index}"));
+            Ok(Some(
+                json!({"id":id,"sessionId":session,"timestamp":end,"intervalStart":start,
+                "intervalEvidence":"antigravity-step-v1","model":model,"tokens":tokens}),
+            ))
+        })();
+        match event {
+            Ok(Some(event)) => {
+                if unknown_model(event["model"].as_str().unwrap_or("")) {
+                    result.issues.push(json!({"step":index,"code":"unknownModel","message":"模型身份未知；已保留 Token，暂不计价"}));
+                }
+                result.events.push(event);
+            }
+            Ok(None) => {}
+            Err(error) => result
+                .issues
+                .push(json!({"step":index,"code":"invalidRecord","message":error.to_string()})),
+        }
+    }
+    Ok(result)
 }
 pub fn scan(store: &Store, settings: &Settings, source: &Source) -> Result<Value> {
     let root = expand(&source.path);
@@ -238,31 +297,33 @@ pub fn scan(store: &Store, settings: &Settings, source: &Source) -> Result<Value
     let prices = store.prices()?;
     let mut count = 0;
     let mut read_bytes = 0;
-    let tx = store.db.unchecked_transaction()?;
+    let mut issues = Vec::new();
+    let mut failed_files = 0;
     for path in &paths {
-        let signature = [
-            path.clone(),
-            PathBuf::from(format!("{}-wal", path.display())),
-        ]
-        .iter()
-        .map(|p| {
-            std::fs::metadata(p)
-                .ok()
-                .map(|m| {
-                    format!(
-                        "{}:{}",
-                        m.len(),
-                        m.modified()
-                            .ok()
-                            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                            .map(|t| t.as_nanos())
-                            .unwrap_or(0)
-                    )
-                })
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join(":");
+        let signature = "antigravity-v2:".to_owned()
+            + &[
+                path.clone(),
+                PathBuf::from(format!("{}-wal", path.display())),
+            ]
+            .iter()
+            .map(|p| {
+                std::fs::metadata(p)
+                    .ok()
+                    .map(|m| {
+                        format!(
+                            "{}:{}",
+                            m.len(),
+                            m.modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                                .map(|t| t.as_nanos())
+                                .unwrap_or(0)
+                        )
+                    })
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(":");
         let key = path.to_string_lossy();
         if store
             .cursor(&source.id, &key)?
@@ -270,7 +331,21 @@ pub fn scan(store: &Store, settings: &Settings, source: &Source) -> Result<Value
         {
             continue;
         }
-        for row in read_database(path)? {
+        let read = match read_database_detailed(path) {
+            Ok(read) => read,
+            Err(error) => {
+                failed_files += 1;
+                issues.push(json!({"path":path.file_name().unwrap_or_default().to_string_lossy(),"code":"fileRead","message":error.to_string()}));
+                continue;
+            }
+        };
+        let clean = read.issues.is_empty();
+        for mut issue in read.issues {
+            issue["path"] = json!(path.file_name().unwrap_or_default().to_string_lossy());
+            issues.push(issue);
+        }
+        let tx = store.db.unchecked_transaction()?;
+        for row in read.events {
             read_bytes += serde_json::to_vec(&row)?.len();
             if let Some(event) = usage::parse(source, &mut ParseState::default(), &row)
                 && store.put_event(&event, &prices, settings)?
@@ -278,12 +353,31 @@ pub fn scan(store: &Store, settings: &Settings, source: &Source) -> Result<Value
                 count += 1;
             }
         }
-        store.set_cursor(&source.id, &key, &signature, 0, &ParseState::default())?;
+        if clean {
+            store.set_cursor(&source.id, &key, &signature, 0, &ParseState::default())?;
+        }
+        tx.commit()?;
     }
-    let status =
-        json!({"updatedAt":now(),"newEvents":count,"files":paths.len(),"readBytes":read_bytes});
+    let mut status = json!({"updatedAt":now(),"newEvents":count,"files":paths.len(),"readBytes":read_bytes,
+        "partial":!issues.is_empty(),"issues":issues,"failedFiles":failed_files});
+    if failed_files > 0 && failed_files == paths.len() {
+        status.as_object_mut().unwrap().remove("updatedAt");
+        status["error"] = json!(format!(
+            "Antigravity 会话文件读取失败：{}",
+            issues
+                .iter()
+                .take(3)
+                .map(|issue| format!(
+                    "{} · {}",
+                    issue["path"].as_str().unwrap_or(""),
+                    issue["message"].as_str().unwrap_or("")
+                ))
+                .collect::<Vec<_>>()
+                .join("；")
+        ));
+        status["failedAt"] = json!(now());
+    }
     store.source_status(&source.id, &status)?;
-    tx.commit()?;
     Ok(status)
 }
 

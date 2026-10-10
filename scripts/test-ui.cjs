@@ -65,7 +65,8 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
               if(args.params.refreshSeconds<10||args.params.refreshSeconds>86400)throw new Error('Agent 刷新间隔范围为 10–86400 秒');
               window.fixtureSettings=structuredClone(args.params);window.saved.push(structuredClone(args.params));return structuredClone(args.params);
             case 'credentials.save':return {path:`test-credentials/${args.params.sourceId}.key`};
-            case 'quotas.refresh':if(window.quotaFails)throw new Error('限额连接失败');return [];
+            case 'quotas.schedule':return {nextDueAt:window.fixtureSettings.accounts.some(a=>a.quotaEnabled&&!a.archived)?(window.fixtureQuotaAttempt??Date.now()/1000)+300:null};
+            case 'quotas.refresh':window.fixtureQuotaAttempt=Date.now()/1000;if(window.quotaFails)throw new Error('限额连接失败');return [];
             case 'sources.scan':return {};
             case 'dashboard':return {summary:window.fixtureUsage??usage,quotas:[],models:[{...usage,key:'Claude Sonnet'}],trendDays:trend,dayModels:trend.map(row=>({day:row.key,model:'Claude Sonnet',usage:row})),heatmap:history,sources:window.fixtureSources??[],pricingGaps:[]};
             case 'hosts.sample':return window.fixtureHosts??[];
@@ -361,14 +362,14 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await quotaPage.waitForFunction(()=>typeof state!=='undefined'&&state.lastQuota>0&&!state.busy);
     assert.equal(await quotaPage.evaluate(()=>window.engineCalls.filter(c=>c.method==='quotas.refresh').length),1);
     await quotaPage.evaluate(async()=>{
-      window.quotaFails=true;state.lastQuota=Date.now()-301000;state.lastScan=Date.now();
-      window.uiTimers.find(t=>t.ms===500).fn();
+      window.quotaFails=true;quotaScheduleKnown=true;quotaDueAt=Date.now()-1;state.lastScan=Date.now();
+      runScheduledRefreshes();
     });
     await quotaPage.waitForFunction(()=>!state.busy);
     assert.equal(await quotaPage.evaluate(()=>window.engineCalls.filter(c=>c.method==='quotas.refresh').length),2);
-    await quotaPage.evaluate(()=>window.uiTimers.find(t=>t.ms===500).fn());
+    await quotaPage.evaluate(()=>runScheduledRefreshes());
     assert.equal(await quotaPage.evaluate(()=>window.engineCalls.filter(c=>c.method==='quotas.refresh').length),2);
-    await quotaPage.evaluate(()=>{state.settings.accounts[0].archived=true;state.lastQuota=0;window.uiTimers.find(t=>t.ms===500).fn();});
+    await quotaPage.evaluate(()=>{state.settings.accounts[0].archived=true;window.fixtureSettings.accounts[0].archived=true;invalidateQuotaSchedule();runScheduledRefreshes();});
     assert.equal(await quotaPage.evaluate(()=>window.engineCalls.filter(c=>c.method==='quotas.refresh').length),2);
     await quotaPage.close();
 

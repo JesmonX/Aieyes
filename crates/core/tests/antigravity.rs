@@ -55,6 +55,141 @@ fn source(path: &std::path::Path) -> Source {
         ..Default::default()
     }
 }
+
+#[test]
+fn partial_databases_keep_tokens_retry_and_repair_model_without_duplicates() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("conversations");
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("valid.db");
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("CREATE TABLE trajectory_meta(cascade_id TEXT); INSERT INTO trajectory_meta VALUES('partial-session'); CREATE TABLE gen_metadata(data BLOB); CREATE TABLE steps(idx INTEGER,status INTEGER,metadata BLOB);").unwrap();
+    let stamp = now() as u64 - 100;
+    let row = |id: &str, numeric: u64| {
+        [
+            bytes(1, &number(1, stamp)),
+            bytes(8, &number(1, stamp + 10)),
+            bytes(
+                9,
+                &[number(1, numeric), number(2, 100), bytes(7, id.as_bytes())].concat(),
+            ),
+        ]
+        .concat()
+    };
+    db.execute(
+        "INSERT INTO gen_metadata VALUES(?1)",
+        [[bytes(1, &bytes(19, b"known")), number(2, 0)].concat()],
+    )
+    .unwrap();
+    for (index, id, numeric) in [(0, "known", 10), (1, "recoverable", 10), (2, "unknown", 99)] {
+        db.execute(
+            "INSERT INTO steps VALUES(?1,3,?2)",
+            rusqlite::params![index, row(id, numeric)],
+        )
+        .unwrap();
+    }
+    db.execute("INSERT INTO steps VALUES(3,3,?1)", [vec![255u8]])
+        .unwrap();
+    std::fs::write(dir.join("broken.db"), b"not sqlite").unwrap();
+    let read = antigravity::read_database_detailed(&path).unwrap();
+    assert_eq!(read.events.len(), 3);
+    assert_eq!(read.events[1]["model"], "known");
+    assert_eq!(read.events[2]["model"], "antigravity-unknown-99");
+    assert_eq!(read.issues.len(), 2);
+    let output = std::process::Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/remote_history.py"
+        ))
+        .arg(&dir)
+        .arg("antigravity")
+        .output()
+        .unwrap();
+    let remote: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(remote["partial"], true);
+    assert_eq!(remote["failedFiles"], 1);
+    assert_eq!(remote["files"][0]["events"], json!(read.events));
+    let store = Store::open(&temp.path().join("store")).unwrap();
+    let source = source(temp.path());
+    let settings = Settings::default();
+    store
+        .save_prices(&[
+            price("known"),
+            price("repaired"),
+            price("antigravity-unknown-99"),
+        ])
+        .unwrap();
+    let first = antigravity::scan(&store, &settings, &source).unwrap();
+    assert_eq!(first["newEvents"], 3);
+    assert_eq!(first["partial"], true);
+    assert_eq!(first["failedFiles"], 1);
+    let second = antigravity::scan(&store, &settings, &source).unwrap();
+    assert_eq!(second["newEvents"], 0);
+    assert_eq!(second["partial"], true);
+    let mut engine = aieyes_core::Engine::open(&temp.path().join("store")).unwrap();
+    engine
+        .store
+        .save_settings(&Settings {
+            sources: vec![source.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+    let public = engine
+        .call("sources.scan", json!({"sourceId":source.id}))
+        .unwrap();
+    assert_eq!(public[0]["partial"], true);
+    assert!(public[0]["issues"].as_array().unwrap().len() >= 2);
+    assert!(public[0].get("error").is_none());
+
+    assert_eq!(
+        store
+            .dashboard(&Filter::default())
+            .unwrap()
+            .summary
+            .priced_tokens,
+        200
+    );
+    db.execute(
+        "INSERT INTO gen_metadata VALUES(?1)",
+        [[bytes(1, &bytes(19, b"repaired")), number(2, 2)].concat()],
+    )
+    .unwrap();
+    db.execute("DELETE FROM steps WHERE idx=3", []).unwrap();
+    std::fs::remove_file(dir.join("broken.db")).unwrap();
+    let repaired = antigravity::scan(&store, &settings, &source).unwrap();
+    assert_eq!(repaired["newEvents"], 0);
+    assert_eq!(repaired["partial"], false);
+    let dashboard = store.dashboard(&Filter::default()).unwrap();
+    assert_eq!(dashboard.summary.total, 300);
+    assert_eq!(dashboard.summary.priced_tokens, 300);
+    assert_eq!(
+        store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE model='repaired'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    // A late copy with less metadata must not undo the repaired model.
+    let event = usage::parse(&source, &mut ParseState::default(), &read.events[2]).unwrap();
+    store
+        .put_event(&event, &store.prices().unwrap(), &settings)
+        .unwrap();
+    assert_eq!(
+        store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE model='repaired'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+        1
+    );
+}
 fn price(model: &str) -> ModelPrice {
     ModelPrice {
         id: model.into(),

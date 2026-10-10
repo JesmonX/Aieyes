@@ -61,7 +61,8 @@ actor SessionMonitor {
                 }
             }
             discoveryFailed = unavailable
-            cache = cache.filter { item in files.contains { $0.0.path == item.key } }
+            let paths = Set(files.map { $0.0.path })
+            cache = cache.filter { paths.contains($0.key) }
         }
         unavailable = unavailable || discoveryFailed
         var result: [LiveSession] = []

@@ -4,11 +4,13 @@ struct CodexProfile: Decodable, Identifiable {
     struct Identity: Decodable { var key: String, workspace: String, email: String, plan: String }
     var id: String, name: String, identity: Identity, current: Bool?
 }
-struct CodexProcess: Decodable, Identifiable { var pid: Int, name: String, canClose: Bool; var id: Int { pid } }
+struct CodexProcess: Decodable, Identifiable { var pid: Int, name: String, canClose: Bool; var parentPid: Int?, blockingReason: String?; var id: Int { pid } }
 struct CodexInspection: Decodable { var profiles: [CodexProfile], processes: [CodexProcess], version: String?, storageMode: String }
 struct CodexOperation: Decodable, Identifiable {
     var operationId: String, status: String, authUrl: String?, userCode: String?, error: String?, message: String?, processes: [CodexProcess]?
     var accountArchived: Bool?, quotaEnabled: Bool?
+    var accountId: String?, statusWarning: String?
+    var preservedProcesses: [CodexProcess]?
     var id: String { operationId }
 }
 
@@ -17,11 +19,19 @@ struct CodexAccountsView: View {
     var targetAccountID: String? = nil
     var initialSourceID: String? = nil
     var intent = "login"
+    var onBusyChanged: (Bool) -> Void = { _ in }
     @State private var restoredAccountID = ""
     @State private var sourceID = ""
     @State private var info: CodexInspection?
     @State private var operation: CodexOperation?
     @State private var prepared: CodexOperation?
+    @State private var switchSheet = false
+    @State private var switchTarget: CodexProfile?
+    @State private var switchSourceID = ""
+    @State private var switchError: String?
+    @State private var switchedProfileID: String?
+    @State private var switchSettingsPending = false
+    @State private var switchWarning: String?
     @State private var busy = false
     @State private var error: String?
     @State private var notice: String?
@@ -44,11 +54,11 @@ struct CodexAccountsView: View {
     var body: some View {
         Form {
             Section(intent == "switch" ? "切换账户" : "Codex 登录") {
-                Text(account.map { "在所选机器登录「" + $0.name + "」，请使用同一个账号。" } ?? "登录或读取成功后自动添加账号，以邮箱命名；已添加的同一账号会自动识别。").foregroundStyle(.secondary)
+                Text(intent == "switch" ? "选择目标账号后，检查并确认切换。" : account.map { "在所选机器登录「" + $0.name + "」，请使用同一个账号。" } ?? "登录或读取成功后自动添加账号，以邮箱命名；已添加的同一账号会自动识别。").foregroundStyle(.secondary)
                 Text("切换会改变机器当前使用的账号。").foregroundStyle(.secondary)
                 Picker("运行位置", selection: $sourceID) { Text("请选择来源").tag(""); ForEach(sources) { Text($0.name + ($0.hostId == nil ? " · 本机" : " · SSH")).tag($0.id) } }.disabled(busy || operation != nil)
                 if let source { Text(source.path).font(AppFont.secondary).textSelection(.enabled) }
-                if let error { HStack { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled); Button("重试读取") { perform { try await refresh() } }.disabled(busy) } }
+                if let error { HStack { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled); Button("重试读取") { perform { if let id = switchedProfileID { await refreshAfterSwitch(profileID: id) } else { try await refresh() } } }.disabled(busy) } }
                 if let notice { Text(notice).foregroundStyle(Palette.ok) }
                 if busy { ProgressView().controlSize(.small) }
                 if intent == "login" { HStack {
@@ -68,25 +78,10 @@ struct CodexAccountsView: View {
                         }
                         if intent == "login" { Button("重新登录") { reauthID = profile.id; loginSheet = true } }
                         if profile.current != true {
-                            if intent == "switch" { Button("切换到此账户") { perform { prepared = try await call("switch.prepare", ["profileId":profile.id]) } } }
+                            if intent == "switch" { Button("切换到此账户") { perform { await prepareSwitch(profile) } } }
                             if intent == "login" { Button("移除", role: .destructive) { removeProfile = profile } }
                         }
                     }.disabled(busy || model.settingsDirty || operation != nil)
-                }
-            }
-            if let prepared {
-                Section("确认切换账号") {
-                    ForEach(prepared.processes ?? []) { process in Text("\(process.name) · PID \(process.pid)\(process.canClose ? "" : " · 无法确认归属，请手动关闭")") }
-                    Text("切换后请重新打开 Codex 并恢复会话。").foregroundStyle(.secondary)
-                    HStack {
-                        Button("取消") { self.prepared = nil }
-                        Button((prepared.processes ?? []).isEmpty ? "确认切换" : "关闭并切换") {
-                            perform {
-                                let result: CodexOperation = try await call("switch.commit", ["operationId":prepared.operationId, "closeProcesses":!(prepared.processes ?? []).isEmpty])
-                                self.prepared = nil; notice = result.message ?? "账号已切换，请重新打开 Codex。"; try await refresh()
-                            }
-                        }.buttonStyle(.borderedProminent).disabled((prepared.processes ?? []).contains { !$0.canClose })
-                    }.disabled(busy || model.settingsDirty)
                 }
             }
             if let operation {
@@ -99,13 +94,24 @@ struct CodexAccountsView: View {
                 }
             }
         }.formStyle(.grouped).aieyesAccent()
+        .updateOperation("Codex 账户操作", active: busy)
+        .onChange(of: busy) { _, value in onBusyChanged(value) }
         .task {
             if sourceID.isEmpty { sourceID = initialSourceID ?? sources.first?.id ?? "" }
             if let id = UserDefaults.standard.string(forKey:"codexLogin.operation"), let sid = UserDefaults.standard.string(forKey:"codexLogin.source"), sources.contains(where: { $0.id == sid }) {
                 restoredAccountID = UserDefaults.standard.string(forKey: "codexLogin.account") ?? ""; sourceID = sid; operation = CodexOperation(operationId:id,status:"running",authUrl:nil,userCode:nil,error:nil,message:nil,processes:nil)
             }
         }
-        .task(id: sourceID) { info = nil; prepared = nil; if !sourceID.isEmpty { perform { try await refresh() } } }
+        .task(id: sourceID) {
+            info = nil; prepared = nil; switchSheet = false; switchedProfileID = nil
+            if !sourceID.isEmpty { perform {
+                try await refresh()
+                if intent == "switch", targetAccountID != nil,
+                   let profile = visibleProfiles.first(where: { $0.current != true && account?.profileRefs.contains((source?.codexHomeId ?? "") + ":" + $0.id) == true }) {
+                    await prepareSwitch(profile)
+                }
+            } }
+        }
         .task(id: operation?.operationId) {
             guard let id = operation?.operationId else { return }
             while !Task.isCancelled {
@@ -121,6 +127,7 @@ struct CodexAccountsView: View {
                 do { try await Task.sleep(for:.seconds(2)) } catch { break }
             }
         }
+        .sheet(isPresented: $switchSheet, onDismiss: { prepared = nil; switchTarget = nil; switchError = nil }) { switchConfirmation }
         .sheet(isPresented:$loginSheet) {
             VStack(alignment:.leading, spacing:16) {
                 Text(reauthID == nil ? "添加 Codex 账号" : "重新登录原账号").font(AppFont.section)
@@ -148,12 +155,88 @@ struct CodexAccountsView: View {
     }
     private func refresh() async throws {
         info = try await call("inspect")
-        if intent == "switch", let id = targetAccountID,
-           let account = model.settings.accounts.first(where: { $0.provider == "codex" && $0.id == id }),
-           let profile = visibleProfiles.first(where: { account.profileRefs.contains((source?.codexHomeId ?? "") + ":" + $0.id) && $0.current != true }) {
-            prepared = try await call("switch.prepare", ["profileId": profile.id])
+    }
+    private var switchConfirmation: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("确认切换账号").font(AppFont.title)
+            Text((info?.profiles.first(where: { $0.current == true })?.name ?? "当前登录") + " → " + (switchTarget?.name ?? "目标账号")).font(AppFont.section)
+            if let source { Text(source.name + " · " + source.path).font(AppFont.secondary).textSelection(.enabled) }
+            Text("切换账号将关闭此设备上使用登录账号的 Codex 和 ChatGPT 进程及应用；已确认使用独立 API 凭据的实例及其辅助进程会保留。请先保存工作。").foregroundStyle(Palette.warn)
+            if let switchError { Text(switchError).foregroundStyle(Palette.warn).textSelection(.enabled) }
+            if busy { HStack { ProgressView().controlSize(.small); Text(prepared == nil ? "正在检查…" : "正在切换…") } }
+            if let prepared {
+                if let preserved = prepared.preservedProcesses, !preserved.isEmpty {
+                    Text("将保留 \(preserved.count) 个使用独立 API 凭据的进程（含辅助进程）。").foregroundStyle(.secondary)
+                }
+                if (prepared.processes ?? []).contains(where: { !$0.canClose }) {
+                    Text("暂时无法切换，请先处理以下进程，再重新检查。").foregroundStyle(Palette.warn)
+                } else {
+                    Text((prepared.processes ?? []).isEmpty ? "没有需要关闭的 Codex 或 ChatGPT 进程。" : "确认后将关闭以下进程及应用。")
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(prepared.processes ?? []) { process in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("\(process.name) · PID \(process.pid)")
+                                if let parent = process.parentPid { Text("父进程 PID \(parent)").font(AppFont.secondary).foregroundStyle(.secondary) }
+                                if !process.canClose { Text(process.blockingReason ?? "无法确认归属，请手动关闭后重新检查").foregroundStyle(Palette.warn) }
+                            }
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(maxHeight: 210)
+            }
+            Text("切换后请按需手动重新打开 Codex 或 ChatGPT 并恢复会话。").foregroundStyle(.secondary)
+            HStack {
+                Button("取消") { switchSheet = false }.keyboardShortcut(.cancelAction)
+                Button("重新检查") { if let target = switchTarget { perform { await prepareSwitch(target) } } }
+                Spacer()
+                Button((prepared?.processes ?? []).isEmpty ? "确认切换" : "关闭并切换") { perform { await commitSwitch() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(prepared == nil || (prepared?.processes ?? []).contains { !$0.canClose })
+            }.disabled(busy || model.settingsDirty)
+        }.padding(24).frame(width: 530).interactiveDismissDisabled(busy).aieyesAccent()
+    }
+    private func prepareSwitch(_ profile: CodexProfile) async {
+        switchTarget = profile; switchSourceID = sourceID; switchError = nil
+        switchedProfileID = nil; prepared = nil; switchSheet = true
+        do {
+            let result: CodexOperation = try await call("switch.prepare", ["profileId": profile.id])
+            guard switchSheet, switchSourceID == sourceID else { return }
+            prepared = result
+        } catch { switchError = error.localizedDescription }
+    }
+    private func commitSwitch() async {
+        guard let prepared, let target = switchTarget, switchSourceID == sourceID else { return }
+        do {
+            let result: CodexOperation = try await call("switch.commit", ["operationId":prepared.operationId, "closeProcesses":!(prepared.processes ?? []).isEmpty])
+            guard result.status == "succeeded" else { throw ClientError.message(result.error ?? "切换尚未完成，请重新检查") }
+            self.prepared = nil; switchedProfileID = target.id; switchSheet = false
+            switchSettingsPending = result.accountId != nil; switchWarning = result.statusWarning
+            await refreshAfterSwitch(profileID: target.id)
+        } catch {
+            switchError = error.localizedDescription
+            self.prepared = nil
         }
     }
+    private func refreshAfterSwitch(profileID: String) async {
+        do {
+            if switchSettingsPending { try await settingsChanged(); switchSettingsPending = false }
+            try await refresh()
+            let current = info?.profiles.first { $0.id == profileID }?.current == true
+            let updated = await model.refreshCodexAccountStatuses(sourceID: sourceID, using: engine)
+            if current {
+                notice = "账号已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话"
+                if !updated { error = "账号已切换，设备状态刷新失败，请重试读取。" }
+                else if let switchWarning { error = switchWarning }
+            } else {
+                notice = nil; error = "当前登录与目标账号不一致，可能已被其他程序修改，请重新检查。"
+            }
+        } catch {
+            notice = "切换已提交，当前账号待确认。"
+            self.error = "状态读取失败：" + error.localizedDescription
+        }
+    }
+
     private func settingsChanged() async throws {
         let saved: Settings = try await engine.call("settings.get")
         let newAccounts = saved.accounts.filter { a in !model.settings.accounts.contains { $0.key == a.key } }

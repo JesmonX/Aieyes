@@ -51,8 +51,8 @@ window.AieyesUI = {
       total: sources.length,
       // The oldest source is the only defensible timestamp for the entire record set.
       timestamp: stamps.length && stamps.every(Boolean) ? Math.min(...stamps) : 0,
-      delayed: statuses.filter(s => !s?.updatedAt || now - s.updatedAt > Math.max(60, settings.refreshSeconds * 2)).length,
-      failed: statuses.filter(s => s?.error).length
+      delayed: statuses.filter(s => !s?.updatedAt || now - s.updatedAt > Math.max(60, (settings.historyRefreshSeconds ?? settings.refreshSeconds) * 2)).length,
+      failed: statuses.filter(s => s?.error || s?.partial).length
     };
   },
   resetDisplayTime(stamp, now = Date.now() / 1000) {

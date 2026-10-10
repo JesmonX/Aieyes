@@ -3,9 +3,9 @@
 mod capsule;
 mod desktop;
 #[cfg(target_os = "windows")]
-mod passive_window;
-#[cfg(target_os = "windows")]
 mod material;
+#[cfg(target_os = "windows")]
+mod passive_window;
 mod phase_colors;
 mod updates;
 
@@ -74,13 +74,16 @@ struct Shared(
     Arc<Mutex<Engine>>,
     Arc<Mutex<Engine>>,
     Arc<Mutex<Engine>>,
+    Arc<Mutex<Engine>>,
 );
 
 impl Shared {
     fn engine_for(&self, method: &str) -> Arc<Mutex<Engine>> {
-        if aieyes_core::settings::is_configuration_method(method) {
+        if method == "dashboard" || method == "dashboard.summary" || method == "quotas.schedule" {
+            self.5.clone()
+        } else if aieyes_core::settings::is_configuration_method(method) {
             self.3.clone()
-        } else if method.starts_with("accounts.") {
+        } else if method.starts_with("accounts.") || method.starts_with("agyAuth.") {
             self.4.clone()
         } else if method.starts_with("network.") {
             self.2.clone()
@@ -95,7 +98,7 @@ impl Shared {
 fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static str, Value)> {
     if method == "hosts.sample" {
         return vec![match result {
-            Ok(rows) => ("desktop:hosts", rows.clone()),
+            Ok(rows) => ("desktop:hosts", rows.get("rows").unwrap_or(rows).clone()),
             Err(error) => ("desktop:hosts-error", Value::String(error.clone())),
         }];
     }
@@ -200,9 +203,24 @@ fn refresh_feedback(
     item_id: Option<&str>,
 ) -> Option<Value> {
     let key = refresh_key(method)?;
+    if key == "quotas"
+        && result
+            .as_ref()
+            .ok()
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+    {
+        return Some(serde_json::json!({"key":key,"busy":false,"noAttempt":true}));
+    }
     let failures: Vec<Value> = match result {
-        Ok(rows) => rows.as_array().into_iter().flatten().filter(|row| row["error"].is_string()).map(|row| {
-            serde_json::json!({"id":row["id"], "accountId":row["accountId"], "name":row["name"], "error":row["error"]})
+        Ok(rows) => rows.as_array().into_iter().flatten().filter(|row| row["error"].is_string() || row["partial"] == true).map(|row| {
+            let error = row["error"].as_str().map(str::to_owned).unwrap_or_else(|| row["issues"].as_array().into_iter().flatten().filter_map(|issue| {
+                let message = issue["message"].as_str()?;
+                let location = issue["path"].as_str().unwrap_or_default();
+                let step = issue["step"].as_u64().map(|n| format!("步骤 {n} · ")).unwrap_or_default();
+                Some(format!("{}{}{}", if location.is_empty() { String::new() } else { format!("{location} · ") }, step, message))
+            }).collect::<Vec<_>>().join("；"));
+            serde_json::json!({"id":row["id"], "accountId":row["accountId"], "name":row["name"], "error":error})
         }).collect(),
         Err(error) => vec![serde_json::json!({"id":item_id,"accountId":if key == "quotas" { item_id } else { None },"name":"刷新失败","error":error})],
     };
@@ -284,6 +302,13 @@ async fn engine_call(
                 &method,
                 params,
                 Box::new(move |mut progress| {
+                    if progress["kind"] == "hosts.sample" {
+                        let _ = progress_app.emit(
+                            "desktop:hosts",
+                            serde_json::json!([progress["row"].clone()]),
+                        );
+                        return;
+                    }
                     progress["operationId"] = operation_id.clone();
                     let _ = progress_app.emit("operations:progress", progress);
                 }),
@@ -338,6 +363,7 @@ fn main() {
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
+                Arc::new(Mutex::new(Engine::open(&root)?)),
             ));
             updates::setup(app.handle(), &root);
             desktop::setup(app, &root)?;
@@ -368,6 +394,7 @@ fn main() {
         .expect("Aieyes startup failed");
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
+            aieyes_core::process::terminate_query_children();
             desktop::save(app);
             #[cfg(target_os = "windows")]
             if let Some(capsule) = app.try_state::<capsule::Capsule>() {
@@ -391,6 +418,7 @@ mod tests {
             .unwrap();
         let shared = Shared(
             Arc::new(Mutex::new(main)),
+            Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
             Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
             Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
             Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
@@ -427,6 +455,12 @@ mod tests {
         assert!(feedback["success"].is_null());
         assert_eq!(feedback["failures"].as_array().unwrap().len(), 1);
         assert!(feedback.to_string().find("hidden").is_none());
+        let partial = refresh_feedback("sources.scan", &Ok(json!([{"id":"agy","partial":true,"issues":[{"path":"session.db","step":2,"message":"模型身份未知"}]}])), None).unwrap();
+        assert_eq!(
+            partial["failures"][0]["error"],
+            "session.db · 步骤 2 · 模型身份未知"
+        );
+        assert!(partial["success"].is_null());
         assert!(
             refresh_feedback("prices.sync", &Ok(json!({})), None).unwrap()["success"].is_number()
         );

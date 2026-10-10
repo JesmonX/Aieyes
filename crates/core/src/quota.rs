@@ -64,7 +64,26 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
         return normalize(source, &v, "command");
     }
     match source.provider.as_str() {
-        "agy" | "antigravity" => normalize(source, &agy(source, settings)?, "live"),
+        "agy" | "antigravity" => {
+            let before = crate::agy_identity::read_key(source, settings);
+            let mut q = normalize(source, &agy(source, settings)?, "live")?;
+            let observation = crate::agy_identity::read(source, settings);
+            if let Some(identity) = &observation.identity {
+                anyhow::ensure!(
+                    before.as_ref().is_none_or(|key| key == &identity.key),
+                    "查询期间登录账户已变化，请重新查询额度"
+                );
+                anyhow::ensure!(
+                    crate::agy_identity::matches(account, identity),
+                    "此设备当前登录 {}，与此账户身份不一致；未更新额度",
+                    identity.email
+                );
+                q.plan = identity.subscription.clone();
+            }
+            q.identity = observation.identity;
+            q.metadata_error = observation.metadata_error;
+            Ok(q)
+        }
         "deepseek" => deepseek(source, settings),
         "codex" => {
             let v = codex(source, settings)?;
@@ -354,6 +373,7 @@ fn run_codex_rpc(
                 .unwrap_or_else(|| "未知".into())
         )
     })?;
+    let _registration = process::track_child(&mut child)?;
     let mut stderr = child.stderr.take().context("打开 Codex 错误输出失败")?;
     let (error_tx, error_rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -577,7 +597,7 @@ fn codex_rpc_result(reply: Value) -> Result<Value> {
     reply.get("result").cloned().context("Codex 返回数据为空")
 }
 
-fn agy(source: &Source, settings: &Settings) -> Result<Value> {
+pub(crate) fn agy(source: &Source, settings: &Settings) -> Result<Value> {
     let binary = if source.agy_binary.is_empty() {
         "agy"
     } else {
@@ -592,7 +612,8 @@ fn agy(source: &Source, settings: &Settings) -> Result<Value> {
         ssh::account_command(
             &quota_host(host, source),
             &format!(
-                "exec {} --print /usage --output-format json --print-timeout 30s",
+                "{}export AGY_CLI_DISABLE_AUTO_UPDATE=true\nexec {} --print /usage --output-format json --print-timeout 30s --log-file /dev/null",
+                agy_proxy(source),
                 process::quote(binary)
             ),
         )?
@@ -603,19 +624,44 @@ fn agy(source: &Source, settings: &Settings) -> Result<Value> {
         } else {
             expand(binary)
         };
-        let mut c = process::cli_command(&resolved.to_string_lossy());
-        c.args([
+        let args = [
             "--print",
             "/usage",
             "--output-format",
             "json",
             "--print-timeout",
             "30s",
-        ]);
+            "--log-file",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        ];
+        let mut c = if !source.quota_pre_command.trim().is_empty() && !cfg!(windows) {
+            let mut c = Command::new(ssh::DEFAULT_SHELL);
+            let args = args
+                .iter()
+                .map(|arg| process::quote(arg))
+                .collect::<Vec<_>>()
+                .join(" ");
+            c.args([
+                "-c",
+                &format!(
+                    "set -e\n{}{{\n{}\n}} </dev/null >&2\nexec {} {}",
+                    ssh::PATH_FALLBACK,
+                    source.quota_pre_command,
+                    process::quote(&resolved.to_string_lossy()),
+                    args
+                ),
+            ]);
+            c
+        } else {
+            let mut c = process::cli_command(&resolved.to_string_lossy());
+            c.args(args);
+            c
+        };
         c.current_dir(std::env::temp_dir());
         network::apply_env(&mut c, source.proxy.as_ref().unwrap_or(&settings.proxy));
         c
     };
+    cmd.env("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
     cmd.stderr(Stdio::null());
     let bytes = process::run(cmd, vec![], Duration::from_secs(40))
         .context("agy 查询失败，请确认已安装并登录 agy")?;
@@ -625,6 +671,21 @@ fn agy(source: &Source, settings: &Settings) -> Result<Value> {
         .find(|l| !l.is_empty())
         .context("agy 没有返回数据")?;
     serde_json::from_slice(line).context("agy 返回格式不正确，请更新 agy")
+}
+
+pub(crate) fn agy_proxy(source: &Source) -> String {
+    match source.proxy.as_ref().map(|p| p.mode.as_str()) {
+        Some("direct") => {
+            "unset HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy\n".into()
+        }
+        Some("custom") => {
+            let url = process::quote(&source.proxy.as_ref().unwrap().url);
+            format!(
+                "export HTTPS_PROXY={url} HTTP_PROXY={url} ALL_PROXY={url} https_proxy={url} http_proxy={url} all_proxy={url}\n"
+            )
+        }
+        _ => String::new(),
+    }
 }
 
 fn parse_agy(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {

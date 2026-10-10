@@ -103,3 +103,5 @@ OpenRouter 请求路径为 `/api/v1/models`；读取 `pricing.prompt`、`complet
 ## Codex 多账号
 
 同一 home 可启用共享历史和独立账号额度。在「设置 → Codex 账号」登录、关联和切换；详情与兼容要求见 [Codex 账号管理](codex-accounts.md)。
+
+Antigravity 身份元数据由 `scripts/agy_identity.py` 在登录机器上读取，订阅来自当前 CLI 使用的 `aicode.googleapis.com/v1:fetchLicenses`，与 `/usage` 的额度解析独立。身份绑定、错误降级和测试入口见 [刷新、监控与 Antigravity](refresh-monitoring-antigravity.md)。

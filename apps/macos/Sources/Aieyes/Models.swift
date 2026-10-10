@@ -93,14 +93,22 @@ struct Balance: Codable, Identifiable {
     var id: String { currency }
 }
 struct CreditsBalance: Codable { var hasCredits: Bool, unlimited: Bool, balance: String? }
+struct AccountIdentity: Codable {
+    var key: String, email: String
+    var subscription: String?, checkedAt: Double?, subscriptionCheckedAt: Double?, stale: Bool?
+    var summary: String { email + (subscription.map { " · " + $0 } ?? " · 订阅未知") + (stale == true ? " · 订阅待更新" : "") }
+}
 struct Quota: Codable, Identifiable {
+    var identity: AccountIdentity? = nil
+    var metadataError: String? = nil
     var credits: CreditsBalance?, creditsUpdatedAt: Double?
     var sourceId: String, accountId: String, provider: String, name: String, updatedAt: Double, origin: String
     var balances: [Balance]?, isAvailable: Bool?
     var windows: [QuotaWindow], bankReset: BankReset?, bankUpdatedAt: Double?, plan: String?, error: String?
     var id: String { provider + ":" + accountId }
 }
-struct SourceStatus: Codable { var updatedAt: Double?, newEvents: Int?, files: Int?, readBytes: Int?, malformedLines: Int?, error: String? }
+struct SyncIssue: Codable { var path: String?; var message: String; var code: String?; var step: Int? }
+struct SourceStatus: Codable { var partial: Bool?, issues: [SyncIssue]?; var updatedAt: Double?, newEvents: Int?, files: Int?, readBytes: Int?, malformedLines: Int?, error: String? }
 struct SourceSummary: Codable, Identifiable { var id: String, name: String, provider: String, enabled: Bool, status: SourceStatus?, accountIds: [String]? }
 struct DayModel: Codable, Identifiable {
     var day: String, model: String, usage: Aggregate
@@ -117,10 +125,24 @@ struct AgentConfiguration: Codable, Equatable, Identifiable {
     var id: String { provider }
 }
 struct AccountDeviceSettings: Codable, Equatable { var machineId: String; var preCommand: String }
+struct AntigravityLoginState: Decodable {
+    var id: String, phase: String, message: String, authUrl: String?
+    var authenticated: Bool, identityConfirmed: Bool
+    var identity: AccountIdentity?, current: Bool?, metadataError: String?
+    var accountStatus: AccountDeviceStatus?
+    var workspaceConfirmationRequired: Bool?
+}
 struct AccountDeviceStatus: Codable, Identifiable {
+    var identity: AccountIdentity? = nil
+    var metadataError: String? = nil
+    var authenticated: Bool?, identityConfirmed: Bool?
     var accountKey: String, sourceId: String, machineId: String
     var current: Bool?, credential: Bool?, checkedAt: Double?, attemptedAt: Double?, error: String?, note: String?
     var id: String { accountKey + ":" + sourceId }
+    var identitySummary: String? {
+        guard let identity else { return authenticated == true ? "登录有效 · 账户身份待确认" : nil }
+        return (current == false ? "身份不一致 · 当前登录 " : "正在使用 ") + identity.summary + (error != nil ? " · 上次检查" : "")
+    }
 }
 struct AgentAccount: Codable, Equatable, Identifiable {
     var pendingName: Bool?
@@ -178,11 +200,18 @@ struct Host: Codable, Equatable, Identifiable {
     func selectedDevices(_ group: String, _ rows: [DeviceMetric]?) -> [DeviceMetric] {
         guard metrics.contains(group) else { return [] }
         let selected = Set(devices.filter { $0.hasPrefix(group + ":") })
-        return (rows ?? []).filter { selected.isEmpty || (group == "cpu" && $0.id == "cpu") || selected.contains(group + ":" + $0.id) }
+        return (rows ?? []).filter { (selected.isEmpty && (group != "filesystems" || MonitorSelection.recommendedFilesystem($0.id, type: $0.type))) || (group == "cpu" && $0.id == "cpu") || selected.contains(group + ":__all__") || selected.contains(group + ":" + $0.id) }
     }
 }
 struct AppearanceSettings: Codable, Equatable {
     var theme = "system", accent = "indigo"
+}
+struct LocalMonitor: Codable, Equatable {
+    var enabled = true
+    var metrics = Host().metrics, devices: [String] = [], details: [String]? = Host().details
+    var host: Host { var h = Host(); h.id = "local"; h.name = "本机"; h.target = "本机"; h.enabled = enabled; h.metrics = metrics; h.devices = devices; h.details = details; return h }
+    init() {}
+    init(_ h: Host) { enabled = h.enabled; metrics = h.metrics; devices = h.devices; details = h.details }
 }
 struct Settings: Codable, Equatable {
     var deletedAccounts: [AgentAccount]?
@@ -194,13 +223,17 @@ struct Settings: Codable, Equatable {
 
     var version = 2, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
     var refreshSeconds = 300, serverRefreshSeconds = 10, menuMetric = "icon", githubRepository = ""
+    var historyRefreshSeconds: Int?, serverForegroundRefreshSeconds: Int?, localMonitor: LocalMonitor?
+    var historyInterval: Int { get { historyRefreshSeconds ?? refreshSeconds } set { historyRefreshSeconds = newValue } }
+    var foregroundInterval: Int { get { serverForegroundRefreshSeconds ?? 2 } set { serverForegroundRefreshSeconds = newValue } }
+    var monitoredHosts: [Host] { (localMonitor.map { [$0.host] } ?? []) + hosts }
     var modelMappings: [String: String] = [:]
     var proxyTestUrls: [String]?
 }
 struct ModelPrice: Codable, Equatable, Identifiable {
     var id = "", name = "", input: Double?, output: Double?, cacheRead: Double?, cacheWrite: Double?, fetchedAt: Double = 0
 }
-struct DeviceMetric: Codable, Identifiable {
+struct DeviceMetric: Codable, Identifiable, Equatable {
     var id: String, name: String?, device: String?, type: String?
     var utilization: Double?, userPercent: Double?, systemPercent: Double?, iowaitPercent: Double?, stealPercent: Double?
     var total: Double?, available: Double?, used: Double?, inodes: Double?, inodesFree: Double?
@@ -208,16 +241,28 @@ struct DeviceMetric: Codable, Identifiable {
     var rxBytes: Double?, txBytes: Double?, rxBytesPerSecond: Double?, txBytesPerSecond: Double?, rxErrors: Double?, txErrors: Double?, rxDrops: Double?, txDrops: Double?
     var readBytesPerSecond: Double?, writeBytesPerSecond: Double?, readIops: Double?, writeIops: Double?, busyMsPerSecond: Double?
 }
-struct MemoryMetric: Codable {
+struct MemoryMetric: Codable, Equatable {
     var total: Double?, available: Double?, cached: Double?, buffers: Double?, swapTotal: Double?, swapFree: Double?
     var used: Double? { Format.usedCapacity(total, available) }
     var swapUsed: Double? { Format.usedCapacity(swapTotal, swapFree) }
 }
-struct MetricSample: Codable {
+struct MetricSample: Codable, Equatable {
     var timestamp: Double, uptime: Double?, load: [Double], errors: [String: String]
     var cpu: [DeviceMetric]?, memory: MemoryMetric?, gpu: [DeviceMetric]?, filesystems: [DeviceMetric]?, disk: [DeviceMetric]?, network: [DeviceMetric]?
 }
-struct HostResult: Codable, Identifiable { var id: String, name: String, sample: MetricSample?, error: String? }
+struct HostResult: Codable, Identifiable, Equatable {
+    var id: String, name: String, sample: MetricSample?, error: String?
+    var sampleSession: String? = nil, sampleVersion: UInt64? = nil
+}
+struct HostSampleBatch: Decodable {
+    var rows: [HostResult]
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer()
+        if let legacy = try? value.decode([HostResult].self) { rows = legacy }
+        else { rows = try value.decode(Envelope.self).rows }
+    }
+    private struct Envelope: Decodable { var rows: [HostResult] }
+}
 
 enum Format {
     static func usedCapacity(_ total: Double?, _ available: Double?) -> Double? {

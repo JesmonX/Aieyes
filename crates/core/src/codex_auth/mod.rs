@@ -1,8 +1,10 @@
 //! Opt-in Codex account management; credential bytes stay on their owning machine.
 pub mod files;
 pub mod local;
+#[cfg(unix)]
+mod process_auth;
 mod processes;
-mod remote;
+pub(crate) mod remote;
 mod rpc;
 use crate::{Engine, models::*, quota, store::expand};
 use anyhow::{Context, Result, ensure};
@@ -405,10 +407,30 @@ impl Engine {
             return Ok(result);
         }
         let mut result = backend(&source, &settings, method, &params)?;
+        if method == "switch.commit"
+            && result["status"] == "succeeded"
+            && crate::accounts::codex_switched(&self.store, &source, &params["operationId"])
+                .is_err()
+        {
+            // The credential replacement already succeeded; never ask a client to resubmit it
+            // merely because the UI cache could not be invalidated.
+            result["statusWarning"] = json!("账号已切换，设备状态缓存更新失败，请重新检查设备状态");
+        }
         let profile = if method == "adopt" {
             result["profile"]["id"].as_str()
         } else if method == "login.status" && result["status"] == "succeeded" {
             result["result"]["profile"]["id"].as_str()
+        } else if method == "switch.commit" && result["status"] == "succeeded" {
+            result["profileId"].as_str().filter(|profile| {
+                let reference = format!(
+                    "{}:{profile}",
+                    source.codex_home_id.as_deref().unwrap_or("")
+                );
+                !settings
+                    .accounts
+                    .iter()
+                    .any(|account| account.has_profile(&reference))
+            })
         } else {
             None
         };
@@ -437,6 +459,11 @@ impl Engine {
                     result["status"] = json!("failed");
                     result["error"] = json!(format!(
                         "登录已保存，但账户连接失败：{error}。可读取已保存登录并重新添加到账户。"
+                    ));
+                }
+                Err(error) if method == "switch.commit" => {
+                    result["statusWarning"] = json!(format!(
+                        "账号已切换，但账户列表关联失败：{error}。请读取当前登录并添加到账户。"
                     ));
                 }
                 Err(error) => return Err(error),

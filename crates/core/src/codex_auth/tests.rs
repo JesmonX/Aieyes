@@ -289,6 +289,7 @@ fn shared_scan_excludes_managed_histories_and_keeps_plain_imports() {
 }
 #[test]
 fn stale_switch_cannot_replace_changed_credentials() {
+    let _processes = super::processes::isolated_switch_test();
     let (_d, r) = root();
     let a = auth("one", "team", "SECRET");
     let b = auth("two", "team", "SECRET");
@@ -495,4 +496,180 @@ for line in sys.stdin:
     assert_eq!(files::read(&r.join("auth.json")).unwrap(), a);
     assert!(!r.join(".aieyes/codex/first/query/auth.json").exists());
     assert!(!r.join(".aieyes/codex/first/managed/auth.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn switch_round_trip_verifies_identity_preserves_history_and_invalidates_status() {
+    let _processes = super::processes::isolated_switch_test();
+    use std::os::unix::fs::PermissionsExt;
+    let (_d, r) = root();
+    let one = auth("one", "team", "PRIVATE_REFRESH_ONE");
+    let two = auth("two", "team", "PRIVATE_REFRESH_TWO");
+    files::atomic(&r.join("auth.json"), &one).unwrap();
+    let first = files::save_profile(&r, "first", "First", &one).unwrap();
+    let second = files::save_profile(&r, "second", "Second", &two).unwrap();
+    fs::create_dir(r.join("sessions")).unwrap();
+    fs::write(r.join("sessions/history.jsonl"), "history must survive").unwrap();
+    let executable = r.join("mock-codex");
+    fs::write(
+        &executable,
+        r#"#!/usr/bin/env python3
+import sys,json,os,pathlib
+if '--version' in sys.argv:
+ print('codex-cli 0.161.0');sys.exit(0)
+assert not pathlib.Path(os.environ['CODEX_HOME'],'auth.json').exists()
+for line in sys.stdin:
+ assert 'PRIVATE_REFRESH' not in line
+ v=json.loads(line)
+ if v.get('method')=='initialized': continue
+ result={'account':{'type':'chatgpt'}} if v.get('method')=='account/read' else {}
+ print(json.dumps({'id':v['id'],'result':result}),flush=True)
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut engine = crate::Engine::open(&r.join("database")).unwrap();
+    engine
+        .store
+        .save_settings(&Settings {
+            sources: vec![Source {
+                id: "source".into(),
+                provider: "codex".into(),
+                codex_home_id: Some("home".into()),
+                path: r.to_string_lossy().into(),
+                codex_binary: executable.to_string_lossy().into(),
+                ..Default::default()
+            }],
+            accounts: [&first, &second]
+                .into_iter()
+                .map(|p| Account {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    provider: "codex".into(),
+                    identity_key: Some(p.identity.key.clone()),
+                    quota_profile_id: Some(format!("home:{}", p.id)),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .unwrap();
+    for id in ["first", "second"] {
+        engine
+            .call(
+                "accounts.status.refresh",
+                json!({"accountKey":format!("codex:{id}"),"sourceId":"source"}),
+            )
+            .unwrap();
+    }
+    for (id, target) in [("second", &two), ("first", &one)] {
+        let prepared = engine
+            .call(
+                "codexAuth.switch.prepare",
+                json!({"sourceId":"source","profileId":id}),
+            )
+            .unwrap();
+        // Never authorize signalling anything in this test, even on a busy development machine.
+        assert_eq!(prepared["processes"], json!([]));
+        let params = json!({"sourceId":"source","operationId":prepared["operationId"],"closeProcesses":false});
+        let result = engine
+            .call("codexAuth.switch.commit", params.clone())
+            .unwrap();
+        assert_eq!(result["status"], "succeeded");
+        assert_eq!(
+            engine.call("codexAuth.switch.commit", params).unwrap(),
+            result
+        );
+        assert_eq!(&files::read(&r.join("auth.json")).unwrap(), target);
+        let cached = engine.call("accounts.status.get", json!({})).unwrap();
+        assert!(
+            cached
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|v| v["current"].is_null())
+        );
+        for profile in ["first", "second"] {
+            let row = engine
+                .call(
+                    "accounts.status.refresh",
+                    json!({"accountKey":format!("codex:{profile}"),"sourceId":"source"}),
+                )
+                .unwrap();
+            assert_eq!(row["current"], profile == id);
+            assert_eq!(row["credential"], true);
+        }
+        assert_eq!(
+            fs::read_to_string(r.join("sessions/history.jsonl")).unwrap(),
+            "history must survive"
+        );
+        assert_eq!(
+            files::read(&r.join(".aieyes/accounts/first/auth.json")).unwrap(),
+            one
+        );
+        assert_eq!(
+            files::read(&r.join(".aieyes/accounts/second/auth.json")).unwrap(),
+            two
+        );
+    }
+    let prepared = engine
+        .call(
+            "codexAuth.switch.prepare",
+            json!({"sourceId":"source","profileId":"second"}),
+        )
+        .unwrap();
+    let path = r.join(".aieyes/state").join(format!(
+        "{}.json",
+        prepared["operationId"].as_str().unwrap()
+    ));
+    let mut expired = files::read(&path).unwrap();
+    expired["expiresAt"] = json!(0);
+    files::atomic(&path, &expired).unwrap();
+    assert!(
+        engine
+            .call(
+                "codexAuth.switch.commit",
+                json!({"sourceId":"source","operationId":prepared["operationId"]})
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("过期")
+    );
+    assert_eq!(files::read(&r.join("auth.json")).unwrap(), one);
+
+    // A separate Aieyes installation can see saved credentials that are not registered
+    // in its own account list. Selecting one must make the new current account visible.
+    let mut settings = engine.store.settings().unwrap();
+    settings.accounts.retain(|a| a.id != "second");
+    engine.store.save_settings(&settings).unwrap();
+    let prepared = engine
+        .call(
+            "codexAuth.switch.prepare",
+            json!({"sourceId":"source","profileId":"second"}),
+        )
+        .unwrap();
+    assert_eq!(prepared["processes"], json!([]));
+    let result = engine
+        .call(
+            "codexAuth.switch.commit",
+            json!({"sourceId":"source","operationId":prepared["operationId"]}),
+        )
+        .unwrap();
+    assert_eq!(result["status"], "succeeded");
+    let account_id = result["accountId"].as_str().unwrap();
+    let saved = engine.store.settings().unwrap();
+    let registered = saved.accounts.iter().find(|a| a.id == account_id).unwrap();
+    assert_eq!(
+        registered.identity_key.as_deref(),
+        Some(second.identity.key.as_str())
+    );
+    assert!(registered.has_profile("home:second"));
+    let row = engine
+        .call(
+            "accounts.status.refresh",
+            json!({"accountKey":format!("codex:{account_id}"),"sourceId":"source"}),
+        )
+        .unwrap();
+    assert_eq!(row["current"], true);
 }

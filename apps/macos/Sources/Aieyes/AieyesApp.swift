@@ -11,6 +11,7 @@ import Combine
     private var statusItem: NSStatusItem!
     private var statusLabel: NSHostingView<MenuActivityLabel>?
     private let popover = NSPopover()
+    private let dockPresence = DockPresence()
     private var appearanceController: AppAppearanceController?
     private var detailWindow: NSWindow?
     private var pageControl: NSSegmentedControl?
@@ -39,12 +40,9 @@ import Combine
         model.$settings.map(\.appearance).removeDuplicates().sink { [weak self] appearance in
             self?.appearanceController?.apply(theme: appearance?.theme ?? "system", accent: appearance?.accent ?? "indigo")
         }.store(in: &cancellables)
-        AppUpdater.shared.prepareInstallation = { [weak self] finalizing in
-            guard let self, await self.prepareUpdate() else { return false }
-            // Saving a draft can yield to another window's operation; recheck before suspending work.
-            guard !self.model.busy, !self.model.quotaBusy, !self.model.serverBusy, !self.model.settingsSaving, !self.model.repricing, self.model.estimateBusy.isEmpty else { return false }
-            self.model.installingUpdate = finalizing
-            return true
+        AppUpdater.shared.prepareInstallation = { [weak self] _ in
+            guard let self else { return false }
+            return await self.prepareUpdate()
         }
         AppUpdater.shared.finishedInstallationAttempt = { [weak self] in self?.model.installingUpdate = false }
         AppUpdater.shared.start()
@@ -112,19 +110,37 @@ import Combine
             statusItem.menu = menu; button.performClick(nil); statusItem.menu = nil; return
         }
         if popover.isShown { popover.performClose(nil) }
-        else {
-            model.panelHeight = min(720, max(360, (button.window?.screen?.visibleFrame.height ?? 800) - 34))
-            popover.contentSize = NSSize(width: 450, height: model.panelHeight)
-            appearanceController?.updatePanel()
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); model.setWindowVisible(true, window: "panel") }
+        else { showPopover() }
+    }
+    private func showPopover() {
+        guard let button = statusItem.button else { return }
+        model.panelHeight = min(720, max(360, (button.window?.screen?.visibleFrame.height ?? 800) - 34))
+        popover.contentSize = NSSize(width: 450, height: model.panelHeight)
+        appearanceController?.updatePanel()
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        model.setWindowVisible(true, window: "panel")
+        NSApp.activate(ignoringOtherApps: true)
     }
     private func dismissOutsidePanel() { if popover.isShown && !model.isPinned { popover.performClose(nil) } }
     @objc private func applicationDeactivated() { dismissOutsidePanel() }
     func popoverDidClose(_ notification: Notification) { model.setWindowVisible(false, window: "panel") }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let windows = [settingsWindow, detailWindow, panelAccountsWindow, quotaOrderWindow, samplingWindow].compactMap { $0 } + Array(estimateWindows.values)
+        if let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first(where: { $0.isVisible || $0.isMiniaturized }) {
+            showWindow(window)
+        } else { showPopover() }
+        return false
+    }
+    private func showWindow(_ window: NSWindow) {
+        dockPresence.open(window)
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
     @objc private func detailAction() { openDetail() }
     @objc private func settingsAction() { openSettings() }
     @objc private func samplingAction() { openSampling() }
-    @objc private func wake() { Task { await model.scan() } }
+    @objc private func wake() { model.resumeAfterWake() }
     private func scheduleTitleUpdate() {
         guard !titleUpdatePending else { return }
         titleUpdatePending = true
@@ -159,7 +175,7 @@ import Combine
             window.setFrameAutosaveName("AieyesDetails"); detailWindow = window
         }
         if let window = detailWindow { fitToVisibleScreen(window) }
-        detailWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); model.setWindowVisible(true, window: "detail")
+        if let window = detailWindow { showWindow(window) }; model.setWindowVisible(true, window: "detail")
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.init("pages"), .flexibleSpace, .init("refresh")] }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarAllowedItemIdentifiers(toolbar) }
@@ -188,23 +204,37 @@ import Combine
             window.center(); window.setFrameAutosaveName("AieyesSettings"); settingsWindow = window
         }
         if let window = settingsWindow { fitToVisibleScreen(window) }
-        settingsWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        if let window = settingsWindow { showWindow(window) }
     }
     private func prepareUpdate() async -> Bool {
-        guard !model.busy, !model.quotaBusy, !model.serverBusy, !model.settingsSaving, !model.repricing, model.estimateBusy.isEmpty else { return false }
-        guard settingsWindow?.attachedSheet == nil else { settingsWindow?.makeKeyAndOrderFront(nil); return false }
-        guard model.settingsDirty else { return true }
-        openSettings()
-        guard let window = settingsWindow else { return false }
-        let alert = NSAlert()
-        alert.messageText = "更新前保存配置更改？"
-        alert.informativeText = "更新会重启 Aieyes。采样记录将保留。"
-        alert.addButton(withTitle: "保存并更新"); alert.addButton(withTitle: "放弃更改并更新"); alert.addButton(withTitle: "取消")
-        let response: NSApplication.ModalResponse = await withCheckedContinuation { continuation in
-            alert.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+        model.installingUpdate = true
+        var completed = false
+        defer { if !completed { model.installingUpdate = false } }
+        model.settingsRefreshTask?.cancel()
+        var started: [String: Date] = [:], deadline = Date().addingTimeInterval(30)
+        func blockers() -> [String] { Array(Set(model.updateBlockers + Array(AppUpdater.shared.operationBlockers.values))).sorted() }
+        while !blockers().isEmpty {
+            for task in blockers() where started[task] == nil { started[task] = Date() }
+            let tasks = blockers().map { $0 + "（已等待 " + String(Int(Date().timeIntervalSince(started[$0] ?? Date()))) + " 秒）" }.joined(separator: "、")
+            AppUpdater.shared.preparationStatus("等待当前任务完成：" + tasks)
+            if Date() >= deadline {
+                guard await updateChoice("更新仍在等待", message: tasks + "。可取消等待，回到对应页面处理。", buttons: ["继续等待", "取消并返回"]) == 0 else { return false }
+                deadline = Date().addingTimeInterval(30)
+            }
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return false }
         }
-        if response == .alertFirstButtonReturn { return await model.saveSettingsDraft() }
-        if response == .alertSecondButtonReturn { model.discardSettingsDraft(); return true }
+        // Prepare nested editors first; saving a child may update its parent's draft.
+        let editors = AppUpdater.shared.editorPreparations.sorted { $0.value.order > $1.value.order }.map(\.key)
+        for id in editors {
+            guard let editor = AppUpdater.shared.editorPreparations[id] else { continue }
+            guard await editor.prepare() else { settingsWindow?.makeKeyAndOrderFront(nil); return false }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard model.settingsDirty else { completed = true; return true }
+        openSettings()
+        let response = await updateChoice("更新前保存配置更改？", message: "更新会重启 Aieyes。采样记录将保留。", buttons: ["保存并更新", "放弃更改并更新", "取消"])
+        if response == 0 { completed = await model.saveSettingsDraft(); if !completed { AppUpdater.shared.preparationError = model.settingsMessage ?? "设置保存失败，请检查设置页" }; return completed }
+        if response == 1 { model.discardSettingsDraft(); completed = true; return true }
         return false
     }
     private func openEstimate(_ quota: Quota, credits: Bool = false, group: String? = nil) {
@@ -218,7 +248,7 @@ import Combine
         }
         window.title = quota.name + (credits ? " · credit 价值" : " · 额度估值")
         window.contentView = NSHostingView(rootView: QuotaEstimateView(model: model, quota: quota, onClose: { [weak window] in window?.close() }, credits: credits, initialGroup: group))
-        fitToVisibleScreen(window); window.deminiaturize(nil); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        fitToVisibleScreen(window); showWindow(window)
     }
     private func openSampling() {
         popover.performClose(nil)
@@ -229,8 +259,7 @@ import Combine
             window.contentView = NSHostingView(rootView: SamplingManagementView(model: model))
             window.center(); samplingWindow = window
         }
-        if let window = samplingWindow { fitToVisibleScreen(window); window.deminiaturize(nil); window.makeKeyAndOrderFront(nil) }
-        NSApp.activate(ignoringOtherApps: true)
+        if let window = samplingWindow { fitToVisibleScreen(window); showWindow(window) }
     }
     private func openQuotaOrder() {
         popover.performClose(nil)
@@ -240,7 +269,7 @@ import Combine
         }
         guard let window = quotaOrderWindow else { return }
         window.contentView = NSHostingView(rootView: QuotaOrderView(model: model, onClose: { [weak window] in window?.close() }))
-        fitToVisibleScreen(window); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        fitToVisibleScreen(window); showWindow(window)
     }
     private func openPanelAccounts() {
         popover.performClose(nil)
@@ -250,7 +279,7 @@ import Combine
         }
         guard let window = panelAccountsWindow else { return }
         window.contentView = NSHostingView(rootView: PanelAccountsView(model: model, onClose: { [weak window] in window?.close() }))
-        fitToVisibleScreen(window); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        fitToVisibleScreen(window); showWindow(window)
     }
     private func fitToVisibleScreen(_ window: NSWindow) {
         guard let screen = window.screen ?? NSScreen.main else { return }
@@ -325,7 +354,7 @@ import Combine
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) {
         if let globalClickMonitor { NSEvent.removeMonitor(globalClickMonitor) }; if let localEventMonitor { NSEvent.removeMonitor(localEventMonitor) }
-        model?.accountEngine.stop(); model?.engine.stop(); model?.metricsEngine.stop()
+        model?.stop()
     }
     private func capture<V: View>(_ content: V, size: NSSize, dark: Bool, to url: URL, opaqueBackground: Bool = true) async throws {
         let view = NSHostingView(rootView: content.frame(width: size.width, height: size.height).background(opaqueBackground ? Color(nsColor: .windowBackgroundColor) : Color.clear).environment(\.colorScheme, dark ? .dark : .light))
@@ -456,8 +485,8 @@ import Combine
             if let source = model.settings.sources.first(where: { $0.hostId != nil }) {
                 try await capture(SourceEditor(source: source, hosts: model.settings.hosts, onSave: { _ in }), size: NSSize(width: 570, height: 660), dark: false, to: root.appendingPathComponent("remote-source.png"))
             }
-        } catch { fputs("\(error.localizedDescription)\n", stderr); model.accountEngine.stop(); model.engine.stop(); model.metricsEngine.stop(); exit(1) }
-        model.accountEngine.stop(); model.engine.stop(); model.metricsEngine.stop(); NSApp.terminate(nil)
+        } catch { fputs("\(error.localizedDescription)\n", stderr); model.stop(); exit(1) }
+        model.stop(); NSApp.terminate(nil)
     }
 }
 

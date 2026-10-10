@@ -11,6 +11,7 @@ pub fn run(mut cmd: Command, input: Vec<u8>, timeout: Duration) -> Result<Vec<u8
         .stderr(Stdio::piped());
     prepare(&mut cmd);
     let mut child = cmd.spawn().context("启动命令失败")?;
+    let _registration = track_child(&mut child)?;
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
@@ -69,6 +70,101 @@ pub fn run(mut cmd: Command, input: Vec<u8>, timeout: Duration) -> Result<Vec<u8
     }
     anyhow::ensure!(output.len() <= 64 * 1024 * 1024, "查询结果超过 64 MB");
     Ok(output)
+}
+
+/// NDJSON transport with bounded buffering and cleanup on parser/consumer failure.
+pub fn run_lines(
+    mut cmd: Command,
+    input: Vec<u8>,
+    timeout: Duration,
+    mut receive: impl FnMut(&[u8]) -> Result<()>,
+) -> Result<()> {
+    use std::io::BufRead;
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    prepare(&mut cmd);
+    let mut child = cmd.spawn().context("启动命令失败")?;
+    let _registration = track_child(&mut child)?;
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    let errors = std::thread::spawn(move || {
+        let mut captured = Vec::new();
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = stderr.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            let keep = n.min(65536usize.saturating_sub(captured.len()));
+            captured.extend_from_slice(&buf[..keep]);
+        }
+        captured
+    });
+    let reader = std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stdout);
+        loop {
+            let mut line = Vec::new();
+            let result = reader
+                .by_ref()
+                .take(1024 * 1024 + 1)
+                .read_until(b'\n', &mut line);
+            match result {
+                Ok(0) => break,
+                Ok(_) if line.len() <= 1024 * 1024 && line.last() == Some(&b'\n') => {
+                    if tx.send(Ok(line)).is_err() {
+                        break;
+                    }
+                }
+                Ok(_) => {
+                    let _ = tx.send(Err(std::io::Error::other("远程统计批次过大或不完整")));
+                    break;
+                }
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                    break;
+                }
+            }
+        }
+    });
+    let started = Instant::now();
+    let result = (|| -> Result<()> {
+        loop {
+            let remaining = timeout.saturating_sub(started.elapsed());
+            anyhow::ensure!(!remaining.is_zero(), "查询超时");
+            match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                Ok(line) => receive(&line?)?,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        loop {
+            if let Some(status) = child.try_wait()? {
+                anyhow::ensure!(status.success(), "命令执行失败（{}）", status);
+                break;
+            }
+            anyhow::ensure!(started.elapsed() < timeout, "查询超时");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Ok(())
+    })();
+    drop(rx);
+    // A successful launcher can still leave descendants holding a pipe open.
+    kill(&mut child);
+    let _ = writer.join();
+    let _ = reader.join();
+    let stderr = errors.join().unwrap_or_default();
+    result.map_err(|error| {
+        if error.to_string().starts_with("命令执行失败") {
+            anyhow::anyhow!(classify_error(&String::from_utf8_lossy(&stderr), None))
+        } else {
+            error
+        }
+    })
 }
 /// Every background child must avoid opening a console window on Windows.
 pub fn prepare(cmd: &mut Command) {
@@ -239,5 +335,128 @@ mod tests {
         );
         assert_eq!(message, "SSH 认证失败");
         assert!(!message.contains("example-secret"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod line_transport_tests {
+    use super::*;
+    #[test]
+    fn lines_are_streamed_and_input_is_not_a_command_argument() {
+        let mut command = Command::new("python3");
+        command.args(["-c","import sys,json; data=json.load(sys.stdin); [print(json.dumps({'n':n,'text':data['text']}),flush=True) for n in range(20)]"]);
+        let input = serde_json::to_vec(&serde_json::json!({"text":"literal '$()` text"})).unwrap();
+        let mut values = vec![];
+        run_lines(command, input, Duration::from_secs(5), |line| {
+            values.push(serde_json::from_slice::<serde_json::Value>(line)?);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(values.len(), 20);
+        assert_eq!(values[19]["n"], 19);
+        assert_eq!(values[19]["text"], "literal '$()` text");
+    }
+    #[test]
+    fn errors_and_timeouts_kill_descendants_without_hanging_on_pipes() {
+        for (program, limit, consumer_error) in [
+            (
+                "import sys,time; print('{}',flush=True); time.sleep(30)",
+                Duration::from_secs(3),
+                true,
+            ),
+            (
+                "import time; time.sleep(30)",
+                Duration::from_millis(100),
+                false,
+            ),
+            (
+                "print('x'*1048577,flush=True)",
+                Duration::from_secs(3),
+                false,
+            ),
+        ] {
+            let mut command = Command::new("python3");
+            command.args(["-c", program]);
+            let started = Instant::now();
+            assert!(
+                run_lines(command, vec![], limit, |_| {
+                    if consumer_error {
+                        anyhow::bail!("fixture consumer")
+                    };
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert!(started.elapsed() < Duration::from_secs(3));
+        }
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30 >&2 & printf '{}\\n'"]);
+        let started = Instant::now();
+        run_lines(command, vec![], Duration::from_millis(150), |_| Ok(())).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+}
+
+// Only short-lived queries are registered. Installed wake services and OS URL
+// launchers intentionally outlive their caller and are never added here.
+use std::sync::atomic::{AtomicU32, Ordering};
+static QUERY_CHILDREN: [AtomicU32; 128] = [const { AtomicU32::new(0) }; 128];
+pub(crate) struct ChildRegistration(usize);
+pub(crate) fn track_child(child: &mut std::process::Child) -> Result<ChildRegistration> {
+    for (index, slot) in QUERY_CHILDREN.iter().enumerate() {
+        if slot
+            .compare_exchange(0, child.id(), Ordering::SeqCst, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Ok(ChildRegistration(index));
+        }
+    }
+    kill(child);
+    anyhow::bail!("后台查询进程数超过上限")
+}
+impl Drop for ChildRegistration {
+    fn drop(&mut self) {
+        QUERY_CHILDREN[self.0].store(0, Ordering::SeqCst);
+    }
+}
+/// Called on desktop exit; the Unix variant also uses only signal-safe operations.
+pub fn terminate_query_children() {
+    for slot in &QUERY_CHILDREN {
+        let pid = slot.load(Ordering::SeqCst);
+        if pid == 0 {
+            continue;
+        }
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+        #[cfg(windows)]
+        {
+            let mut command = Command::new("taskkill");
+            command
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            prepare(&mut command);
+            let _ = command.status();
+        }
+    }
+}
+/// Standalone IPC cores must clean up SSH/CLI children even when the native app
+/// terminates them during a blocked call. The embedded Tauri engine uses its exit hook.
+pub fn install_query_shutdown_handler() {
+    #[cfg(unix)]
+    {
+        extern "C" fn terminate(signal: libc::c_int) {
+            terminate_query_children();
+            unsafe {
+                libc::_exit(128 + signal);
+            }
+        }
+        unsafe {
+            libc::signal(libc::SIGTERM, terminate as *const () as libc::sighandler_t);
+            libc::signal(libc::SIGINT, terminate as *const () as libc::sighandler_t);
+        }
     }
 }

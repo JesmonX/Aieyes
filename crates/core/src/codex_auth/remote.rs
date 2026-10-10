@@ -1,6 +1,22 @@
 use crate::{models::Host, ssh};
 use anyhow::{Context, Result, ensure};
+use base64::Engine as _;
 use serde_json::{Value, json};
+
+pub(crate) fn script() -> Vec<u8> {
+    let sources = json!({
+        "__init__": include_str!("../../../../scripts/vendor/tomli/__init__.py"),
+        "_types": include_str!("../../../../scripts/vendor/tomli/_types.py"),
+        "_re": include_str!("../../../../scripts/vendor/tomli/_re.py"),
+        "_parser": include_str!("../../../../scripts/vendor/tomli/_parser.py"),
+    });
+    format!(
+        "import json, base64\n_aieyes_tomli_sources = json.loads(base64.b64decode('{}'))\n{}",
+        base64::engine::general_purpose::STANDARD.encode(sources.to_string()),
+        include_str!("../../../../scripts/remote_codex_auth.py")
+    )
+    .into_bytes()
+}
 pub fn call(
     host: &Host,
     location: &super::local::Location,
@@ -17,7 +33,7 @@ pub fn call(
     )?;
     let bytes = crate::process::run(
         command,
-        include_bytes!("../../../../scripts/remote_codex_auth.py").to_vec(),
+        script(),
         std::time::Duration::from_secs(if method == "quota" {
             180
         } else if method == "status" {

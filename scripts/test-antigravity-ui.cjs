@@ -3,7 +3,7 @@ const {chromium}=require('../apps/desktop/node_modules/playwright');
 function fixture(){
   window.setInterval=()=>0;
   const at=Date.now()/1000,groups=['Gemini Models','Claude and GPT Models','Future Models'];
-  const q={provider:'antigravity',accountId:'legacy-shared',sourceId:'agy-source',name:'Antigravity',plan:'ultra',updatedAt:at,origin:'live',windows:groups.flatMap(group=>[300,10080].map(minutes=>({id:group+':'+minutes,name:group+' · '+(minutes===300?'5h':'7d'),groupId:group,groupName:group,windowMinutes:minutes,usedPercent:20,resetsAt:at+minutes*60})))};
+  const q={provider:'antigravity',accountId:'legacy-shared',sourceId:'agy-source',name:'Antigravity',identity:{key:'google:fixture',email:'a.very.long.account.name.for.layout.verification@example.test',subscription:'Google AI Ultra',checkedAt:at,stale:false},plan:'Google AI Ultra',updatedAt:at,origin:'live',windows:groups.flatMap(group=>[300,10080].map(minutes=>({id:group+':'+minutes,name:group+' · '+(minutes===300?'5h':'7d'),groupId:group,groupName:group,windowMinutes:minutes,usedPercent:20,resetsAt:at+minutes*60})))};
   const codex={...q,provider:'codex',accountId:'c',sourceId:'c',name:'Codex',plan:'pro',windows:[],credits:{hasCredits:true,unlimited:false,balance:'1000'}};
   const record=(group,value)=>({id:group,accountKey:'antigravity:legacy-shared',groupId:group,windowId:group+':300',windowName:group+' · 5h',valuationMode:'fiveHour',status:'completed',sourceIds:['agy-source'],sourceNames:['CLI'],startedAt:at-100,checkpointAt:at,consumedPercent:10,cost:1,totalTokens:100,pricedTokens:100,fiveHourValue:value,weeklyValue:value*6,weeklyDirectValue:value*6,weeklyRatioValue:value*5,calculationNote:'分组估值',prices:[]});
   const settings={version:2,accountAliases:{'agy:shared':'antigravity:legacy-shared'},accounts:[q,codex].map(q=>({id:q.accountId,name:q.name,provider:q.provider,quotaEnabled:true})),sources:[q,codex].map(q=>({id:q.sourceId,provider:q.provider,accountId:q.accountId,name:q.name,path:'/fixture',enabled:true})),hosts:[],modelMappings:{},proxy:{mode:'direct',url:''},refreshSeconds:300,serverRefreshSeconds:10};
@@ -30,7 +30,9 @@ function fixture(){
  try{for(const surface of ['index.html','floating.html']){
   const panel=surface==='floating.html',page=await browser.newPage({viewport:{width:panel?450:1120,height:850}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.evaluate(()=>AieyesApp.ready);
   const card=page.locator('[data-quota="antigravity:legacy-shared"]');await card.waitFor();
-  assert.equal(await card.locator('.subscription-badge').textContent(),'Ultra');
+  assert.equal(await card.locator('.subscription-badge').textContent(),'Google AI Ultra');
+  assert.equal(await card.locator('.quota-email').textContent(),'a.very.long.account.name.for.layout.verification@example.test');
+  assert.equal(await card.locator('.quota-email').getAttribute('title'),'a.very.long.account.name.for.layout.verification@example.test');
   const pref=await page.evaluate(()=>JSON.parse(localStorage.getItem('aieyes.panel.accounts.v2')));assert.deepEqual(pref.providers.antigravity.keys,['antigravity:legacy-shared']);assert(!pref.providers.agy);
   if(panel){assert.equal(await page.evaluate(()=>state.accountKey),'antigravity:legacy-shared');assert.equal(await page.evaluate(()=>state.provider),'antigravity');assert.equal(await card.locator('details').evaluate(e=>e.open),false);await card.locator('.quota-title').click();}
   const entries=card.locator('[data-estimate]');assert.equal(await entries.count(),3);

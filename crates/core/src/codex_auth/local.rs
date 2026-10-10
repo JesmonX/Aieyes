@@ -568,8 +568,8 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 params["profileId"].as_str().context("请选择目标账号")?,
             )?;
             let op = files::new_id();
-            let running = processes::list(&root)?;
-            let record = json!({"operationId":op,"status":"prepared","profileId":p.id,"revision":files::revision(&snapshot(&root)),"processes":running,"expiresAt":now()+120});
+            let (running, preserved) = processes::review_for_switch()?;
+            let record = json!({"operationId":op,"status":"prepared","profileId":p.id,"revision":files::revision(&snapshot(&root)),"processes":running,"preservedProcesses":preserved,"expiresAt":now()+120});
             update_operation(&root, &op, &record)?;
             Ok(record)
         }
@@ -604,9 +604,9 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 serde_json::from_value(record["processes"].clone())?;
             ensure!(
                 running.is_empty() || params["closeProcesses"] == true,
-                "Codex 正在运行，尚未授权关闭"
+                "Codex / ChatGPT 正在运行，尚未授权关闭"
             );
-            processes::close(&root, &running)?;
+            processes::close_for_switch(&running)?;
             let profile = record["profileId"].as_str().context("目标档案缺失")?;
             let p = files::profile(&root, profile)?;
             let auth = read_authority(&root, &p)?;
@@ -618,8 +618,8 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 rpc.quota(&auth, &mut || Ok(auth.clone()))?;
             }
             ensure!(
-                processes::list(&root)?.is_empty(),
-                "Codex 已重新启动，账号未切换"
+                processes::list_for_switch()?.is_empty(),
+                "Codex / ChatGPT 已重新启动，账号未切换"
             );
             ensure!(
                 record["revision"] == files::revision(&snapshot(&root)),
@@ -657,8 +657,12 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 "外部凭据已变化，账号未切换"
             );
             files::atomic(&root.join("auth.json"), &auth)?;
+            ensure!(
+                files::revision(&files::read(&root.join("auth.json"))?) == files::revision(&auth),
+                "切换后凭据被其他程序修改，请重新检查当前账号"
+            );
             record["status"] = json!("succeeded");
-            record["message"] = json!("账号已切换，请重新打开 Codex 并恢复会话");
+            record["message"] = json!("账号已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话");
             update_operation(&root, op, &record)?;
             Ok(record)
         }

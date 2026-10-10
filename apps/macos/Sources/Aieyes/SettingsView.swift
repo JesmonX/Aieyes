@@ -18,6 +18,7 @@ struct SettingsView: View {
     private var mappingModel: String { get { model.mappingModel } nonmutating set { model.mappingModel = newValue } }
     private var mappingID: String { get { model.mappingID } nonmutating set { model.mappingID = newValue } }
     @FocusState private var mappingFocused: Bool
+    @FocusState private var generalField: String?
     @MainActor init(model: AppModel) {
         self.model = model
         self.catalog = model.priceCatalog
@@ -60,6 +61,7 @@ struct SettingsView: View {
             autoSaveTask?.cancel()
             autoSaveTask = Task { do { try await Task.sleep(for: .milliseconds(600)) } catch { return }; await model.saveGeneralConfiguration() }
         }
+        .onChange(of: model.settingsMessage) { _, message in if let message { for (key,label) in [("quota","Agent 限额"),("history","Agent 记录"),("foreground","服务器前台"),("background","服务器刷新")] where message.contains(label) { model.settingsTab = "general"; generalField = key } } }
         .task(id: model.settingsTab) { if model.settingsTab == "prices" { await catalog.load() } }
         .onChange(of: model.requestedSourceProvider) { _, _ in consumeEditorRequest() }
         .onChange(of: model.requestedAccountKey) { _, _ in consumeEditorRequest() }
@@ -78,7 +80,7 @@ struct SettingsView: View {
         .sheet(item: $accountEditor) { account in AccountDevicesView(model: model, account: account) }
         .sheet(item: $hostEditor) { host in HostEditor(host: host, password: model.pendingHostPasswords[host.id] ?? "") { item, password in
             var next = model.settings
-            if let i = next.hosts.firstIndex(where: { $0.id == item.id }) { next.hosts[i] = item } else { next.hosts.append(item) }
+            if item.id == "local" { next.localMonitor = LocalMonitor(item) } else if let i = next.hosts.firstIndex(where: { $0.id == item.id }) { next.hosts[i] = item } else { next.hosts.append(item) }
             var created: String?
             if !password.isEmpty {
                 let result: [String: String] = try await model.engine.call("hosts.credentials.save", params: ["password":password])
@@ -104,6 +106,10 @@ struct SettingsView: View {
     private var servers: some View {
         VStack(spacing: 12) {
             Form {
+                HStack(spacing: 12) {
+                    Toggle("启用本机监测", isOn: Binding(get: { model.settingsDraft.localMonitor?.enabled ?? true }, set: { value in Task { var next = model.settings; var local = next.localMonitor ?? LocalMonitor(); local.enabled = value; next.localMonitor = local; do { try await model.persistConfiguration(next) } catch { model.settingsMessage = error.localizedDescription } } })).toggleStyle(.switch).controlSize(.small)
+                    Spacer(); Button("监控设置") { hostEditor = (model.settingsDraft.localMonitor ?? LocalMonitor()).host }
+                }.padding(.vertical, 7)
                 ForEach($model.settingsDraft.hosts) { $host in HStack(spacing: 12) {
                     Toggle("启用 " + (host.name.isEmpty ? host.target : host.name), isOn: Binding(get: { host.enabled }, set: { value in Task { var next = model.settings; if let i = next.hosts.firstIndex(where: { $0.id == host.id }) { next.hosts[i].enabled = value }; do { try await model.persistConfiguration(next) } catch { model.settingsMessage = error.localizedDescription } } })).labelsHidden().toggleStyle(.switch).controlSize(.small)
                     VStack(alignment: .leading, spacing: 5) { Text(host.name.isEmpty ? host.target : host.name).font(AppFont.section); Text(host.target).font(AppFont.secondary).foregroundStyle(.secondary) }
@@ -187,8 +193,10 @@ struct SettingsView: View {
                 Picker("显示内容", selection: $model.settingsDraft.menuMetric) { Text("图标").tag("icon"); Text("今日全部 Token").tag("tokens"); Text("首个账户剩余额度").tag("quota"); Text("首台服务器 CPU").tag("cpu") }
             }
             Section("刷新") {
-                TextField("Agent 间隔（秒）", value: $model.settingsDraft.refreshSeconds, format: .number)
-                TextField("服务器后台间隔（秒）", value: $model.settingsDraft.serverRefreshSeconds, format: .number)
+                TextField("Agent 限额间隔（秒）", value: $model.settingsDraft.refreshSeconds, format: .number).focused($generalField, equals: "quota")
+                TextField("Agent 记录间隔（秒）", value: $model.settingsDraft.historyInterval, format: .number).focused($generalField, equals: "history")
+                TextField("服务器前台间隔（秒）", value: $model.settingsDraft.foregroundInterval, format: .number).focused($generalField, equals: "foreground")
+                TextField("服务器后台间隔（秒）", value: $model.settingsDraft.serverRefreshSeconds, format: .number).focused($generalField, equals: "background")
             }
             Section("连接") {
                 ProxyFields(proxy: $model.settingsDraft.proxy, testURLs: model.settingsDraft.proxyTestUrls)
@@ -262,6 +270,7 @@ struct ProxyFields: View {
             if let testError { Text(testError).foregroundStyle(Palette.warn) }
         }
         .disabled(testing)
+        .updateOperation("编辑器代理检测", active: testing)
         .onChange(of: address) { _, _ in result = nil; testError = nil }
         .onChange(of: proxy.mode) { _, _ in result = nil; testError = nil }
         .onChange(of: testURLs) { _, _ in result = nil; testError = nil }
@@ -327,6 +336,7 @@ struct SourceEditor: View {
             }.padding(20)
         }.font(AppFont.body).frame(width: 570, height: EditorLayout.height(660))
         .interactiveDismissDisabled(saving || initialDraft != draftValue)
+        .updateDraftGuard("数据源", snapshot: draftValue, dirty: !initialDraft.isEmpty && initialDraft != draftValue, saving: saving, save: { await save(); return error == nil }, discard: { dismiss() })
         .onAppear { if initialDraft.isEmpty { initialDraft = draftValue } }
         .discardDraftConfirmation($confirmDiscard) { dismiss() }
     }
@@ -397,15 +407,16 @@ struct HostEditor: View {
     private func devicePicker(_ group: String, _ label: String) -> some View {
         let options = deviceOptions(group)
         return MultiSelectPicker(title: label, options: options,
-            selected: MonitorSelection.selected(tokens, group: group, available: Set(options.map(\.id))),
-            all: !tokens.contains { $0.hasPrefix(group + ":") }) { selected, all in
+            selected: MonitorSelection.selected(tokens, group: group, available: Set(options.map(\.id)), recommended: group == "filesystems" ? Set((discovered[group] ?? []).filter { MonitorSelection.recommendedFilesystem($0.id,type: $0.type) }.map(\.id)) : nil),
+            all: tokens.contains(group + ":__all__") || (group != "filesystems" && !tokens.contains { $0.hasPrefix(group + ":") })) { selected, all in
                 devices = MonitorSelection.write(tokens, group: group, selected: selected, all: all).joined(separator: ", ")
             }.disabled(!host.metrics.contains(group))
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack { Text("SSH 主机").font(AppFont.title); Spacer() }.padding(22)
+            HStack { Text(host.id == "local" ? "本机监测" : "SSH 主机").font(AppFont.title); Spacer() }.padding(22)
             Form {
+                if host.id != "local" {
                 TextField("名称", text: $host.name)
                 TextField("SSH 别名或地址", text: $host.target, prompt: Text("my-server 或 user@host"))
                 TextField("端口", text: Binding(get: { host.port.map(String.init) ?? "" }, set: { host.port = Int($0) }), prompt: Text("跟随 SSH 配置"))
@@ -415,7 +426,8 @@ struct HostEditor: View {
                 TextField("用户名", text: Binding(get: { host.username ?? "" }, set: { host.username = $0 }), prompt: Text("跟随地址或 SSH 配置"))
                 if host.authMode == "password" { SecureField("密码（留空保留）", text: $password) }
                 else { HStack { TextField("密钥路径", text: $host.identityFile, prompt: Text("跟随 SSH 配置")); Button("选择…") { let panel = NSOpenPanel(); panel.showsHiddenFiles = true; if panel.runModal() == .OK { host.identityFile = panel.url?.path ?? host.identityFile } } } }
-                Button(discovering ? "连接中…" : "连接并读取设备") { Task { await discover() } }.disabled(discovering || host.target.isEmpty)
+                }
+                Button(discovering ? "读取中…" : "连接并读取设备") { Task { await discover() } }.disabled(discovering || host.target.isEmpty)
                 DisclosureGroup("监控指标与设备 · 按需选择") {
                 Section {
                     MultiSelectPicker(title: "采集项目", options: groups.map { SelectionOption(id: $0.0, label: $0.1) }, selected: Set(host.metrics)) { selected, _ in
@@ -434,13 +446,18 @@ struct HostEditor: View {
                 }
                 }
                 DisclosureGroup("高级设置") {
-                    TextField("远程 shell", text: $host.shell)
-                    TextField("设备表达式", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/")).help("留空显示全部设备")
+                    if host.id != "local" { TextField("远程 shell", text: $host.shell) }
+                    TextField("设备表达式", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/")).help("留空使用推荐设备；文件系统默认隐藏虚拟挂载。全选可显示全部")
                 }
             }.formStyle(.grouped).textFieldStyle(.roundedBorder)
             if let saveError { Text(saveError).foregroundStyle(Palette.warn).textSelection(.enabled) }
             HStack { Button("取消") { cancel() }.keyboardShortcut(.cancelAction); Spacer(); Text("保存后立即生效").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(saving ? "保存中…" : "保存") { Task { saving = true; saveError = nil; defer { saving = false }; host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; do { try await onSave(host, password) } catch { saveError = error.localizedDescription } } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty || saving) }.padding(20)
         }.font(AppFont.body).frame(width: 620, height: EditorLayout.height(650)).onChange(of: connectionIdentity) { _, _ in discoveryRequest = UUID(); discovered = [:]; discoveryInfo = nil; discoveryError = "连接配置已更改，请重新读取设备" }
+        .updateDraftGuard(host.id == "local" ? "本机监测" : "SSH 主机", snapshot: draftValue, dirty: !initialDraft.isEmpty && initialDraft != draftValue, saving: saving || discovering, save: {
+            saving = true; defer { saving = false }; saveError = nil
+            host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }
+            do { try await onSave(host,password); return true } catch { saveError = error.localizedDescription; return false }
+        }, discard: { dismiss() })
         .onAppear { devices = host.devices.joined(separator: ", "); initialDraft = draftValue }
         .interactiveDismissDisabled(initialDraft != draftValue)
         .discardDraftConfirmation($confirmDiscard) { dismiss() }
@@ -482,6 +499,7 @@ struct PriceEditor: View {
                 Button(saving ? "保存中…" : "保存价格") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving || !valid || price.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding(20)
         }.font(AppFont.body).frame(width: 520, height: EditorLayout.height(470)).interactiveDismissDisabled(saving || initialDraft != draftValue)
+            .updateDraftGuard("模型价格", snapshot: draftValue, dirty: !initialDraft.isEmpty && initialDraft != draftValue, saving: saving, save: { guard valid, !price.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { error = "请填写模型 ID 和有效的非负价格"; return false }; await save(); return error == nil }, discard: { dismiss() })
             .onAppear { input = price.input.map { String($0 * 1e6) } ?? ""; output = price.output.map { String($0 * 1e6) } ?? ""; cacheRead = price.cacheRead.map { String($0 * 1e6) } ?? ""; cacheWrite = price.cacheWrite.map { String($0 * 1e6) } ?? ""; initialDraft = draftValue }
             .discardDraftConfirmation($confirmDiscard) { dismiss() }
     }
@@ -511,6 +529,7 @@ struct DangerConfirmation: View {
             if !affected.isEmpty { ScrollView { VStack(alignment: .leading, spacing: 8) { ForEach(Array(affected.enumerated()), id: \.offset) { _, name in Text(name).frame(maxWidth: .infinity, alignment: .leading) } } }.frame(maxHeight: 180) }
             HStack { Spacer(); Button("取消", action: cancel).focused($cancelFocused).keyboardShortcut(.cancelAction); Button(confirmLabel, role: .destructive, action: confirm) }
         }.padding(24).frame(width: 460).onAppear { cancelFocused = true }
+        .updateDraftGuard(title, snapshot: "", dirty: false, saving: false, save: { false }, discard: cancel)
     }
 }
 

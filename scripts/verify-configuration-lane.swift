@@ -24,12 +24,12 @@ import Foundation
         let _: Acknowledgement = try await engine.call("settings.get")
         let blocked = Task { let _: Acknowledgement? = try? await engine.call("fixture.block") }
         while !FileManager.default.fileExists(atPath:directory.appendingPathComponent("blocked").path) { try await Task.sleep(for:.milliseconds(10)) }
-        for method in ["agents.set", "settings.patch", "accounts.connect", "accounts.status.get"] {
+        for method in ["agents.set", "settings.patch", "accounts.connect", "accounts.status.get", "dashboard", "dashboard.summary", "quotas.schedule"] {
             let start = Date()
             let _: Acknowledgement = try await engine.call(method)
             precondition(Date().timeIntervalSince(start) < 0.5, "Configuration queued behind a 20-second request: " + method)
         }
         engine.stop(); await blocked.value
-        print("Configuration requests returned under 500 ms while the main channel was blocked by a 20-second operation")
+        print("Configuration and dashboard requests returned under 500 ms while the main channel was blocked by a 20-second operation")
     }
 }

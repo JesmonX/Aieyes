@@ -1,25 +1,31 @@
 pub mod accounts;
+pub mod agy_auth;
+mod agy_identity;
 pub mod antigravity;
 pub mod capacity;
 pub mod codex_auth;
 pub mod credentials;
 pub mod estimates;
 pub mod file_lock;
+mod host_sampling;
 pub mod import;
 pub mod metrics;
 pub mod models;
+pub mod monitoring;
 pub mod network;
 pub mod pricing;
 pub mod process;
 pub mod providers;
 pub mod quota;
 mod quota_schedule;
+mod remote_history;
 pub mod sessions;
 pub mod settings;
 pub mod ssh;
 pub mod store;
 pub mod update_transport;
 pub mod usage;
+mod usage_cache;
 pub mod wakeups;
 
 use anyhow::{Context, Result};
@@ -30,6 +36,9 @@ use std::{collections::HashMap, path::Path};
 pub struct Engine {
     pub store: store::Store,
     previous_metrics: HashMap<String, Value>,
+    host_generation: u64,
+    host_session: String,
+    local_metrics: monitoring::LocalSampler,
     sessions: sessions::SessionMonitor,
     progress: Option<Box<dyn FnMut(Value) + Send>>,
     network_cache: HashMap<String, network::NetworkTest>,
@@ -39,6 +48,16 @@ impl Engine {
         Ok(Self {
             store: store::Store::open(root)?,
             previous_metrics: HashMap::new(),
+            host_generation: 0,
+            host_session: format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ),
+            local_metrics: monitoring::LocalSampler::default(),
             sessions: sessions::SessionMonitor::default(),
             progress: None,
             network_cache: HashMap::new(),
@@ -105,9 +124,28 @@ impl Engine {
             });
             let mut last = None;
             for source in sources {
+                let auth_revision = accounts::status_revision(&self.store, source)?;
                 match quota::read(source, &settings) {
                     Ok(mut q) => {
                         q.name = account.name.clone();
+                        if account.provider == "antigravity" {
+                            accounts::record_agy_observation(
+                                &self.store,
+                                &settings,
+                                source,
+                                &q,
+                                &auth_revision,
+                            )?;
+                            if let Some(a) = self
+                                .store
+                                .settings()?
+                                .accounts
+                                .iter()
+                                .find(|a| a.provider == account.provider && a.id == account.id)
+                            {
+                                q.name = a.name.clone();
+                            }
+                        }
                         last = Some(q);
                         break;
                     }
@@ -154,6 +192,7 @@ impl Engine {
             | "accounts.delete"
             | "accounts.cleanup.list"
             | "accounts.deployments.sync" => self.account_call(method, params),
+            name if name.starts_with("agyAuth.") => self.agy_auth_call(name, params),
             name if name.starts_with("codexAuth.") => self.codex_auth_call(name, params),
             name if name.starts_with("wakeups.") => self.wakeup_call(name, params),
             name if name.starts_with("quotaEstimates.") || name.starts_with("creditEstimates.") => {
@@ -258,6 +297,9 @@ impl Engine {
                 Ok(json!({"path":path}))
             }
             "hosts.discover" => {
+                if params["hostId"] == "local" || params["host"]["id"] == "local" {
+                    return Ok(self.local_metrics.sample(&Host::default().metrics));
+                }
                 let host: Host = serde_json::from_value(params["host"].clone())?;
                 ssh::python(
                     &host,
@@ -281,112 +323,102 @@ impl Engine {
                 self.store.save_settings(&s)?;
                 Ok(json!({"saved":true}))
             }
-            "dashboard" => Ok(serde_json::to_value(
-                self.store
-                    .dashboard(&serde_json::from_value::<Filter>(params)?)?,
-            )?),
+            "dashboard" | "dashboard.summary" => {
+                let filter = serde_json::from_value::<Filter>(params)?;
+                Ok(serde_json::to_value(if method == "dashboard.summary" {
+                    self.store.dashboard_summary(&filter)?
+                } else {
+                    self.store.dashboard(&filter)?
+                })?)
+            }
             "sources.scan" => {
                 let settings = self.store.settings()?;
                 let mut results = Vec::new();
-                let remote: Vec<_> = settings
+                let explicit = params["sourceId"].is_string() || params["sourceIds"].is_array();
+                let selected: Vec<_> = settings
                     .sources
                     .iter()
                     .filter(|s| {
                         s.enabled
-                            && s.host_id.is_some()
                             && s.provider != "deepseek"
                             && params["sourceId"].as_str().is_none_or(|id| s.id == id)
                             && params["sourceIds"]
                                 .as_array()
                                 .is_none_or(|ids| ids.iter().any(|id| id.as_str() == Some(&s.id)))
-                    })
-                    .collect();
-                let mut fetched = HashMap::new();
-                for batch in remote.chunks(3) {
-                    let reads = std::thread::scope(|scope| {
-                        let jobs: Vec<_> = batch
-                            .iter()
-                            .map(|source| {
-                                let settings = &settings;
-                                scope.spawn(move || {
-                                    let result = settings
+                            && (explicit
+                                || s.host_id.as_ref().is_none_or(|id| {
+                                    settings
                                         .hosts
                                         .iter()
-                                        .find(|h| Some(&h.id) == source.host_id.as_ref())
-                                        .context("主机不存在")
-                                        .and_then(|host| {
-                                            ssh::python(
-                                                host,
-                                                ssh::HISTORY_SCRIPT,
-                                                &[source.path.clone(), source.provider.clone()],
-                                            )
-                                        });
-                                    (source.id.clone(), result)
-                                })
-                            })
-                            .collect();
-                        jobs.into_iter()
-                            .map(|job| job.join().unwrap())
-                            .collect::<Vec<_>>()
-                    });
-                    fetched.extend(reads);
-                }
-                for source in settings.sources.iter().filter(|s| {
-                    s.enabled
-                        && s.provider != "deepseek"
-                        && params["sourceId"].as_str().is_none_or(|id| s.id == id)
-                        && params["sourceIds"]
-                            .as_array()
-                            .is_none_or(|ids| ids.iter().any(|id| id.as_str() == Some(&s.id)))
-                }) {
-                    let result = if source.host_id.is_some() {
-                        (|| -> Result<Value> {
-                            let data = fetched.remove(&source.id).context("远程读取结果缺失")??;
-                            let prices = self.store.prices()?;
-                            let tx = self.store.db.unchecked_transaction()?;
-                            let mut count = 0;
-                            let files = data["files"].as_array().context("远程记录格式不正确")?;
-                            for file in files {
-                                let mut state = ParseState {
-                                    session_id: format!(
-                                        "{}:{}",
-                                        source.id,
-                                        file["path"].as_str().unwrap_or("remote")
-                                    ),
-                                    ..Default::default()
+                                        .find(|h| &h.id == id)
+                                        .is_none_or(|h| h.enabled)
+                                }))
+                    })
+                    .collect();
+                let remote: Vec<_> = selected
+                    .iter()
+                    .copied()
+                    .filter(|s| s.host_id.is_some())
+                    .collect();
+                let root = std::path::Path::new(self.store.db.path().context("数据目录不可用")?)
+                    .parent()
+                    .context("数据目录不可用")?;
+                let mut fetched = HashMap::new();
+                let next = std::sync::atomic::AtomicUsize::new(0);
+                std::thread::scope(|scope| {
+                    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+                    for _ in 0..remote.len().min(2) {
+                        let tx = tx.clone();
+                        let remote = &remote;
+                        let settings = &settings;
+                        let next = &next;
+                        scope.spawn(move || {
+                            loop {
+                                let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let Some(source) = remote.get(index) else {
+                                    break;
                                 };
-                                for v in file["events"].as_array().context("远程事件格式不正确")?
-                                {
-                                    if let Some(e) = usage::parse(source, &mut state, v)
-                                        && self.store.put_event(&e, &prices, &settings)?
-                                    {
-                                        count += 1;
-                                    }
-                                    if source.provider == "codex"
-                                        && settings.quota_enabled(source)
-                                        && v["payload"]["rate_limits"].is_object()
-                                        && let Some(t) = timestamp(&v["timestamp"])
-                                    {
-                                        self.store.quota(&usage::codex_quota(
-                                            source,
-                                            &v["payload"]["rate_limits"],
-                                            t,
-                                            "log",
-                                        ))?;
-                                    }
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        remote_history::scan(root, settings, source)
+                                    }))
+                                    .unwrap_or_else(|_| Err(anyhow::anyhow!("远程同步任务失败")));
+                                if tx.send((source.id.clone(), result)).is_err() {
+                                    break;
                                 }
                             }
-                            tx.commit()?;
-                            let status =
-                                json!({"updatedAt":now(),"newEvents":count,"files":files.len()});
-                            self.store.source_status(&source.id, &status)?;
-                            Ok(status)
-                        })()
+                        });
+                    }
+                    drop(tx);
+                    for (id, result) in rx {
+                        fetched.insert(id, result);
+                    }
+                });
+                for source in selected {
+                    let result = if source.host_id.is_some() {
+                        fetched.remove(&source.id).context("远程读取结果缺失")?
                     } else {
                         import::scan(&self.store, &settings, source)
                     };
                     match result {
-                        Ok(value) => results.push(json!({"id":source.id,"result":value})),
+                        Ok(value) => {
+                            if value["error"].is_string()
+                                || value["failedFiles"].as_u64().unwrap_or(0) > 0
+                                || value["invalidRecords"].as_u64().unwrap_or(0) > 0
+                                || value["issues"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .any(|i| i["code"] == "invalidRecord")
+                            {
+                                self.store.pause_source_estimates(&source.id)?;
+                            }
+                            let mut row = json!({"id":source.id,"name":source.name,"partial":value["partial"],"issues":value["issues"],"result":value});
+                            if value["error"].is_string() {
+                                row["error"] = value["error"].clone();
+                            }
+                            results.push(row);
+                        }
                         Err(e) => {
                             let v = json!({"id":source.id,"error":e.to_string(),"failedAt":now()});
                             self.store.source_status(&source.id, &v)?;
@@ -397,6 +429,7 @@ impl Engine {
                 }
                 Ok(json!(results))
             }
+            "quotas.schedule" => self.quota_schedule(),
             "quotas.refresh" => self.refresh_scheduled_quotas(params),
             "prices.list" => Ok(serde_json::to_value(self.store.prices()?)?),
             "prices.sync" => {
@@ -436,81 +469,7 @@ impl Engine {
             "prices.recalculate" => {
                 Ok(json!({"repriced":self.store.reprice(&self.store.settings()?,false)?}))
             }
-            "hosts.sample" => {
-                let settings = self.store.settings()?;
-                let mut results = Vec::new();
-                let selected: Vec<_> = settings
-                    .hosts
-                    .iter()
-                    .filter(|h| h.enabled && params["hostId"].as_str().is_none_or(|id| h.id == id))
-                    .collect();
-                let samples = std::thread::scope(|scope| {
-                    let tasks: Vec<_> = selected
-                        .iter()
-                        .map(|host| {
-                            let warm = !self.previous_metrics.contains_key(&host.id);
-                            scope.spawn(move || {
-                                ssh::python(
-                                    host,
-                                    ssh::METRICS_SCRIPT,
-                                    &[
-                                        serde_json::to_string(&host.metrics).unwrap(),
-                                        warm.to_string(),
-                                    ],
-                                )
-                            })
-                        })
-                        .collect();
-                    tasks
-                        .into_iter()
-                        .map(|t| {
-                            t.join()
-                                .unwrap_or_else(|_| Err(anyhow::anyhow!("采样任务失败")))
-                        })
-                        .collect::<Vec<_>>()
-                });
-                for (host, sample) in selected.into_iter().zip(samples) {
-                    match sample {
-                        Ok(raw) => {
-                            let mut display = metrics::rates(
-                                &raw,
-                                self.previous_metrics
-                                    .get(&host.id)
-                                    .or_else(|| raw.get("previous")),
-                            );
-                            self.previous_metrics.insert(host.id.clone(), raw);
-                            if !host.devices.is_empty() {
-                                for group in ["cpu", "gpu", "filesystems", "disk", "network"] {
-                                    if host
-                                        .devices
-                                        .iter()
-                                        .any(|d| d.starts_with(&format!("{group}:")))
-                                        && let Some(rows) = display[group].as_array_mut()
-                                    {
-                                        rows.retain(|r| {
-                                            r["id"] == "cpu"
-                                                || host.devices.iter().any(|d| {
-                                                    d == &format!(
-                                                        "{}:{}",
-                                                        group,
-                                                        r["id"].as_str().unwrap_or("")
-                                                    )
-                                                })
-                                        });
-                                    }
-                                }
-                            }
-                            results.push(json!({"id":host.id,"name":host.name,"sample":display}));
-                        }
-                        Err(e) => {
-                            self.previous_metrics.remove(&host.id);
-                            results
-                                .push(json!({"id":host.id,"name":host.name,"error":e.to_string()}));
-                        }
-                    }
-                }
-                Ok(json!(results))
-            }
+            "hosts.sample" => self.sample_hosts(params),
             "updates.open" => {
                 network::open_release_page()?;
                 Ok(json!({"opened":true}))

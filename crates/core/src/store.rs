@@ -9,6 +9,7 @@ use std::{
 
 pub struct Store {
     pub db: Connection,
+    pub(crate) usage_memory: std::cell::RefCell<crate::usage_cache::Memory>,
 }
 impl Store {
     pub fn open(root: &Path) -> Result<Self> {
@@ -35,7 +36,12 @@ impl Store {
         CREATE UNIQUE INDEX IF NOT EXISTS credit_estimate_active ON credit_estimates(account_key) WHERE status IN ('active','pending');
         CREATE TABLE IF NOT EXISTS capacity_samples(account_key TEXT NOT NULL,stamp INTEGER NOT NULL,five REAL NOT NULL,week REAL NOT NULL,PRIMARY KEY(account_key,stamp));
         ")?;
-        let store = Self { db };
+        crate::usage_cache::setup(&db)?;
+        crate::remote_history::setup(&db)?;
+        let store = Self {
+            db,
+            usage_memory: Default::default(),
+        };
         store.migrate_antigravity()?;
         store.bootstrap_capacity()?;
         Ok(store)
@@ -157,7 +163,7 @@ impl Store {
                 );
             }
             anyhow::ensure!(
-                !h.id.is_empty() && ids.insert(format!("host:{}", h.id)),
+                !h.id.is_empty() && h.id != "local" && ids.insert(format!("host:{}", h.id)),
                 "主机 ID 重复或为空"
             );
             anyhow::ensure!(
@@ -262,7 +268,15 @@ impl Store {
         }
         anyhow::ensure!(
             (10..=86400).contains(&s.refresh_seconds),
-            "Agent 刷新间隔范围为 10–86400 秒"
+            "Agent 限额刷新间隔范围为 10–86400 秒"
+        );
+        anyhow::ensure!(
+            (10..=86400).contains(&s.history_refresh_seconds),
+            "Agent 记录刷新间隔范围为 10–86400 秒"
+        );
+        anyhow::ensure!(
+            (2..=86400).contains(&s.server_foreground_refresh_seconds),
+            "服务器前台刷新间隔范围为 2–86400 秒"
         );
         crate::network::validate_test_urls(&s.proxy_test_urls)?;
         anyhow::ensure!(
@@ -374,6 +388,7 @@ impl Store {
                 }
             }
         }
+        tx.execute("DELETE FROM remote_cursors WHERE source_id NOT IN (SELECT json_extract(value,'$.id') FROM json_each(?1))", [serde_json::to_string(&s.sources)?])?;
         tx.execute("INSERT INTO kv VALUES('settings',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[serde_json::to_string(s)?])?;
         if !changed_models.is_empty() {
             self.reprice_in_transaction(s, true, Some(&changed_models))?;
@@ -497,6 +512,12 @@ impl Store {
             .and_then(|p| serde_json::from_str(p).ok());
         if let Some((old, _)) = &old {
             let prior: UsageEvent = serde_json::from_str(old)?;
+            if crate::providers::antigravity(&next.provider)
+                && crate::antigravity::unknown_model(&next.model)
+                && !crate::antigravity::unknown_model(&prior.model)
+            {
+                next.model = prior.model.clone();
+            }
             // A copied record with less metadata must not erase known API billing.
             if (prior.billing.category == "api"
                 || next.billing.category.is_empty()
@@ -529,7 +550,7 @@ impl Store {
             .as_ref()
             .or_else(|| pricing::find_price(&next.model, prices, &settings.model_mappings));
         let (cost, covered) = pricing::estimate(&next.tokens, price);
-        self.db.execute("INSERT INTO events VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET stamp=excluded.stamp,payload=excluded.payload,cost=excluded.cost,priced_tokens=excluded.priced_tokens,price=excluded.price",
+        self.db.execute("INSERT INTO events VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET model=excluded.model,stamp=excluded.stamp,payload=excluded.payload,cost=excluded.cost,priced_tokens=excluded.priced_tokens,price=excluded.price",
             params![next.id,next.provider,next.account_id,next.model,next.timestamp,serde_json::to_string(&next)?,cost,covered,price.map(serde_json::to_string).transpose()?])?;
         self.db.execute(
             "INSERT OR IGNORE INTO event_sources VALUES(?1,?2)",
@@ -550,51 +571,54 @@ impl Store {
         models: Option<&[String]>,
     ) -> Result<u64> {
         let prices = self.prices()?;
-        let sql = if models.is_some() {
-            "SELECT id,payload,price,priced_tokens FROM events WHERE model IN (SELECT value FROM json_each(?1))"
-        } else {
-            "SELECT id,payload,price,priced_tokens FROM events WHERE ?1 IS NULL"
-        };
-        let mut query = self.db.prepare(sql)?;
+        let mut query = self.db.prepare("SELECT id,payload,price,priced_tokens FROM events WHERE (?1 IS NULL OR id>?1) AND (?2 IS NULL OR model IN (SELECT value FROM json_each(?2))) ORDER BY id LIMIT 512")?;
         let selected = models.map(serde_json::to_string).transpose()?;
-        let rows = query
-            .query_map([selected], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                    r.get::<_, u64>(3)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut after: Option<String> = None;
         let mut count = 0;
-        for (id, raw, snapshot, covered) in rows {
-            let e: UsageEvent = serde_json::from_str(&raw)?;
-            if only_unpriced && covered >= e.tokens.total() {
-                continue;
+        loop {
+            let rows = query
+                .query_map(params![after, selected], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, u64>(3)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if rows.is_empty() {
+                break;
             }
-            if let Some(current) = pricing::find_price(&e.model, &prices, &settings.model_mappings)
-            {
-                let mut p = current.clone();
-                if only_unpriced && let Some(raw) = snapshot {
-                    let old: ModelPrice = serde_json::from_str(&raw)?;
-                    p.input = old.input.or(p.input);
-                    p.output = old.output.or(p.output);
-                    p.cache_read = old.cache_read.or(p.cache_read);
-                    p.cache_write = old.cache_write.or(p.cache_write);
+            after = rows.last().map(|r| r.0.clone());
+            for (id, raw, snapshot, covered) in rows {
+                let e: UsageEvent = serde_json::from_str(&raw)?;
+                if only_unpriced && covered >= e.tokens.total() {
+                    continue;
                 }
-                let (c, n) = pricing::estimate(&e.tokens, Some(&p));
-                self.db.execute(
-                    "UPDATE events SET cost=?1,priced_tokens=?2,price=?3 WHERE id=?4",
-                    params![c, n, serde_json::to_string(&p)?, id],
-                )?;
-                count += 1;
-            } else if !only_unpriced {
-                self.db.execute(
-                    "UPDATE events SET cost=0,priced_tokens=0,price=NULL WHERE id=?1",
-                    [&id],
-                )?;
-                count += 1;
+                if let Some(current) =
+                    pricing::find_price(&e.model, &prices, &settings.model_mappings)
+                {
+                    let mut p = current.clone();
+                    if only_unpriced && let Some(raw) = snapshot {
+                        let old: ModelPrice = serde_json::from_str(&raw)?;
+                        p.input = old.input.or(p.input);
+                        p.output = old.output.or(p.output);
+                        p.cache_read = old.cache_read.or(p.cache_read);
+                        p.cache_write = old.cache_write.or(p.cache_write);
+                    }
+                    let (c, n) = pricing::estimate(&e.tokens, Some(&p));
+                    self.db.execute(
+                        "UPDATE events SET cost=?1,priced_tokens=?2,price=?3 WHERE id=?4",
+                        params![c, n, serde_json::to_string(&p)?, id],
+                    )?;
+                    count += 1;
+                } else if !only_unpriced {
+                    self.db.execute(
+                        "UPDATE events SET cost=0,priced_tokens=0,price=NULL WHERE id=?1",
+                        [&id],
+                    )?;
+                    count += 1;
+                }
             }
         }
         Ok(count)
@@ -642,8 +666,34 @@ impl Store {
             )
             .optional()?;
         let mut next = q.clone();
+        if q.provider == "antigravity" && q.error.is_none() {
+            let settings = self.settings()?;
+            if let Some(identity) = &q.identity {
+                let account = settings
+                    .accounts
+                    .iter()
+                    .find(|a| a.provider == q.provider && a.id == q.account_id);
+                anyhow::ensure!(
+                    crate::agy_identity::matches(account, identity),
+                    "账户身份已变化，额度结果已丢弃"
+                );
+            }
+        }
         if let Some(raw) = prior {
             let old: QuotaSnapshot = serde_json::from_str(&raw)?;
+            if q.error.is_none() && q.provider == "antigravity" {
+                // A metadata failure must not throw away newly fetched quota windows.
+                // Retain a failed subscription query only for a confirmed matching identity.
+                if let (Some(new_id), Some(old_id)) = (&mut next.identity, &old.identity)
+                    && new_id.key == old_id.key
+                    && new_id.stale
+                    && new_id.subscription.is_none()
+                {
+                    new_id.subscription = old_id.subscription.clone();
+                    new_id.subscription_checked_at = old_id.subscription_checked_at;
+                    next.plan = new_id.subscription.clone();
+                }
+            }
             if q.error.is_some() {
                 next = old;
                 next.error = q.error.clone();
@@ -661,12 +711,17 @@ impl Store {
                 }
             }
         }
-        self.learn_capacity(q)?;
-        self.observe_estimates(q)?;
+        let observed = if q.provider == "antigravity" {
+            &next
+        } else {
+            q
+        };
+        self.learn_capacity(observed)?;
+        self.observe_estimates(observed)?;
         if q.error.is_none() && q.origin != "log" {
             self.db.execute(
                 "INSERT INTO quota_history(account_key,stamp,payload) VALUES(?1,?2,?3)",
-                params![key, q.updated_at, serde_json::to_string(q)?],
+                params![key, q.updated_at, serde_json::to_string(observed)?],
             )?;
         }
         self.db.execute("INSERT INTO quotas VALUES(?1,?2) ON CONFLICT(account_key) DO UPDATE SET payload=excluded.payload",params![key,serde_json::to_string(&next)?])?;
@@ -695,6 +750,140 @@ impl Store {
         Ok(())
     }
     pub fn dashboard(&self, f: &Filter) -> Result<Dashboard> {
+        self.dashboard_mode(f, false)
+    }
+    pub fn dashboard_summary(&self, f: &Filter) -> Result<Dashboard> {
+        self.dashboard_mode(f, true)
+    }
+    fn dashboard_mode(&self, f: &Filter, summary: bool) -> Result<Dashboard> {
+        // Initialize discovery before opening a read snapshot (settings() may save on first use).
+        self.settings()?;
+        let transaction = if self.db.is_autocommit() {
+            Some(self.db.unchecked_transaction()?)
+        } else {
+            None
+        };
+        let settings = self.settings()?;
+        let (mut d, pending) = crate::usage_cache::read(self, f, summary)
+            .or_else(|_| self.dashboard_usage_reference(f).map(|d| (d, Vec::new())))?;
+        for account in settings
+            .accounts
+            .iter()
+            .filter(|a| a.quota_enabled && !a.archived)
+        {
+            if f.provider.as_ref().is_some_and(|p| p != &account.provider)
+                || f.account_id.as_ref().is_some_and(|id| id != &account.id)
+            {
+                continue;
+            }
+            let linked: Vec<_> = settings
+                .sources
+                .iter()
+                .filter(|s| s.enabled && account.uses_source(s))
+                .collect();
+            if linked.is_empty() {
+                continue;
+            }
+            if f.source_id
+                .as_ref()
+                .is_some_and(|id| !linked.iter().any(|s| &s.id == id))
+            {
+                continue;
+            }
+            let raw: Option<String> = self
+                .db
+                .query_row(
+                    "SELECT payload FROM quotas WHERE account_key=?1",
+                    [format!("{}:{}", account.provider, account.id)],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let mut quota: QuotaSnapshot = raw
+                .map(|r| serde_json::from_str(&r))
+                .transpose()?
+                .unwrap_or_else(|| QuotaSnapshot {
+                    provider: account.provider.clone(),
+                    account_id: account.id.clone(),
+                    error: Some(
+                        if linked.is_empty() {
+                            "关联数据源后可读取限额"
+                        } else {
+                            "尚未读取限额"
+                        }
+                        .into(),
+                    ),
+                    ..Default::default()
+                });
+            quota.name = account.name.clone();
+            if quota.error.as_deref() == Some("设置限额查询命令") {
+                quota.error = Some("请刷新限额；远程代理可在数据源中设置".into());
+            }
+            d.quotas.push(quota);
+        }
+        d.quota_order = self.quota_order()?;
+        let samples = self.estimates()?;
+        d.credit_estimates = samples.iter().filter(|e| e.is_credit()).cloned().collect();
+        d.quota_estimates = samples.into_iter().filter(|e| !e.is_credit()).collect();
+        d.quotas.sort_by(|a, b| {
+            let rank = |q: &QuotaSnapshot| {
+                d.quota_order
+                    .iter()
+                    .position(|k| k == &format!("{}:{}", q.provider, q.account_id))
+                    .unwrap_or(usize::MAX)
+            };
+            rank(a).cmp(&rank(b)).then_with(|| {
+                a.windows
+                    .is_empty()
+                    .cmp(&b.windows.is_empty())
+                    .then(a.name.cmp(&b.name))
+            })
+        });
+        if !summary {
+            for source in &settings.sources {
+                let status: Option<String> = self
+                    .db
+                    .query_row(
+                        "SELECT payload FROM source_status WHERE source_id=?1",
+                        [&source.id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let mut query = self.db.prepare("SELECT account_id FROM usage_source_accounts WHERE source_id=?1 AND provider=?2 AND event_count>0 ORDER BY account_id")?;
+                let mut account_ids = query
+                    .query_map(params![source.id, source.provider], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                if source.codex_home_id.is_some() {
+                    account_ids.clear();
+                }
+                if !account_ids.contains(&source.account_id) {
+                    account_ids.push(source.account_id.clone());
+                }
+                d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":source.enabled,"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok())}));
+            }
+        }
+        d.price_updated_at =
+            self.db
+                .query_row("SELECT MAX(fetched_at) FROM price_history", [], |r| {
+                    r.get(0)
+                })?;
+        if summary {
+            d.days.clear();
+            d.heatmap.clear();
+            d.trend_days.clear();
+            d.day_models.clear();
+            d.models.clear();
+            d.model_options.clear();
+            d.pricing_gaps.clear();
+        }
+        if let Some(transaction) = transaction {
+            transaction.commit()?;
+        }
+        let _ = crate::usage_cache::persist(self, pending);
+        Ok(d)
+    }
+    pub(crate) fn dashboard_usage_reference(&self, f: &Filter) -> Result<Dashboard> {
         use chrono::{Duration, Local, TimeZone};
         let today = Local::now().date_naive();
         let start = today - Duration::days(f.days.unwrap_or(1).clamp(1, 3660) as i64 - 1);
@@ -876,106 +1065,6 @@ impl Store {
             .collect();
         d.models = models.into_values().collect();
         d.models.sort_by_key(|a| std::cmp::Reverse(a.total));
-        for account in settings
-            .accounts
-            .iter()
-            .filter(|a| a.quota_enabled && !a.archived)
-        {
-            if f.provider.as_ref().is_some_and(|p| p != &account.provider)
-                || f.account_id.as_ref().is_some_and(|id| id != &account.id)
-            {
-                continue;
-            }
-            let linked: Vec<_> = settings
-                .sources
-                .iter()
-                .filter(|s| s.enabled && account.uses_source(s))
-                .collect();
-            if linked.is_empty() {
-                continue;
-            }
-            if f.source_id
-                .as_ref()
-                .is_some_and(|id| !linked.iter().any(|s| &s.id == id))
-            {
-                continue;
-            }
-            let raw: Option<String> = self
-                .db
-                .query_row(
-                    "SELECT payload FROM quotas WHERE account_key=?1",
-                    [format!("{}:{}", account.provider, account.id)],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let mut quota: QuotaSnapshot = raw
-                .map(|r| serde_json::from_str(&r))
-                .transpose()?
-                .unwrap_or_else(|| QuotaSnapshot {
-                    provider: account.provider.clone(),
-                    account_id: account.id.clone(),
-                    error: Some(
-                        if linked.is_empty() {
-                            "关联数据源后可读取限额"
-                        } else {
-                            "尚未读取限额"
-                        }
-                        .into(),
-                    ),
-                    ..Default::default()
-                });
-            quota.name = account.name.clone();
-            if quota.error.as_deref() == Some("设置限额查询命令") {
-                quota.error = Some("请刷新限额；远程代理可在数据源中设置".into());
-            }
-            d.quotas.push(quota);
-        }
-        d.quota_order = self.quota_order()?;
-        let samples = self.estimates()?;
-        d.credit_estimates = samples.iter().filter(|e| e.is_credit()).cloned().collect();
-        d.quota_estimates = samples.into_iter().filter(|e| !e.is_credit()).collect();
-        d.quotas.sort_by(|a, b| {
-            let rank = |q: &QuotaSnapshot| {
-                d.quota_order
-                    .iter()
-                    .position(|k| k == &format!("{}:{}", q.provider, q.account_id))
-                    .unwrap_or(usize::MAX)
-            };
-            rank(a).cmp(&rank(b)).then_with(|| {
-                a.windows
-                    .is_empty()
-                    .cmp(&b.windows.is_empty())
-                    .then(a.name.cmp(&b.name))
-            })
-        });
-        for source in &settings.sources {
-            let status: Option<String> = self
-                .db
-                .query_row(
-                    "SELECT payload FROM source_status WHERE source_id=?1",
-                    [&source.id],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let mut query = self.db.prepare("SELECT DISTINCT e.account_id FROM events e JOIN event_sources es ON es.event_id=e.id WHERE es.source_id=?1 AND e.provider=?2")?;
-            let mut account_ids = query
-                .query_map(params![source.id, source.provider], |row| {
-                    row.get::<_, String>(0)
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            if source.codex_home_id.is_some() {
-                account_ids.clear();
-            }
-            if !account_ids.contains(&source.account_id) {
-                account_ids.push(source.account_id.clone());
-            }
-            d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":source.enabled,"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok())}));
-        }
-        d.price_updated_at =
-            self.db
-                .query_row("SELECT MAX(fetched_at) FROM price_history", [], |r| {
-                    r.get(0)
-                })?;
         Ok(d)
     }
 }

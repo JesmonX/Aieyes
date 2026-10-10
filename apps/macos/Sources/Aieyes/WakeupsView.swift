@@ -40,6 +40,7 @@ struct WakeupsView: View {
             }
             ForEach(records) { record in Section { taskCard(record) } }
         }.formStyle(.grouped).font(AppFont.body).disabled(busy || model.installingUpdate).task { await load() }
+        .updateOperation("定时唤醒任务", active: busy)
         .sheet(item: $removal) { record in
             DangerConfirmation(title: record.deployment == nil ? "删除任务草稿？" : "移除自动任务？", explanation: record.deployment == nil ? "删除「" + record.task.name + "」的任务草稿。" : "将从目标机器移除「" + record.task.name + "」的定时部署，后续自动唤醒会停止。运行历史保留。", affected: [], confirmLabel: "确认移除", cancel: { removal = nil }, confirm: { removal = nil; perform(record.deployment == nil ? "delete" : "remove", record.id) })
         }
@@ -149,6 +150,7 @@ struct WakeEditor: View {
         }.padding(24).frame(width: 550).font(AppFont.body).disabled(busy).onAppear { if task.sourceId.isEmpty { task.sourceId = sources.first?.id ?? "" }; initialDraft = draftSnapshot(task) }
         .interactiveDismissDisabled(busy || initialDraft != draftSnapshot(task))
         .discardDraftConfirmation($confirmDiscard) { dismiss() }
+        .updateDraftGuard("定时唤醒", snapshot: draftSnapshot(task), dirty: !initialDraft.isEmpty && initialDraft != draftSnapshot(task), saving: busy, save: { await saveDraft() }, discard: { dismiss() })
         .onChange(of: task.sourceId) { _, _ in capabilities = nil; task.codexProfileId = nil }
         .onChange(of: task.model) { _, _ in if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
     }
@@ -169,7 +171,11 @@ struct WakeEditor: View {
         }
     }
     private func submit() {
+        Task { await saveDraft() }
+    }
+    @discardableResult private func saveDraft() async -> Bool {
         busy = true; error = nil
-        Task { @MainActor in defer { busy = false }; do { try await save(task) } catch { self.error = error.localizedDescription } }
+        defer { busy = false }
+        do { try await save(task); return true } catch { self.error = error.localizedDescription; return false }
     }
 }

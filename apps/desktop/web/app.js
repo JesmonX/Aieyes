@@ -46,6 +46,18 @@ const color = name => {
 
 const groups = {cpu:'CPU',memory:'内存',gpu:'GPU',filesystems:'文件系统',disk:'磁盘 I/O',network:'网络'};
 const detailOptions={uptime:'连续运行时间',cpuTimes:'CPU 时间分布',memoryCache:'内存缓存 / Buffer',swap:'Swap',fsAvailable:'文件系统可用空间',fsType:'文件系统类型 / 设备',inodes:'inode',diskIops:'磁盘 IOPS',diskBusy:'磁盘忙碌率',networkTotals:'累计流量',networkErrors:'网络错误 / 丢包',gpuMemory:'GPU 显存',gpuThermals:'GPU 温度 / 功耗'};
+function monitoredHosts(settings=state.settings) { return [...(settings?.localMonitor?[{id:'local',name:'本机',target:'本机',...settings.localMonitor}]:[]),...(settings?.hosts??[])]; }
+function refreshIndicator(key) { return `<button type="button" class="heading-refresh" data-refresh-status="${key}" aria-label="${refreshLabels[key]}状态" title="${refreshLabels[key]}状态"><span aria-hidden="true">↻</span></button>`; }
+function updateHeadingIndicators() { for(const el of document.querySelectorAll('[data-refresh-status]')) { const r=state.refreshState[el.dataset.refreshStatus]??{};el.dataset.busy=String(Boolean(r.busy||(el.dataset.refreshStatus==='scan'&&state.dashboardPending)));el.dataset.error=String(Boolean(r.error||(el.dataset.refreshStatus==='scan'&&state.dashboardError)));el.title=(refreshLabels[el.dataset.refreshStatus]??'刷新')+' · '+(el.dataset.busy==='true'?'进行中':el.dataset.error==='true'?'部分失败，点击查看':r.success?timeLabel(r.success):'尚未刷新');el.setAttribute('aria-label',el.title); } }
+function openRefreshStatus(key) {
+  let pop=document.querySelector('#refresh-status-popover');if(!pop){pop=document.createElement('div');pop.id='refresh-status-popover';pop.setAttribute('popover','auto');pop.addEventListener('toggle',()=>{if(!pop.matches(':popover-open'))pop.replaceChildren();});document.body.append(pop);}
+  pop.dataset.key=key;
+  const keys=key==='scan'?['scan','prices']:[key],rows=keys.flatMap(k=>(state.refreshState[k]?.failures??[]).map(r=>({...r,key:k})));
+  pop.innerHTML='<strong>'+escapeHTML(refreshLabels[key])+'</strong>'+(rows.length?rows.map((r,i)=>'<div class="error-row"><p>'+escapeHTML((r.name||r.id||r.accountId||'数据源')+' · '+r.error)+'</p><button data-status-retry="'+i+'">重试</button></div>').join(''):'<p>'+escapeHTML(state.refreshState[key]?.busy?'正在刷新…':state.refreshState[key]?.success?'上次成功：'+timeLabel(state.refreshState[key].success):'尚未刷新')+'</p>');
+  pop.querySelectorAll('[data-status-retry]').forEach(b=>b.onclick=()=>{const r=rows[Number(b.dataset.statusRetry)];pop.hidePopover();({scan,quotas,prices:syncPrices,hosts:sample})[r.key](r.key==='quotas'?r.accountId:r.id);});pop.showPopover();if(key==='scan'){renderQueryStatus();const query=$('#query-status');pop.append(query);query.hidden=!state.dashboardPending&&!state.dashboardError;}
+}
+document.addEventListener('click',event=>{const button=event.target.closest('[data-refresh-status]');if(button)openRefreshStatus(button.dataset.refreshStatus);});
+document.addEventListener('keydown',event=>{const pop=document.querySelector('#refresh-status-popover');if(event.key==='Escape'&&pop?.matches(':popover-open')){event.preventDefault();event.stopImmediatePropagation();pop.hidePopover();document.querySelector('[data-refresh-status="'+pop.dataset.key+'"]')?.focus({preventScroll:true});}},true);
 const state = {page:'agent',settingsTab:'sources',priceSearch:'',settings:null,settingsDraft:null,settingsBaseline:null,settingsCommitting:false,dashboard:null,hosts:[],prices:[],provider:'',sourceId:'',accountKey:'',model:'',days:1,cost:false,busy:false,settingsSaving:false,serverBusy:false,lastScan:0,lastMetrics:0,lastQuota:0,lastSuccessfulUpdate:0,quotaBusy:false,estimateBusy:false,quotaError:'',refreshState:{},savedAt:0,savedSection:'',saveError:'',dashboardRequest:0,panelOpen:false,panelPage:'agent'};
 function savePanelView() {
   if(!PANEL)return;
@@ -62,7 +74,10 @@ function openDetail() {
   const view=Object.fromEntries(['page','provider','sourceId','accountKey','model','days','cost'].map(k=>[k,state[k]]));
   return window.__TAURI__.core.invoke('desktop_detail',{view}).catch(e=>notify(String(e),'error'));
 }
-async function api(method, params = {}) { return window.__TAURI__.core.invoke('engine_call', {method,params}); }
+async function api(method, params = {}) {
+  try { return await window.__TAURI__.core.invoke('engine_call', {method,params}); }
+  finally { if(method==='quotas.refresh'||/^(settings\.(save|patch)|agents\.set|sources\.(configure|remove)|accounts\.(create|connect|delete|restore|archive|save)|codexAuth\.(enable|adopt|profiles\.(bind|remove)|login\.status))/.test(method))invalidateQuotaSchedule(); }
+}
 let notificationTimer;
 function notify(message, kind = 'info') {
   clearTimeout(notificationTimer);const el=$('#message');el.hidden=!message;el.dataset.kind=kind;
@@ -72,8 +87,9 @@ function notify(message, kind = 'info') {
 }
 const refreshLabels={scan:'同步记录',quotas:'刷新限额',prices:'同步价格',hosts:'刷新服务器'};
 function updateActivity() {
+  scheduleRefreshes();
   const el=$('#activity'),fresh=AieyesUI.freshness(state.settings,state.dashboard),data=fresh.timestamp;
-  const enabledHosts=(state.settings?.hosts??[]).filter(h=>h.enabled),updatedHosts=enabledHosts.filter(h=>hostStatus(h,state.hosts.find(r=>r.id===h.id))==='正常').length;
+  const enabledHosts=monitoredHosts().filter(h=>h.enabled),updatedHosts=enabledHosts.filter(h=>hostStatus(h,state.hosts.find(r=>r.id===h.id))==='正常').length;
   const running=Object.entries(state.refreshState).filter(([,v])=>v.busy).map(([k])=>refreshLabels[k]);
   const failed=state.saveError||fresh.failed||Object.values(state.refreshState).some(v=>v.error)||state.hosts.some(h=>h.error);
   const engineBusy=['scan','quotas','prices'].some(key=>state.refreshState[key]?.busy);
@@ -81,6 +97,7 @@ function updateActivity() {
   el.dataset.status=status;
   el.textContent=(state.page==='servers'?updatedHosts+'/'+enabledHosts.length+' 台已更新':data?'记录同步于 '+timeLabel(data*1000):fresh.total?'记录尚未全部同步':'未接入用量来源')+' · '+(running.length?running.join('、')+'中…':state.busy?'保存中…':failed?'部分失败':state.page==='servers'?(updatedHosts<enabledHosts.length?'存在延迟或未采样':'采样已更新'):fresh.delayed?fresh.delayed+' 个来源有延迟':fresh.total?'记录已同步':'等待接入');
   el.title=state.page==='servers'?'按每台已启用主机的状态统计；点击刷新服务器':'各来源最后成功同步时间（取最早）；查询生成于 '+date(state.dashboard?.generatedAt)+'；点击同步记录';el.tabIndex=0;el.setAttribute('role','button');el.setAttribute('aria-label',el.textContent+'；'+el.title);window.AieyesNetwork?.draw();
+  updateHeadingIndicators();
   for(const button of document.querySelectorAll('[data-refresh]')) {
     const key=button.dataset.refresh,r=state.refreshState[key]??{};
     button.disabled=Boolean(r.busy||((key==='scan'||key==='quotas'||key==='prices')&&(state.busy||state.settingsSaving||engineBusy)));
@@ -94,15 +111,7 @@ function showFailures(error,key,itemId=null) {
   r.error=r.failures.length?'读取失败':null;
   renderFailures();
 }
-function renderFailures() {
-  const rows=Object.entries(state.refreshState).flatMap(([key,r])=>(r.failures??[]).map(row=>({...row,key})));
-  const el=$('#message');if(!rows.length){if(el.dataset.kind==='error')notify('');return;}
-  clearTimeout(notificationTimer);
-  el.hidden=false;el.dataset.kind='error';
-  el.innerHTML='<button type="button" class="message-close" aria-label="关闭提示">'+uiIcon('x')+'</button><div class="error-list">'+rows.map((row,i)=>'<div class="error-row"><div><strong>'+escapeHTML(row.name||state.settings?.sources.find(s=>s.id===row.id)?.name||row.id||row.accountId||'数据源')+'</strong><p>'+escapeHTML(row.error)+'</p></div><button type="button" data-retry="'+row.key+'" data-failure="'+i+'" aria-label="重试 '+escapeHTML(row.name||row.id||row.accountId||refreshLabels[row.key])+'">重试</button></div>').join('')+'</div>';
-  el.querySelector('.message-close').onclick=()=>notify('');
-  el.querySelectorAll('[data-retry]').forEach(button=>button.onclick=event=>{event.stopPropagation();const row=rows[Number(button.dataset.failure)];({scan,quotas,prices:syncPrices,hosts:sample})[row.key]?.(row.key==='quotas'?row.accountId:row.id);});
-}
+function renderFailures() { updateHeadingIndicators();const pop=document.querySelector('#refresh-status-popover');if(pop?.matches(':popover-open'))openRefreshStatus(pop.dataset.key); }
 function beginRefresh(key){state.refreshState[key]={...state.refreshState[key],busy:true};updateActivity();}
 function endRefresh(key,error,itemId=null){const r=state.refreshState[key];r.busy=false;if(!error)r.success=Date.now();showFailures(error,key,itemId);updateActivity();}
 const timeLabel = stamp => new Date(stamp).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
@@ -125,7 +134,7 @@ window.addEventListener('storage',event=>{
 function focusSelector(element) {
   if(!element||element===document.body)return null;
   if(element.id)return '#'+CSS.escape(element.id);
-  const attributes=['data-account-settings','data-heat-day','data-trend-model','data-day-toggle','data-credit-estimate','data-manage-sampling','data-estimate','data-page','data-settings-tab','data-edit','data-remove','data-price','data-account-edit','data-account-options','data-device-command','data-account-login','data-device-manage','data-account-delete','data-account-connect','data-account-restore','data-source-advanced','data-agent-advanced','data-enable','data-gap-map','data-gap-price','data-host-status'];
+  const attributes=['data-refresh-status','data-account-settings','data-heat-day','data-trend-model','data-day-toggle','data-credit-estimate','data-manage-sampling','data-estimate','data-page','data-settings-tab','data-edit','data-remove','data-price','data-account-edit','data-account-options','data-device-command','data-account-login','data-device-manage','data-account-delete','data-account-connect','data-account-restore','data-source-advanced','data-agent-advanced','data-enable','data-gap-map','data-gap-price','data-host-status'];
   for(const attribute of attributes)if(element.hasAttribute(attribute))return `[${attribute}="${CSS.escape(element.getAttribute(attribute))}"]`;
   if(element.tagName==='SUMMARY')for(const attribute of ['data-agent-detail','data-metric'])if(element.parentElement.hasAttribute(attribute))return `[${attribute}="${CSS.escape(element.parentElement.getAttribute(attribute))}"] > summary`;
   return null;
@@ -169,7 +178,7 @@ function quotaSection(d) {
   const selected=PANEL?AieyesUI.panelAccounts(state.settings,d.quotaOrder??[]):null,visible=a=>!PANEL||selected[a.provider]?.includes(a.provider+':'+(a.accountId??a.id));
   const quotas=(d.quotas??[]).filter(visible),missing=state.settings.accounts.filter(a=>visible(a)&&!a.archived&&a.quotaEnabled&&(!state.provider||a.provider===state.provider)&&(!state.accountKey||state.accountKey===a.provider+':'+a.id)&&!quotas.some(q=>q.provider===a.provider&&q.accountId===a.id));
   if(!quotas.length&&!missing.length)return PANEL&&state.settings.accounts.some(a=>!a.archived&&a.quotaEnabled)?'<p class="muted panel-account-empty">当前面板未显示账户，可在更多中选择；详情保留全部账户。</p>':'';
-  return `<div class="section-head quota-heading"><h2 title="实时账户限额 · 不随历史日期或模型筛选变化">实时账户限额 <span class="count">${quotas.length+missing.length}</span></h2><div class="section-actions"><button id="order-quotas" title="调整账户顺序" aria-label="调整账户顺序">${uiIcon('sort')}</button><button id="read-quotas" ${state.quotaBusy||state.refreshState.quotas?.busy?'disabled':''} title="重新查询各账户的实时限额">${state.quotaBusy||state.refreshState.quotas?.busy?'读取中…':'刷新限额'}</button></div></div><div class="quotas">${quotas.map(q=>quotaCard(q)).join('')}${missing.map(a=>{
+  return `<div class="section-head quota-heading"><h2 title="实时账户限额 · 不随历史日期或模型筛选变化">实时账户限额 ${refreshIndicator('quotas')} <span class="count">${quotas.length+missing.length}</span></h2><div class="section-actions"><button id="order-quotas" title="调整账户顺序" aria-label="调整账户顺序">${uiIcon('sort')}</button><button id="read-quotas" ${state.quotaBusy||state.refreshState.quotas?.busy?'disabled':''} title="重新查询各账户的实时限额">${state.quotaBusy||state.refreshState.quotas?.busy?'读取中…':'刷新限额'}</button></div></div><div class="quotas">${quotas.map(q=>quotaCard(q)).join('')}${missing.map(a=>{
     const enabled=state.settings.sources.some(src=>src.enabled&&src.provider===a.provider&&(src.accountId===a.id||src.codexHomeId&&window.AieyesAgentSettings.profiles(a).some(r=>r.startsWith(src.codexHomeId+':')))&&(!src.hostId||state.settings.hosts.some(h=>h.id===src.hostId&&h.enabled)));
     const text=!enabled?'关联并启用数据源后可读取限额':state.quotaBusy?'正在读取账户限额…':state.quotaError?'读取失败，可重试刷新限额':'尚未读取限额，可点击刷新限额';
     return `<div class="card quota-placeholder"><h3>${providerMark(a.provider)} ${escapeHTML(a.name)}</h3><p class="muted" role="status">${text}</p>${enabled&&state.quotaError?`<p class="error">${escapeHTML(state.quotaError)}</p>`:''}</div>`;
@@ -182,31 +191,52 @@ async function job(label, fn, refreshKey=null, refreshItem=null) {
   const buttons=[...document.querySelectorAll('header [data-refresh]')].map(button=>[button,button.disabled]);
   buttons.forEach(([button])=>button.disabled=true);
   let outcome='error',failure=null;const previousMessage=$('#message').textContent;
-  try { await fn();if(!refreshKey)state.saveError='';outcome='success';state.lastSuccessfulUpdate=Date.now();if($('#message').dataset.kind==='error'&&$('#message').textContent===previousMessage)notify('');return true; }
+  try { const result=await fn();if(result===false){outcome='noop';return true;}if(!refreshKey)state.saveError='';outcome='success';state.lastSuccessfulUpdate=Date.now();if($('#message').dataset.kind==='error'&&$('#message').textContent===previousMessage)notify('');return true; }
   catch (error) { failure=error;outcome=error.partial?'partial':'error';if(!refreshKey){state.saveError=error.message??String(error);notify(state.saveError,'error');document.querySelectorAll('.saved-feedback').forEach(el=>{el.textContent='保存失败：'+state.saveError;el.dataset.status='error';});}return false; }
   finally {
     state.busy=false;$('#activity').dataset.status=outcome;
-    if(refreshKey)endRefresh(refreshKey,failure,refreshItem);else updateActivity();
+    if(refreshKey&&outcome==='noop'){state.refreshState[refreshKey].busy=false;updateActivity();}else if(refreshKey)endRefresh(refreshKey,failure,refreshItem);else updateActivity();
     buttons.forEach(([button,disabled])=>{if(button.isConnected)button.disabled=disabled;});updateActivity();updateSettingsSaveBar();if(jobFocus&&document.activeElement===document.body){const target=document.querySelector(jobFocus);if(target&&!target.disabled)target.focus({preventScroll:true});else if(jobFocus==='#settings-save-all')$('#settings-save-bar .settings-draft-label')?.focus({preventScroll:true});}
   }
 }
 const filterKeys=['provider','accountKey','sourceId','model','days'];
 const filterSnapshot=()=>Object.fromEntries(filterKeys.map(k=>[k,state[k]]));
 function appliedScope(){const f=state.appliedFilters??filterSnapshot();return [f.days===1?'今日':'最近 '+f.days+' 天',providers[f.provider]??'全部 Agent',historicalAccounts().find(a=>a.provider+':'+a.id===f.accountKey)?.name??(f.accountKey==='none'?'未关联账户':'全部账户'),state.settings.sources.find(s=>s.id===f.sourceId)?.name??'全部来源',f.model||'全部模型'].join(' · ');}
-async function changeFilters(values={}){Object.assign(state,values);try{await loadDashboard();}catch(_){} }
+async function changeFilters(values={}){Object.assign(state,values);try{await loadDashboard({debounce:true});}catch(_){} }
 function renderQueryStatus(){
-  let el=$('#query-status');if(!el){el=document.createElement('div');el.id='query-status';el.setAttribute('role','status');$('#content .filters')?.after(el);}
-  el.hidden=!state.dashboardPending&&!state.dashboardError;
-  el.innerHTML=el.hidden?'':'<p>'+escapeHTML(state.dashboardPending?'正在更新，仍显示上一结果：'+appliedScope():'更新失败，仍显示上一结果：'+appliedScope()+'。'+state.dashboardError)+'</p>'+(state.dashboardError?'<button id="query-retry">重试</button><button id="query-restore">恢复已应用筛选</button>':'');
+  let el=$('#query-status');if(!el){el=document.createElement('div');el.id='query-status';el.setAttribute('role','status');document.body.append(el);}
+  el.hidden=(!state.dashboardPending&&!state.dashboardError)||!el.closest('#refresh-status-popover')?.matches(':popover-open');updateHeadingIndicators();
+  el.innerHTML=(!state.dashboardPending&&!state.dashboardError)?'':'<p>'+escapeHTML(state.dashboardPending?'正在更新，仍显示上一结果：'+appliedScope():'更新失败，仍显示上一结果：'+appliedScope()+'。'+state.dashboardError)+'</p>'+(state.dashboardError?'<button id="query-retry">重试</button><button id="query-restore">恢复已应用筛选</button>':'');
   if($('#query-retry'))$('#query-retry').onclick=()=>changeFilters();
   if($('#query-restore'))$('#query-restore').onclick=()=>changeFilters(state.appliedFilters);
 }
-async function loadDashboard() {
+let dashboardWork=false,dashboardQueued=false,dashboardReadyAt=0,dashboardTimer, dashboardWaiters=[];
+function loadDashboard({debounce=false}={}) {
+  ++state.dashboardRequest;dashboardQueued=true;dashboardReadyAt=Date.now()+(debounce?120:0);
+  state.dashboardPending=true;state.dashboardError='';if(state.page==='agent')renderQueryStatus();
+  const result=new Promise((resolve,reject)=>dashboardWaiters.push({resolve,reject}));
+  kickDashboard();return result;
+}
+function kickDashboard() {
+  clearTimeout(dashboardTimer);if(dashboardWork)return;
+  const delay=dashboardReadyAt-Date.now();
+  if(delay>0){dashboardTimer=setTimeout(kickDashboard,delay);return;}
+  if(!dashboardQueued)return;
+  dashboardQueued=false;dashboardWork=true;const request=state.dashboardRequest;
+  loadDashboardOnce(request).then(()=>finishDashboard(null,request),error=>finishDashboard(error,request));
+}
+function finishDashboard(error,request) {
+  dashboardWork=false;
+  if(dashboardQueued){kickDashboard();return;}
+  const waiters=dashboardWaiters;dashboardWaiters=[];
+  for(const waiter of waiters)if(error&&request===state.dashboardRequest)waiter.reject(error);else waiter.resolve();
+}
+async function loadDashboardOnce(request) {
   savePanelView();
   if(state.accountKey && state.accountKey!=='none' && !historicalAccounts().some(a=>a.provider+':'+a.id===state.accountKey))state.accountKey='';
   if(state.sourceId && !state.settings.sources.some(s=>s.id===state.sourceId))state.sourceId='';
   const account=historicalAccounts().find(a=>a.provider+':'+a.id===state.accountKey);
-  const request=++state.dashboardRequest,requested=filterSnapshot();state.dashboardPending=true;state.dashboardError='';if(state.page==='agent')renderQueryStatus();
+  const requested=filterSnapshot();state.dashboardPending=true;state.dashboardError='';if(state.page==='agent')renderQueryStatus();
   try {
   const dashboard = await api('dashboard',{provider:account?.provider || state.provider || null,accountId:state.accountKey==='none'?'':account?.id ?? null,sourceId:state.sourceId || null,model:state.model || null,days:state.days});
   if(request!==state.dashboardRequest)return;
@@ -220,7 +250,7 @@ async function loadDashboard() {
 }
 function batchError(rows,label) {
   if(!Array.isArray(rows))return null;
-  const failures=rows.filter(row=>row.error);if(!failures.length)return null;
+  const failures=rows.filter(row=>row.error||row.partial).map(row=>({...row,error:row.error||(row.issues??[]).map(i=>(i.path?i.path+' · ':'')+(i.step!=null?'步骤 '+i.step+' · ':'')+i.message).join('；')||'部分记录需要处理'}));if(!failures.length)return null;
   const partial=failures.length<rows.length;
   const error=new Error(`${label}${partial?'部分失败':'失败'}：${failures.map(row=>`${row.name||row.id||row.accountId||''}${row.name||row.id||row.accountId?' · ':''}${row.error}`).join('；')}`);
   error.partial=partial;error.failures=failures;return error;
@@ -234,32 +264,47 @@ function hasQuotaSources() {
 }
 async function quotas(accountId,dueOnly=false) {
   if(state.estimateBusy||state.sharedEstimateOperations?.size||state.busy||state.settingsSaving||['scan','quotas','prices'].some(key=>state.refreshState[key]?.busy))return;
-  state.quotaBusy=true;state.quotaError='';if(state.page==='agent')render();
-  try { await job('读取限额',async()=>{try{const rows=await api('quotas.refresh',{...(typeof accountId==='string'?{accountId}:{}),dueOnly});await loadDashboard();const error=batchError(rows,'读取限额');if(error)throw error;}catch(error){state.quotaError=error.failures?'部分账户读取失败，请逐项重试。':error.message??String(error);throw error;}finally{state.lastQuota=Date.now();}},'quotas',typeof accountId==='string'?accountId:null); }
-  finally {state.quotaBusy=false;if(state.page==='agent')render();}
+  state.quotaBusy=true;if(!dueOnly)state.quotaError='';if(!dueOnly&&state.page==='agent')render();
+  try { await job('读取限额',async()=>{try{const rows=await api('quotas.refresh',{...(typeof accountId==='string'?{accountId}:{}),dueOnly});if(dueOnly&&!rows.length)return false;if(rows.some(q=>q.identity&&state.settings.accounts.some(a=>a.id===q.accountId&&a.provider===q.provider&&a.identityKey!==q.identity.key)))await window.AieyesAgentSettings?.syncIdentitySettings();await loadDashboard();const error=batchError(rows,'读取限额');if(error)throw error;}catch(error){state.quotaError=error.failures?'部分账户读取失败，请逐项重试。':error.message??String(error);throw error;}finally{state.lastQuota=Date.now();}},'quotas',typeof accountId==='string'?accountId:null); }
+  finally {state.quotaBusy=false;scheduleRefreshes();if(!dueOnly&&state.page==='agent')render();}
 }
 async function syncPrices(){await job('同步价格',async()=>{await api('prices.sync');state.prices=await api('prices.list');await loadDashboard();if(state.page==='settings')renderSettings();notify('价格已更新');},'prices');}
 let lastHostError='';
-function applyHostSamples(rows) {
-  const attemptedAt=Date.now();
-  state.hosts=rows.map(row=>({...row,lastAttemptAt:row.lastAttemptAt??attemptedAt,
-    ...(row.error?{sample:row.sample??state.hosts.find(previous=>previous.id===row.id)?.sample}:{})}));
+const hostSampleVersions=new Map(),hostSampleValues=new Map();
+function applyHostSamples(payload) {
+  const rows=Array.isArray(payload)?payload:payload?.rows??[],attemptedAt=Date.now();
+  const byID=new Map(state.hosts.map(row=>[row.id,row]));let changed=false;
+  for(const row of rows){
+    const old=hostSampleVersions.get(row.id),version=row.sampleVersion,session=row.sampleSession;
+    if(session&&old?.session===session&&version<=old.version)continue;
+    if(session)hostSampleVersions.set(row.id,{session,version});
+    else {const signature=JSON.stringify(row);if(hostSampleValues.get(row.id)===signature)continue;hostSampleValues.set(row.id,signature);}
+    const previous=byID.get(row.id);
+    byID.set(row.id,{...row,lastAttemptAt:row.lastAttemptAt??attemptedAt,...(row.error?{sample:row.sample??previous?.sample}:{})});changed=true;
+  }
+  if(!changed)return;
+  const allowed=new Set(monitoredHosts().map(h=>h.id));
+  state.hosts=[...byID.values()].filter(row=>allowed.has(row.id));
+  for(const key of hostSampleVersions.keys())if(!allowed.has(key))hostSampleVersions.delete(key);
+  for(const key of hostSampleValues.keys())if(!allowed.has(key))hostSampleValues.delete(key);
   if(!rows.some(row=>row.error)&&lastHostError){if($('#message').textContent===lastHostError)notify('');lastHostError='';}
-  state.lastMetrics=attemptedAt;updateActivity();if(state.settings&&state.page==='servers')render();
+  state.lastMetrics=attemptedAt;updateActivity();updateHostStatuses();if(state.settings&&state.page==='servers')window.AieyesServers.request();
 }
 function applyHostFailure(error,hostId=null) {
   const message=error.message??String(error),attemptedAt=Date.now();
-  const rows=(state.settings?.hosts??[]).map(host=>{
+  const rows=monitoredHosts().map(host=>{
     const previous=state.hosts.find(row=>row.id===host.id)??{id:host.id};
-    return host.enabled&&(!hostId||host.id===hostId)?{...previous,error:message,lastAttemptAt:attemptedAt}:previous;
+    if(!host.enabled||(hostId&&host.id!==hostId))return previous;
+    const {sampleSession,sampleVersion,...retained}=previous;
+    return {...retained,error:message,lastAttemptAt:attemptedAt};
   });
-  applyHostSamples(rows);lastHostError=message;notify(message,'error');
+  applyHostSamples(rows);lastHostError=message;
 }
 async function sample(hostId) {
   if(state.serverBusy||state.refreshState.hosts?.busy)return;state.serverBusy=true;beginRefresh('hosts');let failure=null;
-  try{const rows=await api('hosts.sample',typeof hostId==='string'?{hostId}:{});applyHostSamples(typeof hostId==='string'?[...state.hosts.filter(h=>h.id!==hostId),...rows]:rows);failure=batchError(rows,'刷新服务器');}
+  try{const payload=await api('hosts.sample',{stream:true,...(typeof hostId==='string'?{hostId}:{})}),rows=Array.isArray(payload)?payload:payload.rows;applyHostSamples(rows);failure=batchError(rows,'刷新服务器');}
   catch(error){failure=error;applyHostFailure(error,typeof hostId==='string'?hostId:null);}
-  finally{state.serverBusy=false;endRefresh('hosts',failure,typeof hostId==='string'?hostId:null);}
+  finally{state.lastMetrics=Date.now();state.serverBusy=false;endRefresh('hosts',failure,typeof hostId==='string'?hostId:null);}
 }
 async function saveSettings(next,{refresh=true}={}) {
   if (state.settingsSaving) throw new Error('设置正在保存，请稍后重试');
@@ -269,7 +314,7 @@ async function saveSettings(next,{refresh=true}={}) {
     const saved=await api('settings.patch', {base:previous,settings:next});
     window.AieyesAgentSettings.accept(saved);
     if(JSON.stringify([previous.accounts,previous.sources,previous.hosts,previous.proxy])!==JSON.stringify([next.accounts,next.sources,next.hosts,next.proxy]))state.lastQuota=0;
-  } finally { state.settingsSaving = false; }
+  } finally { state.settingsSaving = false; scheduleRefreshes(); }
   markSaved();
   if(refresh&&JSON.stringify([previous.accounts,previous.sources,previous.hosts,previous.modelMappings])!==JSON.stringify([next.accounts,next.sources,next.hosts,next.modelMappings]))void loadDashboard().catch(error=>notify('设置已保存，概览刷新失败：'+String(error)));
 }
@@ -305,12 +350,13 @@ function collectGeneralDraft(next){
   const data=new FormData();for(const [key,value] of Object.entries(values))data.set(key,value);
   next.appearance={theme:data.get("appearanceTheme")||"system",accent:data.get("appearanceAccent")||"indigo"};
   next.proxy=proxyValue(data,'app');next.proxyTestUrls=(data.get('proxyTestUrls')??'').split(',').map(v=>v.trim()).filter(Boolean);
-  for(const [key,min,label] of [['refreshSeconds',10,'Agent'],['serverRefreshSeconds',2,'服务器']]){const value=Number(data.get(key));if(!Number.isInteger(value)||value<min||value>86400)throw new Error(label+' 刷新间隔范围为 '+min+'–86400 秒，草稿已保留');next[key]=value;}
+  for(const [key,min,label] of [['refreshSeconds',10,'Agent 限额'],['historyRefreshSeconds',10,'Agent 记录'],['serverForegroundRefreshSeconds',2,'服务器前台'],['serverRefreshSeconds',2,'服务器后台']]){const value=Number(data.get(key));if(!Number.isInteger(value)||value<min||value>86400){const input=$('#field-'+key);input?.setAttribute('aria-invalid','true');input?.focus();const error=new Error(label+' 刷新间隔范围为 '+min+'–86400 秒，草稿已保留');error.field='field-'+key;throw error;}$('#field-'+key)?.removeAttribute('aria-invalid');next[key]=value;}
   return next;
 }
 async function saveAllSettings({clearForms=true,refresh=true,section=state.settingsTab}={}){
   if(state.settingsCommitting)throw new Error('配置正在保存');
   const next=section==='prices'?mappingDraft(structuredClone(state.settings)):section==='general'?collectGeneralDraft(structuredClone(state.settings)):structuredClone(draftSettings()),preparedHosts=[];
+  if(section==='general'&&configKey(next)===configKey(state.settings)&&!pendingAPIKeys.size&&!pendingHostPasswords.size){resetSettingsForm('general-form');updateSettingsSaveBar();return true;}
   const controls=[...document.querySelectorAll('#general-form input,#general-form select,#general-form textarea')].map(c=>[c,c.disabled]);
   controls.forEach(([c])=>c.disabled=true);
   state.settingsCommitting=true;updateSettingsSaveBar();
@@ -325,10 +371,11 @@ async function saveAllSettings({clearForms=true,refresh=true,section=state.setti
     if(clearForms)settingsForms.delete(section==='prices'?'mapping-form':'general-form');
     else { const general=settingsForms.get('general-form');if(general){general.baseline=structuredClone(general.values);const form=$('#general-form');if(form)form.dataset.draftBaseline=JSON.stringify(general.baseline);} }
     if(refresh)void loadDashboard().catch(error=>notify('配置已保存，概览刷新失败：'+String(error),'error'));
-    if(state.page==='settings')renderSettings(!clearForms);
+    if(section==='general'&&$('#general-form'))resetSettingsForm('general-form');
+    else if(state.page==='settings')renderSettings(!clearForms);
     return true;
   }catch(error){for(const passwordRef of preparedHosts)await api('hosts.credentials.delete',{passwordRef}).catch(()=>{});throw error;}
-  finally{state.settingsCommitting=false;controls.forEach(([c,disabled])=>{if(c.isConnected)c.disabled=disabled;});updateSettingsSaveBar();}
+  finally{state.settingsCommitting=false;scheduleRefreshes();controls.forEach(([c,disabled])=>{if(c.isConnected)c.disabled=disabled;});updateSettingsSaveBar();}
 }
 function discardAllSettings(){
   state.settingsDraft=null;state.settingsBaseline=null;settingsForms.clear();pendingAPIKeys.clear();pendingHostPasswords.clear();preparedAPIKeys.clear();state.saveError='';renderSettings(false);
@@ -354,6 +401,7 @@ function render() {
   updateActivity();if (!state.settings) return;
   window.AieyesTheme?.apply(state.settings.appearance);
   if (state.page === 'agent') renderAgent(); else if (state.page === 'servers') renderServers(); else renderSettings();
+  updateHeadingIndicators();
 }
 function attention(reason,action,id){return `<div class="attention" role="status">${uiIcon('attention')}<span>${escapeHTML(reason)}</span><button id="${id}" type="button">${action}</button></div>`;}
 function bindAttention(){if($('#pricing-attention'))$('#pricing-attention').onclick=openPricing;if($('#sampling-attention'))$('#sampling-attention').onclick=openSampling;}
@@ -408,7 +456,7 @@ function renderAgent() {
   $('#title').textContent='Agent 概览';
   $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).filter(([key])=>key!=='agy').map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${historicalAccounts().filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select><select id="source" aria-label="数据源">${option('','全部数据源',state.sourceId)}${sources.map(s=>option(s.id,s.name,state.sourceId)).join('')}</select><select id="model" aria-label="模型">${option('','全部模型',state.model)}${[...new Set([...(d.modelOptions??trendModels),...(state.model?[state.model]:[])])].map(m=>option(m,m,state.model)).join('')}</select></div>
   ${s.total>0&&s.pricedTokens<s.total?attention('计价未完成：部分 Token 缺少价格','补充价格','pricing-attention'):''}
-  <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':n===365?'最近一年':`最近 ${n} 天`,state.days)).join('')}</select></div>
+  <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'} ${refreshIndicator('scan')}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':n===365?'最近一年':`最近 ${n} 天`,state.days)).join('')}</select></div>
   <div class="stats">${stat('总 Token',compact(s.total),'','✧')}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens||!s.total?money(s.cost):'—','','$')}</div>${cacheCard(t)}${quotaSection(d)}
   <div class="section-head"><h2>${state.days===1?'近 7 天趋势':'使用趋势'}</h2><div id="cost-mode" class="metric-picker" role="group" aria-label="统计指标"><button type="button" data-cost-mode="false" aria-pressed="${!state.cost}">Token</button><button type="button" data-cost-mode="true" aria-pressed="${state.cost}">API 等价成本</button></div></div>
   <div class="chart-row"><div class="card"><h2>每日用量 · 按模型</h2><canvas id="trend" aria-label="按模型堆叠的每日用量，下方有逐日数据"></canvas><details class="model-legend"><summary>模型图例 · 点击显示或隐藏</summary><div class="model-key">${trendModels.map(m=>`<button data-trend-model="${escapeHTML(m)}" aria-label="显示或隐藏模型 ${escapeHTML(m)}"><i style="background:${color(m)}"></i>${escapeHTML(m)}</button>`).join('')}</div></details></div><div class="card"><h2>所选范围 · 模型分布</h2>${modelDistribution(models)}</div></div>
@@ -432,7 +480,7 @@ function panelTrendExpanded(){try{return localStorage.getItem('aieyes.panel.tren
 function renderAgentPanel(d) {
   const view=rememberView(),s=d.summary,t=s.tokens,trendTitle=`近 ${Math.max(7,state.days)} 天趋势与每日明细`;
   $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).filter(([key])=>key!=='agy').map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${historicalAccounts().filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,a.name+(a.archived?'（已归档）':''),state.accountKey)).join('')}</select></div>
-  <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':n===365?'最近一年':`最近 ${n} 天`,state.days)).join('')}</select></div>
+  <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'} ${refreshIndicator('scan')}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':n===365?'最近一年':`最近 ${n} 天`,state.days)).join('')}</select></div>
   <div class="stats panel-stats">${tokenSummary(s)}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens||!s.total?money(s.cost):'—','','$')}</div>
   ${quotaSection(d)}
   ${samplingBanner(d)}
@@ -497,7 +545,7 @@ function quotaCard(q) {
     const groups=new Map();for(const w of q.windows){const group=w.groupName||w.name.split(' · ').slice(0,-1).join(' · ');if(!groups.has(group))groups.set(group,[]);groups.get(group).push(w);}
     windows=`<div class="agy-groups">${[...groups].map(([group,rows])=>`<div class="agy-group"><strong>${escapeHTML(group)}</strong><div class="agy-windows">${rows.sort((a,b)=>(a.windowMinutes??0)-(b.windowMinutes??0)).map(w=>windowHTML({...w,name:w.windowMinutes===10080?'7d':w.windowMinutes===300?'5h':w.name})).join('')}</div>${estimateEntry(q,records.filter(e=>e.groupId===(rows[0]?.groupId||group)),rows[0]?.groupId||group)}</div>`).join('')}</div>`;
   }
-  return `<div class="card quota-card" data-quota="${escapeHTML(key)}"><details class="quota-disclosure" data-collapsible="${collapsible}" data-agent-detail="quota:${escapeHTML(key)}" ${expanded?'open':''}><summary class="quota-title"><h3>${providerMark(q.provider)}<span class="quota-name" title="${escapeHTML(q.name)}">${escapeHTML(q.name)}</span></h3>${subscriptionBadge(q.plan)}${q.provider==='codex'?`<span class="quota-credit-summary">${creditBalance(q,credit,true)}</span>`:''}${collapsible?`<span class="quota-chevron" aria-hidden="true">${uiIcon('chevron')}</span>`:''}</summary></details><div class="quota-content"><div class="between tiny muted quota-meta"><span>${escapeHTML(providers[q.provider]??q.provider)}</span><span>${q.origin==='log'?'记录':'更新'} ${date(q.updatedAt)}</span></div>${(q.balances??[]).map(b=>`<div class="quota-window"><div class="between"><span>可用余额</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted balance-detail"><span>赠送 ${escapeHTML(b.granted)}</span><span>充值 ${escapeHTML(b.toppedUp)}</span></div></div>`).join('')}${q.isAvailable===false?'<p class="error">当前余额不足以调用 API</p>':''}${windows}${q.bankReset?`<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>Bank Reset · ${q.bankReset.availableCount} 次可用</summary>${(q.bankReset.credits??[]).map(c=>`<div class="between tiny muted"><span>${escapeHTML(c.title??'Reset Credit')}</span><span>到期 ${date(c.expiresAt)}</span></div>`).join('')}</details>`:''}${q.error?`<p class="error quota-error" title="${escapeHTML(q.error)}"><span class="error-detail">${escapeHTML(q.error)}</span><span class="short-error">限额更新失败 · 展开查看</span></p>`:''}${!['antigravity','agy'].includes(q.provider)&&(q.windows.some(w=>w.windowMinutes===300||w.windowMinutes===10080)||latest)?estimateEntry(q,records):''}${q.provider==='codex'?creditRow(q,credit,credits):''}</div></div>`;
+  return `<div class="card quota-card" data-quota="${escapeHTML(key)}"><details class="quota-disclosure" data-collapsible="${collapsible}" data-agent-detail="quota:${escapeHTML(key)}" ${expanded?'open':''}><summary class="quota-title"><h3>${providerMark(q.provider)}<span class="quota-heading-label"><span class="quota-name" title="${escapeHTML(q.name)}">${escapeHTML(q.name)}</span>${q.identity?.email&&q.identity.email!==q.name?`<small class="quota-email" title="${escapeHTML(q.identity.email)}">${escapeHTML(q.identity.email)}</small>`:''}</span></h3>${subscriptionBadge(q.plan)}${q.provider==='codex'?`<span class="quota-credit-summary">${creditBalance(q,credit,true)}</span>`:''}${collapsible?`<span class="quota-chevron" aria-hidden="true">${uiIcon('chevron')}</span>`:''}</summary></details><div class="quota-content"><div class="between tiny muted quota-meta"><span>${escapeHTML(providers[q.provider]??q.provider)}</span><span>${q.origin==='log'?'记录':'更新'} ${date(q.updatedAt)}</span></div>${q.metadataError?`<p class="tiny muted quota-identity-note">${escapeHTML(q.metadataError)}${q.identity?.stale&&q.plan?' · 显示上次订阅':''}</p>`:''}${(q.balances??[]).map(b=>`<div class="quota-window"><div class="between"><span>可用余额</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted balance-detail"><span>赠送 ${escapeHTML(b.granted)}</span><span>充值 ${escapeHTML(b.toppedUp)}</span></div></div>`).join('')}${q.isAvailable===false?'<p class="error">当前余额不足以调用 API</p>':''}${windows}${q.bankReset?`<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>Bank Reset · ${q.bankReset.availableCount} 次可用</summary>${(q.bankReset.credits??[]).map(c=>`<div class="between tiny muted"><span>${escapeHTML(c.title??'Reset Credit')}</span><span>到期 ${date(c.expiresAt)}</span></div>`).join('')}</details>`:''}${q.error?`<p class="error quota-error" title="${escapeHTML(q.error)}"><span class="error-detail">${escapeHTML(q.error)}</span><span class="short-error">限额更新失败 · 展开查看</span></p>`:''}${!['antigravity','agy'].includes(q.provider)&&(q.windows.some(w=>w.windowMinutes===300||w.windowMinutes===10080)||latest)?estimateEntry(q,records):''}${q.provider==='codex'?creditRow(q,credit,credits):''}</div></div>`;
 }
 
 function drawTrend() {
@@ -543,7 +591,7 @@ function hostStatus(host,result) {
 function updateHostStatuses() {
   if(state.page!=='servers'||!state.settings)return;
   for(const element of document.querySelectorAll('[data-host-status]')){
-    const host=state.settings.hosts.find(row=>row.id===element.dataset.hostStatus);if(!host)continue;
+    const host=monitoredHosts().find(row=>row.id===element.dataset.hostStatus);if(!host)continue;
     const status=hostStatus(host,state.hosts.find(row=>row.id===host.id));element.onclick=()=>sample(host.id);element.title=status+' · 点击刷新服务器';
     if(element.dataset.status!==status){element.dataset.status=status;element.querySelector('[data-host-status-label]').textContent=status;}
   }
@@ -552,7 +600,7 @@ function hostShows(host,key) { return host.details==null||host.details.includes(
 function hostDevices(host,key,rows) {
   if(!(host.metrics??Object.keys(groups)).includes(key))return [];
   const selected=(host.devices??[]).filter(token=>token.startsWith(key+':'));
-  return (rows??[]).filter(d=>!selected.length||(key==='cpu'&&d.id==='cpu')||selected.includes(key+':'+d.id));
+  return (rows??[]).filter(d=>(!selected.length&&(key!=='filesystems'||AieyesSelect.recommendedFilesystem(d.id,d.type)))||selected.includes(key+':__all__')||(key==='cpu'&&d.id==='cpu')||selected.includes(key+':'+d.id));
 }
 function usedCapacity(total,available) { return Number.isFinite(total)&&Number.isFinite(available)?total-available:null; }
 function uptimeText(seconds) {
@@ -580,17 +628,8 @@ function serverSummary(host,sample) {
   const filesystems=hostDevices(host,'filesystems',sample?.filesystems),fsSummary=enabled('filesystems')?`<div class="server-filesystems"><span class="muted">文件系统</span><div class="server-filesystem-list">${filesystems.length?filesystems.map(fs=>`<div data-filesystem="${escapeHTML(fs.id)}">${resourceStrip(fs.id,capacityPercent(fs.used,fs.total),capacityPair(fs.used,fs.total))}</div>`).join(''):`<span class="muted">${sample?.filesystems?'无已选挂载点':'—'}</span>`}</div></div>`:'';
   return `<div class="server-summary-metrics">${system?`<div class="server-system-metrics">${system}</div>`:''}${gpuCards?`<div class="server-gpu-list">${gpuCards}</div>`:enabled('gpu')?`<span class="muted">GPU ${sample?.gpu?'无已选设备':'—'}</span>`:''}${fsSummary}<div class="server-summary-facts">${hostShows(host,'uptime')?`<span data-host-uptime>连续运行 <strong>${uptimeText(sample?.uptime)}</strong></span>`:''}${hostShows(host,'networkTotals')&&enabled('network')?(networks.length?networks.map(n=>`<span class="server-network-total" data-network-total="${escapeHTML(n.id)}"><span>${escapeHTML(n.id)} 累计</span><strong>↓ ${bytes(n.rxBytes)} · ↑ ${bytes(n.txBytes)}</strong></span>`).join(''):`<span>累计流量 ${sample?.network?'无已选网卡':'—'}</span>`):''}<span class="server-sample-time muted">采样 ${date(sample?.timestamp)}${!host.enabled?' · 已暂停，保留旧读数':''}</span></div></div>`;
 }
-function renderServers() {
-  const view=rememberView();
-  $('#content').innerHTML = `<div class="section-head"><span class="muted">${state.settings.hosts.length} 台主机</span><select id="server-filter" aria-label="服务器筛选">${[['all','全部'],['errors','异常'],['paused','已暂停']].map(([key,label])=>option(key,label,state.serverFilter??'all')).join('')}</select><button id="sample" title="立即采样所有已启用的服务器">刷新服务器</button></div>${state.settings.hosts.filter(h=>!state.serverFilter||state.serverFilter==='all'||(state.serverFilter==='paused'?!h.enabled:h.enabled&&hostStatus(h,state.hosts.find(r=>r.id===h.id))!=='正常')).map(h=>{
-    const result=state.hosts.find(r=>r.id===h.id),s=result?.sample,status=hostStatus(h,result);
-    return `<details class="card server-card" data-agent-detail="host:${escapeHTML(h.id)}"><summary class="server-summary"><div class="between server-heading"><div><h2 style="margin:0">${escapeHTML(h.name||h.target)}</h2><div class="sub">${escapeHTML(h.target)}</div></div><button type="button" class="host-status" data-host-status="${escapeHTML(h.id)}" data-status="${status}"><i aria-hidden="true"></i><span data-host-status-label>${status}</span></button></div>${serverSummary(h,s)}</summary>${s ? `${Object.entries(groups).filter(([key])=>(h.metrics??Object.keys(groups)).includes(key)&&s[key]).map(([key,label])=>serverGroup(key,label,key==='memory'?s[key]:hostDevices(h,key,s[key]),h)).join('')}<div class="tiny muted">负载 ${(s.load??[]).map(n=>n.toFixed(2)).join(' / ')}</div>${Object.keys(s.errors??{}).filter(k=>(h.metrics??Object.keys(groups)).includes(k)).map(k=>`<p class="error">${groups[k]??escapeHTML(k)} · 采集失败</p>`).join('')}`:''}${result?.error?`<p class="error">${escapeHTML(result.error)}</p>`:''}</details>`;
-  }).join('')||'<div class="card empty"><button id="add-first-host" class="primary" title="新建第一台服务器">添加服务器</button></div>'}`;
-  restoreView(view);
-  $('#sample').onclick=sample;$('#server-filter').onchange=e=>{state.serverFilter=e.target.value;savePanelView();renderServers();};updateHostStatuses();
-  bindSetup();
-}
-function serverGroup(key,label,value,host) {
+function renderServers() { window.AieyesServers.render(); }
+function serverGroupContent(key,value,host) {
   const show=key=>hostShows(host,key);
   const row=(name,value)=>`<div class="metric-row"><span>${escapeHTML(name)}</span><strong>${value}</strong></div>`;
   const meter=(name,value,percent)=>row(name,value)+resourceBar(percent,name);
@@ -603,6 +642,10 @@ function serverGroup(key,label,value,host) {
     if(key==='disk')return row(d.id,`读 ${speed(d.readBytesPerSecond)} · 写 ${speed(d.writeBytesPerSecond)}`)+(show('diskIops')?row('IOPS 读 / 写',`${d.readIops==null?'—':compact(d.readIops)} / ${d.writeIops==null?'—':compact(d.writeIops)}`):'')+(show('diskBusy')?meter('忙碌率',pct(resourcePercent(d.busyMsPerSecond==null?null:d.busyMsPerSecond/10)),d.busyMsPerSecond==null?null:d.busyMsPerSecond/10):'');
     return row(d.id,`↓ ${speed(d.rxBytesPerSecond)} · ↑ ${speed(d.txBytesPerSecond)}`)+(show('networkErrors')?row('错误 / 丢包',`${compact((d.rxErrors??0)+(d.txErrors??0))} / ${compact((d.rxDrops??0)+(d.txDrops??0))}`):'');
   }).join('');
+  return content;
+}
+function serverGroup(key,label,value,host) {
+  const content=serverGroupContent(key,value,host);
   if(!content)return '';
   return `<details class="metric-section" data-metric="${escapeHTML(host.id+':'+key)}"><summary>${label}明细</summary><div class="metric-detail">${content}</div></details>`;
 }
@@ -623,13 +666,14 @@ function sourceError(id) {
   return error?`<span class="error" role="status">${escapeHTML(error)}</span>`:`<small>${source?.provider==='deepseek'?'限额查询来源':status?.updatedAt?'记录同步于 '+date(status.updatedAt):'尚未同步用量记录'}</small>`;
 }
 const settingsForms = new Map();
-let generalSaveTimer;
+let generalSaveTimer,generalSaveVersion=0;
 function scheduleGeneralSave() {
+  const version=++generalSaveVersion;
   clearTimeout(generalSaveTimer);state.generalSavePending=true;
   generalSaveTimer=setTimeout(async()=>{
     if(state.settingsCommitting||state.settingsSaving){scheduleGeneralSave();return;}
     try {await saveAllSettings({section:'general'});} catch(error){notify(error.message??String(error),'error');}
-    finally {state.generalSavePending=false;}
+    finally {if(version===generalSaveVersion)state.generalSavePending=false;}
   },250);
 }
 function captureSettingsForms() {
@@ -666,11 +710,11 @@ function renderSettings(capture=true) {
   if(state.settingsTab==='sources')body=window.AieyesAgentSettings.agentsHTML();
   else if(state.settingsTab==='accounts')body=window.AieyesAgentSettings.accountsHTML();
   else if(state.settingsTab==='hosts'){
-    const isSource=state.settingsTab==='sources',list=isSource?s.sources:s.hosts;
-    body=`<div class="card">${list.map(item=>`<div class="list-row"><input type="checkbox" role="switch" data-enable="${escapeHTML(item.id)}" ${item.enabled?'checked':''} aria-label="启用 ${escapeHTML(item.name)}">${isSource?providerMark(item.provider):''}<div class="row-body">${escapeHTML(item.name||item.target)}<small>${escapeHTML(isSource?`${providers[item.provider]} · ${item.accountId ? (s.accounts.find(a=>a.id===item.accountId&&a.provider===item.provider)?.name??item.accountId) : item.codexHomeId ? "共享历史" : "无账户"}`:item.target)}</small>${isSource?sourceError(item.id):''}</div><button data-edit="${escapeHTML(item.id)}" aria-label="编辑 ${escapeHTML(item.name||item.target)}" title="编辑此项">编辑</button><button data-remove="${escapeHTML(item.id)}" aria-label="移除 ${escapeHTML(item.name)}" title="移除此项">${uiIcon('minus')}</button></div>`).join('')||'<div class="empty">添加第一个'+(isSource?'数据源':'主机')+'</div>'}${savedFeedback(state.settingsTab)}</div><button id="add-item" class="primary" title="新建数据源或服务器">${uiIcon('plus')} 添加${isSource?'数据源':'主机'}</button>`;
+    const isSource=state.settingsTab==='sources',list=isSource?s.sources:monitoredHosts(s);
+    body=`<div class="card">${list.map(item=>`<div class="list-row"><input type="checkbox" role="switch" data-enable="${escapeHTML(item.id)}" ${item.enabled?'checked':''} aria-label="启用 ${escapeHTML(item.name)}">${isSource?providerMark(item.provider):''}<div class="row-body">${escapeHTML(item.name||item.target)}<small>${escapeHTML(isSource?`${providers[item.provider]} · ${item.accountId ? (s.accounts.find(a=>a.id===item.accountId&&a.provider===item.provider)?.name??item.accountId) : item.codexHomeId ? "共享历史" : "无账户"}`:item.target)}</small>${isSource?sourceError(item.id):''}</div><button data-edit="${escapeHTML(item.id)}" aria-label="编辑 ${escapeHTML(item.name||item.target)}" title="编辑此项">编辑</button><button ${item.id==='local'?'hidden':''} data-remove="${escapeHTML(item.id)}" aria-label="移除 ${escapeHTML(item.name)}" title="移除此项">${uiIcon('minus')}</button></div>`).join('')||'<div class="empty">添加第一个'+(isSource?'数据源':'主机')+'</div>'}${savedFeedback(state.settingsTab)}</div><button id="add-item" class="primary" title="新建数据源或服务器">${uiIcon('plus')} 添加${isSource?'数据源':'主机'}</button>`;
   }else if(state.settingsTab==='prices')body='<div class="between"><p class="muted save-model-note">价格与模型映射保存后生效。</p><button id="reprice" type="button" title="保存设置并按当前价格重新计算历史成本">保存并重算</button></div>'+gapList()+`<form id="mapping-form" class="card"><h2>模型映射</h2>${Object.entries(s.modelMappings).map(([from,to])=>`<div class="list-row tiny"><span>${escapeHTML(from)} → ${escapeHTML(to)}</span><button type="button" data-unmap="${escapeHTML(from)}" aria-label="移除 ${escapeHTML(from)} 的模型映射">${uiIcon('minus')}</button></div>`).join('')}${field('mappingModel','日志模型名称')}${field('mappingId','OpenRouter 模型 ID')}<button>添加映射</button></form>`+`<div class="price-toolbar"><input id="price-search" type="search" aria-label="搜索模型" placeholder="搜索模型" value="${escapeHTML(state.priceSearch)}"><button id="sync-prices" title="从项目 Release 同步 OpenRouter 价格表">同步 OpenRouter</button><button id="add-price" title="手动添加一个模型价格">添加价格</button>${savedFeedback('prices')}</div><div class="card prices-list">${priceRows()}</div><span class="muted tiny">USD / 百万 Token</span>`;
   else if(state.settingsTab==='wakeups')body=window.AieyesWakeups?.html()??'<p>正在加载…</p>';
-  else body=(window.AieyesDesktop?.settingsHTML() || '')+`<form id="general-form" class="card"><h2>外观</h2>${select('appearanceTheme','主题',[['system','跟随系统'],['light','浅色'],['dark','深色']],s.appearance?.theme??'system')}${select('appearanceAccent','强调色',[['indigo','靛蓝'],['blue','蓝'],['teal','青绿'],['purple','紫']],s.appearance?.accent??'indigo')}<p class="font-notice">界面字体：HarmonyOS Sans SC（鸿蒙黑体）· © 2021 Huawei Device Co., Ltd. <button type="button" id="font-license">字体许可</button></p><h2>网络与刷新</h2>${proxyFields('app',s.proxy)}${field('proxyTestUrls','测试地址（逗号分隔）',(s.proxyTestUrls??['https://api.github.com/rate_limit','https://openrouter.ai']).join(', '))}<h3>刷新</h3>${field('refreshSeconds','Agent 间隔（秒）',s.refreshSeconds,'','number')}${field('serverRefreshSeconds','服务器间隔（秒）',s.serverRefreshSeconds,'','number')}<p class="muted tiny">选择项即时保存；文本修改后离开输入框保存。</p></form>${window.AieyesUpdates?.settingsHTML() ?? '<div class="card"><p>正在读取更新信息…</p></div>'}`;
+  else body=(window.AieyesDesktop?.settingsHTML() || '')+`<form id="general-form" class="card"><h2>外观</h2>${select('appearanceTheme','主题',[['system','跟随系统'],['light','浅色'],['dark','深色']],s.appearance?.theme??'system')}${select('appearanceAccent','强调色',[['indigo','靛蓝'],['blue','蓝'],['teal','青绿'],['purple','紫']],s.appearance?.accent??'indigo')}<p class="font-notice">界面字体：HarmonyOS Sans SC（鸿蒙黑体）· © 2021 Huawei Device Co., Ltd. <button type="button" id="font-license">字体许可</button></p><h2>网络与刷新</h2>${proxyFields('app',s.proxy)}${field('proxyTestUrls','测试地址（逗号分隔）',(s.proxyTestUrls??['https://api.github.com/rate_limit','https://openrouter.ai']).join(', '))}<h3>刷新</h3>${field('refreshSeconds','Agent 限额间隔（秒）',s.refreshSeconds,'','number')}${field('historyRefreshSeconds','Agent 记录间隔（秒）',s.historyRefreshSeconds??s.refreshSeconds,'','number')}${field('serverForegroundRefreshSeconds','服务器前台间隔（秒）',s.serverForegroundRefreshSeconds??2,'','number')}${field('serverRefreshSeconds','服务器后台间隔（秒）',s.serverRefreshSeconds,'','number')}<p class="muted tiny">选择项即时保存；文本修改后离开输入框保存。</p></form>${window.AieyesUpdates?.settingsHTML() ?? '<div class="card"><p>正在读取更新信息…</p></div>'}`;
   $('#content').innerHTML=`<div class="settings-save-bar" id="settings-save-bar"><p class="settings-draft-label" role="status"></p></div><div class="settings-tabs" role="tablist" aria-label="设置分类">${Object.entries(tabs).map(([k,v])=>`<button id="settings-tab-${k}" data-settings-tab="${k}" role="tab" aria-controls="settings-panel" aria-selected="${state.settingsTab===k}" tabindex="${state.settingsTab===k?0:-1}" class="${state.settingsTab===k?'active':''}">${uiIcon(k)}<span>${v}</span></button>`).join('')}</div><div id="settings-panel" class="settings-block" role="tabpanel" aria-labelledby="settings-tab-${state.settingsTab}">${body}</div>`;
   const fontLicense=$('#font-license');
   if(fontLicense)fontLicense.onclick=async()=>{
@@ -694,13 +738,13 @@ function renderSettings(capture=true) {
   });
   document.querySelectorAll('[data-gap-price]').forEach(b=>b.onclick=()=>{const g=state.dashboard.pricingGaps[Number(b.dataset.gapPrice)];editPrice(state.prices.find(p=>p.id===(g.priceId??g.model))??{id:g.priceId??g.model,name:g.model});});
   document.querySelectorAll('[data-gap-map]').forEach(b=>b.onclick=()=>{const g=state.dashboard.pricingGaps[Number(b.dataset.gapMap)];$('#field-mappingModel').value=g.model;$('#field-mappingId').value=g.priceId??'';$('#field-mappingId').focus();});
-  const items=state.settingsTab==='sources'?s.sources:s.hosts;
+  const items=state.settingsTab==='sources'?s.sources:monitoredHosts(s);
   document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>editItem(items.find(i=>i.id===b.dataset.edit)));
   document.querySelectorAll('[data-enable]').forEach(b=>b.onchange=async()=>{
     const list=state.settingsTab==='sources'?'sources':'hosts',next=structuredClone(draftSettings());
-    next[list].find(i=>i.id===b.dataset.enable).enabled=b.checked;b.disabled=true;
+    if(b.dataset.enable==='local')next.localMonitor={...next.localMonitor,enabled:b.checked};else next[list].find(i=>i.id===b.dataset.enable).enabled=b.checked;b.disabled=true;
     try { await window.AieyesAgentSettings.commit(next); }
-    catch(error){notify(String(error),'error');} finally { b.checked=draftSettings()[list].find(i=>i.id===b.dataset.enable)?.enabled??false;b.disabled=false; }
+    catch(error){notify(String(error),'error');} finally { b.checked=(b.dataset.enable==='local'?draftSettings().localMonitor:draftSettings()[list].find(i=>i.id===b.dataset.enable))?.enabled??false;b.disabled=false; }
   });
   document.querySelectorAll('[data-remove]').forEach(button=>button.onclick=()=>{
     const kind=state.settingsTab,id=button.dataset.remove,item=draftSettings()[kind].find(row=>row.id===id);
@@ -840,7 +884,7 @@ function editItem(existing){
   const base=structuredClone(state.settings),item=structuredClone(existing??{id:crypto.randomUUID(),name:'',target:'',authMode:'ssh',username:'',passwordRef:'',port:null,identityFile:'',shell:'/bin/bash',preCommand:'',enabled:true,metrics:Object.keys(groups),devices:[],details:Object.keys(detailOptions)});
   let preparedPassword=null;
   const body=field('name','名称',item.name)+field('target','SSH 别名或地址',item.target,'my-server 或 user@host')+field('port','端口',item.port??'','跟随 SSH 配置','number')+select('authMode','登录方式',[['ssh','SSH 配置 / 密钥'],['password','账号密码']],item.authMode??'ssh')+field('username','用户名',item.username??'','跟随地址或 SSH 配置')+`<div id="host-password">${field('password','密码（留空保留）',pendingHostPasswords.get(item.id)??'','','password')}</div><div id="host-key">${field('identityFile','密钥路径',item.identityFile,'跟随 SSH 配置')}</div>`+`<section class="host-selectors"><div id="metric-select"></div><div class="section-head"><h3>设备</h3><button type="button" id="discover-devices" title="通过 SSH 读取远端设备列表">读取设备</button></div><p id="discovery-status" class="error" role="status" hidden></p><div id="device-selects" class="device-selects"></div><div id="detail-select"></div></section><details class="advanced"><summary>高级设置</summary>${field('shell','远程 shell',item.shell)+field('devices','设备表达式',item.devices.join(', '),'network:eth0, gpu:0, filesystems:/')}</details>`;
-  showEditor('SSH 主机',body,async f=>{
+  showEditor(item.id==='local'?'本机监测':'SSH 主机',body,async f=>{
     const next=structuredClone(base);
     for(const k of ['name','target','identityFile','shell','authMode','username'])item[k]=f.get(k);
     item.port=f.get('port')?Number(f.get('port')):null;item.devices=f.get('devices').split(',').map(s=>s.trim()).filter(Boolean);if(!item.name)item.name=item.target;
@@ -848,10 +892,11 @@ function editItem(existing){
       if(!preparedPassword||preparedPassword.value!==f.get('password'))preparedPassword={value:f.get('password'),...await api('hosts.credentials.save',{password:f.get('password')})};
       item.passwordRef=preparedPassword.passwordRef;
     }
-    const index=next.hosts.findIndex(h=>h.id===item.id);if(index<0)next.hosts.push(item);else next.hosts[index]=item;
+    if(item.id==='local')next.localMonitor={enabled:item.enabled,metrics:item.metrics,devices:item.devices,details:item.details};else {const index=next.hosts.findIndex(h=>h.id===item.id);if(index<0)next.hosts.push(item);else next.hosts[index]=item;}
     await window.AieyesAgentSettings.commit(next,base);renderSettings(false);
   });
   $('#editor').dataset.kind='host';
+  if(item.id==='local')for(const key of ['name','target','port','authMode','username','password','identityFile','shell']){const el=$('#field-'+key);if(el)el.closest('.form-row').hidden=true;}
   const selectors=$('.host-selectors'),advanced=document.createElement('details');advanced.className='monitor-options';advanced.open=Boolean(existing);advanced.innerHTML='<summary>监控指标与设备 · 按需选择</summary>';selectors.before(advanced);advanced.append(selectors);
   const connect=$('#discover-devices');advanced.before(connect);connect.textContent='连接并读取设备';
   bindPathSelection(false);bindHostSelectors(item);
@@ -881,10 +926,10 @@ function bindHostSelectors(item) {
       const options=()=>{
         const rows=(discovered[group]??[]).filter(d=>group!=='cpu'||d.id!=='cpu');
         const known=new Set(rows.map(d=>d.id));
-        return [...rows.map(d=>({id:d.id,label:[d.id,d.type??d.name].filter(Boolean).join(' · ')})),
+        return [...rows.map(d=>({id:d.id,type:d.type,label:[d.id,d.type??d.name].filter(Boolean).join(' · ')})),
           ...selectors.deviceIds(tokens(),group).filter(id=>!known.has(id)).map(id=>({id,label:id,unavailable:true}))];
       };
-      const control=selectors.mount(root,{title,options,selected:()=>selectors.deviceSelected(tokens(),group,options().map(o=>o.id)),all:()=>!tokens().some(s=>s.startsWith(group+':')),disabled:()=>!item.metrics.includes(group),
+      const control=selectors.mount(root,{title,options,selected:()=>group==='filesystems'&&!tokens().some(s=>s.startsWith('filesystems:'))?options().filter(o=>selectors.recommendedFilesystem(o.id,o.type)).map(o=>o.id):selectors.deviceSelected(tokens(),group,options().map(o=>o.id)),all:()=>tokens().includes(group+':__all__')||(group!=='filesystems'&&!tokens().some(s=>s.startsWith(group+':'))),disabled:()=>!item.metrics.includes(group),
         onChange:(selected,{all})=>{$('#field-devices').value=selectors.writeDevices(tokens(),group,selected,all).join(', ');}});
       deviceControls.push(control);editorSelectors.push(control);
     }
@@ -984,7 +1029,7 @@ function refreshExternalData(settings=false,method='') {
       if(readSettings||!state.settings){const saved=await api('settings.get');syncSharedAppearance(saved.appearance);state.settings=saved;window.AieyesTheme?.apply(saved.appearance);}migrateProviderState();
       await loadDashboard();
       if(readSettings&&PANEL&&state.page!=='agent')render();
-      const scannedSources=(state.dashboard?.sources??[]).filter(source=>state.settings.sources.some(row=>row.id===source.id&&row.enabled&&(!row.hostId||state.settings.hosts.some(host=>host.id===row.hostId&&host.enabled)))).map(source=>({id:source.id,error:source.status?.error}));
+      const scannedSources=(state.dashboard?.sources??[]).filter(source=>state.settings.sources.some(row=>row.id===source.id&&row.enabled&&(!row.hostId||state.settings.hosts.some(host=>host.id===row.hostId&&host.enabled)))).map(source=>({id:source.id,error:source.status?.error,partial:source.status?.partial,issues:source.status?.issues}));
       // A filtered snapshot is not an action result. Shared feedback owns busy,
       // success time and targeted failures; invalidation must never replace it.
       for(const [key,check,rows] of [['quotas',checkQuotas,state.dashboard?.quotas],['scan',checkScan,scannedSources]]) {
@@ -1001,22 +1046,23 @@ async function listenForSharedState() {
   state.sharedEstimateOperations=new Set();
   await events.listen('operations:busy',({payload})=>{
     if(payload.busy)state.sharedEstimateOperations.add(payload.operationId);
-    else state.sharedEstimateOperations.delete(payload.operationId);
+    else state.sharedEstimateOperations.delete(payload.operationId);scheduleRefreshes();
   });
   await events.listen('desktop:refresh-status',({payload})=>{
     if(!refreshLabels[payload.key])return;
     const previous=state.refreshState[payload.key]??{};
+    if(payload.noAttempt){state.refreshState[payload.key]={...previous,busy:false};updateActivity();return;}
     if(payload.busy)state.refreshState[payload.key]={...previous,busy:true};
     else {if(payload.key==='hosts')state.hostRefreshItem=payload.itemId??null;state.refreshState[payload.key]={...previous,busy:false,success:payload.success??previous.success};showFailures(payload.failures?.length?{failures:payload.failures}:null,payload.key,payload.itemId??null);}
     updateActivity();
   });
   await events.listen('desktop:status',({payload})=>{
-    state.panelOpen=Boolean(payload.panelOpen);state.panelPage=payload.panelPage??state.panelPage;
+    state.panelOpen=Boolean(payload.panelOpen);state.panelPage=payload.panelPage??state.panelPage;scheduleRefreshes();
   });
-  await events.listen('desktop:settings',()=>{window.AieyesNetwork?.invalidate();if(PANEL)return refreshExternalData(true);});
-  await events.listen('desktop:hosts',({payload})=>{applyHostSamples(state.hostRefreshItem?[...state.hosts.filter(row=>row.id!==state.hostRefreshItem),...payload]:payload);});
+  await events.listen('desktop:settings',()=>{invalidateQuotaSchedule();window.AieyesNetwork?.invalidate();if(PANEL)return refreshExternalData(true);});
+  await events.listen('desktop:hosts',({payload})=>{applyHostSamples(payload);});
   await events.listen('desktop:hosts-error',({payload})=>{applyHostFailure(payload,state.hostRefreshItem);});
-  await events.listen('desktop:data-changed',({payload})=>{
+  await events.listen('desktop:data-changed',({payload})=>{invalidateQuotaSchedule();
     if(PANEL&&['settings.save','settings.patch','agents.set','sources.configure','sources.remove','accounts.connect','accounts.create','accounts.delete','codexAuth.enable','codexAuth.adopt','codexAuth.login.status','codexAuth.profiles.bind','codexAuth.profiles.remove'].includes(payload))return; // desktop:settings owns this invalidation.
     if(PANEL||(!state.busy&&!state.settingsSaving&&!state.settingsCommitting&&!editorSaving))return refreshExternalData(['settings.save','settings.patch','agents.set','sources.configure','sources.remove','accounts.connect','accounts.create','accounts.delete','codexAuth.enable','codexAuth.adopt','codexAuth.login.status','codexAuth.profiles.bind','codexAuth.profiles.remove'].includes(payload),payload);
   });
@@ -1043,15 +1089,56 @@ window.AieyesApp={
 };
 // The panel refreshes on open and on manual action; periodic polling stays in the details window.
 const resetConfirmations=new Set();
-if(!PANEL)setInterval(()=>{
-  if(!state.settings)return;
-  if(!state.serverBusy&&state.settings.hosts.some(h=>h.enabled)&&Date.now()-state.lastMetrics>((state.page==='servers'&&!document.hidden)||(state.panelOpen&&state.panelPage==='servers')?2000:state.settings.serverRefreshSeconds*1000)){sample();}
-  if(state.settingsCommitting||window.AieyesUpdates?.busy||$('#editor').open||state.estimateBusy||state.sharedEstimateOperations?.size||$('#quota-dialog')?.dataset.busy||state.busy||state.settingsSaving)return;
-  const expired=state.dashboard?.quotas.flatMap(q=>q.windows.map(w=>({q,w,key:q.provider+':'+q.accountId+':'+w.resetsAt}))).find(({w,key})=>w.resetsAt&&w.resetsAt*1000<=Date.now()&&!resetConfirmations.has(key));
-  if(expired){resetConfirmations.add(expired.key);quotas(expired.q.accountId);return;}
-  if(hasQuotaSources()&&(!state.lastQuota||Date.now()-state.lastQuota>5000)){quotas(undefined,true);return;}
-  if(Date.now()-state.lastScan>state.settings.refreshSeconds*1000){scan();return;}
-},500);
+let refreshTimer,quotaScheduleRead=null,quotaScheduleRevision=0,quotaScheduleKnown=false,quotaDueAt=null,refreshStopped=false;
+function invalidateQuotaSchedule() {
+  quotaScheduleRevision++;quotaScheduleKnown=false;scheduleRefreshes();
+}
+async function readQuotaSchedule() {
+  if(quotaScheduleRead||PANEL||refreshStopped||!state.settings)return;
+  const revision=quotaScheduleRevision;
+  quotaScheduleRead=(async()=>{
+    try {
+      const schedule=await api('quotas.schedule');
+      if(revision===quotaScheduleRevision){quotaDueAt=Number.isFinite(schedule?.nextDueAt)?Math.max(Date.now()+1000,schedule.nextDueAt*1000):null;quotaScheduleKnown=true;}
+    }catch(_){if(revision===quotaScheduleRevision){quotaDueAt=Date.now()+30000;quotaScheduleKnown=true;}}
+  })();
+  try{await quotaScheduleRead;}finally{quotaScheduleRead=null;scheduleRefreshes();}
+}
+function foregroundMetrics(){return (state.page==='servers'&&!document.hidden)||(state.panelOpen&&state.panelPage==='servers');}
+function metricsDeadline(){return state.lastMetrics+(foregroundMetrics()?(state.settings.serverForegroundRefreshSeconds??2):state.settings.serverRefreshSeconds)*1000;}
+function collectionBlocked(){return state.settingsCommitting||window.AieyesUpdates?.busy||$('#editor')?.open||state.estimateBusy||state.sharedEstimateOperations?.size||$('#quota-dialog')?.dataset.busy||state.busy||state.quotaBusy||state.settingsSaving||['scan','quotas','prices'].some(key=>state.refreshState[key]?.busy);}
+function quotaResets(){return (state.dashboard?.quotas??[]).flatMap(q=>q.windows.map(w=>({q,w,key:q.provider+':'+q.accountId+':'+w.resetsAt}))).filter(({w,key})=>w.resetsAt&&!resetConfirmations.has(key));}
+function scheduleRefreshes() {
+  clearTimeout(refreshTimer);
+  if(PANEL||refreshStopped||!state.settings||window.AieyesUpdates?.busy)return;
+  const now=Date.now();
+  for(const key of ['lastScan','lastMetrics','lastQuota'])if(state[key]>now)state[key]=0;
+  if(!quotaScheduleKnown)void readQuotaSchedule();
+  const deadlines=[];
+  if(!state.serverBusy&&!state.refreshState.hosts?.busy&&monitoredHosts().some(h=>h.enabled))deadlines.push(metricsDeadline());
+  if(!collectionBlocked()){
+    deadlines.push(state.lastScan+(state.settings.historyRefreshSeconds??state.settings.refreshSeconds)*1000);
+    if(quotaScheduleKnown&&quotaDueAt!=null)deadlines.push(quotaDueAt);
+    deadlines.push(...quotaResets().map(({w})=>w.resetsAt*1000));
+  }
+  const next=Math.min(...deadlines.filter(Number.isFinite));
+  if(Number.isFinite(next))refreshTimer=setTimeout(runScheduledRefreshes,Math.max(1,next-Date.now()));
+}
+function runScheduledRefreshes() {
+  if(PANEL||refreshStopped||!state.settings||window.AieyesUpdates?.busy)return;
+  if(!state.serverBusy&&!state.refreshState.hosts?.busy&&monitoredHosts().some(h=>h.enabled)&&Date.now()>=metricsDeadline())void sample();
+  if(!collectionBlocked()){
+    const expired=quotaResets().find(({w})=>w.resetsAt*1000<=Date.now());
+    if(expired){resetConfirmations.add(expired.key);void quotas(expired.q.accountId);}
+    else if(Date.now()>=state.lastScan+(state.settings.historyRefreshSeconds??state.settings.refreshSeconds)*1000)void scan();
+    else if(quotaScheduleKnown&&quotaDueAt!=null&&Date.now()>=quotaDueAt){quotaDueAt=null;void quotas(undefined,true);}
+  }
+  scheduleRefreshes();
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)invalidateQuotaSchedule();else scheduleRefreshes();});
+window.addEventListener('focus',invalidateQuotaSchedule);
+document.addEventListener('close',scheduleRefreshes,true);
+window.addEventListener('beforeunload',()=>{refreshStopped=true;clearTimeout(refreshTimer);clearTimeout(dashboardTimer);});
 // Age visible samples even while an RPC is slow or the panel receives no new events.
 setInterval(updateHostStatuses,1000);
 function updateResetDisplays(now=Date.now()/1000) { for(const el of document.querySelectorAll('[data-reset-at]'))el.textContent=AieyesUI.quotaReset({resetsAt:Number(el.dataset.resetAt),windowMinutes:Number(el.dataset.windowMinutes),usedPercent:el.dataset.usedPercent?.trim()?Number(el.dataset.usedPercent):undefined},now); }
@@ -1081,7 +1168,7 @@ async function quotaAction(action,params){
   let unlisten=()=>{};
   try{unlisten=await window.__TAURI__.event.listen('operations:progress',({payload})=>{if(payload.operationId===operationId){stage=payload.stage;update();}});await api(action,{...params,operationId});stage='读取计算结果';update();await loadDashboard();state.estimateOperation.status='success';background.textContent='后台操作已完成 · 查看结果';return true;}
   catch(error){state.estimateOperation.status='error';background.textContent='后台操作失败 · 查看并重试';$('#quota-tool-error').textContent=error.message??String(error);$('#quota-tool-error').hidden=false;await loadDashboard().catch(()=>{});return false;}
-  finally{clearInterval(timer);unlisten();progress.remove();controls.forEach(([el,disabled])=>el.disabled=disabled);dialog.oncancel=null;delete dialog.dataset.busy;state.estimateBusy=false;}
+  finally{clearInterval(timer);unlisten();progress.remove();controls.forEach(([el,disabled])=>el.disabled=disabled);dialog.oncancel=null;delete dialog.dataset.busy;state.estimateBusy=false;scheduleRefreshes();}
 }
 function refreshQuotaDialog(){
   const dialog=$('#quota-dialog'),key=dialog?.dataset.estimateKey;

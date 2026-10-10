@@ -153,8 +153,29 @@ fn python_inner(
         .rev()
         .find(|line| !line.is_empty())
         .ok_or_else(|| anyhow::anyhow!("远程查询没有返回数据"))?;
-    Ok(serde_json::from_slice(line)?)
+    let response: serde_json::Value = serde_json::from_slice(line)?;
+    if let Some(error) = response["error"].as_str() {
+        anyhow::bail!("{error}");
+    }
+    Ok(response)
 }
 
 pub const HISTORY_SCRIPT: &str = include_str!("../../../scripts/remote_history.py");
 pub const METRICS_SCRIPT: &str = include_str!("../../../scripts/linux_metrics.py");
+
+/// Send both the bundled collector and its cursor manifest over stdin, not argv.
+pub(crate) fn history_stream(
+    host: &crate::models::Host,
+    request: serde_json::Value,
+    receive: impl FnMut(&[u8]) -> Result<()>,
+) -> Result<()> {
+    let loader = "import json,sys; p=json.load(sys.stdin); print('',flush=True); exec(compile(p['script'],'<aieyes-history>','exec'),{'__name__':'__main__','REQUEST':p['request']})";
+    let command = command_inner(host, &format!("exec python3 -c {}", quote(loader)), true)?;
+    let payload =
+        serde_json::to_vec(&serde_json::json!({"script":HISTORY_SCRIPT,"request":request}))?;
+    anyhow::ensure!(
+        payload.len() <= 16 * 1024 * 1024,
+        "远程游标清单过大，请缩小数据目录范围"
+    );
+    process::run_lines(command, payload, Duration::from_secs(45), receive)
+}

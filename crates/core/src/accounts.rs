@@ -39,10 +39,21 @@ pub(crate) fn key(account: &Account) -> String {
 fn cache_key(account: &Account, source: &Source) -> String {
     format!("account-status:{}:{}", key(account), source.id)
 }
+pub(crate) fn status_revision(store: &Store, source: &Source) -> Result<Value> {
+    Ok(get(store, &format!("account-status-revision:{}", source.id))?.unwrap_or(Value::Null))
+}
+pub(crate) fn codex_switched(store: &Store, source: &Source, operation: &Value) -> Result<()> {
+    put(
+        store,
+        &format!("account-status-revision:{}", source.id),
+        operation,
+    )
+}
 fn fingerprint(settings: &Settings, account: &Account, source: &Source) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     json!([
         source,
+        settings.proxy,
         account.identity_key,
         account.profile_refs(),
         pre_command(settings, Some(account), source),
@@ -68,6 +79,154 @@ fn put(store: &Store, key: &str, value: &Value) -> Result<()> {
         rusqlite::params![key, value.to_string()],
     )?;
     Ok(())
+}
+
+pub(crate) fn agy_status(
+    account: Option<&Account>,
+    identity: Option<&AccountIdentity>,
+    metadata_error: Option<&str>,
+) -> Value {
+    let current = identity.map(|id| crate::agy_identity::matches(account, id));
+    let note = match current {
+        Some(true) => "已确认当前登录账户",
+        Some(false) => "设备当前登录身份与此账户不一致；请在 agy 中切换后重新检查",
+        None => "登录有效；账户身份暂无法确认",
+    };
+    json!({"authenticated":true,"identityConfirmed":identity.is_some(),"identity":identity,
+        "current":current,"credential":current,"checkedAt":now(),"note":note,"metadataError":metadata_error})
+}
+
+fn retain_agy_subscription(row: &mut Value, prior: Option<Value>) {
+    let Some(old) = prior else {
+        return;
+    };
+    if row["identity"]["key"].is_string()
+        && row["identity"]["key"] == old["identity"]["key"]
+        && row["identity"]["stale"] == true
+        && row["identity"]["subscription"].is_null()
+    {
+        row["identity"]["subscription"] = old["identity"]["subscription"].clone();
+        row["identity"]["subscriptionCheckedAt"] = old["identity"]["subscriptionCheckedAt"].clone();
+    }
+}
+
+// Call inside a transaction. Bind once; never silently replace an established identity.
+fn bind_agy_identity(
+    store: &Store,
+    settings: &Settings,
+    account: &Account,
+    identity: &AccountIdentity,
+) -> Result<Settings> {
+    if !crate::agy_identity::matches(Some(account), identity) {
+        return Ok(settings.clone());
+    }
+    let mut next = settings.clone();
+    let a = next
+        .accounts
+        .iter_mut()
+        .find(|a| key(a) == key(account))
+        .context("账户已删除")?;
+    let mut changed = false;
+    if a.identity_key.is_none() {
+        a.identity_key = Some(identity.key.clone());
+        changed = true;
+        if a.pending_name || a.name == default_name("antigravity") || a.name.is_empty() {
+            a.name = identity.email.clone();
+            a.pending_name = false;
+        }
+    }
+    if changed {
+        store.save_auth_settings(&next)?;
+    }
+    Ok(next)
+}
+
+pub(crate) fn record_agy_observation(
+    store: &Store,
+    settings: &Settings,
+    source: &Source,
+    q: &QuotaSnapshot,
+    revision: &Value,
+) -> Result<()> {
+    let account = settings
+        .accounts
+        .iter()
+        .find(|a| a.provider == "antigravity" && a.id == source.account_id);
+    let row = agy_status(account, q.identity.as_ref(), q.metadata_error.as_deref());
+    record_agy_status(store, settings, source, row, revision, None)?;
+    Ok(())
+}
+
+/// Persist the same public observation returned by login, without another CLI query.
+pub(crate) fn record_agy_status(
+    store: &Store,
+    settings: &Settings,
+    source: &Source,
+    mut row: Value,
+    revision: &Value,
+    next_revision: Option<&Value>,
+) -> Result<Value> {
+    let Some(account) = settings
+        .accounts
+        .iter()
+        .find(|a| a.provider == "antigravity" && a.id == source.account_id)
+    else {
+        return Ok(Value::Null);
+    };
+    let tx = store.db.unchecked_transaction()?;
+    ensure!(
+        status_revision(store, source)? == *revision,
+        "登录状态已变化，请重新检查"
+    );
+    let latest = store.settings()?;
+    let pair = latest
+        .accounts
+        .iter()
+        .find(|a| key(a) == key(account))
+        .zip(latest.sources.iter().find(|s| s.id == source.id));
+    ensure!(
+        pair.is_some_and(|(a, s)| {
+            let mut expected = account.clone();
+            // A parallel check may have bound the same identity while login was running.
+            if expected.identity_key.is_none()
+                && a.identity_key
+                    .as_deref()
+                    .is_some_and(|key| row["identity"]["key"] == key)
+            {
+                expected.identity_key = a.identity_key.clone();
+            }
+            fingerprint(&latest, a, s) == fingerprint(settings, &expected, source)
+        }),
+        "设备配置已变化，请重新检查"
+    );
+    let current_account = pair.unwrap().0;
+    let next =
+        if let Ok(identity) = serde_json::from_value::<AccountIdentity>(row["identity"].clone()) {
+            bind_agy_identity(store, &latest, current_account, &identity)?
+        } else {
+            latest
+        };
+    let a = next
+        .accounts
+        .iter()
+        .find(|a| key(a) == key(account))
+        .unwrap();
+    retain_agy_subscription(&mut row, get(store, &cache_key(a, source))?);
+    if let Some(next_revision) = next_revision {
+        // Invalidate checks started during authorization in the same transaction as success.
+        codex_switched(store, source, next_revision)?;
+    }
+    row["fingerprint"] = json!(fingerprint(&next, a, source));
+    row["authRevision"] = status_revision(store, source)?;
+    row["attemptedAt"] = json!(now());
+    put(store, &cache_key(a, source), &row)?;
+    tx.commit()?;
+    row["accountKey"] = json!(key(a));
+    row["sourceId"] = json!(source.id);
+    row["machineId"] = json!(source.host_id.as_deref().unwrap_or("local"));
+    row.as_object_mut().unwrap().remove("fingerprint");
+    row.as_object_mut().unwrap().remove("authRevision");
+    Ok(row)
 }
 pub fn task_uses(account: &Account, settings: &Settings, record: &crate::wakeups::Record) -> bool {
     let task_matches = |task: &crate::wakeups::Task| {
@@ -148,7 +307,7 @@ impl Engine {
                 name: name
                     .map(str::to_owned)
                     .unwrap_or_else(|| default_name(provider)),
-                pending_name: provider == "codex" && name.is_none(),
+                pending_name: matches!(provider, "codex" | "antigravity") && name.is_none(),
                 provider: provider.into(),
                 ..Default::default()
             });
@@ -168,13 +327,16 @@ impl Engine {
                     let mut row = get(&self.store, &cache_key(account, source))?.unwrap_or_else(
                         || json!({"current":null,"credential":null,"checkedAt":null}),
                     );
-                    if row["fingerprint"] != json!(fingerprint(&settings, account, source)) {
+                    if row["fingerprint"] != json!(fingerprint(&settings, account, source))
+                        || row["authRevision"] != status_revision(&self.store, source)?
+                    {
                         row = json!({"current":null,"credential":null,"checkedAt":null});
                     }
                     row["accountKey"] = json!(key(account));
                     row["sourceId"] = json!(source.id);
                     row["machineId"] = json!(source.host_id.as_deref().unwrap_or("local"));
                     row.as_object_mut().unwrap().remove("fingerprint");
+                    row.as_object_mut().unwrap().remove("authRevision");
                     rows.push(row);
                 }
             }
@@ -211,8 +373,10 @@ impl Engine {
                 "设备已暂停"
             );
             let stamp = fingerprint(&settings, &account, source);
+            let auth_revision = status_revision(&self.store, source)?;
             let result = self.inspect_account_device(&settings, &account, source);
             // Observations made with old settings must never overwrite a new device's state.
+            let transaction = self.store.db.unchecked_transaction()?;
             let latest = self.store.settings()?;
             let unchanged = latest
                 .accounts
@@ -221,11 +385,19 @@ impl Engine {
                 .zip(latest.sources.iter().find(|s| s.id == source.id))
                 .is_some_and(|(a, s)| fingerprint(&latest, a, s) == stamp);
             ensure!(unchanged, "设备配置已变化，请重新检查");
+            // Keep the generation check and cache write in the same transaction, so an
+            // observation started before a switch cannot overwrite the new account state.
+            ensure!(
+                status_revision(&self.store, source)? == auth_revision,
+                "账号已切换，请重新检查设备状态"
+            );
             let mut row = match result {
                 Ok(v) => v,
                 Err(e) => {
                     let mut old = get(&self.store, &cache_key(&account, source))?
-                        .filter(|v| v["fingerprint"] == json!(stamp))
+                        .filter(|v| {
+                            v["fingerprint"] == json!(stamp) && v["authRevision"] == auth_revision
+                        })
                         .unwrap_or_else(
                             || json!({"current":null,"credential":null,"checkedAt":null}),
                         );
@@ -233,13 +405,38 @@ impl Engine {
                     old
                 }
             };
+            let mut observed_settings = latest;
+            if account.provider == "antigravity"
+                && row["current"] == true
+                && let Ok(identity) =
+                    serde_json::from_value::<AccountIdentity>(row["identity"].clone())
+            {
+                let latest_account = observed_settings
+                    .accounts
+                    .iter()
+                    .find(|a| key(a) == account_key)
+                    .unwrap();
+                observed_settings =
+                    bind_agy_identity(&self.store, &observed_settings, latest_account, &identity)?;
+            }
+            let observed_account = observed_settings
+                .accounts
+                .iter()
+                .find(|a| key(a) == account_key)
+                .unwrap();
+            if account.provider == "antigravity" {
+                retain_agy_subscription(&mut row, get(&self.store, &cache_key(&account, source))?);
+            }
             row["attemptedAt"] = json!(now());
-            row["fingerprint"] = json!(stamp);
+            row["fingerprint"] = json!(fingerprint(&observed_settings, observed_account, source));
+            row["authRevision"] = auth_revision;
             put(&self.store, &cache_key(&account, source), &row)?;
+            transaction.commit()?;
             row["accountKey"] = json!(account_key);
             row["sourceId"] = json!(source.id);
             row["machineId"] = json!(source.host_id.as_deref().unwrap_or("local"));
             row.as_object_mut().unwrap().remove("fingerprint");
+            row.as_object_mut().unwrap().remove("authRevision");
             return Ok(row);
         }
         let tasks = self
@@ -273,6 +470,9 @@ impl Engine {
         account: &Account,
         source: &Source,
     ) -> Result<Value> {
+        if source.provider == "antigravity" && source.account_id == account.id {
+            return crate::agy_auth::inspect(source, settings);
+        }
         if source.provider == "codex" {
             let info = crate::codex_auth::backend(
                 source,
@@ -484,6 +684,93 @@ mod tests {
             })
             .unwrap();
         (dir, engine)
+    }
+    #[test]
+    fn agy_login_commit_rejects_older_checks_and_accepts_parallel_same_identity_binding() {
+        let (_dir, mut e) = fixture();
+        let mut settings = e.store.settings().unwrap();
+        settings.sources[0].provider = "antigravity".into();
+        settings.accounts[0].provider = "antigravity".into();
+        settings.accounts[0].archived = false;
+        e.store.save_auth_settings(&settings).unwrap();
+        let source = settings.sources[0].clone();
+        let identity = AccountIdentity {
+            key: format!("google:{}", "a".repeat(64)),
+            email: "fixture@example.test".into(),
+            ..Default::default()
+        };
+        let revision = json!({"session":"authorizing"});
+        codex_switched(&e.store, &source, &revision).unwrap();
+        let q = QuotaSnapshot {
+            identity: Some(identity.clone()),
+            ..Default::default()
+        };
+        // Another observation binds the same identity before the login is published.
+        record_agy_observation(&e.store, &settings, &source, &q, &revision).unwrap();
+        let new_revision = json!({"session":"confirmed"});
+        let row = record_agy_status(
+            &e.store,
+            &settings,
+            &source,
+            agy_status(Some(&settings.accounts[0]), Some(&identity), None),
+            &revision,
+            Some(&new_revision),
+        )
+        .unwrap();
+        assert_eq!(row["current"], true);
+        assert_eq!(status_revision(&e.store, &source).unwrap(), new_revision);
+        let latest = e.store.settings().unwrap();
+        // Even with unchanged identity/configuration, a check started before success is stale.
+        assert!(
+            record_agy_observation(
+                &e.store,
+                &latest,
+                &source,
+                &QuotaSnapshot::default(),
+                &revision
+            )
+            .is_err()
+        );
+        assert_eq!(
+            e.account_call("accounts.status.get", json!({})).unwrap()[0]["identity"]["key"],
+            identity.key
+        );
+    }
+    #[test]
+    fn agy_observations_reject_changed_configuration_and_authentication_revision() {
+        let (_dir, e) = fixture();
+        let mut settings = e.store.settings().unwrap();
+        settings.sources[0].provider = "antigravity".into();
+        settings.accounts[0].provider = "antigravity".into();
+        settings.accounts[0].archived = false;
+        e.store.save_auth_settings(&settings).unwrap();
+        let source = settings.sources[0].clone();
+        let q = QuotaSnapshot {
+            identity: Some(AccountIdentity {
+                key: format!("google:{}", "a".repeat(64)),
+                email: "fixture@example.test".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let revision = status_revision(&e.store, &source).unwrap();
+        let mut changed = settings.clone();
+        changed.proxy.mode = "direct".into();
+        e.store.save_settings(&changed).unwrap();
+        assert!(record_agy_observation(&e.store, &settings, &source, &q, &revision).is_err());
+        assert!(
+            e.store.settings().unwrap().accounts[0]
+                .identity_key
+                .is_none()
+        );
+        e.store.save_settings(&settings).unwrap();
+        codex_switched(&e.store, &source, &json!({"session":"new"})).unwrap();
+        assert!(record_agy_observation(&e.store, &settings, &source, &q, &revision).is_err());
+        assert!(
+            e.store.settings().unwrap().accounts[0]
+                .identity_key
+                .is_none()
+        );
     }
     #[test]
     fn delete_preserves_history_credentials_and_deduplication_namespace() {

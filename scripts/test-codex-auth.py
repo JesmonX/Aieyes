@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline coordinator fault tests. No real accounts or processes are touched."""
 import base64
+import builtins
 import importlib.util
 import json
 import pathlib
@@ -11,6 +12,7 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('auth_helper', pathlib.Path(__file__).with_name('remote_codex_auth.py'))
 a = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(a)
+scan_switch_processes = a.switch_running
 
 
 def credential(user, refresh='initial'):
@@ -27,6 +29,8 @@ class CoordinatorTests(unittest.TestCase):
         self.loc = dict(path=str(self.root), binary='fixture-codex', proxy=dict(mode='direct'))
         self.processes = patch.object(a, 'running', return_value=[])
         self.processes.start(); self.addCleanup(self.processes.stop)
+        self.switch_processes = patch.object(a, 'switch_running', return_value=[])
+        self.switch_processes.start(); self.addCleanup(self.switch_processes.stop)
         self.one, self.two = credential('one'), credential('two')
         a.atomic(self.root/'auth.json', self.one)
         a.save_profile(self.root, 'one', 'One', self.one)
@@ -35,6 +39,23 @@ class CoordinatorTests(unittest.TestCase):
 
     def call(self, method, **params):
         return a.call(dict(version=1, location=self.loc, method=method, params=params))
+
+    def test_toml_fallback_without_python_311_or_site_packages(self):
+        original = builtins.__import__
+        def restricted(name, *args, **kwargs):
+            if name in ('tomllib', 'tomli', 'vendor'):
+                raise ImportError(name)
+            return original(name, *args, **kwargs)
+        sources = {name: pathlib.Path(__file__).with_name('vendor').joinpath('tomli', name+'.py').read_text() for name in ('__init__','_types','_re','_parser')}
+        config = self.root/'config.toml'
+        config.write_text('cli_auth_credentials_store = "keyring"\n[profiles.test]\nmodel = "test"\n')
+        with patch.object(a, '_aieyes_tomli_sources', sources, create=True), patch('builtins.__import__', side_effect=restricted):
+            self.assertEqual(a.config(self.root)['profiles']['test']['model'], 'test')
+            with self.assertRaises(ValueError): a.require_file(self.root)
+            config.write_text('cli_auth_credentials_store = "file"\n')
+            a.require_file(self.root)
+            config.write_text('invalid = [')
+            with self.assertRaises(ValueError): a.config(self.root)
 
     def test_lightweight_status_does_not_launch_cli_or_expose_credentials(self):
         with patch.object(a.subprocess, 'check_output', side_effect=AssertionError('status must not launch CLI')):
@@ -127,6 +148,85 @@ class CoordinatorTests(unittest.TestCase):
         with patch.object(a,'running',return_value=[unknown]), patch.object(a.os,'kill') as kill:
             with self.assertRaises(ValueError): a.close_processes(self.root,[unknown])
             with self.assertRaisesRegex(ValueError,'运行中的 Codex'): a.renew(self.loc,self.root,a.profile(self.root,'one'))
+            kill.assert_not_called()
+
+    def test_switch_scans_chatgpt_and_other_homes_and_retains_orphans(self):
+        proc = self.root / 'proc'; proc.mkdir()
+        def process(pid, parent, name, start=500):
+            entry = proc / str(pid); entry.mkdir(exist_ok=True)
+            (entry / 'comm').write_text(name[:15])
+            if not (entry / 'exe').is_symlink(): (entry / 'exe').symlink_to('/fixture/bin/' + name)
+            fields = ['S', str(parent)] + ['0'] * 17 + [str(start)]
+            (entry / 'stat').write_text(str(pid) + ' (' + name + ') ' + ' '.join(fields))
+            (entry / 'environ').write_bytes(b'CODEX_HOME=/other-home\0')
+        process(90, 1, 'ChatGPT'); process(50, 90, 'codex')
+        process(20, 50, 'node'); process(10, 20, 'helper')
+        process(100, 1, 'codex-code-mode-host'); process(110, 1, 'codex-unknown')
+        process(120, 1, 'unrelated')
+        rows = scan_switch_processes(proc_root=proc)
+        self.assertEqual([(p['pid'], p['canClose']) for p in rows], [(10,True),(20,True),(50,True),(90,True),(100,True),(110,False)])
+        self.assertEqual(next(p['name'] for p in rows if p['pid'] == 90), 'ChatGPT 应用')
+        process(20, 1, 'node')
+        self.assertNotIn(20, [p['pid'] for p in scan_switch_processes(proc_root=proc)])
+        self.assertIn(20, [p['pid'] for p in scan_switch_processes(rows, proc_root=proc)])
+        process(20, 1, 'node', start=600)
+        self.assertNotIn(20, [p['pid'] for p in scan_switch_processes(rows, proc_root=proc)])
+
+    def test_shared_process_profile_and_override_cases(self):
+        import time
+        cases = json.loads(pathlib.Path(__file__).with_name('fixtures').joinpath('codex-process-auth.json').read_text())
+        for case in cases:
+            with self.subTest(case=case['name']), tempfile.TemporaryDirectory() as directory:
+                home = pathlib.Path(directory).resolve()
+                (home / 'config.toml').write_text(case['config'])
+                if case.get('changedBase'):
+                    import os
+                    os.utime(home / 'config.toml', (time.time()+5, time.time()+5))
+                for name, text in case['profiles'].items(): (home / (name + '.config.toml')).write_text(text)
+                env = dict(case['env'], CODEX_HOME=str(home))
+                actual = a.process_auth_usage(case['args'], env, time.time(), system=home / 'system.toml')
+                self.assertEqual(actual, case['expected'])
+                if case['name'] == 'explicit_profile_inline_token':
+                    self.assertEqual(a.process_auth_usage(case['args'], env, 0, system=home / 'system.toml'), 'unknownProfile')
+
+    def test_api_profile_process_tree_is_preserved_without_secret_disclosure(self):
+        import os, time
+        proc = self.root / 'proc'; proc.mkdir(); (proc / 'stat').write_text('btime 0\n')
+        api = json.loads(pathlib.Path(__file__).with_name('fixtures').joinpath('codex-process-auth.json').read_text())[0]['profiles']['api']
+        (self.root / 'api.config.toml').write_text(api)
+        ticks = int((time.time()+1) * os.sysconf('SC_CLK_TCK'))
+        def process(pid, parent, name, args):
+            entry = proc / str(pid); entry.mkdir()
+            (entry / 'comm').write_text(name[:15]); (entry / 'exe').symlink_to('/fixture/bin/'+name)
+            (entry / 'stat').write_text(str(pid)+' ('+name+') '+' '.join(['S',str(parent)]+['0']*17+[str(ticks)]))
+            (entry / 'cmdline').write_bytes(('\0'.join([name]+args)+'\0').encode())
+            (entry / 'environ').write_bytes(('CODEX_HOME='+str(self.root)+'\0').encode())
+        process(10, 1, 'codex', ['--profile','api'])
+        process(11, 10, 'codex-code-mode-host', [])
+        process(12, 11, 'node', [])
+        process(20, 1, 'codex', [])
+        preserved = []
+        rows = scan_switch_processes(proc_root=proc, preserved=preserved)
+        self.assertEqual([p['pid'] for p in rows], [20])
+        self.assertEqual(sorted(p['pid'] for p in preserved), [10,11,12])
+        public = json.dumps(dict(processes=rows, preservedProcesses=preserved))
+        self.assertNotIn('FIXTURE_SECRET', public); self.assertNotIn('fixture.invalid', public)
+
+    def test_switch_closes_application_first_and_rejects_restarts(self):
+        rows = [dict(pid=pid, parentPid=parent, fingerprint=str(pid), canClose=True) for pid,parent in [(10,20),(20,50),(50,90),(90,1)]]
+        current = list(rows)
+        order = []
+        def terminate(pid, sig):
+            order.append(pid)
+            current[:] = [p for p in current if p['pid'] != pid]
+        with patch.object(a, 'switch_running', side_effect=lambda *args: list(current)), patch.object(a.os, 'kill', side_effect=terminate):
+            a.close_processes(self.root, rows)
+        self.assertEqual(order, [90,50,20,10])
+        with patch.object(a, 'switch_running', return_value=[dict(rows[0], fingerprint='reused')]), patch.object(a.os, 'kill') as kill:
+            with self.assertRaisesRegex(ValueError, '重新启动'): a.close_processes(self.root, rows)
+            kill.assert_not_called()
+        with patch.object(a, 'switch_running', return_value=[]), patch.object(a.os, 'kill') as kill:
+            a.close_processes(self.root, rows)
             kill.assert_not_called()
 
     def test_reauthorization_resolves_conflict_but_rejects_other_user(self):

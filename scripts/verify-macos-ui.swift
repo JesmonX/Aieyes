@@ -34,6 +34,13 @@ import Foundation
         PanelAccountPreference.migrateAntigravity(aliases, defaults: preferences)
         precondition(preferences.string(forKey: "panel.accounts.v2") == savedPreference)
         precondition(Format.subscription("ultra") == "Ultra")
+        let legacyQuota = try JSONDecoder().decode(Quota.self, from: Data(#"{"sourceId":"s","accountId":"a","provider":"antigravity","name":"Custom","updatedAt":1,"origin":"live","windows":[]}"#.utf8))
+        precondition(legacyQuota.identity == nil && legacyQuota.metadataError == nil)
+        let identified = try JSONDecoder().decode(AccountDeviceStatus.self, from: Data(#"{"accountKey":"antigravity:a","sourceId":"s","machineId":"local","authenticated":true,"identityConfirmed":true,"current":true,"credential":true,"identity":{"key":"google:fixture","email":"account@example.test","subscription":"Google AI Pro","stale":false}}"#.utf8))
+        precondition(identified.identitySummary == "正在使用 account@example.test · Google AI Pro")
+        var mismatch = identified; mismatch.current = false
+        precondition(mismatch.identitySummary?.contains("身份不一致") == true)
+
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("aieyes-ui-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -59,8 +66,8 @@ for line in sys.stdin:
     with open(root+'/calls.jsonl','a') as log: log.write(json.dumps(req)+'\n')
     response=dict(jsonrpc='2.0',id=req['id'])
     if method=='settings.get': response['result']=json.load(open(root+'/settings.json'))
-    elif method=='dashboard':
-        if os.path.exists(root+'/fail-panel-query') and req.get('params',{}).get('days') == 1:
+    elif method in ('dashboard','dashboard.summary'):
+        if os.path.exists(root+'/fail-panel-query') and (method=='dashboard.summary' or req.get('params',{}).get('days') == 1):
             response['error']=dict(message='模拟今日面板查询失败')
             print(json.dumps(response),flush=True)
             continue
@@ -89,6 +96,13 @@ for line in sys.stdin:
         dashboard['quotaEstimates']=[estimate]
         with open(root+'/dashboard.json','w') as stored: json.dump(dashboard,stored)
     elif method=='quotas.refresh': response['error']=dict(message='模拟限额连接失败')
+    elif method=='accounts.status.get':
+        import time
+        open(root+'/account-status-started','w').close()
+        deadline=time.monotonic()+10
+        while os.path.exists(root+'/hold-account-status') and not os.path.exists(root+'/release-account-status') and time.monotonic()<deadline: time.sleep(.01)
+        response['result']=json.load(open(root+'/account-status.json')) if os.path.exists(root+'/account-status.json') else []
+    elif method=='accounts.status.refresh': response['error']=dict(message='不应再次检查已确认的登录')
     elif method=='prices.save': response['error']=dict(message='模拟价格保存失败')
     elif method=='prices.recalculate' and os.path.exists(root+'/fail-reprice'): response['error']=dict(message='模拟重算失败')
     elif method=='hosts.sample': response['error']=dict(message='模拟采样连接失败')
@@ -128,7 +142,7 @@ for line in sys.stdin:
         precondition(model.settingsDraft.refreshSeconds == 321 && model.settings.refreshSeconds == 300 && model.settingsDirty)
         model.discardSettingsDraft()
         precondition(model.quotaError == "模拟限额连接失败")
-        precondition(model.quotaNextAttempt.map { $0 > Date() } == true)
+        precondition(model.quotaNextAttempt == nil, "Autostart-disabled models do not schedule background polls")
         func calls(_ method: String) throws -> Int {
             try String(contentsOf: root.appendingPathComponent("calls.jsonl"), encoding: .utf8).split(separator: "\n").filter { line in
                 (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["method"] as? String == method
@@ -355,6 +369,36 @@ for line in sys.stdin:
         try FileManager.default.removeItem(at: root.appendingPathComponent("fail-theme"))
         await model.toggleTheme(currentlyDark: true)
         precondition(model.settings.appearance?.theme == "light" && model.settingsDraft.refreshSeconds == 321)
+        let agyModel = AppModel(autostart: false)
+        defer { agyModel.stop() }
+        var agySettings = Settings()
+        agySettings.accounts = [AgentAccount(id: "a", name: "Custom", provider: "antigravity", quotaEnabled: true)]
+        agySettings.sources = [AgentSource(id: "s", name: "Local", provider: "antigravity", accountId: "a", path: "fixture", enabled: true)]
+        agyModel.settings = agySettings; agyModel.settingsDraft = agySettings
+        agyModel.settingsDraft.refreshSeconds = 321
+        var bound = agySettings; bound.accounts[0].identityKey = identified.identity?.key
+        try encoder.encode(bound).write(to: root.appendingPathComponent("settings.json"))
+        let staleAccountStatus = #"[{"accountKey":"antigravity:a","sourceId":"s","machineId":"local","current":null,"credential":null}]"#
+        try Data(staleAccountStatus.utf8).write(to: root.appendingPathComponent("account-status.json"))
+        try Data().write(to: root.appendingPathComponent("hold-account-status"))
+        let oldRead = Task { await agyModel.loadAccountStatuses() }
+        while !FileManager.default.fileExists(atPath: root.appendingPathComponent("account-status-started").path) { try await Task.sleep(for: .milliseconds(10)) }
+        let acceptedAt = Date()
+        try await agyModel.refreshAntigravityAccount(sourceID: "s", status: identified)
+        precondition(Date().timeIntervalSince(acceptedAt) < 0.5, "Login acceptance must not wait for quota queries")
+        precondition(agyModel.accountStatuses[0].identitySummary == identified.identitySummary)
+        try Data().write(to: root.appendingPathComponent("release-account-status"))
+        await oldRead.value
+        precondition(agyModel.accountStatuses[0].current == true, "An older pending read must not replace the login")
+        if let followUp = agyModel.antigravityRefreshTasks["s"] { await followUp.value }
+        precondition(agyModel.antigravityRefreshTasks.isEmpty)
+        precondition(agyModel.quotaError == "模拟限额连接失败")
+        precondition(agyModel.accountStatuses[0].identity?.email == "account@example.test")
+        precondition(agyModel.settings.accounts[0].identityKey == "google:fixture" && agyModel.settings.accounts[0].name == "Custom")
+        precondition(agyModel.settingsDraft.refreshSeconds == 321, "Identity refresh must preserve unsaved input")
+        let login = try JSONDecoder().decode(AntigravityLoginState.self, from: Data(#"{"id":"session","phase":"authenticated","message":"登录有效","authenticated":true,"identityConfirmed":true,"workspaceConfirmationRequired":false,"accountStatus":{"accountKey":"antigravity:a","sourceId":"s","machineId":"local","current":true,"credential":true}}"#.utf8))
+        precondition(login.accountStatus?.current == true && login.workspaceConfirmationRequired == false)
+        print("Antigravity login accepts committed identity immediately, rejects older status reads, retains identity after quota failure, and preserves drafts")
         print("Theme quick toggle saves globally, preserves unrelated drafts and retains theme after failure")
         print("Atomic filtered/today snapshots and mapping save/reprice failure recovery passed")
         print("Unfiltered menu metric, data-time semantics, per-source retry, and destructive draft confirmation checks passed")

@@ -873,7 +873,14 @@ impl Engine {
                 value
                     .as_array()
                     .is_some_and(|rows| rows.len() == batch.len()
-                        && rows.iter().all(|r| r.get("error").is_none())),
+                        && rows.iter().all(|r| r.get("error").is_none()
+                            && r["result"]["failedFiles"].as_u64().unwrap_or(0) == 0
+                            && r["result"]["invalidRecords"].as_u64().unwrap_or(0) == 0
+                            && !r["issues"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .any(|issue| issue["code"] == "invalidRecord"))),
                 "用量同步失败，请重试；尚未提交采样边界"
             );
         }

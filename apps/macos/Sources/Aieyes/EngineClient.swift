@@ -8,10 +8,18 @@ final class EngineClient: @unchecked Sendable {
     private var buffer = Data()
     private var nextID = 0
     private let configuration: EngineClient?
-    init(configurationOnly: Bool = false) { configuration = configurationOnly ? nil : EngineClient(configurationOnly: true) }
+    private let queries: EngineClient?
+    private let lifecycle = NSLock()
+    private var stopped = false
+    init(configurationOnly: Bool = false) {
+        configuration = configurationOnly ? nil : EngineClient(configurationOnly: true)
+        queries = configurationOnly ? nil : EngineClient(configurationOnly: true)
+    }
     private static let configurationMethods: Set<String> = ["settings.get", "settings.patch", "settings.save", "agents.set", "sources.configure", "sources.remove", "accounts.connect", "accounts.create", "accounts.status.get", "accounts.deletion.preview", "accounts.cleanup.list"]
 
     private func start() throws {
+        lifecycle.lock(); defer { lifecycle.unlock() }
+        guard !stopped else { throw ClientError.message("核心连接已关闭") }
         if process?.isRunning == true { return }
         let executable = ProcessInfo.processInfo.environment["AIEYES_CORE_PATH"]
             ?? Bundle.main.url(forResource: "aieyes-core", withExtension: nil)?.path
@@ -31,7 +39,10 @@ final class EngineClient: @unchecked Sendable {
         process = p; input = stdin.fileHandleForWriting; output = stdout.fileHandleForReading; buffer.removeAll()
     }
 
-    func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self, onProgress: (@Sendable (String) -> Void)? = nil) async throws -> T {
+    func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self, onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil) async throws -> T {
+        if ["dashboard", "dashboard.summary", "quotas.schedule"].contains(method), let queries {
+            return try await queries.call(method, params: params, as: type, onProgress: onProgress)
+        }
         if Self.configurationMethods.contains(method), let configuration {
             return try await configuration.call(method, params: params, as: type, onProgress: onProgress)
         }
@@ -47,7 +58,11 @@ final class EngineClient: @unchecked Sendable {
                         if let end = self.buffer.firstIndex(of: 10) {
                             let line = self.buffer[..<end]; self.buffer.removeSubrange(...end)
                             guard let response = try JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
-                            if response["method"] as? String == "operations.progress", let progress = response["params"] as? [String: Any], let stage = progress["stage"] as? String { onProgress?(stage); continue }
+                            if response["method"] as? String == "operations.progress", let progress = response["params"] as? [String: Any] {
+                                if progress["kind"] as? String == "hosts.sample", let row = progress["row"], let data = try? JSONSerialization.data(withJSONObject: row), let result = try? JSONDecoder().decode(HostResult.self, from: data) { onHostSample?(result) }
+                                else if let stage = progress["stage"] as? String { onProgress?(stage) }
+                                continue
+                            }
                             guard response["id"] as? Int == self.nextID else { continue }
                             if let error = response["error"] as? [String: Any] { throw ClientError.message(error["message"] as? String ?? "查询失败") }
                             let result = try JSONSerialization.data(withJSONObject: response["result"] ?? [:], options: .fragmentsAllowed)
@@ -60,11 +75,16 @@ final class EngineClient: @unchecked Sendable {
             }
         }
     }
-    func stop() { configuration?.stop(); process?.terminate() }
-    deinit { process?.terminate() }
+    func stop() {
+        configuration?.stop(); queries?.stop()
+        lifecycle.lock(); defer { lifecycle.unlock() }
+        stopped = true; try? input?.close(); if process?.isRunning == true { process?.terminate() }
+    }
+    deinit { stop() }
 }
 enum ClientError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let text) = self { return text }; return nil } }
-struct Acknowledgement: Decodable { var id: String?, name: String?, error: String? }
+struct Acknowledgement: Decodable { var partial: Bool?, issues: [SyncIssue]?; var id: String?, name: String?, error: String? }
+struct QuotaSchedule: Decodable { var nextDueAt: Double? }
 struct RefreshStatus { var busy = false; var succeededAt: Date?; var error: String? }
 struct ActionFailure: Identifiable { var action: String; var itemID: String? = nil; var name: String, reason: String; var id: String { action + ":" + (itemID ?? name) } }
 struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: String, explanation: String, affected: [String]; var id: String { kind + ":" + itemID } }
@@ -78,13 +98,16 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published private(set) var error: String?
     @Published var query = "" { didSet { if query != oldValue { filter() } } }
     private let fetch: () async throws -> [ModelPrice]
+    private let reader: EngineClient
     private var pending: Task<Void, Never>?
     private var revision = 0
 
     init(fetch: (() async throws -> [ModelPrice])? = nil) {
-        let reader = EngineClient()
+        let reader = EngineClient(configurationOnly: true)
+        self.reader = reader
         self.fetch = fetch ?? { try await reader.call("prices.list") }
     }
+    func stop() { pending?.cancel(); reader.stop() }
     func replace(_ values: [ModelPrice]) {
         revision += 1
         if prices != values { prices = values; filter() }
@@ -126,6 +149,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     let accountEngine = EngineClient()
     @Published var accountStatuses: [AccountDeviceStatus] = []
     @Published var accountStatusBusy = false
+    var accountStatusRevision = 0
+    var accountSourceStatusRequests: [String: Int] = [:]
+    var accountSourceStatusTasks: [String: Task<Bool, Never>] = [:]
+    @Published var agyLoginActive = false
+    var antigravityRefreshTasks: [String: Task<Void, Never>] = [:]
     @Published var deploymentSyncMessage: String?
     var deploymentSyncTask: Task<Void, Never>?
     var settingsRefreshTask: Task<Void, Never>?
@@ -133,9 +161,66 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     let networkEngine = EngineClient()
     let priceCatalog = PriceCatalog()
     @Published var networkTest: NetworkTest?
-    @Published var networkBusy = false
+    @Published var networkBusy = false { didSet { scheduleRefreshes() } }
     private var lastNetworkAttempt = Date.distantPast
     private var networkRevision = 0
+    func loadAccountStatuses(refresh: Bool = false) async {
+        guard !accountStatusBusy else { return }
+        accountStatusBusy = true; defer { accountStatusBusy = false }
+        let revision = accountStatusRevision
+        do {
+            let rows: [AccountDeviceStatus] = try await engine.call("accounts.status.get")
+            if revision == accountStatusRevision { accountStatuses = rows }
+        }
+        catch { settingsMessage = error.localizedDescription; return }
+        guard refresh else { return }
+        let accounts = settings.accounts.filter { $0.archived != true }
+        for account in accounts {
+            for source in settings.sources.filter({ $0.provider == account.provider && $0.enabled }) {
+                if let host = source.hostId, !settings.hosts.contains(where: { $0.id == host && $0.enabled }) { continue }
+                if Task.isCancelled || installingUpdate { return }
+                do {
+                    let row: AccountDeviceStatus = try await accountEngine.call("accounts.status.refresh", params: ["accountKey":account.key,"sourceId":source.id])
+                    if revision == accountStatusRevision { accountStatuses.removeAll { $0.id == row.id }; accountStatuses.append(row) }
+                } catch { /* The per-device result is retained; a concurrent settings edit invalidates it. */ }
+            }
+        }
+        await refreshIdentitySettings()
+    }
+    func refreshIdentitySettings(reportFailure: Bool = false) async {
+        let before = settings
+        let saved: Settings
+        do { saved = try await accountEngine.call("settings.get") }
+        catch { if reportFailure { settingsMessage = "登录已确认，账户设置刷新失败：" + error.localizedDescription }; return }
+        guard settings == before else { return }
+        let cleanDraft = settingsDraft == before
+        settings = saved
+        if cleanDraft { settingsDraft = saved }
+    }
+    func refreshAntigravityAccount(sourceID: String, status: AccountDeviceStatus? = nil) async throws {
+        guard let source = settings.sources.first(where: { $0.id == sourceID }),
+              let account = settings.accounts.first(where: { $0.provider == "antigravity" && $0.id == source.accountId }) else { throw ClientError.message("账户连接已变化，请重新检查") }
+        accountStatusRevision += 1
+        let revision = accountStatusRevision
+        let row: AccountDeviceStatus
+        if let status { row = status }
+        else { row = try await accountEngine.call("accounts.status.refresh", params: ["accountKey":account.key,"sourceId":sourceID]) }
+        if status == nil, let error = row.error { throw ClientError.message("设备状态更新失败：" + error) }
+        guard revision == accountStatusRevision, row.sourceId == sourceID, row.accountKey == account.key, row.machineId == (source.hostId ?? "local"),
+              settings.sources.contains(where: { $0.id == sourceID && $0.accountId == account.id && $0.enabled }) else {
+            throw ClientError.message("账户连接已变化，请重新检查")
+        }
+        accountStatuses.removeAll { $0.id == row.id }; accountStatuses.append(row)
+        // Owned by the model, so closing the login sheet does not cancel quota/settings reads.
+        if antigravityRefreshTasks[sourceID] == nil {
+            antigravityRefreshTasks[sourceID] = Task {
+                defer { antigravityRefreshTasks[sourceID] = nil }
+                await refreshIdentitySettings(reportFailure: true)
+                guard !Task.isCancelled else { return }
+                await refreshQuotas(accountID: account.id)
+            }
+        }
+    }
     func testNetwork(force: Bool = true) async {
         guard !networkBusy else { return }; networkBusy = true; lastNetworkAttempt = Date()
         let revision = networkRevision
@@ -149,7 +234,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private let sessionMonitor = SessionMonitor()
     @Published var sessions: [LiveSession] = []
     @Published var sessionsUnavailable = false
-    private var sessionBusy = false
+    private var sessionBusy = false { didSet { scheduleRefreshes() } }
     private var lastSessionRead = Date.distantPast
     var activeSessions: [LiveSession] { sessions.filter { $0.phase.active } }
     var sessionPhase: SessionPhase? { sessionsUnavailable ? .unknown : activeSessions.first?.phase ?? sessions.first?.phase }
@@ -174,13 +259,13 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published private(set) var actionFailures: [ActionFailure] = []
     @Published private(set) var fallbackModelOptions: [String] = []
     var modelOptions: [String] { dashboard.modelOptions ?? fallbackModelOptions }
-    @Published var settings = Settings()
+    @Published var settings = Settings() { didSet { invalidateQuotaSchedule() } }
     @Published var settingsDraft = Settings()
     @Published var settingsLoaded = false
-    @Published var settingsSaving = false
+    @Published var settingsSaving = false { didSet { scheduleRefreshes() } }
     @Published var settingsStage = ""
     @Published var settingsStartedAt: Date?
-    @Published private(set) var repricing = false
+    @Published private(set) var repricing = false { didSet { scheduleRefreshes() } }
     @Published var settingsMessage: String?
     @Published var mappingModel = ""
     @Published var mappingID = ""
@@ -225,13 +310,13 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var settingsTab = "sources"
     @Published var selectedModel = "all"
     @Published var range = 1
-    @Published var busy = false
-    @Published var serverBusy = false
+    @Published var busy = false { didSet { scheduleRefreshes() } }
+    @Published var serverBusy = false { didSet { scheduleRefreshes() } }
     @Published var message: String?
     @Published var activity = ""
     @Published var isPinned = false
-    @Published var installingUpdate = false
-    @Published private(set) var estimateBusy = Set<String>()
+    @Published var installingUpdate = false { didSet { scheduleRefreshes() } }
+    @Published private(set) var estimateBusy = Set<String>() { didSet { scheduleRefreshes() } }
     @Published var estimateStages: [String: String] = [:]
     @Published var estimateStartedAt: [String: Date] = [:]
     @Published private(set) var estimateErrors: [String: String] = [:]
@@ -249,14 +334,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var panelVisible: Bool { !visibleWindows.isEmpty }
     func setWindowVisible(_ visible: Bool, window: String) {
         guard visibleWindows.contains(window) != visible else { return }
-        if visible { visibleWindows.insert(window) } else { visibleWindows.remove(window) }
+        if visible { visibleWindows.insert(window) } else { visibleWindows.remove(window) }; scheduleRefreshes()
     }
     private var visibleServerWindows = Set<String>()
     var serverTabVisible: Bool { !visibleServerWindows.intersection(visibleWindows).isEmpty }
     func setServerVisible(_ visible: Bool, window: String) {
-        if visible { visibleServerWindows.insert(window) } else { visibleServerWindows.remove(window) }
+        if visible { visibleServerWindows.insert(window) } else { visibleServerWindows.remove(window) }; scheduleRefreshes()
     }
-    @Published var quotaBusy = false
+    @Published var quotaBusy = false { didSet { scheduleRefreshes() } }
     @Published var quotaError: String?
     @Published var quotaNextAttempt: Date?
     var quotaAccounts: [AgentAccount] { settings.accounts.filter { $0.quotaEnabled && $0.archived != true } }
@@ -274,7 +359,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func openEstimate(_ estimate: QuotaEstimate) async {
         do {
             // Use an unfiltered read so changing the usage filter cannot hide sampling controls.
-            let snapshot: Dashboard = try await engine.call("dashboard", params: ["days": 1])
+            let snapshot: Dashboard = try await engine.call("dashboard.summary")
             guard let quota = snapshot.quotas.first(where: { $0.id == estimate.accountKey }) else {
                 estimateErrors[estimate.accountKey] = "此账户已归档或移除；仍可结束采样并保留有效段。"; return
             }
@@ -284,10 +369,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 
     init(autostart: Bool = true) {
         guard autostart else { return }
-        Task { await bootstrap() }
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
-        }
+        schedulingEnabled = true
+        Task { await bootstrap(); scheduleRefreshes() }
     }
     func bootstrap() async {
         do {
@@ -301,8 +384,28 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published private(set) var dashboardError: String?
     @Published private(set) var appliedScope = "今日 · 全部 Agent · 全部账户 · 全部来源 · 全部模型"
     private var dashboardRequest = 0
+    private var reloadTask: Task<Bool, Never>?
+    private var reloadAgain = false
+    private var filterRefresh: Task<Void, Never>?
+    func requestDashboardReload() {
+        filterRefresh?.cancel()
+        dashboardRequest += 1
+        filterRefresh = Task { do { try await Task.sleep(for: .milliseconds(120)) } catch { return }; filterRefresh = nil; _ = await reload() }
+    }
     @discardableResult func reload() async -> Bool {
-        dashboardRequest += 1; let request = dashboardRequest
+        guard !installingUpdate, !stopped else { return false }
+        dashboardRequest += 1; reloadAgain = true
+        if let reloadTask { return await reloadTask.value }
+        let work = Task { @MainActor in
+            defer { reloadTask = nil }
+            var result = true
+            repeat { reloadAgain = false; result = await reloadOnce(request: dashboardRequest) } while reloadAgain && !Task.isCancelled
+            return result
+        }
+        reloadTask = work
+        return await work.value
+    }
+    private func reloadOnce(request: Int) async -> Bool {
         dashboardPending = true; dashboardError = nil
         let scope = [range == 1 ? "今日" : "最近 \(range) 天", provider == "all" ? "全部 Agent" : Format.provider(provider), settings.accounts.first { $0.key == selectedAccount }?.name ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
         var params: [String: Any] = ["days":range]
@@ -318,7 +421,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             guard request == dashboardRequest else { return true }
             let panel = next
             guard request == dashboardRequest else { return true }
-            let unfiltered: Dashboard = unfilteredSelected ? next : try await engine.call("dashboard", params: ["days": 1])
+            let unfiltered: Dashboard = unfilteredSelected ? next : try await engine.call("dashboard.summary")
             guard request == dashboardRequest else { return true }
             // Publish all surfaces together so a failed secondary query cannot mix filter scopes.
             dashboard = next; panelDashboard = panel; menuDashboard = unfiltered
@@ -364,14 +467,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var statusText: String {
         let delayed = usageSources.filter { source in
             guard let stamp = dashboard.sources.first(where: { $0.id == source.id })?.status?.updatedAt else { return true }
-            return Date().timeIntervalSince1970 - stamp > Double(max(60, settings.refreshSeconds * 2))
+            return Date().timeIntervalSince1970 - stamp > Double(max(60, settings.historyInterval * 2))
         }.count
-        let failed = dashboard.sources.contains { $0.enabled && $0.status?.error != nil }
+        let failed = dashboard.sources.contains { $0.enabled && ($0.status?.error != nil || $0.status?.partial == true) }
         let prefix = dataTime > 0 ? "记录同步于 " + Format.time(dataTime) : usageSources.isEmpty ? "未接入用量来源" : "记录尚未全部同步"
         return prefix + " · " + (busy ? "同步中…" : failed || !actionFailures.isEmpty ? "部分失败" : delayed > 0 ? "\(delayed) 个来源有延迟" : usageSources.isEmpty ? "等待接入" : "记录已同步")
     }
     var serverStatusText: String {
-        let enabled = settings.hosts.filter(\.enabled)
+        let enabled = settings.monitoredHosts.filter(\.enabled)
         let updated = enabled.filter { host in
             guard let result = hosts.first(where: { $0.id == host.id }), result.error == nil, let sample = result.sample else { return false }
             return sample.errors.isEmpty && Date().timeIntervalSince1970 - sample.timestamp <= 10
@@ -383,7 +486,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         return (Self.refreshLabels[key] ?? key) + " · " + (state.busy ? "进行中…" : state.error != nil ? "失败，可重试" : state.succeededAt.map { Format.time($0.timeIntervalSince1970) } ?? "尚未刷新")
     }
     private func beginRefresh(_ key: String) {
-        var state = refreshStates[key] ?? RefreshStatus(); state.busy = true; state.error = nil; refreshStates[key] = state
+        var state = refreshStates[key] ?? RefreshStatus(); state.busy = true; refreshStates[key] = state
     }
     private func finishRefresh(_ key: String, failures: [ActionFailure], itemID: String? = nil) {
         var state = refreshStates[key] ?? RefreshStatus(); state.busy = false; state.error = failures.first?.reason
@@ -402,12 +505,12 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         }
     }
     func scan(sourceID: String? = nil) async {
-        guard !busy, !quotaBusy, estimateBusy.isEmpty else { return }; busy = true; activity = "同步记录"; beginRefresh("scan")
-        defer { busy = false; activity = ""; lastScan = Date() }
+        guard !installingUpdate, !busy, !quotaBusy, estimateBusy.isEmpty else { return }; busy = true; activity = "同步记录"; beginRefresh("scan")
+        defer { lastScan = Date(); busy = false; activity = "" }
         do {
             let rows: [Acknowledgement] = try await engine.call("sources.scan", params: sourceID.map { ["sourceId": $0] } ?? [:])
             let failures = rows.compactMap { row -> ActionFailure? in
-                guard let error = row.error else { return nil }
+                guard let error = row.error ?? (row.partial == true ? row.issues?.map { ($0.path.map { $0 + " · " } ?? "") + $0.message }.joined(separator: "；") ?? "部分记录需要处理" : nil) else { return nil }
                 return ActionFailure(action: "scan", itemID: row.id, name: row.name ?? settings.sources.first { $0.id == row.id }?.name ?? "数据源", reason: error)
             }
             let loaded = await reload()
@@ -415,15 +518,18 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         } catch { message = error.localizedDescription; finishRefresh("scan", failures: [ActionFailure(action: "scan", itemID: sourceID, name: "同步记录", reason: error.localizedDescription)], itemID: sourceID) }
     }
     func refreshQuotas(accountID: String? = nil, dueOnly: Bool = false) async {
-        guard !quotaBusy, !busy, estimateBusy.isEmpty, hasQuotaAccounts else { return }
+        guard !installingUpdate, !quotaBusy, !busy, estimateBusy.isEmpty, hasQuotaAccounts else { return }
         quotaBusy = true; quotaError = nil; beginRefresh("quotas")
-        quotaNextAttempt = Date().addingTimeInterval(5)
-        defer { quotaBusy = false }
+        defer { quotaBusy = false; invalidateQuotaSchedule() }
         do {
             var params: [String: Any] = ["dueOnly": dueOnly]
             if let accountID { params["accountId"] = accountID }
             let result: [Quota] = try await engine.call("quotas.refresh", params: params)
-            if dueOnly && result.isEmpty { finishRefresh("quotas", failures: []); return }
+            if dueOnly && result.isEmpty { refreshStates["quotas"]?.busy = false; return }
+            if result.contains(where: { q in q.identity.map { id in settings.accounts.contains { $0.id == q.accountId && $0.provider == q.provider && $0.identityKey != id.key } } ?? false }) {
+                let before = settings
+                if let saved: Settings = try? await engine.call("settings.get"), settings == before { let clean = settingsDraft == before; settings = saved; if clean { settingsDraft = saved } }
+            }
             var failures = result.compactMap { row -> ActionFailure? in
                 guard let error = row.error else { return nil }
                 return ActionFailure(action: "quotas", itemID: row.accountId, name: row.name, reason: error)
@@ -434,25 +540,36 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             finishRefresh("quotas", failures: failures + (loaded ? [] : [ActionFailure(action: "quotas", name: "概览", reason: message ?? "读取失败")]), itemID: accountID)
         } catch { quotaError = error.localizedDescription; finishRefresh("quotas", failures: [ActionFailure(action: "quotas", itemID: accountID, name: "账户限额", reason: error.localizedDescription)], itemID: accountID) }
     }
-    func sampleHosts(hostID: String? = nil) async {
-        guard !serverBusy, !settings.hosts.isEmpty else { return }; serverBusy = true; beginRefresh("hosts")
-        defer { serverBusy = false; lastMetrics = Date() }
-        do {
-            let results: [HostResult] = try await metricsEngine.call("hosts.sample", params: hostID.map { ["hostId": $0] } ?? [:])
-            let next = results.map { result in
-                if result.error != nil, let old = hosts.first(where: { $0.id == result.id }) {
-                    return HostResult(id: result.id, name: result.name, sample: result.sample ?? old.sample, error: result.error)
-                }
-                return result
+    private var hostVersions: [String: (String, UInt64)] = [:]
+    func acceptHostSamples(_ rows: [HostResult]) {
+        var next = Dictionary(uniqueKeysWithValues: hosts.map { ($0.id, $0) })
+        for var row in rows {
+            if let session = row.sampleSession, let version = row.sampleVersion {
+                if let old = hostVersions[row.id], old.0 == session, old.1 >= version { continue }
+                hostVersions[row.id] = (session, version)
             }
-            hosts = hostID == nil ? next : hosts.filter { $0.id != hostID } + next
+            if row.error != nil, row.sample == nil { row.sample = next[row.id]?.sample }
+            next[row.id] = row
+        }
+        let ids = Set(settings.monitoredHosts.map(\.id))
+        hostVersions = hostVersions.filter { ids.contains($0.key) }
+        let ordered = settings.monitoredHosts.compactMap { next[$0.id] }
+        if hosts != ordered { hosts = ordered }
+    }
+    func sampleHosts(hostID: String? = nil) async {
+        guard !installingUpdate, !serverBusy, settings.monitoredHosts.contains(where: \.enabled) else { return }; serverBusy = true; beginRefresh("hosts")
+        defer { lastMetrics = Date(); serverBusy = false }
+        do {
+            let batch: HostSampleBatch = try await metricsEngine.call("hosts.sample", params: ["stream": true].merging(hostID.map { ["hostId": $0] } ?? [:]) { _, new in new }, onHostSample: { [weak self] row in Task { @MainActor in self?.acceptHostSamples([row]) } })
+            let results = batch.rows
+            acceptHostSamples(results)
             if !results.contains(where: { $0.error != nil }), let lastHostError {
                 if message == lastHostError { message = nil }; self.lastHostError = nil
             }
             finishRefresh("hosts", failures: results.compactMap { row in row.error.map { ActionFailure(action: "hosts", itemID: row.id, name: row.name, reason: $0) } }, itemID: hostID)
         } catch {
             let failure = error.localizedDescription; lastHostError = failure; message = failure
-            hosts = settings.hosts.map { host in
+            hosts = settings.monitoredHosts.map { host in
                 let previous = hosts.first { $0.id == host.id }
                 return HostResult(id: host.id, name: host.name.isEmpty ? host.target : host.name, sample: previous?.sample, error: host.enabled && (hostID == nil || hostID == host.id) ? failure : previous?.error)
             }
@@ -571,7 +688,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             message = "已保存"
             if refreshDashboard { Task {
                 if historyConfigurationChanged { await reload() }
-                if hasQuotaAccounts && quotaNextAttempt == nil { await refreshQuotas(dueOnly: true) }
+                if quotaConfigurationChanged && hasQuotaAccounts { await refreshQuotas(dueOnly: true) }
             } }
             return true
         } catch { message = error.localizedDescription; return false }
@@ -602,26 +719,88 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         do { let _: Acknowledgement = try await engine.call("prices.recalculate"); let loaded = await reload(); message = loaded ? "已按当前价格重算" : "重算已完成，概览读取失败，请重试查询"; return true }
         catch { message = error.localizedDescription; return false }
     }
+    var updateBlockers: [String] {
+        [(reloadTask != nil || filterRefresh != nil, "概览查询"), (quotaScheduleTask != nil, "刷新调度读取"), (busy, activity.isEmpty ? "记录同步 / 价格操作" : activity), (quotaBusy, "Agent 限额查询"), (serverBusy, "服务器采样"), (settingsSaving, "保存配置"), (repricing, "重算价格"), (!estimateBusy.isEmpty, "采样任务"), (networkBusy, "网络检测"), (sessionBusy, "会话状态读取"), (accountStatusBusy, "账户状态检查"), (deploymentSyncTask != nil, "唤醒配置同步"), (!antigravityRefreshTasks.isEmpty, "Antigravity 登录后刷新"), (agyLoginActive, "Antigravity 登录授权"), (UserDefaults.standard.string(forKey: "codexLogin.operation") != nil, "Codex 登录授权（可在账户页继续或取消）")].filter { $0.0 }.map { $0.1 }
+    }
     private var resetConfirmations = Set<String>()
+    private var schedulingEnabled = false
+    private var stopped = false
+    private var quotaScheduleKnown = false
+    private var quotaScheduleRevision = 0
+    private var quotaScheduleTask: Task<Void, Never>?
+    private func invalidateQuotaSchedule() {
+        quotaScheduleRevision += 1; quotaScheduleKnown = false; scheduleRefreshes()
+    }
+    private func readQuotaSchedule() {
+        guard quotaScheduleTask == nil, !stopped else { return }
+        let revision = quotaScheduleRevision
+        quotaScheduleTask = Task { @MainActor in
+            defer { quotaScheduleTask = nil; scheduleRefreshes() }
+            do {
+                let schedule: QuotaSchedule = try await engine.call("quotas.schedule")
+                guard revision == quotaScheduleRevision, !Task.isCancelled else { return }
+                quotaNextAttempt = schedule.nextDueAt.map { max(Date().addingTimeInterval(1), Date(timeIntervalSince1970: $0)) }
+                quotaScheduleKnown = true
+            } catch {
+                if revision == quotaScheduleRevision { quotaNextAttempt = Date().addingTimeInterval(30); quotaScheduleKnown = true }
+            }
+        }
+    }
+    private var historyBlocked: Bool { busy || quotaBusy || !estimateBusy.isEmpty }
+    private var metricsDeadline: Date { lastMetrics.addingTimeInterval(Double(serverTabVisible ? settings.foregroundInterval : settings.serverRefreshSeconds)) }
+    private var pendingResets: [(Quota, Double, String)] {
+        dashboard.quotas.flatMap { quota in quota.windows.compactMap { window in
+            guard let reset = window.resetsAt else { return nil }
+            let key = quota.id + ":" + String(reset)
+            return resetConfirmations.contains(key) ? nil : (quota, reset, key)
+        } }
+    }
+    private func scheduleRefreshes() {
+        timer?.invalidate(); timer = nil
+        guard schedulingEnabled, settingsLoaded, !stopped, !installingUpdate, !settingsSaving, !repricing else { return }
+        let now = Date()
+        if lastScan > now { lastScan = .distantPast }
+        if lastMetrics > now { lastMetrics = .distantPast }
+        if lastNetworkAttempt > now { lastNetworkAttempt = .distantPast }
+        if lastSessionRead > now { lastSessionRead = .distantPast }
+        if !quotaScheduleKnown { readQuotaSchedule() }
+        var deadlines: [Date] = []
+        if panelVisible, !networkBusy { deadlines.append(lastNetworkAttempt.addingTimeInterval(300)) }
+        if !sessionBusy { deadlines.append(lastSessionRead.addingTimeInterval(5)) }
+        if !serverBusy, settings.monitoredHosts.contains(where: \.enabled) { deadlines.append(metricsDeadline) }
+        if !historyBlocked {
+            deadlines.append(lastScan.addingTimeInterval(Double(settings.historyInterval)))
+            if quotaScheduleKnown, let quotaNextAttempt { deadlines.append(quotaNextAttempt) }
+            deadlines += pendingResets.map { Date(timeIntervalSince1970: $0.1) }
+        }
+        guard let next = deadlines.min() else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: max(0.01, next.timeIntervalSinceNow), repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+    }
+    func resumeAfterWake() { invalidateQuotaSchedule(); tick() }
     func tick() {
-        guard !installingUpdate, !settingsSaving, !repricing else { return }
-        if panelVisible, !networkBusy, Date().timeIntervalSince(lastNetworkAttempt) >= 300 { Task { await testNetwork(force: false) } }
-        if !sessionBusy, Date().timeIntervalSince(lastSessionRead) >= 5 { Task { await refreshSessions() } }
-        
-        if !serverBusy, !settings.hosts.isEmpty, Date().timeIntervalSince(lastMetrics) > Double(panelVisible && serverTabVisible ? 2 : settings.serverRefreshSeconds) {
-            Task { await sampleHosts() }
+        guard !stopped, !installingUpdate, !settingsSaving, !repricing else { return }
+        defer { scheduleRefreshes() }
+        let now = Date()
+        if panelVisible, !networkBusy, now.timeIntervalSince(lastNetworkAttempt) >= 300 { Task { await testNetwork(force: false) } }
+        if !sessionBusy, now.timeIntervalSince(lastSessionRead) >= 5 { Task { await refreshSessions() } }
+        if !serverBusy, settings.monitoredHosts.contains(where: \.enabled), now >= metricsDeadline { Task { await sampleHosts() } }
+        guard !historyBlocked else { return }
+        if let (quota, _, key) = pendingResets.first(where: { $0.1 <= now.timeIntervalSince1970 }) {
+            resetConfirmations.insert(key); Task { await refreshQuotas(accountID: quota.accountId) }; return
         }
-        if !busy, !quotaBusy, estimateBusy.isEmpty {
-            for quota in dashboard.quotas { for window in quota.windows {
-                if let reset = window.resetsAt, reset <= Date().timeIntervalSince1970 {
-                    let key = quota.id + ":" + String(reset)
-                    if resetConfirmations.insert(key).inserted { Task { await refreshQuotas(accountID: quota.accountId) }; return }
-                }
-            } }
+        if now.timeIntervalSince(lastScan) >= Double(settings.historyInterval) { Task { await scan() }; return }
+        if quotaScheduleKnown, let next = quotaNextAttempt, now >= next {
+            quotaNextAttempt = nil; Task { await refreshQuotas(dueOnly: true) }
         }
-        if hasQuotaAccounts, !quotaBusy, quotaNextAttempt == nil || Date() >= quotaNextAttempt! { Task { await refreshQuotas(dueOnly: true) } }
-        guard !busy else { return }
-        if Date().timeIntervalSince(lastScan) > Double(settings.refreshSeconds) { Task { await scan() }; return }
+    }
+    func stop() {
+        stopped = true; schedulingEnabled = false; timer?.invalidate(); timer = nil
+        filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
+        deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel()
+        for task in antigravityRefreshTasks.values { task.cancel() }
+        priceCatalog.stop(); accountEngine.stop(); engine.stop(); metricsEngine.stop(); networkEngine.stop()
     }
     var menuText: String {
         switch settings.menuMetric {

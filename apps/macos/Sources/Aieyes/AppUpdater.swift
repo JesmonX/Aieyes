@@ -33,6 +33,10 @@ import OSLog
     }
     var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版本" }
     var busy: Bool { ["checking", "downloading", "extracting", "installing", "preparing"].contains(phase) }
+    func preparationStatus(_ text: String) { message = text }
+    var preparationError: String?
+    var editorPreparations: [UUID: (order: Double, prepare: () async -> Bool)] = [:]
+    var operationBlockers: [UUID: String] = [:]
     var prepareInstallation: ((Bool) async -> Bool)?
     var finishedInstallationAttempt: (() -> Void)?
     private let logger = Logger(subsystem: "app.aieyes.desktop", category: "updater")
@@ -103,12 +107,12 @@ import OSLog
     }
     func install() {
         guard let choice, !busy else { return }
-        phase = "preparing"; message = "正在准备更新…"
+        phase = "preparing"; preparationError = nil; message = "正在准备更新…"
         Task {
-            guard await prepareInstallation?(readyToInstall) ?? true else { phase = "available"; message = "请先完成或保存当前操作，再点击更新。"; return }
+            guard await prepareInstallation?(readyToInstall) ?? true else { phase = "available"; message = preparationError ?? "已取消更新准备；后台刷新已恢复。"; finishedInstallationAttempt?(); return }
             if !readyToInstall, let feed = originalFeed {
                 do { try await transport.start(feed: feed) }
-                catch { phase = "available"; message = error.localizedDescription; return }
+                catch { phase = "available"; message = error.localizedDescription; finishedInstallationAttempt?(); return }
             }
             self.choice = nil; phase = readyToInstall ? "installing" : "downloading"; message = readyToInstall ? "正在安装并重启…" : "正在下载更新…"; choice(.install)
         }
@@ -125,7 +129,7 @@ import OSLog
         deadline?.cancel(); checkTask?.cancel(); checkTask = nil
         let cancel = cancellation; cancellation = nil
         transport.stop(); cancel?()
-        phase = failed ? "error" : "idle"; self.message = message
+        phase = failed ? "error" : "idle"; self.message = message; finishedInstallationAttempt?()
     }
     private func finishCheck() { deadline?.cancel(); deadline = nil; cancellation = nil }
     func feedURLString(for updater: SPUUpdater) -> String? {
@@ -189,7 +193,7 @@ import OSLog
     func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {
         finishCheck()
         guard interruptedMessage == nil else { acknowledgement(); return }
-        phase = "error"; message = transport.lastFailure ?? error.localizedDescription; acknowledgement()
+        phase = "error"; message = transport.lastFailure ?? error.localizedDescription; finishedInstallationAttempt?(); acknowledgement()
     }
     func showDownloadInitiated(cancellation: @escaping () -> Void) {
         guard interruptedMessage == nil else { cancellation(); return }
@@ -204,7 +208,7 @@ import OSLog
         readyToInstall = true
         Task {
             if await prepareInstallation?(true) ?? true { phase = "installing"; message = "正在安装并重启…"; reply(.install) }
-            else { phase = "available"; message = "更新已就绪，请先完成或保存当前操作。"; choice = reply }
+            else { phase = "available"; message = preparationError ?? "已取消更新准备；后台刷新已恢复。"; finishedInstallationAttempt?(); choice = reply }
         }
     }
     func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool, retryTerminatingApplication: @escaping () -> Void) {
@@ -277,5 +281,56 @@ struct UpdateMenuButton: View {
         }.help(updater.hasUpdate ? "发现新版本 · 查看更新" : "检查更新")
             .accessibilityLabel(updater.hasUpdate ? "发现新版本，查看更新" : "检查更新")
             .disabled(updater.phase == "checking")
+    }
+}
+
+@MainActor func updateChoice(_ title: String, message: String, buttons: [String]) async -> Int {
+    let alert = NSAlert(); alert.messageText = title; alert.informativeText = message
+    for title in buttons { alert.addButton(withTitle: title) }
+    if var window = NSApp.keyWindow ?? NSApp.mainWindow {
+        while let sheet = window.attachedSheet { window = sheet }
+        let response: NSApplication.ModalResponse = await withCheckedContinuation { continuation in alert.beginSheetModal(for: window) { continuation.resume(returning: $0) } }
+        return response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+    }
+    return alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+}
+private struct UpdateDraftGuard: ViewModifier {
+    let title: String, snapshot: String
+    let dirty: Bool, saving: Bool
+    var save: () async -> Bool
+    var discard: () -> Void
+    @State private var id = UUID()
+    @State private var order = ProcessInfo.processInfo.systemUptime
+    private func register() {
+        AppUpdater.shared.editorPreparations[id] = (order, {
+            guard !saving else { AppUpdater.shared.preparationError = title + "正在保存，请稍后重试"; return false }
+            if !dirty { discard(); return true }
+            switch await updateChoice("更新前保存“" + title + "”中的更改？", message: "保存失败时保留输入，并回到编辑器显示具体错误。", buttons: ["保存并更新", "放弃更改并更新", "取消"]) {
+            case 0:
+                let saved = await save()
+                if !saved { AppUpdater.shared.preparationError = title + "保存失败，请检查编辑器中的错误提示" }
+                return saved
+            case 1: discard(); return true
+            default: return false
+            }
+        })
+    }
+    func body(content: Content) -> some View {
+        content.updateOperation(title + "处理中", active: saving).onAppear { register() }.onChange(of: snapshot) { _,_ in register() }.onChange(of: dirty) { _,_ in register() }.onChange(of: saving) { _,_ in register() }.onDisappear { AppUpdater.shared.editorPreparations.removeValue(forKey: id) }
+    }
+}
+private struct UpdateOperation: ViewModifier {
+    let title: String
+    let active: Bool
+    @State private var id = UUID()
+    private func register() { AppUpdater.shared.operationBlockers[id] = active ? title : nil }
+    func body(content: Content) -> some View {
+        content.onAppear { register() }.onChange(of: active) { _,_ in register() }.onDisappear { AppUpdater.shared.operationBlockers.removeValue(forKey: id) }
+    }
+}
+extension View {
+    func updateOperation(_ title: String, active: Bool) -> some View { modifier(UpdateOperation(title: title, active: active)) }
+    func updateDraftGuard(_ title: String, snapshot: String, dirty: Bool, saving: Bool, save: @escaping () async -> Bool, discard: @escaping () -> Void) -> some View {
+        modifier(UpdateDraftGuard(title: title, snapshot: snapshot, dirty: dirty, saving: saving, save: save, discard: discard))
     }
 }

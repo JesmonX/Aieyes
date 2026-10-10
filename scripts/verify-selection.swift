@@ -2,6 +2,11 @@ import Foundation
 
 @main struct VerifySelection {
     static func main() {
+        let files: Set<String> = ["/", "/data", "/snap/x/1", "/run", "/boot/efi"]
+        precondition(MonitorSelection.selected([], group: "filesystems", available: files) == ["/", "/data"])
+        let explicit = MonitorSelection.write([], group: "filesystems", selected: files, all: true)
+        precondition(explicit == ["filesystems:__all__"])
+        precondition(MonitorSelection.selected(explicit, group: "filesystems", available: files) == files)
         let all: Set<String> = ["eth0", "eth1"]
         precondition(MonitorSelection.selected([], group: "network", available: all) == all)
         let cleared = MonitorSelection.write(["gpu:0"], group: "network", selected: [], all: false)

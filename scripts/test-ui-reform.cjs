@@ -54,8 +54,8 @@ function fixture(){
    const initial=await page.locator('#activity').textContent();assert.match(initial,/记录/);
    await page.evaluate(()=>{reform.waitScan=true;window.pendingScan=scan();});assert.match(await page.locator('#activity').textContent(),/同步记录中/);await page.locator(trigger).click();assert.equal(await page.locator(menu+' [data-refresh=scan]').isDisabled(),true);await page.keyboard.press('Escape');
    await page.evaluate(async()=>{reform.waitScan=false;reform.releaseScan();await window.pendingScan;});assert.equal(await page.locator('#activity').textContent(),initial,'Success uses the dashboard timestamp, not completion time');
-   await page.evaluate(async()=>{reform.failures=[{id:'s1',error:'来源一失败'},{id:'s2',error:'来源二失败'}];await scan();});assert.equal(await page.locator('.error-row').count(),2);assert.match(await page.locator('#activity').textContent(),/部分失败/);
-   await page.evaluate(()=>{reform.failures=[{id:'s2',error:'来源二失败'}];});await page.locator('[data-retry=scan]').first().click();await page.waitForFunction(()=>!state.busy);assert.equal(await page.locator('.error-row').count(),1);assert.equal(await page.evaluate(()=>reform.calls.filter(c=>c.method==='sources.scan').at(-1).params.sourceId),'s1');
+   await page.evaluate(async()=>{reform.failures=[{id:'s1',error:'来源一失败'},{id:'s2',error:'来源二失败'}];await scan();});await page.locator('[data-refresh-status=scan]').click();assert.equal(await page.locator('.error-row').count(),2);assert.match(await page.locator('#activity').textContent(),/部分失败/);
+   await page.evaluate(()=>{reform.failures=[{id:'s2',error:'来源二失败'}];});await page.locator('[data-status-retry]').first().click();await page.waitForFunction(()=>!state.busy);await page.locator('[data-refresh-status=scan]').click();assert.equal(await page.locator('.error-row').count(),1);assert.equal(await page.evaluate(()=>reform.calls.filter(c=>c.method==='sources.scan').at(-1).params.sourceId),'s1');
    await page.evaluate(async()=>{reform.failures=[];await scan();});assert.equal(await page.locator('.error-row').count(),0);
    // Shared RPC feedback must survive a filtered dashboard invalidation and retries.
    await page.evaluate(async()=>{
@@ -75,12 +75,15 @@ function fixture(){
    assert.match(await page.locator('#activity').textContent(),/同步记录中/,'Data invalidation cannot complete a newer refresh');
    await page.evaluate(async()=>{
     await reformEmit('desktop:refresh-status',{key:'scan',busy:false,success:Date.now(),failures:[]});
+    state.settings.hosts.push({...state.settings.hosts[0],id:'h2'});
     state.hosts=[{id:'h1',sample:{timestamp:reform.stamp}},{id:'h2',sample:{timestamp:reform.stamp}}];
     await reformEmit('desktop:refresh-status',{key:'hosts',busy:false,itemId:'h1',success:Date.now(),failures:[]});
     await reformEmit('desktop:hosts',[{id:'h1',sample:{timestamp:reform.stamp+60}}]);
    });
    assert.equal(await page.evaluate(()=>state.hosts.find(h=>h.id==='h1').sample.timestamp),1791260460,'Both windows receive host samples');
-   assert.equal(await page.evaluate(()=>state.hosts.length),2,'Targeted host samples retain the other hosts');
+   assert.equal(await page.evaluate(()=>state.hosts.length),2,'Targeted host samples retain the other configured hosts');
+   await page.evaluate(()=>{state.settings.hosts=state.settings.hosts.filter(h=>h.id!=='h2');});
+   await page.keyboard.press('Escape');
    await page.evaluate(async()=>{state.model='missing';await loadDashboard();});assert.equal(await page.locator('.stat').count(),0);if(panel)await page.locator('.panel-filter-summary > summary').click();assert.equal(await page.getByRole('button',{name:'清除全部',exact:true}).count(),1);await page.getByRole('button',{name:'清除全部',exact:true}).click();await page.waitForFunction(()=>state.dashboard.summary.total>0);
    if(panel){
     assert.equal(await page.locator('[data-agent-detail=panel-trend]').evaluate(el=>el.open),false);

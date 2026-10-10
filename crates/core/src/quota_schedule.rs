@@ -14,6 +14,48 @@ fn due(last: Option<i64>, now: i64, seconds: i64) -> bool {
     last.is_none_or(|last| now < last || now - last >= seconds)
 }
 impl Engine {
+    pub(crate) fn quota_schedule(&self) -> Result<Value> {
+        let settings = self.store.settings()?;
+        let now = chrono::Utc::now().timestamp();
+        let mut accounts = vec![];
+        for account in settings
+            .accounts
+            .iter()
+            .filter(|a| a.quota_enabled && !a.archived)
+        {
+            if !settings.sources.iter().any(|s| {
+                s.enabled
+                    && account.uses_source(s)
+                    && s.host_id
+                        .as_ref()
+                        .is_none_or(|id| settings.hosts.iter().any(|h| h.id == *id && h.enabled))
+            }) {
+                continue;
+            }
+            let key = crate::accounts::key(account);
+            let last: Option<i64> = self
+                .store
+                .db
+                .query_row(
+                    "SELECT CAST(value AS INTEGER) FROM kv WHERE key=?1",
+                    [format!("quota-attempt:{key}")],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let seconds = interval(account, settings.refresh_seconds);
+            let next = if due(last, now, seconds) {
+                now
+            } else {
+                last.unwrap().saturating_add(seconds)
+            };
+            accounts.push(json!({"accountKey":key,"nextDueAt":next,"intervalSeconds":seconds}));
+        }
+        let next = accounts
+            .iter()
+            .filter_map(|a| a["nextDueAt"].as_i64())
+            .min();
+        Ok(json!({"generatedAt":now,"nextDueAt":next,"accounts":accounts}))
+    }
     pub(crate) fn refresh_scheduled_quotas(&mut self, params: Value) -> Result<Value> {
         let settings = self.store.settings()?;
         let automatic = params["dueOnly"].as_bool().unwrap_or(false);
@@ -140,11 +182,18 @@ mod tests {
                 .is_empty()
         );
         drop(lock);
+        let schedule = engine.call("quotas.schedule", json!({})).unwrap();
+        assert_eq!(schedule["accounts"].as_array().unwrap().len(), 2);
         let rows = engine
             .call("quotas.refresh", json!({"dueOnly":true}))
             .unwrap();
         assert_eq!(rows.as_array().unwrap().len(), 2);
         assert!(rows[0]["error"].is_string());
+        let schedule = engine.call("quotas.schedule", json!({})).unwrap();
+        let next = schedule["nextDueAt"].as_i64().unwrap();
+        let now = chrono::Utc::now().timestamp();
+        assert!((now + 28..=now + 30).contains(&next));
+        assert_eq!(schedule["accounts"][1]["intervalSeconds"], 600);
         assert!(
             engine
                 .call("quotas.refresh", json!({"dueOnly":true}))
@@ -187,6 +236,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        assert!(engine.call("quotas.schedule", json!({})).unwrap()["nextDueAt"].is_null());
         settings.accounts[0].quota_refresh_seconds = Some(29);
         assert!(engine.store.save_settings(&settings).is_err());
     }

@@ -39,6 +39,7 @@ struct QuotaOrderView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var keys: [String] = []
+    @State private var initialKeys: [String] = []
     @State private var saving = false
     @State private var error: String?
     var body: some View {
@@ -59,10 +60,14 @@ struct QuotaOrderView: View {
             }.frame(minHeight: 150, maxHeight: 300)
             if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
             HStack { Spacer(); Button("取消") { close() }.keyboardShortcut(.cancelAction); Button(saving ? "保存中…" : "保存顺序") {
-                saving = true
-                Task { do { try await model.saveQuotaOrder(keys); close() } catch { self.error = error.localizedDescription }; saving = false }
+                Task { await saveOrder() }
             }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }.disabled(saving)
-        }.aieyesAccent().font(AppFont.body).padding(24).frame(width: 440).onAppear { keys = model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key) }
+        }.aieyesAccent().font(AppFont.body).padding(24).frame(width: 440).onAppear { keys = model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key); initialKeys = keys }
+        .updateDraftGuard("账户顺序", snapshot: draftSnapshot(keys), dirty: keys != initialKeys, saving: saving, save: { await saveOrder() }, discard: close)
+    }
+    @discardableResult private func saveOrder() async -> Bool {
+        saving = true; error = nil; defer { saving = false }
+        do { try await model.saveQuotaOrder(keys); close(); return true } catch { self.error = error.localizedDescription; return false }
     }
     private func close() { if let onClose { onClose() } else { dismiss() } }
     private func move(_ key: String, _ offset: Int) {
@@ -77,6 +82,9 @@ struct PanelAccountsView: View {
     @AppStorage("panel.accounts.v2") private var stored = "{}"
     @State private var selected: [String: [String]] = [:]
     @State private var automatic = Set<String>()
+    @State private var initialDraft = ""
+    private var draft: String { PanelAccountPreference.encode(selected, automatic: automatic) }
+    private var snapshot: String { draftSnapshot(selected) + draftSnapshot(automatic.sorted()) }
     @FocusState private var cancelFocused: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -102,7 +110,8 @@ struct PanelAccountsView: View {
             }
             HStack { Spacer(); Button("取消", action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button("保存面板选择") { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.borderedProminent) }
         }.padding(24).font(AppFont.body).frame(width: 440, height: 480).aieyesAccent()
-            .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: "panel.accounts.v1") ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); cancelFocused = true }
+            .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: "panel.accounts.v1") ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); initialDraft = snapshot; cancelFocused = true }
+            .updateDraftGuard("面板显示账户", snapshot: snapshot, dirty: !initialDraft.isEmpty && initialDraft != snapshot, saving: false, save: { stored = draft; onClose(); return true }, discard: onClose)
     }
 }
 
