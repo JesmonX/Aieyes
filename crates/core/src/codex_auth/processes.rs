@@ -126,6 +126,49 @@ fn process_launch(pid: u32) -> Option<(Vec<String>, Vec<u8>)> {
     Some((args, std::fs::read(format!("/proc/{pid}/environ")).ok()?))
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn start_from_ticks(
+    stat: &str,
+    ticks_per_second: u64,
+    boot_elapsed: Duration,
+    now: std::time::SystemTime,
+) -> Option<std::time::SystemTime> {
+    if ticks_per_second == 0 {
+        return None;
+    }
+    // Field 22 follows 19 fields after comm, whose name can contain spaces and ')'.
+    let ticks: u64 = stat
+        .rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()?;
+    let started =
+        Duration::from_secs(ticks / ticks_per_second).checked_add(Duration::from_nanos(
+            (ticks % ticks_per_second).checked_mul(1_000_000_000)? / ticks_per_second,
+        ))?;
+    now.checked_sub(boot_elapsed.checked_sub(started)?)
+}
+
+#[cfg(target_os = "linux")]
+fn process_started(pid: u32) -> Option<std::time::SystemTime> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    let mut boot: libc::timespec = unsafe { std::mem::zeroed() };
+    if ticks <= 0 || unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut boot) } != 0 {
+        return None;
+    }
+    // ps lstart loses fractional seconds; combining rounded boot/start times can
+    // make a pre-launch profile appear newer than the process on Linux.
+    start_from_ticks(
+        &stat,
+        ticks as u64,
+        Duration::new(boot.tv_sec.try_into().ok()?, boot.tv_nsec.try_into().ok()?),
+        std::time::SystemTime::now(),
+    )
+}
+
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
 fn process_launch(_pid: u32) -> Option<(Vec<String>, Vec<u8>)> {
     None
@@ -235,14 +278,19 @@ fn observe(with_home: bool) -> Result<Vec<Observation>> {
                 home = environment_home(&env);
             }
             if name == "codex" && !with_home {
-                use chrono::TimeZone;
-                let started = chrono::NaiveDateTime::parse_from_str(
-                    &fields[3..8].join(" "),
-                    "%a %b %e %H:%M:%S %Y",
-                )
-                .ok()
-                .and_then(|time| chrono::Local.from_local_datetime(&time).single())
-                .map(std::time::SystemTime::from);
+                #[cfg(target_os = "linux")]
+                let started = process_started(pid);
+                #[cfg(not(target_os = "linux"))]
+                let started = {
+                    use chrono::TimeZone;
+                    chrono::NaiveDateTime::parse_from_str(
+                        &fields[3..8].join(" "),
+                        "%a %b %e %H:%M:%S %Y",
+                    )
+                    .ok()
+                    .and_then(|time| chrono::Local.from_local_datetime(&time).single())
+                    .map(std::time::SystemTime::from)
+                };
                 auth_usage = process_auth::inspect(&args, &env, started);
             }
         }
@@ -577,6 +625,18 @@ fn terminate(pid: u32) -> Result<()> {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    #[test]
+    fn linux_start_ticks_preserve_fractional_seconds_and_reject_invalid_data() {
+        let stat = format!("123 (fixture ) with spaces) S {}1250", "0 ".repeat(18));
+        let now = std::time::SystemTime::UNIX_EPOCH + Duration::from_millis(1_000_100);
+        assert_eq!(
+            start_from_ticks(&stat, 100, Duration::from_millis(13_250), now),
+            Some(std::time::SystemTime::UNIX_EPOCH + Duration::from_millis(999_350))
+        );
+        assert!(start_from_ticks(&stat, 0, Duration::from_secs(20), now).is_none());
+        assert!(start_from_ticks(&stat, 100, Duration::from_secs(12), now).is_none());
+        assert!(start_from_ticks("invalid", 100, Duration::from_secs(20), now).is_none());
+    }
     #[cfg(unix)]
     #[test]
     fn independent_api_tree_is_preserved_and_shared_parent_is_blocked() {
@@ -642,7 +702,7 @@ mod tests {
         let home = directory.path().canonicalize().unwrap();
         std::fs::write(
             home.join("fixture.c"),
-            "#include <unistd.h>\nint main(void) { sleep(30); return 0; }\n",
+            "#include <stdio.h>\n#include <unistd.h>\nint main(void) { puts(\"ready\"); fflush(stdout); sleep(30); return 0; }\n",
         )
         .unwrap();
         let executable = home.join("codex");
@@ -660,16 +720,25 @@ mod tests {
         let mut api = Command::new(&executable)
             .args(["--profile", "api"])
             .env("CODEX_HOME", &home)
+            .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
         let mut login = Command::new(&executable)
             .args(["--profile=login"])
             .env("CODEX_HOME", &home)
+            .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
         let api_id = api.id();
         let login_id = login.id();
         let result = (|| -> Result<()> {
+            use std::io::BufRead;
+            for child in [&mut api, &mut login] {
+                let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+                let mut ready = String::new();
+                output.read_line(&mut ready)?;
+                ensure!(ready == "ready\n", "fixture did not finish starting");
+            }
             let (close, preserved) = review_for_switch()?;
             ensure!(preserved.iter().any(|p| p.pid == api_id));
             ensure!(!close.iter().any(|p| p.pid == api_id));

@@ -110,6 +110,13 @@ jobs:
           node --check apps/desktop/web/updates.js
           node --check apps/desktop/web/wakeups.js
           node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs
+      - name: Linux process identification regression
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for attempt in {1..10}; do
+            cargo test -p aieyes-core --lib --locked native_profile_switch_preserves_api_fixture_and_closes_login_fixture
+          done
       - name: Desktop Rust tests
         if: runner.os != 'macOS'
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
