@@ -287,7 +287,7 @@ impl Engine {
         );
         if method == "profiles.bind" {
             let profile = params["profileId"].as_str().context("请选择账号档案")?;
-            let info = backend(&source, &settings, "list", &json!({}))?;
+            let info = backend(&source, &settings, "profiles.list", &json!({}))?;
             let p = info["profiles"]
                 .as_array()
                 .and_then(|rows| rows.iter().find(|p| p["id"] == profile))
@@ -323,7 +323,7 @@ impl Engine {
                     ensure!(key == identity, "只能连接同一用户与工作区的账户");
                 } else if let Some(old) = a.profile_refs().first() {
                     let (old_source, old_profile) = source_for_profile(&settings, old)?;
-                    let old_info = backend(old_source, &settings, "list", &json!({}))?;
+                    let old_info = backend(old_source, &settings, "profiles.list", &json!({}))?;
                     ensure!(
                         old_info["profiles"]
                             .as_array()

@@ -44,8 +44,12 @@ function installFixture(data) {
         const shot=async name=>{assert(!/TypeError|ReferenceError|SyntaxError/.test(await page.locator('body').innerText()),'no caught runtime errors in rendered UI');return page.screenshot({path:path.join(out,`${scenario}-${theme}-${name}.png`),animations:'disabled'});};
         await shot('overview');
         assert.equal(await page.locator('[data-copy-value]').count(),0,'model rows have no copy buttons');
-        for(const bar of await page.locator('.resource-bar,.track').all())assert.equal(await bar.evaluate(el=>getComputedStyle(el).height),'4px');
-        for(const value of await page.locator('.stat-value').all())assert.equal(await value.evaluate(el=>getComputedStyle(el).fontSize),'24px');
+        const sizes=await page.evaluate(()=>({
+          bars:[...document.querySelectorAll('.resource-bar,.track')].map(el=>getComputedStyle(el).height),
+          values:[...document.querySelectorAll('.stat-value')].map(el=>getComputedStyle(el).fontSize),
+        }));
+        for(const height of sizes.bars)assert.equal(height,'4px');
+        for(const fontSize of sizes.values)assert.equal(fontSize,'24px');
         if(scenario==='single'&&!dark){
           const width=await page.evaluate(()=>innerWidth);
           const initial=await page.locator('aside').evaluate(el=>el.getBoundingClientRect().width);

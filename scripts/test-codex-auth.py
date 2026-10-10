@@ -65,6 +65,14 @@ class CoordinatorTests(unittest.TestCase):
         self.assertNotIn('refresh_token', json.dumps(result))
         self.assertNotIn('access_token', json.dumps(result))
 
+    def test_profile_binding_list_does_not_launch_cli_or_query_processes(self):
+        with patch.object(a.subprocess, 'check_output', side_effect=AssertionError('profiles must not launch CLI')), patch.object(a, 'running', side_effect=AssertionError('profiles must not query processes')):
+            result = self.call('profiles.list')
+        self.assertEqual({p['id'] for p in result['profiles']}, {'one', 'two'})
+        self.assertEqual(result['profiles'][0]['identity']['key'], a.identity(self.one)['key'])
+        self.assertNotIn('processes', result)
+        self.assertNotIn('access_token', json.dumps(result))
+
     def test_lock_permissions_and_identity(self):
         with a.Lock(self.root):
             with self.assertRaises(ValueError):

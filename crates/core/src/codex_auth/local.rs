@@ -107,12 +107,17 @@ fn file_mode(root: &Path) -> Result<()> {
     );
     Ok(())
 }
-fn inspect(loc: &Location, root: &Path) -> Result<Value> {
+fn inspect(loc: &Location, root: &Path, runtime: bool) -> Result<Value> {
     let active = current(root);
     let rows = files::profiles(root)?.into_iter().map(|p| {
         let is_current = active.as_deref() == Some(&p.identity.key);
         json!({"id":p.id,"name":p.name,"identity":p.identity,"updatedAt":p.updated_at,"current":is_current})
     }).collect::<Vec<_>>();
+    if !runtime {
+        return Ok(
+            json!({"protocolVersion":1,"path":root,"storageMode":mode(root)?,"currentIdentity":active,"profiles":rows}),
+        );
+    }
     let mut cmd = crate::process::cli_command(&crate::quota::resolve_codex(&loc.binary));
     cmd.arg("--version");
     let version = crate::process::run(cmd, vec![], Duration::from_secs(5))
@@ -442,7 +447,8 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             Ok(info)
         }
         "status" => status(&root),
-        "inspect" | "list" => inspect(loc, &root),
+        "inspect" | "list" => inspect(loc, &root, true),
+        "profiles.list" => inspect(loc, &root, false),
         "model.list" => {
             let _lock = files::lock(&root)?;
             file_mode(&root)?;

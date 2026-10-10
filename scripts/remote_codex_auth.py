@@ -757,10 +757,12 @@ def call(request):
                 available = False
             rows.append(dict(id=p['id'], identityKey=p['identity']['key'], credential=available))
         return dict(storageMode=mode(root), currentIdentity=active_key, currentCredential=active_key is not None, profiles=rows)
-    if method in ('inspect', 'list'):
+    if method in ('inspect', 'list', 'profiles.list'):
         rows = profiles(root)
         for p in rows:
             p['current'] = active(root) == p['identity']['key']
+        if method == 'profiles.list':
+            return dict(protocolVersion=1, path=str(root), storageMode=mode(root), currentIdentity=active(root), profiles=rows)
         try:
             version = subprocess.check_output([os.path.expanduser(loc.get('binary') or 'codex'), '--version'], timeout=5, stderr=subprocess.DEVNULL).decode().strip()[:80]
         except (OSError, subprocess.SubprocessError):
