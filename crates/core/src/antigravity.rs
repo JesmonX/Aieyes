@@ -181,12 +181,16 @@ fn executor_models(db: &Connection) -> Result<BTreeMap<u64, String>> {
     let mut query = db.prepare("SELECT idx,data FROM executor_metadata")?;
     for row in query.query_map([], |r| Ok((r.get::<_, u64>(0)?, r.get::<_, Vec<u8>>(1)?)))? {
         let (index, raw) = row?;
-        let envelope = fields(&raw)?;
-        let config = data(&envelope, 10).map(fields).transpose()?.unwrap_or_default();
-        let variant = data(&config, 1).map(fields).transpose()?.unwrap_or_default();
-        if let Some(name) = text(&variant, 28) {
-            models.insert(index, name);
-        }
+        // Executor metadata is optional; an incompatible version must not
+        // discard otherwise valid usage statistics.
+        let Some(name) = fields(&raw).ok().and_then(|envelope| {
+            let config = fields(data(&envelope, 10)?).ok()?;
+            let variant = fields(data(&config, 1)?).ok()?;
+            text(&variant, 28)
+        }) else {
+            continue;
+        };
+        models.insert(index, name);
     }
     Ok(models)
 }
