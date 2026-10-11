@@ -1,6 +1,9 @@
 import contextlib
 import io
 import json
+import sqlite3
+import subprocess
+import sys
 import pathlib
 import runpy
 import tempfile
@@ -85,6 +88,72 @@ class Collectors(unittest.TestCase):
         self.assertEqual(sample["filesystems"][0]["available"], 300 * 4096)
         self.assertEqual(sample["filesystems"][0]["inodesFree"], 120)
         self.assertEqual(sample["monotonic"] - sample["previous"]["monotonic"], 0.25)
+
+
+    def test_antigravity_unknown_model_does_not_block_ssh_cursor(self):
+        def varint(n):
+            output = []
+            while n >= 128:
+                output.append((n & 127) | 128)
+                n >>= 7
+            return bytes(output + [n])
+        def num(field, value):
+            return varint(field << 3) + varint(value)
+        def blob(field, value):
+            return varint((field << 3) | 2) + varint(len(value)) + value
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            conversations = root / "conversations"
+            conversations.mkdir()
+            path = conversations / "fixture.db"
+            db = sqlite3.connect(path)
+            db.executescript("""
+                CREATE TABLE trajectory_meta(cascade_id TEXT);
+                INSERT INTO trajectory_meta VALUES('session');
+                CREATE TABLE gen_metadata(data BLOB);
+                CREATE TABLE executor_metadata(idx INTEGER, data BLOB);
+                CREATE TABLE steps(idx INTEGER, status INTEGER, metadata BLOB);
+            """)
+            db.execute("INSERT INTO gen_metadata VALUES(?)",
+                       (blob(1, blob(19, b"gemini-3.5-flash")) + num(2, 0),))
+            db.execute("INSERT INTO executor_metadata VALUES(0, ?)",
+                       (blob(10, blob(1, blob(28, b"gemini-3.5-flash-low"))),))
+            db.execute("INSERT INTO executor_metadata VALUES(1, ?)", (b"\\xff",))
+            for idx, numeric in [(0, 10), (1, 99)]:
+                metadata = (blob(1, num(1, 1000)) + blob(8, num(1, 1010)) +
+                            blob(9, num(1, numeric) + num(2, 100)))
+                db.execute("INSERT INTO steps VALUES(?, 3, ?)", (idx, metadata))
+            db.commit()
+            db.close()
+
+            def scan(cursors):
+                request = dict(path=str(root), provider="antigravity", cursors=cursors)
+                code = "import runpy; runpy.run_path(" + repr(str(SCRIPTS / "remote_history.py")) + ", init_globals={'REQUEST': " + repr(request) + "})"
+                result = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                                        text=True, check=True)
+                return [json.loads(line) for line in result.stdout.splitlines()]
+
+            first = scan({})
+            batch = next(frame for frame in first if frame["kind"] == "batch")
+            done = first[-1]
+            self.assertEqual([event["model"] for event in batch["events"]],
+                             ["gemini-3.5-flash-low", "antigravity-unknown-99"])
+            self.assertEqual(done["partial"], False)
+            self.assertEqual(done["issues"][0]["code"], "unknownModel")
+            self.assertIsNotNone(batch["cursor"])
+            self.assertNotIn("private", json.dumps(first))
+            second = scan({str(path): batch["cursor"]})
+            self.assertEqual([frame["kind"] for frame in second], ["done"])
+
+            # Corrupt records must remain retryable even with unknown-model steps.
+            db = sqlite3.connect(path)
+            db.execute("INSERT INTO steps VALUES(2, 3, ?)", (b"\\xff",))
+            db.commit()
+            db.close()
+            retry = scan({str(path): batch["cursor"]})
+            self.assertEqual(retry[-1]["partial"], True)
+            self.assertEqual(next(f for f in retry if f["kind"] == "batch")["cursor"], None)
 
 if __name__ == "__main__":
     unittest.main()
