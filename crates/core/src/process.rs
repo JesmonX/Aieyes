@@ -77,10 +77,12 @@ pub fn run(mut cmd: Command, input: Vec<u8>, timeout: Duration) -> Result<Vec<u8
 }
 
 /// NDJSON transport with bounded buffering and cleanup on parser/consumer failure.
+/// The timeout limits waiting for the next line or process exit, not the total
+/// transfer or time spent committing a batch in the consumer.
 pub fn run_lines(
     mut cmd: Command,
     input: Vec<u8>,
-    timeout: Duration,
+    idle_timeout: Duration,
     mut receive: impl FnMut(&[u8]) -> Result<()>,
 ) -> Result<()> {
     use std::io::BufRead;
@@ -135,14 +137,17 @@ pub fn run_lines(
             }
         }
     });
-    let started = Instant::now();
+    let mut waiting_since = Instant::now();
     let result = (|| -> Result<()> {
         loop {
             crate::operations::check()?;
-            let remaining = timeout.saturating_sub(started.elapsed());
+            let remaining = idle_timeout.saturating_sub(waiting_since.elapsed());
             anyhow::ensure!(!remaining.is_zero(), "查询超时");
             match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
-                Ok(line) => receive(&line?)?,
+                Ok(line) => {
+                    receive(&line?)?;
+                    waiting_since = Instant::now();
+                }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -152,7 +157,7 @@ pub fn run_lines(
                 anyhow::ensure!(status.success(), "命令执行失败（{}）", status);
                 break;
             }
-            anyhow::ensure!(started.elapsed() < timeout, "查询超时");
+            anyhow::ensure!(waiting_since.elapsed() < idle_timeout, "查询超时");
             std::thread::sleep(Duration::from_millis(10));
         }
         Ok(())
@@ -346,6 +351,49 @@ mod tests {
 #[cfg(all(test, unix))]
 mod line_transport_tests {
     use super::*;
+    #[test]
+    fn active_streams_can_outlast_the_receive_timeout() {
+        let mut command = Command::new("python3");
+        command.args([
+            "-c",
+            "import time; [(print('{}',flush=True),time.sleep(0.1)) for _ in range(8)]",
+        ]);
+        let mut count = 0;
+        run_lines(command, vec![], Duration::from_millis(400), |_| {
+            count += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(count, 8);
+    }
+    #[test]
+    fn local_batch_processing_does_not_consume_the_receive_timeout() {
+        let mut command = Command::new("python3");
+        command.args(["-c", "print('{}',flush=True); print('{}',flush=True)"]);
+        let mut count = 0;
+        run_lines(command, vec![], Duration::from_millis(400), |_| {
+            std::thread::sleep(Duration::from_millis(500));
+            count += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(count, 2);
+    }
+    #[test]
+    fn stalled_streams_still_timeout_after_a_successful_batch() {
+        let mut command = Command::new("python3");
+        command.args(["-c", "import time; print('{}',flush=True); time.sleep(30)"]);
+        let mut count = 0;
+        let started = Instant::now();
+        let error = run_lines(command, vec![], Duration::from_millis(400), |_| {
+            count += 1;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(count, 1);
+        assert!(error.to_string().contains("查询超时"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
     #[test]
     fn lines_are_streamed_and_input_is_not_a_command_argument() {
         let mut command = Command::new("python3");

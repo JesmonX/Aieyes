@@ -158,7 +158,7 @@ fn refresh_feedback(
     }
     let failures: Vec<Value> = match result {
         Ok(rows) => rows.as_array().into_iter().flatten().filter(|row| row["error"].is_string() || row["partial"] == true).map(|row| {
-            let error = row["error"].as_str().map(str::to_owned).unwrap_or_else(|| row["issues"].as_array().into_iter().flatten().filter_map(|issue| {
+            let error = row["error"].as_str().map(str::to_owned).unwrap_or_else(|| row["issues"].as_array().into_iter().flatten().filter(|issue| issue["code"] != "unknownModel").filter_map(|issue| {
                 let message = issue["message"].as_str()?;
                 let location = issue["path"].as_str().unwrap_or_default();
                 let step = issue["step"].as_u64().map(|n| format!("步骤 {n} · ")).unwrap_or_default();
@@ -422,8 +422,17 @@ mod tests {
         assert!(warning["failures"].as_array().unwrap().is_empty());
         assert!(warning["success"].is_number());
         let partial = refresh_feedback("sources.scan", &Ok(json!([{"id":"agy","partial":true,"issues":[{"path":"session.db","step":3,"code":"invalidRecord","message":"记录损坏"}]}])), None).unwrap();
-        assert_eq!(partial["failures"][0]["error"], "session.db · 步骤 3 · 记录损坏");
+        assert_eq!(
+            partial["failures"][0]["error"],
+            "session.db · 步骤 3 · 记录损坏"
+        );
         assert!(partial["success"].is_null());
+        let mixed = refresh_feedback("sources.rescan", &Ok(json!([{"id":"agy","partial":true,"issues":[{"path":"session.db","step":2,"code":"unknownModel","message":"模型身份未知"},{"path":"session.db","step":3,"code":"invalidRecord","message":"记录损坏"}]}])), None).unwrap();
+        assert_eq!(
+            mixed["failures"][0]["error"],
+            "session.db · 步骤 3 · 记录损坏"
+        );
+        assert!(mixed["success"].is_null());
         assert!(
             refresh_feedback("prices.sync", &Ok(json!({})), None).unwrap()["success"].is_number()
         );

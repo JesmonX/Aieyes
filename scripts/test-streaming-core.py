@@ -53,6 +53,7 @@ class StreamingCore(unittest.TestCase):
                 settings.update(accounts=[], sources=[dict(id='s', provider='codex',
                     accountId='', path='/fixture', enabled=True, hostId='fixture')],
                     hosts=[dict(id='fixture', target='synthetic.invalid', enabled=True)])
+                settings['agents'] = [dict(provider='codex', enabled=True, machineIds=['fixture'])]
                 settings['localMonitor']['enabled'] = False
                 core.call('settings.save', settings)
                 result = core.call('sources.scan')[0]
@@ -77,6 +78,7 @@ raise SystemExit(subprocess.call(sys.argv[-1], shell=True))
             core=Core(data,bin_directory);other=None
             try:
                 settings=core.call('settings.get');settings.update(accounts=[],sources=[dict(id='s',provider='codex',accountId='',path=str(history),name='Fixture',enabled=True,hostId='fixture')],hosts=[dict(id='fixture',target='synthetic.invalid',name='Fixture',enabled=True,shell='/bin/sh')]);settings['localMonitor']['enabled']=False
+                settings['agents'] = [dict(provider='codex', enabled=True, machineIds=['fixture'])]
                 core.call('settings.save',settings)
                 first=core.call('sources.scan')[0];self.assertNotIn('error',first);self.assertEqual(first['result']['newEvents'],1)
                 same=core.call('sources.scan')[0];self.assertEqual(same['result']['readBytes'],0);self.assertEqual(same['result']['newEvents'],0)
@@ -113,7 +115,7 @@ raise SystemExit(subprocess.call(sys.argv[-1], shell=True))
                 settings['hosts'][0]['enabled']=False
                 core.call('settings.save',settings)
                 self.assertEqual(core.call('sources.scan'),[],'Automatic scans skip paused hosts')
-                self.assertIn('error',core.call('sources.scan',{'sourceId':'s'})[0],'Explicit boundary reads cannot claim a paused source succeeded')
+                self.assertEqual(core.call('sources.scan',{'sourceId':'s'}),[], 'Explicit scans also skip paused hosts')
             finally:
                 core.close()
                 if other:other.close()
