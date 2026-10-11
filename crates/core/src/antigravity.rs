@@ -220,7 +220,10 @@ pub fn read_database_detailed(path: &Path) -> Result<DatabaseRead> {
     for (index, full_name) in executor_models(&db)? {
         // Generation metadata can contain only a 16-byte model prefix. Prefer
         // the full name only when both sources agree on that prefix.
-        if models.get(&index).is_none_or(|alias| full_name.starts_with(alias)) {
+        if models
+            .get(&index)
+            .is_none_or(|alias| full_name.starts_with(alias))
+        {
             models.insert(index, full_name);
         }
     }
@@ -386,7 +389,10 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         };
         // Missing model identity is a pricing warning, not an unreadable record.
         // Committing its cursor prevents every incremental scan from replaying it.
-        let clean = read.issues.iter().all(|issue| issue["code"] == "unknownModel");
+        let clean = read
+            .issues
+            .iter()
+            .all(|issue| issue["code"] == "unknownModel");
         for mut issue in read.issues {
             issue["path"] = json!(path.file_name().unwrap_or_default().to_string_lossy());
             issues.push(issue);
