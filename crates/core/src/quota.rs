@@ -323,9 +323,17 @@ pub fn codex_rpc(
             ),
         )?
     } else {
-        let mut c = process::cli_command(&resolve_codex(&source.codex_binary));
         // Stdio is the default. Older CLIs reject the newer --stdio alias.
-        c.arg("app-server");
+        let account = settings
+            .accounts
+            .iter()
+            .find(|a| a.provider == source.provider && a.id == source.account_id);
+        let mut c = process::cli_command_with_pre_command(
+            &resolve_codex(&source.codex_binary),
+            &["app-server"],
+            &crate::accounts::pre_command(settings, account, source),
+            ssh::DEFAULT_SHELL,
+        );
         let root = expand(&source.path);
         let root = if root
             .file_name()

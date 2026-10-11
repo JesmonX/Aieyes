@@ -198,6 +198,51 @@ pub fn cli_command(program: &str) -> Command {
     Command::new(path)
 }
 
+/// Run initialization in the CLI's shell, keeping banners and reads out of its protocol.
+pub(crate) fn cli_command_with_pre_command(
+    program: &str,
+    args: &[&str],
+    pre_command: &str,
+    shell: &str,
+) -> Command {
+    if pre_command.trim().is_empty() {
+        let mut command = cli_command(program);
+        command.args(args);
+        return command;
+    }
+    if cfg!(windows) {
+        let quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
+        let script = format!(
+            "$ErrorActionPreference='Stop'\n. {{\n{pre_command}\n}} 1>&2\n& {} {}\nexit $LASTEXITCODE",
+            quote(program),
+            args.iter()
+                .map(|arg| quote(arg))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let mut command = Command::new("powershell.exe");
+        command.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        command
+    } else {
+        let script = format!(
+            "set -e\n{}{{\n{pre_command}\n}} </dev/null >&2\nexec {} {}",
+            crate::ssh::PATH_FALLBACK,
+            quote(program),
+            args.iter()
+                .map(|arg| quote(arg))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let mut command = Command::new(if shell.trim().is_empty() {
+            crate::ssh::DEFAULT_SHELL
+        } else {
+            shell
+        });
+        command.args(["-c", &script]);
+        command
+    }
+}
+
 #[cfg(windows)]
 fn resolve_windows_cli(program: &std::path::Path) -> std::path::PathBuf {
     if program.is_absolute() || program.components().count() > 1 {

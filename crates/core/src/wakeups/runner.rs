@@ -59,36 +59,8 @@ pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
     result
 }
 fn command(m: &Manifest, args: &[String], cwd: &Path) -> Command {
-    let mut cmd = if m.pre_command.trim().is_empty() {
-        let mut cmd = process::cli_command(&m.binary);
-        cmd.args(args);
-        cmd
-    } else if cfg!(windows) {
-        let quote = |s: &str| format!("'{}'", s.replace('\'', "''"));
-        let script = format!(
-            "$ErrorActionPreference='Stop'\n{}\n& {} {}\nexit $LASTEXITCODE",
-            m.pre_command,
-            quote(&m.binary),
-            args.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ")
-        );
-        let mut cmd = Command::new("powershell.exe");
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
-        cmd
-    } else {
-        let script = format!(
-            "set -e\n{}{}\nexec {} {}",
-            ssh::PATH_FALLBACK,
-            m.pre_command,
-            process::quote(&m.binary),
-            args.iter()
-                .map(|a| process::quote(a))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        let mut cmd = Command::new(&m.shell);
-        cmd.args(["-c", &script]);
-        cmd
-    };
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut cmd = process::cli_command_with_pre_command(&m.binary, &args, &m.pre_command, &m.shell);
     cmd.current_dir(cwd);
     for key in CLEAR_ENV {
         cmd.env_remove(key);
@@ -250,6 +222,8 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                                     path: m.config_path.clone(),
                                     binary: m.binary.clone(),
                                     proxy: m.proxy.clone(),
+                                    pre_command: m.pre_command.clone(),
+                                    shell: m.shell.clone(),
                                 };
                                 crate::codex_auth::local::with_credentials(&loc, profile, |path| {
                                     let mut bound = m.clone();

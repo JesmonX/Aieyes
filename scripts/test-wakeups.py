@@ -1,5 +1,6 @@
 """No real CLI inference, SSH connection or system scheduler is used by these tests."""
 import datetime
+import base64
 import importlib.util
 import json
 import os
@@ -19,6 +20,53 @@ wake=importlib.util.module_from_spec(spec);spec.loader.exec_module(wake)
 class WakeTests(unittest.TestCase):
     def manifest(self, binary='fake'):
         return dict(version=1,id='wake-test',accountKey='codex:test',provider='codex',model='model',effort='low',binary=binary,args=['exec','-m','model','-c','model_reasoning_effort="low"',"hi; $(touch never)"],configPath='/fixture',preCommand='',shell='/bin/bash',proxy={'mode':'direct'},times=[datetime.datetime.now().strftime('%H:%M')],enabled=True)
+
+    @unittest.skipUnless(os.name == 'posix', 'Remote runner requires a POSIX host')
+    def test_profile_probe_passes_initialization_to_auth_helper(self):
+        spec = importlib.util.spec_from_file_location('auth_helper', pathlib.Path(__file__).with_name('remote_codex_auth.py'))
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            claims = {'https://api.openai.com/auth': {'chatgpt_user_id': 'fixture', 'chatgpt_account_id': 'team'}}
+            token = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip('=')
+            credential = {'auth_mode': 'chatgpt', 'tokens': {'access_token': 'h.' + token + '.s', 'refresh_token': 'fixture', 'account_id': 'team'}}
+            helper.save_profile(root, 'fixture', 'Fixture', credential)
+            binary = root / 'fake-codex'
+            binary.write_text('''#!/usr/bin/env python3
+import json, os, sys
+if '--help' in sys.argv:
+    print('--model --ignore-user-config'); sys.exit(0)
+if '--version' in sys.argv:
+    assert os.environ['AIEYES_WAKE_FIXTURE'] == 'ready'
+    print('codex-cli 0.161.0'); sys.exit(0)
+assert os.environ['AIEYES_WAKE_FIXTURE'] == 'ready'
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request: continue
+    if request['method'] == 'account/read': result = {'account': {'type': 'chatgpt'}}
+    elif request['method'] == 'model/list': result = {'data': [{'model': 'fixture-model'}]}
+    else: result = {}
+    print(json.dumps({'id': request['id'], 'result': result}), flush=True)
+''')
+            binary.chmod(0o700)
+            script = root / 'proxy setup'
+            script.write_text('export AIEYES_WAKE_FIXTURE=ready\nprintf "private banner\\n"\nread ignored || true\n')
+            m = dict(self.manifest(str(binary)), configPath=str(root), codexProfileId='home:fixture',
+                     model='', effort='', preCommand='source ' + shlex.quote(str(script)), shell='/bin/bash')
+            with patch.object(wake, 'auth_helper', return_value=helper):
+                self.assertEqual(wake.probe(m)['models'][0]['id'], 'fixture-model')
+            self.assertFalse((root / '.aieyes/codex/fixture/query/auth.json').exists())
+
+    def test_profile_model_query_preserves_explicit_empty_precommand(self):
+        helper = Mock()
+        helper.call.return_value = {'models': {'data': []}}
+        m = dict(self.manifest(), codexProfileId='home:fixture', preCommand='', shell='/bin/sh')
+        with patch.object(wake, 'auth_helper', return_value=helper):
+            self.assertEqual(wake.codex_rpc(m, 'model/list', {}), {'data': []})
+        loc = helper.call.call_args.args[0]['location']
+        self.assertEqual(loc['preCommand'], '')
+        self.assertEqual(loc['shell'], '/bin/sh')
 
     @unittest.skipUnless(os.name == 'posix', 'Remote runner requires a POSIX host')
     def test_codex_rpc_uses_default_stdio_for_older_cli(self):

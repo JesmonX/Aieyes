@@ -383,6 +383,8 @@ fn stale_switch_cannot_replace_changed_credentials() {
         path: r.to_string_lossy().into(),
         binary: "missing-fixture-codex".into(),
         proxy: ProxyConfig::default(),
+        pre_command: String::new(),
+        shell: String::new(),
     };
     let prepared = local::call(&loc, "switch.prepare", &json!({"profileId":"second"})).unwrap();
     let mut changed = a.clone();
@@ -572,6 +574,8 @@ for line in sys.stdin:
         path: r.to_string_lossy().into(),
         binary: executable.to_string_lossy().into(),
         proxy: ProxyConfig::default(),
+        pre_command: String::new(),
+        shell: String::new(),
     };
     assert_eq!(
         local::call(&loc, "quota", &json!({"profileId":"first"})).unwrap()["fixture"],

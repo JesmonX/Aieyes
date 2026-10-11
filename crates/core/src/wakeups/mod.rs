@@ -802,6 +802,120 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    fn check_local_model_probe_inherits_account_command(managed: bool) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let binary = root.join("fake-codex");
+        std::fs::write(&binary, r#"#!/usr/bin/env python3
+import json, os, sys
+if '--version' in sys.argv:
+    print('codex-cli 0.161.0'); sys.exit(0)
+if '--help' in sys.argv:
+    print('--model --ignore-user-config'); sys.exit(0)
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request: continue
+    method = request['method']
+    if method == 'account/read': result = {'account': {'type': 'chatgpt'}}
+    elif method == 'model/list':
+        result = {'data': [{'model': os.environ.get('AIEYES_WAKE_FIXTURE', 'plain'), 'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}]}
+    else: result = {}
+    print(json.dumps({'id': request['id'], 'result': result}), flush=True)
+"#).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut engine = Engine::open(&root.join("db")).unwrap();
+        let source = Source {
+            id: "source".into(),
+            account_id: if managed {
+                String::new()
+            } else {
+                "first".into()
+            },
+            path: root.to_string_lossy().into(),
+            codex_binary: binary.to_string_lossy().into(),
+            codex_home_id: managed.then(|| "home".into()),
+            quota_pre_command: "export AIEYES_WAKE_FIXTURE=legacy".into(),
+            ..Default::default()
+        };
+        let mut settings = Settings {
+            sources: vec![source],
+            accounts: vec![Account {
+                id: "first".into(),
+                name: "First".into(),
+                device_settings: vec![AccountDeviceSettings {
+                    machine_id: "local".into(),
+                    pre_command: "export AIEYES_WAKE_FIXTURE=first".into(),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        if managed {
+            use base64::Engine as _;
+            let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+                json!({"https://api.openai.com/auth":{"chatgpt_user_id":"second","chatgpt_account_id":"team"}}).to_string(),
+            );
+            crate::codex_auth::files::save_profile(&root, "second", "Second", &json!({
+                "auth_mode":"chatgpt", "tokens":{"access_token":format!("h.{claims}.s"), "refresh_token":"fixture", "account_id":"team"}
+            })).unwrap();
+            settings.accounts.push(Account {
+                id: "second".into(),
+                name: "Second".into(),
+                connections: vec![AccountConnection {
+                    source_id: "source".into(),
+                    profile_id: Some("home:second".into()),
+                }],
+                ..Default::default()
+            });
+        }
+        let task = Task {
+            source_id: "source".into(),
+            codex_profile_id: managed.then(|| "home:second".into()),
+            effort: String::new(),
+            ..Default::default()
+        };
+        let selected = if managed { 1 } else { 0 };
+        for (command, expected) in [
+            (
+                Some(
+                    "export AIEYES_WAKE_FIXTURE=selected\nprintf 'private banner\\n'\nread ignored || true",
+                ),
+                "selected",
+            ),
+            (Some(""), "plain"),
+            (None, "legacy"),
+        ] {
+            settings.accounts[selected].device_settings = command
+                .map(|pre_command| AccountDeviceSettings {
+                    machine_id: "local".into(),
+                    pre_command: pre_command.into(),
+                })
+                .into_iter()
+                .chain([AccountDeviceSettings {
+                    machine_id: "other-machine".into(),
+                    pre_command: "export AIEYES_WAKE_FIXTURE=wrong".into(),
+                }])
+                .collect();
+            engine.store.save_settings(&settings).unwrap();
+            let info = engine
+                .wakeup_call("wakeups.probe", json!({"task":task}))
+                .unwrap();
+            assert_eq!(info["models"][0]["id"], expected);
+        }
+        assert!(!root.join(".aieyes/codex/second/query/auth.json").exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn local_model_probe_inherits_account_command() {
+        check_local_model_probe_inherits_account_command(false);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn local_profile_model_probe_inherits_selected_account_command() {
+        check_local_model_probe_inherits_account_command(true);
+    }
     #[test]
     fn times_are_validated_without_unicode_panics_and_duplicates_removed() {
         let mut t = Task {

@@ -21,6 +21,10 @@ pub struct Location {
     pub path: String,
     pub binary: String,
     pub proxy: ProxyConfig,
+    #[serde(default)]
+    pub pre_command: String,
+    #[serde(default)]
+    pub shell: String,
 }
 impl Location {
     pub fn root(&self) -> Result<PathBuf> {
@@ -461,7 +465,14 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             )?;
             let auth = read_authority(&root, &p)?;
             let path = layout(&root, &p.id, "query")?;
-            let mut rpc = Rpc::start(&loc.binary, &path, &loc.proxy, false)?;
+            let mut rpc = Rpc::start_with_pre_command(
+                &loc.binary,
+                &path,
+                &loc.proxy,
+                false,
+                &loc.pre_command,
+                &loc.shell,
+            )?;
             let mut info = rpc.login_external(&auth)?;
             info["models"] = rpc.call("model/list", json!({"includeHidden":false}), &mut |_| {
                 Ok(None)

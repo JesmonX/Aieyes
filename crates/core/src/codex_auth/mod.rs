@@ -13,6 +13,13 @@ pub fn location(source: &Source, settings: &Settings) -> local::Location {
     local::Location {
         path: home_path(&source.path),
         binary: source.codex_binary.clone(),
+        // Remote account operations already initialize the SSH shell around the helper.
+        pre_command: if source.host_id.is_none() {
+            source.quota_pre_command.clone()
+        } else {
+            String::new()
+        },
+        shell: crate::ssh::DEFAULT_SHELL.into(),
         proxy: if source.host_id.is_some() {
             source.proxy.clone().unwrap_or(ProxyConfig {
                 mode: "system".into(),

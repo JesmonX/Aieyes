@@ -27,10 +27,25 @@ impl Rpc {
         proxy: &ProxyConfig,
         managed: bool,
     ) -> Result<Self> {
+        Self::start_with_pre_command(binary, root, proxy, managed, "", "")
+    }
+    pub(super) fn start_with_pre_command(
+        binary: &str,
+        root: &std::path::Path,
+        proxy: &ProxyConfig,
+        managed: bool,
+        pre_command: &str,
+        shell: &str,
+    ) -> Result<Self> {
         let resolved = crate::quota::resolve_codex(binary);
         if !managed {
-            let mut version = process::cli_command(&resolved);
-            version.arg("--version");
+            let mut version = process::cli_command_with_pre_command(
+                &resolved,
+                &["--version"],
+                pre_command,
+                shell,
+            );
+            network::apply_env(&mut version, proxy);
             let value = process::run(version, vec![], Duration::from_secs(5))
                 .map_err(|_| anyhow::anyhow!("接口不兼容：无法确认 Codex CLI 版本"))?;
             ensure!(
@@ -38,9 +53,9 @@ impl Rpc {
                 "接口不兼容：内存凭据查询需要 Codex 0.99.0 或更新版本"
             );
         }
-        let mut command = process::cli_command(&resolved);
-        command
-            .args([
+        let mut command = process::cli_command_with_pre_command(
+            &resolved,
+            &[
                 "-c",
                 if managed {
                     "cli_auth_credentials_store=\"file\""
@@ -48,9 +63,11 @@ impl Rpc {
                     "cli_auth_credentials_store=\"ephemeral\""
                 },
                 "app-server",
-            ])
-            .env("CODEX_HOME", root)
-            .current_dir(root);
+            ],
+            pre_command,
+            shell,
+        );
+        command.env("CODEX_HOME", root).current_dir(root);
         for key in [
             "OPENAI_API_KEY",
             "CODEX_API_KEY",

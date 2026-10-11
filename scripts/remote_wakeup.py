@@ -110,7 +110,8 @@ def auth_helper():
 
 
 def auth_location(m):
-    return dict(path=m['configPath'], binary=m['binary'], proxy=m.get('proxy'))
+    return dict(path=m['configPath'], binary=m['binary'], proxy=m.get('proxy'),
+                preCommand=m.get('preCommand', ''), shell=m.get('shell') or '/bin/bash')
 
 
 def codex_rpc(m, method, params):

@@ -463,6 +463,15 @@ def layout(root, profile_id, kind):
     return private(root / '.aieyes/codex' / identifier(profile_id) / kind)
 
 
+def cli_argv(loc, args):
+    binary = os.path.expanduser(loc.get('binary') or 'codex')
+    if not loc.get('preCommand', '').strip():
+        return [binary] + args
+    import shlex
+    script = 'set -e\n{\n' + loc['preCommand'] + '\n} </dev/null >&2\n'
+    return [loc.get('shell') or '/bin/bash', '-c', script + 'exec ' + ' '.join(shlex.quote(a) for a in [binary] + args)]
+
+
 class Rpc:
     def __init__(self, loc, root, managed=False):
         env = dict(os.environ, CODEX_HOME=str(root))
@@ -474,16 +483,15 @@ class Rpc:
                 env.pop(key, None)
         if proxy.get('mode') == 'custom':
             env.update({key: proxy['url'] for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')})
-        binary = os.path.expanduser(loc.get('binary') or 'codex')
         if not managed:
             try:
-                version = subprocess.check_output([binary, '--version'], timeout=5, stderr=subprocess.DEVNULL).decode()
+                version = subprocess.check_output(cli_argv(loc, ['--version']), env=env, cwd=root, timeout=5, stderr=subprocess.DEVNULL).decode()
                 match = re.search(r'(\d+)\.(\d+)\.\d+', version)
                 if not match or (int(match[1]), int(match[2])) < (0, 99):
                     raise ValueError('接口不兼容：内存凭据查询需要 Codex 0.99.0 或更新版本')
             except (OSError, subprocess.SubprocessError):
                 raise ValueError('接口不兼容：无法确认 Codex CLI 版本') from None
-        self.child = subprocess.Popen([binary, '-c', 'cli_auth_credentials_store="%s"' % ('file' if managed else 'ephemeral'), 'app-server'], cwd=root, env=env,
+        self.child = subprocess.Popen(cli_argv(loc, ['-c', 'cli_auth_credentials_store="%s"' % ('file' if managed else 'ephemeral'), 'app-server']), cwd=root, env=env,
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
         self.messages, self.notifications, self.next = queue.Queue(maxsize=64), [], 0
         def reader():
