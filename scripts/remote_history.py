@@ -81,9 +81,13 @@ def _agy_iter(path):
         # truncated) model name. Join by explicit step index only.
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='executor_metadata'").fetchone():
             for index, raw in db.execute('SELECT idx,data FROM executor_metadata'):
-                envelope = _agy_fields(raw)
-                config = _agy_message(envelope, 10)
-                name = _agy_text(_agy_message(config, 1), 28)
+                try:
+                    envelope = _agy_fields(raw)
+                    config = _agy_message(envelope, 10)
+                    name = _agy_text(_agy_message(config, 1), 28)
+                except (ValueError, TypeError, IndexError):
+                    # An optional, incompatible executor envelope must not lose usage.
+                    continue
                 if name and (index not in models or name.startswith(models[index])):
                     models[index] = name
         session = db.execute('SELECT cascade_id FROM trajectory_meta LIMIT 1').fetchone()[0]
