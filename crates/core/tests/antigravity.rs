@@ -190,6 +190,61 @@ fn partial_databases_keep_tokens_retry_and_repair_model_without_duplicates() {
         1
     );
 }
+
+#[test]
+fn executor_full_name_and_unknown_model_allow_incremental_cursor() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("conversations");
+    std::fs::create_dir(&dir).unwrap();
+    let db = Connection::open(dir.join("session.db")).unwrap();
+    db.execute_batch("CREATE TABLE trajectory_meta(cascade_id TEXT);
+        INSERT INTO trajectory_meta VALUES('executor-session');
+        CREATE TABLE gen_metadata(data BLOB);
+        CREATE TABLE executor_metadata(idx INTEGER, data BLOB);
+        CREATE TABLE steps(idx INTEGER, status INTEGER, metadata BLOB);").unwrap();
+    db.execute(
+        "INSERT INTO gen_metadata VALUES(?1)",
+        [[bytes(1, &bytes(19, b"gemini-3.5-flash")), number(2, 0)].concat()],
+    ).unwrap();
+    db.execute(
+        "INSERT INTO executor_metadata VALUES(0, ?1)",
+        [bytes(10, &bytes(1, &bytes(28, b"gemini-3.5-flash-low")))],
+    ).unwrap();
+    // A malformed optional executor row is not a reason to lose usage.
+    db.execute("INSERT INTO executor_metadata VALUES(1, ?1)", [vec![255u8]]).unwrap();
+    let stamp = now() as u64 - 100;
+    for (index, numeric) in [(0, 10), (1, 99)] {
+        let record = [
+            bytes(1, &number(1, stamp)),
+            bytes(8, &number(1, stamp + 10)),
+            bytes(9, &[number(1, numeric), number(2, 100)].concat()),
+        ].concat();
+        db.execute("INSERT INTO steps VALUES(?1, 3, ?2)", rusqlite::params![index, record]).unwrap();
+    }
+    let read = antigravity::read_database_detailed(&dir.join("session.db")).unwrap();
+    assert_eq!(read.events.len(), 2);
+    assert_eq!(read.events[0]["model"], "gemini-3.5-flash-low");
+    assert_eq!(read.events[1]["model"], "antigravity-unknown-99");
+    assert_eq!(read.issues.len(), 1);
+    assert_eq!(read.issues[0]["code"], "unknownModel");
+
+    let store = Store::open(&temp.path().join("store")).unwrap();
+    let s = source(temp.path());
+    let settings = Settings::default();
+    let first = antigravity::scan(&store, &settings, &s).unwrap();
+    assert_eq!(first["newEvents"], 2);
+    assert_eq!(first["partial"], false);
+    assert_eq!(first["issues"].as_array().unwrap().len(), 1);
+    // Unknown pricing must not keep an unchanged database in the retry queue.
+    let second = antigravity::scan(&store, &settings, &s).unwrap();
+    assert_eq!(second["newEvents"], 0);
+    assert_eq!(second["readBytes"], 0);
+    let rescan = import::rescan(&store, &settings, &s).unwrap();
+    assert_eq!(rescan["newEvents"], 0);
+    assert_eq!(rescan["partial"], false);
+    assert!(rescan["readBytes"].as_u64().unwrap() > 0);
+}
+
 fn price(model: &str) -> ModelPrice {
     ModelPrice {
         id: model.into(),
