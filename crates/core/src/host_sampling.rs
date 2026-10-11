@@ -21,8 +21,13 @@ where
         let fetch = &fetch;
         for _ in 0..hosts.len().min(CONCURRENCY) {
             let tx = tx.clone();
+            let operation = crate::operations::context();
             scope.spawn(move || {
+                let _operation = crate::operations::inherit(operation);
                 loop {
+                    if crate::operations::check().is_err() {
+                        break;
+                    }
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some(host) = hosts.get(index) else { break };
                     let result =

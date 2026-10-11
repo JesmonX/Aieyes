@@ -21,6 +21,8 @@ function fixture(){
   if(method==='prices.recalculate'){if(a.failReprice)throw Error('重算失败测试');return {};}
   if(method==='hosts.discover'){if(a.holdDiscovery)await new Promise(r=>a.releaseDiscovery=r);return {cpu:[{id:'cpu0'}],gpu:[{id:'gpu-from-a'}],errors:{}};}
   if(method==='quotaEstimates.start'){if(a.holdEstimate)await new Promise(r=>a.releaseEstimate=r);a.records=[structuredClone(record)];return record;}
+  if(method==='accounts.targets')return settings.sources.map((s,i)=>({accountKey:'codex:a'+i,accountName:settings.accounts[i].name,provider:'codex',sourceId:s.id,sourceName:s.name,machineId:'local',machineName:'本机',profileId:null,canWake:true}));
+  if(method==='codexAuth.reconcile')return {settings,issues:[]};
   if(method==='wakeups.list')return structuredClone(a.tasks);
   if(method==='wakeups.status')return {installed:true,enabled:true,timezone:'Asia/Shanghai',nextRunAt:stamp+10000,history:[]};
   if(method==='wakeups.remove'){a.tasks[0].deployment=null;return {};}

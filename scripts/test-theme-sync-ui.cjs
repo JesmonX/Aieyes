@@ -3,7 +3,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('nod
 const {spawn,execFileSync}=require('node:child_process');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
 const project=path.resolve(__dirname,'..'),root=fs.mkdtempSync(path.join(os.tmpdir(),'aieyes-theme-'));
-execFileSync('python3',['-c','import sqlite3,json,sys; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE kv(key TEXT PRIMARY KEY,value TEXT NOT NULL)"); c.execute("INSERT INTO kv VALUES(?,?)",("settings",json.dumps(dict(version=4,sources=[],accounts=[],hosts=[])))); c.commit()',path.join(root,'aieyes.sqlite')]);
+execFileSync(process.platform==='win32'?'python':'python3',['-c','import sqlite3,json,sys; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE kv(key TEXT PRIMARY KEY,value TEXT NOT NULL)"); c.execute("INSERT INTO kv VALUES(?,?)",("settings",json.dumps(dict(version=4,sources=[],accounts=[],hosts=[])))); c.commit()',path.join(root,'aieyes.sqlite')]);
 const core=spawn(path.join(project,'target/debug/aieyes-core'),['--data-dir',root],{stdio:['pipe','pipe','pipe']});
 let id=0,failSave=false;const pending=new Map();
 readline.createInterface({input:core.stdout}).on('line',line=>{const value=JSON.parse(line),promise=pending.get(value.id);if(!promise)return;pending.delete(value.id);value.error?promise.reject(new Error(value.error.message)):promise.resolve(value.result);});
@@ -61,5 +61,5 @@ function fixture(){
       assert.equal(await page.evaluate(()=>themeNative.at(-1).theme),'dark');
     }
     assert.deepEqual(errors,[]);console.log('Theme: bidirectional main/panel sync, stale rerender, settings picker, system mode, drafts, failed saves and reload passed');
-  }finally{if(browser)await browser.close();server.close();core.stdin.end();fs.rmSync(root,{recursive:true,force:true});}
+  }finally{if(browser)await browser.close();server.close();core.stdin.end();if(core.exitCode===null)await new Promise(resolve=>core.once('exit',resolve));fs.rmSync(root,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);core.kill();process.exitCode=1;});

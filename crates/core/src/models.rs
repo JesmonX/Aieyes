@@ -381,9 +381,19 @@ impl Settings {
             }
             self.version = 2;
         }
-        for agent in &mut self.agents { agent.machine_ids.sort(); agent.machine_ids.dedup(); }
+        for agent in &mut self.agents {
+            agent.machine_ids.sort();
+            agent.machine_ids.dedup();
+        }
         let mut unique = Vec::new();
-        self.agents.retain(|a| { if unique.contains(a) { false } else { unique.push(a.clone()); true } });
+        self.agents.retain(|a| {
+            if unique.contains(a) {
+                false
+            } else {
+                unique.push(a.clone());
+                true
+            }
+        });
         for &provider in crate::providers::PROVIDERS {
             if !self.agents.iter().any(|a| a.provider == provider) {
                 let sources: Vec<_> = self
@@ -416,7 +426,8 @@ impl Settings {
                         profile_id: None,
                     });
                 }
-                if let Some(reference) = &account.quota_profile_id
+                if self.version < 7
+                    && let Some(reference) = &account.quota_profile_id
                     && source
                         .codex_home_id
                         .as_ref()
@@ -433,8 +444,18 @@ impl Settings {
                 }
             }
             let mut seen = Vec::new();
-            account.connections.retain(|c| { if seen.contains(c) { false } else { seen.push(c.clone()); true } });
-            account.quota_profile_id = account.connections.iter().find_map(|c| c.profile_id.clone());
+            account.connections.retain(|c| {
+                if seen.contains(c) {
+                    false
+                } else {
+                    seen.push(c.clone());
+                    true
+                }
+            });
+            account.quota_profile_id = account
+                .connections
+                .iter()
+                .find_map(|c| c.profile_id.clone());
         }
         if self.version < 4 {
             for account in &mut self.accounts {
@@ -478,13 +499,38 @@ impl Settings {
         self.version = self.version.max(7);
         self.configuration_issues.clear();
         let mut providers = std::collections::HashSet::new();
-        for agent in &self.agents { if !providers.insert(&agent.provider) { self.configuration_issues.push(format!("{} 有冲突的重复配置，请在 Agents 重新选择机器并保存", agent.provider)); } }
-        if let Err(error) = crate::codex_auth::validate_settings(self) { self.configuration_issues.push(error.to_string()); }
+        for agent in &self.agents {
+            if !providers.insert(&agent.provider) {
+                self.configuration_issues.push(format!(
+                    "{} 有冲突的重复配置，请在 Agents 重新选择机器并保存",
+                    agent.provider
+                ));
+            }
+        }
+        if let Err(error) = crate::codex_auth::validate_settings(self) {
+            self.configuration_issues.push(error.to_string());
+        }
     }
     pub fn monitored_hosts(&self) -> Vec<Host> {
         std::iter::once(self.local_monitor.host())
             .chain(self.hosts.clone())
             .collect()
+    }
+    pub fn source_enabled(&self, source: &Source) -> bool {
+        let mut agents = self.agents.iter().filter(|a| a.provider == source.provider);
+        let enabled = agents.next().is_none_or(|a| {
+            a.enabled
+                && a.machine_ids
+                    .iter()
+                    .any(|id| id == source.host_id.as_deref().unwrap_or("local"))
+        });
+        source.enabled
+            && enabled
+            && agents.next().is_none()
+            && source
+                .host_id
+                .as_ref()
+                .is_none_or(|id| self.hosts.iter().any(|h| &h.id == id && h.enabled))
     }
     pub fn quota_enabled(&self, source: &Source) -> bool {
         !source.account_id.is_empty()

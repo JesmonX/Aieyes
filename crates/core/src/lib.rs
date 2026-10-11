@@ -1,5 +1,5 @@
-pub mod accounts;
 mod account_targets;
+pub mod accounts;
 pub mod agy_auth;
 mod agy_identity;
 pub mod antigravity;
@@ -110,7 +110,7 @@ impl Engine {
                 .sources
                 .iter()
                 .filter(|s| {
-                    s.enabled
+                    settings.source_enabled(s)
                         && s.provider == account.provider
                         && s.account_id == account.id
                         && params["sourceId"].as_str().is_none_or(|id| s.id == id)
@@ -358,7 +358,7 @@ impl Engine {
                     .sources
                     .iter()
                     .filter(|s| {
-                        s.enabled
+                        settings.source_enabled(s)
                             && s.provider != "deepseek"
                             && params["sourceId"].as_str().is_none_or(|id| s.id == id)
                             && params["sourceIds"]

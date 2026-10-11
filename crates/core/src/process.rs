@@ -43,7 +43,10 @@ pub fn run(mut cmd: Command, input: Vec<u8>, timeout: Duration) -> Result<Vec<u8
     });
     let start = Instant::now();
     let status = loop {
-        if let Err(error) = crate::operations::check() { kill(&mut child); return Err(error); }
+        if let Err(error) = crate::operations::check() {
+            kill(&mut child);
+            return Err(error);
+        }
         if let Some(status) = child.try_wait()? {
             break status;
         }

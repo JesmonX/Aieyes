@@ -151,24 +151,45 @@ fn scan_file(
         let mut bytes = 0u64;
         while rows.len() < 256 && bytes < 1024 * 1024 {
             let mut line = Vec::new();
-            let n = reader.read_until(b'\n', &mut line)?;
-            if n == 0 || line.last() != Some(&b'\n') { eof = true; break; }
+            let n = (&mut reader)
+                .take(16 * 1024 * 1024 + 1)
+                .read_until(b'\n', &mut line)?;
+            anyhow::ensure!(
+                n <= 16 * 1024 * 1024,
+                "记录行超过 16 MiB，已提交进度保留：{}",
+                path.display()
+            );
+            if n == 0 || line.last() != Some(&b'\n') {
+                eof = true;
+                break;
+            }
             bytes += n as u64;
             rows.push(line);
         }
-        if rows.is_empty() { break; }
+        if rows.is_empty() {
+            break;
+        }
         let tx = store.write_transaction()?;
         for line in rows {
             match serde_json::from_slice::<Value>(&line) {
                 Ok(v) => {
                     if let Some(e) = usage::parse(source, &mut state, &v)
-                        && store.put_event(&e, prices, settings)? { inserted += 1; }
+                        && store.put_event(&e, prices, settings)?
+                    {
+                        inserted += 1;
+                    }
                     if source.provider == "codex"
                         && settings.quota_enabled(source)
                         && v["payload"]["type"] == "token_count"
                         && v["payload"]["rate_limits"].is_object()
-                        && let Some(stamp) = timestamp(&v["timestamp"]) {
-                        store.quota(&usage::codex_quota(source, &v["payload"]["rate_limits"], stamp, "log"))?;
+                        && let Some(stamp) = timestamp(&v["timestamp"])
+                    {
+                        store.quota(&usage::codex_quota(
+                            source,
+                            &v["payload"]["rate_limits"],
+                            stamp,
+                            "log",
+                        ))?;
                     }
                 }
                 Err(_) => malformed += 1,
@@ -185,6 +206,56 @@ fn scan_file(
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn failed_later_batch_keeps_committed_cursor_and_full_replay_is_idempotent() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(&root.path().join("db")).unwrap();
+        let path = root.path().join("history.jsonl");
+        let source = Source {
+            id: "s".into(),
+            account_id: "a".into(),
+            provider: "custom".into(),
+            path: path.to_string_lossy().into(),
+            ..Default::default()
+        };
+        let settings = Settings {
+            sources: vec![source.clone()],
+            ..Default::default()
+        };
+        store.save_settings(&settings).unwrap();
+        let lines: Vec<_> = (0..600).map(|i| format!("{}\n", json!({"id":format!("event-{i}"),"sessionId":"session","timestamp":now(),"model":"fixture","tokens":{"input":10}}))).collect();
+        std::fs::write(&path, lines.concat()).unwrap();
+        store.db.execute_batch("CREATE TRIGGER fail_later BEFORE UPDATE ON files BEGIN SELECT RAISE(ABORT,'fixture batch failure'); END;").unwrap();
+        assert!(rescan(&store, &settings, &source).is_err());
+        assert_eq!(
+            store.dashboard(&Filter::default()).unwrap().summary.total,
+            2560
+        );
+        let cursor = store
+            .cursor(&source.id, &path.to_string_lossy())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cursor.1,
+            lines[..256].iter().map(|s| s.len() as u64).sum::<u64>()
+        );
+        store.db.execute_batch("DROP TRIGGER fail_later").unwrap();
+        for _ in 0..2 {
+            rescan(&store, &settings, &source).unwrap();
+        }
+        assert_eq!(
+            store.dashboard(&Filter::default()).unwrap().summary.total,
+            6000
+        );
+        assert_eq!(
+            store
+                .cursor(&source.id, &path.to_string_lossy())
+                .unwrap()
+                .unwrap()
+                .1,
+            lines.concat().len() as u64
+        );
+    }
     #[test]
     fn incomplete_lines_and_reimports() {
         let temp = tempfile::tempdir().unwrap();

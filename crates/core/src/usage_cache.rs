@@ -123,7 +123,8 @@ pub(crate) fn setup(db: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     if !initialized {
-        let tx = db.unchecked_transaction()?;
+        let tx =
+            rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Immediate)?;
         // A second process may have completed initialization while this one waited.
         db.execute("INSERT OR REPLACE INTO usage_source_accounts SELECT es.source_id,e.provider,e.account_id,COUNT(*) FROM event_sources es JOIN events e ON e.id=es.event_id WHERE NOT EXISTS(SELECT 1 FROM kv WHERE key='usage-source-accounts-v1') GROUP BY es.source_id,e.provider,e.account_id",[])?;
         db.execute(

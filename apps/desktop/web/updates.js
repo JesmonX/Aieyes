@@ -129,7 +129,8 @@
       while(operations.protected.length&&!cancelled){status.message='正在完成账号或配置操作：'+operations.protected.join('、');renderDialog();await new Promise(resolve=>setTimeout(resolve,250));operations=await api('operations.status');}
       if(cancelled)return;
       preparing=false;submitting=true;renderDialog();await run('updates_install');
-    } finally {await api('operations.resume').catch(()=>{});preparing=false;submitting=false;answer?.('cancel');updateView();}
+    } catch(error) {status={...status,phase:'error',message:String(error.message??error)};renderDialog();}
+    finally {await api('operations.resume').catch(()=>{});preparing=false;submitting=false;answer?.('cancel');updateView();}
   }
   window.AieyesUpdates = {settingsHTML, bindSettings, get busy() { return preparing || status.phase==='installing'; }};
   window.addEventListener('focus', maybePresent);

@@ -12,6 +12,7 @@ use std::{
 
 #[derive(Default)]
 struct Session {
+    operation: Option<crate::operations::Context>,
     source: String,
     configuration: String,
     phase: String,
@@ -82,6 +83,7 @@ fn finish_locked(s: &mut Session, phase: &str, message: &str) {
         s.writer = None;
         s.url = None;
         s.workspace_confirmation_required = false;
+        s.operation = None;
     }
 }
 
@@ -471,6 +473,7 @@ impl Engine {
             let revision = json!({"session":id});
             crate::accounts::codex_switched(&self.store, source, &revision)?;
             let session = Arc::new(Mutex::new(Session {
+                operation: crate::operations::context(),
                 source: source.id.clone(),
                 configuration,
                 phase: "checking".into(),
@@ -482,7 +485,11 @@ impl Engine {
             sessions.insert(id.clone(), session.clone());
             let result = snapshot(&id, &session.lock().unwrap());
             let source = source.clone();
-            std::thread::spawn(move || launch(session, source, settings));
+            let operation = crate::operations::context();
+            std::thread::spawn(move || {
+                let _operation = crate::operations::inherit(operation);
+                launch(session, source, settings)
+            });
             return Ok(result);
         }
         let id = params["id"].as_str().context("缺少登录会话")?;
@@ -542,6 +549,7 @@ impl Engine {
                 state.auth_revision = revision;
                 state.settings = Some(settings.clone());
                 state.persisted = false;
+                state.operation = crate::operations::context();
                 state.account_status = Value::Null;
                 state.observation = Value::Null;
                 finish_locked(&mut state, "verifying", "正在验证登录…");
@@ -549,13 +557,17 @@ impl Engine {
                 let s = session.clone();
                 let source = source.clone();
                 let verification_settings = settings.clone();
-                std::thread::spawn(move || match inspect(&source, &verification_settings) {
-                    Ok(observation) => authenticated(&s, observation),
-                    Err(_) => finish(
-                        &s,
-                        "authorizing",
-                        "尚未验证到登录，请完成浏览器授权或检查网络后重试",
-                    ),
+                let operation = crate::operations::context();
+                std::thread::spawn(move || {
+                    let _operation = crate::operations::inherit(operation);
+                    match inspect(&source, &verification_settings) {
+                        Ok(observation) => authenticated(&s, observation),
+                        Err(_) => finish(
+                            &s,
+                            "authorizing",
+                            "尚未验证到登录，请完成浏览器授权或检查网络后重试",
+                        ),
+                    }
                 });
             }
             "agyAuth.submitCode" | "agyAuth.confirmWorkspace" => {

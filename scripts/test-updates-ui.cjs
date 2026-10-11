@@ -21,6 +21,7 @@ function fixture() {
       t.emit(t.next==='current'?{phase:'current',message:'当前已是最新版本 v1.2.3',latestVersion:'1.2.3'}:t.next==='newer'?{phase:'current',message:'当前版本 v1.2.3 高于最新稳定版 v1.0.0',latestVersion:'1.0.0'}:t.next==='error'?{phase:'error',message:'更新连接失败'}:{phase:'available',message:'发现新版本 v1.2.4',latestVersion:'1.2.4',notes:'改进与修复\n<script>bad()</script>',prompt:true});
       return structuredClone(t.status);
     }
+    if(command==='updates_download'){t.emit({phase:'available',message:'更新包已就绪'});return structuredClone(t.status);}
     if(command==='updates_install'){
       t.emit({phase:'downloading',message:'正在下载更新…',downloaded:1024,total:4096,prompt:false});
       await new Promise(resolve=>setTimeout(resolve,150));
@@ -28,7 +29,10 @@ function fixture() {
     }
     if(command==='desktop_info')return {platform:'linux',mode:'tray',effectiveMode:'tray',sessions:[],summary:'无活跃会话'};
     if(command!=='engine_call')return {};
+    t.calls.push(args.method);
     switch(args.method){
+      case 'operations.prepareUpdate':case 'operations.status':return {preparing:true,protected:t.protected??[],active:0};
+      case 'operations.resume':return {preparing:false,protected:[],active:0};
       case 'hello':return {version:'1.2.3'};
       case 'settings.get':return structuredClone(settings);
       case 'settings.patch':if(t.saveFails)throw new Error('模拟自动保存失败');Object.assign(settings,structuredClone(args.params.settings));return structuredClone(settings);
@@ -62,21 +66,18 @@ function fixture() {
     assert.equal(await page.locator('#field-refreshSeconds').inputValue(),'123');
     assert.equal(await page.evaluate(()=>updateTest.calls.filter(x=>x==='updates_install').length),0);
     await page.evaluate(()=>updateTest.saveFails=false);await page.locator('#field-refreshSeconds').fill('124');await commitSettings(page);await page.waitForFunction(()=>state.settings.refreshSeconds===124);
-    await page.evaluate(()=>state.serverBusy=true);await page.locator('#update-view').click();await page.locator('#update-install').click();
-    await page.waitForFunction(()=>document.querySelector('#update-message').textContent.includes('服务器采样'));
-    await page.evaluate(()=>{window.realUpdateClock=Date.now;Date.now=()=>realUpdateClock()+31000;});
-    await page.waitForSelector('#update-preparation-actions');assert.match(await page.locator('#update-message').textContent(),/已等待/);
-    await page.locator('#update-preparation-actions button').filter({hasText:'取消并返回'}).click();
-    await page.waitForFunction(()=>!AieyesUpdates.busy);await page.evaluate(()=>{Date.now=realUpdateClock;state.serverBusy=false;});
+    await page.evaluate(()=>{state.serverBusy=true;state.busy=true;updateTest.protected=['settings.save'];});await page.locator('#update-view').click();await page.locator('#update-install').click();
+    await page.waitForFunction(()=>document.querySelector('#update-message').textContent.includes('settings.save'));
+    assert(await page.evaluate(()=>updateTest.calls.includes('updates_download')),'Download starts while background work is running');
     assert.equal(await page.evaluate(()=>updateTest.calls.filter(x=>x==='updates_install').length),0);
-    await page.locator('#update-later').click();
-    await page.evaluate(()=>state.serverBusy=true);await page.locator('#update-view').click();await page.locator('#update-install').click();
-    await page.waitForFunction(()=>document.querySelector('#update-message').textContent.includes('服务器采样'));
-    assert.equal(await page.evaluate(()=>AieyesUpdates.busy),true);
-    await page.evaluate(()=>state.serverBusy=false);
+    await page.locator('#update-later').click();await page.waitForFunction(()=>!AieyesUpdates.busy);
+    assert(await page.evaluate(()=>updateTest.calls.includes('operations.resume')),'Cancelling preparation restores scheduling');
+    await page.evaluate(()=>updateTest.protected=[]);
+    await page.locator('#update-install').click();
     await page.waitForFunction(()=>document.querySelector('#update-message').textContent.includes('签名校验失败'));
     assert.equal(await page.evaluate(()=>AieyesUpdates.busy),false);
-    assert.equal(await page.evaluate(()=>updateTest.calls.filter(x=>x==='updates_install').length),1);
+    assert.equal(await page.evaluate(()=>updateTest.calls.filter(x=>x==='updates_install').length),1,'Background tasks do not block installation');
+    await page.evaluate(()=>{state.busy=false;state.serverBusy=false;});
     assert.equal(await page.locator('#update-install').textContent(),'重新检查');
     await page.locator('#update-later').click();await page.locator('#updates-automatic').uncheck();assert.equal(await page.evaluate(()=>updateTest.status.automatic),false);
     await page.evaluate(()=>updateTest.next='error');await page.locator('#updates').click();await page.waitForFunction(()=>document.querySelector('#update-result').textContent.includes('连接失败'));

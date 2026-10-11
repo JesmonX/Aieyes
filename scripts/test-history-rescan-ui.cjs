@@ -32,7 +32,7 @@ function browserFixture(){
     await rpc('settings.save',{version:6,sources:[{id:'fixture',name:'测试历史',provider:'antigravity',accountId:'account',path:log,enabled:true}],accounts:[{id:'account',provider:'antigravity',name:'测试账户',quotaEnabled:false}],hosts:[],localMonitor:{enabled:false},modelMappings:{}});
     await rpc('prices.save',{prices:[{id:'fixture',input:0.01}]});
     await rpc('sources.scan');
-    execFileSync('python3',['-c',`
+    execFileSync(process.platform==='win32'?'python':'python3',['-c',`
 import sqlite3,json,hashlib,sys
 db=sqlite3.connect(sys.argv[1]); row=db.execute('SELECT * FROM events').fetchone()
 event=json.loads(row[5]); identity=event.pop('importIdentity')

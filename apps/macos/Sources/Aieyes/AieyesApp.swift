@@ -240,9 +240,14 @@ import Combine
     }
     private func quiesceForUpdate() async -> Bool {
         var blockers = await EngineClient.coordinateUpdate("operations.prepareUpdate")
+        var deadline = Date().addingTimeInterval(30)
         while !blockers.isEmpty {
             AppUpdater.shared.preparationStatus("正在完成账号或配置操作：" + Array(Set(blockers)).sorted().joined(separator: "、"))
             do { try await Task.sleep(for: .milliseconds(250)) } catch { _ = await EngineClient.coordinateUpdate("operations.resume"); return false }
+            if Date() >= deadline {
+                guard await updateChoice("更新仍在等待", message: blockers.joined(separator: "、"), buttons: ["继续等待", "取消并返回"]) == 0 else { _ = await EngineClient.coordinateUpdate("operations.resume"); return false }
+                deadline = Date().addingTimeInterval(30)
+            }
             blockers = await EngineClient.coordinateUpdate("operations.status")
         }
         return true

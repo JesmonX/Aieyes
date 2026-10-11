@@ -9,6 +9,12 @@ final class EngineClient: @unchecked Sendable {
     }
     private static let registryLock = NSLock()
     private static let clients = NSHashTable<EngineClient>.weakObjects()
+    private static var preparingUpdate = false
+    private static func setPreparing(_ value: Bool) { registryLock.lock(); preparingUpdate = value; registryLock.unlock() }
+    private static func allowedDuringUpdate(_ method: String) -> Bool {
+        registryLock.lock(); defer { registryLock.unlock() }
+        return !preparingUpdate || method.hasPrefix("operations.") || ["observe", "complete"].contains(CoreContract.updateBehaviors[method] ?? "finish")
+    }
     private let queue = DispatchQueue(label: "app.aieyes.engine", qos: .utility)
     private let lifecycle = NSLock()
     private var process: Process?
@@ -85,6 +91,7 @@ final class EngineClient: @unchecked Sendable {
                 self.lifecycle.lock()
                 var requestID: Int?
                 do {
+                    guard Self.allowedDuringUpdate(method) else { throw ClientError.message("正在准备更新，请稍候") }
                     try self.startLocked(); self.nextID += 1; let id = self.nextID; requestID = id
                     let parameters = try JSONSerialization.jsonObject(with: payload)
                     let request = try JSONSerialization.data(withJSONObject: ["jsonrpc":"2.0", "id":id, "method":method, "params":parameters])
@@ -104,11 +111,13 @@ final class EngineClient: @unchecked Sendable {
         return try await send(method, params: params, onProgress: onProgress, onHostSample: onHostSample)
     }
     static func coordinateUpdate(_ method: String) async -> [String] {
+        if method == "operations.prepareUpdate" { setPreparing(true) }
+        if method == "operations.resume" { setPreparing(false) }
         let active: [EngineClient] = snapshot()
         var blockers: [String] = []
         for client in active {
             do { let state: UpdateOperations = try await client.send(method, params: [:]); blockers += state.protected }
-            catch { /* An exited worker has no outstanding writes. */ }
+            catch { if snapshot().contains(where: { $0 === client }) { blockers.append("核心更新协调失败：" + error.localizedDescription) } }
         }
         return blockers
     }
