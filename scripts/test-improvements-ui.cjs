@@ -57,6 +57,7 @@ function fixture(){
         await page.evaluate(()=>feature.unstable=true);await page.locator('#app-proxy-test').click();await page.waitForFunction(()=>document.querySelector('#app-proxy-result').textContent==='连接不稳定');
         await page.evaluate(()=>{renderSettings();state.lastQuota=12345;});
         await page.locator('#app-proxy-test').click();await page.waitForFunction(()=>document.querySelector('#app-proxy-result').textContent==='连接不稳定');
+        await commitSettings(page); // Settle the proxy autosave before measuring the next edit.
         const ordinarySaveStart=await page.evaluate(()=>feature.calls.length);
         await page.locator('#field-refreshSeconds').fill('600');await commitSettings(page);await page.waitForFunction(()=>feature.settings.refreshSeconds===600&&!state.busy&&!state.settingsSaving);
         assert.deepEqual(await page.evaluate(start=>feature.calls.slice(start).map(c=>c.args?.method).filter(method=>method&&method!=='quotas.schedule'),ordinarySaveStart),['settings.patch','settings.get','dashboard']);assert.equal(await page.evaluate(()=>state.lastQuota),0,'Preserved proxy draft is saved and invalidates quota polling');

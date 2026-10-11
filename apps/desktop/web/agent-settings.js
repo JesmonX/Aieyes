@@ -36,6 +36,7 @@
     if(state.page==='settings'&&state.settingsTab==='accounts'&&!document.getElementById('editor')?.open&&!document.activeElement?.matches('[data-account-field],[data-command-field]'))renderSettings(false);
   };
   async function refreshStatuses(refresh=true,provider=null){
+    if(provider&&!state.settings.accounts.some(a=>a.provider===provider)){statusLoaded=true;return;}
     if(statusLoading)return;statusLoading=true;
     const revision=statusRevision;
     try{
