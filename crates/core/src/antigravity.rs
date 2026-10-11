@@ -165,6 +165,35 @@ fn generators(db: &Connection) -> Result<BTreeMap<u64, String>> {
     }
     Ok(models)
 }
+
+// Modern agy stores the full, non-truncated model name in the executor config.
+// Match only the executor's explicit step index; never infer from a nearby step.
+fn executor_models(db: &Connection) -> Result<BTreeMap<u64, String>> {
+    let has_table: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='executor_metadata')",
+        [],
+        |r| r.get(0),
+    )?;
+    let mut models = BTreeMap::new();
+    if !has_table {
+        return Ok(models);
+    }
+    let mut query = db.prepare("SELECT idx,data FROM executor_metadata")?;
+    for row in query.query_map([], |r| Ok((r.get::<_, u64>(0)?, r.get::<_, Vec<u8>>(1)?)))? {
+        let (index, raw) = row?;
+        // Executor metadata is optional; an incompatible version must not
+        // discard otherwise valid usage statistics.
+        let Some(name) = fields(&raw).ok().and_then(|envelope| {
+            let config = fields(data(&envelope, 10)?).ok()?;
+            let variant = fields(data(&config, 1)?).ok()?;
+            text(&variant, 28)
+        }) else {
+            continue;
+        };
+        models.insert(index, name);
+    }
+    Ok(models)
+}
 #[derive(Default)]
 pub struct DatabaseRead {
     pub events: Vec<Value>,
@@ -187,7 +216,17 @@ pub fn read_database_detailed(path: &Path) -> Result<DatabaseRead> {
     .context("无法只读打开 Antigravity 会话数据库")?;
     db.busy_timeout(std::time::Duration::from_secs(2))?;
     db.execute_batch("BEGIN")?;
-    let models = generators(&db)?;
+    let mut models = generators(&db)?;
+    for (index, full_name) in executor_models(&db)? {
+        // Generation metadata can contain only a 16-byte model prefix. Prefer
+        // the full name only when both sources agree on that prefix.
+        if models
+            .get(&index)
+            .is_none_or(|alias| full_name.starts_with(alias))
+        {
+            models.insert(index, full_name);
+        }
+    }
     let session: String =
         db.query_row("SELECT cascade_id FROM trajectory_meta LIMIT 1", [], |r| {
             r.get(0)
@@ -348,7 +387,12 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
                 continue;
             }
         };
-        let clean = read.issues.is_empty();
+        // Missing model identity is a pricing warning, not an unreadable record.
+        // Committing its cursor prevents every incremental scan from replaying it.
+        let clean = read
+            .issues
+            .iter()
+            .all(|issue| issue["code"] == "unknownModel");
         for mut issue in read.issues {
             issue["path"] = json!(path.file_name().unwrap_or_default().to_string_lossy());
             issues.push(issue);
@@ -368,7 +412,7 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         tx.commit()?;
     }
     let mut status = json!({"updatedAt":now(),"newEvents":count,"files":paths.len(),"readBytes":read_bytes,
-        "partial":!issues.is_empty(),"issues":issues,"failedFiles":failed_files});
+        "partial":issues.iter().any(|issue| issue["code"] != "unknownModel"),"issues":issues,"failedFiles":failed_files});
     if failed_files > 0 && failed_files == paths.len() {
         status.as_object_mut().unwrap().remove("updatedAt");
         status["error"] = json!(format!(

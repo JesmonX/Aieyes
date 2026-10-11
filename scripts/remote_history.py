@@ -77,6 +77,19 @@ def _agy_iter(path):
                     pos = 0
                     while pos < len(index):
                         step, pos = _agy_varint(index, pos); models[step] = model
+        # Newer agy executor metadata supplies the complete (not 16-byte
+        # truncated) model name. Join by explicit step index only.
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='executor_metadata'").fetchone():
+            for index, raw in db.execute('SELECT idx,data FROM executor_metadata'):
+                try:
+                    envelope = _agy_fields(raw)
+                    config = _agy_message(envelope, 10)
+                    name = _agy_text(_agy_message(config, 1), 28)
+                except (ValueError, TypeError, IndexError):
+                    # An optional, incompatible executor envelope must not lose usage.
+                    continue
+                if name and (index not in models or name.startswith(models[index])):
+                    models[index] = name
         session = db.execute('SELECT cascade_id FROM trajectory_meta LIMIT 1').fetchone()[0]
         if not session:
             raise ValueError('Antigravity 会话标识缺失')
@@ -253,8 +266,9 @@ def _incremental(request):
                 try:
                     for row in _agy_iter(path):
                         if 'issue' in row:
-                            clean = False
                             value = row['issue']
+                            if value['code'] != 'unknownModel':
+                                clean = False
                             issue(path, value['message'], value['code'])
                             continue
                         event = row['event']
@@ -308,7 +322,9 @@ def _incremental(request):
                     except Exception as error:
                         failed += 1
                         issue(path, error)
-        emit('done', files=file_count, readBytes=read_bytes, issues=issues, partial=bool(issues), failedFiles=failed, invalidRecords=invalid_records)
+        emit('done', files=file_count, readBytes=read_bytes, issues=issues,
+             partial=any(row['code'] != 'unknownModel' for row in issues),
+             failedFiles=failed, invalidRecords=invalid_records)
     except Exception as error:
         emit('error', error='远程记录读取失败：' + str(error)[:400])
 
@@ -342,7 +358,8 @@ try:
             if size > 48 * 1024 * 1024:
                 raise ValueError('远程记录超过单批大小，请缩小数据目录范围')
             result.append(dict(path=path, events=events))
-        response = dict(files=result, issues=issues, partial=bool(issues), failedFiles=failed)
+        response = dict(files=result, issues=issues,
+                        partial=any(row['code'] != 'unknownModel' for row in issues), failedFiles=failed)
         if failed and not result:
             response['error'] = 'Antigravity 会话文件读取失败：' + '；'.join(issue['path'] + ' · ' + issue['message'] for issue in issues[:3])
         print(json.dumps(response, separators=(',', ':')))

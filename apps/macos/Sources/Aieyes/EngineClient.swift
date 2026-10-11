@@ -591,7 +591,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         do {
             let rows: [Acknowledgement] = try await engine.call(full ? "sources.rescan" : "sources.scan", params: sourceID.map { ["sourceId": $0] } ?? [:])
             let failures = rows.compactMap { row -> ActionFailure? in
-                guard let error = row.error ?? (row.partial == true ? row.issues?.map { ($0.path.map { $0 + " · " } ?? "") + $0.message }.joined(separator: "；") ?? "部分记录需要处理" : nil) else { return nil }
+                let errors = row.issues?.filter { $0.code != "unknownModel" } ?? []
+                guard let error = row.error ?? (row.partial == true ? errors.isEmpty ? "部分记录需要处理" : errors.map { ($0.path.map { $0 + " · " } ?? "") + $0.message }.joined(separator: "；") : nil) else { return nil }
                 return ActionFailure(action: key, itemID: row.id, name: row.name ?? settings.sources.first { $0.id == row.id }?.name ?? "数据源", reason: error)
             }
             let loaded = await reload()
@@ -599,7 +600,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             finishRefresh(key, failures: allFailures, itemID: sourceID)
             if full {
                 rescanFailed = !allFailures.isEmpty
-                rescanMessage = allFailures.isEmpty ? (rows.isEmpty ? "没有可重扫的已启用数据源。" : "全量重扫完成，已更新历史统计（\(rows.count) 个数据源）。") : allFailures.map { $0.name + " · " + $0.reason }.joined(separator: "；")
+                let unknown = rows.reduce(0) { $0 + ($1.issues?.filter { $0.code == "unknownModel" }.count ?? 0) }
+                let warning = unknown > 0 ? " \(unknown) 条调用的模型身份待确认，Token 已保留、暂不计价。" : ""
+                rescanMessage = allFailures.isEmpty ? (rows.isEmpty ? "没有可重扫的已启用数据源。" : "全量重扫完成，已更新历史统计（\(rows.count) 个数据源）。" + warning) : allFailures.map { $0.name + " · " + $0.reason }.joined(separator: "；")
             }
         } catch {
             message = error.localizedDescription

@@ -177,5 +177,15 @@ pub(crate) fn history_stream(
         payload.len() <= 16 * 1024 * 1024,
         "远程游标清单过大，请缩小数据目录范围"
     );
-    process::run_lines(command, payload, Duration::from_secs(45), receive)
+    let idle_timeout = Duration::from_secs(45);
+    process::run_lines(command, payload, idle_timeout, receive).map_err(|error| {
+        if error.to_string() == "查询超时" {
+            anyhow::anyhow!(
+                "远程历史读取超时（{} 秒未收到下一批统计）；已提交进度保留，可重试",
+                idle_timeout.as_secs()
+            )
+        } else {
+            error
+        }
+    })
 }
