@@ -37,6 +37,7 @@ impl Store {
         CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,provider TEXT NOT NULL,account_id TEXT NOT NULL,model TEXT NOT NULL,stamp INTEGER NOT NULL,payload TEXT NOT NULL,cost REAL NOT NULL,priced_tokens INTEGER NOT NULL,price TEXT);
         CREATE INDEX IF NOT EXISTS events_stamp ON events(stamp);
         CREATE INDEX IF NOT EXISTS events_model ON events(model);
+        CREATE INDEX IF NOT EXISTS events_account ON events(provider,account_id);
         CREATE TABLE IF NOT EXISTS event_sources(event_id TEXT NOT NULL REFERENCES events(id),source_id TEXT NOT NULL,PRIMARY KEY(event_id,source_id));
         CREATE INDEX IF NOT EXISTS event_sources_source ON event_sources(source_id,event_id);
         CREATE TABLE IF NOT EXISTS source_identities(source_id TEXT NOT NULL,provider TEXT NOT NULL,account_id TEXT NOT NULL,PRIMARY KEY(source_id,provider,account_id));
@@ -103,7 +104,7 @@ impl Store {
                 crate::providers::normalize_settings(&mut settings);
                 let mut stmt = self
                     .db
-                    .prepare("SELECT value FROM kv WHERE key LIKE 'deleted-account:%'")?;
+                    .prepare("SELECT value FROM kv WHERE key LIKE 'deleted-account:%' AND EXISTS(SELECT 1 FROM events WHERE provider=json_extract(kv.value,'$.provider') AND account_id=json_extract(kv.value,'$.id')) ORDER BY json_extract(value,'$.deletedAt'),key")?;
                 let values = stmt
                     .query_map([], |r| r.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -157,6 +158,15 @@ impl Store {
         anyhow::ensure!(
             ["indigo", "blue", "teal", "purple"].contains(&s.appearance.accent.as_str()),
             "无效的强调色"
+        );
+        anyhow::ensure!(
+            ["classic", "tableau", "tol", "set2", "nord"]
+                .contains(&s.appearance.chart_palette.as_str()),
+            "无效的图表配色"
+        );
+        anyhow::ensure!(
+            ["high", "low"].contains(&s.appearance.chart_contrast.as_str()),
+            "无效的图表对比度"
         );
         let mut normalized = s.clone();
         crate::providers::normalize_settings(&mut normalized);

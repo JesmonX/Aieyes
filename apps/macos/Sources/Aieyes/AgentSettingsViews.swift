@@ -9,7 +9,9 @@ extension AppModel {
     }
     func acceptConfiguration(_ saved: Settings) {
         for account in saved.accounts where !settings.accounts.contains(where: { $0.key == account.key }) { PanelAccountPreference.includeNew(account, accounts: saved.accounts) }
+        invalidateAccountStatuses()
         settings = saved; settingsDraft = saved; settingsMessage = "已保存"
+        if selectedAccount != "all" && selectedAccount != "none" && !settings.filterAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
         scheduleConfigurationRefresh()
     }
     func scheduleConfigurationRefresh() {
@@ -17,6 +19,7 @@ extension AppModel {
         settingsRefreshTask = Task {
             do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
             guard !Task.isCancelled, !installingUpdate else { return }
+            Task { await loadAccountStatuses(refresh: true, provider: "codex") }
             await reload()
             guard !Task.isCancelled, !installingUpdate else { return }
             await refreshQuotas()
@@ -66,7 +69,7 @@ extension AppModel {
     func accountMachineIDs(_ provider: String, includePaused: Bool = false) -> [String] {
         let config = agentConfigurations.first { $0.provider == provider }
         let active = (config?.enabled == true ? config?.machineIds ?? [] : []).filter { id in id == "local" || settings.hosts.contains { $0.id == id && $0.enabled } }
-        if !includePaused { return active.sorted { $0 == "local" && $1 != "local" || ($0 != "local" && $1 != "local" && $0 < $1) } }
+        if !includePaused { return Array(Set(active)).sorted { $0 == "local" && $1 != "local" || ($0 != "local" && $1 != "local" && $0 < $1) } }
         return Array(Set(active + settings.sources.filter { $0.provider == provider }.map { $0.hostId ?? "local" })).sorted { $0 == "local" && $1 != "local" || ($0 != "local" && $1 != "local" && $0 < $1) }
     }
     func machineName(_ id: String) -> String { id == "local" ? "本机" : settings.hosts.first { $0.id == id }.map { $0.name.isEmpty ? $0.target : $0.name } ?? "已移除设备" }
@@ -79,13 +82,11 @@ extension AppModel {
         let usageText = current ? "正在使用" : (!rows.isEmpty && rows.allSatisfy { $0.current == false } ? "未使用" : "使用状态待确认")
         return loginText + " · " + usageText + (uncertain ? " · 待确认" : "")
     }
-    func accountCounts(_ account: AgentAccount) -> String {
-        let machines = accountMachineIDs(account.provider)
-        let logged = machines.filter { machine in accountStatuses.contains { $0.accountKey == account.key && $0.machineId == machine && $0.current == true } }.count
-        let stored = machines.filter { machine in accountStatuses.contains { $0.accountKey == account.key && $0.machineId == machine && ($0.current == true || $0.credential == true) } }.count
-        let pending = machines.contains { machine in let rows = accountStatuses.filter { $0.accountKey == account.key && $0.machineId == machine }; return rows.isEmpty || rows.contains { $0.current == nil || $0.credential == nil || $0.error != nil } }
-        return "已登录 \(stored)/\(machines.count) · 使用中 \(logged)/\(machines.count)" + (pending ? " · 有设备待确认" : "")
+    func accountDeviceCounts(_ key: String) -> AccountDeviceCounts {
+        let provider = settings.accounts.first { $0.key == key }?.provider ?? "codex"
+        return AccountDeviceCounts(accountKey: key, machines: accountMachineIDs(provider), rows: accountStatuses)
     }
+    func accountCounts(_ account: AgentAccount) -> String { accountDeviceCounts(account.key).summary }
     func configureAgent(_ provider: String, enabled: Bool? = nil, machines: [String]? = nil) async {
         guard !settingsSaving else { return }
         settingsSaving = true; settingsMessage = nil
@@ -109,6 +110,7 @@ extension AppModel {
         var next = settings
         next.appearance = settingsDraft.appearance; next.proxy = settingsDraft.proxy
         next.proxyTestUrls = settingsDraft.proxyTestUrls; next.menuMetric = settingsDraft.menuMetric
+        next.historyShowDeletedAccounts = settingsDraft.historyShowDeletedAccounts
         next.historyRefreshSeconds = settingsDraft.historyRefreshSeconds; next.serverForegroundRefreshSeconds = settingsDraft.serverForegroundRefreshSeconds; next.localMonitor = settingsDraft.localMonitor; next.refreshSeconds = settingsDraft.refreshSeconds; next.serverRefreshSeconds = settingsDraft.serverRefreshSeconds
         guard next != settings else { return }
         do { try await persistConfiguration(next) } catch { settingsMessage = error.localizedDescription }

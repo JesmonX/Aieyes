@@ -215,6 +215,21 @@ struct AccountDeviceStatus: Codable, Identifiable {
         return (current == false ? "身份不一致 · 当前登录 " : "正在使用 ") + identity.summary + (error != nil ? " · 上次检查" : "")
     }
 }
+struct AccountDeviceCounts {
+    let total: Int, logged: Int, using: Int
+    let pending: Bool
+    init(accountKey: String, machines: [String], rows: [AccountDeviceStatus]) {
+        let ids = Set(machines)
+        let matching = rows.filter { $0.accountKey == accountKey }
+        total = ids.count
+        logged = ids.filter { id in matching.contains { $0.machineId == id && ($0.current == true || $0.credential == true) } }.count
+        using = ids.filter { id in matching.contains { $0.machineId == id && $0.current == true } }.count
+        pending = ids.contains { id in let rows = matching.filter { $0.machineId == id }; return rows.isEmpty || rows.contains { $0.current == nil || $0.credential == nil || $0.error != nil } }
+    }
+    var loginText: String { "已登录设备\(logged)/\(total)" }
+    var usageText: String { "使用中设备\(using)/\(total)" }
+    var summary: String { loginText + " · " + usageText + (pending ? " · 有设备待确认" : "") }
+}
 struct AgentAccount: Codable, Equatable, Identifiable {
     var quotaRefreshSeconds: Int?
     var deviceSettings: [AccountDeviceSettings]?
@@ -274,7 +289,15 @@ struct Host: Codable, Equatable, Identifiable {
     }
 }
 struct AppearanceSettings: Codable, Equatable {
-    var theme = "system", accent = "indigo"
+    var theme = "system", accent = "indigo", chartPalette = "classic", chartContrast = "high"
+    init() {}
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        theme = try container.decodeIfPresent(String.self, forKey: .theme) ?? "system"
+        accent = try container.decodeIfPresent(String.self, forKey: .accent) ?? "indigo"
+        chartPalette = try container.decodeIfPresent(String.self, forKey: .chartPalette) ?? "classic"
+        chartContrast = try container.decodeIfPresent(String.self, forKey: .chartContrast) ?? "high"
+    }
 }
 struct LocalMonitor: Codable, Equatable {
     var enabled = true
@@ -286,6 +309,11 @@ struct LocalMonitor: Codable, Equatable {
 struct Settings: Codable, Equatable {
     var deletedAccounts: [AgentAccount]?
     var historicalAccounts: [AgentAccount] { accounts + (deletedAccounts ?? []) }
+    var historyShowDeletedAccounts: Bool?
+    var filterAccounts: [AgentAccount] { accounts + (historyShowDeletedAccounts == true ? deletedAccounts ?? [] : []) }
+    func accountFilterName(_ account: AgentAccount) -> String {
+        account.name + (accounts.contains { $0.key == account.key } ? (account.archived == true ? "（已归档）" : "") : "（已删除）")
+    }
     var agents: [AgentConfiguration]?
     var accountAliases: [String: String]?
 

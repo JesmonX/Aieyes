@@ -61,7 +61,7 @@ function fixture(){
    await page.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&samplingFixture.settings.appearance?.theme==='light');
    await page.locator('[name=appearanceAccent]').selectOption('teal');
    await page.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&samplingFixture.settings.appearance?.accent==='teal');
-   assert.deepEqual(await page.evaluate(()=>samplingFixture.settings.appearance),{theme:'light',accent:'teal'});assert.equal(await page.locator('html').getAttribute('data-theme'),'light');
+   assert.deepEqual(await page.evaluate(()=>samplingFixture.settings.appearance),{theme:'light',accent:'teal',chartPalette:'classic',chartContrast:'high'});assert.equal(await page.locator('html').getAttribute('data-theme'),'light');
    await page.screenshot({path:path.join(out,'settings-theme.png')});
   }
   assert.deepEqual(errors,[]);await page.close();

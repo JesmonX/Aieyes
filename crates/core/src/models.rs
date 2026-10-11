@@ -295,6 +295,7 @@ pub struct Settings {
     #[serde(skip_deserializing)]
     pub configuration_issues: Vec<String>,
     pub deleted_accounts: Vec<Account>,
+    pub history_show_deleted_accounts: bool,
     pub agents: Vec<AgentConfiguration>,
     pub account_aliases: std::collections::BTreeMap<String, String>,
     pub appearance: Appearance,
@@ -317,6 +318,7 @@ impl Default for Settings {
         Self {
             configuration_issues: vec![],
             deleted_accounts: vec![],
+            history_show_deleted_accounts: false,
             agents: vec![],
             appearance: Appearance::default(),
             account_aliases: Default::default(),
@@ -345,12 +347,16 @@ impl Default for Settings {
 pub struct Appearance {
     pub theme: String,
     pub accent: String,
+    pub chart_palette: String,
+    pub chart_contrast: String,
 }
 impl Default for Appearance {
     fn default() -> Self {
         Self {
             theme: "system".into(),
             accent: "indigo".into(),
+            chart_palette: "classic".into(),
+            chart_contrast: "high".into(),
         }
     }
 }

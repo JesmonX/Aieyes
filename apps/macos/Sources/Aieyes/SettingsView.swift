@@ -194,6 +194,14 @@ struct SettingsView: View {
                 Picker("强调色", selection: Binding(get: { model.settingsDraft.appearance?.accent ?? "indigo" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.accent = value; model.settingsDraft.appearance = appearance })) {
                     Text("靛蓝").tag("indigo"); Text("蓝").tag("blue"); Text("青绿").tag("teal"); Text("紫").tag("purple")
                 }
+                Picker("图表配色", selection: Binding(get: { model.settingsDraft.appearance?.chartPalette ?? "classic" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.chartPalette = value; model.settingsDraft.appearance = appearance })) {
+                    ForEach(Palette.chartPresets, id: \.id) { Text($0.name).tag($0.id) }
+                }
+                Picker("图表对比度", selection: Binding(get: { model.settingsDraft.appearance?.chartContrast ?? "high" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.chartContrast = value; model.settingsDraft.appearance = appearance })) {
+                    Text("高对比度").tag("high"); Text("低对比度 · 柔和").tag("low")
+                }
+                ChartPalettePreview(preset: model.settingsDraft.appearance?.chartPalette ?? "classic", contrast: model.settingsDraft.appearance?.chartContrast ?? "high")
+                Text("配色随明暗主题调整，适用于模型柱形图与分布图。高对比度适合小色块；低对比度适合柔和展示，可结合图例与明细读取。").font(AppFont.secondary).foregroundStyle(.secondary)
             }
             Section("菜单栏") {
                 Toggle("显示活跃会话计数（本机，立即生效）", isOn: $showMenuCount)
@@ -207,6 +215,8 @@ struct SettingsView: View {
                 TextField("服务器后台间隔（秒）", value: $model.settingsDraft.serverRefreshSeconds, format: .number).focused($generalField, equals: "background")
             }
             Section("历史记录") {
+                Toggle("在筛选中显示已删除账户", isOn: Binding(get: { model.settingsDraft.historyShowDeletedAccounts == true }, set: { model.settingsDraft.historyShowDeletedAccounts = $0 }))
+                Text("默认隐藏已删除账户；历史用量仍计入总统计。开启后仅显示有历史记录的已删除账户。").font(AppFont.secondary).foregroundStyle(.secondary)
                 Text("手动从头读取所有已启用本机及服务器数据源的完整日志，修复可确认的历史重复。保留已有历史和价格快照；已丢失的日志无法恢复或核实。").font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack {
                     Button(model.rescanning ? "全量重扫中…" : "全量重扫") { confirmRescan = true }
@@ -561,5 +571,25 @@ extension View {
             Button("继续编辑", role: .cancel) { }
             Button("放弃更改", role: .destructive, action: discard)
         } message: { Text("此编辑器的输入尚未保存，放弃后无法恢复。") }
+    }
+}
+
+private struct ChartPalettePreview: View {
+    let preset: String, contrast: String
+    private let heights: [CGFloat] = [0.54, 0.82, 0.66, 0.94, 0.44, 0.74, 0.60, 0.88, 0.50, 0.70]
+    var body: some View {
+        HStack(spacing: 12) {
+            ForEach([false, true], id: \.self) { dark in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(dark ? "深色" : "浅色").font(AppFont.secondary).foregroundStyle(dark ? Color.white : Color.black)
+                    HStack(alignment: .bottom, spacing: 5) {
+                        ForEach(Array(Palette.chartPreset(named: preset).colors(dark: dark, contrast: contrast).enumerated()), id: \.offset) { index, hex in
+                            RoundedRectangle(cornerRadius: 2).fill(Palette.adaptive(hex, hex)).frame(height: heights[index] * 48).frame(maxWidth: .infinity)
+                        }
+                    }.frame(height: 48, alignment: .bottom)
+                }.padding(12).frame(maxWidth: .infinity).background(Palette.adaptive(dark ? 0x29292e : 0xffffff, dark ? 0x29292e : 0xffffff), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityElement(children: .ignore).accessibilityLabel("\(dark ? "深色" : "浅色")背景柱形图配色预览")
+            }
+        }
     }
 }

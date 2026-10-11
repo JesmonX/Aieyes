@@ -9,10 +9,12 @@ pub(super) enum Usage {
     UnknownProfile,
 }
 
-fn environment<'a>(env: &'a [u8], key: &str) -> Option<&'a str> {
+pub(super) fn environment<'a>(env: &'a [u8], key: &str) -> Option<&'a str> {
     env.split(|b| *b == 0).find_map(|entry| {
         let (name, value) = std::str::from_utf8(entry).ok()?.split_once('=')?;
-        (name == key && !value.trim().is_empty()).then_some(value)
+        ((name == key || (cfg!(windows) && name.eq_ignore_ascii_case(key)))
+            && !value.trim().is_empty())
+        .then_some(value)
     })
 }
 
@@ -150,7 +152,14 @@ fn classify(config: &toml::Value, env: &[u8]) -> Usage {
 }
 
 pub(super) fn inspect(args: &[String], env: &[u8], started: Option<SystemTime>) -> Usage {
-    inspect_with_system(args, env, started, Path::new("/etc/codex/config.toml"))
+    #[cfg(unix)]
+    let system = std::path::PathBuf::from("/etc/codex/config.toml");
+    #[cfg(windows)]
+    let system = std::path::PathBuf::from(
+        std::env::var_os("ProgramData").unwrap_or_else(|| "C:\\ProgramData".into()),
+    )
+    .join("OpenAI/Codex/config.toml");
+    inspect_with_system(args, env, started, &system)
 }
 
 fn inspect_with_system(
@@ -198,7 +207,10 @@ fn inspect_with_system(
     };
     let Some(home) = environment(env, "CODEX_HOME")
         .map(std::path::PathBuf::from)
-        .or_else(|| environment(env, "HOME").map(|s| Path::new(s).join(".codex")))
+        .or_else(|| {
+            environment(env, if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .map(|s| Path::new(s).join(".codex"))
+        })
     else {
         return fallback;
     };

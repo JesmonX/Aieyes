@@ -9,6 +9,7 @@ if command -v python3 >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; 
 "$PYTHON" scripts/test-collectors.py
 "$PYTHON" scripts/test-wakeups.py
 "$PYTHON" scripts/sync-phase-colors.py --check
+"$PYTHON" scripts/sync-chart-palettes.py --check
 "$PYTHON" scripts/sync-core-contracts.py --check
 for script in apps/desktop/web/*.js; do node --check "$script"; done
 node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs

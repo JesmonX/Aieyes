@@ -3,8 +3,8 @@
   const e = value => escapeHTML(value ?? '');
   let directorySelection = null, saveQueue = Promise.resolve(), pendingSaves = 0;
   const accountDrafts = new Map(), accountErrors = new Map();
-  let showCodex = false, detailKey = '', statusRows = [], statusLoading = false, statusLoaded = false, cleanupRows = [], syncMessage = '', syncRunning = false, refreshTimer;
-  let statusRevision = 0;
+  let showCodex = false, detailKey = '', statusRows = [], statusLoading = false, statusLoaded = false, statusFullLoaded = false, cleanupRows = [], syncMessage = '', syncRunning = false, refreshTimer;
+  let statusRevision = 0, statusRefreshAgain = false;
   const sourceStatusRequests = new Map(), sourceStatusTasks = new Map();
   const antigravityRefreshTasks = new Map();
   const accountKey = a => a.provider+':'+a.id;
@@ -25,21 +25,30 @@
     const current=rows.some(r=>r.current===true)?'正在使用':rows.length&&rows.every(r=>r.current===false)?'未使用':'使用状态待确认';
     return login+' · '+current+(rows.some(r=>r.error)?' · 待确认':'');
   };
-  function counts(a){const ids=machines(a.provider);return '已登录 '+ids.filter(id=>statuses(a,id).some(loggedIn)).length+'/'+ids.length+' · 使用中 '+ids.filter(id=>statuses(a,id).some(r=>r.current===true)).length+'/'+ids.length+(ids.some(id=>{const rows=statuses(a,id);return !rows.length||rows.some(r=>r.current==null||r.credential==null||r.error);})?' · 有设备待确认':'');}
-  const repaint=()=>{if(state.page==='settings'&&state.settingsTab==='accounts'&&!document.getElementById('editor')?.open&&!document.activeElement?.matches('[data-account-field],[data-command-field]'))renderSettings(false);};
-  async function refreshStatuses(refresh=true){
+  function deviceCounts(a){
+    const ids=machines(a.provider), rows=id=>statuses(a,id);
+    return {total:ids.length,logged:ids.filter(id=>rows(id).some(loggedIn)).length,using:ids.filter(id=>rows(id).some(r=>r.current===true)).length,pending:ids.some(id=>!rows(id).length||rows(id).some(r=>r.current==null||r.credential==null||r.error))};
+  }
+  function counts(a){const c=deviceCounts(a);return `已登录设备${c.logged}/${c.total} · 使用中设备${c.using}/${c.total}`+(c.pending?' · 有设备待确认':'');}
+  function countsHTML(key){const a=state.settings.accounts.find(a=>accountKey(a)===key);if(!a)return '';const c=deviceCounts(a);return `<span>已登录设备${c.logged}/${c.total}</span><span>使用中设备${c.using}/${c.total}</span>${c.pending?'<small>有设备待确认</small>':''}`;}
+  const repaint=()=>{
+    document.querySelectorAll('[data-device-counts]').forEach(el=>{el.innerHTML=countsHTML(el.dataset.deviceCounts);});
+    if(state.page==='settings'&&state.settingsTab==='accounts'&&!document.getElementById('editor')?.open&&!document.activeElement?.matches('[data-account-field],[data-command-field]'))renderSettings(false);
+  };
+  async function refreshStatuses(refresh=true,provider=null){
     if(statusLoading)return;statusLoading=true;
     const revision=statusRevision;
     try{
       const loaded=await api('accounts.status.get');if(revision===statusRevision)statusRows=Array.isArray(loaded)?loaded:[];
       cleanupRows=await api('accounts.cleanup.list');if(!Array.isArray(cleanupRows))cleanupRows=[];
       statusLoaded=true;repaint();
-      if(refresh)for(const a of state.settings.accounts.filter(a=>!a.archived))for(const s of state.settings.sources.filter(s=>s.provider===a.provider&&s.enabled&&machines(a.provider).includes(machineId(s)))){
-        if(state.page!=='settings'||state.settingsTab!=='accounts')return;
+      if(refresh)for(const a of state.settings.accounts.filter(a=>!a.archived&&(!provider||a.provider===provider)))for(const s of state.settings.sources.filter(s=>s.provider===a.provider&&s.enabled&&machines(a.provider).includes(machineId(s))).sort((a,b)=>Number(Boolean(a.hostId))-Number(Boolean(b.hostId)))){
+        if(revision!==statusRevision)return;
         try{const row=await api('accounts.status.refresh',{accountKey:accountKey(a),sourceId:s.id});if(revision===statusRevision){statusRows=statusRows.filter(r=>!(r.accountKey===row.accountKey&&r.sourceId===row.sourceId));statusRows.push(row);repaint();}}catch{/* Settings changed while this device was being checked. */}
       }
+      if(refresh&&!provider&&revision===statusRevision)statusFullLoaded=true;
     }catch(error){notify('设备状态读取失败：'+String(error),'error');}
-    finally{statusLoading=false;await syncIdentitySettings();repaint();}
+    finally{statusLoading=false;await syncIdentitySettings();repaint();if(statusRefreshAgain){statusRefreshAgain=false;void refreshStatuses(true,state.page==='settings'&&state.settingsTab==='accounts'?null:'codex');}}
   }
   async function syncIdentitySettings(reportFailure=false) {
     if(pendingSaves||state.settingsSaving)return;
@@ -103,7 +112,7 @@
     const pref=AieyesUI.panelPreference();
     for(const a of added){const choice=pref.providers[a.provider];if(choice?.mode==='custom'&&!a.archived&&a.quotaEnabled){const keys=AieyesUI.panelAccounts(saved,[],pref)[a.provider]??[];if(keys.length<5&&!keys.includes(a.provider+':'+a.id))choice.keys=[...keys,a.provider+':'+a.id];}}
     if(added.length){try{localStorage.setItem('aieyes.panel.accounts.v2',JSON.stringify(pref));}catch{notify('账户已保存，本机面板偏好暂时无法写入','error');}}
-    statusLoaded=false;state.settings=saved;state.settingsDraft=structuredClone(saved);state.settingsBaseline=configKey(saved);state.lastQuota=0;
+    statusRevision++;if(statusLoading)statusRefreshAgain=true;for(const id of sourceStatusRequests.keys())sourceStatusRequests.set(id,statusRevision);statusLoaded=false;statusFullLoaded=false;state.settings=saved;state.settingsDraft=structuredClone(saved);state.settingsBaseline=configKey(saved);state.lastQuota=0;
     window.AieyesTheme?.apply(saved.appearance);
   }
   async function commit(next, base=state.settings) {
@@ -231,11 +240,11 @@
     document.querySelectorAll('[data-source-advanced]').forEach(b=>b.onclick=()=>advanced(state.settings.sources.find(s=>s.id===b.dataset.sourceAdvanced)));
     document.querySelectorAll('[data-source-add]').forEach(b=>b.onclick=()=>advanced(null,b.dataset.sourceAdd));
     document.querySelectorAll('[data-agent-host]').forEach(b=>b.onclick=()=>{state.settingsTab='hosts';renderSettings(false);editItem();});
-    if($('#accounts-back'))$('#accounts-back').onclick=()=>{showCodex=false;statusLoaded=false;renderSettings(false);};
+    if($('#accounts-back'))$('#accounts-back').onclick=()=>{showCodex=false;statusLoaded=false;statusFullLoaded=false;renderSettings(false);};
     if($('#account-detail-back'))$('#account-detail-back').onclick=()=>{detailKey='';renderSettings(false);};
     if($('#account-status-refresh'))$('#account-status-refresh').onclick=()=>refreshStatuses(true);
     document.querySelectorAll('[data-deployment-sync]').forEach(b=>b.onclick=syncDeployments);
-    if(state.settingsTab==='accounts'&&!showCodex&&!statusLoaded&&!statusLoading)void refreshStatuses(true);
+    if(state.settingsTab==='accounts'&&!showCodex&&!statusFullLoaded&&!statusLoading)void refreshStatuses(true);
     document.querySelectorAll('[data-account-add]').forEach(b=>b.onclick=()=>addAccount(null,b.dataset.accountAdd));
     const account=key=>state.settings.accounts.find(a=>a.provider+':'+a.id===key);
     document.querySelectorAll('[data-account-edit]').forEach(b=>b.onclick=()=>{detailKey=b.dataset.accountEdit;renderSettings(false);});
@@ -263,7 +272,8 @@
     for(const [key,value] of [...accountDrafts]){const a=state.settings.accounts.find(a=>key.startsWith(accountKey(a)+':'));if(a)await queueAccountField(a,key.slice(accountKey(a).length+1),value);}
     if(accountErrors.size){notify('账户设置尚未保存，请修正输入或重试。','error');return false;}return true;
   }
-  window.AieyesAgentSettings={flush,agentsHTML,accountsHTML,bind,commit,accept,advanced,editAccount,addAccount,profiles,linked,refreshStatuses,refreshCodexSource,refreshAntigravitySource,syncIdentitySettings,syncDeployments,get antigravityRefreshing(){return antigravityRefreshTasks.size>0;},openDetails(a){detailKey=accountKey(a);showCodex=false;state.page='settings';state.settingsTab='accounts';render();}};
+  window.AieyesAgentSettings={flush,agentsHTML,accountsHTML,bind,commit,accept,advanced,editAccount,addAccount,profiles,linked,deviceCounts,countsHTML,refreshStatuses,refreshCodexSource,refreshAntigravitySource,syncIdentitySettings,syncDeployments,get statusLoaded(){return statusLoaded;},get statusBusy(){return statusLoading;},get antigravityRefreshing(){return antigravityRefreshTasks.size>0;},openDetails(a){detailKey=accountKey(a);showCodex=false;state.page='settings';state.settingsTab='accounts';render();}};
+  void window.AieyesApp.ready.then(()=>{if(!statusLoaded)return refreshStatuses(true,'codex');});
 })();
 
 // A separate modal keeps the connection form intact during the CLI's authorization flow.

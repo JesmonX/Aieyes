@@ -412,6 +412,7 @@ for line in sys.stdin:
         let staleAccountStatus = #"[{"accountKey":"antigravity:a","sourceId":"s","machineId":"local","current":null,"credential":null}]"#
         try Data(staleAccountStatus.utf8).write(to: root.appendingPathComponent("account-status.json"))
         try Data().write(to: root.appendingPathComponent("hold-account-status"))
+        try? FileManager.default.removeItem(at: root.appendingPathComponent("account-status-started"))
         let oldRead = Task { await agyModel.loadAccountStatuses() }
         while !FileManager.default.fileExists(atPath: root.appendingPathComponent("account-status-started").path) { try await Task.sleep(for: .milliseconds(10)) }
         let acceptedAt = Date()
@@ -429,6 +430,26 @@ for line in sys.stdin:
         precondition(agyModel.settingsDraft.refreshSeconds == 321, "Identity refresh must preserve unsaved input")
         let login = try JSONDecoder().decode(AntigravityLoginState.self, from: Data(#"{"id":"session","phase":"authenticated","message":"登录有效","authenticated":true,"identityConfirmed":true,"workspaceConfirmationRequired":false,"accountStatus":{"accountKey":"antigravity:a","sourceId":"s","machineId":"local","current":true,"credential":true}}"#.utf8))
         precondition(login.accountStatus?.current == true && login.workspaceConfirmationRequired == false)
+        var historySettings = Settings()
+        let historical = AgentAccount(id: "history", name: "旧账户历史", provider: "codex", quotaEnabled: false)
+        historySettings.deletedAccounts = [historical]
+        precondition(historySettings.filterAccounts.isEmpty)
+        historySettings.historyShowDeletedAccounts = true
+        precondition(historySettings.filterAccounts.map(\.key) == ["codex:history"])
+        precondition(historySettings.accountFilterName(historical) == "旧账户历史（已删除）")
+        model.settings = historySettings; model.settingsDraft = historySettings
+        model.provider = "all"; model.selectedAccount = "codex:history"; model.selectedSource = "all"; model.selectedModel = "all"
+        await model.reload()
+        let lastHistoryCall = try String(contentsOf: root.appendingPathComponent("calls.jsonl"), encoding: .utf8).split(separator: "\n").compactMap {
+            try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+        }.last { $0["method"] as? String == "dashboard" }
+        let historyParams = lastHistoryCall?["params"] as? [String: Any]
+        precondition(historyParams?["accountId"] as? String == "history" && historyParams?["provider"] as? String == "codex")
+        precondition(model.appliedScope.contains("旧账户历史（已删除）"))
+        model.settingsDraft.historyShowDeletedAccounts = false
+        let historyHidden = await model.saveSettingsDraft()
+        precondition(historyHidden && model.selectedAccount == "all" && model.settings.filterAccounts.isEmpty)
+        print("Deleted account history is hidden by default, filters use the historical account identity, and hiding resets a stale selection")
         print("Antigravity login accepts committed identity immediately, rejects older status reads, retains identity after quota failure, and preserves drafts")
         print("Theme quick toggle saves globally, preserves unrelated drafts and retains theme after failure")
         print("Atomic filtered/today snapshots and mapping save/reprice failure recovery passed")

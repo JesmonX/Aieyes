@@ -23,6 +23,7 @@
       checkingSources.delete(sourceId);
       changed?.(targets, [...issues], new Set(checkingSources));
     }));
+    await window.AieyesAgentSettings.refreshStatuses(false);
     return targets;
   }
   function paint() {

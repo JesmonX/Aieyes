@@ -774,6 +774,26 @@ mod tests {
         );
     }
     #[test]
+    fn empty_deleted_accounts_stay_deleted_without_becoming_history_filters() {
+        let (dir, mut e) = fixture();
+        let result = e
+            .account_call("accounts.delete", json!({"accountKey":"codex:a"}))
+            .unwrap();
+        assert_eq!(result["deleted"], true);
+        assert!(e.store.settings().unwrap().deleted_accounts.is_empty());
+        assert_eq!(
+            e.account_call("accounts.delete", json!({"accountKey":"codex:a"}))
+                .unwrap()["deleted"],
+            true
+        );
+        drop(e);
+        let e = Engine::open(dir.path()).unwrap();
+        let s = e.store.settings().unwrap();
+        assert!(s.accounts.is_empty() && s.deleted_accounts.is_empty());
+        assert!(!s.history_show_deleted_accounts);
+        assert!(get(&e.store, "deleted-account:codex:a").unwrap().is_some());
+    }
+    #[test]
     fn delete_preserves_history_credentials_and_deduplication_namespace() {
         let (dir, mut e) = fixture();
         let credential = dir.path().join("auth.json");

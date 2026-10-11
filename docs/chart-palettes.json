@@ -1,0 +1,7 @@
+[
+  {"id":"classic","name":"经典","source":"Aieyes","colors":["6575ed","39a8a0","a879d5","e3a159","d875a6","4bbbd0","7ca768","817bca"]},
+  {"id":"tableau","name":"Tableau · 经典分析","source":"https://vega.github.io/vega/docs/schemes/#tableau10","colors":["4e79a7","f28e2b","e15759","76b7b2","59a14f","edc949","af7aa1","ff9da7","9c755f","bab0ac"]},
+  {"id":"tol","name":"Paul Tol · 明快","source":"https://sronpersonalpages.nl/~pault/","colors":["4477aa","ee6677","228833","ccbb44","66ccee","aa3377","bbbbbb"]},
+  {"id":"set2","name":"ColorBrewer · 柔彩","source":"https://colorbrewer2.org/?n=8&scheme=Set2&type=qualitative","colors":["66c2a5","fc8d62","8da0cb","e78ac3","a6d854","ffd92f","e5c494","b3b3b3"]},
+  {"id":"nord","name":"Nord · 北欧","source":"https://www.nordtheme.com/docs/colors-and-palettes/","colors":["5e81ac","a3be8c","d08770","b48ead","88c0d0","ebcb8b","bf616a","8fbcbb"]}
+]

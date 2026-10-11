@@ -39,7 +39,7 @@ import Combine
         model = AppModel()
         appearanceController = AppAppearanceController(popover: popover)
         model.$settings.map(\.appearance).removeDuplicates().sink { [weak self] appearance in
-            self?.appearanceController?.apply(theme: appearance?.theme ?? "system", accent: appearance?.accent ?? "indigo")
+            self?.appearanceController?.apply(theme: appearance?.theme ?? "system", accent: appearance?.accent ?? "indigo", chartPalette: appearance?.chartPalette ?? "classic", chartContrast: appearance?.chartContrast ?? "high")
         }.store(in: &cancellables)
         AppUpdater.shared.prepareInstallation = { [weak self] _ in
             guard let self else { return false }
@@ -401,6 +401,7 @@ import Combine
     private func renderSnapshots(to directory: String) async {
         do {
             model.settings = try await model.engine.call("settings.get"); model.settingsDraft = model.settings; model.settingsLoaded = true
+            await model.loadAccountStatuses()
             await model.reload()
             await model.loadPrices()
             await model.refreshSessions()
@@ -473,6 +474,9 @@ import Combine
             model.selectedModel = "all"; await model.reload()
             try await capture(RootView(model: model, compact: false), size: NSSize(width: 760, height: 480), dark: false, to: root.appendingPathComponent("filter-restored.png"))
             if let quota = model.dashboard.quotas.first {
+                for dark in [false, true] {
+                    try await capture(QuotaCard(quota: quota, deviceCounts: model.accountDeviceCounts(quota.id), onSwitch: {}), size: NSSize(width: 340, height: 450), dark: dark, to: root.appendingPathComponent("quota-device-counts-\(dark ? "dark" : "light").png"))
+                }
                 try await capture(QuotaCard(quota: quota), size: NSSize(width: 420, height: 450), dark: false, to: root.appendingPathComponent("single-quota.png"))
             }
             for dark in [false, true] {

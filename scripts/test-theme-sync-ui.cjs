@@ -40,7 +40,7 @@ function fixture(){
     const expectTheme=async(theme)=>{for(const page of [main,panel]){await page.waitForFunction(t=>document.documentElement.dataset.theme===t,theme);assert.equal(await page.evaluate(()=>state.settings.appearance.theme),theme);}};
     await expectTheme('light');
     await main.evaluate(()=>{state.settingsDraft=structuredClone(state.settings);state.settingsDraft.modelMappings.unsaved='keep-this-draft';});
-    await main.locator('[data-theme-toggle]').click();await expectTheme('dark');assert.deepEqual((await rpc('settings.get')).appearance,{theme:'dark',accent:'teal'});
+    await main.locator('[data-theme-toggle]').click();await expectTheme('dark');assert.deepEqual((await rpc('settings.get')).appearance,{theme:'dark',accent:'teal',chartPalette:'classic',chartContrast:'high'});
     assert.equal(await main.evaluate(()=>state.settingsDraft.modelMappings.unsaved),'keep-this-draft');assert.equal((await rpc('settings.get')).modelMappings.unsaved,undefined);
     await panel.evaluate(()=>render());await expectTheme('dark');await panel.evaluate(()=>loadDashboard());await expectTheme('dark');
     await panel.locator('[data-theme-toggle]').click();await expectTheme('light');
@@ -54,12 +54,48 @@ function fixture(){
     failSave=true;await panel.locator('[data-theme-toggle]').click();await panel.getByText('模拟主题保存失败',{exact:false}).waitFor();await panel.waitForFunction(()=>!state.themeSaving);await expectTheme('light');failSave=false;
     await panel.locator('[data-theme-toggle]').click();await expectTheme('dark');await panel.waitForFunction(()=>!state.themeSaving);assert(await panel.locator('#message').isHidden());
     await main.reload();await main.evaluate(()=>AieyesApp.ready);await expectTheme('dark');
+    // Exercise the saved controls against the real core, including every theme/contrast combination.
+    await main.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
+    for(const palette of ['classic','tableau','tol','set2','nord']){
+      await main.locator('[name=appearanceChartPalette]').selectOption(palette);
+      await main.waitForFunction(p=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&state.settings.appearance.chartPalette===p,palette);
+      for(const contrast of ['high','low']){
+        await main.locator('[name=appearanceChartContrast]').selectOption(contrast);
+        await main.waitForFunction(c=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&state.settings.appearance.chartContrast===c,contrast);
+        for(const page of [main,panel])await page.waitForFunction(({palette,contrast})=>document.documentElement.dataset.chartPalette===palette&&document.documentElement.dataset.chartContrast===contrast,{palette,contrast});
+        const saved=(await rpc('settings.get')).appearance;assert.equal(saved.chartPalette,palette);assert.equal(saved.chartContrast,contrast);
+        assert.equal(await main.locator('.chart-palette-sample').count(),2);
+        await main.locator('#chart-palette-preview').screenshot({path:path.join(out,`palette-${palette}-${contrast}.png`)});
+        for(const theme of ['light','dark']){
+          const result=await panel.evaluate(({theme})=>{
+            state.settings.appearance.theme=theme;state.page='agent';
+            const names=['chart-a','chart-b','chart-c'];
+            const usage={tokens:{input:100,output:20,cacheRead:0,cacheWrite:0},total:120,cost:1,pricedTokens:120,events:1};
+            state.dashboard.trendDays=[{...usage,key:'2026-10-11',total:360}];state.dashboard.dayModels=names.map(model=>({day:'2026-10-11',model,usage}));render();
+            document.querySelector('[data-agent-detail=panel-trend]').open=true;
+            const ctx=document.querySelector('#trend').getContext('2d'),paint=[],original=ctx.fillRect;
+            ctx.fillRect=function(...args){paint.push(this.fillStyle);return original.apply(this,args);};
+            try{drawTrend();}finally{ctx.fillRect=original;}
+            const expected=names.map(name=>color(name)),slots=names.map(name=>modelSlots.get(document.documentElement.dataset.chartPalette).get(name));
+            return {paint,expected,slots,colors:chartColors()};
+          },{theme});
+          assert.deepEqual(result.paint,result.expected);assert.equal(new Set(result.slots).size,3);
+          assert(result.expected.every(color=>result.colors.includes(color)));
+        }
+      }
+    }
+    // Reload proves persistence rather than relying on the live storage broadcast.
+    await panel.reload();await panel.evaluate(()=>AieyesApp.ready);
+    assert.equal(await panel.locator('html').getAttribute('data-chart-palette'),'nord');assert.equal(await panel.locator('html').getAttribute('data-chart-contrast'),'low');
+    await main.locator('[name=appearanceChartPalette]').selectOption('classic');await main.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&state.settings.appearance.chartPalette==='classic');
+    await main.locator('[name=appearanceChartContrast]').selectOption('high');await main.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&state.settings.appearance.chartContrast==='high');
+    await expectTheme('dark');
     for(const [page,name] of [[main,'main'],[panel,'panel']]){
       assert.equal(await page.locator('[data-theme-toggle]').getAttribute('aria-label'),'切换到浅色模式');
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
       await page.screenshot({path:path.join(out,name+'-dark.png'),fullPage:true});
       assert.equal(await page.evaluate(()=>themeNative.at(-1).theme),'dark');
     }
-    assert.deepEqual(errors,[]);console.log('Theme: bidirectional main/panel sync, stale rerender, settings picker, system mode, drafts, failed saves and reload passed');
+    assert.deepEqual(errors,[]);console.log('Theme: bidirectional main/panel sync, stale rerender, settings picker, system mode, drafts, failed saves, reload and 20 chart palette variants passed');
   }finally{if(browser)await browser.close();server.close();core.stdin.end();if(core.exitCode===null)await new Promise(resolve=>core.once('exit',resolve));fs.rmSync(root,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);core.kill();process.exitCode=1;});

@@ -13,8 +13,10 @@ import Combine
         }
     }
 
-    func apply(theme: String, accent: String) {
+    func apply(theme: String, accent: String, chartPalette: String = "classic", chartContrast: String = "high") {
         UserDefaults.standard.set(accent, forKey: "appearance.accent")
+        UserDefaults.standard.set(chartPalette, forKey: "appearance.chartPalette")
+        UserDefaults.standard.set(chartContrast, forKey: "appearance.chartContrast")
         NSApp.appearance = theme == "dark" ? NSAppearance(named: .darkAqua) : theme == "light" ? NSAppearance(named: .aqua) : nil
         updatePanel()
     }

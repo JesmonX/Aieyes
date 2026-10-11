@@ -1,7 +1,6 @@
 //! Opt-in Codex account management; credential bytes stay on their owning machine.
 pub mod files;
 pub mod local;
-#[cfg(unix)]
 mod process_auth;
 mod processes;
 pub(crate) mod remote;

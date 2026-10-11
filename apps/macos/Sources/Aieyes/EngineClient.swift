@@ -199,6 +199,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     let accountEngine = EngineClient()
     @Published var accountStatuses: [AccountDeviceStatus] = []
     @Published var accountStatusBusy = false
+    var accountStatusNeedsRefresh = false
     var accountStatusRevision = 0
     var accountSourceStatusRequests: [String: Int] = [:]
     var accountSourceStatusTasks: [String: Task<Bool, Never>] = [:]
@@ -214,9 +215,21 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var networkBusy = false { didSet { scheduleRefreshes() } }
     private var lastNetworkAttempt = Date.distantPast
     private var networkRevision = 0
-    func loadAccountStatuses(refresh: Bool = false) async {
+    func invalidateAccountStatuses() {
+        accountStatusRevision += 1
+        for id in accountSourceStatusRequests.keys { accountSourceStatusRequests[id] = accountStatusRevision }
+        if accountStatusBusy { accountStatusNeedsRefresh = true }
+    }
+    func loadAccountStatuses(refresh: Bool = false, provider: String? = nil) async {
         guard !accountStatusBusy else { return }
-        accountStatusBusy = true; defer { accountStatusBusy = false }
+        accountStatusBusy = true
+        defer {
+            accountStatusBusy = false
+            if accountStatusNeedsRefresh {
+                accountStatusNeedsRefresh = false
+                Task { await loadAccountStatuses(refresh: true, provider: provider) }
+            }
+        }
         let revision = accountStatusRevision
         do {
             let rows: [AccountDeviceStatus] = try await engine.call("accounts.status.get")
@@ -224,11 +237,15 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         }
         catch { settingsMessage = error.localizedDescription; return }
         guard refresh else { return }
-        let accounts = settings.accounts.filter { $0.archived != true }
+        let accounts = settings.accounts.filter { $0.archived != true && (provider == nil || $0.provider == provider) }
+        guard !accounts.isEmpty else { return }
         for account in accounts {
-            for source in settings.sources.filter({ $0.provider == account.provider && $0.enabled }) {
+            for source in settings.sources.filter({ $0.provider == account.provider && $0.enabled }).sorted(by: { ($0.hostId == nil ? 0 : 1) < ($1.hostId == nil ? 0 : 1) }) {
+                if let agents = settings.agents {
+                    guard let agent = agents.first(where: { $0.provider == account.provider }), agent.enabled, agent.machineIds.contains(source.hostId ?? "local") else { continue }
+                }
                 if let host = source.hostId, !settings.hosts.contains(where: { $0.id == host && $0.enabled }) { continue }
-                if Task.isCancelled || installingUpdate { return }
+                if Task.isCancelled || installingUpdate || revision != accountStatusRevision { return }
                 do {
                     let row: AccountDeviceStatus = try await accountEngine.call("accounts.status.refresh", params: ["accountKey":account.key,"sourceId":source.id])
                     if revision == accountStatusRevision { accountStatuses.removeAll { $0.id == row.id }; accountStatuses.append(row) }
@@ -425,8 +442,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             if let hash = info.contractHash, hash != CoreContract.contractHash { throw ClientError.message("应用资源与核心版本不一致，请重新安装同一版本") }
             settings = try await engine.call("settings.get"); PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:]); settingsDraft = settings; settingsLoaded = true
             selectedAccount = settings.accountAliases?[selectedAccount] ?? (selectedAccount.hasPrefix("agy:") ? "antigravity:" + selectedAccount.dropFirst(4) : selectedAccount)
-            if selectedAccount != "all" && selectedAccount != "none" && !settings.accounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
+            if selectedAccount != "all" && selectedAccount != "none" && !settings.filterAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
             if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
+            Task { await loadAccountStatuses(refresh: true, provider: "codex") }
             await reload(); await scan(); await refreshQuotas()
         }
         catch { message = error.localizedDescription }
@@ -459,11 +477,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     private func reloadOnce(request: Int) async -> Bool {
         dashboardPending = true; dashboardError = nil
-        let scope = [range == 1 ? "今日" : "最近 \(range) 天", provider == "all" ? "全部 Agent" : Format.provider(provider), settings.accounts.first { $0.key == selectedAccount }?.name ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
+        let scope = [range == 1 ? "今日" : "最近 \(range) 天", provider == "all" ? "全部 Agent" : Format.provider(provider), settings.historicalAccounts.first { $0.key == selectedAccount }.map { settings.accountFilterName($0) } ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
         var params: [String: Any] = ["days":range]
         if provider != "all" { params["provider"] = provider }
         if selectedAccount == "none" { params["accountId"] = "" }
-        else if let account = settings.accounts.first(where: { $0.key == selectedAccount }) { params["accountId"] = account.id; params["provider"] = account.provider }
+        else if let account = settings.historicalAccounts.first(where: { $0.key == selectedAccount }) { params["accountId"] = account.id; params["provider"] = account.provider }
         if selectedSource != "all" { params["sourceId"] = selectedSource }
         if selectedModel != "all" { params["model"] = selectedModel }
         let unfilteredSelected = params.count == 1 && range == 1
@@ -476,6 +494,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let unfiltered: Dashboard = unfilteredSelected ? next : try await engine.call("dashboard.summary")
             guard request == dashboardRequest else { return true }
             // Publish all surfaces together so a failed secondary query cannot mix filter scopes.
+            Palette.registerModels([next, panel, unfiltered].flatMap { ($0.modelOptions ?? []) + $0.models.map(\.key) + $0.dayModels.map(\.model) })
             dashboard = next; panelDashboard = panel; menuDashboard = unfiltered
             appliedScope = scope; dashboardPending = false
             let names = next.dayModels.map(\.model)
@@ -746,13 +765,17 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let params = try JSONSerialization.jsonObject(with: data) as! [String: Any]
             let baseline = try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings))
             let saved: Settings = try await engine.call("settings.patch", params: ["base": baseline, "settings": params])
-            let historyConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.modelMappings != draft.modelMappings
+            let historyConfigurationChanged = settings.historyShowDeletedAccounts != draft.historyShowDeletedAccounts || settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.modelMappings != draft.modelMappings
             let quotaConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.proxy != draft.proxy
             if settings.proxy != draft.proxy || settings.proxyTestUrls != draft.proxyTestUrls { networkRevision += 1; networkTest = nil; lastNetworkAttempt = .distantPast }
             for account in saved.accounts where !settings.accounts.contains(where: { $0.key == account.key }) { PanelAccountPreference.includeNew(account, accounts: saved.accounts) }
             settings = saved
-            if quotaConfigurationChanged { quotaNextAttempt = nil }
-            if selectedAccount != "all" && selectedAccount != "none" && !settings.historicalAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
+            if quotaConfigurationChanged {
+                quotaNextAttempt = nil
+                invalidateAccountStatuses()
+                Task { await loadAccountStatuses(refresh: true, provider: "codex") }
+            }
+            if selectedAccount != "all" && selectedAccount != "none" && !settings.filterAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
             if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
             message = "已保存"
             if refreshDashboard { Task {

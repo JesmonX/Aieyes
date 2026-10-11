@@ -178,7 +178,7 @@ struct RootView: View {
             }.labelsHidden()
             Picker("账户", selection: $model.selectedAccount) {
                 Text("全部账户").tag("all"); Text("未关联账户").tag("none")
-                ForEach(model.settings.historicalAccounts.filter { model.provider == "all" || $0.provider == model.provider }, id: \.key) { Text($0.name).tag($0.key) }
+                ForEach(model.settings.filterAccounts.filter { model.provider == "all" || $0.provider == model.provider }, id: \.key) { Text(model.settings.accountFilterName($0)).tag($0.key) }
             }.labelsHidden()
             if !compact {
                 Picker("数据源", selection: $model.selectedSource) {
@@ -345,8 +345,8 @@ struct RootView: View {
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } } }
+            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, deviceCounts: model.accountDeviceCounts(quota.id), onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, deviceCounts: model.accountDeviceCounts(quota.id), onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } } }
         }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
     private var filteredHosts: [Host] {
@@ -439,6 +439,8 @@ struct EmptyCard: View {
 }
 
 struct UsageChart: View {
+    @AppStorage("appearance.chartPalette") private var chartPalette = "classic"
+    @AppStorage("appearance.chartContrast") private var chartContrast = "high"
     var days: [Aggregate], rows: [DayModel], cost: Bool
     @State private var selected: String?
     @State private var hidden = Set<String>()
@@ -451,7 +453,7 @@ struct UsageChart: View {
                 }
                 if let selected { RuleMark(x: .value("所选日期", selected)).foregroundStyle(Palette.accent).lineStyle(StrokeStyle(lineWidth: 1, dash: [3])) }
             }
-            .chartForegroundStyleScale(domain: models, range: models.map { Palette.model($0) })
+            .chartForegroundStyleScale(domain: models, range: models.map { Palette.model($0, preset: chartPalette, contrast: chartContrast) })
             .chartXScale(domain: days.map(\.key)).chartLegend(.hidden)
             .chartXSelection(value: $selected)
             .chartXAxis { AxisMarks(values: days.enumerated().filter { $0.offset % max(1, days.count / 7) == 0 }.map { $0.element.key }) { value in AxisValueLabel { if let label = value.as(String.self) { Text(String(label.suffix(5))).font(AppFont.secondary) } } } }
@@ -464,7 +466,7 @@ struct UsageChart: View {
             }
             }.frame(height: 20, alignment: .leading)
             DisclosureGroup("模型图例 · 点击显示或隐藏") {
-                FlowLayout { ForEach(models, id: \.self) { name in Button { if hidden.contains(name) { hidden.remove(name) } else { hidden.insert(name) } } label: { HStack(spacing: 6) { Circle().fill(Palette.model(name)).frame(width: 9, height: 9); Label(name, systemImage: hidden.contains(name) ? "eye.slash" : "eye").strikethrough(hidden.contains(name)) }.font(AppFont.secondary) }.buttonStyle(.plain).help(name).accessibilityLabel((hidden.contains(name) ? "显示模型 " : "隐藏模型 ") + name) } }
+                FlowLayout { ForEach(models, id: \.self) { name in Button { if hidden.contains(name) { hidden.remove(name) } else { hidden.insert(name) } } label: { HStack(spacing: 6) { Circle().fill(Palette.model(name, preset: chartPalette, contrast: chartContrast)).frame(width: 9, height: 9); Label(name, systemImage: hidden.contains(name) ? "eye.slash" : "eye").strikethrough(hidden.contains(name)) }.font(AppFont.secondary) }.buttonStyle(.plain).help(name).accessibilityLabel((hidden.contains(name) ? "显示模型 " : "隐藏模型 ") + name) } }
             }.font(AppFont.secondary)
         }
     }
@@ -505,6 +507,8 @@ struct DailyUsage: View {
 }
 
 struct ModelChart: View {
+    @AppStorage("appearance.chartPalette") private var chartPalette = "classic"
+    @AppStorage("appearance.chartContrast") private var chartContrast = "high"
     var models: [Aggregate], cost: Bool
     @State private var showAll = false
     private var ranked: [Aggregate] { models.sorted { value($0) == value($1) ? $0.key < $1.key : value($0) > value($1) } }
@@ -517,7 +521,7 @@ struct ModelChart: View {
     }
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            Chart(slices) { item in SectorMark(angle: .value(cost ? "USD" : "Token", value(item)), innerRadius: .ratio(0.72), angularInset: 2).foregroundStyle(Palette.model(item.key)).cornerRadius(3) }.frame(width: 132, height: 160)
+            Chart(slices) { item in SectorMark(angle: .value(cost ? "USD" : "Token", value(item)), innerRadius: .ratio(0.72), angularInset: 2).foregroundStyle(Palette.model(item.key, preset: chartPalette, contrast: chartContrast)).cornerRadius(3) }.frame(width: 132, height: 160)
                 .chartBackground { _ in VStack { Text("\(models.count)").font(.title2); Text("模型").font(AppFont.secondary) } }.accessibilityLabel("前五模型与其他；完整数值见列表")
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(showAll ? ranked : Array(ranked.prefix(5))) { item in
@@ -586,6 +590,7 @@ struct QuotaCard: View {
     var collapsible = false
     var sourceName = ""
     var estimate: QuotaEstimate?
+    var deviceCounts: AccountDeviceCounts?
     var onSwitch: (() -> Void)?
     var onEstimate: ((String?) -> Void)?
     var onCredits: (() -> Void)?
@@ -596,14 +601,14 @@ struct QuotaCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage private var storedExpanded: Bool
     private var expanded: Bool { !collapsible || storedExpanded }
-    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = []) {
-        self.onSwitch = onSwitch
+    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, deviceCounts: AccountDeviceCounts? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = []) {
+        self.deviceCounts = deviceCounts; self.onSwitch = onSwitch
         self.quotaHistory = quotaHistory; self.creditHistory = creditHistory
         self.collapsible = collapsible; self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
         _storedExpanded = AppStorage(wrappedValue: true, NativePanelKey.expansion(.quota, id: quota.id, compact: compact))
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) { fullCard; if let onSwitch { Button("切换为此账号", action: onSwitch).padding(.horizontal, 12) } }
+        fullCard
     }
     @ViewBuilder private var balanceContent: some View {
         if let balances = quota.balances { ForEach(balances) { balance in
@@ -667,6 +672,25 @@ struct QuotaCard: View {
             }.contentShape(Rectangle())
             }.buttonStyle(.plain).help(collapsible ? (expanded ? "折叠限额" : "展开限额") : quota.name)
                 .accessibilityLabel(headerAccessibility)
+            if let onSwitch {
+                HStack(spacing: 12) {
+                Button(action: onSwitch) {
+                    Label("切换为此账号", systemImage: "arrow.left.arrow.right")
+                        .font(AppFont.secondary.weight(.medium))
+                        .foregroundStyle(Palette.accent)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.accent.opacity(0.30), lineWidth: 1) }
+                        .contentShape(RoundedRectangle(cornerRadius: 8))
+                }.buttonStyle(.plain)
+                if let deviceCounts {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(deviceCounts.loginText); Text(deviceCounts.usageText)
+                        if deviceCounts.pending { Text("有设备待确认").font(.system(size: 10)) }
+                    }.font(AppFont.secondary).foregroundStyle(.secondary).monospacedDigit().fixedSize()
+                }
+                }
+            }
             if expanded {
                 HStack { Text(Format.provider(quota.provider)); Spacer(); if quota.updatedAt > 0 { Text("\(quota.origin == "log" ? "记录" : "更新") \(Format.date(quota.updatedAt))") } }.font(AppFont.secondary).foregroundStyle(.secondary)
                 if let note = quota.metadataError { Text(note + (quota.identity?.stale == true && quota.plan != nil ? " · 显示上次订阅" : "")).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) }

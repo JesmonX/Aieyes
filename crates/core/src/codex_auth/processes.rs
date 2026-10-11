@@ -1,5 +1,4 @@
 //! Credential operations use home ownership; switching closes this user's Codex/ChatGPT trees.
-#[cfg(unix)]
 use super::process_auth::{self, Usage};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -18,7 +17,6 @@ pub struct Running {
     pub blocking_reason: Option<String>,
 }
 
-#[cfg(unix)]
 struct Observation {
     pid: u32,
     parent_pid: u32,
@@ -316,7 +314,6 @@ fn observe(with_home: bool) -> Result<Vec<Observation>> {
     Ok(observations)
 }
 
-#[cfg(unix)]
 fn independent_processes(observations: &[Observation]) -> std::collections::HashSet<u32> {
     let mut protected: std::collections::HashSet<_> = observations
         .iter()
@@ -343,7 +340,6 @@ fn switch_targets(observations: &[Observation], confirmed: &[Running]) -> Vec<Ru
     switch_review(observations, confirmed).0
 }
 
-#[cfg(unix)]
 fn switch_review(
     observations: &[Observation],
     confirmed: &[Running],
@@ -356,10 +352,9 @@ fn switch_review(
         path.contains("/codex.app/contents/") || path.contains("/chatgpt.app/contents/")
     };
     let known = |p: &Observation| {
-        matches!(
-            p.name.as_str(),
-            "codex" | "chatgpt" | "codex-code-mode-host"
-        ) || bundled(p)
+        matches!(p.name.as_str(), "codex" | "chatgpt")
+            || (cfg!(unix) && p.name == "codex-code-mode-host")
+            || bundled(p)
     };
     let independent = independent_processes(observations);
     let mut protected_parents = HashSet::new();
@@ -402,6 +397,8 @@ fn switch_review(
                 || selected.contains(&p.pid)
                 || p.name.starts_with("codex-")
                 || p.name.starts_with("chatgpt-")
+                || p.name.starts_with("chatgpt ")
+                || p.name.starts_with("codex ")
         })
         .filter_map(|p| {
             let reason = if independent.contains(&p.pid) {
@@ -409,7 +406,11 @@ fn switch_review(
             } else if protected_parents.contains(&p.pid) {
                 Some("此进程仍承载独立 API 实例，请先分离或手动关闭后重新检查")
             } else if p.auth_usage == Usage::UnknownProfile {
-                Some("无法确认此进程的 profile 认证方式，请手动处理后重新检查")
+                Some(if cfg!(windows) {
+                    "无法确认进程用户、权限或 profile 认证方式，请手动处理后重新检查"
+                } else {
+                    "无法确认此进程的 profile 认证方式，请手动处理后重新检查"
+                })
             } else if !selected.contains(&p.pid) {
                 Some("无法确认辅助进程归属，请手动关闭后重新检查")
             } else {
@@ -472,7 +473,7 @@ pub fn review_for_switch() -> Result<(Vec<Running>, Vec<Running>)> {
     }
     #[cfg(windows)]
     {
-        Ok((windows_list(true)?, vec![]))
+        windows::review(&[])
     }
 }
 
@@ -488,47 +489,17 @@ fn read_for_switch(confirmed: &[Running]) -> Result<Vec<Running>> {
     }
     #[cfg(windows)]
     {
-        let _ = confirmed;
-        windows_list(true)
+        Ok(windows::review(confirmed)?.0)
     }
 }
 
 #[cfg(windows)]
-pub fn list(_root: &Path) -> Result<Vec<Running>> {
-    windows_list(false)
-}
+#[path = "processes/windows.rs"]
+mod windows;
 
 #[cfg(windows)]
-fn windows_list(include_apps: bool) -> Result<Vec<Running>> {
-    let mut cmd = Command::new("powershell.exe");
-    let filter = if include_apps {
-        "Name = 'codex.exe' OR Name = 'ChatGPT.exe' OR Name LIKE 'codex-%' OR Name LIKE 'ChatGPT %' OR Name LIKE 'Codex %'"
-    } else {
-        "Name = 'codex.exe'"
-    };
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &format!("@(Get-CimInstance Win32_Process -Filter \"{filter}\" | Select-Object ProcessId,CreationDate,Name) | ConvertTo-Json -Compress")]);
-    let bytes = crate::process::run(cmd, vec![], Duration::from_secs(10))?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!([]));
-    let rows = value.as_array().cloned().unwrap_or_else(|| {
-        if value.is_object() {
-            vec![value]
-        } else {
-            vec![]
-        }
-    });
-    Ok(rows
-        .iter()
-        .filter_map(|v| {
-            v["ProcessId"].as_u64().map(|pid| Running {
-                pid: pid as u32,
-                fingerprint: crate::models::hash(&v.to_string()),
-                name: v["Name"].as_str().unwrap_or("Codex / ChatGPT").into(),
-                can_close: false,
-                parent_pid: None,
-                blocking_reason: Some("请关闭所有 Codex 和 ChatGPT 进程及应用后重新检查".into()),
-            })
-        })
-        .collect())
+pub fn list(root: &Path) -> Result<Vec<Running>> {
+    windows::list(root)
 }
 
 fn unchanged(actual: &[Running], expected: &[Running]) -> Result<()> {
@@ -594,14 +565,26 @@ fn process_depth(p: &Running, rows: &[Running]) -> usize {
 }
 
 pub fn close_for_switch(expected: &[Running]) -> Result<()> {
+    #[cfg(windows)]
+    let signal = |pid| {
+        windows::terminate(
+            expected
+                .iter()
+                .find(|p| p.pid == pid)
+                .expect("confirmed PID"),
+        )
+    };
+    #[cfg(unix)]
+    let signal = terminate;
     close_with(
         expected,
         || read_for_switch(expected),
-        terminate,
+        signal,
         Duration::from_secs(10),
     )
 }
 
+#[cfg(unix)]
 fn terminate(pid: u32) -> Result<()> {
     #[cfg(unix)]
     {
@@ -613,11 +596,6 @@ fn terminate(pid: u32) -> Result<()> {
             );
         }
         Ok(())
-    }
-    #[cfg(windows)]
-    {
-        let _ = pid;
-        anyhow::bail!("请手动关闭 Codex 和 ChatGPT 后重试");
     }
 }
 
@@ -637,7 +615,6 @@ mod tests {
         assert!(start_from_ticks(&stat, 100, Duration::from_secs(12), now).is_none());
         assert!(start_from_ticks("invalid", 100, Duration::from_secs(20), now).is_none());
     }
-    #[cfg(unix)]
     #[test]
     fn independent_api_tree_is_preserved_and_shared_parent_is_blocked() {
         let make = |pid, parent_pid, name: &str, auth_usage| Observation {

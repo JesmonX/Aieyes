@@ -2,6 +2,17 @@ import Foundation
 
 @main struct VerifyModels {
     static func main() throws {
+        let legacy = try JSONDecoder().decode(AppearanceSettings.self, from: Data(#"{"theme":"dark","accent":"teal"}"#.utf8))
+        precondition(legacy.chartPalette == "classic" && legacy.chartContrast == "high")
+        let legacyRoundtrip = try JSONDecoder().decode(AppearanceSettings.self, from: JSONEncoder().encode(legacy))
+        precondition(legacyRoundtrip == legacy)
+        let deviceRows = try JSONDecoder().decode([AccountDeviceStatus].self, from: Data(#"[{"accountKey":"codex:a","sourceId":"one","machineId":"local","current":true,"credential":true},{"accountKey":"codex:a","sourceId":"two","machineId":"local","current":false,"credential":true},{"accountKey":"codex:a","sourceId":"remote","machineId":"server","current":false,"credential":true},{"accountKey":"codex:b","sourceId":"other","machineId":"offline","current":true,"credential":true}]"#.utf8))
+        let counts = AccountDeviceCounts(accountKey: "codex:a", machines: ["local", "local", "server", "offline"], rows: deviceRows)
+        precondition(counts.logged == 2 && counts.using == 1 && counts.total == 3 && counts.pending)
+        precondition(counts.summary == "已登录设备2/3 · 使用中设备1/3 · 有设备待确认")
+        let paused = AccountDeviceCounts(accountKey: "codex:a", machines: ["local"], rows: deviceRows)
+        precondition(paused.summary == "已登录设备1/1 · 使用中设备1/1")
+        precondition(AccountDeviceCounts(accountKey: "codex:a", machines: [], rows: deviceRows).summary == "已登录设备0/0 · 使用中设备0/0")
         let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
         let dashboard = try JSONDecoder().decode(Dashboard.self, from: data)
         precondition(dashboard.trendDays.count == 7)

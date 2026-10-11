@@ -59,7 +59,7 @@ fn canonical_ids_migrate_duplicates_preserving_price_sources_and_account_isolati
         ..Default::default()
     };
     store
-        .put_event(&event, &[price.clone()], &Settings::default())
+        .put_event(&event, std::slice::from_ref(&price), &Settings::default())
         .unwrap();
     let old_id = hash(&format!(
         "agy:account:{}",
@@ -93,7 +93,7 @@ fn canonical_ids_migrate_duplicates_preserving_price_sources_and_account_isolati
         };
         let event = usage::parse(&source, &mut ParseState::default(), &row).unwrap();
         store
-            .put_event(&event, &[price.clone()], &Settings::default())
+            .put_event(&event, std::slice::from_ref(&price), &Settings::default())
             .unwrap();
     }
     store
@@ -190,6 +190,13 @@ fn read_only_settings_reject_edits_but_allow_stale_unchanged_values() {
         .execute(
             "INSERT INTO kv VALUES('deleted-account:custom:deleted',?1)",
             [json!({"id":"deleted","provider":"custom"}).to_string()],
+        )
+        .unwrap();
+    store
+        .db
+        .execute(
+            "INSERT INTO events VALUES('history','custom','deleted','model',1,'{}',0,0,NULL)",
+            [],
         )
         .unwrap();
     let mut next = base.clone();
@@ -588,7 +595,10 @@ fn only_manual_full_rescan_replays_finished_logs_and_repairs_old_duplicates() {
         input: Some(0.01),
         ..Default::default()
     };
-    engine.store.save_prices(&[price.clone()]).unwrap();
+    engine
+        .store
+        .save_prices(std::slice::from_ref(&price))
+        .unwrap();
     let row = json!({"id":"call","sessionId":"session","timestamp":now(),"model":"model","tokens":{"input":100}});
     std::fs::write(&log, format!("{row}\n")).unwrap();
     engine.call("sources.scan", json!({})).unwrap();

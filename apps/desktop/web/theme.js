@@ -21,11 +21,13 @@
   }
   function apply(value = current) {
     const previousPreference=JSON.stringify(current);
-    current = {theme:['system','light','dark'].includes(value?.theme)?value.theme:'system',accent:['indigo','blue','teal','purple'].includes(value?.accent)?value.accent:'indigo'};
+    current = {theme:['system','light','dark'].includes(value?.theme)?value.theme:'system',accent:['indigo','blue','teal','purple'].includes(value?.accent)?value.accent:'indigo',chartPalette:window.AieyesChartPalettes.some(p=>p.id===value?.chartPalette)?value.chartPalette:'classic',chartContrast:value?.chartContrast==='low'?'low':'high'};
     const root=document.documentElement;
     const previous=root.dataset.theme+root.dataset.accent;
     root.dataset.theme=current.theme==='system'?(media.matches?'dark':'light'):current.theme;
     root.dataset.accent=current.accent;
+    root.dataset.chartPalette=current.chartPalette;
+    root.dataset.chartContrast=current.chartContrast;
     updateButtons();
     if(previous!==root.dataset.theme+root.dataset.accent||previousPreference!==JSON.stringify(current))window.dispatchEvent(new CustomEvent('aieyes:appearance',{detail:{...current}}));
     try { localStorage.setItem('aieyes.appearance',JSON.stringify(current)); } catch (_) {}

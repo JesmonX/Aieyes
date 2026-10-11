@@ -8,9 +8,9 @@ on:
         default: false
   push:
     branches: [main]
-    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'Cargo.*', '.github/workflows/desktop.yml']
+    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'docs/chart-palettes.json', 'Cargo.*', '.github/workflows/desktop.yml']
   pull_request:
-    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'Cargo.*', '.github/workflows/desktop.yml']
+    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'docs/chart-palettes.json', 'Cargo.*', '.github/workflows/desktop.yml']
 permissions:
   contents: read
 concurrency:
@@ -64,6 +64,9 @@ jobs:
             .local/windows-ui-sync/browser/*
           include-hidden-files: true
           if-no-files-found: ignore
+      - name: Windows account switching tests
+        if: runner.os == 'Windows'
+        run: cargo test -p aieyes-core codex_auth --locked
       - name: Windows shell tests
         if: runner.os == 'Windows'
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol

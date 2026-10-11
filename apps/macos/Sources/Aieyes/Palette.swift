@@ -1,6 +1,42 @@
 import SwiftUI
 
 enum Palette {
+    // BEGIN GENERATED CHART PALETTES
+    struct ChartPreset {
+        let id: String, name: String
+        let lightHigh, lightLow, darkHigh, darkLow: [UInt32]
+        func colors(dark: Bool, contrast: String) -> [UInt32] {
+            dark ? (contrast == "low" ? darkLow : darkHigh) : (contrast == "low" ? lightLow : lightHigh)
+        }
+    }
+    static let chartPresets: [ChartPreset] = [
+        ChartPreset(id: "classic", name: "经典",
+            lightHigh: [0x6575ed, 0x308d87, 0x986ec1, 0xa77642, 0xba648f, 0x388b9b, 0x668a56, 0x7d77c4],
+            lightLow: [0xa0aaf4, 0x68bdb7, 0xc2a2e2, 0xe3a25a, 0xe29abe, 0x51bdd1, 0x96b986, 0xadaadd],
+            darkHigh: [0x707eee, 0x39a8a0, 0xa879d5, 0xe3a159, 0xd875a6, 0x4bbbd0, 0x7ca768, 0x857fcc],
+            darkLow: [0x4d57a0, 0x316564, 0x6b5285, 0x72583f, 0x7e4e69, 0x37636f, 0x4f6248, 0x5b5887]),
+        ChartPreset(id: "tableau", name: "Tableau · 经典分析",
+            lightHigh: [0x4e79a7, 0xbb6d21, 0xd85456, 0x588985, 0x4f8e46, 0x957e2e, 0xa27195, 0xb26d74, 0x9c755f, 0x867e7c],
+            lightLow: [0x99b2cc, 0xf39b42, 0xed9899, 0x7cbab5, 0x88bc81, 0xcbac3f, 0xc9a4bf, 0xf1959e, 0xc2ab9d, 0xb6ada9],
+            darkHigh: [0x668bb3, 0xf28e2b, 0xe25c5d, 0x76b7b2, 0x59a14f, 0xedc949, 0xaf7aa1, 0xff9da7, 0xa4816c, 0xbab0ac],
+            darkLow: [0x425f80, 0x7e532d, 0x944447, 0x486163, 0x41653f, 0x685c37, 0x71546c, 0x77535a, 0x70584c, 0x605c5e]),
+        ChartPreset(id: "tol", name: "Paul Tol · 明快",
+            lightHigh: [0x4477aa, 0xd05968, 0x228833, 0x8d812f, 0x4489a0, 0xaa3377, 0x808080],
+            lightLow: [0x95b2cf, 0xf3949f, 0x84bd8d, 0xc0b040, 0x5dbada, 0xd79fbf, 0xaeaeae],
+            darkHigh: [0x608cb7, 0xee6677, 0x429950, 0xccbb44, 0x66ccee, 0xc26c9d, 0xbbbbbb],
+            darkLow: [0x3c5f85, 0x8d4853, 0x246a31, 0x645d36, 0x3e6271, 0xa03271, 0x5c5c60]),
+        ChartPreset(id: "set2", name: "ColorBrewer · 柔彩",
+            lightHigh: [0x4a8c77, 0xbd6a4a, 0x7180a3, 0xb16995, 0x6a8a36, 0x957f1c, 0x927d5f, 0x808080],
+            lightLow: [0x65bfa3, 0xfc946b, 0x9fafd3, 0xe995c8, 0x91bc49, 0xcbad26, 0xc7aa81, 0xaeaeae],
+            darkHigh: [0x66c2a5, 0xfc8d62, 0x8da0cb, 0xe78ac3, 0xa6d854, 0xffd92f, 0xe5c494, 0xb3b3b3],
+            darkLow: [0x40635b, 0x7f5243, 0x545d72, 0x77516c, 0x52623a, 0x685c2e, 0x665b4f, 0x5c5c60]),
+        ChartPreset(id: "nord", name: "Nord · 北欧",
+            lightHigh: [0x5e81ac, 0x738663, 0xae715e, 0x967690, 0x5f8692, 0x917e56, 0xbf616a, 0x668686],
+            lightLow: [0x9bb1cc, 0x9db686, 0xdaa290, 0xc4a6bf, 0x82b7c6, 0xc7ab75, 0xd9a1a6, 0x8bb6b6],
+            darkHigh: [0x6a8bb2, 0xa3be8c, 0xd08770, 0xb48ead, 0x88c0d0, 0xebcb8b, 0xc56f77, 0x8fbcbb],
+            darkLow: [0x495e7b, 0x566051, 0x77554d, 0x695768, 0x4c606a, 0x655c4b, 0x874c54, 0x4f6063]),
+    ]
+    // END GENERATED CHART PALETTES
     static func adaptive(_ light: UInt32, _ dark: UInt32) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
             let hex = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
@@ -29,25 +65,32 @@ enum Palette {
         let remaining = min(100, max(0, 100 - used))
         return remaining < 10 ? danger : remaining <= 30 ? warn : accent
     }
-    private static var modelHues: [String: Double] = [:]
+    private static var modelSlots: [String: [String: Int]] = [:]
+    private static var modelUsedSlots: [String: Set<Int>] = [:]
     private static let modelLock = NSLock()
-    static func model(_ name: String) -> Color {
-        modelLock.lock()
+    static func chartPreset(named name: String) -> ChartPreset {
+        chartPresets.first { $0.id == name } ?? chartPresets[0]
+    }
+    static func registerModels(_ names: [String]) {
+        for preset in chartPresets { for name in Set(names).sorted() { _ = modelSlot(name, preset: preset) } }
+    }
+    private static func modelSlot(_ name: String, preset: ChartPreset) -> Int {
+        modelLock.lock(); defer { modelLock.unlock() }
+        if let slot = modelSlots[preset.id]?[name] { return slot }
         let hash = name.utf8.reduce(UInt32(2166136261)) { ($0 ^ UInt32($1)) &* 16777619 }
-        var hue = Double(hash % 3600) / 3600
-        if let previous = modelHues[name] { hue = previous } else {
-            for _ in 0..<24 {
-                if !modelHues.values.contains(where: { min(abs($0 - hue), 1 - abs($0 - hue)) < 20.0 / 360 }) { break }
-                hue = (hue + 137.508 / 360).truncatingRemainder(dividingBy: 1)
-            }
-            modelHues[name] = hue
-        }
-        modelLock.unlock()
-        let identityHue = hue
-        return Color(nsColor: NSColor(name: nil) { appearance in
-            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            return NSColor(hue: identityHue, saturation: dark ? 0.35 : 0.64, brightness: dark ? 0.95 : 0.5, alpha: 1)
-        })
+        let count = preset.lightHigh.count
+        var slot = Int(hash % UInt32(count))
+        let used = modelUsedSlots[preset.id] ?? []
+        for _ in 0..<count { if !used.contains(slot) { break }; slot = (slot + 1) % count }
+        modelSlots[preset.id, default: [:]][name] = slot
+        modelUsedSlots[preset.id, default: []].insert(slot)
+        return slot
+    }
+    static func model(_ name: String, preset: String? = nil, contrast: String? = nil) -> Color {
+        let family = chartPreset(named: preset ?? UserDefaults.standard.string(forKey: "appearance.chartPalette") ?? "classic")
+        let level = contrast ?? UserDefaults.standard.string(forKey: "appearance.chartContrast") ?? "high"
+        let slot = modelSlot(name, preset: family)
+        return adaptive(family.colors(dark: false, contrast: level)[slot], family.colors(dark: true, contrast: level)[slot])
     }
 }
 

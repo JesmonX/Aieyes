@@ -40,7 +40,7 @@ import SwiftUI
                 }
             }
         } catch { if revision == generation && !Task.isCancelled { errors.append(error.localizedDescription) } }
-        if revision == generation { checking = [] }
+        if revision == generation { checking = []; await model.loadAccountStatuses() }
     }
 }
 
