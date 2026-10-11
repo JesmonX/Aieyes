@@ -8,7 +8,7 @@ struct SamplingManagementView: View {
                 Text("后台采样").font(AppFont.title)
                 Text("关闭窗口后采样继续。只有结束采样才会停止记录。").font(AppFont.secondary).foregroundStyle(.secondary)
                 if model.runningEstimates.isEmpty { Text("当前没有进行中的采样").foregroundStyle(.secondary) }
-                ForEach(model.runningEstimates) { estimate in
+                ForEach(model.runningEstimates, id: \.recordKey) { estimate in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text(model.settings.accounts.first { $0.key == estimate.accountKey }?.name ?? estimate.accountKey).font(AppFont.section)
@@ -79,7 +79,7 @@ struct QuotaOrderView: View {
 struct PanelAccountsView: View {
     @ObservedObject var model: AppModel
     var onClose: () -> Void
-    @AppStorage("panel.accounts.v2") private var stored = "{}"
+    @AppStorage(NativePanelKey.accounts.rawValue) private var stored = "{}"
     @State private var selected: [String: [String]] = [:]
     @State private var automatic = Set<String>()
     @State private var initialDraft = ""
@@ -110,7 +110,7 @@ struct PanelAccountsView: View {
             }
             HStack { Spacer(); Button("取消", action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button("保存面板选择") { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.borderedProminent) }
         }.padding(24).font(AppFont.body).frame(width: 440, height: 480).aieyesAccent()
-            .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: "panel.accounts.v1") ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); initialDraft = snapshot; cancelFocused = true }
+            .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); initialDraft = snapshot; cancelFocused = true }
             .updateDraftGuard("面板显示账户", snapshot: snapshot, dirty: !initialDraft.isEmpty && initialDraft != snapshot, saving: false, save: { stored = draft; onClose(); return true }, discard: onClose)
     }
 }
@@ -128,16 +128,7 @@ struct QuotaEstimateView: View {
     private var busy: Bool { model.estimateBusy.contains(quota.id) }
     private var error: String? { model.estimateErrors[quota.id] }
     private var sources: [AgentSource] { model.settings.sources.filter { $0.enabled && $0.provider == quota.provider && $0.accountId == quota.accountId && $0.provider != "deepseek" } }
-    private var windows: [QuotaWindow] {
-        let five = quota.windows.filter { $0.windowMinutes == 300 }
-        if ["antigravity", "agy"].contains(quota.provider) {
-            return quota.windows.filter { w in w.supportsEstimate && (w.windowMinutes == 300 || (w.windowMinutes == 10080 && !quota.windows.contains { $0.estimateGroup == w.estimateGroup && $0.windowMinutes == 300 })) }
-        }
-        if five.count == 1 { return five }
-        if let overall = five.first(where: { $0.stableId == "five_hour" }) { return [overall] }
-        let weekly = quota.windows.filter { $0.windowMinutes == 10080 }
-        return weekly.count == 1 ? weekly : weekly.filter { $0.stableId == "seven_day" }
-    }
+    private var windows: [QuotaWindow] { EstimatePresentation.windows(quota) }
     private var records: [QuotaEstimate] { (credits ? (model.dashboard.creditEstimates ?? []) : (model.dashboard.quotaEstimates ?? [])).filter { $0.accountKey == quota.id } }
     private var current: QuotaEstimate? { records.first { $0.status != "completed" } }
     private var eligible: Bool { if credits { return quota.credits?.balance != nil && quota.credits?.unlimited == false }; return windows.contains { initialGroup == nil || $0.estimateGroup == initialGroup } }
@@ -191,7 +182,7 @@ struct QuotaEstimateView: View {
     private func result(_ e: QuotaEstimate) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let group = e.groupId { Text(quota.windows.first { $0.estimateGroup == group }?.groupLabel ?? group).font(AppFont.section) }
-            else if ["antigravity", "agy"].contains(quota.provider) { Text("账户总体 · 旧记录").font(AppFont.section) }
+            else if quota.provider == "antigravity" { Text("账户总体 · 旧记录").font(AppFont.section) }
             resultHeader(e)
             if e.valuationMode == "fiveHour" { fiveHourValues(e) }
             Text(e.calculationNote).font(AppFont.secondary).foregroundStyle(.secondary)

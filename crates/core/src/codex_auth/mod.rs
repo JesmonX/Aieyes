@@ -91,9 +91,6 @@ pub fn source_for_profile<'a, 'b>(
         .context("账号所在 Codex 数据源已停用或删除")?;
     Ok((source, profile))
 }
-pub fn read_quota(account: &Account, settings: &Settings) -> Result<QuotaSnapshot> {
-    read_quota_at(account, settings, None)
-}
 pub fn read_quota_at(
     account: &Account,
     settings: &Settings,
@@ -163,6 +160,14 @@ pub fn validate_settings(s: &Settings) -> Result<()> {
     }
     let mut bindings = std::collections::HashSet::new();
     for account in &s.accounts {
+        for connection in &account.connections {
+            let source = s.sources.iter().find(|v| v.id == connection.source_id).context("账号连接的来源已删除，请重新关联")?;
+            ensure!(source.provider == account.provider, "账号连接的 Agent 不匹配");
+            if let Some(reference) = &connection.profile_id {
+                let (home, _) = reference.split_once(':').context("账号档案引用无效")?;
+                ensure!(source.codex_home_id.as_deref() == Some(home), "账号连接的来源与档案 home 不匹配，请重新读取登录并关联");
+            }
+        }
         for reference in account.profile_refs() {
             ensure!(account.provider == "codex", "账号档案仅用于 Codex");
             ensure!(
@@ -184,6 +189,7 @@ pub fn validate_settings(s: &Settings) -> Result<()> {
 impl Engine {
     pub(crate) fn codex_auth_call(&mut self, method: &str, params: Value) -> Result<Value> {
         let method = method.strip_prefix("codexAuth.").context("账号操作无效")?;
+        if method == "reconcile" { return self.reconcile_codex(params); }
         if method == "openUrl" {
             let url = params["url"].as_str().context("缺少登录地址")?;
             let parsed = reqwest::Url::parse(url).context("登录地址无效")?;
@@ -215,9 +221,6 @@ impl Engine {
         }
         let mut settings = self.store.settings()?;
         let initial = serde_json::to_value(&settings)?;
-        if method == "homes.list" {
-            return Ok(json!(settings.sources.iter().filter(|s|s.provider=="codex").map(|s|json!({"id":s.codex_home_id,"sourceId":s.id,"name":s.name,"hostId":s.host_id,"path":home_path(&s.path),"enabled":s.enabled})).collect::<Vec<_>>()));
-        }
         let source = settings
             .sources
             .iter()

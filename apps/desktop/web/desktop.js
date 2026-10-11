@@ -1,7 +1,7 @@
 (() => {
   let current = null;
   const invoke = (name, args) => window.__TAURI__.core.invoke(name, args);
-  const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const escape = value => window.AieyesUI.escapeHTML(value);
   function update(info) {
     current = info;
     document.body.dataset.platform = info.platform;

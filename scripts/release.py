@@ -8,6 +8,7 @@ import pathlib
 import plistlib
 import re
 import shutil
+import subprocess
 import tomllib
 import xml.etree.ElementTree as ET
 
@@ -38,7 +39,38 @@ def version(root=ROOT, tag=None):
         raise ValueError(f"Versions do not match: {versions}")
     if tag is not None and tag != f"v{core}":
         raise ValueError(f"Tag {tag!r} does not match v{core}")
+    validate_macos_build(root, core, require_history=tag is not None)
     return core
+
+
+def validate_macos_build(root, release_version, require_history=False):
+    """Sparkle build numbers must increase against the previous stable tag."""
+    build = str(plistlib.loads((root / 'apps/macos/Info.plist').read_bytes())['CFBundleVersion'])
+    if not re.fullmatch(r'[1-9]\d*', build):
+        raise ValueError('CFBundleVersion must be a positive integer')
+    def git(*args):
+        try:
+            return subprocess.check_output(['git', *args], cwd=root, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as error:
+            raise ValueError('Cannot read release history; fetch the complete tag history') from error
+    shallow = git('rev-parse', '--is-shallow-repository').strip() == b'true'
+    if shallow:
+        if require_history:
+            raise ValueError('Release validation requires complete tag history (fetch-depth: 0)')
+        return
+    current = tuple(map(int, release_version.split('.')))
+    previous = []
+    for candidate in git('tag', '--list', 'v*').decode('utf-8').splitlines():
+        if re.fullmatch(r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', candidate):
+            parts = tuple(map(int, candidate[1:].split('.')))
+            if parts < current:
+                previous.append((parts, candidate))
+    if not previous:
+        return  # First stable release.
+    previous_tag = max(previous)[1]
+    old = plistlib.loads(git('show', f'{previous_tag}:apps/macos/Info.plist'))
+    if int(build) <= int(old['CFBundleVersion']):
+        raise ValueError(f'CFBundleVersion {build} must exceed {previous_tag} build {old["CFBundleVersion"]}')
 
 
 def installer_names(release_version):

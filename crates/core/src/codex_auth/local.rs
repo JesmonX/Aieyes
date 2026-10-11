@@ -211,6 +211,7 @@ pub(super) fn recover(root: &Path) -> Result<()> {
     Ok(())
 }
 fn renew(loc: &Location, root: &Path, p: &Profile) -> Result<Value> {
+    let _critical = crate::operations::critical()?;
     recover(root)?;
     let target = authority(root, p)?;
     let is_current = target == root.join("auth.json");
@@ -289,6 +290,7 @@ fn quota(loc: &Location, root: &Path, profile: &str) -> Result<Value> {
                             || processes::list(root)?.is_empty(),
                         "当前账号暂时显示缓存额度"
                     );
+                    let _critical = crate::operations::critical()?;
                     let managed = layout(root, profile, "managed")?;
                     files::atomic(&managed.join("auth.json"), &fresh)?;
                     files::atomic(
@@ -531,7 +533,9 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             let copy = op.clone();
             let loc = loc.clone();
             let device = params["deviceCode"] == true;
+            let operation = crate::operations::context();
             std::thread::spawn(move || {
+                let _context = crate::operations::inherit(operation);
                 login(loc, root, copy, name, device, replacement, before, lock)
             });
             Ok(json!({"operationId":op,"status":"running"}))

@@ -173,7 +173,7 @@ pub(crate) fn record_agy_status(
     else {
         return Ok(Value::Null);
     };
-    let tx = store.db.unchecked_transaction()?;
+    let tx = store.write_transaction()?;
     ensure!(
         status_revision(store, source)? == *revision,
         "登录状态已变化，请重新检查"
@@ -376,7 +376,7 @@ impl Engine {
             let auth_revision = status_revision(&self.store, source)?;
             let result = self.inspect_account_device(&settings, &account, source);
             // Observations made with old settings must never overwrite a new device's state.
-            let transaction = self.store.db.unchecked_transaction()?;
+            let transaction = self.store.write_transaction()?;
             let latest = self.store.settings()?;
             let unchanged = latest
                 .accounts

@@ -43,6 +43,7 @@ pub fn run(mut cmd: Command, input: Vec<u8>, timeout: Duration) -> Result<Vec<u8
     });
     let start = Instant::now();
     let status = loop {
+        if let Err(error) = crate::operations::check() { kill(&mut child); return Err(error); }
         if let Some(status) = child.try_wait()? {
             break status;
         }
@@ -134,6 +135,7 @@ pub fn run_lines(
     let started = Instant::now();
     let result = (|| -> Result<()> {
         loop {
+            crate::operations::check()?;
             let remaining = timeout.saturating_sub(started.elapsed());
             anyhow::ensure!(!remaining.is_zero(), "查询超时");
             match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {

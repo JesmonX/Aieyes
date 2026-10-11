@@ -65,7 +65,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
@@ -96,20 +99,7 @@ jobs:
           fi
       - name: Shared checks
         shell: bash
-        run: |
-          python scripts/release.py check --tag "$RELEASE_TAG"
-          cargo test --workspace --locked
-          python scripts/test-collectors.py
-          python scripts/test-wakeups.py
-          node --check apps/desktop/web/app.js
-          node --check apps/desktop/web/tooltip.js
-          node --check apps/desktop/web/multiselect.js
-          node --check apps/desktop/web/desktop.js
-          node --check apps/desktop/web/floating.js
-          node --check apps/desktop/web/sessions.js
-          node --check apps/desktop/web/updates.js
-          node --check apps/desktop/web/wakeups.js
-          node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs
+        run: sh scripts/ci-checks.sh --rust
       - name: Linux process identification regression
         if: runner.os == 'Linux'
         shell: bash
@@ -117,11 +107,15 @@ jobs:
           for attempt in {1..10}; do
             cargo test -p aieyes-core --lib --locked native_profile_switch_preserves_api_fixture_and_closes_login_fixture
           done
+      - name: Prepare bundled core for desktop tests
+        if: runner.os != 'macOS'
+        run: node scripts/prepare-wakeup.cjs --debug
       - name: Desktop Rust tests
         if: runner.os != 'macOS'
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
       - name: Browser integration
         if: runner.os != 'macOS'
+        shell: bash
         run: |
           npm ci --prefix apps/desktop
           cd apps/desktop
@@ -210,6 +204,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

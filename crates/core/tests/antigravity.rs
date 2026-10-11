@@ -267,6 +267,9 @@ fn native_and_ssh_match_wal_incremental_and_standard_import() {
         import::scan(&store, &store.settings().unwrap(), &s).unwrap()["newEvents"],
         0
     );
+    let replay = import::rescan(&store, &store.settings().unwrap(), &s).unwrap();
+    assert_eq!(replay["newEvents"], 0);
+    assert!(replay["readBytes"].as_u64().unwrap() > 0);
     let d = store.dashboard(&Filter::default()).unwrap();
     assert_eq!(d.summary.total, 200);
     assert!((d.summary.cost - 2.05).abs() < 1e-10);
@@ -350,8 +353,26 @@ fn legacy_migration_keeps_conflicting_accounts_ids_costs_and_wakeups() {
     let row = json!({"id":"call","sessionId":"session","timestamp":now(),"model":"gemini-test","tokens":{"input":100}});
     let mut event = usage::parse(&legacy, &mut ParseState::default(), &row).unwrap();
     event.provider = "agy".into();
+    event.id = hash(&format!(
+        "agy:account:{}",
+        event.import_identity.as_ref().unwrap()
+    ));
     store
-        .put_event(&event, &[price("gemini-test")], &settings)
+        .db
+        .execute(
+            "INSERT INTO events VALUES(?1,'agy','account',?2,?3,?4,1.0,100,?5)",
+            rusqlite::params![
+                event.id,
+                event.model,
+                event.timestamp,
+                serde_json::to_string(&event).unwrap(),
+                serde_json::to_string(&price("gemini-test")).unwrap()
+            ],
+        )
+        .unwrap();
+    store
+        .db
+        .execute("INSERT INTO event_sources VALUES(?1,'source')", [&event.id])
         .unwrap();
     store
         .db
@@ -407,7 +428,15 @@ fn legacy_migration_keeps_conflicting_accounts_ids_costs_and_wakeups() {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .unwrap();
-    assert_eq!(id, event.id);
+    assert_eq!(
+        id,
+        usage::event_id(
+            "antigravity",
+            "source",
+            &account,
+            event.import_identity.as_ref().unwrap()
+        )
+    );
     assert_eq!(cost, 1.0);
     assert_eq!(key, &format!("antigravity:{account}"));
     let copy = Source {
@@ -495,7 +524,10 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
     let estimate = store
         .begin_estimate(&q, "gemini:300", vec![source.id.clone()], None)
         .unwrap();
-    assert_eq!(estimate.group_id.as_deref(), Some("gemini"));
+    assert_eq!(
+        estimate.quota().unwrap().group_id.as_deref(),
+        Some("gemini")
+    );
     assert!(
         store
             .begin_estimate(&q, "claude-gpt:300", vec![source.id.clone()], None)
@@ -515,7 +547,7 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
     let done = store.finish_estimate(&estimate.id).unwrap();
     assert_eq!(done.total_tokens, 100);
     assert_eq!(done.cost, 1.0);
-    assert_eq!(done.five_hour_value, Some(10.0));
+    assert_eq!(done.quota().unwrap().five_hour_value, Some(10.0));
     assert_eq!(
         store
             .capacity_for_group("antigravity:account", "gemini", now())
@@ -546,5 +578,5 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
     store.quota(&q).unwrap();
     let done = store.finish_estimate(&e.id).unwrap();
     assert_eq!(done.calculation_status, "unmappedGroup");
-    assert_eq!(done.five_hour_value, None);
+    assert_eq!(done.quota().unwrap().five_hour_value, None);
 }

@@ -1,3 +1,5 @@
+> 历史记录：当前实现与验证请参阅 [后续实施记录](windows-appearance.md)；下文的版本、行号与旧行为仅对应原审计基线。
+
 # Windows 界面刷新
 
 本文记录 2026-10-04 的历史实现。当前字体、尺寸、原生 Acrylic / Blur 与验证结果见 [Windows 外观对齐（2026-10-09）](windows-appearance.md)。

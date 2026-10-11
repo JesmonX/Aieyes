@@ -21,9 +21,9 @@
 
 ## 配置和接口
 
-- 配置版本 4。`agents[{provider,enabled,machineIds}]` 与 `connections[{sourceId,profileId?}]` 沿用版本 3。
+- 配置版本 6，移除未使用的 `githubRepository`，保留版本 5 的独立刷新间隔。`agents[{provider,enabled,machineIds}]` 与 `connections[{sourceId,profileId?}]` 沿用版本 3。
 - 新增 `Account.deviceSettings[{machineId,preCommand}]`。尚未授权也可保存设备设置；显式空命令不再继承旧值。迁移将明确的旧命令复制到对应账户设备；同机旧目录命令冲突时保留来源兼容值，界面逐项展示，直到用户明确统一。
-- `settings.patch({base,settings})` 按字段和记录标识合并，设备设置按 `machineId` 合并；同字段冲突整次回滚。macOS 独立核心通道、Tauri 独立 Engine 执行配置读写，避免排在额度／SSH 后面。
+- `settings.patch({base,settings})` 按字段和记录标识合并，设备设置按 `machineId` 合并；同字段冲突整次回滚。`deletedAccounts` / `accountAliases` 是系统管理的只读字段，修改会明确报错；未改动的旧值可用于乐观合并。macOS 独立核心通道、Tauri 独立 Engine 执行配置读写，避免排在额度／SSH 后面。
 - `accounts.create({provider,name?})` 保留为旧配置的兼容入口，新界面的添加账号流程不调用它。旧的未命名 Codex 配置可用 `pendingName` 在后续登录时补齐邮箱名称，手动改名清除此标记。
 - `accounts.status.get` 返回缓存；`accounts.status.refresh({accountKey,sourceId})` 检查一个目录，返回 `current`、`credential`、检查时间及错误。无法确认使用 null；失败保留上次确认结果，配置变化则丢弃旧观察结果。
 - `accounts.deletion.preview({accountKey})` 返回清理清单；`accounts.delete({accountKey,force?})` 返回删除结果、失败任务或规范化配置。已成功删除的重复请求幂等。

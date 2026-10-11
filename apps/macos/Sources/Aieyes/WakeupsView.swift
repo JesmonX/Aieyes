@@ -8,12 +8,12 @@ struct WakeTask: Codable, Identifiable, Equatable {
 }
 struct WakeDeployment: Decodable { var task: WakeTask, deployedAt: Double, enabled: Bool, state: String, timezone: String, target: String, changed: Bool }
 struct WakeRecord: Decodable, Identifiable { var task: WakeTask, deployment: WakeDeployment?; var id: String { task.id } }
-struct WakeModel: Decodable, Identifiable { var id: String, efforts: [String], defaultEffort: String?, referenceCost: Double? }
+struct WakeModel: Decodable, Identifiable { var id: String, efforts: [String] }
 struct WakeCapabilities: Decodable { var models: [WakeModel], efforts: [String], timezone: String, message: String, recommendedModel: String? }
 struct WakeRun: Decodable, Identifiable {
     var startedAt: Double, endedAt: Double?, status: String, model: String, effort: String
     var id: String { "\(startedAt):\(model)" }
-    var label: String { ["success":"已完成", "running":"运行中", "failed":"调用失败，请检查登录、模型和代理", "timeout":"调用超时", "interrupted":"执行中断", "skipped-overlap":"同账户任务运行中，已跳过"][status] ?? status }
+    var label: String { ["success":"已完成", "running":"运行中", "failed":"调用失败，请检查登录、模型及代理", "timeout":"调用超时", "interrupted":"执行中断", "skipped-overlap":"同账户任务运行中，已跳过"][status] ?? status }
 }
 struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: String, nextRunAt: Double?, history: [WakeRun] }
 
@@ -40,7 +40,7 @@ struct WakeupsView: View {
             }
             ForEach(records) { record in Section { taskCard(record) } }
         }.formStyle(.grouped).font(AppFont.body).disabled(busy || model.installingUpdate).task { await load() }
-        .updateOperation("定时唤醒任务", active: busy)
+        .updateOperation("定时唤醒任务", active: false)
         .sheet(item: $removal) { record in
             DangerConfirmation(title: record.deployment == nil ? "删除任务草稿？" : "移除自动任务？", explanation: record.deployment == nil ? "删除「" + record.task.name + "」的任务草稿。" : "将从目标机器移除「" + record.task.name + "」的定时部署，后续自动唤醒会停止。运行历史保留。", affected: [], confirmLabel: "确认移除", cancel: { removal = nil }, confirm: { removal = nil; perform(record.deployment == nil ? "delete" : "remove", record.id) })
         }
@@ -102,13 +102,15 @@ struct WakeEditor: View {
     var deployed: Bool
     var save: (WakeTask) async throws -> Void
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var targets = AccountTargetsModel()
+    @State private var selectedAccount = ""
     @State private var initialDraft = ""
     @State private var confirmDiscard = false
     @State private var capabilities: WakeCapabilities?
     @State private var busy = false
     @State private var error: String?
     private let engine = EngineClient()
-    private var sources: [AgentSource] { model.settings.sources.filter { source in source.enabled && (!source.accountId.isEmpty || source.codexHomeId != nil) && ["codex","claude","antigravity"].contains(source.provider) && (source.hostId == nil || model.settings.hosts.contains { h in h.id == source.hostId && h.enabled }) } }
+    private var sources: [AgentSource] { model.settings.sources.filter { source in source.enabled && (!source.accountId.isEmpty || source.codexHomeId != nil) && CoreContract.wakeupProviders.contains(source.provider) && (source.hostId == nil || model.settings.hosts.contains { h in h.id == source.hostId && h.enabled }) } }
     private var efforts: [String] { capabilities?.models.first { $0.id == task.model }?.efforts ?? capabilities?.efforts ?? ["low","medium","high","xhigh","max","ultra"] }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -116,13 +118,22 @@ struct WakeEditor: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     TextField("名称", text: $task.name)
-                    Picker("账户与运行位置", selection: $task.sourceId) { Text("请选择数据源").tag(""); ForEach(sources) { source in Text(source.name + " · " + (source.hostId.flatMap { id in model.settings.hosts.first { $0.id == id }?.name } ?? "本机")).tag(source.id) } }.disabled(deployed)
-                    if let home = sources.first(where: { $0.id == task.sourceId })?.codexHomeId {
-                        Picker("执行账号", selection: Binding(get: { task.codexProfileId ?? "" }, set: { task.codexProfileId = $0.isEmpty ? nil : $0; capabilities = nil })) {
-                            Text("请选择已关联的额度账户").tag("")
-                            ForEach(model.settings.accounts.filter { $0.archived != true && $0.profileRefs.contains { $0.hasPrefix(home + ":") } }, id: \.id) { Text($0.name).tag($0.profileRefs.first { $0.hasPrefix(home + ":") } ?? "") }
-                        }.disabled(deployed)
-                    }
+                    Picker("账户", selection: Binding(get: { selectedAccount }, set: { selectedAccount = $0; task.sourceId = ""; task.codexProfileId = nil; task.model = ""; capabilities = nil })) {
+                        Text("请选择账号").tag("")
+                        ForEach(model.settings.accounts.filter { a in a.archived != true && targets.rows.contains { $0.accountKey == a.key && CoreContract.wakeupProviders.contains($0.provider) } }, id: \.key) { Text($0.name).tag($0.key) }
+                    }.disabled(deployed)
+                    Picker("运行位置", selection: Binding(get: { targets.rows.first { $0.accountKey == selectedAccount && $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId }?.id ?? "" }, set: { id in
+                        guard let target = targets.rows.first(where: { $0.id == id }) else { return }
+                        task.sourceId = target.sourceId; task.codexProfileId = target.profileId; task.model = ""; capabilities = nil
+                    })) {
+                        Text("请选择位置").tag("")
+                        ForEach(targets.rows.filter { $0.accountKey == selectedAccount }) { target in
+                            Text(target.machineName + " · " + target.sourceName + (target.canWake ? "" : " · 登录待确认")).tag(target.id)
+                        }
+                    }.disabled(deployed)
+                    if !targets.checking.isEmpty { ProgressView("正在检查机器登录…").controlSize(.small) }
+                    ForEach(targets.errors, id: \.self) { Text($0).font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                    Button("重新检查登录") { Task { await targets.load(model) } }.disabled(!targets.checking.isEmpty)
                     Text("使用已保存的数据源；切换运行位置前需要移除旧部署。").font(AppFont.secondary).foregroundStyle(.secondary)
                     ForEach(task.times.indices, id: \.self) { index in
                         HStack { Text("目标时刻"); TextField("HH:mm", text: $task.times[index]).frame(width: 80); Text(localTime(task.times[index])).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button("移除") { task.times.remove(at: index) }.accessibilityLabel("移除时刻 " + task.times[index]) }
@@ -151,7 +162,12 @@ struct WakeEditor: View {
         .interactiveDismissDisabled(busy || initialDraft != draftSnapshot(task))
         .discardDraftConfirmation($confirmDiscard) { dismiss() }
         .updateDraftGuard("定时唤醒", snapshot: draftSnapshot(task), dirty: !initialDraft.isEmpty && initialDraft != draftSnapshot(task), saving: busy, save: { await saveDraft() }, discard: { dismiss() })
-        .onChange(of: task.sourceId) { _, _ in capabilities = nil; task.codexProfileId = nil }
+         .task {
+            await targets.load(model)
+            if selectedAccount.isEmpty { selectedAccount = targets.rows.first { $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId }?.accountKey ?? "" }
+        }
+        .onChange(of: task.sourceId) { _, _ in capabilities = nil }
+        .onChange(of: task.codexProfileId) { _, _ in capabilities = nil }
         .onChange(of: task.model) { _, _ in if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
     }
     private func localTime(_ time: String) -> String {
@@ -166,7 +182,7 @@ struct WakeEditor: View {
         busy = true; error = nil
         Task { @MainActor in
             defer { busy = false }
-            do { var input = task; input.model = ""; input.effort = ""; let result: WakeCapabilities = try await engine.call("wakeups.probe", params: ["task":input.parameters]); capabilities = result; if task.model.isEmpty { task.model = result.recommendedModel ?? "" }; if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
+            do { var input = task; input.model = ""; input.effort = ""; let result: WakeCapabilities = try await engine.call("wakeups.probe", params: ["task":input.parameters]); guard input.sourceId == task.sourceId && input.codexProfileId == task.codexProfileId else { return }; capabilities = result; if task.model.isEmpty { task.model = result.recommendedModel ?? "" }; if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
             catch { self.error = error.localizedDescription }
         }
     }
@@ -176,6 +192,6 @@ struct WakeEditor: View {
     @discardableResult private func saveDraft() async -> Bool {
         busy = true; error = nil
         defer { busy = false }
-        do { try await save(task); return true } catch { self.error = error.localizedDescription; return false }
+        do { guard targets.rows.contains(where: { $0.accountKey == selectedAccount && $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId && $0.canWake }) else { throw ClientError.message("此账号在所选位置尚不可唤醒，请检查登录与关联") }; try await save(task); return true } catch { self.error = error.localizedDescription; return false }
     }
 }

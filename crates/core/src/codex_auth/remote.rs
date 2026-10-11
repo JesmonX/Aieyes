@@ -11,7 +11,8 @@ pub(crate) fn script() -> Vec<u8> {
         "_parser": include_str!("../../../../scripts/vendor/tomli/_parser.py"),
     });
     format!(
-        "import json, base64\n_aieyes_tomli_sources = json.loads(base64.b64decode('{}'))\n{}",
+        "import json, base64\n_aieyes_client_version = {:?}\n_aieyes_tomli_sources = json.loads(base64.b64decode('{}'))\n{}",
+        env!("CARGO_PKG_VERSION"),
         base64::engine::general_purpose::STANDARD.encode(sources.to_string()),
         include_str!("../../../../scripts/remote_codex_auth.py")
     )

@@ -24,7 +24,7 @@ crates/
   domain/             统一领域模型、单位、时间与能力描述
   store/              SQLite、迁移、游标、聚合
   usage/              历史记录导入与去重
-  providers/          Codex / Claude Code / Antigravity
+  providers/          Codex / Claude Code / Antigravity / DeepSeek / 自定义
   pricing/            OpenRouter、模型映射、价格快照
   ssh/                连接、远程执行、环境配置
   metrics/            Linux 采样与计数器差值
@@ -93,4 +93,4 @@ SQLite 保存配置引用、基础用量、价格、限额快照与聚合历史�
 
 GitHub Release 元数据与下载走应用代理设置；更新提供平台、架构、版本与校验信息。macOS 和 Windows/Linux 的安装更新流程由各自外壳实现，共享发布元数据。
 
-发布时处理 macOS 应用签名、公证、Universal 构建，以及 Windows/Linux 包格式。仓库为 `JesmonX/Aieyes`。CI 上传 Windows/Linux 开发构建产物到 Actions Artifacts；签名、公证及正式 GitHub Release 发布尚未配置。
+仓库为 `JesmonX/Aieyes`。Release workflow 构建 macOS x64/arm64、Windows/Linux 安装包，校验并签名更新源后发布 GitHub Release。macOS Developer ID 签名与公证由仓库密钥配置启用；默认采用 ad-hoc 签名。Desktop workflow 另提供 Windows/Linux 开发构建产物。详见 [发布说明](releases.md)。

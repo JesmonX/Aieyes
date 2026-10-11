@@ -283,6 +283,14 @@ pub fn read_database_detailed(path: &Path) -> Result<DatabaseRead> {
     Ok(result)
 }
 pub fn scan(store: &Store, settings: &Settings, source: &Source) -> Result<Value> {
+    scan_mode(store, settings, source, false)
+}
+
+pub(crate) fn rescan(store: &Store, settings: &Settings, source: &Source) -> Result<Value> {
+    scan_mode(store, settings, source, true)
+}
+
+fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) -> Result<Value> {
     let root = expand(&source.path);
     let dir = directory(&root).context("Antigravity 会话目录不存在")?;
     let mut paths = std::fs::read_dir(dir)?
@@ -325,9 +333,10 @@ pub fn scan(store: &Store, settings: &Settings, source: &Source) -> Result<Value
             .collect::<Vec<_>>()
             .join(":");
         let key = path.to_string_lossy();
-        if store
-            .cursor(&source.id, &key)?
-            .is_some_and(|(s, _, _)| s == signature)
+        if !full
+            && store
+                .cursor(&source.id, &key)?
+                .is_some_and(|(s, _, _)| s == signature)
         {
             continue;
         }
@@ -344,7 +353,7 @@ pub fn scan(store: &Store, settings: &Settings, source: &Source) -> Result<Value
             issue["path"] = json!(path.file_name().unwrap_or_default().to_string_lossy());
             issues.push(issue);
         }
-        let tx = store.db.unchecked_transaction()?;
+        let tx = store.write_transaction()?;
         for row in read.events {
             read_bytes += serde_json::to_vec(&row)?.len();
             if let Some(event) = usage::parse(source, &mut ParseState::default(), &row)

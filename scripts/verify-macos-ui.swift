@@ -1,7 +1,25 @@
 import Foundation
 
 @main struct VerifyMacUI {
+    struct SemanticsFixture: Decodable {
+        struct Panel: Decodable {
+            var name: String, accounts: [AgentAccount], order: [String]
+            var preference: PanelAccountPreference.Preference, expected: [String: [String]]
+        }
+        struct Windows: Decodable { var name: String, provider: String, windows: [QuotaWindow], expected: [String] }
+        var panels: [Panel], windows: [Windows]
+    }
     @MainActor static func main() async throws {
+        let fixture = try JSONDecoder().decode(SemanticsFixture.self, from: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/ui-semantics.json")))
+        for row in fixture.panels {
+            let preference = String(data: try JSONEncoder().encode(row.preference), encoding: .utf8)!
+            precondition(PanelAccountPreference.selections(preference, accounts: row.accounts, order: row.order) == row.expected, row.name)
+        }
+        for row in fixture.windows {
+            let raw: [String: Any] = ["sourceId":"fixture", "accountId":"fixture", "provider":row.provider, "name":"Fixture", "updatedAt":1, "origin":"fixture", "windows":try JSONSerialization.jsonObject(with: JSONEncoder().encode(row.windows))]
+            let quota = try JSONDecoder().decode(Quota.self, from: JSONSerialization.data(withJSONObject: raw))
+            precondition(EstimatePresentation.windows(quota).map(\.id) == row.expected, row.name)
+        }
         let panelAccounts = (0..<20).map { AgentAccount(id: "a\($0)", name: "账户 \($0)", provider: "codex", quotaEnabled: true) }
         let order = panelAccounts.reversed().map(\.key)
         let defaults = PanelAccountPreference.selections("{}", accounts: panelAccounts, order: order)
@@ -78,7 +96,7 @@ for line in sys.stdin:
             while not os.path.exists(root+'/release-dashboard') and time.monotonic()<deadline: time.sleep(0.01)
         response['result']=json.load(open(root+'/dashboard.json'))
         if req.get('params',{}).get('model'): response['result']['summary']['total']=77
-    elif method=='sources.scan':
+    elif method in ('sources.scan','sources.rescan'):
         rows=json.load(open(root+'/scan-result.json')) if os.path.exists(root+'/scan-result.json') else []
         response['result']=[r for r in rows if not req.get('params',{}).get('sourceId') or r['id']==req['params']['sourceId']]
     elif method=='settings.patch' and os.path.exists(root+'/fail-theme'): response['error']=dict(message='模拟主题保存失败')
@@ -154,6 +172,8 @@ for line in sys.stdin:
         try await Task.sleep(nanoseconds: 80_000_000)
         let queriesAfterTick = try calls("quotas.refresh")
         precondition(queriesAfterTick == 1, "Failed quota reads must respect the retry deadline")
+        let startupRescans = try calls("sources.rescan")
+        precondition(startupRescans == 0, "Startup and scheduled refresh must not trigger full history replay")
         model.settingsDraft.refreshSeconds = 1
         precondition(model.settingsDirty && model.settings.refreshSeconds == 300)
         let rejected = await model.saveSettingsDraft()
@@ -315,8 +335,19 @@ for line in sys.stdin:
         precondition(model.actionFailures.filter { $0.action == "scan" }.map(\.itemID) == ["second"], "Targeted retry must preserve other failed sources")
         await model.scan()
         precondition(!model.actionFailures.contains { $0.action == "scan" } && model.refreshStates["scan"]?.succeededAt != nil)
+        try failures.write(to: root.appendingPathComponent("scan-result.json"))
+        await model.rescan()
+        precondition(model.rescanFailed && model.rescanMessage?.contains("first failed") == true && !model.rescanning)
+        precondition(model.actionFailures.filter { $0.action == "rescan" }.count == 2)
+        try Data("[]".utf8).write(to: root.appendingPathComponent("scan-result.json"))
+        await model.retry(model.actionFailures.first { $0.action == "rescan" && $0.itemID == "first" }!)
+        precondition(model.actionFailures.filter { $0.action == "rescan" }.map(\.itemID) == ["second"])
+        await model.rescan()
+        precondition(!model.rescanFailed && model.rescanMessage == "没有可重扫的已启用数据源。" && !model.rescanning)
+        precondition(!model.actionFailures.contains { $0.action == "rescan" })
         let requests = try String(contentsOf: root.appendingPathComponent("calls.jsonl"), encoding: .utf8).split(separator: "\n").compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
         precondition(requests.contains { $0["method"] as? String == "sources.scan" && ($0["params"] as? [String: Any])?["sourceId"] as? String == "first" })
+        precondition(requests.contains { $0["method"] as? String == "sources.rescan" && ($0["params"] as? [String: Any])?["sourceId"] as? String == "first" }, "Manual retry must also replay the failed source in full")
         model.settingsDraft = model.settings
         model.settingsDraft.hosts = [Host(id: "linked-host", name: "Linked", target: "example.invalid")]
         model.settingsDraft.sources[0].hostId = "linked-host"; model.settingsDraft.sources[0].enabled = true

@@ -1,3 +1,4 @@
+use crate::contracts::{FIVE_HOUR_MINUTES, WEEK_MINUTES};
 use crate::{
     models::*,
     network, process, ssh,
@@ -221,11 +222,11 @@ pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapsh
         }
     } else if source.provider == "claude" {
         for (key, label, minutes) in [
-            ("five_hour", "5h", 300),
-            ("seven_day", "7d", 10080),
-            ("seven_day_sonnet", "Sonnet · 7d", 10080),
-            ("seven_day_opus", "Opus · 7d", 10080),
-            ("seven_day_oauth_apps", "OAuth · 7d", 10080),
+            ("five_hour", "5h", FIVE_HOUR_MINUTES),
+            ("seven_day", "7d", WEEK_MINUTES),
+            ("seven_day_sonnet", "Sonnet · 7d", WEEK_MINUTES),
+            ("seven_day_opus", "Opus · 7d", WEEK_MINUTES),
+            ("seven_day_oauth_apps", "OAuth · 7d", WEEK_MINUTES),
         ] {
             if let Some(used) = v[key]["utilization"].as_f64() {
                 q.windows.push(QuotaWindow {
@@ -729,8 +730,8 @@ fn parse_agy(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
                     name: format!("{} · {}", group["name"].as_str().unwrap_or("agy"), label),
                     used_percent: (1.0 - remaining) * 100.0,
                     window_minutes: match window {
-                        "weekly" => Some(10080),
-                        "5h" => Some(300),
+                        "weekly" => Some(WEEK_MINUTES),
+                        "5h" => Some(FIVE_HOUR_MINUTES),
                         _ => None,
                     },
                     resets_at: timestamp(&bucket["reset_time"]),

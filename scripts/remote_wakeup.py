@@ -17,6 +17,7 @@ import time
 
 CLEAR_ENV = ('OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY')
 CLI_READY = b'AIEYES_WAKEUP_CLI_READY'
+CLIENT_VERSION = globals().get('_aieyes_client_version', 'development')
 
 
 def shell_argv(m, argv, diagnostic=False):
@@ -150,7 +151,7 @@ def codex_rpc(m, method, params):
                 return v.get('result', {})
         raise ValueError('Codex 能力查询超时')
     try:
-        send({'id': 1, 'method': 'initialize', 'params': {'clientInfo': {'name': 'aieyes', 'version': '0.1.5'}, 'capabilities': {'experimentalApi': True}}})
+        send({'id': 1, 'method': 'initialize', 'params': {'clientInfo': {'name': 'aieyes', 'version': CLIENT_VERSION}, 'capabilities': {'experimentalApi': True}}})
         wait(1)
         send({'method': 'initialized'})
         send({'id': 2, 'method': method, 'params': params})

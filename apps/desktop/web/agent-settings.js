@@ -94,7 +94,7 @@
   async function syncDeployments(){if(syncRunning)return;syncRunning=true;try{const r=await api('accounts.deployments.sync');syncMessage=r.failedTasks?.length?'配置已保存，部分唤醒部署待同步，可重试。':'';}catch(error){syncMessage='配置已保存，唤醒部署待同步：'+String(error);}finally{syncRunning=false;repaint();}}
   function backgroundRefresh(){clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>{void loadDashboard().catch(error=>notify('配置已保存，刷新失败：'+String(error),'error'));},300);void syncDeployments();}
 
-  const configurations = () => state.settings.agents ?? Object.keys(providers).filter(p=>p!=='agy').map(provider=>({provider,enabled:state.settings.sources.some(s=>s.provider===provider&&s.enabled),machineIds:[...new Set(state.settings.sources.filter(s=>s.provider===provider&&s.enabled).map(s=>s.hostId||'local'))]}));
+  const configurations = () => state.settings.agents ?? Object.keys(providers).map(provider=>({provider,enabled:state.settings.sources.some(s=>s.provider===provider&&s.enabled),machineIds:[...new Set(state.settings.sources.filter(s=>s.provider===provider&&s.enabled).map(s=>s.hostId||'local'))]}));
   const machineName = s => s.hostId ? state.settings.hosts.find(h=>h.id===s.hostId)?.name || s.hostId : '本机';
   const profiles = a => [...new Set([a.quotaProfileId,...(a.connections??[]).map(c=>c.profileId)].filter(Boolean))];
   const linked = (a,s) => s.provider===a.provider&&(s.accountId===a.id||s.codexHomeId&&profiles(a).some(r=>r.startsWith(s.codexHomeId+':')));
@@ -178,7 +178,7 @@
     });$('#editor-form button[type=submit]').textContent='确认删除';
   }
   function advanced(existing, provider) {
-    const base=structuredClone(state.settings), item=structuredClone(existing??{id:crypto.randomUUID(),provider,name:providers[provider],accountId:'',path:{codex:'~/.codex',claude:'~/.claude',antigravity:'~/.gemini/antigravity-cli',custom:'~/.aieyes'}[provider]||'',hostId:directorySelection?.machine==='local'?null:directorySelection?.machine??null,enabled:true,codexBinary:'codex',agyBinary:'agy',quotaCommand:'',quotaPreCommand:'',proxy:null});
+    const base=structuredClone(state.settings), item=structuredClone(existing??{id:crypto.randomUUID(),provider,name:providers[provider],accountId:'',path:window.AieyesContract.defaultPaths[provider]||'',hostId:directorySelection?.machine==='local'?null:directorySelection?.machine??null,enabled:true,codexBinary:window.AieyesContract.binaries.codex,agyBinary:window.AieyesContract.binaries.antigravity,quotaCommand:'',quotaPreCommand:'',proxy:null});
     showEditor(providers[item.provider]+' · 目录设置',select('hostId','机器',[['','本机'],...base.hosts.map(h=>[h.id,h.name||h.target])],item.hostId||'')+field('path',item.provider==='deepseek'?'API Key 文件':'数据目录',item.path)+(item.codexHomeId?'<p class="muted">更换目录将解除旧位置的账户连接；原文件和凭证保留，请在账户中读取新目录的登录信息。</p>':'')+(item.provider==='codex'?field('codexBinary','Codex 程序',item.codexBinary):'')+(item.provider==='antigravity'?field('agyBinary','agy 程序',item.agyBinary):'')+(item.provider==='custom'?textarea('quotaCommand','限额查询命令',item.quotaCommand||''):'')+proxyFields('source',item.proxy,true),async f=>{
       item.path=f.get('path').trim();if(!['antigravity','deepseek'].includes(item.provider)&&!item.path)throw new Error('请输入数据目录');
       for(const key of ['codexBinary','agyBinary','quotaCommand'])if(f.has(key))item[key]=f.get(key);
@@ -202,7 +202,7 @@
         const next=structuredClone(base),id=accountId||crypto.randomUUID();
         if(!accountId)next.accounts.push({id,provider,name,quotaEnabled:true,archived:false,connections:[]});
         let source=next.sources.find(s=>s.provider===provider&&s.accountId===id);
-        if(!source){source={id:secretSourceId,provider,name:name||'DeepSeek',accountId:id,hostId:null,enabled:true,path:'',quotaCommand:'',quotaPreCommand:'',codexBinary:'codex',agyBinary:'agy',proxy:null};next.sources.push(source);}
+        if(!source){source={id:secretSourceId,provider,name:name||'DeepSeek',accountId:id,hostId:null,enabled:true,path:'',quotaCommand:'',quotaPreCommand:'',codexBinary:window.AieyesContract.binaries.codex,agyBinary:window.AieyesContract.binaries.antigravity,proxy:null};next.sources.push(source);}
         if(!secret||secret.key!==key){const result=await api('credentials.save',{sourceId:secretSourceId+'-'+crypto.randomUUID(),apiKey:key});secret={key,path:result.path};}
         source.path=secret.path;await commit(next,base);
       } else {const result=await api('accounts.connect',{provider,accountId,name,sourceIds:f.getAll('sourceIds')});accept(result.settings);markSaved();backgroundRefresh();}

@@ -218,7 +218,6 @@ canvas { display: block; width: 100%; height: 220px; }
 .price-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; }
 .price-toolbar input { flex: 1; min-width: 160px; }
 .account-toggle { display: flex; align-items: center; gap: 10px; padding: 12px 0; }
-#account-fields { padding: 0 14px; background: var(--surface-sunken); border-radius: var(--r-md); overflow: auto; }
 .account-history { margin-top: 19px; }
 .account-history > summary { font-weight: 500; }
 .host-selectors { display: grid; gap: 14px; margin: 21px 0; }
@@ -536,8 +535,6 @@ button:active:not(:disabled) { transform:scale(.985); }
 .saved-feedback { color:var(--ok); font-size:var(--font-secondary); }
 .hint { max-width:min(300px,calc(100vw - 24px)); }
 :root[data-material=mica] #titlebar { background:transparent; }
-#account-fields { border:1px solid var(--border); }
-#account-fields h3 { padding-bottom:10px; border-bottom:1px solid var(--border); }
 
 
 .quota-disclosure:not([open]) + .quota-content .balance-detail,
@@ -825,3 +822,7 @@ body:not([data-platform=windows]) .font-notice { display:none; }
 .quota-email{font-size:11px;font-weight:400;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;user-select:text}
 .account-identity,#agy-login-identity{overflow-wrap:anywhere;user-select:text}
 .quota-identity-note{margin:4px 0}
+
+#account-targets { width:min(680px,calc(100vw - 24px)); max-height:90vh; }
+.account-target-body { overflow:auto; max-height:70vh; }
+.account-switch-entry { margin-top:12px; }

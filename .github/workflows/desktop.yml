@@ -8,9 +8,9 @@ on:
         default: false
   push:
     branches: [main]
-    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'Cargo.*', '.github/workflows/desktop.yml']
+    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'Cargo.*', '.github/workflows/desktop.yml']
   pull_request:
-    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'Cargo.*', '.github/workflows/desktop.yml']
+    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'Cargo.*', '.github/workflows/desktop.yml']
 permissions:
   contents: read
 concurrency:
@@ -21,12 +21,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04]
+        os: [windows-2022, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri -> target
@@ -36,30 +40,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Release version and packaging checks
-        run: |
-          python scripts/release.py check
-          python scripts/test-release.py
-          python scripts/test-wakeups.py
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libglib2.0-bin
-      - name: JavaScript syntax
+      - name: Shared checks
         shell: bash
-        run: |
-          node --check apps/desktop/web/webview-guards.js
-          node --check apps/desktop/web/app.js
-          node --check apps/desktop/web/tooltip.js
-          node --check apps/desktop/web/desktop.js
-          node --check apps/desktop/web/floating.js
-          node --check apps/desktop/web/sessions.js
-          node --check apps/desktop/web/updates.js
-          node --check apps/desktop/web/wakeups.js
-          node --check apps/desktop/web/multiselect.js
-      - run: node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs
+        run: sh scripts/ci-checks.sh
       - name: Browser integration
         shell: bash
         run: |
+          node scripts/prepare-wakeup.cjs --debug
           npm ci --prefix apps/desktop
           cd apps/desktop
           npx playwright install --with-deps chromium
@@ -96,8 +86,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Windows'
         with:
-          name: Windows-native-panel-results
-          path: .local/windows-ui-sync/native/*
+          name: windows-ui-evidence
+          path: .local/windows-ui-sync/
           include-hidden-files: true
           if-no-files-found: warn
       - name: Linux packages

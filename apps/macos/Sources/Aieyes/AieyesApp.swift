@@ -16,6 +16,7 @@ import Combine
     private var detailWindow: NSWindow?
     private var pageControl: NSSegmentedControl?
     private var settingsWindow: NSWindow?
+    private var accountSwitchWindow: NSWindow?
     private var samplingWindow: NSWindow?
     private var quotaOrderWindow: NSWindow?
     private var panelAccountsWindow: NSWindow?
@@ -30,7 +31,7 @@ import Combine
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         if let index = CommandLine.arguments.firstIndex(of: "--render"), CommandLine.arguments.count > index + 1 {
-            UserDefaults.standard.setVolatileDomain(["panel.accounts.v1": "{}", "panel.accounts.v2": "{\"version\":2,\"providers\":{}}", "panel.page": "agent", "detail.page": "agent", "panel.trendExpanded": false, "panel.sessionsExpanded": false, "panel.serverFilter": "all", "menu.showCount": false], forName: UserDefaults.argumentDomain)
+            UserDefaults.standard.setVolatileDomain(NativePanelKey.snapshotOverrides(), forName: UserDefaults.argumentDomain)
             model = AppModel(autostart: false)
             Task { await renderSnapshots(to: CommandLine.arguments[index + 1]) }
             return
@@ -44,12 +45,12 @@ import Combine
             guard let self else { return false }
             return await self.prepareUpdate()
         }
-        AppUpdater.shared.finishedInstallationAttempt = { [weak self] in self?.model.installingUpdate = false }
+        AppUpdater.shared.finishedInstallationAttempt = { [weak self] in Task { _ = await EngineClient.coordinateUpdate("operations.resume"); self?.model.installingUpdate = false } }
         AppUpdater.shared.start()
         model.showSettings = { [weak self] in self?.openSettings() }
-        model.showDetail = { [weak self] in self?.openDetail() }
         model.showDetailPage = { [weak self] page in self?.openDetail(page: page) }
         model.showEstimate = { [weak self] quota, credits, group in self?.openEstimate(quota, credits: credits, group: group) }
+        model.showAccountSwitch = { [weak self] key in self?.openAccountSwitch(key) }
         model.showSampling = { [weak self] in self?.openSampling() }
         model.showQuotaOrder = { [weak self] in self?.openQuotaOrder() }
         model.showPanelAccounts = { [weak self] in self?.openPanelAccounts() }
@@ -164,7 +165,7 @@ import Combine
     }
     private func openDetail(page: String? = nil) {
         if let page { model.requestedDetailPage = page; model.detailPage = page }
-        else if detailWindow == nil, let saved = UserDefaults.standard.string(forKey: "detail.page"), ["agent", "servers"].contains(saved) { model.detailPage = saved }
+        else if detailWindow == nil, let saved = UserDefaults.standard.string(forKey: NativePanelKey.detailPage.rawValue), ["agent", "servers"].contains(saved) { model.detailPage = saved }
         popover.performClose(nil)
         if detailWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -230,12 +231,21 @@ import Combine
             guard await editor.prepare() else { settingsWindow?.makeKeyAndOrderFront(nil); return false }
             try? await Task.sleep(for: .milliseconds(100))
         }
-        guard model.settingsDirty else { completed = true; return true }
+        guard model.settingsDirty else { completed = await quiesceForUpdate(); return completed }
         openSettings()
         let response = await updateChoice("更新前保存配置更改？", message: "更新会重启 Aieyes。采样记录将保留。", buttons: ["保存并更新", "放弃更改并更新", "取消"])
-        if response == 0 { completed = await model.saveSettingsDraft(); if !completed { AppUpdater.shared.preparationError = model.settingsMessage ?? "设置保存失败，请检查设置页" }; return completed }
-        if response == 1 { model.discardSettingsDraft(); completed = true; return true }
+        if response == 0 { completed = await model.saveSettingsDraft(); if completed { completed = await quiesceForUpdate() }; if !completed { AppUpdater.shared.preparationError = model.settingsMessage ?? "设置保存失败，请检查设置页" }; return completed }
+        if response == 1 { model.discardSettingsDraft(); completed = await quiesceForUpdate(); return completed }
         return false
+    }
+    private func quiesceForUpdate() async -> Bool {
+        var blockers = await EngineClient.coordinateUpdate("operations.prepareUpdate")
+        while !blockers.isEmpty {
+            AppUpdater.shared.preparationStatus("正在完成账号或配置操作：" + Array(Set(blockers)).sorted().joined(separator: "、"))
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { _ = await EngineClient.coordinateUpdate("operations.resume"); return false }
+            blockers = await EngineClient.coordinateUpdate("operations.status")
+        }
+        return true
     }
     private func openEstimate(_ quota: Quota, credits: Bool = false, group: String? = nil) {
         let key = quota.id + (credits ? ":credits" : ":quota")
@@ -249,6 +259,14 @@ import Combine
         window.title = quota.name + (credits ? " · credit 价值" : " · 额度估值")
         window.contentView = NSHostingView(rootView: QuotaEstimateView(model: model, quota: quota, onClose: { [weak window] in window?.close() }, credits: credits, initialGroup: group))
         fitToVisibleScreen(window); showWindow(window)
+    }
+    private func openAccountSwitch(_ key: String) {
+        popover.performClose(nil)
+        let window = accountSwitchWindow ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 470), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "切换账号"; window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: AccountTargetsView(model: model, accountKey: key))
+        if accountSwitchWindow == nil { window.center() }
+        accountSwitchWindow = window; fitToVisibleScreen(window); showWindow(window)
     }
     private func openSampling() {
         popover.performClose(nil)
@@ -411,7 +429,7 @@ import Combine
                 try await capture(RootView(model: model, compact: false, page: "servers"), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("servers-\(dark ? "dark" : "light").png"))
                 if let host = model.settings.hosts.first {
                     for compact in [false, true] {
-                        let key = "server.expanded." + (compact ? "panel." : "detail.") + host.id
+                        let key = NativePanelKey.expansion(.server, id: host.id, compact: compact)
                         let previous = UserDefaults.standard.object(forKey: key)
                         defer { if let previous { UserDefaults.standard.set(previous, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) } }
                         for expanded in [false, true] {
@@ -464,7 +482,7 @@ import Combine
             try await capture(PanelAccountsView(model: model, onClose: {}), size: NSSize(width: 488, height: 528), dark: false, to: root.appendingPathComponent("panel-accounts.png"))
             if let quota = model.dashboard.quotas.first {
                 var overrides = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
-                overrides["quota.expanded.v2.panel." + quota.id] = false
+                overrides[NativePanelKey.expansion(.quota, id: quota.id, compact: true)] = false
                 UserDefaults.standard.setVolatileDomain(overrides, forName: UserDefaults.argumentDomain)
                 try await capture(QuotaCard(quota: quota, compact: true, collapsible: true), size: NSSize(width: 414, height: 200), dark: false, to: root.appendingPathComponent("quota-folded-summary.png"))
                 try await capture(QuotaCard(quota: quota, compact: true, collapsible: true), size: NSSize(width: 414, height: 200), dark: true, to: root.appendingPathComponent("quota-folded-summary-dark.png"))

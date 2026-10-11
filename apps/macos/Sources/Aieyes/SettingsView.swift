@@ -12,9 +12,10 @@ struct SettingsView: View {
     @State private var accountEditor: AgentAccount?
     @State private var hostEditor: Host?
     @State private var priceEditor: ModelPrice?
-    @AppStorage("menu.showCount") private var showMenuCount = false
+    @AppStorage(NativePanelKey.showCount.rawValue) private var showMenuCount = false
     @State private var removal: RemovalRequest?
     @State private var confirmDiscardConfig = false
+    @State private var confirmRescan = false
     private var mappingModel: String { get { model.mappingModel } nonmutating set { model.mappingModel = newValue } }
     private var mappingID: String { get { model.mappingID } nonmutating set { model.mappingID = newValue } }
     @FocusState private var mappingFocused: Bool
@@ -36,6 +37,7 @@ struct SettingsView: View {
                 }
             }.padding(.horizontal, 22).padding(.vertical, 12)
             if let message = model.settingsMessage ?? model.message { HStack { Text(message).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.settingsMessage = nil; model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭提示") }.padding(.horizontal, 22).padding(.bottom, 10) }
+            ForEach(model.settings.configurationIssues ?? [], id: \.self) { Text($0).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled).padding(.horizontal, 22) }
             Picker("设置分类", selection: $model.settingsTab) {
                 Text("Agents").tag("sources"); Text("服务器").tag("servers"); Text("价格").tag("prices"); Text("账户").tag("accounts"); Text("定时唤醒").tag("wakeups"); Text("通用").tag("general")
             }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 22).padding(.bottom, 12)
@@ -54,6 +56,12 @@ struct SettingsView: View {
         }
         .font(AppFont.body).disabled(model.installingUpdate)
         .discardDraftConfirmation($confirmDiscardConfig) { model.discardSettingsDraft() }
+        .alert("全量重扫历史记录", isPresented: $confirmRescan) {
+            Button("取消", role: .cancel) { }
+            Button("开始重扫") { Task { await model.rescan() } }
+        } message: {
+            Text("将从头读取所有已启用本机及服务器数据源的完整日志，修复可确认的历史重复。已有历史和价格快照会保留；日志较多时可能需要较长时间。")
+        }
         .frame(minWidth: 620, idealWidth: 760, minHeight: 440, idealHeight: 600).aieyesAccent()
         .onAppear { if model.settingsTab == "codexAuth" { model.settingsTab = "accounts" }; if model.settingsTab == "connection" { model.settingsTab = "general" }; consumeEditorRequest() }
         .onChange(of: model.settingsDraft) { _, _ in
@@ -198,6 +206,16 @@ struct SettingsView: View {
                 TextField("服务器前台间隔（秒）", value: $model.settingsDraft.foregroundInterval, format: .number).focused($generalField, equals: "foreground")
                 TextField("服务器后台间隔（秒）", value: $model.settingsDraft.serverRefreshSeconds, format: .number).focused($generalField, equals: "background")
             }
+            Section("历史记录") {
+                Text("手动从头读取所有已启用本机及服务器数据源的完整日志，修复可确认的历史重复。保留已有历史和价格快照；已丢失的日志无法恢复或核实。").font(AppFont.secondary).foregroundStyle(.secondary)
+                HStack {
+                    Button(model.rescanning ? "全量重扫中…" : "全量重扫") { confirmRescan = true }
+                        .disabled(model.busy || model.quotaBusy || model.settingsSaving || !model.estimateBusy.isEmpty)
+                    RefreshIndicator(model: model, key: "rescan")
+                }
+                if model.rescanning { ProgressView("正在重新读取完整日志…").controlSize(.small) }
+                if let result = model.rescanMessage { Text(result).font(AppFont.secondary).foregroundStyle(model.rescanFailed ? Palette.warn : Color.secondary).textSelection(.enabled) }
+            }
             Section("连接") {
                 ProxyFields(proxy: $model.settingsDraft.proxy, testURLs: model.settingsDraft.proxyTestUrls)
                 TextField("测试地址（逗号分隔）", text: Binding(get: { (model.settingsDraft.proxyTestUrls ?? ["https://api.github.com/rate_limit", "https://openrouter.ai"]).joined(separator: ", ") }, set: { model.settingsDraft.proxyTestUrls = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }))
@@ -270,7 +288,7 @@ struct ProxyFields: View {
             if let testError { Text(testError).foregroundStyle(Palette.warn) }
         }
         .disabled(testing)
-        .updateOperation("编辑器代理检测", active: testing)
+        .updateOperation("编辑器代理检测", active: false)
         .onChange(of: address) { _, _ in result = nil; testError = nil }
         .onChange(of: proxy.mode) { _, _ in result = nil; testError = nil }
         .onChange(of: testURLs) { _, _ in result = nil; testError = nil }

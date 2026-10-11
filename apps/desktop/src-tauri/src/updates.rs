@@ -10,6 +10,8 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+// The feed and actual public key are managed here. The JSON pubkey placeholder
+// is required by the plugin's Config decoder; requireSignedVersion must stay enabled.
 const FEED: &str = "https://github.com/JesmonX/Aieyes/releases/latest/download/latest.json";
 const PUBLIC_KEY: &str = match option_env!("AIEYES_UPDATER_PUBLIC_KEY") {
     Some(key) => key,
@@ -65,6 +67,7 @@ struct Inner {
     status: Status,
     preferences: Preferences,
     update: Option<Update>,
+    package: Option<(String, Vec<u8>)>,
     target: String,
 }
 pub struct Updates {
@@ -180,6 +183,7 @@ pub fn setup(app: &AppHandle, root: &std::path::Path) {
             status,
             preferences,
             update: None,
+            package: None,
             target: String::new(),
         }),
         path,
@@ -364,101 +368,62 @@ pub fn updates_later(app: AppHandle, window: tauri::WebviewWindow) -> Result<Sta
     Ok(change(&app, |inner| inner.status.prompt = false))
 }
 #[tauri::command]
-pub async fn updates_install(
-    app: AppHandle,
-    window: tauri::WebviewWindow,
-) -> Result<Status, String> {
+pub async fn updates_download(app: AppHandle, window: tauri::WebviewWindow) -> Result<Status, String> {
     require_main(&window)?;
-    let (mut update, target) = {
+    let mut update = {
         let service = app.state::<Updates>();
         let mut inner = service.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.status.busy() {
-            return Err("更新正在进行".into());
-        }
+        if inner.status.busy() { return Err("更新正在进行".into()); }
         let update = inner.update.clone().ok_or("请先检查更新")?;
-        inner.status.phase = "downloading".into();
-        inner.status.message = "正在下载更新…".into();
-        inner.status.prompt = false;
-        inner.status.downloaded = 0;
-        inner.status.total = None;
-        (update, inner.target.clone())
+        if inner.package.as_ref().is_some_and(|(version, _)| version == &update.version) { return Ok(inner.status.clone()); }
+        inner.status.phase = "downloading".into(); inner.status.message = "正在下载更新…".into();
+        inner.status.prompt = false; inner.status.downloaded = 0; inner.status.total = None;
+        update
     };
-    app.state::<Updates>()
-        .installing
-        .store(true, Ordering::SeqCst);
     update.timeout = Some(Duration::from_secs(900));
     change(&app, |_| {});
-    let result: Result<(), String> = async {
-        let bytes = update
-            .download(
-                |length, total| {
-                    change(&app, |inner| {
-                        inner.status.downloaded += length as u64;
-                        inner.status.total = total;
-                    });
-                },
-                || {
-                    change(&app, |inner| {
-                        inner.status.phase = "verifying".into();
-                        inner.status.message = "正在校验更新包…".into();
-                    });
-                },
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        app.state::<Updates>()
-            .installing
-            .store(true, Ordering::SeqCst);
-        change(&app, |inner| {
-            inner.status.phase = "installing".into();
-            inner.status.message = if target.ends_with("-deb") {
-                "请完成系统授权，正在安装更新…"
-            } else {
-                "正在安装并重启…"
-            }
-            .into();
-        });
-        let installing_app = app.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            // Wait for existing mutations to finish; engine_call refuses new ones until installation ends.
-            let engines = installing_app.state::<crate::Shared>();
-            let _core = engines.0.lock().map_err(|_| "核心不可用")?;
-            let _metrics = engines.1.lock().map_err(|_| "采样核心不可用")?;
-            let _network = engines.2.lock().map_err(|_| "网络检测核心不可用")?;
-            let _configuration = engines.3.lock().map_err(|_| "配置核心不可用")?;
-            let _accounts = engines.4.lock().map_err(|_| "账户核心不可用")?;
-            let _queries = engines.5.lock().map_err(|_| "查询核心不可用")?;
-            if aieyes_core::agy_auth::busy() {
-                return Err("Antigravity 登录尚未完成，请完成或取消授权后再更新".into());
-            }
-            #[cfg(target_os = "linux")]
-            if target.ends_with("-deb") {
-                return install_deb(&bytes);
-            }
-            update.install(bytes).map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
-        Ok(())
-    }
-    .await;
-    app.state::<Updates>()
-        .installing
-        .store(false, Ordering::SeqCst);
+    let result = update.download(|length, total| { change(&app, |inner| { inner.status.downloaded += length as u64; inner.status.total = total; }); }, || {
+        change(&app, |inner| { inner.status.phase = "verifying".into(); inner.status.message = "正在校验更新包…".into(); });
+    }).await;
     match result {
-        Ok(()) => {
-            change(&app, |inner| {
-                inner.status.phase = "installed".into();
-                inner.status.message = "更新已安装，正在重启…".into();
-            });
-            app.restart()
-        }
-        Err(error) => Ok(change(&app, |inner| {
-            inner.status.phase = "error".into();
-            inner.status.message = format!("更新未完成：{error}");
-        })),
+        Ok(bytes) => Ok(change(&app, |inner| { inner.package = Some((update.version, bytes)); inner.status.phase = "available".into(); inner.status.message = "更新包已就绪".into(); })),
+        Err(error) => Ok(change(&app, |inner| { inner.status.phase = "error".into(); inner.status.message = error.to_string(); })),
     }
 }
+#[tauri::command]
+pub async fn updates_install(app: AppHandle, window: tauri::WebviewWindow) -> Result<Status, String> {
+    require_main(&window)?;
+    // UI preparation has saved drafts and drained authorization. Recheck in the host.
+    let state = aieyes_core::operations::prepare();
+    if state["protected"].as_array().is_some_and(|rows| !rows.is_empty()) || aieyes_core::agy_auth::busy() {
+        aieyes_core::operations::resume();
+        return Err("账号或配置操作尚未完成，请完成或取消后再更新".into());
+    }
+    let prepared = (|| -> Result<_, String> {
+        let service = app.state::<Updates>();
+        let mut inner = service.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.status.busy() { return Err("更新正在进行".into()); }
+        let update = inner.update.clone().ok_or("请先检查更新")?;
+        let (version, bytes) = inner.package.take().ok_or("请先下载更新包")?;
+        if version != update.version { return Err("更新版本已变化，请重新下载".into()); }
+        Ok((update, inner.target.clone(), bytes))
+    })();
+    let (update, target, bytes) = match prepared { Ok(value) => value, Err(error) => { aieyes_core::operations::resume(); return Err(error); } };
+    app.state::<Updates>().installing.store(true, Ordering::SeqCst);
+    change(&app, |inner| { inner.status.phase = "installing".into(); inner.status.message = "正在安装并重启…".into(); });
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        if target.ends_with("-deb") { return install_deb(&bytes); }
+        let _ = target;
+        update.install(bytes).map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string()).and_then(|r| r);
+    app.state::<Updates>().installing.store(false, Ordering::SeqCst);
+    match result {
+        Ok(()) => { let result = change(&app, |inner| { inner.status.phase = "installed".into(); inner.status.message = "更新已安装，正在重启…".into(); }); app.restart(); Ok(result) }
+        Err(error) => { aieyes_core::operations::resume(); Ok(change(&app, |inner| { inner.status.phase = "error".into(); inner.status.message = error; })) }
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn install_deb(bytes: &[u8]) -> Result<(), String> {
     use std::{io::Write, os::unix::fs::PermissionsExt, process::Command};
@@ -492,6 +457,16 @@ fn install_deb(bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn plugin_configuration_requires_a_key_field_and_signed_versions() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let updater: tauri_plugin_updater::Config = serde_json::from_value(config["plugins"]["updater"].clone()).unwrap();
+        assert!(updater.require_signed_version);
+        assert!(updater.pubkey.is_empty()); // Overridden by PUBLIC_KEY at check time.
+        let mut missing_key = config["plugins"]["updater"].clone();
+        missing_key.as_object_mut().unwrap().remove("pubkey");
+        assert!(serde_json::from_value::<tauri_plugin_updater::Config>(missing_key).is_err());
+    }
     #[test]
     fn semantic_versions_do_not_downgrade_or_compare_as_text() {
         assert!(version_message("1.9.0", "v1.10.0").unwrap().is_none());

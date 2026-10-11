@@ -42,25 +42,6 @@ struct NeutralCard: ViewModifier {
         .overlay(RoundedRectangle(cornerRadius: Palette.radiusCard).strokeBorder(Palette.cardBorder.opacity(previewAccessible || contrast == .increased ? 1 : 0.22), lineWidth: previewAccessible || contrast == .increased ? 2 : 1))
     }
 }
-struct AttentionNotice: View {
-    var reason: String, action: String, perform: () -> Void
-    var body: some View {
-        HStack(spacing: 8) { Image(systemName: "exclamationmark.triangle"); Text(reason).font(AppFont.secondary).fixedSize(horizontal: false, vertical: true); Spacer(minLength: 0); Button(action, action: perform) }
-            .foregroundStyle(Palette.warn).padding(10).overlay(RoundedRectangle(cornerRadius: Palette.radiusControl).strokeBorder(Palette.warn))
-    }
-}
-struct ActionFailureList: View {
-    @ObservedObject var model: AppModel
-    var body: some View {
-        ScrollView { VStack(alignment: .leading, spacing: 8) {
-            ForEach(model.actionFailures) { failure in
-                HStack(alignment: .top, spacing: 8) { VStack(alignment: .leading, spacing: 3) { Text(failure.name).fontWeight(.semibold); Text(failure.reason).textSelection(.enabled) }; Spacer(minLength: 0); Button("重试") { Task { await model.retry(failure) } }.accessibilityLabel("重试" + failure.name).disabled(model.refreshStates[failure.action]?.busy == true) }
-                if failure.id != model.actionFailures.last?.id { Divider() }
-            }
-        }.font(AppFont.secondary).padding(10) }.frame(maxHeight: 180).modifier(NeutralCard())
-    }
-}
-
 struct RootView: View {
     @ObservedObject var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -70,19 +51,19 @@ struct RootView: View {
     var compact = true
     var nativePanelBackground = false
     @AppStorage private var tab: String
-    @State private var costMode = false
+    @AppStorage private var costMode: Bool
     @AppStorage private var serverFilter: String
     @AppStorage private var trendExpanded: Bool
     @AppStorage private var sessionsExpanded: Bool
-    @AppStorage("panel.accounts.v2") private var panelAccounts = "{}"
+    @AppStorage(NativePanelKey.accounts.rawValue) private var panelAccounts = "{}"
     private var usageDashboard: Dashboard { compact ? model.panelDashboard : model.dashboard }
     init(model: AppModel, compact: Bool = true, page: String = "agent", nativePanelBackground: Bool = false) {
         self.model = model; self.compact = compact; self.nativePanelBackground = nativePanelBackground
-        let scope = compact ? "panel." : "detail."
-        _tab = AppStorage(wrappedValue: page, scope + "page")
-        _serverFilter = AppStorage(wrappedValue: "all", scope + "serverFilter")
-        _trendExpanded = AppStorage(wrappedValue: false, scope + "trendExpanded")
-        _sessionsExpanded = AppStorage(wrappedValue: false, scope + "sessionsExpanded")
+        _tab = AppStorage(wrappedValue: page, NativePanelKey.scoped(.panelPage, .detailPage, compact: compact))
+        _serverFilter = AppStorage(wrappedValue: "all", NativePanelKey.scoped(.panelServerFilter, .detailServerFilter, compact: compact))
+        _trendExpanded = AppStorage(wrappedValue: false, NativePanelKey.scoped(.panelTrend, .detailTrend, compact: compact))
+        _sessionsExpanded = AppStorage(wrappedValue: false, NativePanelKey.scoped(.panelSessions, .detailSessions, compact: compact))
+        _costMode = AppStorage(wrappedValue: false, NativePanelKey.scoped(.panelCost, .detailCost, compact: compact))
     }
     var body: some View {
         usageObservedContent
@@ -144,7 +125,7 @@ struct RootView: View {
     }
     private func initializePanelAccounts() {
         guard compact && model.settingsLoaded && model.dashboard.generatedAt > 0 && !CommandLine.arguments.contains("--render") else { return }
-        if panelAccounts == "{}" { panelAccounts = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: "panel.accounts.v1") ?? "{}") }
+        if panelAccounts == "{}" { panelAccounts = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}") }
     }
     private var header: some View {
         HStack(spacing: 12) {
@@ -193,7 +174,7 @@ struct RootView: View {
         HStack(spacing: 8) {
             Picker("Agent", selection: $model.provider) {
                 Text("全部 Agent").tag("all")
-                ForEach(["codex", "claude", "antigravity", "deepseek", "custom"], id: \.self) { Text(Format.provider($0)).tag($0) }
+                ForEach(CoreContract.providers, id: \.self) { Text(Format.provider($0)).tag($0) }
             }.labelsHidden()
             Picker("账户", selection: $model.selectedAccount) {
                 Text("全部账户").tag("all"); Text("未关联账户").tag("none")
@@ -364,8 +345,8 @@ struct RootView: View {
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } } }
+            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } } }
         }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
     private var filteredHosts: [Host] {
@@ -423,17 +404,6 @@ struct CacheSummaryCard: View {
                 VStack(alignment: .leading, spacing: 6) { Text(label).font(AppFont.secondary).foregroundStyle(.secondary); Text(value).font(AppFont.section).monospacedDigit().textSelection(.enabled) }
             }
         }.padding(14).modifier(NeutralCard()).help("读取命中率 = 缓存读取 ÷（普通输入 + 缓存读取 + 缓存写入）")
-    }
-}
-
-struct TokenBreakdownCard: View {
-    var tokens: Tokens
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Token 明细").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
-            TokenBreakdown(tokens: tokens)
-        }.padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .modifier(NeutralCard())
     }
 }
 
@@ -499,24 +469,6 @@ struct UsageChart: View {
         }
     }
     private func move(_ offset: Int) { guard !days.isEmpty else { return }; let index = selected.flatMap { key in days.firstIndex { $0.key == key } } ?? 0; selected = days[min(days.count - 1, max(0, index + offset))].key }
-}
-
-struct ModelKey: View {
-    var rows: [DayModel]
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) { entries }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], alignment: .leading, spacing: 8) { entries }
-        }
-    }
-    private var entries: some View {
-        ForEach(Array(Set(rows.map(\.model))).sorted(), id: \.self) { name in
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Circle().fill(Palette.model(name)).frame(width: 7, height: 7)
-                Text(name).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }.help(name)
-        }
-    }
 }
 
 struct DailyUsage: View {
@@ -634,6 +586,7 @@ struct QuotaCard: View {
     var collapsible = false
     var sourceName = ""
     var estimate: QuotaEstimate?
+    var onSwitch: (() -> Void)?
     var onEstimate: ((String?) -> Void)?
     var onCredits: (() -> Void)?
     var creditEstimate: QuotaEstimate?
@@ -643,13 +596,14 @@ struct QuotaCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage private var storedExpanded: Bool
     private var expanded: Bool { !collapsible || storedExpanded }
-    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = []) {
+    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = []) {
+        self.onSwitch = onSwitch
         self.quotaHistory = quotaHistory; self.creditHistory = creditHistory
         self.collapsible = collapsible; self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
-        _storedExpanded = AppStorage(wrappedValue: true, "quota.expanded.v2." + (compact ? "panel." : "detail.") + quota.id)
+        _storedExpanded = AppStorage(wrappedValue: true, NativePanelKey.expansion(.quota, id: quota.id, compact: compact))
     }
     var body: some View {
-        fullCard
+        VStack(alignment: .leading, spacing: 8) { fullCard; if let onSwitch { Button("切换为此账号", action: onSwitch).padding(.horizontal, 12) } }
     }
     @ViewBuilder private var balanceContent: some View {
         if let balances = quota.balances { ForEach(balances) { balance in
@@ -674,7 +628,7 @@ struct QuotaCard: View {
                     HStack(alignment: .top, spacing: 14) {
                         ForEach(quota.windows.filter { $0.groupLabel == group }.sorted { ($0.windowMinutes ?? 0) < ($1.windowMinutes ?? 0) }) { window in
                             VStack(alignment: .leading, spacing: 5) {
-                                HStack { Text(window.windowMinutes == 10080 ? "7d" : window.windowMinutes == 300 ? "5h" : window.name); Spacer(minLength: 2); Text(Format.percent(max(0, 100-window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)) }.font(AppFont.secondary)
+                                HStack { Text(window.windowMinutes == CoreContract.weekMinutes ? "7d" : window.windowMinutes == CoreContract.fiveHourMinutes ? "5h" : window.name); Spacer(minLength: 2); Text(Format.percent(max(0, 100-window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)) }.font(AppFont.secondary)
                                 ResourceBar(percent: 100-window.usedPercent, tint: Palette.quota(window.usedPercent))
                                 QuotaResetLabel(window: window)
                             }.frame(maxWidth: .infinity).accessibilityElement(children: .combine).accessibilityLabel(window.name + "，剩余 " + Format.percent(max(0, 100-window.usedPercent)))
@@ -726,7 +680,7 @@ struct QuotaCard: View {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(Array(quota.windows.prefix(2))) { window in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(window.windowMinutes == 300 ? "5h" : window.windowMinutes == 10080 ? "7d" : window.name).font(AppFont.secondary).lineLimit(2)
+                            Text(window.windowMinutes == CoreContract.fiveHourMinutes ? "5h" : window.windowMinutes == CoreContract.weekMinutes ? "7d" : window.name).font(AppFont.secondary).lineLimit(2)
                             Text("剩余 " + Format.percent(max(0, 100 - window.usedPercent))).font(AppFont.secondary).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent))
                             ResourceBar(percent: 100 - window.usedPercent, tint: Palette.quota(window.usedPercent))
                         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -736,7 +690,7 @@ struct QuotaCard: View {
             }
             if expanded {
             balanceContent
-            if ["antigravity", "agy"].contains(quota.provider) { agyWindows }
+            if quota.provider == "antigravity" { agyWindows }
             else if !quota.windows.isEmpty { LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: expanded ? 1 : 2), alignment: .leading, spacing: expanded ? 14 : 8) {
             ForEach(quota.windows) { window in
                 VStack(spacing: 6) {
@@ -750,7 +704,7 @@ struct QuotaCard: View {
             }
             }
             }
-            if let onEstimate, !["antigravity", "agy"].contains(quota.provider), quota.windows.contains(where: { $0.windowMinutes == 300 || $0.windowMinutes == 10080 }) || estimate != nil {
+            if let onEstimate, quota.provider != "antigravity", quota.windows.contains(where: { $0.windowMinutes == CoreContract.fiveHourMinutes || $0.windowMinutes == CoreContract.weekMinutes }) || estimate != nil {
                 EstimateEntry(records: quotaHistory.isEmpty ? [estimate].compactMap { $0 } : quotaHistory) { onEstimate(nil) }
             }
             if expanded && !sourceName.isEmpty { Text(sourceName).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
@@ -786,7 +740,7 @@ struct ServerCard: View, Equatable {
     @AppStorage private var expanded: Bool
     init(host: Host, result: HostResult?, compact: Bool, onRefresh: @escaping () -> Void = {}) {
         self.host = host; self.result = result; self.compact = compact; self.onRefresh = onRefresh
-        _expanded = AppStorage(wrappedValue: false, "server.expanded." + (compact ? "panel." : "detail.") + host.id)
+        _expanded = AppStorage(wrappedValue: false, NativePanelKey.expansion(.server, id: host.id, compact: compact))
     }
     var body: some View {
         Surface(spacing: 8, padding: 12) {
@@ -881,7 +835,7 @@ struct ServerCard: View, Equatable {
         if !host.enabled { return "已暂停" }
         if result?.error != nil { return "连接失败" }
         guard let sample = result?.sample else { return "等待采样" }
-        if date.timeIntervalSince1970 - sample.timestamp > 10 { return "数据延迟" }
+        if date.timeIntervalSince1970 - sample.timestamp > 10 { return "数据已延迟" }
         return sample.errors.isEmpty ? "正常" : "部分采集失败"
     }
     private func metricKey(_ group: String) -> String { (compact ? "panel." : "detail.") + host.id + ":" + group }
@@ -892,7 +846,7 @@ struct LazyMetricDisclosure<Content: View, Label: View>: View {
     @ViewBuilder var content: () -> Content
     @ViewBuilder var label: () -> Label
     init(key: String, @ViewBuilder content: @escaping () -> Content, @ViewBuilder label: @escaping () -> Label) {
-        _expanded = AppStorage(wrappedValue: false, "server.metric.expanded." + key)
+        _expanded = AppStorage(wrappedValue: false, NativePanelKey.Prefix.metric.rawValue + key)
         self.content = content; self.label = label
     }
     var body: some View {

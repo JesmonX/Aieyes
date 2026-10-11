@@ -5,20 +5,8 @@ use serde_json::{Value, json};
 
 /// Pure local configuration work must not wait behind remote requests.
 pub fn is_configuration_method(method: &str) -> bool {
-    matches!(
-        method,
-        "settings.get"
-            | "settings.patch"
-            | "settings.save"
-            | "agents.set"
-            | "sources.configure"
-            | "sources.remove"
-            | "accounts.connect"
-            | "accounts.create"
-            | "accounts.status.get"
-            | "accounts.deletion.preview"
-            | "accounts.cleanup.list"
-    )
+    crate::contracts::method(method)
+        .is_some_and(|m| m.lane == crate::contracts::Lane::Configuration)
 }
 
 // Preserve concurrent edits to unrelated fields and rows. A conflicting field
@@ -108,12 +96,17 @@ impl Store {
             Ok(serde_json::to_value(s)?)
         };
         let current = serde_json::to_value(self.settings()?)?;
-        let mut result: Settings = serde_json::from_value(merge(
-            &normalize(base)?,
-            &normalize(next)?,
-            &current,
-            "设置",
-        )?)?;
+        let base = normalize(base)?;
+        let next = normalize(next)?;
+        // These values are managed by account deletion and provider migrations.
+        // Unchanged stale values remain valid during concurrent system updates.
+        for key in ["deletedAccounts", "accountAliases"] {
+            ensure!(
+                base[key] == next[key],
+                "{key} 为只读设置，请使用账户操作修改"
+            );
+        }
+        let mut result: Settings = serde_json::from_value(merge(&base, &next, &current, "设置")?)?;
         result.deleted_accounts = serde_json::from_value(current["deletedAccounts"].clone())?;
         result.account_aliases = serde_json::from_value(current["accountAliases"].clone())?;
         if auth {
@@ -276,6 +269,8 @@ impl Engine {
         let base = self.store.settings()?;
         let mut next = base.clone();
         let provider = params["provider"].as_str().context("请选择 Agent")?;
+        let mut retained = false;
+        next.agents.retain(|a| { if a.provider != provider { true } else if retained { false } else { retained = true; true } });
         let agent = next
             .agents
             .iter_mut()
@@ -315,14 +310,9 @@ impl Engine {
                         }
                     ),
                     provider: provider.into(),
-                    path: match provider {
-                        "codex" => "~/.codex",
-                        "claude" => "~/.claude",
-                        "antigravity" => "~/.gemini/antigravity-cli",
-                        "custom" => "~/.aieyes",
-                        _ => "",
-                    }
-                    .into(),
+                    path: crate::contracts::provider(provider)
+                        .map_or("", |p| p.default_path)
+                        .into(),
                     host_id: (machine != "local").then(|| machine.clone()),
                     ..Default::default()
                 });

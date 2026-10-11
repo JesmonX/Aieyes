@@ -5,37 +5,37 @@ import Foundation
     static func item(_ type: String) -> String { "{\"type\":\"response_item\",\"payload\":{\"type\":\"\(type)\"}}\n" }
     static func main() async throws {
         let start = event("task_started")
-        precondition(LiveSession.phase(in: Data(start.utf8)) == .working)
-        precondition(LiveSession.phase(in: Data((start + item("reasoning")).utf8)) == .thinking)
-        precondition(LiveSession.phase(in: Data((start + item("function_call")).utf8)) == .tool)
-        precondition(LiveSession.phase(in: Data((start + item("custom_tool_call") + item("custom_tool_call_output")).utf8)) == .working)
-        precondition(LiveSession.phase(in: Data((start + event("task_complete") + item("reasoning")).utf8)) == .complete)
-        precondition(LiveSession.phase(in: Data((start + event("turn_aborted")).utf8)) == .interrupted)
-        precondition(LiveSession.phase(in: Data((start + event("task_complete") + start).utf8)) == .working)
-        precondition(LiveSession.phase(in: Data("broken\n{}\n".utf8)) == nil)
+        let snapshot = try JSONDecoder().decode(SessionSnapshot.self, from: Data(#"{"sessions":[{"id":"s","source":"Codex","phase":"tool","updatedAt":1791640000}],"unavailable":false}"#.utf8))
+        precondition(snapshot.sessions[0].phase == .tool)
+        precondition(snapshot.sessions[0].updatedAt.timeIntervalSince1970 == 1791640000)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("session.jsonl")
         try Data(start.utf8).write(to: file)
-        let source = AgentSource(name: "Test", path: file.path)
-        let monitor = SessionMonitor()
-        let fresh = await monitor.read(sources: [source])
+        // Exercise the production Rust monitor via a persistent, isolated RPC lane.
+        setenv("AIEYES_DATA_DIR", root.appendingPathComponent("store").path, 1)
+        let engine = EngineClient(configurationOnly: true)
+        defer { engine.stop() }
+        var settings = Settings()
+        settings.sources = [AgentSource(id: "source", name: "Test", path: file.path)]
+        func save(_ sources: [AgentSource]) async throws {
+            settings.sources = sources
+            let params = try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as! [String: Any]
+            let _: Acknowledgement = try await engine.call("settings.save", params: params)
+        }
+        try await save(settings.sources)
+        let fresh: SessionSnapshot = try await engine.call("sessions.list")
         precondition(fresh.sessions.count == 1 && fresh.sessions[0].phase == .working)
-        let duplicate = await monitor.read(sources: [source, source])
-        precondition(duplicate.sessions.count == 1)
-        let stale = await monitor.read(sources: [source], now: Date().addingTimeInterval(190))
-        precondition(stale.sessions.first?.phase == .unknown)
         try Data((start + event("task_complete")).utf8).write(to: file)
-        let completed = await monitor.read(sources: [source])
+        let completed: SessionSnapshot = try await engine.call("sessions.list")
         precondition(completed.sessions.first?.phase == .complete)
-        let disabled = await monitor.read(sources: [AgentSource(name: "Disabled", path: file.path, enabled: false)])
+        try await save([AgentSource(id: "source", name: "Disabled", path: file.path, enabled: false)])
+        let disabled: SessionSnapshot = try await engine.call("sessions.list")
         precondition(disabled.sessions.isEmpty)
-        let remote = await monitor.read(sources: [AgentSource(name: "Remote", path: file.path, hostId: "remote")])
-        precondition(remote.sessions.isEmpty)
-        let missingSource = AgentSource(name: "Missing", path: root.appendingPathComponent("missing.jsonl").path)
-        let missing = await monitor.read(sources: [missingSource])
+        try await save([AgentSource(id: "missing", name: "Missing", path: root.appendingPathComponent("missing.jsonl").path)])
+        let missing: SessionSnapshot = try await engine.call("sessions.list")
         precondition(missing.unavailable && missing.sessions.isEmpty)
-        print("Session lifecycle, stale state, completion, disabled and remote source checks passed")
+        print("Native session decoding and real-core lifecycle, completion, disabled and unavailable source RPC checks passed")
     }
 }

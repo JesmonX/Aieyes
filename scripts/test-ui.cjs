@@ -31,7 +31,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
       const day='2026-10-03';
       const history=Array.from({length:365},(_,i)=>({...usage,key:new Date(Date.UTC(2025,9,4+i)).toISOString().slice(0,10),total:i%5?100000+(i*71239)%850000:0}));
       const trend=history.slice(-7);
-      window.fixtureSettings={accounts:[],sources:[],hosts:[{id:'host1',name:'训练服务器',target:'gpu-lab',port:null,identityFile:'',shell:'/bin/bash',preCommand:'',enabled:true,metrics:groups,devices:[],details}],proxy:{mode:'system',url:''},refreshSeconds:300,serverRefreshSeconds:10,githubRepository:'JesmonX/Aieyes',modelMappings:{}};
+      window.fixtureSettings={accounts:[],sources:[],hosts:[{id:'host1',name:'训练服务器',target:'gpu-lab',port:null,identityFile:'',shell:'/bin/bash',preCommand:'',enabled:true,metrics:groups,devices:[],details}],proxy:{mode:'system',url:''},refreshSeconds:300,serverRefreshSeconds:10,modelMappings:{}};
       window.saved=[]; window.discoveryFails=false; window.nativeCalls=[]; window.engineCalls=[]; window.settingsSaveFails=false; window.quotaFails=false; let maximized=false;
       window.uiTimers=[];
       window.setInterval=(fn,ms)=>{window.uiTimers.push({fn,ms});return window.uiTimers.length;};
@@ -73,8 +73,6 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
             case 'prices.list':return window.fixturePrices??[{id:'anthropic/claude-sonnet',name:'Claude Sonnet',input:0.000003,output:0.000015},{id:'openai/gpt-test',name:'GPT Test',input:0.000001,output:0.000002}];
             case 'prices.save':window.fixturePrices=args.params.prices;return {};
             case 'prices.sync':return {};
-            case 'updates.open':return {opened:true};
-            case 'updates.check':return {version:'v0.1.1',url:'https://github.com/JesmonX/Aieyes/releases/tag/v0.1.1'};
             case 'hosts.discover':
               if(window.discoveryFails)throw new Error('连接失败');
               return {cpu:[{id:'cpu'},...Array.from({length:256},(_,i)=>({id:`cpu${i}`}))],network:[{id:'eth0'},{id:'eth1'},{id:'ib0',name:'高速网卡'}],filesystems:Array.from({length:100},(_,i)=>({id:`/data/挂载点-${i}-long-name`,type:'ext4'})),gpu:[{id:'0',name:'GPU'}],disk:[{id:'nvme0n1'}],errors:{}};
@@ -260,7 +258,6 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     assert.equal(await page.evaluate(()=>window.fixtureSettings.hosts[0].enabled),true);
 
     await page.locator('[data-settings-tab=general]').click();
-    assert.equal(await page.locator('#field-githubRepository').count(),0);
     assert.equal(await page.locator('#field-refreshSeconds').inputValue(),'300');await page.locator('#field-refreshSeconds').fill('300');
     await page.locator('#field-appMode').selectOption('custom');
     await page.locator('#field-appHost').fill('proxy.example');
@@ -285,7 +282,6 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await page.waitForFunction(()=>document.querySelector('#update-result').textContent.includes('当前已是最新版本'));
     assert.match(await page.locator('#update-current').textContent(),/0\.1\.1/);
     assert.equal(await page.locator('#update-result a').count(),0);
-    assert.equal(await page.evaluate(()=>window.engineCalls.filter(c=>c.method==='updates.open').length),0);
     await page.screenshot({animations:'disabled',path:path.join(output,'general-light.png'),fullPage:true});
 
     await page.locator('[data-settings-tab=prices]').click();

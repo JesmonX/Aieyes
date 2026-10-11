@@ -1,5 +1,21 @@
 /* Shared UI semantics. Query timestamps deliberately never imply a successful sync. */
 window.AieyesUI = {
+  canonicalProvider(provider) { return provider === 'agy' ? 'antigravity' : provider; },
+  canonicalAccountKey(key, aliases = {}) { return aliases[key] ?? (key?.startsWith('agy:') ? 'antigravity:' + key.slice(4) : key); },
+  canonicalPayload(value, aliases = value?.accountAliases ?? {}) {
+    if (Array.isArray(value)) return value.map(row => this.canonicalPayload(row, aliases));
+    if (!value || typeof value !== 'object') return value;
+    const next = Object.fromEntries(Object.entries(value).map(([key,row]) => [key,this.canonicalPayload(row,aliases)]));
+    if (next.provider === 'agy') {
+      const field = 'accountId' in next ? 'accountId' : 'quotaEnabled' in next ? 'id' : null;
+      if (field) next[field] = this.canonicalAccountKey('agy:' + next[field], aliases).slice('antigravity:'.length);
+      next.provider = 'antigravity';
+    }
+    if (next.accountKey) next.accountKey = this.canonicalAccountKey(next.accountKey, aliases);
+    if (next.quotaOrder) next.quotaOrder = next.quotaOrder.map(key => this.canonicalAccountKey(key, aliases));
+    return next;
+  },
+  escapeHTML(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); },
   panelPreference() {
     try {
       const current = JSON.parse(localStorage.getItem('aieyes.panel.accounts.v2') || 'null');
@@ -70,13 +86,13 @@ window.AieyesUI = {
     if (minutes < 1440 && minutes % 60) parts.push(minutes % 60 + ' 分');
     return parts.join(' ') + '后重置';
   },
-  quotaReset(window, now = Date.now() / 1000) {
-    if (!(Number.isFinite(window.resetsAt) && window.resetsAt > 0) && window.usedPercent === 0) {
-      if (window.windowMinutes === 300) return '5h';
-      if (window.windowMinutes === 10080) return '7d';
+  quotaReset(quotaWindow, now = Date.now() / 1000) {
+    if (!(Number.isFinite(quotaWindow.resetsAt) && quotaWindow.resetsAt > 0) && quotaWindow.usedPercent === 0) {
+      if (quotaWindow.windowMinutes===window.AieyesContract.windows.fiveHour) return '5h';
+      if (quotaWindow.windowMinutes===window.AieyesContract.windows.week) return '7d';
     }
-    const text = this.resetText(window.resetsAt, now);
-    const stamp = this.resetDisplayTime(window.resetsAt, now), date = new Date(stamp * 1000);
+    const text = this.resetText(quotaWindow.resetsAt, now);
+    const stamp = this.resetDisplayTime(quotaWindow.resetsAt, now), date = new Date(stamp * 1000);
     if (stamp == null || !Number.isFinite(date.getTime())) return text;
     const pad = n => String(n).padStart(2, '0');
     return text + ' · ' + pad(date.getMonth()+1) + '/' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
@@ -92,15 +108,15 @@ window.AieyesUI = {
   },
   estimateWindows(q) {
     const windows=q.windows??[];
-    if(['antigravity','agy'].includes(q.provider)) {
+    if(q.provider==='antigravity') {
       const groups=[...new Set(windows.map(w=>w.groupId||w.groupName||''))];
       return groups.filter(g=>['gemini','gemini models','claude-gpt','claude and gpt models'].includes(g.toLowerCase())).flatMap(g=>{
         const rows=windows.filter(w=>(w.groupId||w.groupName)===g);
-        const five=rows.filter(w=>w.windowMinutes===300),week=rows.filter(w=>w.windowMinutes===10080);
+        const five=rows.filter(w=>w.windowMinutes===window.AieyesContract.windows.fiveHour),week=rows.filter(w=>w.windowMinutes===window.AieyesContract.windows.week);
         return five.length===1?five:!five.length&&week.length===1?week:[];
       });
     }
-    const five=windows.filter(w=>w.windowMinutes===300),week=windows.filter(w=>w.windowMinutes===10080);
+    const five=windows.filter(w=>w.windowMinutes===window.AieyesContract.windows.fiveHour),week=windows.filter(w=>w.windowMinutes===window.AieyesContract.windows.week);
     return five.length===1?five:q.provider==='claude'&&five.some(w=>w.id==='five_hour')?five.filter(w=>w.id==='five_hour'):week.length===1?week:week.filter(w=>q.provider==='claude'&&w.id==='seven_day');
   },
   estimateLine(records=[]) {
@@ -117,12 +133,6 @@ window.AieyesUI = {
       const view=JSON.parse(localStorage.getItem('aieyes.panel.view')||'{}');if(view.provider==='agy')view.provider='antigravity';if(view.accountKey)view.accountKey=key(view.accountKey);localStorage.setItem('aieyes.panel.view',JSON.stringify(view));
       localStorage.setItem('aieyes.antigravity.preferences',marker);
     } catch(_) {}
-  },
-  estimateLabel(record) {
-    if (!record) return '';
-    const five = record.valuationMode === 'fiveHour';
-    const value = five ? record.fiveHourValue : record.weeklyValue;
-    return (five ? '5h' : '7d 整周') + (value == null ? ' · ' + this.estimateIssue(record) : ' ≈ $' + value.toFixed(2) + ' USD');
   },
   targetTimeLocal(time, zone, now = new Date()) {
     if (!zone) return '目标时区待读取';

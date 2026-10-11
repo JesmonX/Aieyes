@@ -143,9 +143,9 @@ fn five_hour_sampling_resumes_normal_resets_and_preserves_three_values() {
     q.windows[1].used_percent = 22.0;
     store.quota(&q).unwrap();
     let e = store.estimate(&estimate.id).unwrap();
-    assert_eq!(e.five_hour_value, Some(10.0));
-    assert_eq!(e.weekly_direct_value, Some(50.0));
-    assert_eq!(e.weekly_ratio_value, Some(50.0));
+    assert_eq!(e.quota().unwrap().five_hour_value, Some(10.0));
+    assert_eq!(e.quota().unwrap().weekly_direct_value, Some(50.0));
+    assert_eq!(e.quota().unwrap().weekly_ratio_value, Some(50.0));
     add(
         &store,
         &source,
@@ -160,7 +160,7 @@ fn five_hour_sampling_resumes_normal_resets_and_preserves_three_values() {
     store.quota(&q).unwrap();
     let e = store.estimate(&estimate.id).unwrap();
     assert_eq!(e.status, "active");
-    assert_eq!(e.segments.len(), 1);
+    assert_eq!(e.quota().unwrap().segments.len(), 1);
     assert_eq!(e.total_tokens, 100);
     add(&store, &source, "two", q.updated_at + 10, 200, "model");
     q.updated_at += 20;
@@ -169,14 +169,16 @@ fn five_hour_sampling_resumes_normal_resets_and_preserves_three_values() {
     store.quota(&q).unwrap();
     let done = store.finish_estimate(&estimate.id).unwrap();
     assert_eq!(done.total_tokens, 300);
-    assert_eq!(done.five_hour_value, Some(15.0));
-    assert_eq!(done.weekly_direct_value, Some(75.0));
-    assert_eq!(done.weekly_ratio_value, Some(75.0));
+    assert_eq!(done.quota().unwrap().five_hour_value, Some(15.0));
+    assert_eq!(done.quota().unwrap().weekly_direct_value, Some(75.0));
+    assert_eq!(done.quota().unwrap().weekly_ratio_value, Some(75.0));
     drop(store);
     let reopened = Store::open(dir.path()).unwrap();
     assert_eq!(
         reopened
             .finish_estimate(&done.id)
+            .unwrap()
+            .quota()
             .unwrap()
             .weekly_ratio_value,
         Some(75.0)
@@ -192,7 +194,15 @@ fn early_resets_and_unpriced_usage_do_not_produce_a_five_hour_value() {
     q.updated_at += 10;
     q.windows[0].used_percent = 30.0;
     store.quota(&q).unwrap();
-    assert!(store.estimate(&e.id).unwrap().five_hour_value.is_none());
+    assert!(
+        store
+            .estimate(&e.id)
+            .unwrap()
+            .quota()
+            .unwrap()
+            .five_hour_value
+            .is_none()
+    );
     q.updated_at += 10;
     q.windows[0].resets_at = Some(now() + 18000);
     q.windows[0].used_percent = 0.0;

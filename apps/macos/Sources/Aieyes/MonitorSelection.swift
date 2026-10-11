@@ -2,9 +2,9 @@ import Foundation
 
 enum MonitorSelection {
     static func recommendedFilesystem(_ id: String, type: String? = nil) -> Bool {
-        let path = id.lowercased(), kind = (type ?? "").lowercased()
-        return !["tmpfs", "devtmpfs", "squashfs", "overlay", "proc", "procfs", "sysfs", "devfs", "autofs", "cgroup", "cgroup2"].contains(kind)
-            && !["/snap", "/var/lib/snapd/snap", "/run", "/efi", "/boot/efi", "/dev", "/proc", "/sys", "/system/volumes/preboot", "/system/volumes/vm", "/system/volumes/update", "/system/volumes/xarts", "/system/volumes/iscpreboot", "/system/volumes/hardware"].contains { path == $0 || path.hasPrefix($0 + "/") }
+        let path = id.replacingOccurrences(of: "\\", with: "/").lowercased(), kind = (type ?? "").lowercased()
+        return !CoreContract.excludedFilesystemTypes.contains(kind)
+            && !CoreContract.excludedFilesystemPaths.contains { path == $0 || path.hasPrefix($0 + "/") }
     }
     enum Action: Equatable { case all, clear, invert }
 

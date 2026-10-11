@@ -3,11 +3,20 @@ set -eu
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$PROJECT_DIR"
 mkdir -p .build/swift-module-cache
+export PATH="$HOME/.cargo/bin:$PATH"
+cargo build --workspace --locked
+MODEL_FIXTURE=$(mktemp -d "$PROJECT_DIR/.build/model-fixture.XXXXXX")
+trap 'rm -rf "$MODEL_FIXTURE"' EXIT HUP INT TERM
+target/debug/aieyes-core --data-dir "$MODEL_FIXTURE" --call settings.save '{"version":6,"sources":[],"accounts":[],"hosts":[]}' > /dev/null
+target/debug/aieyes-core --data-dir "$MODEL_FIXTURE" --call settings.get > "$MODEL_FIXTURE/settings.json"
+target/debug/aieyes-core --data-dir "$MODEL_FIXTURE" --call dashboard > "$MODEL_FIXTURE/dashboard.json"
+swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift scripts/verify-models.swift -o .build/verify-models
+.build/verify-models "$MODEL_FIXTURE/dashboard.json" "$MODEL_FIXTURE/settings.json"
 swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/DockPresence.swift scripts/verify-dock-presence.swift -o .build/verify-dock-presence
 .build/verify-dock-presence
 swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Palette.swift scripts/verify-palette.swift -o .build/verify-palette
 .build/verify-palette
-swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift scripts/verify-selection.swift -o .build/verify-selection
+swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift scripts/verify-selection.swift -o .build/verify-selection
 .build/verify-selection
 swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-sessions.swift -o .build/verify-sessions
 .build/verify-sessions

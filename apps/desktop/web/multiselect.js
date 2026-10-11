@@ -127,7 +127,8 @@
     refresh(); return controller;
   }
   function recommendedFilesystem(id,type='') {
-    const path=id.toLowerCase();return !['tmpfs','devtmpfs','squashfs','overlay','proc','procfs','sysfs','devfs','autofs','cgroup','cgroup2'].includes(type.toLowerCase())&&!['/snap','/var/lib/snapd/snap','/run','/efi','/boot/efi','/dev','/proc','/sys','/system/volumes/preboot','/system/volumes/vm','/system/volumes/update','/system/volumes/xarts','/system/volumes/iscpreboot','/system/volumes/hardware'].some(p=>path===p||path.startsWith(p+'/'));
+    const rules=globalThis.AieyesContract.filesystems,path=id.replace(/\\/g,'/').toLowerCase();
+    return !rules.excludedTypes.includes(type.toLowerCase())&&!rules.excludedPaths.some(p=>path===p||path.startsWith(p+'/'));
   }
   globalThis.AieyesSelect = {recommendedFilesystem,parse, deviceIds, deviceSelected, writeDevices, applySelection, filterOptions, mount};
 })();

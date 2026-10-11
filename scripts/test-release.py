@@ -5,6 +5,7 @@ import unittest
 import base64
 import json
 import plistlib
+import subprocess
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("release", pathlib.Path(__file__).with_name("release.py"))
@@ -13,6 +14,31 @@ spec.loader.exec_module(release)
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_sparkle_build_strictly_increases_against_previous_stable_tag(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            plist = root / 'apps/macos/Info.plist'
+            plist.parent.mkdir(parents=True)
+            def git(*args):
+                subprocess.check_call(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', *args], cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            git('init')
+            plist.write_bytes(plistlib.dumps({'CFBundleVersion':'29'}))
+            git('add', '.'); git('commit', '-m', 'previous'); git('tag', 'v0.1.28')
+            # A newer tag and a prerelease must not become the previous release.
+            plist.write_bytes(plistlib.dumps({'CFBundleVersion':'999'}))
+            git('add', '.'); git('commit', '-m', 'other'); git('tag', 'v0.1.30'); git('tag', 'v0.1.29-beta.1')
+            for invalid in ('29', '28', '0', '-1', '1.2', 'bad'):
+                plist.write_bytes(plistlib.dumps({'CFBundleVersion':invalid}))
+                with self.assertRaises(ValueError):
+                    release.validate_macos_build(root, '0.1.29', require_history=True)
+            plist.write_bytes(plistlib.dumps({'CFBundleVersion':'30'}))
+            release.validate_macos_build(root, '0.1.29', require_history=True)
+
+    def test_shallow_history_cannot_prove_release_build_monotonicity(self):
+        with patch.object(release.subprocess, 'check_output', return_value=b'true\n'):
+            with self.assertRaisesRegex(ValueError, 'complete tag history'):
+                release.validate_macos_build(release.ROOT, '0.1.29', require_history=True)
+
     def test_manifest_uses_utf8_on_non_utf8_hosts(self):
         original_open = pathlib.Path.open
         def windows_open(path, mode='r', buffering=-1, encoding=None, errors=None, newline=None):

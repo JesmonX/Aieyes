@@ -956,10 +956,6 @@ pub fn desktop_appearance(app: AppHandle, theme: String, accent: String) -> Resu
 }
 #[tauri::command]
 pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
-    let dark = app
-        .get_webview_window("main")
-        .and_then(|w| w.theme().ok())
-        .is_some_and(|t| t == tauri::Theme::Dark);
     let desktop = app.state::<Desktop>();
     let state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
     let materials = desktop.materials.lock().map_err(|_| "材质状态不可用")?;
@@ -967,13 +963,12 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "materials": {"main": materials.main.kind, "floating": materials.floating.kind},
         "platform": std::env::consts::OS, "material": materials.main.kind, "mode": state.preferences.mode,
         "effectiveMode": if state.floating { "floating" } else { "tray" },
-        "trayAvailable": desktop.tray_available.load(Ordering::Relaxed), "reason": state.reason,
+        "reason": state.reason,
         "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
         "showCount": state.preferences.show_count, "panelPage": state.panel_page, "nativeCapsule": cfg!(windows),
-        "recovery": state.recovery, "generation": state.panel_generation,
-        "dark": dark,
+        "recovery": state.recovery,
         "accent": state.accent,
     }))
 }

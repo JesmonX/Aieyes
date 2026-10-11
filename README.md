@@ -36,7 +36,7 @@ open dist/Aieyes.app
 | Antigravity（agy CLI） | 本机及 SSH 会话 Token 采集、标准 JSONL 导入、模型组 5h/7d 限额与分组估值；旧 agy 数据自动迁移 |
 | DeepSeek | 官方余额查询，显示币种、总额、赠送及充值余额；需配置 API Key |
 | OpenRouter 定价 | 缺失模型与维度清单、映射、手动补价、自动补计缺项、重算；联网同步待验证 |
-| Linux SSH 监控 | 可勾选挂载点及设备、12 项细分显示；独立并行采样、前台约 2 秒间隔；3 台实机验证通过 |
+| Linux SSH 监控 | 可勾选挂载点及设备、13 项细分显示；独立并行采样、前台约 2 秒间隔；3 台实机验证通过 |
 | Agents 与账户 | Agent 启停与机器多选、独立账户页、跨机器共享额度、操作即保存 |
 | 远程历史、前置命令 | 限额查询可单独配置代理前置命令；远端只回传统计字段 |
 | 代理 | HTTP/HTTPS/SOCKS5、来源覆盖、连接测试与延迟；macOS 静态系统代理，其他平台代理环境变量；PAC 和代理认证界面尚未实现 |
@@ -46,6 +46,8 @@ open dist/Aieyes.app
 服务器通过 CPU、内存圆环和 GPU／文件系统细进度条展示实时资源，尚未保存长期采样历史。Token 历史保存在 SQLite 中。
 
 设置包含 Agents、服务器、价格、账户、定时唤醒和通用六个标签。代理位于通用，选择协议并填写 Host、端口，或使用自定义 URL；价格支持按模型 ID 和名称搜索，顶部可「保存并重算」。普通保存跳过历史重算，概览按需后台刷新，macOS 显示保存阶段与耗时。更新按钮在应用内检查、下载安装；无新版时明确提示当前已是最新版本。概览仅保留主指标与输入、输出、缓存明细，计价不足以感叹号进入价格设置。
+
+「设置 → 通用 → 历史记录 → 全量重扫」可手动从头读取已启用本机及服务器的数据源，修复可确认的历史重复，保留已有记录和价格快照。启动及定时刷新仍为增量同步；使用范围、失败重试和验证见[手动全量重扫](docs/manual-history-rescan.md)。
 
 主面板与菜单栏／悬浮面板均提供太阳／月亮按钮，一键切换明暗并同步保存到「设置 → 通用 → 主题」。菜单栏弹出面板跟随应用主题，悬浮面板在跨窗口更新及重新打开后保持一致；仍可在通用设置选择跟随系统。
 
@@ -105,12 +107,7 @@ dist/Aieyes.app/Contents/MacOS/Aieyes --render "$PWD/.local/previews"
 
 每 5 秒检查已有日志，每 30 秒发现新会话。连续 3 分钟无日志更新会标记「状态待确认」，避免将退出或失联的会话一直显示为工作中；完成、中断保留 90 秒，待确认状态最多保留 1 小时。监测仅读取已启用的本机 Codex 数据源，不代表进程存活、审批等待或远程会话状态。
 
-会话解析与过期行为验证：
-
-```sh
-swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-sessions.swift -o .build/verify-sessions
-.build/verify-sessions
-```
+会话解析与过期行为由 Rust 核心测试覆盖；原生会话 RPC、模型解码及界面回归运行 `sh scripts/test-native.sh`。维护与按需验证入口见 [手动验证清单](docs/manual-verification.md)。
 
 ## 接入与设计
 

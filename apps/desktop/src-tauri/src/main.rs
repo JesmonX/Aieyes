@@ -79,18 +79,14 @@ struct Shared(
 
 impl Shared {
     fn engine_for(&self, method: &str) -> Arc<Mutex<Engine>> {
-        if method == "dashboard" || method == "dashboard.summary" || method == "quotas.schedule" {
-            self.5.clone()
-        } else if aieyes_core::settings::is_configuration_method(method) {
-            self.3.clone()
-        } else if method.starts_with("accounts.") || method.starts_with("agyAuth.") {
-            self.4.clone()
-        } else if method.starts_with("network.") {
-            self.2.clone()
-        } else if method.starts_with("hosts.") {
-            self.1.clone()
-        } else {
-            self.0.clone()
+        use aieyes_core::contracts::{method as metadata, Lane};
+        match metadata(method).map_or(Lane::Main, |m| m.lane) {
+            Lane::Dashboard => self.5.clone(),
+            Lane::Configuration => self.3.clone(),
+            Lane::Accounts => self.4.clone(),
+            Lane::Network => self.2.clone(),
+            Lane::Hosts => self.1.clone(),
+            Lane::Main => self.0.clone(),
         }
     }
 }
@@ -119,84 +115,19 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
             Value::String("wakeups.deploy".into()),
         )];
     }
-    if method.starts_with("creditEstimates.") || method.starts_with("wakeups.") {
-        return vec![("desktop:data-changed", Value::String(method.into()))];
-    }
-    if result.is_err() {
-        // Sampling may have persisted a pending checkpoint before a later sync fails.
-        if matches!(
-            method,
-            "quotaEstimates.start" | "quotaEstimates.stop" | "quotaEstimates.restart"
-        ) {
-            return vec![("desktop:data-changed", Value::String(method.into()))];
-        }
-        return vec![];
-    }
-    if method == "codexAuth.login.status"
-        && !result
-            .as_ref()
-            .is_ok_and(|value| value["accountId"].is_string())
-    {
-        return vec![];
-    }
-    let mut events = vec![];
-    if matches!(
-        method,
-        "settings.save"
-            | "settings.patch"
-            | "agents.set"
-            | "sources.configure"
-            | "sources.remove"
-            | "accounts.connect"
-            | "accounts.create"
-            | "codexAuth.adopt"
-            | "codexAuth.login.status"
-            | "codexAuth.enable"
-            | "codexAuth.profiles.bind"
-            | "codexAuth.profiles.remove"
-    ) {
-        // Broadcast invalidation only, never settings or credentials.
-        events.push(("desktop:settings", Value::Null));
-    }
-    if matches!(
-        method,
-        "settings.save"
-            | "settings.patch"
-            | "agents.set"
-            | "sources.configure"
-            | "sources.remove"
-            | "accounts.connect"
-            | "accounts.create"
-            | "codexAuth.adopt"
-            | "codexAuth.login.status"
-            | "codexAuth.enable"
-            | "codexAuth.profiles.bind"
-            | "codexAuth.profiles.remove"
-            | "sources.scan"
-            | "quotas.refresh"
-            | "prices.save"
-            | "prices.sync"
-            | "prices.recalculate"
-            | "quotas.order.set"
-            | "quotaEstimates.start"
-            | "quotaEstimates.stop"
-            | "quotaEstimates.restart"
-            | "quotaEstimates.repair"
-    ) {
-        events.push(("desktop:data-changed", Value::String(method.into())));
-    }
-    events
+    let Some(metadata) = aieyes_core::contracts::method(method) else { return vec![]; };
+    if result.is_err() && !metadata.invalidate_on_failure { return vec![]; }
+    if method == "codexAuth.login.status" && !result.as_ref().is_ok_and(|v| v["accountId"].is_string()) { return vec![]; }
+    metadata.invalidates.iter().map(|event| match *event {
+        "settings" => ("desktop:settings", Value::Null),
+        _ => ("desktop:data-changed", Value::String(method.into())),
+    }).collect()
 }
 
 fn refresh_key(method: &str) -> Option<&'static str> {
-    match method {
-        "sources.scan" => Some("scan"),
-        "quotas.refresh" => Some("quotas"),
-        "prices.sync" => Some("prices"),
-        "hosts.sample" => Some("hosts"),
-        _ => None,
-    }
+    aieyes_core::contracts::method(method).and_then(|m| m.refresh_key)
 }
+
 fn refresh_feedback(
     method: &str,
     result: &Result<Value, String>,
@@ -248,6 +179,12 @@ async fn engine_call(
         .load(std::sync::atomic::Ordering::SeqCst)
     {
         return Err("正在安装更新，请稍候".into());
+    }
+    match method.as_str() {
+        "operations.prepareUpdate" => return Ok(aieyes_core::operations::prepare()),
+        "operations.resume" => return Ok(aieyes_core::operations::resume()),
+        "operations.status" => return Ok(aieyes_core::operations::status()),
+        _ => {}
     }
     let changed = method.clone();
     let network_broadcast =
@@ -378,6 +315,7 @@ fn main() {
             updates::updates_check,
             updates::updates_panel_check,
             updates::updates_install,
+            updates::updates_download,
             updates::updates_preferences,
             updates::updates_later,
             desktop::desktop_info,

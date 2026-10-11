@@ -1,7 +1,35 @@
 import Foundation
 
 @main struct VerifySelection {
-    static func main() {
+    static func main() throws {
+        let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/monitor-selection.json"))) as! [String: Any]
+        for row in fixture["filesystems"] as! [[String: Any]] {
+            precondition(MonitorSelection.recommendedFilesystem(row["id"] as! String, type: row["type"] as? String) == row["expected"] as! Bool)
+        }
+        for row in fixture["devices"] as! [[String: Any]] {
+            var host = Host(); host.devices = row["tokens"] as! [String]
+            let devices = try JSONDecoder().decode([DeviceMetric].self, from: JSONSerialization.data(withJSONObject: row["rows"]!))
+            precondition(host.selectedDevices(row["group"] as! String, devices).map(\.id) == row["expected"] as! [String], row["name"] as! String)
+        }
+        let suite = "aieyes-filter-test-" + UUID().uuidString, defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        precondition(DashboardFilterPreference.read(defaults: defaults) == DashboardFilterPreference())
+        let saved = DashboardFilterPreference(provider: "claude", source: "remote", account: "claude:a", model: "model", days: 30)
+        saved.save(defaults: defaults)
+        precondition(DashboardFilterPreference.read(defaults: defaults) == saved)
+        DashboardFilterPreference(provider: "unknown", days: 0).save(defaults: defaults)
+        precondition(DashboardFilterPreference.read(defaults: defaults) == DashboardFilterPreference())
+        defaults.set(true, forKey: NativePanelKey.expansion(.server, id: "host", compact: false))
+        defaults.set(false, forKey: NativePanelKey.expansion(.quota, id: "account", compact: true))
+        let overrides = NativePanelKey.snapshotOverrides(defaults: defaults)
+        precondition(NativePanelKey.allCases.allSatisfy { overrides[$0.rawValue] != nil })
+        precondition(overrides[NativePanelKey.expansion(.server, id: "host", compact: false)] as? Bool == false)
+        precondition(overrides[NativePanelKey.expansion(.quota, id: "account", compact: true)] as? Bool == true)
+        let legacy: [String: Any] = ["accountAliases":["agy:a":"antigravity:legacy-a"], "accounts":[["id":"a","provider":"agy","quotaEnabled":true]], "quotaOrder":["agy:a"]]
+        let normalized = ProviderBoundary.normalize(legacy) as! [String: Any]
+        let account = (normalized["accounts"] as! [[String: Any]])[0]
+        precondition(account["provider"] as? String == "antigravity" && account["id"] as? String == "legacy-a")
+        precondition(normalized["quotaOrder"] as? [String] == ["antigravity:legacy-a"])
         let files: Set<String> = ["/", "/data", "/snap/x/1", "/run", "/boot/efi"]
         precondition(MonitorSelection.selected([], group: "filesystems", available: files) == ["/", "/data"])
         let explicit = MonitorSelection.write([], group: "filesystems", selected: files, all: true)

@@ -24,14 +24,11 @@ enum Palette {
     static let danger = adaptive(0xb83245, 0xff929c)
     static let cardBorder = adaptive(0x7b879d, 0x8794ad)
     static let radiusCard: CGFloat = 16
-    static let radiusOverlay: CGFloat = 20
-    static let radiusControl: CGFloat = 9
     static func quota(_ used: Double) -> Color {
         guard used.isFinite else { return .secondary }
         let remaining = min(100, max(0, 100 - used))
         return remaining < 10 ? danger : remaining <= 30 ? warn : accent
     }
-    static var colors: [Color] { [accent, .teal, .purple, .orange, .pink, .cyan, .green, .indigo] }
     private static var modelHues: [String: Double] = [:]
     private static let modelLock = NSLock()
     static func model(_ name: String) -> Color {

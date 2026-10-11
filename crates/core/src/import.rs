@@ -61,10 +61,23 @@ pub fn paths(source: &Source) -> Result<Vec<PathBuf>> {
 }
 
 pub fn scan(store: &Store, settings: &Settings, source: &Source) -> Result<Value> {
+    scan_mode(store, settings, source, false)
+}
+
+/// Explicitly replay available history without deleting stored usage or prices.
+pub fn rescan(store: &Store, settings: &Settings, source: &Source) -> Result<Value> {
+    scan_mode(store, settings, source, true)
+}
+
+fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) -> Result<Value> {
     if crate::providers::antigravity(&source.provider)
         && crate::antigravity::directory(&expand(&source.path)).is_some()
     {
-        return crate::antigravity::scan(store, settings, source);
+        return if full {
+            crate::antigravity::rescan(store, settings, source)
+        } else {
+            crate::antigravity::scan(store, settings, source)
+        };
     }
     let prices = store.prices()?;
     let files = paths(source)?;
@@ -72,12 +85,16 @@ pub fn scan(store: &Store, settings: &Settings, source: &Source) -> Result<Value
     let mut malformed = 0;
     let mut read_bytes = 0;
     for path in &files {
-        let (n, b, m) = scan_file(store, settings, source, path, &prices)?;
+        let (n, b, m) = scan_file(store, settings, source, path, &prices, full)?;
         count += n;
         read_bytes += b;
         malformed += m;
     }
-    let result = json!({"updatedAt":now(),"newEvents":count,"files":files.len(),"readBytes":read_bytes,"malformedLines":malformed});
+    let mut result = json!({"updatedAt":now(),"newEvents":count,"files":files.len(),"readBytes":read_bytes,"malformedLines":malformed});
+    if full && malformed > 0 {
+        result["partial"] = json!(true);
+        result["issues"] = json!([{"code":"invalidRecord","message":format!("{malformed} 行记录格式无效，已保留其他可读取的历史。") }]);
+    }
     store.source_status(&source.id, &result)?;
     Ok(result)
 }
@@ -88,6 +105,7 @@ fn scan_file(
     source: &Source,
     path: &Path,
     prices: &[ModelPrice],
+    full: bool,
 ) -> Result<(u64, u64, u64)> {
     let file = File::open(path).context("打开记录失败")?;
     let len = file.metadata()?.len();
@@ -97,7 +115,11 @@ fn scan_file(
     reader.read_exact(&mut prefix)?;
     let signature = hash(&String::from_utf8_lossy(&prefix));
     let key = path.to_string_lossy();
-    let cursor = store.cursor(&source.id, &key)?;
+    let cursor = if full {
+        None
+    } else {
+        store.cursor(&source.id, &key)?
+    };
     let (offset, mut state) = match cursor {
         Some((s, o, p))
             if s == signature
@@ -118,44 +140,44 @@ fn scan_file(
         return Ok((0, 0, 0));
     }
     reader.seek(SeekFrom::Start(offset))?;
-    let tx = store.db.unchecked_transaction()?;
     let mut pos = offset;
     let mut inserted = 0;
     let mut malformed = 0;
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        let n = reader.read_until(b'\n', &mut line)?;
-        if n == 0 || line.last() != Some(&b'\n') {
-            break;
+    let mut eof = false;
+    while !eof {
+        crate::operations::check()?;
+        // Read a bounded batch before taking SQLite's writer lock.
+        let mut rows = Vec::new();
+        let mut bytes = 0u64;
+        while rows.len() < 256 && bytes < 1024 * 1024 {
+            let mut line = Vec::new();
+            let n = reader.read_until(b'\n', &mut line)?;
+            if n == 0 || line.last() != Some(&b'\n') { eof = true; break; }
+            bytes += n as u64;
+            rows.push(line);
         }
-        pos += n as u64;
-        match serde_json::from_slice::<Value>(&line) {
-            Ok(v) => {
-                if let Some(e) = usage::parse(source, &mut state, &v)
-                    && store.put_event(&e, prices, settings)?
-                {
-                    inserted += 1;
+        if rows.is_empty() { break; }
+        let tx = store.write_transaction()?;
+        for line in rows {
+            match serde_json::from_slice::<Value>(&line) {
+                Ok(v) => {
+                    if let Some(e) = usage::parse(source, &mut state, &v)
+                        && store.put_event(&e, prices, settings)? { inserted += 1; }
+                    if source.provider == "codex"
+                        && settings.quota_enabled(source)
+                        && v["payload"]["type"] == "token_count"
+                        && v["payload"]["rate_limits"].is_object()
+                        && let Some(stamp) = timestamp(&v["timestamp"]) {
+                        store.quota(&usage::codex_quota(source, &v["payload"]["rate_limits"], stamp, "log"))?;
+                    }
                 }
-                if source.provider == "codex"
-                    && settings.quota_enabled(source)
-                    && v["payload"]["type"] == "token_count"
-                    && v["payload"]["rate_limits"].is_object()
-                    && let Some(stamp) = timestamp(&v["timestamp"])
-                {
-                    store.quota(&usage::codex_quota(
-                        source,
-                        &v["payload"]["rate_limits"],
-                        stamp,
-                        "log",
-                    ))?;
-                }
+                Err(_) => malformed += 1,
             }
-            Err(_) => malformed += 1,
         }
+        pos += bytes;
+        store.set_cursor(&source.id, &key, &signature, pos, &state)?;
+        tx.commit()?;
     }
-    store.set_cursor(&source.id, &key, &signature, pos, &state)?;
-    tx.commit()?;
     Ok((inserted, pos - offset, malformed))
 }
 

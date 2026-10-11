@@ -116,10 +116,17 @@ impl Rpc {
         self.wire(timeout)
     }
     fn wire(&self, timeout: Duration) -> Result<Value> {
-        self.messages.recv_timeout(timeout).map_err(|e| match e {
-            mpsc::RecvTimeoutError::Timeout => anyhow::anyhow!("Codex 响应超时"),
-            _ => anyhow::anyhow!("Codex 连接已断开"),
-        })
+        let start = Instant::now();
+        loop {
+            crate::operations::check()?;
+            let remaining = timeout.saturating_sub(start.elapsed());
+            if remaining.is_zero() { anyhow::bail!("Codex 响应超时"); }
+            match self.messages.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                Ok(value) => return Ok(value),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => anyhow::bail!("Codex 连接已断开"),
+            }
+        }
     }
     pub fn call(
         &mut self,

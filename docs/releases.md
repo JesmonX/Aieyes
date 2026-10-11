@@ -4,7 +4,7 @@ Release 工作流对稳定版本标签构建 macOS Intel / Apple Silicon、Windo
 
 ## 版本准备
 
-同步修改 Rust 核心、Tauri Cargo 包、Tauri 配置及 macOS `CFBundleShortVersionString`，更新两个 Cargo.lock。macOS `CFBundleVersion` 必须为正整数，每次发布递增；Sparkle 按构建号判断是否有更新。已有公开 Release 不覆盖，修复须使用新版本标签。
+同步修改 Rust 核心、Tauri Cargo 包、Tauri 配置及 macOS `CFBundleShortVersionString`，更新两个 Cargo.lock。macOS `CFBundleVersion` 必须为正整数，每次发布递增；`release.py check` 对照上一稳定标签严格校验（正式标签检查要求完整 git 历史，CI 使用 `fetch-depth: 0`）。Sparkle 按构建号判断是否有更新。已有公开 Release 不覆盖，修复须使用新版本标签。
 
 Python 工具要求 Python 3.11+。Tauri CLI 固定为 2.12.1，Sparkle 固定为 2.9.6；提交 SwiftPM 的 `Package.resolved`。
 

@@ -1,0 +1,205 @@
+{
+  "filesystems": [
+    {
+      "id": "/",
+      "type": "apfs",
+      "expected": true
+    },
+    {
+      "id": "/data",
+      "type": "ext4",
+      "expected": true
+    },
+    {
+      "id": "/runtime",
+      "type": "ext4",
+      "expected": true
+    },
+    {
+      "id": "/RUN/service",
+      "type": "ext4",
+      "expected": false
+    },
+    {
+      "id": "/snap/x/1",
+      "type": "ext4",
+      "expected": false
+    },
+    {
+      "id": "/data",
+      "type": "TMPFS",
+      "expected": false
+    },
+    {
+      "id": "/SYSTEM/VOLUMES/VM",
+      "type": "apfs",
+      "expected": false
+    },
+    {
+      "id": "\\system\\volumes\\preboot",
+      "type": "apfs",
+      "expected": false
+    },
+    {
+      "id": "C:\\",
+      "type": "NTFS",
+      "expected": true
+    },
+    {
+      "id": "/snapshots",
+      "type": "ext4",
+      "expected": true
+    }
+  ],
+  "devices": [
+    {
+      "name": "recommended filesystems",
+      "group": "filesystems",
+      "tokens": [],
+      "rows": [
+        {
+          "id": "/",
+          "type": "ext4"
+        },
+        {
+          "id": "/data",
+          "type": "ext4"
+        },
+        {
+          "id": "/run",
+          "type": "ext4"
+        },
+        {
+          "id": "/cache",
+          "type": "tmpfs"
+        }
+      ],
+      "expected": [
+        "/",
+        "/data"
+      ]
+    },
+    {
+      "name": "explicit filesystem clear",
+      "group": "filesystems",
+      "tokens": [
+        "filesystems:__none__"
+      ],
+      "rows": [
+        {
+          "id": "/",
+          "type": "ext4"
+        },
+        {
+          "id": "/data",
+          "type": "ext4"
+        },
+        {
+          "id": "/run",
+          "type": "ext4"
+        },
+        {
+          "id": "/cache",
+          "type": "tmpfs"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "all filesystems opt in",
+      "group": "filesystems",
+      "tokens": [
+        "filesystems:__all__"
+      ],
+      "rows": [
+        {
+          "id": "/",
+          "type": "ext4"
+        },
+        {
+          "id": "/data",
+          "type": "ext4"
+        },
+        {
+          "id": "/run",
+          "type": "ext4"
+        },
+        {
+          "id": "/cache",
+          "type": "tmpfs"
+        }
+      ],
+      "expected": [
+        "/",
+        "/data",
+        "/run",
+        "/cache"
+      ]
+    },
+    {
+      "name": "explicit hidden filesystem",
+      "group": "filesystems",
+      "tokens": [
+        "filesystems:/cache",
+        "gpu:0"
+      ],
+      "rows": [
+        {
+          "id": "/",
+          "type": "ext4"
+        },
+        {
+          "id": "/data",
+          "type": "ext4"
+        },
+        {
+          "id": "/run",
+          "type": "ext4"
+        },
+        {
+          "id": "/cache",
+          "type": "tmpfs"
+        }
+      ],
+      "expected": [
+        "/cache"
+      ]
+    },
+    {
+      "name": "aggregate CPU survives clear",
+      "group": "cpu",
+      "tokens": [
+        "cpu:__none__"
+      ],
+      "rows": [
+        {
+          "id": "cpu"
+        },
+        {
+          "id": "cpu0"
+        }
+      ],
+      "expected": [
+        "cpu"
+      ]
+    },
+    {
+      "name": "network subset",
+      "group": "network",
+      "tokens": [
+        "network:eth1"
+      ],
+      "rows": [
+        {
+          "id": "eth0"
+        },
+        {
+          "id": "eth1"
+        }
+      ],
+      "expected": [
+        "eth1"
+      ]
+    }
+  ]
+}

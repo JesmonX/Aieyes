@@ -1,9 +1,11 @@
 pub mod accounts;
+mod account_targets;
 pub mod agy_auth;
 mod agy_identity;
 pub mod antigravity;
 pub mod capacity;
 pub mod codex_auth;
+pub mod contracts;
 pub mod credentials;
 pub mod estimates;
 pub mod file_lock;
@@ -13,6 +15,7 @@ pub mod metrics;
 pub mod models;
 pub mod monitoring;
 pub mod network;
+pub mod operations;
 pub mod pricing;
 pub mod process;
 pub mod providers;
@@ -168,6 +171,13 @@ impl Engine {
         Ok(result)
     }
     pub fn call(&mut self, method: &str, mut params: Value) -> Result<Value> {
+        match method {
+            "operations.prepareUpdate" => return Ok(operations::prepare()),
+            "operations.resume" => return Ok(operations::resume()),
+            "operations.status" => return Ok(operations::status()),
+            _ => {}
+        }
+        let _operation = operations::enter(method)?;
         if method != "hello" && method != "settings.get" {
             let aliases = self.store.settings()?.account_aliases;
             if method == "settings.save" {
@@ -185,6 +195,8 @@ impl Engine {
             }
         }
         match method {
+            "methods.manifest" => Ok(serde_json::to_value(contracts::METHODS)?),
+            "accounts.targets" => self.account_targets(&params),
             "accounts.create"
             | "accounts.status.get"
             | "accounts.status.refresh"
@@ -206,9 +218,9 @@ impl Engine {
                 &self.store.settings()?.sources,
                 std::time::SystemTime::now(),
             ))?),
-            "hello" => {
-                Ok(json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1}))
-            }
+            "hello" => Ok(
+                json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"contractHash":contracts::CONTRACT_HASH}),
+            ),
             "hosts.credentials.save" => Ok(
                 json!({"passwordRef": credentials::save(params["password"].as_str().context("请输入服务器密码")?)?}),
             ),
@@ -325,13 +337,20 @@ impl Engine {
             }
             "dashboard" | "dashboard.summary" => {
                 let filter = serde_json::from_value::<Filter>(params)?;
-                Ok(serde_json::to_value(if method == "dashboard.summary" {
+                Ok((if method == "dashboard.summary" {
                     self.store.dashboard_summary(&filter)?
                 } else {
                     self.store.dashboard(&filter)?
-                })?)
+                })
+                .wire_value()?)
             }
-            "sources.scan" => {
+            "sources.scan" | "sources.rescan" => {
+                // Only this explicit RPC bypasses cursors; automatic collection
+                // continues to use sources.scan.
+                let full = method == "sources.rescan";
+                if full {
+                    self.progress("全量重扫");
+                }
                 let settings = self.store.settings()?;
                 let mut results = Vec::new();
                 let explicit = params["sourceId"].is_string() || params["sourceIds"].is_array();
@@ -372,7 +391,9 @@ impl Engine {
                         let remote = &remote;
                         let settings = &settings;
                         let next = &next;
+                        let operation = operations::context();
                         scope.spawn(move || {
+                            let _context = operations::inherit(operation);
                             loop {
                                 let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 let Some(source) = remote.get(index) else {
@@ -380,7 +401,11 @@ impl Engine {
                                 };
                                 let result =
                                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        remote_history::scan(root, settings, source)
+                                        if full {
+                                            remote_history::rescan(root, settings, source)
+                                        } else {
+                                            remote_history::scan(root, settings, source)
+                                        }
                                     }))
                                     .unwrap_or_else(|_| Err(anyhow::anyhow!("远程同步任务失败")));
                                 if tx.send((source.id.clone(), result)).is_err() {
@@ -394,11 +419,18 @@ impl Engine {
                         fetched.insert(id, result);
                     }
                 });
+                operations::check()?;
                 for source in selected {
+                    operations::check()?;
                     let result = if source.host_id.is_some() {
                         fetched.remove(&source.id).context("远程读取结果缺失")?
                     } else {
-                        import::scan(&self.store, &settings, source)
+                        if full {
+                            self.progress(&format!("全量重扫 · {}", source.name));
+                            import::rescan(&self.store, &settings, source)
+                        } else {
+                            import::scan(&self.store, &settings, source)
+                        }
                     };
                     match result {
                         Ok(value) => {
@@ -420,7 +452,7 @@ impl Engine {
                             results.push(row);
                         }
                         Err(e) => {
-                            let v = json!({"id":source.id,"error":e.to_string(),"failedAt":now()});
+                            let v = json!({"id":source.id,"name":source.name,"error":e.to_string(),"failedAt":now()});
                             self.store.source_status(&source.id, &v)?;
                             self.store.pause_source_estimates(&source.id)?;
                             results.push(v);
@@ -470,30 +502,6 @@ impl Engine {
                 Ok(json!({"repriced":self.store.reprice(&self.store.settings()?,false)?}))
             }
             "hosts.sample" => self.sample_hosts(params),
-            "updates.open" => {
-                network::open_release_page()?;
-                Ok(json!({"opened":true}))
-            }
-            "updates.check" => {
-                let s = self.store.settings()?;
-                let repository = "JesmonX/Aieyes";
-                let response = network::client(&s.proxy)?
-                    .get(format!(
-                        "https://api.github.com/repos/{}/releases/latest",
-                        repository
-                    ))
-                    .send()
-                    .map_err(|_| anyhow::anyhow!("更新连接失败"))?;
-                anyhow::ensure!(
-                    response.status().is_success(),
-                    "更新查询失败（HTTP {}）",
-                    response.status().as_u16()
-                );
-                let v: Value = response.json()?;
-                Ok(
-                    json!({"version":v["tag_name"],"url":v["html_url"],"publishedAt":v["published_at"]}),
-                )
-            }
             _ => anyhow::bail!("未知方法：{method}"),
         }
     }

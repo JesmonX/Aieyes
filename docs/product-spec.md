@@ -6,7 +6,7 @@
 
 - macOS 使用 SwiftUI/AppKit 原生菜单栏界面。
 - Windows/Linux 复用数据核心，使用各自的托盘入口与桌面界面。
-- Agent 首批接入 Codex、Claude Code（CC）、Google Antigravity（AGY）。
+- Agent 已接入 Codex、Claude Code（CC）、Google Antigravity（AGY）和 DeepSeek 余额查询，支持自定义用量。
 - 同时支持本机与 SSH 远程来源，支持多账号。
 - SSH 服务器监控首先支持 Linux。
 - 支持应用代理，以及远程查询前执行的可选前置命令。

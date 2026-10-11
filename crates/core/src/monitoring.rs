@@ -11,29 +11,10 @@ pub fn recommended_filesystem(row: &Value) -> bool {
         .replace('\\', "/")
         .to_lowercase();
     let kind = row["type"].as_str().unwrap_or("").to_lowercase();
-    ![
-        "tmpfs", "devtmpfs", "squashfs", "overlay", "proc", "procfs", "sysfs", "devfs", "autofs",
-        "cgroup", "cgroup2",
-    ]
-    .contains(&kind.as_str())
-        && ![
-            "/snap",
-            "/var/lib/snapd/snap",
-            "/run",
-            "/efi",
-            "/boot/efi",
-            "/dev",
-            "/proc",
-            "/sys",
-            "/system/volumes/preboot",
-            "/system/volumes/vm",
-            "/system/volumes/update",
-            "/system/volumes/xarts",
-            "/system/volumes/iscpreboot",
-            "/system/volumes/hardware",
-        ]
-        .iter()
-        .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
+    !crate::contracts::EXCLUDED_FS_TYPES.contains(&kind.as_str())
+        && !crate::contracts::EXCLUDED_FS_PATHS
+            .iter()
+            .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
 }
 
 pub fn filter_devices(sample: &mut Value, host: &Host) {

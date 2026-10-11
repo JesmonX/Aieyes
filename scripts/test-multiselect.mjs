@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import '../apps/desktop/web/contracts.js';
 import '../apps/desktop/web/multiselect.js';
 
 const S=globalThis.AieyesSelect;
+test('shared filesystem fixtures cover types, boundaries, case and Windows separators',()=>{
+  const fixture=JSON.parse(readFileSync(new URL('fixtures/monitor-selection.json',import.meta.url),'utf8'));
+  for(const row of fixture.filesystems)assert.equal(S.recommendedFilesystem(row.id,row.type),row.expected,JSON.stringify(row));
+});
 test('default all includes new devices; clear persists an explicit empty group',()=>{
   const ids=['eth0','eth1'];
   assert.deepEqual(S.deviceSelected([], 'network', ids),ids);

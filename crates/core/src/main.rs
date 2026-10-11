@@ -57,9 +57,32 @@ fn run() -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    let mut out = io::BufWriter::new(io::stdout());
-    for line in io::stdin().lock().lines() {
-        let line = line?;
+    // Read controls independently of the worker. A blocked SSH/SQLite operation must
+    // not prevent cancellation or status polling during update preparation.
+    let (requests, incoming) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                let result = match v["method"].as_str() {
+                    Some("operations.prepareUpdate") => Some(aieyes_core::operations::prepare()),
+                    Some("operations.resume") => Some(aieyes_core::operations::resume()),
+                    Some("operations.status") => Some(aieyes_core::operations::status()),
+                    _ => None,
+                };
+                if let Some(result) = result {
+                    if let Some(id) = v.get("id") {
+                        let mut out = io::stdout().lock();
+                        let _ = serde_json::to_writer(&mut out, &json!({"jsonrpc":"2.0","id":id,"result":result}));
+                        let _ = out.write_all(b"\n"); let _ = out.flush();
+                    }
+                    continue;
+                }
+            }
+            if requests.send(line).is_err() { break; }
+        }
+    });
+    for line in incoming {
         if line.trim().is_empty() {
             continue;
         }
@@ -70,8 +93,10 @@ fn run() -> anyhow::Result<()> {
                 match v["method"].as_str() {
                     Some(method) => {
                         let operation = v["params"]["operationId"].clone();
+                        let request_id = id.clone();
                         match engine.call_with_progress(method, v.get("params").cloned().unwrap_or(json!({})), Box::new(move |mut progress| {
                             progress["operationId"] = operation.clone();
+                            progress["requestId"] = request_id.clone();
                             let mut stdout = io::stdout().lock();
                             let _ = serde_json::to_writer(&mut stdout, &json!({"jsonrpc":"2.0","method":"operations.progress","params":progress}));
                             let _ = stdout.write_all(b"\n"); let _ = stdout.flush();
@@ -91,6 +116,7 @@ fn run() -> anyhow::Result<()> {
                 json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"JSON 格式不正确"}})
             }
         };
+        let mut out = io::stdout().lock();
         serde_json::to_writer(&mut out, &reply)?;
         out.write_all(b"\n")?;
         out.flush()?;

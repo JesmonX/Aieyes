@@ -1,5 +1,67 @@
 import Foundation
 
+enum ProviderBoundary {
+    static func normalize(_ value: Any, aliases: [String: String] = [:]) -> Any {
+        if let rows = value as? [Any] { return rows.map { normalize($0, aliases: aliases) } }
+        guard let map = value as? [String: Any] else { return value }
+        let aliases = map["accountAliases"] as? [String: String] ?? aliases
+        func canonicalKey(_ key: String) -> String { aliases[key] ?? (key.hasPrefix("agy:") ? "antigravity:" + key.dropFirst(4) : key) }
+        var next = map.mapValues { normalize($0, aliases: aliases) }
+        if next["provider"] as? String == "agy" {
+            let field = next["accountId"] != nil ? "accountId" : next["quotaEnabled"] != nil ? "id" : nil
+            if let field, let id = next[field] as? String { next[field] = String(canonicalKey("agy:" + id).dropFirst("antigravity:".count)) }
+            next["provider"] = "antigravity"
+        }
+        if let key = next["accountKey"] as? String { next["accountKey"] = canonicalKey(key) }
+        if let keys = next["quotaOrder"] as? [String] { next["quotaOrder"] = keys.map(canonicalKey) }
+        return next
+    }
+}
+
+enum NativePanelKey: String, CaseIterable {
+    case accountsLegacy = "panel.accounts.v1", accounts = "panel.accounts.v2"
+    case aliasMigration = "antigravity.preferences.v1", filters = "dashboard.filters.v1"
+    case panelPage = "panel.page", detailPage = "detail.page"
+    case panelServerFilter = "panel.serverFilter", detailServerFilter = "detail.serverFilter"
+    case panelTrend = "panel.trendExpanded", detailTrend = "detail.trendExpanded"
+    case panelSessions = "panel.sessionsExpanded", detailSessions = "detail.sessionsExpanded"
+    case panelCost = "panel.costMode", detailCost = "detail.costMode"
+    case showCount = "menu.showCount"
+    enum Prefix: String, CaseIterable {
+        case quota = "quota.expanded.v2.", server = "server.expanded.", metric = "server.metric.expanded."
+    }
+    static func scoped(_ panel: Self, _ detail: Self, compact: Bool) -> String { (compact ? panel : detail).rawValue }
+    static func expansion(_ prefix: Prefix, id: String, compact: Bool) -> String { prefix.rawValue + (compact ? "panel." : "detail.") + id }
+    static func snapshotOverrides(defaults: UserDefaults = .standard) -> [String: Any] {
+        var result: [String: Any] = [:]
+        for key in allCases {
+            switch key {
+            case .accountsLegacy, .filters: result[key.rawValue] = "{}"
+            case .accounts: result[key.rawValue] = "{\"version\":2,\"providers\":{}}"
+            case .aliasMigration: result[key.rawValue] = ""
+            case .panelPage, .detailPage: result[key.rawValue] = "agent"
+            case .panelServerFilter, .detailServerFilter: result[key.rawValue] = "all"
+            default: result[key.rawValue] = false
+            }
+        }
+        for name in defaults.dictionaryRepresentation().keys where Prefix.allCases.contains(where: { name.hasPrefix($0.rawValue) }) { result[name] = name.hasPrefix(Prefix.quota.rawValue) }
+        return result
+    }
+}
+
+struct DashboardFilterPreference: Codable, Equatable {
+    var provider = "all", source = "all", account = "all", model = "all"
+    var days = 1
+    static func read(defaults: UserDefaults = .standard) -> Self {
+        guard let data = defaults.data(forKey: NativePanelKey.filters.rawValue), var value = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
+        if value.provider == "agy" { value.provider = "antigravity" }
+        if !CoreContract.providers.contains(value.provider) && value.provider != "all" { value.provider = "all" }
+        if ![1, 7, 30, 90, 365].contains(value.days) { value.days = 1 }
+        return value
+    }
+    func save(defaults: UserDefaults = .standard) { defaults.set(try? JSONEncoder().encode(self), forKey: NativePanelKey.filters.rawValue) }
+}
+
 enum PanelAccountPreference {
     struct Choice: Codable { var mode = "auto"; var keys: [String] = [] }
     struct Preference: Codable { var version = 2; var providers: [String: Choice] = [:] }
@@ -15,24 +77,23 @@ enum PanelAccountPreference {
     static func migrateAntigravity(_ aliases: [String: String], defaults: UserDefaults = .standard) {
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
         let marker = (try? encoder.encode(aliases)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        guard defaults.string(forKey: "antigravity.preferences.v1") != marker else { return }
+        guard defaults.string(forKey: NativePanelKey.aliasMigration.rawValue) != marker else { return }
         func key(_ value: String) -> String { aliases[value] ?? (value.hasPrefix("agy:") ? "antigravity:" + value.dropFirst(4) : value) }
-        var pref = decode(defaults.string(forKey: "panel.accounts.v2") ?? defaults.string(forKey: "panel.accounts.v1") ?? "{}")
+        var pref = decode(defaults.string(forKey: NativePanelKey.accounts.rawValue) ?? defaults.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}")
         if let old = pref.providers.removeValue(forKey: "agy") {
             let current = pref.providers["antigravity"]
             let values = ((current?.keys ?? []) + old.keys).map(key)
             var seen = Set<String>()
             pref.providers["antigravity"] = Choice(mode: current?.mode == "custom" || old.mode == "custom" ? "custom" : "auto", keys: Array(values.filter { seen.insert($0).inserted }.prefix(5)))
-            defaults.set(String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8), forKey: "panel.accounts.v2")
+            defaults.set(String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8), forKey: NativePanelKey.accounts.rawValue)
         }
-        for (name, value) in defaults.dictionaryRepresentation() where name.hasPrefix("quota.expanded.v2.") {
+        for (name, value) in defaults.dictionaryRepresentation() where name.hasPrefix(NativePanelKey.Prefix.quota.rawValue) {
             if let range = name.range(of: ".agy:") {
                 let start = name.index(after: range.lowerBound), next = String(name[..<start]) + key(String(name[start...]))
                 if defaults.object(forKey: next) == nil { defaults.set(value, forKey: next) }
             }
         }
-        for name in ["panel.provider", "detail.provider"] where defaults.string(forKey: name) == "agy" { defaults.set("antigravity", forKey: name) }
-        defaults.set(marker, forKey: "antigravity.preferences.v1")
+        defaults.set(marker, forKey: NativePanelKey.aliasMigration.rawValue)
     }
     static func automatic(_ json: String, provider: String) -> Bool { decode(json).providers[provider]?.mode != "custom" }
     static func selections(_ json: String, accounts: [AgentAccount], order: [String]) -> [String: [String]] {
@@ -51,13 +112,13 @@ enum PanelAccountPreference {
     }
     static func includeNew(_ account: AgentAccount, accounts: [AgentAccount]) {
         let defaults = UserDefaults.standard
-        let raw = defaults.string(forKey: "panel.accounts.v2") ?? migrated(defaults.string(forKey: "panel.accounts.v1") ?? "{}")
+        let raw = defaults.string(forKey: NativePanelKey.accounts.rawValue) ?? migrated(defaults.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}")
         var pref = decode(raw)
         guard pref.providers[account.provider]?.mode == "custom" else { return }
         var keys = selections(raw, accounts: accounts, order: [])[account.provider] ?? []
         guard keys.count < 5, !keys.contains(account.key), account.archived != true else { return }
         keys.append(account.key); pref.providers[account.provider] = Choice(mode: "custom", keys: keys)
-        defaults.set(String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8), forKey: "panel.accounts.v2")
+        defaults.set(String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8), forKey: NativePanelKey.accounts.rawValue)
     }
     static func encode(_ selections: [String: [String]], automatic: Set<String> = []) -> String {
         var value = Preference(providers: selections.mapValues { Choice(mode: "custom", keys: $0) })
@@ -67,12 +128,12 @@ enum PanelAccountPreference {
 }
 
 struct Tokens: Codable {
-    var input: Double = 0, output: Double = 0, cacheRead: Double = 0, cacheWrite: Double = 0, reasoning: Double = 0
+    var input: Double = 0, output: Double = 0, cacheRead: Double = 0, cacheWrite: Double = 0
     var allInput: Double { input + cacheRead + cacheWrite }
     var cacheRate: Double? { allInput > 0 ? cacheRead / allInput : nil }
 }
 struct Aggregate: Codable, Identifiable {
-    var key = "", tokens = Tokens(), total: Double = 0, cost: Double = 0, pricedTokens: Double = 0, events: Int = 0
+    var key = "", tokens = Tokens(), total: Double = 0, cost: Double = 0, pricedTokens: Double = 0
     var id: String { key }
 }
 struct QuotaWindow: Codable, Identifiable {
@@ -85,7 +146,7 @@ struct QuotaWindow: Codable, Identifiable {
     enum CodingKeys: String, CodingKey { case name, usedPercent, windowMinutes, resetsAt, groupId, groupName; case stableId = "id" }
 }
 struct ResetCredit: Codable, Identifiable {
-    var id: String, status: String, expiresAt: Double?, grantedAt: Double?, title: String?
+    var id: String, status: String, expiresAt: Double?, title: String?
 }
 struct BankReset: Codable { var availableCount: Int, credits: [ResetCredit]? }
 struct Balance: Codable, Identifiable {
@@ -95,7 +156,7 @@ struct Balance: Codable, Identifiable {
 struct CreditsBalance: Codable { var hasCredits: Bool, unlimited: Bool, balance: String? }
 struct AccountIdentity: Codable {
     var key: String, email: String
-    var subscription: String?, checkedAt: Double?, subscriptionCheckedAt: Double?, stale: Bool?
+    var subscription: String?, checkedAt: Double?, stale: Bool?
     var summary: String { email + (subscription.map { " · " + $0 } ?? " · 订阅未知") + (stale == true ? " · 订阅待更新" : "") }
 }
 struct Quota: Codable, Identifiable {
@@ -108,7 +169,7 @@ struct Quota: Codable, Identifiable {
     var id: String { provider + ":" + accountId }
 }
 struct SyncIssue: Codable { var path: String?; var message: String; var code: String?; var step: Int? }
-struct SourceStatus: Codable { var partial: Bool?, issues: [SyncIssue]?; var updatedAt: Double?, newEvents: Int?, files: Int?, readBytes: Int?, malformedLines: Int?, error: String? }
+struct SourceStatus: Codable { var partial: Bool?, issues: [SyncIssue]?; var updatedAt: Double?, files: Int?, readBytes: Int?, error: String? }
 struct SourceSummary: Codable, Identifiable { var id: String, name: String, provider: String, enabled: Bool, status: SourceStatus?, accountIds: [String]? }
 struct DayModel: Codable, Identifiable {
     var day: String, model: String, usage: Aggregate
@@ -132,12 +193,22 @@ struct AntigravityLoginState: Decodable {
     var accountStatus: AccountDeviceStatus?
     var workspaceConfirmationRequired: Bool?
 }
+struct AccountTarget: Decodable, Identifiable {
+    var accountKey: String, accountName: String, provider: String, sourceId: String, sourceName: String, path: String, machineId: String, machineName: String
+    var profileId: String?, current: Bool?, credential: Bool?, checkedAt: Double?, reason: String?
+    var canWake: Bool, canSwitch: Bool
+    var id: String { accountKey + ":" + sourceId + ":" + (profileId ?? "") }
+}
+struct AccountTargetRefresh: Decodable {
+    struct Issue: Decodable { var message: String }
+    var issues: [Issue]
+}
 struct AccountDeviceStatus: Codable, Identifiable {
     var identity: AccountIdentity? = nil
     var metadataError: String? = nil
     var authenticated: Bool?, identityConfirmed: Bool?
     var accountKey: String, sourceId: String, machineId: String
-    var current: Bool?, credential: Bool?, checkedAt: Double?, attemptedAt: Double?, error: String?, note: String?
+    var current: Bool?, credential: Bool?, checkedAt: Double?, error: String?, note: String?
     var id: String { accountKey + ":" + sourceId }
     var identitySummary: String? {
         guard let identity else { return authenticated == true ? "登录有效 · 账户身份待确认" : nil }
@@ -145,7 +216,6 @@ struct AccountDeviceStatus: Codable, Identifiable {
     }
 }
 struct AgentAccount: Codable, Equatable, Identifiable {
-    var pendingName: Bool?
     var quotaRefreshSeconds: Int?
     var deviceSettings: [AccountDeviceSettings]?
     var connections: [AccountConnection]?
@@ -159,11 +229,11 @@ struct AgentAccount: Codable, Equatable, Identifiable {
     var key: String { provider + ":" + id }
 }
 struct Dashboard: Codable {
-    var generatedAt: Double = 0, summary = Aggregate(), days: [Aggregate] = [], heatmap: [Aggregate] = [], models: [Aggregate] = []
+    var generatedAt: Double = 0, summary = Aggregate(), heatmap: [Aggregate] = [], models: [Aggregate] = []
     var trendDays: [Aggregate] = [], dayModels: [DayModel] = [], pricingGaps: [PricingGap] = []
     var modelOptions: [String]? = nil
     var quotaOrder: [String]? = nil, quotaEstimates: [QuotaEstimate]? = nil, creditEstimates: [QuotaEstimate]? = nil
-    var quotas: [Quota] = [], sources: [SourceSummary] = [], priceUpdatedAt: Double?
+    var quotas: [Quota] = [], sources: [SourceSummary] = []
 }
 struct ProxySettings: Codable, Equatable { var mode = "system", url = "" }
 struct ProxyAddressDraft: Equatable {
@@ -186,7 +256,7 @@ struct ProxyAddressDraft: Equatable {
 struct AgentSource: Codable, Equatable, Identifiable {
     var codexHomeId: String?
     var id = UUID().uuidString, name = "", provider = "codex", accountId = ""
-    var path = "~/.codex", hostId: String?, enabled = true, quotaCommand = "", quotaPreCommand = "", codexBinary = "codex", agyBinary: String? = "agy", proxy: ProxySettings?
+    var path = "", hostId: String?, enabled = true, quotaCommand = "", quotaPreCommand = "", codexBinary = CoreContract.binaries["codex"]!, agyBinary: String? = CoreContract.binaries["antigravity"], proxy: ProxySettings?
 }
 struct Host: Codable, Equatable, Identifiable {
     var id = UUID().uuidString, name = "", target = "", port: Int?, identityFile = "", shell = "/bin/bash", preCommand = "", enabled = true
@@ -221,8 +291,9 @@ struct Settings: Codable, Equatable {
 
     var appearance: AppearanceSettings?
 
-    var version = 2, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
-    var refreshSeconds = 300, serverRefreshSeconds = 10, menuMetric = "icon", githubRepository = ""
+    var configurationIssues: [String]?
+    var version = 7, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
+    var refreshSeconds = 300, serverRefreshSeconds = 10, menuMetric = "icon"
     var historyRefreshSeconds: Int?, serverForegroundRefreshSeconds: Int?, localMonitor: LocalMonitor?
     var historyInterval: Int { get { historyRefreshSeconds ?? refreshSeconds } set { historyRefreshSeconds = newValue } }
     var foregroundInterval: Int { get { serverForegroundRefreshSeconds ?? 2 } set { serverForegroundRefreshSeconds = newValue } }
@@ -303,8 +374,8 @@ enum Format {
     }
     static func quotaReset(_ window: QuotaWindow, now: Date = Date()) -> String {
         if !(window.resetsAt.map { $0.isFinite && $0 > 0 } ?? false), window.usedPercent == 0 {
-            if window.windowMinutes == 300 { return "5h" }
-            if window.windowMinutes == 10080 { return "7d" }
+            if window.windowMinutes == CoreContract.fiveHourMinutes { return "5h" }
+            if window.windowMinutes == CoreContract.weekMinutes { return "7d" }
         }
         let countdown = resetCountdown(window.resetsAt, now: now)
         guard let stamp = resetDisplayTime(window.resetsAt, now: now) else { return countdown }
@@ -389,37 +460,43 @@ enum Format {
     static func speed(_ value: Double?) -> String { value.map { bytes($0) + "/s" } ?? "—" }
     static func date(_ stamp: Double?) -> String {
         guard let stamp, stamp > 0 else { return "—" }
-        return Date(timeIntervalSince1970: stamp).formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour().minute())
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "MM/dd HH:mm"
+        return formatter.string(from: Date(timeIntervalSince1970: stamp))
     }
     static func relative(_ date: Date, now: Date = Date()) -> String {
         let formatter = RelativeDateTimeFormatter(); formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: now)
     }
     static func time(_ stamp: Double) -> String { Date(timeIntervalSince1970: stamp).formatted(date: .omitted, time: .shortened) }
-    static func provider(_ key: String) -> String { ["codex":"Codex", "claude":"Claude Code", "antigravity":"Antigravity", "agy":"Antigravity", "deepseek":"DeepSeek", "custom":"自定义" ][key] ?? key }
+    static func provider(_ key: String) -> String { CoreContract.providerNames[key] ?? key }
 }
 
 struct QuotaEstimate: Codable, Identifiable {
+    var recordKey: String { (kind == "credits" ? "credits:" : "quota:") + id }
     var groupId: String?
 
-    var calculationStatus: String?, calculationVersion: Int?, originalEstimateId: String?, repairedAt: Double?
+    var calculationStatus: String?, originalEstimateId: String?, repairedAt: Double?
     var hasValue: Bool { [fiveHourValue, weeklyValue, valuePer1000].compactMap { $0 }.contains { $0.isFinite } }
     var issueLabel: String {
-        if status == "pending" { return "待确认" }
+        if status == "pending" { return reason.isEmpty ? "待确认" : reason }
         if let code = calculationStatus, let label = ["boundary":"用量边界待确认", "noUsage":"暂无有效用量", "unpriced":"模型价格不完整", "insufficientUsage":"尚未达到采样阈值", "invalidPrice":"价格数据无效"][code] { return label }
         return calculationNote.isEmpty ? "尚无估值" : calculationNote
     }
 
-    var kind: String?, consumedCredits: Double?, valuePer500: Double?, valuePer1000: Double?
+    var kind: String?, consumedCredits: Double?, valuePer1000: Double?
     var id: String, accountKey: String, windowId: String, windowName: String
     var sourceIds: [String], sourceNames: [String], status: String, reason: String
     var startedAt: Double, checkpointAt: Double, endedAt: Double?
-    var consumedPercent: Double, cost: Double, totalTokens: Double, pricedTokens: Double
+    var consumedPercent: Double?
+    var cost: Double, totalTokens: Double, pricedTokens: Double
     var weeklyValue: Double?, calculationNote: String
     var prices: [ModelPrice]?
     var valuationMode: String?, fiveHourValue: Double?, weeklyDirectValue: Double?, weeklyRatioValue: Double?
     var capacity: CapacityInfo?, segments: [EstimateSegment]?
-    var statusLabel: String { ["active":"采样中", "pending":"待确认", "completed":"已结束"][status] ?? status }
+    var statusLabel: String { ["active":"采样中", "pending":"需要确认", "completed":"已结束"][status] ?? status }
 }
 
 struct CapacityInfo: Codable {
@@ -440,6 +517,28 @@ struct NetworkTest: Codable {
 }
 
 enum EstimatePresentation {
+    static func windows(_ quota: Quota) -> [QuotaWindow] {
+        if quota.provider == "antigravity" {
+            func group(_ window: QuotaWindow) -> String {
+                window.groupId.flatMap { $0.isEmpty ? nil : $0 } ?? window.groupName ?? ""
+            }
+            var groups = Set<String>()
+            return quota.windows.compactMap { window in
+                let key = group(window)
+                guard groups.insert(key).inserted,
+                      ["gemini", "gemini models", "claude-gpt", "claude and gpt models"].contains(key.lowercased()) else { return nil }
+                let rows = quota.windows.filter { group($0) == key }
+                let five = rows.filter { $0.windowMinutes == CoreContract.fiveHourMinutes }
+                let week = rows.filter { $0.windowMinutes == CoreContract.weekMinutes }
+                return five.count == 1 ? five.first : five.isEmpty && week.count == 1 ? week.first : nil
+            }
+        }
+        let five = quota.windows.filter { $0.windowMinutes == CoreContract.fiveHourMinutes }
+        if five.count == 1 { return five }
+        if quota.provider == "claude", let overall = five.first(where: { $0.stableId == "five_hour" }) { return [overall] }
+        let week = quota.windows.filter { $0.windowMinutes == CoreContract.weekMinutes }
+        return week.count == 1 ? week : week.filter { quota.provider == "claude" && $0.stableId == "seven_day" }
+    }
     struct Entry: Identifiable {
         var id: String, label: String, value: Double, record: QuotaEstimate
         var historical: Bool
@@ -473,3 +572,110 @@ struct AccountCleanupTask: Decodable, Identifiable { var id: String, name: Strin
 struct AccountDeletionPreview: Decodable { var tasks: [AccountCleanupTask] }
 struct AccountCleanupResult: Decodable { var deleted: Bool?, settings: Settings?, failedTasks: [AccountCleanupTask]? }
 struct AccountCleanupRecord: Decodable, Identifiable { var accountKey: String, name: String, tasks: [AccountCleanupTask]; var id: String { accountKey } }
+
+// BEGIN GENERATED CORE CONTRACT
+// Generated by scripts/sync-core-contracts.py; edit docs/core-contracts.json.
+enum CoreContract {
+    static let contractHash = "7c03549ccca8817e91b05e46b622c2cd7ceb628b56a37a5a0d86cb968022f81b"
+    static let providers = ["codex", "claude", "antigravity", "deepseek", "custom"]
+    static let wakeupProviders = ["codex", "claude", "antigravity"]
+    static let providerNames: [String: String] = ["codex": "Codex", "claude": "Claude Code", "antigravity": "Antigravity", "deepseek": "DeepSeek", "custom": "自定义"]
+    static let defaultPaths: [String: String] = ["codex": "~/.codex", "claude": "~/.claude", "antigravity": "~/.gemini/antigravity-cli", "deepseek": "", "custom": "~/.aieyes"]
+    static let binaries: [String: String] = ["codex": "codex", "claude": "claude", "antigravity": "agy", "deepseek": "", "custom": ""]
+    static let fiveHourMinutes = 300
+    static let weekMinutes = 10080
+    static let excludedFilesystemTypes: Set<String> = ["tmpfs", "devtmpfs", "squashfs", "overlay", "proc", "procfs", "sysfs", "devfs", "autofs", "cgroup", "cgroup2"]
+    static let excludedFilesystemPaths = ["/snap", "/var/lib/snapd/snap", "/run", "/efi", "/boot/efi", "/dev", "/proc", "/sys", "/system/volumes/preboot", "/system/volumes/vm", "/system/volumes/update", "/system/volumes/xarts", "/system/volumes/iscpreboot", "/system/volumes/hardware"]
+    static let methodLanes: [String: String] = [
+        "accounts.cleanup.list": "configuration",
+        "accounts.connect": "configuration",
+        "accounts.create": "configuration",
+        "accounts.delete": "accounts",
+        "accounts.deletion.preview": "configuration",
+        "accounts.deployments.sync": "accounts",
+        "accounts.status.get": "configuration",
+        "accounts.status.refresh": "accounts",
+        "agents.set": "configuration",
+        "agyAuth.cancel": "accounts",
+        "agyAuth.confirmWorkspace": "accounts",
+        "agyAuth.inspect": "accounts",
+        "agyAuth.openUrl": "accounts",
+        "agyAuth.start": "accounts",
+        "agyAuth.status": "accounts",
+        "agyAuth.submitCode": "accounts",
+        "agyAuth.verify": "accounts",
+        "codexAuth.adopt": "main",
+        "codexAuth.enable": "main",
+        "codexAuth.inspect": "main",
+        "codexAuth.list": "main",
+        "codexAuth.login.cancel": "main",
+        "codexAuth.login.start": "main",
+        "codexAuth.login.status": "main",
+        "codexAuth.model.list": "main",
+        "codexAuth.openUrl": "main",
+        "codexAuth.profiles.bind": "main",
+        "codexAuth.profiles.list": "main",
+        "codexAuth.profiles.remove": "main",
+        "codexAuth.quota": "main",
+        "codexAuth.status": "main",
+        "codexAuth.switch.commit": "main",
+        "codexAuth.switch.prepare": "main",
+        "credentials.save": "main",
+        "creditEstimates.get": "main",
+        "creditEstimates.list": "main",
+        "creditEstimates.repair": "main",
+        "creditEstimates.restart": "main",
+        "creditEstimates.start": "main",
+        "creditEstimates.stop": "main",
+        "dashboard": "dashboard",
+        "dashboard.summary": "dashboard",
+        "hello": "main",
+        "hosts.credentials.delete": "hosts",
+        "hosts.credentials.save": "hosts",
+        "hosts.discover": "hosts",
+        "hosts.sample": "hosts",
+        "methods.manifest": "main",
+        "network.status": "network",
+        "network.test": "network",
+        "prices.list": "main",
+        "prices.recalculate": "main",
+        "prices.save": "main",
+        "prices.sync": "main",
+        "quotaEstimates.get": "main",
+        "quotaEstimates.list": "main",
+        "quotaEstimates.repair": "main",
+        "quotaEstimates.restart": "main",
+        "quotaEstimates.start": "main",
+        "quotaEstimates.stop": "main",
+        "quotas.order.set": "main",
+        "quotas.refresh": "main",
+        "quotas.schedule": "dashboard",
+        "sessions.list": "main",
+        "settings.get": "configuration",
+        "settings.patch": "configuration",
+        "settings.save": "configuration",
+        "sources.configure": "configuration",
+        "sources.remove": "configuration",
+        "sources.rescan": "main",
+        "sources.scan": "main",
+        "wakeups.delete": "main",
+        "wakeups.deploy": "main",
+        "wakeups.disable": "main",
+        "wakeups.enable": "main",
+        "wakeups.history": "main",
+        "wakeups.list": "main",
+        "wakeups.probe": "main",
+        "wakeups.remove": "main",
+        "wakeups.run": "main",
+        "wakeups.save": "main",
+        "wakeups.status": "main",
+        "accounts.targets": "configuration",
+        "codexAuth.reconcile": "accounts",
+        "operations.prepareUpdate": "configuration",
+        "operations.resume": "configuration",
+        "operations.status": "configuration",
+    ]
+    static let updateBehaviors: [String: String] = ["accounts.cleanup.list": "observe", "accounts.connect": "finish", "accounts.create": "finish", "accounts.delete": "finish", "accounts.deletion.preview": "finish", "accounts.deployments.sync": "finish", "accounts.status.get": "observe", "accounts.status.refresh": "cancel", "agents.set": "finish", "agyAuth.cancel": "observe", "agyAuth.confirmWorkspace": "finish", "agyAuth.inspect": "finish", "agyAuth.openUrl": "finish", "agyAuth.start": "finish", "agyAuth.status": "observe", "agyAuth.submitCode": "finish", "agyAuth.verify": "finish", "codexAuth.adopt": "finish", "codexAuth.enable": "finish", "codexAuth.inspect": "finish", "codexAuth.list": "observe", "codexAuth.login.cancel": "observe", "codexAuth.login.start": "finish", "codexAuth.login.status": "observe", "codexAuth.model.list": "observe", "codexAuth.openUrl": "finish", "codexAuth.profiles.bind": "finish", "codexAuth.profiles.list": "observe", "codexAuth.profiles.remove": "finish", "codexAuth.quota": "finish", "codexAuth.status": "finish", "codexAuth.switch.commit": "finish", "codexAuth.switch.prepare": "finish", "credentials.save": "finish", "creditEstimates.get": "finish", "creditEstimates.list": "observe", "creditEstimates.repair": "finish", "creditEstimates.restart": "finish", "creditEstimates.start": "finish", "creditEstimates.stop": "finish", "dashboard": "cancel", "dashboard.summary": "cancel", "hello": "observe", "hosts.credentials.delete": "finish", "hosts.credentials.save": "finish", "hosts.discover": "finish", "hosts.sample": "cancel", "methods.manifest": "observe", "network.status": "finish", "network.test": "cancel", "prices.list": "observe", "prices.recalculate": "finish", "prices.save": "finish", "prices.sync": "finish", "quotaEstimates.get": "finish", "quotaEstimates.list": "observe", "quotaEstimates.repair": "finish", "quotaEstimates.restart": "finish", "quotaEstimates.start": "finish", "quotaEstimates.stop": "finish", "quotas.order.set": "finish", "quotas.refresh": "cancel", "quotas.schedule": "cancel", "sessions.list": "cancel", "settings.get": "observe", "settings.patch": "finish", "settings.save": "finish", "sources.configure": "finish", "sources.remove": "finish", "sources.rescan": "cancel", "sources.scan": "cancel", "wakeups.delete": "finish", "wakeups.deploy": "finish", "wakeups.disable": "finish", "wakeups.enable": "finish", "wakeups.history": "cancel", "wakeups.list": "observe", "wakeups.probe": "cancel", "wakeups.remove": "finish", "wakeups.run": "finish", "wakeups.save": "finish", "wakeups.status": "cancel", "accounts.targets": "observe", "codexAuth.reconcile": "finish", "operations.prepareUpdate": "observe", "operations.resume": "observe", "operations.status": "observe"]
+    static let configurationMethods = Set(methodLanes.filter { $0.value == "configuration" }.keys)
+}
+// END GENERATED CORE CONTRACT

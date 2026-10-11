@@ -10,7 +10,7 @@ def source(provider):
     return dict(id=provider+'-source',name=provider+' · 测试来源',provider=provider,accountId=provider,path='/tmp/aieyes-preview-missing',enabled=True,quotaCommand='',quotaPreCommand='',codexBinary='codex',agyBinary='agy')
 def window(key,name,used,minutes=10080,group=None):
     return dict(id=key,name=name,usedPercent=used,windowMinutes=minutes,resetsAt=stamp+minutes*60,groupName=group,groupId=group)
-settings=dict(version=2,sources=[source('codex'),source('antigravity')],accounts=[dict(id=p,name=n,provider=p,quotaEnabled=True) for p,n in [('codex','个人订阅'),('antigravity','Antigravity 工作空间')]],hosts=[],proxy=dict(mode='system',url=''),refreshSeconds=300,serverRefreshSeconds=10,menuMetric='icon',githubRepository='',modelMappings={})
+settings=dict(version=2,sources=[source('codex'),source('antigravity')],accounts=[dict(id=p,name=n,provider=p,quotaEnabled=True) for p,n in [('codex','个人订阅'),('antigravity','Antigravity 工作空间')]],hosts=[],proxy=dict(mode='system',url=''),refreshSeconds=300,serverRefreshSeconds=10,menuMetric='icon',modelMappings={})
 quotas=[dict(sourceId=p+'-source',accountId=p,provider=p,name=n,updatedAt=stamp,origin='live',windows=ws) for p,n,ws in [('codex','个人订阅',[window('codex:primary','5h',35,300),window('codex:secondary','7d',42)]),('antigravity','Antigravity 工作空间',[window(g+':'+str(m),g+' · '+('7d' if m==10080 else '5h'),v,m,g) for g,v in [('Claude and GPT Models',28),('Gemini Models',65)] for m in [300,10080]])]]
 tokens=dict(input=30000,output=12000,cacheRead=28000,cacheWrite=0,reasoning=0)
 usage=dict(key='',tokens=tokens,total=70000,cost=2.4,pricedTokens=70000,events=14)

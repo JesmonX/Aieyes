@@ -12,83 +12,22 @@ enum SessionPhase: String {
         switch self { case .idle: return "circle.dotted"; case .working: return "waveform"; case .thinking: return "sparkles"; case .tool: return "gearshape.2"; case .complete: return "checkmark"; case .interrupted: return "pause.fill"; case .unknown: return "questionmark" }
     }
 }
-struct LiveSession: Identifiable {
+struct LiveSession: Identifiable, Decodable {
     var id: String, source: String, phase: SessionPhase, updatedAt: Date
-    static func phase(in data: Data) -> SessionPhase? {
-        var phase: SessionPhase?
-        for line in data.split(separator: 10) {
-            guard let row = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any], let payload = row["payload"] as? [String: Any] else { continue }
-            let type = payload["type"] as? String
-            if row["type"] as? String == "event_msg" {
-                switch type { case "task_started": phase = .working; case "task_complete": phase = .complete; case "turn_aborted": phase = .interrupted; default: break }
-            } else if row["type"] as? String == "response_item", phase != .complete, phase != .interrupted {
-                switch type {
-                case "reasoning": phase = .thinking
-                case "function_call", "custom_tool_call": phase = .tool
-                case "function_call_output", "custom_tool_call_output": phase = .working
-                default: break
-                }
-            }
-        }
-        return phase
+    init(id: String, source: String, phase: SessionPhase, updatedAt: Date) {
+        self.id = id; self.source = source; self.phase = phase; self.updatedAt = updatedAt
+    }
+    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt }
+    init(from decoder: Decoder) throws {
+        let row = try decoder.container(keyedBy: CodingKeys.self)
+        id = try row.decode(String.self, forKey: .id)
+        source = try row.decode(String.self, forKey: .source)
+        let key = try row.decode(String.self, forKey: .phase)
+        phase = ["working": .working, "thinking": .thinking, "tool": .tool, "complete": .complete, "interrupted": .interrupted, "unknown": .unknown][key] ?? .unknown
+        updatedAt = Date(timeIntervalSince1970: try row.decode(Double.self, forKey: .updatedAt))
     }
 }
-actor SessionMonitor {
-    private var files: [(URL, String)] = []
-    private var discovered = Date.distantPast
-    private var sourceKey = ""
-    private var discoveryFailed = false
-    private var cache: [String: (Date, Int, LiveSession?)] = [:]
-    func read(sources: [AgentSource], now: Date = Date()) -> (sessions: [LiveSession], unavailable: Bool) {
-        let local = sources.filter { $0.enabled && $0.hostId == nil && $0.provider == "codex" }
-        let key = local.map { $0.id + $0.path + $0.name }.joined(separator: "|")
-        var unavailable = false
-        if key != sourceKey || now.timeIntervalSince(discovered) > 30 {
-            files = []; sourceKey = key; discovered = now
-            var seen = Set<String>()
-            for source in local {
-                let root = URL(fileURLWithPath: (source.path as NSString).expandingTildeInPath)
-                let sessions = root.appendingPathComponent("sessions")
-                let directory = FileManager.default.fileExists(atPath: sessions.path) ? sessions : root
-                if directory.pathExtension == "jsonl" {
-                    if seen.insert(directory.path).inserted { files.append((directory, source.name)) }
-                    continue
-                }
-                guard let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey], options: [.skipsHiddenFiles], errorHandler: { _, _ in unavailable = true; return true }) else { unavailable = true; continue }
-                for case let url as URL in enumerator where url.pathExtension == "jsonl" {
-                    guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]), values.isRegularFile == true, let modified = values.contentModificationDate, now.timeIntervalSince(modified) < 3600, seen.insert(url.path).inserted else { continue }
-                    files.append((url, source.name))
-                }
-            }
-            discoveryFailed = unavailable
-            let paths = Set(files.map { $0.0.path })
-            cache = cache.filter { paths.contains($0.key) }
-        }
-        unavailable = unavailable || discoveryFailed
-        var result: [LiveSession] = []
-        for (url, source) in files {
-            guard let values = try? URL(fileURLWithPath: url.path).resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]), let modified = values.contentModificationDate else { unavailable = true; continue }
-            let age = now.timeIntervalSince(modified)
-            guard age < 3600 else { continue }
-            var session: LiveSession?
-            if let old = cache[url.path], old.0 == modified, old.1 == values.fileSize ?? 0 { session = old.2 }
-            else {
-                do {
-                    let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
-                    let end = try file.seekToEnd(); try file.seek(toOffset: end > 262144 ? end - 262144 : 0)
-                    let data = try file.readToEnd() ?? Data()
-                    if let phase = LiveSession.phase(in: data) { session = LiveSession(id: url.path, source: source, phase: phase, updatedAt: modified) }
-                    cache[url.path] = (modified, values.fileSize ?? 0, session)
-                } catch { unavailable = true }
-            }
-            if var session {
-                if session.phase.active && age > 180 { session.phase = .unknown }
-                if session.phase.active || session.phase == .unknown || age < 90 { result.append(session) }
-            }
-        }
-        return (result.sorted { $0.updatedAt > $1.updatedAt }, unavailable)
-    }
-}
+struct SessionSnapshot: Decodable { var sessions: [LiveSession]; var unavailable: Bool }
 
 struct ActivityIndicator: View {
     var phase: SessionPhase?
@@ -106,7 +45,7 @@ struct ActivityIndicator: View {
 }
 struct MenuActivityLabel: View {
     @ObservedObject var model: AppModel
-    @AppStorage("menu.showCount") private var showCount = false
+    @AppStorage(NativePanelKey.showCount.rawValue) private var showCount = false
     var body: some View {
         HStack(spacing: 5) {
             BrandMark(template: true).frame(width: 22, height: 22)

@@ -34,6 +34,7 @@ fn source_lock(root: &Path, source: &Source) -> Result<FileLock> {
     let path = root.join(format!("history-{}.lock", hash(&source.id)));
     let start = Instant::now();
     loop {
+        crate::operations::check()?;
         let file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -50,6 +51,14 @@ fn source_lock(root: &Path, source: &Source) -> Result<FileLock> {
 }
 
 pub(crate) fn scan(root: &Path, settings: &Settings, source: &Source) -> Result<Value> {
+    scan_mode(root, settings, source, false)
+}
+
+pub(crate) fn rescan(root: &Path, settings: &Settings, source: &Source) -> Result<Value> {
+    scan_mode(root, settings, source, true)
+}
+
+fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> Result<Value> {
     let _lock = source_lock(root, source)?;
     let store = Store::open(root)?;
     let host = settings
@@ -62,19 +71,24 @@ pub(crate) fn scan(root: &Path, settings: &Settings, source: &Source) -> Result<
         "DELETE FROM remote_cursors WHERE source_id=?1 AND configuration<>?2",
         params![source.id, config],
     )?;
-    let mut q = store.db.prepare(
-        "SELECT path,cursor FROM remote_cursors WHERE source_id=?1 AND configuration=?2",
-    )?;
-    let cursors = q
-        .query_map(params![source.id, config], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?
-        .map(|r| -> Result<_> {
-            let (path, cursor) = r?;
-            Ok((path, serde_json::from_str::<Value>(&cursor)?))
-        })
-        .collect::<Result<serde_json::Map<String, Value>>>()?;
-    drop(q);
+    let cursors = if full {
+        serde_json::Map::new()
+    } else {
+        let mut q = store.db.prepare(
+            "SELECT path,cursor FROM remote_cursors WHERE source_id=?1 AND configuration=?2",
+        )?;
+        let cursors = q
+            .query_map(params![source.id, config], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .map(|r| -> Result<_> {
+                let (path, cursor) = r?;
+                Ok((path, serde_json::from_str::<Value>(&cursor)?))
+            })
+            .collect::<Result<serde_json::Map<String, Value>>>()?;
+        drop(q);
+        cursors
+    };
     let request =
         json!({"protocol":2,"path":source.path,"provider":source.provider,"cursors":cursors});
     let prices = store.prices()?;
@@ -141,7 +155,7 @@ fn apply_batch(
     frame: &Value,
 ) -> Result<u64> {
     let path = frame["path"].as_str().context("远程批次缺少文件路径")?;
-    let tx = store.db.unchecked_transaction()?;
+    let tx = store.write_transaction()?;
     let saved: Option<String> = if frame["reset"] == true {
         None
     } else {

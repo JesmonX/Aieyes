@@ -1,5 +1,5 @@
 (() => {
-  const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const escape = value => window.AieyesUI.escapeHTML(value);
   const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
   let status = {currentVersion: '', phase:'idle', message:'', automatic:true, prompt:false};
   let dialog = null, submitting = false, preparing = false, cancelled = false, answer = null;
@@ -86,7 +86,7 @@
     });
   }
   function blockers() {
-    return [[state.dashboardPending,'概览查询'],[quotaScheduleRead!=null,'刷新调度读取'],[state.busy,'记录同步 / 价格操作'],[state.quotaBusy,'Agent 限额查询'],[state.serverBusy,'服务器采样'],[state.settingsSaving||state.settingsCommitting||editorSaving,'保存配置'],[state.repricing,'重算价格'],[state.estimateBusy||state.sharedEstimateOperations?.size||document.querySelector('#quota-dialog')?.dataset.busy,'采样任务'],[window.AieyesAgyAuth?.busy,'Antigravity 登录授权'],[window.AieyesAgentSettings?.antigravityRefreshing,'Antigravity 登录后刷新'],[window.AieyesCodexAuth?.busy,'Codex 登录授权']].filter(([busy])=>busy).map(([,label])=>label);
+    return [[state.settingsSaving||state.settingsCommitting||editorSaving,'保存配置'],[state.repricing,'重算价格'],[window.AieyesAgyAuth?.busy,'Antigravity 登录授权'],[window.AieyesCodexAuth?.busy,'Codex 登录授权']].filter(([busy])=>busy).map(([,label])=>label);
   }
   async function prepare() {
     const started=new Map();let deadline=Date.now()+30000;
@@ -119,13 +119,19 @@
   async function install() {
     if (busy()) return;
     if (status.phase === 'error') { await run('updates_check'); return; }
-    preparing=true;cancelled=false;renderDialog();
+    submitting=true;cancelled=false;renderDialog();
     try {
+      await run('updates_download');
+      if(status.phase==='error')return;
+      submitting=false;preparing=true;renderDialog();
       if(!await prepare()){if(dialog.open){status.message=cancelled?'已取消更新等待；后台刷新已恢复':status.message;renderDialog();}return;}
+      let operations=await api('operations.prepareUpdate');
+      while(operations.protected.length&&!cancelled){status.message='正在完成账号或配置操作：'+operations.protected.join('、');renderDialog();await new Promise(resolve=>setTimeout(resolve,250));operations=await api('operations.status');}
+      if(cancelled)return;
       preparing=false;submitting=true;renderDialog();await run('updates_install');
-    } finally {preparing=false;submitting=false;answer?.('cancel');updateView();}
+    } finally {await api('operations.resume').catch(()=>{});preparing=false;submitting=false;answer?.('cancel');updateView();}
   }
-  window.AieyesUpdates = {settingsHTML, bindSettings, get busy() { return preparing || submitting || installing(); }};
+  window.AieyesUpdates = {settingsHTML, bindSettings, get busy() { return preparing || status.phase==='installing'; }};
   window.addEventListener('focus', maybePresent);
   document.addEventListener('visibilitychange', maybePresent);
   document.addEventListener('close', () => queueMicrotask(maybePresent), true);

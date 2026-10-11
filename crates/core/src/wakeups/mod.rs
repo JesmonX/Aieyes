@@ -237,7 +237,7 @@ fn source_for(s: &Settings, id: &str, profile: Option<&str>) -> Result<Source> {
             .clone();
     }
     ensure!(
-        ["codex", "claude", "antigravity", "agy"].contains(&source.provider.as_str()),
+        crate::providers::supports_wakeup(&source.provider),
         "此 CLI 暂不支持订阅唤醒"
     );
     ensure!(
@@ -275,14 +275,16 @@ fn manifest(task: &Task, source: &Source, settings: &Settings) -> Result<Manifes
     let configured = if !task.binary.is_empty() {
         task.binary.as_str()
     } else {
-        match source.provider.as_str() {
+        match crate::providers::canonical(&source.provider) {
             "codex" => source.codex_binary.as_str(),
-            "agy" | "antigravity" => source.agy_binary.as_str(),
-            _ => "claude",
+            "antigravity" => source.agy_binary.as_str(),
+            provider => crate::contracts::provider(provider).map_or("", |p| p.binary),
         }
     };
-    let binary = if configured.is_empty() {
-        source.provider.clone()
+    let binary: String = if configured.is_empty() {
+        crate::contracts::provider(crate::providers::canonical(&source.provider))
+            .map_or(source.provider.as_str(), |p| p.binary)
+            .into()
     } else {
         configured.into()
     };
@@ -450,18 +452,19 @@ fn agy_models(output: &str) -> Vec<Value> {
 }
 
 fn remote(host: &Host, mut request: Value) -> Result<Value> {
+    let script = format!(
+        "_aieyes_client_version = {:?}\n{}",
+        env!("CARGO_PKG_VERSION"),
+        include_str!("../../../../scripts/remote_wakeup.py")
+    );
     request["authHelper"] = json!(String::from_utf8(crate::codex_auth::remote::script())?);
     // Deployment/control does not need the provider's proxy pre-command.
     if request["action"] == "deploy" {
-        request["script"] = json!(include_str!("../../../../scripts/remote_wakeup.py"));
+        request["script"] = json!(script);
     }
     let mut host = host.clone();
     host.pre_command.clear();
-    let v = ssh::python(
-        &host,
-        include_str!("../../../../scripts/remote_wakeup.py"),
-        &[serde_json::to_string(&request)?],
-    )?;
+    let v = ssh::python(&host, &script, &[serde_json::to_string(&request)?])?;
     if let Some(error) = v["error"].as_str() {
         anyhow::bail!("{error}");
     }

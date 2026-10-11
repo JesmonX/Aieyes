@@ -78,7 +78,7 @@ struct CodexAccountsView: View {
                         }
                         if intent == "login" { Button("重新登录") { reauthID = profile.id; loginSheet = true } }
                         if profile.current != true {
-                            if intent == "switch" { Button("切换到此账户") { perform { await prepareSwitch(profile) } } }
+                            if intent == "switch" || targetAccountID != nil { Button("切换到此账户") { perform { await prepareSwitch(profile) } } }
                             if intent == "login" { Button("移除", role: .destructive) { removeProfile = profile } }
                         }
                     }.disabled(busy || model.settingsDirty || operation != nil)

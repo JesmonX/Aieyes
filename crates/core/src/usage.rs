@@ -1,3 +1,4 @@
+use crate::contracts::{FIVE_HOUR_MINUTES, WEEK_MINUTES};
 use crate::models::*;
 use serde_json::Value;
 
@@ -52,6 +53,7 @@ fn event(
 }
 
 pub fn event_id(provider: &str, source_id: &str, account_id: &str, identity: &str) -> String {
+    let provider = crate::providers::canonical(provider);
     let namespace = if account_id.is_empty() {
         format!("source:{source_id}")
     } else {
@@ -265,8 +267,8 @@ pub fn codex_quota(source: &Source, value: &Value, stamp: i64, origin: &str) -> 
                     .as_i64()
                     .or(w["window_minutes"].as_i64());
                 let label = match duration {
-                    Some(300) => "5h".into(),
-                    Some(10080) => "7d".into(),
+                    Some(FIVE_HOUR_MINUTES) => "5h".into(),
+                    Some(WEEK_MINUTES) => "7d".into(),
                     Some(n) if n % 60 == 0 => format!("{}h", n / 60),
                     Some(n) => format!("{n}m"),
                     None => key.into(),

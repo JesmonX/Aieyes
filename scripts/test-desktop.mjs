@@ -5,8 +5,35 @@ import { readFileSync } from 'node:fs';
 
 const read = name => readFileSync(new URL(`../apps/desktop/web/${name}`, import.meta.url), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test('legacy providers normalize at the payload boundary with collision aliases', () => {
+  const window = {};
+  vm.runInNewContext(read('ui-state.js'), {window});
+  const payload = {accountAliases:{'agy:a':'antigravity:legacy-a'},accounts:[{provider:'agy',id:'a',quotaEnabled:true}],sources:[{provider:'agy',accountId:'a'}],quotas:[{provider:'agy',accountId:'a'}],quotaOrder:['agy:a']};
+  const next = window.AieyesUI.canonicalPayload(payload);
+  assert.equal(next.accounts[0].provider,'antigravity');
+  assert.equal(next.accounts[0].id,'legacy-a');
+  assert.equal(next.sources[0].accountId,'legacy-a');
+  assert.equal(next.quotas[0].accountId,'legacy-a');
+  assert.deepEqual([...next.quotaOrder],['antigravity:legacy-a']);
+  assert.equal(payload.accounts[0].provider,'agy');
+});
+test('native and Web share panel preference and valuation window fixtures', () => {
+  const window = {};
+  vm.runInNewContext(read('contracts.js'), {window});
+  vm.runInNewContext(read('ui-state.js'), {window});
+  const fixture = JSON.parse(readFileSync(new URL('fixtures/ui-semantics.json', import.meta.url), 'utf8'));
+  for (const row of fixture.panels) {
+    const actual = window.AieyesUI.panelAccounts({accounts:row.accounts},row.order,row.preference);
+    assert.deepEqual(JSON.parse(JSON.stringify(actual)),row.expected,row.name);
+  }
+  for (const row of fixture.windows) {
+    const actual = window.AieyesUI.estimateWindows(row).map(w=>w.id);
+    assert.deepEqual([...actual],row.expected,row.name);
+  }
+});
 test('panel account choices cap each Agent and preserve explicit empty choices', () => {
   const data=new Map(),window={};
+  vm.runInNewContext(read('contracts.js'), {window});
   vm.runInNewContext(read('ui-state.js'),{window,localStorage:{getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value)}});
   const accounts=[...Array.from({length:20},(_,i)=>({provider:'codex',id:'c'+i,quotaEnabled:true})),...Array.from({length:6},(_,i)=>({provider:'claude',id:'a'+i,quotaEnabled:true}))];
   const order=accounts.map(a=>a.provider+':'+a.id).reverse(),settings={accounts};
@@ -21,6 +48,48 @@ test('panel account choices cap each Agent and preserve explicit empty choices',
   assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).claude],['claude:a1']);
   accounts.filter(a=>a.provider==='claude').forEach(a=>a.archived=true);
   assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).claude],[]);
+});
+test('wakeup source choices follow contract capabilities and source availability', async () => {
+  const source = (id, provider, extra = {}) => ({id, name:id, provider, enabled:true, accountId:'account', ...extra});
+  for (const row of [
+    {providers:['codex'], sources:[source('removed','antigravity')], expected:[]},
+    {providers:['future-provider'], sources:[source('added','future-provider')], expected:['added']},
+    {providers:['codex','claude','antigravity'], sources:[
+      source('local','codex'), source('remote','claude',{hostId:'online'}),
+      source('profile','codex',{accountId:'',codexHomeId:'home'}),
+      source('disabled','codex',{enabled:false}), source('unlinked','codex',{accountId:''}),
+      source('offline','antigravity',{hostId:'offline'}), source('missing-host','codex',{hostId:'missing'}),
+      source('legacy','agy'),
+    ], expected:['local','remote','profile']},
+  ]) {
+    const elements = new Map(), notices = [], window = {};
+    const editorShown = new Error('editor rendered');
+    let body = '';
+    const sandbox = {
+      window, structuredClone,
+      state:{page:'other',settings:{sources:row.sources,hosts:[{id:'online',enabled:true},{id:'offline',enabled:false}]}},
+      $: selector => {if(!elements.has(selector))elements.set(selector,{});return elements.get(selector);},
+      document:{querySelectorAll:()=>[]}, api:async()=>[], notify:message=>notices.push(message),
+      field:()=>'', escapeHTML:String, option:(id,label)=>`<option value="${id}">${label}</option>`,
+      showEditor:(_title,html)=>{body=html;throw editorShown;},
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(read('contracts.js'),sandbox);
+    window.AieyesContract.wakeupProviders = row.providers;
+    vm.runInContext(read('wakeups.js'),sandbox);
+    window.AieyesWakeups.bind();
+    if (row.expected.length) {
+      assert.throws(()=>elements.get('#wake-add').onclick(), error=>error===editorShown);
+      const choices = body.match(/<select name="sourceId" id="wake-source">(.*?)<\/select>/s)[1];
+      assert.deepEqual([...choices.matchAll(/<option value="([^"]+)"/g)].map(match=>match[1]),row.expected);
+      assert.equal(notices.length,0);
+    } else {
+      elements.get('#wake-add').onclick();
+      assert.equal(body,'');
+      assert.equal(notices.length,1);
+    }
+    await flush();
+  }
 });
 function harness(file, initial = {}) {
   const elements = new Map(), events = new Map(), calls = [], notices = [], runs = [], timers = new Map();
@@ -82,6 +151,8 @@ function harness(file, initial = {}) {
   vm.createContext(sandbox);
   element('#panel-menu').hidden = true;
   vm.runInContext(read('icons.js'), sandbox, {filename:'icons.js'});
+  vm.runInContext(read('contracts.js'), sandbox, {filename:'contracts.js'});
+  vm.runInContext(read('ui-state.js'), sandbox, {filename:'ui-state.js'});
   vm.runInContext(read('sessions.js'), sandbox, {filename:'sessions.js'});
   vm.runInContext(read('refresh.js'), sandbox, {filename:'refresh.js'});
   vm.runInContext(read(file), sandbox, {filename:file});

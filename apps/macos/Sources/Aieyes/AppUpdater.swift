@@ -109,7 +109,7 @@ import OSLog
         guard let choice, !busy else { return }
         phase = "preparing"; preparationError = nil; message = "正在准备更新…"
         Task {
-            guard await prepareInstallation?(readyToInstall) ?? true else { phase = "available"; message = preparationError ?? "已取消更新准备；后台刷新已恢复。"; finishedInstallationAttempt?(); return }
+            if readyToInstall { guard await prepareInstallation?(true) ?? true else { phase = "available"; message = preparationError ?? "已取消更新准备；后台刷新已恢复。"; finishedInstallationAttempt?(); return } }
             if !readyToInstall, let feed = originalFeed {
                 do { try await transport.start(feed: feed) }
                 catch { phase = "available"; message = error.localizedDescription; finishedInstallationAttempt?(); return }

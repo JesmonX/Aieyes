@@ -54,7 +54,7 @@ CODEX_HOME/
 
 ## 协议入口
 
-核心提供 `codexAuth.homes.list`、`enable`、`inspect`、`adopt`、`login.start/status/cancel`、`profiles.bind/remove`、`switch.prepare/commit`。有状态操作使用 sourceId 和 operationId；UI 不接收凭据内容。`openUrl` 只允许受支持的 HTTPS 登录域名。来源通过 `codexHomeId` 标识共享 home；账户使用 `connections[{sourceId,profileId}]` 连接多个来源，保留旧 `quotaProfileId` 作为兼容主连接；唤醒任务继续通过 `codexProfileId` 的 `homeId:profileId` 引用明确档案。
+共享 home 来自 `settings.get` 的来源列表。核心提供 `codexAuth.enable`、`inspect`、`adopt`、`login.start/status/cancel`、`profiles.bind/remove`、`switch.prepare/commit`。有状态操作使用 sourceId 和 operationId；UI 不接收凭据内容。`openUrl` 只允许受支持的 HTTPS 登录域名。来源通过 `codexHomeId` 标识共享 home；账户使用 `connections[{sourceId,profileId}]` 连接多个来源，保留旧 `quotaProfileId` 作为兼容主连接；唤醒任务继续通过 `codexProfileId` 的 `homeId:profileId` 引用明确档案。
 
 ## 验证
 

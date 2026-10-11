@@ -1,0 +1,304 @@
+{
+  "panels": [
+    {
+      "name": "explicit empty",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [],
+      "preference": {
+        "version": 2,
+        "providers": {
+          "codex": {
+            "mode": "custom",
+            "keys": []
+          }
+        }
+      },
+      "expected": {
+        "codex": []
+      }
+    },
+    {
+      "name": "deduplicate and preserve order",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "b",
+          "name": "B",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "old",
+          "name": "Old",
+          "provider": "codex",
+          "quotaEnabled": true,
+          "archived": true
+        }
+      ],
+      "order": [
+        "codex:a",
+        "codex:b"
+      ],
+      "preference": {
+        "version": 2,
+        "providers": {
+          "codex": {
+            "mode": "custom",
+            "keys": [
+              "codex:b",
+              "codex:b",
+              "codex:old",
+              "codex:missing",
+              "codex:a"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "codex": [
+          "codex:b",
+          "codex:a"
+        ]
+      }
+    },
+    {
+      "name": "removed choices use available accounts",
+      "accounts": [
+        {
+          "id": "new",
+          "name": "New",
+          "provider": "antigravity",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [],
+      "preference": {
+        "version": 2,
+        "providers": {
+          "antigravity": {
+            "mode": "custom",
+            "keys": [
+              "antigravity:old"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "antigravity": [
+          "antigravity:new"
+        ]
+      }
+    },
+    {
+      "name": "automatic respects quota and archive",
+      "accounts": [
+        {
+          "id": "hidden",
+          "name": "Hidden",
+          "provider": "claude",
+          "quotaEnabled": false
+        },
+        {
+          "id": "old",
+          "name": "Old",
+          "provider": "claude",
+          "quotaEnabled": true,
+          "archived": true
+        },
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "claude",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [],
+      "preference": {
+        "version": 2,
+        "providers": {
+          "claude": {
+            "mode": "auto",
+            "keys": [
+              "claude:hidden"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "claude": [
+          "claude:a"
+        ]
+      }
+    }
+  ],
+  "windows": [
+    {
+      "name": "unique five hour",
+      "provider": "codex",
+      "windows": [
+        {
+          "id": "five",
+          "name": "5h",
+          "usedPercent": 0,
+          "windowMinutes": 300
+        }
+      ],
+      "expected": [
+        "five"
+      ]
+    },
+    {
+      "name": "Claude overall among duplicates",
+      "provider": "claude",
+      "windows": [
+        {
+          "id": "five_hour",
+          "name": "总额",
+          "usedPercent": 0,
+          "windowMinutes": 300
+        },
+        {
+          "id": "model",
+          "name": "模型",
+          "usedPercent": 0,
+          "windowMinutes": 300
+        }
+      ],
+      "expected": [
+        "five_hour"
+      ]
+    },
+    {
+      "name": "overall ID is Claude specific",
+      "provider": "custom",
+      "windows": [
+        {
+          "id": "five_hour",
+          "name": "总额",
+          "usedPercent": 0,
+          "windowMinutes": 300
+        },
+        {
+          "id": "model",
+          "name": "模型",
+          "usedPercent": 0,
+          "windowMinutes": 300
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "weekly fallback",
+      "provider": "codex",
+      "windows": [
+        {
+          "id": "week",
+          "name": "7d",
+          "usedPercent": 0,
+          "windowMinutes": 10080
+        }
+      ],
+      "expected": [
+        "week"
+      ]
+    },
+    {
+      "name": "independent groups",
+      "provider": "antigravity",
+      "windows": [
+        {
+          "id": "gemini-five",
+          "name": "Gemini 5h",
+          "groupId": "gemini",
+          "usedPercent": 0,
+          "windowMinutes": 300
+        },
+        {
+          "id": "gemini-week",
+          "name": "Gemini 7d",
+          "groupId": "gemini",
+          "usedPercent": 0,
+          "windowMinutes": 10080
+        },
+        {
+          "id": "claude-week",
+          "name": "Claude 7d",
+          "groupId": "claude-gpt",
+          "usedPercent": 0,
+          "windowMinutes": 10080
+        }
+      ],
+      "expected": [
+        "gemini-five",
+        "claude-week"
+      ]
+    },
+    {
+      "name": "ambiguous group is rejected",
+      "provider": "antigravity",
+      "windows": [
+        {
+          "id": "first",
+          "name": "Gemini 5h",
+          "groupId": "gemini",
+          "usedPercent": 0,
+          "windowMinutes": 300
+        },
+        {
+          "id": "second",
+          "name": "Gemini 5h 2",
+          "groupId": "gemini",
+          "usedPercent": 0,
+          "windowMinutes": 300
+        },
+        {
+          "id": "week",
+          "name": "Gemini 7d",
+          "groupId": "gemini",
+          "usedPercent": 0,
+          "windowMinutes": 10080
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "unknown group is rejected",
+      "provider": "antigravity",
+      "windows": [
+        {
+          "id": "unknown",
+          "name": "未知 5h",
+          "groupId": "unknown",
+          "usedPercent": 0,
+          "windowMinutes": 300
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "group metadata is required",
+      "provider": "antigravity",
+      "windows": [
+        {
+          "id": "legacy",
+          "name": "Gemini Models · 5h",
+          "usedPercent": 0,
+          "windowMinutes": 300
+        }
+      ],
+      "expected": []
+    }
+  ]
+}

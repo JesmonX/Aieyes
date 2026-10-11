@@ -1,3 +1,5 @@
+> 历史记录：当前实现与验证请参阅 [后续实施记录](ui-audit-and-redesign-2026-10-06-implementation.md)；下文的版本、行号与旧行为仅对应原审计基线。
+
 # Aieyes desktop / mac 全面 UI 复核与美化改革方案
 
 评审日期：2026-10-06。基线：`26823c9`，desktop 配置版本 `0.1.12`。本报告对应当前源码，独立于同日较早的 [UI 改革方案](ui-reform-2026-10-06.md) 和 [实施记录](ui-reform-2026-10-06-implementation.md)。

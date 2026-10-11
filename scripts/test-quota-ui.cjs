@@ -9,13 +9,13 @@ function fixture(){
   const win=(id,name,minutes,groupName)=>({id,name,windowMinutes:minutes,usedPercent:35,resetsAt:now+10000,groupName});
   const rows=[{provider:'codex',accountId:'c',name:'个人订阅',plan:'plus',sourceId:'c',updatedAt:now,origin:'live',windows:[win('weekly','7d',10080)]},{provider:'agy',accountId:'a',name:'工作空间 agy',sourceId:'a',updatedAt:now,origin:'live',windows:['Claude Opus','Claude Sonnet','Gemini Pro'].flatMap(g=>[win(g+':5h',g+' · 5h',300,g),win(g+':7d',g+' · 7d',10080,g)])}];
   const settings={accounts:rows.map(q=>({id:q.accountId,name:q.name,provider:q.provider,quotaEnabled:true})),sources:rows.map(q=>({id:q.accountId,name:q.name,provider:q.provider,accountId:q.accountId,enabled:true,path:'/fixture'})),hosts:[],modelMappings:{},proxy:{mode:'system',url:''},refreshSeconds:300,serverRefreshSeconds:10};
-  window.quotaFixture={rows,settings,order:['codex:c','agy:a'],records:[],calls:[],fail:false,panelOpen:true};
+  window.quotaFixture={rows,settings,order:['codex:c','antigravity:a'],records:[],calls:[],fail:false,panelOpen:true};
   const info=()=>({platform:'windows',material:'opaque',mode:'floating',effectiveMode:'floating',sessions:[],summary:'暂无活跃会话',panelOpen:window.quotaFixture.panelOpen,panelPinned:true,hidden:false});
   window.__TAURI__={event:{async listen(){return ()=>{};}},window:{getCurrentWindow:()=>({async isMaximized(){return false;},async onResized(){return ()=>{};}})},core:{async invoke(command,args){
     const f=window.quotaFixture;if(command==='desktop_info')return info();if(command==='desktop_panel'){f.panelOpen=args.open;return info();}if(command!=='engine_call')return {};
     const {method,params}=args;f.calls.push({method,params});
     if(method==='hello')return {version:'test'};if(method==='settings.get')return structuredClone(settings);
-    if(method==='dashboard')return {generatedAt:now,summary,quotas:[...rows].sort((a,b)=>f.order.indexOf(a.provider+':'+a.accountId)-f.order.indexOf(b.provider+':'+b.accountId)),quotaOrder:f.order,quotaEstimates:f.records,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:[],pricingGaps:[]};
+    if(method==='dashboard')return {generatedAt:now,summary,quotas:[...rows].sort((a,b)=>f.order.indexOf(AieyesUI.canonicalProvider(a.provider)+':'+a.accountId)-f.order.indexOf(AieyesUI.canonicalProvider(b.provider)+':'+b.accountId)),quotaOrder:f.order,quotaEstimates:f.records,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:[],pricingGaps:[]};
     if(method==='sources.scan')return [];if(method==='quotas.refresh')return rows;
     if(method==='quotas.order.set'){if(f.fail)throw new Error('保存失败，请重试');f.order=params.keys;return f.order;}
     if(method.startsWith('quotaEstimates.')){
@@ -35,13 +35,13 @@ function fixture(){
   for(const surface of ['index.html','floating.html']){
    const page=await browser.newPage({viewport:{width:surface==='floating.html'?450:1120,height:760}}),errors=[];
    page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
-   const agy=page.locator('[data-quota="agy:a"]:visible');await agy.waitFor({state:'visible'});
+   const agy=page.locator('[data-quota="antigravity:a"]:visible');await agy.waitFor({state:'visible'});
    assert.equal(await agy.locator('.agy-group').count(),3);
    assert.equal(await agy.locator('.resource-bar:visible').count(),6,'single account shows all model groups');
    assert.equal(await agy.locator('.quota-reset:visible').count(),6);
    const codex=page.locator('[data-quota="codex:c"]:visible');
    assert.equal(await codex.locator('.subscription-badge').textContent(),'Plus');
-   assert.equal(await agy.locator('.provider-mark').getAttribute('data-provider'),'agy');
+   assert.equal(await agy.locator('.provider-mark').getAttribute('data-provider'),'antigravity');
    const resetCheck=await page.evaluate(()=>{
      const now=1800000000,window=quotaFixture.rows[0].windows[0],original=JSON.stringify(window),node=document.querySelector('[data-quota="codex:c"] [data-reset-at]');
      node.dataset.resetAt=String(now-1);
@@ -80,20 +80,20 @@ function fixture(){
    assert.equal(fullWindowCheck.expired,'确认重置中');assert.equal(fullWindowCheck.unknown,'重置时间未知');assert.equal(fullWindowCheck.unknownLater,'重置时间未知');assert.match(fullWindowCheck.refreshed,/^30 分后重置 · /);
    assert.deepEqual(fullWindowCheck.fullUnknown,['5h','7d']);assert.deepEqual(fullWindowCheck.fullUnknownLater,['5h','7d']);
    const icons=await page.evaluate(async()=>{
-     const holder=document.createElement('div');holder.innerHTML=['codex','claude','antigravity','agy','deepseek','custom'].map(providerMark).join('');document.body.append(holder);
+     const holder=document.createElement('div');holder.innerHTML=['codex','claude','antigravity','agy','deepseek','custom'].map(provider=>providerMark(AieyesUI.canonicalProvider(provider))).join('');document.body.append(holder);
      try { await Promise.all([...holder.querySelectorAll('img')].map(img=>img.decode()));return {images:holder.querySelectorAll('img').length,fallback:holder.querySelectorAll('svg').length}; } finally {holder.remove();}
    });assert.deepEqual(icons,{images:5,fallback:1});
    await agy.locator('.quota-title').click();assert.equal(await agy.locator('.quota-reset:visible').count(),0,'Collapsed accounts hide reset details');assert.equal(await agy.locator('.resource-bar:visible').count(),2,'Collapsed accounts retain two key windows');await agy.locator('.quota-title').click();assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Expanding restores all model groups');
-   await page.locator('#order-quotas').click();await page.locator('[data-order="agy:a"] [data-direction="-1"]').click();
+   await page.locator('#order-quotas').click();await page.locator('[data-order="antigravity:a"] [data-direction="-1"]').click();
    // A single mouse jump can leave Chromium's native drag unfinished,
    // swallowing the following save click. Check each drop before proceeding.
-   await page.locator('[data-order="codex:c"]').dragTo(page.locator('[data-order="agy:a"]'),{steps:10});
+   await page.locator('[data-order="codex:c"]').dragTo(page.locator('[data-order="antigravity:a"]'),{steps:10});
    await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='codex:c');await page.evaluate(()=>Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))));
-   await page.locator('[data-order="agy:a"]').dragTo(page.locator('[data-order="codex:c"]'),{steps:10});
-   await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='agy:a');
+   await page.locator('[data-order="antigravity:a"]').dragTo(page.locator('[data-order="codex:c"]'),{steps:10});
+   await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='antigravity:a');
    await page.evaluate(()=>quotaFixture.fail=true);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>document.querySelector('#quota-tool-error').textContent.includes('保存失败'));
    assert(await page.locator('#quota-dialog').evaluate(e=>e.open));await page.evaluate(()=>quotaFixture.fail=false);await page.locator('#quota-order-save').click();await page.waitForFunction(()=>!document.querySelector('#quota-dialog').open);
-   assert.equal(await page.locator('[data-quota]').first().getAttribute('data-quota'),'agy:a');
+   assert.equal(await page.locator('[data-quota]').first().getAttribute('data-quota'),'antigravity:a');
    if(!await page.locator('[data-quota="codex:c"]:visible .quota-disclosure').evaluate(el=>el.open))await page.locator('[data-quota="codex:c"]:visible .quota-disclosure summary').click();
    await page.locator('[data-estimate="codex:c"]:visible').click();assert(await page.locator('#estimate-start').isDisabled());await page.locator('#estimate-confirm').check();
    await page.locator('[name=estimate-source]').uncheck();await page.locator('#estimate-start').click();await page.waitForFunction(()=>document.querySelector('#quota-tool-error').textContent.includes('数据源'));

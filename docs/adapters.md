@@ -30,16 +30,16 @@ Claude Code 实时查询读取来源目录下的 `.credentials.json`；默认 ma
 
 ## 账户与数据源
 
-「设置 → 数据源」统一管理来源和账户。在编辑器开启「作为账户」后，新建或选择同一 Agent 的账户，设置账户名称、限额查询与优先查询位置。来源和新账户一次提交；取消及保存失败不留下空账户。
+「设置 → Agents」启用 Agent、选择机器并管理数据目录；「设置 → 账户」添加实际登录账户、设置名称、限额查询与优先查询位置，并连接各设备。登录取消或失败不留下空账户。详见 [Agents 与账户设置](agents-and-accounts-settings.md)。
 
 - 本机和服务器登录同一账户：创建一个账户，再让两个数据源都选择它。限额按账户显示一次，记录可按任一数据源筛选。
 - 本机使用两个 Codex 账户：创建两个账户，为各自的 `CODEX_HOME` 目录添加数据源并分别关联。不同账户的相同事件标识也不会合并。
 - 外接 API：关闭「作为账户」。统计模型、Token、缓存和成本，不显示订阅限额；无账户来源之间不自动去重。
 - API 账户也可作为命名账户管理，并关闭「显示并查询账户限额」。
 
-旧版配置自动按 `provider + accountId` 生成账户，保留原有关联；账户可以独立重命名。新安装自动发现时，明确使用 API key 的 Codex 目录不创建订阅账户。关闭「作为账户」或更换账户关联，保留旧账户、历史事件、价格快照和导入游标，新增记录使用当前归属。核心记住来源曾使用的账户命名空间，文件重扫或 SSH 全量读取时复用该来源的原事件，避免重复计算。无账户来源之间仍不自动去重。`dashboard.sources` 的 `accountIds` 包含来源的当前及历史账户归属，支持解除关联后的历史筛选；旧客户端可忽略该新增字段。未关联账户和归档账户在数据源页的折叠区域管理；已关联账户可在来源编辑器中归档。
+旧版配置自动按 `provider + accountId` 生成账户，保留原有关联；账户可以独立重命名。新安装自动发现时，明确使用 API key 的 Codex 目录不创建订阅账户。关闭「作为账户」或更换账户关联，保留旧账户、历史事件、价格快照和导入游标，新增记录使用当前归属。核心记住来源曾使用的账户命名空间，文件重扫或 SSH 全量读取时复用该来源的原事件，避免重复计算。无账户来源之间仍不自动去重。`dashboard.sources` 的 `accountIds` 包含来源的当前及历史账户归属，支持解除关联后的历史筛选；旧客户端可忽略该新增字段。归档与恢复在账户页管理。
 
-限额优先从账户指定的位置查询，默认优先本机；失败后尝试同账户其他启用的来源，仍失败则保留上次成功的快照。可在来源中的账户设置关闭不需要的限额。所有 Agent 通过相同的添加数据源入口接入；agy 读取所选位置当前登录账户的限额。
+限额优先从账户指定的位置查询，默认优先本机；失败后尝试同账户其他启用的来源，仍失败则保留上次成功的快照。可在账户设置关闭不需要的限额；Antigravity 读取所选位置当前登录账户的限额。
 
 ## 自动限额查询
 
@@ -57,7 +57,7 @@ Codex 使用配置目录启动 App Server；Claude Code 本机读取登录信息
 source ~/proxy-environment
 ```
 
-在「数据源 → 限额查询前置命令」配置代理，例如 `export HTTPS_PROXY=http://127.0.0.1:7890`。填写后只覆盖本来源的限额查询环境；留空继承主机前置命令。主机前置命令仍用于历史和指标采集。
+在「账户 → 设备 → 前置命令」配置代理，例如 `export HTTPS_PROXY=http://127.0.0.1:7890`。命令用于该账户的授权、切换、额度查询和唤醒；显式留空不会继承主机命令。历史同步和指标采集不执行账户命令。
 
 前置命令与后续查询处于同一 shell，导出的变量会传入后续 Python 或 Agent 进程。前置命令的标准输入与统计脚本分开，避免读取掉脚本内容。Linux 主机需要 Python 3；GPU 采集另外使用现有 `nvidia-smi`。
 
@@ -74,13 +74,13 @@ OpenRouter 请求路径为 `/api/v1/models`；读取 `pricing.prompt`、`complet
 价格列表支持按模型 ID 和名称搜索，忽略大小写；无匹配时显示空状态。保存价格或映射后自动补计缺项，已计价维度保留原单价。需要把整个历史改用当前价格时，使用「按当前价格重算」。
 
 
-## agy 与 DeepSeek
+## Antigravity 与 DeepSeek
 
-`provider: "agy"` 使用 `agy --print /usage --output-format json --print-timeout 30s`，读取 `command.data.groups[].buckets[]` 的 `remaining_fraction`、`window` 和 `reset_time`。实测返回 Gemini 与 Claude/GPT 两组的 5h、7d 窗口，`num_turns` 和 Token 用量均为 0。可指定 `agyBinary`，支持 SSH 及限额查询前置命令。CLI 查询使用该位置当前登录身份，不根据数据目录切换账户；不同远程用户可配置为不同位置。
+`provider: "antigravity"` 使用 `agy --print /usage --output-format json --print-timeout 30s`，读取 `command.data.groups[].buckets[]` 的 `remaining_fraction`、`window` 和 `reset_time`。实测返回 Gemini 与 Claude/GPT 两组的 5h、7d 窗口，`num_turns` 和 Token 用量均为 0。可指定 `agyBinary`，支持 SSH 及限额查询前置命令。CLI 查询使用该位置当前登录身份，不根据数据目录切换账户；不同远程用户可配置为不同位置。
 
 `provider: "deepseek"` 通过官方 [Get User Balance](https://api-docs.deepseek.com/api/get-user-balance) 的 `GET https://api.deepseek.com/user/balance` 查询，使用 Bearer API Key。`balances` 保存币种、总额、赠送余额和充值余额，金额以原始十进制字符串保留，`isAvailable` 反映 API 可用状态。余额不换算为百分比，不跨币种合计。
 
-界面的 API Key 输入框只写不回显；`credentials.save` 保存到应用数据目录中的凭据文件，配置只引用路径。Unix 下目录权限为 0700、文件为 0600，文件内容未加密。也可在数据源高级设置指定现有纯文本 Key 文件；路径为空时读取 `DEEPSEEK_API_KEY`。DeepSeek 查询在本机执行并遵循数据源代理设置。agy 和 DeepSeek 来源只用于查询，不扫描登录目录或密钥文件为用量历史。
+界面的 API Key 输入框只写不回显；`credentials.save` 保存到应用数据目录中的凭据文件，配置只引用路径。Unix 下目录权限为 0700、文件为 0600，文件内容未加密。也可在数据源高级设置指定现有纯文本 Key 文件；路径为空时读取 `DEEPSEEK_API_KEY`。DeepSeek 查询在本机执行并遵循数据源代理设置。DeepSeek 来源只用于余额查询，不扫描密钥文件为用量历史；Antigravity 的会话历史接入见上文。
 
 ## 服务器设备和细分显示
 
@@ -92,11 +92,11 @@ OpenRouter 请求路径为 `/api/v1/models`；读取 `pricing.prompt`、`complet
 
 「设置 → 通用 → 连接」配置应用代理；本机来源可覆盖代理或跟随应用。指定代理可选择 HTTP、HTTPS、SOCKS5、SOCKS5H，填写 Host 与端口，自动生成地址；IPv6 自动补方括号。自定义 URL 保留高级地址输入。配置继续保存为 `mode` 与 `url`，旧地址自动回填。
 
-检查更新固定查询 `JesmonX/Aieyes` 的最新 Release，不再填写仓库。`updates.check` 返回版本及发布页，`updates.open` 请求系统浏览器打开固定项目的最新发布页；不执行安装。
+更新由各平台外壳处理：macOS 使用签名 Sparkle appcast，Windows/Linux 使用签名 Tauri 更新源，支持安装与重启。核心只提供更新传输代理，不提供旧的 `updates.check` / `updates.open` RPC。
 
 ## 界面统计与状态
 
-概览的输入是非缓存输入，缓存是读取与写入之和，与输出互不重复。缓存命中率仍按缓存读取 / 全部输入计算。概览不显示记录数量、计价覆盖文字或数据来源板块；来源筛选继续可用，导入错误在数据源页查看。
+概览的输入是非缓存输入，缓存是读取与写入之和，与输出互不重复。缓存命中率仍按缓存读取 / 全部输入计算。概览不显示记录数量、计价覆盖文字或数据来源板块；来源筛选继续可用，导入错误在 Agents 的目录设置查看。
 
 服务器顶部显示 CPU、内存和各选中 GPU 圆环，设备容量、CPU 核心、Swap 与磁盘忙碌率使用状态条。70% 起为提醒色，90% 起为高占用色；缺失值显示「—」，零容量不产生百分比。网络与磁盘吞吐直接显示速率。暂停、等待采样、正常、延迟、连接失败及部分采集失败以短状态标记。
 

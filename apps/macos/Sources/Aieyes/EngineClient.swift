@@ -1,24 +1,29 @@
 import Foundation
 
+struct UpdateOperations: Decodable { var preparing: Bool; var protected: [String]; var active: Int }
 final class EngineClient: @unchecked Sendable {
+    private struct Pending {
+        var complete: (Result<Data, Error>) -> Void
+        var progress: (@Sendable (String) -> Void)?
+        var sample: (@Sendable (HostResult) -> Void)?
+    }
+    private static let registryLock = NSLock()
+    private static let clients = NSHashTable<EngineClient>.weakObjects()
     private let queue = DispatchQueue(label: "app.aieyes.engine", qos: .utility)
+    private let lifecycle = NSLock()
     private var process: Process?
     private var input: FileHandle?
-    private var output: FileHandle?
-    private var buffer = Data()
+    private var pending: [Int: Pending] = [:]
     private var nextID = 0
+    private var stopped = false
     private let configuration: EngineClient?
     private let queries: EngineClient?
-    private let lifecycle = NSLock()
-    private var stopped = false
     init(configurationOnly: Bool = false) {
         configuration = configurationOnly ? nil : EngineClient(configurationOnly: true)
         queries = configurationOnly ? nil : EngineClient(configurationOnly: true)
+        Self.registryLock.lock(); Self.clients.add(self); Self.registryLock.unlock()
     }
-    private static let configurationMethods: Set<String> = ["settings.get", "settings.patch", "settings.save", "agents.set", "sources.configure", "sources.remove", "accounts.connect", "accounts.create", "accounts.status.get", "accounts.deletion.preview", "accounts.cleanup.list"]
-
-    private func start() throws {
-        lifecycle.lock(); defer { lifecycle.unlock() }
+    private func startLocked() throws {
         guard !stopped else { throw ClientError.message("核心连接已关闭") }
         if process?.isRunning == true { return }
         let executable = ProcessInfo.processInfo.environment["AIEYES_CORE_PATH"]
@@ -29,56 +34,92 @@ final class EngineClient: @unchecked Sendable {
         p.executableURL = URL(fileURLWithPath: executable)
         p.standardInput = stdin; p.standardOutput = stdout; p.standardError = FileHandle.nullDevice
         var environment = ProcessInfo.processInfo.environment
-        if environment["AIEYES_DATA_DIR"] == nil, let developmentPath = Bundle.main.object(forInfoDictionaryKey: "AieyesDevelopmentDataDirectory") as? String {
-            environment["AIEYES_DATA_DIR"] = developmentPath
-        }
+        if environment["AIEYES_DATA_DIR"] == nil, let developmentPath = Bundle.main.object(forInfoDictionaryKey: "AieyesDevelopmentDataDirectory") as? String { environment["AIEYES_DATA_DIR"] = developmentPath }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         environment["PATH"] = home + "/.local/bin:/opt/homebrew/bin:/opt/local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + (environment["PATH"] ?? "")
         p.environment = environment
-        try p.run()
-        process = p; input = stdin.fileHandleForWriting; output = stdout.fileHandleForReading; buffer.removeAll()
+        try p.run(); process = p; input = stdin.fileHandleForWriting
+        let output = stdout.fileHandleForReading
+        DispatchQueue(label: "app.aieyes.engine.read", qos: .utility).async { [weak self] in
+            var buffer = Data()
+            while true {
+                let data = output.availableData
+                if data.isEmpty { break }
+                buffer.append(data)
+                while let end = buffer.firstIndex(of: 10) {
+                    let line = Data(buffer[..<end]); buffer.removeSubrange(...end)
+                    self?.receive(line)
+                }
+            }
+            self?.disconnected(p)
+        }
     }
-
-    func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self, onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil) async throws -> T {
-        if ["dashboard", "dashboard.summary", "quotas.schedule"].contains(method), let queries {
-            return try await queries.call(method, params: params, as: type, onProgress: onProgress)
+    private func receive(_ line: Data) {
+        guard let response = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { return }
+        lifecycle.lock()
+        if response["method"] as? String == "operations.progress", let value = response["params"] as? [String: Any] {
+            let request = (value["requestId"] as? Int).flatMap { pending[$0] } ?? pending.values.first
+            lifecycle.unlock()
+            if value["kind"] as? String == "hosts.sample", let row = value["row"], let data = try? JSONSerialization.data(withJSONObject: row), let sample = try? JSONDecoder().decode(HostResult.self, from: data) { request?.sample?(sample) }
+            else if let stage = value["stage"] as? String { request?.progress?(stage) }
+            return
         }
-        if Self.configurationMethods.contains(method), let configuration {
-            return try await configuration.call(method, params: params, as: type, onProgress: onProgress)
-        }
+        let request = (response["id"] as? Int).flatMap { pending.removeValue(forKey: $0) }
+        lifecycle.unlock()
+        guard let request else { return }
+        if let error = response["error"] as? [String: Any] { request.complete(.failure(ClientError.message(error["message"] as? String ?? "查询失败"))); return }
+        do { request.complete(.success(try JSONSerialization.data(withJSONObject: ProviderBoundary.normalize(response["result"] ?? [:]), options: .fragmentsAllowed))) }
+        catch { request.complete(.failure(error)) }
+    }
+    private func disconnected(_ old: Process) {
+        lifecycle.lock()
+        guard process === old else { lifecycle.unlock(); return }
+        process = nil; input = nil
+        let requests = Array(pending.values); pending.removeAll(); lifecycle.unlock()
+        for request in requests { request.complete(.failure(ClientError.message("核心连接已断开"))) }
+    }
+    private func send<T: Decodable>(_ method: String, params: [String: Any], onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil) async throws -> T {
         let payload = try JSONSerialization.data(withJSONObject: params)
-        return try await withCheckedThrowingContinuation { continuation in
+        let data: Data = try await withCheckedThrowingContinuation { continuation in
             queue.async {
+                self.lifecycle.lock()
+                var requestID: Int?
                 do {
-                    try self.start(); self.nextID += 1
+                    try self.startLocked(); self.nextID += 1; let id = self.nextID; requestID = id
                     let parameters = try JSONSerialization.jsonObject(with: payload)
-                    let request = try JSONSerialization.data(withJSONObject: ["jsonrpc":"2.0", "id":self.nextID, "method":method, "params":parameters])
-                    try self.input?.write(contentsOf: request + Data([10]))
-                    while true {
-                        if let end = self.buffer.firstIndex(of: 10) {
-                            let line = self.buffer[..<end]; self.buffer.removeSubrange(...end)
-                            guard let response = try JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
-                            if response["method"] as? String == "operations.progress", let progress = response["params"] as? [String: Any] {
-                                if progress["kind"] as? String == "hosts.sample", let row = progress["row"], let data = try? JSONSerialization.data(withJSONObject: row), let result = try? JSONDecoder().decode(HostResult.self, from: data) { onHostSample?(result) }
-                                else if let stage = progress["stage"] as? String { onProgress?(stage) }
-                                continue
-                            }
-                            guard response["id"] as? Int == self.nextID else { continue }
-                            if let error = response["error"] as? [String: Any] { throw ClientError.message(error["message"] as? String ?? "查询失败") }
-                            let result = try JSONSerialization.data(withJSONObject: response["result"] ?? [:], options: .fragmentsAllowed)
-                            continuation.resume(returning: try JSONDecoder().decode(T.self, from: result)); return
-                        }
-                        guard let data = self.output?.availableData, !data.isEmpty else { throw ClientError.message("核心连接已断开") }
-                        self.buffer.append(data)
-                    }
-                } catch { continuation.resume(throwing: error) }
+                    let request = try JSONSerialization.data(withJSONObject: ["jsonrpc":"2.0", "id":id, "method":method, "params":parameters])
+                    self.pending[id] = Pending(complete: { continuation.resume(with: $0) }, progress: onProgress, sample: onHostSample)
+                    try self.input?.write(contentsOf: request + Data([10])); self.lifecycle.unlock()
+                } catch {
+                    if let id = requestID { self.pending.removeValue(forKey: id) }
+                    self.lifecycle.unlock(); continuation.resume(throwing: error)
+                }
             }
         }
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+    func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self, onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil) async throws -> T {
+        if CoreContract.methodLanes[method] == "dashboard", let queries { return try await queries.call(method, params: params, as: type, onProgress: onProgress) }
+        if CoreContract.configurationMethods.contains(method), let configuration { return try await configuration.call(method, params: params, as: type, onProgress: onProgress) }
+        return try await send(method, params: params, onProgress: onProgress, onHostSample: onHostSample)
+    }
+    static func coordinateUpdate(_ method: String) async -> [String] {
+        let active: [EngineClient] = snapshot()
+        var blockers: [String] = []
+        for client in active {
+            do { let state: UpdateOperations = try await client.send(method, params: [:]); blockers += state.protected }
+            catch { /* An exited worker has no outstanding writes. */ }
+        }
+        return blockers
+    }
+    private static func snapshot() -> [EngineClient] {
+        registryLock.lock(); let all = clients.allObjects; registryLock.unlock()
+        return all.filter { client in client.lifecycle.lock(); defer { client.lifecycle.unlock() }; return client.process?.isRunning == true }
     }
     func stop() {
         configuration?.stop(); queries?.stop()
-        lifecycle.lock(); defer { lifecycle.unlock() }
-        stopped = true; try? input?.close(); if process?.isRunning == true { process?.terminate() }
+        lifecycle.lock(); stopped = true; try? input?.close(); let old = process; lifecycle.unlock()
+        if old?.isRunning == true { old?.terminate() }
     }
     deinit { stop() }
 }
@@ -231,7 +272,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         } catch { if revision == networkRevision { message = error.localizedDescription } }
     }
 
-    private let sessionMonitor = SessionMonitor()
+    private let sessionEngine = EngineClient(configurationOnly: true)
     @Published var sessions: [LiveSession] = []
     @Published var sessionsUnavailable = false
     private var sessionBusy = false { didSet { scheduleRefreshes() } }
@@ -248,9 +289,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func refreshSessions() async {
         guard !sessionBusy else { return }
         sessionBusy = true; lastSessionRead = Date()
-        let result = await sessionMonitor.read(sources: settings.sources)
-        sessions = result.sessions; sessionsUnavailable = result.unavailable
-        sessionBusy = false
+        defer { sessionBusy = false }
+        do {
+            let result: SessionSnapshot = try await sessionEngine.call("sessions.list")
+            sessions = result.sessions; sessionsUnavailable = result.unavailable
+        } catch { sessionsUnavailable = true }
     }
     @Published var dashboard = Dashboard()
     @Published private(set) var menuDashboard = Dashboard()
@@ -263,8 +306,6 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var settingsDraft = Settings()
     @Published var settingsLoaded = false
     @Published var settingsSaving = false { didSet { scheduleRefreshes() } }
-    @Published var settingsStage = ""
-    @Published var settingsStartedAt: Date?
     @Published private(set) var repricing = false { didSet { scheduleRefreshes() } }
     @Published var settingsMessage: String?
     @Published var mappingModel = ""
@@ -274,21 +315,6 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private var preparedHostPasswords: [String: (password: String, reference: String)] = [:]
     func stageHostPassword(_ password: String, hostID: String) { if !password.isEmpty { pendingHostPasswords[hostID] = password } }
     private var preparedCredentials: [String: (key: String, path: String)] = [:]
-    var settingsChangeCount: Int {
-        var rows = Set<String>()
-        for source in settingsDraft.sources where settings.sources.first(where: { $0.id == source.id }) != source { rows.insert("source:" + source.id) }
-        for source in settings.sources where !settingsDraft.sources.contains(where: { $0.id == source.id }) { rows.insert("source:" + source.id) }
-        for host in settingsDraft.hosts where settings.hosts.first(where: { $0.id == host.id }) != host { rows.insert("host:" + host.id) }
-        for host in settings.hosts where !settingsDraft.hosts.contains(where: { $0.id == host.id }) { rows.insert("host:" + host.id) }
-        for account in settingsDraft.accounts where settings.accounts.first(where: { $0.key == account.key }) != account { rows.insert("account:" + account.key) }
-        for account in settings.accounts where !settingsDraft.accounts.contains(where: { $0.key == account.key }) { rows.insert("account:" + account.key) }
-        for id in pendingAPIKeys.keys { rows.insert("source:" + id) }; for id in pendingHostPasswords.keys { rows.insert("host:" + id) }
-        var general = settingsDraft
-        general.sources = settings.sources; general.hosts = settings.hosts; general.accounts = settings.accounts; general.modelMappings = settings.modelMappings
-        if general != settings { rows.insert("general") }
-        if settingsDraft.modelMappings != settings.modelMappings || !mappingModel.isEmpty || !mappingID.isEmpty { rows.insert("mappings") }
-        return rows.count
-    }
     var settingsDirty: Bool { settingsDraft != settings || !pendingAPIKeys.isEmpty || !pendingHostPasswords.isEmpty || !mappingModel.isEmpty || !mappingID.isEmpty }
     func stageAPIKey(_ key: String?, sourceID: String) {
         let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -304,13 +330,21 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var requestHostEditor = false
     @Published var hosts: [HostResult] = []
     var prices: [ModelPrice] { get { priceCatalog.prices } set { priceCatalog.replace(newValue) } }
-    @Published var provider = "all"
-    @Published var selectedSource = "all"
-    @Published var selectedAccount = "all"
+    @Published var provider = "all" { didSet { persistDashboardFilters() } }
+    @Published var selectedSource = "all" { didSet { persistDashboardFilters() } }
+    @Published var selectedAccount = "all" { didSet { persistDashboardFilters() } }
     @Published var settingsTab = "sources"
-    @Published var selectedModel = "all"
-    @Published var range = 1
+    @Published var selectedModel = "all" { didSet { persistDashboardFilters() } }
+    @Published var range = 1 { didSet { persistDashboardFilters() } }
+    private var filterPersistenceEnabled = false
+    private func persistDashboardFilters() {
+        guard filterPersistenceEnabled else { return }
+        DashboardFilterPreference(provider: provider, source: selectedSource, account: selectedAccount, model: selectedModel, days: range).save()
+    }
     @Published var busy = false { didSet { scheduleRefreshes() } }
+    @Published private(set) var rescanning = false
+    @Published private(set) var rescanMessage: String?
+    @Published private(set) var rescanFailed = false
     @Published var serverBusy = false { didSet { scheduleRefreshes() } }
     @Published var message: String?
     @Published var activity = ""
@@ -351,8 +385,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private var lastMetrics = Date.distantPast
     private var lastHostError: String?
     var showSettings: (() -> Void)?
-    var showDetail: (() -> Void)?
     var showEstimate: ((Quota, Bool, String?) -> Void)?
+    var showAccountSwitch: ((String) -> Void)?
     var showSampling: (() -> Void)?
     var showQuotaOrder: (() -> Void)?
     var showPanelAccounts: (() -> Void)?
@@ -369,12 +403,21 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 
     init(autostart: Bool = true) {
         guard autostart else { return }
+        let saved = DashboardFilterPreference.read()
+        provider = saved.provider; selectedSource = saved.source; selectedAccount = saved.account; selectedModel = saved.model; range = saved.days
+        filterPersistenceEnabled = true
         schedulingEnabled = true
         Task { await bootstrap(); scheduleRefreshes() }
     }
     func bootstrap() async {
         do {
+            struct CoreInfo: Decodable { var contractHash: String? }
+            let info: CoreInfo = try await engine.call("hello")
+            if let hash = info.contractHash, hash != CoreContract.contractHash { throw ClientError.message("应用资源与核心版本不一致，请重新安装同一版本") }
             settings = try await engine.call("settings.get"); PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:]); settingsDraft = settings; settingsLoaded = true
+            selectedAccount = settings.accountAliases?[selectedAccount] ?? (selectedAccount.hasPrefix("agy:") ? "antigravity:" + selectedAccount.dropFirst(4) : selectedAccount)
+            if selectedAccount != "all" && selectedAccount != "none" && !settings.accounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
+            if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
             await reload(); await scan(); await refreshQuotas()
         }
         catch { message = error.localizedDescription }
@@ -458,7 +501,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         do { try await estimateAction(action, params: params, credits: credits); return true }
         catch { estimateErrors[accountKey] = error.localizedDescription; await reload(); return false }
     }
-    static let refreshLabels = ["scan": "同步记录", "quotas": "刷新限额", "prices": "同步价格", "hosts": "刷新服务器"]
+    static let refreshLabels = ["scan": "同步记录", "rescan": "全量重扫", "quotas": "刷新限额", "prices": "同步价格", "hosts": "刷新服务器"]
     var usageSources: [AgentSource] { settings.sources.filter { source in source.enabled && source.provider != "deepseek" && (source.hostId == nil || settings.hosts.contains { $0.id == source.hostId && $0.enabled }) } }
     var dataTime: Double {
         let stamps = usageSources.map { source in dashboard.sources.first { $0.id == source.id }?.status?.updatedAt ?? 0 }
@@ -498,6 +541,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func retry(_ failure: ActionFailure) async {
         switch failure.action {
         case "scan": await scan(sourceID: failure.itemID)
+        case "rescan": await rescan(sourceID: failure.itemID)
         case "quotas": await refreshQuotas(accountID: failure.itemID)
         case "hosts": await sampleHosts(hostID: failure.itemID)
         case "prices": await syncPrices()
@@ -505,17 +549,35 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         }
     }
     func scan(sourceID: String? = nil) async {
-        guard !installingUpdate, !busy, !quotaBusy, estimateBusy.isEmpty else { return }; busy = true; activity = "同步记录"; beginRefresh("scan")
-        defer { lastScan = Date(); busy = false; activity = "" }
+        await collectHistory(sourceID: sourceID, full: false)
+    }
+    func rescan(sourceID: String? = nil) async {
+        await collectHistory(sourceID: sourceID, full: true)
+    }
+    private func collectHistory(sourceID: String?, full: Bool) async {
+        guard !installingUpdate, !busy, !quotaBusy, estimateBusy.isEmpty, !full || !settingsSaving else { return }
+        let key = full ? "rescan" : "scan", label = full ? "全量重扫" : "同步记录"
+        busy = true; activity = label; beginRefresh(key)
+        if full { rescanning = true; rescanMessage = nil; rescanFailed = false }
+        defer { lastScan = Date(); busy = false; activity = ""; if full { rescanning = false } }
         do {
-            let rows: [Acknowledgement] = try await engine.call("sources.scan", params: sourceID.map { ["sourceId": $0] } ?? [:])
+            let rows: [Acknowledgement] = try await engine.call(full ? "sources.rescan" : "sources.scan", params: sourceID.map { ["sourceId": $0] } ?? [:])
             let failures = rows.compactMap { row -> ActionFailure? in
                 guard let error = row.error ?? (row.partial == true ? row.issues?.map { ($0.path.map { $0 + " · " } ?? "") + $0.message }.joined(separator: "；") ?? "部分记录需要处理" : nil) else { return nil }
-                return ActionFailure(action: "scan", itemID: row.id, name: row.name ?? settings.sources.first { $0.id == row.id }?.name ?? "数据源", reason: error)
+                return ActionFailure(action: key, itemID: row.id, name: row.name ?? settings.sources.first { $0.id == row.id }?.name ?? "数据源", reason: error)
             }
             let loaded = await reload()
-            finishRefresh("scan", failures: failures + (loaded ? [] : [ActionFailure(action: "scan", name: "概览", reason: message ?? "读取失败")]), itemID: sourceID)
-        } catch { message = error.localizedDescription; finishRefresh("scan", failures: [ActionFailure(action: "scan", itemID: sourceID, name: "同步记录", reason: error.localizedDescription)], itemID: sourceID) }
+            let allFailures = failures + (loaded ? [] : [ActionFailure(action: key, name: "概览", reason: message ?? "读取失败")])
+            finishRefresh(key, failures: allFailures, itemID: sourceID)
+            if full {
+                rescanFailed = !allFailures.isEmpty
+                rescanMessage = allFailures.isEmpty ? (rows.isEmpty ? "没有可重扫的已启用数据源。" : "全量重扫完成，已更新历史统计（\(rows.count) 个数据源）。") : allFailures.map { $0.name + " · " + $0.reason }.joined(separator: "；")
+            }
+        } catch {
+            message = error.localizedDescription
+            finishRefresh(key, failures: [ActionFailure(action: key, itemID: sourceID, name: label, reason: error.localizedDescription)], itemID: sourceID)
+            if full { rescanMessage = error.localizedDescription; rescanFailed = true }
+        }
     }
     func refreshQuotas(accountID: String? = nil, dueOnly: Bool = false) async {
         guard !installingUpdate, !quotaBusy, !busy, estimateBusy.isEmpty, hasQuotaAccounts else { return }
@@ -607,8 +669,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     func saveSettingsDraft(refreshDashboard: Bool = true, includeMappings: Bool = true) async -> Bool {
         guard !settingsSaving, !repricing else { return false }
-        settingsSaving = true; settingsMessage = nil; settingsStartedAt = Date(); settingsStage = "准备保存"
-        defer { settingsSaving = false; settingsStage = ""; settingsStartedAt = nil }
+        settingsSaving = true; settingsMessage = nil
+        defer { settingsSaving = false }
         var next = settingsDraft
         do {
             let from = mappingModel.trimmingCharacters(in: .whitespacesAndNewlines), to = mappingID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -617,7 +679,6 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 guard next.modelMappings[from] == nil || next.modelMappings[from] == to else { throw ClientError.message("该模型已有映射，请先移除原映射再添加新值") }
                 next.modelMappings[from] = to
             }
-            if !pendingHostPasswords.isEmpty || !pendingAPIKeys.isEmpty { settingsStage = busy || quotaBusy ? "等待当前刷新完成" : "保存凭据" }
             for (id,password) in pendingHostPasswords {
                 guard let index = next.hosts.firstIndex(where: { $0.id == id }) else { continue }
                 let reference: String
@@ -674,9 +735,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         do {
             let data = try JSONEncoder().encode(draft)
             let params = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-            settingsStage = busy || quotaBusy ? "等待当前刷新完成" : "保存配置"
             let baseline = try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings))
-            let saved: Settings = try await engine.call("settings.patch", params: ["base": baseline, "settings": params], onProgress: { [weak self] stage in Task { @MainActor in guard let self, self.settingsSaving else { return }; self.settingsStage = stage } })
+            let saved: Settings = try await engine.call("settings.patch", params: ["base": baseline, "settings": params])
             let historyConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.modelMappings != draft.modelMappings
             let quotaConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.proxy != draft.proxy
             if settings.proxy != draft.proxy || settings.proxyTestUrls != draft.proxyTestUrls { networkRevision += 1; networkTest = nil; lastNetworkAttempt = .distantPast }
@@ -720,7 +780,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         catch { message = error.localizedDescription; return false }
     }
     var updateBlockers: [String] {
-        [(reloadTask != nil || filterRefresh != nil, "概览查询"), (quotaScheduleTask != nil, "刷新调度读取"), (busy, activity.isEmpty ? "记录同步 / 价格操作" : activity), (quotaBusy, "Agent 限额查询"), (serverBusy, "服务器采样"), (settingsSaving, "保存配置"), (repricing, "重算价格"), (!estimateBusy.isEmpty, "采样任务"), (networkBusy, "网络检测"), (sessionBusy, "会话状态读取"), (accountStatusBusy, "账户状态检查"), (deploymentSyncTask != nil, "唤醒配置同步"), (!antigravityRefreshTasks.isEmpty, "Antigravity 登录后刷新"), (agyLoginActive, "Antigravity 登录授权"), (UserDefaults.standard.string(forKey: "codexLogin.operation") != nil, "Codex 登录授权（可在账户页继续或取消）")].filter { $0.0 }.map { $0.1 }
+        [(settingsSaving, "保存配置"), (repricing, "重算价格"), (agyLoginActive, "Antigravity 登录授权"), (UserDefaults.standard.string(forKey: "codexLogin.operation") != nil, "Codex 登录授权（可在账户页继续或取消）")].filter { $0.0 }.map { $0.1 }
     }
     private var resetConfirmations = Set<String>()
     private var schedulingEnabled = false
@@ -800,7 +860,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
         deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel()
         for task in antigravityRefreshTasks.values { task.cancel() }
-        priceCatalog.stop(); accountEngine.stop(); engine.stop(); metricsEngine.stop(); networkEngine.stop()
+        priceCatalog.stop(); sessionEngine.stop(); accountEngine.stop(); engine.stop(); metricsEngine.stop(); networkEngine.stop()
     }
     var menuText: String {
         switch settings.menuMetric {

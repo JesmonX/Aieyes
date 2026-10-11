@@ -104,9 +104,9 @@ fn cache_prices_are_shared_by_weekly_and_credit_estimates() {
     assert_eq!(c.total_tokens, 350);
     assert_eq!(c.priced_tokens, 350);
     assert_eq!(c.excluded_api_tokens, 350);
-    assert_eq!(c.consumed_credits, 10.0);
-    assert!((c.value_per500.unwrap() - 98.75).abs() < 1e-8);
-    assert!((c.value_per1000.unwrap() - 197.5).abs() < 1e-8);
+    assert_eq!(c.credit().unwrap().consumed_credits, 10.0);
+    assert!((c.credit().unwrap().value_per500.unwrap() - 98.75).abs() < 1e-8);
+    assert!((c.credit().unwrap().value_per1000.unwrap() - 197.5).abs() < 1e-8);
     store
         .save_prices(&[ModelPrice {
             input: Some(10.0),
@@ -163,13 +163,22 @@ fn credit_sampling_pauses_on_topup_and_preserves_valid_checkpoint() {
     drop(store);
     let store = Store::open(dir.path()).unwrap();
     assert_eq!(
-        store.estimate(&e.id).unwrap().checkpoint_balance.as_deref(),
+        store
+            .estimate(&e.id)
+            .unwrap()
+            .credit()
+            .unwrap()
+            .checkpoint_balance
+            .as_deref(),
         Some("990")
     );
     let restarted = store
         .begin_estimate(&q, "credits", vec!["s".into()], Some(&e.id))
         .unwrap();
-    assert_eq!(restarted.baseline_balance.as_deref(), Some("1200"));
+    assert_eq!(
+        restarted.credit().unwrap().baseline_balance.as_deref(),
+        Some("1200")
+    );
     q.updated_at += 10;
     q.windows[0].used_percent = 1.0;
     store.quota(&q).unwrap();
@@ -185,7 +194,15 @@ fn small_unpriced_or_boundary_samples_have_no_value() {
     q.updated_at += 10;
     q.credits.as_mut().unwrap().balance = Some("999".into());
     store.quota(&q).unwrap();
-    assert!(store.estimate(&e.id).unwrap().value_per500.is_none());
+    assert!(
+        store
+            .estimate(&e.id)
+            .unwrap()
+            .credit()
+            .unwrap()
+            .value_per500
+            .is_none()
+    );
     q.updated_at += 10;
     q.credits.as_mut().unwrap().balance = Some("900".into());
     store.quota(&q).unwrap();

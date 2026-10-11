@@ -33,9 +33,7 @@
     ],
     "shortDescription": "Agent usage and SSH server monitor",
     "category": "DeveloperTool",
-    "resources": [
-      "binaries/*"
-    ]
+    "resources": ["binaries/aieyes-core*"]
   },
   "plugins": {
     "updater": {

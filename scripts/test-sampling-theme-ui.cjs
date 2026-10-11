@@ -36,15 +36,15 @@ function fixture(){
   const card=page.locator('[data-quota="codex:a"]');await card.waitFor();
   assert.match(await card.innerText(),/52.15/);assert.match(await card.innerText(),/用量边界待确认/);assert.doesNotMatch(await card.innerText(),/样本不足/);
   assert.equal(await card.locator('.subscription-badge').evaluate(e=>getComputedStyle(e).fontSize),'14px');
-  assert(await page.locator('[data-quota="agy:new"]').isVisible());
+  assert(await page.locator('[data-quota="antigravity:new"]').isVisible());
   const selection=await page.evaluate(()=>{
-   const settings=samplingFixture.settings;
-   const stale={version:2,providers:{agy:{mode:'custom',keys:['agy:old']}}};
+   const settings=state.settings;
+   const stale={version:2,providers:{antigravity:{mode:'custom',keys:['antigravity:old']}}};
    const result=AieyesUI.panelAccounts(settings,[],stale);
-   const hidden=AieyesUI.panelAccounts(settings,[],{version:2,providers:{agy:{mode:'custom',keys:[]}}});
+   const hidden=AieyesUI.panelAccounts(settings,[],{version:2,providers:{antigravity:{mode:'custom',keys:[]}}});
    const untouched=JSON.stringify(stale);AieyesUI.panelAccounts({accounts:[]},[],stale);
    return {result,hidden,unchanged:untouched===JSON.stringify(stale)};
-  });assert.deepEqual(selection.result.agy,['agy:new']);assert.deepEqual(selection.hidden.agy,[]);assert(selection.unchanged);
+  });assert.deepEqual(selection.result.antigravity,['antigravity:new']);assert.deepEqual(selection.hidden.antigravity,[]);assert(selection.unchanged);
   await page.locator('[data-estimate="codex:a"]').click();await page.locator('[data-estimate-repair="broken"]').click();await page.waitForFunction(()=>!state.estimateBusy);await page.locator('#quota-close').click();await page.waitForFunction(()=>document.querySelector('[data-quota="codex:a"]').innerText.includes('6.80'));
   assert.match(await card.innerText(),/6.80/);assert.match(await card.innerText(),/已修正/);assert.equal(await page.evaluate(()=>samplingFixture.records.filter(e=>e.id==='broken').length),1);
   await page.locator('[data-credit-estimate="codex:a"]').click();await page.locator('[data-estimate-repair="credit"]').click();await page.waitForFunction(()=>!state.estimateBusy);await page.locator('#quota-close').click();await page.waitForFunction(()=>document.querySelector('[data-quota="codex:a"]').innerText.includes('40.70'));assert.match(await card.innerText(),/40.70/);

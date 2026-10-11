@@ -18,6 +18,7 @@ import time
 import uuid
 
 VERSION = 1
+CLIENT_VERSION = globals().get('_aieyes_client_version', 'development')
 
 
 def identifier(value):
@@ -499,7 +500,7 @@ class Rpc:
                 self.messages.put(None)
         threading.Thread(target=reader, daemon=True).start()
         try:
-            self.call('initialize', dict(clientInfo=dict(name='aieyes', title='Aieyes', version='0.1.21'), capabilities=dict(experimentalApi=True)))
+            self.call('initialize', dict(clientInfo=dict(name='aieyes', title='Aieyes', version=CLIENT_VERSION), capabilities=dict(experimentalApi=True)))
             self.send(dict(method='initialized'))
         except Exception:
             self.close()

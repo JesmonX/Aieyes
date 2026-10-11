@@ -39,8 +39,8 @@ impl Tokens {
 #[serde(rename_all = "camelCase")]
 pub struct UsageEvent {
     pub id: String,
-    // Only the parser needs this key; old persisted events remain readable.
-    #[serde(skip)]
+    // Persist stable identities for safe re-keying; old records may omit them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_identity: Option<String>,
     pub source_id: String,
     pub account_id: String,
@@ -102,8 +102,11 @@ impl Default for Source {
             enabled: true,
             quota_command: String::new(),
             quota_pre_command: String::new(),
-            codex_binary: "codex".into(),
-            agy_binary: "agy".into(),
+            codex_binary: crate::contracts::provider("codex").unwrap().binary.into(),
+            agy_binary: crate::contracts::provider("antigravity")
+                .unwrap()
+                .binary
+                .into(),
             proxy: None,
         }
     }
@@ -185,7 +188,7 @@ impl Account {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AgentConfiguration {
     pub provider: String,
@@ -289,6 +292,8 @@ impl LocalMonitor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    #[serde(skip_deserializing)]
+    pub configuration_issues: Vec<String>,
     pub deleted_accounts: Vec<Account>,
     pub agents: Vec<AgentConfiguration>,
     pub account_aliases: std::collections::BTreeMap<String, String>,
@@ -304,13 +309,13 @@ pub struct Settings {
     pub server_foreground_refresh_seconds: u64,
     pub local_monitor: LocalMonitor,
     pub menu_metric: String,
-    pub github_repository: String,
     pub model_mappings: std::collections::BTreeMap<String, String>,
     pub proxy_test_urls: Vec<String>,
 }
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            configuration_issues: vec![],
             deleted_accounts: vec![],
             agents: vec![],
             appearance: Appearance::default(),
@@ -329,7 +334,6 @@ impl Default for Settings {
             server_foreground_refresh_seconds: 2,
             local_monitor: LocalMonitor::default(),
             menu_metric: "icon".into(),
-            github_repository: String::new(),
             model_mappings: Default::default(),
             proxy_test_urls: crate::network::default_test_urls(),
         }
@@ -369,8 +373,7 @@ impl Settings {
                             source.name.clone()
                         },
                         provider: source.provider.clone(),
-                        quota_enabled: ["codex", "claude", "antigravity", "agy", "deepseek"]
-                            .contains(&source.provider.as_str())
+                        quota_enabled: crate::providers::known(&source.provider)
                             || !source.quota_command.is_empty(),
                         ..Default::default()
                     });
@@ -378,7 +381,10 @@ impl Settings {
             }
             self.version = 2;
         }
-        for provider in ["codex", "claude", "antigravity", "deepseek", "custom"] {
+        for agent in &mut self.agents { agent.machine_ids.sort(); agent.machine_ids.dedup(); }
+        let mut unique = Vec::new();
+        self.agents.retain(|a| { if unique.contains(a) { false } else { unique.push(a.clone()); true } });
+        for &provider in crate::providers::PROVIDERS {
             if !self.agents.iter().any(|a| a.provider == provider) {
                 let sources: Vec<_> = self
                     .sources
@@ -426,6 +432,9 @@ impl Settings {
                     });
                 }
             }
+            let mut seen = Vec::new();
+            account.connections.retain(|c| { if seen.contains(c) { false } else { seen.push(c.clone()); true } });
+            account.quota_profile_id = account.connections.iter().find_map(|c| c.profile_id.clone());
         }
         if self.version < 4 {
             for account in &mut self.accounts {
@@ -465,7 +474,12 @@ impl Settings {
         if self.version < 5 {
             self.history_refresh_seconds = self.refresh_seconds;
         }
-        self.version = self.version.max(5);
+        // Version 6 drops the unused githubRepository key during deserialization.
+        self.version = self.version.max(7);
+        self.configuration_issues.clear();
+        let mut providers = std::collections::HashSet::new();
+        for agent in &self.agents { if !providers.insert(&agent.provider) { self.configuration_issues.push(format!("{} 有冲突的重复配置，请在 Agents 重新选择机器并保存", agent.provider)); } }
+        if let Err(error) = crate::codex_auth::validate_settings(self) { self.configuration_issues.push(error.to_string()); }
     }
     pub fn monitored_hosts(&self) -> Vec<Host> {
         std::iter::once(self.local_monitor.host())
@@ -605,6 +619,7 @@ pub struct PricingGap {
 pub struct Dashboard {
     pub generated_at: i64,
     pub summary: Aggregate,
+    #[serde(skip_serializing)]
     pub days: Vec<Aggregate>,
     pub heatmap: Vec<Aggregate>,
     pub models: Vec<Aggregate>,
@@ -618,7 +633,31 @@ pub struct Dashboard {
     pub quota_estimates: Vec<crate::estimates::Estimate>,
     pub credit_estimates: Vec<crate::estimates::Estimate>,
     pub sources: Vec<Value>,
+    #[serde(skip_serializing)]
     pub price_updated_at: Option<i64>,
+}
+
+impl Dashboard {
+    /// Trim display-only responses without changing persisted event/parser tokens.
+    pub fn wire_value(&self) -> serde_json::Result<Value> {
+        fn trim(value: &mut Value) {
+            match value {
+                Value::Object(map) => {
+                    if let Some(Value::Object(tokens)) = map.get_mut("tokens") {
+                        tokens.remove("reasoning");
+                    }
+                    for child in map.values_mut() {
+                        trim(child);
+                    }
+                }
+                Value::Array(rows) => rows.iter_mut().for_each(trim),
+                _ => {}
+            }
+        }
+        let mut value = serde_json::to_value(self)?;
+        trim(&mut value);
+        Ok(value)
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

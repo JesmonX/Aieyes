@@ -136,7 +136,7 @@ fn repair_keeps_original_frozen_prices_and_is_idempotent() {
     store
         .db
         .execute(
-            "INSERT INTO credit_estimates VALUES('sample','codex:a','completed',?1)",
+            "INSERT INTO estimates VALUES('credits','sample','codex:a','completed',?1)",
             [serde_json::to_string(&original).unwrap()],
         )
         .unwrap();
@@ -155,11 +155,25 @@ fn repair_keeps_original_frozen_prices_and_is_idempotent() {
         .unwrap();
     store.reprice(&settings, false).unwrap();
     let repaired = store.repair_estimate("sample").unwrap();
-    assert_eq!(repaired.value_per1000, Some(40.0));
+    assert_eq!(repaired.credit().unwrap().value_per1000, Some(40.0));
     assert_eq!(repaired.original_estimate_id.as_deref(), Some("sample"));
     assert_eq!(store.repair_estimate("sample").unwrap().id, repaired.id);
-    assert!(store.estimate("sample").unwrap().value_per1000.is_none());
-    assert_eq!(repaired.capacity.ratio, Some(7.0));
+    assert!(
+        store
+            .estimate("sample")
+            .unwrap()
+            .credit()
+            .unwrap()
+            .value_per1000
+            .is_none()
+    );
+    assert!(
+        serde_json::to_value(&repaired)
+            .unwrap()
+            .get("capacity")
+            .is_none()
+    );
+    assert_eq!(repaired.prices, store.estimate("sample").unwrap().prices);
     assert_eq!(repaired.calculation_status, "ready");
     assert_eq!(store.estimates().unwrap().len(), 2);
 }

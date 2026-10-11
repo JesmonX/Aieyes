@@ -2,10 +2,9 @@ use crate::{models::*, pricing};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 pub struct Store {
     pub db: Connection,
@@ -15,7 +14,8 @@ impl Store {
     pub fn open(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root)?;
         let db = Connection::open(root.join("aieyes.sqlite"))?;
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
+        db.busy_timeout(std::time::Duration::from_millis(5000))?;
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
         CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,provider TEXT NOT NULL,account_id TEXT NOT NULL,model TEXT NOT NULL,stamp INTEGER NOT NULL,payload TEXT NOT NULL,cost REAL NOT NULL,priced_tokens INTEGER NOT NULL,price TEXT);
         CREATE INDEX IF NOT EXISTS events_stamp ON events(stamp);
@@ -30,10 +30,8 @@ impl Store {
         CREATE INDEX IF NOT EXISTS price_model ON price_history(model_id,fetched_at);
         CREATE TABLE IF NOT EXISTS quota_history(id INTEGER PRIMARY KEY,account_key TEXT NOT NULL,stamp INTEGER NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS quota_history_account ON quota_history(account_key,stamp);
-        CREATE TABLE IF NOT EXISTS quota_estimates(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL);
-        CREATE UNIQUE INDEX IF NOT EXISTS estimate_active ON quota_estimates(account_key) WHERE status IN ('active','pending');
-        CREATE TABLE IF NOT EXISTS credit_estimates(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL);
-        CREATE UNIQUE INDEX IF NOT EXISTS credit_estimate_active ON credit_estimates(account_key) WHERE status IN ('active','pending');
+        CREATE TABLE IF NOT EXISTS estimates(kind TEXT NOT NULL CHECK(kind IN ('quota','credits')),id TEXT NOT NULL,account_key TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(kind,id));
+        CREATE UNIQUE INDEX IF NOT EXISTS estimates_active ON estimates(kind,account_key) WHERE status IN ('active','pending');
         CREATE TABLE IF NOT EXISTS capacity_samples(account_key TEXT NOT NULL,stamp INTEGER NOT NULL,five REAL NOT NULL,week REAL NOT NULL,PRIMARY KEY(account_key,stamp));
         ")?;
         crate::usage_cache::setup(&db)?;
@@ -42,9 +40,25 @@ impl Store {
             db,
             usage_memory: Default::default(),
         };
+        store.migrate_estimate_tables()?;
         store.migrate_antigravity()?;
+        store.migrate_usage_ids()?;
         store.bootstrap_capacity()?;
         Ok(store)
+    }
+    /// Acquire the writer before reading a snapshot; never upgrade a stale WAL reader.
+    pub(crate) fn write_transaction(&self) -> Result<rusqlite::Transaction<'_>> {
+        let start = std::time::Instant::now();
+        loop {
+            crate::operations::check()?;
+            match rusqlite::Transaction::new_unchecked(&self.db, rusqlite::TransactionBehavior::Immediate) {
+                Ok(tx) => return Ok(tx),
+                Err(rusqlite::Error::SqliteFailure(e, _)) if matches!(e.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) && start.elapsed() < std::time::Duration::from_secs(30) => {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                Err(e) => return Err(e).context("数据库写入未完成，已提交进度保留，请重试"),
+            }
+        }
     }
     pub fn settings(&self) -> Result<Settings> {
         let raw: Option<String> = self
@@ -76,20 +90,16 @@ impl Store {
             }
             None => {
                 let mut settings = Settings::default();
-                for (provider, name, dir) in [
-                    ("codex", "Codex · 本机", ".codex"),
-                    ("claude", "Claude Code · 本机", ".claude"),
-                    (
-                        "antigravity",
-                        "Antigravity · 本机",
-                        ".gemini/antigravity-cli",
-                    ),
-                ] {
-                    let root = home().join(dir);
+                for entry in crate::contracts::PROVIDERS
+                    .iter()
+                    .filter(|p| p.discover_local)
+                {
+                    let provider = entry.id;
+                    let root = home().join(entry.default_path.trim_start_matches("~/"));
                     if root.is_dir() {
                         settings.sources.push(Source {
                             id: format!("local-{provider}"),
-                            name: name.into(),
+                            name: format!("{} · 本机", entry.name),
                             provider: provider.into(),
                             account_id: local_account_id(provider, &root),
                             path: root.to_string_lossy().into(),
@@ -142,6 +152,7 @@ impl Store {
                 }
             }
         }
+        anyhow::ensure!(normalized.configuration_issues.is_empty(), "{}", normalized.configuration_issues.join("；"));
         crate::codex_auth::validate_settings(&normalized)?;
         self.check_wakeup_settings(&normalized)?;
         let s = &normalized;
@@ -219,20 +230,12 @@ impl Store {
                 "请选择同一 Agent 的账户，或选择无账户"
             );
             anyhow::ensure!(
-                ["antigravity", "agy", "deepseek"].contains(&source.provider.as_str())
+                !crate::providers::requires_path(&source.provider)
                     || !source.path.trim().is_empty(),
                 "请输入数据目录"
             );
             anyhow::ensure!(
-                [
-                    "codex",
-                    "claude",
-                    "antigravity",
-                    "agy",
-                    "deepseek",
-                    "custom"
-                ]
-                .contains(&source.provider.as_str()),
+                crate::providers::known(&source.provider),
                 "请选择 Agent 类型"
             );
             if let Some(id) = &source.host_id {
@@ -310,7 +313,7 @@ impl Store {
             .map(|h| h.password_ref.clone())
             .collect();
         let transaction = if self.db.is_autocommit() {
-            Some(self.db.unchecked_transaction()?)
+            Some(self.write_transaction()?)
         } else {
             None
         };
@@ -435,7 +438,7 @@ impl Store {
         raw.iter().map(|s| Ok(serde_json::from_str(s)?)).collect()
     }
     pub fn save_prices(&self, prices: &[ModelPrice]) -> Result<()> {
-        let tx = self.db.unchecked_transaction()?;
+        let tx = self.write_transaction()?;
         for p in prices {
             tx.execute(
                 "INSERT INTO price_history(model_id,fetched_at,payload) VALUES(?1,?2,?3)",
@@ -451,53 +454,116 @@ impl Store {
         prices: &[ModelPrice],
         settings: &Settings,
     ) -> Result<bool> {
+        // Imports already own a transaction. Direct writes need the same atomicity
+        // when an old identity resolves to more than one stored hash.
+        let transaction = if self.db.is_autocommit() {
+            Some(self.write_transaction()?)
+        } else {
+            None
+        };
         let mut next = e.clone();
+        next.provider = crate::providers::canonical(&e.provider).into();
+        if e.provider == "agy" {
+            let key = crate::providers::account_key(
+                &format!("agy:{}", e.account_id),
+                &settings.account_aliases,
+            );
+            next.account_id = key
+                .strip_prefix("antigravity:")
+                .unwrap_or(&e.account_id)
+                .into();
+        }
         if let Some(identity) = &e.import_identity {
-            let mut query = self.db.prepare("SELECT provider,account_id FROM source_identities WHERE source_id=?1 AND (provider=?2 OR (?2='antigravity' AND provider='agy')) ORDER BY rowid")?;
+            next.id =
+                crate::usage::event_id(&next.provider, &next.source_id, &next.account_id, identity);
+            let mut query = self.db.prepare("SELECT provider,account_id FROM source_identities WHERE source_id=?1 AND provider=?2 ORDER BY rowid")?;
             let scopes = query
-                .query_map(params![e.source_id, e.provider], |row| {
+                .query_map(params![e.source_id, next.provider], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             // Only reuse an event previously observed by this source. Unrelated
             // no-account sources and separate accounts keep independent identities.
-            for (provider, account_id) in scopes {
-                let id = crate::usage::event_id(&provider, &e.source_id, &account_id, identity);
-                let observed: bool = self.db.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM event_sources WHERE event_id=?1 AND source_id=?2)",
-                    params![id, e.source_id],
-                    |row| row.get(0),
-                )?;
-                if observed {
-                    next.id = id;
-                    break;
+            let mut candidates = crate::providers::usage_ids(
+                &next.provider,
+                &next.source_id,
+                &next.account_id,
+                identity,
+                &settings.account_aliases,
+            );
+            'scopes: for (provider, account_id) in scopes {
+                let ids = crate::providers::usage_ids(
+                    &provider,
+                    &e.source_id,
+                    &account_id,
+                    identity,
+                    &settings.account_aliases,
+                );
+                for id in &ids {
+                    let observed: bool = self.db.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM events e JOIN event_sources s ON s.event_id=e.id WHERE e.id=?1 AND s.source_id=?2 AND e.provider=?3 AND e.account_id=?4)",
+                        params![id, e.source_id, provider, account_id],
+                        |row| row.get(0),
+                    )?;
+                    if observed {
+                        next.account_id = account_id;
+                        candidates = ids;
+                        break 'scopes;
+                    }
+                }
+            }
+            // Replaying a stable identity proves that all matching hashes in this
+            // namespace describe one event, even if their old payloads lack it.
+            // Candidate order prefers the canonical row and its frozen price.
+            let mut matched = Vec::new();
+            for id in candidates {
+                let old: Option<(String, Option<String>)> = self.db.query_row(
+                    "SELECT payload,price FROM events WHERE id=?1 AND provider=?2 AND account_id=?3",
+                    params![id, next.provider, next.account_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).optional()?;
+                if let Some((payload, price)) = old {
+                    matched.push((id, payload, price));
+                }
+            }
+            if let Some((id, _, _)) = matched.first() {
+                next.id = id.clone();
+                for (duplicate_id, payload, price) in matched.iter().skip(1) {
+                    let mut duplicate: UsageEvent = serde_json::from_str(payload)?;
+                    duplicate.id = next.id.clone();
+                    duplicate.import_identity = Some(identity.clone());
+                    let frozen: Option<ModelPrice> = price
+                        .as_ref()
+                        .map(|raw| serde_json::from_str(raw))
+                        .transpose()?;
+                    self.merge_usage_event(duplicate, &e.source_id, frozen.as_slice(), settings)?;
+                    self.db.execute(
+                        "INSERT OR IGNORE INTO event_sources SELECT ?1,source_id FROM event_sources WHERE event_id=?2",
+                        params![next.id, duplicate_id],
+                    )?;
+                    self.db.execute(
+                        "DELETE FROM event_sources WHERE event_id=?1",
+                        [duplicate_id],
+                    )?;
+                    self.db
+                        .execute("DELETE FROM events WHERE id=?1", [duplicate_id])?;
                 }
             }
         }
-        // A newly added copy of a migrated account also uses its legacy hash namespace.
-        if next.id == e.id
-            && crate::providers::antigravity(&e.provider)
-            && !e.account_id.is_empty()
-            && let Some(identity) = &e.import_identity
-        {
-            let canonical_key = format!("antigravity:{}", e.account_id);
-            for (legacy, canonical) in &settings.account_aliases {
-                if canonical != &canonical_key {
-                    continue;
-                }
-                let Some(account) = legacy.strip_prefix("agy:") else {
-                    continue;
-                };
-                let id = crate::usage::event_id("agy", &e.source_id, account, identity);
-                let exists: bool = self.db.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM events WHERE id=?1 AND provider='antigravity' AND account_id=?2)",
-                        params![id, e.account_id], |r| r.get(0))?;
-                if exists {
-                    next.id = id;
-                    break;
-                }
-            }
+        let inserted = self.merge_usage_event(next, &e.source_id, prices, settings)?;
+        if let Some(transaction) = transaction {
+            transaction.commit()?;
         }
+        Ok(inserted)
+    }
+    /// Persist a known canonical identity without re-attributing its namespace.
+    pub(crate) fn merge_usage_event(
+        &self,
+        mut next: UsageEvent,
+        observed_source: &str,
+        prices: &[ModelPrice],
+        settings: &Settings,
+    ) -> Result<bool> {
         let old: Option<(String, Option<String>)> = self
             .db
             .query_row(
@@ -512,6 +578,7 @@ impl Store {
             .and_then(|p| serde_json::from_str(p).ok());
         if let Some((old, _)) = &old {
             let prior: UsageEvent = serde_json::from_str(old)?;
+            next.import_identity = next.import_identity.or(prior.import_identity);
             if crate::providers::antigravity(&next.provider)
                 && crate::antigravity::unknown_model(&next.model)
                 && !crate::antigravity::unknown_model(&prior.model)
@@ -554,12 +621,25 @@ impl Store {
             params![next.id,next.provider,next.account_id,next.model,next.timestamp,serde_json::to_string(&next)?,cost,covered,price.map(serde_json::to_string).transpose()?])?;
         self.db.execute(
             "INSERT OR IGNORE INTO event_sources VALUES(?1,?2)",
-            params![next.id, e.source_id],
+            params![next.id, observed_source],
         )?;
+        if let Some(identity) = &next.import_identity
+            && next.id
+                != crate::usage::event_id(
+                    &next.provider,
+                    &next.source_id,
+                    &next.account_id,
+                    identity,
+                )
+        {
+            // Re-import supplied a previously missing identity; re-key on next open.
+            self.db
+                .execute("DELETE FROM kv WHERE key='usage.ids.canonical.v1'", [])?;
+        }
         Ok(old.is_none())
     }
     pub fn reprice(&self, settings: &Settings, only_unpriced: bool) -> Result<u64> {
-        let tx = self.db.unchecked_transaction()?;
+        let tx = self.write_transaction()?;
         let count = self.reprice_in_transaction(settings, only_unpriced, None)?;
         tx.commit()?;
         Ok(count)
@@ -764,8 +844,7 @@ impl Store {
             None
         };
         let settings = self.settings()?;
-        let (mut d, pending) = crate::usage_cache::read(self, f, summary)
-            .or_else(|_| self.dashboard_usage_reference(f).map(|d| (d, Vec::new())))?;
+        let (mut d, pending) = crate::usage_cache::read(self, f, summary)?;
         for account in settings
             .accounts
             .iter()
@@ -822,8 +901,15 @@ impl Store {
         }
         d.quota_order = self.quota_order()?;
         let samples = self.estimates()?;
-        d.credit_estimates = samples.iter().filter(|e| e.is_credit()).cloned().collect();
-        d.quota_estimates = samples.into_iter().filter(|e| !e.is_credit()).collect();
+        d.credit_estimates = samples
+            .iter()
+            .filter(|e| matches!(e, crate::estimates::Estimate::Credit(_)))
+            .cloned()
+            .collect();
+        d.quota_estimates = samples
+            .into_iter()
+            .filter(|e| !matches!(e, crate::estimates::Estimate::Credit(_)))
+            .collect();
         d.quotas.sort_by(|a, b| {
             let rank = |q: &QuotaSnapshot| {
                 d.quota_order
@@ -883,6 +969,7 @@ impl Store {
         let _ = crate::usage_cache::persist(self, pending);
         Ok(d)
     }
+    #[cfg(test)]
     pub(crate) fn dashboard_usage_reference(&self, f: &Filter) -> Result<Dashboard> {
         use chrono::{Duration, Local, TimeZone};
         let today = Local::now().date_naive();
@@ -1068,6 +1155,7 @@ impl Store {
         Ok(d)
     }
 }
+#[cfg(test)]
 fn add_aggregate(a: &mut Aggregate, e: &UsageEvent, cost: f64, n: u64) {
     a.tokens.add(&e.tokens);
     a.total = a.tokens.total();

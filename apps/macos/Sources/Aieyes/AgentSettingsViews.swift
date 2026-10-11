@@ -2,7 +2,7 @@ import SwiftUI
 
 extension AppModel {
     var agentConfigurations: [AgentConfiguration] {
-        settings.agents ?? ["codex", "claude", "antigravity", "deepseek", "custom"].map { provider in
+        settings.agents ?? CoreContract.providers.map { provider in
             let sources = settings.sources.filter { $0.provider == provider && $0.enabled }
             return AgentConfiguration(provider: provider, enabled: !sources.isEmpty, machineIds: Array(Set(sources.map { $0.hostId ?? "local" })).sorted())
         }
@@ -99,6 +99,13 @@ extension AppModel {
         } catch { settingsMessage = error.localizedDescription }
     }
     func saveGeneralConfiguration() async {
+        guard (10...86400).contains(settingsDraft.refreshSeconds),
+              (10...86400).contains(settingsDraft.historyInterval),
+              (2...86400).contains(settingsDraft.foregroundInterval),
+              (2...86400).contains(settingsDraft.serverRefreshSeconds) else {
+            settingsMessage = "刷新间隔范围：Agent 10–86400 秒，服务器 2–86400 秒"
+            return
+        }
         var next = settings
         next.appearance = settingsDraft.appearance; next.proxy = settingsDraft.proxy
         next.proxyTestUrls = settingsDraft.proxyTestUrls; next.menuMetric = settingsDraft.menuMetric
@@ -201,7 +208,7 @@ struct AgentDirectoriesView: View {
                     }
                 }
                 Button("添加目录") {
-                    var source = AgentSource(provider: provider, path: provider == "codex" ? "~/.codex" : provider == "claude" ? "~/.claude" : provider == "antigravity" ? "~/.gemini/antigravity-cli" : "~/.aieyes")
+                    var source = AgentSource(provider: provider, path: CoreContract.defaultPaths[provider] ?? "")
                     source.hostId = machine == "local" ? nil : machine; editing = source
                 }
                 Text("只配置采集位置，不移动文件。远程 Shell 位于服务器设置，前置命令位于账户设置。").font(AppFont.secondary).foregroundStyle(.secondary)
@@ -371,7 +378,7 @@ struct AccountDevicesView: View {
     @State private var pendingSaveCount = 0
     @State private var intervalText = ""
     @FocusState private var focusedField: String?
-    @AppStorage("panel.accounts.v2") private var panelPreference = "{}"
+    @AppStorage(NativePanelKey.accounts.rawValue) private var panelPreference = "{}"
     private var current: AgentAccount { model.settings.accounts.first { $0.key == account.key } ?? account }
     var body: some View {
         VStack {

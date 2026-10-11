@@ -1,4 +1,5 @@
 //! Passive capacity calibration from paired, authoritative quota observations.
+use crate::contracts::{FIVE_HOUR_MINUTES, WEEK_MINUTES};
 use crate::{estimates::window_id, models::*, store::Store};
 use anyhow::Result;
 use rusqlite::{OptionalExtension, params};
@@ -31,7 +32,7 @@ pub fn overall(q: &QuotaSnapshot, minutes: i64) -> Option<&QuotaWindow> {
         return Some(windows[0]);
     }
     if q.provider == "claude" {
-        let id = if minutes == 300 {
+        let id = if minutes == FIVE_HOUR_MINUTES {
             "five_hour"
         } else {
             "seven_day"
@@ -64,19 +65,21 @@ fn comparable(a: &QuotaSnapshot, b: &QuotaSnapshot, group: &str) -> bool {
     a.plan == b.plan
         && b.updated_at > a.updated_at
         && b.updated_at - a.updated_at <= 18000
-        && [300, 10080].into_iter().all(|minutes| {
-            match (window(a, minutes, group), window(b, minutes, group)) {
-                (Some(old), Some(new)) => {
-                    valid(old)
-                        && valid(new)
-                        && window_id(old) == window_id(new)
-                        && old.resets_at.is_some_and(|t| t > b.updated_at)
-                        && old.resets_at == new.resets_at
-                        && new.used_percent + 0.000001 >= old.used_percent
-                }
-                _ => false,
-            }
-        })
+        && [FIVE_HOUR_MINUTES, WEEK_MINUTES]
+            .into_iter()
+            .all(
+                |minutes| match (window(a, minutes, group), window(b, minutes, group)) {
+                    (Some(old), Some(new)) => {
+                        valid(old)
+                            && valid(new)
+                            && window_id(old) == window_id(new)
+                            && old.resets_at.is_some_and(|t| t > b.updated_at)
+                            && old.resets_at == new.resets_at
+                            && new.used_percent + 0.000001 >= old.used_percent
+                    }
+                    _ => false,
+                },
+            )
 }
 impl Store {
     pub fn learn_capacity(&self, q: &QuotaSnapshot) -> Result<()> {
@@ -114,7 +117,7 @@ impl Store {
             return Ok(());
         }
         if q.error.is_some()
-            || ![300, 10080]
+            || ![FIVE_HOUR_MINUTES, WEEK_MINUTES]
                 .into_iter()
                 .all(|m| window(q, m, group).is_some_and(valid))
         {
@@ -126,10 +129,12 @@ impl Store {
             .filter(|s| comparable(&s.last, q, group))
             .map(|s| s.first.clone())
             .unwrap_or_else(|| q.clone());
-        let five = window(q, 300, group).unwrap().used_percent
-            - window(&first, 300, group).unwrap().used_percent;
-        let week = window(q, 10080, group).unwrap().used_percent
-            - window(&first, 10080, group).unwrap().used_percent;
+        let five = window(q, FIVE_HOUR_MINUTES, group).unwrap().used_percent
+            - window(&first, FIVE_HOUR_MINUTES, group)
+                .unwrap()
+                .used_percent;
+        let week = window(q, WEEK_MINUTES, group).unwrap().used_percent
+            - window(&first, WEEK_MINUTES, group).unwrap().used_percent;
         if old.as_ref().is_some_and(|s| s.last.plan != q.plan) {
             self.db.execute(
                 "DELETE FROM capacity_samples WHERE account_key=?1",

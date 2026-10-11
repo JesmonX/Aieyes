@@ -78,7 +78,7 @@ fn valuation_excludes_api_deduplicates_sources_and_freezes_prices() {
     q.windows[0].used_percent = 30.0;
     store.quota(&q).unwrap();
     let done = store.finish_estimate(&e.id).unwrap();
-    assert_eq!(done.weekly_value, Some(10.0));
+    assert_eq!(done.quota().unwrap().weekly_value, Some(10.0));
     assert_eq!(done.total_tokens, 100);
     assert_eq!(done.excluded_api_tokens, 100);
     store
@@ -90,7 +90,12 @@ fn valuation_excludes_api_deduplicates_sources_and_freezes_prices() {
         .unwrap();
     store.reprice(&settings, false).unwrap();
     assert_eq!(
-        store.finish_estimate(&e.id).unwrap().weekly_value,
+        store
+            .finish_estimate(&e.id)
+            .unwrap()
+            .quota()
+            .unwrap()
+            .weekly_value,
         Some(10.0)
     );
     assert_eq!(done.prices.len(), 1);
@@ -113,7 +118,7 @@ fn reset_pauses_at_last_valid_checkpoint_and_requires_explicit_restart() {
     let pending = store.estimate(&e.id).unwrap();
     assert_eq!(pending.status, "pending");
     assert_eq!(pending.checkpoint_at, good);
-    assert_eq!(pending.weekly_value, Some(10.0));
+    assert_eq!(pending.quota().unwrap().weekly_value, Some(10.0));
     drop(store);
     let store = Store::open(dir.path()).unwrap();
     assert_eq!(store.estimate(&e.id).unwrap().status, "pending");
@@ -126,7 +131,7 @@ fn reset_pauses_at_last_valid_checkpoint_and_requires_explicit_restart() {
         .begin_estimate(&q, "weekly", vec![source.id], Some(&e.id))
         .unwrap();
     assert_ne!(next.id, e.id);
-    assert_eq!(next.baseline_percent, 1.0);
+    assert_eq!(next.quota().unwrap().baseline_percent, 1.0);
     assert_eq!(store.estimate(&e.id).unwrap().status, "completed");
 }
 #[test]
@@ -139,7 +144,15 @@ fn low_sample_missing_price_and_ambiguous_boundary_never_produce_a_number() {
     q.updated_at += 10;
     q.windows[0].used_percent = 22.0;
     store.quota(&q).unwrap();
-    assert!(store.estimate(&e.id).unwrap().weekly_value.is_none());
+    assert!(
+        store
+            .estimate(&e.id)
+            .unwrap()
+            .quota()
+            .unwrap()
+            .weekly_value
+            .is_none()
+    );
     let mut event = usage::parse(
         &source,
         &mut ParseState::default(),
