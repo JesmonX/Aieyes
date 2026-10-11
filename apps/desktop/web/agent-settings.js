@@ -51,7 +51,7 @@
     finally{statusLoading=false;await syncIdentitySettings();repaint();if(statusRefreshAgain){statusRefreshAgain=false;void refreshStatuses(true,state.page==='settings'&&state.settingsTab==='accounts'?null:'codex');}}
   }
   async function syncIdentitySettings(reportFailure=false) {
-    if(pendingSaves||state.settingsSaving)return;
+    if(!state.settings.accounts.length||pendingSaves||state.settingsSaving)return;
     const before=configKey(state.settings),saved=await api('settings.get').catch(error=>{if(reportFailure)notify('登录已确认，账户设置刷新失败：'+String(error),'error');return null;});
     if(!saved)return;
     if(before===configKey(state.settings)&&!pendingSaves&&!state.settingsSaving){

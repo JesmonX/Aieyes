@@ -312,7 +312,9 @@ mod tests {
             let home = dir.path().canonicalize().unwrap();
             std::fs::write(home.join("config.toml"), case["config"].as_str().unwrap()).unwrap();
             if case["changedBase"] == true {
-                std::fs::File::open(home.join("config.toml"))
+                std::fs::File::options()
+                    .write(true)
+                    .open(home.join("config.toml"))
                     .unwrap()
                     .set_times(
                         std::fs::FileTimes::new()

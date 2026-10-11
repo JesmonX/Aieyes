@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-palettes = json.loads((ROOT / 'docs/chart-palettes.json').read_text())
+palettes = json.loads((ROOT / 'docs/chart-palettes.json').read_text(encoding='utf-8'))
 
 def rgb(hex_value):
     return [int(hex_value[i:i+2], 16) for i in (0, 2, 4)]
@@ -60,7 +60,7 @@ for palette in palettes:
                         for name, key in [('lightHigh', 'light-high'), ('lightLow', 'light-low'), ('darkHigh', 'dark-high'), ('darkLow', 'dark-low')]) + '),\n'
 swift += '    ]\n    // END GENERATED CHART PALETTES'
 path = ROOT / 'apps/macos/Sources/Aieyes/Palette.swift'
-old = path.read_text()
+old = path.read_text(encoding='utf-8')
 start, end = '// BEGIN GENERATED CHART PALETTES', '// END GENERATED CHART PALETTES'
 if start in old:
     a, b = old.index(start), old.index(end) + len(end)
@@ -70,7 +70,7 @@ else:
 outputs = {ROOT / 'apps/desktop/web/chart-palettes.js': web, path: updated}
 for path, value in outputs.items():
     if '--check' in sys.argv:
-        assert path.read_text() == value, f'Stale chart palettes: {path}; run scripts/sync-chart-palettes.py'
+        assert path.read_text(encoding='utf-8') == value, f'Stale chart palettes: {path}; run scripts/sync-chart-palettes.py'
     else:
-        path.write_text(value)
+        path.write_text(value, encoding='utf-8')
 print('Chart palettes: five families × light/dark × high/low are synchronized')
