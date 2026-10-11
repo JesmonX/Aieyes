@@ -86,10 +86,7 @@ fn merge(base: &Value, next: &Value, current: &Value, path: &str) -> Result<Valu
 
 impl Store {
     pub fn patch_settings(&self, base: &Value, next: &Value, auth: bool) -> Result<Settings> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.write_transaction()?;
         let normalize = |v: &Value| -> Result<Value> {
             let mut s: Settings = serde_json::from_value(v.clone())?;
             crate::providers::normalize_settings(&mut s);
@@ -136,10 +133,7 @@ impl Engine {
     /// Directory changes are local transactions; never delete files or credentials.
     pub(crate) fn configure_source(&mut self, params: Value, remove: bool) -> Result<Value> {
         let _tasks = crate::accounts::lock_tasks(&self.store)?;
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.store.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.store.write_transaction()?;
         let base = self.store.settings()?;
         let mut next = base.clone();
         let mut source: Source = if remove {
@@ -270,7 +264,16 @@ impl Engine {
         let mut next = base.clone();
         let provider = params["provider"].as_str().context("请选择 Agent")?;
         let mut retained = false;
-        next.agents.retain(|a| { if a.provider != provider { true } else if retained { false } else { retained = true; true } });
+        next.agents.retain(|a| {
+            if a.provider != provider {
+                true
+            } else if retained {
+                false
+            } else {
+                retained = true;
+                true
+            }
+        });
         let agent = next
             .agents
             .iter_mut()
@@ -428,6 +431,10 @@ mod tests {
             name: "A".into(),
             quota_profile_id: Some("home:profile".into()),
             quota_source_id: Some("managed".into()),
+            connections: vec![AccountConnection {
+                source_id: "managed".into(),
+                profile_id: Some("home:profile".into()),
+            }],
             ..Default::default()
         });
         engine.store.save_auth_settings(&settings).unwrap();

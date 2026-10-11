@@ -220,7 +220,7 @@ fn source_for(s: &Settings, id: &str, profile: Option<&str>) -> Result<Source> {
     let source = s
         .sources
         .iter()
-        .find(|v| v.id == id && v.enabled)
+        .find(|v| v.id == id && s.source_enabled(v))
         .context("请选择已启用的目标数据源")?
         .clone();
     let mut source = source;
@@ -647,10 +647,7 @@ impl Engine {
             } else {
                 scheduler::deploy(&local_root, &m)?
             };
-            let tx = rusqlite::Transaction::new_unchecked(
-                &self.store.db,
-                rusqlite::TransactionBehavior::Immediate,
-            )?;
+            let tx = self.store.write_transaction()?;
             let latest = self.store.settings()?;
             let command_changed = latest
                 .sources

@@ -75,11 +75,12 @@ struct Shared(
     Arc<Mutex<Engine>>,
     Arc<Mutex<Engine>>,
     Arc<Mutex<Engine>>,
+    std::path::PathBuf,
 );
 
 impl Shared {
     fn engine_for(&self, method: &str) -> Arc<Mutex<Engine>> {
-        use aieyes_core::contracts::{method as metadata, Lane};
+        use aieyes_core::contracts::{Lane, method as metadata};
         match metadata(method).map_or(Lane::Main, |m| m.lane) {
             Lane::Dashboard => self.5.clone(),
             Lane::Configuration => self.3.clone(),
@@ -115,13 +116,25 @@ fn update_events(method: &str, result: &Result<Value, String>) -> Vec<(&'static 
             Value::String("wakeups.deploy".into()),
         )];
     }
-    let Some(metadata) = aieyes_core::contracts::method(method) else { return vec![]; };
-    if result.is_err() && !metadata.invalidate_on_failure { return vec![]; }
-    if method == "codexAuth.login.status" && !result.as_ref().is_ok_and(|v| v["accountId"].is_string()) { return vec![]; }
-    metadata.invalidates.iter().map(|event| match *event {
-        "settings" => ("desktop:settings", Value::Null),
-        _ => ("desktop:data-changed", Value::String(method.into())),
-    }).collect()
+    let Some(metadata) = aieyes_core::contracts::method(method) else {
+        return vec![];
+    };
+    if result.is_err() && !metadata.invalidate_on_failure {
+        return vec![];
+    }
+    if method == "codexAuth.login.status"
+        && !result.as_ref().is_ok_and(|v| v["accountId"].is_string())
+    {
+        return vec![];
+    }
+    metadata
+        .invalidates
+        .iter()
+        .map(|event| match *event {
+            "settings" => ("desktop:settings", Value::Null),
+            _ => ("desktop:data-changed", Value::String(method.into())),
+        })
+        .collect()
 }
 
 fn refresh_key(method: &str) -> Option<&'static str> {
@@ -223,8 +236,17 @@ async fn engine_call(
         );
     }
     let engine = state.engine_for(&method);
+    let root = state.6.clone();
     let guarded_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _operation = aieyes_core::operations::enter(&method).map_err(|e| e.to_string())?;
+        // Each machine check gets its own connection: an offline SSH host must
+        // not queue checks for every other machine behind the accounts lane.
+        if method == "codexAuth.reconcile" {
+            return Engine::open(&root)
+                .and_then(|mut engine| engine.call(&method, params))
+                .map_err(|e| e.to_string());
+        }
         let mut engine = engine.lock().map_err(|_| "核心连接已断开".to_string())?;
         if guarded_app
             .state::<updates::Updates>()
@@ -301,6 +323,7 @@ fn main() {
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
+                root.clone(),
             ));
             updates::setup(app.handle(), &root);
             desktop::setup(app, &root)?;
@@ -361,6 +384,7 @@ mod tests {
             Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
             Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
             Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
+            root.path().to_owned(),
         );
         let _blocked = shared.0.lock().unwrap();
         let lane = shared.engine_for("agents.set");

@@ -304,10 +304,7 @@ pub(crate) fn source_config(
 
 impl Store {
     pub(crate) fn migrate_estimate_tables(&self) -> Result<()> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.write_transaction()?;
         for (table, kind) in [
             ("quota_estimates", "quota"),
             ("credit_estimates", "credits"),

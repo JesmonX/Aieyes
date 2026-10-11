@@ -69,7 +69,7 @@ test('wakeup source choices follow contract capabilities and source availability
       window, structuredClone,
       state:{page:'other',settings:{sources:row.sources,hosts:[{id:'online',enabled:true},{id:'offline',enabled:false}]}},
       $: selector => {if(!elements.has(selector))elements.set(selector,{});return elements.get(selector);},
-      document:{querySelectorAll:()=>[]}, api:async()=>[], notify:message=>notices.push(message),
+      document:{querySelectorAll:()=>[]}, api:async(method)=>method==='accounts.targets'?row.sources.filter(s=>s.enabled&&(s.accountId||s.codexHomeId)&&row.providers.includes(s.provider)&&(!s.hostId||s.hostId==='online')).map(s=>({sourceId:s.id,provider:s.provider})):[], notify:message=>notices.push(message),
       field:()=>'', escapeHTML:String, option:(id,label)=>`<option value="${id}">${label}</option>`,
       showEditor:(_title,html)=>{body=html;throw editorShown;},
     };
@@ -79,12 +79,12 @@ test('wakeup source choices follow contract capabilities and source availability
     vm.runInContext(read('wakeups.js'),sandbox);
     window.AieyesWakeups.bind();
     if (row.expected.length) {
-      assert.throws(()=>elements.get('#wake-add').onclick(), error=>error===editorShown);
+      await assert.rejects(elements.get('#wake-add').onclick(), error=>error===editorShown);
       const choices = body.match(/<select name="sourceId" id="wake-source">(.*?)<\/select>/s)[1];
       assert.deepEqual([...choices.matchAll(/<option value="([^"]+)"/g)].map(match=>match[1]),row.expected);
       assert.equal(notices.length,0);
     } else {
-      elements.get('#wake-add').onclick();
+      await elements.get('#wake-add').onclick();
       assert.equal(body,'');
       assert.equal(notices.length,1);
     }

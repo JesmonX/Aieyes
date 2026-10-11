@@ -1,0 +1,31 @@
+name: Core and macOS regression tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo test --workspace --locked
+      - name: Build macOS client and verify native contracts
+        if: runner.os == 'macOS'
+        run: |
+          swift build --package-path apps/macos --scratch-path .build/swift --disable-sandbox
+          sh scripts/test-native.sh

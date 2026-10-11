@@ -199,6 +199,81 @@ fn apply_batch(
 mod tests {
     use super::*;
     #[test]
+    fn two_sources_commit_batches_while_configuration_and_quota_are_written() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let sources: Vec<_> = (0..2)
+            .map(|i| Source {
+                id: format!("s{i}"),
+                account_id: "a".into(),
+                provider: "custom".into(),
+                path: "/fixture".into(),
+                ..Default::default()
+            })
+            .collect();
+        let settings = Settings {
+            sources: sources.clone(),
+            ..Default::default()
+        };
+        store.save_settings(&settings).unwrap();
+        let barrier = std::sync::Barrier::new(3);
+        std::thread::scope(|scope| {
+            for source in &sources {
+                let settings = &settings;
+                let barrier = &barrier;
+                let root = root.path();
+                scope.spawn(move || {
+                    let store = Store::open(root).unwrap();
+                    barrier.wait();
+                    for _ in 0..2 {
+                        for n in 0..40 {
+                            let event = json!({"id":format!("{}-{n}",source.id),"sessionId":source.id,"model":"fixture","timestamp":now(),"tokens":{"input":10}});
+                            let frame = json!({"path":"/fixture","reset":n==0,"events":[event],"cursor":{"offset":n+1}});
+                            apply_batch(&store, settings, source, "config", &[], &frame).unwrap();
+                        }
+                    }
+                });
+            }
+            barrier.wait();
+            for n in 0..40 {
+                let mut next = settings.clone();
+                next.refresh_seconds = 300 + n;
+                store.save_settings(&next).unwrap();
+                store
+                    .quota(&QuotaSnapshot {
+                        account_id: "a".into(),
+                        provider: "custom".into(),
+                        updated_at: now(),
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+        });
+        assert_eq!(
+            store.dashboard(&Filter::default()).unwrap().summary.total,
+            800
+        );
+        assert_eq!(
+            store
+                .db
+                .query_row("SELECT COUNT(*) FROM event_sources", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            80
+        );
+        assert_eq!(
+            store
+                .db
+                .query_row(
+                    "SELECT COUNT(*) FROM remote_cursors WHERE json_extract(cursor,'$.offset')=40",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            2
+        );
+    }
+    #[test]
     fn changing_a_sources_host_invalidates_its_cursor_configuration() {
         let mut source = Source {
             host_id: Some("first".into()),

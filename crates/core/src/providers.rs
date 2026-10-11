@@ -165,6 +165,8 @@ pub fn normalize_settings(settings: &mut Settings) {
     let mut value = serde_json::to_value(&*settings).expect("serializable settings");
     normalize_value(&mut value, &settings.account_aliases);
     *settings = serde_json::from_value(value).expect("normalized settings");
+    // Diagnostics are read-only on the wire and intentionally skipped on input.
+    settings.migrate();
 }
 
 impl Store {
@@ -350,10 +352,7 @@ impl Store {
 
     /// Re-key legacy hashes atomically, merging copied events and their sources.
     pub(crate) fn migrate_usage_ids(&self) -> Result<()> {
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.write_transaction()?;
         let done: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM kv WHERE key='usage.ids.canonical.v1')",
             [],

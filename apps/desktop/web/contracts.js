@@ -142,14 +142,14 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "observe"
+      "updateBehavior": "complete"
     },
     "agyAuth.confirmWorkspace": {
       "lane": "accounts",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     "agyAuth.inspect": {
       "lane": "accounts",
@@ -163,7 +163,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     "agyAuth.start": {
       "lane": "accounts",
@@ -177,21 +177,21 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "observe"
+      "updateBehavior": "complete"
     },
     "agyAuth.submitCode": {
       "lane": "accounts",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     "agyAuth.verify": {
       "lane": "accounts",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     "codexAuth.adopt": {
       "lane": "main",
@@ -232,7 +232,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "observe"
+      "updateBehavior": "complete"
     },
     "codexAuth.login.start": {
       "lane": "main",
@@ -249,21 +249,21 @@
       ],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "observe"
+      "updateBehavior": "complete"
     },
     "codexAuth.model.list": {
       "lane": "main",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "observe"
+      "updateBehavior": "cancel"
     },
     "codexAuth.openUrl": {
       "lane": "main",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     "codexAuth.profiles.bind": {
       "lane": "main",
@@ -297,21 +297,21 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     "codexAuth.status": {
       "lane": "main",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     "codexAuth.switch.commit": {
       "lane": "main",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     "codexAuth.switch.prepare": {
       "lane": "main",
@@ -332,7 +332,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     "creditEstimates.list": {
       "lane": "main",
@@ -417,7 +417,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     "hosts.sample": {
       "lane": "hosts",
@@ -479,14 +479,14 @@
       ],
       "invalidateOnFailure": false,
       "refreshKey": "prices",
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     "quotaEstimates.get": {
       "lane": "main",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     "quotaEstimates.list": {
       "lane": "main",
@@ -734,7 +734,7 @@
       ],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     "operations.prepareUpdate": {
       "lane": "configuration",
@@ -758,5 +758,5 @@
       "updateBehavior": "observe"
     }
   },
-  "contractHash": "7c03549ccca8817e91b05e46b622c2cd7ceb628b56a37a5a0d86cb968022f81b"
+  "contractHash": "4db1989414fb5431211b338e221b7a2b03efdd9f5894e3ba61c2b459c194fe16"
 };

@@ -15,6 +15,90 @@ fn root() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 #[test]
+fn reconciliation_links_existing_login_once_without_switching_or_restoring_archives() {
+    let (_d, r) = root();
+    let mut engine = crate::Engine::open(&r.join("db")).unwrap();
+    let credential = auth("one", "team", "FIXTURE");
+    let other = auth("two", "team", "FIXTURE");
+    let profile = files::save_profile(&r, "first", "First", &credential).unwrap();
+    let archived = files::save_profile(&r, "archived", "Archived", &other).unwrap();
+    files::atomic(&r.join("auth.json"), &credential).unwrap();
+    engine
+        .store
+        .save_settings(&Settings {
+            sources: vec![Source {
+                id: "s".into(),
+                path: r.to_string_lossy().into(),
+                codex_home_id: Some("home".into()),
+                codex_binary: "missing-fixture-cli".into(),
+                ..Default::default()
+            }],
+            accounts: vec![
+                Account {
+                    id: "a".into(),
+                    name: "Active".into(),
+                    identity_key: Some(profile.identity.key),
+                    ..Default::default()
+                },
+                Account {
+                    id: "archived".into(),
+                    name: "Archived".into(),
+                    identity_key: Some(archived.identity.key),
+                    archived: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        })
+        .unwrap();
+    let before = engine
+        .call("accounts.targets", json!({"accountKey":"codex:a"}))
+        .unwrap();
+    assert_eq!(before[0]["canWake"], false);
+    for _ in 0..2 {
+        let result = engine
+            .call("codexAuth.reconcile", json!({"sourceId":"s"}))
+            .unwrap();
+        assert_eq!(result["issues"], json!([]));
+        assert_eq!(result["targets"][0]["current"], true);
+        assert_eq!(result["targets"][0]["canWake"], true);
+        assert_eq!(result["targets"][0]["profileId"], "home:first");
+        assert_eq!(
+            result["settings"]["accounts"][0]["connections"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            result["settings"]["accounts"][1]["connections"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(files::read(&r.join("auth.json")).unwrap(), credential);
+    }
+    // A different workspace is not the same account, even for the same user.
+    let wrong = files::identity(&auth("one", "other-team", "FIXTURE"))
+        .unwrap()
+        .key;
+    let mut settings = engine.store.settings().unwrap();
+    settings.accounts[0].connections.clear();
+    settings.accounts[0].identity_key = Some(wrong);
+    engine.store.save_auth_settings(&settings).unwrap();
+    let result = engine
+        .call("codexAuth.reconcile", json!({"sourceId":"s"}))
+        .unwrap();
+    assert_eq!(result["targets"][0]["canWake"], false);
+    assert!(
+        result["settings"]["accounts"][0]["connections"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn unnamed_accounts_use_login_email_and_preserve_manual_names() {
     let (_d, r) = root();
     let mut engine = crate::Engine::open(&r.join("database")).unwrap();
@@ -328,7 +412,7 @@ for line in sys.stdin:
   print(json.dumps({'id':ident,'result':{'ok':True}}),flush=True)
  elif v.get('method')=='failure': print(json.dumps({'id':v['id'],'error':{'code':401,'message':'unauthorized SECRET_TOKEN'}}),flush=True)
 "#;
-    let mut command = Command::new("python3");
+    let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
     command.args(["-u", "-c", script]);
     let mut rpc = Rpc::command(command).unwrap();
     let a = auth("one", "team", "SECRET");

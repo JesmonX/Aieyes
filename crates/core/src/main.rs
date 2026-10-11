@@ -63,6 +63,7 @@ fn run() -> anyhow::Result<()> {
     std::thread::spawn(move || {
         for line in io::stdin().lock().lines() {
             let Ok(line) = line else { break };
+            let mut operation = None;
             if let Ok(v) = serde_json::from_str::<Value>(&line) {
                 let result = match v["method"].as_str() {
                     Some("operations.prepareUpdate") => Some(aieyes_core::operations::prepare()),
@@ -73,16 +74,40 @@ fn run() -> anyhow::Result<()> {
                 if let Some(result) = result {
                     if let Some(id) = v.get("id") {
                         let mut out = io::stdout().lock();
-                        let _ = serde_json::to_writer(&mut out, &json!({"jsonrpc":"2.0","id":id,"result":result}));
-                        let _ = out.write_all(b"\n"); let _ = out.flush();
+                        let _ = serde_json::to_writer(
+                            &mut out,
+                            &json!({"jsonrpc":"2.0","id":id,"result":result}),
+                        );
+                        let _ = out.write_all(b"\n");
+                        let _ = out.flush();
                     }
                     continue;
                 }
+                if let Some(method) = v["method"].as_str() {
+                    match aieyes_core::operations::enter(method) {
+                        Ok(_scope) => operation = aieyes_core::operations::context(),
+                        Err(error) => {
+                            if let Some(id) = v.get("id") {
+                                let mut out = io::stdout().lock();
+                                let _ = serde_json::to_writer(
+                                    &mut out,
+                                    &json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":error.to_string()}}),
+                                );
+                                let _ = out.write_all(b"\n");
+                                let _ = out.flush();
+                            }
+                            continue;
+                        }
+                    }
+                }
             }
-            if requests.send(line).is_err() { break; }
+            if requests.send((line, operation)).is_err() {
+                break;
+            }
         }
     });
-    for line in incoming {
+    for (line, operation) in incoming {
+        let _operation = aieyes_core::operations::inherit(operation);
         if line.trim().is_empty() {
             continue;
         }

@@ -1,6 +1,7 @@
 /* Shared account/machine projection; credential handling stays in the core. */
 (() => {
   const e = v => AieyesUI.escapeHTML(v ?? '');
+  let pendingSources=new Set();
   let dialog, accountKey = '', rows = [], errors = [], checking = false, embedded = false, generation = 0;
   const eligible = key => {
     const a = state.settings?.accounts.find(a => a.provider+':'+a.id === key && !a.archived);
@@ -8,24 +9,26 @@
   };
   async function refresh(key, changed) {
     let targets = await api('accounts.targets', key ? {accountKey:key} : {});
-    changed?.(targets, []);
+    const checkingSources=new Set(targets.filter(t=>t.provider==='codex').map(t=>t.sourceId));
+    changed?.(targets, [], checkingSources);
     const sources = [...new Set(targets.filter(t => t.provider === 'codex').map(t => t.sourceId))];
     const issues = [];
     await Promise.all(sources.map(async sourceId => {
       try {
         const result = await api('codexAuth.reconcile', {sourceId, accountId:key?.replace(/^codex:/,'') || ''});
-        window.AieyesAgentSettings.accept(result.settings);
+        window.AieyesAgentSettings.accept(await api('settings.get'));
         issues.push(...result.issues.map(i => i.message));
       } catch (error) { issues.push((targets.find(t=>t.sourceId===sourceId)?.machineName || sourceId) + '：' + String(error.message ?? error)); }
       targets = await api('accounts.targets', key ? {accountKey:key} : {});
-      changed?.(targets, [...issues]);
+      checkingSources.delete(sourceId);
+      changed?.(targets, [...issues], new Set(checkingSources));
     }));
     return targets;
   }
   function paint() {
     if (!dialog?.open) return;
     const title = state.settings.accounts.find(a=>a.provider+':'+a.id===accountKey)?.name ?? '账号';
-    dialog.innerHTML = `<div class="dialog-head"><h2>切换为此账号 · ${e(title)}</h2></div><div class="account-target-body">${embedded?window.AieyesCodexAuth.html():`${checking?'<p role="status">正在检查各机器的登录…</p>':''}${errors.map(v=>`<p class="error">${e(v)}</p>`).join('')}${rows.map((t,i)=>`<div class="list-row"><div class="row-body"><strong>${e(t.machineName)}</strong><small>${e(t.path)}</small><small>${e(t.reason || (t.current===true?'正在使用':t.credential===true?'已登录，尚未选用':t.credential===false?'未登录':'登录状态待确认'))}</small></div>${t.current===true?'':`<button data-account-target="${i}" ${checking&&!t.canSwitch?'disabled':''}>${t.canSwitch?'切换':t.credential===false?'登录':'检查 / 登录'}</button>`}</div>`).join('')}`}</div><div class="dialog-foot">${embedded?'<button id="target-back">返回机器列表</button>':'<button id="target-refresh">重新检查</button>'}<button id="target-close">完成</button></div>`;
+    dialog.innerHTML = `<div class="dialog-head"><h2>切换为此账号 · ${e(title)}</h2></div><div class="account-target-body">${embedded?window.AieyesCodexAuth.html():`${checking?'<p role="status">正在检查各机器的登录…</p>':''}${errors.map(v=>`<p class="error">${e(v)}</p>`).join('')}${rows.map((t,i)=>`<div class="list-row"><div class="row-body"><strong>${e(t.machineName)}</strong><small>${e(t.path)}</small><small>${e(t.reason || (t.current===true?'正在使用':t.credential===true?'已登录，尚未选用':t.credential===false?'未登录':'登录状态待确认'))}</small></div>${t.current===true?'':`<button data-account-target="${i}" ${pendingSources.has(t.sourceId)&&!t.canSwitch?'disabled':''}>${t.canSwitch?'切换':t.credential===false?'登录':'检查 / 登录'}</button>`}</div>`).join('')}`}</div><div class="dialog-foot">${embedded?'<button id="target-back">返回机器列表</button>':'<button id="target-refresh">重新检查</button>'}<button id="target-close">完成</button></div>`;
     dialog.querySelector('#target-close').disabled = embedded && window.AieyesCodexAuth.busy;
     dialog.querySelector('#target-close').onclick = () => { generation++; dialog.close(); embedded=false; };
     if (embedded) {
@@ -44,7 +47,7 @@
   }
   async function reload() {
     const revision=++generation;checking=true;errors=[];paint();
-    try { await refresh(accountKey,(next,issues)=>{if(revision===generation){rows=next;errors=issues;paint();}}); }
+    try { await refresh(accountKey,(next,issues,pending)=>{if(revision===generation){rows=next;errors=issues;pendingSources=pending;paint();}}); }
     catch(error){if(revision===generation)errors=[String(error.message??error)];}
     finally {if(revision===generation){checking=false;paint();}}
   }

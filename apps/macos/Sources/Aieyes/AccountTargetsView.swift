@@ -11,7 +11,9 @@ import SwiftUI
         let params: [String: Any] = accountKey.map { ["accountKey": $0] } ?? [:]
         errors = []
         do {
-            rows = try await reader.call("accounts.targets", params: params)
+            let initial: [AccountTarget] = try await reader.call("accounts.targets", params: params)
+            guard revision == generation, !Task.isCancelled else { return }
+            rows = initial
             let sources = Set(rows.filter { $0.provider == "codex" }.map(\.sourceId))
             checking = sources
             await withTaskGroup(of: (String, String?).self) { group in
@@ -30,12 +32,14 @@ import SwiftUI
                     if let error { errors.append((rows.first { $0.sourceId == source }?.machineName ?? source) + "：" + error) }
                     do {
                         let saved: Settings = try await reader.call("settings.get")
+                        guard revision == generation, !Task.isCancelled else { continue }
                         model.acceptConfiguration(saved)
-                        rows = try await reader.call("accounts.targets", params: params)
-                    } catch { errors.append(error.localizedDescription) }
+                        let next: [AccountTarget] = try await reader.call("accounts.targets", params: params)
+                        if revision == generation && !Task.isCancelled { rows = next }
+                    } catch { if revision == generation && !Task.isCancelled { errors.append(error.localizedDescription) } }
                 }
             }
-        } catch { errors.append(error.localizedDescription) }
+        } catch { if revision == generation && !Task.isCancelled { errors.append(error.localizedDescription) } }
         if revision == generation { checking = [] }
     }
 }

@@ -172,7 +172,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "observe"
+      "updateBehavior": "complete"
     },
     {
       "name": "agyAuth.confirmWorkspace",
@@ -180,7 +180,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     {
       "name": "agyAuth.inspect",
@@ -196,7 +196,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     {
       "name": "agyAuth.start",
@@ -212,7 +212,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "observe"
+      "updateBehavior": "complete"
     },
     {
       "name": "agyAuth.submitCode",
@@ -220,7 +220,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     {
       "name": "agyAuth.verify",
@@ -228,7 +228,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     {
       "name": "codexAuth.adopt",
@@ -274,7 +274,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "observe"
+      "updateBehavior": "complete"
     },
     {
       "name": "codexAuth.login.start",
@@ -293,7 +293,7 @@
       ],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "observe"
+      "updateBehavior": "complete"
     },
     {
       "name": "codexAuth.model.list",
@@ -301,7 +301,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "observe"
+      "updateBehavior": "cancel"
     },
     {
       "name": "codexAuth.openUrl",
@@ -309,7 +309,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     {
       "name": "codexAuth.profiles.bind",
@@ -347,7 +347,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     {
       "name": "codexAuth.status",
@@ -355,7 +355,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     {
       "name": "codexAuth.switch.commit",
@@ -363,7 +363,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "complete"
     },
     {
       "name": "codexAuth.switch.prepare",
@@ -387,7 +387,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     {
       "name": "creditEstimates.list",
@@ -483,7 +483,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     {
       "name": "hosts.sample",
@@ -553,7 +553,7 @@
       ],
       "invalidateOnFailure": false,
       "refreshKey": "prices",
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     {
       "name": "quotaEstimates.get",
@@ -561,7 +561,7 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     {
       "name": "quotaEstimates.list",
@@ -838,7 +838,7 @@
       ],
       "invalidateOnFailure": false,
       "refreshKey": null,
-      "updateBehavior": "finish"
+      "updateBehavior": "cancel"
     },
     {
       "name": "operations.prepareUpdate",

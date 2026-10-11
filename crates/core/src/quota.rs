@@ -5,7 +5,7 @@ use crate::{
     store::{expand, home},
     usage,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -416,11 +416,16 @@ fn run_codex_rpc(
         let wait = |id: i64| -> Result<Value> {
             let deadline = Instant::now() + timeout;
             loop {
+                crate::operations::check()?;
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                let v = rx.recv_timeout(remaining).map_err(|e| match e {
-                    mpsc::RecvTimeoutError::Timeout => anyhow::anyhow!("Codex 查询超时"),
-                    mpsc::RecvTimeoutError::Disconnected => anyhow::anyhow!("Codex 查询连接已断开"),
-                })?;
+                ensure!(!remaining.is_zero(), "Codex 查询超时");
+                let v = match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                    Ok(value) => value,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        anyhow::bail!("Codex 查询连接已断开")
+                    }
+                };
                 if v["id"] == id {
                     return Ok(v);
                 }

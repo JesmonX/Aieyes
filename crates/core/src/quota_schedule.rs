@@ -24,7 +24,7 @@ impl Engine {
             .filter(|a| a.quota_enabled && !a.archived)
         {
             if !settings.sources.iter().any(|s| {
-                s.enabled
+                settings.source_enabled(s)
                     && account.uses_source(s)
                     && s.host_id
                         .as_ref()
@@ -70,7 +70,7 @@ impl Engine {
         }) {
             if automatic
                 && !settings.sources.iter().any(|s| {
-                    s.enabled
+                    settings.source_enabled(s)
                         && account.uses_source(s)
                         && s.host_id.as_ref().is_none_or(|id| {
                             settings.hosts.iter().any(|h| h.id == *id && h.enabled)

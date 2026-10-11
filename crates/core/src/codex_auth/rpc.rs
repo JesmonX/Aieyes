@@ -120,8 +120,13 @@ impl Rpc {
         loop {
             crate::operations::check()?;
             let remaining = timeout.saturating_sub(start.elapsed());
-            if remaining.is_zero() { anyhow::bail!("Codex 响应超时"); }
-            match self.messages.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            if remaining.is_zero() {
+                anyhow::bail!("Codex 响应超时");
+            }
+            match self
+                .messages
+                .recv_timeout(remaining.min(Duration::from_millis(100)))
+            {
                 Ok(value) => return Ok(value),
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(_) => anyhow::bail!("Codex 连接已断开"),

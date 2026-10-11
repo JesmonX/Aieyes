@@ -10,6 +10,23 @@ pub struct Store {
     pub db: Connection,
     pub(crate) usage_memory: std::cell::RefCell<crate::usage_cache::Memory>,
 }
+/// Keep a short committed/rolled-back write visible to the updater until SQLite
+/// releases its lock. Network and file reads happen outside this guard.
+pub(crate) struct WriteTransaction<'a> {
+    transaction: rusqlite::Transaction<'a>,
+    _critical: crate::operations::Critical,
+}
+impl std::ops::Deref for WriteTransaction<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.transaction
+    }
+}
+impl WriteTransaction<'_> {
+    pub fn commit(self) -> rusqlite::Result<()> {
+        self.transaction.commit()
+    }
+}
 impl Store {
     pub fn open(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root)?;
@@ -47,13 +64,26 @@ impl Store {
         Ok(store)
     }
     /// Acquire the writer before reading a snapshot; never upgrade a stale WAL reader.
-    pub(crate) fn write_transaction(&self) -> Result<rusqlite::Transaction<'_>> {
+    pub(crate) fn write_transaction(&self) -> Result<WriteTransaction<'_>> {
         let start = std::time::Instant::now();
         loop {
             crate::operations::check()?;
-            match rusqlite::Transaction::new_unchecked(&self.db, rusqlite::TransactionBehavior::Immediate) {
-                Ok(tx) => return Ok(tx),
-                Err(rusqlite::Error::SqliteFailure(e, _)) if matches!(e.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) && start.elapsed() < std::time::Duration::from_secs(30) => {
+            match rusqlite::Transaction::new_unchecked(
+                &self.db,
+                rusqlite::TransactionBehavior::Immediate,
+            ) {
+                Ok(transaction) => {
+                    return Ok(WriteTransaction {
+                        transaction,
+                        _critical: crate::operations::critical()?,
+                    });
+                }
+                Err(rusqlite::Error::SqliteFailure(e, _))
+                    if matches!(
+                        e.code,
+                        rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                    ) && start.elapsed() < std::time::Duration::from_secs(30) =>
+                {
                     std::thread::sleep(std::time::Duration::from_millis(25));
                 }
                 Err(e) => return Err(e).context("数据库写入未完成，已提交进度保留，请重试"),
@@ -152,7 +182,11 @@ impl Store {
                 }
             }
         }
-        anyhow::ensure!(normalized.configuration_issues.is_empty(), "{}", normalized.configuration_issues.join("；"));
+        anyhow::ensure!(
+            normalized.configuration_issues.is_empty(),
+            "{}",
+            normalized.configuration_issues.join("；")
+        );
         crate::codex_auth::validate_settings(&normalized)?;
         self.check_wakeup_settings(&normalized)?;
         let s = &normalized;

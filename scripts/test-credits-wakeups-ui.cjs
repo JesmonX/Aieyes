@@ -15,6 +15,8 @@ function fixture(){
   if(method==='sources.scan'||method==='prices.list')return [];if(method==='quotas.refresh')return [q];
   if(method==='creditEstimates.start'){f.records=[{id:'credit-test',kind:'credits',accountKey:'codex:a',windowId:'credits',windowName:'Credits',sourceIds:['s'],sourceNames:['本机'],status:'active',reason:'',startedAt:now-60,checkpointAt:now,consumedPercent:0,consumedCredits:10,cost:2,totalTokens:100,pricedTokens:100,valuePer500:100,valuePer1000:200,calculationNote:'手动采样估值',prices:[]}];return f.records[0];}
   if(method==='creditEstimates.stop'){f.records[0].status='completed';return f.records[0];}
+  if(method==='accounts.targets')return [{accountKey:'codex:a',accountName:'订阅账户',provider:'codex',sourceId:'s',sourceName:'本机订阅',machineId:'local',machineName:'本机',path:'/fixture',profileId:null,canWake:true}];
+  if(method==='codexAuth.reconcile')return {settings,issues:[]};
   if(method==='wakeups.list')return structuredClone(f.tasks);
   if(method==='wakeups.probe')return {models:[{id:'cheap-model',efforts:['low','medium'],referenceCost:0.00015}],recommendedModel:'cheap-model',efforts:['low','medium'],timezone:'CST +0800',message:'按 1000 输入 + 100 输出 Token 推荐'};
   if(method==='wakeups.save'){let r={task:{...params.task,id:params.task.id||'wake-test'},deployment:null};const i=f.tasks.findIndex(r=>r.task.id===params.task.id);if(i>=0){r.deployment=f.tasks[i].deployment;f.tasks[i]=r;}else f.tasks.push(r);return r;}

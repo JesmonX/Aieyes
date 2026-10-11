@@ -510,8 +510,12 @@ impl Engine {
                 (info["currentIdentity"] == id && info["currentCredential"] == true)
                     || matching.iter().any(|p| p["credential"] == true)
             });
+            let profile_credentials: serde_json::Map<String, Value> = matching
+                .iter()
+                .filter_map(|p| Some((p["id"].as_str()?.to_owned(), p["credential"].clone())))
+                .collect();
             return Ok(
-                json!({"current":current,"credential":credential,"checkedAt":now(),"note": if identity.is_none() { "尚未验证账户身份，请读取当前登录或授权" } else { "" }}),
+                json!({"current":current,"credential":credential,"profileCredentials":profile_credentials,"checkedAt":now(),"note": if identity.is_none() { "尚未验证账户身份，请读取当前登录或授权" } else { "" }}),
             );
         }
         // Other providers cannot safely infer the identity of a machine's current login.
@@ -570,10 +574,7 @@ impl Engine {
         if !failed.is_empty() {
             return Ok(json!({"deleted":false,"failedTasks":failed,"canForce":true}));
         }
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.store.db,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
+        let tx = self.store.write_transaction()?;
         let base = self.store.settings()?;
         ensure!(
             base.accounts

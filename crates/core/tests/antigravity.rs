@@ -96,7 +96,7 @@ fn partial_databases_keep_tokens_retry_and_repair_model_without_duplicates() {
     assert_eq!(read.events[1]["model"], "known");
     assert_eq!(read.events[2]["model"], "antigravity-unknown-99");
     assert_eq!(read.issues.len(), 2);
-    let output = std::process::Command::new("python3")
+    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../scripts/remote_history.py"
@@ -233,7 +233,7 @@ fn native_and_ssh_match_wal_incremental_and_standard_import() {
         json!({"input":100,"output":20,"cacheRead":50,"cacheWrite":30,"reasoning":10})
     );
     assert_eq!(rows[0]["model"], "gemini-test");
-    let output = std::process::Command::new("python3")
+    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../scripts/remote_history.py"

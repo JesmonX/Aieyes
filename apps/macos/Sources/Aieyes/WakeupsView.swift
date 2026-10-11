@@ -162,12 +162,13 @@ struct WakeEditor: View {
         .interactiveDismissDisabled(busy || initialDraft != draftSnapshot(task))
         .discardDraftConfirmation($confirmDiscard) { dismiss() }
         .updateDraftGuard("定时唤醒", snapshot: draftSnapshot(task), dirty: !initialDraft.isEmpty && initialDraft != draftSnapshot(task), saving: busy, save: { await saveDraft() }, discard: { dismiss() })
-         .task {
-            await targets.load(model)
+        .task { await targets.load(model) }
+        .onChange(of: targets.rows.map(\.id)) { _, _ in
             if selectedAccount.isEmpty { selectedAccount = targets.rows.first { $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId }?.accountKey ?? "" }
         }
         .onChange(of: task.sourceId) { _, _ in capabilities = nil }
         .onChange(of: task.codexProfileId) { _, _ in capabilities = nil }
+        .onChange(of: task.binary) { _, _ in capabilities = nil; task.model = "" }
         .onChange(of: task.model) { _, _ in if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
     }
     private func localTime(_ time: String) -> String {
@@ -182,7 +183,7 @@ struct WakeEditor: View {
         busy = true; error = nil
         Task { @MainActor in
             defer { busy = false }
-            do { var input = task; input.model = ""; input.effort = ""; let result: WakeCapabilities = try await engine.call("wakeups.probe", params: ["task":input.parameters]); guard input.sourceId == task.sourceId && input.codexProfileId == task.codexProfileId else { return }; capabilities = result; if task.model.isEmpty { task.model = result.recommendedModel ?? "" }; if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
+            do { var input = task; input.model = ""; input.effort = ""; let result: WakeCapabilities = try await engine.call("wakeups.probe", params: ["task":input.parameters]); guard input.sourceId == task.sourceId && input.codexProfileId == task.codexProfileId && input.binary == task.binary else { return }; capabilities = result; if task.model.isEmpty { task.model = result.recommendedModel ?? "" }; if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
             catch { self.error = error.localizedDescription }
         }
     }
@@ -192,6 +193,6 @@ struct WakeEditor: View {
     @discardableResult private func saveDraft() async -> Bool {
         busy = true; error = nil
         defer { busy = false }
-        do { guard targets.rows.contains(where: { $0.accountKey == selectedAccount && $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId && $0.canWake }) else { throw ClientError.message("此账号在所选位置尚不可唤醒，请检查登录与关联") }; try await save(task); return true } catch { self.error = error.localizedDescription; return false }
+        do { guard deployed || targets.rows.contains(where: { $0.accountKey == selectedAccount && $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId && $0.canWake }) else { throw ClientError.message("此账号在所选位置尚不可唤醒，请检查登录与关联") }; try await save(task); return true } catch { self.error = error.localizedDescription; return false }
     }
 }
