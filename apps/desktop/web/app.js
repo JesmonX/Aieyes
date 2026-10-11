@@ -270,7 +270,7 @@ async function loadDashboardOnce(request) {
 }
 function batchError(rows,label) {
   if(!Array.isArray(rows))return null;
-  const failures=rows.filter(row=>row.error||row.partial).map(row=>({...row,error:row.error||(row.issues??[]).map(i=>(i.path?i.path+' · ':'')+(i.step!=null?'步骤 '+i.step+' · ':'')+i.message).join('；')||'部分记录需要处理'}));if(!failures.length)return null;
+  const failures=rows.filter(row=>row.error||row.partial).map(row=>({...row,error:row.error||(row.issues??[]).filter(i=>i.code!=='unknownModel').map(i=>(i.path?i.path+' · ':'')+(i.step!=null?'步骤 '+i.step+' · ':'')+i.message).join('；')||'部分记录需要处理'}));if(!failures.length)return null;
   const partial=failures.length<rows.length;
   const error=new Error(`${label}${partial?'部分失败':'失败'}：${failures.map(row=>`${row.name||row.id||row.accountId||''}${row.name||row.id||row.accountId?' · ':''}${row.error}`).join('；')}`);
   error.partial=partial;error.failures=failures;return error;
@@ -293,7 +293,9 @@ async function rescan(sourceId) {
         const rows=await api('sources.rescan',typeof sourceId==='string'?{sourceId}:{});
         await loadDashboard();
         const error=batchError(rows,'全量重扫');if(error)throw error;
-        state.rescanMessage=rows.length?`全量重扫完成，已更新历史统计（${rows.length} 个数据源）。`:'没有可重扫的已启用数据源。';
+        const unknown=rows.reduce((sum,row)=>sum+(row.issues??[]).filter(issue=>issue.code==='unknownModel').length,0);
+        const warning=unknown?` ${unknown} 条调用的模型身份待确认，Token 已保留、暂不计价。`:'';
+        state.rescanMessage=rows.length?`全量重扫完成，已更新历史统计（${rows.length} 个数据源）。`+warning:'没有可重扫的已启用数据源。';
         return rows.length?undefined:false;
       } catch(error) {state.rescanFailed=true;state.rescanMessage=error.message??String(error);throw error;}
       finally {state.lastScan=Date.now();}
