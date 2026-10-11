@@ -417,11 +417,12 @@ mod tests {
         assert!(feedback["success"].is_null());
         assert_eq!(feedback["failures"].as_array().unwrap().len(), 1);
         assert!(feedback.to_string().find("hidden").is_none());
-        let partial = refresh_feedback("sources.scan", &Ok(json!([{"id":"agy","partial":true,"issues":[{"path":"session.db","step":2,"message":"模型身份未知"}]}])), None).unwrap();
-        assert_eq!(
-            partial["failures"][0]["error"],
-            "session.db · 步骤 2 · 模型身份未知"
-        );
+        // Unpriced models are diagnostic warnings, not failed scans.
+        let warning = refresh_feedback("sources.scan", &Ok(json!([{"id":"agy","partial":false,"issues":[{"path":"session.db","step":2,"code":"unknownModel","message":"模型身份未知"}]}])), None).unwrap();
+        assert!(warning["failures"].as_array().unwrap().is_empty());
+        assert!(warning["success"].is_number());
+        let partial = refresh_feedback("sources.scan", &Ok(json!([{"id":"agy","partial":true,"issues":[{"path":"session.db","step":3,"code":"invalidRecord","message":"记录损坏"}]}])), None).unwrap();
+        assert_eq!(partial["failures"][0]["error"], "session.db · 步骤 3 · 记录损坏");
         assert!(partial["success"].is_null());
         assert!(
             refresh_feedback("prices.sync", &Ok(json!({})), None).unwrap()["success"].is_number()
