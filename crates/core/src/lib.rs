@@ -3,6 +3,7 @@ pub mod accounts;
 pub mod agy_auth;
 mod agy_identity;
 pub mod antigravity;
+pub mod automatic;
 pub mod capacity;
 pub mod codex_auth;
 pub mod contracts;
@@ -196,6 +197,8 @@ impl Engine {
         }
         match method {
             "methods.manifest" => Ok(serde_json::to_value(contracts::METHODS)?),
+            "autoEstimates.configure" => self.configure_automatic(params),
+            "autoEstimates.tick" => self.tick_automatic(),
             "accounts.targets" => self.account_targets(&params),
             "accounts.create"
             | "accounts.status.get"

@@ -156,6 +156,14 @@
       "updateBehavior": "cancel"
     },
     {
+      "name": "accounts.targets",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
       "name": "agents.set",
       "lane": "configuration",
       "invalidates": [
@@ -229,6 +237,27 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "complete"
+    },
+    {
+      "name": "autoEstimates.configure",
+      "lane": "configuration",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "autoEstimates.tick",
+      "lane": "main",
+      "invalidates": [
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
     },
     {
       "name": "codexAuth.adopt",
@@ -345,6 +374,17 @@
       "name": "codexAuth.quota",
       "lane": "main",
       "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
+      "name": "codexAuth.reconcile",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
@@ -516,6 +556,30 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    {
+      "name": "operations.prepareUpdate",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
+      "name": "operations.resume",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
+      "name": "operations.status",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
     },
     {
       "name": "prices.list",
@@ -820,49 +884,6 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
-    },
-    {
-      "name": "accounts.targets",
-      "lane": "configuration",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "observe"
-    },
-    {
-      "name": "codexAuth.reconcile",
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "cancel"
-    },
-    {
-      "name": "operations.prepareUpdate",
-      "lane": "configuration",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "observe"
-    },
-    {
-      "name": "operations.resume",
-      "lane": "configuration",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "observe"
-    },
-    {
-      "name": "operations.status",
-      "lane": "configuration",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "observe"
     }
   ]
 }

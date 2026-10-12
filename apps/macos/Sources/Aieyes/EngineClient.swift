@@ -195,6 +195,33 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 
 
 @MainActor final class AppModel: ObservableObject {
+    private let automaticEngine = EngineClient(configurationOnly: true)
+    private var automaticTask: Task<Void, Never>?
+    @Published var automaticSaving = false
+    @Published var automaticError: String?
+    func configureAutomatic(_ source: AgentSource, enabled: Bool, confirmed: Bool) async {
+        guard !automaticSaving else { return }
+        automaticSaving = true; automaticError = nil
+        defer { automaticSaving = false }
+        do {
+            struct Saved: Decodable { var settings: Settings }
+            let baseline: Any = try source.autoValuation.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()
+            let result: Saved = try await engine.call("autoEstimates.configure", params: ["sourceId":source.id,"enabled":enabled,"confirmed":confirmed,"baseConfig":baseline])
+            acceptConfiguration(result.settings); await reload()
+        } catch { automaticError = error.localizedDescription }
+    }
+    private func startAutomatic() {
+        automaticTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, !self.stopped else { return }
+                if self.settingsLoaded && !self.installingUpdate {
+                    struct Changed: Decodable { var changed: Bool }
+                    if let value: Changed = try? await self.automaticEngine.call("autoEstimates.tick"), value.changed { await self.reload() }
+                }
+                do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
+            }
+        }
+    }
     let engine = EngineClient()
     let accountEngine = EngineClient()
     @Published var accountStatuses: [AccountDeviceStatus] = []
@@ -418,6 +445,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         provider = saved.provider; selectedSource = saved.source; selectedAccount = saved.account; selectedModel = saved.model; range = saved.days
         filterPersistenceEnabled = true
         schedulingEnabled = true
+        startAutomatic()
         Task { await bootstrap(); scheduleRefreshes() }
     }
     func bootstrap() async {
@@ -835,6 +863,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     func stop() {
         stopped = true; schedulingEnabled = false; timer?.invalidate(); timer = nil
+        automaticTask?.cancel(); automaticEngine.stop()
         filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
         deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel()
         for task in antigravityRefreshTasks.values { task.cancel() }

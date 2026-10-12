@@ -75,6 +75,8 @@ pub struct ProxyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Source {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_valuation: Option<crate::automatic::AutoValuationConfig>,
     pub codex_home_id: Option<String>,
     pub id: String,
     pub name: String,
@@ -93,6 +95,7 @@ impl Default for Source {
     fn default() -> Self {
         Self {
             codex_home_id: None,
+            auto_valuation: None,
             id: String::new(),
             name: String::new(),
             provider: "codex".into(),

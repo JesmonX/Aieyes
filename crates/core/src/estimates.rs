@@ -64,18 +64,24 @@ pub struct CreditEstimate {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct EstimateCommon {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub sampling_mode: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub automatic_segments: Vec<crate::automatic::AutoSegment>,
     pub calculation_status: String,
     pub calculation_version: u32,
     pub original_estimate_id: Option<String>,
     pub repaired_at: Option<i64>,
     #[serde(skip)]
-    repair_prices: Option<Vec<Value>>,
+    pub(crate) repair_prices: Option<Vec<Value>>,
     pub checkpoint_windows: Vec<QuotaWindow>,
     pub id: String,
     pub account_key: String,
     pub window_id: String,
     pub window_name: String,
     pub source_ids: Vec<String>,
+    // Explicit manual sampling scope; shared history itself keeps its original attribution.
+    pub shared_source_ids: Vec<String>,
     pub source_names: Vec<String>,
     pub source_config: String,
     pub status: String,
@@ -277,12 +283,12 @@ pub(crate) fn source_config(
             .iter()
             .find(|s| &s.id == id)
             .context("采样数据源已删除")?;
+        let account = settings
+            .accounts
+            .iter()
+            .find(|a| format!("{}:{}", a.provider, a.id) == account_key);
         ensure!(
-            s.codex_home_id.is_none(),
-            "共享 Codex 历史不按账号归属，不能用于单账号额度估值"
-        );
-        ensure!(
-            s.enabled && format!("{}:{}", s.provider, s.account_id) == account_key,
+            settings.source_enabled(s) && account.is_some_and(|a| a.uses_source(s)),
             "采样数据源已停用或账户关联发生变化"
         );
         ensure!(s.provider != "deepseek", "该数据源没有可采集的 Token 用量");
@@ -297,12 +303,59 @@ pub(crate) fn source_config(
                     .context("采样主机已停用或删除")
             })
             .transpose()?;
-        values.push(json!({"source":s,"host":host}));
+        let mut value = json!({"source":s,"host":host});
+        if let Some(home) = &s.codex_home_id {
+            value["profiles"] = json!(
+                account
+                    .unwrap()
+                    .profile_refs()
+                    .into_iter()
+                    .filter(|r| r.starts_with(&format!("{home}:")))
+                    .collect::<Vec<_>>()
+            );
+        }
+        values.push(value);
     }
     Ok(hash(&serde_json::to_string(&values)?))
 }
 
+fn shared_sources(settings: &Settings, ids: &[String]) -> Vec<String> {
+    ids.iter()
+        .filter(|id| {
+            settings
+                .sources
+                .iter()
+                .any(|s| &s.id == *id && s.provider == "codex" && s.codex_home_id.is_some())
+        })
+        .cloned()
+        .collect()
+}
+
 impl Store {
+    fn ensure_shared_sample_available(&self, ids: &[String], account_key: &str) -> Result<()> {
+        ensure!(
+            !self.active_estimates()?.iter().any(|e| {
+                e.account_key != account_key
+                    && e.shared_source_ids.iter().any(|id| ids.contains(id))
+            }),
+            "共享目录正在为其他账户采样，请先结束该采样"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn pause_shared_source_estimates(&self, source: &str) -> Result<()> {
+        for mut e in self
+            .active_estimates()?
+            .into_iter()
+            .filter(|e| e.status == "active" && e.shared_source_ids.iter().any(|id| id == source))
+        {
+            e.status = "pending".into();
+            e.reason = "共享目录的登录账户已变化；请确认后开始新一段".into();
+            self.save_estimate(&e)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn migrate_estimate_tables(&self) -> Result<()> {
         let tx = self.write_transaction()?;
         for (table, kind) in [
@@ -432,8 +485,13 @@ impl Store {
                     .ok()
                     != Some(&e.source_config)
             {
-                e.status = "pending".into();
-                e.reason = "账户或数据源配置发生变化；请确认后开始新一段".into();
+                if e.sampling_mode == "automatic" {
+                    e.status = "completed".into();
+                    e.ended_at = Some(e.checkpoint_at);
+                } else {
+                    e.status = "pending".into();
+                }
+                e.reason = "账户或数据源配置发生变化；已保留有效区间".into();
                 self.save_estimate(&e)?;
             }
         }
@@ -457,11 +515,9 @@ impl Store {
             return Ok(());
         }
         let key = format!("{}:{}", q.provider, q.account_id);
-        for mut e in self
-            .active_estimates()?
-            .into_iter()
-            .filter(|e| e.account_key == key && e.status == "active")
-        {
+        for mut e in self.active_estimates()?.into_iter().filter(|e| {
+            e.account_key == key && e.status == "active" && e.sampling_mode != "automatic"
+        }) {
             let e = match &mut e {
                 Estimate::Credit(credit) => {
                     self.observe_credit(credit, q)?;
@@ -509,6 +565,9 @@ impl Store {
         Ok(())
     }
     pub fn calculate_estimate(&self, e: &mut Estimate) -> Result<()> {
+        if e.sampling_mode == "automatic" {
+            return Ok(());
+        }
         match e {
             Estimate::Quota(e) => self.calculate_quota(e),
             Estimate::Credit(e) => self.calculate_credit(e),
@@ -554,7 +613,11 @@ impl Store {
         }
         Ok(())
     }
-    fn calculate_usage(&self, e: &mut EstimateCommon, group: Option<&str>) -> Result<()> {
+    pub(crate) fn calculate_usage(
+        &self,
+        e: &mut EstimateCommon,
+        group: Option<&str>,
+    ) -> Result<()> {
         let key = e.account_key.clone();
         let (provider, account) = key.split_once(':').context("账户格式错误")?;
         e.cost = 0.0;
@@ -566,14 +629,15 @@ impl Store {
         let mut boundary = false;
         let mut unmapped_group = false;
         // EXISTS avoids multiplying events observed through several selected sources.
-        let mut stmt = self.db.prepare("SELECT e.payload,e.cost,e.priced_tokens,e.price FROM events e WHERE e.provider=?1 AND e.account_id=?2 AND e.stamp>?3 AND e.stamp<=?4 AND EXISTS(SELECT 1 FROM event_sources s WHERE s.event_id=e.id AND s.source_id IN (SELECT value FROM json_each(?5)))")?;
+        let mut stmt = self.db.prepare("SELECT e.payload,e.cost,e.priced_tokens,e.price FROM events e WHERE e.provider=?1 AND e.stamp>?3 AND e.stamp<=?4 AND EXISTS(SELECT 1 FROM event_sources s WHERE s.event_id=e.id AND s.source_id IN (SELECT value FROM json_each(?5)) AND (e.account_id=?2 OR s.source_id IN (SELECT value FROM json_each(?6))))")?;
         let rows = stmt.query_map(
             params![
                 provider,
                 account,
                 e.started_at,
                 e.checkpoint_at,
-                serde_json::to_string(&e.source_ids)?
+                serde_json::to_string(&e.source_ids)?,
+                serde_json::to_string(&e.shared_source_ids)?
             ],
             |r| {
                 Ok((
@@ -691,6 +755,8 @@ impl Store {
         let settings = self.settings()?;
         let config = source_config(&settings, &ids, &key)?;
         let tx = self.write_transaction()?;
+        let shared_source_ids = shared_sources(&settings, &ids);
+        self.ensure_shared_sample_available(&shared_source_ids, &key)?;
         if let Some(id) = previous {
             let mut old = self.estimate_for(id, false)?;
             ensure!(
@@ -739,6 +805,7 @@ impl Store {
                     })
                     .collect(),
                 source_ids: ids,
+                shared_source_ids,
                 source_config: config,
                 status: "active".into(),
                 started_at: q.updated_at,
@@ -1083,7 +1150,9 @@ impl Engine {
                 return Ok(serde_json::to_value(existing)?);
             }
             ensure!(
-                original.status == "completed" && !original.has_value(),
+                original.status == "completed"
+                    && original.sampling_mode != "automatic"
+                    && !original.has_value(),
                 "仅支持修复已结束且无估值的记录"
             );
             self.sync_estimate_sources(&original.source_ids)?;
@@ -1094,10 +1163,27 @@ impl Engine {
         }
         if action == "stop" {
             let e = self.store.estimate_for(id, credits)?;
+            if e.sampling_mode == "automatic" {
+                for source in &e.source_ids {
+                    self.configure_automatic(json!({"sourceId":source,"enabled":false}))?;
+                }
+                return Ok(serde_json::to_value(self.store.estimate_for(id, credits)?)?);
+            }
             if e.status == "completed" {
                 return Ok(serde_json::to_value(e)?);
             }
             if e.status == "pending" {
+                return Ok(serde_json::to_value(
+                    self.store.finish_estimate_for(id, credits)?,
+                )?);
+            }
+            if self
+                .verify_sampling_identities(&e.source_ids, &e.account_key)
+                .is_err()
+            {
+                for source in &e.shared_source_ids {
+                    self.store.pause_shared_source_estimates(source)?;
+                }
                 return Ok(serde_json::to_value(
                     self.store.finish_estimate_for(id, credits)?,
                 )?);
@@ -1118,6 +1204,17 @@ impl Engine {
                 }
                 self.progress("补齐尾部记录");
                 self.sync_estimate_sources(&e.source_ids)?;
+                if self
+                    .verify_sampling_identities(&e.source_ids, &e.account_key)
+                    .is_err()
+                {
+                    for source in &e.shared_source_ids {
+                        self.store.pause_shared_source_estimates(source)?;
+                    }
+                    return Ok(serde_json::to_value(
+                        self.store.finish_estimate_for(id, credits)?,
+                    )?);
+                }
                 self.store.quota(q)?;
             }
             self.progress("保存采样结果");
@@ -1156,7 +1253,14 @@ impl Engine {
         };
         ids.sort();
         ids.dedup();
+        ensure!(
+            !self.store.settings()?.sources.iter().any(
+                |s| ids.contains(&s.id) && s.auto_valuation.as_ref().is_some_and(|a| a.enabled)
+            ),
+            "请先关闭所选来源的自动估值，再开始手动采样"
+        );
         source_config(&self.store.settings()?, &ids, key)?;
+        self.verify_sampling_identities(&ids, key)?;
         self.sync_estimate_sources(&ids)?;
         let (_, account) = key.split_once(':').context("账户格式错误")?;
         self.progress("读取实时限额");
@@ -1166,6 +1270,7 @@ impl Engine {
             .find(|q| format!("{}:{}", q.provider, q.account_id) == key)
             .context("未读取到账户限额")?;
         self.store.quota(q)?;
+        self.verify_sampling_identities(&ids, key)?;
         self.progress("保存采样起点");
         Ok(serde_json::to_value(self.store.begin_estimate(
             q,
@@ -1236,6 +1341,8 @@ impl Store {
         let settings = self.settings()?;
         let config = source_config(&settings, &ids, &key)?;
         let tx = self.write_transaction()?;
+        let shared_source_ids = shared_sources(&settings, &ids);
+        self.ensure_shared_sample_available(&shared_source_ids, &key)?;
         if let Some(id) = previous {
             let mut old = self.estimate_for(id, true)?;
             ensure!(
@@ -1280,6 +1387,7 @@ impl Store {
                     })
                     .collect(),
                 source_ids: ids,
+                shared_source_ids,
                 status: "active".into(),
                 started_at: q.updated_at,
                 checkpoint_at: q.updated_at,

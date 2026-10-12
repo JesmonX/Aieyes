@@ -990,7 +990,7 @@ impl Store {
                 if !account_ids.contains(&source.account_id) {
                     account_ids.push(source.account_id.clone());
                 }
-                d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":settings.source_enabled(source),"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok())}));
+                d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":settings.source_enabled(source),"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"autoValuation":source.auto_valuation,"autoValuationStatus":self.automatic_status(&source.id)?}));
             }
         }
         d.price_updated_at =

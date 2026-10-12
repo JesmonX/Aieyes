@@ -117,17 +117,31 @@ impl Engine {
                 .store
                 .estimates()?
                 .iter()
-                .filter(|e| e.status == "active" && e.account_key == key)
+                .filter(|e| {
+                    e.status == "active" && e.account_key == key && e.sampling_mode != "automatic"
+                })
                 .flat_map(|e| e.source_ids.clone())
                 .collect();
             ids.sort();
             ids.dedup();
             if !ids.is_empty() {
-                let _ = self.sync_estimate_sources(&ids);
+                if self.verify_sampling_identities(&ids, &key).is_err() {
+                    for id in &ids {
+                        self.store.pause_shared_source_estimates(id)?;
+                    }
+                    ids.clear();
+                } else {
+                    let _ = self.sync_estimate_sources(&ids);
+                }
             }
             let mut selected = params.clone();
             selected["accountKey"] = json!(key);
             let rows = self.read_quotas(&selected)?;
+            if !ids.is_empty() && self.verify_sampling_identities(&ids, &key).is_err() {
+                for id in &ids {
+                    self.store.pause_shared_source_estimates(id)?;
+                }
+            }
             for row in &rows {
                 self.store.quota(row)?;
             }

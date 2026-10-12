@@ -83,6 +83,13 @@ window.AieyesUI = {
   usageSources(settings) {
     return (settings?.sources ?? []).filter(source => source.provider !== 'deepseek' && this.sourceEnabled(settings, source));
   },
+  estimateSources(settings, quota) {
+    const account=(settings?.accounts??[]).find(a=>a.provider===quota.provider&&a.id===quota.accountId);
+    if(!account)return [];
+    const profiles=[account.quotaProfileId,...(account.connections??[]).map(c=>c.profileId)].filter(Boolean);
+    return this.usageSources(settings).filter(s=>s.provider===account.provider &&
+      (s.accountId===account.id || s.codexHomeId&&profiles.some(r=>r.startsWith(s.codexHomeId+':'))));
+  },
   freshness(settings, dashboard, now = Date.now() / 1000) {
     const sources = this.usageSources(settings);
     const statuses = sources.map(s => dashboard?.sources?.find(row => row.id === s.id)?.status);

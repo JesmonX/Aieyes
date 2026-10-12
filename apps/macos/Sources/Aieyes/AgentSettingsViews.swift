@@ -57,6 +57,7 @@ struct AgentDirectoriesView: View {
                 ForEach(sources) { source in
                     Section {
                         Text(source.path).textSelection(.enabled)
+                        AutomaticValuationControls(model: model, sources: [source])
                         HStack { Button("编辑目录") { editing = source }; Button("移除目录配置", role: .destructive) { removing = source } }
                     }
                 }

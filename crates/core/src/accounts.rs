@@ -43,6 +43,13 @@ pub(crate) fn status_revision(store: &Store, source: &Source) -> Result<Value> {
     Ok(get(store, &format!("account-status-revision:{}", source.id))?.unwrap_or(Value::Null))
 }
 pub(crate) fn codex_switched(store: &Store, source: &Source, operation: &Value) -> Result<()> {
+    if source.provider == "codex"
+        && source.codex_home_id.is_some()
+        && status_revision(store, source)? != *operation
+    {
+        store.pause_shared_source_estimates(&source.id)?;
+        store.invalidate_automatic_sources(std::slice::from_ref(&source.id))?;
+    }
     put(
         store,
         &format!("account-status-revision:{}", source.id),

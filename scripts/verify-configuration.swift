@@ -43,6 +43,18 @@ import Foundation
         }
         let afterConflict: Settings = try await other.call("settings.get")
         precondition(afterConflict == changed && model.settings == changed && model.settingsDraft == changed)
+        var automaticSeed = afterConflict
+        automaticSeed.sources = [AgentSource(id: "auto-source", name: "Auto", provider: "claude", accountId: "", path: "/fixture", enabled: false)]
+        let _: Acknowledgement = try await other.call("settings.save", params: parameters(automaticSeed))
+        let automaticBaseline: Settings = try await other.call("settings.get")
+        model.settings = automaticBaseline; model.settingsDraft = automaticBaseline
+        await model.configureAutomatic(automaticBaseline.sources[0], enabled: true, confirmed: true)
+        precondition(model.automaticError == nil && model.settings.sources[0].autoValuation?.enabled == true)
+        let enabled: Settings = try await other.call("settings.get")
+        precondition(enabled.sources[0].autoValuation?.consentVersion == 1 && model.settingsDraft == enabled)
+        await model.configureAutomatic(enabled.sources[0], enabled: false, confirmed: false)
+        precondition(model.automaticError == nil && model.settings.sources[0].autoValuation == nil)
+        print("Native source-level automatic opt-in and disable: real-core persistence and draft synchronization passed")
         print("Native production configuration actions: real-core concurrent fields merged, stale same-field edit rejected, committed settings preserved")
     }
 }

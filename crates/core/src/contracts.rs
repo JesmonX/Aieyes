@@ -40,6 +40,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "accounts.deployments.sync", lane: Lane::Accounts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.status.get", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.status.refresh", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "accounts.targets", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "agents.set", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "agyAuth.cancel", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "agyAuth.confirmWorkspace", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -49,6 +50,8 @@ pub const METHODS: &[Method] = &[
     Method { name: "agyAuth.status", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "agyAuth.submitCode", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "agyAuth.verify", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "autoEstimates.configure", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "autoEstimates.tick", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.adopt", lane: Lane::Main, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.enable", lane: Lane::Main, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.inspect", lane: Lane::Main, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -62,6 +65,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "codexAuth.profiles.list", lane: Lane::Main, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.profiles.remove", lane: Lane::Main, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.quota", lane: Lane::Main, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "codexAuth.reconcile", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.status", lane: Lane::Main, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.switch.commit", lane: Lane::Main, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.switch.prepare", lane: Lane::Main, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -82,6 +86,9 @@ pub const METHODS: &[Method] = &[
     Method { name: "methods.manifest", lane: Lane::Main, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "network.status", lane: Lane::Network, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "network.test", lane: Lane::Network, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "operations.prepareUpdate", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "operations.resume", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "operations.status", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.list", lane: Lane::Main, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.recalculate", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.save", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
@@ -114,11 +121,6 @@ pub const METHODS: &[Method] = &[
     Method { name: "wakeups.run", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.save", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.status", lane: Lane::Main, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "accounts.targets", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "codexAuth.reconcile", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "operations.prepareUpdate", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "operations.resume", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "operations.status", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
 ];
 #[rustfmt::skip]
 pub const PROVIDERS: &[Provider] = &[
@@ -136,7 +138,7 @@ pub const EXCLUDED_FS_TYPES: &[&str] = &["tmpfs", "devtmpfs", "squashfs", "overl
 pub const EXCLUDED_FS_PATHS: &[&str] = &["/snap", "/var/lib/snapd/snap", "/run", "/efi", "/boot/efi", "/dev", "/proc", "/sys", "/system/volumes/preboot", "/system/volumes/vm", "/system/volumes/update", "/system/volumes/xarts", "/system/volumes/iscpreboot", "/system/volumes/hardware"];
 pub const FIVE_HOUR_MINUTES: i64 = 300;
 pub const WEEK_MINUTES: i64 = 10080;
-pub const CONTRACT_HASH: &str = "4db1989414fb5431211b338e221b7a2b03efdd9f5894e3ba61c2b459c194fe16";
+pub const CONTRACT_HASH: &str = "eae7986bd3cc31bcd50b7578716885eaf1c3bea3f7762fd4002d80547b271c16";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

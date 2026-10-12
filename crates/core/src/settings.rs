@@ -165,6 +165,9 @@ impl Engine {
             );
         }
         let moved = old.is_some_and(|s| s.path != source.path);
+        if moved {
+            source.auto_valuation = None;
+        }
         if remove || moved {
             let tasks: Vec<_> = self
                 .store
@@ -488,6 +491,10 @@ mod tests {
             .unwrap();
         let mut settings = engine.store.settings().unwrap();
         settings.sources[0].codex_home_id = Some("home".into());
+        settings.sources[0].auto_valuation = Some(crate::automatic::AutoValuationConfig {
+            enabled: true,
+            consent_version: crate::automatic::CONSENT_VERSION,
+        });
         engine.store.save_auth_settings(&settings).unwrap();
         let old = engine.store.settings().unwrap().sources[0].clone();
         let mut moved = old.clone();

@@ -2,6 +2,12 @@ import Foundation
 
 @main struct VerifyModels {
     static func main() throws {
+        let automatic = try JSONDecoder().decode(AgentSource.self, from: Data(#"{"id":"s","name":"Shared","provider":"codex","path":"/fixture","accountId":"","enabled":true,"quotaCommand":"","quotaPreCommand":"","codexBinary":"codex","autoValuation":{"enabled":true,"consentVersion":1}}"#.utf8))
+        precondition(automatic.autoValuation?.enabled == true && automatic.autoValuation?.consentVersion == 1)
+        let roundtrip = try JSONDecoder().decode(AgentSource.self, from: JSONEncoder().encode(automatic))
+        precondition(roundtrip.autoValuation == automatic.autoValuation)
+        let legacySource = try JSONDecoder().decode(AgentSource.self, from: Data(#"{"id":"old","name":"Old","provider":"codex","path":"/fixture","accountId":"","enabled":true,"quotaCommand":"","quotaPreCommand":"","codexBinary":"codex"}"#.utf8))
+        precondition(legacySource.autoValuation == nil)
         let legacy = try JSONDecoder().decode(AppearanceSettings.self, from: Data(#"{"theme":"dark","accent":"teal"}"#.utf8))
         precondition(legacy.chartPalette == "classic" && legacy.chartContrast == "high")
         let legacyRoundtrip = try JSONDecoder().decode(AppearanceSettings.self, from: JSONEncoder().encode(legacy))
