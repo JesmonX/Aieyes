@@ -80,4 +80,8 @@ M1–M6 已在整合工作区实施。本机为 Intel macOS，下列结果针对
 
 首轮 Windows 共享检查发现一个本机未暴露的文件句柄问题：`sqlite3.Connection` 的上下文管理器只提交或回滚事务，不会关闭连接。新加的远端调度状态查询和其测试都因此保留数据库连接，Windows 在清理临时目录时报告 `WinError 32`。查询改用 `contextlib.closing`，测试同时明确提交事务和关闭连接；保留原有目录清理检查，不能通过跳过测试掩盖差异。
 
+SQLite 修复后的 Windows 检查继续发现历史备份测试把 Unix 的 `0600` 权限位用于 Windows 断言。该断言改为仅在 POSIX 上执行，独立备份可读、原始记录保留和再次修复幂等仍在三平台运行。维护文档同时明确 Windows 文件访问由继承的目录 ACL 控制，不能通过 `st_mode` 宣称 Unix 权限语义。[Python 文件权限说明](https://docs.python.org/3.12/library/os.html#os.chmod)、[Windows 文件安全说明](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)。
+
+Windows 原生进程回归还暴露了不必要的 PowerShell/CIM 查询：每次扫描都会读取沙箱服务注册信息，并在一次 CI 中触及 10 秒查询期限。改为发现沙箱可执行文件后再惰性查询，一次扫描共用查询结果；服务排除仍同时校验 PID、注册名称和实际映像路径，查询失败仍返回错误。保留实际子进程的身份变化拒绝、CLI 关闭、独立 API 保留和 GUI 正常退出/拒绝强杀回归，不通过延长所有超时或删除测试处理。
+
 最终验收以修复提交的 CI 为准：Core 三平台、macOS 原生构建/契约、Windows/Linux 桌面测试与构建均须成功。完整运行链接和结论同步到 PR 描述，原始检查元数据与日志保存在 `.local/audit-cc65Sr/ci/`。

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -101,7 +102,9 @@ class LegacyHistoryTests(unittest.TestCase):
             backup = sqlite3.connect('file:' + result['backup'] + '?mode=ro', uri=True)
             self.assertEqual(backup.execute('SELECT count(*) FROM events').fetchone()[0], 2)
             backup.close()
-            self.assertEqual(Path(result['backup']).stat().st_mode & 0o777, 0o600)
+            # Windows uses inherited ACLs; st_mode does not encode POSIX access rights.
+            if os.name == 'posix':
+                self.assertEqual(Path(result['backup']).stat().st_mode & 0o777, 0o600)
             self.assertEqual(json.loads(subprocess.check_output(command, text=True))['removedRows'], 0)
 
 

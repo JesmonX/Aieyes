@@ -123,8 +123,11 @@ fn services() -> Result<Vec<Service>> {
     let bytes = crate::process::run(cmd, vec![], Duration::from_secs(10))?;
     serde_json::from_slice(&bytes).context("无法确认 Windows 沙箱服务，请重新检查")
 }
-fn sandbox_service(pid: u32, path: &str, services: &[Service]) -> bool {
+fn sandbox_image(path: &str) -> bool {
     normalize(path).rsplit('\\').next() == Some("codex-windows-sandbox-service.exe")
+}
+fn sandbox_service(pid: u32, path: &str, services: &[Service]) -> bool {
+    sandbox_image(path)
         && services.iter().any(|s| {
             s.process_id == pid
                 && (s.name.eq_ignore_ascii_case("CodexSandboxService")
@@ -137,7 +140,7 @@ fn sandbox_service(pid: u32, path: &str, services: &[Service]) -> bool {
         })
 }
 fn observe() -> Result<Vec<Observation>> {
-    let services = services()?;
+    let mut service_rows = None;
     let mut system = System::new();
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
@@ -164,11 +167,18 @@ fn observe() -> Result<Vec<Observation>> {
         let candidate = name.starts_with("codex") || name.starts_with("chatgpt");
         let handle = open(pid, PROCESS_QUERY_LIMITED_INFORMATION);
         let actual_path = handle.as_ref().ok().and_then(|h| image(h.0).ok());
-        if actual_path
-            .as_ref()
-            .is_some_and(|path| sandbox_service(pid, path, &services))
-        {
-            continue;
+        if let Some(path) = actual_path.as_deref().filter(|path| sandbox_image(path)) {
+            // Most reviews have no sandbox service. Query registration only for
+            // a matching image, retaining all identity checks before exclusion.
+            if service_rows.is_none() {
+                service_rows = Some(services()?);
+            }
+            if service_rows
+                .as_ref()
+                .is_some_and(|services| sandbox_service(pid, path, services))
+            {
+                continue;
+            }
         }
         if handle
             .as_ref()
