@@ -599,7 +599,29 @@ impl Engine {
             enabled: true,
             consent_version: CONSENT_VERSION,
         });
+        // Consent changes do not change the token scope of an ongoing manual sample.
+        // Keep its original checkpoint and status; the automatic worker waits for it.
+        let manuals = self
+            .store
+            .estimates()?
+            .into_iter()
+            .filter(|e| {
+                e.sampling_mode != "automatic"
+                    && e.status == "active"
+                    && e.source_ids.iter().any(|source| source == id)
+                    && crate::estimates::source_config(&base, &e.source_ids, &e.account_key)
+                        .ok()
+                        .as_ref()
+                        == Some(&e.source_config)
+            })
+            .collect::<Vec<_>>();
         self.store.save_settings(&next)?;
+        let saved = self.store.settings()?;
+        for mut manual in manuals {
+            manual.source_config =
+                crate::estimates::source_config(&saved, &manual.source_ids, &manual.account_key)?;
+            self.store.save_estimate(&manual)?;
+        }
         self.store.invalidate_automatic_sources(&[id.into()])?;
         self.store.automatic_status_set(
             &[id.into()],
@@ -1322,6 +1344,55 @@ mod tests {
         assert_eq!(e.store.automatic_status("s").unwrap(), Value::Null);
     }
 
+    #[test]
+    fn opting_in_during_manual_sampling_does_not_pause_or_rebase_the_manual_record() {
+        let (_dir, mut e, mut q) = setup(false);
+        e.call(
+            "autoEstimates.configure",
+            json!({"sourceId":"s","enabled":false}),
+        )
+        .unwrap();
+        q.updated_at = now() - 60;
+        let manual = e
+            .store
+            .begin_estimate(&q, "week", vec!["s".into()], None)
+            .unwrap();
+        event(&e, &q, "manual-first", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 10.0;
+        e.store.quota(&q).unwrap();
+        e.call(
+            "autoEstimates.configure",
+            json!({"sourceId":"s","enabled":true,"confirmed":true}),
+        )
+        .unwrap();
+        let preserved = e.store.estimate_for(&manual.id, false).unwrap();
+        assert_eq!(preserved.status, "active");
+        assert_eq!(preserved.cost, 1.0);
+        assert_eq!(preserved.started_at, manual.started_at);
+        assert_eq!(preserved.checkpoint_at, q.updated_at);
+        observe(&e, &q);
+        assert_eq!(
+            e.store.automatic_status("s").unwrap()["state"],
+            "waitingManual"
+        );
+        e.call(
+            "autoEstimates.configure",
+            json!({"sourceId":"s","enabled":false}),
+        )
+        .unwrap();
+        assert_eq!(
+            e.store.estimate_for(&manual.id, false).unwrap().status,
+            "active"
+        );
+        event(&e, &q, "manual-next", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 10.0;
+        e.store.quota(&q).unwrap();
+        let finished = e.store.finish_estimate_for(&manual.id, false).unwrap();
+        assert_eq!(finished.cost, 2.0);
+        assert_eq!(finished.quota().unwrap().weekly_value, Some(10.0));
+    }
     #[test]
     fn manual_sampling_has_priority_and_long_gaps_do_not_invent_costs() {
         let (_dir, e, mut q) = setup(false);
