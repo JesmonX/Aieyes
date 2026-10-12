@@ -330,7 +330,21 @@ mod executable_tests {
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
         #[cfg(windows)]
-        std::fs::write(&script, "@echo off\r\necho %AIEYES_CLI_INIT%\r\necho %~1\r\nset /p aieyesFixtureInput=\r\necho %aieyesFixtureInput%\r\n").unwrap();
+        {
+            // Match npm launchers: the batch file forwards stdin to a native
+            // CLI process. `set /p` is a console-oriented reader and can hang
+            // on the redirected, hidden-console pipe in Windows CI.
+            std::fs::write(
+                directory.join("fixture-cli.py"),
+                "import os, sys\nprint(os.environ['AIEYES_CLI_INIT'])\nprint(sys.argv[1])\nprint(sys.stdin.buffer.readline().decode('utf-8').rstrip('\\r\\n'))\n",
+            )
+            .unwrap();
+            std::fs::write(
+                &script,
+                "@echo off\r\npython \"%~dp0fixture-cli.py\" %*\r\nexit /b %errorlevel%\r\n",
+            )
+            .unwrap();
+        }
 
         let initialization = if cfg!(windows) {
             "Write-Output 'setup banner'; Write-Host 'host banner'; $env:AIEYES_CLI_INIT='ready'"
@@ -351,7 +365,9 @@ mod executable_tests {
                 b"protocol-input\n".to_vec(),
                 Duration::from_secs(20),
             )
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!("CLI fixture initialization {pre_command:?}: {error:#}")
+            });
             assert_eq!(
                 String::from_utf8(output)
                     .unwrap()
@@ -389,7 +405,7 @@ mod executable_tests {
             b"protocol-input\n".to_vec(),
             Duration::from_secs(20),
         )
-        .unwrap();
+        .unwrap_or_else(|error| panic!("CLI fixture with initialized PATH: {error:#}"));
         assert_eq!(
             String::from_utf8(output)
                 .unwrap()

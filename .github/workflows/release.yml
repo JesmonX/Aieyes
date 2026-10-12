@@ -107,6 +107,13 @@ jobs:
           for attempt in {1..10}; do
             cargo test -p aieyes-core --lib --locked native_profile_switch_preserves_api_fixture_and_closes_login_fixture
           done
+      - name: Windows CLI stdin forwarding regression
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          for attempt in {1..5}; do
+            cargo test -p aieyes-core --lib --locked initialization_preserves_home_paths_environment_arguments_and_stdin -- --nocapture
+          done
       - name: Prepare bundled core for desktop tests
         if: runner.os != 'macOS'
         run: node scripts/prepare-wakeup.cjs --debug
