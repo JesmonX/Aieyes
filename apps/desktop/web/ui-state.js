@@ -16,18 +16,37 @@ window.AieyesUI = {
     return next;
   },
   escapeHTML(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); },
+  normalizePanelPreference(value) {
+    const next = {version:2, providers:{}};
+    const object = row => row && typeof row === 'object' && !Array.isArray(row);
+    const keys = row => Array.isArray(row) && row.every(key => typeof key === 'string');
+    if (!object(value)) return next;
+    if ('version' in value || 'providers' in value) {
+      if (value.version !== 2 || !object(value.providers)) return next;
+      for (const [provider,choice] of Object.entries(value.providers)) {
+        next.providers[provider] = choice?.mode === 'custom' && keys(choice.keys)
+          ? {mode:'custom', keys:[...choice.keys]} : {mode:'auto', keys:[]};
+      }
+    } else {
+      for (const [provider,choice] of Object.entries(value)) if (keys(choice)) next.providers[provider] = {mode:'custom', keys:[...choice]};
+    }
+    return next;
+  },
+  decodePanelPreference(raw) {
+    try { return this.normalizePanelPreference(JSON.parse(raw)); }
+    catch (_) { return {version:2, providers:{}}; }
+  },
   panelPreference() {
     try {
-      const current = JSON.parse(localStorage.getItem('aieyes.panel.accounts.v2') || 'null');
-      if (current?.version === 2 && current.providers) return current;
-      const old = JSON.parse(localStorage.getItem('aieyes.panel.accounts.v1') || '{}');
-      const next = {version:2, providers:{}};
-      for (const [provider,keys] of Object.entries(old || {})) if (Array.isArray(keys)) next.providers[provider] = {mode:'custom',keys};
+      const current = localStorage.getItem('aieyes.panel.accounts.v2');
+      if (current !== null) return this.decodePanelPreference(current);
+      const next = this.decodePanelPreference(localStorage.getItem('aieyes.panel.accounts.v1') || '{}');
       localStorage.setItem('aieyes.panel.accounts.v2', JSON.stringify(next));
       return next;
     } catch (_) { return {version:2,providers:{}}; }
   },
   panelAccounts(settings, order = [], preference = this.panelPreference()) {
+    preference = this.normalizePanelPreference(preference);
     const selected = {}, eligible=(settings?.accounts??[]).filter(a=>!a.archived&&a.quotaEnabled);
     const rank=a=>{const i=order.indexOf(a.provider+':'+a.id);return i<0?Number.MAX_SAFE_INTEGER:i;};
     const sorted=[...eligible].sort((a,b)=>rank(a)-rank(b));
@@ -55,9 +74,14 @@ window.AieyesUI = {
       return record?[{field,label:field==='weeklyValue'&&record.valuationMode==='fiveHour'?'7d 同期':label,value:record[field],record,historical:record!==all[0]||record.status==='completed'}]:[];
     });
   },
+  sourceEnabled(settings, source) {
+    const agents = (settings?.agents ?? []).filter(agent => agent.provider === source.provider);
+    return source.enabled && agents.length <= 1 &&
+      (!agents.length || (agents[0].enabled && agents[0].machineIds.includes(source.hostId ?? 'local'))) &&
+      (source.hostId == null || (settings?.hosts ?? []).some(host => host.id === source.hostId && host.enabled));
+  },
   usageSources(settings) {
-    return (settings?.sources ?? []).filter(s => s.enabled && s.provider!=='deepseek' &&
-      (!s.hostId || settings.hosts.some(h => h.id === s.hostId && h.enabled)));
+    return (settings?.sources ?? []).filter(source => source.provider !== 'deepseek' && this.sourceEnabled(settings, source));
   },
   freshness(settings, dashboard, now = Date.now() / 1000) {
     const sources = this.usageSources(settings);
@@ -134,21 +158,35 @@ window.AieyesUI = {
       localStorage.setItem('aieyes.antigravity.preferences',marker);
     } catch(_) {}
   },
-  targetTimeLocal(time, zone, now = new Date()) {
-    if (!zone) return '目标时区待读取';
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return '请输入 HH:mm';
+  nextTargetTime(time, zone, now = new Date()) {
+    zone = zone?.trim();
+    if (!zone) return {status:'pending',date:null,approximate:false};
+    if (typeof time!=='string'||time.length!==5||!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return {status:'invalidTime',date:null,approximate:false};
     try {
-      const formatter = new Intl.DateTimeFormat('en-CA', {timeZone:zone, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23'});
-      const parts = date => Object.fromEntries(formatter.formatToParts(date).filter(p=>p.type!=='literal').map(p=>[p.type,Number(p.value)]));
-      const p=parts(now),[hour,minute]=time.split(':').map(Number);
-      for(let day=0;day<3;day++) {
-        const target=Date.UTC(p.year,p.month-1,p.day+day,hour,minute);let candidate=target;
-        for(let i=0;i<4;i++){const z=parts(new Date(candidate));candidate=target-(Date.UTC(z.year,z.month-1,z.day,z.hour,z.minute)-candidate);}
-        const actual=parts(new Date(candidate));
-        if(candidate>now.getTime()&&actual.hour===hour&&actual.minute===minute)return '本地 '+new Date(candidate).toLocaleString(undefined,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+      let parts, approximate=false;
+      if(zone.includes('/')||zone==='UTC'||zone==='GMT') {
+        const formatter = new Intl.DateTimeFormat('en-GB', {timeZone:zone,hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+        parts = date => Object.fromEntries(formatter.formatToParts(date).filter(p=>p.type!=='literal').map(p=>[p.type,Number(p.value)]));
+      } else {
+        const offset=zone.match(/(?:^|\s)(?:UTC|GMT)?([+-])(\d{2}):?(\d{2})$/);
+        if(!offset||Number(offset[3])>=60||Number(offset[2])*60+Number(offset[3])>18*60)return {status:'invalidZone',date:null,approximate:false};
+        const minutes=(Number(offset[2])*60+Number(offset[3]))*(offset[1]==='-'?-1:1);
+        parts = date => {const local=new Date(date.getTime()+minutes*60_000);return {hour:local.getUTCHours(),minute:local.getUTCMinutes()};};
+        approximate=true;
       }
-      return '时区换算待确认，以部署状态为准';
-    } catch (_) { return '目标时区 '+zone+'；以部署状态为准'; }
+      const [hour,minute]=time.split(':').map(Number), start=Math.floor(now.getTime()/60_000)*60_000;
+      if(!Number.isFinite(start))return {status:'unavailable',date:null,approximate:false};
+      for(let i=1;i<=2880;i++) {
+        const date=new Date(start+i*60_000), actual=parts(date);
+        if(actual.hour===hour&&actual.minute===minute)return {status:'ready',date,approximate};
+      }
+      return {status:'unavailable',date:null,approximate:false};
+    } catch (_) { return {status:'invalidZone',date:null,approximate:false}; }
+  },
+  targetTimeLocal(time, zone, now = new Date()) {
+    const next=this.nextTargetTime(time,zone,now);
+    if(next.date)return '本地 '+next.date.toLocaleString(undefined,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})+(next.approximate?'（按当前偏移估算）':'');
+    return ({pending:'目标时区待读取',invalidTime:'请输入 HH:mm'})[next.status]??'时区换算待确认，以部署状态为准';
   },
   formValues(form) {
     return Object.fromEntries([...form.querySelectorAll('input[name],select[name],textarea[name]')].map(el =>

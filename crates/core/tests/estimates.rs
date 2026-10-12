@@ -77,7 +77,7 @@ fn valuation_excludes_api_deduplicates_sources_and_freezes_prices() {
     q.updated_at += 50;
     q.windows[0].used_percent = 30.0;
     store.quota(&q).unwrap();
-    let done = store.finish_estimate(&e.id).unwrap();
+    let done = store.finish_estimate_for(&e.id, false).unwrap();
     assert_eq!(done.quota().unwrap().weekly_value, Some(10.0));
     assert_eq!(done.total_tokens, 100);
     assert_eq!(done.excluded_api_tokens, 100);
@@ -91,7 +91,7 @@ fn valuation_excludes_api_deduplicates_sources_and_freezes_prices() {
     store.reprice(&settings, false).unwrap();
     assert_eq!(
         store
-            .finish_estimate(&e.id)
+            .finish_estimate_for(&e.id, false)
             .unwrap()
             .quota()
             .unwrap()
@@ -115,13 +115,13 @@ fn reset_pauses_at_last_valid_checkpoint_and_requires_explicit_restart() {
     q.windows[0].used_percent = 1.0;
     q.windows[0].resets_at = Some(now() + 20000);
     store.quota(&q).unwrap();
-    let pending = store.estimate(&e.id).unwrap();
+    let pending = store.estimate_for(&e.id, false).unwrap();
     assert_eq!(pending.status, "pending");
     assert_eq!(pending.checkpoint_at, good);
     assert_eq!(pending.quota().unwrap().weekly_value, Some(10.0));
     drop(store);
     let store = Store::open(dir.path()).unwrap();
-    assert_eq!(store.estimate(&e.id).unwrap().status, "pending");
+    assert_eq!(store.estimate_for(&e.id, false).unwrap().status, "pending");
     assert!(
         store
             .begin_estimate(&q, "weekly", vec![source.id.clone()], None)
@@ -132,7 +132,10 @@ fn reset_pauses_at_last_valid_checkpoint_and_requires_explicit_restart() {
         .unwrap();
     assert_ne!(next.id, e.id);
     assert_eq!(next.quota().unwrap().baseline_percent, 1.0);
-    assert_eq!(store.estimate(&e.id).unwrap().status, "completed");
+    assert_eq!(
+        store.estimate_for(&e.id, false).unwrap().status,
+        "completed"
+    );
 }
 #[test]
 fn low_sample_missing_price_and_ambiguous_boundary_never_produce_a_number() {
@@ -146,7 +149,7 @@ fn low_sample_missing_price_and_ambiguous_boundary_never_produce_a_number() {
     store.quota(&q).unwrap();
     assert!(
         store
-            .estimate(&e.id)
+            .estimate_for(&e.id, false)
             .unwrap()
             .quota()
             .unwrap()
@@ -167,7 +170,7 @@ fn low_sample_missing_price_and_ambiguous_boundary_never_produce_a_number() {
     store.quota(&q).unwrap();
     assert!(
         store
-            .estimate(&e.id)
+            .estimate_for(&e.id, false)
             .unwrap()
             .calculation_note
             .contains("价格")
@@ -182,7 +185,7 @@ fn low_sample_missing_price_and_ambiguous_boundary_never_produce_a_number() {
     store.quota(&q).unwrap();
     assert!(
         store
-            .estimate(&e.id)
+            .estimate_for(&e.id, false)
             .unwrap()
             .calculation_note
             .contains("边界")
@@ -198,11 +201,14 @@ fn log_snapshots_and_older_live_snapshots_cannot_reset_or_advance_sampling() {
     q.updated_at += 10;
     q.windows[0].used_percent = 0.0;
     store.quota(&q).unwrap();
-    assert_eq!(store.estimate(&e.id).unwrap().checkpoint_at, e.started_at);
+    assert_eq!(
+        store.estimate_for(&e.id, false).unwrap().checkpoint_at,
+        e.started_at
+    );
     q.origin = "live".into();
     q.updated_at = e.started_at - 1;
     store.observe_estimates(&q).unwrap();
-    assert_eq!(store.estimate(&e.id).unwrap().status, "active");
+    assert_eq!(store.estimate_for(&e.id, false).unwrap().status, "active");
 }
 #[test]
 fn read_failure_retains_previous_checkpoint_and_source_changes_are_not_silent() {
@@ -212,8 +218,11 @@ fn read_failure_retains_previous_checkpoint_and_source_changes_are_not_silent() 
         .unwrap();
     q.error = Some("offline".into());
     store.quota(&q).unwrap();
-    assert_eq!(store.estimate(&e.id).unwrap().status, "pending");
-    assert_eq!(store.estimate(&e.id).unwrap().checkpoint_at, e.started_at);
+    assert_eq!(store.estimate_for(&e.id, false).unwrap().status, "pending");
+    assert_eq!(
+        store.estimate_for(&e.id, false).unwrap().checkpoint_at,
+        e.started_at
+    );
     q.error = None;
     let next = store
         .begin_estimate(&q, "weekly", vec![source.id], Some(&e.id))
@@ -223,7 +232,10 @@ fn read_failure_retains_previous_checkpoint_and_source_changes_are_not_silent() 
     store.save_settings(&settings).unwrap();
     q.updated_at += 10;
     store.quota(&q).unwrap();
-    assert_eq!(store.estimate(&next.id).unwrap().status, "pending");
+    assert_eq!(
+        store.estimate_for(&next.id, false).unwrap().status,
+        "pending"
+    );
 }
 #[test]
 fn quota_order_survives_drafts_filtering_new_accounts_and_reopen() {
@@ -315,7 +327,7 @@ fn pending_record_can_end_after_source_removal_without_recomputing_frozen_segmen
     let mut settings = store.settings().unwrap();
     settings.sources.clear();
     store.save_settings(&settings).unwrap();
-    assert_eq!(store.estimate(&e.id).unwrap().status, "pending");
+    assert_eq!(store.estimate_for(&e.id, false).unwrap().status, "pending");
     drop(store);
     let mut engine = aieyes_core::Engine::open(dir.path()).unwrap();
     let done = engine

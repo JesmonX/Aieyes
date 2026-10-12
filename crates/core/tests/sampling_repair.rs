@@ -140,7 +140,7 @@ fn repair_keeps_original_frozen_prices_and_is_idempotent() {
             [serde_json::to_string(&original).unwrap()],
         )
         .unwrap();
-    assert!(store.repair_estimate("sample").is_err());
+    assert!(store.repair_estimate_for("sample", true).is_err());
     store
         .put_event(&verified, std::slice::from_ref(&price), &settings)
         .unwrap();
@@ -154,13 +154,16 @@ fn repair_keeps_original_frozen_prices_and_is_idempotent() {
         }])
         .unwrap();
     store.reprice(&settings, false).unwrap();
-    let repaired = store.repair_estimate("sample").unwrap();
+    let repaired = store.repair_estimate_for("sample", true).unwrap();
     assert_eq!(repaired.credit().unwrap().value_per1000, Some(40.0));
     assert_eq!(repaired.original_estimate_id.as_deref(), Some("sample"));
-    assert_eq!(store.repair_estimate("sample").unwrap().id, repaired.id);
+    assert_eq!(
+        store.repair_estimate_for("sample", true).unwrap().id,
+        repaired.id
+    );
     assert!(
         store
-            .estimate("sample")
+            .estimate_for("sample", true)
             .unwrap()
             .credit()
             .unwrap()
@@ -173,7 +176,10 @@ fn repair_keeps_original_frozen_prices_and_is_idempotent() {
             .get("capacity")
             .is_none()
     );
-    assert_eq!(repaired.prices, store.estimate("sample").unwrap().prices);
+    assert_eq!(
+        repaired.prices,
+        store.estimate_for("sample", true).unwrap().prices
+    );
     assert_eq!(repaired.calculation_status, "ready");
     assert_eq!(store.estimates().unwrap().len(), 2);
 }

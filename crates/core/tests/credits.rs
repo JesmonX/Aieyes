@@ -97,8 +97,8 @@ fn cache_prices_are_shared_by_weekly_and_credit_estimates() {
     q.credits.as_mut().unwrap().balance = Some("990.125".into());
     q.windows[0].used_percent = 100.0;
     store.quota(&q).unwrap();
-    let c = store.finish_estimate(&c.id).unwrap();
-    let w = store.finish_estimate(&w.id).unwrap();
+    let c = store.finish_estimate_for(&c.id, true).unwrap();
+    let w = store.finish_estimate_for(&w.id, false).unwrap();
     assert!((c.cost - 1.975).abs() < 1e-9);
     assert_eq!(c.cost, w.cost);
     assert_eq!(c.total_tokens, 350);
@@ -114,7 +114,7 @@ fn cache_prices_are_shared_by_weekly_and_credit_estimates() {
         }])
         .unwrap();
     store.reprice(&store.settings().unwrap(), false).unwrap();
-    assert!((store.estimate(&c.id).unwrap().cost - c.cost).abs() < 1e-12);
+    assert!((store.estimate_for(&c.id, true).unwrap().cost - c.cost).abs() < 1e-12);
 }
 #[test]
 fn credit_balance_is_exact_and_missing_is_not_zero() {
@@ -157,14 +157,14 @@ fn credit_sampling_pauses_on_topup_and_preserves_valid_checkpoint() {
     q.updated_at += 10;
     q.credits.as_mut().unwrap().balance = Some("1200".into());
     store.quota(&q).unwrap();
-    let paused = store.estimate(&e.id).unwrap();
+    let paused = store.estimate_for(&e.id, true).unwrap();
     assert_eq!(paused.status, "pending");
     assert_eq!(paused.checkpoint_at, stamp);
     drop(store);
     let store = Store::open(dir.path()).unwrap();
     assert_eq!(
         store
-            .estimate(&e.id)
+            .estimate_for(&e.id, true)
             .unwrap()
             .credit()
             .unwrap()
@@ -182,7 +182,10 @@ fn credit_sampling_pauses_on_topup_and_preserves_valid_checkpoint() {
     q.updated_at += 10;
     q.windows[0].used_percent = 1.0;
     store.quota(&q).unwrap();
-    assert_eq!(store.estimate(&restarted.id).unwrap().status, "pending");
+    assert_eq!(
+        store.estimate_for(&restarted.id, true).unwrap().status,
+        "pending"
+    );
 }
 #[test]
 fn small_unpriced_or_boundary_samples_have_no_value() {
@@ -196,7 +199,7 @@ fn small_unpriced_or_boundary_samples_have_no_value() {
     store.quota(&q).unwrap();
     assert!(
         store
-            .estimate(&e.id)
+            .estimate_for(&e.id, true)
             .unwrap()
             .credit()
             .unwrap()
@@ -208,7 +211,7 @@ fn small_unpriced_or_boundary_samples_have_no_value() {
     store.quota(&q).unwrap();
     assert!(
         store
-            .estimate(&e.id)
+            .estimate_for(&e.id, true)
             .unwrap()
             .calculation_note
             .contains("价格")
@@ -225,7 +228,7 @@ fn small_unpriced_or_boundary_samples_have_no_value() {
     store.reprice(&store.settings().unwrap(), true).unwrap();
     q.error = Some("offline".into());
     store.quota(&q).unwrap();
-    assert_eq!(store.estimate(&e.id).unwrap().status, "pending");
+    assert_eq!(store.estimate_for(&e.id, true).unwrap().status, "pending");
 }
 #[test]
 fn credits_are_not_reset_counts_or_sums_and_logs_cannot_replace_live_balances() {

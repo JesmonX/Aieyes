@@ -141,6 +141,334 @@
           "claude:a"
         ]
       }
+    },
+    {
+      "name": "unknown mode falls back to automatic",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "b",
+          "name": "B",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "provider": "claude",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [
+        "codex:b",
+        "codex:a"
+      ],
+      "rawPreference": "{\"version\":2,\"providers\":{\"codex\":{\"mode\":\"future\",\"keys\":[]}}}",
+      "expected": {
+        "codex": [
+          "codex:b",
+          "codex:a"
+        ],
+        "claude": [
+          "claude:c"
+        ]
+      }
+    },
+    {
+      "name": "missing custom keys are not explicit empty",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "b",
+          "name": "B",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "provider": "claude",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [
+        "codex:b",
+        "codex:a"
+      ],
+      "rawPreference": "{\"version\":2,\"providers\":{\"codex\":{\"mode\":\"custom\"}}}",
+      "expected": {
+        "codex": [
+          "codex:b",
+          "codex:a"
+        ],
+        "claude": [
+          "claude:c"
+        ]
+      }
+    },
+    {
+      "name": "invalid choice preserves other explicit empty choices",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "b",
+          "name": "B",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "provider": "claude",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [
+        "codex:b",
+        "codex:a"
+      ],
+      "rawPreference": "{\"version\":2,\"providers\":{\"codex\":false,\"claude\":{\"mode\":\"custom\",\"keys\":[]}}}",
+      "expected": {
+        "codex": [
+          "codex:b",
+          "codex:a"
+        ],
+        "claude": []
+      }
+    },
+    {
+      "name": "non-string keys recover to automatic",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "b",
+          "name": "B",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "provider": "claude",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [
+        "codex:b",
+        "codex:a"
+      ],
+      "rawPreference": "{\"version\":2,\"providers\":{\"codex\":{\"mode\":\"custom\",\"keys\":[7]}}}",
+      "expected": {
+        "codex": [
+          "codex:b",
+          "codex:a"
+        ],
+        "claude": [
+          "claude:c"
+        ]
+      }
+    },
+    {
+      "name": "unknown preference version falls back to automatic",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "b",
+          "name": "B",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "provider": "claude",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [
+        "codex:b",
+        "codex:a"
+      ],
+      "rawPreference": "{\"version\":3,\"providers\":{\"codex\":{\"mode\":\"custom\",\"keys\":[]}}}",
+      "expected": {
+        "codex": [
+          "codex:b",
+          "codex:a"
+        ],
+        "claude": [
+          "claude:c"
+        ]
+      }
+    },
+    {
+      "name": "invalid providers recover to automatic",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "b",
+          "name": "B",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "provider": "claude",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [
+        "codex:b",
+        "codex:a"
+      ],
+      "rawPreference": "{\"version\":2,\"providers\":null}",
+      "expected": {
+        "codex": [
+          "codex:b",
+          "codex:a"
+        ],
+        "claude": [
+          "claude:c"
+        ]
+      }
+    },
+    {
+      "name": "null preference recovers to automatic",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "b",
+          "name": "B",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "provider": "claude",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [
+        "codex:b",
+        "codex:a"
+      ],
+      "rawPreference": "null",
+      "expected": {
+        "codex": [
+          "codex:b",
+          "codex:a"
+        ],
+        "claude": [
+          "claude:c"
+        ]
+      }
+    },
+    {
+      "name": "legacy explicit empty remains empty",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "b",
+          "name": "B",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "provider": "claude",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [
+        "codex:b",
+        "codex:a"
+      ],
+      "rawPreference": "{\"codex\":[]}",
+      "expected": {
+        "codex": [],
+        "claude": [
+          "claude:c"
+        ]
+      }
+    },
+    {
+      "name": "corrupt JSON recovers to automatic",
+      "accounts": [
+        {
+          "id": "a",
+          "name": "A",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "b",
+          "name": "B",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "c",
+          "name": "C",
+          "provider": "claude",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [
+        "codex:b",
+        "codex:a"
+      ],
+      "rawPreference": "{",
+      "expected": {
+        "codex": [
+          "codex:b",
+          "codex:a"
+        ],
+        "claude": [
+          "claude:c"
+        ]
+      }
     }
   ],
   "windows": [

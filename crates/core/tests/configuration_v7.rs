@@ -2,6 +2,115 @@ use aieyes_core::{Engine, models::*};
 use serde_json::json;
 
 #[test]
+fn source_availability_matches_shared_client_fixtures() {
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(root.path()).unwrap();
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../scripts/fixtures/source-availability.json"
+    ))
+    .unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let settings: Settings = serde_json::from_value(json!({
+            "sources": fixture["sources"], "agents": case["agents"], "hosts": case["hosts"]
+        }))
+        .unwrap();
+        let enabled: Vec<_> = settings
+            .sources
+            .iter()
+            .filter(|source| settings.source_enabled(source))
+            .map(|source| &source.id)
+            .collect();
+        assert_eq!(json!(enabled), case["expectedEnabled"], "{}", case["name"]);
+        engine
+            .store
+            .db
+            .execute(
+                "INSERT OR REPLACE INTO kv VALUES('settings',?1)",
+                [json!(settings).to_string()],
+            )
+            .unwrap();
+        let dashboard = engine.call("dashboard", json!({})).unwrap();
+        let effective: Vec<_> = dashboard["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|source| source["enabled"] == true)
+            .map(|source| &source["id"])
+            .collect();
+        assert_eq!(
+            &json!(effective),
+            case.get("expectedNormalizedEnabled")
+                .unwrap_or(&case["expectedEnabled"]),
+            "dashboard: {}",
+            case["name"]
+        );
+    }
+}
+
+#[test]
+fn account_targets_use_committed_agent_machine_host_and_archive_rules() {
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(root.path()).unwrap();
+    let original: Settings = serde_json::from_value(json!({
+        "version":7,
+        "agents":[{"provider":"claude","enabled":true,"machineIds":["local","online","paused","missing"]}],
+        "sources":[
+            {"id":"local","provider":"claude","accountId":"fixture","enabled":true},
+            {"id":"remote","provider":"claude","accountId":"fixture","hostId":"online","enabled":true},
+            {"id":"paused","provider":"claude","accountId":"fixture","hostId":"paused","enabled":true},
+            {"id":"missing","provider":"claude","accountId":"fixture","hostId":"missing","enabled":true},
+            {"id":"disabled","provider":"claude","accountId":"fixture","enabled":false}
+        ],
+        "accounts":[{"id":"fixture","provider":"claude","quotaEnabled":true}],
+        "hosts":[{"id":"online","enabled":true},{"id":"paused","enabled":false}]
+    })).unwrap();
+    let mut cases = vec![("active", original.clone(), vec!["local", "remote"])];
+    let mut paused = original.clone();
+    paused.agents[0].enabled = false;
+    cases.push(("paused agent", paused, vec![]));
+    let mut machines = original.clone();
+    machines.agents[0].machine_ids = vec!["online".into()];
+    cases.push(("deselected local", machines, vec!["remote"]));
+    let mut duplicate = original.clone();
+    let mut conflicting = duplicate.agents[0].clone();
+    conflicting.enabled = false;
+    duplicate.agents.push(conflicting);
+    cases.push(("conflicting agent", duplicate, vec![]));
+    let mut host = original.clone();
+    host.hosts[0].enabled = false;
+    cases.push(("paused host", host, vec!["local"]));
+    let mut archived = original;
+    archived.accounts[0].archived = true;
+    cases.push(("archived account", archived, vec![]));
+    for (name, settings, expected) in cases {
+        engine
+            .store
+            .db
+            .execute(
+                "INSERT OR REPLACE INTO kv VALUES('settings',?1)",
+                [json!(settings).to_string()],
+            )
+            .unwrap();
+        let targets = engine.call("accounts.targets", json!({})).unwrap();
+        let actual: Vec<_> = targets
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|target| target["sourceId"].as_str().unwrap())
+            .collect();
+        assert_eq!(actual, expected, "{name}");
+        assert!(
+            targets
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|target| target["canWake"] == true),
+            "{name}: {targets}"
+        );
+    }
+}
+
+#[test]
 fn legacy_profile_migrates_once_and_removed_connections_do_not_resurrect() {
     let mut settings = Settings {
         version: 6,

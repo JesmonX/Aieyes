@@ -1,0 +1,437 @@
+{
+  "sources": [
+    {
+      "id": "local",
+      "provider": "codex",
+      "enabled": true
+    },
+    {
+      "id": "remote",
+      "provider": "codex",
+      "hostId": "online",
+      "enabled": true
+    },
+    {
+      "id": "paused-host",
+      "provider": "codex",
+      "hostId": "paused",
+      "enabled": true
+    },
+    {
+      "id": "missing-host",
+      "provider": "codex",
+      "hostId": "missing",
+      "enabled": true
+    },
+    {
+      "id": "empty-host",
+      "provider": "codex",
+      "hostId": "",
+      "enabled": true
+    },
+    {
+      "id": "disabled-source",
+      "provider": "codex",
+      "enabled": false
+    },
+    {
+      "id": "claude",
+      "provider": "claude",
+      "enabled": true
+    },
+    {
+      "id": "balance",
+      "provider": "deepseek",
+      "enabled": true
+    },
+    {
+      "id": "custom",
+      "provider": "custom",
+      "enabled": true
+    }
+  ],
+  "cases": [
+    {
+      "name": "legacy configuration without agents",
+      "agents": [],
+      "hosts": [
+        {
+          "id": "online",
+          "enabled": true
+        },
+        {
+          "id": "paused",
+          "enabled": false
+        }
+      ],
+      "expectedEnabled": [
+        "local",
+        "remote",
+        "claude",
+        "balance",
+        "custom"
+      ],
+      "expectedUsage": [
+        "local",
+        "remote",
+        "claude",
+        "custom"
+      ]
+    },
+    {
+      "name": "enabled agent on selected machines",
+      "agents": [
+        {
+          "provider": "codex",
+          "enabled": true,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        }
+      ],
+      "hosts": [
+        {
+          "id": "online",
+          "enabled": true
+        },
+        {
+          "id": "paused",
+          "enabled": false
+        }
+      ],
+      "expectedEnabled": [
+        "local",
+        "remote",
+        "claude",
+        "balance",
+        "custom"
+      ],
+      "expectedUsage": [
+        "local",
+        "remote",
+        "claude",
+        "custom"
+      ]
+    },
+    {
+      "name": "disabled agent retains history but stops queries",
+      "agents": [
+        {
+          "provider": "codex",
+          "enabled": false,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        }
+      ],
+      "hosts": [
+        {
+          "id": "online",
+          "enabled": true
+        },
+        {
+          "id": "paused",
+          "enabled": false
+        }
+      ],
+      "expectedEnabled": [
+        "claude",
+        "balance",
+        "custom"
+      ],
+      "expectedUsage": [
+        "claude",
+        "custom"
+      ]
+    },
+    {
+      "name": "local machine deselected",
+      "agents": [
+        {
+          "provider": "codex",
+          "enabled": true,
+          "machineIds": [
+            "online"
+          ]
+        }
+      ],
+      "hosts": [
+        {
+          "id": "online",
+          "enabled": true
+        },
+        {
+          "id": "paused",
+          "enabled": false
+        }
+      ],
+      "expectedEnabled": [
+        "remote",
+        "claude",
+        "balance",
+        "custom"
+      ],
+      "expectedUsage": [
+        "remote",
+        "claude",
+        "custom"
+      ]
+    },
+    {
+      "name": "no selected machines",
+      "agents": [
+        {
+          "provider": "codex",
+          "enabled": true,
+          "machineIds": []
+        }
+      ],
+      "hosts": [
+        {
+          "id": "online",
+          "enabled": true
+        },
+        {
+          "id": "paused",
+          "enabled": false
+        }
+      ],
+      "expectedEnabled": [
+        "claude",
+        "balance",
+        "custom"
+      ],
+      "expectedUsage": [
+        "claude",
+        "custom"
+      ]
+    },
+    {
+      "name": "conflicting duplicate agents",
+      "agents": [
+        {
+          "provider": "codex",
+          "enabled": true,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        },
+        {
+          "provider": "codex",
+          "enabled": false,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        }
+      ],
+      "hosts": [
+        {
+          "id": "online",
+          "enabled": true
+        },
+        {
+          "id": "paused",
+          "enabled": false
+        }
+      ],
+      "expectedEnabled": [
+        "claude",
+        "balance",
+        "custom"
+      ],
+      "expectedUsage": [
+        "claude",
+        "custom"
+      ]
+    },
+    {
+      "name": "identical duplicate agents",
+      "agents": [
+        {
+          "provider": "codex",
+          "enabled": true,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        },
+        {
+          "provider": "codex",
+          "enabled": true,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        }
+      ],
+      "hosts": [
+        {
+          "id": "online",
+          "enabled": true
+        },
+        {
+          "id": "paused",
+          "enabled": false
+        }
+      ],
+      "expectedEnabled": [
+        "claude",
+        "balance",
+        "custom"
+      ],
+      "expectedUsage": [
+        "claude",
+        "custom"
+      ],
+      "expectedNormalizedEnabled": [
+        "local",
+        "remote",
+        "claude",
+        "balance",
+        "custom"
+      ]
+    },
+    {
+      "name": "host paused",
+      "agents": [
+        {
+          "provider": "codex",
+          "enabled": true,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        }
+      ],
+      "hosts": [
+        {
+          "id": "online",
+          "enabled": false
+        }
+      ],
+      "expectedEnabled": [
+        "local",
+        "claude",
+        "balance",
+        "custom"
+      ],
+      "expectedUsage": [
+        "local",
+        "claude",
+        "custom"
+      ]
+    },
+    {
+      "name": "hosts removed",
+      "agents": [
+        {
+          "provider": "codex",
+          "enabled": true,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        }
+      ],
+      "hosts": [],
+      "expectedEnabled": [
+        "local",
+        "claude",
+        "balance",
+        "custom"
+      ],
+      "expectedUsage": [
+        "local",
+        "claude",
+        "custom"
+      ]
+    },
+    {
+      "name": "unconfigured provider remains compatible",
+      "agents": [
+        {
+          "provider": "claude",
+          "enabled": false,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        }
+      ],
+      "hosts": [
+        {
+          "id": "online",
+          "enabled": true
+        },
+        {
+          "id": "paused",
+          "enabled": false
+        }
+      ],
+      "expectedEnabled": [
+        "local",
+        "remote",
+        "balance",
+        "custom"
+      ],
+      "expectedUsage": [
+        "local",
+        "remote",
+        "custom"
+      ]
+    },
+    {
+      "name": "all agents disabled",
+      "agents": [
+        {
+          "provider": "codex",
+          "enabled": false,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        },
+        {
+          "provider": "claude",
+          "enabled": false,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        },
+        {
+          "provider": "deepseek",
+          "enabled": false,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        },
+        {
+          "provider": "custom",
+          "enabled": false,
+          "machineIds": [
+            "local",
+            "online"
+          ]
+        }
+      ],
+      "hosts": [
+        {
+          "id": "online",
+          "enabled": true
+        },
+        {
+          "id": "paused",
+          "enabled": false
+        }
+      ],
+      "expectedEnabled": [],
+      "expectedUsage": []
+    }
+  ]
+}

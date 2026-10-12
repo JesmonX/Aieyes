@@ -27,7 +27,6 @@ fn migration_preserves_both_types_same_id_and_original_payloads() {
     drop(db);
     let store = Store::open(root.path()).unwrap();
     assert_eq!(store.estimates().unwrap().len(), 2);
-    assert!(store.estimate("same").is_err());
     assert_eq!(
         store
             .estimate_for("same", false)
@@ -73,6 +72,24 @@ fn migration_preserves_both_types_same_id_and_original_payloads() {
         "credits"
     );
     assert_eq!(engine.store.estimates().unwrap().len(), 2);
+    engine
+        .call("quotaEstimates.stop", json!({"id":"same"}))
+        .unwrap();
+    assert_eq!(
+        engine.store.estimate_for("same", false).unwrap().status,
+        "completed"
+    );
+    assert_eq!(
+        engine.store.estimate_for("same", true).unwrap().status,
+        "pending"
+    );
+    engine
+        .call("creditEstimates.stop", json!({"id":"same"}))
+        .unwrap();
+    assert_eq!(
+        engine.store.estimate_for("same", true).unwrap().status,
+        "completed"
+    );
 }
 
 #[test]

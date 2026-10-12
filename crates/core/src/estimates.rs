@@ -398,18 +398,6 @@ impl Store {
             .map(|(kind, raw)| decode_estimate(kind, raw))
             .collect()
     }
-    pub fn estimate(&self, id: &str) -> Result<Estimate> {
-        let rows = self
-            .db
-            .prepare("SELECT kind,payload FROM estimates WHERE id=?1 LIMIT 2")?
-            .query_map([id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        ensure!(rows.len() <= 1, "采样编号不唯一，请指定采样类型");
-        let (kind, raw) = rows.first().context("采样记录不存在")?;
-        decode_estimate(kind, raw)
-    }
     pub fn estimate_for(&self, id: &str, credits: bool) -> Result<Estimate> {
         let kind = if credits { "credits" } else { "quota" };
         let raw: String = self
@@ -783,9 +771,6 @@ impl Store {
         tx.commit()?;
         Ok(Estimate::Quota(e))
     }
-    pub fn finish_estimate(&self, id: &str) -> Result<Estimate> {
-        self.finish_record(self.estimate(id)?)
-    }
     pub fn finish_estimate_for(&self, id: &str, credits: bool) -> Result<Estimate> {
         self.finish_record(self.estimate_for(id, credits)?)
     }
@@ -802,9 +787,6 @@ impl Store {
         Ok(e)
     }
 
-    pub fn repair_estimate(&self, id: &str) -> Result<Estimate> {
-        self.repair_record(self.estimate(id)?)
-    }
     pub fn repair_estimate_for(&self, id: &str, credits: bool) -> Result<Estimate> {
         self.repair_record(self.estimate_for(id, credits)?)
     }

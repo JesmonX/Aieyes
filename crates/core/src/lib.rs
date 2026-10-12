@@ -214,10 +214,10 @@ impl Engine {
                 self.store
                     .set_quota_order(serde_json::from_value(params["keys"].clone())?)?,
             )?),
-            "sessions.list" => Ok(serde_json::to_value(self.sessions.read(
-                &self.store.settings()?.sources,
-                std::time::SystemTime::now(),
-            ))?),
+            "sessions.list" => Ok(serde_json::to_value(
+                self.sessions
+                    .read(&self.store.settings()?, std::time::SystemTime::now()),
+            )?),
             "hello" => Ok(
                 json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"contractHash":contracts::CONTRACT_HASH}),
             ),

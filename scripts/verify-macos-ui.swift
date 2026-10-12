@@ -4,7 +4,7 @@ import Foundation
     struct SemanticsFixture: Decodable {
         struct Panel: Decodable {
             var name: String, accounts: [AgentAccount], order: [String]
-            var preference: PanelAccountPreference.Preference, expected: [String: [String]]
+            var preference: PanelAccountPreference.Preference?, rawPreference: String?, expected: [String: [String]]
         }
         struct Windows: Decodable { var name: String, provider: String, windows: [QuotaWindow], expected: [String] }
         var panels: [Panel], windows: [Windows]
@@ -12,7 +12,7 @@ import Foundation
     @MainActor static func main() async throws {
         let fixture = try JSONDecoder().decode(SemanticsFixture.self, from: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/ui-semantics.json")))
         for row in fixture.panels {
-            let preference = String(data: try JSONEncoder().encode(row.preference), encoding: .utf8)!
+            let preference = try row.rawPreference ?? String(data: JSONEncoder().encode(row.preference), encoding: .utf8)!
             precondition(PanelAccountPreference.selections(preference, accounts: row.accounts, order: row.order) == row.expected, row.name)
         }
         for row in fixture.windows {
@@ -65,9 +65,7 @@ import Foundation
         var settings = Settings()
         settings.accounts = [AgentAccount(id: "fixture", name: "Fixture", provider: "deepseek", quotaEnabled: true)]
         settings.sources = [AgentSource(id: "fixture-source", name: "Fixture", provider: "deepseek", accountId: "fixture", path: "", enabled: false)]
-        let committedKey = root.appendingPathComponent("committed.key")
-        try Data("old-fixture-key".utf8).write(to: committedKey)
-        settings.sources[0].path = committedKey.path
+        settings.sources[0].path = root.appendingPathComponent("fixture.key").path
         var dashboard = Dashboard()
         dashboard.modelOptions = ["alpha", "beta"]
         dashboard.generatedAt = 1_790_000_000; dashboard.summary.total = 123_456
@@ -77,7 +75,7 @@ import Foundation
         let executable = root.appendingPathComponent("core.py")
         let script = #"""
 #!/usr/bin/python3
-import json,sys,os,hashlib
+import json,sys,os
 root=os.environ['AIEYES_UI_FIXTURE']
 for line in sys.stdin:
     req=json.loads(line); method=req['method']
@@ -99,6 +97,7 @@ for line in sys.stdin:
     elif method in ('sources.scan','sources.rescan'):
         rows=json.load(open(root+'/scan-result.json')) if os.path.exists(root+'/scan-result.json') else []
         response['result']=[r for r in rows if not req.get('params',{}).get('sourceId') or r['id']==req['params']['sourceId']]
+    elif method=='settings.patch' and os.path.exists(root+'/fail-configuration'): response['error']=dict(message='模拟配置保存失败')
     elif method=='settings.patch' and os.path.exists(root+'/fail-theme'): response['error']=dict(message='模拟主题保存失败')
     elif method=='settings.patch' and req['params']['settings']['refreshSeconds'] < 5: response['error']=dict(message='刷新间隔无效')
     elif method.startswith('quotaEstimates.'):
@@ -124,10 +123,6 @@ for line in sys.stdin:
     elif method=='prices.save': response['error']=dict(message='模拟价格保存失败')
     elif method=='prices.recalculate' and os.path.exists(root+'/fail-reprice'): response['error']=dict(message='模拟重算失败')
     elif method=='hosts.sample': response['error']=dict(message='模拟采样连接失败')
-    elif method=='credentials.save':
-        target=root+'/'+hashlib.sha256(req['params']['sourceId'].encode()).hexdigest()+'.key'
-        with open(target,'x') as keyfile: keyfile.write(req['params']['apiKey'])
-        response['result']=dict(path=target)
     elif method=='hosts.credentials.save':
         import time
         reference='ssh-fixture-'+str(time.time_ns())
@@ -232,54 +227,35 @@ for line in sys.stdin:
         old.removeValue(forKey: "modelOptions")
         let decoded = try JSONDecoder().decode(Dashboard.self, from: JSONSerialization.data(withJSONObject: old))
         precondition(decoded.modelOptions == nil, "Older cores must still decode")
-        model.stageAPIKey("new-fixture-key", sourceID: "fixture-source")
-        precondition(model.settingsDirty)
-        let writesBeforeSave = try calls("credentials.save")
-        precondition(writesBeforeSave == 0, "Editing a key must only stage it in memory")
-        model.discardSettingsDraft()
-        precondition(model.pendingAPIKeys.isEmpty && !model.settingsDirty)
-        model.stageAPIKey("new-fixture-key", sourceID: "fixture-source")
-        model.settingsDraft.refreshSeconds = 1
-        let credentialRejected = await model.saveSettingsDraft()
-        precondition(!credentialRejected && model.pendingAPIKeys["fixture-source"] == "new-fixture-key")
-        precondition(model.settings.sources[0].path == committedKey.path && model.settingsDraft.sources[0].path == committedKey.path)
-        let firstCredentialWrites = try calls("credentials.save")
-        precondition(firstCredentialWrites == 1)
-        let credentialRetry = await model.saveSettingsDraft()
-        let writesAfterRetry = try calls("credentials.save")
-        precondition(!credentialRetry && writesAfterRetry == 1, "Retry should reuse the prepared immutable credential file")
-        model.settingsDraft.refreshSeconds = 60
-        let credentialCommitted = await model.saveSettingsDraft()
-        precondition(credentialCommitted && model.pendingAPIKeys.isEmpty && !model.settingsDirty)
-        precondition(model.settings.sources[0].path != committedKey.path)
-        let oldKey = try String(contentsOf: committedKey, encoding: .utf8)
-        let newKey = try String(contentsOfFile: model.settings.sources[0].path, encoding: .utf8)
-        precondition(oldKey == "old-fixture-key" && newKey == "new-fixture-key")
-        let persisted = try JSONDecoder().decode(Settings.self, from: Data(contentsOf: root.appendingPathComponent("settings.json")))
-        precondition(persisted.sources[0].path == model.settings.sources[0].path)
-        model.settings.hosts = [Host(id: "fixture-host", name: "Fixture", target: "example.invalid")]
-        model.settingsDraft = model.settings
-        model.settingsDraft.hosts[0].authMode = "password"
-        model.settingsDraft.hosts[0].username = "fixture-user"
-        model.stageHostPassword("fixture-password", hostID: "fixture-host")
-        let stagedPasswordWrites = try calls("hosts.credentials.save")
-        precondition(stagedPasswordWrites == 0)
-        model.settingsDraft.refreshSeconds = 1
-        let passwordRejected = await model.saveSettingsDraft()
-        precondition(!passwordRejected && model.settings.hosts[0].passwordRef == nil && model.settingsDraft.hosts[0].passwordRef == nil)
-        let passwordRetry = await model.saveSettingsDraft()
-        let passwordWritesAfterRetry = try calls("hosts.credentials.save")
-        precondition(!passwordRetry && passwordWritesAfterRetry == 1)
-        model.stageHostPassword("replacement-fixture-password", hostID: "fixture-host")
-        let replacementRejected = await model.saveSettingsDraft()
-        let obsoletePasswordDeletes = try calls("hosts.credentials.delete")
-        precondition(!replacementRejected && obsoletePasswordDeletes == 1)
-        model.settingsDraft.refreshSeconds = 60
-        let passwordCommitted = await model.saveSettingsDraft()
-        precondition(passwordCommitted && model.pendingHostPasswords.isEmpty && model.settings.hosts[0].passwordRef != nil)
+        // Exercise the same transaction used by HostEditor, including credential rollback.
+        let beforeHostEdit = model.settings
+        var host = Host(id: "fixture-host", name: "Fixture", target: "example.invalid")
+        host.authMode = "password"; host.username = "fixture-user"
+        let failureMarker = root.appendingPathComponent("fail-configuration")
+        try Data().write(to: failureMarker)
+        for password in ["fixture-password", "replacement-fixture-password"] {
+            do {
+                try await model.saveHostConfiguration(host, password: password, base: beforeHostEdit)
+                preconditionFailure("A rejected configuration must fail the editor save")
+            } catch { precondition(error.localizedDescription.contains("模拟配置保存失败")) }
+            precondition(model.settings == beforeHostEdit && model.settingsDraft == beforeHostEdit)
+            let leftovers = try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix("ssh-fixture-") }
+            precondition(leftovers.isEmpty, "A failed save must not leave a credential behind")
+        }
+        let failedSaves = try calls("hosts.credentials.save"), failedDeletes = try calls("hosts.credentials.delete")
+        precondition(failedSaves == 2 && failedDeletes == 2)
+        try FileManager.default.removeItem(at: failureMarker)
+        try await model.saveHostConfiguration(host, password: "replacement-fixture-password", base: beforeHostEdit)
         let storedHost = try JSONDecoder().decode(Settings.self, from: Data(contentsOf: root.appendingPathComponent("settings.json"))).hosts[0]
+        precondition(storedHost.passwordRef != nil && storedHost.authMode == "password")
         let encodedHost = String(data: try encoder.encode(storedHost), encoding: .utf8)!
         precondition(!encodedHost.contains("replacement-fixture-password"))
+        let storedPassword = try String(contentsOf: root.appendingPathComponent(storedHost.passwordRef!), encoding: .utf8)
+        precondition(storedPassword == "replacement-fixture-password")
+        host = storedHost; host.authMode = "ssh"
+        try await model.saveHostConfiguration(host, password: "ignored password input", base: model.settings)
+        let savesAfterSSH = try calls("hosts.credentials.save")
+        precondition(savesAfterSSH == 3 && model.settings.hosts[0].passwordRef == storedHost.passwordRef, "Switching to key login ignores the hidden password field")
         await model.testNetwork()
         precondition(model.networkTest?.label == "系统 73 ms")
         model.settingsDraft.proxy.mode = "direct"
@@ -348,23 +324,26 @@ for line in sys.stdin:
         let requests = try String(contentsOf: root.appendingPathComponent("calls.jsonl"), encoding: .utf8).split(separator: "\n").compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
         precondition(requests.contains { $0["method"] as? String == "sources.scan" && ($0["params"] as? [String: Any])?["sourceId"] as? String == "first" })
         precondition(requests.contains { $0["method"] as? String == "sources.rescan" && ($0["params"] as? [String: Any])?["sourceId"] as? String == "first" }, "Manual retry must also replay the failed source in full")
-        model.settingsDraft = model.settings
-        model.settingsDraft.hosts = [Host(id: "linked-host", name: "Linked", target: "example.invalid")]
-        model.settingsDraft.sources[0].hostId = "linked-host"; model.settingsDraft.sources[0].enabled = true
-        model.settingsDraft.accounts[0].quotaSourceId = model.settingsDraft.sources[0].id
-        let beforeConfirmation = model.settingsDraft
+        let originalConfiguration = model.settings
+        var linkedConfiguration = model.settings
+        linkedConfiguration.hosts = [Host(id: "linked-host", name: "Linked", target: "example.invalid")]
+        linkedConfiguration.sources[0].hostId = "linked-host"; linkedConfiguration.sources[0].enabled = true
+        linkedConfiguration.accounts[0].quotaSourceId = linkedConfiguration.sources[0].id
+        linkedConfiguration.agents = [AgentConfiguration(provider: "deepseek", enabled: true, machineIds: ["local", "linked-host"])]
+        try await model.persistConfiguration(linkedConfiguration)
         let removal = model.removalRequest("host", id: "linked-host")!
-        precondition(removal.affected == [model.settingsDraft.sources[0].name] && model.settingsDraft == beforeConfirmation, "Preparing or cancelling confirmation must leave the draft untouched")
-        model.applyRemoval(removal)
-        precondition(model.settingsDraft.hosts.isEmpty && model.settingsDraft.sources[0].hostId == nil && !model.settingsDraft.sources[0].enabled)
-        precondition(model.settings.hosts != model.settingsDraft.hosts, "Removal must remain a draft until Save")
-        let sourceRemoval = model.removalRequest("source", id: model.settingsDraft.sources[0].id)!
-        precondition(sourceRemoval.affected == [model.settingsDraft.accounts[0].name])
-        model.applyRemoval(sourceRemoval)
-        precondition(model.settingsDraft.sources.isEmpty && model.settingsDraft.accounts[0].quotaSourceId == nil)
-        model.applyRemoval(model.removalRequest("account", id: model.settingsDraft.accounts[0].key)!)
-        precondition(model.settingsDraft.accounts[0].archived == true)
-        model.discardSettingsDraft(); precondition(!model.settingsDirty)
+        precondition(removal.affected == [model.settings.sources[0].name] && model.settings == linkedConfiguration && model.settingsDraft == linkedConfiguration, "Preparing or cancelling confirmation must not mutate configuration")
+        try Data().write(to: failureMarker)
+        await model.removeConfiguration(removal)
+        precondition(model.settings == linkedConfiguration && model.settingsDraft == linkedConfiguration, "Failed removal must preserve the committed host and its connections")
+        try FileManager.default.removeItem(at: failureMarker)
+        await model.removeConfiguration(removal)
+        precondition(model.settings.hosts.isEmpty && model.settings.sources[0].hostId == nil && !model.settings.sources[0].enabled)
+        precondition(model.settings.agents?.first?.machineIds == ["local"])
+        let persistedRemoval = try JSONDecoder().decode(Settings.self, from: Data(contentsOf: root.appendingPathComponent("settings.json")))
+        precondition(persistedRemoval == model.settings && model.settingsDraft == model.settings, "Confirmed removal persists immediately")
+        try await model.persistConfiguration(originalConfiguration)
+        precondition(!model.settingsDirty)
         // A secondary dashboard failure must preserve all previous applied snapshots.
         let previousTotal = model.dashboard.summary.total, previousPanel = model.panelDashboard.summary.total, previousScope = model.appliedScope
         model.selectedModel = "all"; model.range = 90
@@ -453,7 +432,7 @@ for line in sys.stdin:
         print("Antigravity login accepts committed identity immediately, rejects older status reads, retains identity after quota failure, and preserves drafts")
         print("Theme quick toggle saves globally, preserves unrelated drafts and retains theme after failure")
         print("Atomic filtered/today snapshots and mapping save/reprice failure recovery passed")
-        print("Unfiltered menu metric, data-time semantics, per-source retry, and destructive draft confirmation checks passed")
-        print("macOS draft rollback/commit, automatic quota retry, per-window visibility, model-options compatibility, staged credential commit/rollback, sampling failure throttling, and price failure checks passed")
+        print("Unfiltered menu metric, data-time semantics, per-source retry, and immediate host removal checks passed")
+        print("macOS draft rollback/commit, automatic quota retry, per-window visibility, model-options compatibility, host credential transaction rollback/retry, sampling failure throttling, and price failure checks passed")
     }
 }

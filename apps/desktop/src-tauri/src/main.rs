@@ -15,15 +15,6 @@ use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
-fn local_path(raw: &str) -> std::path::PathBuf {
-    if (raw == "~" || raw.starts_with("~/"))
-        && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-    {
-        return std::path::PathBuf::from(home).join(raw.strip_prefix("~/").unwrap_or(""));
-    }
-    raw.into()
-}
-
 #[tauri::command]
 async fn select_local_path(
     app: tauri::AppHandle,
@@ -31,7 +22,7 @@ async fn select_local_path(
     initial: String,
 ) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let initial = local_path(&initial);
+        let initial = aieyes_core::store::expand(&initial);
         let folder = if initial.is_dir() {
             initial.as_path()
         } else {
@@ -65,7 +56,7 @@ async fn select_local_path(
 
 #[tauri::command]
 fn check_local_path(path: String) -> bool {
-    local_path(&path).exists()
+    aieyes_core::store::expand(&path).exists()
 }
 
 struct Shared(
@@ -369,6 +360,43 @@ fn main() {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn local_path_checks_follow_the_core_home_on_each_platform() {
+        if std::env::var_os("AIEYES_PATH_CHECK_FIXTURE").is_some() {
+            let expected = if cfg!(windows) { "profile" } else { "home" };
+            let other = if cfg!(windows) { "home" } else { "profile" };
+            assert!(check_local_path(format!("~/{expected}.txt")));
+            assert!(!check_local_path(format!("~/{other}.txt")));
+            #[cfg(windows)]
+            assert!(check_local_path("~\\profile.txt".into()));
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        for name in ["home", "profile"] {
+            let directory = root.path().join(name);
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::write(directory.join(format!("{name}.txt")), "fixture").unwrap();
+        }
+        // Isolate environment overrides from the other tests and the real home.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::local_path_checks_follow_the_core_home_on_each_platform",
+                "--nocapture",
+            ])
+            .env("AIEYES_PATH_CHECK_FIXTURE", "1")
+            .env("HOME", root.path().join("home"))
+            .env("USERPROFILE", root.path().join("profile"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn configuration_lane_is_independent_of_long_remote_work() {

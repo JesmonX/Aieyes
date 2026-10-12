@@ -431,7 +431,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         let mut tick = 0u32;
         loop {
             let snapshot = match store.settings() {
-                Ok(settings) => monitor.read(&settings.sources, std::time::SystemTime::now()),
+                Ok(settings) => monitor.read(&settings, std::time::SystemTime::now()),
                 Err(_) => Snapshot {
                     unavailable: true,
                     ..Snapshot::default()

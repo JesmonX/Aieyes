@@ -5,6 +5,39 @@ import { readFileSync } from 'node:fs';
 
 const read = name => readFileSync(new URL(`../apps/desktop/web/${name}`, import.meta.url), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test('wakeup previews follow shared timezone and DST fixtures', () => {
+  const window = {};
+  vm.runInNewContext(read('ui-state.js'), {window});
+  const fixture = JSON.parse(readFileSync(new URL('fixtures/wakeup-times.json', import.meta.url), 'utf8'));
+  for (const row of fixture) {
+    const result = window.AieyesUI.nextTargetTime(row.time,row.zone,new Date(row.now));
+    assert.equal(result.date?.getTime()??null,row.expected?Date.parse(row.expected):null,row.name);
+    assert.equal(result.status,row.status,row.name);
+    assert.equal(result.approximate,row.approximate,row.name);
+    if(result.approximate)assert.match(window.AieyesUI.targetTimeLocal(row.time,row.zone,new Date(row.now)),/按当前偏移估算/);
+  }
+});
+test('provider icons are bundled as PNG assets', () => {
+  for (const provider of ['codex','claude','antigravity','deepseek']) {
+    const png = readFileSync(new URL(`../apps/desktop/web/provider-${provider}.png`, import.meta.url));
+    assert.equal(png.subarray(0,8).toString('hex'), '89504e470d0a1a0a');
+  }
+});
+test('source availability and freshness follow the shared core rules', () => {
+  const window = {};
+  vm.runInNewContext(read('ui-state.js'), {window});
+  const fixture = JSON.parse(readFileSync(new URL('fixtures/source-availability.json', import.meta.url), 'utf8'));
+  for (const row of fixture.cases) {
+    const settings = {sources:fixture.sources, agents:row.agents, hosts:row.hosts, refreshSeconds:300};
+    assert.deepEqual(fixture.sources.filter(source => window.AieyesUI.sourceEnabled(settings, source)).map(source => source.id), row.expectedEnabled, row.name);
+    assert.deepEqual([...window.AieyesUI.usageSources(settings)].map(source => source.id), row.expectedUsage, row.name);
+    const dashboard = {sources:fixture.sources.map(source => ({...source, status:row.expectedUsage.includes(source.id)
+      ? {updatedAt:900} : {updatedAt:1, error:'old failure', partial:true}}))};
+    const actual = window.AieyesUI.freshness(settings, dashboard, 1000);
+    assert.deepEqual({...actual}, {total:row.expectedUsage.length, timestamp:row.expectedUsage.length ? 900 : 0, delayed:0, failed:0}, row.name);
+  }
+});
+
 test('legacy providers normalize at the payload boundary with collision aliases', () => {
   const window = {};
   vm.runInNewContext(read('ui-state.js'), {window});
@@ -23,7 +56,8 @@ test('native and Web share panel preference and valuation window fixtures', () =
   vm.runInNewContext(read('ui-state.js'), {window});
   const fixture = JSON.parse(readFileSync(new URL('fixtures/ui-semantics.json', import.meta.url), 'utf8'));
   for (const row of fixture.panels) {
-    const actual = window.AieyesUI.panelAccounts({accounts:row.accounts},row.order,row.preference);
+    const preference = row.rawPreference === undefined ? row.preference : window.AieyesUI.decodePanelPreference(row.rawPreference);
+    const actual = window.AieyesUI.panelAccounts({accounts:row.accounts},row.order,preference);
     assert.deepEqual(JSON.parse(JSON.stringify(actual)),row.expected,row.name);
   }
   for (const row of fixture.windows) {
@@ -48,19 +82,24 @@ test('panel account choices cap each Agent and preserve explicit empty choices',
   assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).claude],['claude:a1']);
   accounts.filter(a=>a.provider==='claude').forEach(a=>a.archived=true);
   assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).claude],[]);
+  data.set('aieyes.panel.accounts.v2', '{"version":2,"providers":null}');
+  assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).codex], [...defaults.codex]);
+  data.set('aieyes.panel.accounts.v2', '{');
+  assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).codex], [...defaults.codex]);
 });
-test('wakeup source choices follow contract capabilities and source availability', async () => {
+test('wakeup source choices consume backend targets and contract capabilities', async () => {
   const source = (id, provider, extra = {}) => ({id, name:id, provider, enabled:true, accountId:'account', ...extra});
   for (const row of [
-    {providers:['codex'], sources:[source('removed','antigravity')], expected:[]},
-    {providers:['future-provider'], sources:[source('added','future-provider')], expected:['added']},
+    {providers:['codex'], sources:[source('removed','antigravity')], targets:[{sourceId:'removed',provider:'antigravity'}], expected:[]},
+    {providers:['future-provider'], sources:[source('added','future-provider')], targets:[{sourceId:'added',provider:'future-provider'}], expected:['added']},
     {providers:['codex','claude','antigravity'], sources:[
       source('local','codex'), source('remote','claude',{hostId:'online'}),
       source('profile','codex',{accountId:'',codexHomeId:'home'}),
       source('disabled','codex',{enabled:false}), source('unlinked','codex',{accountId:''}),
       source('offline','antigravity',{hostId:'offline'}), source('missing-host','codex',{hostId:'missing'}),
       source('legacy','agy'),
-    ], expected:['local','remote','profile']},
+    ], targets:[{sourceId:'local',provider:'codex'},{sourceId:'remote',provider:'claude'},{sourceId:'profile',provider:'codex'}], expected:['local','remote','profile']},
+    {providers:['codex'], sources:[source('paused-agent','codex')], targets:[], expected:[]},
   ]) {
     const elements = new Map(), notices = [], window = {};
     const editorShown = new Error('editor rendered');
@@ -69,7 +108,7 @@ test('wakeup source choices follow contract capabilities and source availability
       window, structuredClone,
       state:{page:'other',settings:{sources:row.sources,hosts:[{id:'online',enabled:true},{id:'offline',enabled:false}]}},
       $: selector => {if(!elements.has(selector))elements.set(selector,{});return elements.get(selector);},
-      document:{querySelectorAll:()=>[]}, api:async(method)=>method==='accounts.targets'?row.sources.filter(s=>s.enabled&&(s.accountId||s.codexHomeId)&&row.providers.includes(s.provider)&&(!s.hostId||s.hostId==='online')).map(s=>({sourceId:s.id,provider:s.provider})):[], notify:message=>notices.push(message),
+      document:{querySelectorAll:()=>[]}, api:async(method)=>method==='accounts.targets'?structuredClone(row.targets):[], notify:message=>notices.push(message),
       field:()=>'', escapeHTML:String, option:(id,label)=>`<option value="${id}">${label}</option>`,
       showEditor:(_title,html)=>{body=html;throw editorShown;},
     };

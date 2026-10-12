@@ -648,29 +648,12 @@ pub(crate) fn agy(source: &Source, settings: &Settings) -> Result<Value> {
             "--log-file",
             if cfg!(windows) { "NUL" } else { "/dev/null" },
         ];
-        let mut c = if !source.quota_pre_command.trim().is_empty() && !cfg!(windows) {
-            let mut c = Command::new(ssh::DEFAULT_SHELL);
-            let args = args
-                .iter()
-                .map(|arg| process::quote(arg))
-                .collect::<Vec<_>>()
-                .join(" ");
-            c.args([
-                "-c",
-                &format!(
-                    "set -e\n{}{{\n{}\n}} </dev/null >&2\nexec {} {}",
-                    ssh::PATH_FALLBACK,
-                    source.quota_pre_command,
-                    process::quote(&resolved.to_string_lossy()),
-                    args
-                ),
-            ]);
-            c
-        } else {
-            let mut c = process::cli_command(&resolved.to_string_lossy());
-            c.args(args);
-            c
-        };
+        let mut c = process::cli_command_with_pre_command(
+            &resolved.to_string_lossy(),
+            &args,
+            &source.quota_pre_command,
+            ssh::DEFAULT_SHELL,
+        );
         c.current_dir(std::env::temp_dir());
         network::apply_env(&mut c, source.proxy.as_ref().unwrap_or(&settings.proxy));
         c

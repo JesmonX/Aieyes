@@ -66,10 +66,15 @@ enum PanelAccountPreference {
     struct Choice: Codable { var mode = "auto"; var keys: [String] = [] }
     struct Preference: Codable { var version = 2; var providers: [String: Choice] = [:] }
     static func decode(_ json: String) -> Preference {
-        let data = Data(json.utf8)
-        if let value = try? JSONDecoder().decode(Preference.self, from: data) { return value }
-        let legacy = (try? JSONDecoder().decode([String: [String]].self, from: data)) ?? [:]
-        return Preference(providers: legacy.mapValues { Choice(mode: "custom", keys: $0) })
+        guard let value = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else { return Preference() }
+        if value["version"] != nil || value["providers"] != nil {
+            guard value["version"] as? Int == 2, let providers = value["providers"] as? [String: Any] else { return Preference() }
+            return Preference(providers: providers.mapValues { row in
+                guard let choice = row as? [String: Any], choice["mode"] as? String == "custom", let keys = choice["keys"] as? [String] else { return Choice() }
+                return Choice(mode: "custom", keys: keys)
+            })
+        }
+        return Preference(providers: value.compactMapValues { ($0 as? [String]).map { Choice(mode: "custom", keys: $0) } })
     }
     static func migrated(_ json: String) -> String {
         String(data: (try? JSONEncoder().encode(decode(json))) ?? Data(), encoding: .utf8) ?? "{}"
@@ -104,19 +109,18 @@ enum PanelAccountPreference {
         for provider in Set(eligible.map(\.provider)).union(preference.providers.keys) {
             let keys = sorted.filter { $0.provider == provider }.map(\.key)
             let choice = preference.providers[provider] ?? Choice()
-            var selected = choice.mode == "auto" ? keys : choice.keys.filter { keys.contains($0) }
+            var selected = choice.mode == "custom" ? choice.keys.filter { keys.contains($0) } : keys
             if choice.mode == "custom" && !choice.keys.isEmpty && selected.isEmpty { selected = keys }
             result[provider] = Array(selected.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.prefix(5))
         }
         return result
     }
-    static func includeNew(_ account: AgentAccount, accounts: [AgentAccount]) {
-        let defaults = UserDefaults.standard
+    static func includeNew(_ account: AgentAccount, accounts: [AgentAccount], defaults: UserDefaults = .standard) {
         let raw = defaults.string(forKey: NativePanelKey.accounts.rawValue) ?? migrated(defaults.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}")
         var pref = decode(raw)
         guard pref.providers[account.provider]?.mode == "custom" else { return }
         var keys = selections(raw, accounts: accounts, order: [])[account.provider] ?? []
-        guard keys.count < 5, !keys.contains(account.key), account.archived != true else { return }
+        guard keys.count < 5, !keys.contains(account.key), account.archived != true, account.quotaEnabled else { return }
         keys.append(account.key); pref.providers[account.provider] = Choice(mode: "custom", keys: keys)
         defaults.set(String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8), forKey: NativePanelKey.accounts.rawValue)
     }
@@ -141,7 +145,6 @@ struct QuotaWindow: Codable, Identifiable {
     var stableId: String?, groupId: String?, groupName: String?
     var id: String { stableId.flatMap { $0.isEmpty ? nil : $0 } ?? name }
     var estimateGroup: String { groupId.flatMap { $0.isEmpty ? nil : $0 } ?? groupLabel }
-    var supportsEstimate: Bool { ["gemini", "gemini models", "claude-gpt", "claude and gpt models"].contains(estimateGroup.lowercased()) }
     var groupLabel: String { groupName.flatMap { $0.isEmpty ? nil : $0 } ?? name.components(separatedBy: " · ").dropLast().joined(separator: " · ") }
     enum CodingKeys: String, CodingKey { case name, usedPercent, windowMinutes, resetsAt, groupId, groupName; case stableId = "id" }
 }
@@ -326,6 +329,13 @@ struct Settings: Codable, Equatable {
     var historyInterval: Int { get { historyRefreshSeconds ?? refreshSeconds } set { historyRefreshSeconds = newValue } }
     var foregroundInterval: Int { get { serverForegroundRefreshSeconds ?? 2 } set { serverForegroundRefreshSeconds = newValue } }
     var monitoredHosts: [Host] { (localMonitor.map { [$0.host] } ?? []) + hosts }
+    func sourceEnabled(_ source: AgentSource) -> Bool {
+        let configured = (agents ?? []).filter { $0.provider == source.provider }
+        return source.enabled && configured.count <= 1
+            && (configured.first.map { $0.enabled && $0.machineIds.contains(source.hostId ?? "local") } ?? true)
+            && (source.hostId == nil || hosts.contains { $0.id == source.hostId && $0.enabled })
+    }
+    var usageSources: [AgentSource] { sources.filter { $0.provider != "deepseek" && sourceEnabled($0) } }
     var modelMappings: [String: String] = [:]
     var proxyTestUrls: [String]?
 }

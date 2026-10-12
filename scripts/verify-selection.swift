@@ -2,6 +2,29 @@ import Foundation
 
 @main struct VerifySelection {
     static func main() throws {
+        let wakeups = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/wakeup-times.json"))) as! [[String: Any]]
+        let iso = ISO8601DateFormatter()
+        for row in wakeups {
+            let result = WakeupTime.next(row["time"] as! String, zone: row["zone"] as? String, now: iso.date(from: row["now"] as! String)!)
+            let expected = (row["expected"] as? String).flatMap { iso.date(from: $0) }
+            precondition(result.date == expected && result.status.rawValue == row["status"] as! String && result.approximate == row["approximate"] as! Bool, row["name"] as! String)
+            if result.approximate { precondition(result.label.contains("按当前偏移估算")) }
+        }
+        let availability = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/source-availability.json"))) as! [String: Any]
+        for row in availability["cases"] as! [[String: Any]] {
+            var settings = Settings()
+            settings.sources = (availability["sources"] as! [[String: Any]]).map { raw in
+                var source = AgentSource(); source.id = raw["id"] as! String
+                source.provider = raw["provider"] as! String; source.enabled = raw["enabled"] as! Bool
+                source.hostId = raw["hostId"] as? String; return source
+            }
+            settings.agents = try JSONDecoder().decode([AgentConfiguration].self, from: JSONSerialization.data(withJSONObject: row["agents"]!))
+            settings.hosts = (row["hosts"] as! [[String: Any]]).map { raw in
+                var host = Host(); host.id = raw["id"] as! String; host.enabled = raw["enabled"] as! Bool; return host
+            }
+            precondition(settings.sources.filter { settings.sourceEnabled($0) }.map(\.id) == row["expectedEnabled"] as! [String], row["name"] as! String)
+            precondition(settings.usageSources.map(\.id) == row["expectedUsage"] as! [String], row["name"] as! String)
+        }
         let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/monitor-selection.json"))) as! [String: Any]
         for row in fixture["filesystems"] as! [[String: Any]] {
             precondition(MonitorSelection.recommendedFilesystem(row["id"] as! String, type: row["type"] as? String) == row["expected"] as! Bool)
@@ -14,6 +37,15 @@ import Foundation
         let suite = "aieyes-filter-test-" + UUID().uuidString, defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         precondition(DashboardFilterPreference.read(defaults: defaults) == DashboardFilterPreference())
+        let hidden = PanelAccountPreference.encode(["codex": []])
+        defaults.set(hidden, forKey: NativePanelKey.accounts.rawValue)
+        var newAccount = AgentAccount(id: "new", name: "New", provider: "codex", quotaEnabled: false)
+        PanelAccountPreference.includeNew(newAccount, accounts: [newAccount], defaults: defaults)
+        precondition(defaults.string(forKey: NativePanelKey.accounts.rawValue) == hidden, "An account without quota must not change a custom panel choice")
+        newAccount.quotaEnabled = true
+        PanelAccountPreference.includeNew(newAccount, accounts: [newAccount], defaults: defaults)
+        let included = defaults.string(forKey: NativePanelKey.accounts.rawValue)!
+        precondition(PanelAccountPreference.selections(included, accounts: [newAccount], order: [])["codex"] == [newAccount.key])
         let saved = DashboardFilterPreference(provider: "claude", source: "remote", account: "claude:a", model: "model", days: 30)
         saved.save(defaults: defaults)
         precondition(DashboardFilterPreference.read(defaults: defaults) == saved)

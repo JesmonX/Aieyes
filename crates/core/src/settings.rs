@@ -3,12 +3,6 @@ use crate::{Engine, models::*, store::Store};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
-/// Pure local configuration work must not wait behind remote requests.
-pub fn is_configuration_method(method: &str) -> bool {
-    crate::contracts::method(method)
-        .is_some_and(|m| m.lane == crate::contracts::Lane::Configuration)
-}
-
 // Preserve concurrent edits to unrelated fields and rows. A conflicting field
 // fails before any configuration is written; clients retain their form input.
 fn merge(base: &Value, next: &Value, current: &Value, path: &str) -> Result<Value> {

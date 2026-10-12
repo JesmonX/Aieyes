@@ -219,7 +219,9 @@ pub fn control(root: &Path, id: &str, action: &str) -> Result<Value> {
             let next = m
                 .as_ref()
                 .filter(|m| m.enabled && registered)
-                .and_then(|m| next_run(&m.times));
+                .map(|m| next_run_from(root, id, &m.times, chrono::Local::now()))
+                .transpose()?
+                .flatten();
             Ok(
                 json!({"installed":m.is_some()&&registered,"enabled":m.as_ref().is_some_and(|m|m.enabled),"timezone":chrono::Local::now().format("%Z %:z").to_string(),"nextRunAt":next,"history":runner::history(root,id)?}),
             )
@@ -267,11 +269,81 @@ pub fn control(root: &Path, id: &str, action: &str) -> Result<Value> {
         _ => anyhow::bail!("未知部署操作"),
     }
 }
-fn next_run(times: &[String]) -> Option<i64> {
+fn next_run_from<Tz: chrono::TimeZone>(
+    root: &Path,
+    id: &str,
+    times: &[String],
+    start: chrono::DateTime<Tz>,
+) -> Result<Option<i64>> {
     use chrono::Timelike;
-    let start = chrono::Local::now();
-    (1..=2880)
-        .map(|m| start + chrono::Duration::minutes(m))
-        .find(|t| times.contains(&format!("{:02}:{:02}", t.hour(), t.minute())))
-        .map(|t| t.timestamp() - i64::from(t.second()))
+    let path = root.join("runner.sqlite");
+    let mut occurred = std::collections::HashSet::<String>::new();
+    if path.exists() {
+        let db = rusqlite::Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let mut query = db.prepare("SELECT occurrence FROM runs WHERE task=?1 AND started>=?2")?;
+        occurred = query
+            .query_map(rusqlite::params![id, start.timestamp() - 172800], |row| {
+                row.get(0)
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+    }
+    Ok((1..=2880)
+        .map(|m| start.clone() + chrono::Duration::minutes(m))
+        .find(|t| {
+            let slot = format!("{:02}:{:02}", t.hour(), t.minute());
+            times.contains(&slot) && !occurred.contains(&format!("{id}:{}:{slot}", t.date_naive()))
+        })
+        .map(|t| t.timestamp() - i64::from(t.second())))
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+
+    #[test]
+    fn next_run_uses_full_minutes_and_skips_recorded_occurrences() {
+        let root = tempfile::tempdir().unwrap();
+        // The -05:00 offset represents the second 01:15 after New York falls back.
+        let start = chrono::DateTime::parse_from_rfc3339("2026-11-01T01:15:43-05:00").unwrap();
+        let times = vec!["01:30".into()];
+        let expected = chrono::DateTime::parse_from_rfc3339("2026-11-01T01:30:00-05:00")
+            .unwrap()
+            .timestamp();
+        assert_eq!(
+            next_run_from(root.path(), "wake-test", &times, start).unwrap(),
+            Some(expected)
+        );
+        let db = rusqlite::Connection::open(root.path().join("runner.sqlite")).unwrap();
+        db.execute_batch("CREATE TABLE runs(task TEXT, occurrence TEXT UNIQUE, started INTEGER);")
+            .unwrap();
+        db.execute(
+            "INSERT INTO runs VALUES (?1,?2,?3)",
+            rusqlite::params!["other", "other:2026-11-01:01:30", start.timestamp() - 3000],
+        )
+        .unwrap();
+        assert_eq!(
+            next_run_from(root.path(), "wake-test", &times, start).unwrap(),
+            Some(expected)
+        );
+        db.execute(
+            "INSERT INTO runs VALUES (?1,?2,?3)",
+            rusqlite::params![
+                "wake-test",
+                "wake-test:2026-11-01:01:30",
+                start.timestamp() - 3000
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            next_run_from(root.path(), "wake-test", &times, start).unwrap(),
+            Some(expected + 86400)
+        );
+        assert_eq!(
+            next_run_from(root.path(), "wake-test", &[], start).unwrap(),
+            None
+        );
+    }
 }
