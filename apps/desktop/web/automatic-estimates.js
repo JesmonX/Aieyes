@@ -5,7 +5,11 @@ window.AieyesAutomatic=(()=>{
   const status=s=>state.dashboard?.sources?.find(row=>row.id===s.id)?.autoValuationStatus;
   const description=s=>{const row=status(s);return s.autoValuation?.enabled?(labels[row?.state]??'等待首个实时快照')+(row?.note?' · '+row.note:''):'已关闭';};
   function html(sources){return sources.filter(s=>s.provider!=='deepseek').map(s=>`<button type="button" data-auto-source="${escapeHTML(s.id)}">自动估值 · ${escapeHTML(s.name)} · ${s.autoValuation?.enabled?'开启':'关闭'}</button><p class="tiny muted" data-auto-status="${escapeHTML(s.id)}">${escapeHTML(description(s))}</p>`).join('');}
-  function refresh(){document.querySelectorAll('[data-auto-status]').forEach(el=>{const s=state.settings?.sources?.find(s=>s.id===el.dataset.autoStatus);if(s)el.textContent=description(s);});}
+  function summary(sources){const enabled=sources.filter(s=>s.autoValuation?.enabled).length;return !sources.length?'请先添加数据目录':enabled?`已开启 ${enabled}/${sources.length}`:'已关闭';}
+  function refresh(){
+    document.querySelectorAll('[data-auto-status]').forEach(el=>{const s=state.settings?.sources?.find(s=>s.id===el.dataset.autoStatus);if(s)el.textContent=description(s);});
+    document.querySelectorAll('[data-auto-machine-status]').forEach(el=>{el.textContent=summary((state.settings?.sources??[]).filter(s=>s.provider===el.dataset.autoProvider&&(s.hostId||'local')===el.dataset.autoMachineStatus));});
+  }
   function open(ids){
     const sources=state.settings.sources.filter(s=>ids.includes(s.id)&&s.provider!=='deepseek');
     const dialog=quotaDialog('数据源自动估值',`<p class="muted">自动识别当前订阅账号，分别积累 5h / 7d 与 credits 的可信样本。无法归属的区间自动跳过，保留最后有效值。</p><label class="quota-confirm"><input type="checkbox" id="auto-estimate-consent">${consent}</label>${sources.map(s=>`<div class="sampling-row"><strong>${escapeHTML(s.name)}</strong><small>${escapeHTML(s.path)}</small><p class="muted" data-auto-status="${escapeHTML(s.id)}">${escapeHTML(description(s))}</p><button type="button" data-auto-save="${escapeHTML(s.id)}" data-enabled="${s.autoValuation?.enabled?'false':'true'}" ${s.autoValuation?.enabled?'':'disabled'}>${s.autoValuation?.enabled?'关闭自动估值':'开启自动估值'}</button></div>`).join('')}`);
@@ -22,5 +26,5 @@ window.AieyesAutomatic=(()=>{
     });
   }
   document.addEventListener('click',event=>{const button=event.target.closest('[data-auto-source]');if(button)open([button.dataset.autoSource]);});
-  return {html,open,refresh};
+  return {html,open,refresh,summary};
 })();

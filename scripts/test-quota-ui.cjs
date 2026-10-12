@@ -119,13 +119,22 @@ function fixture(){
    await page.locator('#quota-close').click();
    if(surface==='index.html'){
      await page.evaluate(()=>{state.page='settings';state.settingsTab='sources';render();});
+     const automatic=page.locator('[data-machine-estimates="codex"][data-machine="local"]');
+     await automatic.waitFor();
+     assert.match(await automatic.locator('..').textContent(),/已开启 1\/1/,'Outer source page shares the valuation setting');
      await page.locator('[data-machine-directories="codex"]').first().click();
-     assert.match(await page.locator('[data-auto-source="c"]').textContent(),/开启/,'Directory and valuation pages share one source setting');
-     await page.locator('[data-auto-source="c"]').click();
+     assert.equal(await page.locator('[data-auto-source], [data-machine-estimates]').count(),0,'Directory settings contain no automatic valuation entry');
+     await page.locator('#directories-back').click();
+     await page.evaluate(()=>{state.settings.hosts.push({id:'remote',name:'远程机器',enabled:true});state.settings.sources.push({id:'remote-source',provider:'codex',hostId:'remote',name:'远程日志',path:'/remote',enabled:true});render();});
+     assert(await page.locator('[data-machine-estimates="claude"][data-machine="local"]').isDisabled(),'Unconfigured machines explain why automatic settings are unavailable');
+     await page.screenshot({path:path.join(output,'source-automatic-settings.png'),fullPage:true});
+     await automatic.click();
+     assert.equal(await page.locator('[data-auto-save="remote-source"]').count(),0,'Each machine manages only its own sources');
    }else await page.evaluate(()=>window.AieyesAutomatic.open(['c']));
    await page.locator('[data-auto-save="c"][data-enabled="false"]').click();
    await page.waitForFunction(()=>!state.settings.sources.find(s=>s.id==='c').autoValuation?.enabled);
    await page.locator('#quota-close').click();
+   if(surface==='index.html')assert.match(await page.locator('[data-machine-estimates="codex"][data-machine="local"]').locator('..').textContent(),/已关闭/,'Outer source status updates after saving');
    await page.evaluate(()=>{state.page='agent';render();});
    for(const colorScheme of ['light','dark']){await page.emulateMedia({colorScheme});await page.screenshot({path:path.join(output,surface+'-'+colorScheme+'.png')});}
    assert.deepEqual(errors,[]);await page.close();

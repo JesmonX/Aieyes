@@ -838,3 +838,7 @@ body:not([data-platform=windows]) .font-notice { display:none; }
 .chart-palette-sample > span { font-size:12px; }
 .chart-palette-bars { display:flex; align-items:flex-end; gap:5px; height:48px; margin-top:8px; border-bottom:1px solid currentColor; }
 .chart-palette-bars i { flex:1; min-width:0; border-radius:2px 2px 0 0; }
+
+.agent-machines > .agent-machine { border-top:1px solid var(--border); padding:8px 4px; }
+.agent-machine > .list-row { border:0; min-height:40px; padding:4px 0; gap:16px; }
+.agent-machine .agent-auto-valuation { padding:8px 12px; margin-top:4px; border-radius:10px; background:var(--surface-soft); }

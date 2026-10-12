@@ -7,6 +7,7 @@ struct AgentDirectorySelection: Identifiable {
 struct AgentsSettingsView: View {
     @ObservedObject var model: AppModel
     @State private var directories: AgentDirectorySelection?
+    @State private var automaticValuation: AgentDirectorySelection?
     var body: some View {
         Form {
             ForEach(model.agentConfigurations) { agent in
@@ -29,15 +30,49 @@ struct AgentsSettingsView: View {
             }
         }.formStyle(.grouped)
         .sheet(item: $directories) { selection in AgentDirectoriesView(model: model, provider: selection.provider, machine: selection.machine) }
+        .sheet(item: $automaticValuation) { selection in
+            AgentAutomaticValuationView(model: model, provider: selection.provider, machine: selection.machine)
+        }
     }
     private func machine(_ id: String, name: String, agent: AgentConfiguration) -> some View {
-        HStack {
-            Toggle(name, isOn: Binding(get: { agent.machineIds.contains(id) }, set: { selected in
-                var ids = agent.machineIds.filter { $0 != id }; if selected { ids.append(id) }
-                Task { await model.configureAgent(agent.provider, machines: ids) }
-            })).disabled(!agent.enabled)
-            Button("目录设置") { directories = .init(provider: agent.provider, machine: id) }
+        let sources = model.settings.sources.filter { $0.provider == agent.provider && ($0.hostId ?? "local") == id }
+        let enabled = sources.filter { $0.autoValuation?.enabled == true }.count
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Toggle(name, isOn: Binding(get: { agent.machineIds.contains(id) }, set: { selected in
+                    var ids = agent.machineIds.filter { $0 != id }; if selected { ids.append(id) }
+                    Task { await model.configureAgent(agent.provider, machines: ids) }
+                })).disabled(!agent.enabled)
+                Button("目录设置") { directories = .init(provider: agent.provider, machine: id) }
+            }
+            HStack {
+                Text("自动估值").font(AppFont.secondary)
+                Text(sources.isEmpty ? "请先添加数据目录" : enabled == 0 ? "已关闭" : "已开启 \(enabled)/\(sources.count)")
+                    .font(AppFont.secondary).foregroundStyle(.secondary)
+                Spacer()
+                Button("自动估值设置") { automaticValuation = .init(provider: agent.provider, machine: id) }
+                    .disabled(sources.isEmpty)
+            }
         }
+    }
+}
+
+struct AgentAutomaticValuationView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: AppModel
+    let provider: String, machine: String
+    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine } }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text(Format.provider(provider) + " · " + model.machineName(machine)).font(AppFont.title)
+                Spacer()
+                Button("完成") { dismiss() }.disabled(model.automaticSaving)
+            }
+            ScrollView { AutomaticValuationControls(model: model, sources: sources).frame(maxWidth: .infinity, alignment: .leading) }
+        }.padding(24).frame(width: 600, height: 440).aieyesAccent()
+            .interactiveDismissDisabled(model.automaticSaving)
+            .updateOperation("自动估值设置", active: model.automaticSaving)
     }
 }
 
@@ -57,7 +92,6 @@ struct AgentDirectoriesView: View {
                 ForEach(sources) { source in
                     Section {
                         Text(source.path).textSelection(.enabled)
-                        AutomaticValuationControls(model: model, sources: [source])
                         HStack { Button("编辑目录") { editing = source }; Button("移除目录配置", role: .destructive) { removing = source } }
                     }
                 }
