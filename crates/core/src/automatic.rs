@@ -61,14 +61,16 @@ fn status_key(id: &str) -> String {
 fn window_id(w: &QuotaWindow) -> &str {
     if w.id.is_empty() { &w.name } else { &w.id }
 }
-fn balance(q: &QuotaSnapshot) -> Option<i128> {
+fn fresh_credits(q: &QuotaSnapshot) -> Option<&CreditsSnapshot> {
     if q.credits_origin.as_deref() == Some("log")
         || q.credits_updated_at.is_some_and(|t| t != q.updated_at)
     {
         return None;
     }
-    q.credits
-        .as_ref()
+    q.credits.as_ref()
+}
+fn balance(q: &QuotaSnapshot) -> Option<i128> {
+    fresh_credits(q)
         .filter(|c| !c.unlimited)?
         .balance
         .as_deref()
@@ -126,13 +128,10 @@ fn interval_kind(a: &QuotaSnapshot, b: &QuotaSnapshot) -> Option<&'static str> {
     let (credit_changed, credit_unchanged) = if a.provider == "codex" {
         match (balance(a), balance(b)) {
             (Some(x), Some(y)) if y <= x => (y < x, y == x),
-            _ if a
-                .credits
-                .as_ref()
-                .is_some_and(|c| !c.has_credits && !c.unlimited)
-                && b.credits
-                    .as_ref()
-                    .is_some_and(|c| !c.has_credits && !c.unlimited) =>
+            _ if fresh_credits(a)
+                .is_some_and(|c| !c.has_credits && !c.unlimited && c.balance.is_none())
+                && fresh_credits(b)
+                    .is_some_and(|c| !c.has_credits && !c.unlimited && c.balance.is_none()) =>
             {
                 (false, true)
             }
@@ -145,9 +144,11 @@ fn interval_kind(a: &QuotaSnapshot, b: &QuotaSnapshot) -> Option<&'static str> {
         Some("quota")
     } else if credit_changed
         && !quota_changed
-        && pairs
-            .iter()
-            .any(|(a, b)| a.used_percent == 100.0 && b.used_percent == 100.0)
+        && pairs.iter().any(|(old, new)| {
+            old.used_percent == 100.0
+                && new.used_percent == 100.0
+                && crate::estimates::eligible(b, new)
+        })
     {
         Some("credits")
     } else {
@@ -1223,6 +1224,28 @@ mod tests {
         q.windows[0].used_percent += 10.0;
         e.store.advance_automatic(&q, &ids, &fingerprint).unwrap();
         assert_eq!(e.store.estimates().unwrap()[0].cost, 1.0);
+    }
+    #[test]
+    fn exhausted_unmapped_subpool_does_not_prove_credit_only_usage() {
+        let (_dir, _e, mut a) = setup(false);
+        a.windows.push(QuotaWindow {
+            id: "unmapped".into(),
+            window_minutes: Some(60),
+            used_percent: 100.0,
+            ..a.windows[0].clone()
+        });
+        let mut b = a.clone();
+        b.updated_at += 30;
+        b.credits.as_mut().unwrap().balance = Some("990".into());
+        assert!(interval_kind(&a, &b).is_none());
+        a.windows[0].used_percent = 100.0;
+        b.windows[0].used_percent = 100.0;
+        assert_eq!(interval_kind(&a, &b), Some("credits"));
+        a.credits.as_mut().unwrap().has_credits = false;
+        b.credits.as_mut().unwrap().has_credits = false;
+        b.credits_updated_at = Some(a.updated_at);
+        b.windows[0].used_percent = 100.0;
+        assert!(interval_kind(&a, &b).is_none());
     }
     #[test]
     fn weekly_rounded_intervals_do_not_pollute_direct_weekly_value() {
