@@ -195,6 +195,33 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 
 
 @MainActor final class AppModel: ObservableObject {
+    private let automaticEngine = EngineClient(configurationOnly: true)
+    private var automaticTask: Task<Void, Never>?
+    @Published var automaticSaving = false
+    @Published var automaticError: String?
+    func configureAutomatic(_ source: AgentSource, enabled: Bool, confirmed: Bool) async {
+        guard !automaticSaving else { return }
+        automaticSaving = true; automaticError = nil
+        defer { automaticSaving = false }
+        do {
+            struct Saved: Decodable { var settings: Settings }
+            let baseline: Any = try source.autoValuation.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()
+            let result: Saved = try await engine.call("autoEstimates.configure", params: ["sourceId":source.id,"enabled":enabled,"confirmed":confirmed,"baseConfig":baseline])
+            acceptConfiguration(result.settings); await reload()
+        } catch { automaticError = error.localizedDescription }
+    }
+    private func startAutomatic() {
+        automaticTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, !self.stopped else { return }
+                if self.settingsLoaded && !self.installingUpdate {
+                    struct Changed: Decodable { var changed: Bool }
+                    if let value: Changed = try? await self.automaticEngine.call("autoEstimates.tick"), value.changed { await self.reload() }
+                }
+                do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
+            }
+        }
+    }
     let engine = EngineClient()
     let accountEngine = EngineClient()
     @Published var accountStatuses: [AccountDeviceStatus] = []
@@ -240,11 +267,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         let accounts = settings.accounts.filter { $0.archived != true && (provider == nil || $0.provider == provider) }
         guard !accounts.isEmpty else { return }
         for account in accounts {
-            for source in settings.sources.filter({ $0.provider == account.provider && $0.enabled }).sorted(by: { ($0.hostId == nil ? 0 : 1) < ($1.hostId == nil ? 0 : 1) }) {
-                if let agents = settings.agents {
-                    guard let agent = agents.first(where: { $0.provider == account.provider }), agent.enabled, agent.machineIds.contains(source.hostId ?? "local") else { continue }
-                }
-                if let host = source.hostId, !settings.hosts.contains(where: { $0.id == host && $0.enabled }) { continue }
+            for source in settings.sources.filter({ $0.provider == account.provider && settings.sourceEnabled($0) }).sorted(by: { ($0.hostId == nil ? 0 : 1) < ($1.hostId == nil ? 0 : 1) }) {
                 if Task.isCancelled || installingUpdate || revision != accountStatusRevision { return }
                 do {
                     let row: AccountDeviceStatus = try await accountEngine.call("accounts.status.refresh", params: ["accountKey":account.key,"sourceId":source.id])
@@ -307,7 +330,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var sessionPhase: SessionPhase? { sessionsUnavailable ? .unknown : activeSessions.first?.phase ?? sessions.first?.phase }
     var sessionSummary: String {
         if sessionsUnavailable { return "会话状态不可用" }
-        if !settings.sources.contains(where: { $0.enabled && $0.hostId == nil && $0.provider == "codex" }) { return "未接入会话状态" }
+        if !settings.sources.contains(where: { settings.sourceEnabled($0) && $0.hostId == nil && $0.provider == "codex" }) { return "未接入会话状态" }
         if !activeSessions.isEmpty { return "\(activeSessions.count) 个活跃会话" }
         if sessions.contains(where: { $0.phase == .unknown }) { return "会话状态待确认" }
         return "无活跃会话"
@@ -336,18 +359,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var settingsMessage: String?
     @Published var mappingModel = ""
     @Published var mappingID = ""
-    @Published private(set) var pendingAPIKeys: [String: String] = [:]
-    @Published private(set) var pendingHostPasswords: [String: String] = [:]
-    private var preparedHostPasswords: [String: (password: String, reference: String)] = [:]
-    func stageHostPassword(_ password: String, hostID: String) { if !password.isEmpty { pendingHostPasswords[hostID] = password } }
-    private var preparedCredentials: [String: (key: String, path: String)] = [:]
-    var settingsDirty: Bool { settingsDraft != settings || !pendingAPIKeys.isEmpty || !pendingHostPasswords.isEmpty || !mappingModel.isEmpty || !mappingID.isEmpty }
-    func stageAPIKey(_ key: String?, sourceID: String) {
-        let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmed.isEmpty { pendingAPIKeys.removeValue(forKey: sourceID) }
-        else { pendingAPIKeys[sourceID] = trimmed }
-        if preparedCredentials[sourceID]?.key != trimmed { preparedCredentials.removeValue(forKey: sourceID) }
-    }
+    var settingsDirty: Bool { settingsDraft != settings || !mappingModel.isEmpty || !mappingID.isEmpty }
     @Published var requestedSourceProvider: String?
     @Published var requestedAccountKey: String?
     @Published var requestedDetailPage: String?
@@ -433,6 +445,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         provider = saved.provider; selectedSource = saved.source; selectedAccount = saved.account; selectedModel = saved.model; range = saved.days
         filterPersistenceEnabled = true
         schedulingEnabled = true
+        startAutomatic()
         Task { await bootstrap(); scheduleRefreshes() }
     }
     func bootstrap() async {
@@ -530,7 +543,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         catch { estimateErrors[accountKey] = error.localizedDescription; await reload(); return false }
     }
     static let refreshLabels = ["scan": "同步记录", "rescan": "全量重扫", "quotas": "刷新限额", "prices": "同步价格", "hosts": "刷新服务器"]
-    var usageSources: [AgentSource] { settings.sources.filter { source in source.enabled && source.provider != "deepseek" && (source.hostId == nil || settings.hosts.contains { $0.id == source.hostId && $0.enabled }) } }
+    var usageSources: [AgentSource] { settings.usageSources }
     var dataTime: Double {
         let stamps = usageSources.map { source in dashboard.sources.first { $0.id == source.id }?.status?.updatedAt ?? 0 }
         return stamps.min() ?? 0
@@ -540,7 +553,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             guard let stamp = dashboard.sources.first(where: { $0.id == source.id })?.status?.updatedAt else { return true }
             return Date().timeIntervalSince1970 - stamp > Double(max(60, settings.historyInterval * 2))
         }.count
-        let failed = dashboard.sources.contains { $0.enabled && ($0.status?.error != nil || $0.status?.partial == true) }
+        let failed = usageSources.contains { source in
+            let status = dashboard.sources.first { $0.id == source.id }?.status
+            return status?.error != nil || status?.partial == true
+        }
         let prefix = dataTime > 0 ? "记录同步于 " + Format.time(dataTime) : usageSources.isEmpty ? "未接入用量来源" : "记录尚未全部同步"
         return prefix + " · " + (busy ? "同步中…" : failed || !actionFailures.isEmpty ? "部分失败" : delayed > 0 ? "\(delayed) 个来源有延迟" : usageSources.isEmpty ? "等待接入" : "记录已同步")
     }
@@ -670,35 +686,19 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         }
     }
     func removalRequest(_ kind: String, id: String) -> RemovalRequest? {
-        if kind == "host", let host = settingsDraft.hosts.first(where: { $0.id == id }) {
-            let linked = settingsDraft.sources.filter { $0.hostId == id }.map(\.name)
+        if kind == "host", let host = settings.hosts.first(where: { $0.id == id }) {
+            let linked = settings.sources.filter { $0.hostId == id }.map(\.name)
             return RemovalRequest(kind: kind, itemID: id, title: "移除服务器「" + (host.name.isEmpty ? host.target : host.name) + "」？", explanation: linked.isEmpty ? "历史用量会保留。确认后立即生效。" : "以下 \(linked.count) 个数据源将暂停，并需要重新选择服务器。确认后立即生效。", affected: linked)
         }
-        if kind == "source", let source = settingsDraft.sources.first(where: { $0.id == id }) {
-            return RemovalRequest(kind: kind, itemID: id, title: "移除数据源「" + source.name + "」？", explanation: "已导入的历史用量会保留。以此来源查询限额的账户需要重新选择来源；确认后立即生效。", affected: settingsDraft.accounts.filter { $0.quotaSourceId == id }.map(\.name))
+        if kind == "source", let source = settings.sources.first(where: { $0.id == id }) {
+            return RemovalRequest(kind: kind, itemID: id, title: "移除数据源「" + source.name + "」？", explanation: "已导入的历史用量会保留。以此来源查询限额的账户需要重新选择来源；确认后立即生效。", affected: settings.accounts.filter { $0.quotaSourceId == id }.map(\.name))
         }
-        if kind == "account", let account = settingsDraft.accounts.first(where: { $0.key == id }) {
+        if kind == "account", let account = settings.accounts.first(where: { $0.key == id }) {
             return RemovalRequest(kind: kind, itemID: id, title: "归档账户「" + account.name + "」？", explanation: "停止展示此账户的实时限额，保留历史用量；确认后立即生效，可从已归档账户恢复。", affected: [])
         }
         return nil
     }
-    func applyRemoval(_ request: RemovalRequest) {
-        let id = request.itemID
-        switch request.kind {
-        case "source":
-            stageAPIKey(nil, sourceID: id); settingsDraft.sources.removeAll { $0.id == id }
-            for i in settingsDraft.accounts.indices where settingsDraft.accounts[i].quotaSourceId == id { settingsDraft.accounts[i].quotaSourceId = nil }
-        case "host":
-            pendingHostPasswords.removeValue(forKey: id)
-            if let reference = preparedHostPasswords.removeValue(forKey: id)?.reference { Task { let _: Acknowledgement? = try? await engine.call("hosts.credentials.delete", params: ["passwordRef":reference]) } }
-            settingsDraft.hosts.removeAll { $0.id == id }
-            for i in settingsDraft.sources.indices where settingsDraft.sources[i].hostId == id { settingsDraft.sources[i].hostId = nil; settingsDraft.sources[i].enabled = false }
-        case "account":
-            if let i = settingsDraft.accounts.firstIndex(where: { $0.key == id }) { settingsDraft.accounts[i].archived = true }
-        default: break
-        }
-    }
-    func saveSettingsDraft(refreshDashboard: Bool = true, includeMappings: Bool = true) async -> Bool {
+    func saveSettingsDraft(refreshDashboard: Bool = true, includeMappings: Bool = true, base: Settings? = nil) async -> Bool {
         guard !settingsSaving, !repricing else { return false }
         settingsSaving = true; settingsMessage = nil
         defer { settingsSaving = false }
@@ -710,43 +710,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 guard next.modelMappings[from] == nil || next.modelMappings[from] == to else { throw ClientError.message("该模型已有映射，请先移除原映射再添加新值") }
                 next.modelMappings[from] = to
             }
-            for (id,password) in pendingHostPasswords {
-                guard let index = next.hosts.firstIndex(where: { $0.id == id }) else { continue }
-                let reference: String
-                if let prepared = preparedHostPasswords[id], prepared.password == password { reference = prepared.reference }
-                else {
-                    let result: [String: String] = try await engine.call("hosts.credentials.save", params: ["password": password])
-                    guard let created = result["passwordRef"] else { throw ClientError.message("密码保存失败") }
-                    if let obsolete = preparedHostPasswords[id]?.reference { let _: Acknowledgement? = try? await engine.call("hosts.credentials.delete", params: ["passwordRef":obsolete]) }
-                    reference = created; preparedHostPasswords[id] = (password,reference)
-                }
-                next.hosts[index].passwordRef = reference
-            }
-            for id in pendingAPIKeys.keys.sorted() {
-                guard let index = next.sources.firstIndex(where: { $0.id == id && $0.provider == "deepseek" }), let key = pendingAPIKeys[id] else { continue }
-                let path: String
-                if let prepared = preparedCredentials[id], prepared.key == key { path = prepared.path }
-                else {
-                    // A fresh storage identity also protects users of older cores that wrote one file per source ID.
-                    let result: [String: String] = try await engine.call("credentials.save", params: ["sourceId": id + "-draft-" + UUID().uuidString, "apiKey": key])
-                    guard let createdPath = result["path"], !createdPath.isEmpty else { throw ClientError.message("未获得凭据保存路径") }
-                    path = createdPath
-                    preparedCredentials[id] = (key, path)
-                }
-                next.sources[index].path = path
-            }
-            let success = await save(next, refreshDashboard: refreshDashboard)
-            if success { if includeMappings { mappingModel = ""; mappingID = "" }; settingsDraft = settings; pendingAPIKeys.removeAll(); preparedCredentials.removeAll(); pendingHostPasswords.removeAll(); preparedHostPasswords.removeAll() }
+            let success = await save(next, base: base, refreshDashboard: refreshDashboard)
+            if success { if includeMappings { mappingModel = ""; mappingID = "" }; settingsDraft = settings }
             settingsMessage = success ? "已保存配置 · " + Format.time(Date().timeIntervalSince1970) : message ?? "保存失败"
             return success
         } catch { settingsMessage = error.localizedDescription; return false }
     }
     func discardSettingsDraft() {
         settingsDraft = settings; settingsMessage = nil; mappingModel = ""; mappingID = ""
-        pendingAPIKeys.removeAll(); preparedCredentials.removeAll()
-        let references = preparedHostPasswords.values.map(\.reference)
-        Task { for reference in references { let _: Acknowledgement? = try? await engine.call("hosts.credentials.delete", params: ["passwordRef":reference]) } }
-        pendingHostPasswords.removeAll(); preparedHostPasswords.removeAll()
     }
     func toggleTheme(currentlyDark: Bool) async {
         guard settingsLoaded, !settingsSaving else { return }
@@ -762,15 +733,15 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         draftAppearance.theme = settings.appearance?.theme ?? appearance.theme
         settingsDraft.appearance = draftAppearance
     }
-    func save(_ draft: Settings, refreshDashboard: Bool = true) async -> Bool {
+    func save(_ draft: Settings, base: Settings? = nil, refreshDashboard: Bool = true) async -> Bool {
         do {
             let data = try JSONEncoder().encode(draft)
             let params = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-            let baseline = try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings))
+            let baseline = try JSONSerialization.jsonObject(with: JSONEncoder().encode(base ?? settings))
             let saved: Settings = try await engine.call("settings.patch", params: ["base": baseline, "settings": params])
-            let historyConfigurationChanged = settings.historyShowDeletedAccounts != draft.historyShowDeletedAccounts || settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.modelMappings != draft.modelMappings
-            let quotaConfigurationChanged = settings.accounts != draft.accounts || settings.sources != draft.sources || settings.hosts != draft.hosts || settings.proxy != draft.proxy
-            if settings.proxy != draft.proxy || settings.proxyTestUrls != draft.proxyTestUrls { networkRevision += 1; networkTest = nil; lastNetworkAttempt = .distantPast }
+            let historyConfigurationChanged = settings.historyShowDeletedAccounts != saved.historyShowDeletedAccounts || settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.modelMappings != saved.modelMappings
+            let quotaConfigurationChanged = settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.proxy != saved.proxy
+            if settings.proxy != saved.proxy || settings.proxyTestUrls != saved.proxyTestUrls { networkRevision += 1; networkTest = nil; lastNetworkAttempt = .distantPast }
             for account in saved.accounts where !settings.accounts.contains(where: { $0.key == account.key }) { PanelAccountPreference.includeNew(account, accounts: saved.accounts) }
             settings = saved
             if quotaConfigurationChanged {
@@ -892,6 +863,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     func stop() {
         stopped = true; schedulingEnabled = false; timer?.invalidate(); timer = nil
+        automaticTask?.cancel(); automaticEngine.stop()
         filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
         deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel()
         for task in antigravityRefreshTasks.values { task.cancel() }

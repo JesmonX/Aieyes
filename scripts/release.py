@@ -9,7 +9,10 @@ import plistlib
 import re
 import shutil
 import subprocess
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    from vendor import tomli as tomllib
 import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -157,9 +160,11 @@ def checksum_assets(directory, release_version):
         path = directory / name
         if not path.is_file() or path.stat().st_size == 0:
             raise ValueError(f"Empty or invalid asset: {name}")
+        digest = hashlib.sha256()
         with path.open("rb") as source:
-            digest = hashlib.file_digest(source, "sha256").hexdigest()
-        lines.append(f"{digest}  {name}\n")
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(block)
+        lines.append(f"{digest.hexdigest()}  {name}\n")
     validate_updates(directory, release_version)
     (directory / "SHA256SUMS").write_text("".join(lines), encoding="utf-8")
 

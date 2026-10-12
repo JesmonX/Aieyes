@@ -1,4 +1,5 @@
 """No real CLI inference, SSH connection or system scheduler is used by these tests."""
+from contextlib import closing
 import datetime
 import base64
 import importlib.util
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -18,6 +20,44 @@ spec=importlib.util.spec_from_file_location('wake',pathlib.Path(__file__).with_n
 wake=importlib.util.module_from_spec(spec);spec.loader.exec_module(wake)
 
 class WakeTests(unittest.TestCase):
+    def test_next_run_uses_real_full_minutes(self):
+        start = datetime.datetime.fromisoformat('2026-01-15T07:59:40+00:00').timestamp()
+        with patch.object(wake.time, 'localtime', time.gmtime):
+            self.assertEqual(wake.next_run(['08:00'], start), start + 20)
+            self.assertEqual(wake.next_run(['08:00'], start + 20), start + 20 + 86400)
+            self.assertIsNone(wake.next_run([], start))
+
+    @unittest.skipUnless(hasattr(time, 'tzset'), 'Remote scheduler follows POSIX timezone rules')
+    def test_next_run_matches_shared_dst_cases_and_recorded_slots(self):
+        fixture = json.loads(pathlib.Path(__file__).with_name('fixtures').joinpath('wakeup-times.json').read_text())
+        previous = os.environ.get('TZ')
+        try:
+            for row in fixture:
+                if row['status'] != 'ready' or row['approximate']:
+                    continue
+                os.environ['TZ'] = row['zone']; time.tzset()
+                start = datetime.datetime.fromisoformat(row['now'].replace('Z', '+00:00')).timestamp()
+                expected = datetime.datetime.fromisoformat(row['expected'].replace('Z', '+00:00')).timestamp()
+                self.assertEqual(wake.next_run([row['time']], start), expected, row['name'])
+            os.environ['TZ'] = 'America/New_York'; time.tzset()
+            start = datetime.datetime.fromisoformat('2026-11-01T05:45:00+00:00').timestamp()
+            occurred = {'wake-test:2026-11-01:01:30'}
+            expected = datetime.datetime.fromisoformat('2026-11-02T06:30:00+00:00').timestamp()
+            self.assertEqual(wake.next_run(['01:30'], start, occurred, 'wake-test'), expected)
+        finally:
+            if previous is None: os.environ.pop('TZ', None)
+            else: os.environ['TZ'] = previous
+            time.tzset()
+
+    def test_next_run_reads_only_this_tasks_occurrences(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            self.assertEqual(wake.scheduled_occurrences(root, 'wake-test', 100), set())
+            with closing(sqlite3.connect(root / 'runner.sqlite')) as db, db:
+                db.execute('CREATE TABLE runs(task TEXT, occurrence TEXT, started INTEGER)')
+                db.executemany('INSERT INTO runs VALUES(?,?,?)', [('wake-test', 'wake-test:2026-11-01:01:30', 100), ('other', 'other:2026-11-01:01:30', 100)])
+            self.assertEqual(wake.scheduled_occurrences(root, 'wake-test', 100), {'wake-test:2026-11-01:01:30'})
+
     def manifest(self, binary='fake'):
         return dict(version=1,id='wake-test',accountKey='codex:test',provider='codex',model='model',effort='low',binary=binary,args=['exec','-m','model','-c','model_reasoning_effort="low"',"hi; $(touch never)"],configPath='/fixture',preCommand='',shell='/bin/bash',proxy={'mode':'direct'},times=[datetime.datetime.now().strftime('%H:%M')],enabled=True)
 

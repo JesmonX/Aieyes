@@ -127,6 +127,13 @@
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
+    "accounts.targets": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
     "agents.set": {
       "lane": "configuration",
       "invalidates": [
@@ -192,6 +199,25 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "complete"
+    },
+    "autoEstimates.configure": {
+      "lane": "configuration",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "autoEstimates.tick": {
+      "lane": "main",
+      "invalidates": [
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
     },
     "codexAuth.adopt": {
       "lane": "main",
@@ -295,6 +321,16 @@
     "codexAuth.quota": {
       "lane": "main",
       "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    "codexAuth.reconcile": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
@@ -446,6 +482,27 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    "operations.prepareUpdate": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    "operations.resume": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    "operations.status": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
     },
     "prices.list": {
       "lane": "main",
@@ -718,45 +775,7 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
-    },
-    "accounts.targets": {
-      "lane": "configuration",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "observe"
-    },
-    "codexAuth.reconcile": {
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "cancel"
-    },
-    "operations.prepareUpdate": {
-      "lane": "configuration",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "observe"
-    },
-    "operations.resume": {
-      "lane": "configuration",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "observe"
-    },
-    "operations.status": {
-      "lane": "configuration",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "observe"
     }
   },
-  "contractHash": "4db1989414fb5431211b338e221b7a2b03efdd9f5894e3ba61c2b459c194fe16"
+  "contractHash": "eae7986bd3cc31bcd50b7578716885eaf1c3bea3f7762fd4002d80547b271c16"
 };

@@ -1,8 +1,7 @@
 // Production renderer/query queue with synthetic IPC. No real hosts or accounts.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
-const source=fs.readFileSync(path.join(__dirname,'test-ui.cjs'),'utf8');
-const fixture=eval('('+source.slice(source.indexOf('const fixture = ')+16,source.indexOf('\n    await page.addInitScript(fixture);')).trim().replace(/;$/,'')+')');
+const fixture=require('./fixtures/browser-ui.cjs');
 (async()=>{
  const root=path.resolve(__dirname,'../apps/desktop/web');
  const server=http.createServer((req,res)=>{if(require('./ui-test-helpers.cjs').serveFont(req,res))return;const file=path.join(root,path.basename(new URL(req.url,'http://test').pathname)||'index.html');try{res.setHeader('content-type',({'.js':'text/javascript','.html':'text/html','.css':'text/css'})[path.extname(file)]||'application/octet-stream');res.end(fs.readFileSync(file));}catch{res.writeHead(404);res.end();}});

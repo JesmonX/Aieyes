@@ -1,5 +1,5 @@
 //! Local Codex lifecycle metadata only. Never returns prompts or tool arguments.
-use crate::{models::Source, store::expand};
+use crate::{models::Settings, store::expand};
 use serde::Serialize;
 use serde_json::Value;
 use std::{
@@ -85,10 +85,11 @@ pub struct SessionMonitor {
     cache: HashMap<PathBuf, (SystemTime, u64, Option<Phase>)>,
 }
 impl SessionMonitor {
-    pub fn read(&mut self, sources: &[Source], now: SystemTime) -> Snapshot {
-        let local: Vec<_> = sources
+    pub fn read(&mut self, settings: &Settings, now: SystemTime) -> Snapshot {
+        let local: Vec<_> = settings
+            .sources
             .iter()
-            .filter(|s| s.enabled && s.host_id.is_none() && s.provider == "codex")
+            .filter(|s| settings.source_enabled(s) && s.host_id.is_none() && s.provider == "codex")
             .collect();
         let key: Vec<_> = local
             .iter()
@@ -250,6 +251,7 @@ fn parse(data: &[u8]) -> Option<Phase> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{AgentConfiguration, Source};
     use serde_json::json;
     fn row(kind: &str, event: &str) -> String {
         format!(
@@ -287,8 +289,11 @@ mod tests {
             ..Source::default()
         };
         let mut monitor = SessionMonitor::default();
-        let sources = [source.clone(), source.clone()];
-        let live = monitor.read(&sources, now);
+        let mut settings = Settings {
+            sources: vec![source.clone(), source.clone()],
+            ..Default::default()
+        };
+        let live = monitor.read(&settings, now);
         assert_eq!(live.active_count(), 1);
         assert!(
             !serde_json::to_string(&live)
@@ -297,16 +302,30 @@ mod tests {
         );
         assert_eq!(
             monitor
-                .read(&sources, now + Duration::from_secs(181))
+                .read(&settings, now + Duration::from_secs(181))
                 .phase(),
             Some(Phase::Unknown)
         );
         assert!(
             monitor
-                .read(&sources, now + Duration::from_secs(3601))
+                .read(&settings, now + Duration::from_secs(3601))
                 .sessions
                 .is_empty()
         );
+        settings.agents = vec![AgentConfiguration {
+            provider: "codex".into(),
+            enabled: false,
+            machine_ids: vec!["local".into()],
+        }];
+        assert!(monitor.read(&settings, now).sessions.is_empty());
+        settings.agents[0].enabled = true;
+        assert_eq!(monitor.read(&settings, now).active_count(), 1);
+        settings.agents[0].machine_ids.clear();
+        assert!(monitor.read(&settings, now).sessions.is_empty());
+        settings.agents[0].machine_ids.push("local".into());
+        settings.agents.push(settings.agents[0].clone());
+        assert!(monitor.read(&settings, now).sessions.is_empty());
+        settings.agents.clear();
         let disabled = Source {
             enabled: false,
             ..source.clone()
@@ -315,12 +334,14 @@ mod tests {
             host_id: Some("host".into()),
             ..source.clone()
         };
-        assert!(monitor.read(&[disabled, remote], now).sessions.is_empty());
+        settings.sources = vec![disabled, remote];
+        assert!(monitor.read(&settings, now).sessions.is_empty());
         let missing = Source {
             path: temp.path().join("missing").to_string_lossy().into(),
             ..source
         };
-        assert!(monitor.read(&[missing], now).unavailable);
+        settings.sources = vec![missing];
+        assert!(monitor.read(&settings, now).unavailable);
     }
     #[test]
     fn completed_sessions_expire_even_when_cached() {
@@ -328,15 +349,18 @@ mod tests {
         let file = temp.path().join("session.jsonl");
         fs::write(&file, row("event_msg", "task_complete")).unwrap();
         let now = fs::metadata(&file).unwrap().modified().unwrap();
-        let sources = [Source {
-            path: file.to_string_lossy().into(),
-            ..Source::default()
-        }];
+        let settings = Settings {
+            sources: vec![Source {
+                path: file.to_string_lossy().into(),
+                ..Source::default()
+            }],
+            ..Default::default()
+        };
         let mut monitor = SessionMonitor::default();
-        assert_eq!(monitor.read(&sources, now).phase(), Some(Phase::Complete));
+        assert_eq!(monitor.read(&settings, now).phase(), Some(Phase::Complete));
         assert!(
             monitor
-                .read(&sources, now + Duration::from_secs(90))
+                .read(&settings, now + Duration::from_secs(90))
                 .sessions
                 .is_empty()
         );

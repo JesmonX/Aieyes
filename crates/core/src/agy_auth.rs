@@ -282,20 +282,17 @@ fn command(source: &Source, settings: &Settings) -> Result<CommandBuilder> {
                 .find(|a| a.provider == source.provider && a.id == source.account_id),
             source,
         );
-        let mut cmd = if !pre.trim().is_empty() && !cfg!(windows) {
-            let mut cmd = std::process::Command::new(ssh::DEFAULT_SHELL);
-            cmd.args(["-c", &format!("set -e\n{}{{\n{}\n}} </dev/null >&2\nexec {} --log-file /dev/null --prompt-interactive /usage", ssh::PATH_FALLBACK, pre, process::quote(&path.to_string_lossy()))]);
-            cmd
-        } else {
-            let mut cmd = process::cli_command(&path.to_string_lossy());
-            cmd.args([
+        let mut cmd = process::cli_command_with_pre_command(
+            &path.to_string_lossy(),
+            &[
                 "--log-file",
                 if cfg!(windows) { "NUL" } else { "/dev/null" },
                 "--prompt-interactive",
                 "/usage",
-            ]);
-            cmd
-        };
+            ],
+            &pre,
+            ssh::DEFAULT_SHELL,
+        );
         network::apply_env(&mut cmd, source.proxy.as_ref().unwrap_or(&settings.proxy));
         cmd
     };

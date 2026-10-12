@@ -110,7 +110,7 @@ struct WakeEditor: View {
     @State private var busy = false
     @State private var error: String?
     private let engine = EngineClient()
-    private var sources: [AgentSource] { model.settings.sources.filter { source in source.enabled && (!source.accountId.isEmpty || source.codexHomeId != nil) && CoreContract.wakeupProviders.contains(source.provider) && (source.hostId == nil || model.settings.hosts.contains { h in h.id == source.hostId && h.enabled }) } }
+    private var sources: [AgentSource] { model.settings.sources.filter { model.settings.sourceEnabled($0) && (!$0.accountId.isEmpty || $0.codexHomeId != nil) && CoreContract.wakeupProviders.contains($0.provider) } }
     private var efforts: [String] { capabilities?.models.first { $0.id == task.model }?.efforts ?? capabilities?.efforts ?? ["low","medium","high","xhigh","max","ultra"] }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -172,12 +172,7 @@ struct WakeEditor: View {
         .onChange(of: task.model) { _, _ in if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
     }
     private func localTime(_ time: String) -> String {
-        guard let name = capabilities?.timezone, let zone = TimeZone(identifier: name) else { return "目标时区待读取" }
-        let parts = time.split(separator: ":").compactMap { Int($0) }
-        guard parts.count == 2, (0..<24).contains(parts[0]), (0..<60).contains(parts[1]) else { return "请输入 HH:mm" }
-        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = zone
-        guard let next = calendar.nextDate(after: Date(), matching: DateComponents(hour: parts[0], minute: parts[1]), matchingPolicy: .nextTime) else { return "时间待确认" }
-        return name + " → 本地 " + next.formatted(date: .abbreviated, time: .shortened)
+        WakeupTime.next(time, zone: capabilities?.timezone).label
     }
     private func probe() {
         busy = true; error = nil

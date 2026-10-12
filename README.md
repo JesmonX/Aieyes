@@ -78,7 +78,7 @@ node --check apps/desktop/web/tooltip.js
 sh scripts/build-macos.sh debug
 ```
 
-主题同步回归（先完成上面的 debug 构建）：`node scripts/test-theme-sync-ui.cjs`；macOS 实际弹出面板明暗切换验证：`sh scripts/test-native-theme.sh`。
+统一检查入口及平台要求见[手动验证与维护](docs/manual-verification.md)，本轮代码清理方案与验收见[死代码、测试与跨平台一致性优化](docs/dead-code-and-platform-audit-2026-10-12.md)。主题同步已包含在 `npm run test:ui --prefix apps/desktop`，也可在 debug 构建后单独运行 `node scripts/test-theme-sync-ui.cjs`；macOS 实际弹出面板明暗切换验证：`sh scripts/test-native-theme.sh`。
 
 Tauri 界面在安装目标系统构建依赖后运行：
 

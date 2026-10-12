@@ -204,10 +204,6 @@ pub fn unknown_model(model: &str) -> bool {
     model.starts_with("antigravity-unknown-")
 }
 
-pub fn read_database(path: &Path) -> Result<Vec<Value>> {
-    Ok(read_database_detailed(path)?.events)
-}
-
 pub fn read_database_detailed(path: &Path) -> Result<DatabaseRead> {
     let db = Connection::open_with_flags(
         path,

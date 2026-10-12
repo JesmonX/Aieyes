@@ -292,7 +292,7 @@ fn native_and_ssh_match_wal_incremental_and_standard_import() {
     .unwrap();
     db.execute("INSERT INTO steps VALUES(1,1,?1)", [step(start + 20, 0)])
         .unwrap();
-    let rows = antigravity::read_database(&path).unwrap();
+    let rows = antigravity::read_database_detailed(&path).unwrap().events;
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows[0]["tokens"],
@@ -381,7 +381,11 @@ fn native_and_ssh_match_wal_incremental_and_standard_import() {
     db.execute("INSERT INTO steps VALUES(2,3,?1)", [metadata])
         .unwrap();
     assert_eq!(
-        antigravity::read_database(&path).unwrap().last().unwrap()["model"],
+        antigravity::read_database_detailed(&path)
+            .unwrap()
+            .events
+            .last()
+            .unwrap()["model"],
         "claude-test"
     );
     assert_eq!(
@@ -610,7 +614,7 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
         w.used_percent += delta;
     }
     store.quota(&q).unwrap();
-    let done = store.finish_estimate(&estimate.id).unwrap();
+    let done = store.finish_estimate_for(&estimate.id, false).unwrap();
     assert_eq!(done.total_tokens, 100);
     assert_eq!(done.cost, 1.0);
     assert_eq!(done.quota().unwrap().five_hour_value, Some(10.0));
@@ -642,7 +646,7 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
     q.updated_at += 10;
     q.windows[0].used_percent += 10.0;
     store.quota(&q).unwrap();
-    let done = store.finish_estimate(&e.id).unwrap();
+    let done = store.finish_estimate_for(&e.id, false).unwrap();
     assert_eq!(done.calculation_status, "unmappedGroup");
     assert_eq!(done.quota().unwrap().five_hour_value, None);
 }

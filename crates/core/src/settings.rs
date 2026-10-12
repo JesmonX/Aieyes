@@ -3,12 +3,6 @@ use crate::{Engine, models::*, store::Store};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
-/// Pure local configuration work must not wait behind remote requests.
-pub fn is_configuration_method(method: &str) -> bool {
-    crate::contracts::method(method)
-        .is_some_and(|m| m.lane == crate::contracts::Lane::Configuration)
-}
-
 // Preserve concurrent edits to unrelated fields and rows. A conflicting field
 // fails before any configuration is written; clients retain their form input.
 fn merge(base: &Value, next: &Value, current: &Value, path: &str) -> Result<Value> {
@@ -171,6 +165,9 @@ impl Engine {
             );
         }
         let moved = old.is_some_and(|s| s.path != source.path);
+        if moved {
+            source.auto_valuation = None;
+        }
         if remove || moved {
             let tasks: Vec<_> = self
                 .store
@@ -494,6 +491,10 @@ mod tests {
             .unwrap();
         let mut settings = engine.store.settings().unwrap();
         settings.sources[0].codex_home_id = Some("home".into());
+        settings.sources[0].auto_valuation = Some(crate::automatic::AutoValuationConfig {
+            enabled: true,
+            consent_version: crate::automatic::CONSENT_VERSION,
+        });
         engine.store.save_auth_settings(&settings).unwrap();
         let old = engine.store.settings().unwrap().sources[0].clone();
         let mut moved = old.clone();

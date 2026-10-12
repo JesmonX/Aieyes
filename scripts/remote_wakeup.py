@@ -1,4 +1,5 @@
 """Aieyes user-owned SSH deployment and headless runner (Python 3 stdlib only)."""
+from contextlib import closing
 import datetime
 import concurrent.futures
 import hashlib
@@ -233,6 +234,21 @@ def timezone():
     return datetime.datetime.now().astimezone().strftime('%Z %z')
 
 
+def next_run(times, now=None, occurred=(), task_id=''):
+    start = int((time.time() if now is None else now) // 60) * 60
+    # Walk real minutes, not wall-clock additions that can invent a DST gap.
+    return next((stamp for stamp in range(start + 60, start + 2881 * 60, 60)
+                 if time.strftime('%H:%M', time.localtime(stamp)) in times
+                 and task_id + ':' + time.strftime('%Y-%m-%d:%H:%M', time.localtime(stamp)) not in occurred), None)
+
+
+def scheduled_occurrences(root, identifier, now):
+    if not (root / 'runner.sqlite').exists():
+        return set()
+    with closing(sqlite3.connect((root / 'runner.sqlite').as_uri() + '?mode=ro', uri=True)) as db:
+        return {row[0] for row in db.execute('SELECT occurrence FROM runs WHERE task=? AND started>=?', (identifier, now - 172800))}
+
+
 def tag(root):
     return '# app.aieyes.wakeup.' + hashlib.sha256(str(root).encode()).hexdigest()[:20]
 
@@ -391,9 +407,9 @@ def manage(request):
         m = json.loads(path.read_text()) if path.exists() else None
         cron = subprocess.run(['crontab','-l'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         installed = bool(m) and tag(root) in cron.stdout.decode()
-        now = datetime.datetime.now().replace(second=0, microsecond=0)
-        next_run = next(((now + datetime.timedelta(minutes=i)).timestamp() for i in range(1, 2881) if (now+datetime.timedelta(minutes=i)).strftime('%H:%M') in m['times']), None) if installed and m['enabled'] else None
-        return {'installed': installed, 'enabled': bool(m and m['enabled']), 'timezone': timezone(), 'nextRunAt': next_run, 'history': history(root, identifier)}
+        now = time.time()
+        next_run_at = next_run(m['times'], now, scheduled_occurrences(root, identifier, now), identifier) if installed and m['enabled'] else None
+        return {'installed': installed, 'enabled': bool(m and m['enabled']), 'timezone': timezone(), 'nextRunAt': next_run_at, 'history': history(root, identifier)}
     if action == 'run':
         if not path.exists():
             raise ValueError('部署文件不存在')

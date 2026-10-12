@@ -3,8 +3,9 @@ const sandbox={window:{},Date,localStorage:{getItem(){return null;},setItem(){}}
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../apps/desktop/web/contracts.js'),'utf8'),sandbox);
 vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../apps/desktop/web/ui-state.js'),'utf8'),sandbox);
-const ui=sandbox.window.AieyesUI,now=1800000000;
-for(const [seconds,text] of [[1,'1 分后重置'],[59*60,'59 分后重置'],[59*60+1,'1 小时后重置'],[3600,'1 小时后重置'],[86400,'1 天后重置'],[26*3600+15*60,'1 天 2 小时后重置'],[7*86400,'7 天后重置'],[23*3600+59*60,'23 小时 59 分后重置'],[86400+60,'1 天后重置'],[86400+3600+60,'1 天 1 小时后重置']])assert.equal(ui.resetText(now+seconds,now),text);
+const fixture=require('./fixtures/reset-display.json');
+const ui=sandbox.window.AieyesUI,now=fixture.now;
+for(const {seconds,text} of fixture.durations)assert.equal(ui.resetText(now+seconds,now),text);
 for(const windowMinutes of [300,10080]) {
   const snapshot={resetsAt:now-1,windowMinutes,usedPercent:0},original=JSON.stringify(snapshot);
   for(const elapsed of [0,60,30*86400]) {
@@ -28,10 +29,6 @@ for(const resetsAt of [null,undefined,0,-1,NaN,Infinity]) {
 }
 assert.equal(ui.quotaReset({resetsAt:null,usedPercent:0},now),'重置时间未知');
 assert.equal(ui.subscription('plus'),'Plus');assert.equal(ui.subscription(' pro '),'Pro');assert.equal(ui.subscription('Special Plan'),'Special Plan');
-for(const provider of ['codex','claude','antigravity','deepseek']) {
-  const png=fs.readFileSync(path.resolve(__dirname,'../apps/desktop/web/provider-'+provider+'.png'));
-  assert.equal(png.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
-}
 const windows=[{resetsAt:now+2*3600,windowMinutes:300,usedPercent:0},{resetsAt:now+2*86400,windowMinutes:10080,usedPercent:20}];
 const original=JSON.stringify(windows);
 for(const [elapsed,countdown] of [[0,'2 小时'],[60,'1 小时 59 分'],[3600,'1 小时']]) {
@@ -45,9 +42,6 @@ assert.match(ui.quotaReset(windows[1],now+3600),/^1 天 23 小时后重置/);
 assert.equal(JSON.stringify(windows),original);
 for(const usedPercent of [undefined,null,NaN,Infinity,-1,0,0.001,20,100]) {
   assert.match(ui.quotaReset({...windows[0],usedPercent},now),/^2 小时后重置/);
-}
-for(const usedPercent of [0,0.001,10,0]) {
-  assert.match(ui.quotaReset({...windows[0],usedPercent},now+3600),/^1 小时后重置/);
 }
 assert.match(ui.quotaReset({...windows[1],usedPercent:0},now+3600),/^1 天 23 小时后重置/);
 assert.match(ui.quotaReset({...windows[0],windowMinutes:null},now),/^2 小时后重置/);

@@ -3,6 +3,7 @@ import pathlib
 import tempfile
 import unittest
 import base64
+import hashlib
 import json
 import plistlib
 import subprocess
@@ -76,6 +77,9 @@ class ReleaseTests(unittest.TestCase):
             release.checksum_assets(root, "1.2.3")
             sums = (root / "SHA256SUMS").read_bytes()
             self.assertEqual(len(sums.splitlines()), 11)
+            for line in sums.decode('utf-8').splitlines():
+                digest, name = line.split('  ', 1)
+                self.assertEqual(digest, hashlib.sha256((root / name).read_bytes()).hexdigest())
             release.checksum_assets(root, "1.2.3")
             self.assertEqual((root / "SHA256SUMS").read_bytes(), sums)
             missing = root / "Aieyes-1.2.3-macos-arm64.dmg"

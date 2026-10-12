@@ -1,5 +1,11 @@
 import SwiftUI
 
+private struct HostEditorRequest: Identifiable {
+    let id = UUID()
+    var host: Host
+    var baseline: Settings
+}
+
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var catalog: PriceCatalog
@@ -8,13 +14,11 @@ struct SettingsView: View {
         nonmutating set { model.settingsDraft = newValue }
     }
     @State private var autoSaveTask: Task<Void, Never>?
-    @State private var sourceEditor: AgentSource?
     @State private var accountEditor: AgentAccount?
-    @State private var hostEditor: Host?
+    @State private var hostEditor: HostEditorRequest?
     @State private var priceEditor: ModelPrice?
     @AppStorage(NativePanelKey.showCount.rawValue) private var showMenuCount = false
     @State private var removal: RemovalRequest?
-    @State private var confirmDiscardConfig = false
     @State private var confirmRescan = false
     private var mappingModel: String { get { model.mappingModel } nonmutating set { model.mappingModel = newValue } }
     private var mappingID: String { get { model.mappingID } nonmutating set { model.mappingID = newValue } }
@@ -46,16 +50,15 @@ struct SettingsView: View {
                 switch model.settingsTab {
                 case "accounts", "codexAuth": AccountsSettingsView(model: model) { accountEditor = $0 }
                 case "wakeups": WakeupsView(model: model)
-                case "sources": AgentsSettingsView(model: model) { sourceEditor = $0 }
+                case "sources": AgentsSettingsView(model: model)
                 case "servers": servers
                 case "prices": prices
                 case "general", "connection": general
-                default: AgentsSettingsView(model: model) { sourceEditor = $0 }
+                default: AgentsSettingsView(model: model)
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16).disabled((model.settingsSaving && model.settingsTab != "accounts") || model.repricing || !model.settingsLoaded)
         }
         .font(AppFont.body).disabled(model.installingUpdate)
-        .discardDraftConfirmation($confirmDiscardConfig) { model.discardSettingsDraft() }
         .alert("全量重扫历史记录", isPresented: $confirmRescan) {
             Button("取消", role: .cancel) { }
             Button("开始重扫") { Task { await model.rescan() } }
@@ -77,27 +80,10 @@ struct SettingsView: View {
         .sheet(item: $removal) { request in
             DangerConfirmation(title: request.title, explanation: request.explanation, affected: request.affected, confirmLabel: request.kind == "account" ? "归档并保留历史" : "确认移除", cancel: { removal = nil }, confirm: { removal = nil; Task { await model.removeConfiguration(request) } })
         }
-        .sheet(item: $sourceEditor) { source in
-            SourceEditor(source: source, hosts: draft.hosts, appProxy: model.settings.proxy, testURLs: model.settings.proxyTestUrls) { item in
-                var params: [String: Any] = ["source": try JSONSerialization.jsonObject(with: JSONEncoder().encode(item))]
-                if model.settings.sources.contains(where: { $0.id == source.id }) { params["baseSource"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(source)) }
-                let saved: Settings = try await model.engine.call("sources.configure", params: params)
-                model.settings = saved; model.settingsDraft = saved; sourceEditor = nil; await model.reload()
-            }
-        }
         .sheet(item: $accountEditor) { account in AccountDevicesView(model: model, account: account) }
-        .sheet(item: $hostEditor) { host in HostEditor(host: host, password: model.pendingHostPasswords[host.id] ?? "") { item, password in
-            var next = model.settings
-            if item.id == "local" { next.localMonitor = LocalMonitor(item) } else if let i = next.hosts.firstIndex(where: { $0.id == item.id }) { next.hosts[i] = item } else { next.hosts.append(item) }
-            var created: String?
-            if !password.isEmpty {
-                let result: [String: String] = try await model.engine.call("hosts.credentials.save", params: ["password":password])
-                guard let reference = result["passwordRef"] else { throw ClientError.message("密码保存失败") }
-                created = reference
-                if let index = next.hosts.firstIndex(where: { $0.id == item.id }) { next.hosts[index].passwordRef = reference }
-            }
-            do { try await model.persistConfiguration(next); hostEditor = nil }
-            catch { if let created { let _: Acknowledgement? = try? await model.engine.call("hosts.credentials.delete", params: ["passwordRef":created]) }; throw error }
+        .sheet(item: $hostEditor) { request in HostEditor(host: request.host) { item, password in
+            try await model.saveHostConfiguration(item, password: password, base: request.baseline)
+            hostEditor = nil
         } }
         .sheet(item: $priceEditor) { price in PriceEditor(price: price) { item in
             guard await model.savePrice(item) else { throw ClientError.message(model.message ?? "保存失败") }
@@ -109,23 +95,24 @@ struct SettingsView: View {
         if model.requestedSourceProvider != nil {
             model.settingsTab = "sources"; model.requestedSourceProvider = nil
         }
-        if model.requestHostEditor { hostEditor = Host(); model.requestHostEditor = false }
+        if model.requestHostEditor { editHost(Host()); model.requestHostEditor = false }
     }
+    private func editHost(_ host: Host) { hostEditor = HostEditorRequest(host: host, baseline: model.settings) }
     private var servers: some View {
         VStack(spacing: 12) {
             Form {
                 HStack(spacing: 12) {
                     Toggle("启用本机监测", isOn: Binding(get: { model.settingsDraft.localMonitor?.enabled ?? true }, set: { value in Task { var next = model.settings; var local = next.localMonitor ?? LocalMonitor(); local.enabled = value; next.localMonitor = local; do { try await model.persistConfiguration(next) } catch { model.settingsMessage = error.localizedDescription } } })).toggleStyle(.switch).controlSize(.small)
-                    Spacer(); Button("监控设置") { hostEditor = (model.settingsDraft.localMonitor ?? LocalMonitor()).host }
+                    Spacer(); Button("监控设置") { editHost((model.settingsDraft.localMonitor ?? LocalMonitor()).host) }
                 }.padding(.vertical, 7)
                 ForEach($model.settingsDraft.hosts) { $host in HStack(spacing: 12) {
                     Toggle("启用 " + (host.name.isEmpty ? host.target : host.name), isOn: Binding(get: { host.enabled }, set: { value in Task { var next = model.settings; if let i = next.hosts.firstIndex(where: { $0.id == host.id }) { next.hosts[i].enabled = value }; do { try await model.persistConfiguration(next) } catch { model.settingsMessage = error.localizedDescription } } })).labelsHidden().toggleStyle(.switch).controlSize(.small)
                     VStack(alignment: .leading, spacing: 5) { Text(host.name.isEmpty ? host.target : host.name).font(AppFont.section); Text(host.target).font(AppFont.secondary).foregroundStyle(.secondary) }
-                    Spacer(); Button("编辑") { hostEditor = host }.accessibilityLabel("编辑服务器 " + (host.name.isEmpty ? host.target : host.name))
+                    Spacer(); Button("编辑") { editHost(host) }.accessibilityLabel("编辑服务器 " + (host.name.isEmpty ? host.target : host.name))
                     Button { removal = model.removalRequest("host", id: host.id) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除主机").accessibilityLabel("移除服务器 " + (host.name.isEmpty ? host.target : host.name))
                 }.padding(.vertical, 7) }
             }.formStyle(.grouped)
-            HStack { Button("添加 SSH 主机", systemImage: "plus") { hostEditor = Host() }; Spacer(); Button("测试采样") { Task { await model.sampleHosts() } }.disabled(model.serverBusy) }.padding(.horizontal, 8)
+            HStack { Button("添加 SSH 主机", systemImage: "plus") { editHost(Host()) }; Spacer(); Button("测试采样") { Task { await model.sampleHosts() } }.disabled(model.serverBusy) }.padding(.horizontal, 8)
         }.padding(.vertical, 12)
     }
     private func applyMappingDraft() -> Bool {

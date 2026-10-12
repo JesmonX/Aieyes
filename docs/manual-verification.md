@@ -1,8 +1,8 @@
 # 手动验证与维护入口
 
-从仓库根目录运行。Python 检查使用 Python 3.11+；浏览器检查需要 `npm ci --prefix apps/desktop` 和 Playwright Chromium。核心集成检查使用先构建的 `target/debug/aieyes-core`。原生检查需要 macOS、Swift 和已解析的 Sparkle 依赖。
+从仓库根目录运行。共享 Python 检查支持 Python 3.9+，旧版本复用仓库内 Tomli 解析 TOML；发布打包仍按对应构建脚本的依赖要求执行。浏览器检查需要 `npm ci --prefix apps/desktop` 和 Playwright Chromium。核心集成检查使用先构建的 `target/debug/aieyes-core`。原生检查需要 macOS、Swift 和已解析的 Sparkle 依赖。
 
-自动化入口：`sh scripts/ci-checks.sh [--rust]`、`npm run test:ui --prefix apps/desktop`、`sh scripts/test-native.sh`。`test-agent-settings-ui.cjs` 已在 Web 测试链及两份 CI 中运行；`verify-models.swift` 已在原生测试链中使用真实核心输出运行。
+自动化入口：`sh scripts/ci-checks.sh [--rust]`、`npm run test:ui --prefix apps/desktop`、`sh scripts/test-native.sh`。共享检查包含发布、采集、唤醒、增量历史、旧账户历史、Antigravity 身份、Node 交互、重置格式及生成契约；远端 Codex 权限/锁测试依赖 POSIX，在 Unix 检查任务执行。Web 测试链包含真实核心的主题同步；`verify-models.swift` 在原生测试链中使用真实核心输出。面板偏好和重置格式由两端读取同一组 JSON 夹具。
 
 以下工具保留为按需验证或维护入口；性能基准、真实联网下载及截图矩阵不作为每次 CI 的默认步骤。
 
@@ -13,7 +13,6 @@
 | [test-native-performance.sh](../scripts/test-native-performance.sh) | `sh scripts/test-native-performance.sh`，链接真实 Swift debug 对象并测量视图性能 |
 | [test-server-performance.sh](../scripts/test-server-performance.sh) | `sh scripts/test-server-performance.sh`；`--deadlines-only` 单独验证调度暂停、恢复和退出 |
 | [test-streaming-core.py](../scripts/test-streaming-core.py) | `python3 scripts/test-streaming-core.py`，真实核心与临时 SSH 流式夹具；测试中需要本机进程及监听权限 |
-| [test-incremental-history.py](../scripts/test-incremental-history.py) | `python3 scripts/test-incremental-history.py`，采集器增量游标、截断与兼容路径 |
 | [test-update-transport.py](../scripts/test-update-transport.py) | `python3 scripts/test-update-transport.py`，真实核心子进程和本机录制代理，不访问公网 |
 | [benchmark-performance.py](../scripts/benchmark-performance.py) | `python3 scripts/benchmark-performance.py --soak-seconds 3600`，默认使用 release 核心及临时合成库；可用 `--binary` 和 `--output` 指定路径 |
 | [benchmark-remote-history.py](../scripts/benchmark-remote-history.py) | `python3 scripts/benchmark-remote-history.py`，全量与增量采集性能对照 |

@@ -1,5 +1,38 @@
 import SwiftUI
 
+struct AutomaticValuationControls: View {
+    @ObservedObject var model: AppModel
+    var sources: [AgentSource]
+    @State private var confirmed = false
+    private var eligible: [AgentSource] { sources.filter { $0.provider != "deepseek" } }
+    var body: some View {
+        if !eligible.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("数据源自动估值").font(AppFont.section)
+                Text("自动跟随当前订阅账号，分别积累额度与 credits 的可信样本。无法归属时自动等待，保留有效值。").font(AppFont.secondary).foregroundStyle(.secondary)
+                if eligible.contains(where: { $0.autoValuation?.enabled != true }) {
+                    Toggle("我确认仅使用订阅账号及其 credits，不使用 API／中转；影响额度的所有设备用量均已纳入。", isOn: $confirmed)
+                }
+                ForEach(eligible) { source in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(source.name)
+                            Spacer()
+                            Button(source.autoValuation?.enabled == true ? "关闭自动估值" : "开启自动估值") {
+                                Task { await model.configureAutomatic(source, enabled: source.autoValuation?.enabled != true, confirmed: confirmed) }
+                            }.disabled(model.automaticSaving || (source.autoValuation?.enabled != true && !confirmed))
+                        }
+                        if source.autoValuation?.enabled == true {
+                            Text(model.dashboard.sources.first { $0.id == source.id }?.autoValuationStatus?.note ?? "等待首个实时订阅快照").font(AppFont.secondary).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if let error = model.automaticError { Text(error).foregroundStyle(Palette.warn) }
+            }
+        }
+    }
+}
+
 struct SamplingManagementView: View {
     @ObservedObject var model: AppModel
     var body: some View {
@@ -127,7 +160,10 @@ struct QuotaEstimateView: View {
     var initialGroup: String? = nil
     private var busy: Bool { model.estimateBusy.contains(quota.id) }
     private var error: String? { model.estimateErrors[quota.id] }
-    private var sources: [AgentSource] { model.settings.sources.filter { $0.enabled && $0.provider == quota.provider && $0.accountId == quota.accountId && $0.provider != "deepseek" } }
+    private var sources: [AgentSource] {
+        guard let account = model.settings.accounts.first(where: { $0.provider == quota.provider && $0.id == quota.accountId }) else { return [] }
+        return model.settings.usageSources.filter { account.uses($0) }
+    }
     private var windows: [QuotaWindow] { EstimatePresentation.windows(quota) }
     private var records: [QuotaEstimate] { (credits ? (model.dashboard.creditEstimates ?? []) : (model.dashboard.quotaEstimates ?? [])).filter { $0.accountKey == quota.id } }
     private var current: QuotaEstimate? { records.first { $0.status != "completed" } }
@@ -139,6 +175,7 @@ struct QuotaEstimateView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(credits ? "按实际 credits 扣款与样本 API 等价成本，估算 credit 的 API 等价价值，不是可兑换余额。" : "主要采样 5h 额度，显示 5h 价值、7d 同期换算及近期倍率估算。正常重置后自动接续，结果取决于本次模型组合。").foregroundStyle(.secondary)
+                    AutomaticValuationControls(model: model, sources: sources)
                     if let current {
                         if let group = current.groupId, let initialGroup, group != initialGroup { Text("当前账户正在采样其他模型组；每个账户同时保留一段采样。").foregroundStyle(.secondary) }
                         result(current)
@@ -148,6 +185,8 @@ struct QuotaEstimateView: View {
                             Button("确认并开始新一段") { perform("restart", ["id": current.id, "confirmed": confirmed]) }.disabled(!confirmed || busy)
                         }
                         Button(current.status == "pending" ? "结束并保留有效段" : "结束并保存本段结果") { perform("stop", ["id": current.id]) }.buttonStyle(.borderedProminent).disabled(busy)
+                    } else if sources.contains(where: { $0.autoValuation?.enabled == true }) {
+                        Text("自动估值正在等待有效样本。关闭来源的自动估值后可开始手动采样。").foregroundStyle(.secondary)
                     } else if eligible && !sources.isEmpty {
                         if !credits { Picker("主要额度池", selection: $window) {
                             ForEach(windows) { Text($0.name).tag($0.id) }
@@ -157,6 +196,9 @@ struct QuotaEstimateView: View {
                             Toggle(source.name, isOn: Binding(get: { selected.contains(source.id) }, set: { if $0 { selected.insert(source.id) } else { selected.remove(source.id) } })).disabled(busy)
                         }
                         confirmation
+                        if sources.contains(where: { $0.codexHomeId != nil }) {
+                            Text("共享目录只计算本次采样时段。采样期间请只使用此账户；切换账户前结束采样，切换后重新开始。").font(AppFont.secondary).foregroundStyle(.secondary)
+                        }
                         Text(credits ? "建议开始后新建会话，至少消耗 5 credits 且价格完整后输出估值。充值或包含额度恢复后需要开始新一段。" : "建议开始后新建会话。跨起始边界的累计用量会使本次结果不可用；5h 至少消耗 5 个百分点后输出估值；7d 同期消耗较少时会标注样本较少。").font(AppFont.secondary).foregroundStyle(.secondary)
                         Button("开始采样") { perform("start", ["accountKey": quota.id, "windowId": credits ? "credits" : window, "sourceIds": Array(selected), "confirmed": confirmed]) }.buttonStyle(.borderedProminent).disabled(!confirmed || selected.isEmpty || (!credits && window.isEmpty) || busy)
                     } else {
@@ -187,13 +229,13 @@ struct QuotaEstimateView: View {
             if e.valuationMode == "fiveHour" { fiveHourValues(e) }
             Text(e.calculationNote).font(AppFont.secondary).foregroundStyle(.secondary)
             if e.originalEstimateId != nil { Text("已修正 · 原采样记录保留").font(AppFont.secondary).foregroundStyle(.secondary) }
-            else if e.status == "completed" && !e.hasValue { Button("按原记录修复估值") { perform("repair", ["id": e.id]) }.disabled(busy) }
+            else if e.samplingMode != "automatic" && e.status == "completed" && !e.hasValue { Button("按原记录修复估值") { perform("repair", ["id": e.id]) }.disabled(busy) }
             DisclosureGroup("计算依据") { calculationDetails(e) }
         }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
     private func resultHeader(_ e: QuotaEstimate) -> some View {
         HStack {
-            Text(e.status == "active" ? ((e.fiveHourValue ?? e.weeklyValue ?? e.valuePer1000) == nil ? "正在积累样本" : "可输出估值 · 采样继续") : e.statusLabel).foregroundStyle(e.status == "pending" ? Palette.warn : Palette.accent)
+            Text(e.samplingMode == "automatic" ? (e.status == "completed" ? "自动估值 · 已封存" : "自动估值 · 持续更新") : e.status == "active" ? ((e.fiveHourValue ?? e.weeklyValue ?? e.valuePer1000) == nil ? "正在积累样本" : "可输出估值 · 采样继续") : e.statusLabel).foregroundStyle(e.status == "pending" ? Palette.warn : Palette.accent)
             Spacer()
             Text(resultValue(e)).font(AppFont.section).monospacedDigit()
         }

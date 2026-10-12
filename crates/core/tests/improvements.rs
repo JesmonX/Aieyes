@@ -142,7 +142,7 @@ fn five_hour_sampling_resumes_normal_resets_and_preserves_three_values() {
     q.windows[0].used_percent = 30.0;
     q.windows[1].used_percent = 22.0;
     store.quota(&q).unwrap();
-    let e = store.estimate(&estimate.id).unwrap();
+    let e = store.estimate_for(&estimate.id, false).unwrap();
     assert_eq!(e.quota().unwrap().five_hour_value, Some(10.0));
     assert_eq!(e.quota().unwrap().weekly_direct_value, Some(50.0));
     assert_eq!(e.quota().unwrap().weekly_ratio_value, Some(50.0));
@@ -158,7 +158,7 @@ fn five_hour_sampling_resumes_normal_resets_and_preserves_three_values() {
     q.windows[0].used_percent = 0.0;
     q.windows[0].resets_at = Some(now() + 17900);
     store.quota(&q).unwrap();
-    let e = store.estimate(&estimate.id).unwrap();
+    let e = store.estimate_for(&estimate.id, false).unwrap();
     assert_eq!(e.status, "active");
     assert_eq!(e.quota().unwrap().segments.len(), 1);
     assert_eq!(e.total_tokens, 100);
@@ -167,7 +167,7 @@ fn five_hour_sampling_resumes_normal_resets_and_preserves_three_values() {
     q.windows[0].used_percent = 10.0;
     q.windows[1].used_percent = 24.0;
     store.quota(&q).unwrap();
-    let done = store.finish_estimate(&estimate.id).unwrap();
+    let done = store.finish_estimate_for(&estimate.id, false).unwrap();
     assert_eq!(done.total_tokens, 300);
     assert_eq!(done.quota().unwrap().five_hour_value, Some(15.0));
     assert_eq!(done.quota().unwrap().weekly_direct_value, Some(75.0));
@@ -176,7 +176,7 @@ fn five_hour_sampling_resumes_normal_resets_and_preserves_three_values() {
     let reopened = Store::open(dir.path()).unwrap();
     assert_eq!(
         reopened
-            .finish_estimate(&done.id)
+            .finish_estimate_for(&done.id, false)
             .unwrap()
             .quota()
             .unwrap()
@@ -196,7 +196,7 @@ fn early_resets_and_unpriced_usage_do_not_produce_a_five_hour_value() {
     store.quota(&q).unwrap();
     assert!(
         store
-            .estimate(&e.id)
+            .estimate_for(&e.id, false)
             .unwrap()
             .quota()
             .unwrap()
@@ -207,7 +207,7 @@ fn early_resets_and_unpriced_usage_do_not_produce_a_five_hour_value() {
     q.windows[0].resets_at = Some(now() + 18000);
     q.windows[0].used_percent = 0.0;
     store.quota(&q).unwrap();
-    let pending = store.estimate(&e.id).unwrap();
+    let pending = store.estimate_for(&e.id, false).unwrap();
     assert_eq!(pending.status, "pending");
     assert!(pending.reason.contains("提前"));
 }
@@ -371,7 +371,7 @@ fn changing_subscription_plan_discards_old_capacity_and_pauses_the_sample() {
             .ratio
             .is_none()
     );
-    let pending = store.estimate(&sample.id).unwrap();
+    let pending = store.estimate_for(&sample.id, false).unwrap();
     assert_eq!(pending.status, "pending");
     assert!(pending.reason.contains("订阅方案"));
 }

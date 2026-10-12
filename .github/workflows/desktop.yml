@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       full_checks:
-        description: '额外运行 Rust 测试（默认只做轻量检查和打包）'
+        description: '额外运行核心全量测试（默认已运行共享、浏览器与 Tauri 检查和打包）'
         type: boolean
         default: false
   push:
@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri -> target
@@ -67,15 +67,15 @@ jobs:
       - name: Windows account switching tests
         if: runner.os == 'Windows'
         run: cargo test -p aieyes-core codex_auth --locked
-      - name: Windows shell tests
-        if: runner.os == 'Windows'
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
+      - name: Desktop shell tests
+        run: |
+          cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --features custom-protocol -- -D warnings
+          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
       - name: Optional Rust tests
         if: inputs.full_checks == true
         shell: bash
         run: |
           cargo test --workspace --locked
-          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
       - name: Install prebuilt Tauri CLI
         run: npm install --global @tauri-apps/cli@2.12.1
       - name: Windows installer

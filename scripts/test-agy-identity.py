@@ -59,7 +59,7 @@ class IdentityTests(unittest.TestCase):
             self.assertIsNone(agy.observe()['identity'])
 
     def test_remote_files_follow_home_and_conflicting_stores_are_unknown(self):
-        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {'HOME': root, 'SSH_CONNECTION': 'fixture'}, clear=True), patch.object(agy.subprocess, 'run', side_effect=AssertionError('must not open keyring')):
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {'HOME': root, 'USERPROFILE': root, 'SSH_CONNECTION': 'fixture'}, clear=True), patch.object(agy.subprocess, 'run', side_effect=AssertionError('must not open keyring')):
             home = pathlib.Path(root) / '.gemini'
             home.mkdir()
             (home / 'antigravity-oauth-token').write_text(json.dumps(credential()))

@@ -483,12 +483,11 @@ pub async fn updates_install(
         .store(false, Ordering::SeqCst);
     match result {
         Ok(()) => {
-            let result = change(&app, |inner| {
+            change(&app, |inner| {
                 inner.status.phase = "installed".into();
                 inner.status.message = "更新已安装，正在重启…".into();
             });
-            app.restart();
-            Ok(result)
+            app.restart()
         }
         Err(error) => {
             aieyes_core::operations::resume();

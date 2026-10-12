@@ -78,11 +78,12 @@ function fixture(){
         await page.locator('#discover-devices').click();await page.waitForFunction(()=>feature.calls.some(c=>c.args?.method==='hosts.credentials.delete'));
         await page.evaluate(()=>feature.saveFails=true);await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!editorSaving);assert.match(await page.locator('#editor-error').textContent(),/模拟保存失败/);
         assert.equal(await page.locator('#editor[open]').count(),1);assert.equal(await page.locator('#field-password').inputValue(),'fixture secret');
-        assert.equal(await page.evaluate(()=>feature.settings.hosts[0].passwordRef),undefined);assert.equal(await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='hosts.credentials.delete').length),1);
+        assert.equal(await page.evaluate(()=>feature.settings.hosts[0].passwordRef),undefined);assert.equal(await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='hosts.credentials.delete').length),2,'Discovery and rejected saves each release their own credential');
         const credentialSaves=await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='hosts.credentials.save').length);
         await page.evaluate(()=>feature.saveFails=false);await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
-        assert.equal(await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='hosts.credentials.save').length),credentialSaves,'Retry reuses the prepared credential');
+        assert.equal(await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='hosts.credentials.save').length),credentialSaves+1,'Retry creates a new credential after the rejected one was released');
         const host=await page.evaluate(()=>feature.settings.hosts[0]);assert.equal(host.authMode,'password');assert.equal(host.username,'fixture-user');assert(host.passwordRef.startsWith('ssh-fixture-'));assert(!JSON.stringify(host).includes('fixture secret'));
+        assert.equal(await page.evaluate(ref=>feature.calls.some(c=>c.args?.method==='hosts.credentials.delete'&&c.args.params.passwordRef===ref),host.passwordRef),false,'Committed credentials remain available');
         await page.evaluate(()=>{state.page='agent';render();feature.emit('operations:busy',{operationId:'other-window',busy:true});state.lastQuota=0;runScheduledRefreshes();});
         const before=await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='quotas.refresh').length);
         await page.evaluate(()=>{runScheduledRefreshes();});assert.equal(await page.evaluate(()=>feature.calls.filter(c=>c.args?.method==='quotas.refresh').length),before);

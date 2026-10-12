@@ -66,10 +66,15 @@ enum PanelAccountPreference {
     struct Choice: Codable { var mode = "auto"; var keys: [String] = [] }
     struct Preference: Codable { var version = 2; var providers: [String: Choice] = [:] }
     static func decode(_ json: String) -> Preference {
-        let data = Data(json.utf8)
-        if let value = try? JSONDecoder().decode(Preference.self, from: data) { return value }
-        let legacy = (try? JSONDecoder().decode([String: [String]].self, from: data)) ?? [:]
-        return Preference(providers: legacy.mapValues { Choice(mode: "custom", keys: $0) })
+        guard let value = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else { return Preference() }
+        if value["version"] != nil || value["providers"] != nil {
+            guard value["version"] as? Int == 2, let providers = value["providers"] as? [String: Any] else { return Preference() }
+            return Preference(providers: providers.mapValues { row in
+                guard let choice = row as? [String: Any], choice["mode"] as? String == "custom", let keys = choice["keys"] as? [String] else { return Choice() }
+                return Choice(mode: "custom", keys: keys)
+            })
+        }
+        return Preference(providers: value.compactMapValues { ($0 as? [String]).map { Choice(mode: "custom", keys: $0) } })
     }
     static func migrated(_ json: String) -> String {
         String(data: (try? JSONEncoder().encode(decode(json))) ?? Data(), encoding: .utf8) ?? "{}"
@@ -104,19 +109,18 @@ enum PanelAccountPreference {
         for provider in Set(eligible.map(\.provider)).union(preference.providers.keys) {
             let keys = sorted.filter { $0.provider == provider }.map(\.key)
             let choice = preference.providers[provider] ?? Choice()
-            var selected = choice.mode == "auto" ? keys : choice.keys.filter { keys.contains($0) }
+            var selected = choice.mode == "custom" ? choice.keys.filter { keys.contains($0) } : keys
             if choice.mode == "custom" && !choice.keys.isEmpty && selected.isEmpty { selected = keys }
             result[provider] = Array(selected.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.prefix(5))
         }
         return result
     }
-    static func includeNew(_ account: AgentAccount, accounts: [AgentAccount]) {
-        let defaults = UserDefaults.standard
+    static func includeNew(_ account: AgentAccount, accounts: [AgentAccount], defaults: UserDefaults = .standard) {
         let raw = defaults.string(forKey: NativePanelKey.accounts.rawValue) ?? migrated(defaults.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}")
         var pref = decode(raw)
         guard pref.providers[account.provider]?.mode == "custom" else { return }
         var keys = selections(raw, accounts: accounts, order: [])[account.provider] ?? []
-        guard keys.count < 5, !keys.contains(account.key), account.archived != true else { return }
+        guard keys.count < 5, !keys.contains(account.key), account.archived != true, account.quotaEnabled else { return }
         keys.append(account.key); pref.providers[account.provider] = Choice(mode: "custom", keys: keys)
         defaults.set(String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8), forKey: NativePanelKey.accounts.rawValue)
     }
@@ -141,7 +145,6 @@ struct QuotaWindow: Codable, Identifiable {
     var stableId: String?, groupId: String?, groupName: String?
     var id: String { stableId.flatMap { $0.isEmpty ? nil : $0 } ?? name }
     var estimateGroup: String { groupId.flatMap { $0.isEmpty ? nil : $0 } ?? groupLabel }
-    var supportsEstimate: Bool { ["gemini", "gemini models", "claude-gpt", "claude and gpt models"].contains(estimateGroup.lowercased()) }
     var groupLabel: String { groupName.flatMap { $0.isEmpty ? nil : $0 } ?? name.components(separatedBy: " · ").dropLast().joined(separator: " · ") }
     enum CodingKeys: String, CodingKey { case name, usedPercent, windowMinutes, resetsAt, groupId, groupName; case stableId = "id" }
 }
@@ -170,7 +173,9 @@ struct Quota: Codable, Identifiable {
 }
 struct SyncIssue: Codable { var path: String?; var message: String; var code: String?; var step: Int? }
 struct SourceStatus: Codable { var partial: Bool?, issues: [SyncIssue]?; var updatedAt: Double?, files: Int?, readBytes: Int?, error: String? }
-struct SourceSummary: Codable, Identifiable { var id: String, name: String, provider: String, enabled: Bool, status: SourceStatus?, accountIds: [String]? }
+struct AutomaticValuationStatus: Codable { var state: String?, note: String?, accountKey: String?, updatedAt: Double? }
+struct AutomaticValuationConfig: Codable, Equatable { var enabled: Bool, consentVersion: Int }
+struct SourceSummary: Codable, Identifiable { var id: String, name: String, provider: String, enabled: Bool, status: SourceStatus?, accountIds: [String]?; var autoValuationStatus: AutomaticValuationStatus? }
 struct DayModel: Codable, Identifiable {
     var day: String, model: String, usage: Aggregate
     var id: String { day + ":" + model }
@@ -269,6 +274,7 @@ struct ProxyAddressDraft: Equatable {
     }
 }
 struct AgentSource: Codable, Equatable, Identifiable {
+    var autoValuation: AutomaticValuationConfig?
     var codexHomeId: String?
     var id = UUID().uuidString, name = "", provider = "codex", accountId = ""
     var path = "", hostId: String?, enabled = true, quotaCommand = "", quotaPreCommand = "", codexBinary = CoreContract.binaries["codex"]!, agyBinary: String? = CoreContract.binaries["antigravity"], proxy: ProxySettings?
@@ -326,6 +332,13 @@ struct Settings: Codable, Equatable {
     var historyInterval: Int { get { historyRefreshSeconds ?? refreshSeconds } set { historyRefreshSeconds = newValue } }
     var foregroundInterval: Int { get { serverForegroundRefreshSeconds ?? 2 } set { serverForegroundRefreshSeconds = newValue } }
     var monitoredHosts: [Host] { (localMonitor.map { [$0.host] } ?? []) + hosts }
+    func sourceEnabled(_ source: AgentSource) -> Bool {
+        let configured = (agents ?? []).filter { $0.provider == source.provider }
+        return source.enabled && configured.count <= 1
+            && (configured.first.map { $0.enabled && $0.machineIds.contains(source.hostId ?? "local") } ?? true)
+            && (source.hostId == nil || hosts.contains { $0.id == source.hostId && $0.enabled })
+    }
+    var usageSources: [AgentSource] { sources.filter { $0.provider != "deepseek" && sourceEnabled($0) } }
     var modelMappings: [String: String] = [:]
     var proxyTestUrls: [String]?
 }
@@ -503,6 +516,7 @@ enum Format {
 }
 
 struct QuotaEstimate: Codable, Identifiable {
+    var samplingMode: String?
     var recordKey: String { (kind == "credits" ? "credits:" : "quota:") + id }
     var groupId: String?
 
@@ -604,7 +618,7 @@ struct AccountCleanupRecord: Decodable, Identifiable { var accountKey: String, n
 // BEGIN GENERATED CORE CONTRACT
 // Generated by scripts/sync-core-contracts.py; edit docs/core-contracts.json.
 enum CoreContract {
-    static let contractHash = "4db1989414fb5431211b338e221b7a2b03efdd9f5894e3ba61c2b459c194fe16"
+    static let contractHash = "eae7986bd3cc31bcd50b7578716885eaf1c3bea3f7762fd4002d80547b271c16"
     static let providers = ["codex", "claude", "antigravity", "deepseek", "custom"]
     static let wakeupProviders = ["codex", "claude", "antigravity"]
     static let providerNames: [String: String] = ["codex": "Codex", "claude": "Claude Code", "antigravity": "Antigravity", "deepseek": "DeepSeek", "custom": "自定义"]
@@ -623,6 +637,7 @@ enum CoreContract {
         "accounts.deployments.sync": "accounts",
         "accounts.status.get": "configuration",
         "accounts.status.refresh": "accounts",
+        "accounts.targets": "configuration",
         "agents.set": "configuration",
         "agyAuth.cancel": "accounts",
         "agyAuth.confirmWorkspace": "accounts",
@@ -632,6 +647,8 @@ enum CoreContract {
         "agyAuth.status": "accounts",
         "agyAuth.submitCode": "accounts",
         "agyAuth.verify": "accounts",
+        "autoEstimates.configure": "configuration",
+        "autoEstimates.tick": "main",
         "codexAuth.adopt": "main",
         "codexAuth.enable": "main",
         "codexAuth.inspect": "main",
@@ -645,6 +662,7 @@ enum CoreContract {
         "codexAuth.profiles.list": "main",
         "codexAuth.profiles.remove": "main",
         "codexAuth.quota": "main",
+        "codexAuth.reconcile": "accounts",
         "codexAuth.status": "main",
         "codexAuth.switch.commit": "main",
         "codexAuth.switch.prepare": "main",
@@ -665,6 +683,9 @@ enum CoreContract {
         "methods.manifest": "main",
         "network.status": "network",
         "network.test": "network",
+        "operations.prepareUpdate": "configuration",
+        "operations.resume": "configuration",
+        "operations.status": "configuration",
         "prices.list": "main",
         "prices.recalculate": "main",
         "prices.save": "main",
@@ -697,13 +718,8 @@ enum CoreContract {
         "wakeups.run": "main",
         "wakeups.save": "main",
         "wakeups.status": "main",
-        "accounts.targets": "configuration",
-        "codexAuth.reconcile": "accounts",
-        "operations.prepareUpdate": "configuration",
-        "operations.resume": "configuration",
-        "operations.status": "configuration",
     ]
-    static let updateBehaviors: [String: String] = ["accounts.cleanup.list": "observe", "accounts.connect": "finish", "accounts.create": "finish", "accounts.delete": "finish", "accounts.deletion.preview": "finish", "accounts.deployments.sync": "finish", "accounts.status.get": "observe", "accounts.status.refresh": "cancel", "agents.set": "finish", "agyAuth.cancel": "complete", "agyAuth.confirmWorkspace": "complete", "agyAuth.inspect": "finish", "agyAuth.openUrl": "complete", "agyAuth.start": "finish", "agyAuth.status": "complete", "agyAuth.submitCode": "complete", "agyAuth.verify": "complete", "codexAuth.adopt": "finish", "codexAuth.enable": "finish", "codexAuth.inspect": "finish", "codexAuth.list": "observe", "codexAuth.login.cancel": "complete", "codexAuth.login.start": "finish", "codexAuth.login.status": "complete", "codexAuth.model.list": "cancel", "codexAuth.openUrl": "complete", "codexAuth.profiles.bind": "finish", "codexAuth.profiles.list": "observe", "codexAuth.profiles.remove": "finish", "codexAuth.quota": "cancel", "codexAuth.status": "cancel", "codexAuth.switch.commit": "complete", "codexAuth.switch.prepare": "finish", "credentials.save": "finish", "creditEstimates.get": "cancel", "creditEstimates.list": "observe", "creditEstimates.repair": "finish", "creditEstimates.restart": "finish", "creditEstimates.start": "finish", "creditEstimates.stop": "finish", "dashboard": "cancel", "dashboard.summary": "cancel", "hello": "observe", "hosts.credentials.delete": "finish", "hosts.credentials.save": "finish", "hosts.discover": "cancel", "hosts.sample": "cancel", "methods.manifest": "observe", "network.status": "finish", "network.test": "cancel", "prices.list": "observe", "prices.recalculate": "finish", "prices.save": "finish", "prices.sync": "cancel", "quotaEstimates.get": "cancel", "quotaEstimates.list": "observe", "quotaEstimates.repair": "finish", "quotaEstimates.restart": "finish", "quotaEstimates.start": "finish", "quotaEstimates.stop": "finish", "quotas.order.set": "finish", "quotas.refresh": "cancel", "quotas.schedule": "cancel", "sessions.list": "cancel", "settings.get": "observe", "settings.patch": "finish", "settings.save": "finish", "sources.configure": "finish", "sources.remove": "finish", "sources.rescan": "cancel", "sources.scan": "cancel", "wakeups.delete": "finish", "wakeups.deploy": "finish", "wakeups.disable": "finish", "wakeups.enable": "finish", "wakeups.history": "cancel", "wakeups.list": "observe", "wakeups.probe": "cancel", "wakeups.remove": "finish", "wakeups.run": "finish", "wakeups.save": "finish", "wakeups.status": "cancel", "accounts.targets": "observe", "codexAuth.reconcile": "cancel", "operations.prepareUpdate": "observe", "operations.resume": "observe", "operations.status": "observe"]
+    static let updateBehaviors: [String: String] = ["accounts.cleanup.list": "observe", "accounts.connect": "finish", "accounts.create": "finish", "accounts.delete": "finish", "accounts.deletion.preview": "finish", "accounts.deployments.sync": "finish", "accounts.status.get": "observe", "accounts.status.refresh": "cancel", "accounts.targets": "observe", "agents.set": "finish", "agyAuth.cancel": "complete", "agyAuth.confirmWorkspace": "complete", "agyAuth.inspect": "finish", "agyAuth.openUrl": "complete", "agyAuth.start": "finish", "agyAuth.status": "complete", "agyAuth.submitCode": "complete", "agyAuth.verify": "complete", "autoEstimates.configure": "finish", "autoEstimates.tick": "cancel", "codexAuth.adopt": "finish", "codexAuth.enable": "finish", "codexAuth.inspect": "finish", "codexAuth.list": "observe", "codexAuth.login.cancel": "complete", "codexAuth.login.start": "finish", "codexAuth.login.status": "complete", "codexAuth.model.list": "cancel", "codexAuth.openUrl": "complete", "codexAuth.profiles.bind": "finish", "codexAuth.profiles.list": "observe", "codexAuth.profiles.remove": "finish", "codexAuth.quota": "cancel", "codexAuth.reconcile": "cancel", "codexAuth.status": "cancel", "codexAuth.switch.commit": "complete", "codexAuth.switch.prepare": "finish", "credentials.save": "finish", "creditEstimates.get": "cancel", "creditEstimates.list": "observe", "creditEstimates.repair": "finish", "creditEstimates.restart": "finish", "creditEstimates.start": "finish", "creditEstimates.stop": "finish", "dashboard": "cancel", "dashboard.summary": "cancel", "hello": "observe", "hosts.credentials.delete": "finish", "hosts.credentials.save": "finish", "hosts.discover": "cancel", "hosts.sample": "cancel", "methods.manifest": "observe", "network.status": "finish", "network.test": "cancel", "operations.prepareUpdate": "observe", "operations.resume": "observe", "operations.status": "observe", "prices.list": "observe", "prices.recalculate": "finish", "prices.save": "finish", "prices.sync": "cancel", "quotaEstimates.get": "cancel", "quotaEstimates.list": "observe", "quotaEstimates.repair": "finish", "quotaEstimates.restart": "finish", "quotaEstimates.start": "finish", "quotaEstimates.stop": "finish", "quotas.order.set": "finish", "quotas.refresh": "cancel", "quotas.schedule": "cancel", "sessions.list": "cancel", "settings.get": "observe", "settings.patch": "finish", "settings.save": "finish", "sources.configure": "finish", "sources.remove": "finish", "sources.rescan": "cancel", "sources.scan": "cancel", "wakeups.delete": "finish", "wakeups.deploy": "finish", "wakeups.disable": "finish", "wakeups.enable": "finish", "wakeups.history": "cancel", "wakeups.list": "observe", "wakeups.probe": "cancel", "wakeups.remove": "finish", "wakeups.run": "finish", "wakeups.save": "finish", "wakeups.status": "cancel"]
     static let configurationMethods = Set(methodLanes.filter { $0.value == "configuration" }.keys)
 }
 // END GENERATED CORE CONTRACT

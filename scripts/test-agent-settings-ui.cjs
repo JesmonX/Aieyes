@@ -20,9 +20,12 @@ readline.createInterface({input:core.stdout}).on('line',line=>{const r=JSON.pars
 core.on('exit',()=>{for(const p of pending.values())p.reject(new Error('Core exited: '+stderr));pending.clear();});
 function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++counter;pending.set(id,{resolve,reject});core.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});}
 const profile=id=>({id,name:id==='one'?'个人 Codex':'工作 Codex',current:id==='one',identity:{key:id,workspace:'workspace',email:id+'@example.test',plan:'plus'}});
-let authDone=false,authCancelled=false,unknown=false,failSave=false,loggedIn=true,authFailed=false;const calls=[];
+let authDone=false,authCancelled=false,unknown=false,failSave=false,loggedIn=true,authFailed=false;const calls=[],secrets=new Map();let secretId=0;
 async function invoke(method,params){
   calls.push({method,params});
+  // Keep the operating-system credential store outside this disposable UI test.
+  if(method==='hosts.credentials.save'){const passwordRef='ssh-fixture-'+(++secretId);secrets.set(passwordRef,params.password);return {passwordRef};}
+  if(method==='hosts.credentials.delete'){assert(secrets.delete(params.passwordRef));return {};}
   if(['settings.patch','sources.configure'].includes(method)&&failSave)throw new Error('模拟保存失败，输入已保留');
   if(method==='accounts.status.refresh')return {accountKey:params.accountKey,sourceId:params.sourceId,machineId:params.sourceId==='codex-local'?'local':'server',current:loggedIn&&params.accountKey==='codex:a',credential:loggedIn&&['codex:a','codex:b'].includes(params.accountKey),checkedAt:Date.now()/1000};
   if(method==='accounts.deletion.preview'&&params.accountKey==='codex:old')return {tasks:[{id:'offline-task',name:'离线任务',machine:'弃用服务器',root:'~/fixture'}]};
@@ -71,6 +74,41 @@ function browserFixture(){
     await page.locator('#field-historyShowDeletedAccounts').uncheck();await page.waitForFunction(()=>state.settings.historyShowDeletedAccounts===false&&!state.settingsCommitting&&state.accountKey==='');
     await page.evaluate(()=>{state.page='agent';render();});
     assert.equal(await page.locator('#account option[value="codex:history"]').count(),0);assert.equal(await page.evaluate(()=>state.dashboard.summary.total),historyTotal);
+    await page.evaluate(()=>{state.page='settings';state.settingsTab='hosts';render();});
+    const beforeHost=structuredClone((await rpc('settings.get')).hosts.find(h=>h.id==='server'));
+    await page.locator('[data-edit="server"]').click();
+    await page.locator('#field-authMode').selectOption('password');await page.locator('#field-username').fill('fixture-user');
+    failSave=true;
+    for(const password of ['fixture-password','replacement-fixture-password']){
+      await page.locator('#field-password').fill(password);await page.locator('#editor-form button[type=submit]').click();
+      await page.waitForFunction(()=>!document.querySelector('#editor-form button[type=submit]').disabled);
+      await page.getByText('模拟保存失败，输入已保留',{exact:true}).waitFor();
+      assert.equal(await page.locator('#field-password').inputValue(),password);assert.equal(secrets.size,0);
+      assert.deepEqual((await rpc('settings.get')).hosts.find(h=>h.id==='server'),beforeHost);
+    }
+    assert.equal(calls.filter(c=>c.method==='hosts.credentials.save').length,2);
+    assert.equal(calls.filter(c=>c.method==='hosts.credentials.delete').length,2);
+    await page.locator('#cancel-editor').click();await page.locator('#editor-confirm-discard').click();
+    assert.equal(secrets.size,0);failSave=false;
+    await page.locator('[data-edit="server"]').click();await page.locator('#field-authMode').selectOption('password');
+    await page.locator('#field-username').fill('fixture-user');await page.locator('#field-password').fill('committed-fixture-password');
+    await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.getElementById('editor').open);
+    const passwordHost=(await rpc('settings.get')).hosts.find(h=>h.id==='server');
+    assert.equal(secrets.get(passwordHost.passwordRef),'committed-fixture-password');assert.equal(secrets.size,1);
+    assert(!JSON.stringify(await rpc('settings.get')).includes('committed-fixture-password'));
+    await page.locator('[data-edit="server"]').click();await page.locator('#field-password').fill('hidden-password-input');
+    await page.locator('#field-authMode').selectOption('ssh');await page.locator('#editor-form button[type=submit]').click();
+    await page.waitForFunction(()=>!document.getElementById('editor').open);
+    assert.equal(calls.filter(c=>c.method==='hosts.credentials.save').length,3);assert.equal(secrets.size,1);
+    assert.equal((await rpc('settings.get')).hosts.find(h=>h.id==='server').passwordRef,passwordHost.passwordRef);
+    // A second window can change other fields while this editor remains open.
+    await page.locator('[data-edit="server"]').click();await page.locator('#field-port').fill('2222');
+    const hostBase=await rpc('settings.get'),concurrent=structuredClone(hostBase);
+    concurrent.hosts.find(h=>h.id==='server').name='外部窗口更新';concurrent.refreshSeconds=120;
+    await rpc('settings.patch',{base:hostBase,settings:concurrent});
+    await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.getElementById('editor').open);
+    const mergedHost=(await rpc('settings.get')).hosts.find(h=>h.id==='server');
+    assert.equal(mergedHost.name,'外部窗口更新');assert.equal(mergedHost.port,2222);assert.equal((await rpc('settings.get')).refreshSeconds,120);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='sources';render();});
     assert.equal(await page.locator('[data-agent-enable]').count(),5);
     assert.equal(await page.locator('#settings-save-all').count(),0);

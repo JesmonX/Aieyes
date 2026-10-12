@@ -198,7 +198,7 @@ pub fn cli_command(program: &str) -> Command {
     Command::new(path)
 }
 
-/// Run initialization in the CLI's shell, keeping banners and reads out of its protocol.
+/// Run initialization in the CLI's shell, keeping its output out of the CLI protocol.
 pub(crate) fn cli_command_with_pre_command(
     program: &str,
     args: &[&str],
@@ -210,11 +210,24 @@ pub(crate) fn cli_command_with_pre_command(
         command.args(args);
         return command;
     }
+    let path = crate::store::expand(program);
+    let program = path.to_string_lossy();
     if cfg!(windows) {
         let quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
+        // Resolve bare names after initialization so a changed PATH takes effect.
+        // Application excludes npm's PowerShell shim and selects its native/cmd launcher.
+        let invocation = if path.is_absolute() || path.components().count() > 1 {
+            #[cfg(windows)]
+            let path = resolve_windows_cli(&path);
+            quote(&path.to_string_lossy())
+        } else {
+            format!(
+                "(Get-Command -Name {} -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source",
+                quote(&program)
+            )
+        };
         let script = format!(
-            "$ErrorActionPreference='Stop'\n. {{\n{pre_command}\n}} 1>&2\n& {} {}\nexit $LASTEXITCODE",
-            quote(program),
+            "$ErrorActionPreference='Stop'\n$LASTEXITCODE=0\n. {{\n{pre_command}\n}} 3>&1 4>&1 5>&1 6>&1 | ForEach-Object {{ [Console]::Error.WriteLine([string]$_) }}\nif ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n& {invocation} {}\nexit $LASTEXITCODE",
             args.iter()
                 .map(|arg| quote(arg))
                 .collect::<Vec<_>>()
@@ -227,7 +240,7 @@ pub(crate) fn cli_command_with_pre_command(
         let script = format!(
             "set -e\n{}{{\n{pre_command}\n}} </dev/null >&2\nexec {} {}",
             crate::ssh::PATH_FALLBACK,
-            quote(program),
+            quote(&program),
             args.iter()
                 .map(|arg| quote(arg))
                 .collect::<Vec<_>>()
@@ -275,6 +288,131 @@ fn windows_executable(path: &std::path::Path) -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod executable_tests {
     use super::*;
+    #[test]
+    fn initialization_preserves_home_paths_environment_arguments_and_stdin() {
+        if std::env::var_os("AIEYES_CLI_COMMAND_FIXTURE").is_none() {
+            let root = tempfile::tempdir().unwrap();
+            for name in ["home", "profile"] {
+                std::fs::create_dir(root.path().join(name)).unwrap();
+            }
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "process::executable_tests::initialization_preserves_home_paths_environment_arguments_and_stdin",
+                    "--nocapture",
+                ])
+                .env("AIEYES_CLI_COMMAND_FIXTURE", "1")
+                .env("HOME", root.path().join("home"))
+                .env("USERPROFILE", root.path().join("profile"))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let directory = crate::store::home().join("测试 tools");
+        std::fs::create_dir(&directory).unwrap();
+        let name = if cfg!(windows) {
+            "fixture-cli.cmd"
+        } else {
+            "fixture-cli"
+        };
+        let script = directory.join(name);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&script, "#!/bin/sh\nprintf '%s\\n' \"$AIEYES_CLI_INIT\" \"$1\"\nIFS= read -r value\nprintf '%s\\n' \"$value\"\n").unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        #[cfg(windows)]
+        std::fs::write(&script, "@echo off\r\necho %AIEYES_CLI_INIT%\r\necho %~1\r\nset /p aieyesFixtureInput=\r\necho %aieyesFixtureInput%\r\n").unwrap();
+
+        let initialization = if cfg!(windows) {
+            "Write-Output 'setup banner'; Write-Host 'host banner'; $env:AIEYES_CLI_INIT='ready'"
+        } else {
+            "printf 'setup banner\\n'; read ignored || true; export AIEYES_CLI_INIT=ready"
+        };
+        let path = format!("~/测试 tools/{name}");
+        for pre_command in ["", initialization] {
+            let mut command = cli_command_with_pre_command(
+                &path,
+                &["argument with spaces"],
+                pre_command,
+                "/bin/sh",
+            );
+            command.env("AIEYES_CLI_INIT", "direct");
+            let output = run(
+                command,
+                b"protocol-input\n".to_vec(),
+                Duration::from_secs(20),
+            )
+            .unwrap();
+            assert_eq!(
+                String::from_utf8(output)
+                    .unwrap()
+                    .lines()
+                    .collect::<Vec<_>>(),
+                [
+                    if pre_command.is_empty() {
+                        "direct"
+                    } else {
+                        "ready"
+                    },
+                    "argument with spaces",
+                    "protocol-input"
+                ]
+            );
+        }
+        let path_setup = if cfg!(windows) {
+            format!(
+                "$env:PATH='{};'+$env:PATH; {initialization}",
+                directory.to_string_lossy().replace('\'', "''")
+            )
+        } else {
+            format!(
+                "export PATH={}:\"$PATH\"; {initialization}",
+                quote(&directory.to_string_lossy())
+            )
+        };
+        let output = run(
+            cli_command_with_pre_command(
+                "fixture-cli",
+                &["argument with spaces"],
+                &path_setup,
+                "/bin/sh",
+            ),
+            b"protocol-input\n".to_vec(),
+            Duration::from_secs(20),
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(output)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            ["ready", "argument with spaces", "protocol-input"]
+        );
+
+        for fail in if cfg!(windows) {
+            ["throw 'fixture setup failed'", "cmd.exe /c exit 7"]
+        } else {
+            ["exit 7", "false"]
+        } {
+            let error = run(
+                cli_command_with_pre_command(&path, &[], fail, "/bin/sh"),
+                vec![],
+                Duration::from_secs(20),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("命令执行失败"), "{error:#}");
+        }
+    }
+
     #[test]
     fn windows_prefers_native_or_cmd_over_npm_posix_script() {
         let temp = tempfile::tempdir().unwrap();
@@ -393,31 +531,110 @@ mod tests {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod line_transport_tests {
     use super::*;
+
+    const IDLE_TIMEOUT: Duration = Duration::from_secs(1);
+    const FIXTURE_WAIT: Duration = Duration::from_secs(30);
+    // Catch waiting for the child's natural exit, while allowing platform
+    // process termination and a loaded CI host to finish cleanup.
+    const CLEANUP_LIMIT: Duration = Duration::from_secs(15);
+
+    fn run_fixture(
+        mode: &str,
+        input: Vec<u8>,
+        timeout: Duration,
+        mut receive: impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .args([
+                "--exact",
+                "process::line_transport_tests::stream_fixture",
+                "--ignored",
+                "--nocapture",
+                "--quiet",
+                "--color=never",
+            ])
+            .env("AIEYES_STREAM_FIXTURE", mode);
+        run_lines(command, input, timeout, |line| {
+            // libtest prints this preamble before calling the child fixture.
+            if line == b"\n" || line == b"running 1 test\n" {
+                return Ok(());
+            }
+            receive(line)
+        })
+    }
+
+    #[test]
+    #[ignore = "subprocess fixture, exercised by the line transport tests"]
+    fn stream_fixture() {
+        let emit = |value: &[u8]| {
+            let mut output = std::io::stdout().lock();
+            output.write_all(value).unwrap();
+            output.write_all(b"\n").unwrap();
+            output.flush().unwrap();
+        };
+        match std::env::var("AIEYES_STREAM_FIXTURE").unwrap().as_str() {
+            "active" => {
+                for _ in 0..16 {
+                    emit(b"{}");
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+            "batches" => {
+                emit(b"{}");
+                emit(b"{}");
+            }
+            "stalled" => {
+                emit(b"{}");
+                std::thread::sleep(FIXTURE_WAIT);
+            }
+            "silent" => std::thread::sleep(FIXTURE_WAIT),
+            "oversized" => emit(&vec![b'x'; 1024 * 1024 + 1]),
+            "incomplete" => {
+                let mut output = std::io::stdout().lock();
+                output.write_all(b"{}").unwrap();
+                output.flush().unwrap();
+            }
+            "echo" => {
+                let input: serde_json::Value = serde_json::from_reader(std::io::stdin()).unwrap();
+                let arguments: Vec<_> = std::env::args().collect();
+                for n in 0..20 {
+                    emit(
+                        &serde_json::to_vec(
+                            &serde_json::json!({"n":n,"text":input["text"],"args":arguments}),
+                        )
+                        .unwrap(),
+                    );
+                }
+            }
+            mode => panic!("unknown stream fixture: {mode}"),
+        }
+        // Do not append libtest's human-readable result to the NDJSON stream.
+        std::process::exit(0);
+    }
+
     #[test]
     fn active_streams_can_outlast_the_receive_timeout() {
-        let mut command = Command::new("python3");
-        command.args([
-            "-c",
-            "import time; [(print('{}',flush=True),time.sleep(0.1)) for _ in range(8)]",
-        ]);
         let mut count = 0;
-        run_lines(command, vec![], Duration::from_millis(400), |_| {
+        let started = Instant::now();
+        run_fixture("active", vec![], IDLE_TIMEOUT, |line| {
+            assert_eq!(line, b"{}\n");
             count += 1;
             Ok(())
         })
         .unwrap();
-        assert_eq!(count, 8);
+        assert_eq!(count, 16);
+        assert!(started.elapsed() > IDLE_TIMEOUT);
     }
     #[test]
     fn local_batch_processing_does_not_consume_the_receive_timeout() {
-        let mut command = Command::new("python3");
-        command.args(["-c", "print('{}',flush=True); print('{}',flush=True)"]);
         let mut count = 0;
-        run_lines(command, vec![], Duration::from_millis(400), |_| {
-            std::thread::sleep(Duration::from_millis(500));
+        run_fixture("batches", vec![], IDLE_TIMEOUT, |line| {
+            assert_eq!(line, b"{}\n");
+            std::thread::sleep(IDLE_TIMEOUT + Duration::from_millis(100));
             count += 1;
             Ok(())
         })
@@ -426,26 +643,23 @@ mod line_transport_tests {
     }
     #[test]
     fn stalled_streams_still_timeout_after_a_successful_batch() {
-        let mut command = Command::new("python3");
-        command.args(["-c", "import time; print('{}',flush=True); time.sleep(30)"]);
         let mut count = 0;
         let started = Instant::now();
-        let error = run_lines(command, vec![], Duration::from_millis(400), |_| {
+        let error = run_fixture("stalled", vec![], IDLE_TIMEOUT, |line| {
+            assert_eq!(line, b"{}\n");
             count += 1;
             Ok(())
         })
         .unwrap_err();
         assert_eq!(count, 1);
         assert!(error.to_string().contains("查询超时"));
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(started.elapsed() < CLEANUP_LIMIT);
     }
     #[test]
     fn lines_are_streamed_and_input_is_not_a_command_argument() {
-        let mut command = Command::new("python3");
-        command.args(["-c","import sys,json; data=json.load(sys.stdin); [print(json.dumps({'n':n,'text':data['text']}),flush=True) for n in range(20)]"]);
         let input = serde_json::to_vec(&serde_json::json!({"text":"literal '$()` text"})).unwrap();
         let mut values = vec![];
-        run_lines(command, input, Duration::from_secs(5), |line| {
+        run_fixture("echo", input, Duration::from_secs(5), |line| {
             values.push(serde_json::from_slice::<serde_json::Value>(line)?);
             Ok(())
         })
@@ -453,40 +667,45 @@ mod line_transport_tests {
         assert_eq!(values.len(), 20);
         assert_eq!(values[19]["n"], 19);
         assert_eq!(values[19]["text"], "literal '$()` text");
+        assert!(
+            values[19]["args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|arg| !arg.as_str().unwrap().contains("literal '$()` text"))
+        );
     }
     #[test]
-    fn errors_and_timeouts_kill_descendants_without_hanging_on_pipes() {
-        for (program, limit, consumer_error) in [
+    fn errors_and_timeouts_close_the_stream_without_hanging_on_pipes() {
+        for (mode, limit, expected) in [
+            ("stalled", Duration::from_secs(3), "fixture consumer"),
+            ("silent", IDLE_TIMEOUT, "查询超时"),
             (
-                "import sys,time; print('{}',flush=True); time.sleep(30)",
+                "oversized",
                 Duration::from_secs(3),
-                true,
+                "远程统计批次过大或不完整",
             ),
             (
-                "import time; time.sleep(30)",
-                Duration::from_millis(100),
-                false,
-            ),
-            (
-                "print('x'*1048577,flush=True)",
+                "incomplete",
                 Duration::from_secs(3),
-                false,
+                "远程统计批次过大或不完整",
             ),
         ] {
-            let mut command = Command::new("python3");
-            command.args(["-c", program]);
             let started = Instant::now();
+            let error = run_fixture(mode, vec![], limit, |_| anyhow::bail!("fixture consumer"))
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
             assert!(
-                run_lines(command, vec![], limit, |_| {
-                    if consumer_error {
-                        anyhow::bail!("fixture consumer")
-                    };
-                    Ok(())
-                })
-                .is_err()
+                started.elapsed() < CLEANUP_LIMIT,
+                "{mode}: cleanup took {:?}",
+                started.elapsed()
             );
-            assert!(started.elapsed() < Duration::from_secs(3));
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn successful_launcher_cleans_descendants_holding_pipes() {
         let mut command = Command::new("sh");
         command.args(["-c", "sleep 30 >&2 & printf '{}\\n'"]);
         let started = Instant::now();

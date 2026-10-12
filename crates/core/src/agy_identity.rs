@@ -1,7 +1,7 @@
 //! Public identity observations; the helper keeps local/SSH credentials on their machine.
 use crate::{accounts, models::*, network, process, quota, ssh};
 use serde::Deserialize;
-use std::{process::Command, time::Duration};
+use std::time::Duration;
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -42,15 +42,17 @@ fn read_inner(source: &Source, settings: &Settings, identity_only: bool) -> Obse
                 &format!("{}exec python3 -{flag}", quota::agy_proxy(source)),
             )?
         } else {
-            let mut cmd = Command::new(ssh::DEFAULT_SHELL);
-            cmd.args([
-                "-c",
-                &format!(
-                    "set -e\n{}{{\n{}\n}} </dev/null >&2\nexec python3 -{flag}",
-                    ssh::PATH_FALLBACK,
-                    if pre.trim().is_empty() { ":" } else { &pre }
-                ),
-            ]);
+            let args = if identity_only {
+                vec!["-", "--identity-only"]
+            } else {
+                vec!["-"]
+            };
+            let mut cmd = process::cli_command_with_pre_command(
+                if cfg!(windows) { "python" } else { "python3" },
+                &args,
+                &pre,
+                ssh::DEFAULT_SHELL,
+            );
             network::apply_env(&mut cmd, source.proxy.as_ref().unwrap_or(&settings.proxy));
             cmd
         };

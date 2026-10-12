@@ -990,7 +990,7 @@ impl Store {
                 if !account_ids.contains(&source.account_id) {
                     account_ids.push(source.account_id.clone());
                 }
-                d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":source.enabled,"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok())}));
+                d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":settings.source_enabled(source),"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"autoValuation":source.auto_valuation,"autoValuationStatus":self.automatic_status(&source.id)?}));
             }
         }
         d.price_updated_at =
@@ -1287,6 +1287,25 @@ fn local_account_id(provider: &str, root: &Path) -> String {
 #[cfg(test)]
 mod discovery_tests {
     use super::*;
+    #[test]
+    fn home_paths_keep_platform_separators_and_literal_names() {
+        assert_eq!(expand("~"), home());
+        assert_eq!(
+            expand("~/folder name/目录"),
+            home().join("folder name/目录")
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            expand(r"~\folder name\目录"),
+            home().join(r"folder name\目录")
+        );
+        #[cfg(not(windows))]
+        assert_eq!(expand(r"~\folder"), PathBuf::from(r"~\folder"));
+        for literal in ["~other/folder", "$HOME/folder", "relative folder", ""] {
+            assert_eq!(expand(literal), PathBuf::from(literal));
+        }
+    }
+
     #[test]
     fn api_credentials_do_not_create_a_subscription_account() {
         let root = tempfile::tempdir().unwrap();

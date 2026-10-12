@@ -38,17 +38,20 @@ function fixture(){
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const browser=await chromium.launch({headless:true});
   try{
-    const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
+    const page=await browser.newPage({reducedMotion:'reduce'}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
     assert.equal(await page.locator('[data-switch-account="codex:old"]').count(),0);
     await page.locator('[data-device-counts="codex:a"]').getByText('已登录设备1/3',{exact:true}).waitFor();
     await page.locator('[data-device-counts="codex:a"]').getByText('使用中设备1/3',{exact:true}).waitFor();
     assert.match(await page.locator('[data-device-counts="codex:b"]').innerText(),/使用中设备0\/3/);
     assert.match(await page.locator('[data-device-counts="codex:b"]').innerText(),/有设备待确认/);
+    // Font swaps and viewport reflow can otherwise be measured on different frames.
+    await page.evaluate(()=>document.fonts.ready);
     await page.setViewportSize({width:450,height:720});
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    fs.mkdirSync(path.resolve(__dirname,'../.local/ui-previews'),{recursive:true});await page.screenshot({path:path.resolve(__dirname,'../.local/ui-previews/device-counts.png')});
     const switchBox=await page.locator('[data-switch-account="codex:b"]').boundingBox(),countsBox=await page.locator('[data-device-counts="codex:b"]').boundingBox();
     assert(countsBox.x>switchBox.x+switchBox.width,'counts appear to the right of the switch button');
     assert(countsBox.x+countsBox.width<=450,'counts fit the narrow panel');
-    fs.mkdirSync(path.resolve(__dirname,'../.local/ui-previews'),{recursive:true});await page.screenshot({path:path.resolve(__dirname,'../.local/ui-previews/device-counts.png')});
     await page.waitForFunction(()=>targetsTest.calls.filter(c=>c.method==='accounts.status.refresh').length>=6);
     await page.waitForFunction(()=>!AieyesAgentSettings.statusBusy);
     // A source refresh supersedes an older global observation without changing the page.
