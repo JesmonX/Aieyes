@@ -87,8 +87,10 @@ function fixture(){
    });assert.deepEqual(icons,{images:5,fallback:1});
    await agy.locator('.quota-title').click();assert.equal(await agy.locator('.quota-reset:visible').count(),0,'Collapsed accounts hide reset details');assert.equal(await agy.locator('.resource-bar:visible').count(),2,'Collapsed accounts retain two key windows');await agy.locator('.quota-title').click();assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Expanding restores all model groups');
    await page.locator('#order-quotas').click();await page.locator('[data-order="antigravity:a"] [data-direction="-1"]').click();
-   // A single mouse jump can leave Chromium's native drag unfinished,
-   // swallowing the following save click. Check each drop before proceeding.
+   // Button reordering animates both rows. Native drag computes its target
+   // before dragstart cancels those animations, so wait for stable positions.
+   await page.evaluate(async()=>{await document.fonts.ready;await Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});
+   // Check each native drop before proceeding to the save/retry flow.
    await page.locator('[data-order="codex:c"]').dragTo(page.locator('[data-order="antigravity:a"]'),{steps:10});
    await page.waitForFunction(()=>document.querySelector('[data-order]').dataset.order==='codex:c');await page.evaluate(()=>Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))));
    await page.locator('[data-order="antigravity:a"]').dragTo(page.locator('[data-order="codex:c"]'),{steps:10});
