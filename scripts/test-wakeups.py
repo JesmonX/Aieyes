@@ -1,4 +1,5 @@
 """No real CLI inference, SSH connection or system scheduler is used by these tests."""
+from contextlib import closing
 import datetime
 import base64
 import importlib.util
@@ -52,7 +53,7 @@ class WakeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary).resolve()
             self.assertEqual(wake.scheduled_occurrences(root, 'wake-test', 100), set())
-            with sqlite3.connect(root / 'runner.sqlite') as db:
+            with closing(sqlite3.connect(root / 'runner.sqlite')) as db, db:
                 db.execute('CREATE TABLE runs(task TEXT, occurrence TEXT, started INTEGER)')
                 db.executemany('INSERT INTO runs VALUES(?,?,?)', [('wake-test', 'wake-test:2026-11-01:01:30', 100), ('other', 'other:2026-11-01:01:30', 100)])
             self.assertEqual(wake.scheduled_occurrences(root, 'wake-test', 100), {'wake-test:2026-11-01:01:30'})

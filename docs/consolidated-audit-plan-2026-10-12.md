@@ -74,4 +74,10 @@ M1–M6 已在整合工作区实施。本机为 Intel macOS，下列结果针对
 | Tauri 宿主测试 | 23 项通过 |
 | Rust 格式、diff 空白、工作流 YAML | 通过 |
 
-三平台 CI 将以独立验证分支的实际运行补充到此处。Windows 原生面板与安装器、Linux 安装包以及 macOS 原生检查必须在各自 runner 完成后才能记为通过。
+## 三平台 CI 收尾
+
+独立验证分支与[草稿 PR #3](https://github.com/JesmonX/Aieyes/pull/3) 执行真实平台检查。首轮 [Core / macOS 工作流](https://github.com/JesmonX/Aieyes/actions/runs/38204823789) 的 macOS、Windows、Linux 三项均通过，Windows 也实际执行了路径和前置命令回归。
+
+首轮 Windows 共享检查发现一个本机未暴露的文件句柄问题：`sqlite3.Connection` 的上下文管理器只提交或回滚事务，不会关闭连接。新加的远端调度状态查询和其测试都因此保留数据库连接，Windows 在清理临时目录时报告 `WinError 32`。查询改用 `contextlib.closing`，测试同时明确提交事务和关闭连接；保留原有目录清理检查，不能通过跳过测试掩盖差异。
+
+最终验收以修复提交的 CI 为准：Core 三平台、macOS 原生构建/契约、Windows/Linux 桌面测试与构建均须成功。完整运行链接和结论同步到 PR 描述，原始检查元数据与日志保存在 `.local/audit-cc65Sr/ci/`。

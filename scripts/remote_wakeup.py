@@ -1,4 +1,5 @@
 """Aieyes user-owned SSH deployment and headless runner (Python 3 stdlib only)."""
+from contextlib import closing
 import datetime
 import concurrent.futures
 import hashlib
@@ -244,7 +245,7 @@ def next_run(times, now=None, occurred=(), task_id=''):
 def scheduled_occurrences(root, identifier, now):
     if not (root / 'runner.sqlite').exists():
         return set()
-    with sqlite3.connect((root / 'runner.sqlite').as_uri() + '?mode=ro', uri=True) as db:
+    with closing(sqlite3.connect((root / 'runner.sqlite').as_uri() + '?mode=ro', uri=True)) as db:
         return {row[0] for row in db.execute('SELECT occurrence FROM runs WHERE task=? AND started>=?', (identifier, now - 172800))}
 
 
