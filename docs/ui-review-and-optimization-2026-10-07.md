@@ -95,7 +95,7 @@
 | macOS `SessionPhase.color` | `.teal` | `.purple` | `.blue` | `.green` | `.orange` |
 
 同一个"进行中"在胶囊、托盘图标、会话行里是三种不同的绿色；`.phase-mark` 那一列偏暗，因为它是为浅色文字前景定的，而胶囊/托盘是图形填充色。macOS 用系统语义色，能跟随深色模式与增大对比度，桌面端做不到。
-方向：在 `tokens.css` 定义一组 `--phase-*` 变量并让 `app.js` 通过 `getComputedStyle` 读取（它已经在读 `--border`/`--muted`/`--accent`/`--resource-*`）；`capsule.rs` 与 `desktop.rs icon()` 保留各自的 Rust 常量，但值必须从同一张表派生，并在 `scripts/check-native-capsule.sh` 里加一致性断言。
+方向：在 `tokens.css` 定义一组 `--phase-*` 变量并让 `app.js` 通过 `getComputedStyle` 读取（它已经在读 `--border`/`--muted`/`--accent`/`--resource-*`）；`capsule.rs` 与 `desktop.rs icon()` 保留各自的 Rust 常量，但值必须从同一张表派生，并在 `scripts/test-windows-panel.ps1` 里加一致性断言。
 
 **P1-5 Linux 悬浮球的几何比 Windows 内缩 8px。**
 Windows 胶囊是 144×44 的原生窗口，圆角路径覆盖 `0.5…143.5`，视觉与窗口边界一致（`capsule.rs`）。Linux 是 160×60 的 Tauri 窗口（`desktop.rs:24-25` 的 `BALL_SIZE/BALL_HEIGHT`），内部由 `floating.css:4` 的 `place-items:center` 把 144×44 的药丸居中，四周各留 8px 透明边。
@@ -233,7 +233,7 @@ Windows 胶囊是 144×44 的原生窗口，圆角路径覆盖 `0.5…143.5`，�
 
 - `docs/ui-audit-and-redesign-2026-10-06.md`、`docs/ui-audit-and-redesign-2026-10-06-implementation.md`
 - `docs/ui-reform-2026-10-06.md`、`docs/ui-reform-2026-10-06-implementation.md`
-- `docs/cross-platform-ui-review-2026-10-05.md`、`docs/native-capsule-and-ui-sync.md`、`docs/windows-ui-refresh.md`
+- `docs/cross-platform-ui-review-2026-10-05.md`、`docs/desktop-pets.md`、`docs/windows-ui-refresh.md`
 
 截图（均早于本次基线，需重新生成后再作验收依据）：
 

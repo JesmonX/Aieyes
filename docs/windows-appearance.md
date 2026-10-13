@@ -19,7 +19,7 @@ Windows 使用本地鸿蒙黑体，内容尺寸以原生 macOS 界面为参照�
 | 资源圆环 | 48 / 72，描边 5 |
 | 窗口 / 卡片 / 控件圆角 | 8 / 16 / 9 |
 
-字体文件来自 OpenHarmony 的 `resources` 仓库，固定版本及 SHA-256 位于 [sources.json](../apps/desktop/web/fonts/sources.json)。Regular、Medium、Bold 三个原始 TTF 共约 23.5 MiB；没有子集化或修改。WebView 使用本地 `@font-face`，原生悬浮胶囊使用 GDI+ 私有字体集合，不需要用户安装字体。代码、路径仍使用等宽字体。
+字体文件来自 OpenHarmony 的 `resources` 仓库，固定版本及 SHA-256 位于 [sources.json](../apps/desktop/web/fonts/sources.json)。Regular、Medium、Bold 三个原始 TTF 共约 23.5 MiB；没有子集化或修改。WebView 使用本地 `@font-face`，原生桌宠文字使用 GDI+ 私有字体集合，不需要用户安装字体。代码、路径仍使用等宽字体。
 
 在「设置 → 通用 → 外观」展示字体署名和完整许可。打包前运行 `check-bundled-fonts.cjs` 检查文件尺寸、哈希及许可。正文和图表共用字体，字体加载完成后重绘图表。模型分布及每日模型明细的复制按钮已移除，文字仍可选中复制。
 
@@ -35,7 +35,7 @@ Windows 使用本地鸿蒙黑体，内容尺寸以原生 macOS 界面为参照�
 
 浅色 / 深色主窗口网页底色 alpha 分别为 .18 / .28，面板为 .12 / .20；卡片保留轻微底色，菜单和输入控件使用较强底色。实际桌面透出程度由系统材质与网页底色共同决定。减少透明度和强制颜色模式在网页侧同样恢复不透明底色。
 
-Windows 11 使用系统圆角；Windows 10 使用按 DPI 缩放的窗口区域裁剪。最大化恢复方角。原生胶囊继续保留独立的点击、拖动与焦点逻辑。
+Windows 11 使用系统圆角；Windows 10 使用按 DPI 缩放的窗口区域裁剪。最大化恢复方角。原生桌宠保留独立的点击、拖动与焦点逻辑。
 
 ## 验证与复现
 
@@ -45,7 +45,7 @@ node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs
 AIEYES_UI_OUT=.local/windows-appearance/after node scripts/test-windows-ui.cjs
 node scripts/test-agent-settings-ui.cjs
 node scripts/test-theme-sync-ui.cjs
-sh scripts/check-native-capsule.sh
+pwsh -File scripts/test-windows-panel.ps1
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
 cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --features custom-protocol -- -D warnings
 ```
@@ -54,7 +54,7 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --l
 
 本轮 macOS 宿主上的 21 项桌面 / 多选 Node 测试、21 项 Tauri Rust 测试、Clippy、Windows 原生模块交叉类型检查、当前 Agents / 账户与主题同步检查通过。发布准备时更新了 UI 交互回归测试：启用入口验证当前 Agents 页面，服务器保存使用新版 `settings.patch`，移除最后一个服务器后验证焦点返回“添加主机”，不再调用会主动移走焦点的旧草稿保存辅助函数。服务器保存测试同样补齐了 `settings.patch` 的测试返回值。
 
-Windows 实机尚未运行，本轮未生成 Windows 安装包。Windows 10 / 11 材质、混合 DPI、原生胶囊字体及安装流程仍需实机验收。已有交互测试增加了可选的桌面像素验证，在启用透明效果的交互桌面中运行：
+Windows 实机尚未运行，本轮未生成 Windows 安装包。Windows 10 / 11 材质、混合 DPI、原生桌宠字体及安装流程仍需实机验收。已有交互测试增加了可选的桌面像素验证，在启用透明效果的交互桌面中运行：
 
 ```powershell
 ./scripts/build-desktop.ps1 release

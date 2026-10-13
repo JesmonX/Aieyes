@@ -4,7 +4,7 @@ import SwiftUI
 // Only lifecycle metadata is retained; prompts and tool arguments are never displayed.
 enum SessionPhase: String {
     case idle = "空闲", working = "进行中", thinking = "思考中", tool = "执行工具", complete = "已完成", interrupted = "已中断", unknown = "状态待确认", needsInput = "等待输入", failed = "执行失败"
-    var active: Bool { self == .working || self == .thinking || self == .tool }
+    var active: Bool { self == .working || self == .thinking || self == .tool || self == .needsInput }
     var color: Color {
         switch self { case .idle: return .secondary; case .working: return Palette.accent; case .thinking: return Palette.accent; case .tool: return Palette.accent; case .complete: return Palette.ok; case .interrupted: return Palette.warn; case .needsInput: return Palette.warn; case .failed: return Palette.danger; case .unknown: return .secondary }
     }
@@ -13,21 +13,38 @@ enum SessionPhase: String {
     }
 }
 struct LiveSession: Identifiable, Decodable {
+    var provider = "codex", machine = "本机", machineId = "local", sourceId = "", turnId = ""
     var id: String, source: String, phase: SessionPhase, updatedAt: Date
     init(id: String, source: String, phase: SessionPhase, updatedAt: Date) {
         self.id = id; self.source = source; self.phase = phase; self.updatedAt = updatedAt
     }
-    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt }
+    enum CodingKeys: String, CodingKey { case id, source, phase, updatedAt, provider, machine, machineId, sourceId, turnId }
     init(from decoder: Decoder) throws {
         let row = try decoder.container(keyedBy: CodingKeys.self)
         id = try row.decode(String.self, forKey: .id)
         source = try row.decode(String.self, forKey: .source)
+        provider = try row.decodeIfPresent(String.self, forKey: .provider) ?? "codex"
+        machine = try row.decodeIfPresent(String.self, forKey: .machine) ?? "本机"
+        machineId = try row.decodeIfPresent(String.self, forKey: .machineId) ?? "local"
+        sourceId = try row.decodeIfPresent(String.self, forKey: .sourceId) ?? ""
+        turnId = try row.decodeIfPresent(String.self, forKey: .turnId) ?? ""
         let key = try row.decode(String.self, forKey: .phase)
         phase = ["working": .working, "thinking": .thinking, "tool": .tool, "complete": .complete, "interrupted": .interrupted, "unknown": .unknown, "needsInput": .needsInput, "failed": .failed][key] ?? .unknown
         updatedAt = Date(timeIntervalSince1970: try row.decode(Double.self, forKey: .updatedAt))
     }
 }
-struct SessionSnapshot: Decodable { var sessions: [LiveSession]; var unavailable: Bool; var pet: PetState? = nil }
+struct SessionSnapshot: Decodable { var sessions: [LiveSession]; var unavailable: Bool; var pet: PetState? = nil; var summary: String? = nil; var phase: String? = nil; var sources: [SessionSourceHealth]? = nil }
+struct SessionSourceHealth: Decodable, Identifiable {
+    var sourceId: String, provider: String, machineId: String, state: String
+    var error: String?
+    var id: String { machineId + ":" + sourceId }
+    var message: String { error ?? (state == "connecting" ? "正在连接…" : "状态暂不可用") }
+}
+struct SessionHookStatus: Decodable {
+    var sourceId: String, provider: String, machineId: String, configPath: String, state: String
+    var error: String?
+    var label: String { ["installed":"已接入", "missing":"等待自动接入", "disabled":"已停用", "error":"接入失败"][state] ?? state }
+}
 
 struct ActivityIndicator: View {
     var phase: SessionPhase?
@@ -107,3 +124,9 @@ struct PetState: Decodable, Equatable {
         return row * 8 + Int(ms / frameMs) % frames
     }
 }
+
+struct ImportedPet: Decodable, Equatable {
+    var id: String, displayName: String, contentHash: String, spritePath: String
+    var spriteVersionNumber: Int, rows: Int, cellWidth: Int, cellHeight: Int
+}
+struct PetSelection: Decodable { var pet: ImportedPet?; var error: String? }

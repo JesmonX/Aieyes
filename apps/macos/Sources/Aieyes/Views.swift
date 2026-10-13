@@ -299,7 +299,7 @@ struct RootView: View {
                     HStack(spacing: 10) {
                         ActivityIndicator(phase: session.phase)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(session.source).lineLimit(1)
+                            Text(Format.provider(session.provider) + " · " + session.machine).lineLimit(1)
                             SurfaceTimeline(interval: 60) { context in
                                 Text("会话 " + String(URL(fileURLWithPath: session.id).deletingPathExtension().lastPathComponent.prefix(8)) + " · " + Format.relative(session.updatedAt, now: context.date)).font(AppFont.secondary).foregroundStyle(.secondary)
                             }
@@ -309,11 +309,16 @@ struct RootView: View {
                     }
                 }
                 if model.sessions.isEmpty { Text(model.sessionsUnavailable ? "读取失败" : "暂无会话动态").foregroundStyle(.secondary) }
+                ForEach(model.sessionSources.filter { $0.state != "healthy" }) { source in
+                    let machine = source.machineId == "local" ? "本机" : model.settings.hosts.first(where: { $0.id == source.machineId })?.name ?? source.machineId
+                    Text(Format.provider(source.provider) + " · " + machine + "：" + source.message)
+                        .font(AppFont.secondary).foregroundStyle(Palette.warn).frame(maxWidth: .infinity, alignment: .leading)
+                }
             }.padding(.top, 12)
         } label: {
             HStack(spacing: 9) {
                 ActivityIndicator(phase: model.sessionPhase)
-                Text(model.sessionSummary).font(.system(size: 15, weight: .medium)).help("本机 Codex · 日志状态")
+                Text(model.sessionSummary).font(.system(size: 15, weight: .medium)).help("已启用的本机和 SSH Codex / Claude / AGY 会话")
                 Spacer()
                 if let phase = model.sessionPhase { Text(phase.rawValue).font(AppFont.secondary).foregroundStyle(phase.color) }
             }

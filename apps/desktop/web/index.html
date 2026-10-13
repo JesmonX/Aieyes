@@ -16,7 +16,7 @@
   <main>
     <header><h1 id="title">Agent 概览</h1><div class="header-actions"><button type="button" data-theme-toggle aria-label="切换明暗模式" title="切换明暗模式"></button><div class="refresh-wrap"><button id="refresh" aria-haspopup="true" aria-expanded="false" aria-controls="refresh-menu" title="刷新">刷新</button><div id="refresh-menu" class="refresh-menu" role="menu" hidden><button id="scan" role="menuitem" data-refresh="scan">同步记录</button><button id="quota" role="menuitem" data-refresh="quotas">刷新限额</button><button role="menuitem" data-refresh="prices">同步价格</button><button role="menuitem" data-refresh="hosts">刷新服务器</button></div></div></div></header>
     <div id="message" role="status" hidden></div>
-    <details id="live-sessions"><summary><span class="dot"></span><span id="session-summary">正在读取会话状态…</span><span class="muted" title="已启用的本机 Codex 日志状态">本机 Codex</span></summary><div id="session-list"></div><p id="session-warning" class="error" hidden>部分日志不可读，状态可能不完整。</p></details>
+    <details id="live-sessions"><summary><span class="dot"></span><span id="session-summary">正在读取会话状态…</span><span class="muted" title="已启用的本机和 SSH Agent 会话状态">Codex / Claude / AGY</span></summary><div id="session-list"></div><p id="session-warning" class="error" hidden>部分日志不可读，状态可能不完整。</p></details>
     <section id="content"></section>
   </main>
 </div>

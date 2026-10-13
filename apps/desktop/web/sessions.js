@@ -17,9 +17,11 @@
     summary.textContent = info.summary;
     list.innerHTML = info.sessions.map(s => {
       const [symbol, label] = phases[s.phase] || phases.unknown;
-      return `<div class="live-row"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(s.source || 'Codex')}</strong><small>会话 ${escape(s.id.slice(0,8))} · ${new Intl.RelativeTimeFormat(undefined,{numeric:'auto'}).format(-Math.max(0,Math.round((Date.now()/1000-s.updatedAt)/60)),'minute')}</small></div><span>${label}</span></div>`;
+      return `<div class="live-row"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(({codex:'Codex',claude:'Claude Code',antigravity:'AGY'}[s.provider]||s.source||'Agent')+' · '+(s.machine||'本机'))}</strong><small>会话 ${escape(s.id.slice(0,8))} · ${new Intl.RelativeTimeFormat(undefined,{numeric:'auto'}).format(-Math.max(0,Math.round((Date.now()/1000-s.updatedAt)/60)),'minute')}</small></div><span>${label}</span></div>`;
     }).join('') || '<p class="muted">暂无活跃会话</p>';
-    warning.hidden = true;
+    const failures=(info.sources||[]).filter(s=>s.state!=='healthy');
+    warning.hidden = !failures.length;
+    warning.textContent=failures.map(s=>`${s.provider} · ${s.machineId==='local'?'本机':s.machineId}：${s.error||'正在连接'}`).join('；');
     let notice=document.querySelector('#session-attention');
     const uncertain=info.unavailable || info.sessions.some(s=>s.phase==='unknown');
     if(uncertain){

@@ -245,7 +245,7 @@ test('hover does not open; click, pin and Escape operate the panel', async () =>
   await ball.dispatch('click',{detail:1});await flush();
   assert.equal(h.info.panelOpen,true);
 });
-test('drag capture cancellation never leaves the capsule stuck', async () => {
+test('drag capture cancellation never leaves the pet stuck', async () => {
   const h=harness('floating.js');await flush();
   const ball=h.element('#ball');
   await ball.dispatch('pointerdown',{button:0,clientX:20,clientY:20});
@@ -278,8 +278,8 @@ test('Escape closes the refresh menu before the panel and restores keyboard focu
   assert.equal(h.info.panelOpen,false);
   assert.equal(h.document.activeElement,h.element('#ball'));
 });
-test('native Windows panel close never focuses the hidden Web capsule', async () => {
-  const h=harness('floating.js',{nativeCapsule:true,panelOpen:true});
+test('native Windows panel close never focuses the hidden Web pet', async () => {
+  const h=harness('floating.js',{nativePet:true,panelOpen:true});
   await flush();await flush();
   const input=h.element('#panel-input');input.parent=h.element('#panel');input.focus();
   await h.document.dispatch('keydown',{key:'Escape'});await flush();
@@ -341,11 +341,11 @@ test('settings hide and restore the floating ball with the live label', async ()
   const h = harness('desktop.js'); await flush();
   h.window.AieyesDesktop.bindSettings();
   const hide = h.element('#hide-ball');
-  assert.equal(hide.textContent,'暂时隐藏悬浮球');
+  assert.equal(hide.textContent,'暂时隐藏桌宠');
   await hide.onclick();
   assert.equal(h.calls.filter(c=>c.command==='desktop_action').at(-1).args.action,'hide-ball');
   h.events.get('desktop:status')({payload:{...h.info,hidden:true}});
-  assert.equal(hide.textContent,'恢复显示悬浮球');
+  assert.equal(hide.textContent,'恢复显示桌宠');
   await hide.onclick();
   assert.equal(h.calls.filter(c=>c.command==='desktop_action').at(-1).args.action,'show-ball');
 });

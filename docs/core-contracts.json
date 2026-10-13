@@ -582,6 +582,22 @@
       "updateBehavior": "observe"
     },
     {
+      "name": "pets.current",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
+      "name": "pets.import",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
       "name": "prices.list",
       "lane": "main",
       "invalidates": [],
@@ -702,6 +718,30 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    {
+      "name": "sessions.hooks.remove",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "sessions.hooks.repair",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "sessions.hooks.status",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
     },
     {
       "name": "sessions.list",

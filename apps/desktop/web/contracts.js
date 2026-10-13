@@ -504,6 +504,20 @@
       "refreshKey": null,
       "updateBehavior": "observe"
     },
+    "pets.current": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    "pets.import": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
     "prices.list": {
       "lane": "main",
       "invalidates": [],
@@ -612,6 +626,27 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    "sessions.hooks.remove": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "sessions.hooks.repair": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "sessions.hooks.status": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
     },
     "sessions.list": {
       "lane": "main",
@@ -777,5 +812,5 @@
       "updateBehavior": "cancel"
     }
   },
-  "contractHash": "eae7986bd3cc31bcd50b7578716885eaf1c3bea3f7762fd4002d80547b271c16"
+  "contractHash": "059ec50602f45950a56e33e527b820ce735081e8ac36859eeb6f269b4b42cee4"
 };

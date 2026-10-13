@@ -17,7 +17,7 @@ struct SettingsView: View {
     @State private var accountEditor: AgentAccount?
     @State private var hostEditor: HostEditorRequest?
     @State private var priceEditor: ModelPrice?
-    @AppStorage("aieyes.pet.enabled") private var petEnabled = false
+    @AppStorage("aieyes.pet.enabled") private var petEnabled = true
     @AppStorage(NativePanelKey.showCount.rawValue) private var showMenuCount = false
     @State private var removal: RemovalRequest?
     @State private var confirmRescan = false
@@ -193,7 +193,17 @@ struct SettingsView: View {
             }
             Section("桌面宠物") {
                 Toggle("显示桌面宠物（本机，立即生效）", isOn: $petEnabled)
-                Text("小猫随本机 Codex 状态行动；单击打开面板，拖动移动，右键可隐藏。遵循系统减少动态效果设置。").font(AppFont.secondary).foregroundStyle(.secondary)
+                HStack {
+                    Text(model.importedPet?.displayName ?? "正在读取桌宠…")
+                    Spacer()
+                    Button(model.petImportBusy ? "导入中…" : "导入桌宠文件…") {
+                        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+                        panel.title = "选择桌宠 ZIP 或 pet.json"; panel.showsHiddenFiles = true
+                        if panel.runModal() == .OK, let url = panel.url { Task { await model.importPet(path: url.path) } }
+                    }.disabled(model.petImportBusy)
+                }
+                if let error = model.petImportError { Text(error).foregroundStyle(Palette.danger) }
+                Text("支持 ZIP / pet.json，PNG / WebP 图集。首次使用会导入月薪喵（kiffin）。桌宠跟随已启用的本机和 SSH Codex、Claude、AGY 会话；单击打开面板，拖动移动。").font(AppFont.secondary).foregroundStyle(.secondary)
             }
             Section("菜单栏") {
                 Toggle("显示活跃会话计数（本机，立即生效）", isOn: $showMenuCount)

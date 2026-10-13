@@ -1,40 +1,24 @@
-/* Linux fallback capsule; Windows uses the matching native Win32 surface. */
-:root { color-scheme:light dark; background:transparent; --capsule-bg:#f6f8fc; --capsule-ink:#243049; }
+/* Transparent imported pet; shared panel styles are independent. */
+:root { color-scheme:light dark; background:transparent; --pet-bg:#f6f8fc; --pet-ink:#243049; }
 html,body { margin:0; width:100%; height:100%; overflow:hidden; background:transparent; user-select:none; }
-body { display:grid; place-items:normal; font-family:var(--font-ui,"Segoe UI",system-ui,sans-serif); }
-#ball { position:relative; width:144px; height:44px; min-height:0; display:flex; flex-direction:row; align-items:center; gap:3px; padding:0 10px 0 12px; border:1px solid var(--border); border-radius:22px; background:var(--capsule-bg); color:var(--capsule-ink); box-shadow:0 2px 8px #15213826; cursor:grab; touch-action:none; }
-#ball:hover { background:var(--surface-strong); transform:none; }
-#ball:active { cursor:grabbing; transform:none; background:var(--soft); box-shadow:inset 0 0 0 2px var(--border); }
-#ball:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-#ball .eye { flex:0 0 24px; width:24px; height:24px; pointer-events:none; }
-#ball .halo { display:none; }
-#phase { display:flex; align-items:center; gap:4px; font-size:var(--font-entry); line-height:18px; white-space:nowrap; pointer-events:none; }
+body { display:grid; place-items:normal; font-family:var(--font-ui,system-ui,sans-serif); }
+#ball { position:relative; width:144px; height:168px; min-height:0; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; display:block; cursor:grab; touch-action:none; }
+#ball:hover,#ball:active { background:transparent; box-shadow:none; transform:none; }
+#ball:active { cursor:grabbing; }
+#ball:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+#pet-sprite { display:block; width:132px; height:143px; margin:0 auto; background-size:800% 900%; pointer-events:none; }
+#phase { position:absolute; bottom:4px; left:50%; transform:translateX(-50%); padding:2px 9px; background:var(--pet-bg); color:var(--pet-ink); border-radius:10px; font-size:12px; display:flex; align-items:center; gap:4px; line-height:18px; white-space:nowrap; pointer-events:none; }
 #phase::before { content:""; width:5px; height:5px; border-radius:50%; background:var(--phase-color,#91a0b7); }
-#count { margin-left:auto; width:25px; flex:0 0 25px; line-height:20px; text-align:center; border-radius:var(--r-pill); padding:0; background:var(--count-badge); font-size:var(--font-entry); font-variant-numeric:tabular-nums; pointer-events:none; }
-[hidden] { display:none!important; }
+#count { position:absolute; right:1px; top:18px; line-height:20px; text-align:center; border-radius:var(--r-pill); padding:0 5px; background:var(--count-badge); font-size:var(--font-entry); font-variant-numeric:tabular-nums; pointer-events:none; }
+[hidden],body[data-native-pet=true] #ball { display:none!important; }
+@media(prefers-color-scheme:dark) { :root { --pet-bg:#202735; --pet-ink:#edf2fc; } }
+@media(forced-colors:active) { #phase,#count { background:Canvas; color:CanvasText; border:1px solid CanvasText; } }
 body[data-phase=working] { --phase-color:var(--phase-working); }
 body[data-phase=thinking] { --phase-color:var(--phase-thinking); }
 body[data-phase=tool] { --phase-color:var(--phase-tool); }
 body[data-phase=complete] { --phase-color:var(--phase-complete); }
 body[data-phase=interrupted] { --phase-color:var(--phase-interrupted); }
-@media(prefers-color-scheme:dark) { :root { --capsule-bg:#202735; --capsule-ink:#edf2fc; } }
-@media(forced-colors:active) { #ball { background:Canvas; color:CanvasText; border:1px solid CanvasText; box-shadow:none; } }
-body[data-native-capsule=true] #ball { display:none; }
-
 body[data-phase=idle] { --phase-color:var(--phase-idle); }
 body[data-phase=unknown] { --phase-color:var(--phase-unknown); }
-@media(forced-colors:active) { #count { border:1px solid CanvasText; } }
-
-/* Transparent sprite surface; the panel retains its own layout and materials. */
-#pet-sprite { display:none; }
-body[data-pet=true] #ball { width:144px; height:168px; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; display:block; }
-body[data-pet=true] #ball:hover, body[data-pet=true] #ball:active { background:transparent; box-shadow:none; }
-body[data-pet=true] #ball .eye { display:none; }
-body[data-pet=true] #pet-sprite { display:block; width:132px; height:143px; margin:0 auto; background-image:url('pet-cat.png'); background-size:800% 900%; pointer-events:none; }
-body[data-pet=true] #phase { position:absolute; bottom:4px; left:50%; transform:translateX(-50%); padding:2px 9px; background:var(--capsule-bg); color:var(--capsule-ink); border-radius:10px; font-size:12px; }
-body[data-pet=true] #count { position:absolute; right:1px; top:18px; }
-body[data-pet=true][data-native-capsule=true] #ball { display:none; }
-@media(forced-colors:active) { body[data-pet=true] #phase { background:Canvas; color:CanvasText; border:1px solid CanvasText; } }
-
 body[data-phase=needsInput] { --phase-color:var(--phase-needsInput); }
 body[data-phase=failed] { --phase-color:var(--phase-failed); }

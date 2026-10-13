@@ -323,18 +323,34 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 
     private let sessionEngine = EngineClient(configurationOnly: true)
     @Published var sessions: [LiveSession] = []
+    @Published var sessionSources: [SessionSourceHealth] = []
     @Published var sessionsUnavailable = false
     @Published var petState = PetState.idle
+    @Published var importedPet: ImportedPet?
+    @Published var petImportError: String?
+    @Published var petImportBusy = false
+    func importPet(path: String) async {
+        guard !petImportBusy else { return }
+        petImportBusy = true
+        defer { petImportBusy = false }
+        do {
+            let result: PetSelection = try await engine.call("pets.import", params: ["path": path])
+            importedPet = result.pet; petImportError = result.error
+        } catch { petImportError = error.localizedDescription }
+    }
     private var sessionBusy = false { didSet { scheduleRefreshes() } }
     private var lastSessionRead = Date.distantPast
     var activeSessions: [LiveSession] { sessions.filter { $0.phase.active } }
-    var sessionPhase: SessionPhase? { sessionsUnavailable ? .unknown : activeSessions.first?.phase ?? sessions.first?.phase }
+    private var coreSessionSummary: String?
+    var sessionPhase: SessionPhase? { sessions.first?.phase ?? (sessionsUnavailable ? .unknown : nil) }
     var sessionSummary: String {
+        if let summary = coreSessionSummary { return summary }
         if sessionsUnavailable { return "会话状态不可用" }
-        if !settings.sources.contains(where: { settings.sourceEnabled($0) && $0.hostId == nil && $0.provider == "codex" }) { return "未接入会话状态" }
-        if !activeSessions.isEmpty { return "\(activeSessions.count) 个活跃会话" }
-        if sessions.contains(where: { $0.phase == .unknown }) { return "会话状态待确认" }
-        return "无活跃会话"
+        if !settings.sources.contains(where: { settings.sourceEnabled($0) && ["codex", "claude", "antigravity"].contains($0.provider) }) { return "未接入会话状态" }
+        return activeSessions.isEmpty ? "无活跃会话" : "\(activeSessions.count) 个活跃会话"
+    }
+    func manageSessionHooks(sourceID: String, action: String) async throws -> [SessionHookStatus] {
+        try await engine.call("sessions.hooks." + action, params: ["sourceId": sourceID])
     }
     func refreshSessions() async {
         guard !sessionBusy else { return }
@@ -342,8 +358,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         defer { sessionBusy = false }
         do {
             let result: SessionSnapshot = try await sessionEngine.call("sessions.list")
-            sessions = result.sessions; sessionsUnavailable = result.unavailable; petState = result.pet ?? .unknown
-        } catch { sessionsUnavailable = true; petState = .unknown }
+            sessions = result.sessions; sessionSources = result.sources ?? []; sessionsUnavailable = result.unavailable; petState = result.pet ?? .unknown; coreSessionSummary = result.summary
+            let selection: PetSelection = try await sessionEngine.call("pets.current")
+            importedPet = selection.pet; petImportError = selection.error
+        } catch { sessionsUnavailable = true; petState = .unknown; coreSessionSummary = nil }
     }
     @Published var dashboard = Dashboard()
     @Published private(set) var menuDashboard = Dashboard()
@@ -833,7 +851,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         if !quotaScheduleKnown { readQuotaSchedule() }
         var deadlines: [Date] = []
         if panelVisible, !networkBusy { deadlines.append(lastNetworkAttempt.addingTimeInterval(300)) }
-        if !sessionBusy { deadlines.append(lastSessionRead.addingTimeInterval(5)) }
+        if !sessionBusy { deadlines.append(lastSessionRead.addingTimeInterval(1)) }
         if !serverBusy, settings.monitoredHosts.contains(where: \.enabled) { deadlines.append(metricsDeadline) }
         if !historyBlocked {
             deadlines.append(lastScan.addingTimeInterval(Double(settings.historyInterval)))
@@ -851,7 +869,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         defer { scheduleRefreshes() }
         let now = Date()
         if panelVisible, !networkBusy, now.timeIntervalSince(lastNetworkAttempt) >= 300 { Task { await testNetwork(force: false) } }
-        if !sessionBusy, now.timeIntervalSince(lastSessionRead) >= 5 { Task { await refreshSessions() } }
+        if !sessionBusy, now.timeIntervalSince(lastSessionRead) >= 1 { Task { await refreshSessions() } }
         if !serverBusy, settings.monitoredHosts.contains(where: \.enabled), now >= metricsDeadline { Task { await sampleHosts() } }
         guard !historyBlocked else { return }
         if let (quota, _, key) = pendingResets.first(where: { $0.1 <= now.timeIntervalSince1970 }) {

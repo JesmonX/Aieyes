@@ -44,7 +44,7 @@
 | `sh scripts/test-native.sh` | Swift 草稿提交/回滚、筛选快照、会话生命周期、凭据与采样失败、配色对比度、面板账户偏好 |
 | Swift 原生构建 | SwiftUI / AppKit 全应用编译与链接 |
 | 桌面 Rust 测试（18 项） | 胶囊吸附、面板锚点、工作区与混合 DPI、品牌图保留、配置与状态广播 |
-| `sh scripts/check-native-capsule.sh` | 使用 Windows 目标类型检查原生胶囊与非激活窗口适配器，宿主胶水使用替身；阶段表一致性检查 |
+| `pwsh -File scripts/test-windows-panel.ps1` | 使用 Windows 目标类型检查原生胶囊与非激活窗口适配器，宿主胶水使用替身；阶段表一致性检查 |
 | 六状态原生截图矩阵 | 空态、单账户、多账户、长名称/大数字、失败、20 账户；浅深色、450×540、760×480、620×440、折叠摘要与选择窗口 |
 | 高对比截图像素断言 | Web 不透明 Canvas 与可见 CanvasText；原生浅深色不透明表面与实色边框 |
 

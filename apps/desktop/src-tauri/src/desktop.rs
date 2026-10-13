@@ -20,23 +20,11 @@ use tauri::{
 
 const TRAY_ID: &str = "aieyes-status";
 const HIDE_MENU_ID: &str = "hide";
-/// Linux WebView capsule size in logical pixels; Windows uses its own native window.
+/// Transparent pet surface in logical pixels on every platform.
 const BALL_SIZE: f64 = 144.0;
-const BALL_HEIGHT: f64 = 44.0;
-fn pet_enabled(mode: Mode, windows: bool) -> bool {
-    mode == Mode::Pet || (mode == Mode::Auto && windows)
-}
-fn entry_size(app: &AppHandle) -> (f64, f64) {
-    let pet = app
-        .state::<Desktop>()
-        .state
-        .lock()
-        .is_ok_and(|s| pet_enabled(s.preferences.mode, cfg!(windows)));
-    if pet {
-        (144.0, 168.0)
-    } else {
-        (BALL_SIZE, BALL_HEIGHT)
-    }
+const BALL_HEIGHT: f64 = 168.0;
+fn entry_size(_app: &AppHandle) -> (f64, f64) {
+    (BALL_SIZE, BALL_HEIGHT)
 }
 /// Panel size in logical pixels; height is clamped to the monitor work area.
 const PANEL_WIDTH: f64 = 450.0;
@@ -49,10 +37,9 @@ const PANEL_GAP: f64 = 8.0;
 #[serde(rename_all = "camelCase")]
 pub enum Mode {
     #[default]
-    Auto,
-    Tray,
-    Floating,
+    #[serde(alias = "auto", alias = "floating")]
     Pet,
+    Tray,
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct Position {
@@ -65,11 +52,13 @@ struct Preferences {
     mode: Mode,
     position: Option<Position>,
     show_count: bool,
+    hidden: bool,
 }
 struct ShellState {
     accent: String,
     preferences: Preferences,
     snapshot: Snapshot,
+    pet_asset: Value,
     floating: bool,
     visible: bool,
     hidden: bool,
@@ -120,8 +109,8 @@ pub struct Desktop {
 }
 
 // Never hide the only usable entry point when tray support is absent.
-fn use_floating(mode: Mode, windows: bool, tray_available: bool) -> bool {
-    !tray_available || matches!(mode, Mode::Floating | Mode::Pet) || (mode == Mode::Auto && windows)
+fn use_floating(mode: Mode, _windows: bool, tray_available: bool) -> bool {
+    !tray_available || mode == Mode::Pet
 }
 
 /// Hiding the only entry point would strand the app; a usable tray is required.
@@ -168,8 +157,8 @@ fn panel_rect(
     };
     let below = ball_pos.y + ball.1 + gap;
     let above = ball_pos.y - panel_height - gap;
-    // A tall panel cannot fit above/below a capsule midway down a small screen.
-    // Prefer the free horizontal side before clamping into the capsule itself.
+    // A tall panel cannot fit above/below a pet_window midway down a small screen.
+    // Prefer the free horizontal side before clamping into the pet_window itself.
     if below + panel_height > y + height as i32 && above < y {
         let right = ball_pos.x + ball.0 + gap;
         let left_side = ball_pos.x - panel_width - gap;
@@ -344,24 +333,17 @@ pub(crate) fn refresh_materials(app: &AppHandle) {
 
 pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let path = root.join("desktop.json");
-    let preferences = std::fs::read(&path)
+    let preferences: Preferences = std::fs::read(&path)
         .ok()
         .and_then(|s| serde_json::from_slice(&s).ok())
         .unwrap_or_default();
     let status_item = MenuItem::with_id(app, "status", "正在读取会话状态…", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "打开 Aieyes", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
-    let auto = MenuItem::with_id(
-        app,
-        "auto",
-        "跟随系统（Windows 宠物 / Linux 状态栏）",
-        true,
-        None::<&str>,
-    )?;
-    let floating = MenuItem::with_id(app, "floating", "使用悬浮胶囊", true, None::<&str>)?;
+    let tray = MenuItem::with_id(app, "tray", "仅系统状态栏 / 托盘", true, None::<&str>)?;
     let pet = MenuItem::with_id(app, "pet", "使用桌面宠物", true, None::<&str>)?;
-    let reset = MenuItem::with_id(app, "reset-position", "重置悬浮球位置", true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, HIDE_MENU_ID, "暂时隐藏悬浮球", false, None::<&str>)?;
+    let reset = MenuItem::with_id(app, "reset-position", "重置桌宠位置", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, HIDE_MENU_ID, "暂时隐藏桌宠", false, None::<&str>)?;
     let refresh = MenuItem::with_id(
         app,
         "refresh-floating",
@@ -381,8 +363,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             &refresh,
             &open,
             &settings,
-            &auto,
-            &floating,
+            &tray,
             &pet,
             &reset,
             &hide,
@@ -393,11 +374,12 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         path,
         state: Mutex::new(ShellState {
             accent: "indigo".into(),
+            hidden: preferences.hidden,
             preferences,
             snapshot: Snapshot::default(),
+            pet_asset: Value::Null,
             floating: false,
             visible: false,
-            hidden: false,
             panel: false,
             panel_page: "agent".into(),
             pin: false,
@@ -425,7 +407,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             .and_then(|s| s.preferences.position)
             .map(|p| (p.x, p.y));
         app.manage(
-            crate::capsule::Capsule::start(app.handle().clone(), position)
+            crate::native_pet::NativePet::start(app.handle().clone(), position)
                 .map_err(std::io::Error::other)?,
         );
         if let Some(main) = app.get_webview_window("main") {
@@ -453,20 +435,21 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                     ..Snapshot::default()
                 },
             };
-            let supported = if tick.is_multiple_of(3) {
+            let pet_asset = aieyes_core::pet_import::current(&store, false).unwrap_or(Value::Null);
+            let supported = if tick.is_multiple_of(15) {
                 Some(tray_supported())
             } else {
                 None
             };
             let app = handle.clone();
             if handle
-                .run_on_main_thread(move || update(&app, snapshot, supported))
+                .run_on_main_thread(move || update(&app, snapshot, pet_asset, supported))
                 .is_err()
             {
                 break;
             }
             tick = tick.wrapping_add(1);
-            std::thread::sleep(Duration::from_secs(5));
+            std::thread::sleep(Duration::from_secs(1));
         }
     });
     #[cfg(target_os = "windows")]
@@ -524,13 +507,6 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
                 if cfg!(windows) { PANEL_WIDTH } else { 144.0 },
                 if cfg!(windows) {
                     PANEL_HEIGHT
-                } else if app
-                    .state::<Desktop>()
-                    .state
-                    .lock()
-                    .is_ok_and(|s| pet_enabled(s.preferences.mode, false))
-                {
-                    168.0
                 } else {
                     BALL_HEIGHT
                 },
@@ -587,7 +563,7 @@ pub(crate) fn native_interaction(app: &AppHandle, active: bool) {
     }
 }
 #[cfg(target_os = "windows")]
-pub(crate) fn capsule_moved(app: &AppHandle, x: i32, y: i32) {
+pub(crate) fn pet_moved(app: &AppHandle, x: i32, y: i32) {
     let open = if let Ok(mut state) = app.state::<Desktop>().state.lock() {
         state.preferences.position = Some(Position { x, y });
         state.dirty = true;
@@ -638,7 +614,7 @@ fn request_native_panel(app: &AppHandle, request: PanelRequest) -> Result<(), St
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     let owner = app.clone();
     // Tauri executes inline on the UI thread. Resolve toggles/dismissals here,
-    // not before enqueueing, so interleaved tray and capsule input stays ordered.
+    // not before enqueueing, so interleaved tray and pet_window input stays ordered.
     owner
         .run_on_main_thread(move || {
             let result = (|| {
@@ -676,10 +652,10 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
         return Err("面板不可用，可右键刷新悬浮窗".into());
     };
     if open {
-        let capsule = app
-            .try_state::<crate::capsule::Capsule>()
+        let pet_window = app
+            .try_state::<crate::native_pet::NativePet>()
             .ok_or("悬浮入口不可用")?;
-        let (x, y, ball_width, ball_height, scale) = capsule.geometry()?;
+        let (x, y, ball_width, ball_height, scale) = pet_window.geometry()?;
         let monitors = window.available_monitors().map_err(|e| e.to_string())?;
         let monitor = monitors
             .into_iter()
@@ -716,8 +692,8 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
     }
     let handle = window.hwnd().map_err(|e| e.to_string())?.0 as usize;
     crate::passive_window::set_visible(windows::Win32::Foundation::HWND(handle as *mut _), open)?;
-    if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
-        capsule.watch_panel(open.then_some(handle));
+    if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
+        pet_window.watch_panel(open.then_some(handle));
     }
     app.state::<Desktop>()
         .state
@@ -728,7 +704,7 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Recreate the renderer, never the core or the native capsule. The menu callback
+/// Recreate the renderer, never the core or the native pet_window. The menu callback
 /// must return before Windows starts constructing another WebView2 controller.
 fn refresh_floating(app: &AppHandle) -> Result<(), String> {
     let (generation, _open) = {
@@ -743,8 +719,8 @@ fn refresh_floating(app: &AppHandle) -> Result<(), String> {
     };
     emit_shell(app);
     #[cfg(target_os = "windows")]
-    if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
-        capsule.watch_panel(None);
+    if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
+        pet_window.watch_panel(None);
     }
     let app = app.clone();
     std::thread::spawn(move || {
@@ -849,7 +825,7 @@ fn create_tray(app: &AppHandle, desktop: &Desktop) -> tauri::Result<()> {
     Ok(())
 }
 
-fn update(app: &AppHandle, snapshot: Snapshot, supported: Option<bool>) {
+fn update(app: &AppHandle, snapshot: Snapshot, pet_asset: Value, supported: Option<bool>) {
     let desktop = app.state::<Desktop>();
     let mut new_tray = false;
     if let Some(supported) = supported {
@@ -885,14 +861,15 @@ fn update(app: &AppHandle, snapshot: Snapshot, supported: Option<bool>) {
     }
     if let Ok(mut state) = desktop.state.lock() {
         state.snapshot = snapshot;
+        state.pet_asset = pet_asset;
     }
     if let Err(error) = apply_mode(app) {
         let _ = app.emit("desktop:error", error);
     }
     if let Ok(info) = desktop_info(app.clone()) {
         #[cfg(target_os = "windows")]
-        if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
-            capsule.status(info.clone());
+        if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
+            pet_window.status(info.clone());
         }
         let _ = app.emit("desktop:status", info);
     }
@@ -905,13 +882,13 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
     let (floating, hidden, changed) = {
         let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
         let floating = use_floating(state.preferences.mode, cfg!(windows), available);
-        let hidden = state.hidden;
+        let hidden = state.hidden && available;
         let visible = floating && !hidden;
         let changed = visible != state.visible;
         state.reason = if !available {
-            "未检测到可用状态栏，已使用悬浮球".into()
+            "未检测到可用状态栏，已使用桌宠".into()
         } else if hidden {
-            "悬浮球已暂时隐藏".into()
+            "桌宠已暂时隐藏".into()
         } else {
             String::new()
         };
@@ -923,8 +900,8 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
         set_panel(app, false)?;
     }
     #[cfg(target_os = "windows")]
-    if changed && let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
-        capsule.visible(floating && !hidden);
+    if changed && let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
+        pet_window.visible(floating && !hidden);
     }
     #[cfg(not(target_os = "windows"))]
     if changed && let Some(window) = app.get_webview_window("floating") {
@@ -981,14 +958,16 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
     Ok(json!({
         "materials": {"main": materials.main.kind, "floating": materials.floating.kind},
         "platform": std::env::consts::OS, "material": materials.main.kind, "mode": state.preferences.mode,
-        "effectiveMode": if state.floating { "floating" } else { "tray" },
+        "effectiveMode": if state.floating { "pet" } else { "tray" },
+        "trayAvailable": desktop.tray_available.load(Ordering::Relaxed),
         "reason": state.reason,
-        "petEnabled": pet_enabled(state.preferences.mode, cfg!(windows)),
+        "petEnabled": state.floating,
+        "petAsset": state.pet_asset["pet"], "petError": state.pet_asset["error"],
         "pet": aieyes_core::pets::project(&state.snapshot),
         "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
-        "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
+        "sources": state.snapshot.sources, "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
-        "showCount": state.preferences.show_count, "panelPage": state.panel_page, "nativeCapsule": cfg!(windows),
+        "showCount": state.preferences.show_count, "panelPage": state.panel_page, "nativePet": cfg!(windows),
         "recovery": state.recovery,
         "accent": state.accent,
     }))
@@ -1019,8 +998,8 @@ pub fn desktop_mode(app: AppHandle, mode: Mode) -> Result<Value, String> {
     }
     let info = desktop_info(app.clone())?;
     #[cfg(target_os = "windows")]
-    if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
-        capsule.status(info.clone());
+    if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
+        pet_window.status(info.clone());
     }
     let _ = app.emit("desktop:status", &info);
     Ok(info)
@@ -1140,8 +1119,8 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
             }
             let info = desktop_info(app.clone())?;
             #[cfg(target_os = "windows")]
-            if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
-                capsule.status(info.clone());
+            if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
+                pet_window.status(info.clone());
             }
             let _ = app.emit("desktop:status", info);
             Ok(())
@@ -1161,8 +1140,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         "add-source" => show_main(app, "add-source"),
         "add-host" => show_main(app, "add-host"),
         "add-quota" => show_main(app, "add-quota"),
-        "auto" => desktop_mode(app.clone(), Mode::Auto).map(|_| ()),
-        "floating" => desktop_mode(app.clone(), Mode::Floating).map(|_| ()),
+        "tray" => desktop_mode(app.clone(), Mode::Tray).map(|_| ()),
         "pet" => desktop_mode(app.clone(), Mode::Pet).map(|_| ()),
         "reset-position" => {
             {
@@ -1175,7 +1153,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         }
         "menu" => app
             .get_webview_window("floating")
-            .ok_or("悬浮球不可用")?
+            .ok_or("桌宠不可用")?
             .popup_menu(&app.state::<Desktop>().menu)
             .map_err(|e| e.to_string()),
         "snap" => snap_ball(app),
@@ -1240,14 +1218,14 @@ fn clamp_rect(
 fn restore_position(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
+        if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
             let position = app
                 .state::<Desktop>()
                 .state
                 .lock()
                 .ok()
                 .and_then(|s| s.preferences.position);
-            capsule.position(position.map(|p| (p.x, p.y)));
+            pet_window.position(position.map(|p| (p.x, p.y)));
         }
         Ok(())
     }
@@ -1307,9 +1285,9 @@ fn refresh_menu(app: &AppHandle) {
     };
     if let Ok(state) = desktop.state.lock() {
         let text = if state.hidden {
-            "恢复显示悬浮球"
+            "恢复显示桌宠"
         } else {
-            "暂时隐藏悬浮球"
+            "暂时隐藏桌宠"
         };
         let _ = desktop.hide_item.set_text(text);
         let enabled = state.hidden
@@ -1324,8 +1302,8 @@ fn emit_shell(app: &AppHandle) {
     if let Ok(info) = desktop_info(app.clone()) {
         let _ = app.emit("desktop:panel", info.clone());
         #[cfg(target_os = "windows")]
-        if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
-            capsule.status(info.clone());
+        if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
+            pet_window.status(info.clone());
         }
         let _ = app.emit("desktop:status", info);
     }
@@ -1349,7 +1327,7 @@ fn set_web_panel(app: &AppHandle, open: bool) -> Result<(), String> {
         }
         state.panel = open;
     }
-    let window = app.get_webview_window("floating").ok_or("悬浮球不可用")?;
+    let window = app.get_webview_window("floating").ok_or("桌宠不可用")?;
     let scale = window.scale_factor().map_err(|error| error.to_string())?;
     let ball = (entry_size(app).0 * scale).round() as i32;
     let ball_height = (entry_size(app).1 * scale).round() as i32;
@@ -1397,7 +1375,7 @@ fn set_web_panel(app: &AppHandle, open: bool) -> Result<(), String> {
     emit_shell(app);
     Ok(())
 }
-/// Temporarily hide the ball without changing the display mode; restart or the tray restores it.
+/// Preserve the explicit hidden preference; a missing tray still restores an entry point.
 fn set_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
     let desktop = app.state::<Desktop>();
     {
@@ -1411,7 +1389,13 @@ fn set_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
                 desktop.tray_available.load(Ordering::Relaxed),
             )
         {
-            return Err("没有其它入口，无法隐藏悬浮球".into());
+            return Err("没有其它入口，无法隐藏桌宠".into());
+        }
+        let previous = state.preferences.hidden;
+        state.preferences.hidden = hidden;
+        if let Err(error) = write_preferences(&desktop.path, &state.preferences) {
+            state.preferences.hidden = previous;
+            return Err(error.to_string());
         }
         state.hidden = hidden;
     }
@@ -1424,7 +1408,7 @@ fn set_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
 }
 /// Snap the ball flush to a nearby work-area edge after a drag.
 fn snap_ball(app: &AppHandle) -> Result<(), String> {
-    let window = app.get_webview_window("floating").ok_or("悬浮球不可用")?;
+    let window = app.get_webview_window("floating").ok_or("桌宠不可用")?;
     if app
         .state::<Desktop>()
         .state
@@ -1514,13 +1498,15 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                         .state::<Desktop>()
                         .state
                         .lock()
-                        .map(|s| s.floating && !s.hidden)
+                        .map(|s| s.visible)
                         .unwrap_or(true)
                     {
                         #[cfg(target_os = "windows")]
                         {
-                            if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
-                                capsule.visible(true);
+                            if let Some(pet_window) =
+                                app.try_state::<crate::native_pet::NativePet>()
+                            {
+                                pet_window.visible(true);
                             }
                             true
                         }
@@ -1554,7 +1540,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         #[cfg(not(target_os = "windows"))]
         tauri::WindowEvent::Focused(false) if window.label() == "floating" => {
             let app = window.app_handle().clone();
-            // Let an owned menu/dialog activation settle before dismissing the Web capsule.
+            // Let an owned menu/dialog activation settle before dismissing the Web pet_window.
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(80));
                 if app
@@ -1668,7 +1654,7 @@ mod tests {
         );
     }
     #[test]
-    fn rectangular_capsules_use_their_height_for_bottom_edges_and_panel_anchors() {
+    fn rectangular_pet_windows_use_their_height_for_bottom_edges_and_panel_anchors() {
         let area = (-1920, 40, 1920, 1040);
         let position = snap_rect(Position { x: -170, y: 1010 }, area, (144, 44), 48);
         assert_eq!((position.x, position.y), (-144, 1036));
@@ -1717,19 +1703,27 @@ mod tests {
     }
     #[test]
     fn platform_defaults_and_tray_failure_always_leave_an_entry_point() {
-        assert!(pet_enabled(Mode::Auto, true));
-        assert!(!pet_enabled(Mode::Auto, false));
-        assert!(pet_enabled(Mode::Pet, false));
-        assert!(!pet_enabled(Mode::Floating, true));
-        assert!(use_floating(Mode::Auto, true, true));
-        assert!(!use_floating(Mode::Auto, false, true));
-        for mode in [Mode::Auto, Mode::Tray, Mode::Floating, Mode::Pet] {
-            for windows in [true, false] {
-                assert!(use_floating(mode, windows, false));
-            }
+        assert_eq!(Mode::default(), Mode::Pet);
+        for legacy in ["auto", "floating", "pet"] {
+            assert_eq!(
+                serde_json::from_value::<Mode>(json!(legacy)).unwrap(),
+                Mode::Pet
+            );
         }
-        assert!(use_floating(Mode::Floating, false, true));
+        for mode in [Mode::Tray, Mode::Pet] {
+            assert!(use_floating(mode, false, false));
+        }
+        assert!(use_floating(Mode::Pet, false, true));
         assert!(!use_floating(Mode::Tray, true, true));
+        let preferences: Preferences =
+            serde_json::from_value(json!({"mode":"tray","hidden":true})).unwrap();
+        assert_eq!(preferences.mode, Mode::Tray);
+        assert!(preferences.hidden);
+        assert!(
+            serde_json::to_value(preferences).unwrap()["hidden"]
+                .as_bool()
+                .unwrap()
+        );
     }
     #[test]
     fn position_clamps_on_negative_monitors_and_small_work_areas() {
@@ -1795,7 +1789,7 @@ mod tests {
         assert_eq!(panel_size(2.0, Some(700)), (900, 652));
     }
     #[test]
-    fn tall_panel_uses_free_side_without_covering_capsule() {
+    fn tall_panel_uses_free_side_without_covering_pet_window() {
         for scale in [1, 2] {
             let ball = Position {
                 x: 856 * scale,

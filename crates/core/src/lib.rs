@@ -17,6 +17,7 @@ pub mod models;
 pub mod monitoring;
 pub mod network;
 pub mod operations;
+pub mod pet_import;
 pub mod pets;
 pub mod pricing;
 pub mod process;
@@ -24,6 +25,8 @@ pub mod providers;
 pub mod quota;
 mod quota_schedule;
 mod remote_history;
+pub mod session_events;
+pub mod session_hooks;
 pub mod sessions;
 pub mod settings;
 pub mod ssh;
@@ -224,7 +227,24 @@ impl Engine {
                     .read(&self.store.settings()?, std::time::SystemTime::now());
                 let mut value = serde_json::to_value(&snapshot)?;
                 value["pet"] = serde_json::to_value(pets::project(&snapshot))?;
+                value["summary"] = json!(snapshot.summary());
+                value["phase"] = serde_json::to_value(snapshot.phase())?;
+                value["activeCount"] = json!(snapshot.active_count());
                 Ok(value)
+            }
+            "pets.current" => pet_import::current(
+                &self.store,
+                params["includeImage"].as_bool().unwrap_or(false),
+            ),
+            "sessions.hooks.status" | "sessions.hooks.repair" | "sessions.hooks.remove" => {
+                session_hooks::call(&self.store.settings()?, method, &params)
+            }
+            "pets.import" => {
+                let path = params["path"]
+                    .as_str()
+                    .context("请选择桌宠 ZIP 或 pet.json 文件")?;
+                pet_import::import(&self.store, Path::new(path))?;
+                pet_import::current(&self.store, false)
             }
             "hello" => Ok(
                 json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"contractHash":contracts::CONTRACT_HASH}),

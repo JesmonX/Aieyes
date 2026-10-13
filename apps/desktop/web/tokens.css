@@ -100,8 +100,8 @@
   -moz-osx-font-smoothing: grayscale;
   color: var(--ink);
   color-scheme: light;
-  --capsule-bg: #f6f6f8;
-  --capsule-ink: #252528;
+  --pet-bg: #f6f6f8;
+  --pet-ink: #252528;
   --control-selected: rgba(255,255,255,.96);
 }
 :root[data-theme=dark] {
@@ -129,8 +129,8 @@
     --ok: #5cc4a4; --warn: #e0b062; --danger: #ff929c;
     color-scheme: dark;
   --control-selected: #62626b;
-  --capsule-bg: #29292e;
-  --capsule-ink: #efeff2;
+  --pet-bg: #29292e;
+  --pet-ink: #efeff2;
 }
 
 :root[data-accent=blue] { --accent:#2166be; --accent-deep:#19559f; }

@@ -36,6 +36,12 @@ import Foundation
         try await save([AgentSource(id: "missing", name: "Missing", path: root.appendingPathComponent("missing.jsonl").path)])
         let missing: SessionSnapshot = try await engine.call("sessions.list")
         precondition(missing.unavailable && missing.sessions.isEmpty)
-        print("Native session decoding and real-core lifecycle, completion, disabled and unavailable source RPC checks passed")
+        precondition(missing.sources?.first?.sourceId == "missing" && missing.sources?.first?.error != nil)
+        try Data(start.utf8).write(to: file)
+        try await save([AgentSource(id: "source", name: "Test", path: file.path), settings.sources[0]])
+        let partial: SessionSnapshot = try await engine.call("sessions.list")
+        precondition(partial.unavailable && partial.sessions.first?.phase == .working)
+        precondition(partial.sources?.filter { $0.state != "healthy" }.count == 1)
+        print("Native session decoding and real-core lifecycle, completion, disabled and per-source failure RPC checks passed")
     }
 }

@@ -40,7 +40,7 @@
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline`：19 项 Rust 外壳测试，含刷新事件字段范围及失败反馈。
 - `sh scripts/test-native.sh`：原生模型、会话、代理、更新、credits 检查；新增无筛选菜单栏口径、失败数据时间、定向重试、删除影响与草稿回滚检查。
 - `swift build --package-path apps/macos --scratch-path .build/swift --disable-sandbox`：原生应用编译通过。受限环境可加 `CLANG_MODULE_CACHE_PATH="$PWD/.build/swift-module-cache" SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/swift-module-cache"`，将模块缓存放在工作区。
-- `sh scripts/check-native-capsule.sh`：真实 `capsule.rs` 使用 Windows bindings 与 Windows Rust target 进行类型检查。仅外壳胶水桩替代 Tauri，无 C 链接和运行时验证。
+- `pwsh -File scripts/test-windows-panel.ps1`：真实 `capsule.rs` 使用 Windows bindings 与 Windows Rust target 进行类型检查。仅外壳胶水桩替代 Tauri，无 C 链接和运行时验证。
 - `sh scripts/test-ui-native-render.sh`：用隔离的合成 RPC 数据运行原生 `--render`；数据状态包括空态、单账户、多账户、长名称、失败。截图覆盖浅深色、450×540、原生最小详情 760×480、设置小窗口、30 条映射及危险确认。
 - `git diff --check` 与 Rust 格式检查通过。
 

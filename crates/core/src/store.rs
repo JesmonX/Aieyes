@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub struct Store {
+    pub root: PathBuf,
     pub db: Connection,
     pub(crate) usage_memory: std::cell::RefCell<crate::usage_cache::Memory>,
 }
@@ -55,6 +56,7 @@ impl Store {
         crate::usage_cache::setup(&db)?;
         crate::remote_history::setup(&db)?;
         let store = Self {
+            root: root.to_path_buf(),
             db,
             usage_memory: Default::default(),
         };

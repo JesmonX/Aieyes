@@ -1,4 +1,4 @@
-/* Compact panel and Linux capsule. Windows capsule input lives in capsule.rs. */
+/* Compact panel and Linux pet. Windows pet input lives in native_pet.rs. */
 (() => {
   const invoke = (name, args) => window.__TAURI__.core.invoke(name, args);
   const ball = document.querySelector('#ball');
@@ -44,7 +44,7 @@
       const more = document.querySelector('#panel-more');
       if (more) more.open = false;
       if(typeof closeTokenSummary==='function')closeTokenSummary();
-      if (!info?.nativeCapsule && panel.contains(focused)) ball.focus({preventScroll:true});
+      if (!info?.nativePet && panel.contains(focused)) ball.focus({preventScroll:true});
     }
     if (!was && panelOpen) {
       window.AieyesNetwork?.refresh();
@@ -154,7 +154,7 @@
       await window.__TAURI__.event.listen('desktop:error', event => failure(event.payload));
       await window.__TAURI__.event.listen('desktop:panel', event => applyPanel(event.payload));
       const initial=await invoke('desktop_info');
-      document.body.dataset.nativeCapsule=String(!!initial.nativeCapsule);
+      document.body.dataset.nativePet=String(!!initial.nativePet);
       update(initial);
       if(typeof appReady!=='undefined')await appReady;
       await window.AieyesTheme?.loadFonts?.();

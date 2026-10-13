@@ -1,9 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-#[cfg(target_os = "windows")]
-mod capsule;
 mod desktop;
 #[cfg(target_os = "windows")]
 mod material;
+#[cfg(target_os = "windows")]
+mod native_pet;
 #[cfg(target_os = "windows")]
 mod passive_window;
 mod phase_colors;
@@ -289,6 +289,9 @@ async fn engine_call(
 }
 
 fn main() {
+    if aieyes_core::session_hooks::run_if_requested() {
+        return;
+    }
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -356,8 +359,8 @@ fn main() {
             aieyes_core::process::terminate_query_children();
             desktop::save(app);
             #[cfg(target_os = "windows")]
-            if let Some(capsule) = app.try_state::<capsule::Capsule>() {
-                capsule.stop();
+            if let Some(pet_window) = app.try_state::<native_pet::NativePet>() {
+                pet_window.stop();
             }
         }
     });

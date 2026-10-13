@@ -45,6 +45,11 @@ struct AgentsSettingsView: View {
                 })).disabled(!agent.enabled)
                 Button("目录设置") { directories = .init(provider: agent.provider, machine: id) }
             }
+            if ["claude", "antigravity"].contains(agent.provider) {
+                ForEach(sources.filter { source in sources.first(where: { $0.path == source.path })?.id == source.id }) { source in
+                    SessionHookControls(model: model, source: source)
+                }
+            }
             HStack {
                 Text("自动估值").font(AppFont.secondary)
                 Text(sources.isEmpty ? "请先添加数据目录" : enabled == 0 ? "已关闭" : "已开启 \(enabled)/\(sources.count)")
@@ -510,5 +515,31 @@ struct AccountConnectionView: View {
             }
             dismiss()
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct SessionHookControls: View {
+    @ObservedObject var model: AppModel
+    let source: AgentSource
+    @State private var status: SessionHookStatus?
+    @State private var busy = false
+    @State private var failure: String?
+    private func perform(_ action: String) async {
+        guard !busy else { return }; busy = true
+        defer { busy = false }
+        do { status = try await model.manageSessionHooks(sourceID: source.id, action: action).first; failure = nil }
+        catch { failure = error.localizedDescription }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("会话状态接入").font(AppFont.secondary)
+                Text(status?.label ?? "正在读取…").foregroundStyle(.secondary)
+                Spacer()
+                Button("修复接入") { Task { await perform("repair") } }.disabled(busy)
+                Button("停用") { Task { await perform("remove") } }.disabled(busy)
+            }
+            if let message = failure ?? status?.error { Text(message).font(AppFont.secondary).foregroundStyle(Palette.danger) }
+        }.task(id: source.id + source.path) { await perform("status") }
     }
 }

@@ -12,20 +12,9 @@ pub struct PetState {
     pub key: String,
 }
 pub fn project(snapshot: &Snapshot) -> PetState {
-    let priority = |phase: Phase| match phase {
-        Phase::NeedsInput => 0,
-        Phase::Failed => 1,
-        Phase::Complete => 2,
-        Phase::Working | Phase::Thinking | Phase::Tool => 3,
-        Phase::Interrupted => 4,
-        Phase::Unknown => 5,
-    };
-    let selected = snapshot
-        .sessions
-        .iter()
-        .min_by_key(|s| (priority(s.phase), std::cmp::Reverse(s.updated_at)));
+    let selected = snapshot.selected();
     let phase = selected.map(|s| s.phase);
-    let (behavior, label, row, frames, frame_ms) = if snapshot.unavailable {
+    let (behavior, label, row, frames, frame_ms) = if snapshot.unavailable && selected.is_none() {
         ("unknown", "状态不全", 6, 6, 260)
     } else {
         match phase {
@@ -41,8 +30,9 @@ pub fn project(snapshot: &Snapshot) -> PetState {
         }
     };
     let key = format!(
-        "{}:{}",
+        "{}:{}:{}",
         selected.map(|s| s.id.as_str()).unwrap_or(""),
+        selected.map(|s| s.turn_id.as_str()).unwrap_or(""),
         behavior
     );
     PetState {
@@ -85,16 +75,20 @@ mod tests {
                 source: "fixture".into(),
                 phase,
                 updated_at: 100,
+                ..LiveSession::default()
             })
             .collect(),
             unavailable: false,
+            ..Snapshot::default()
         };
         assert_eq!(project(&snapshot).behavior, "attention");
         snapshot.sessions.pop();
         assert_eq!(project(&snapshot).behavior, "blocked");
         snapshot.sessions.pop();
-        assert_eq!(project(&snapshot).behavior, "success");
+        assert_eq!(project(&snapshot).behavior, "running");
         snapshot.unavailable = true;
+        assert_eq!(project(&snapshot).behavior, "running");
+        snapshot.sessions.clear();
         assert_eq!(project(&snapshot).behavior, "unknown");
     }
     #[test]
@@ -115,8 +109,10 @@ mod tests {
                     source: "local".into(),
                     phase,
                     updated_at: 1,
+                    ..LiveSession::default()
                 }],
                 unavailable: false,
+                ..Snapshot::default()
             });
             assert_eq!(frame(&state, 0, true), u32::from(state.row) * 8);
             assert_eq!(frame(&state, 999999, true), frame(&state, 0, true));

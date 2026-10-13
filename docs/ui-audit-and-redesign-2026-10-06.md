@@ -539,4 +539,4 @@
 | [AieyesApp.swift](../apps/macos/Sources/Aieyes/AieyesApp.swift)、[EngineClient.swift](../apps/macos/Sources/Aieyes/EngineClient.swift)、[QuotaTools.swift](../apps/macos/Sources/Aieyes/QuotaTools.swift) | C03/C14；M03/M06/M12/M13 |
 | [WakeupsView.swift](../apps/macos/Sources/Aieyes/WakeupsView.swift)、[AppUpdater.swift](../apps/macos/Sources/Aieyes/AppUpdater.swift) | C16/C17；M06/M10、更新流程 |
 | [store.rs](../crates/core/src/store.rs)、[estimates.rs](../crates/core/src/estimates.rs) | C03/C04；D10 的数据口径根因 |
-| [desktop.rs](../apps/desktop/src-tauri/src/desktop.rs)、[capsule.rs](../apps/desktop/src-tauri/src/capsule.rs) | 窗口尺寸、常驻入口、原生高对比及实机验收边界 |
+| [desktop.rs](../apps/desktop/src-tauri/src/desktop.rs)、[历史 capsule.rs](https://github.com/JesmonX/Aieyes/blob/d6f624f24740d29b6044b806614a88f6434f5383/apps/desktop/src-tauri/src/capsule.rs) | 窗口尺寸、常驻入口、原生高对比及实机验收边界；当前桌宠入口见[桌宠说明](desktop-pets.md) |

@@ -1,5 +1,5 @@
 # Interactive Windows regression against the built app. Isolated data, no real accounts.
-param([string]$Binary = "$PSScriptRoot/../apps/desktop/src-tauri/target/release/aieyes-desktop.exe", [switch]$VerifyMaterials, [switch]$LegacyCapsule)
+param([string]$Binary = "$PSScriptRoot/../apps/desktop/src-tauri/target/release/aieyes-desktop.exe", [switch]$VerifyMaterials)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type @'
@@ -83,18 +83,18 @@ function Click-At([int]$X,[int]$Y,[bool]$Right=$false) {
 function Bounds([IntPtr]$Handle) {
     $rect=New-Object PanelProbe+Rect; $null=[PanelProbe]::GetWindowRect($Handle,[ref]$rect);return $rect
 }
-function Capsule-Click([bool]$Right=$false) {
-    $r=Bounds $script:capsule;Click-At ($r.Left+($r.Right-$r.Left)/2) ($r.Top+($r.Bottom-$r.Top)/2) $Right
+function Pet-Click([bool]$Right=$false) {
+    $r=Bounds $script:pet;Click-At ($r.Left+($r.Right-$r.Left)/2) ($r.Bottom-11*[PanelProbe]::GetDpiForWindow($script:pet)/96) $Right
 }
-function Open-CapsuleMenu {
-    Capsule-Click $true
-    Wait-For { [PanelProbe]::FindMenu($app.Id) -ne [IntPtr]::Zero } 'capsule menu appears'
+function Open-PetMenu {
+    Pet-Click $true
+    Wait-For { [PanelProbe]::FindMenu($app.Id) -ne [IntPtr]::Zero } 'pet menu appears'
 }
 function Choose-MenuItem([uint32]$Index,[string]$Expected) {
-    Open-CapsuleMenu
+    Open-PetMenu
     $popup=[PanelProbe]::FindMenu($app.Id)
     # MN_GETHMENU obtains the actual popup menu; do not assume keyboard activation
-    # of a WS_EX_NOACTIVATE capsule or a fixed menu row height on different DPI.
+    # of a WS_EX_NOACTIVATE pet or a fixed menu row height on different DPI.
     $menu=[PanelProbe]::SendMessage($popup,0x1e1,[IntPtr]::Zero,[IntPtr]::Zero)
     $label=New-Object Text.StringBuilder 256
     $null=[PanelProbe]::GetMenuString($menu,$Index,$label,256,0x400)
@@ -107,9 +107,8 @@ function Choose-MenuItem([uint32]$Index,[string]$Expected) {
 }
 function Panel-Visible { $script:panel=[PanelProbe]::Find($app.Id,'Aieyes 面板',$false);return $script:panel -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:panel) }
 function Panel-HasFocus {
-    $foreground=[PanelProbe]::GetForegroundWindow();[uint32]$owner=0
-    $null=[PanelProbe]::GetWindowThreadProcessId($foreground,[ref]$owner)
-    return $owner -eq [uint32]$app.Id -and $foreground -ne $background.Handle
+    $foreground=[PanelProbe]::GetForegroundWindow()
+    return $foreground -ne [IntPtr]::Zero -and [PanelProbe]::GetAncestor($foreground,2) -eq [PanelProbe]::GetAncestor($script:panel,2)
 }
 function Screenshot([string]$Name) {
     $bounds=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -157,28 +156,27 @@ $testData=Join-Path ([IO.Path]::GetTempPath()) ('aieyes-panel-'+[guid]::NewGuid(
 New-Item -ItemType Directory $testData | Out-Null
 $env:AIEYES_DATA_DIR=$testData
 $env:WEBVIEW2_USER_DATA_FOLDER=Join-Path $testData 'webview2'
-if($LegacyCapsule){'{"mode":"floating"}' | Set-Content -Encoding utf8 (Join-Path $testData 'desktop.json')}
 $resolvedTestData=[IO.Path]::GetFullPath($testData)
 if(-not $resolvedTestData.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()),[StringComparison]::OrdinalIgnoreCase) -or (Split-Path $resolvedTestData -Leaf) -notlike 'aieyes-panel-*'){throw 'Unexpected test directory'}
 $app=$null;$background=$null
 try {
     $startup=[Diagnostics.Stopwatch]::StartNew()
     $app=Start-Process -FilePath (Resolve-Path $Binary) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $out 'app-stdout.log') -RedirectStandardError (Join-Path $out 'app-stderr.log')
-    # A fresh runner initializes both WebViews before creating the capsule.
+    # A fresh runner initializes both WebViews before creating the pet.
     # Give cold startup its own budget; keep interaction deadlines at 15 seconds.
-    Wait-For { $script:capsule=[PanelProbe]::Find($app.Id,'AieyesNativeCapsule',$true);$script:capsule -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:capsule) } 'native capsule startup' 60
+    Wait-For { $script:pet=[PanelProbe]::Find($app.Id,'AieyesNativePet',$true);$script:pet -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:pet) } 'native pet startup' 60
     $result.startupMilliseconds=$startup.ElapsedMilliseconds
-    $result.dpi=[PanelProbe]::GetDpiForWindow($script:capsule)
-    $expectedHeight=$(if($LegacyCapsule){44}else{168})*$result.dpi/96
-    Wait-For { $r=Bounds $script:capsule; [Math]::Abs(($r.Bottom-$r.Top)-$expectedHeight) -le 2 } 'DPI-scaled pet or capsule dimensions'
-    Screenshot $(if($LegacyCapsule){'capsule-startup'}else{'pet-startup'})
+    $result.dpi=[PanelProbe]::GetDpiForWindow($script:pet)
+    $expectedHeight=168*$result.dpi/96
+    Wait-For { $r=Bounds $script:pet; [Math]::Abs(($r.Bottom-$r.Top)-$expectedHeight) -le 2 } 'DPI-scaled pet dimensions'
+    Screenshot 'pet-startup'
     $background=New-Object System.Windows.Forms.Form
     $background.Text='Aieyes isolated background input target';$background.FormBorderStyle='None';$background.WindowState='Maximized';$background.BackColor=[Drawing.Color]::FromArgb(49,67,83)
     $background.Show();$background.Activate();Pump 300
     $null=[PanelProbe]::SetForegroundWindow($background.Handle)
     Click-At 25 200
     Wait-For { [PanelProbe]::GetForegroundWindow() -eq $background.Handle } 'background focus established before pet click'
-    Capsule-Click
+    Pet-Click
     Wait-For {Panel-Visible} 'open panel'
     Assert-That ([PanelProbe]::GetForegroundWindow() -eq $background.Handle) 'opening preserves background keyboard focus'
     Screenshot 'open'
@@ -197,34 +195,34 @@ try {
     # Check actual desktop pixels for a surviving frame/shadow, not only HWND flags.
     $bitmap=[Drawing.Bitmap]::FromFile((Join-Path $out 'closed.png'))
     try {
-      $different=0;$total=0;$expected=$background.BackColor.ToArgb();$capsuleRect=Bounds $script:capsule
+      $different=0;$total=0;$expected=$background.BackColor.ToArgb();$petRect=Bounds $script:pet
       for($x=$former.Left;$x -lt $former.Right;$x+=4) {for($y=$former.Top;$y -lt $former.Bottom;$y+=4) {
-        # The capsule deliberately remains visible, including its own shadow.
-        if($x -ge $capsuleRect.Left-8 -and $x -le $capsuleRect.Right+8 -and $y -ge $capsuleRect.Top-8 -and $y -le $capsuleRect.Bottom+8){continue}
+        # The pet deliberately remains visible, including its own shadow.
+        if($x -ge $petRect.Left-8 -and $x -le $petRect.Right+8 -and $y -ge $petRect.Top-8 -and $y -le $petRect.Bottom+8){continue}
         if($x -ge 0 -and $y -ge 0 -and $x -lt $bitmap.Width -and $y -lt $bitmap.Height){$total++;if($bitmap.GetPixel($x,$y).ToArgb() -ne $expected){$different++}}
       }}
       $result.pixelSamples=$total;$result.differentPixels=$different
       Assert-That ($total -gt 0 -and $different/$total -lt .005) 'closed panel leaves no visible surface or frame'
     } finally {$bitmap.Dispose()}
-    for($i=0;$i -lt 12;$i++) {Capsule-Click;Wait-For {Panel-Visible} 'repeat open';Capsule-Click;Wait-For {-not (Panel-Visible)} 'repeat close'}
-    Assert-That (-not (Panel-Visible)) 'repeated capsule toggles end fully hidden'
-    Capsule-Click;Wait-For {Panel-Visible} 'open before menu'
-    Open-CapsuleMenu;Click-At 25 200;Wait-For { [PanelProbe]::FindMenu($app.Id) -eq [IntPtr]::Zero } 'outside click cancels menu';Pump 200
-    Assert-That (Panel-Visible) 'canceling capsule menu preserves open panel'
+    for($i=0;$i -lt 12;$i++) {Pet-Click;Wait-For {Panel-Visible} 'repeat open';Pet-Click;Wait-For {-not (Panel-Visible)} 'repeat close'}
+    Assert-That (-not (Panel-Visible)) 'repeated pet toggles end fully hidden'
+    Pet-Click;Wait-For {Panel-Visible} 'open before menu'
+    Open-PetMenu;Click-At 25 200;Wait-For { [PanelProbe]::FindMenu($app.Id) -eq [IntPtr]::Zero } 'outside click cancels menu';Pump 200
+    Assert-That (Panel-Visible) 'canceling pet menu preserves open panel'
     # Select the second item: pin; then prove outside clicks no longer dismiss.
     Choose-MenuItem 1 '固定面板'
     Click-At 25 200;Assert-That (Panel-Visible) 'pinned panel survives outside click'
     Choose-MenuItem 1 '取消固定面板'
     Click-At 25 200;Wait-For {-not (Panel-Visible)} 'unpin restores outside dismissal'
-    Capsule-Click;Wait-For {Panel-Visible} 'open before renderer rebuild'
+    Pet-Click;Wait-For {Panel-Visible} 'open before renderer rebuild'
     $oldPanel=$script:panel
     Choose-MenuItem 2 '重建面板（用于界面无响应）'
     Wait-For {(Panel-Visible) -and $script:panel -ne $oldPanel} 'rebuild creates a new visible panel'
-    Capsule-Click;Wait-For {-not (Panel-Visible)} 'rebuilt panel closes'
+    Pet-Click;Wait-For {-not (Panel-Visible)} 'rebuilt panel closes'
     if($VerifyMaterials) {
-        Capsule-Click;Wait-For {Panel-Visible} 'open for native material check'
+        Pet-Click;Wait-For {Panel-Visible} 'open for native material check'
         Verify-Backdrop $script:panel 'floating'
-        Capsule-Click;Wait-For {-not (Panel-Visible)} 'close after native material check'
+        Pet-Click;Wait-For {-not (Panel-Visible)} 'close after native material check'
         Choose-MenuItem 3 '打开主窗口'
         Wait-For { $script:main=[PanelProbe]::Find($app.Id,'Aieyes',$false);$script:main -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:main) } 'main window appears'
         Verify-Backdrop $script:main 'main'

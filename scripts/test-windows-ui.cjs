@@ -8,7 +8,7 @@ const out=path.resolve(process.env.AIEYES_UI_OUT || path.join(__dirname,'../.loc
 function installFixture(data) {
   window.setInterval=()=>0;
   window.__fixture=data;
-  const info={platform:'windows',page:'agent',mode:'auto',effectiveMode:'floating',nativeCapsule:true,panelOpen:true,panelPinned:false,material:'opaque',materials:{main:'opaque',floating:'opaque'},sessions:[],activeCount:0,summary:'暂无活跃会话'};
+  const info={platform:'windows',page:'agent',mode:'auto',effectiveMode:'floating',nativePet:true,panelOpen:true,panelPinned:false,material:'opaque',materials:{main:'opaque',floating:'opaque'},sessions:[],activeCount:0,summary:'暂无活跃会话'};
   const listeners=new Map();
   window.__setDesktopMaterials=(main,floating)=>{info.materials={main,floating};for(const fn of listeners.get('desktop:status')||[])fn({payload:info});};
   window.__TAURI__={event:{listen:async(name,fn)=>{listeners.set(name,[...(listeners.get(name)||[]),fn]);return ()=>{};}},window:{getCurrentWindow:()=>({isMaximized:async()=>false,onResized:async()=>()=>{}})},core:{invoke:async(name,args)=>{

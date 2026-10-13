@@ -6,6 +6,9 @@ use std::{
 };
 
 fn main() {
+    if aieyes_core::session_hooks::run_if_requested() {
+        return;
+    }
     if let Err(e) = run() {
         eprintln!("Aieyes: {e}");
         std::process::exit(1);

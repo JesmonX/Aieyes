@@ -1,6 +1,6 @@
 # Aieyes
 
-跨平台 Agent 用量与 SSH 服务器监控工具。macOS 使用原生菜单栏，Windows 默认使用状态联动小猫，macOS/Linux 可在设置中打开宠物；Linux 默认优先使用状态栏、不支持时自动回退悬浮球。SwiftUI/AppKit 与 Tauri 界面共享 Rust 核心和 SQLite 本地存储。
+跨平台 Agent 用量与 SSH 服务器监控工具。macOS、Windows、Linux 默认显示状态联动桌宠，首次通过文件导入器加载月薪喵，可在设置中导入其他公开桌宠文件或切换为菜单栏／托盘。SwiftUI/AppKit 与 Tauri 界面共享 Rust 核心和 SQLite 本地存储。
 
 ## 下载安装包
 
@@ -41,7 +41,8 @@ open dist/Aieyes.app
 | 远程历史、前置命令 | 限额查询可单独配置代理前置命令；远端只回传统计字段 |
 | 代理 | HTTP/HTTPS/SOCKS5、来源覆盖、连接测试与延迟；macOS 静态系统代理，其他平台代理环境变量；PAC 和代理认证界面尚未实现 |
 | 应用内更新 | 显示当前版本，支持手动及每日检查、签名校验、一键安装重启；Linux 支持 AppImage 与 DEB |
-| Windows/Linux | 已实现悬浮球、动态托盘、自动回退及本机会话状态；悬浮球单击展开，悬停查看提示，展开后呈现与 macOS 菜单栏一致的面板，支持贴边与暂时隐藏；界面为半透明圆润风格，含统一动效与悬停提示（见 [Windows 界面刷新](docs/windows-ui-refresh.md)）；Windows NSIS、Linux deb/AppImage 原生 CI 构建通过；桌面交互和安装卸载待实测 |
+| 桌宠与会话状态 | 文件导入 PNG/WebP 图集，支持 v1 8×9 和 v2 8×11；默认月薪喵。本机及 SSH 的 Codex、Claude Code、AGY 会话共享状态与动画，Agents 设备设置可管理观察 hooks |
+| Windows/Linux | 桌宠单击展开与 macOS 菜单栏一致的面板，悬停查看提示，支持贴边、隐藏和动态托盘；界面为半透明圆润风格（见 [Windows 界面刷新](docs/windows-ui-refresh.md)）；提供 Windows NSIS、Linux deb/AppImage，真实桌面交互和安装卸载仍需按平台验收 |
 
 服务器通过 CPU、内存圆环和 GPU／文件系统细进度条展示实时资源，尚未保存长期采样历史。Token 历史保存在 SQLite 中。
 
@@ -88,7 +89,7 @@ cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features 
 
 Windows 使用 `./scripts/build-desktop.ps1 debug`；Linux 使用 `sh scripts/build-desktop.sh debug`。将 `debug` 改为 `release` 可构建安装包，需要先安装 Tauri v2 CLI。macOS DMG 使用 `sh scripts/build-macos.sh release --dmg`，并需要 Python 3.11+。完整依赖、操作方式和平台验证范围见 [Windows / Linux 桌面版](docs/windows-linux.md)。
 
-悬浮球单击展开，悬停查看提示，展开后呈现与 macOS 菜单栏一致的面板，拖动松手后自动贴边，可暂时隐藏以应对全屏场景；右键打开菜单，Linux 托盘通过原生菜单打开详情和设置。「设置 → 通用 → 桌面显示」可切换模式或重置位置。关闭详情窗口后继续监测，选择「退出 Aieyes」才退出应用。
+桌宠单击展开，悬停查看提示，展开后呈现与 macOS 菜单栏一致的面板，拖动松手后自动贴边，可隐藏以应对全屏场景；右键打开菜单，Linux 托盘通过原生菜单打开详情和设置。「设置 → 通用 → 桌面显示」可导入桌宠、切换模式或重置位置。关闭详情窗口后继续监测，选择「退出 Aieyes」才退出应用。
 
 核心可独立运行 JSON-RPC stdio 或单次命令：
 
@@ -105,9 +106,9 @@ dist/Aieyes.app/Contents/MacOS/Aieyes --render "$PWD/.local/previews"
 
 ## 菜单栏会话状态
 
-菜单栏和面板显示本机 Codex 会话的日志状态：进行中、思考中、执行工具、已完成、中断。展开会话条可查看各会话，颜色与图标同时区分状态；动效遵循系统「减少动态效果」。界面使用中性卡片与分层字号；面板优先显示当前账户限额、今日用量与缓存摘要，详情提供完整分析。
+菜单栏、桌宠和面板显示已启用的本机及 SSH Codex、Claude Code、AGY 会话状态。会话列表标明 Agent、机器、来源与更新时间，等待输入计入活跃数；动效遵循系统「减少动态效果」。
 
-每 5 秒检查已有日志，每 30 秒发现新会话。连续 3 分钟无日志更新会标记「状态待确认」，避免将退出或失联的会话一直显示为工作中；完成、中断保留 90 秒，待确认状态最多保留 1 小时。监测仅读取已启用的本机 Codex 数据源，不代表进程存活、审批等待或远程会话状态。
+本机约每秒读取生命周期，SSH 每台机器独立约每 5 秒更新。Claude/AGY 自动接入观察 hooks，可在 Agents 设备设置中修复或停用。只记录生命周期元数据，来源故障单独呈现。边界与恢复规则见[桌面宠物与会话状态](docs/desktop-pets.md)。
 
 会话解析与过期行为由 Rust 核心测试覆盖；原生会话 RPC、模型解码及界面回归运行 `sh scripts/test-native.sh`。维护与按需验证入口见 [手动验证清单](docs/manual-verification.md)。
 
@@ -130,4 +131,4 @@ dist/Aieyes.app/Contents/MacOS/Aieyes --render "$PWD/.local/previews"
 
 Codex 多账号管理的启用方式、凭据协调与验收边界见 [Codex 账号管理](docs/codex-accounts.md)。
 
-桌面宠物：内置小猫根据本机 Codex 会话切换思考、执行工具、等待输入、完成等动作，支持减少动画。Windows 自动模式默认启用，也可切回胶囊；macOS/Linux 默认关闭。映射、设置和测试范围见 [桌面宠物](docs/desktop-pets.md)。
+桌面宠物：三端默认通过统一文件导入器导入月薪喵（kiffin）。只支持文件导入，兼容公开站点的 ZIP / pet.json、PNG / WebP、v1 / v2 图集；用户导入结果跨重启和升级保留。详见[桌面宠物](docs/desktop-pets.md)。

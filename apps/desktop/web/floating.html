@@ -4,8 +4,6 @@
 <body data-view="ball">
   <button id="ball" type="button" aria-label="打开 Aieyes 面板；拖动可移动，右键打开菜单" title="单击打开面板 · 拖动移动 · 右键菜单">
     <span id="pet-sprite" aria-hidden="true"></span>
-    <span class="halo" aria-hidden="true"></span>
-    <img draggable="false" class="eye brand-art" src="brand.png" alt="" aria-hidden="true">
     <span id="phase" aria-live="polite">连接中</span><span id="count" hidden></span>
   </button>
   <div id="panel">
@@ -28,7 +26,7 @@
     </header>
     <div class="panel-body">
       <div id="message" role="status" hidden></div>
-      <details id="live-sessions"><summary><span class="dot"></span><span id="session-summary">正在读取会话状态…</span><span class="muted" title="已启用的本机 Codex 日志状态">本机 Codex</span></summary><div id="session-list"></div><p id="session-warning" class="error" hidden>部分日志不可读，状态可能不完整。</p></details>
+      <details id="live-sessions"><summary><span class="dot"></span><span id="session-summary">正在读取会话状态…</span><span class="muted" title="已启用的本机和 SSH Agent 会话状态">Codex / Claude / AGY</span></summary><div id="session-list"></div><p id="session-warning" class="error" hidden>部分日志不可读，状态可能不完整。</p></details>
       <section id="content"></section>
     </div>
     <footer class="panel-foot">

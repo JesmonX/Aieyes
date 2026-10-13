@@ -133,9 +133,29 @@
     const sources=machineSources(provider,machine),status=window.AieyesAutomatic.summary(sources);
     return `<div class="list-row agent-auto-valuation"><div class="row-body"><strong>自动估值</strong><small data-auto-machine-status="${e(machine)}" data-auto-provider="${e(provider)}">${status}</small></div><button data-machine-estimates="${e(provider)}" data-machine="${e(machine)}" ${sources.length?'':'disabled'}>自动估值设置</button></div>`;
   }
+  let hookRows=[],hookReadAt=0,hookReading=false;
+  function hooksHTML(provider,machine){
+    if(!['claude','antigravity'].includes(provider))return '';
+    const sources=machineSources(provider,machine).filter((s,i,a)=>a.findIndex(v=>v.path===s.path)===i);
+    return sources.map(s=>`<div class="list-row"><div class="row-body"><strong>会话状态接入</strong><small data-session-hook-status="${e(s.id)}">自动接入 · ${e(s.path)}</small></div><button type="button" data-session-hook-action="repair" data-source="${e(s.id)}">修复接入</button><button type="button" data-session-hook-action="remove" data-source="${e(s.id)}">停用</button></div>`).join('');
+  }
+  function paintHooks(){
+    const labels={installed:'已接入',missing:'等待自动接入',disabled:'已停用',error:'接入失败'};
+    document.querySelectorAll('[data-session-hook-status]').forEach(el=>{
+      const row=hookRows.find(r=>r.sourceId===el.dataset.sessionHookStatus);
+      if(row)el.textContent=(labels[row.state]||row.state)+(row.error?' · '+row.error:'');
+    });
+  }
+  async function refreshHooks(){
+    if(hookReading||Date.now()-hookReadAt<30000)return;
+    hookReading=true;
+    try{const rows=await api('sessions.hooks.status');hookRows=Array.isArray(rows)?rows:[];hookReadAt=Date.now();paintHooks();}
+    catch(error){document.querySelectorAll('[data-session-hook-status]').forEach(el=>el.textContent='接入状态待确认');}
+    finally{hookReading=false;}
+  }
   function agentsHTML() {
     if(directorySelection){const {provider,machine}=directorySelection;return `<button id="directories-back">返回 Agents</button><section class="card"><h2>${e(providers[provider])} · ${e(deviceName(machine))}</h2>${state.settings.sources.filter(s=>s.provider===provider&&machineId(s)===machine).map(s=>`<div class="list-row"><code class="row-body">${e(s.path)}</code><button data-source-advanced="${e(s.id)}">编辑目录</button><button class="danger" data-source-remove="${e(s.id)}">移除目录配置</button></div>`).join('')}<button data-source-add="${e(provider)}">添加目录</button><p class="muted">只配置采集位置，不移动文件。远程 Shell 位于服务器设置，前置命令位于账户设置。</p></section>`;}
-    return configurations().map(a=>`<section class="card agent-setup"><div class="between"><h2>${providerMark(a.provider)} ${e(providers[a.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(a.provider)}" ${state.settingsSaving?'disabled':''} ${a.enabled?'checked':''}>启用</label></div>${a.provider==='deepseek'?'<p class="muted">在账户中添加 API Key，通过本机查询余额。</p>':`<fieldset class="agent-machines"><legend>所在机器 · 可多选</legend>${[{id:'local',name:'本机',enabled:true},...state.settings.hosts].map(h=>`<div class="agent-machine"><div class="list-row"><label class="row-body"><input type="checkbox" role="switch" data-agent-machine="${e(a.provider)}" ${state.settingsSaving||!a.enabled?'disabled':''} value="${e(h.id)}" ${a.machineIds.includes(h.id)?'checked':''}>${e(h.name||h.target)}${h.enabled?'':' · 服务器已停用'}</label><button data-machine-directories="${e(a.provider)}" data-machine="${e(h.id)}">目录设置</button></div>${automaticMachineHTML(a.provider,h.id)}</div>`).join('')}</fieldset>${a.machineIds.length?'':'<p class="muted">未选择机器，暂不采集。</p>'}${state.settings.hosts.length?'':'<button data-agent-host>添加服务器</button>'}`}</section>`).join('');
+    return configurations().map(a=>`<section class="card agent-setup"><div class="between"><h2>${providerMark(a.provider)} ${e(providers[a.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(a.provider)}" ${state.settingsSaving?'disabled':''} ${a.enabled?'checked':''}>启用</label></div>${a.provider==='deepseek'?'<p class="muted">在账户中添加 API Key，通过本机查询余额。</p>':`<fieldset class="agent-machines"><legend>所在机器 · 可多选</legend>${[{id:'local',name:'本机',enabled:true},...state.settings.hosts].map(h=>`<div class="agent-machine"><div class="list-row"><label class="row-body"><input type="checkbox" role="switch" data-agent-machine="${e(a.provider)}" ${state.settingsSaving||!a.enabled?'disabled':''} value="${e(h.id)}" ${a.machineIds.includes(h.id)?'checked':''}>${e(h.name||h.target)}${h.enabled?'':' · 服务器已停用'}</label><button data-machine-directories="${e(a.provider)}" data-machine="${e(h.id)}">目录设置</button></div>${automaticMachineHTML(a.provider,h.id)}${hooksHTML(a.provider,h.id)}</div>`).join('')}</fieldset>${a.machineIds.length?'':'<p class="muted">未选择机器，暂不采集。</p>'}${state.settings.hosts.length?'':'<button data-agent-host>添加服务器</button>'}`}</section>`).join('');
   }
   function accountsHTML() {
     if(showCodex)return '<button id="accounts-back">返回账户</button>'+window.AieyesCodexAuth.html();
@@ -234,6 +254,16 @@
     };draw();
   }
   function bind() {
+    paintHooks();
+    if(document.querySelector('[data-session-hook-status]'))void refreshHooks();
+    document.querySelectorAll('[data-session-hook-action]').forEach(button=>button.onclick=async()=>{
+      const controls=[...document.querySelectorAll('[data-session-hook-action]')];controls.forEach(b=>b.disabled=true);
+      try{
+        const rows=await api('sessions.hooks.'+button.dataset.sessionHookAction,{sourceId:button.dataset.source});
+        if(Array.isArray(rows))for(const row of rows){hookRows=hookRows.filter(r=>r.sourceId!==row.sourceId);hookRows.push(row);}paintHooks();
+      }catch(error){notify(String(error),'error');}
+      finally{controls.forEach(b=>b.disabled=false);}
+    });
     document.querySelectorAll('[data-agent-enable],[data-agent-machine]').forEach(input=>input.onchange=()=>run(async()=>{
       const provider=input.dataset.agentEnable||input.dataset.agentMachine,a=configurations().find(a=>a.provider===provider);
       const params=input.dataset.agentEnable?{provider,enabled:input.checked,...(input.checked&&!a.machineIds.length?{machineIds:['local']}:{})}:{provider,machineIds:[...document.querySelectorAll('[data-agent-machine]')].filter(i=>i.dataset.agentMachine===provider&&i.checked).map(i=>i.value)};

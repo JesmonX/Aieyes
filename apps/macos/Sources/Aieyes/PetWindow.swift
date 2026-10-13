@@ -2,27 +2,36 @@ import AppKit
 import SwiftUI
 import Combine
 
-private enum PetSprites {
-    static let frames: [CGImage] = {
-        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("apps/desktop/web/pet-cat.png")
-        guard let image = NSImage(contentsOf: Bundle.main.url(forResource: "pet-cat", withExtension: "png") ?? source),
-              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return [] }
-        return (0..<72).compactMap { cg.cropping(to: CGRect(x: ($0 % 8) * 192, y: ($0 / 8) * 208, width: 192, height: 208)) }
-    }()
+@MainActor private enum PetSprites {
+    static var key: String?
+    static var cached: [CGImage] = []
+    static func frames(for asset: ImportedPet?) -> [CGImage] {
+        guard let asset else { key = nil; cached = []; return [] }
+        if key == asset.spritePath { return cached }
+        key = asset.spritePath; cached = []
+        guard let image = NSImage(contentsOfFile: asset.spritePath),
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              cg.width == asset.cellWidth * 8, cg.height == asset.cellHeight * asset.rows else { return [] }
+        cached = (0..<(8 * asset.rows)).compactMap {
+            cg.cropping(to: CGRect(x: ($0 % 8) * asset.cellWidth, y: ($0 / 8) * asset.cellHeight, width: asset.cellWidth, height: asset.cellHeight))
+        }
+        return cached
+    }
 }
 private struct PetView: View {
     @ObservedObject var model: AppModel
-    @AppStorage("aieyes.pet.enabled") private var enabled = false
+    @AppStorage("aieyes.pet.enabled") private var enabled = true
     @Environment(\.accessibilityReduceMotion) private var reduced
     @State private var start = Date()
     var body: some View {
         TimelineView(.animation(minimumInterval: 0.1, paused: reduced || !enabled)) { tick in
             let state = model.petState
+            let frames = PetSprites.frames(for: model.importedPet)
             let frame = state.frame(elapsed: tick.date.timeIntervalSince(start), reduced: reduced)
             VStack(spacing: 0) {
-                if PetSprites.frames.indices.contains(frame) {
-                    Image(decorative: PetSprites.frames[frame], scale: 1).resizable().interpolation(.high).frame(width: 132, height: 143)
-                } else { Image(systemName: "cat.fill").font(.system(size: 72)).frame(width: 132, height: 143) }
+                if frames.indices.contains(frame) {
+                    Image(decorative: frames[frame], scale: 1).resizable().interpolation(.high).frame(width: 132, height: 143)
+                } else { Text("请导入桌宠").font(.callout).frame(width: 132, height: 143) }
                 Text(state.label).font(.system(size: 12, weight: .medium)).padding(.horizontal, 9).padding(.vertical, 3).background(.regularMaterial, in: Capsule())
             }.frame(width: 144, height: 168).accessibilityElement(children: .ignore)
                 .accessibilityLabel("Aieyes · " + state.label).accessibilityHint("单击打开面板，拖动移动，右键菜单")
@@ -62,6 +71,7 @@ private final class PetHost: NSHostingView<PetView> {
     var window: NSWindow { panel }
     private var subscriptions = Set<AnyCancellable>()
     init(model: AppModel, open: @escaping (NSView) -> Void) {
+        UserDefaults.standard.register(defaults: ["aieyes.pet.enabled": true])
         panel = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 144,height: 168), styleMask: [.borderless,.nonactivatingPanel], backing: .buffered, defer: false)
         panel.title="Aieyes 宠物"; panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
         panel.level = .floating; panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.hidesOnDeactivate=false

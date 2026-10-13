@@ -23,12 +23,12 @@ use windows::{
 
 use std::result::Result::Ok;
 use windows::Win32::Graphics::GdiPlus::Ok as GDI_OK;
-#[path = "capsule_pet.rs"]
+#[path = "pet_sprite.rs"]
 mod pet;
 const PET_TIMER: usize = 42;
 const WAKE: u32 = WM_APP + 41;
 pub const WIDTH: f64 = 144.0;
-pub const HEIGHT: f64 = 44.0;
+pub const HEIGHT: f64 = 168.0;
 enum Command {
     Status(Value),
     Visible(bool),
@@ -36,16 +36,16 @@ enum Command {
     WatchPanel(Option<usize>),
     Stop,
 }
-pub struct Capsule {
+pub struct NativePet {
     hwnd: usize,
     tx: mpsc::Sender<Command>,
 }
-struct CapsuleFont {
+struct PetFont {
     collection: *mut GpFontCollection,
     family: *mut GpFontFamily,
     font: *mut GpFont,
 }
-impl CapsuleFont {
+impl PetFont {
     unsafe fn new() -> Self {
         let mut result = Self {
             collection: null_mut(),
@@ -84,7 +84,7 @@ impl CapsuleFont {
         result
     }
 }
-impl Drop for CapsuleFont {
+impl Drop for PetFont {
     fn drop(&mut self) {
         unsafe {
             if !self.font.is_null() {
@@ -113,28 +113,28 @@ struct Surface {
     mouse_hook: Cell<Option<HHOOK>>,
     menu_active: Cell<bool>,
     tooltip_text: RefCell<Vec<u16>>,
-    font: CapsuleFont,
-    pet_sprite: pet::Sprite,
+    font: PetFont,
+    pet_sprite: RefCell<pet::Sprite>,
     pet_start: Cell<std::time::Instant>,
 }
-impl Capsule {
+impl NativePet {
     pub fn start(app: AppHandle, position: Option<(i32, i32)>) -> Result<Self, String> {
         let (tx, rx) = mpsc::channel();
         let (ready, wait) = mpsc::sync_channel(1);
         let (actions, commands) = mpsc::channel::<String>();
         let worker = app.clone();
-        std::thread::Builder::new().name("aieyes-capsule-actions".into()).spawn(move || {
+        std::thread::Builder::new().name("aieyes-pet-actions".into()).spawn(move || {
             for action in commands {
                 if let Err(error)=crate::desktop::action(&worker,&action) {
                     let _=worker.emit("desktop:error",&error);
-                    if let Some(capsule)=worker.try_state::<Capsule>() {
-                        capsule.status(serde_json::json!({"summary":error,"phase":"interrupted","recovery":"failed"}));
+                    if let Some(pet)=worker.try_state::<NativePet>() {
+                        pet.status(serde_json::json!({"summary":error,"phase":"interrupted","recovery":"failed"}));
                     }
                 }
             }
         }).map_err(|e|e.to_string())?;
         std::thread::Builder::new()
-            .name("aieyes-capsule".into())
+            .name("aieyes-pet".into())
             .spawn(move || unsafe {
                 let mut token = 0;
                 if GdiplusStartup(
@@ -153,7 +153,7 @@ impl Capsule {
                 let class = WNDCLASSW {
                     lpfnWndProc: Some(window_proc),
                     hInstance: instance.into(),
-                    lpszClassName: w!("AieyesNativeCapsule"),
+                    lpszClassName: w!("AieyesNativePet"),
                     hCursor: LoadCursorW(None, IDC_HAND).unwrap_or_default(),
                     style: CS_DROPSHADOW,
                     ..Default::default()
@@ -173,8 +173,8 @@ impl Capsule {
                     mouse_hook: Cell::new(None),
                     menu_active: Cell::new(false),
                     tooltip_text: RefCell::new(Vec::new()),
-                    font: CapsuleFont::new(),
-                    pet_sprite: pet::Sprite::new(),
+                    font: PetFont::new(),
+                    pet_sprite: RefCell::new(pet::Sprite::empty()),
                     pet_start: Cell::new(std::time::Instant::now()),
                 });
                 let result = CreateWindowExW(
@@ -185,7 +185,7 @@ impl Capsule {
                     0,
                     0,
                     144,
-                    44,
+                    168,
                     None,
                     None,
                     Some(instance.into()),
@@ -284,7 +284,7 @@ thread_local! {
     static HOOK_SURFACE: Cell<*const Surface> = const { Cell::new(std::ptr::null()) };
 }
 
-// Runs on the capsule message thread. Never wait for the renderer or consume
+// Runs on the pet message thread. Never wait for the renderer or consume
 // input here: the original click must still reach the other application.
 unsafe extern "system" fn outside_click(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0
@@ -302,14 +302,14 @@ unsafe extern "system" fn outside_click(code: i32, wparam: WPARAM, lparam: LPARA
                 let target = WindowFromPoint(point);
                 let root = GetAncestor(target, GA_ROOT);
                 let owner = GetAncestor(target, GA_ROOTOWNER);
-                let capsule = surface
+                let pet = surface
                     .app
-                    .try_state::<Capsule>()
+                    .try_state::<NativePet>()
                     .map(|c| c.hwnd)
                     .unwrap_or(0);
                 if ![root.0 as usize, owner.0 as usize]
                     .iter()
-                    .any(|h| *h == panel || *h == capsule)
+                    .any(|h| *h == panel || *h == pet)
                 {
                     dispatch(surface, "dismiss-panel");
                 }
@@ -362,53 +362,26 @@ unsafe fn area(hwnd: HWND) -> RECT {
     );
     monitor.rcWork
 }
-unsafe fn is_pet(hwnd: HWND) -> bool {
-    let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Surface;
-    !pointer.is_null()
-        && (*pointer).info.borrow()["petEnabled"]
-            .as_bool()
-            .unwrap_or(true)
-}
 unsafe fn animate(hwnd: HWND) {
     let _ = KillTimer(Some(hwnd), PET_TIMER);
-    if is_pet(hwnd) && IsWindowVisible(hwnd).as_bool() && !pet::reduced_motion() {
+    if IsWindowVisible(hwnd).as_bool() && !pet::reduced_motion() {
         SetTimer(Some(hwnd), PET_TIMER, 100, None);
     }
 }
 unsafe fn reshape(hwnd: HWND) {
-    let pet = is_pet(hwnd);
     let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-    SetWindowLongPtrW(
-        hwnd,
-        GWL_EXSTYLE,
-        if pet {
-            style | WS_EX_LAYERED.0
-        } else {
-            style & !WS_EX_LAYERED.0
-        } as isize,
-    );
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_LAYERED.0) as isize);
     let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
-    let (width, height) = (
-        (WIDTH * scale).round() as i32,
-        ((if pet { 168.0 } else { HEIGHT }) * scale).round() as i32,
-    );
     let _ = SetWindowPos(
         hwnd,
         None,
         0,
         0,
-        width,
-        height,
+        (WIDTH * scale).round() as i32,
+        (HEIGHT * scale).round() as i32,
         SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
     );
-    if pet {
-        SetWindowRgn(hwnd, None, true);
-    } else {
-        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, height, height);
-        if SetWindowRgn(hwnd, Some(region), true) == 0 {
-            let _ = DeleteObject(region.into());
-        }
-    }
+    SetWindowRgn(hwnd, None, true);
     animate(hwnd);
     let _ = InvalidateRect(Some(hwnd), None, false);
 }
@@ -549,16 +522,17 @@ unsafe extern "system" fn window_proc(
                             .dark
                             .set(info["dark"].as_bool().unwrap_or(surface.dark.get()));
                         let changed = surface.info.borrow()["pet"]["key"] != info["pet"]["key"];
-                        let previous = is_pet(hwnd);
+                        if surface.info.borrow()["petAsset"]["spritePath"]
+                            != info["petAsset"]["spritePath"]
+                        {
+                            surface.pet_sprite.replace(
+                                pet::Sprite::load(&info["petAsset"])
+                                    .unwrap_or_else(pet::Sprite::empty),
+                            );
+                        }
                         surface.info.replace(info);
                         if changed {
                             surface.pet_start.set(std::time::Instant::now());
-                        }
-                        if previous != is_pet(hwnd) {
-                            reshape(hwnd);
-                            let mut rect = RECT::default();
-                            let _ = GetWindowRect(hwnd, &mut rect);
-                            place(hwnd, Some((rect.left, rect.top)), false);
                         }
                         animate(hwnd);
                         let title = format!(
@@ -743,7 +717,7 @@ unsafe extern "system" fn window_proc(
 unsafe fn save_position(hwnd: HWND, surface: &Surface) {
     let mut rect = RECT::default();
     if GetWindowRect(hwnd, &mut rect).is_ok() {
-        crate::desktop::capsule_moved(&surface.app, rect.left, rect.top);
+        crate::desktop::pet_moved(&surface.app, rect.left, rect.top);
     }
 }
 // System contrast colors use COLORREF (BGR); GDI+ takes opaque ARGB.
@@ -765,212 +739,25 @@ unsafe fn high_contrast() -> bool {
     .is_ok()
         && settings.dwFlags.contains(HCF_HIGHCONTRASTON)
 }
-// The legacy capsule stays static; pet animation has its own reduced-motion timer.
+// Animation uses only the imported atlas.
 unsafe fn paint(hwnd: HWND, surface: &Surface) {
-    if is_pet(hwnd) {
-        let mut ps = PAINTSTRUCT::default();
-        BeginPaint(hwnd, &mut ps);
-        let info = surface.info.borrow();
-        let state: aieyes_core::pets::PetState = serde_json::from_value(info["pet"].clone())
-            .unwrap_or_else(|_| aieyes_core::pets::project(&Default::default()));
-        let frame = aieyes_core::pets::frame(
-            &state,
-            surface.pet_start.get().elapsed().as_millis() as u64,
-            pet::reduced_motion(),
-        );
-        pet::paint(
-            hwnd,
-            &surface.pet_sprite,
-            &state,
-            frame,
-            surface.font.font,
-            &info,
-        );
-        let _ = EndPaint(hwnd, &ps);
-        return;
-    }
-    let contrast = high_contrast();
     let mut ps = PAINTSTRUCT::default();
-    let dc = BeginPaint(hwnd, &mut ps);
-    let mut graphics = null_mut();
-    if GdipCreateFromHDC(dc, &mut graphics) == GDI_OK {
-        let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
-        GdipScaleWorldTransform(graphics, scale, scale, MatrixOrderPrepend);
-        GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
-        GdipGraphicsClear(
-            graphics,
-            if contrast {
-                system_argb(COLOR_WINDOW)
-            } else if surface.press.get().is_some() {
-                if surface.dark.get() {
-                    0xff494951
-                } else {
-                    0xffe4e4e9
-                }
-            } else if surface.hover.get() {
-                if surface.dark.get() {
-                    0xff3b3b43
-                } else {
-                    0xffeeeef2
-                }
-            } else if surface.dark.get() {
-                0xff29292e
-            } else {
-                0xfff6f6f8
-            },
-        );
-        let mut outline = null_mut();
-        let mut pen = null_mut();
-        GdipCreatePath(FillModeAlternate, &mut outline);
-        GdipAddPathArc(outline, 0.5, 0.5, 43.0, 43.0, 90.0, 180.0);
-        GdipAddPathArc(outline, 100.5, 0.5, 43.0, 43.0, 270.0, 180.0);
-        GdipClosePathFigure(outline);
-        GdipCreatePen1(
-            if contrast {
-                system_argb(COLOR_WINDOWTEXT)
-            } else if surface.dark.get() {
-                0xff565660
-            } else {
-                0xffd5d5dd
-            },
-            1.0,
-            UnitPixel,
-            &mut pen,
-        );
-        GdipDrawPath(graphics, pen, outline);
-        if surface.press.get().is_some() {
-            GdipTranslateWorldTransform(graphics, 0.0, 1.0, MatrixOrderPrepend);
-        }
-        GdipDeletePen(pen);
-        GdipDeletePath(outline);
-        let info = surface.info.borrow().clone();
-        let phase = info["phase"].as_str().unwrap_or("idle");
-        let label = match phase {
-            "working" => "进行中",
-            "thinking" => "思考中",
-            "tool" => "执行工具",
-            "complete" => "已完成",
-            "interrupted" => "已中断",
-            "unknown" => "待确认",
-            _ => "空闲",
-        };
-        let [r, g, b] = crate::phase_colors::rgb(phase, surface.dark.get());
-        let color = 0xff000000 | ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
-        let label = if info["recovery"] == "failed" {
-            "恢复失败"
-        } else if info["recovery"] == "refreshing" {
-            "恢复中"
-        } else if info["unavailable"] == true {
-            "状态不全"
-        } else {
-            label
-        };
-        let mut pixels = include_bytes!("../icons/brand.rgba").to_vec();
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            pixel.swap(0, 2);
-        }
-        let mut bitmap = null_mut();
-        if GdipCreateBitmapFromScan0(32, 32, 128, 0x26200a, Some(pixels.as_ptr()), &mut bitmap)
-            == GDI_OK
-        {
-            GdipDrawImageRect(graphics, bitmap.cast(), 12.0, 10.0, 24.0, 24.0);
-            GdipDisposeImage(bitmap.cast());
-        }
-        let mut brush = null_mut();
-        GdipCreateSolidFill(
-            if contrast {
-                system_argb(COLOR_WINDOWTEXT)
-            } else {
-                color
-            },
-            &mut brush,
-        );
-        GdipFillEllipse(graphics, brush.cast(), 39.0, 19.0, 6.0, 6.0);
-        GdipDeleteBrush(brush.cast());
-        let font = surface.font.font;
-        let mut format = null_mut();
-        GdipCreateStringFormat(0, 0, &mut format);
-        GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
-        GdipSetTextRenderingHint(graphics, TextRenderingHintAntiAliasGridFit);
-        GdipCreateSolidFill(
-            if contrast {
-                system_argb(COLOR_WINDOWTEXT)
-            } else if surface.dark.get() {
-                0xffefeff2
-            } else {
-                0xff252528
-            },
-            &mut brush,
-        );
-        let text: Vec<u16> = label.encode_utf16().collect();
-        GdipDrawString(
-            graphics,
-            PCWSTR(text.as_ptr()),
-            text.len() as i32,
-            font,
-            &RectF {
-                X: 49.0,
-                Y: 0.0,
-                Width: 61.0,
-                Height: 44.0,
-            },
-            format,
-            brush.cast(),
-        );
-        let count = info["activeCount"].as_u64().unwrap_or(0);
-        if count > 0 && info["showCount"].as_bool().unwrap_or(false) {
-            let mut badge = null_mut();
-            GdipCreateSolidFill(
-                if contrast {
-                    system_argb(COLOR_HIGHLIGHT)
-                } else {
-                    match (
-                        info["accent"].as_str().unwrap_or("indigo"),
-                        surface.dark.get(),
-                    ) {
-                        ("blue", true) => 0xff344961,
-                        ("blue", false) => 0xffdce9f8,
-                        ("teal", true) => 0xff314d45,
-                        ("teal", false) => 0xffdceee8,
-                        ("purple", true) => 0xff4b3e60,
-                        ("purple", false) => 0xffeee3fa,
-                        (_, true) => 0xff40425a,
-                        (_, false) => 0xffe4e5f5,
-                    }
-                },
-                &mut badge,
-            );
-            GdipFillEllipse(graphics, badge.cast(), 109.0, 12.0, 25.0, 20.0);
-            GdipDeleteBrush(badge.cast());
-            if contrast {
-                GdipDeleteBrush(brush.cast());
-                GdipCreateSolidFill(system_argb(COLOR_HIGHLIGHTTEXT), &mut brush);
-            }
-            GdipSetStringFormatAlign(format, StringAlignmentCenter);
-            let count = if count > 99 {
-                "99+".into()
-            } else {
-                count.to_string()
-            };
-            let text: Vec<u16> = count.encode_utf16().collect();
-            GdipDrawString(
-                graphics,
-                PCWSTR(text.as_ptr()),
-                text.len() as i32,
-                font,
-                &RectF {
-                    X: 108.0,
-                    Y: 0.0,
-                    Width: 29.0,
-                    Height: 44.0,
-                },
-                format,
-                brush.cast(),
-            );
-        }
-        GdipDeleteBrush(brush.cast());
-        GdipDeleteStringFormat(format);
-        GdipDeleteGraphics(graphics);
-    }
+    BeginPaint(hwnd, &mut ps);
+    let info = surface.info.borrow();
+    let state: aieyes_core::pets::PetState = serde_json::from_value(info["pet"].clone())
+        .unwrap_or_else(|_| aieyes_core::pets::project(&Default::default()));
+    let frame = aieyes_core::pets::frame(
+        &state,
+        surface.pet_start.get().elapsed().as_millis() as u64,
+        pet::reduced_motion(),
+    );
+    pet::paint(
+        hwnd,
+        &surface.pet_sprite.borrow(),
+        &state,
+        frame,
+        surface.font.font,
+        &info,
+    );
     let _ = EndPaint(hwnd, &ps);
 }
