@@ -24,6 +24,7 @@
     document.body.dataset.pet=String(!!info.petEnabled);
     if(info.pet){if(state?.key!==info.pet.key)start=performance.now();state=info.pet;}
     if(state&&info.petEnabled){
+      document.body.dataset.petBehavior=state.behavior;
       document.querySelector('#phase').textContent=state.label;
       ball.title=`Aieyes · ${state.label}\n单击打开面板 · 拖动移动 · 右键菜单`;
     }

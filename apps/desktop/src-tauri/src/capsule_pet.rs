@@ -179,6 +179,19 @@ unsafe fn draw(
         } else {
             label
         };
+        let count = info["activeCount"].as_u64().unwrap_or(0);
+        let label = if info["showCount"].as_bool().unwrap_or(false) && count > 0 {
+            format!(
+                "{label} {}",
+                if count > 99 {
+                    "99+".to_owned()
+                } else {
+                    count.to_string()
+                }
+            )
+        } else {
+            label.to_owned()
+        };
         let text: Vec<u16> = label.encode_utf16().collect();
         let mut format = null_mut();
         GdipCreateStringFormat(0, 0, &mut format);

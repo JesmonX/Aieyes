@@ -35,3 +35,10 @@ body[data-pet=true] #phase { position:absolute; bottom:4px; left:50%; transform:
 body[data-pet=true] #count { position:absolute; right:1px; top:18px; }
 body[data-pet=true][data-native-capsule=true] #ball { display:none; }
 @media(forced-colors:active) { body[data-pet=true] #phase { background:Canvas; color:CanvasText; border:1px solid CanvasText; } }
+
+body[data-phase=needsInput] { --phase-color:var(--phase-needsInput); }
+body[data-phase=failed] { --phase-color:var(--phase-failed); }
+body[data-pet=true][data-pet-behavior=attention] { --phase-color:var(--phase-needsInput); }
+body[data-pet=true][data-pet-behavior=blocked] { --phase-color:var(--phase-failed); }
+body[data-pet=true][data-pet-behavior=success] { --phase-color:var(--phase-complete); }
+body[data-pet=true][data-pet-behavior=unknown] { --phase-color:var(--phase-unknown); }

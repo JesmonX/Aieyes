@@ -28,6 +28,7 @@ function fixture(data){
       const state={behavior:name,label:name,row,frames:count,frameMs:ms,key:name};await page.evaluate(s=>petTest.emit(s),state);
       assert.equal(await page.locator('#pet-sprite').getAttribute('data-frame'),String(row*8));
       assert.equal(await page.locator('#phase').textContent(),name);
+      assert.equal(await page.locator('body').getAttribute('data-pet-behavior'),name);
       assert.equal(await page.evaluate(s=>AieyesPet.frame(s,100000,false)<6,state),true);
       await page.locator('#ball').screenshot({path:path.join(out,name+'.png')});
     }
