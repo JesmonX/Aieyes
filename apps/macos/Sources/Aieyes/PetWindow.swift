@@ -59,6 +59,7 @@ private final class PetHost: NSHostingView<PetView> {
 }
 @MainActor final class PetWindowController {
     private let panel: NSPanel
+    var window: NSWindow { panel }
     private var subscriptions = Set<AnyCancellable>()
     init(model: AppModel, open: @escaping (NSView) -> Void) {
         panel = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 144,height: 168), styleMask: [.borderless,.nonactivatingPanel], backing: .buffered, defer: false)
