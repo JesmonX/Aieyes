@@ -29,9 +29,18 @@ function fixture(data){
       assert.equal(await page.locator('#pet-sprite').getAttribute('data-frame'),String(row*8));
       assert.equal(await page.locator('#phase').textContent(),name);
       assert.equal(await page.locator('body').getAttribute('data-pet-behavior'),name);
+      assert.match(await page.locator('#ball').getAttribute('aria-label'),new RegExp(name));
+      const color=await page.evaluate(name=>{
+        const phase={attention:'needsInput',blocked:'failed',success:'complete',running:'working',working:'tool',thinking:'thinking',unknown:'unknown',idle:'idle'}[name];
+        const probe=document.createElement('span');probe.style.color=`var(--phase-${phase})`;document.body.append(probe);
+        const result=[getComputedStyle(document.querySelector('#phase'),'::before').backgroundColor,getComputedStyle(probe).color];probe.remove();return result;
+      },name);assert.equal(color[0],color[1],'indicator uses selected pet state, including attention over another running session');
       assert.equal(await page.evaluate(s=>AieyesPet.frame(s,100000,false)<6,state),true);
       await page.locator('#ball').screenshot({path:path.join(out,name+'.png')});
     }
+    await page.evaluate(()=>{petTest.info.recovery='failed';petTest.emit(petTest.info.pet);});
+    assert.equal(await page.locator('#phase').textContent(),'恢复失败');assert.match(await page.locator('#ball').getAttribute('aria-label'),/恢复失败/);
+    await page.evaluate(()=>{delete petTest.info.recovery;petTest.emit(petTest.info.pet);});
     await page.emulateMedia({reducedMotion:'no-preference'});await page.evaluate(()=>petTest.emit({behavior:'running',label:'进行中',row:1,frames:8,frameMs:150,key:'fresh'}));
     await page.waitForFunction(()=>Number(document.querySelector('#pet-sprite').dataset.frame)>8);
     const before=await page.locator('#pet-sprite').getAttribute('data-frame');await page.evaluate(()=>petTest.emit(petTest.info.pet));assert.notEqual(before,'8');assert.notEqual(await page.locator('#pet-sprite').getAttribute('data-frame'),'8','poll does not restart animation');

@@ -25,8 +25,12 @@
     if(info.pet){if(state?.key!==info.pet.key)start=performance.now();state=info.pet;}
     if(state&&info.petEnabled){
       document.body.dataset.petBehavior=state.behavior;
-      document.querySelector('#phase').textContent=state.label;
-      ball.title=`Aieyes · ${state.label}\n单击打开面板 · 拖动移动 · 右键菜单`;
+      const phase={attention:'needsInput',blocked:'failed',success:'complete',rest:'interrupted',running:'working',working:'tool',thinking:'thinking',unknown:'unknown',idle:'idle'}[state.behavior]||'unknown';
+      const label=info.recovery==='failed'?'恢复失败':info.recovery==='refreshing'?'恢复中':state.label;
+      document.body.style.setProperty('--phase-color',`var(--phase-${info.recovery==='failed'?'failed':phase})`);
+      document.querySelector('#phase').textContent=label;
+      ball.title=`Aieyes · ${label}\n单击打开面板 · 拖动移动 · 右键菜单`;
+      ball.setAttribute('aria-label',ball.title);
     }
     schedule();
   }

@@ -38,7 +38,3 @@ body[data-pet=true][data-native-capsule=true] #ball { display:none; }
 
 body[data-phase=needsInput] { --phase-color:var(--phase-needsInput); }
 body[data-phase=failed] { --phase-color:var(--phase-failed); }
-body[data-pet=true][data-pet-behavior=attention] { --phase-color:var(--phase-needsInput); }
-body[data-pet=true][data-pet-behavior=blocked] { --phase-color:var(--phase-failed); }
-body[data-pet=true][data-pet-behavior=success] { --phase-color:var(--phase-complete); }
-body[data-pet=true][data-pet-behavior=unknown] { --phase-color:var(--phase-unknown); }
