@@ -3,7 +3,7 @@ const {execFileSync}=require('node:child_process');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
 function fixture(data){
   const interval=window.setInterval;window.setInterval=(fn,ms)=>ms===100?interval(fn,ms):0;
-  const listeners=new Map(),info={platform:'linux',page:'agent',mode:'pet',effectiveMode:'pet',nativePet:false,petEnabled:true,panelOpen:false,panelPinned:false,sessions:[],summary:'空闲',activeCount:0,petAsset:data.pet.pet,pet:{key:'idle',behavior:'idle',label:'空闲',row:0,frames:6,frameMs:900}};
+  const listeners=new Map(),info={platform:'linux',page:'agent',mode:'pet',effectiveMode:'pet',nativePet:false,petEnabled:true,panelOpen:false,panelPinned:false,sessions:[],summary:'空闲',activeCount:0,petAsset:data.pet.pet,pet:{key:'idle',behavior:'idle',label:'空闲',row:0,frames:6,frameMs:180}};
   window.petTest={info,selection:data.pet,calls:[],emit(pet){info.pet=pet;for(const f of listeners.get('desktop:status')||[])f({payload:{...info}});}};
   window.__TAURI__={event:{async listen(name,fn){listeners.set(name,[...(listeners.get(name)||[]),fn]);return()=>{};}},window:{getCurrentWindow:()=>({async startDragging(){window.petTest.dragged=true;},async isMaximized(){return false;},async onResized(){return()=>{};}})},core:{async invoke(name,args={}){
     petTest.calls.push({name,args});
@@ -31,7 +31,7 @@ function fixture(data){
     await page.goto(`http://127.0.0.1:${server.address().port}/floating.html`);await page.waitForFunction(()=>window.AieyesPet&&document.body.dataset.pet==='true');
     await page.waitForFunction(()=>document.querySelector('#pet-sprite').style.backgroundImage.startsWith('url('));
     const box=await page.locator('#ball').boundingBox();assert.equal(box.width,144);assert.equal(box.height,168);
-    for(const [name,row,count,ms] of [['idle',0,6,900],['running',1,8,150],['attention',3,4,180],['success',4,5,180],['blocked',5,8,180],['unknown',6,6,260],['working',7,6,150],['thinking',8,6,220]]){
+    for(const [name,row,count,ms] of [['idle',0,6,180],['running',1,8,180],['attention',3,4,180],['success',4,5,180],['blocked',5,8,180],['rest',5,8,180],['unknown',6,6,180],['working',7,6,180],['thinking',8,6,180]]){
       await page.emulateMedia({reducedMotion:'reduce'});
       const state={behavior:name,label:name,row,frames:count,frameMs:ms,key:name};await page.evaluate(s=>petTest.emit(s),state);
       assert.equal(await page.locator('#pet-sprite').getAttribute('data-frame'),String(row*8));
@@ -39,17 +39,21 @@ function fixture(data){
       assert.equal(await page.locator('body').getAttribute('data-pet-behavior'),name);
       assert.match(await page.locator('#ball').getAttribute('aria-label'),new RegExp(name));
       const color=await page.evaluate(name=>{
-        const phase={attention:'needsInput',blocked:'failed',success:'complete',running:'working',working:'tool',thinking:'thinking',unknown:'unknown',idle:'idle'}[name];
+        const phase={attention:'needsInput',blocked:'failed',success:'complete',rest:'interrupted',running:'working',working:'tool',thinking:'thinking',unknown:'unknown',idle:'idle'}[name];
         const probe=document.createElement('span');probe.style.color=`var(--phase-${phase})`;document.body.append(probe);
         const result=[getComputedStyle(document.querySelector('#phase'),'::before').backgroundColor,getComputedStyle(probe).color];probe.remove();return result;
       },name);assert.equal(color[0],color[1],'indicator uses selected pet state, including attention over another running session');
-      assert.equal(await page.evaluate(s=>AieyesPet.frame(s,100000,false)<6,state),true);
+      assert.equal(await page.evaluate(s=>Math.floor(AieyesPet.frame(s,100000,false)/8),state),row,'long-running animation keeps the row described by its label');
+      assert.deepEqual(await page.evaluate(s=>Array.from({length:s.frames*8},(_,step)=>AieyesPet.frame(s,step*180+1,false)),state),Array.from({length:count*8},(_,step)=>row*8+step%count),'all behaviors use the same cadence for more than three cycles');
       await page.locator('#ball').screenshot({path:path.join(out,name+'.png')});
     }
+    await page.emulateMedia({reducedMotion:'no-preference'});
+    await page.evaluate(()=>petTest.emit({behavior:'idle',label:'空闲',row:0,frames:6,frameMs:180,key:'idle-cadence'}));
+    await page.waitForFunction(()=>Number(document.querySelector('#pet-sprite').dataset.frame)>=4,null,{timeout:1800});
     await page.evaluate(()=>{petTest.info.recovery='failed';petTest.emit(petTest.info.pet);});
     assert.equal(await page.locator('#phase').textContent(),'恢复失败');assert.match(await page.locator('#ball').getAttribute('aria-label'),/恢复失败/);
     await page.evaluate(()=>{delete petTest.info.recovery;petTest.emit(petTest.info.pet);});
-    await page.emulateMedia({reducedMotion:'no-preference'});await page.evaluate(()=>petTest.emit({behavior:'running',label:'进行中',row:1,frames:8,frameMs:150,key:'fresh'}));
+    await page.emulateMedia({reducedMotion:'no-preference'});await page.evaluate(()=>petTest.emit({behavior:'running',label:'进行中',row:1,frames:8,frameMs:180,key:'fresh'}));
     await page.waitForFunction(()=>Number(document.querySelector('#pet-sprite').dataset.frame)>8);
     const before=await page.locator('#pet-sprite').getAttribute('data-frame');await page.evaluate(()=>petTest.emit(petTest.info.pet));assert.notEqual(before,'8');assert.notEqual(await page.locator('#pet-sprite').getAttribute('data-frame'),'8','poll does not restart animation');
     assert.equal(await page.evaluate(()=>petTest.calls.filter(c=>c.args.method==='pets.current').length),1,'status polls reuse the loaded asset');
@@ -60,7 +64,7 @@ function fixture(data){
       canvas.getContext('2d').drawImage(image,0,0);image.close();
       petTest.selection={pet:{...petTest.selection.pet,rows:11,spriteVersionNumber:2,spritePath:'/fixture/v2.png'},imageDataUrl:canvas.toDataURL()};
       petTest.info.petAsset=petTest.selection.pet;
-      petTest.emit({behavior:'thinking',label:'思考中',row:8,frames:6,frameMs:220,key:'v2'});
+      petTest.emit({behavior:'thinking',label:'思考中',row:8,frames:6,frameMs:180,key:'v2'});
     });
     await page.waitForFunction(()=>document.querySelector('#pet-sprite').style.backgroundSize==='800% 1100%');
     assert.equal(await page.locator('#pet-sprite').evaluate(el=>el.style.backgroundPositionY),'80%','v2 crops row 8 of 11');
@@ -74,6 +78,6 @@ function fixture(data){
     assert.deepEqual(await page.locator('#desktop-mode option').evaluateAll(options=>options.map(o=>o.value)),['pet','tray']);
     await page.locator('#import-pet').click();await page.waitForFunction(()=>document.querySelector('#current-pet').textContent.includes('导入成功'));
     assert.ok(await page.evaluate(()=>petTest.calls.some(c=>c.args.method==='pets.import'&&c.args.params.path==='/fixture/import.zip')));
-    assert.deepEqual(errors,[]);console.log('Pet UI: eight behaviors, v1/v2 grids, asset caching, reduced motion, stable polling, panel/keyboard/drag, high contrast and file import passed');
+    assert.deepEqual(errors,[]);console.log('Pet UI: nine behaviors, uniform cadence, persistent state, v1/v2 grids, asset caching, reduced motion, stable polling, panel/keyboard/drag, high contrast and file import passed');
   }finally{await browser.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -2,11 +2,17 @@ import Foundation
 import AppKit
 @main struct VerifyPets {
     @MainActor static func main() throws {
-        for (row,count,ms) in [(0,6,900),(1,8,150),(3,4,180),(4,5,180),(5,8,180),(6,6,260),(7,6,150),(8,6,220)] {
+        let idleCadence = (0...6).map { PetState.idle.frame(elapsed: Double($0 * 180 + 1) / 1000, reduced: false) }
+        precondition(idleCadence == [0,1,2,3,4,5,0])
+        precondition(PetState.unknown.frameMs == PetState.idle.frameMs)
+        for (row,count,ms) in [(0,6,180),(1,8,180),(3,4,180),(4,5,180),(5,8,180),(6,6,180),(7,6,180),(8,6,180)] {
             let pet=PetState(behavior:"fixture",label:"Fixture",row:row,frames:count,frameMs:Double(ms),key:"fixture")
             precondition(pet.frame(elapsed:0,reduced:false)==row*8)
             precondition(pet.frame(elapsed:100,reduced:true)==row*8)
-            precondition(pet.frame(elapsed:100,reduced:false)<6)
+            precondition(pet.frame(elapsed:100,reduced:false)/8==row)
+            for step in 0..<(count * 8) {
+                precondition(pet.frame(elapsed: Double(step * 180 + 1) / 1000, reduced: false) == row * 8 + step % count)
+            }
         }
         _ = NSApplication.shared
         let defaults = UserDefaults.standard
@@ -34,6 +40,6 @@ import AppKit
             precondition(!panel.isVisible)
         }
         print("Pet native window defaults, visibility, geometry, accessibility activation passed")
-        print("Pet animation bounds, reduced motion and settle timing passed")
+        print("Pet uniform animation cadence, persistent state and reduced motion passed")
     }
 }

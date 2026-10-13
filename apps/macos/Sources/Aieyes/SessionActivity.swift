@@ -115,12 +115,11 @@ struct SurfaceTimeline<Content: View>: View {
 // Core-selected activity and shared sprite timing; no client-side priority rules.
 struct PetState: Decodable, Equatable {
     var behavior: String, label: String, row: Int, frames: Int, frameMs: Double, key: String
-    static let idle = PetState(behavior: "idle", label: "空闲", row: 0, frames: 6, frameMs: 900, key: "idle")
-    static let unknown = PetState(behavior: "unknown", label: "状态不可用", row: 6, frames: 6, frameMs: 260, key: "unknown")
+    static let idle = PetState(behavior: "idle", label: "空闲", row: 0, frames: 6, frameMs: 180, key: "idle")
+    static let unknown = PetState(behavior: "unknown", label: "状态不可用", row: 6, frames: 6, frameMs: 180, key: "unknown")
     func frame(elapsed: TimeInterval, reduced: Bool) -> Int {
         if reduced { return row * 8 }
-        let ms = max(0, elapsed * 1000), cycle = Double(frames) * frameMs
-        if row != 0 && ms >= cycle * 3 { return Int((ms - cycle * 3) / 900) % 6 }
+        let ms = max(0, elapsed * 1000)
         return row * 8 + Int(ms / frameMs) % frames
     }
 }

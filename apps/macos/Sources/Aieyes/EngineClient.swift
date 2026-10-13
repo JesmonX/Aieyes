@@ -322,6 +322,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
 
     private let sessionEngine = EngineClient(configurationOnly: true)
+    private var sessionTask: Task<Void, Never>?
     @Published var sessions: [LiveSession] = []
     @Published var sessionSources: [SessionSourceHealth] = []
     @Published var sessionsUnavailable = false
@@ -338,8 +339,19 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             importedPet = result.pet; petImportError = result.error
         } catch { petImportError = error.localizedDescription }
     }
-    private var sessionBusy = false { didSet { scheduleRefreshes() } }
-    private var lastSessionRead = Date.distantPast
+    private var sessionBusy = false
+    // Live state has its own clock and IPC stream, independent of history, quotas and configuration work.
+    private func startSessionMonitoring() {
+        guard schedulingEnabled, !stopped, sessionTask == nil else { return }
+        sessionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, !self.stopped else { return }
+                let next = ContinuousClock.now.advanced(by: .seconds(1))
+                if self.settingsLoaded && !self.installingUpdate { await self.refreshSessions() }
+                do { try await Task.sleep(until: next, clock: .continuous) } catch { return }
+            }
+        }
+    }
     var activeSessions: [LiveSession] { sessions.filter { $0.phase.active } }
     private var coreSessionSummary: String?
     var sessionPhase: SessionPhase? { sessions.first?.phase ?? (sessionsUnavailable ? .unknown : nil) }
@@ -353,15 +365,20 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         try await engine.call("sessions.hooks." + action, params: ["sourceId": sourceID])
     }
     func refreshSessions() async {
-        guard !sessionBusy else { return }
-        sessionBusy = true; lastSessionRead = Date()
+        guard !sessionBusy, !stopped, !installingUpdate else { return }
+        sessionBusy = true
         defer { sessionBusy = false }
         do {
             let result: SessionSnapshot = try await sessionEngine.call("sessions.list")
+            guard !stopped, !installingUpdate, !Task.isCancelled else { return }
             sessions = result.sessions; sessionSources = result.sources ?? []; sessionsUnavailable = result.unavailable; petState = result.pet ?? .unknown; coreSessionSummary = result.summary
             let selection: PetSelection = try await sessionEngine.call("pets.current")
+            guard !stopped, !installingUpdate, !Task.isCancelled else { return }
             importedPet = selection.pet; petImportError = selection.error
-        } catch { sessionsUnavailable = true; petState = .unknown; coreSessionSummary = nil }
+        } catch {
+            guard !stopped, !installingUpdate, !Task.isCancelled else { return }
+            sessionsUnavailable = true; petState = .unknown; coreSessionSummary = nil
+        }
     }
     @Published var dashboard = Dashboard()
     @Published private(set) var menuDashboard = Dashboard()
@@ -493,6 +510,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let info: CoreInfo = try await engine.call("hello")
             if let hash = info.contractHash, hash != CoreContract.contractHash { throw ClientError.message("应用资源与核心版本不一致，请重新安装同一版本") }
             settings = try await engine.call("settings.get"); PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:]); settingsDraft = settings; settingsLoaded = true
+            startSessionMonitoring()
             selectedAccount = settings.accountAliases?[selectedAccount] ?? (selectedAccount.hasPrefix("agy:") ? "antigravity:" + selectedAccount.dropFirst(4) : selectedAccount)
             if selectedAccount != "all" && selectedAccount != "none" && !settings.filterAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
             if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
@@ -867,11 +885,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         if lastScan > now { lastScan = .distantPast }
         if lastMetrics > now { lastMetrics = .distantPast }
         if lastNetworkAttempt > now { lastNetworkAttempt = .distantPast }
-        if lastSessionRead > now { lastSessionRead = .distantPast }
         if !quotaScheduleKnown { readQuotaSchedule() }
         var deadlines: [Date] = []
         if panelVisible, !networkBusy { deadlines.append(lastNetworkAttempt.addingTimeInterval(300)) }
-        if !sessionBusy { deadlines.append(lastSessionRead.addingTimeInterval(1)) }
         if !serverBusy, settings.monitoredHosts.contains(where: \.enabled) { deadlines.append(metricsDeadline) }
         if !historyBlocked {
             deadlines.append(lastScan.addingTimeInterval(Double(settings.historyInterval)))
@@ -883,13 +899,15 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             Task { @MainActor in self?.tick() }
         }
     }
-    func resumeAfterWake() { invalidateQuotaSchedule(); tick() }
+    func resumeAfterWake() {
+        invalidateQuotaSchedule(); tick()
+        if settingsLoaded { Task { await refreshSessions() } }
+    }
     func tick() {
         guard !stopped, !installingUpdate, !settingsSaving, !repricing else { return }
         defer { scheduleRefreshes() }
         let now = Date()
         if panelVisible, !networkBusy, now.timeIntervalSince(lastNetworkAttempt) >= 300 { Task { await testNetwork(force: false) } }
-        if !sessionBusy, now.timeIntervalSince(lastSessionRead) >= 1 { Task { await refreshSessions() } }
         if !serverBusy, settings.monitoredHosts.contains(where: \.enabled), now >= metricsDeadline { Task { await sampleHosts() } }
         guard !historyBlocked else { return }
         if let (quota, _, key) = pendingResets.first(where: { $0.1 <= now.timeIntervalSince1970 }) {
@@ -902,6 +920,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     func stop() {
         stopped = true; schedulingEnabled = false; timer?.invalidate(); timer = nil
+        sessionTask?.cancel(); sessionTask = nil
         automaticTask?.cancel(); automaticEngine.stop()
         filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
         deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel()

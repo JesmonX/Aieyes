@@ -5,8 +5,6 @@
   let state=null, start=0, timer=null, enabled=false, rows=9, assetKey=null, loading=null;
   function frame(s,elapsed,still=false){
     if(still)return s.row*8;
-    const cycle=s.frames*s.frameMs;
-    if(s.row!==0&&elapsed>=cycle*3)return Math.floor((elapsed-cycle*3)/900)%6;
     return s.row*8+Math.floor(elapsed/s.frameMs)%s.frames;
   }
   function paint(){
