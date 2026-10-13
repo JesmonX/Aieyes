@@ -48,7 +48,7 @@
     const signature=JSON.stringify([host,result?.sampleSession&&result?.sampleVersion!=null?[result.sampleSession,result.sampleVersion]:result]);if(card.signature===signature)return;
     card.signature=signature;
     const sample=result?.sample;
-    patch(card.heading,`<div><h2 style="margin:0">${escapeHTML(host.name||host.target)}</h2><div class="sub">${escapeHTML(host.target)}</div></div><button type="button" class="host-status" data-host-status="${escapeHTML(host.id)}"><i aria-hidden="true"></i><span data-host-status-label></span></button>`);
+    patch(card.heading,`<div><h2 style="margin:0">${escapeHTML(host.name||host.target)}</h2><div class="sub">${escapeHTML(host.target)}</div></div><div class="server-card-actions"><button type="button" data-host-settings="${escapeHTML(host.id)}" aria-label="${escapeHTML(host.name||host.target)}的监控设置">监控设置</button><button type="button" class="host-status" data-host-status="${escapeHTML(host.id)}"><i aria-hidden="true"></i><span data-host-status-label></span></button></div>`);
     patch(card.summary,serverSummary(host,sample));
     if(!card.el.open)return;
     const enabled=(host.metrics??Object.keys(groups)).filter(key=>sample?.[key]);
@@ -64,7 +64,7 @@
   }
   function render(){
     const content=document.querySelector('#content');if(!content)return;
-    if(!root?.isConnected){clear();root=document.createElement('div');root.className='server-list';content.replaceChildren(root);const head=document.createElement('div');head.className='section-head';head.innerHTML=`<span class="muted" data-server-count></span><select id="server-filter" aria-label="服务器筛选">${[['all','全部'],['errors','异常'],['paused','已暂停']].map(([key,label])=>option(key,label,state.serverFilter??'all')).join('')}</select><button id="sample" title="立即采样所有已启用的服务器">刷新服务器</button>`;content.prepend(head);head.querySelector('#sample').onclick=()=>sample();head.querySelector('#server-filter').onchange=e=>{state.serverFilter=e.target.value;savePanelView();render();};}
+    if(!root?.isConnected){clear();root=document.createElement('div');root.className='server-list';content.replaceChildren(root);const head=document.createElement('div');head.className='section-head';head.innerHTML=`<span class="muted" data-server-count></span><select id="server-filter" aria-label="服务器筛选">${[['all','全部'],['errors','异常'],['paused','已暂停']].map(([key,label])=>option(key,label,state.serverFilter??'all')).join('')}</select><button type="button" id="add-server">添加 SSH 主机</button><button id="sample" title="立即采样所有已启用的服务器">刷新服务器</button>`;content.prepend(head);head.querySelector('#add-server').onclick=()=>openSettings({category:'hosts',section:'add-host'});head.querySelector('#sample').onclick=()=>sample();head.querySelector('#server-filter').onchange=e=>{state.serverFilter=e.target.value;savePanelView();render();};}
     const hosts=monitoredHosts();for(const key of expansion.keys())if(!hosts.some(h=>key==='host:'+h.id||key.startsWith('group:'+h.id+':')))expansion.delete(key);const byID=new Map(state.hosts.map(row=>[row.id,row]));
     patch(document.querySelector('[data-server-count]'),hosts.length+' 台主机 '+refreshIndicator('hosts'));
     const selected=hosts.filter(h=>!state.serverFilter||state.serverFilter==='all'||(state.serverFilter==='paused'?!h.enabled:h.enabled&&hostStatus(h,byID.get(h.id))!=='正常')),ids=new Set(selected.map(h=>h.id));
@@ -76,9 +76,18 @@
       if(previous?previous.nextSibling!==card.el:root.firstChild!==card.el){if(previous)previous.after(card.el);else root.prepend(card.el);}previous=card.el;
       if(visible(card.el)||!card.signature)paintCard(card,host,byID.get(host.id));
     }
-    let empty=root.querySelector('.empty');if(selected.length)empty?.remove();else if(!empty){empty=document.createElement('div');empty.className='card empty';empty.innerHTML='<button id="add-first-host" class="primary">添加服务器</button>';root.append(empty);bindSetup();}
+    let empty=root.querySelector('.empty');
+    if(selected.length)empty?.remove();
+    else {
+      if(!empty){empty=document.createElement('div');empty.className='card empty';root.append(empty);}
+      const filtered=hosts.length>0;
+      patch(empty,filtered?'<p>当前筛选没有匹配的服务器</p><button type="button" id="clear-server-filter">清除筛选</button>':'<p>尚未添加服务器</p><button id="add-first-host" class="primary">添加服务器</button>');
+      if(filtered)empty.querySelector('#clear-server-filter').onclick=()=>{state.serverFilter='all';document.querySelector('#server-filter').value='all';savePanelView();render();};
+      else bindSetup();
+    }
     for(const list of lists)list.paint();updateHostStatuses();
   }
+  document.addEventListener('click',event=>{const button=event.target.closest('[data-host-settings]');if(button){event.preventDefault();event.stopPropagation();void openSettings({category:'hosts',hostId:button.dataset.hostSettings});}});
   document.addEventListener('scroll',request,{capture:true,passive:true});window.addEventListener('resize',request);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)request();});
   new MutationObserver(()=>{if(root&&!root.isConnected)clear();}).observe(document.body,{childList:true,subtree:true});

@@ -3,6 +3,7 @@
 (() => {
   const mark = path => `<svg viewBox="0 0 24 24"><path d="${path}"/></svg>`;
   const phases = {
+    needsInput:[mark('M12 5v9m0 4h.01'),'等待输入'], failed:[mark('m6 6 12 12M6 18 18 6'),'执行失败'],
     working:[mark('M8 5v14l11-7Z'),'进行中'], thinking:[mark('M12 3 9 9 3 12l6 3 3 6 3-6 6-3-6-3Z'),'思考中'],
     tool:[mark('m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18'),'执行工具'], complete:[mark('m5 12 4 4L19 6'),'已完成'],
     interrupted:[mark('M8 5v14M16 5v14'),'已中断'], unknown:[mark('M9 8a3 3 0 1 1 5 2c-2 1-2 2-2 4m0 4h.01'),'状态待确认'],
@@ -16,9 +17,11 @@
     summary.textContent = info.summary;
     list.innerHTML = info.sessions.map(s => {
       const [symbol, label] = phases[s.phase] || phases.unknown;
-      return `<div class="live-row"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(s.source || 'Codex')}</strong><small>会话 ${escape(s.id.slice(0,8))} · ${new Intl.RelativeTimeFormat(undefined,{numeric:'auto'}).format(-Math.max(0,Math.round((Date.now()/1000-s.updatedAt)/60)),'minute')}</small></div><span>${label}</span></div>`;
+      return `<div class="live-row"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(({codex:'Codex',claude:'Claude Code',antigravity:'AGY'}[s.provider]||s.source||'Agent')+' · '+(s.machine||'本机'))}</strong><small>会话 ${escape(s.id.slice(0,8))} · ${new Intl.RelativeTimeFormat(undefined,{numeric:'auto'}).format(-Math.max(0,Math.round((Date.now()/1000-s.updatedAt)/60)),'minute')}</small></div><span>${label}</span></div>`;
     }).join('') || '<p class="muted">暂无活跃会话</p>';
-    warning.hidden = true;
+    const failures=(info.sources||[]).filter(s=>s.state!=='healthy');
+    warning.hidden = !failures.length;
+    warning.textContent=failures.map(s=>`${s.provider} · ${s.machineId==='local'?'本机':s.machineId}：${s.error||'正在连接'}`).join('；');
     let notice=document.querySelector('#session-attention');
     const uncertain=info.unavailable || info.sessions.some(s=>s.phase==='unknown');
     if(uncertain){

@@ -795,7 +795,7 @@ body:not([data-platform=windows]) .font-notice { display:none; }
 
 /* Refresh feedback occupies a fixed slot beside its section title. */
 .heading-refresh { display:inline-grid; place-items:center; width:24px; height:24px; min-height:0; padding:0; border:0; background:transparent; box-shadow:none; color:var(--muted); vertical-align:middle; font:18px system-ui; flex-shrink:0; }
-.heading-refresh[data-busy=true] > span { animation:refresh-spin 1s linear infinite; }
+.heading-refresh[data-busy=true] > span { font-weight:700; }
 .heading-refresh[data-error=true] { color:var(--warn); }
 @keyframes refresh-spin { to { transform:rotate(360deg); } }
 @media(prefers-reduced-motion:reduce) { .heading-refresh[data-busy=true] > span { animation:none; opacity:.6; } }
@@ -826,7 +826,7 @@ body:not([data-platform=windows]) .font-notice { display:none; }
 #account-targets { width:min(680px,calc(100vw - 24px)); max-height:90vh; }
 .account-target-body { overflow:auto; max-height:70vh; }
 .account-switch-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
-.account-device-counts { display:flex; flex-direction:column; font-size:11px; line-height:1.5; color:var(--muted); font-variant-numeric:tabular-nums; }
+.account-device-counts { display:block; white-space:nowrap; font-size:11px; line-height:1.5; color:var(--muted); font-variant-numeric:tabular-nums; }
 .account-device-counts small { font-size:10px; }
 .quota-card .account-switch-entry { display:inline-flex; align-items:center; gap:6px; min-height:30px; padding:4px 10px; font-size:var(--font-secondary); color:var(--accent); background:color-mix(in srgb,var(--accent) 10%,transparent); border-color:color-mix(in srgb,var(--accent) 30%,transparent); box-shadow:none; }
 .quota-card .account-switch-entry:hover { background:color-mix(in srgb,var(--accent) 16%,transparent); border-color:color-mix(in srgb,var(--accent) 45%,transparent); }

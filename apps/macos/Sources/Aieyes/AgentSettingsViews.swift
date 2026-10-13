@@ -6,35 +6,32 @@ struct AgentDirectorySelection: Identifiable {
 }
 struct AgentsSettingsView: View {
     @ObservedObject var model: AppModel
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            SettingsSidebar(title: "选择 Agent", items: model.agentConfigurations.map { ($0.provider, Format.provider($0.provider)) }, selection: $model.settingsAgent)
+            AccountsSettingsView(model: model, provider: model.settingsAgent) { model.requestedAccountKey = $0.key }
+                .id(model.settingsAgent)
+        }.padding(.top, 12)
+    }
+}
+
+struct AgentMachinesSection: View {
+    @ObservedObject var model: AppModel
+    let agent: AgentConfiguration
     @State private var directories: AgentDirectorySelection?
     @State private var automaticValuation: AgentDirectorySelection?
     var body: some View {
-        Form {
-            ForEach(model.agentConfigurations) { agent in
-                Section {
-                    HStack {
-                        ProviderMark(provider: agent.provider)
-                        Toggle(Format.provider(agent.provider), isOn: Binding(get: { agent.enabled }, set: { enabled in
-                            Task { await model.configureAgent(agent.provider, enabled: enabled, machines: enabled && agent.machineIds.isEmpty ? ["local"] : nil) }
-                        })).toggleStyle(.switch)
-                    }
-                    if agent.provider == "deepseek" { Text("在账户中添加 API Key，通过本机查询余额。").foregroundStyle(.secondary) }
-                    else {
-                        Text("所在机器 · 可多选").font(AppFont.secondary).foregroundStyle(.secondary)
-                        machine("local", name: "本机", agent: agent)
-                        ForEach(model.settings.hosts) { host in machine(host.id, name: (host.name.isEmpty ? host.target : host.name) + (host.enabled ? "" : " · 服务器已停用"), agent: agent) }
-                        if agent.machineIds.isEmpty { Text("未选择机器，暂不采集。").foregroundStyle(.secondary) }
-                        if model.settings.hosts.isEmpty { Button("添加服务器") { model.settingsTab = "servers"; model.requestHostEditor = true } }
-                    }
-                }
-            }
-        }.formStyle(.grouped)
+        Section("机器与目录") {
+            Text("所在机器 · 可多选").font(AppFont.secondary).foregroundStyle(.secondary)
+            machine("local", name: "本机")
+            ForEach(model.settings.hosts) { host in machine(host.id, name: (host.name.isEmpty ? host.target : host.name) + (host.enabled ? "" : " · 服务器已停用")) }
+            if agent.machineIds.isEmpty { Text("未选择机器，暂不采集。").foregroundStyle(.secondary) }
+            Button("添加 SSH 主机") { model.openSettings(.init(category: "servers", section: "add-host")) }
+        }.id("machines")
         .sheet(item: $directories) { selection in AgentDirectoriesView(model: model, provider: selection.provider, machine: selection.machine) }
-        .sheet(item: $automaticValuation) { selection in
-            AgentAutomaticValuationView(model: model, provider: selection.provider, machine: selection.machine)
-        }
+        .sheet(item: $automaticValuation) { selection in AgentAutomaticValuationView(model: model, provider: selection.provider, machine: selection.machine) }
     }
-    private func machine(_ id: String, name: String, agent: AgentConfiguration) -> some View {
+    private func machine(_ id: String, name: String) -> some View {
         let sources = model.settings.sources.filter { $0.provider == agent.provider && ($0.hostId ?? "local") == id }
         let enabled = sources.filter { $0.autoValuation?.enabled == true }.count
         return VStack(alignment: .leading, spacing: 8) {
@@ -45,13 +42,17 @@ struct AgentsSettingsView: View {
                 })).disabled(!agent.enabled)
                 Button("目录设置") { directories = .init(provider: agent.provider, machine: id) }
             }
+            if ["claude", "antigravity"].contains(agent.provider) {
+                ForEach(sources.filter { source in sources.first(where: { $0.path == source.path })?.id == source.id }) { source in
+                    SessionHookControls(model: model, source: source)
+                }
+            }
             HStack {
                 Text("自动估值").font(AppFont.secondary)
                 Text(sources.isEmpty ? "请先添加数据目录" : enabled == 0 ? "已关闭" : "已开启 \(enabled)/\(sources.count)")
                     .font(AppFont.secondary).foregroundStyle(.secondary)
                 Spacer()
-                Button("自动估值设置") { automaticValuation = .init(provider: agent.provider, machine: id) }
-                    .disabled(sources.isEmpty)
+                Button("自动估值设置") { automaticValuation = .init(provider: agent.provider, machine: id) }.disabled(sources.isEmpty)
             }
         }
     }
@@ -127,7 +128,9 @@ struct AgentDirectoriesView: View {
 
 struct AccountsSettingsView: View {
     @ObservedObject var model: AppModel
+    var provider: String? = nil
     var editAccount: (AgentAccount) -> Void
+    @State private var showingValuation = false
     @State private var adding: AgentConfiguration?
     @State private var selectedAccount: AgentAccount?
     @State private var deleting: AgentAccount?
@@ -137,17 +140,36 @@ struct AccountsSettingsView: View {
     @State private var agySource: AgentSource?
     private var visibleAgents: [AgentConfiguration] {
         model.agentConfigurations.filter { config in
-            config.enabled || model.settings.accounts.contains { $0.provider == config.provider && $0.archived != true }
+            provider.map { config.provider == $0 } ?? (config.enabled || model.settings.accounts.contains { $0.provider == config.provider && $0.archived != true })
         }
     }
-    private var archivedAccounts: [AgentAccount] { model.settings.accounts.filter { $0.archived == true } }
+    private var archivedAccounts: [AgentAccount] { model.settings.accounts.filter { $0.archived == true && (provider == nil || $0.provider == provider) } }
     var body: some View {
-        Form {
-            statusSection
-            ForEach(visibleAgents) { agent in agentSection(agent) }
-            archivedSection
-            cleanupSection
-        }.formStyle(.grouped)
+        ScrollViewReader { reader in
+            Form {
+                if let provider, let agent = visibleAgents.first(where: { $0.provider == provider }) {
+                    Section {
+                        HStack {
+                            Label { Text(Format.provider(provider)).font(AppFont.section) } icon: { ProviderMark(provider: provider) }.fixedSize()
+                            Spacer()
+                            Text("启用").fixedSize()
+                            Toggle("启用 " + Format.provider(provider), isOn: Binding(get: { agent.enabled }, set: { value in Task { await model.configureAgent(provider, enabled: value, machines: value && agent.machineIds.isEmpty ? ["local"] : nil) } })).labelsHidden().toggleStyle(.switch).fixedSize()
+                        }
+                        if provider == "deepseek" { Text("添加 API Key，通过本机查询账户余额。").font(AppFont.secondary).foregroundStyle(.secondary) }
+                        else { Button("估值与采样") { showingValuation = true } }
+                    }
+                }
+                statusSection.id("accounts")
+                ForEach(visibleAgents) { agent in agentSection(agent) }
+                if provider == nil || provider == "codex" { CodexAPISettingsSection(model: model) }
+                if let provider, let agent = visibleAgents.first(where: { $0.provider == provider }), provider != "deepseek" { AgentMachinesSection(model: model, agent: agent) }
+                archivedSection
+                cleanupSection
+            }.formStyle(.grouped)
+            .onAppear { if let section = model.settingsSection { reader.scrollTo(section, anchor: .top) } }
+            .onChange(of: model.settingsSection) { _, section in if let section { reader.scrollTo(section, anchor: .top) } }
+        }
+        .sheet(isPresented: $showingValuation) { if let provider { AgentValuationView(model: model, provider: provider) } }
         .task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? []; await model.loadAccountStatuses(refresh: true) }
         .sheet(item: $adding, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { agent in AccountConnectionView(model: model, initialProvider: agent.provider) }
         .sheet(item: $selectedAccount) { account in AccountDevicesView(model: model, account: account) }
@@ -158,6 +180,7 @@ struct AccountsSettingsView: View {
     private var statusSection: some View {
         Section {
             HStack {
+                Text("账户").font(AppFont.section)
                 Spacer()
                 Button(model.accountStatusBusy ? "检查中…" : "刷新设备状态") { Task { await model.loadAccountStatuses(refresh: true) } }.disabled(model.accountStatusBusy)
             }
@@ -175,7 +198,7 @@ struct AccountsSettingsView: View {
             }
             ForEach(accounts, id: \.key) { account in
                 HStack {
-                    VStack(alignment: .leading) { Text(account.name); Text(model.accountCounts(account)).font(AppFont.secondary).foregroundStyle(.secondary)
+                    VStack(alignment: .leading) { Text(account.name); Text(model.accountDeviceCounts(account.key).inlineSummary).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).help(model.accountCounts(account))
                         if let identity = model.accountStatuses.first(where: { $0.accountKey == account.key && $0.current == true && $0.identity != nil })?.identity { Text(identity.summary).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) } }
                     Spacer(); Button("设置") { selectedAccount = account }
                 }
@@ -265,6 +288,7 @@ struct AccountDevicesView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var pendingSaveCount = 0
     @State private var intervalText = ""
+    @State private var showingConnection = false
     @FocusState private var focusedField: String?
     @AppStorage(NativePanelKey.accounts.rawValue) private var panelPreference = "{}"
     private var current: AgentAccount { model.settings.accounts.first { $0.key == account.key } ?? account }
@@ -283,7 +307,15 @@ struct AccountDevicesView: View {
                     Text("留空沿用全局间隔；自定义范围 30–86400 秒。").font(AppFont.secondary).foregroundStyle(.secondary)
                     TextField("账户名称", text: $account.name).focused($focusedField, equals: "name")
                     Toggle("归档账户", isOn: Binding(get: { account.archived == true }, set: { value in account.archived = value; save { $0.archived = value } }))
-                    Toggle("在面板显示", isOn: panelBinding).disabled(!current.quotaEnabled)
+                    Toggle("在面板显示", isOn: panelBinding).disabled(!current.quotaEnabled || (!panelBinding.wrappedValue && panelSelectionCount >= 5))
+                    Text("面板已选择 \(panelSelectionCount)/5 个账户；每个 Agent 最多显示 5 个账户。").font(AppFont.secondary).foregroundStyle(.secondary)
+                    if account.provider != "codex" {
+                        Button(account.provider == "deepseek" ? "更新 API Key" : "连接机器") {
+                            focusedField = nil
+                            guard saveEditedText(force: error != nil) else { return }
+                            Task { await saveTask?.value; if error == nil { showingConnection = true } }
+                        }
+                    }
                 }
                 ForEach(model.accountMachineIDs(account.provider, includePaused: true), id: \.self) { machine in
                     Section(model.machineName(machine) + (model.accountMachineIDs(account.provider).contains(machine) ? "" : " · 已暂停")) {
@@ -325,6 +357,7 @@ struct AccountDevicesView: View {
         .onChange(of: current.name) { old, value in if focusedField != "name" && account.name == old { account.name = value } }
         .onChange(of: focusedField) { old, _ in if old != nil { saveEditedText() } }
         .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
+        .sheet(isPresented: $showingConnection, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { AccountConnectionView(model: model, account: current) }
         .sheet(item: $loginSource, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { source in AccountConnectionView(model: model, account: current, initialSourceID: source.id, intent: authIntent) }
     }
     private func openLogin(_ source: AgentSource, intent: String) {
@@ -367,6 +400,7 @@ struct AccountDevicesView: View {
     private func legacyCommand(_ source: AgentSource) -> String { source.quotaPreCommand.isEmpty ? model.settings.hosts.first { $0.id == source.hostId }?.preCommand ?? "" : source.quotaPreCommand }
     private func legacyCommands(_ machine: String) -> Set<String> { Set(model.settings.sources.filter { $0.provider == account.provider && $0.hostId == machine }.map(legacyCommand)) }
     private func inheritedCommand(_ machine: String) -> String { current.deviceSettings?.first { $0.machineId == machine }?.preCommand ?? (legacyCommands(machine).count == 1 ? legacyCommands(machine).first ?? "" : "") }
+    private var panelSelectionCount: Int { PanelAccountPreference.selections(panelPreference, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[account.provider]?.count ?? 0 }
     private var panelBinding: Binding<Bool> {
         Binding(get: { (PanelAccountPreference.selections(panelPreference, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[account.provider] ?? []).contains(account.key) }, set: { enabled in
             var pref = PanelAccountPreference.decode(panelPreference)
@@ -459,7 +493,7 @@ struct AccountConnectionView: View {
     private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && $0.enabled && ($0.accountId.isEmpty || $0.accountId == (account?.id ?? "")) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text(intent == "switch" ? "切换账户" : account == nil ? "添加账户" : "连接机器").font(AppFont.title); Spacer(); Button("完成") { dismiss() }.disabled(busy) }.padding(.horizontal, 20).padding(.top, 20)
+            HStack { Text(intent == "switch" ? "切换账户" : account == nil ? "添加账户" : provider == "deepseek" ? "更新 API Key" : "连接机器").font(AppFont.title); Spacer(); Button("完成") { dismiss() }.disabled(busy) }.padding(.horizontal, 20).padding(.top, 20)
             Text(Format.provider(provider)).font(AppFont.section).padding(.horizontal, 20)
             if provider == "codex" { CodexAccountsView(model: model, targetAccountID: account?.id, initialSourceID: initialSourceID, intent: intent, onBusyChanged: { busy = $0 }) }
             else {
@@ -470,12 +504,12 @@ struct AccountConnectionView: View {
                     } else {
                         Section("已有登录的机器 · 可多选") {
                             ForEach(sources) { source in HStack { Toggle(source.name, isOn: Binding(get: { selection.contains(source.id) }, set: { if $0 { selection.insert(source.id) } else { selection.remove(source.id) } })); if provider == "antigravity" { Button("登录 / 检查") { agySource = source } } } }
-                            if sources.isEmpty { Text("没有可用位置，请先在 Agents 选择机器；同一目录只能连接一个当前登录账户。").foregroundStyle(.secondary) }
+                            if sources.isEmpty { Text("没有可用位置，请先在 Agent 接入选择机器；同一目录只能连接一个当前登录账户。").foregroundStyle(.secondary) }
                         }
                     }
                     if account == nil { Text("添加后可修改账号的显示名称。").foregroundStyle(.secondary) }
                     if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
-                    Button(busy ? "保存中…" : account == nil ? "添加账号" : "保存连接") { Task { await save() } }.buttonStyle(.borderedProminent).disabled(busy)
+                    Button(busy ? "保存中…" : account == nil ? "添加账号" : provider == "deepseek" ? "更新 API Key" : "保存连接") { Task { await save() } }.buttonStyle(.borderedProminent).disabled(busy)
                 }.formStyle(.grouped).disabled(busy)
             }
         }.frame(width: 640, height: 620).interactiveDismissDisabled(busy)
@@ -510,5 +544,31 @@ struct AccountConnectionView: View {
             }
             dismiss()
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct SessionHookControls: View {
+    @ObservedObject var model: AppModel
+    let source: AgentSource
+    @State private var status: SessionHookStatus?
+    @State private var busy = false
+    @State private var failure: String?
+    private func perform(_ action: String) async {
+        guard !busy else { return }; busy = true
+        defer { busy = false }
+        do { status = try await model.manageSessionHooks(sourceID: source.id, action: action).first; failure = nil }
+        catch { failure = error.localizedDescription }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("会话状态接入").font(AppFont.secondary)
+                Text(status?.label ?? "正在读取…").foregroundStyle(.secondary)
+                Spacer()
+                Button("修复接入") { Task { await perform("repair") } }.disabled(busy)
+                Button("停用") { Task { await perform("remove") } }.disabled(busy)
+            }
+            if let message = failure ?? status?.error { Text(message).font(AppFont.secondary).foregroundStyle(Palette.danger) }
+        }.task(id: source.id + source.path) { await perform("status") }
     }
 }

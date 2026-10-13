@@ -52,6 +52,14 @@ pub const METHODS: &[Method] = &[
     Method { name: "agyAuth.verify", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "autoEstimates.configure", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "autoEstimates.tick", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "codexApi.command", lane: Lane::Accounts, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "codexApi.default", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "codexApi.deploy", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "codexApi.list", lane: Lane::Accounts, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "codexApi.probe", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "codexApi.remove", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "codexApi.save", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "codexApi.status", lane: Lane::Accounts, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.adopt", lane: Lane::Main, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.enable", lane: Lane::Main, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.inspect", lane: Lane::Main, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -89,6 +97,8 @@ pub const METHODS: &[Method] = &[
     Method { name: "operations.prepareUpdate", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "operations.resume", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "operations.status", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "pets.current", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "pets.import", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.list", lane: Lane::Main, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.recalculate", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.save", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
@@ -102,6 +112,9 @@ pub const METHODS: &[Method] = &[
     Method { name: "quotas.order.set", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "quotas.refresh", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: Some("quotas") },
     Method { name: "quotas.schedule", lane: Lane::Dashboard, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sessions.hooks.remove", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sessions.hooks.repair", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sessions.hooks.status", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sessions.list", lane: Lane::Main, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "settings.get", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "settings.patch", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
@@ -138,7 +151,7 @@ pub const EXCLUDED_FS_TYPES: &[&str] = &["tmpfs", "devtmpfs", "squashfs", "overl
 pub const EXCLUDED_FS_PATHS: &[&str] = &["/snap", "/var/lib/snapd/snap", "/run", "/efi", "/boot/efi", "/dev", "/proc", "/sys", "/system/volumes/preboot", "/system/volumes/vm", "/system/volumes/update", "/system/volumes/xarts", "/system/volumes/iscpreboot", "/system/volumes/hardware"];
 pub const FIVE_HOUR_MINUTES: i64 = 300;
 pub const WEEK_MINUTES: i64 = 10080;
-pub const CONTRACT_HASH: &str = "eae7986bd3cc31bcd50b7578716885eaf1c3bea3f7762fd4002d80547b271c16";
+pub const CONTRACT_HASH: &str = "e4e0ee5087d8e90875259e102e097b0ec45fc9359e7906e08a9f97d9650f5830";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

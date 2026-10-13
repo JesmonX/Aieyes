@@ -118,6 +118,57 @@ class CoordinatorTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'跳过唤醒'):
                 with a.with_credentials(self.loc,'one'): self.fail('must not run')
 
+    def test_lightweight_wakeup_runs_beside_daily_cli_and_checks_completion(self):
+        testcase=self
+        for result_status in ('completed','failed'):
+            class Rpc:
+                def __init__(self,loc,stage):
+                    self.events=[dict(method='turn/completed',params=dict(threadId='other',turn=dict(id='turn',status='completed'))),dict(method='turn/completed',params=dict(threadId='thread',turn=dict(id='old',status='completed'))),dict(method='turn/completed',params=dict(threadId='thread',turn=dict(id='turn',status=result_status)))]
+                    testcase.assertEqual(stage.name,'wake')
+                def __enter__(self): return self
+                def __exit__(self,*_): pass
+                def login(self,auth): testcase.assertNotIn('refresh_token',json.dumps(a.external(auth)))
+                def call(self,method,params,refresh):
+                    if method=='thread/start':
+                        testcase.assertTrue(params['ephemeral']);testcase.assertEqual(params['modelProvider'],'openai')
+                        testcase.assertEqual(params['sandbox'],'read-only')
+                        return {'thread':{'id':'thread'}}
+                    return {'turn':{'id':'turn'}}
+                def receive(self,*_): return self.events.pop(0)
+            with patch.object(a,'Rpc',Rpc),patch.object(a,'running',return_value=[dict(pid=123)]),patch.object(a,'renew') as renew:
+                if result_status=='completed': a.wakeup(self.loc,'one',dict(model='fixture',effort='low',args=['OK']),self.root)
+                else:
+                    with self.assertRaisesRegex(ValueError,'未完成'): a.wakeup(self.loc,'one',dict(model='fixture',args=['OK']),self.root)
+                renew.assert_not_called()
+            self.assertEqual(a.read(self.root/'auth.json'),self.one)
+            self.assertFalse((self.root/'.aieyes/codex/one/wake/auth.json').exists())
+
+    def test_lightweight_wakeup_rejects_refresh_identity_change_without_retry(self):
+        class Rpc:
+            def __init__(self,*_): pass
+            def __enter__(self): return self
+            def __exit__(self,*_): pass
+            def login(self,*_): pass
+            def call(self,method,params,refresh): return refresh({'previousAccountId':'team'})
+        with patch.object(a,'Rpc',Rpc),patch.object(a,'current_auth',side_effect=[self.one,self.two]),patch.object(a,'renew') as renew:
+            with self.assertRaisesRegex(ValueError,'账号已改变'): a.wakeup(self.loc,'one',dict(model='fixture',args=['OK']),self.root)
+            renew.assert_not_called()
+
+    def test_expired_active_wakeup_does_not_rotate_daily_cli_credentials(self):
+        value=credential('one')
+        claims=json.loads(base64.urlsafe_b64decode(value['tokens']['access_token'].split('.')[1]+'==='));claims['exp']=0
+        value['tokens']['access_token']='h.'+base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip('=')+'.s'
+        a.atomic(self.root/'auth.json',value)
+        class Rpc:
+            def __init__(self,*_): pass
+            def __enter__(self): return self
+            def __exit__(self,*_): pass
+            def login(self,*_): raise ValueError('认证已失效')
+        with patch.object(a,'Rpc',Rpc),patch.object(a,'running',return_value=[dict(pid=123)]),patch.object(a,'renew') as renew:
+            with self.assertRaisesRegex(ValueError,'认证已失效'): a.wakeup(self.loc,'one',dict(model='fixture',args=['OK']),self.root)
+            renew.assert_not_called()
+        self.assertEqual(a.read(self.root/'auth.json'),value)
+
     def test_switch_is_atomic_idempotent_preserves_history_and_rejects_stale(self):
         class Rpc:
             def __init__(self,*args): pass

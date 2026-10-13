@@ -7,8 +7,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub struct Store {
+    pub root: PathBuf,
     pub db: Connection,
     pub(crate) usage_memory: std::cell::RefCell<crate::usage_cache::Memory>,
+    pub(crate) billing_memory: std::cell::RefCell<crate::codex_api::usage::BillingCache>,
 }
 /// Keep a short committed/rolled-back write visible to the updater until SQLite
 /// releases its lock. Network and file reads happen outside this guard.
@@ -54,9 +56,12 @@ impl Store {
         ")?;
         crate::usage_cache::setup(&db)?;
         crate::remote_history::setup(&db)?;
+        crate::codex_api::usage::setup(&db)?;
         let store = Self {
+            root: root.to_path_buf(),
             db,
             usage_memory: Default::default(),
+            billing_memory: Default::default(),
         };
         store.migrate_estimate_tables()?;
         store.migrate_antigravity()?;
@@ -198,6 +203,8 @@ impl Store {
             normalized.configuration_issues.join("；")
         );
         crate::codex_auth::validate_settings(&normalized)?;
+        let _api_locations =
+            crate::codex_api::check_settings(self, previous.as_ref(), &normalized)?;
         self.check_wakeup_settings(&normalized)?;
         let s = &normalized;
         let mut ids = std::collections::HashSet::new();
@@ -993,6 +1000,7 @@ impl Store {
                 d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":settings.source_enabled(source),"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"autoValuation":source.auto_valuation,"autoValuationStatus":self.automatic_status(&source.id)?}));
             }
         }
+        d.billing_summary = self.billing_summary(f)?;
         d.price_updated_at =
             self.db
                 .query_row("SELECT MAX(fetched_at) FROM price_history", [], |r| {

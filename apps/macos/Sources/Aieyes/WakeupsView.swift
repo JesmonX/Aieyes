@@ -12,8 +12,9 @@ struct WakeModel: Decodable, Identifiable { var id: String, efforts: [String] }
 struct WakeCapabilities: Decodable { var models: [WakeModel], efforts: [String], timezone: String, message: String, recommendedModel: String? }
 struct WakeRun: Decodable, Identifiable {
     var startedAt: Double, endedAt: Double?, status: String, model: String, effort: String
+    var stage: String?, errorCode: String?, message: String?
     var id: String { "\(startedAt):\(model)" }
-    var label: String { ["success":"已完成", "running":"运行中", "failed":"调用失败，请检查登录、模型及代理", "timeout":"调用超时", "interrupted":"执行中断", "skipped-overlap":"同账户任务运行中，已跳过"][status] ?? status }
+    var label: String { message ?? (["success":"已完成", "running":"运行中", "failed":"调用失败，请检查登录、模型及代理", "timeout":"调用超时", "interrupted":"执行中断", "skipped-overlap":"同账户任务运行中，已跳过"][status] ?? status) }
 }
 struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: String, nextRunAt: Double?, history: [WakeRun] }
 
@@ -52,14 +53,15 @@ struct WakeupsView: View {
         }
     }
     private func taskCard(_ r: WakeRecord) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let needsDeploy = r.deployment == nil || r.deployment?.state == "deployment-unconfirmed" || statuses[r.id]?.installed == false
+        return VStack(alignment: .leading, spacing: 10) {
             HStack { Text(r.task.name).font(AppFont.section); Spacer(); Text(r.deployment.map { $0.state == "settings-pending" ? "部署待同步" : $0.state == "pending-removal" ? "待移除" : $0.state == "deployment-unconfirmed" ? "部署待确认" : $0.enabled ? "已部署" : "已停用" } ?? "未部署").foregroundStyle(.secondary) }
             Text("\(r.task.times.joined(separator: "、")) · \(r.task.model) · \(r.task.effort.isEmpty ? "模型默认 effort" : r.task.effort)").textSelection(.enabled)
             if let d = r.deployment { Text(d.target + " · " + (statuses[r.id]?.timezone ?? d.timezone) + (d.changed ? " · 有尚未部署的更改" : "")).font(AppFont.secondary).foregroundStyle(.secondary) }
             HStack {
                 Button("编辑") { editing = r.task }
-                Button(r.deployment == nil ? "部署" : r.deployment?.changed == true ? "更新部署" : "查看运行结果") { perform(r.deployment == nil || r.deployment?.changed == true ? "deploy" : "status", r.id) }.buttonStyle(.borderedProminent)
-                Menu("更多操作") { if let d = r.deployment { Button(d.enabled ? "停用" : "启用") { perform(d.enabled ? "disable" : "enable", r.id) }; Button("立即运行") { perform("run", r.id) }; Button("状态与记录") { perform("status", r.id) } }; Button(r.deployment == nil ? "删除草稿" : "移除自动任务", role: .destructive) { removal = r } }
+                Button(r.deployment == nil ? "部署" : needsDeploy ? "重新部署" : r.deployment?.changed == true ? "更新部署" : "查看运行结果") { perform(needsDeploy || r.deployment?.changed == true ? "deploy" : "status", r.id) }.buttonStyle(.borderedProminent)
+                Menu("更多操作") { if let d = r.deployment, !needsDeploy { Button(d.enabled ? "停用" : "启用") { perform(d.enabled ? "disable" : "enable", r.id) }; Button("立即运行") { perform("run", r.id) }; Button("状态与记录") { perform("status", r.id) } }; Button(r.deployment == nil ? "删除草稿" : "移除自动任务", role: .destructive) { removal = r } }
             }
             if let error = statusErrors[r.id] { Text("状态读取失败：" + error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
             if let status = statuses[r.id] {

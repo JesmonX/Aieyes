@@ -30,6 +30,7 @@ for scenario in ['empty','single','multi','long','failure','capacity']:
 print('Native six-state light/dark, settings, minimum size, reduced transparency and increased contrast screenshots passed')
 PY
 swift -module-cache-path .build/swift-module-cache scripts/verify-native-contrast.swift "$AIEYES_RENDER_ROOT"
+swift -module-cache-path .build/swift-module-cache scripts/verify-native-settings-snapshots.swift "$AIEYES_RENDER_ROOT"
 for scenario in empty single multi long failure capacity; do
   swift -module-cache-path .build/swift-module-cache scripts/verify-panel-transparency.swift "$AIEYES_RENDER_ROOT/$scenario"
 done

@@ -129,6 +129,21 @@ fn login_shell(shell: &str) -> bool {
 pub fn python(host: &Host, script: &str, args: &[String]) -> Result<serde_json::Value> {
     python_inner(host, script, args, false)
 }
+/// Bounded observer transport, independent of account pre-commands. Payload goes over stdin.
+pub fn session_request(host: &Host, request: serde_json::Value) -> Result<serde_json::Value> {
+    let loader = "import json,sys;p=json.load(sys.stdin);exec(compile(p['script'],'<aieyes-sessions>','exec'),{'__name__':'__main__','REQUEST':p['request'],'SCRIPT':p['script']})";
+    let cmd = command(host, &format!("exec python3 -c {}", quote(loader)))?;
+    let payload = serde_json::to_vec(
+        &serde_json::json!({"script":crate::session_hooks::REMOTE,"request":request}),
+    )?;
+    let output = process::run(cmd, payload, Duration::from_secs(12))?;
+    let line = output
+        .split(|b| *b == b'\n')
+        .rev()
+        .find(|l| !l.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("远程会话查询无响应"))?;
+    Ok(serde_json::from_slice(line)?)
+}
 pub fn account_python(host: &Host, script: &str, args: &[String]) -> Result<serde_json::Value> {
     python_inner(host, script, args, true)
 }

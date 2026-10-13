@@ -3,7 +3,7 @@
   const e = value => escapeHTML(value ?? '');
   let directorySelection = null, saveQueue = Promise.resolve(), pendingSaves = 0;
   const accountDrafts = new Map(), accountErrors = new Map();
-  let showCodex = false, detailKey = '', statusRows = [], statusLoading = false, statusLoaded = false, statusFullLoaded = false, cleanupRows = [], syncMessage = '', syncRunning = false, refreshTimer;
+  let showCodex = false, detailKey = '', statusRows = [], statusLoading = false, statusLoaded = false, statusFullLoaded = false, statusError = '', cleanupRows = [], syncMessage = '', syncRunning = false, refreshTimer;
   let statusRevision = 0, statusRefreshAgain = false;
   const sourceStatusRequests = new Map(), sourceStatusTasks = new Map();
   const antigravityRefreshTasks = new Map();
@@ -29,15 +29,20 @@
     const ids=machines(a.provider), rows=id=>statuses(a,id);
     return {total:ids.length,logged:ids.filter(id=>rows(id).some(loggedIn)).length,using:ids.filter(id=>rows(id).some(r=>r.current===true)).length,pending:ids.some(id=>!rows(id).length||rows(id).some(r=>r.current==null||r.credential==null||r.error))};
   }
-  function counts(a){const c=deviceCounts(a);return `已登录设备${c.logged}/${c.total} · 使用中设备${c.using}/${c.total}`+(c.pending?' · 有设备待确认':'');}
-  function countsHTML(key){const a=state.settings.accounts.find(a=>accountKey(a)===key);if(!a)return '';const c=deviceCounts(a);return `<span>已登录设备${c.logged}/${c.total}</span><span>使用中设备${c.using}/${c.total}</span>${c.pending?'<small>有设备待确认</small>':''}`;}
+  function counts(a){const c=deviceCounts(a);return `已登录设备 ${c.logged}/${c.total} · 使用中设备 ${c.using}/${c.total}`+(c.pending?' · 有设备待确认':'');}
+  function countsHTML(key){const a=state.settings.accounts.find(a=>accountKey(a)===key);if(!a)return '';const c=deviceCounts(a);return `<span class="device-count-line" title="${c.pending?'部分设备状态待确认，离线设备以上次检查为准':'已登录表示保留登录凭据，使用中表示当前选用此账号'}">已登录设备 ${c.logged}/${c.total} · 使用中设备 ${c.using}/${c.total}</span>`;}
   const repaint=()=>{
     document.querySelectorAll('[data-device-counts]').forEach(el=>{el.innerHTML=countsHTML(el.dataset.deviceCounts);});
-    if(state.page==='settings'&&state.settingsTab==='accounts'&&!document.getElementById('editor')?.open&&!document.activeElement?.matches('[data-account-field],[data-command-field]'))renderSettings(false);
+    if(state.page==='settings'&&state.settingsTab==='integrations'&&!document.getElementById('editor')?.open&&!document.activeElement?.matches('[data-account-field],[data-command-field]'))renderSettings(false);
   };
+  function ensureStatuses(provider=null) {
+    if(statusLoading||statusError||(provider?statusLoaded:statusFullLoaded))return;
+    return refreshStatuses(true,provider);
+  }
   async function refreshStatuses(refresh=true,provider=null){
     if(provider&&!state.settings.accounts.some(a=>a.provider===provider)){statusLoaded=true;return;}
-    if(statusLoading)return;statusLoading=true;
+    if(statusLoading)return;
+    const previousError=statusError;statusLoading=true;statusError='';
     const revision=statusRevision;
     try{
       const loaded=await api('accounts.status.get');if(revision===statusRevision)statusRows=Array.isArray(loaded)?loaded:[];
@@ -48,8 +53,9 @@
         try{const row=await api('accounts.status.refresh',{accountKey:accountKey(a),sourceId:s.id});if(revision===statusRevision){statusRows=statusRows.filter(r=>!(r.accountKey===row.accountKey&&r.sourceId===row.sourceId));statusRows.push(row);repaint();}}catch{/* Settings changed while this device was being checked. */}
       }
       if(refresh&&!provider&&revision===statusRevision)statusFullLoaded=true;
-    }catch(error){notify('设备状态读取失败：'+String(error),'error');}
-    finally{statusLoading=false;await syncIdentitySettings();repaint();if(statusRefreshAgain){statusRefreshAgain=false;void refreshStatuses(true,state.page==='settings'&&state.settingsTab==='accounts'?null:'codex');}}
+      if(previousError&&document.querySelector('#message .message-text')?.textContent===previousError)notify('');
+    }catch(error){statusError='设备状态读取失败：'+String(error);notify(statusError,'error');}
+    finally{statusLoading=false;await syncIdentitySettings();repaint();if(statusRefreshAgain){statusRefreshAgain=false;void refreshStatuses(true,state.page==='settings'&&state.settingsTab==='integrations'?null:'codex');}}
   }
   async function syncIdentitySettings(reportFailure=false) {
     if(!state.settings.accounts.length||pendingSaves||state.settingsSaving)return;
@@ -113,7 +119,7 @@
     const pref=AieyesUI.panelPreference();
     for(const a of added){const choice=pref.providers[a.provider];if(choice?.mode==='custom'&&!a.archived&&a.quotaEnabled){const keys=AieyesUI.panelAccounts(saved,[],pref)[a.provider]??[];if(keys.length<5&&!keys.includes(a.provider+':'+a.id))choice.keys=[...keys,a.provider+':'+a.id];}}
     if(added.length){try{localStorage.setItem('aieyes.panel.accounts.v2',JSON.stringify(pref));}catch{notify('账户已保存，本机面板偏好暂时无法写入','error');}}
-    statusRevision++;if(statusLoading)statusRefreshAgain=true;for(const id of sourceStatusRequests.keys())sourceStatusRequests.set(id,statusRevision);statusLoaded=false;statusFullLoaded=false;state.settings=saved;state.settingsDraft=structuredClone(saved);state.settingsBaseline=configKey(saved);state.lastQuota=0;
+    statusRevision++;if(statusLoading)statusRefreshAgain=true;for(const id of sourceStatusRequests.keys())sourceStatusRequests.set(id,statusRevision);statusLoaded=false;statusFullLoaded=false;statusError='';state.settings=saved;state.settingsDraft=structuredClone(saved);state.settingsBaseline=configKey(saved);state.lastQuota=0;
     window.AieyesTheme?.apply(saved.appearance);
   }
   async function commit(next, base=state.settings) {
@@ -133,17 +139,54 @@
     const sources=machineSources(provider,machine),status=window.AieyesAutomatic.summary(sources);
     return `<div class="list-row agent-auto-valuation"><div class="row-body"><strong>自动估值</strong><small data-auto-machine-status="${e(machine)}" data-auto-provider="${e(provider)}">${status}</small></div><button data-machine-estimates="${e(provider)}" data-machine="${e(machine)}" ${sources.length?'':'disabled'}>自动估值设置</button></div>`;
   }
+  let hookRows=[],hookReadAt=0,hookReading=false;
+  function hooksHTML(provider,machine){
+    if(!['claude','antigravity'].includes(provider))return '';
+    const sources=machineSources(provider,machine).filter((s,i,a)=>a.findIndex(v=>v.path===s.path)===i);
+    return sources.map(s=>`<div class="list-row"><div class="row-body"><strong>会话状态接入</strong><small data-session-hook-status="${e(s.id)}">自动接入 · ${e(s.path)}</small></div><button type="button" data-session-hook-action="repair" data-source="${e(s.id)}">修复接入</button><button type="button" data-session-hook-action="remove" data-source="${e(s.id)}">停用</button></div>`).join('');
+  }
+  function paintHooks(){
+    const labels={installed:'已接入',missing:'等待自动接入',disabled:'已停用',error:'接入失败'};
+    document.querySelectorAll('[data-session-hook-status]').forEach(el=>{
+      const row=hookRows.find(r=>r.sourceId===el.dataset.sessionHookStatus);
+      if(row)el.textContent=(labels[row.state]||row.state)+(row.error?' · '+row.error:'');
+    });
+  }
+  async function refreshHooks(){
+    if(hookReading||Date.now()-hookReadAt<30000)return;
+    hookReading=true;
+    try{const rows=await api('sessions.hooks.status');hookRows=Array.isArray(rows)?rows:[];hookReadAt=Date.now();paintHooks();}
+    catch(error){document.querySelectorAll('[data-session-hook-status]').forEach(el=>el.textContent='接入状态待确认');}
+    finally{hookReading=false;}
+  }
+  function navigate(target={}) {
+    const account=state.settings.accounts.find(a=>accountKey(a)===target.accountKey);
+    state.settingsAgent=account?.provider??target.provider??state.settingsAgent;
+    if(!configurations().some(a=>a.provider===state.settingsAgent))state.settingsAgent='codex';
+    detailKey=account?accountKey(account):'';showCodex=false;directorySelection=null;
+    try{localStorage.setItem('aieyes.settings.agent',state.settingsAgent);}catch(_){}
+  }
+  function integrationsHTML() {
+    const agent=configurations().find(a=>a.provider===state.settingsAgent)??configurations()[0];
+    if(!agent)return '<p>暂无 Agent 配置</p>';
+    state.settingsAgent=agent.provider;
+    let body;
+    if(directorySelection)body=agentsHTML();
+    else if(showCodex||state.settings.accounts.some(a=>accountKey(a)===detailKey))body=accountsHTML();
+    else body=`<section class="card agent-integration-header"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving?'disabled':''} ${agent.enabled?'checked':''}>启用</label></div>${agent.provider==='deepseek'?'<p class="muted">添加 API Key，通过本机查询账户余额。</p>':`<button type="button" data-agent-estimates="${e(agent.provider)}">估值与采样</button>`}</section>`+accountsHTML()+agentsHTML();
+    return `<div class="settings-layout">${settingsSidebar(configurations().map(a=>[a.provider,providers[a.provider]??a.provider]),agent.provider,'data-settings-agent','选择 Agent')}<div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
+  }
   function agentsHTML() {
-    if(directorySelection){const {provider,machine}=directorySelection;return `<button id="directories-back">返回 Agents</button><section class="card"><h2>${e(providers[provider])} · ${e(deviceName(machine))}</h2>${state.settings.sources.filter(s=>s.provider===provider&&machineId(s)===machine).map(s=>`<div class="list-row"><code class="row-body">${e(s.path)}</code><button data-source-advanced="${e(s.id)}">编辑目录</button><button class="danger" data-source-remove="${e(s.id)}">移除目录配置</button></div>`).join('')}<button data-source-add="${e(provider)}">添加目录</button><p class="muted">只配置采集位置，不移动文件。远程 Shell 位于服务器设置，前置命令位于账户设置。</p></section>`;}
-    return configurations().map(a=>`<section class="card agent-setup"><div class="between"><h2>${providerMark(a.provider)} ${e(providers[a.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(a.provider)}" ${state.settingsSaving?'disabled':''} ${a.enabled?'checked':''}>启用</label></div>${a.provider==='deepseek'?'<p class="muted">在账户中添加 API Key，通过本机查询余额。</p>':`<fieldset class="agent-machines"><legend>所在机器 · 可多选</legend>${[{id:'local',name:'本机',enabled:true},...state.settings.hosts].map(h=>`<div class="agent-machine"><div class="list-row"><label class="row-body"><input type="checkbox" role="switch" data-agent-machine="${e(a.provider)}" ${state.settingsSaving||!a.enabled?'disabled':''} value="${e(h.id)}" ${a.machineIds.includes(h.id)?'checked':''}>${e(h.name||h.target)}${h.enabled?'':' · 服务器已停用'}</label><button data-machine-directories="${e(a.provider)}" data-machine="${e(h.id)}">目录设置</button></div>${automaticMachineHTML(a.provider,h.id)}</div>`).join('')}</fieldset>${a.machineIds.length?'':'<p class="muted">未选择机器，暂不采集。</p>'}${state.settings.hosts.length?'':'<button data-agent-host>添加服务器</button>'}`}</section>`).join('');
+    if(directorySelection){const {provider,machine}=directorySelection;return `<button id="directories-back">返回 Agent 接入</button><section class="card"><h2>${e(providers[provider])} · ${e(deviceName(machine))}</h2>${state.settings.sources.filter(s=>s.provider===provider&&machineId(s)===machine).map(s=>`<div class="list-row"><code class="row-body">${e(s.path)}</code><button data-source-advanced="${e(s.id)}">编辑目录</button><button class="danger" data-source-remove="${e(s.id)}">移除目录配置</button></div>`).join('')}<button data-source-add="${e(provider)}">添加目录</button><p class="muted">只配置采集位置，不移动文件。远程 Shell 位于服务器设置，前置命令位于账户设置。</p></section>`;}
+    return configurations().filter(a=>a.provider===state.settingsAgent&&a.provider!=='deepseek').map(a=>`<section class="card agent-setup" id="agent-machines"><h2>机器与目录</h2>${a.provider==='deepseek'?'<p class="muted">在账户中添加 API Key，通过本机查询余额。</p>':`<fieldset class="agent-machines"><legend>所在机器 · 可多选</legend>${[{id:'local',name:'本机',enabled:true},...state.settings.hosts].map(h=>`<div class="agent-machine"><div class="list-row"><label class="row-body"><input type="checkbox" role="switch" data-agent-machine="${e(a.provider)}" ${state.settingsSaving||!a.enabled?'disabled':''} value="${e(h.id)}" ${a.machineIds.includes(h.id)?'checked':''}>${e(h.name||h.target)}${h.enabled?'':' · 服务器已停用'}</label><button data-machine-directories="${e(a.provider)}" data-machine="${e(h.id)}">目录设置</button></div>${automaticMachineHTML(a.provider,h.id)}${hooksHTML(a.provider,h.id)}</div>`).join('')}</fieldset>${a.machineIds.length?'':'<p class="muted">未选择机器，暂不采集。</p>'}${state.settings.hosts.length?'':'<button data-agent-host>添加服务器</button>'}`}</section>`).join('');
   }
   function accountsHTML() {
     if(showCodex)return '<button id="accounts-back">返回账户</button>'+window.AieyesCodexAuth.html();
     const detail=state.settings.accounts.find(a=>accountKey(a)===detailKey);
     if(detail)return detailsHTML(detail);
     const row=a=>`<div class="list-row"><div class="row-body"><strong>${e(a.name)}</strong><small>${e(counts(a))}</small>${statusRows.find(r=>r.accountKey===accountKey(a)&&r.current===true&&r.identity)?`<small class="account-identity">${e(identityText(statusRows.find(r=>r.accountKey===accountKey(a)&&r.current===true&&r.identity)))}</small>`:''}</div><button data-account-edit="${e(accountKey(a))}">设置</button></div>`;
-    const groups=configurations().filter(config=>config.enabled||state.settings.accounts.some(a=>a.provider===config.provider&&!a.archived));
-    return `<div class="card"><div class="between"><button id="account-status-refresh" ${statusLoading?'disabled':''}>${statusLoading?'检查中…':'刷新设备状态'}</button></div><p class="muted">一个账户就是一个实际账号，可在多台机器登录。“已登录”表示机器保存了该账号的登录；“使用中”表示当前选用该账号。离线状态以上次检查为准。</p>${syncHTML()}</div>`+groups.map(config=>`<section class="card account-agent-group"><div class="between"><h2>${providerMark(config.provider)} ${e(providers[config.provider])}</h2><button data-account-add="${e(config.provider)}" class="primary" ${config.enabled?'':'disabled'}>添加账户</button></div>${state.settings.accounts.filter(a=>a.provider===config.provider&&!a.archived).map(row).join('')||'<p class="muted">尚未添加账户</p>'}<div class="account-machine-summary">${machines(config.provider).map(id=>{
+    const groups=configurations().filter(config=>config.provider===state.settingsAgent);
+    return `<div class="card" id="agent-accounts"><div class="between"><h2>账户</h2><button id="account-status-refresh" ${statusLoading?'disabled':''}>${statusLoading?'检查中…':'刷新设备状态'}</button></div><p class="muted">一个账户就是一个实际账号，可在多台机器登录。“已登录”表示机器保存了该账号的登录；“使用中”表示当前选用该账号。离线状态以上次检查为准。</p>${syncHTML()}</div>`+groups.map(config=>`<section class="card account-agent-group"><div class="between"><h2>${providerMark(config.provider)} ${e(providers[config.provider])}</h2><button data-account-add="${e(config.provider)}" class="primary" ${config.enabled?'':'disabled'}>添加账户</button></div>${state.settings.accounts.filter(a=>a.provider===config.provider&&!a.archived).map(row).join('')||'<p class="muted">尚未添加账户</p>'}<div class="account-machine-summary">${machines(config.provider).map(id=>{
       const sources=state.settings.sources.filter(s=>s.provider===config.provider&&machineId(s)===id&&s.enabled);
       const rows=statusRows.filter(r=>r.machineId===id&&r.accountKey.startsWith(config.provider+':')&&sources.some(s=>s.id===r.sourceId));
       const names=state.settings.accounts.filter(a=>a.provider===config.provider&&rows.some(r=>r.accountKey===accountKey(a)&&r.current===true)).map(a=>a.name);
@@ -151,10 +194,11 @@
       const source=sources.find(s=>rows.some(r=>r.sourceId===s.id&&(r.current===true||r.credential===true)))||sources[0];
       return `<div class="list-row"><span>${e(deviceName(id))}</span><span class="row-body muted">${e(stateText)}</span>${config.provider==='antigravity'&&source?`<button data-agy-login="${e(source.id)}">登录 / 检查</button>`:''}${config.provider==='codex'&&source?(rows.some(r=>r.current===true||r.credential===true)?`<button data-device-manage="${e(source.id)}" data-intent="switch">切换账户</button>`:`<button data-device-manage="${e(source.id)}" data-intent="login">登录</button>`):''}</div>`;
     }).join('')}</div></section>`).join('')+
-    (state.settings.accounts.some(a=>a.archived)?`<details class="card" data-agent-detail="archived-accounts"><summary>已归档账户</summary>${state.settings.accounts.filter(a=>a.archived).map(a=>`<div class="list-row"><span class="row-body">${e(providers[a.provider])} · ${e(a.name)}</span><button data-account-restore="${e(accountKey(a))}">恢复</button><button class="danger" data-account-delete="${e(accountKey(a))}">删除账户</button></div>`).join('')}</details>`:'')+
+    (state.settingsAgent==='codex'?(window.AieyesCodexAPI?.html()??''):'')+
+    (state.settings.accounts.some(a=>a.archived&&a.provider===state.settingsAgent)?`<details class="card" data-agent-detail="archived-accounts"><summary>已归档账户</summary>${state.settings.accounts.filter(a=>a.archived&&a.provider===state.settingsAgent).map(a=>`<div class="list-row"><span class="row-body">${e(providers[a.provider])} · ${e(a.name)}</span><button data-account-restore="${e(accountKey(a))}">恢复</button><button class="danger" data-account-delete="${e(accountKey(a))}">删除账户</button></div>`).join('')}</details>`:'')+
     (cleanupRows.length?`<details class="card" data-agent-detail="abandoned-tasks"><summary>已解除管理的远端任务（可能仍在运行）</summary>${cleanupRows.map(r=>`<h3>${e(r.name)}</h3>${r.tasks.map(t=>`<p>${e(t.name)} · ${e(t.machine)} · <code>${e(t.root)}</code></p>`).join('')}`).join('')}</details>`:'');
   }
-  function syncHTML(){return syncMessage?`<p class="error">${e(syncMessage)} <button data-deployment-sync>重试同步</button></p>`:'';}
+  function syncHTML(){return (statusError?`<p class="error" id="account-status-error" role="alert">${e(statusError)}。可点击“刷新设备状态”重试。</p>`:'')+(syncMessage?`<p class="error">${e(syncMessage)} <button data-deployment-sync>重试同步</button></p>`:'');}
   function legacyCommand(s){return s.quotaPreCommand||state.settings.hosts.find(h=>h.id===s.hostId)?.preCommand||'';}
   function deviceCommand(a,id){const configured=a.deviceSettings?.find(d=>d.machineId===id);if(configured)return configured.preCommand;const values=[...new Set(state.settings.sources.filter(s=>s.provider===a.provider&&machineId(s)===id).map(legacyCommand))];return values.length===1?values[0]:'';}
   const draftValue=(a,field,fallback)=>accountDrafts.get(accountKey(a)+':'+field)??fallback;
@@ -176,7 +220,7 @@
   }
   function detailsHTML(a){
     const selected=AieyesUI.panelAccounts(state.settings,state.dashboard?.quotaOrder??[]),isSelected=selected[a.provider]?.includes(accountKey(a));
-    return `<div class="between"><button id="account-detail-back">返回账户</button><button id="account-status-refresh" ${statusLoading?'disabled':''}>${statusLoading?'检查中…':'刷新设备状态'}</button></div><section class="card account-config"><h2>${providerMark(a.provider)} ${e(a.name)}</h2><p>${e(counts(a))}</p>${state.dashboard?.quotas?.find(q=>q.provider===a.provider&&q.accountId===a.id)?.error?`<p class="error">额度查询：${e(state.dashboard.quotas.find(q=>q.provider===a.provider&&q.accountId===a.id).error)}</p>`:''}<label>优先查询位置<select data-account-priority="${e(accountKey(a))}">${option('','自动 · 优先本机',draftValue(a,'quotaSourceId',a.quotaSourceId)||'')}${state.settings.sources.filter(s=>linked(a,s)).map(s=>option(s.id,deviceName(machineId(s))+' · '+s.name+(s.enabled?'':' · 已暂停'),draftValue(a,'quotaSourceId',a.quotaSourceId)||'')).join('')}</select></label><div class="actions"><label><input type="checkbox" data-account-quota="${e(accountKey(a))}" ${draftValue(a,'quotaEnabled',a.quotaEnabled)?'checked':''}>显示并查询额度</label><label><input type="checkbox" data-account-panel="${e(accountKey(a))}" ${isSelected?'checked':''} ${!a.quotaEnabled?'disabled':''}>在面板显示</label><button data-account-panel-manage>调整面板选择</button>${a.provider!=='codex'?`<button data-account-connect="${e(accountKey(a))}">连接机器</button>`:''}</div><label>查询间隔（秒）<input id="account-interval" data-account-field="quotaRefreshSeconds" data-account="${e(accountKey(a))}" type="number" min="30" max="86400" value="${e(draftValue(a,'quotaRefreshSeconds',a.quotaRefreshSeconds??''))}" placeholder="沿用全局 · ${state.settings.refreshSeconds} 秒"></label><label>账户名称<input id="account-name" data-account-field="name" data-account="${e(accountKey(a))}" value="${e(draftValue(a,'name',a.name))}"></label><label><input type="checkbox" data-account-archive="${e(accountKey(a))}" ${draftValue(a,'archived',a.archived)?'checked':''}>归档账户</label><p class="muted tiny">选择项即时保存；文本离开输入框保存。${pendingSaves?'正在保存…':''}</p>${[...accountErrors].filter(([key])=>key.startsWith(accountKey(a)+':')).map(([key,message])=>`<p class="error">${e(message)} <button data-account-retry="${e(key)}">重试保存</button></p>`).join('')}${syncHTML()}</section>`+
+    return `<div class="between"><button id="account-detail-back">返回账户</button><button id="account-status-refresh" ${statusLoading?'disabled':''}>${statusLoading?'检查中…':'刷新设备状态'}</button></div><section class="card account-config"><h2>${providerMark(a.provider)} ${e(a.name)}</h2><p>${e(counts(a))}</p>${state.dashboard?.quotas?.find(q=>q.provider===a.provider&&q.accountId===a.id)?.error?`<p class="error">额度查询：${e(state.dashboard.quotas.find(q=>q.provider===a.provider&&q.accountId===a.id).error)}</p>`:''}<label>优先查询位置<select data-account-priority="${e(accountKey(a))}">${option('','自动 · 优先本机',draftValue(a,'quotaSourceId',a.quotaSourceId)||'')}${state.settings.sources.filter(s=>linked(a,s)).map(s=>option(s.id,deviceName(machineId(s))+' · '+s.name+(s.enabled?'':' · 已暂停'),draftValue(a,'quotaSourceId',a.quotaSourceId)||'')).join('')}</select></label><div class="actions"><label><input type="checkbox" data-account-quota="${e(accountKey(a))}" ${draftValue(a,'quotaEnabled',a.quotaEnabled)?'checked':''}>显示并查询额度</label><label><input type="checkbox" data-account-panel="${e(accountKey(a))}" ${isSelected?'checked':''} ${!a.quotaEnabled||(!isSelected&&(selected[a.provider]?.length??0)>=5)?'disabled':''}>在面板显示</label><button data-account-panel-manage>调整面板选择</button>${a.provider!=='codex'?`<button data-account-connect="${e(accountKey(a))}">${a.provider==='deepseek'?'更新 API Key':'连接机器'}</button>`:''}</div><p class="tiny muted" role="status">面板已选择 ${selected[a.provider]?.length??0}/5 个账户；每个 Agent 最多显示 5 个账户。${!isSelected&&(selected[a.provider]?.length??0)>=5?'请先取消其他账户的选择。':''}</p><label>查询间隔（秒）<input id="account-interval" data-account-field="quotaRefreshSeconds" data-account="${e(accountKey(a))}" type="number" min="30" max="86400" value="${e(draftValue(a,'quotaRefreshSeconds',a.quotaRefreshSeconds??''))}" placeholder="沿用全局 · ${state.settings.refreshSeconds} 秒"></label><label>账户名称<input id="account-name" data-account-field="name" data-account="${e(accountKey(a))}" value="${e(draftValue(a,'name',a.name))}"></label><label><input type="checkbox" data-account-archive="${e(accountKey(a))}" ${draftValue(a,'archived',a.archived)?'checked':''}>归档账户</label><p class="muted tiny">选择项即时保存；文本离开输入框保存。${pendingSaves?'正在保存…':''}</p>${[...accountErrors].filter(([key])=>key.startsWith(accountKey(a)+':')).map(([key,message])=>`<p class="error">${e(message)} <button data-account-retry="${e(key)}">重试保存</button></p>`).join('')}${syncHTML()}</section>`+
     machines(a.provider,true).map(id=>{
       const sources=state.settings.sources.filter(s=>s.provider===a.provider&&machineId(s)===id),active=machines(a.provider).includes(id),rows=statuses(a,id);
       const legacy=[...new Set(sources.map(legacyCommand))],conflict=legacy.length>1&&!a.deviceSettings?.some(d=>d.machineId===id);
@@ -203,13 +247,13 @@
     $('#field-hostId').disabled=true;bindProxy('source');bindPathSelection(true);
   }
   function removeDirectory(source){showEditor('移除目录配置','<p>仅解除此目录的采集和账户连接；文件、登录凭证和历史记录保留。</p><code>'+e(source.path)+'</code>',async()=>{accept(await api('sources.remove',{sourceId:source.id,baseSource:source}));markSaved();backgroundRefresh();renderSettings(false);});$('#editor-form button[type=submit]').textContent='移除配置';}
-  function editAccount(account){detailKey=accountKey(account);showCodex=false;renderSettings(false);}
+  function editAccount(account){state.settingsAgent=account.provider;detailKey=accountKey(account);showCodex=false;renderSettings(false);}
   function addAccount(account, selectedProvider) {
-    const enabled=configurations().filter(a=>a.enabled), initial=account?.provider||selectedProvider||enabled[0]?.provider;
+    const enabled=configurations().filter(a=>a.enabled), initial=account?.provider||selectedProvider||state.settingsAgent||enabled[0]?.provider;
     if(!initial)return;
     if(initial==='codex'){detailKey=account?accountKey(account):'';showCodex=true;window.AieyesCodexAuth.open(account?.id||'');renderSettings(false);return;}
     let secret=null, secretSourceId=crypto.randomUUID();
-    showEditor(providers[initial]+' · '+(account?'连接机器':'添加账户'),`<input id="field-provider" type="hidden" name="provider" value="${e(initial)}">`+'<div id="account-connection-fields"></div>',async f=>{
+    showEditor(providers[initial]+' · '+(account?(initial==='deepseek'?'更新 API Key':'连接机器'):'添加账户'),`<input id="field-provider" type="hidden" name="provider" value="${e(initial)}">`+'<div id="account-connection-fields"></div>',async f=>{
       const provider=f.get('provider')||account?.provider, accountId=account?.id||'';
       const name=account?.name||providers[provider]+' 账户',base=structuredClone(state.settings);
       if(provider==='deepseek'){
@@ -228,12 +272,24 @@
       $('#account-connection-fields').innerHTML='<p class="muted">'+(provider==='deepseek'?'添加账号的 API Key，之后可修改显示名称。':'读取所选机器上已有账号的登录。')+'</p>'+(provider==='deepseek'?field('apiKey','API Key','','','password'):'<fieldset id="account-source-options"><legend>已有登录的机器 · 可多选</legend></fieldset>');
       const drawSources=()=>{
         const id=account?.id||'';
-        if($('#account-source-options'))$('#account-source-options').innerHTML=state.settings.sources.filter(s=>s.enabled&&s.provider===provider&&(!s.accountId||s.accountId===id)).map(s=>`<label><input type="checkbox" name="sourceIds" value="${e(s.id)}">${e(s.name)} · ${e(machineName(s))}</label>${provider==='antigravity'?`<button type="button" data-agy-login="${e(s.id)}">登录 / 检查</button>`:''}`).join('')||'<p>没有可用位置。请先在 Agents 选择机器；同一目录只能连接一个当前登录账户。</p>';
+        if($('#account-source-options'))$('#account-source-options').innerHTML=state.settings.sources.filter(s=>s.enabled&&s.provider===provider&&(!s.accountId||s.accountId===id)).map(s=>`<label><input type="checkbox" name="sourceIds" value="${e(s.id)}">${e(s.name)} · ${e(machineName(s))}</label>${provider==='antigravity'?`<button type="button" data-agy-login="${e(s.id)}">登录 / 检查</button>`:''}`).join('')||'<p>没有可用位置。请先在 Agent 接入选择机器；同一目录只能连接一个当前登录账户。</p>';
       };drawSources();
-      $('#editor-form button[type=submit]').textContent=account?'保存连接':'添加账号';
+      $('#editor-form button[type=submit]').textContent=account?(provider==='deepseek'?'更新 API Key':'保存连接'):'添加账号';
     };draw();
   }
   function bind() {
+    paintHooks();
+    if(document.querySelector('[data-session-hook-status]'))void refreshHooks();
+    document.querySelectorAll('[data-session-hook-action]').forEach(button=>button.onclick=async()=>{
+      const controls=[...document.querySelectorAll('[data-session-hook-action]')];controls.forEach(b=>b.disabled=true);
+      try{
+        const rows=await api('sessions.hooks.'+button.dataset.sessionHookAction,{sourceId:button.dataset.source});
+        if(Array.isArray(rows))for(const row of rows){hookRows=hookRows.filter(r=>r.sourceId!==row.sourceId);hookRows.push(row);}paintHooks();
+      }catch(error){notify(String(error),'error');}
+      finally{controls.forEach(b=>b.disabled=false);}
+    });
+    bindSettingsSidebar('data-settings-agent',provider=>{navigate({provider});renderSettings();});
+    document.querySelectorAll('[data-agent-estimates]').forEach(button=>button.onclick=()=>openProviderEstimates(button.dataset.agentEstimates));
     document.querySelectorAll('[data-agent-enable],[data-agent-machine]').forEach(input=>input.onchange=()=>run(async()=>{
       const provider=input.dataset.agentEnable||input.dataset.agentMachine,a=configurations().find(a=>a.provider===provider);
       const params=input.dataset.agentEnable?{provider,enabled:input.checked,...(input.checked&&!a.machineIds.length?{machineIds:['local']}:{})}:{provider,machineIds:[...document.querySelectorAll('[data-agent-machine]')].filter(i=>i.dataset.agentMachine===provider&&i.checked).map(i=>i.value)};
@@ -247,11 +303,11 @@
     document.querySelectorAll('[data-source-advanced]').forEach(b=>b.onclick=()=>advanced(state.settings.sources.find(s=>s.id===b.dataset.sourceAdvanced)));
     document.querySelectorAll('[data-source-add]').forEach(b=>b.onclick=()=>advanced(null,b.dataset.sourceAdd));
     document.querySelectorAll('[data-agent-host]').forEach(b=>b.onclick=()=>{state.settingsTab='hosts';renderSettings(false);editItem();});
-    if($('#accounts-back'))$('#accounts-back').onclick=()=>{showCodex=false;statusLoaded=false;statusFullLoaded=false;renderSettings(false);};
+    if($('#accounts-back'))$('#accounts-back').onclick=()=>{showCodex=false;statusLoaded=false;statusFullLoaded=false;statusError='';renderSettings(false);};
     if($('#account-detail-back'))$('#account-detail-back').onclick=()=>{detailKey='';renderSettings(false);};
     if($('#account-status-refresh'))$('#account-status-refresh').onclick=()=>refreshStatuses(true);
     document.querySelectorAll('[data-deployment-sync]').forEach(b=>b.onclick=syncDeployments);
-    if(state.settingsTab==='accounts'&&!showCodex&&!statusFullLoaded&&!statusLoading)void refreshStatuses(true);
+    if(state.settingsTab==='integrations'&&!showCodex)void ensureStatuses();
     document.querySelectorAll('[data-account-add]').forEach(b=>b.onclick=()=>addAccount(null,b.dataset.accountAdd));
     const account=key=>state.settings.accounts.find(a=>a.provider+':'+a.id===key);
     document.querySelectorAll('[data-account-edit]').forEach(b=>b.onclick=()=>{detailKey=b.dataset.accountEdit;renderSettings(false);});
@@ -270,7 +326,7 @@
     document.querySelectorAll('[data-device-manage]').forEach(b=>b.onclick=()=>{showCodex=true;window.AieyesCodexAuth.open('',b.dataset.deviceManage,b.dataset.intent);renderSettings(false);});
     document.querySelectorAll('[data-account-connect]').forEach(b=>b.onclick=()=>{const a=account(b.dataset.accountConnect);if(a.provider==='codex'){showCodex=true;window.AieyesCodexAuth.open(a.id);renderSettings(false);}else addAccount(a);});
     document.querySelectorAll('[data-account-restore]').forEach(b=>b.onclick=()=>run(async()=>{const next=structuredClone(state.settings),a=next.accounts.find(a=>a.provider+':'+a.id===b.dataset.accountRestore);a.archived=false;await commit(next);}));
-    document.querySelectorAll('[data-account-panel]').forEach(i=>i.onchange=()=>{const a=account(i.dataset.accountPanel),pref=AieyesUI.panelPreference(),keys=(AieyesUI.panelAccounts(state.settings,state.dashboard?.quotaOrder??[],pref)[a.provider]??[]).filter(k=>k!==i.dataset.accountPanel);if(i.checked&&keys.length<5)keys.push(i.dataset.accountPanel);pref.providers[a.provider]={mode:'custom',keys};try{localStorage.setItem('aieyes.panel.accounts.v2',JSON.stringify(pref));renderSettings(false);}catch(error){i.checked=!i.checked;notify('无法保存面板选择：'+error,'error');}});
+    document.querySelectorAll('[data-account-panel]').forEach(i=>i.onchange=()=>{const a=account(i.dataset.accountPanel),pref=AieyesUI.panelPreference(),keys=(AieyesUI.panelAccounts(state.settings,state.dashboard?.quotaOrder??[],pref)[a.provider]??[]).filter(k=>k!==i.dataset.accountPanel);if(i.checked){if(keys.length>=5){i.checked=false;notify('每个 Agent 最多显示 5 个账户，请先取消其他账户的选择。','error');return;}keys.push(i.dataset.accountPanel);}pref.providers[a.provider]={mode:'custom',keys};try{localStorage.setItem('aieyes.panel.accounts.v2',JSON.stringify(pref));renderSettings(false);}catch(error){i.checked=!i.checked;notify('无法保存面板选择：'+error,'error');}});
     document.querySelectorAll('[data-account-panel-manage]').forEach(b=>b.onclick=openPanelAccounts);
     if(showCodex)window.AieyesCodexAuth.bind();
   }
@@ -279,8 +335,8 @@
     for(const [key,value] of [...accountDrafts]){const a=state.settings.accounts.find(a=>key.startsWith(accountKey(a)+':'));if(a)await queueAccountField(a,key.slice(accountKey(a).length+1),value);}
     if(accountErrors.size){notify('账户设置尚未保存，请修正输入或重试。','error');return false;}return true;
   }
-  window.AieyesAgentSettings={flush,agentsHTML,accountsHTML,bind,commit,accept,advanced,editAccount,addAccount,profiles,linked,deviceCounts,countsHTML,refreshStatuses,refreshCodexSource,refreshAntigravitySource,syncIdentitySettings,syncDeployments,get statusLoaded(){return statusLoaded;},get statusBusy(){return statusLoading;},get antigravityRefreshing(){return antigravityRefreshTasks.size>0;},openDetails(a){detailKey=accountKey(a);showCodex=false;state.page='settings';state.settingsTab='accounts';render();}};
-  void window.AieyesApp.ready.then(()=>{if(!statusLoaded)return refreshStatuses(true,'codex');});
+  window.AieyesAgentSettings={flush,navigate,integrationsHTML,agentsHTML,accountsHTML,bind,commit,accept,advanced,editAccount,addAccount,profiles,linked,deviceCounts,countsHTML,ensureStatuses,refreshStatuses,refreshCodexSource,refreshAntigravitySource,syncIdentitySettings,syncDeployments,get statusLoaded(){return statusLoaded;},get statusBusy(){return statusLoading;},get antigravityRefreshing(){return antigravityRefreshTasks.size>0;},openDetails(a){return openSettings({provider:a.provider,accountKey:accountKey(a)});}};
+  void window.AieyesApp.ready.then(()=>ensureStatuses('codex'));
 })();
 
 // A separate modal keeps the connection form intact during the CLI's authorization flow.

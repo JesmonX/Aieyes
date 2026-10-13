@@ -144,7 +144,12 @@ fn classify(config: &toml::Value, env: &[u8]) -> Usage {
         .and_then(toml::Value::as_str)
         .and_then(|key| environment(env, key))
         .is_some();
-    if endpoint && (token || key) {
+    let helper = provider
+        .get("auth")
+        .and_then(|v| v.get("command"))
+        .and_then(toml::Value::as_str)
+        .is_some_and(|v| Path::new(v).is_absolute());
+    if endpoint && (token || key || helper) {
         Usage::IndependentApi
     } else {
         Usage::UnknownProfile
@@ -229,6 +234,49 @@ fn inspect_with_system(
         };
         if let Some(layer) = layer {
             merge(&mut config, layer);
+        }
+    }
+    if let Some(started) = started {
+        let history = home.join(".aieyes/api/default-history.json");
+        if history.exists() {
+            let snapshot = (|| -> Option<()> {
+                let bytes = std::fs::read(history).ok()?;
+                if bytes.len() > 4 * 1024 * 1024 {
+                    return None;
+                }
+                let entries: Vec<serde_json::Value> = serde_json::from_slice(&bytes).ok()?;
+                let started = started
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .ok()?
+                    .as_secs_f64();
+                for entry in entries {
+                    if started + 1.0 < entry["startedAt"].as_f64()? {
+                        let table = config.as_table_mut()?;
+                        for key in ["model_provider", "model_providers"] {
+                            if entry["before"][key].is_null() {
+                                table.remove(key);
+                            } else {
+                                table.insert(
+                                    key.into(),
+                                    serde_json::from_value(entry["before"][key].clone()).ok()?,
+                                );
+                            }
+                        }
+                        return Some(());
+                    }
+                    if started <= entry["completedAt"].as_f64()? + 1.0 {
+                        return None;
+                    }
+                }
+                Some(())
+            })();
+            if snapshot.is_none() {
+                if profile.is_none() {
+                    return Usage::UnknownProfile;
+                }
+                incomplete_base = true;
+                config = toml::Value::Table(Default::default());
+            }
         }
     }
     let mut alternatives = Vec::new();

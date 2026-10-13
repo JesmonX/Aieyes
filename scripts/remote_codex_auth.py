@@ -221,9 +221,9 @@ def process_auth_usage(args, env, started, system=pathlib.Path('/etc/codex/confi
             if arg in ('--profile', '-p'): profile = args[index]
             else: overrides.append(args[index])
         elif arg.startswith('--profile='): profile = arg.split('=', 1)[1]
-        elif arg.startswith('-p') and len(arg) > 2: profile = arg[2:].removeprefix('=')
+        elif arg.startswith('-p') and len(arg) > 2: profile = arg[3:] if arg[2:3] == '=' else arg[2:]
         elif arg.startswith('--config='): overrides.append(arg.split('=', 1)[1])
-        elif arg.startswith('-c') and len(arg) > 2: overrides.append(arg[2:].removeprefix('='))
+        elif arg.startswith('-c') and len(arg) > 2: overrides.append(arg[3:] if arg[2:3] == '=' else arg[2:])
         index += 1
     fallback = 'unknownProfile' if profile is not None else 'account'
     def merge(base, layer):
@@ -265,6 +265,8 @@ def process_auth_usage(args, env, started, system=pathlib.Path('/etc/codex/confi
         token = table.get('experimental_bearer_token')
         key = env.get(table.get('env_key', ''))
         credential = any(isinstance(v, str) and v.strip() for v in (token, key))
+        helper = (table.get('auth') or {}).get('command')
+        credential = credential or isinstance(helper, str) and os.path.isabs(helper)
         return 'independentApi' if url.scheme in ('http', 'https') and url.hostname and credential else 'unknownProfile'
     import copy
     import urllib.parse
@@ -275,6 +277,20 @@ def process_auth_usage(args, env, started, system=pathlib.Path('/etc/codex/confi
         for path in (system, home / 'config.toml'):
             try: merge(config, load(path) or {})
             except (OSError, ValueError): config, incomplete_base = {}, True
+        history_path = home / '.aieyes/api/default-history.json'
+        if started is not None and history_path.exists():
+            try:
+                if history_path.stat().st_size > 4*1024*1024: raise ValueError('unconfirmed config history')
+                for entry in json.loads(history_path.read_text()):
+                    if started + 1 < entry['startedAt']:
+                        for key in ('model_provider', 'model_providers'):
+                            if entry['before'].get(key) is None: config.pop(key, None)
+                            else: config[key] = entry['before'][key]
+                        break
+                    if started <= entry['completedAt'] + 1: raise ValueError('configuration changed during process launch')
+            except (OSError, ValueError, KeyError, TypeError):
+                if profile is None: return 'unknownProfile'
+                config, incomplete_base = {}, True
         alternatives = []
         if profile is not None:
             if not re.fullmatch(r'[A-Za-z0-9_-]+', profile): return 'unknownProfile'
@@ -316,7 +332,7 @@ def switch_running(confirmed=(), proc_root=pathlib.Path('/proc'), preserved=None
                 continue
             name = (entry / 'comm').read_text().strip().lower()
             try:
-                executable = str((entry / 'exe').readlink())
+                executable = os.readlink(str(entry / 'exe'))
                 name = pathlib.Path(executable).name.lower()
             except OSError:
                 executable = name
@@ -939,6 +955,55 @@ def with_credentials(loc, profile_id):
             yield managed
         finally:
             recover(root)
+
+
+def wakeup(loc, profile_id, manifest, cwd):
+    """Use access-token auth while the daily CLI keeps refresh-token authority."""
+    root = safe(pathlib.Path(os.path.expanduser(loc['path']))).resolve()
+    with Lock(root):
+        require_file(root)
+        recover(root)
+        p = profile(root, profile_id)
+        auth = current_auth(root, p)
+        try:
+            token_claims = json.loads(base64.urlsafe_b64decode(auth['tokens']['access_token'].split('.')[1] + '==='))
+        except (KeyError, IndexError, ValueError):
+            token_claims = {}
+        if token_claims.get('exp', time.time() + 3600) <= time.time() + 30 and (active(root) != p['identity']['key'] or not running(root)):
+            auth = renew(loc, root, p)
+        initial_identity = identity(auth)
+        access = auth['tokens']['access_token']
+        def refresh(params):
+            nonlocal access
+            if params.get('previousAccountId', initial_identity['workspace']) != initial_identity['workspace']:
+                raise ValueError('刷新请求工作区不一致')
+            latest = current_auth(root, p)
+            if identity(latest)['key'] != initial_identity['key']:
+                raise ValueError('账号已改变，已停止唤醒')
+            if latest['tokens']['access_token'] == access:
+                return None
+            access = latest['tokens']['access_token']
+            value = external(latest)
+            return {k: value[k] for k in ('accessToken', 'chatgptAccountId', 'chatgptPlanType')}
+        deadline = time.monotonic() + 120
+        with Rpc(loc, layout(root, profile_id, 'wake')) as rpc:
+            rpc.login(auth)
+            thread = rpc.call('thread/start', dict(model=manifest['model'], modelProvider='openai', cwd=str(cwd), approvalPolicy='never', sandbox='read-only', ephemeral=True, baseInstructions='Reply briefly. Do not use tools.', config={'features.shell_tool':False}), refresh)['thread']['id']
+            params = dict(threadId=thread, input=[dict(type='text', text=manifest['args'][-1])])
+            if manifest.get('effort'):
+                params['effort'] = manifest['effort']
+            turn = rpc.call('turn/start', params, refresh)['turn']['id']
+            while time.monotonic() < deadline:
+                event = rpc.receive(deadline - time.monotonic())
+                if 'id' in event:
+                    result = refresh(event.get('params') or {}) if event.get('method') == 'account/chatgptAuthTokens/refresh' else None
+                    rpc.send(dict(id=event['id'], result=result) if result else dict(id=event['id'], error=dict(code=-32000, message='Wakeup does not authorize tools or credential rotation')))
+                params = event.get('params') or {}
+                if event.get('method') == 'turn/completed' and params.get('threadId') == thread and (params.get('turn') or {}).get('id') == turn:
+                    if params['turn'].get('status') != 'completed':
+                        raise ValueError('Codex 模型调用未完成；请检查认证、模型及网络')
+                    return
+            raise TimeoutError('Codex 唤醒超时')
 
 if __name__ == '__main__':
     try:

@@ -12,9 +12,9 @@ fn xml(s: &str) -> String {
 }
 fn installed_runner(root: &Path) -> Result<PathBuf> {
     let v: Value = serde_json::from_slice(&fs::read(root.join("runtime.json"))?)?;
-    Ok(PathBuf::from(
-        v["runner"].as_str().context("执行器路径缺失")?,
-    ))
+    let path = PathBuf::from(v["runner"].as_str().context("执行器路径缺失")?);
+    ensure!(path.is_file(), "执行器文件缺失；请重新部署");
+    Ok(path)
 }
 fn run_system(program: &str, args: &[String]) -> Result<Vec<u8>> {
     let mut cmd = Command::new(program);
@@ -84,6 +84,11 @@ fn register(root: &Path, exe: &Path, remove: bool) -> Result<()> {
             xml(&root.to_string_lossy())
         );
         let old = fs::read(&path).ok();
+        if old.as_deref() == Some(contents.as_bytes())
+            && run_system("launchctl", &["print".into(), service.clone()]).is_ok()
+        {
+            return Ok(());
+        }
         if run_system("launchctl", &["print".into(), service.clone()]).is_ok() {
             run_system("launchctl", &["bootout".into(), service])?;
         }
@@ -216,18 +221,19 @@ pub fn control(root: &Path, id: &str, action: &str) -> Result<Value> {
                     String::from_utf8_lossy(&v).contains(&format!("# {}", label(root)))
                 })
             };
+            let installed = m.is_some() && registered && installed_runner(root).is_ok();
             let next = m
                 .as_ref()
-                .filter(|m| m.enabled && registered)
+                .filter(|m| m.enabled && installed)
                 .map(|m| next_run_from(root, id, &m.times, chrono::Local::now()))
                 .transpose()?
                 .flatten();
             Ok(
-                json!({"installed":m.is_some()&&registered,"enabled":m.as_ref().is_some_and(|m|m.enabled),"timezone":chrono::Local::now().format("%Z %:z").to_string(),"nextRunAt":next,"history":runner::history(root,id)?}),
+                json!({"installed":installed,"enabled":m.as_ref().is_some_and(|m|m.enabled),"timezone":chrono::Local::now().format("%Z %:z").to_string(),"nextRunAt":next,"history":runner::history(root,id)?}),
             )
         }
         "run" => {
-            ensure!(path.is_file(), "部署文件不存在");
+            ensure!(path.is_file(), "任务文件缺失；请重新部署");
             let mut cmd = Command::new(installed_runner(root)?);
             cmd.arg("--wake-runner")
                 .arg(root)
@@ -243,6 +249,7 @@ pub fn control(root: &Path, id: &str, action: &str) -> Result<Value> {
             Ok(json!({"started":true}))
         }
         "enable" | "disable" => {
+            ensure!(path.is_file(), "任务文件缺失；请重新部署");
             let mut m: Manifest = serde_json::from_slice(&fs::read(&path)?)?;
             m.enabled = action == "enable";
             runner::atomic_json(&path, &m)?;

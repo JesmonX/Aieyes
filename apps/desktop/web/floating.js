@@ -1,9 +1,9 @@
-/* Compact panel and Linux capsule. Windows capsule input lives in capsule.rs. */
+/* Compact panel and Linux pet. Windows pet input lives in native_pet.rs. */
 (() => {
   const invoke = (name, args) => window.__TAURI__.core.invoke(name, args);
   const ball = document.querySelector('#ball');
   const panel = document.querySelector('#panel');
-  const labels = {idle:'空闲',working:'进行中',thinking:'思考中',tool:'执行工具',complete:'已完成',interrupted:'已中断',unknown:'待确认'};
+  const labels = {idle:'空闲',working:'进行中',thinking:'思考中',tool:'执行工具',complete:'已完成',interrupted:'已中断',unknown:'待确认',needsInput:'等待输入',failed:'执行失败'};
   const SUPPRESS = 250;
   let start = null, dragged = false, info = null;
   let panelOpen = false, pinned = false, suppress = 0;
@@ -30,6 +30,7 @@
     panelOpen = !!next.panelOpen;
     pinned = !!next.panelPinned;
     document.body.dataset.view = panelOpen ? 'panel' : 'ball';
+    if(info)window.AieyesPet?.update({...info,panelOpen});
     const pin = document.querySelector('#panel-pin');
     if (pin) {
       pin.dataset.pinned = String(pinned);
@@ -43,7 +44,7 @@
       const more = document.querySelector('#panel-more');
       if (more) more.open = false;
       if(typeof closeTokenSummary==='function')closeTokenSummary();
-      if (!info?.nativeCapsule && panel.contains(focused)) ball.focus({preventScroll:true});
+      if (!info?.nativePet && panel.contains(focused)) ball.focus({preventScroll:true});
     }
     if (!was && panelOpen) {
       window.AieyesNetwork?.refresh();
@@ -143,6 +144,7 @@
     if(typeof phaseColor==='function')document.body.style.setProperty('--phase-color',phaseColor(next.phase||'idle'));
     ball.title = `Aieyes · ${next.summary}\n单击打开面板 · 拖动移动 · 右键菜单`;
     ball.setAttribute('aria-label', ball.title);
+    window.AieyesPet?.update(next);
     if (typeof renderLiveSessions === 'function') renderLiveSessions(next);
     if (applyOpen && (next.panelOpen !== undefined || next.panelPinned !== undefined)) applyPanel(next);
   }
@@ -152,7 +154,7 @@
       await window.__TAURI__.event.listen('desktop:error', event => failure(event.payload));
       await window.__TAURI__.event.listen('desktop:panel', event => applyPanel(event.payload));
       const initial=await invoke('desktop_info');
-      document.body.dataset.nativeCapsule=String(!!initial.nativeCapsule);
+      document.body.dataset.nativePet=String(!!initial.nativePet);
       update(initial);
       if(typeof appReady!=='undefined')await appReady;
       await window.AieyesTheme?.loadFonts?.();

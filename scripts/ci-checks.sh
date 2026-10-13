@@ -12,11 +12,12 @@ if [ -z "${PYTHON:-}" ]; then
   if command -v python3 >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
 fi
 "$PYTHON" scripts/release.py check
-for script in test-release.py test-collectors.py test-wakeups.py test-incremental-history.py test-legacy-account-history.py test-agy-identity.py; do
+for script in test-release.py test-collectors.py test-wakeups.py test-incremental-history.py test-legacy-account-history.py test-agy-identity.py test-session-observers.py; do
   "$PYTHON" "scripts/$script"
 done
 if "$PYTHON" -c 'import os, sys; sys.exit(os.name == "nt")'; then
   "$PYTHON" scripts/test-codex-auth.py
+  "$PYTHON" scripts/test-codex-api.py
 else
   echo 'Remote Codex POSIX permissions/locking tests require Unix; covered by the Unix check jobs.'
 fi

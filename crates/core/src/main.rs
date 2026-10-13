@@ -6,6 +6,9 @@ use std::{
 };
 
 fn main() {
+    if aieyes_core::session_hooks::run_if_requested() {
+        return;
+    }
     if let Err(e) = run() {
         eprintln!("Aieyes: {e}");
         std::process::exit(1);
@@ -29,6 +32,22 @@ fn run() -> anyhow::Result<()> {
         return aieyes_core::wakeups::runner::run(
             std::path::Path::new(root),
             args.get(i + 2).map(String::as_str),
+        );
+    }
+    if let Some(i) = args.iter().position(|a| a == "--codex-api-service") {
+        return aieyes_core::codex_api::gateway::serve(std::path::Path::new(
+            args.get(i + 1)
+                .ok_or_else(|| anyhow::anyhow!("Missing API root"))?,
+        ));
+    }
+    if let Some(i) = args.iter().position(|a| a == "--codex-api-token") {
+        return aieyes_core::codex_api::token(
+            std::path::Path::new(
+                args.get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("Missing API root"))?,
+            ),
+            args.get(i + 2)
+                .ok_or_else(|| anyhow::anyhow!("Missing API id"))?,
         );
     }
     let root = args

@@ -5,6 +5,7 @@ mod agy_identity;
 pub mod antigravity;
 pub mod automatic;
 pub mod capacity;
+pub mod codex_api;
 pub mod codex_auth;
 pub mod contracts;
 pub mod credentials;
@@ -17,12 +18,16 @@ pub mod models;
 pub mod monitoring;
 pub mod network;
 pub mod operations;
+pub mod pet_import;
+pub mod pets;
 pub mod pricing;
 pub mod process;
 pub mod providers;
 pub mod quota;
 mod quota_schedule;
 mod remote_history;
+pub mod session_events;
+pub mod session_hooks;
 pub mod sessions;
 pub mod settings;
 pub mod ssh;
@@ -183,6 +188,7 @@ impl Engine {
             let aliases = self.store.settings()?.account_aliases;
             if method == "settings.save" {
                 params["accountAliases"] = serde_json::to_value(&aliases)?;
+                params["codexApis"] = serde_json::to_value(self.store.settings()?.codex_apis)?;
             }
             providers::normalize_value(&mut params, &aliases);
             if method == "quotas.order.set"
@@ -208,6 +214,7 @@ impl Engine {
             | "accounts.cleanup.list"
             | "accounts.deployments.sync" => self.account_call(method, params),
             name if name.starts_with("agyAuth.") => self.agy_auth_call(name, params),
+            name if name.starts_with("codexApi.") => self.codex_api_call(name, params),
             name if name.starts_with("codexAuth.") => self.codex_auth_call(name, params),
             name if name.starts_with("wakeups.") => self.wakeup_call(name, params),
             name if name.starts_with("quotaEstimates.") || name.starts_with("creditEstimates.") => {
@@ -217,10 +224,31 @@ impl Engine {
                 self.store
                     .set_quota_order(serde_json::from_value(params["keys"].clone())?)?,
             )?),
-            "sessions.list" => Ok(serde_json::to_value(
-                self.sessions
-                    .read(&self.store.settings()?, std::time::SystemTime::now()),
-            )?),
+            "sessions.list" => {
+                let snapshot = self
+                    .sessions
+                    .read(&self.store.settings()?, std::time::SystemTime::now());
+                let mut value = serde_json::to_value(&snapshot)?;
+                value["pet"] = serde_json::to_value(pets::project(&snapshot))?;
+                value["summary"] = json!(snapshot.summary());
+                value["phase"] = serde_json::to_value(snapshot.phase())?;
+                value["activeCount"] = json!(snapshot.active_count());
+                Ok(value)
+            }
+            "pets.current" => pet_import::current(
+                &self.store,
+                params["includeImage"].as_bool().unwrap_or(false),
+            ),
+            "sessions.hooks.status" | "sessions.hooks.repair" | "sessions.hooks.remove" => {
+                session_hooks::call(&self.store.settings()?, method, &params)
+            }
+            "pets.import" => {
+                let path = params["path"]
+                    .as_str()
+                    .context("请选择桌宠 ZIP 或 pet.json 文件")?;
+                pet_import::import(&self.store, Path::new(path))?;
+                pet_import::current(&self.store, false)
+            }
             "hello" => Ok(
                 json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"contractHash":contracts::CONTRACT_HASH}),
             ),
@@ -435,6 +463,10 @@ impl Engine {
                             import::scan(&self.store, &settings, source)
                         }
                     };
+                    let result = result.and_then(|value| {
+                        codex_api::usage::sync(&self.store, &settings, source)?;
+                        Ok(value)
+                    });
                     match result {
                         Ok(value) => {
                             if value["error"].is_string()

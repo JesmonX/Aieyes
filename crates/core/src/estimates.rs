@@ -626,6 +626,14 @@ impl Store {
         e.excluded_api_tokens = 0;
         e.prices.clear();
         let settings = self.settings()?;
+        let mixed = provider == "codex"
+            && settings.sources.iter().any(|s| {
+                e.source_ids.contains(&s.id)
+                    && (s.auto_valuation.as_ref().is_some_and(|v| v.mode == "mixed")
+                        || settings.codex_apis.iter().any(|c| c.source_id == s.id))
+            });
+        let mut unknown_billing =
+            mixed && !self.api_interval_complete(&e.source_ids, e.started_at, e.checkpoint_at)?;
         let mut boundary = false;
         let mut unmapped_group = false;
         // EXISTS avoids multiplying events observed through several selected sources.
@@ -651,8 +659,13 @@ impl Store {
         for row in rows {
             let (raw, mut cost, mut priced, mut price) = row?;
             let event: UsageEvent = serde_json::from_str(&raw)?;
-            if event.billing.category == "api" {
+            let billing = self.effective_billing(&event)?;
+            if billing == "api" {
                 e.excluded_api_tokens += event.tokens.total();
+                continue;
+            }
+            if mixed && billing != "subscription" {
+                unknown_billing = true;
                 continue;
             }
             if let Some(group) = group {
@@ -707,7 +720,10 @@ impl Store {
                 }
             }
         }
-        e.calculation_note = if unmapped_group {
+        e.calculation_note = if unknown_billing {
+            e.calculation_status = "unknownBilling".into();
+            "存在未归属用量或不完整 API 请求，本区间不参与订阅估值；已保留有效值"
+        } else if unmapped_group {
             e.calculation_status = "unmappedGroup".into();
             "存在无法归属额度组的模型，请补全模型映射后重新计算"
         } else if boundary {

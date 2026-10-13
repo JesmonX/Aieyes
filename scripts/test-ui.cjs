@@ -145,9 +145,9 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     assert.equal(await page.locator('[data-day-toggle]').first().evaluate(e=>e===document.activeElement),true);
 
     await page.locator('[data-page=settings]').click();
-    assert.deepEqual(await page.locator('[data-settings-tab]').allTextContents(),['Agents','服务器','价格','账户','定时唤醒','通用']);
+    assert.deepEqual(await page.locator('[data-settings-tab]').allTextContents(),['Agent 接入','服务器','价格','定时唤醒','常规']);
     assert.equal(await page.locator('[data-add-query]').count(),0);
-    await page.locator('[data-settings-tab=sources]').click();
+    await page.locator('[data-settings-tab=integrations]').click();
     await page.evaluate(()=>AieyesAgentSettings.advanced(null,'codex'));
     await page.locator('#field-path').fill('');
     await page.locator('#editor-form button[type=submit]').click();
@@ -168,7 +168,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await page.keyboard.press('Escape');
     if(await page.locator('#editor-confirm-discard').isVisible())await page.locator('#editor-confirm-discard').click();
     assert.equal(await page.locator('.shell').evaluate(e=>e.inert),false);
-    assert.equal(await page.locator('[data-settings-tab=sources]').evaluate(e=>e===document.activeElement),true);
+    assert.equal(await page.locator('[data-settings-tab=integrations]').evaluate(e=>e===document.activeElement),true);
 
     // Account/machine flows are covered against the real core in test-agent-settings-ui.
     // Source-specific advanced settings still round trip without changing identity.
@@ -185,6 +185,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await discardEditor(page);
 
     await page.locator('[data-settings-tab=general]').click();
+    await page.locator('[data-general-page=refresh]').click();
     await page.locator('#field-refreshSeconds').fill('1');
     await page.evaluate(()=>document.activeElement?.blur());await page.waitForFunction(()=>!state.generalSavePending&&!state.settingsCommitting&&!state.settingsSaving);
     await page.waitForFunction(()=>!state.busy);
@@ -202,6 +203,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
 
     await page.locator('[data-settings-tab=general]').click();
     assert.equal(await page.locator('#field-refreshSeconds').inputValue(),'300');await page.locator('#field-refreshSeconds').fill('300');
+    await page.locator('[data-general-page=network]').click();
     await page.locator('#field-appMode').selectOption('custom');
     await page.locator('#field-appHost').fill('proxy.example');
     await page.locator('#field-appPort').fill('8443');
@@ -220,6 +222,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await page.evaluate(()=>document.activeElement?.blur());await page.waitForFunction(()=>!state.generalSavePending&&!state.settingsCommitting&&!state.settingsSaving);
     await page.waitForFunction(()=>!state.busy);
     assert.equal(await page.evaluate(()=>state.settings.proxy.url),'socks5://localhost:1080');
+    await page.locator('[data-general-page=updates]').click();
     await page.locator('#updates').click();
     await page.waitForFunction(()=>!state.busy);
     await page.waitForFunction(()=>document.querySelector('#update-result').textContent.includes('当前已是最新版本'));

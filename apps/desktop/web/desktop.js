@@ -15,20 +15,20 @@
     if (effective) effective.textContent = effectiveText(info);
     const count=document.querySelector('#desktop-count');if(count)count.checked=!!info.showCount;
     const hide = document.querySelector('#hide-ball');
-    if (hide && document.activeElement !== hide) hide.textContent = info.hidden ? '恢复显示悬浮球' : '暂时隐藏悬浮球';
+    if (hide && document.activeElement !== hide) hide.textContent = info.hidden ? '恢复显示桌宠' : '暂时隐藏桌宠';
   }
   function effectiveText(info) {
-    return info.reason || `当前使用${info.effectiveMode === 'floating' ? '悬浮球' : '系统状态栏'}。`;
+    return info.reason || `当前使用${info.effectiveMode === 'pet' ? '桌面宠物' : '系统状态栏'}。`;
   }
   async function navigate(page) {
-    if(page.startsWith("edit-account:")){await window.AieyesApp.ready;state.page="settings";state.settingsTab="sources";render();const index=state.settings.accounts.findIndex(a=>a.provider+":"+a.id===page.slice(13));if(index>=0)editAccount(index);return;}
+    if(page.startsWith('settings-target:')){try{await window.AieyesApp.openSettings(JSON.parse(page.slice(16)));}catch(error){notify(String(error),'error');}return;}
+    if(page.startsWith("edit-account:")){await window.AieyesApp.ready;await window.AieyesApp.openSettings({accountKey:page.slice(13)});return;}
     if (page === 'add-source' || page === 'add-host' || page === 'add-quota') {
       await window.AieyesApp.openSetupInMain(page === 'add-host' ? 'hosts' : page === 'add-quota' ? 'quota' : 'sources');
       return;
     }
-    state.page = page === 'settings' || page === 'prices' ? 'settings' : 'agent';
-    if (state.page === 'settings') state.settingsTab = page === 'prices' ? 'prices' : 'general';
-    if (page === 'prices') state.prices = await api('prices.list');
+    if(page==='settings'||page==='prices'){await window.AieyesApp.openSettings(page==='prices'?{category:'prices'}:{});return;}
+    state.page = 'agent';
     render();
   }
   async function bindTitlebar(info) {
@@ -53,23 +53,35 @@
   }
   window.AieyesDesktop = {
     settingsHTML() {
-      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="auto">跟随系统</option><option value="floating">悬浮球</option><option value="tray">系统状态栏 / 托盘</option></select></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">显示活跃会话计数（本机，立即生效）</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">悬浮胶囊单击打开面板，悬停查看状态，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，重启应用也会恢复。</p><div class="between"><button type="button" id="reset-ball">重置悬浮球位置</button><button type="button" id="hide-ball">暂时隐藏悬浮球</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
+      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="pet">桌面宠物</option><option value="tray">系统状态栏 / 托盘</option></select></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">显示活跃会话计数（本机及 SSH，立即生效）</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">桌宠单击打开面板，悬停查看状态，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，显示偏好会保留。</p><div class="form-row"><span id="current-pet" role="status">正在读取桌宠…</span><button type="button" id="import-pet">导入桌宠文件…</button></div><p class="muted tiny">支持 .zip、.codex-pet.zip 或解压后的 pet.json，图集可为 PNG / WebP。首次使用会导入月薪喵（kiffin）。</p><div class="between"><button type="button" id="reset-ball">重置桌宠位置</button><button type="button" id="hide-ball">暂时隐藏桌宠</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
     },
     bindSettings() {
       const select = document.querySelector('#desktop-mode');
       if (!select) return;
-      select.value = current?.mode || 'auto';
+      const petStatus = document.querySelector('#current-pet');
+      const showPet = result => { if(petStatus)petStatus.textContent=result.error || (result.pet ? `${result.pet.displayName} · v${result.pet.spriteVersionNumber}` : '请选择桌宠文件'); };
+      api('pets.current').then(showPet).catch(error=>{petStatus.textContent=String(error);});
+      const importButton=document.querySelector('#import-pet');
+      importButton.onclick=async()=>{
+        importButton.disabled=true;
+        try {
+          const path=await invoke('select_local_path',{directory:false,initial:'~'});
+          if(path){showPet(await api('pets.import',{path}));notify('桌宠已导入');}
+        } catch(error){notify(String(error));}
+        finally{importButton.disabled=false;}
+      };
+      select.value = current?.mode || 'pet';
       const count=document.querySelector('#desktop-count');if(count){count.checked=!!current?.showCount;count.onchange=async()=>{count.disabled=true;try{await invoke('desktop_action',{action:'toggle-count'});update(await invoke('desktop_info'));}catch(error){count.checked=!!current?.showCount;notify(String(error));}finally{count.disabled=false;}};}
       select.onchange = async () => {
         select.disabled = true;
         try { update(await invoke('desktop_mode',{mode:select.value})); }
-        catch (error) { select.value = current?.mode || 'auto'; notify(String(error)); }
+        catch (error) { select.value = current?.mode || 'pet'; notify(String(error)); }
         finally { select.disabled = false; }
       };
       document.querySelector('#reset-ball').onclick = () => invoke('desktop_action',{action:'reset-position'}).catch(e=>notify(String(e)));
       const hide = document.querySelector('#hide-ball');
       if (hide) {
-        hide.textContent = current?.hidden ? '恢复显示悬浮球' : '暂时隐藏悬浮球';
+        hide.textContent = current?.hidden ? '恢复显示桌宠' : '暂时隐藏桌宠';
         hide.onclick = () => invoke('desktop_action',{action: current?.hidden ? 'show-ball' : 'hide-ball'}).catch(e=>notify(String(e)));
       }
       document.querySelector('#quit-app').onclick = () => invoke('desktop_action',{action:'quit'}).catch(e=>notify(String(e)));

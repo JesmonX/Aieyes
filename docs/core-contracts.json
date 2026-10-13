@@ -260,6 +260,82 @@
       "updateBehavior": "cancel"
     },
     {
+      "name": "codexApi.command",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
+      "name": "codexApi.default",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "codexApi.deploy",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "codexApi.list",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
+      "name": "codexApi.probe",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
+      "name": "codexApi.remove",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "codexApi.save",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "codexApi.status",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
       "name": "codexAuth.adopt",
       "lane": "main",
       "invalidates": [
@@ -582,6 +658,22 @@
       "updateBehavior": "observe"
     },
     {
+      "name": "pets.current",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
+      "name": "pets.import",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
       "name": "prices.list",
       "lane": "main",
       "invalidates": [],
@@ -702,6 +794,30 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    {
+      "name": "sessions.hooks.remove",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "sessions.hooks.repair",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "sessions.hooks.status",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
     },
     {
       "name": "sessions.list",

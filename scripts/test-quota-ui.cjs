@@ -39,7 +39,12 @@ function fixture(){
    page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
    const agy=page.locator('[data-quota="antigravity:a"]:visible');await agy.waitFor({state:'visible'});
    assert.equal(await agy.locator('.agy-group').count(),3);
-   assert.equal(await agy.locator('.resource-bar:visible').count(),6,'single account shows all model groups');
+   if(surface==='floating.html'){
+     assert.equal(await agy.locator('.resource-bar:visible').count(),2,'Multiple panel accounts default to key windows');
+     assert.equal(await agy.locator('.quota-reset:visible').count(),0);
+     await agy.locator('.quota-title').click();
+   }
+   assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Expanded accounts show all model groups');
    assert.equal(await agy.locator('.quota-reset:visible').count(),6);
    const codex=page.locator('[data-quota="codex:c"]:visible');
    assert.equal(await codex.locator('.subscription-badge').textContent(),'Plus');
@@ -112,7 +117,7 @@ function fixture(){
    await page.locator('[data-estimate="codex:c"]:visible').click();
    await page.locator('[data-auto-source="c"]').click();
    assert(await page.locator('[data-auto-save="c"]').isDisabled(),'Automatic opt-in requires consent');
-   await page.locator('#auto-estimate-consent').check();await page.locator('[data-auto-save="c"]').click();
+   await page.locator('[data-auto-consent="c"]').check();await page.locator('[data-auto-save="c"]').click();
    await page.waitForFunction(()=>state.settings.sources.find(s=>s.id==='c').autoValuation?.enabled===true);
    await page.locator('[data-auto-save="c"][data-enabled="false"]').waitFor();
    assert.match(await page.locator('[data-auto-status="c"]').textContent(),/等待有效样本/);
@@ -126,9 +131,9 @@ function fixture(){
      assert.equal(await page.locator('[data-auto-source], [data-machine-estimates]').count(),0,'Directory settings contain no automatic valuation entry');
      await page.locator('#directories-back').click();
      await page.evaluate(()=>{state.settings.hosts.push({id:'remote',name:'远程机器',enabled:true});state.settings.sources.push({id:'remote-source',provider:'codex',hostId:'remote',name:'远程日志',path:'/remote',enabled:true});render();});
-     assert(await page.locator('[data-machine-estimates="claude"][data-machine="local"]').isDisabled(),'Unconfigured machines explain why automatic settings are unavailable');
+     await page.locator('[data-settings-agent=claude]').click();assert(await page.locator('[data-machine-estimates="claude"][data-machine="local"]').isDisabled(),'Unconfigured machines explain why automatic settings are unavailable');
      await page.screenshot({path:path.join(output,'source-automatic-settings.png'),fullPage:true});
-     await automatic.click();
+     await page.locator('[data-settings-agent=codex]').click();await automatic.click();
      assert.equal(await page.locator('[data-auto-save="remote-source"]').count(),0,'Each machine manages only its own sources');
    }else await page.evaluate(()=>window.AieyesAutomatic.open(['c']));
    await page.locator('[data-auto-save="c"][data-enabled="false"]').click();

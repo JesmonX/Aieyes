@@ -270,7 +270,7 @@ def crontab(root, remove=False):
 def tick(root, manual=None):
     private_dir(root)
     db = sqlite3.connect(str(root / 'runner.sqlite'), timeout=3)
-    db.executescript('CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY,task TEXT,occurrence TEXT UNIQUE,started INTEGER,ended INTEGER,status TEXT,model TEXT,effort TEXT); CREATE TABLE IF NOT EXISTS leases(account TEXT PRIMARY KEY,expires INTEGER);')
+    db.executescript('CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY,task TEXT,occurrence TEXT UNIQUE,started INTEGER,ended INTEGER,status TEXT,model TEXT,effort TEXT); CREATE TABLE IF NOT EXISTS leases(account TEXT PRIMARY KEY,expires INTEGER); CREATE TABLE IF NOT EXISTS run_diagnostics(run_id INTEGER PRIMARY KEY,stage TEXT,code TEXT,message TEXT);')
     local = datetime.datetime.now()
     slot = local.strftime('%H:%M')
     jobs = []
@@ -298,14 +298,17 @@ def tick(root, manual=None):
     def execute(job):
         m, row = job
         status = 'failed'
+        stage, detail = 'prepare', None
         try:
             cwd = root / 'work' / m['id']
             private_dir(cwd)
+            stage = 'authentication'
             auth(m)
+            stage = 'model-request'
             if m.get('codexProfileId'):
-                with auth_helper().with_credentials(auth_location(m), m['codexProfileId'].split(':', 1)[1]) as managed:
-                    bound = dict(m, configPath=str(managed))
-                    output = call(bound, bound['args'], cwd, 120)
+                stage = 'codex-turn'
+                auth_helper().wakeup(auth_location(m), m['codexProfileId'].split(':', 1)[1], m, cwd)
+                output = '{"type":"turn.completed"}'
             else:
                 if m['provider'] == 'codex' and (pathlib.Path(m['configPath']) / '.aieyes/state/home.json').exists():
                     raise ValueError('旧唤醒任务需绑定账号后重新部署')
@@ -318,15 +321,18 @@ def tick(root, manual=None):
                     pass
             if any(response_ok(m['provider'], v) for v in rows):
                 status = 'success'
-        except ValueError as e:
-            if '超时' in str(e):
+            else:
+                detail = ('missing-completion', '模型没有返回成功完成事件')
+        except Exception as e:
+            detail = diagnostic(e)
+            if detail[0] == 'timeout':
                 status = 'timeout'
-        except Exception:
-            pass
         db = sqlite3.connect(str(root / 'runner.sqlite'), timeout=3)
         try:
             with db:
                 db.execute('UPDATE runs SET status=?,ended=? WHERE id=?', (status, int(time.time()), row))
+                if detail:
+                    db.execute('INSERT OR REPLACE INTO run_diagnostics VALUES(?,?,?,?)', (row, stage, detail[0], detail[1]))
                 db.execute('DELETE FROM leases WHERE account=?', (m['accountKey'],))
         finally:
             db.close()
@@ -348,9 +354,32 @@ def history(root, identifier):
     if not (root / 'runner.sqlite').exists():
         return []
     db = sqlite3.connect('file:' + str(root / 'runner.sqlite') + '?mode=ro', uri=True)
-    rows = [{'startedAt': s, 'endedAt': e, 'status': st, 'model': m, 'effort': ef} for s,e,st,m,ef in db.execute('SELECT started,ended,status,model,effort FROM runs WHERE task=? ORDER BY id DESC LIMIT 30', (identifier,))]
+    details = db.execute("SELECT 1 FROM sqlite_master WHERE name='run_diagnostics'").fetchone()
+    query = 'SELECT r.started,r.ended,r.status,r.model,r.effort,d.stage,d.code,d.message FROM runs r LEFT JOIN run_diagnostics d ON d.run_id=r.id WHERE r.task=? ORDER BY r.id DESC LIMIT 30' if details else 'SELECT started,ended,status,model,effort,NULL,NULL,NULL FROM runs WHERE task=? ORDER BY id DESC LIMIT 30'
+    rows = [dict(startedAt=s, endedAt=e, status=st, model=m, effort=ef, stage=stage, errorCode=code, message=message) for s,e,st,m,ef,stage,code,message in db.execute(query, (identifier,))]
     db.close()
     return rows
+
+
+def diagnostic(error):
+    text = str(error)
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)) or '超时' in text:
+        return 'timeout', '调用超时；请检查目标网络与代理'
+    if isinstance(error, FileNotFoundError):
+        return 'dependency-missing', '任务文件或可执行文件不存在；请重新部署并检查 CLI 路径'
+    if isinstance(error, PermissionError):
+        return 'permission-denied', '任务文件或命令权限不足；请检查目标用户权限'
+    for needle, code, message in (
+        ('前置命令', 'pre-command', '前置命令失败；请检查非交互 shell 环境'),
+        ('接口不兼容', 'incompatible-cli', 'CLI 接口不兼容；请升级 Codex'),
+        ('正在执行的账号操作', 'account-busy', '账号管理操作进行中；本次唤醒未执行'),
+        ('身份', 'identity-changed', '账号身份已变化；请检查任务绑定'),
+        ('认证', 'authentication', '订阅认证不可用；请刷新登录状态后重试'),
+        ('登录', 'authentication', '订阅认证不可用；请刷新登录状态后重试'),
+        ('凭据', 'authentication', '订阅认证不可用；请刷新登录状态后重试')):
+        if needle in text:
+            return code, message
+    return 'model-request', '模型请求未成功完成；请检查模型、认证与代理'
 
 
 def manage(request):
@@ -376,14 +405,23 @@ def manage(request):
         script = root / 'runner.py'
         old_script = script.read_text() if script.exists() else None
         atomic(script, request['script'])
+        helper = root / 'codex_auth.py'
+        old_helper = helper.read_text() if helper.exists() else None
         if request.get('authHelper'):
-            atomic(root / 'codex_auth.py', request['authHelper'])
+            atomic(helper, request['authHelper'])
         path = root / 'tasks' / (m['id'] + '.json')
         old = path.read_text() if path.exists() else None
         atomic(path, json.dumps(m))
         try:
             crontab(root)
+            check = subprocess.run(['crontab', '-l'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            if check.returncode or tag(root) not in check.stdout.decode() or json.loads(path.read_text()) != m:
+                raise ValueError('部署回读验证失败；请重新部署')
         except Exception:
+            if old_helper is not None:
+                atomic(helper, old_helper)
+            elif helper.exists():
+                helper.unlink()
             if old_script is not None:
                 atomic(script, old_script)
             else:
@@ -392,6 +430,10 @@ def manage(request):
                 atomic(path, old)
             else:
                 path.unlink()
+            try:
+                crontab(root, remove=not any((root / 'tasks').glob('*.json')))
+            except Exception:
+                pass
             raise
         return {'root': str(root), 'timezone': timezone()}
     root = pathlib.Path(os.path.expanduser(request['root']))
@@ -406,16 +448,18 @@ def manage(request):
     if action == 'status':
         m = json.loads(path.read_text()) if path.exists() else None
         cron = subprocess.run(['crontab','-l'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        installed = bool(m) and tag(root) in cron.stdout.decode()
+        installed = bool(m) and (root / 'runner.py').is_file() and (not m.get('codexProfileId') or (root / 'codex_auth.py').is_file()) and cron.returncode == 0 and tag(root) in cron.stdout.decode()
         now = time.time()
         next_run_at = next_run(m['times'], now, scheduled_occurrences(root, identifier, now), identifier) if installed and m['enabled'] else None
         return {'installed': installed, 'enabled': bool(m and m['enabled']), 'timezone': timezone(), 'nextRunAt': next_run_at, 'history': history(root, identifier)}
     if action == 'run':
         if not path.exists():
-            raise ValueError('部署文件不存在')
+            raise ValueError('任务文件缺失；请重新部署')
         subprocess.Popen([sys.executable, str(root/'runner.py'), '--tick', str(root), identifier], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return {'started': True}
     if action in ('enable', 'disable'):
+        if not path.is_file():
+            raise ValueError('任务文件缺失；请重新部署')
         m = json.loads(path.read_text())
         m['enabled'] = action == 'enable'
         atomic(path, json.dumps(m))
@@ -437,6 +481,7 @@ if __name__ == '__main__':
             print(json.dumps(manage(json.loads(sys.argv[1])), ensure_ascii=False))
         except (ValueError, FileNotFoundError, PermissionError) as error:
             # Fixed messages only; do not print subprocess output/configuration.
-            print(json.dumps({'error': str(error) if isinstance(error, ValueError) else '目标依赖或任务文件不可用；请检查 Python 3、crontab 和 CLI'}, ensure_ascii=False))
+            code, message = diagnostic(error)
+            print(json.dumps({'error': str(error) if isinstance(error, ValueError) else message, 'errorCode':code}, ensure_ascii=False))
         except Exception:
             print(json.dumps({'error': '远程任务操作失败，请检查目标机器连接和运行环境'}, ensure_ascii=False))

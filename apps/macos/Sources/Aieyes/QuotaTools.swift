@@ -3,33 +3,52 @@ import SwiftUI
 struct AutomaticValuationControls: View {
     @ObservedObject var model: AppModel
     var sources: [AgentSource]
-    @State private var confirmed = false
     private var eligible: [AgentSource] { sources.filter { $0.provider != "deepseek" } }
     var body: some View {
         if !eligible.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("数据源自动估值").font(AppFont.section)
                 Text("自动跟随当前订阅账号，分别积累额度与 credits 的可信样本。无法归属时自动等待，保留有效值。").font(AppFont.secondary).foregroundStyle(.secondary)
-                if eligible.contains(where: { $0.autoValuation?.enabled != true }) {
-                    Toggle("我确认仅使用订阅账号及其 credits，不使用 API／中转；影响额度的所有设备用量均已纳入。", isOn: $confirmed)
-                }
-                ForEach(eligible) { source in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(source.name)
-                            Spacer()
-                            Button(source.autoValuation?.enabled == true ? "关闭自动估值" : "开启自动估值") {
-                                Task { await model.configureAutomatic(source, enabled: source.autoValuation?.enabled != true, confirmed: confirmed) }
-                            }.disabled(model.automaticSaving || (source.autoValuation?.enabled != true && !confirmed))
-                        }
-                        if source.autoValuation?.enabled == true {
-                            Text(model.dashboard.sources.first { $0.id == source.id }?.autoValuationStatus?.note ?? "等待首个实时订阅快照").font(AppFont.secondary).foregroundStyle(.secondary)
-                        }
-                    }
-                }
+                ForEach(eligible) { source in AutomaticValuationSourceControls(model: model, source: source) }
                 if let error = model.automaticError { Text(error).foregroundStyle(Palette.warn) }
             }
         }
+    }
+}
+private struct AutomaticValuationSourceControls: View {
+    @ObservedObject var model: AppModel
+    let source: AgentSource
+    @State private var confirmed = false
+    @State private var mode = "subscription"
+    private var enabled: Bool { source.autoValuation?.enabled == true }
+    private var savedMode: String { source.autoValuation?.mode == "mixed" ? "mixed" : "subscription" }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(source.name)
+            if source.provider == "codex" {
+                Picker("计费方式", selection: $mode) {
+                    Text("仅订阅与 credits").tag("subscription")
+                    Text("订阅与 API 混用").tag("mixed")
+                }
+            }
+            if !enabled || mode != savedMode {
+                Toggle(mode == "mixed" ? "我确认影响订阅额度的所有设备用量均已纳入；API 用量通过计量服务识别，未归属或不完整的区间不参与订阅及 credits 估值。" : "我确认仅使用订阅账号及其 credits，不使用 API／中转；影响额度的所有设备用量均已纳入。", isOn: $confirmed)
+            }
+            HStack {
+                Button(enabled ? "关闭自动估值" : "开启自动估值") {
+                    Task { await model.configureAutomatic(source, enabled: !enabled, confirmed: confirmed, mode: mode); confirmed = false }
+                }.disabled(!enabled && !confirmed)
+                if enabled && mode != savedMode {
+                    Button("保存计费方式") { Task { await model.configureAutomatic(source, enabled: true, confirmed: confirmed, mode: mode); confirmed = false } }.disabled(!confirmed)
+                }
+            }
+            if enabled {
+                Text(model.dashboard.sources.first { $0.id == source.id }?.autoValuationStatus?.note ?? "等待首个实时订阅快照").font(AppFont.secondary).foregroundStyle(.secondary)
+            }
+        }.disabled(model.automaticSaving)
+            .onAppear { mode = savedMode }
+            .onChange(of: mode) { _, _ in confirmed = false }
+            .onChange(of: savedMode) { _, value in mode = value; confirmed = false }
     }
 }
 
@@ -63,6 +82,70 @@ struct SamplingManagementView: View {
                 }
             }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
         }.aieyesAccent().font(AppFont.body).disabled(model.installingUpdate)
+    }
+}
+
+struct AgentValuationView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: AppModel
+    let provider: String
+    @State private var snapshot: Dashboard?
+    @State private var error: String?
+    @State private var loading = false
+    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider } }
+    private var accounts: [AgentAccount] { model.settings.accounts.filter { $0.provider == provider && $0.archived != true } }
+    private var records: [QuotaEstimate] {
+        let data = snapshot ?? model.dashboard
+        return ((data.quotaEstimates ?? []) + (data.creditEstimates ?? [])).filter { $0.accountKey.hasPrefix(provider + ":") }.sorted { $0.checkpointAt > $1.checkpointAt }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack { Text(Format.provider(provider) + " · 估值与采样").font(AppFont.title); Spacer(); Button("完成") { dismiss() }.disabled(model.automaticSaving) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    AutomaticValuationControls(model: model, sources: sources)
+                    if sources.isEmpty { Text("添加数据目录后可配置自动估值。").foregroundStyle(.secondary) }
+                    Text("手动采样").font(AppFont.section)
+                    ForEach(accounts, id: \.key) { account in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(account.name); Spacer()
+                                Button("额度采样") { Task { await model.openEstimate(accountKey: account.key) } }
+                                if provider == "codex" { Button("credits 采样") { Task { await model.openEstimate(accountKey: account.key, credits: true) } } }
+                            }
+                            if let error = model.estimateErrors[account.key] { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                        }
+                    }
+                    if accounts.isEmpty { Text("添加账户后可开始手动采样。").foregroundStyle(.secondary) }
+                    recordSection("进行中的手动采样", records.filter { $0.status != "completed" && $0.samplingMode != "automatic" })
+                    recordSection("已完成的采样历史", records.filter { $0.status == "completed" })
+                    if loading { ProgressView("正在读取采样记录…") }
+                    if let error { HStack { Text(error).foregroundStyle(Palette.warn); Button("重试读取") { Task { await load() } } } }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }.padding(24).frame(width: 660, height: 650).aieyesAccent()
+            .interactiveDismissDisabled(model.automaticSaving)
+            .updateOperation("估值与采样", active: model.automaticSaving)
+            .task(id: model.dashboard.generatedAt) { await load() }
+    }
+    private func recordSection(_ title: String, _ values: [QuotaEstimate]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(AppFont.section)
+            if values.isEmpty { Text("暂无记录").font(AppFont.secondary).foregroundStyle(.secondary) }
+            ForEach(values, id: \.recordKey) { record in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack { Text(model.settings.historicalAccounts.first { $0.key == record.accountKey }?.name ?? record.accountKey); Spacer(); Button("查看与管理") { Task { await model.openEstimate(record) } } }
+                    Text((record.kind == "credits" ? "credits 估值" : "5h / 7d 额度估值") + " · " + record.statusLabel).font(AppFont.secondary).foregroundStyle(.secondary)
+                    Text(Format.date(record.startedAt) + " → " + Format.date(record.checkpointAt)).font(AppFont.secondary).foregroundStyle(.secondary)
+                    if let error = model.estimateErrors[record.accountKey] { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                }.padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+    }
+    private func load() async {
+        loading = true; error = nil; defer { loading = false }
+        do { snapshot = try await model.engine.call("dashboard.summary") }
+        catch { self.error = error.localizedDescription }
     }
 }
 

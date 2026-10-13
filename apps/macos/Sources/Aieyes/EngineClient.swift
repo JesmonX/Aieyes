@@ -199,14 +199,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private var automaticTask: Task<Void, Never>?
     @Published var automaticSaving = false
     @Published var automaticError: String?
-    func configureAutomatic(_ source: AgentSource, enabled: Bool, confirmed: Bool) async {
+    func configureAutomatic(_ source: AgentSource, enabled: Bool, confirmed: Bool, mode: String = "subscription") async {
         guard !automaticSaving else { return }
         automaticSaving = true; automaticError = nil
         defer { automaticSaving = false }
         do {
             struct Saved: Decodable { var settings: Settings }
             let baseline: Any = try source.autoValuation.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()
-            let result: Saved = try await engine.call("autoEstimates.configure", params: ["sourceId":source.id,"enabled":enabled,"confirmed":confirmed,"baseConfig":baseline])
+            let result: Saved = try await engine.call("autoEstimates.configure", params: ["sourceId":source.id,"enabled":enabled,"confirmed":confirmed,"mode":mode,"baseConfig":baseline])
             acceptConfiguration(result.settings); await reload()
         } catch { automaticError = error.localizedDescription }
     }
@@ -323,17 +323,34 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 
     private let sessionEngine = EngineClient(configurationOnly: true)
     @Published var sessions: [LiveSession] = []
+    @Published var sessionSources: [SessionSourceHealth] = []
     @Published var sessionsUnavailable = false
+    @Published var petState = PetState.idle
+    @Published var importedPet: ImportedPet?
+    @Published var petImportError: String?
+    @Published var petImportBusy = false
+    func importPet(path: String) async {
+        guard !petImportBusy else { return }
+        petImportBusy = true
+        defer { petImportBusy = false }
+        do {
+            let result: PetSelection = try await engine.call("pets.import", params: ["path": path])
+            importedPet = result.pet; petImportError = result.error
+        } catch { petImportError = error.localizedDescription }
+    }
     private var sessionBusy = false { didSet { scheduleRefreshes() } }
     private var lastSessionRead = Date.distantPast
     var activeSessions: [LiveSession] { sessions.filter { $0.phase.active } }
-    var sessionPhase: SessionPhase? { sessionsUnavailable ? .unknown : activeSessions.first?.phase ?? sessions.first?.phase }
+    private var coreSessionSummary: String?
+    var sessionPhase: SessionPhase? { sessions.first?.phase ?? (sessionsUnavailable ? .unknown : nil) }
     var sessionSummary: String {
+        if let summary = coreSessionSummary { return summary }
         if sessionsUnavailable { return "会话状态不可用" }
-        if !settings.sources.contains(where: { settings.sourceEnabled($0) && $0.hostId == nil && $0.provider == "codex" }) { return "未接入会话状态" }
-        if !activeSessions.isEmpty { return "\(activeSessions.count) 个活跃会话" }
-        if sessions.contains(where: { $0.phase == .unknown }) { return "会话状态待确认" }
-        return "无活跃会话"
+        if !settings.sources.contains(where: { settings.sourceEnabled($0) && ["codex", "claude", "antigravity"].contains($0.provider) }) { return "未接入会话状态" }
+        return activeSessions.isEmpty ? "无活跃会话" : "\(activeSessions.count) 个活跃会话"
+    }
+    func manageSessionHooks(sourceID: String, action: String) async throws -> [SessionHookStatus] {
+        try await engine.call("sessions.hooks." + action, params: ["sourceId": sourceID])
     }
     func refreshSessions() async {
         guard !sessionBusy else { return }
@@ -341,8 +358,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         defer { sessionBusy = false }
         do {
             let result: SessionSnapshot = try await sessionEngine.call("sessions.list")
-            sessions = result.sessions; sessionsUnavailable = result.unavailable
-        } catch { sessionsUnavailable = true }
+            sessions = result.sessions; sessionSources = result.sources ?? []; sessionsUnavailable = result.unavailable; petState = result.pet ?? .unknown; coreSessionSummary = result.summary
+            let selection: PetSelection = try await sessionEngine.call("pets.current")
+            importedPet = selection.pet; petImportError = selection.error
+        } catch { sessionsUnavailable = true; petState = .unknown; coreSessionSummary = nil }
     }
     @Published var dashboard = Dashboard()
     @Published private(set) var menuDashboard = Dashboard()
@@ -362,6 +381,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var settingsDirty: Bool { settingsDraft != settings || !mappingModel.isEmpty || !mappingID.isEmpty }
     @Published var requestedSourceProvider: String?
     @Published var requestedAccountKey: String?
+    @Published var requestedHostID: String?
     @Published var requestedDetailPage: String?
     @Published var detailPage = "agent"
     var showDetailPage: ((String) -> Void)?
@@ -371,7 +391,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var provider = "all" { didSet { persistDashboardFilters() } }
     @Published var selectedSource = "all" { didSet { persistDashboardFilters() } }
     @Published var selectedAccount = "all" { didSet { persistDashboardFilters() } }
-    @Published var settingsTab = "sources"
+    @Published var settingsTab = "integrations"
+    @Published var settingsAgent = "codex"
+    @Published var generalPage = "appearance"
+    @Published var settingsSection: String?
     @Published var selectedModel = "all" { didSet { persistDashboardFilters() } }
     @Published var range = 1 { didSet { persistDashboardFilters() } }
     private var filterPersistenceEnabled = false
@@ -428,15 +451,31 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var showSampling: (() -> Void)?
     var showQuotaOrder: (() -> Void)?
     var showPanelAccounts: (() -> Void)?
+    func openSettings(_ destination: SettingsDestination = .init()) {
+        settingsTab = destination.normalizedCategory
+        if let account = settings.accounts.first(where: { $0.key == destination.accountKey }) { settingsAgent = account.provider }
+        else if let provider = destination.provider { settingsAgent = provider }
+        if settingsTab == "general", let section = destination.section { generalPage = section }
+        settingsSection = destination.section
+        requestedAccountKey = destination.accountKey
+        requestedHostID = destination.hostID
+        requestHostEditor = destination.section == "add-host"
+        showSettings?()
+    }
     func openEstimate(_ estimate: QuotaEstimate) async {
+        await openEstimate(accountKey: estimate.accountKey, credits: estimate.kind == "credits", group: estimate.groupId)
+    }
+    func openEstimate(accountKey: String, credits: Bool = false, group: String? = nil) async {
         do {
             // Use an unfiltered read so changing the usage filter cannot hide sampling controls.
             let snapshot: Dashboard = try await engine.call("dashboard.summary")
-            guard let quota = snapshot.quotas.first(where: { $0.id == estimate.accountKey }) else {
-                estimateErrors[estimate.accountKey] = "此账户已归档或移除；仍可结束采样并保留有效段。"; return
-            }
-            showEstimate?(quota, estimate.kind == "credits", estimate.groupId)
-        } catch { estimateErrors[estimate.accountKey] = error.localizedDescription }
+            let account = settings.historicalAccounts.first { $0.key == accountKey }
+            let parts = accountKey.split(separator: ":", maxSplits: 1).map(String.init)
+            let quota = snapshot.quotas.first(where: { $0.id == accountKey }) ?? Quota(sourceId: "", accountId: account?.id ?? parts.last ?? accountKey, provider: account?.provider ?? parts.first ?? "custom", name: account?.name ?? accountKey, updatedAt: 0, origin: "", windows: [], bankReset: nil, bankUpdatedAt: nil, plan: nil, error: nil)
+            dashboard.quotaEstimates = snapshot.quotaEstimates; dashboard.creditEstimates = snapshot.creditEstimates
+            estimateErrors[accountKey] = nil
+            showEstimate?(quota, credits, group)
+        } catch { estimateErrors[accountKey] = error.localizedDescription }
     }
 
     init(autostart: Bool = true) {
@@ -462,7 +501,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         }
         catch { message = error.localizedDescription }
     }
-    func openPricing() { settingsTab = "prices"; showSettings?() }
+    func openPricing() { openSettings(.init(category: "prices")) }
     @Published private(set) var dashboardPending = false
     @Published private(set) var dashboardError: String?
     @Published private(set) var appliedScope = "今日 · 全部 Agent · 全部账户 · 全部来源 · 全部模型"
@@ -832,7 +871,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         if !quotaScheduleKnown { readQuotaSchedule() }
         var deadlines: [Date] = []
         if panelVisible, !networkBusy { deadlines.append(lastNetworkAttempt.addingTimeInterval(300)) }
-        if !sessionBusy { deadlines.append(lastSessionRead.addingTimeInterval(5)) }
+        if !sessionBusy { deadlines.append(lastSessionRead.addingTimeInterval(1)) }
         if !serverBusy, settings.monitoredHosts.contains(where: \.enabled) { deadlines.append(metricsDeadline) }
         if !historyBlocked {
             deadlines.append(lastScan.addingTimeInterval(Double(settings.historyInterval)))
@@ -850,7 +889,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         defer { scheduleRefreshes() }
         let now = Date()
         if panelVisible, !networkBusy, now.timeIntervalSince(lastNetworkAttempt) >= 300 { Task { await testNetwork(force: false) } }
-        if !sessionBusy, now.timeIntervalSince(lastSessionRead) >= 5 { Task { await refreshSessions() } }
+        if !sessionBusy, now.timeIntervalSince(lastSessionRead) >= 1 { Task { await refreshSessions() } }
         if !serverBusy, settings.monitoredHosts.contains(where: \.enabled), now >= metricsDeadline { Task { await sampleHosts() } }
         guard !historyBlocked else { return }
         if let (quota, _, key) = pendingResets.first(where: { $0.1 <= now.timeIntervalSince1970 }) {
