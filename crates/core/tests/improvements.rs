@@ -319,7 +319,13 @@ fn manual_boundaries_report_progress_without_duplicate_quota_refresh_scans() {
     let started = engine.call_with_progress("quotaEstimates.start", json!({"accountKey":"custom:account","windowId":"short","sourceIds":["source"],"confirmed":true}), Box::new(move |p| observed.lock().unwrap().push(p["stage"].as_str().unwrap().into()))).unwrap();
     assert_eq!(
         *stages.lock().unwrap(),
-        vec!["同步来源 · fixture", "读取实时限额", "保存采样起点"]
+        vec![
+            "同步来源 · fixture",
+            "读取实时限额",
+            "补齐尾部记录",
+            "同步来源 · fixture",
+            "保存采样起点"
+        ]
     );
     stages.lock().unwrap().clear();
     let observed = stages.clone();

@@ -1,9 +1,11 @@
 (() => {
   let current = null;
+  let scalePending=null, scaleSaving=false, scaleTimer=null;
   const invoke = (name, args) => window.__TAURI__.core.invoke(name, args);
   const escape = value => window.AieyesUI.escapeHTML(value);
   function update(info) {
     current = info;
+    window.AieyesAgentSettings?.updateSession(info);
     document.body.dataset.platform = info.platform;
     document.documentElement.dataset.platform = info.platform;
     document.documentElement.dataset.material = info.materials?.main || info.material || 'opaque';
@@ -11,6 +13,8 @@
     renderLiveSessions(info);
     const mode = document.querySelector('#desktop-mode');
     if (mode && document.activeElement !== mode) mode.value = info.mode;
+    const scale=document.querySelector('#pet-scale');
+    if(scale&&document.activeElement!==scale&&!scaleSaving&&scalePending===null)showScale(info.petScale??1);
     const effective = document.querySelector('#desktop-effective');
     if (effective) effective.textContent = effectiveText(info);
     const count=document.querySelector('#desktop-count');if(count)count.checked=!!info.showCount;
@@ -19,6 +23,27 @@
   }
   function effectiveText(info) {
     return info.reason || `当前使用${info.effectiveMode === 'pet' ? '桌面宠物' : '系统状态栏'}。`;
+  }
+  function showScale(value){
+    const slider=document.querySelector('#pet-scale'),output=document.querySelector('#pet-scale-value'),reset=document.querySelector('#reset-pet-scale');
+    if(slider)slider.value=String(value);
+    if(output)output.textContent=Math.round(value*100)+'%';
+    if(reset)reset.disabled=value===1;
+  }
+  async function saveScale(){
+    if(scaleSaving||scalePending===null)return;
+    scaleSaving=true;
+    try{
+      while(scalePending!==null){
+        const value=scalePending;scalePending=null;
+        const info=await invoke('desktop_pet_scale',{scale:value});
+        update(info);
+      }
+    }catch(error){scalePending=null;showScale(current?.petScale??1);notify(String(error),'error');}
+    finally{scaleSaving=false;}
+  }
+  function changeScale(value){
+    showScale(value);scalePending=value;clearTimeout(scaleTimer);scaleTimer=setTimeout(saveScale,75);
   }
   async function navigate(page) {
     if(page.startsWith('settings-target:')){try{await window.AieyesApp.openSettings(JSON.parse(page.slice(16)));}catch(error){notify(String(error),'error');}return;}
@@ -53,7 +78,7 @@
   }
   window.AieyesDesktop = {
     settingsHTML() {
-      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="pet">桌面宠物</option><option value="tray">系统状态栏 / 托盘</option></select></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">显示活跃会话计数（本机及 SSH，立即生效）</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">桌宠单击打开面板，悬停查看状态，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，显示偏好会保留。</p><div class="form-row"><span id="current-pet" role="status">正在读取桌宠…</span><button type="button" id="import-pet">导入桌宠文件…</button></div><p class="muted tiny">支持 .zip、.codex-pet.zip 或解压后的 pet.json，图集可为 PNG / WebP。首次使用会导入月薪喵（kiffin）。</p><div class="between"><button type="button" id="reset-ball">重置桌宠位置</button><button type="button" id="hide-ball">暂时隐藏桌宠</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
+      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="pet">桌面宠物</option><option value="tray">系统状态栏 / 托盘</option></select></div><div class="form-row pet-scale-control"><label for="pet-scale">桌宠缩放</label><input id="pet-scale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="pet-scale-value" for="pet-scale">100%</output><button type="button" id="reset-pet-scale">恢复 100%</button></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">显示活跃会话计数（本机及 SSH，立即生效）</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">桌宠单击打开面板，悬停查看状态，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，显示偏好会保留。</p><div class="form-row"><span id="current-pet" role="status">正在读取桌宠…</span><button type="button" id="import-pet">导入桌宠文件…</button></div><p class="muted tiny">支持 .zip、.codex-pet.zip 或解压后的 pet.json，图集可为 PNG / WebP。首次使用会导入月薪喵（kiffin）。</p><div class="between"><button type="button" id="reset-ball">重置桌宠位置</button><button type="button" id="hide-ball">暂时隐藏桌宠</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
     },
     bindSettings() {
       const select = document.querySelector('#desktop-mode');
@@ -71,6 +96,10 @@
         finally{importButton.disabled=false;}
       };
       select.value = current?.mode || 'pet';
+      const scale=document.querySelector('#pet-scale');showScale(current?.petScale??1);
+      scale.oninput=()=>changeScale(Number(scale.value));
+      scale.onchange=()=>{clearTimeout(scaleTimer);void saveScale();};
+      document.querySelector('#reset-pet-scale').onclick=()=>{changeScale(1);clearTimeout(scaleTimer);void saveScale();};
       const count=document.querySelector('#desktop-count');if(count){count.checked=!!current?.showCount;count.onchange=async()=>{count.disabled=true;try{await invoke('desktop_action',{action:'toggle-count'});update(await invoke('desktop_info'));}catch(error){count.checked=!!current?.showCount;notify(String(error));}finally{count.disabled=false;}};}
       select.onchange = async () => {
         select.disabled = true;
@@ -103,7 +132,7 @@
       await window.__TAURI__.event.listen('desktop:detail-view',async event=>{
         await window.AieyesApp?.ready;
         const view=event.payload;
-        for(const key of ['provider','sourceId','accountKey','model','days','cost'])if(view[key]!==undefined)state[key]=view[key];
+        for(const key of ['provider','sourceId','accountKey','model','days','dateRange','cost'])if(view[key]!==undefined)state[key]=view[key];
         state.page=view.page==='servers'?'servers':'agent';
         await loadDashboard();render();
       });

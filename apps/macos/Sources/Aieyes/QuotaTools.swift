@@ -8,7 +8,7 @@ struct AutomaticValuationControls: View {
         if !eligible.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("数据源自动估值").font(AppFont.section)
-                Text("自动跟随当前订阅账号，分别积累额度与 credits 的可信样本。无法归属时自动等待，保留有效值。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text(eligible.contains { $0.provider == "codex" } ? "自动估值5h/7d限额和credits的价值" : "自动估值5h/7d限额的价值").font(AppFont.secondary).foregroundStyle(.secondary)
                 ForEach(eligible) { source in AutomaticValuationSourceControls(model: model, source: source) }
                 if let error = model.automaticError { Text(error).foregroundStyle(Palette.warn) }
             }
@@ -18,24 +18,25 @@ struct AutomaticValuationControls: View {
 private struct AutomaticValuationSourceControls: View {
     @ObservedObject var model: AppModel
     let source: AgentSource
-    @State private var confirmed = false
+    @State private var confirming = false
     private var enabled: Bool { source.autoValuation?.enabled == true }
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(source.name)
-            if !enabled {
-                Toggle("我确认影响订阅额度的所有设备用量均已纳入；按日志识别 API，不确定的区间跳过。", isOn: $confirmed)
-            }
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Button(enabled ? "关闭自动估值" : "开启自动估值") {
-                    Task { await model.configureAutomatic(source, enabled: !enabled, confirmed: confirmed); confirmed = false }
-                }.disabled(!enabled && !confirmed)
+                Text(source.name)
+                Spacer()
+                Toggle("自动估值 · " + source.name, isOn: Binding(get: { enabled }, set: { value in
+                    if value { confirming = true }
+                    else { Task { await model.configureAutomatic(source, enabled: false, confirmed: false) } }
+                })).labelsHidden().toggleStyle(.switch)
             }
-            if enabled {
-                Text(model.dashboard.sources.first { $0.id == source.id }?.autoValuationStatus?.note ?? "等待首个实时订阅快照").font(AppFont.secondary).foregroundStyle(.secondary)
-            }
+            Text(source.path).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled)
+            if enabled { Text(model.dashboard.sources.first { $0.id == source.id }?.autoValuationStatus?.note ?? "等待首个实时订阅快照").font(AppFont.secondary).foregroundStyle(.secondary) }
         }.disabled(model.automaticSaving)
-            .onChange(of: enabled) { _, _ in confirmed = false }
+            .confirmationDialog("开启自动估值？", isPresented: $confirming, titleVisibility: .visible) {
+                Button("确认开启") { Task { await model.configureAutomatic(source, enabled: true, confirmed: true) } }
+                Button("取消", role: .cancel) { }
+            } message: { Text("我确认影响订阅额度的所有设备用量均已纳入；按日志识别 API，不确定的区间跳过。") }
     }
 }
 
@@ -79,6 +80,7 @@ struct AgentValuationView: View {
     @State private var snapshot: Dashboard?
     @State private var error: String?
     @State private var loading = false
+    @State private var manualExpanded = false
     private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider } }
     private var accounts: [AgentAccount] { model.settings.accounts.filter { $0.provider == provider && $0.archived != true } }
     private var records: [QuotaEstimate] {
@@ -92,7 +94,8 @@ struct AgentValuationView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     AutomaticValuationControls(model: model, sources: sources)
                     if sources.isEmpty { Text("添加数据目录后可配置自动估值。").foregroundStyle(.secondary) }
-                    Text("手动采样").font(AppFont.section)
+                    DisclosureGroup("手动采样（进行中 \(records.filter { $0.status != "completed" && $0.samplingMode != "automatic" }.count)）", isExpanded: $manualExpanded) {
+                        if manualExpanded {
                     ForEach(accounts, id: \.key) { account in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
@@ -105,7 +108,10 @@ struct AgentValuationView: View {
                     }
                     if accounts.isEmpty { Text("添加账户后可开始手动采样。").foregroundStyle(.secondary) }
                     recordSection("进行中的手动采样", records.filter { $0.status != "completed" && $0.samplingMode != "automatic" })
-                    recordSection("已完成的采样历史", records.filter { $0.status == "completed" })
+                    recordSection("手动采样历史", records.filter { $0.status == "completed" && $0.samplingMode != "automatic" })
+                        }
+                    }
+                    recordSection("自动采样历史", records.filter { $0.samplingMode == "automatic" })
                     if loading { ProgressView("正在读取采样记录…") }
                     if let error { HStack { Text(error).foregroundStyle(Palette.warn); Button("重试读取") { Task { await load() } } } }
                 }.frame(maxWidth: .infinity, alignment: .leading)
@@ -113,10 +119,13 @@ struct AgentValuationView: View {
         }.padding(24).frame(width: 660, height: 650).aieyesAccent()
             .interactiveDismissDisabled(model.automaticSaving)
             .updateOperation("估值与采样", active: model.automaticSaving)
-            .task(id: model.dashboard.generatedAt) { await load() }
+            .task(id: recordsRevision) { await load() }
+    }
+    private var recordsRevision: String {
+        ((model.dashboard.quotaEstimates ?? []) + (model.dashboard.creditEstimates ?? [])).filter { $0.accountKey.hasPrefix(provider + ":") }.map { $0.recordKey + ":" + $0.status + ":" + String($0.checkpointAt) }.joined(separator: "|")
     }
     private func recordSection(_ title: String, _ values: [QuotaEstimate]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        LazyVStack(alignment: .leading, spacing: 12) {
             Text(title).font(AppFont.section)
             if values.isEmpty { Text("暂无记录").font(AppFont.secondary).foregroundStyle(.secondary) }
             ForEach(values, id: \.recordKey) { record in

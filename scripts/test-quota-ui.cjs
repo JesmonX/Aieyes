@@ -16,8 +16,8 @@ function fixture(){
     const f=window.quotaFixture;if(command==='desktop_info')return info();if(command==='desktop_panel'){f.panelOpen=args.open;return info();}if(command!=='engine_call')return {};
     const {method,params}=args;f.calls.push({method,params});
     if(method==='hello')return {version:'test'};if(method==='settings.get')return structuredClone(settings);
-    if(method==='dashboard')return {generatedAt:now,summary,quotas:[...rows].sort((a,b)=>f.order.indexOf(AieyesUI.canonicalProvider(a.provider)+':'+a.accountId)-f.order.indexOf(AieyesUI.canonicalProvider(b.provider)+':'+b.accountId)),quotaOrder:f.order,quotaEstimates:f.records,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:settings.sources.map(s=>({...s,autoValuationStatus:s.autoValuation?.enabled?{state:'collecting',note:'等待有效样本',accountKey:'codex:c'}:null})),pricingGaps:[]};
-    if(method==='autoEstimates.configure'){const src=settings.sources.find(s=>s.id===params.sourceId);if(params.enabled&&!params.confirmed)throw new Error('请同意');src.autoValuation=params.enabled?{enabled:true,consentVersion:1}:null;return {settings:structuredClone(settings)};}
+    if(method==='dashboard'||method==='dashboard.summary')return {generatedAt:now,summary,quotas:[...rows].sort((a,b)=>f.order.indexOf(AieyesUI.canonicalProvider(a.provider)+':'+a.accountId)-f.order.indexOf(AieyesUI.canonicalProvider(b.provider)+':'+b.accountId)),quotaOrder:f.order,quotaEstimates:f.records,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:settings.sources.map(s=>({...s,autoValuationStatus:s.autoValuation?.enabled?{state:'collecting',note:'等待有效样本',accountKey:'codex:c'}:null})),pricingGaps:[]};
+    if(method==='autoEstimates.configure'){if(f.failAutomatic)throw new Error('模拟自动估值保存失败');const src=settings.sources.find(s=>s.id===params.sourceId);if(params.enabled&&!params.confirmed)throw new Error('请同意');src.autoValuation=params.enabled?{enabled:true,consentVersion:1}:null;return {settings:structuredClone(settings)};}
     if(method==='sources.scan')return [];if(method==='quotas.refresh')return rows;
     if(method==='quotas.order.set'){if(f.fail)throw new Error('保存失败，请重试');f.order=params.keys;return f.order;}
     if(method.startsWith('quotaEstimates.')){
@@ -114,32 +114,46 @@ function fixture(){
    await page.locator('#estimate-restart').waitFor();assert(await page.locator('#estimate-restart').isDisabled());await page.locator('#estimate-confirm').check();await page.locator('#estimate-restart').click();await page.locator('#estimate-stop').waitFor();
    await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();assert.equal(await page.locator('#quota-dialog').getByText('已结束',{exact:true}).count(),1);
    await page.locator('#quota-close').click();
-   await page.locator('[data-estimate="codex:c"]:visible').click();
-   await page.locator('[data-auto-source="c"]').click();
-   assert(await page.locator('[data-auto-save="c"]').isDisabled(),'Automatic opt-in requires consent');
-   await page.locator('[data-auto-consent="c"]').check();await page.locator('[data-auto-save="c"]').click();
-   await page.waitForFunction(()=>state.settings.sources.find(s=>s.id==='c').autoValuation?.enabled===true);
-   await page.locator('[data-auto-save="c"][data-enabled="false"]').waitFor();
+   await page.evaluate(()=>openProviderEstimates('codex'));
+   assert.equal(await page.locator('#manual-sampling').evaluate(el=>el.open),false);
+   assert.equal(await page.locator('[data-valuation-record]').count(),0);
+   assert.match(await page.locator('#quota-dialog').innerText(),/自动估值5h\/7d限额和credits的价值/);
+   const beforeConsent=await page.evaluate(()=>quotaFixture.calls.filter(c=>c.method==='autoEstimates.configure').length);
+   await page.locator('[data-auto-save="c"]').click();await page.locator('#auto-consent [data-cancel]').click();
+   assert.equal(await page.locator('[data-auto-save="c"]').isChecked(),false);
+   assert.equal(await page.evaluate(()=>quotaFixture.calls.filter(c=>c.method==='autoEstimates.configure').length),beforeConsent);
+   await page.evaluate(()=>quotaFixture.failAutomatic=true);
+   await page.locator('[data-auto-save="c"]').click();await page.locator('#auto-consent [data-confirm]').click();
+   await page.locator('[data-auto-error]:visible').waitFor();
+   assert.equal(await page.locator('[data-auto-save="c"]').isChecked(),false,'Failed opt-in retains the saved switch');
+   await page.evaluate(()=>quotaFixture.failAutomatic=false);
+   await page.locator('[data-auto-save="c"]').click();await page.locator('#auto-consent [data-confirm]').click();
+   await page.waitForFunction(()=>state.settings.sources.find(s=>s.id==='c').autoValuation?.enabled===true&&!document.querySelector('#quota-dialog').dataset.busy);
+   assert(await page.locator('[data-auto-save="c"]').isChecked());
    assert.match(await page.locator('[data-auto-status="c"]').textContent(),/等待有效样本/);
    await page.locator('#quota-close').click();
    if(surface==='index.html'){
      await page.evaluate(()=>{state.page='settings';state.settingsTab='sources';render();});
-     const automatic=page.locator('[data-machine-estimates="codex"][data-machine="local"]');
-     await automatic.waitFor();
-     assert.match(await automatic.locator('..').textContent(),/已开启 1\/1/,'Outer source page shares the valuation setting');
+     const automatic=page.locator('[data-auto-machine-status="local"][data-auto-provider="codex"]');
+     assert.match(await automatic.textContent(),/已开启 1\/1/,'Machine rows expose valuation status');
+     assert.equal(await page.locator('[data-machine-estimates]').count(),0,'No per-machine settings button');
      await page.locator('[data-machine-directories="codex"]').first().click();
      assert.equal(await page.locator('[data-auto-source], [data-machine-estimates]').count(),0,'Directory settings contain no automatic valuation entry');
      await page.locator('#directories-back').click();
-     await page.evaluate(()=>{state.settings.hosts.push({id:'remote',name:'远程机器',enabled:true});state.settings.sources.push({id:'remote-source',provider:'codex',hostId:'remote',name:'远程日志',path:'/remote',enabled:true});render();});
-     await page.locator('[data-settings-agent=claude]').click();assert(await page.locator('[data-machine-estimates="claude"][data-machine="local"]').isDisabled(),'Unconfigured machines explain why automatic settings are unavailable');
+     await page.locator('[data-settings-agent=claude]').click();
+     assert.match(await page.locator('[data-auto-machine-status="local"][data-auto-provider="claude"]').textContent(),/未配置目录/);
+     await page.locator('[data-agent-estimates="claude"]').click();
+     assert.match(await page.locator('#quota-dialog').innerText(),/自动估值5h\/7d限额的价值/);
+     assert(!await page.locator('#quota-dialog').innerText().then(text=>text.includes('credits')));
+     await page.locator('#quota-close').click();
      await page.screenshot({path:path.join(output,'source-automatic-settings.png'),fullPage:true});
-     await page.locator('[data-settings-agent=codex]').click();await automatic.click();
-     assert.equal(await page.locator('[data-auto-save="remote-source"]').count(),0,'Each machine manages only its own sources');
-   }else await page.evaluate(()=>window.AieyesAutomatic.open(['c']));
-   await page.locator('[data-auto-save="c"][data-enabled="false"]').click();
-   await page.waitForFunction(()=>!state.settings.sources.find(s=>s.id==='c').autoValuation?.enabled);
+     await page.locator('[data-settings-agent=codex]').click();await page.locator('[data-agent-estimates="codex"]').click();
+   }else await page.evaluate(()=>openProviderEstimates('codex'));
+   await page.locator('[data-auto-save="c"]').click();
+   await page.waitForFunction(()=>!state.settings.sources.find(s=>s.id==='c').autoValuation?.enabled&&!document.querySelector('#quota-dialog').dataset.busy);
+   assert.equal(await page.locator('#auto-consent').count(),0,'Disabling saves directly');
    await page.locator('#quota-close').click();
-   if(surface==='index.html')assert.match(await page.locator('[data-machine-estimates="codex"][data-machine="local"]').locator('..').textContent(),/已关闭/,'Outer source status updates after saving');
+   if(surface==='index.html')assert.match(await page.locator('[data-auto-machine-status="local"][data-auto-provider="codex"]').textContent(),/已关闭/,'Machine status updates after saving');
    await page.evaluate(()=>{state.page='agent';render();});
    for(const colorScheme of ['light','dark']){await page.emulateMedia({colorScheme});await page.screenshot({path:path.join(output,surface+'-'+colorScheme+'.png')});}
    assert.deepEqual(errors,[]);await page.close();

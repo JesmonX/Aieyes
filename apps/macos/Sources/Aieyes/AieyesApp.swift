@@ -72,12 +72,14 @@ import Combine
         popover.contentViewController = PanelContainer(model: model)
         appearanceController?.updatePanel()
         popover.contentSize = NSSize(width: 450, height: 720)
-        petWindow = PetWindowController(model: model, open: { [weak self] anchor in
+        petWindow = PetWindowController(model: model, open: { [weak self] anchor, toggle in
             guard let self else { return }
-            if self.popover.isShown { self.popover.performClose(nil); return }
+            if self.popover.isShown { if toggle { self.popover.performClose(nil) }; return }
+            NSApp.activate(ignoringOtherApps: true)
             self.popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
             self.model.setWindowVisible(true, window: "panel")
         })
+        model.live.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         model.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification).sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)

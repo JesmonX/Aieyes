@@ -191,6 +191,47 @@ impl Store {
         let previous = previous
             .map(|raw| serde_json::from_str::<Settings>(&raw))
             .transpose()?;
+        // Host removal is a core transaction, including for older clients that
+        // used to turn remote sources into local ones by clearing hostId.
+        if let Some(old) = &previous {
+            let removed: Vec<_> = old
+                .hosts
+                .iter()
+                .filter(|host| !normalized.hosts.iter().any(|h| h.id == host.id))
+                .collect();
+            for source in &mut normalized.sources {
+                if let Some(prior) = old.sources.iter().find(|s| s.id == source.id) {
+                    if let Some(host) = removed
+                        .iter()
+                        .find(|h| prior.host_id.as_ref() == Some(&h.id))
+                    {
+                        source.host_id = prior.host_id.clone();
+                        source.machine_binding = MachineBinding::Unbound;
+                        source.last_machine_name = Some(
+                            if host.name.is_empty() {
+                                &host.target
+                            } else {
+                                &host.name
+                            }
+                            .clone(),
+                        );
+                        source.enabled = false;
+                    }
+                    anyhow::ensure!(
+                        verified_auth_change
+                            || prior.machine_binding != MachineBinding::Unbound
+                            || (source.machine_binding == MachineBinding::Unbound
+                                && source.host_id == prior.host_id),
+                        "请使用重新绑定机器操作恢复此目录"
+                    );
+                }
+            }
+            for agent in &mut normalized.agents {
+                agent
+                    .machine_ids
+                    .retain(|id| !removed.iter().any(|host| &host.id == id));
+            }
+        }
         if !verified_auth_change {
             for account in &mut normalized.accounts {
                 if previous.as_ref().is_some_and(|old| {
@@ -250,8 +291,8 @@ impl Store {
             anyhow::ensure!(
                 account
                     .quota_refresh_seconds
-                    .is_none_or(|n| (30..=86400).contains(&n)),
-                "账户查询间隔范围为 30–86400 秒"
+                    .is_none_or(|n| (5..=86400).contains(&n)),
+                "账户查询间隔范围为 5–86400 秒"
             );
             anyhow::ensure!(
                 !account.id.trim().is_empty()
@@ -298,10 +339,16 @@ impl Store {
             );
             if let Some(id) = &source.host_id {
                 anyhow::ensure!(
-                    s.hosts.iter().any(|h| &h.id == id),
+                    source.machine_binding == MachineBinding::Unbound
+                        || s.hosts.iter().any(|h| &h.id == id),
                     "数据源关联的主机不存在"
                 );
             }
+            anyhow::ensure!(
+                source.machine_binding != MachineBinding::Unbound
+                    || (!source.enabled && source.host_id.is_some()),
+                "未绑定机器的目录必须暂停并保留原机器标识"
+            );
         }
         for proxy in
             std::iter::once(&s.proxy).chain(s.sources.iter().filter_map(|s| s.proxy.as_ref()))
@@ -328,8 +375,8 @@ impl Store {
             }
         }
         anyhow::ensure!(
-            (10..=86400).contains(&s.refresh_seconds),
-            "Agent 限额刷新间隔范围为 10–86400 秒"
+            (5..=86400).contains(&s.refresh_seconds),
+            "Agent 限额刷新间隔范围为 5–86400 秒"
         );
         anyhow::ensure!(
             (10..=86400).contains(&s.history_refresh_seconds),
@@ -423,7 +470,9 @@ impl Store {
                         anyhow::ensure!(
                             old.codex_home_id == source.codex_home_id
                                 && old.path == source.path
-                                && old.host_id == source.host_id
+                                && (old.host_id == source.host_id
+                                    || (verified_auth_change
+                                        && old.machine_binding == MachineBinding::Unbound))
                                 && old.provider == source.provider,
                             "受管理 Codex 来源的 home 与路径不能通过普通配置覆盖，请使用账号管理"
                         );
@@ -442,8 +491,21 @@ impl Store {
                                 params![old.id, old.provider, old.account_id],
                             )?;
                         }
-                        if old.path != source.path || old.host_id != source.host_id {
+                        if old.path != source.path
+                            || old.host_id != source.host_id
+                            || old.machine_binding != source.machine_binding
+                        {
                             tx.execute("DELETE FROM files WHERE source_id=?1", [&source.id])?;
+                            tx.execute(
+                                "DELETE FROM remote_cursors WHERE source_id=?1",
+                                [&source.id],
+                            )?;
+                            tx.execute(
+                                "DELETE FROM source_status WHERE source_id=?1",
+                                [&source.id],
+                            )?;
+                            self.pause_shared_source_estimates(&source.id)?;
+                            self.invalidate_automatic_sources(std::slice::from_ref(&source.id))?;
                         }
                     }
                 }
@@ -842,6 +904,10 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?;
+        // Shared in-flight reads can be delivered to more than one caller.
+        if prior.as_deref() == Some(serde_json::to_string(q)?.as_str()) {
+            return Ok(());
+        }
         let mut next = q.clone();
         if q.provider == "antigravity" && q.error.is_none() {
             let settings = self.settings()?;
@@ -1069,10 +1135,13 @@ impl Store {
     #[cfg(test)]
     pub(crate) fn dashboard_usage_reference(&self, f: &Filter) -> Result<Dashboard> {
         use chrono::{Duration, Local, TimeZone};
-        let today = Local::now().date_naive();
-        let start = today - Duration::days(f.days.unwrap_or(1).clamp(1, 3660) as i64 - 1);
-        let trend_start = start.min(today - Duration::days(6));
-        let heat_start = today - Duration::days(364);
+        let crate::usage_cache::DateBounds {
+            start,
+            end: today,
+            trend_start,
+            heat_start,
+        } = crate::usage_cache::date_bounds(self, f, false)?;
+        let until = now().min(crate::usage_cache::boundary(today + Duration::days(1)) - 1);
         let earliest = start.min(heat_start);
         let from = Local
             .from_local_datetime(&earliest.and_hms_opt(0, 0, 0).unwrap())
@@ -1091,7 +1160,7 @@ impl Store {
         let mut query=self.db.prepare("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<=?2 AND (?3 IS NULL OR provider=?3) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7))))) AND (?5 IS NULL OR model=?5) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
         let mut rows = query.query(params![
             from,
-            now(),
+            until,
             f.provider,
             f.account_id,
             f.model,
@@ -1117,7 +1186,7 @@ impl Store {
             .query_map(
                 params![
                     options_from,
-                    d.generated_at,
+                    until,
                     f.provider,
                     f.account_id,
                     f.source_id,
@@ -1241,7 +1310,7 @@ impl Store {
                 })
             })
             .collect();
-        d.heatmap = (0..365)
+        d.heatmap = (0..=(today - heat_start).num_days())
             .map(|n| {
                 let key = (heat_start + Duration::days(n)).to_string();
                 heat.remove(&key).unwrap_or(Aggregate {

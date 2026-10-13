@@ -418,7 +418,7 @@
     },
     {
       "name": "codexAuth.quota",
-      "lane": "main",
+      "lane": "quotas",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
@@ -749,7 +749,7 @@
     },
     {
       "name": "quotas.refresh",
-      "lane": "main",
+      "lane": "quotas",
       "invalidates": [
         "data"
       ],
@@ -829,6 +829,17 @@
     },
     {
       "name": "sources.configure",
+      "lane": "configuration",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "sources.rebind",
       "lane": "configuration",
       "invalidates": [
         "settings",

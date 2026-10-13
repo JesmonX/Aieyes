@@ -1,14 +1,21 @@
 //! Per-account polling shared by all UI windows and engine lanes.
-use crate::{Engine, file_lock::FileLock, models::Account};
+use crate::{
+    Engine,
+    models::{Account, QuotaSnapshot},
+    quota_queries,
+};
 use anyhow::{Context, Result};
-use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
+use std::{
+    collections::VecDeque,
+    sync::{Mutex, mpsc},
+};
 
 fn interval(account: &Account, global: u64) -> i64 {
     account
         .quota_refresh_seconds
         .unwrap_or(global)
-        .clamp(10, 86400) as i64
+        .clamp(5, 86400) as i64
 }
 fn due(last: Option<i64>, now: i64, seconds: i64) -> bool {
     last.is_none_or(|last| now < last || now - last >= seconds)
@@ -16,39 +23,36 @@ fn due(last: Option<i64>, now: i64, seconds: i64) -> bool {
 impl Engine {
     pub(crate) fn quota_schedule(&self) -> Result<Value> {
         let settings = self.store.settings()?;
-        let now = chrono::Utc::now().timestamp();
+        let now = crate::models::now();
         let mut accounts = vec![];
         for account in settings
             .accounts
             .iter()
             .filter(|a| a.quota_enabled && !a.archived)
         {
-            if !settings.sources.iter().any(|s| {
-                settings.source_enabled(s)
-                    && account.uses_source(s)
-                    && s.host_id
-                        .as_ref()
-                        .is_none_or(|id| settings.hosts.iter().any(|h| h.id == *id && h.enabled))
-            }) {
+            if !settings
+                .sources
+                .iter()
+                .any(|s| settings.source_enabled(s) && account.uses_source(s))
+            {
                 continue;
             }
             let key = crate::accounts::key(account);
-            let last: Option<i64> = self
-                .store
-                .db
-                .query_row(
-                    "SELECT CAST(value AS INTEGER) FROM kv WHERE key=?1",
-                    [format!("quota-attempt:{key}")],
-                    |r| r.get(0),
-                )
-                .optional()?;
+            let last = quota_queries::finished(&self.store, &key)?;
             let seconds = interval(account, settings.refresh_seconds);
-            let next = if due(last, now, seconds) {
+            let in_flight = quota_queries::try_lock(&quota_queries::account_lock(
+                quota_queries::root(&self.store)?,
+                &key,
+            ))?
+            .is_none();
+            let next = if in_flight {
+                now + seconds
+            } else if due(last, now, seconds) {
                 now
             } else {
                 last.unwrap().saturating_add(seconds)
             };
-            accounts.push(json!({"accountKey":key,"nextDueAt":next,"intervalSeconds":seconds}));
+            accounts.push(json!({"accountKey":key,"nextDueAt":next,"intervalSeconds":seconds,"inFlight":in_flight}));
         }
         let next = accounts
             .iter()
@@ -56,103 +60,153 @@ impl Engine {
             .min();
         Ok(json!({"generatedAt":now,"nextDueAt":next,"accounts":accounts}))
     }
-    pub(crate) fn refresh_scheduled_quotas(&mut self, params: Value) -> Result<Value> {
-        let settings = self.store.settings()?;
+    fn refresh_one_quota(
+        &mut self,
+        params: &Value,
+        observed: &std::collections::HashMap<String, Option<String>>,
+    ) -> Result<Vec<QuotaSnapshot>> {
+        let key = params["accountKey"].as_str().context("账户缺失")?;
         let automatic = params["dueOnly"].as_bool().unwrap_or(false);
-        let mut result = vec![];
-        for account in settings.accounts.iter().filter(|a| {
-            a.quota_enabled
-                && !a.archived
-                && params["accountId"].as_str().is_none_or(|id| a.id == id)
-                && params["accountKey"]
-                    .as_str()
-                    .is_none_or(|key| crate::accounts::key(a) == key)
-        }) {
-            if automatic
-                && !settings.sources.iter().any(|s| {
-                    settings.source_enabled(s)
-                        && account.uses_source(s)
-                        && s.host_id.as_ref().is_none_or(|id| {
-                            settings.hosts.iter().any(|h| h.id == *id && h.enabled)
-                        })
-                })
-            {
-                continue;
-            }
-            let key = crate::accounts::key(account);
-            let filename: String = key.bytes().map(|b| format!("{b:02x}")).collect();
-            let root = std::path::Path::new(self.store.db.path().context("数据目录不可用")?)
-                .parent()
-                .context("数据目录不可用")?;
-            let lock = std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .open(root.join(format!("quota-{filename}.lock")))?;
-            let _lock = match FileLock::try_exclusive(lock) {
-                Ok(lock) => lock,
-                Err(std::fs::TryLockError::WouldBlock) => continue,
-                Err(error) => return Err(error.into()),
-            };
-            let attempt_key = format!("quota-attempt:{key}");
-            let last: Option<i64> = self
-                .store
-                .db
-                .query_row(
-                    "SELECT CAST(value AS INTEGER) FROM kv WHERE key=?1",
-                    [&attempt_key],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let now = chrono::Utc::now().timestamp();
-            if automatic && !due(last, now, interval(account, settings.refresh_seconds)) {
-                continue;
-            }
-            self.store.db.execute(
-                "INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                rusqlite::params![attempt_key, now.to_string()],
-            )?;
-            // Sampling history belongs only to the account actually being queried.
-            let mut ids: Vec<_> = self
-                .store
-                .estimates()?
+        if automatic {
+            let settings = self.store.settings()?;
+            let Some(account) = settings
+                .accounts
                 .iter()
-                .filter(|e| {
-                    e.status == "active" && e.account_key == key && e.sampling_mode != "automatic"
-                })
-                .flat_map(|e| e.source_ids.clone())
-                .collect();
-            ids.sort();
-            ids.dedup();
-            if !ids.is_empty() {
-                if self.verify_sampling_identities(&ids, &key).is_err() {
-                    for id in &ids {
-                        self.store.pause_shared_source_estimates(id)?;
-                    }
-                    ids.clear();
-                } else {
-                    let _ = self.sync_estimate_sources(&ids);
-                }
+                .find(|a| crate::accounts::key(a) == key)
+            else {
+                return Ok(vec![]);
+            };
+            if !due(
+                quota_queries::finished(&self.store, key)?,
+                crate::models::now(),
+                interval(account, settings.refresh_seconds),
+            ) {
+                return Ok(vec![]);
             }
-            let mut selected = params.clone();
-            selected["accountKey"] = json!(key);
-            let rows = self.read_quotas(&selected)?;
-            if !ids.is_empty() && self.verify_sampling_identities(&ids, &key).is_err() {
+        }
+        let mut ids: Vec<_> = self
+            .store
+            .estimates()?
+            .iter()
+            .filter(|e| {
+                e.status == "active" && e.account_key == key && e.sampling_mode != "automatic"
+            })
+            .flat_map(|e| e.source_ids.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        if !ids.is_empty() {
+            if self.verify_sampling_identities(&ids, key).is_err() {
                 for id in &ids {
                     self.store.pause_shared_source_estimates(id)?;
                 }
+                ids.clear();
+            } else {
+                let _ = self.sync_estimate_sources(&ids);
             }
-            for row in &rows {
-                self.store.quota(row)?;
-            }
-            result.extend(rows);
         }
-        Ok(serde_json::to_value(result)?)
+        let rows = self.coordinated_quotas(params, automatic, !ids.is_empty(), observed)?;
+        if !ids.is_empty() && self.verify_sampling_identities(&ids, key).is_err() {
+            for id in &ids {
+                self.store.pause_shared_source_estimates(id)?;
+            }
+        }
+        Ok(rows)
+    }
+    pub(crate) fn refresh_scheduled_quotas(&mut self, params: Value) -> Result<Value> {
+        let settings = self.store.settings()?;
+        let mut accounts: Vec<_> = settings
+            .accounts
+            .iter()
+            .filter(|a| {
+                a.quota_enabled
+                    && !a.archived
+                    && params["accountId"].as_str().is_none_or(|id| a.id == id)
+                    && params["accountKey"]
+                        .as_str()
+                        .is_none_or(|key| crate::accounts::key(a) == key)
+            })
+            .cloned()
+            .collect();
+        let mut deadlines = std::collections::HashMap::new();
+        let mut observed = std::collections::HashMap::new();
+        for a in &accounts {
+            let key = crate::accounts::key(a);
+            deadlines.insert(
+                key.clone(),
+                quota_queries::finished(&self.store, &key)?.unwrap_or(0),
+            );
+            // Capture at request entry, before worker startup or a queue wait.
+            observed.insert(key.clone(), quota_queries::completed(&self.store, &key)?);
+        }
+        accounts.sort_by_key(|a| deadlines[&crate::accounts::key(a)]);
+        let count = accounts.len().min(4);
+        let queue = Mutex::new(VecDeque::from(accounts));
+        let root = quota_queries::root(&self.store)?.to_owned();
+        let context = crate::operations::context();
+        let (tx, rx) = mpsc::channel();
+        let mut rows = vec![];
+        std::thread::scope(|scope| {
+            for _ in 0..count {
+                let (queue, root, params, tx, context, observed) = (
+                    &queue,
+                    &root,
+                    &params,
+                    tx.clone(),
+                    context.clone(),
+                    &observed,
+                );
+                scope.spawn(move || {
+                    let _operation = crate::operations::inherit(context);
+                    let mut engine = Engine::open(root);
+                    loop {
+                        let Some(account) = queue.lock().unwrap().pop_front() else {
+                            break;
+                        };
+                        let mut selected = params.clone();
+                        selected["accountKey"] = json!(crate::accounts::key(&account));
+                        let result = match &mut engine {
+                            Ok(engine) => engine.refresh_one_quota(&selected, observed),
+                            Err(error) => Err(anyhow::anyhow!(error.to_string())),
+                        };
+                        let result = result.unwrap_or_else(|error| {
+                            vec![QuotaSnapshot {
+                                account_id: account.id,
+                                provider: account.provider,
+                                name: account.name,
+                                error: Some(error.to_string()),
+                                ..Default::default()
+                            }]
+                        });
+                        if tx.send(result).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            drop(tx);
+            for finished in rx {
+                for row in finished {
+                    if let Some(progress) = &mut self.progress {
+                        progress(json!({"kind":"quotas.refresh","row":row}));
+                    }
+                    rows.push(row);
+                }
+            }
+        });
+        rows.sort_by_key(|q| {
+            settings
+                .accounts
+                .iter()
+                .position(|a| a.id == q.account_id && a.provider == q.provider)
+        });
+        Ok(serde_json::to_value(rows)?)
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_lock::FileLock;
     #[test]
     fn failed_queries_obey_independent_intervals_and_manual_refresh_bypasses_due() {
         use crate::models::*;
@@ -172,7 +226,7 @@ mod tests {
                 name: id.into(),
                 provider: "custom".into(),
                 account_id: id.into(),
-                path: "/nonexistent/fixture".into(),
+                path: format!("/nonexistent/fixture/{id}"),
                 ..Default::default()
             });
         }
@@ -189,7 +243,10 @@ mod tests {
         let lock = FileLock::try_exclusive(lock).unwrap();
         assert!(
             engine
-                .call("quotas.refresh", json!({"accountKey":"custom:fast"}))
+                .call(
+                    "quotas.refresh",
+                    json!({"accountKey":"custom:fast","dueOnly":true})
+                )
                 .unwrap()
                 .as_array()
                 .unwrap()
@@ -251,7 +308,7 @@ mod tests {
                 .is_empty()
         );
         assert!(engine.call("quotas.schedule", json!({})).unwrap()["nextDueAt"].is_null());
-        settings.accounts[0].quota_refresh_seconds = Some(29);
+        settings.accounts[0].quota_refresh_seconds = Some(4);
         assert!(engine.store.save_settings(&settings).is_err());
     }
 

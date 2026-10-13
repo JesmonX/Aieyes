@@ -2,18 +2,14 @@
 use super::*;
 use windows::core::BOOL;
 pub(super) struct Sprite {
-    pixels: Vec<u8>,
-    width: u32,
-    height: u32,
+    frames: Vec<Vec<u8>>,
     cell_width: u32,
     cell_height: u32,
 }
 impl Sprite {
     pub fn empty() -> Self {
         Self {
-            pixels: Vec::new(),
-            width: 0,
-            height: 0,
+            frames: Vec::new(),
             cell_width: 0,
             cell_height: 0,
         }
@@ -42,11 +38,30 @@ impl Sprite {
         pixels.truncate(info.buffer_size());
         for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
+            // GDI+ and UpdateLayeredWindow both receive premultiplied BGRA.
+            // Invisible white/black RGB must not tint interpolated outline pixels.
+            let alpha = u16::from(pixel[3]);
+            for channel in &mut pixel[..3] {
+                *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+            }
         }
+        // Isolate cells before resampling; the next animation frame is not an edge pixel.
+        let frames = (0..8 * height / cell_height)
+            .map(|index| {
+                let mut frame = vec![0; (cell_width * cell_height * 4) as usize];
+                for y in 0..cell_height {
+                    let src = ((index / 8 * cell_height + y) * width + index % 8 * cell_width)
+                        as usize
+                        * 4;
+                    let dst = (y * cell_width * 4) as usize;
+                    frame[dst..dst + (cell_width * 4) as usize]
+                        .copy_from_slice(&pixels[src..src + (cell_width * 4) as usize]);
+                }
+                frame
+            })
+            .collect();
         Some(Self {
-            pixels,
-            width,
-            height,
+            frames,
             cell_width,
             cell_height,
         })
@@ -163,14 +178,16 @@ unsafe fn draw(
     {
         GdipScaleWorldTransform(graphics, scale, scale, MatrixOrderPrepend);
         GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
+        GdipSetInterpolationMode(graphics, InterpolationModeHighQualityBicubic);
+        GdipSetPixelOffsetMode(graphics, PixelOffsetModeHalf);
         let mut image = null_mut();
-        if !sprite.pixels.is_empty()
+        if let Some(pixels) = sprite.frames.get(frame as usize)
             && GdipCreateBitmapFromScan0(
-                sprite.width as i32,
-                sprite.height as i32,
-                (sprite.width * 4) as i32,
-                0x26200a,
-                Some(sprite.pixels.as_ptr()),
+                sprite.cell_width as i32,
+                sprite.cell_height as i32,
+                (sprite.cell_width * 4) as i32,
+                0xe200b,
+                Some(pixels.as_ptr()),
                 &mut image,
             ) == GDI_OK
         {
@@ -181,8 +198,8 @@ unsafe fn draw(
                 0.0,
                 132.0,
                 143.0,
-                (frame % 8 * sprite.cell_width) as f32,
-                (frame / 8 * sprite.cell_height) as f32,
+                0.0,
+                0.0,
                 sprite.cell_width as f32,
                 sprite.cell_height as f32,
                 UnitPixel,
@@ -201,27 +218,29 @@ unsafe fn draw(
             },
             &mut brush,
         );
-        GdipFillRectangle(graphics, brush.cast(), 30.0, 145.0, 84.0, 21.0);
+        let (x, y, w, h) = (3.0, 145.0, 138.0, height as f32 / scale - 147.0);
+        let diameter = 20.0_f32.min(h);
+        let mut path = null_mut();
+        if GdipCreatePath(FillModeWinding, &mut path) == GDI_OK {
+            for (left, top, angle) in [
+                (x, y, 180.0),
+                (x + w - diameter, y, 270.0),
+                (x + w - diameter, y + h - diameter, 0.0),
+                (x, y + h - diameter, 90.0),
+            ] {
+                GdipAddPathArc(path, left, top, diameter, diameter, angle, 90.0);
+            }
+            GdipClosePathFigure(path);
+            GdipFillPath(graphics, brush.cast(), path);
+            GdipDeletePath(path);
+        }
         GdipDeleteBrush(brush.cast());
-        let label = if sprite.pixels.is_empty() {
+        let label = if sprite.frames.is_empty() {
             "请导入桌宠"
         } else if info["recovery"] == "failed" {
             "恢复失败"
         } else {
             label
-        };
-        let count = info["activeCount"].as_u64().unwrap_or(0);
-        let label = if info["showCount"].as_bool().unwrap_or(false) && count > 0 {
-            format!(
-                "{label} {}",
-                if count > 99 {
-                    "99+".to_owned()
-                } else {
-                    count.to_string()
-                }
-            )
-        } else {
-            label.to_owned()
         };
         let text: Vec<u16> = label.encode_utf16().collect();
         let mut format = null_mut();
@@ -243,10 +262,10 @@ unsafe fn draw(
             text.len() as i32,
             font,
             &RectF {
-                X: 15.0,
+                X: 3.0,
                 Y: 143.0,
-                Width: 114.0,
-                Height: 24.0,
+                Width: 138.0,
+                Height: height as f32 / scale - 143.0,
             },
             format,
             brush.cast(),
@@ -271,9 +290,47 @@ mod tests {
     #[test]
     fn imported_sheet_has_complete_transparent_rgba_frames() {
         let sprite = imported_sprite();
-        assert_eq!(sprite.pixels.len(), 1536 * 1872 * 4);
-        assert_eq!(sprite.pixels[3], 0);
-        assert!(sprite.pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 255));
+        assert_eq!(sprite.frames.len(), 72);
+        assert_eq!(
+            sprite.frames.iter().map(Vec::len).sum::<usize>(),
+            1536 * 1872 * 4
+        );
+        assert_eq!(sprite.frames[0][3], 0);
+        assert!(
+            sprite.frames[0]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[3] == 255)
+        );
+        assert!(
+            sprite
+                .frames
+                .iter()
+                .flat_map(|frame| frame.as_chunks::<4>().0)
+                .all(|p| p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3])
+        );
+    }
+    #[test]
+    fn transparent_rgb_is_removed_before_frame_interpolation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("transparent.png");
+        let mut encoder = png::Encoder::new(std::fs::File::create(&path).unwrap(), 8, 9);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut pixels = vec![255; 8 * 9 * 4];
+        pixels[..8].copy_from_slice(&[255, 255, 255, 0, 100, 50, 200, 128]);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&pixels)
+            .unwrap();
+        let sprite = Sprite::load(
+            &serde_json::json!({"spritePath":path,"cellWidth":1,"cellHeight":1,"rows":9}),
+        )
+        .unwrap();
+        assert_eq!(sprite.frames[0], [0, 0, 0, 0]);
+        assert_eq!(sprite.frames[1], [100, 25, 50, 128]);
     }
     #[test]
     fn native_render_preserves_alpha_at_multiple_dpi() {
@@ -285,8 +342,11 @@ mod tests {
             };
             assert_eq!(GdiplusStartup(&mut token, &input, null_mut()), GDI_OK);
             let sprite = imported_sprite();
-            for scale in [1, 2, 3] {
-                let (width, height) = (144 * scale, 168 * scale);
+            for scale in [0.5_f64, 1.0, 1.25, 2.0, 3.0] {
+                let (width, height) = (
+                    (144.0 * scale).round() as i32,
+                    (168.0 * scale).round() as i32,
+                );
                 for row in 0..9 {
                     let mut pixels = vec![0u8; (width * height * 4) as usize];
                     draw(
@@ -301,7 +361,7 @@ mod tests {
                     );
                     assert_eq!(pixels[3], 0, "transparent corner");
                     assert!(
-                        pixels[..(width * 140 * scale * 4) as usize]
+                        pixels[..(f64::from(width) * 140.0 * scale * 4.0) as usize]
                             .as_chunks::<4>()
                             .0
                             .iter()

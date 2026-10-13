@@ -1,11 +1,8 @@
-use crate::{file_lock::FileLock, models::*, ssh, store::Store, usage};
+use crate::{models::*, ssh, store::Store, usage};
 use anyhow::{Context, Result, ensure};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::path::Path;
 
 pub(crate) fn setup(db: &rusqlite::Connection) -> Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS remote_cursors(source_id TEXT NOT NULL,path TEXT NOT NULL,configuration TEXT NOT NULL,cursor TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(source_id,path));")?;
@@ -30,25 +27,6 @@ fn configuration(source: &Source, host: &Host) -> String {
         .unwrap(),
     )
 }
-fn source_lock(root: &Path, source: &Source) -> Result<FileLock> {
-    let path = root.join(format!("history-{}.lock", hash(&source.id)));
-    let start = Instant::now();
-    loop {
-        crate::operations::check()?;
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)?;
-        match FileLock::try_exclusive(file) {
-            Ok(lock) => return Ok(lock),
-            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < Duration::from_secs(45) => {
-                std::thread::sleep(Duration::from_millis(50))
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-}
 
 pub(crate) fn scan(root: &Path, settings: &Settings, source: &Source) -> Result<Value> {
     scan_mode(root, settings, source, false)
@@ -59,8 +37,10 @@ pub(crate) fn rescan(root: &Path, settings: &Settings, source: &Source) -> Resul
 }
 
 fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> Result<Value> {
-    let _lock = source_lock(root, source)?;
+    let _lock = crate::file_lock::history(root, &source.id)?;
     let store = Store::open(root)?;
+    let current = crate::import::current_settings(&store, settings, source)?;
+    let settings = &current;
     let host = settings
         .hosts
         .iter()
@@ -125,7 +105,8 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         ensure!(completed.is_none(), "远程统计协议在结束后仍返回数据");
         match frame["kind"].as_str() {
             Some("routes") => {
-                let current = store.settings()?;
+                let tx = store.write_transaction()?;
+                let current = crate::import::current_settings(&store, settings, source)?;
                 let current_source = current
                     .sources
                     .iter()
@@ -142,27 +123,11 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
                 );
                 let routes: Vec<crate::codex_routes::Route> =
                     serde_json::from_value(frame["routes"].clone())?;
-                let tx = store.write_transaction()?;
                 store.put_codex_routes(&source.id, &routes)?;
                 store.db.execute("INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![route_key,frame["cursor"].to_string()])?;
                 tx.commit()?;
             }
             Some("batch") => {
-                let current = store.settings()?;
-                let current_source = current
-                    .sources
-                    .iter()
-                    .find(|s| s.id == source.id && s.enabled)
-                    .context("来源配置已改变，同步已停止")?;
-                let current_host = current
-                    .hosts
-                    .iter()
-                    .find(|h| h.id == host.id && h.enabled)
-                    .context("主机配置已改变，同步已停止")?;
-                ensure!(
-                    configuration(current_source, current_host) == config,
-                    "来源配置已改变，同步已停止"
-                );
                 count += apply_batch(&store, settings, source, &config, &prices, &frame)?;
             }
             Some("done") => completed = Some(frame),
@@ -178,7 +143,10 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
     result.as_object_mut().unwrap().remove("protocol");
     result["newEvents"] = json!(count);
     result["updatedAt"] = json!(now());
+    let tx = store.write_transaction()?;
+    crate::import::current_settings(&store, settings, source)?;
     store.source_status(&source.id, &result)?;
+    tx.commit()?;
     store.repair_history_estimates()?;
     Ok(result)
 }
@@ -193,6 +161,8 @@ fn apply_batch(
 ) -> Result<u64> {
     let path = frame["path"].as_str().context("远程批次缺少文件路径")?;
     let tx = store.write_transaction()?;
+    let current = crate::import::current_settings(store, settings, source)?;
+    let settings = &current;
     let saved: Option<String> = if frame["reset"] == true {
         None
     } else {

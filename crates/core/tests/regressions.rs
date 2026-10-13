@@ -57,6 +57,7 @@ fn model_choices_preserve_siblings_and_honor_other_filters() {
     }
     let d = db
         .dashboard(&Filter {
+            date_range: None,
             provider: Some("custom".into()),
             account_id: Some("account".into()),
             source_id: Some("a".into()),
@@ -483,7 +484,7 @@ fn legacy_accounts_migrate_and_shared_quota_has_one_identity() {
     })
     .unwrap();
     let settings = db.settings().unwrap();
-    assert_eq!(settings.version, 7);
+    assert_eq!(settings.version, 8);
     assert_eq!(settings.accounts.len(), 1);
     db.quota(&usage::codex_quota(
         &b,

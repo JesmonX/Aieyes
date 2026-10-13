@@ -124,6 +124,103 @@ impl Store {
 }
 
 impl Engine {
+    /// Rebinding only repairs an orphaned machine link; account identities and
+    /// the existing history namespace are deliberately not editable here.
+    pub(crate) fn rebind_source(&mut self, params: Value) -> Result<Value> {
+        let base = self.store.settings()?;
+        let old = base
+            .sources
+            .iter()
+            .find(|s| Some(s.id.as_str()) == params["sourceId"].as_str())
+            .context("目录配置已移除")?;
+        ensure!(
+            old.machine_binding == MachineBinding::Unbound,
+            "此目录已经绑定机器"
+        );
+        let expected: Source = serde_json::from_value(params["baseSource"].clone())?;
+        ensure!(
+            serde_json::to_value(old)? == serde_json::to_value(expected)?,
+            "目录配置已在其他窗口修改，请重新打开后重试"
+        );
+        let machine = params["machineId"].as_str().context("请选择目标机器")?;
+        ensure!(
+            machine == "local" || base.hosts.iter().any(|h| h.id == machine),
+            "目标机器已移除"
+        );
+        let mut source = old.clone();
+        source.host_id = (machine != "local").then(|| machine.to_owned());
+        source.machine_binding = MachineBinding::Bound;
+        source.last_machine_name = None;
+        ensure!(
+            !base.sources.iter().any(|s| s.id != source.id
+                && s.machine_binding == MachineBinding::Bound
+                && s.provider == source.provider
+                && s.host_id == source.host_id
+                && crate::codex_auth::home_path(&s.path)
+                    == crate::codex_auth::home_path(&source.path)),
+            "目标机器已有此目录，请使用现有配置"
+        );
+        if let Some(home) = &source.codex_home_id {
+            let info = crate::codex_auth::backend(&source, &base, "home.identity", &json!({}))?;
+            ensure!(
+                info["homeId"].as_str() == Some(home),
+                "目标目录不是原受管理 Codex home；原账户和历史关联已保留，请选择原目录所在机器"
+            );
+        }
+        let _tasks = crate::accounts::lock_tasks(&self.store)?;
+        let tx = self.store.write_transaction()?;
+        let mut next = self.store.settings()?;
+        let index = next
+            .sources
+            .iter()
+            .position(|s| s.id == source.id)
+            .context("目录配置已移除")?;
+        ensure!(
+            serde_json::to_value(&next.sources[index])? == serde_json::to_value(old)?,
+            "目录配置已在其他窗口修改，请重新打开后重试"
+        );
+        ensure!(
+            base.hosts
+                .iter()
+                .find(|h| h.id == machine)
+                .map(serde_json::to_value)
+                .transpose()?
+                == next
+                    .hosts
+                    .iter()
+                    .find(|h| h.id == machine)
+                    .map(serde_json::to_value)
+                    .transpose()?,
+            "目标机器配置已改变，请重试"
+        );
+        ensure!(
+            !next.sources.iter().any(|s| s.id != source.id
+                && s.machine_binding == MachineBinding::Bound
+                && s.provider == source.provider
+                && s.host_id == source.host_id
+                && crate::codex_auth::home_path(&s.path)
+                    == crate::codex_auth::home_path(&source.path)),
+            "目标机器已有此目录，请使用现有配置"
+        );
+        if let Some(agent) = next
+            .agents
+            .iter_mut()
+            .find(|a| a.provider == source.provider)
+        {
+            if !agent.machine_ids.iter().any(|id| id == machine) {
+                agent.machine_ids.push(machine.into());
+            }
+            source.enabled = agent.enabled;
+        } else {
+            source.enabled = true;
+        }
+        next.sources[index] = source;
+        self.store.save_auth_settings(&next)?;
+        let saved = self.store.settings()?;
+        tx.commit()?;
+        Ok(serde_json::to_value(saved)?)
+    }
+
     /// Directory changes are local transactions; never delete files or credentials.
     pub(crate) fn configure_source(&mut self, params: Value, remove: bool) -> Result<Value> {
         let _tasks = crate::accounts::lock_tasks(&self.store)?;
@@ -227,7 +324,8 @@ impl Engine {
                 .iter()
                 .find(|a| a.provider == source.provider)
                 .context("不支持的 Agent")?;
-            source.enabled = agent.enabled
+            source.enabled = source.machine_binding == MachineBinding::Bound
+                && agent.enabled
                 && agent
                     .machine_ids
                     .iter()
@@ -319,7 +417,8 @@ impl Engine {
             }
         }
         for source in next.sources.iter_mut().filter(|s| s.provider == provider) {
-            source.enabled = agent.enabled
+            source.enabled = source.machine_binding == MachineBinding::Bound
+                && agent.enabled
                 && agent
                     .machine_ids
                     .iter()
@@ -408,6 +507,213 @@ mod tests {
             })
             .unwrap();
         (root, engine)
+    }
+
+    #[test]
+    fn deleted_hosts_remain_unbound_until_explicit_conflict_checked_rebinding() {
+        let (root, mut engine) = fixture();
+        let mut settings = engine.store.settings().unwrap();
+        let source = Source {
+            id: "remote-history".into(),
+            provider: "custom".into(),
+            account_id: "account".into(),
+            path: root.path().join("history").display().to_string(),
+            host_id: Some("server".into()),
+            ..Default::default()
+        };
+        settings.sources.push(source.clone());
+        settings.accounts.push(Account {
+            id: "account".into(),
+            name: "Account".into(),
+            provider: "custom".into(),
+            connections: vec![AccountConnection {
+                source_id: source.id.clone(),
+                profile_id: None,
+            }],
+            ..Default::default()
+        });
+        engine.store.save_settings(&settings).unwrap();
+        let event = crate::usage::parse(&source, &mut ParseState::default(), &json!({"id":"history","sessionId":"s","model":"fixture","timestamp":now(),"tokens":{"input":42}})).unwrap();
+        engine.store.put_event(&event, &[], &settings).unwrap();
+        engine
+            .store
+            .set_cursor(&source.id, "log", "v1", 42, &ParseState::default())
+            .unwrap();
+        let mut removed = engine.store.settings().unwrap();
+        removed.hosts.clear();
+        // Simulate an older client clearing hostId when it deletes the host.
+        removed.sources[0].host_id = None;
+        engine.store.save_settings(&removed).unwrap();
+        let mut unbound = engine.store.settings().unwrap();
+        let old = unbound
+            .sources
+            .iter()
+            .find(|s| s.id == source.id)
+            .unwrap()
+            .clone();
+        assert_eq!(old.host_id.as_deref(), Some("server"));
+        assert_eq!(old.last_machine_name.as_deref(), Some("Server"));
+        assert_eq!(old.machine_binding, MachineBinding::Unbound);
+        assert!(!unbound.source_enabled(&old));
+        assert!(engine.store.cursor(&source.id, "log").unwrap().is_none());
+        assert_eq!(
+            engine
+                .store
+                .dashboard(&Filter::default())
+                .unwrap()
+                .summary
+                .total,
+            42
+        );
+        assert!(
+            engine
+                .call(
+                    "sources.rebind",
+                    json!({"sourceId":source.id,"machineId":"missing","baseSource":old})
+                )
+                .is_err()
+        );
+        let mut stale = old.clone();
+        stale.name = "stale".into();
+        assert!(
+            engine
+                .call(
+                    "sources.rebind",
+                    json!({"sourceId":source.id,"machineId":"local","baseSource":stale})
+                )
+                .is_err()
+        );
+        unbound.sources.push(Source {
+            id: "duplicate".into(),
+            host_id: None,
+            machine_binding: MachineBinding::Bound,
+            enabled: true,
+            ..old.clone()
+        });
+        engine.store.save_settings(&unbound).unwrap();
+        assert!(
+            engine
+                .call(
+                    "sources.rebind",
+                    json!({"sourceId":source.id,"machineId":"local","baseSource":old})
+                )
+                .is_err()
+        );
+        unbound.sources.retain(|s| s.id != "duplicate");
+        engine.store.save_settings(&unbound).unwrap();
+        let before = engine.store.settings().unwrap();
+        let saved = engine
+            .call(
+                "sources.rebind",
+                json!({"sourceId":source.id,"machineId":"local","baseSource":old}),
+            )
+            .unwrap();
+        assert_eq!(saved["sources"][0]["machineBinding"], "bound");
+        assert!(saved["sources"][0]["hostId"].is_null());
+        assert_eq!(saved["sources"][0]["accountId"], "account");
+        assert_eq!(
+            saved["accounts"],
+            serde_json::to_value(before.accounts).unwrap()
+        );
+        assert_eq!(
+            engine
+                .store
+                .dashboard(&Filter::default())
+                .unwrap()
+                .summary
+                .total,
+            42
+        );
+    }
+
+    #[test]
+    fn managed_rebinding_verifies_original_home_identity_without_changing_accounts() {
+        let (root, mut engine) = fixture();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join(".aieyes/state")).unwrap();
+        let home = std::fs::canonicalize(home).unwrap();
+        std::fs::write(
+            home.join(".aieyes/state/home.json"),
+            r#"{"homeId":"different"}"#,
+        )
+        .unwrap();
+        let mut settings = engine.store.settings().unwrap();
+        settings.sources.push(Source {
+            id: "managed".into(),
+            path: home.display().to_string(),
+            codex_home_id: Some("original".into()),
+            host_id: Some("server".into()),
+            ..Default::default()
+        });
+        engine.store.save_settings(&settings).unwrap();
+        settings.hosts.clear();
+        engine.store.save_settings(&settings).unwrap();
+        let before = engine.store.settings().unwrap();
+        let source = before.sources[0].clone();
+        assert!(
+            engine
+                .call(
+                    "sources.rebind",
+                    json!({"sourceId":source.id,"machineId":"local","baseSource":source})
+                )
+                .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(engine.store.settings().unwrap()).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+        std::fs::write(
+            home.join(".aieyes/state/home.json"),
+            r#"{"homeId":"original"}"#,
+        )
+        .unwrap();
+        let saved = engine
+            .call(
+                "sources.rebind",
+                json!({"sourceId":source.id,"machineId":"local","baseSource":source}),
+            )
+            .unwrap();
+        assert_eq!(saved["sources"][0]["codexHomeId"], "original");
+    }
+
+    #[test]
+    fn resource_switches_and_device_pause_have_distinct_effects_after_migration() {
+        let (_root, mut engine) = fixture();
+        engine
+            .call(
+                "agents.set",
+                json!({"provider":"claude","enabled":true,"machineIds":["local","server"]}),
+            )
+            .unwrap();
+        let mut settings = engine.store.settings().unwrap();
+        settings.local_monitor.enabled = false;
+        settings.hosts[0].monitoring_enabled = false;
+        engine.store.save_settings(&settings).unwrap();
+        let settings = engine.store.settings().unwrap();
+        assert!(
+            settings
+                .sources
+                .iter()
+                .all(|source| settings.source_enabled(source))
+        );
+        assert!(settings.monitored_hosts().iter().all(|host| !host.enabled));
+        let mut paused = settings.clone();
+        paused.local_device_enabled = false;
+        paused.hosts[0].enabled = false;
+        paused.local_monitor.enabled = true;
+        paused.hosts[0].monitoring_enabled = true;
+        engine.store.save_settings(&paused).unwrap();
+        let paused = engine.store.settings().unwrap();
+        assert!(
+            paused
+                .sources
+                .iter()
+                .all(|source| !paused.source_enabled(source))
+        );
+        assert!(paused.monitored_hosts().iter().all(|host| !host.enabled));
+        let legacy: Settings = serde_json::from_value(json!({"version":7,"hosts":[{"id":"old","target":"fixture.invalid","enabled":false}],"localMonitor":{"enabled":false}})).unwrap();
+        assert!(legacy.local_device_enabled && legacy.hosts[0].monitoring_enabled);
+        assert!(legacy.monitored_hosts().iter().all(|host| !host.enabled));
     }
 
     #[test]

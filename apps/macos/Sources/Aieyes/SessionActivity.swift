@@ -12,7 +12,7 @@ enum SessionPhase: String {
         switch self { case .idle: return "circle.dotted"; case .working: return "waveform"; case .thinking: return "sparkles"; case .tool: return "gearshape.2"; case .complete: return "checkmark"; case .interrupted: return "pause.fill"; case .needsInput: return "hand.raised.fill"; case .failed: return "exclamationmark.triangle"; case .unknown: return "questionmark" }
     }
 }
-struct LiveSession: Identifiable, Decodable {
+struct LiveSession: Identifiable, Decodable, Equatable {
     var provider = "codex", machine = "本机", machineId = "local", sourceId = "", turnId = ""
     var id: String, source: String, phase: SessionPhase, updatedAt: Date
     init(id: String, source: String, phase: SessionPhase, updatedAt: Date) {
@@ -34,9 +34,10 @@ struct LiveSession: Identifiable, Decodable {
     }
 }
 struct SessionSnapshot: Decodable { var sessions: [LiveSession]; var unavailable: Bool; var pet: PetState? = nil; var summary: String? = nil; var phase: String? = nil; var sources: [SessionSourceHealth]? = nil }
-struct SessionSourceHealth: Decodable, Identifiable {
+struct SessionSourceHealth: Decodable, Identifiable, Equatable {
     var sourceId: String, provider: String, machineId: String, state: String
     var error: String?
+    var hooks: String?
     var id: String { machineId + ":" + sourceId }
     var message: String { error ?? (state == "connecting" ? "正在连接…" : "状态暂不可用") }
 }
@@ -62,6 +63,8 @@ struct ActivityIndicator: View {
 }
 struct MenuActivityLabel: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var live: LiveSessionState
+    init(model: AppModel) { self.model = model; live = model.live }
     @AppStorage(NativePanelKey.showCount.rawValue) private var showCount = false
     var body: some View {
         HStack(spacing: 5) {
@@ -115,8 +118,11 @@ struct SurfaceTimeline<Content: View>: View {
 // Core-selected activity and shared sprite timing; no client-side priority rules.
 struct PetState: Decodable, Equatable {
     var behavior: String, label: String, row: Int, frames: Int, frameMs: Double, key: String
-    static let idle = PetState(behavior: "idle", label: "空闲", row: 0, frames: 6, frameMs: 180, key: "idle")
-    static let unknown = PetState(behavior: "unknown", label: "状态不可用", row: 6, frames: 6, frameMs: 180, key: "unknown")
+    var activeCount: Int?
+    var phaseCounts: [String: Int]?
+    var height: CGFloat { 168 + CGFloat(max(0, label.components(separatedBy: "\n").count - 1)) * 18 }
+    static let idle = PetState(behavior: "idle", label: "空闲", row: 0, frames: 6, frameMs: 100, key: "idle")
+    static let unknown = PetState(behavior: "unknown", label: "状态不可用", row: 6, frames: 6, frameMs: 100, key: "unknown")
     func frame(elapsed: TimeInterval, reduced: Bool) -> Int {
         if reduced { return row * 8 }
         let ms = max(0, elapsed * 1000)
@@ -129,3 +135,12 @@ struct ImportedPet: Decodable, Equatable {
     var spriteVersionNumber: Int, rows: Int, cellWidth: Int, cellHeight: Int
 }
 struct PetSelection: Decodable { var pet: ImportedPet?; var error: String? }
+
+// High-frequency lifecycle updates only invalidate the views that display them.
+@MainActor final class LiveSessionState: ObservableObject {
+    @Published var sessions: [LiveSession] = []
+    @Published var sources: [SessionSourceHealth] = []
+    @Published var unavailable = false
+    @Published var pet = PetState.idle
+    @Published var summary: String?
+}

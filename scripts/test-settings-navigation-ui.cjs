@@ -86,12 +86,13 @@ function fixture({platform, failStatus = false}) {
       await page.locator('[data-settings-tab=integrations][aria-selected=true]').waitFor();
       assert.equal(await page.locator('[data-settings-agent=claude]').getAttribute('aria-current'), 'page');
       assert.equal(await page.evaluate(() => navigationFixture.calls.filter(c => c.args?.method === 'accounts.status.get').length), failedStatusCalls, 'failed automatic status reads do not retry on every render');
-      await page.locator('#account-status-refresh').click();
+      await page.locator('[data-account-retry-status]').click();
       await page.waitForFunction(() => !AieyesAgentSettings.statusBusy);
       assert.equal(await page.evaluate(() => navigationFixture.calls.filter(c => c.args?.method === 'accounts.status.get').length), failedStatusCalls + 1, 'manual retry performs one read after failure');
       await page.evaluate(() => navigationFixture.failStatus = false);
-      await page.locator('#account-status-refresh').click();
+      await page.locator('[data-account-retry-status]').click();
       await page.waitForFunction(() => !AieyesAgentSettings.statusBusy);
+      await page.locator('#account-status-error').waitFor({state:'detached'});
       assert.equal(await page.locator('#account-status-error').count(), 0, 'successful retry clears the retained error');
       assert(!await page.locator('#message').innerText().then(text => text.includes('模拟设备状态读取失败')), 'successful retry clears its own notification');
       await page.evaluate(() => openSettings({category: 'accounts', accountKey: 'codex:a5'}));
@@ -176,9 +177,14 @@ function fixture({platform, failStatus = false}) {
       await page.evaluate(() => navigationFixture.quotas.unshift(navigationFixture.missingQuota));
       await page.evaluate(() => openSettings({provider: 'codex'}));
       await page.locator('[data-agent-estimates=codex]').click();
-      await page.getByText('已完成的采样历史', {exact: true}).waitFor();
+      await page.locator('#manual-sampling').waitFor();
+      assert.equal(await page.locator('#manual-sampling').evaluate(el=>el.open), false);
+      assert.equal(await page.locator('[data-valuation-record]').count(), 0, 'manual records are not mounted until expanded');
+      assert.equal(await page.locator('[data-auto-save][role=switch]').count(), 6);
+      assert.match(await page.locator('#quota-dialog').innerText(), /自动估值5h\/7d限额和credits的价值/);
+      await page.locator('#manual-sampling > summary').click();
+      await page.getByText('手动采样历史', {exact: true}).waitFor();
       assert.equal(await page.locator('[data-valuation-record]').count(), 2);
-      assert.equal(await page.locator('[data-auto-source]').count(), 6);
       await page.screenshot({path: path.join(out, platform + '-valuation.png')});
       await page.locator('#quota-close').click();
 

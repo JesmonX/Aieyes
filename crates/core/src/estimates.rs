@@ -1304,17 +1304,14 @@ impl Engine {
                 let (_, account) = e.account_key.split_once(':').context("账户格式错误")?;
                 self.progress("读取实时限额");
                 let results =
-                    self.read_quotas(&json!({"accountId":account,"accountKey":e.account_key}))?;
+                    self.read_quotas(&json!({"accountId":account,"accountKey":e.account_key,"samplingSourceIds":e.source_ids}))?;
                 let q = results
                     .iter()
                     .find(|q| format!("{}:{}", q.provider, q.account_id) == e.account_key)
                     .context("未读取到账户限额")?;
                 if q.error.is_some() {
-                    self.store.quota(q)?;
                     anyhow::bail!("限额查询失败，已保留有效采样，请重试");
                 }
-                self.progress("补齐尾部记录");
-                self.sync_estimate_sources(&e.source_ids)?;
                 if self
                     .verify_sampling_identities(&e.source_ids, &e.account_key)
                     .is_err()
@@ -1326,7 +1323,6 @@ impl Engine {
                         self.store.finish_estimate_for(id, credits)?,
                     )?);
                 }
-                self.store.quota(q)?;
             }
             self.progress("保存采样结果");
             return Ok(serde_json::to_value(
@@ -1375,12 +1371,12 @@ impl Engine {
         self.sync_estimate_sources(&ids)?;
         let (_, account) = key.split_once(':').context("账户格式错误")?;
         self.progress("读取实时限额");
-        let results = self.read_quotas(&json!({"accountId":account,"accountKey":key}))?;
+        let results = self
+            .read_quotas(&json!({"accountId":account,"accountKey":key,"samplingSourceIds":ids}))?;
         let q = results
             .iter()
             .find(|q| format!("{}:{}", q.provider, q.account_id) == key)
             .context("未读取到账户限额")?;
-        self.store.quota(q)?;
         self.verify_sampling_identities(&ids, key)?;
         self.progress("保存采样起点");
         Ok(serde_json::to_value(self.store.begin_estimate(

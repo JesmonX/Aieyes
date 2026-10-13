@@ -66,7 +66,7 @@ states={
     'thinking':('thinking','思考中',8,6),
     'needsInput':('attention','等待输入',3,4),
     'complete':('success','已完成',4,5),
-    'interrupted':('rest','已中断',5,8),
+    'interrupted':('rest','已中断',2,8),
 }
 for line in sys.stdin:
     request=json.loads(line);method=request['method']
@@ -88,7 +88,7 @@ for line in sys.stdin:
         phase=(root/'phase').read_text();behavior,label,row,frames=states[phase]
         result={'sessions':[{'id':'fixture','source':'Codex','phase':phase,'updatedAt':time.time()}],
             'unavailable':False,'summary':label,
-            'pet':{'key':phase,'behavior':behavior,'label':label,'row':row,'frames':frames,'frameMs':180}}
+            'pet':{'key':phase,'behavior':behavior,'label':label,'row':row,'frames':frames,'frameMs':100}}
     elif method=='pets.current':result={'pet':None,'error':None}
     elif method=='quotas.schedule':result={'nextDueAt':None}
     elif method=='autoEstimates.tick':result={'changed':False}

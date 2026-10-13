@@ -1,7 +1,16 @@
 //! Shared pet projection using the public Codex 8 x 9 animation layout.
 use crate::sessions::{Phase, Snapshot};
 use serde::{Deserialize, Serialize};
-const FRAME_MS: u64 = 180;
+const FRAME_MS: u64 = 100;
+pub const MIN_SCALE: f64 = 0.5;
+pub const MAX_SCALE: f64 = 2.0;
+pub fn normalized_scale(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(MIN_SCALE, MAX_SCALE)
+    } else {
+        1.0
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PetState {
@@ -11,6 +20,10 @@ pub struct PetState {
     pub frames: u8,
     pub frame_ms: u64,
     pub key: String,
+    #[serde(default)]
+    pub active_count: usize,
+    #[serde(default)]
+    pub phase_counts: std::collections::BTreeMap<String, usize>,
 }
 pub fn project(snapshot: &Snapshot) -> PetState {
     let selected = snapshot.selected();
@@ -25,7 +38,7 @@ pub fn project(snapshot: &Snapshot) -> PetState {
             Some(Phase::Thinking) => ("thinking", "思考中", 8, 6),
             Some(Phase::Tool) => ("working", "执行工具", 7, 6),
             Some(Phase::Working) => ("running", "进行中", 1, 8),
-            Some(Phase::Interrupted) => ("rest", "已中断", 5, 8),
+            Some(Phase::Interrupted) => ("rest", "已中断", 2, 8),
             Some(Phase::Unknown) => ("unknown", "状态待确认", 6, 6),
             None => ("idle", "空闲", 0, 6),
         }
@@ -36,14 +49,32 @@ pub fn project(snapshot: &Snapshot) -> PetState {
         selected.map(|s| s.turn_id.as_str()).unwrap_or(""),
         behavior
     );
+    let mut label = if snapshot.sessions.len() > 1 {
+        snapshot
+            .count_labels()
+            .chunks(2)
+            .map(|line| line.join(" · "))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        label.into()
+    };
+    if snapshot.unavailable && selected.is_some() {
+        label.push_str("\n部分状态不可用");
+    }
     PetState {
         behavior: behavior.into(),
-        label: label.into(),
+        label,
         row,
         frames,
         frame_ms: FRAME_MS,
         key,
+        active_count: snapshot.active_count(),
+        phase_counts: snapshot.phase_counts(),
     }
+}
+pub fn height(state: &PetState) -> f64 {
+    168.0 + state.label.lines().count().saturating_sub(1) as f64 * 18.0
 }
 /// Loop the selected behavior until the session state changes, keeping its label accurate.
 pub fn frame(state: &PetState, elapsed_ms: u64, reduced: bool) -> u32 {
@@ -92,7 +123,7 @@ mod tests {
     fn frames_use_one_cadence_and_preserve_the_selected_state() {
         let idle = project(&Snapshot::default());
         let idle_cadence: Vec<_> = (0..=6)
-            .map(|step| frame(&idle, step * 180 + 1, false))
+            .map(|step| frame(&idle, step * 100 + 1, false))
             .collect();
         assert_eq!(idle_cadence, [0, 1, 2, 3, 4, 5, 0]);
         for phase in [
@@ -121,7 +152,7 @@ mod tests {
             assert_eq!(state.frame_ms, idle.frame_ms);
             for step in 0..u64::from(state.frames) * 8 {
                 assert_eq!(
-                    frame(&state, step * 180 + 1, false),
+                    frame(&state, step * 100 + 1, false),
                     u32::from(state.row) * 8 + (step % u64::from(state.frames)) as u32
                 );
             }
@@ -130,5 +161,58 @@ mod tests {
                 assert!(frame(&state, time, false) < 72);
             }
         }
+    }
+    #[test]
+    fn counts_cover_every_phase_without_resetting_the_chosen_animation() {
+        let mut snapshot = Snapshot {
+            sessions: vec![LiveSession {
+                id: "waiting".into(),
+                turn_id: "turn".into(),
+                phase: Phase::NeedsInput,
+                updated_at: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let first = project(&snapshot);
+        for (index, phase) in [
+            Phase::Working,
+            Phase::Working,
+            Phase::Thinking,
+            Phase::Tool,
+            Phase::Failed,
+            Phase::Complete,
+            Phase::Interrupted,
+            Phase::Unknown,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            snapshot.sessions.push(LiveSession {
+                id: index.to_string(),
+                phase,
+                updated_at: 100,
+                ..Default::default()
+            });
+        }
+        let many = project(&snapshot);
+        assert_eq!(many.key, first.key);
+        assert_eq!(many.active_count, 5);
+        assert_eq!(many.phase_counts["working"], 2);
+        assert_eq!(many.phase_counts["failed"], 1);
+        assert_eq!(
+            many.label,
+            "等待1 · 失败1\n工作2 · 思考1\n工具1 · 完成1\n中断1 · 待定1"
+        );
+        assert_eq!(height(&many), 222.0);
+        snapshot.unavailable = true;
+        assert_eq!(project(&snapshot).key, first.key);
+        assert!(project(&snapshot).label.ends_with("部分状态不可用"));
+        snapshot.sessions.retain(|s| s.phase == Phase::Interrupted);
+        assert_eq!(project(&snapshot).row, 2);
+        assert_eq!(project(&snapshot).active_count, 0);
+        assert_eq!(normalized_scale(f64::NAN), 1.0);
+        assert_eq!(normalized_scale(0.0), 0.5);
+        assert_eq!(normalized_scale(3.0), 2.0);
     }
 }

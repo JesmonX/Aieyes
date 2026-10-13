@@ -128,7 +128,7 @@ fn legacy_profile_migrates_once_and_removed_connections_do_not_resurrect() {
         ..Default::default()
     };
     settings.migrate();
-    assert_eq!(settings.version, 7);
+    assert_eq!(settings.version, 8);
     assert_eq!(settings.accounts[0].connections.len(), 1);
     let first = json!(settings);
     settings.migrate();

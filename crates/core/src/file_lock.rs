@@ -16,6 +16,29 @@ impl Drop for FileLock {
     }
 }
 
+/// Both local and SSH imports share this lock, including sampling-boundary syncs.
+pub(crate) fn history(root: &std::path::Path, source_id: &str) -> anyhow::Result<FileLock> {
+    let path = root.join(format!("history-{}.lock", crate::models::hash(source_id)));
+    let start = std::time::Instant::now();
+    loop {
+        crate::operations::check()?;
+        let file = File::options()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        match FileLock::try_exclusive(file) {
+            Ok(lock) => return Ok(lock),
+            Err(TryLockError::WouldBlock)
+                if start.elapsed() < std::time::Duration::from_secs(45) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

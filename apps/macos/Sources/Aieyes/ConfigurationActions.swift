@@ -57,7 +57,7 @@ extension AppModel {
                 }
                 if requested != accountSourceStatusRequests[sourceID] { continue }
                 for row in rows where settings.accounts.contains(where: { $0.key == row.accountKey }) {
-                    accountStatuses.removeAll { $0.id == row.id }; accountStatuses.append(row)
+                    accountStatusStore.upsert(row)
                 }
                 return succeeded
             }
@@ -68,7 +68,7 @@ extension AppModel {
     }
     func accountMachineIDs(_ provider: String, includePaused: Bool = false) -> [String] {
         let config = agentConfigurations.first { $0.provider == provider }
-        let active = (config?.enabled == true ? config?.machineIds ?? [] : []).filter { id in id == "local" || settings.hosts.contains { $0.id == id && $0.enabled } }
+        let active = (config?.enabled == true ? config?.machineIds ?? [] : []).filter { id in id == "local" ? settings.localDeviceEnabled != false : settings.hosts.contains { $0.id == id && $0.enabled } }
         if !includePaused { return Array(Set(active)).sorted { $0 == "local" && $1 != "local" || ($0 != "local" && $1 != "local" && $0 < $1) } }
         return Array(Set(active + settings.sources.filter { $0.provider == provider }.map { $0.hostId ?? "local" })).sorted { $0 == "local" && $1 != "local" || ($0 != "local" && $1 != "local" && $0 < $1) }
     }
@@ -100,11 +100,11 @@ extension AppModel {
         } catch { settingsMessage = error.localizedDescription }
     }
     func saveGeneralConfiguration() async {
-        guard (10...86400).contains(settingsDraft.refreshSeconds),
+        guard (5...86400).contains(settingsDraft.refreshSeconds),
               (10...86400).contains(settingsDraft.historyInterval),
               (2...86400).contains(settingsDraft.foregroundInterval),
               (2...86400).contains(settingsDraft.serverRefreshSeconds) else {
-            settingsMessage = "刷新间隔范围：Agent 10–86400 秒，服务器 2–86400 秒"
+            settingsMessage = "刷新间隔范围：额度 5–86400 秒，记录 10–86400 秒，服务器 2–86400 秒"
             return
         }
         var next = settings
@@ -148,12 +148,17 @@ extension AppModel {
             throw error
         }
     }
+    func setDeviceEnabled(_ id: String, enabled: Bool) async {
+        var next = settings
+        if id == "local" { next.localDeviceEnabled = enabled }
+        else if let index = next.hosts.firstIndex(where: { $0.id == id }) { next.hosts[index].enabled = enabled }
+        do { try await persistConfiguration(next) } catch { settingsMessage = error.localizedDescription }
+    }
     func removeConfiguration(_ request: RemovalRequest) async {
         guard request.kind == "host" else { return }
         var next = settings
         let id = request.itemID
         next.hosts.removeAll { $0.id == id }
-        for i in next.sources.indices where next.sources[i].hostId == id { next.sources[i].hostId = nil; next.sources[i].enabled = false }
         if var agents = next.agents {
             for i in agents.indices { agents[i].machineIds.removeAll { $0 == id } }
             next.agents = agents

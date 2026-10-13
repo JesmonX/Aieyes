@@ -64,7 +64,8 @@ function updateChartPalettePreview() { const preview=$('#chart-palette-preview')
 
 const groups = {cpu:'CPU',memory:'内存',gpu:'GPU',filesystems:'文件系统',disk:'磁盘 I/O',network:'网络'};
 const detailOptions={uptime:'连续运行时间',cpuTimes:'CPU 时间分布',memoryCache:'内存缓存 / Buffer',swap:'Swap',fsAvailable:'文件系统可用空间',fsType:'文件系统类型 / 设备',inodes:'inode',diskIops:'磁盘 IOPS',diskBusy:'磁盘忙碌率',networkTotals:'累计流量',networkErrors:'网络错误 / 丢包',gpuMemory:'GPU 显存',gpuThermals:'GPU 温度 / 功耗'};
-function monitoredHosts(settings=state.settings) { return [...(settings?.localMonitor?[{id:'local',name:'本机',target:'本机',...settings.localMonitor}]:[]),...(settings?.hosts??[])]; }
+function configuredHosts(settings=state.settings) { return [...(settings?.localMonitor?[{id:'local',name:'本机',target:'本机',...settings.localMonitor}]:[]),...(settings?.hosts??[])]; }
+function monitoredHosts(settings=state.settings) { return configuredHosts(settings).map(host=>({...host,enabled:host.enabled&&(host.id==='local'?settings?.localDeviceEnabled!==false:host.monitoringEnabled!==false)})); }
 function refreshIndicator(key) { return `<button type="button" class="heading-refresh" data-refresh-status="${key}" aria-label="${refreshLabels[key]}状态" title="${refreshLabels[key]}状态"><span aria-hidden="true">ⓘ</span></button>`; }
 function updateHeadingIndicators() { for(const el of document.querySelectorAll('[data-refresh-status]')) { const r=state.refreshState[el.dataset.refreshStatus]??{};el.dataset.busy=String(Boolean(r.busy||(el.dataset.refreshStatus==='scan'&&state.dashboardPending)));el.dataset.error=String(Boolean(r.error||(el.dataset.refreshStatus==='scan'&&state.dashboardError)));el.title=(refreshLabels[el.dataset.refreshStatus]??'刷新')+'状态 · '+(el.dataset.busy==='true'?'进行中':el.dataset.error==='true'?'部分失败':r.success?'已更新 · '+timeLabel(r.success):'尚未刷新')+'；点击查看详情';el.setAttribute('aria-label',el.title);el.firstElementChild.textContent=el.dataset.busy==='true'?'…':el.dataset.error==='true'?'!':r.success?'✓':'ⓘ'; } }
 function openRefreshStatus(key) {
@@ -76,7 +77,7 @@ function openRefreshStatus(key) {
 }
 document.addEventListener('click',event=>{const button=event.target.closest('[data-refresh-status]');if(button)openRefreshStatus(button.dataset.refreshStatus);});
 document.addEventListener('keydown',event=>{const pop=document.querySelector('#refresh-status-popover');if(event.key==='Escape'&&pop?.matches(':popover-open')){event.preventDefault();event.stopImmediatePropagation();pop.hidePopover();document.querySelector('[data-refresh-status="'+pop.dataset.key+'"]')?.focus({preventScroll:true});}},true);
-const state = {page:'agent',settingsTab:'integrations',settingsAgent:'codex',generalTab:'appearance',priceSearch:'',settings:null,settingsDraft:null,settingsBaseline:null,settingsCommitting:false,dashboard:null,hosts:[],prices:[],provider:'',sourceId:'',accountKey:'',model:'',days:1,cost:false,busy:false,settingsSaving:false,serverBusy:false,lastScan:0,lastMetrics:0,lastQuota:0,lastSuccessfulUpdate:0,quotaBusy:false,estimateBusy:false,quotaError:'',refreshState:{},savedAt:0,savedSection:'',saveError:'',dashboardRequest:0,panelOpen:false,panelPage:'agent'};
+const state = {page:'agent',settingsTab:'integrations',settingsAgent:'codex',generalTab:'appearance',priceSearch:'',settings:null,settingsDraft:null,settingsBaseline:null,settingsCommitting:false,dashboard:null,hosts:[],prices:[],provider:'',sourceId:'',accountKey:'',model:'',days:1,dateRange:null,cost:false,busy:false,settingsSaving:false,serverBusy:false,lastScan:0,lastMetrics:0,lastQuota:0,lastSuccessfulUpdate:0,quotaBusy:false,estimateBusy:false,quotaError:'',refreshState:{},savedAt:0,savedSection:'',saveError:'',dashboardRequest:0,panelOpen:false,panelPage:'agent'};
 try { const provider=localStorage.getItem('aieyes.settings.agent');if(providers[provider])state.settingsAgent=provider; } catch (_) {}
 const settingsCategory = category => ({sources:'integrations',accounts:'integrations',codexAuth:'integrations',servers:'hosts',connection:'general'}[category]??category);
 async function openSettings(target={}) {
@@ -86,23 +87,30 @@ async function openSettings(target={}) {
   if(state.settingsTab==='integrations')window.AieyesAgentSettings.navigate(target);
   if(state.settingsTab==='general'&&target.section)state.generalTab=target.section;
   render();
-  if(state.settingsTab==='hosts'&&(target.hostId||target.section==='add-host')){const host=target.hostId?monitoredHosts().find(h=>h.id===target.hostId):undefined;if(target.hostId&&!host)notify('此服务器已移除，请重新选择。','error');else editItem(host);}
+  if(state.settingsTab==='hosts'&&(target.hostId||target.section==='add-host')){const host=target.hostId?configuredHosts().find(h=>h.id===target.hostId):undefined;if(target.hostId&&!host)notify('此服务器已移除，请重新选择。','error');else editItem(host);}
   if(state.settingsTab==='integrations'&&['accounts','machines'].includes(target.section))document.getElementById('agent-'+target.section)?.scrollIntoView({block:'start'});
   if(state.settingsTab==='prices'){try{state.prices=await api('prices.list');if(state.page==='settings'&&state.settingsTab==='prices')renderSettings();}catch(error){notify(String(error),'error');}}
 }
 function savePanelView() {
   if(!PANEL)return;
-  try{localStorage.setItem('aieyes.panel.view',JSON.stringify(Object.fromEntries(['page','provider','sourceId','accountKey','model','days','cost','serverFilter'].map(k=>[k,state[k]]))));}catch(_){}
+  try{localStorage.setItem('aieyes.panel.view',JSON.stringify(Object.fromEntries(['page','provider','sourceId','accountKey','model','days','dateRange','cost','serverFilter'].map(k=>[k,state[k]]))));}catch(_){}
 }
 if(PANEL)try {
   const saved=JSON.parse(localStorage.getItem('aieyes.panel.view')||'{}');
   for(const key of ['provider','sourceId','accountKey','model'])if(typeof saved[key]==='string')state[key]=saved[key];
   if([1,7,30,90,365].includes(saved.days))state.days=saved.days;
+  if(['all','custom'].includes(saved.dateRange?.kind))state.dateRange=saved.dateRange;
   if(['all','errors','paused'].includes(saved.serverFilter))state.serverFilter=saved.serverFilter;state.cost=saved.cost===true;if(saved.page==='servers')state.page='servers';
   document.querySelector('.panel-body').addEventListener('scroll',event=>{try{localStorage.setItem('aieyes.panel.scroll',String(event.target.scrollTop));}catch(_){}},{passive:true});
 }catch(_){}
+if(!PANEL)try {
+  const saved=JSON.parse(localStorage.getItem('aieyes.dashboard.filters.v2')||'{}');
+  for(const key of ['provider','sourceId','accountKey','model'])if(typeof saved[key]==='string')state[key]=saved[key];
+  if([1,7,30,90,365].includes(saved.days))state.days=saved.days;
+  if(['all','custom'].includes(saved.dateRange?.kind))state.dateRange=saved.dateRange;
+}catch(_){}
 function openDetail() {
-  const view=Object.fromEntries(['page','provider','sourceId','accountKey','model','days','cost'].map(k=>[k,state[k]]));
+  const view=Object.fromEntries(['page','provider','sourceId','accountKey','model','days','dateRange','cost'].map(k=>[k,state[k]]));
   return window.__TAURI__.core.invoke('desktop_detail',{view}).catch(e=>notify(String(e),'error'));
 }
 async function api(method, params = {}) {
@@ -123,7 +131,7 @@ function updateActivity() {
   const enabledHosts=monitoredHosts().filter(h=>h.enabled),updatedHosts=enabledHosts.filter(h=>hostStatus(h,state.hosts.find(r=>r.id===h.id))==='正常').length;
   const running=Object.entries(state.refreshState).filter(([,v])=>v.busy).map(([k])=>refreshLabels[k]);
   const failed=state.saveError||fresh.failed||Object.values(state.refreshState).some(v=>v.error)||state.hosts.some(h=>h.error);
-  const engineBusy=['scan','rescan','quotas','prices'].some(key=>state.refreshState[key]?.busy);
+  const engineBusy=['scan','rescan','prices'].some(key=>state.refreshState[key]?.busy);
   const status=state.busy||running.length?'busy':failed?'error':fresh.delayed?'warning':data?'success':'info';
   el.dataset.status=status;
   el.textContent=(state.page==='servers'?updatedHosts+'/'+enabledHosts.length+' 台已更新':data?'记录同步于 '+timeLabel(data*1000):fresh.total?'记录尚未全部同步':'未接入用量来源')+' · '+(running.length?running.join('、')+'中…':state.busy?'保存中…':failed?'部分失败':state.page==='servers'?(updatedHosts<enabledHosts.length?'存在延迟或未采样':'采样已更新'):fresh.delayed?fresh.delayed+' 个来源有延迟':fresh.total?'记录已同步':'等待接入');
@@ -131,7 +139,7 @@ function updateActivity() {
   updateHeadingIndicators();
   for(const button of document.querySelectorAll('[data-refresh]')) {
     const key=button.dataset.refresh,r=state.refreshState[key]??{};
-    button.disabled=Boolean(r.busy||((key==='scan'||key==='quotas'||key==='prices')&&(state.busy||state.settingsSaving||engineBusy)));
+    button.disabled=Boolean(r.busy||state.settingsSaving||(key==='quotas'?state.quotaBusy:(key==='scan'||key==='prices')&&(state.busy||engineBusy)));
     button.innerHTML='<span>'+refreshLabels[key]+'</span><small>'+(r.busy?'进行中…':r.error?'失败 · 可重试':r.success?timeLabel(r.success):'尚未刷新')+'</small>';
   }
   updateRescanStatus();
@@ -214,28 +222,29 @@ function quotaSection(d) {
   return `<div class="section-head quota-heading"><h2 title="实时账户限额 · 不随历史日期或模型筛选变化">实时账户限额 ${refreshIndicator('quotas')} <span class="count">${quotas.length+missing.length}</span></h2><div class="section-actions"><button id="order-quotas" title="调整账户顺序" aria-label="调整账户顺序">${uiIcon('sort')}</button><button id="read-quotas" ${state.quotaBusy||state.refreshState.quotas?.busy?'disabled':''} title="重新查询各账户的实时限额">${state.quotaBusy||state.refreshState.quotas?.busy?'读取中…':'刷新限额'}</button></div></div><div class="quotas">${quotas.map(q=>quotaCard(q,quotas.length+missing.length)).join('')}${missing.map(a=>{
     const enabled=state.settings.sources.some(src=>AieyesUI.sourceEnabled(state.settings,src)&&src.provider===a.provider&&(src.accountId===a.id||src.codexHomeId&&window.AieyesAgentSettings.profiles(a).some(r=>r.startsWith(src.codexHomeId+':'))));
     const text=!enabled?'关联并启用数据源后可读取限额':state.quotaBusy?'正在读取账户限额…':state.quotaError?'读取失败，可重试刷新限额':'尚未读取限额，可点击刷新限额';
-    return `<div class="card quota-placeholder"><h3>${providerMark(a.provider)} ${escapeHTML(a.name)}</h3><p class="muted" role="status">${text}</p>${enabled&&state.quotaError?`<p class="error">${escapeHTML(state.quotaError)}</p>`:''}</div>`;
+    return `<div class="card quota-placeholder" data-quota-placeholder="${escapeHTML(a.provider+':'+a.id)}"><h3>${providerMark(a.provider)} ${escapeHTML(a.name)}</h3><p class="muted" role="status">${text}</p>${enabled&&state.quotaError?`<p class="error">${escapeHTML(state.quotaError)}</p>`:''}</div>`;
   }).join('')}</div>`;
 }
 async function job(label, fn, refreshKey=null, refreshItem=null) {
-  if (state.busy || state.settingsSaving || ['scan','rescan','quotas','prices'].some(key=>state.refreshState[key]?.busy)) return false;
+  const quotaJob=refreshKey==='quotas';
+  if (state.settingsSaving || (quotaJob?state.refreshState.quotas?.busy:state.busy||['scan','rescan','prices'].some(key=>state.refreshState[key]?.busy))) return false;
   const jobFocus=focusSelector(document.activeElement);
-  state.busy=true;if(refreshKey)beginRefresh(refreshKey);else updateActivity();
+  if(!quotaJob)state.busy=true;if(refreshKey)beginRefresh(refreshKey);else updateActivity();
   const buttons=[...document.querySelectorAll('header [data-refresh]')].map(button=>[button,button.disabled]);
-  buttons.forEach(([button])=>button.disabled=true);
+  buttons.forEach(([button])=>{if(quotaJob?button.dataset.refresh==='quotas':button.dataset.refresh!=='quotas')button.disabled=true;});
   let outcome='error',failure=null;const previousMessage=$('#message').textContent;
   try { const result=await fn();if(result===false){outcome='noop';return true;}if(!refreshKey)state.saveError='';outcome='success';state.lastSuccessfulUpdate=Date.now();if($('#message').dataset.kind==='error'&&$('#message').textContent===previousMessage)notify('');return true; }
   catch (error) { failure=error;outcome=error.partial?'partial':'error';if(!refreshKey){state.saveError=error.message??String(error);notify(state.saveError,'error');document.querySelectorAll('.saved-feedback').forEach(el=>{el.textContent='保存失败：'+state.saveError;el.dataset.status='error';});}return false; }
   finally {
-    state.busy=false;$('#activity').dataset.status=outcome;
+    if(!quotaJob)state.busy=false;$('#activity').dataset.status=outcome;
     if(refreshKey&&outcome==='noop'){state.refreshState[refreshKey].busy=false;updateActivity();}else if(refreshKey)endRefresh(refreshKey,failure,refreshItem);else updateActivity();
     buttons.forEach(([button,disabled])=>{if(button.isConnected)button.disabled=disabled;});updateActivity();updateSettingsSaveBar();if(jobFocus&&document.activeElement===document.body){const target=document.querySelector(jobFocus);if(target&&!target.disabled)target.focus({preventScroll:true});else if(jobFocus==='#settings-save-all')$('#settings-save-bar .settings-draft-label')?.focus({preventScroll:true});}
   }
 }
-const filterKeys=['provider','accountKey','sourceId','model','days'];
-const filterSnapshot=()=>Object.fromEntries(filterKeys.map(k=>[k,state[k]]));
-function appliedScope(){const f=state.appliedFilters??filterSnapshot();return [f.days===1?'今日':'最近 '+f.days+' 天',providers[f.provider]??'全部 Agent',historicalAccounts().find(a=>a.provider+':'+a.id===f.accountKey)?.name??(f.accountKey==='none'?'未关联账户':'全部账户'),state.settings.sources.find(s=>s.id===f.sourceId)?.name??'全部来源',f.model||'全部模型'].join(' · ');}
-async function changeFilters(values={}){Object.assign(state,values);try{await loadDashboard({debounce:true});}catch(_){} }
+const filterKeys=['provider','accountKey','sourceId','model','days','dateRange'];
+const filterSnapshot=()=>structuredClone(Object.fromEntries(filterKeys.map(k=>[k,state[k]])));
+function appliedScope(){const f=state.appliedFilters??filterSnapshot();return [rangeLabel(f),providers[f.provider]??'全部 Agent',historicalAccounts().find(a=>a.provider+':'+a.id===f.accountKey)?.name??(f.accountKey==='none'?'未关联账户':'全部账户'),state.settings.sources.find(s=>s.id===f.sourceId)?.name??'全部来源',f.model||'全部模型'].join(' · ');}
+async function changeFilters(values={}){Object.assign(state,values);try{localStorage.setItem('aieyes.dashboard.filters.v2',JSON.stringify(filterSnapshot()));savePanelView();await loadDashboard({debounce:true});}catch(_){} }
 function renderQueryStatus(){
   let el=$('#query-status');if(!el){el=document.createElement('div');el.id='query-status';el.setAttribute('role','status');document.body.append(el);}
   el.hidden=(!state.dashboardPending&&!state.dashboardError)||!el.closest('#refresh-status-popover')?.matches(':popover-open');updateHeadingIndicators();
@@ -272,7 +281,7 @@ async function loadDashboardOnce(request) {
   const account=historicalAccounts().find(a=>a.provider+':'+a.id===state.accountKey);
   const requested=filterSnapshot();state.dashboardPending=true;state.dashboardError='';if(state.page==='agent')renderQueryStatus();
   try {
-  const dashboard = await api('dashboard',{provider:account?.provider || state.provider || null,accountId:state.accountKey==='none'?'':account?.id ?? null,sourceId:state.sourceId || null,model:state.model || null,days:state.days});
+  const dashboard = await api('dashboard',{provider:account?.provider || state.provider || null,accountId:state.accountKey==='none'?'':account?.id ?? null,sourceId:state.sourceId || null,model:state.model || null,days:state.days,dateRange:state.dateRange});
   if(request!==state.dashboardRequest)return;
   for(const name of [...new Set([...(dashboard.modelOptions??[]),...(dashboard.models??[]).map(m=>m.key),...(dashboard.dayModels??[]).map(r=>r.model)])].sort())for(const preset of window.AieyesChartPalettes)color(name,preset.id);
   state.dashboard=dashboard;state.appliedFilters=requested;state.dashboardPending=false;state.dashboardError='';updateActivity();
@@ -320,12 +329,30 @@ function hasQuotaSources() {
   return state.settings.accounts.some(a => !a.archived && a.quotaEnabled && state.settings.sources.some(s => AieyesUI.sourceEnabled(state.settings,s) && s.provider === a.provider && (s.accountId === a.id || s.codexHomeId && window.AieyesAgentSettings.profiles(a).some(r=>r.startsWith(s.codexHomeId+':')))));
 }
 async function quotas(accountId,dueOnly=false) {
-  if(state.estimateBusy||state.sharedEstimateOperations?.size||state.busy||state.settingsSaving||['scan','rescan','quotas','prices'].some(key=>state.refreshState[key]?.busy))return;
+  if(quotaCollectionBlocked())return;
   state.quotaBusy=true;if(!dueOnly)state.quotaError='';if(!dueOnly&&state.page==='agent')render();
-  try { await job('读取限额',async()=>{try{const rows=await api('quotas.refresh',{...(typeof accountId==='string'?{accountId}:{}),dueOnly});if(dueOnly&&!rows.length)return false;if(rows.some(q=>q.identity&&state.settings.accounts.some(a=>a.id===q.accountId&&a.provider===q.provider&&a.identityKey!==q.identity.key)))await window.AieyesAgentSettings?.syncIdentitySettings();await loadDashboard();const error=batchError(rows,'读取限额');if(error)throw error;}catch(error){state.quotaError=error.failures?'部分账户读取失败，请逐项重试。':error.message??String(error);throw error;}finally{state.lastQuota=Date.now();}},'quotas',typeof accountId==='string'?accountId:null); }
+  try { await job('读取限额',async()=>{try{const rows=await api('quotas.refresh',{...(typeof accountId==='string'?{accountId}:{}),dueOnly});applyQuotaSamples(rows);if(dueOnly&&!rows.length)return false;if(rows.some(q=>q.identity&&state.settings.accounts.some(a=>a.id===q.accountId&&a.provider===q.provider&&a.identityKey!==q.identity.key)))await window.AieyesAgentSettings?.syncIdentitySettings();await loadDashboard();const error=batchError(rows,'读取限额');if(error)throw error;}catch(error){state.quotaError=error.failures?'部分账户读取失败，请逐项重试。':error.message??String(error);throw error;}finally{state.lastQuota=Date.now();}},'quotas',typeof accountId==='string'?accountId:null); }
   finally {state.quotaBusy=false;scheduleRefreshes();if(!dueOnly&&state.page==='agent')render();}
 }
 async function syncPrices(){await job('同步价格',async()=>{await api('prices.sync');state.prices=await api('prices.list');await loadDashboard();if(state.page==='settings')renderSettings();notify('价格已更新');},'prices');}
+function applyQuotaSamples(rows){
+  if(!state.dashboard||!Array.isArray(rows))return;
+  const changed=[];
+  for(let row of rows){
+    const key=row.provider+':'+row.accountId;
+    if(!state.settings?.accounts.some(a=>a.provider+':'+a.id===key&&!a.archived))continue;
+    const index=state.dashboard.quotas.findIndex(q=>q.provider+':'+q.accountId===key),old=state.dashboard.quotas[index];
+    if(row.error&&old)row={...old,error:row.error};else if(old?.updatedAt>row.updatedAt)continue;
+    if(JSON.stringify(row)===JSON.stringify(old))continue;
+    if(index>=0)state.dashboard.quotas[index]=row;else if((!state.provider||state.provider===row.provider)&&(!state.accountKey||state.accountKey===key))state.dashboard.quotas.push(row);
+    changed.push(row);
+  }
+  if(state.page==='agent'){
+    const view=rememberView();let replaced=false;
+    for(const row of changed){const key=CSS.escape(row.provider+':'+row.accountId),node=document.querySelector('[data-quota="'+key+'"],[data-quota-placeholder="'+key+'"]');if(node){node.outerHTML=quotaCard(row,state.dashboard.quotas.length);replaced=true;}}
+    if(replaced){bindQuotaTools();restoreView(view);}
+  }
+}
 let lastHostError='';
 const hostSampleVersions=new Map(),hostSampleValues=new Map();
 function applyHostSamples(payload) {
@@ -408,7 +435,7 @@ function collectGeneralDraft(next,forms){
     for(const [field,key] of [['appearanceTheme','theme'],['appearanceAccent','accent'],['appearanceChartPalette','chartPalette'],['appearanceChartContrast','chartContrast']])if(changed(field))next.appearance={theme:'system',accent:'indigo',chartPalette:'classic',chartContrast:'high',...next.appearance,[key]:values[field]};
     if(Object.hasOwn(values,'appMode')&&Object.keys(values).some(key=>key.startsWith('app')&&changed(key)))next.proxy=proxyValue(data,'app');
     if(changed('proxyTestUrls'))next.proxyTestUrls=values.proxyTestUrls.split(',').map(v=>v.trim()).filter(Boolean);
-    for(const [key,min,label] of [['refreshSeconds',10,'Agent 限额'],['historyRefreshSeconds',10,'Agent 记录'],['serverForegroundRefreshSeconds',2,'服务器前台'],['serverRefreshSeconds',2,'服务器后台']]){
+    for(const [key,min,label] of [['refreshSeconds',5,'Agent 限额'],['historyRefreshSeconds',10,'Agent 记录'],['serverForegroundRefreshSeconds',2,'服务器前台'],['serverRefreshSeconds',2,'服务器后台']]){
       if(!changed(key))continue;const value=Number(values[key]);
       if(!Number.isInteger(value)||value<min||value>86400){state.page='settings';state.settingsTab='general';state.generalTab=formKey.split(':')[1];renderSettings(false);const input=$('#field-'+key);input?.setAttribute('aria-invalid','true');input?.focus();const error=new Error(label+' 刷新间隔范围为 '+min+'–86400 秒，草稿已保留');error.field='field-'+key;throw error;}
       $('#field-'+key)?.removeAttribute('aria-invalid');next[key]=value;
@@ -510,11 +537,31 @@ const cacheRate = t => { const input=t.input+t.cacheRead+t.cacheWrite; return in
 const missingLabels = gap => [['input','输入'],['output','输出'],['cacheRead','缓存读取'],['cacheWrite','缓存写入']].filter(([k])=>gap.tokens[k]>0).map(([,label])=>label).join('、');
 function gapList() {
   const gaps=state.dashboard?.pricingGaps??[];
-  return gaps.length ? `<div class="card pricing-gaps"><h2>所选范围 · 待计价模型</h2>${gaps.map((g,i)=>`<div class="list-row"><div class="row-body"><strong>${escapeHTML(g.model)}</strong><small>缺少${missingLabels(g)} · ${compact(g.unpricedTokens)} Token</small></div><button data-gap-map="${i}" title="把日志里的模型名映射到 OpenRouter 模型 ID">映射</button><button data-gap-price="${i}" title="为缺失计价的模型补充价格">补充价格</button></div>`).join('')}</div>` : '';
+  return gaps.length ? `<div class="card pricing-gaps"><h2>待计价模型</h2>${gaps.map((g,i)=>`<div class="list-row"><div class="row-body"><strong>${escapeHTML(g.model)}</strong><small>缺少${missingLabels(g)} · ${compact(g.unpricedTokens)} Token</small></div><button data-gap-map="${i}" title="把日志里的模型名映射到 OpenRouter 模型 ID">映射</button><button data-gap-price="${i}" title="为缺失计价的模型补充价格">补充价格</button></div>`).join('')}</div>` : '';
 }
 async function openPricing() {
   if(PANEL){window.__TAURI__.core.invoke('desktop_action',{action:'prices'}).catch(e=>notify(String(e)));return;}
   state.page='settings';state.settingsTab='prices';state.prices=await api('prices.list');render();
+}
+function rangeLabel(value=state){return value.dateRange?.kind==='all'?'所有':value.dateRange?.kind==='custom'?value.dateRange.start+' 至 '+value.dateRange.end:value.days===1?'今日':'最近 '+value.days+' 天';}
+function localISODate(date=new Date()){return [date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');}
+function rangeSelectHTML(){
+  const selected=state.dateRange?.kind??state.days;
+  return `<div class="range-controls"><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':n===365?'最近一年':`最近 ${n} 天`,selected)).join('')}${option('all','所有',selected)}${option('custom','自定义日期',selected)}</select>${state.dateRange?.kind==='custom'?`<div class="custom-date-controls"><label>开始<input id="range-start" type="date" value="${escapeHTML(state.dateRange.start)}" aria-label="开始日期"></label><label>结束<input id="range-end" type="date" value="${escapeHTML(state.dateRange.end)}" aria-label="结束日期"></label><button type="button" id="range-apply">应用日期</button></div>`:''}</div>`;
+}
+function bindRangeControl(){
+  $('#days').onchange=async event=>{
+    const value=event.target.value;
+    if(value==='all')state.dateRange={kind:'all'};
+    else if(value==='custom'){const start=new Date();start.setDate(start.getDate()-6);state.dateRange={kind:'custom',start:localISODate(start),end:localISODate()};}
+    else{state.dateRange=null;state.days=Number(value);}
+    await changeFilters();
+  };
+  if($('#range-apply'))$('#range-apply').onclick=async()=>{
+    const start=$('#range-start'),end=$('#range-end');
+    if(!start.value||!end.value||!start.checkValidity()||!end.checkValidity()||start.value>end.value){notify('请输入有效日期，开始日期不能晚于结束日期。','error');return;}
+    await changeFilters({dateRange:{kind:'custom',start:start.value,end:end.value}});
+  };
 }
 function renderAgent() {
   const d=state.dashboard;if(!d)return;
@@ -527,19 +574,19 @@ function renderAgent() {
   $('#title').textContent='Agent 概览';
   $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${filterAccounts().filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,accountFilterName(a),state.accountKey)).join('')}</select><select id="source" aria-label="数据源">${option('','全部数据源',state.sourceId)}${sources.map(s=>option(s.id,s.name,state.sourceId)).join('')}</select><select id="model" aria-label="模型">${option('','全部模型',state.model)}${[...new Set([...(d.modelOptions??trendModels),...(state.model?[state.model]:[])])].map(m=>option(m,m,state.model)).join('')}</select></div>
   ${s.total>0&&s.pricedTokens<s.total?attention('计价未完成：部分 Token 缺少价格','补充价格','pricing-attention'):''}
-  <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'} ${refreshIndicator('scan')}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':n===365?'最近一年':`最近 ${n} 天`,state.days)).join('')}</select></div>
+  <div class="section-head overview-heading"><h2>${!state.dateRange&&state.days===1?'今日概览':'使用概览'} ${refreshIndicator('scan')}</h2>${rangeSelectHTML()}</div>
   <div class="stats">${stat('总 Token',compact(s.total),'','✧')}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens||!s.total?money(s.cost):'—','','$')}</div>${cacheCard(t)}${quotaSection(d)}
-  <div class="section-head"><h2>${state.days===1?'近 7 天趋势':'使用趋势'}</h2><div id="cost-mode" class="metric-picker" role="group" aria-label="统计指标"><button type="button" data-cost-mode="false" aria-pressed="${!state.cost}">Token</button><button type="button" data-cost-mode="true" aria-pressed="${state.cost}">API 等价成本</button></div></div>
+  <div class="section-head"><h2>${!state.dateRange&&state.days===1?'近 7 天趋势':'使用趋势'}</h2><div id="cost-mode" class="metric-picker" role="group" aria-label="统计指标"><button type="button" data-cost-mode="false" aria-pressed="${!state.cost}">Token</button><button type="button" data-cost-mode="true" aria-pressed="${state.cost}">API 等价成本</button></div></div>
   <div class="chart-row"><div class="card"><h2>每日用量 · 按模型</h2><canvas id="trend" aria-label="按模型堆叠的每日用量，下方有逐日数据"></canvas><details class="model-legend"><summary>模型图例 · 点击显示或隐藏</summary><div class="model-key">${trendModels.map(m=>`<button data-trend-model="${escapeHTML(m)}" aria-label="显示或隐藏模型 ${escapeHTML(m)}"><i style="background:${color(m)}"></i>${escapeHTML(m)}</button>`).join('')}</div></details></div><div class="card"><h2>所选范围 · 模型分布</h2>${modelDistribution(models)}</div></div>
   ${samplingBanner(d)}<div class="card"><details class="daily" data-agent-detail="daily"><summary><h2>每日明细 · 可选择与复制精确数值</h2></summary>${dailyTable(d.trendDays,d.dayModels)}</details></div>
-  <div class="card"><h2>过去 365 天</h2>${heatmapHTML(d.heatmap)}</div>
+  <div class="card"><h2>${state.dateRange?'所选日期用量':'过去 365 天'}</h2>${state.dateRange?yearlyHeatmapHTML(d.heatmap):heatmapHTML(d.heatmap)}</div>
   `;
   bindSetup();
   $('#provider').onchange=async e=>{state.provider=e.target.value;state.accountKey='';state.sourceId='';state.model='';await changeFilters();};
   $('#account').onchange=async e=>{state.accountKey=e.target.value;state.sourceId='';await changeFilters();};
   $('#source').onchange=async e=>{state.sourceId=e.target.value;await changeFilters();};
   $('#model').onchange=async e=>{state.model=e.target.value;await changeFilters();};
-  $('#days').onchange=async e=>{state.days=Number(e.target.value);await changeFilters();};
+  bindRangeControl();
   document.querySelectorAll('[data-cost-mode]').forEach(button=>button.onclick=()=>{state.cost=button.dataset.costMode==='true';renderAgent();document.querySelector(`[data-cost-mode="${state.cost}"]`)?.focus({preventScroll:true});});
   if($('#read-quotas'))$('#read-quotas').onclick=()=>quotas();
   bindQuotaTools();bindAttention();
@@ -549,9 +596,9 @@ function renderAgent() {
 }
 function panelTrendExpanded(){try{return localStorage.getItem('aieyes.panel.trend')==='true';}catch(_){return false;}}
 function renderAgentPanel(d) {
-  const view=rememberView(),s=d.summary,t=s.tokens,trendTitle=`近 ${Math.max(7,state.days)} 天趋势与每日明细`;
+  const view=rememberView(),s=d.summary,t=s.tokens,trendTitle=state.dateRange?'所选日期趋势与每日明细':`近 ${Math.max(7,state.days)} 天趋势与每日明细`;
   $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${Object.entries(providers).map(([k,v])=>option(k,v,state.provider)).join('')}</select><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${filterAccounts().filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,accountFilterName(a),state.accountKey)).join('')}</select></div>
-  <div class="section-head overview-heading"><h2>${state.days===1?'今日概览':'使用概览'} ${refreshIndicator('scan')}</h2><select id="days" aria-label="时间范围">${[1,7,30,90,365].map(n=>option(n,n===1?'今日':n===365?'最近一年':`最近 ${n} 天`,state.days)).join('')}</select></div>
+  <div class="section-head overview-heading"><h2>${!state.dateRange&&state.days===1?'今日概览':'使用概览'} ${refreshIndicator('scan')}</h2>${rangeSelectHTML()}</div>
   <div class="stats panel-stats">${tokenSummary(s)}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),s.pricedTokens||!s.total?money(s.cost):'—','','$')}</div>
   ${quotaSection(d)}
   ${samplingBanner(d)}
@@ -559,7 +606,7 @@ function renderAgentPanel(d) {
   <button id="open-detail" class="panel-wide" title="打开完整详情窗口">用量详情</button>`;
   $('#provider').onchange=async e=>{state.provider=e.target.value;state.accountKey='';state.sourceId='';state.model='';await changeFilters();};
   $('#account').onchange=async e=>{state.accountKey=e.target.value;state.sourceId='';await changeFilters();};
-  $('#days').onchange=async e=>{state.days=Number(e.target.value);await changeFilters();};
+  bindRangeControl();
   if($('#read-quotas'))$('#read-quotas').onclick=()=>quotas();
   bindQuotaTools();bindAttention();bindTokenSummary();
   const trend=$('[data-agent-detail=panel-trend]');if(trend){const persist=()=>{if(!trend.isConnected)return;try{localStorage.setItem('aieyes.panel.trend',String(trend.open));}catch(_){}};trend.addEventListener('toggle',persist);trend.querySelector('summary').onclick=event=>{event.preventDefault();trend.open=!trend.open;persist();};}
@@ -578,15 +625,26 @@ function shortenEmptyUsage(d) {
     const title=onlyQuota?'此来源提供账户限额':fresh.failed?'记录同步失败':filtered?'没有匹配的用量记录':!fresh.timestamp?'尚未同步用量记录':'此时间范围暂无用量';
     const description=onlyQuota?'可在实时账户区查看余额与限额；接入日志后即可分析用量。':fresh.failed?'请在对应来源查看错误并重试，已有记录仍保留。':filtered?'尝试清除筛选或扩大时间范围。':!fresh.timestamp?'来源已配置，首次同步后将显示统计。':'可以扩大日期范围查看历史，或同步最新日志。';
     const empty=document.createElement('div');empty.className='card empty-usage';empty.innerHTML='<h2>'+title+'</h2><p class="muted">'+description+'</p><div class="actions">'+(onlyQuota?'<button id="empty-add-source">添加日志来源</button>':'<button id="empty-sync">同步记录</button><button id="empty-range">扩大到最近一年</button>'+(filtered?'<button id="empty-clear">清除筛选</button>':''))+'</div>';chart.replaceWith(empty);
-    if($('#empty-sync'))$('#empty-sync').onclick=()=>scan();if($('#empty-add-source'))$('#empty-add-source').onclick=()=>openSetup();if($('#empty-range'))$('#empty-range').onclick=()=>PANEL?openDetail():changeFilters({days:365});if($('#empty-clear'))$('#empty-clear').onclick=()=>changeFilters({provider:'',accountKey:'',sourceId:'',model:''});
+    if($('#empty-sync'))$('#empty-sync').onclick=()=>scan();if($('#empty-add-source'))$('#empty-add-source').onclick=()=>openSetup();if($('#empty-range'))$('#empty-range').onclick=()=>PANEL?openDetail():changeFilters({days:365,dateRange:null});if($('#empty-clear'))$('#empty-clear').onclick=()=>changeFilters({provider:'',accountKey:'',sourceId:'',model:''});
   }
   $('#cost-mode')?.closest('.section-head')?.remove();
   $('#content .daily')?.closest('.card')?.remove();
   $('#content .heatmap')?.closest('.card')?.remove();
 }
-function dailyTable(days,rows) {
-  return `<div class="daily-table table-scroll"><table><thead><tr><th scope="col">日期 / 模型</th><th scope="col">Token</th><th scope="col">读取命中率</th><th scope="col">已计价成本 USD</th></tr></thead>${[...days].reverse().map(day=>`<tbody data-agent-detail="day:${escapeHTML(day.key)}"><tr class="day"><th scope="row"><button data-day-toggle="${day.key}" aria-expanded="false" aria-label="展开 ${day.key} 的模型明细">${day.key}</button></th><td title="${day.total} Token">${compact(day.total)}</td><td>${pct(cacheRate(day.tokens))}</td><td>${day.pricedTokens||!day.total?day.cost.toFixed(6):'—'}</td></tr>${rows.filter(r=>r.day===day.key).map(r=>`<tr class="day-model" hidden><th scope="row"><span>${escapeHTML(r.model)}</span></th><td title="${r.usage.total} Token">${compact(r.usage.total)}</td><td>${pct(cacheRate(r.usage.tokens))}</td><td>${r.usage.pricedTokens?r.usage.cost.toFixed(6):'—'}</td></tr>`).join('')}</tbody>`).join('')}</table></div>`;
+let dailyState=null;
+function dailyRowsHTML(days,byDay){
+  return days.map(day=>`<tbody data-agent-detail="day:${escapeHTML(day.key)}"><tr class="day"><th scope="row"><button data-day-toggle="${day.key}" aria-expanded="false" aria-label="展开 ${day.key} 的模型明细">${day.key}</button></th><td title="${day.total} Token">${compact(day.total)}</td><td>${pct(cacheRate(day.tokens))}</td><td>${day.pricedTokens||!day.total?day.cost.toFixed(6):'—'}</td></tr>${(byDay.get(day.key)??[]).map(r=>`<tr class="day-model" hidden><th scope="row"><span>${escapeHTML(r.model)}</span></th><td title="${r.usage.total} Token">${compact(r.usage.total)}</td><td>${pct(cacheRate(r.usage.tokens))}</td><td>${r.usage.pricedTokens?r.usage.cost.toFixed(6):'—'}</td></tr>`).join('')}</tbody>`).join('');
 }
+function dailyTable(days,rows) {
+  const sorted=[...days].reverse(),byDay=new Map();for(const row of rows){if(!byDay.has(row.day))byDay.set(row.day,[]);byDay.get(row.day).push(row);}
+  const count=state.dateRange?Math.min(31,sorted.length):sorted.length;dailyState={days:sorted,byDay,count};
+  return `<div class="daily-table table-scroll"><table><thead><tr><th scope="col">日期 / 模型</th><th scope="col">Token</th><th scope="col">读取命中率</th><th scope="col">已计价成本 USD</th></tr></thead>${dailyRowsHTML(sorted.slice(0,count),byDay)}</table>${count<sorted.length?'<button data-more-days>加载更多日期</button>':''}</div>`;
+}
+function bindMoreDays(){
+  const button=document.querySelector('[data-more-days]');if(!button||!dailyState)return;const data=dailyState;
+  button.onclick=()=>{const next=Math.min(data.count+31,data.days.length);button.previousElementSibling.insertAdjacentHTML('beforeend',dailyRowsHTML(data.days.slice(data.count,next),data.byDay));data.count=next;if(next===data.days.length)button.remove();bindDailyToggles();};
+}
+
 
 function estimateNotice(records,credits=false) {
   const latest=AieyesUI.canonicalEstimates(records)[0],entries=AieyesUI.estimateEntries(records,credits),notes=[];
@@ -619,11 +677,11 @@ function drawTrend() {
   const canvas=$('#trend');if(!canvas||!state.dashboard)return;
   const width=canvas.clientWidth,height=canvas.clientHeight,dpr=window.devicePixelRatio||1;canvas.width=width*dpr;canvas.height=height*dpr;
   const ctx=canvas.getContext('2d');ctx.scale(dpr,dpr);
-  const days=state.dashboard.trendDays,rows=state.dashboard.dayModels.filter(r=>!hiddenTrendModels.has(r.model)),values=days.map(d=>rows.filter(r=>r.day===d.key).reduce((n,r)=>n+(state.cost?r.usage.cost:r.usage.total),0)),max=Math.max(1,...values);
+  const days=state.dashboard.trendDays,rows=state.dashboard.dayModels.filter(r=>!hiddenTrendModels.has(r.model)),byDay=new Map();for(const row of rows){if(!byDay.has(row.day))byDay.set(row.day,[]);byDay.get(row.day).push(row);}const values=days.map(d=>(byDay.get(d.key)??[]).reduce((n,r)=>n+(state.cost?r.usage.cost:r.usage.total),0)),max=Math.max(1,...values);
   const left=58,top=12,bottom=30,plot=height-top-bottom,space=(width-left)/Math.max(1,days.length);
   const style=getComputedStyle(canvas),muted=style.getPropertyValue('--muted');ctx.font=`${style.getPropertyValue('--font-secondary').trim() || '14px'} ${style.fontFamily}`;ctx.fillStyle=muted;ctx.textAlign='right';
   for(let i=0;i<3;i++){const y=top+plot*i/2;ctx.fillText(state.cost?money(max*(1-i/2)):compact(max*(1-i/2)),left-9,y+3);ctx.strokeStyle='rgba(140,145,170,.15)';ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width,y);ctx.stroke();}
-  days.forEach((d,i)=>{let used=0;const x=left+i*space+space*.2;rows.filter(r=>r.day===d.key).forEach(r=>{const h=(state.cost?r.usage.cost:r.usage.total)/max*plot;ctx.fillStyle=color(r.model);ctx.fillRect(x,top+plot-used-h,Math.max(1,space*.6),h);used+=h;});if(i%Math.max(1,Math.floor(days.length/7))===0){ctx.fillStyle=muted;ctx.textAlign='center';ctx.fillText(d.key.slice(5),x+space*.3,height-5);}});
+  days.forEach((d,i)=>{let used=0;const x=left+i*space+space*.2;(byDay.get(d.key)??[]).forEach(r=>{const h=(state.cost?r.usage.cost:r.usage.total)/max*plot;ctx.fillStyle=color(r.model);ctx.fillRect(x,top+plot-used-h,Math.max(1,space*.6),h);used+=h;});if(i%Math.max(1,Math.floor(days.length/7))===0){ctx.fillStyle=muted;ctx.textAlign='center';ctx.fillText(d.key.slice(5),x+space*.3,height-5);}});
   canvas.tabIndex=0;
   let selected=Math.min(state.trendDayIndex??0,Math.max(0,days.length-1));
   const describe=i=>{const day=days[i];if(!day)return;state.trendDayIndex=i;const label=day.key+' · '+exactUsage(day);canvas.removeAttribute('title');let reading=$('#trend-reading');if(!reading){reading=document.createElement('p');reading.id='trend-reading';reading.className='muted tiny';reading.setAttribute('aria-live','polite');canvas.after(reading);}reading.textContent=label;canvas.setAttribute('aria-label',label+'；左右键选择日期，回车查看精确值');};
@@ -714,10 +772,36 @@ function serverGroupContent(key,value,host) {
 function field(name,label,value='',placeholder='',type='text') {return `<div class="form-row"><label for="field-${name}">${label}</label><input id="field-${name}" name="${name}" type="${type}" value="${escapeHTML(value)}" placeholder="${escapeHTML(placeholder)}"></div>`;}
 function select(name,label,entries,current) {return `<div class="form-row"><label for="field-${name}">${label}</label><select id="field-${name}" name="${name}">${entries.map(([k,v])=>option(k,v,current)).join('')}</select></div>`;}
 function textarea(name,label,value='') {return `<div class="form-row"><label for="field-${name}">${label}</label><textarea id="field-${name}" name="${name}">${escapeHTML(value)}</textarea></div>`;}
-function priceRows() {
+const PRICE_ROW_HEIGHT=64;
+let priceCache={source:null,query:'',rows:[]};
+function matchingPrices(){
   const query=state.priceSearch.trim().toLocaleLowerCase();
-  const prices=state.prices.filter(p=>[p.id,p.name].some(v=>String(v??'').toLocaleLowerCase().includes(query)));
-  return prices.map(p=>`<div class="list-row"><div class="row-body">${escapeHTML(p.id)}<small>输入 ${p.input==null?'—':money(p.input*1e6)} · 输出 ${p.output==null?'—':money(p.output*1e6)}</small></div><button data-map-price="${escapeHTML(p.id)}">一键映射</button><button data-price="${escapeHTML(p.id)}" aria-label="编辑 ${escapeHTML(p.id)} 的价格" title="编辑该模型的价格">编辑</button></div>`).join('')||`<div class="empty">${query?'无匹配模型':'同步模型价格'}</div>`;
+  if(priceCache.source!==state.prices||priceCache.query!==query)priceCache={source:state.prices,query,rows:state.prices.filter(p=>[p.id,p.name].some(v=>String(v??'').toLocaleLowerCase().includes(query)))};
+  return priceCache.rows;
+}
+function priceRows(top=0) {
+  const prices=matchingPrices(),first=Math.max(0,Math.floor(top/PRICE_ROW_HEIGHT)-2),last=Math.min(prices.length,first+9);
+  return prices.length?`<div class="price-list-spacer" style="height:${prices.length*PRICE_ROW_HEIGHT}px">`+prices.slice(first,last).map((p,offset)=>`<div class="list-row price-virtual-row" style="top:${(first+offset)*PRICE_ROW_HEIGHT}px"><div class="row-body" title="${escapeHTML(p.id)}">${escapeHTML(p.id)}<small>输入 ${p.input==null?'—':money(p.input*1e6)} · 输出 ${p.output==null?'—':money(p.output*1e6)}</small></div><button data-map-price="${escapeHTML(p.id)}">一键映射</button><button data-price="${escapeHTML(p.id)}" aria-label="编辑 ${escapeHTML(p.id)} 的价格">编辑</button></div>`).join('')+'</div>':`<div class="empty">${priceCache.query?'无匹配模型':'同步模型价格'}</div>`;
+}
+function bindPriceViewport(){
+  const viewport=document.querySelector('.prices-list');if(!viewport)return;let scheduled=false,lastStart=-1;
+  viewport.onscroll=()=>{if(scheduled)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;if(!viewport.isConnected)return;const top=viewport.scrollTop,start=Math.floor(top/PRICE_ROW_HEIGHT);if(start===lastStart)return;lastStart=start;viewport.innerHTML=priceRows(top);viewport.scrollTop=top;bindPrices();});};
+}
+function existingMappingRows(){return Object.entries(draftSettings().modelMappings).map(([from,to])=>`<div class="list-row tiny"><span class="row-body">${escapeHTML(from)} → ${escapeHTML(to)}</span><button type="button" data-mapping-edit="${escapeHTML(from)}">编辑</button><button type="button" data-unmap="${escapeHTML(from)}" aria-label="移除 ${escapeHTML(from)} 的模型映射">${uiIcon('minus')}</button></div>`).join('');}
+function bindExistingMappings(){
+  const details=document.querySelector('#existing-mappings');if(!details)return;
+  const mount=()=>{
+    const body=details.querySelector('[data-mapping-rows]');body.innerHTML=details.open?existingMappingRows():'';
+    body.querySelectorAll('[data-mapping-edit]').forEach(button=>button.onclick=()=>{
+      const name=button.dataset.mappingEdit,baseline=structuredClone(state.settings);
+      showEditor('编辑模型映射',field('from','日志模型名称',name)+field('to','OpenRouter 模型 ID',baseline.modelMappings[name]),async form=>{
+        const from=form.get('from').trim(),to=form.get('to').trim();if(!from||!to)throw new Error('请补全映射两端');if(from!==name&&baseline.modelMappings[from]!=null)throw new Error('日志模型名称已存在');
+        const next=structuredClone(baseline);delete next.modelMappings[name];next.modelMappings[from]=to;await window.AieyesAgentSettings.commit(next,baseline);renderSettings(false);
+      });
+    });
+    body.querySelectorAll('[data-unmap]').forEach(button=>button.onclick=()=>job('移除模型映射',async()=>{const next=structuredClone(state.settings);delete next.modelMappings[button.dataset.unmap];await saveSettings(next);renderSettings(false);}));
+  };
+  details.ontoggle=mount;mount();
 }
 function bindPrices() {
   document.querySelectorAll('[data-map-price]').forEach(b=>b.onclick=()=>{const input=$('#field-mappingId');input.value=b.dataset.mapPrice;$('#mapping-form').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});input.focus({preventScroll:true});});
@@ -755,7 +839,7 @@ function mappingDraft(next) {
   captureSettingsForms();const values=settingsForms.get('mapping-form')?.values??{};
   const from=(values.mappingModel??'').trim(),to=(values.mappingId??'').trim();
   if(Boolean(from)!==Boolean(to)){const field=document.getElementById(from?'field-mappingId':'field-mappingModel');field?.setCustomValidity('请补全映射两端');field?.reportValidity();field?.addEventListener('input',()=>field.setCustomValidity(''),{once:true});throw new Error('请补全日志模型名称和 OpenRouter 模型 ID，输入已保留');}
-  if(from&&next.modelMappings?.[from]&&next.modelMappings[from]!==to)throw new Error('该模型已有映射；请先明确移除原映射，再添加新值');
+  if(from&&next.modelMappings?.[from]&&next.modelMappings[from]!==to)throw new Error('该模型已有映射；请在已有映射中编辑');
   next.modelMappings??={};if(from)next.modelMappings[from]=to;
   return next;
 }
@@ -776,7 +860,7 @@ function generalSettingsHTML(s) {
   if(state.generalTab==='appearance')fields=`<h2>外观</h2>${select('appearanceTheme','主题',[['system','跟随系统'],['light','浅色'],['dark','深色']],s.appearance?.theme??'system')}${select('appearanceAccent','强调色',[['indigo','靛蓝'],['blue','蓝'],['teal','青绿'],['purple','紫']],s.appearance?.accent??'indigo')}${select('appearanceChartPalette','图表配色',window.AieyesChartPalettes.map(p=>[p.id,p.name]),s.appearance?.chartPalette??'classic')}${select('appearanceChartContrast','图表对比度',[['high','高对比度'],['low','低对比度 · 柔和']],s.appearance?.chartContrast??'high')}<div id="chart-palette-preview" class="chart-palette-preview"></div><p class="muted tiny">配色随明暗主题调整，适用于模型柱形图与分布图。高对比度适合小色块；低对比度适合柔和展示，可结合图例与明细读取。</p><p class="font-notice">界面字体：HarmonyOS Sans SC（鸿蒙黑体）· © 2021 Huawei Device Co., Ltd. <button type="button" id="font-license">字体许可</button></p>`;
   if(state.generalTab==='network')fields=`<h2>网络代理</h2>${proxyFields('app',s.proxy)}${field('proxyTestUrls','测试地址（逗号分隔）',(s.proxyTestUrls??['https://api.github.com/rate_limit','https://openrouter.ai']).join(', '))}`;
   if(state.generalTab==='refresh'){
-    fields=`<h2>刷新与历史</h2>${field('refreshSeconds','Agent 限额间隔（秒）',s.refreshSeconds,'','number')}${field('historyRefreshSeconds','Agent 记录间隔（秒）',s.historyRefreshSeconds??s.refreshSeconds,'','number')}${field('serverForegroundRefreshSeconds','服务器前台间隔（秒）',s.serverForegroundRefreshSeconds??2,'','number')}${field('serverRefreshSeconds','服务器后台间隔（秒）',s.serverRefreshSeconds,'','number')}<h3>历史账户</h3><label><input id="field-historyShowDeletedAccounts" type="checkbox" name="historyShowDeletedAccounts" ${s.historyShowDeletedAccounts?'checked':''}>在筛选中显示已删除账户</label><p class="muted tiny">默认隐藏已删除账户；历史用量仍计入总统计。开启后仅显示有历史记录的已删除账户。</p>`;
+    fields=`<h2>刷新与历史</h2>${field('refreshSeconds','Agent 限额间隔（秒）',s.refreshSeconds,'','number')}${field('historyRefreshSeconds','Agent 记录间隔（秒）',s.historyRefreshSeconds??Math.max(10,s.refreshSeconds),'','number')}${field('serverForegroundRefreshSeconds','服务器前台间隔（秒）',s.serverForegroundRefreshSeconds??2,'','number')}${field('serverRefreshSeconds','服务器后台间隔（秒）',s.serverRefreshSeconds,'','number')}<h3>历史账户</h3><label><input id="field-historyShowDeletedAccounts" type="checkbox" name="historyShowDeletedAccounts" ${s.historyShowDeletedAccounts?'checked':''}>在筛选中显示已删除账户</label><p class="muted tiny">默认隐藏已删除账户；历史用量仍计入总统计。开启后仅显示有历史记录的已删除账户。</p>`;
     body=`<div class="card"><h2>历史记录 ${refreshIndicator('rescan')}</h2><p class="muted">手动从头读取所有已启用本机及服务器数据源的完整日志，修复可确认的历史重复。保留已有历史和价格快照；已丢失的日志无法恢复或核实。</p><button type="button" id="history-rescan">全量重扫</button><p id="history-rescan-status" role="status" aria-live="polite" hidden></p></div>`;
   }
   if(state.generalTab==='desktop')body=window.AieyesDesktop?.settingsHTML()??'';
@@ -792,9 +876,9 @@ function renderSettings(capture=true) {
   let body='';const s=draftSettings();
   if(state.settingsTab==='integrations')body=window.AieyesAgentSettings.integrationsHTML();
   else if(state.settingsTab==='hosts'){
-    const list=monitoredHosts(s);
-    body=`<div class="card">${list.map(item=>`<div class="list-row"><input type="checkbox" role="switch" data-enable="${escapeHTML(item.id)}" ${item.enabled?'checked':''} aria-label="启用 ${escapeHTML(item.name)}"><div class="row-body">${escapeHTML(item.name||item.target)}<small>${escapeHTML(item.target)}</small></div><button data-edit="${escapeHTML(item.id)}" aria-label="编辑 ${escapeHTML(item.name||item.target)}" title="编辑此项">编辑</button><button ${item.id==='local'?'hidden':''} data-remove="${escapeHTML(item.id)}" aria-label="移除 ${escapeHTML(item.name)}" title="移除此项">${uiIcon('minus')}</button></div>`).join('')||'<div class="empty">添加第一个主机</div>'}${savedFeedback(state.settingsTab)}</div><button id="add-item" class="primary" title="新建服务器">${uiIcon('plus')} 添加主机</button>`;
-  }else if(state.settingsTab==='prices')body='<div class="between"><p class="muted save-model-note">价格与模型映射保存后生效。</p><button id="reprice" type="button" title="保存设置并按当前价格重新计算历史成本">保存并重算</button></div>'+gapList()+`<form id="mapping-form" class="card"><h2>模型映射</h2>${Object.entries(s.modelMappings).map(([from,to])=>`<div class="list-row tiny"><span>${escapeHTML(from)} → ${escapeHTML(to)}</span><button type="button" data-unmap="${escapeHTML(from)}" aria-label="移除 ${escapeHTML(from)} 的模型映射">${uiIcon('minus')}</button></div>`).join('')}${field('mappingModel','日志模型名称')}${field('mappingId','OpenRouter 模型 ID')}<button>添加映射</button></form>`+`<div class="price-toolbar"><input id="price-search" type="search" aria-label="搜索模型" placeholder="搜索模型" value="${escapeHTML(state.priceSearch)}"><button id="sync-prices" title="从项目 Release 同步 OpenRouter 价格表">同步 OpenRouter</button><button id="add-price" title="手动添加一个模型价格">添加价格</button>${savedFeedback('prices')}</div><div class="card prices-list">${priceRows()}</div><span class="muted tiny">USD / 百万 Token</span>`;
+    const list=configuredHosts(s);
+    body=`<div class="card">${list.map(item=>{const collecting=item.id==='local'?s.localDeviceEnabled!==false:item.enabled,monitoring=item.id==='local'?item.enabled:item.monitoringEnabled!==false;return `<div class="list-row"><label><input type="checkbox" role="switch" data-enable="${escapeHTML(item.id)}" ${monitoring?'checked':''} aria-label="资源监控 · ${escapeHTML(item.name||item.target)}">资源监控</label><div class="row-body">${escapeHTML(item.name||item.target)}<small>${collecting?'采集已启用':'整机采集已暂停'}</small></div><button data-device-collection="${escapeHTML(item.id)}" data-enabled="${!collecting}">${collecting?'暂停整机采集':'恢复整机采集'}</button><button data-edit="${escapeHTML(item.id)}" aria-label="编辑 ${escapeHTML(item.name||item.target)}">编辑</button><button ${item.id==='local'?'hidden':''} data-remove="${escapeHTML(item.id)}" aria-label="移除 ${escapeHTML(item.name)}">${uiIcon('minus')}</button></div>`;}).join('')}${savedFeedback(state.settingsTab)}</div><button id="add-item" class="primary">${uiIcon('plus')} 添加主机</button>`;
+  }else if(state.settingsTab==='prices')body='<div class="between"><p class="muted save-model-note">价格与模型映射保存后生效。</p><button id="reprice" type="button" title="保存设置并按当前价格重新计算历史成本">保存并重算</button></div>'+gapList()+`<form id="mapping-form" class="card"><h2>模型映射</h2><details id="existing-mappings" data-agent-detail="existing-mappings"><summary>已有映射（${Object.keys(s.modelMappings).length}）</summary><div data-mapping-rows></div></details>${field('mappingModel','日志模型名称')}${field('mappingId','OpenRouter 模型 ID')}<button>添加映射</button></form>`+`<div class="price-toolbar"><input id="price-search" type="search" aria-label="搜索模型" placeholder="搜索模型" value="${escapeHTML(state.priceSearch)}"><button id="sync-prices" title="从项目 Release 同步 OpenRouter 价格表">同步 OpenRouter</button><button id="add-price" title="手动添加一个模型价格">添加价格</button>${savedFeedback('prices')}</div><div class="card prices-list">${priceRows()}</div><span class="muted tiny">USD / 百万 Token</span>`;
   else if(state.settingsTab==='wakeups')body=window.AieyesWakeups?.html()??'<p>正在加载…</p>';
   else body=generalSettingsHTML(state.settings);
   $('#content').innerHTML=`<div class="settings-save-bar" id="settings-save-bar"><p class="settings-draft-label" role="status"></p><button id="settings-retry-save" type="button" hidden>重试保存</button></div><div class="settings-tabs" role="tablist" aria-label="设置分类">${Object.entries(tabs).map(([k,v])=>`<button id="settings-tab-${k}" data-settings-tab="${k}" role="tab" aria-controls="settings-panel" aria-selected="${state.settingsTab===k}" tabindex="${state.settingsTab===k?0:-1}" class="${state.settingsTab===k?'active':''}">${uiIcon(k==='integrations'?'sources':k)}<span>${v}</span></button>`).join('')}</div><div id="settings-panel" class="settings-block" role="tabpanel" aria-labelledby="settings-tab-${state.settingsTab}">${body}</div>`;
@@ -826,13 +910,18 @@ function renderSettings(capture=true) {
   });
   document.querySelectorAll('[data-gap-price]').forEach(b=>b.onclick=()=>{const g=state.dashboard.pricingGaps[Number(b.dataset.gapPrice)];editPrice(state.prices.find(p=>p.id===(g.priceId??g.model))??{id:g.priceId??g.model,name:g.model});});
   document.querySelectorAll('[data-gap-map]').forEach(b=>b.onclick=()=>{const g=state.dashboard.pricingGaps[Number(b.dataset.gapMap)];$('#field-mappingModel').value=g.model;$('#field-mappingId').value=g.priceId??'';$('#field-mappingId').focus();});
-  const items=state.settingsTab==='sources'?s.sources:monitoredHosts(s);
+  const items=state.settingsTab==='sources'?s.sources:configuredHosts(s);
   document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>editItem(items.find(i=>i.id===b.dataset.edit)));
-  document.querySelectorAll('[data-enable]').forEach(b=>b.onchange=async()=>{
-    const list=state.settingsTab==='sources'?'sources':'hosts',next=structuredClone(draftSettings());
-    if(b.dataset.enable==='local')next.localMonitor={...next.localMonitor,enabled:b.checked};else next[list].find(i=>i.id===b.dataset.enable).enabled=b.checked;b.disabled=true;
-    try { await window.AieyesAgentSettings.commit(next); }
-    catch(error){notify(String(error),'error');} finally { b.checked=(b.dataset.enable==='local'?draftSettings().localMonitor:draftSettings()[list].find(i=>i.id===b.dataset.enable))?.enabled??false;b.disabled=false; }
+  document.querySelectorAll('[data-enable]').forEach(input=>input.onchange=async()=>{
+    const next=structuredClone(state.settings),id=input.dataset.enable;input.disabled=true;
+    if(id==='local')next.localMonitor={...next.localMonitor,enabled:input.checked};else next.hosts.find(h=>h.id===id).monitoringEnabled=input.checked;
+    try{await window.AieyesAgentSettings.commit(next);}catch(error){notify(String(error),'error');}
+    finally{const saved=state.settings;input.checked=id==='local'?saved.localMonitor?.enabled!==false:saved.hosts.find(h=>h.id===id)?.monitoringEnabled!==false;input.disabled=false;}
+  });
+  document.querySelectorAll('[data-device-collection]').forEach(button=>button.onclick=async()=>{
+    const next=structuredClone(state.settings),id=button.dataset.deviceCollection,enabled=button.dataset.enabled==='true';button.disabled=true;
+    if(id==='local')next.localDeviceEnabled=enabled;else next.hosts.find(h=>h.id===id).enabled=enabled;
+    try{await window.AieyesAgentSettings.commit(next);renderSettings(false);}catch(error){notify(String(error),'error');button.disabled=false;}
   });
   document.querySelectorAll('[data-remove]').forEach(button=>button.onclick=()=>{
     const kind=state.settingsTab,id=button.dataset.remove,item=draftSettings()[kind].find(row=>row.id===id);
@@ -841,7 +930,6 @@ function renderSettings(capture=true) {
     showEditor(kind==='hosts'?'移除服务器':'移除数据源',`<p>确认移除「${escapeHTML(item.name||item.target)}」？</p>${impact}`,async()=>{
       const next=structuredClone(state.settings);next[kind]=next[kind].filter(row=>row.id!==id);
       if(kind==='hosts'){
-        for(const src of next.sources)if(src.hostId===id){src.hostId=null;src.enabled=false;}
         for(const agent of next.agents??[])agent.machineIds=agent.machineIds.filter(machine=>machine!==id);
       }
       if(kind==='sources')for(const account of next.accounts)if(account.quotaSourceId===id)account.quotaSourceId=null;
@@ -864,8 +952,8 @@ function renderSettings(capture=true) {
   window.AieyesUpdates?.bindSettings();
   if($('#sync-prices'))$('#sync-prices').onclick=syncPrices;
   if($('#add-price'))$('#add-price').onclick=()=>editPrice();
-  bindPrices();
-  if($('#price-search'))$('#price-search').oninput=e=>{state.priceSearch=e.target.value;$('.prices-list').innerHTML=priceRows();bindPrices();};
+  bindPrices();bindPriceViewport();bindExistingMappings();
+  if($('#price-search'))$('#price-search').oninput=e=>{state.priceSearch=e.target.value;$('.prices-list').scrollTop=0;$('.prices-list').innerHTML=priceRows();bindPrices();};
   if($('#field-appMode'))bindProxy('app');
   if($('#mapping-form'))$('#mapping-form').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);if(!f.get('mappingModel')?.trim()||!f.get('mappingId')?.trim()){notify('请输入日志模型名称和 OpenRouter 模型 ID','error');return;}job('保存模型映射',async()=>{const next=structuredClone(state.settings);mappingDraft(next);await saveSettings(next);$('#mapping-form').reset();resetSettingsForm('mapping-form');renderSettings();});};
   document.querySelectorAll('[data-unmap]').forEach(b=>b.onclick=()=>job('移除模型映射',async()=>{const next=structuredClone(state.settings);delete next.modelMappings[b.dataset.unmap];await saveSettings(next);renderSettings(false);}));
@@ -1165,9 +1253,11 @@ async function listenForSharedState() {
     updateActivity();
   });
   await events.listen('desktop:status',({payload})=>{
+    state.sessionSnapshot=payload;window.AieyesAgentSettings?.updateSession(payload);
     state.panelOpen=Boolean(payload.panelOpen);state.panelPage=payload.panelPage??state.panelPage;scheduleRefreshes();
   });
   await events.listen('desktop:settings',()=>{invalidateQuotaSchedule();window.AieyesNetwork?.invalidate();if(PANEL)return refreshExternalData(true);});
+  await events.listen('desktop:quotas',({payload})=>applyQuotaSamples(payload));
   await events.listen('desktop:hosts',({payload})=>{applyHostSamples(payload);});
   await events.listen('desktop:hosts-error',({payload})=>{applyHostFailure(payload,state.hostRefreshItem);});
   await events.listen('desktop:data-changed',({payload})=>{invalidateQuotaSchedule();
@@ -1216,7 +1306,8 @@ async function readQuotaSchedule() {
 }
 function foregroundMetrics(){return (state.page==='servers'&&!document.hidden)||(state.panelOpen&&state.panelPage==='servers');}
 function metricsDeadline(){return state.lastMetrics+(foregroundMetrics()?(state.settings.serverForegroundRefreshSeconds??2):state.settings.serverRefreshSeconds)*1000;}
-function collectionBlocked(){return state.settingsCommitting||window.AieyesUpdates?.busy||$('#editor')?.open||state.estimateBusy||state.sharedEstimateOperations?.size||$('#quota-dialog')?.dataset.busy||state.busy||state.quotaBusy||state.settingsSaving||['scan','rescan','quotas','prices'].some(key=>state.refreshState[key]?.busy);}
+function collectionBlocked(){return state.settingsCommitting||window.AieyesUpdates?.busy||$('#editor')?.open||state.estimateBusy||state.sharedEstimateOperations?.size||$('#quota-dialog')?.dataset.busy||state.busy||state.settingsSaving||['scan','rescan','prices'].some(key=>state.refreshState[key]?.busy);}
+function quotaCollectionBlocked(){return state.settingsCommitting||window.AieyesUpdates?.busy||state.quotaBusy||state.settingsSaving||state.refreshState.quotas?.busy;}
 function quotaResets(){return (state.dashboard?.quotas??[]).flatMap(q=>q.windows.map(w=>({q,w,key:q.provider+':'+q.accountId+':'+w.resetsAt}))).filter(({w,key})=>w.resetsAt&&!resetConfirmations.has(key));}
 function scheduleRefreshes() {
   clearTimeout(refreshTimer);
@@ -1227,7 +1318,9 @@ function scheduleRefreshes() {
   const deadlines=[];
   if(!state.serverBusy&&!state.refreshState.hosts?.busy&&monitoredHosts().some(h=>h.enabled))deadlines.push(metricsDeadline());
   if(!collectionBlocked()){
-    deadlines.push(state.lastScan+(state.settings.historyRefreshSeconds??state.settings.refreshSeconds)*1000);
+    deadlines.push(state.lastScan+(state.settings.historyRefreshSeconds??Math.max(10,state.settings.refreshSeconds))*1000);
+  }
+  if(!quotaCollectionBlocked()){
     if(quotaScheduleKnown&&quotaDueAt!=null)deadlines.push(quotaDueAt);
     deadlines.push(...quotaResets().map(({w})=>w.resetsAt*1000));
   }
@@ -1237,10 +1330,10 @@ function scheduleRefreshes() {
 function runScheduledRefreshes() {
   if(PANEL||refreshStopped||!state.settings||window.AieyesUpdates?.busy)return;
   if(!state.serverBusy&&!state.refreshState.hosts?.busy&&monitoredHosts().some(h=>h.enabled)&&Date.now()>=metricsDeadline())void sample();
-  if(!collectionBlocked()){
+  if(!collectionBlocked()&&Date.now()>=state.lastScan+(state.settings.historyRefreshSeconds??Math.max(10,state.settings.refreshSeconds))*1000)void scan();
+  if(!quotaCollectionBlocked()){
     const expired=quotaResets().find(({w})=>w.resetsAt*1000<=Date.now());
     if(expired){resetConfirmations.add(expired.key);void quotas(expired.q.accountId);}
-    else if(Date.now()>=state.lastScan+(state.settings.historyRefreshSeconds??state.settings.refreshSeconds)*1000)void scan();
     else if(quotaScheduleKnown&&quotaDueAt!=null&&Date.now()>=quotaDueAt){quotaDueAt=null;void quotas(undefined,true);}
   }
   scheduleRefreshes();
@@ -1293,7 +1386,7 @@ async function refreshQuotaDialog(){
   if(expanded&&dialog.querySelector('details'))dialog.querySelector('details').open=true;
   if(focus)document.getElementById(focus)?.focus({preventScroll:true});
 }
-function hasActiveFilters(){return Boolean(state.provider||state.accountKey||state.sourceId||state.model||state.days!==1);}
+function hasActiveFilters(){return Boolean(state.provider||state.accountKey||state.sourceId||state.model||state.dateRange||state.days!==1);}
 function bindQuotaTools(){
   document.querySelectorAll('[data-switch-account]').forEach(b=>b.onclick=()=>window.AieyesAccountTargets.open(b.dataset.switchAccount));
   renderQueryStatus();
@@ -1305,8 +1398,8 @@ function bindQuotaTools(){
       const button=document.createElement('button');button.innerHTML=escapeHTML(label)+uiIcon('x');button.setAttribute('aria-label','清除筛选：'+label);
       button.onclick=()=>{state[key]='';if(key==='provider'){state.accountKey='';state.sourceId='';state.model='';}if(key==='accountKey')state.sourceId='';changeFilters();};filters.append(button);
     }
-    if(state.days!==1){const range=document.createElement('button');range.textContent='最近 '+state.days+' 天';range.setAttribute('aria-label','清除时间范围');range.onclick=()=>{state.days=1;changeFilters();};filters.append(range);}
-    const clear=document.createElement('button');clear.textContent='清除全部';clear.onclick=()=>{state.provider=state.accountKey=state.sourceId=state.model='';state.days=1;changeFilters();};filters.append(clear);
+    if(state.dateRange||state.days!==1){const range=document.createElement('button');range.textContent=rangeLabel();range.setAttribute('aria-label','清除时间范围');range.onclick=()=>{state.days=1;state.dateRange=null;changeFilters();};filters.append(range);}
+    const clear=document.createElement('button');clear.textContent='清除全部';clear.onclick=()=>{state.provider=state.accountKey=state.sourceId=state.model='';state.days=1;state.dateRange=null;changeFilters();};filters.append(clear);
     if(PANEL){const disclosure=document.createElement('details');disclosure.className='panel-filter-summary';disclosure.innerHTML='<summary>已筛选 '+(filters.children.length-1)+' 项</summary>';disclosure.append(filters);$('#content .filters')?.after(disclosure);}else $('#content .filters')?.after(filters);
   }
   document.querySelectorAll('.quota-disclosure').forEach(detail=>{

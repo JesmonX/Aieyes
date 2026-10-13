@@ -27,6 +27,7 @@ pub mod pricing;
 pub mod process;
 pub mod providers;
 pub mod quota;
+mod quota_queries;
 mod quota_schedule;
 mod remote_history;
 pub mod session_events;
@@ -91,7 +92,7 @@ impl Engine {
             callback(json!({"stage":stage}));
         }
     }
-    pub(crate) fn read_quotas(&self, params: &Value) -> Result<Vec<QuotaSnapshot>> {
+    pub(crate) fn read_quotas_unlocked(&self, params: &Value) -> Result<Vec<QuotaSnapshot>> {
         let settings = self.store.settings()?;
         let mut result = Vec::new();
         for account in settings.accounts.iter().filter(|a| {
@@ -360,6 +361,7 @@ impl Engine {
             )?)?),
             "agents.set" => self.configure_agent(params),
             "sources.configure" => self.configure_source(params, false),
+            "sources.rebind" => self.rebind_source(params),
             "sources.remove" => self.configure_source(params, true),
             "accounts.connect" => self.connect_account(params),
             "settings.get" => Ok(serde_json::to_value(self.store.settings()?)?),

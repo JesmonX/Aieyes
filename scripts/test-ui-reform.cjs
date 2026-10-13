@@ -115,7 +115,7 @@ function fixture(){
    if(!panel){
     await page.evaluate(async()=>{reform.scenario='single';state.settings=await api('settings.get');await loadDashboard();});await page.setViewportSize({width:640,height:440});
     for(const theme of ['light','dark']){await page.emulateMedia({colorScheme:theme});await page.screenshot({animations:'disabled',path:path.join(output,`minimum-detail-${theme}.png`)});}
-    await page.keyboard.press('Control+,');await page.locator('[data-settings-tab=prices]').click();assert.equal(await page.locator('[data-unmap]').count(),30);await page.screenshot({animations:'disabled',path:path.join(output,'mappings-30-minimum.png')});
+    await page.keyboard.press('Control+,');await page.locator('[data-settings-tab=prices]').click();assert.equal(await page.locator('[data-unmap]').count(),0,'Existing mappings stay unmounted while collapsed');await page.locator('#existing-mappings > summary').click();await page.waitForFunction(()=>document.querySelectorAll('[data-unmap]').length===30);await page.screenshot({animations:'disabled',path:path.join(output,'mappings-30-minimum.png')});
     await page.locator('[data-settings-tab=hosts]').click();await page.locator('[data-edit=h1]').click();await page.screenshot({animations:'disabled',path:path.join(output,'editor-minimum.png')});await page.keyboard.press('Escape');
    }
    await page.close();

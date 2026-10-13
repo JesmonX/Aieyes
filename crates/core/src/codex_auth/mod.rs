@@ -55,6 +55,14 @@ pub fn backend(
     method: &str,
     params: &Value,
 ) -> Result<Value> {
+    ensure!(
+        source.machine_binding == crate::models::MachineBinding::Bound,
+        "目录尚未绑定机器"
+    );
+    ensure!(
+        source.host_id.is_some() || settings.local_device_enabled,
+        "本机采集已暂停"
+    );
     let account = settings.accounts.iter().find(|a| {
         a.provider == source.provider
             && (params["accountId"].as_str().is_some_and(|id| a.id == id)
@@ -247,7 +255,7 @@ impl Engine {
             .find(|s| {
                 s.id == params["sourceId"].as_str().unwrap_or("")
                     && s.provider == "codex"
-                    && s.enabled
+                    && settings.source_enabled(s)
             })
             .context("请选择已保存且启用的 Codex 来源")?
             .clone();
@@ -441,6 +449,9 @@ impl Engine {
             self.store
                 .patch_settings(&initial, &serde_json::to_value(&settings)?, true)?;
             return Ok(result);
+        }
+        if method == "quota" {
+            return crate::quota_queries::raw_codex_quota(&self.store, &settings, &source, &params);
         }
         let mut result = backend(&source, &settings, method, &params)?;
         if method == "switch.commit"

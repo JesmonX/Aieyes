@@ -11,6 +11,62 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Recheck after a source-lock wait and inside each committing transaction.
+/// Pausing or rebinding a device must not let an old reader commit another batch.
+pub(crate) fn current_settings(
+    store: &Store,
+    expected: &Settings,
+    source: &Source,
+) -> Result<Settings> {
+    crate::operations::check()?;
+    let settings = store.settings()?;
+    let current = settings
+        .sources
+        .iter()
+        .find(|s| s.id == source.id && settings.source_enabled(s))
+        .context("来源已暂停、移除或机器未绑定，同步已停止")?;
+    anyhow::ensure!(
+        current.provider == source.provider
+            && current.path == source.path
+            && current.account_id == source.account_id
+            && current.codex_home_id == source.codex_home_id
+            && current.host_id == source.host_id
+            && current.machine_binding == source.machine_binding,
+        "来源配置已改变，同步已停止"
+    );
+    if let Some(id) = &source.host_id {
+        let old = expected
+            .hosts
+            .iter()
+            .find(|h| &h.id == id)
+            .context("原机器配置缺失")?;
+        let new = settings
+            .hosts
+            .iter()
+            .find(|h| &h.id == id)
+            .context("机器已移除")?;
+        anyhow::ensure!(
+            (
+                &old.target,
+                old.port,
+                &old.username,
+                &old.shell,
+                &old.pre_command,
+                &old.identity_file
+            ) == (
+                &new.target,
+                new.port,
+                &new.username,
+                &new.shell,
+                &new.pre_command,
+                &new.identity_file
+            ),
+            "机器配置已改变，同步已停止"
+        );
+    }
+    Ok(settings)
+}
+
 pub fn paths(source: &Source) -> Result<Vec<PathBuf>> {
     let root = expand(&source.path);
     anyhow::ensure!(root.exists(), "数据目录不存在");
@@ -70,6 +126,12 @@ pub fn rescan(store: &Store, settings: &Settings, source: &Source) -> Result<Val
 }
 
 fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) -> Result<Value> {
+    let root = Path::new(store.db.path().context("数据目录不可用")?)
+        .parent()
+        .context("数据目录不可用")?;
+    let _lock = crate::file_lock::history(root, &source.id)?;
+    let current = current_settings(store, settings, source)?;
+    let settings = &current;
     if crate::providers::antigravity(&source.provider)
         && crate::antigravity::directory(&expand(&source.path)).is_some()
     {
@@ -119,7 +181,10 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         }
         result["issues"].as_array_mut().unwrap().push(json!({"code":"missingHistoryBase","message":format!("{missing_history} 个会话缺少可验证的父历史，首段累计暂不计入；父记录恢复后自动补全。") }));
     }
+    let tx = store.write_transaction()?;
+    current_settings(store, settings, source)?;
     store.source_status(&source.id, &result)?;
+    tx.commit()?;
     store.repair_history_estimates()?;
     Ok(result)
 }
@@ -216,6 +281,8 @@ fn scan_file(
             break;
         }
         let tx = store.write_transaction()?;
+        let current = current_settings(store, settings, source)?;
+        let settings = &current;
         for line in rows {
             match serde_json::from_slice::<Value>(&line) {
                 Ok(v) => {

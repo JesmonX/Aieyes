@@ -23,8 +23,18 @@ const HIDE_MENU_ID: &str = "hide";
 /// Transparent pet surface in logical pixels on every platform.
 const BALL_SIZE: f64 = 144.0;
 const BALL_HEIGHT: f64 = 168.0;
-fn entry_size(_app: &AppHandle) -> (f64, f64) {
-    (BALL_SIZE, BALL_HEIGHT)
+fn entry_size(app: &AppHandle) -> (f64, f64) {
+    app.try_state::<Desktop>()
+        .and_then(|desktop| {
+            desktop.state.lock().ok().map(|state| {
+                let scale = aieyes_core::pets::normalized_scale(state.preferences.pet_scale);
+                (
+                    BALL_SIZE * scale,
+                    aieyes_core::pets::height(&aieyes_core::pets::project(&state.snapshot)) * scale,
+                )
+            })
+        })
+        .unwrap_or((BALL_SIZE, BALL_HEIGHT))
 }
 /// Panel size in logical pixels; height is clamped to the monitor work area.
 const PANEL_WIDTH: f64 = 450.0;
@@ -46,13 +56,25 @@ struct Position {
     x: i32,
     y: i32,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct Preferences {
     mode: Mode,
     position: Option<Position>,
     show_count: bool,
     hidden: bool,
+    pet_scale: f64,
+}
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            mode: Mode::default(),
+            position: None,
+            show_count: false,
+            hidden: false,
+            pet_scale: 1.0,
+        }
+    }
 }
 struct ShellState {
     accent: String,
@@ -859,9 +881,24 @@ fn update(app: &AppHandle, snapshot: Snapshot, pet_asset: Value, supported: Opti
             )));
         }
     }
+    #[cfg(not(target_os = "windows"))]
+    let previous_size = entry_size(app);
     if let Ok(mut state) = desktop.state.lock() {
         state.snapshot = snapshot;
         state.pet_asset = pet_asset;
+    }
+    #[cfg(not(target_os = "windows"))]
+    if previous_size != entry_size(app)
+        && desktop
+            .state
+            .lock()
+            .map(|state| !state.panel)
+            .unwrap_or(false)
+        && let Some(window) = app.get_webview_window("floating")
+    {
+        let (width, height) = entry_size(app);
+        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        let _ = clamp_ball(app);
     }
     if let Err(error) = apply_mode(app) {
         let _ = app.emit("desktop:error", error);
@@ -962,6 +999,7 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "trayAvailable": desktop.tray_available.load(Ordering::Relaxed),
         "reason": state.reason,
         "petEnabled": state.floating,
+        "petScale": aieyes_core::pets::normalized_scale(state.preferences.pet_scale),
         "petAsset": state.pet_asset["pet"], "petError": state.pet_asset["error"],
         "pet": aieyes_core::pets::project(&state.snapshot),
         "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
@@ -1003,6 +1041,38 @@ pub fn desktop_mode(app: AppHandle, mode: Mode) -> Result<Value, String> {
     }
     let _ = app.emit("desktop:status", &info);
     Ok(info)
+}
+#[tauri::command]
+pub fn desktop_pet_scale(app: AppHandle, scale: f64) -> Result<Value, String> {
+    if !scale.is_finite()
+        || !(aieyes_core::pets::MIN_SCALE..=aieyes_core::pets::MAX_SCALE).contains(&scale)
+    {
+        return Err("桌宠缩放范围为 50%–200%".into());
+    }
+    {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        let previous = state.preferences.pet_scale;
+        state.preferences.pet_scale = scale;
+        if let Err(error) = write_preferences(&desktop.path, &state.preferences) {
+            state.preferences.pet_scale = previous;
+            return Err(format!("缩放偏好保存失败：{error}"));
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    if let Some(window) = app.get_webview_window("floating") {
+        let panel = app.state::<Desktop>().state.lock().is_ok_and(|s| s.panel);
+        if !panel {
+            let (width, height) = entry_size(&app);
+            window
+                .set_size(tauri::LogicalSize::new(width, height))
+                .map_err(|e| e.to_string())?;
+            // Use the current position so changing size does not jump back to an old drag position.
+            clamp_ball(&app).map_err(|e| e.to_string())?;
+        }
+    }
+    emit_shell(&app);
+    desktop_info(app)
 }
 #[tauri::command]
 pub fn desktop_panel(app: AppHandle, open: bool) -> Result<Value, String> {
@@ -1066,6 +1136,9 @@ pub fn desktop_detail(app: AppHandle, view: Value) -> Result<(), String> {
         "cost".into(),
         json!(view["cost"].as_bool().unwrap_or(false)),
     );
+    let range: Option<aieyes_core::models::DateRange> =
+        serde_json::from_value(view["dateRange"].clone()).map_err(|_| "日期范围无效")?;
+    filter.insert("dateRange".into(), json!(range));
     show_main(&app, "agent")?;
     app.emit_to("main", "desktop:detail-view", filter)
         .map_err(|e| e.to_string())
@@ -1416,6 +1489,13 @@ fn set_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
 }
 /// Snap the ball flush to a nearby work-area edge after a drag.
 fn snap_ball(app: &AppHandle) -> Result<(), String> {
+    position_ball(app, true)
+}
+#[cfg(not(target_os = "windows"))]
+fn clamp_ball(app: &AppHandle) -> Result<(), String> {
+    position_ball(app, false)
+}
+fn position_ball(app: &AppHandle, snap: bool) -> Result<(), String> {
     let window = app.get_webview_window("floating").ok_or("桌宠不可用")?;
     if app
         .state::<Desktop>()
@@ -1447,7 +1527,11 @@ fn snap_ball(app: &AppHandle) -> Result<(), String> {
     }) else {
         return Ok(());
     };
-    let threshold = (SNAP_DISTANCE * scale).round() as i32;
+    let threshold = if snap {
+        (SNAP_DISTANCE * scale).round() as i32
+    } else {
+        0
+    };
     let snapped = snap_rect(
         Position {
             x: position.x,

@@ -111,7 +111,11 @@ fn partial_databases_keep_tokens_retry_and_repair_model_without_duplicates() {
     assert_eq!(remote["files"][0]["events"], json!(read.events));
     let store = Store::open(&temp.path().join("store")).unwrap();
     let source = source(temp.path());
-    let settings = Settings::default();
+    let settings = Settings {
+        sources: vec![source.clone()],
+        ..Default::default()
+    };
+    store.save_settings(&settings).unwrap();
     store
         .save_prices(&[
             price("known"),
@@ -241,7 +245,11 @@ fn executor_full_name_and_unknown_model_allow_incremental_cursor() {
 
     let store = Store::open(&temp.path().join("store")).unwrap();
     let s = source(temp.path());
-    let settings = Settings::default();
+    let settings = Settings {
+        sources: vec![s.clone()],
+        ..Default::default()
+    };
+    store.save_settings(&settings).unwrap();
     let first = antigravity::scan(&store, &settings, &s).unwrap();
     assert_eq!(first["newEvents"], 2);
     assert_eq!(first["partial"], false);
@@ -358,6 +366,9 @@ fn native_and_ssh_match_wal_incremental_and_standard_import() {
         path: standard.to_string_lossy().into(),
         ..s.clone()
     };
+    let mut with_copy = store.settings().unwrap();
+    with_copy.sources.push(copy.clone());
+    store.save_settings(&with_copy).unwrap();
     assert_eq!(
         import::scan(&store, &store.settings().unwrap(), &copy).unwrap()["newEvents"],
         0

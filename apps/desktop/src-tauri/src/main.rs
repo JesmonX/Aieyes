@@ -67,12 +67,14 @@ struct Shared(
     Arc<Mutex<Engine>>,
     Arc<Mutex<Engine>>,
     std::path::PathBuf,
+    Arc<Mutex<Engine>>,
 );
 
 impl Shared {
     fn engine_for(&self, method: &str) -> Arc<Mutex<Engine>> {
         use aieyes_core::contracts::{Lane, method as metadata};
         match metadata(method).map_or(Lane::Main, |m| m.lane) {
+            Lane::Quotas => self.7.clone(),
             Lane::Dashboard => self.5.clone(),
             Lane::Configuration => self.3.clone(),
             Lane::Accounts => self.4.clone(),
@@ -252,6 +254,13 @@ async fn engine_call(
                 &method,
                 params,
                 Box::new(move |mut progress| {
+                    if progress["kind"] == "quotas.refresh" {
+                        let _ = progress_app.emit(
+                            "desktop:quotas",
+                            serde_json::json!([progress["row"].clone()]),
+                        );
+                        return;
+                    }
                     if progress["kind"] == "hosts.sample" {
                         let _ = progress_app.emit(
                             "desktop:hosts",
@@ -318,6 +327,7 @@ fn main() {
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
                 root.clone(),
+                Arc::new(Mutex::new(Engine::open(&root)?)),
             ));
             updates::setup(app.handle(), &root);
             desktop::setup(app, &root)?;
@@ -345,6 +355,7 @@ fn main() {
             desktop::desktop_info,
             desktop::desktop_appearance,
             desktop::desktop_mode,
+            desktop::desktop_pet_scale,
             desktop::desktop_panel,
             desktop::desktop_panel_pin,
             desktop::desktop_panel_page,
@@ -423,6 +434,7 @@ mod tests {
             Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
             Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
             root.path().to_owned(),
+            Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
         );
         let _blocked = shared.0.lock().unwrap();
         let lane = shared.engine_for("agents.set");

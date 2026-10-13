@@ -371,14 +371,7 @@ impl Engine {
                 .iter()
                 .find(|s| params["sourceId"] == s.id && s.provider == account.provider)
                 .context("设备目录不存在")?;
-            ensure!(
-                source.enabled
-                    && source
-                        .host_id
-                        .as_ref()
-                        .is_none_or(|id| settings.hosts.iter().any(|h| &h.id == id && h.enabled)),
-                "设备已暂停"
-            );
+            ensure!(settings.source_enabled(source), "设备已暂停");
             let stamp = fingerprint(&settings, &account, source);
             let auth_revision = status_revision(&self.store, source)?;
             let result = self.inspect_account_device(&settings, &account, source);
@@ -390,7 +383,9 @@ impl Engine {
                 .iter()
                 .find(|a| key(a) == account_key)
                 .zip(latest.sources.iter().find(|s| s.id == source.id))
-                .is_some_and(|(a, s)| fingerprint(&latest, a, s) == stamp);
+                .is_some_and(|(a, s)| {
+                    latest.source_enabled(s) && fingerprint(&latest, a, s) == stamp
+                });
             ensure!(unchanged, "设备配置已变化，请重新检查");
             // Keep the generation check and cache write in the same transaction, so an
             // observation started before a switch cannot overwrite the new account state.

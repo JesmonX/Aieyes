@@ -48,7 +48,7 @@ function fixture(){
  try{
   browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1180,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
   await page.evaluate(()=>{state.page='settings';state.settingsTab='accounts';render();});
-  await page.locator('[data-device-manage][data-intent="switch"]').first().click();
+  await page.locator('.machine-menu > summary').first().click();await page.locator('[data-device-manage][data-intent="switch"]').first().click();
   assert.equal(await page.getByRole('button',{name:'读取账号',exact:true}).count(),0);await page.getByText('工作账号',{exact:true}).waitFor();
   await page.locator('[data-auth="switch"]').click();
   await page.locator('#codex-switch[open]').waitFor();
@@ -126,7 +126,7 @@ function fixture(){
   await page.getByText('账号已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话',{exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>state.settings.accounts.some(a=>a.id==='b')),true,'a switched saved profile must appear in this installation account list');
   await page.setViewportSize({width:1180,height:900});
-  await page.evaluate(()=>authTest.loggedIn=false);await page.locator('#accounts-back').click();if(await page.locator('#account-detail-back').count())await page.locator('#account-detail-back').click();await page.locator('[data-device-manage][data-intent="login"]').first().click();await page.locator('[data-auth="reauth"][data-profile="one"]').click();assert.equal(await page.locator('#field-name').count(),0);await page.locator('#editor-form button[type="submit"]').click();await page.getByText('FIXTURE-CODE',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>authTest.calls.find(c=>c.method==='codexAuth.login.start').params.profileId),'one');
+  await page.evaluate(()=>authTest.loggedIn=false);await page.locator('#accounts-back').click();if(await page.locator('#account-detail-back').count())await page.locator('#account-detail-back').click();await page.locator('.machine-menu > summary').first().click();await page.locator('[data-device-manage][data-intent="login"]').first().click();await page.locator('[data-auth="reauth"][data-profile="one"]').click();assert.equal(await page.locator('#field-name').count(),0);await page.locator('#editor-form button[type="submit"]').click();await page.getByText('FIXTURE-CODE',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>authTest.calls.find(c=>c.method==='codexAuth.login.start').params.profileId),'one');
   await page.locator('[data-auth="open"]').click();assert.equal(await page.evaluate(()=>authTest.calls.find(c=>c.method==='codexAuth.openUrl').params.url),'https://auth.openai.com/device');
   await page.screenshot({path:path.resolve(__dirname,'../.local/codex-accounts.png'),fullPage:true});
   await page.locator('[data-auth="cancelLogin"]').click();await page.getByText('登录成功，已启用此账号的额度查询。',{exact:true}).waitFor();

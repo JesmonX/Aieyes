@@ -16,4 +16,4 @@ objects = sorted(p for p in (debug/'Aieyes.build').glob('*.o') if p.name != 'Aie
 assert objects
 subprocess.run(['swiftc', '-parse-as-library', '-module-cache-path', '.build/swift-module-cache', '-I', str(debug/'Modules'), '-F', str(framework), '-framework', 'Sparkle', '-Xlinker', '-rpath', '-Xlinker', str(framework), 'scripts/verify-native-performance.swift', *map(str, objects), '-o', '.build/verify-native-performance'], check=True)
 PY
-AIEYES_CORE_PATH="$PROJECT_DIR/scripts/preview-quota-core.py" AIEYES_UI_SCENARIO=multi .build/verify-native-performance "$PROJECT_DIR/.local/performance-2026-10-08"
+AIEYES_CORE_PATH="$PROJECT_DIR/scripts/preview-quota-core.py" AIEYES_UI_SCENARIO=multi .build/verify-native-performance "$PROJECT_DIR/.local/performance-2026-10-13"

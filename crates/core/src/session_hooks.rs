@@ -417,6 +417,15 @@ pub fn call(settings: &Settings, method: &str, params: &Value) -> Result<Value> 
         if !seen.insert(key(source)) {
             continue;
         }
+        if source.machine_binding == crate::models::MachineBinding::Unbound
+            || source
+                .host_id
+                .as_ref()
+                .is_some_and(|id| !settings.hosts.iter().any(|h| &h.id == id))
+        {
+            rows.push(json!({"sourceId":source.id,"provider":source.provider,"machineId":source.host_id,"configPath":source.path,"state":"unbound","error":"机器未绑定，请先重新绑定目录"}));
+            continue;
+        }
         if let Some(id) = &source.host_id {
             let host = settings
                 .hosts

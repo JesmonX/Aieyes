@@ -21,7 +21,7 @@ fn provider_capabilities_and_legacy_custom_settings_are_consistent() {
     }))
     .unwrap();
     settings.migrate();
-    assert_eq!(settings.version, 7);
+    assert_eq!(settings.version, 8);
     assert!(settings.accounts[0].quota_enabled);
     assert_eq!(settings.agents.len(), providers::PROVIDERS.len());
     assert!(
@@ -358,9 +358,15 @@ fn full_log_replay_repairs_two_historical_hashes_without_identities() {
         store.dashboard(&Filter::default()).unwrap().summary.total,
         200
     );
+    let mut settings = Settings {
+        sources: vec![source.clone()],
+        ..Default::default()
+    };
+    store.save_settings(&settings).unwrap();
+    settings = store.settings().unwrap();
     // Real imports already own a transaction, so repair must support that path.
     assert_eq!(
-        aieyes_core::import::scan(&store, &Settings::default(), &source).unwrap()["newEvents"],
+        aieyes_core::import::scan(&store, &settings, &source).unwrap()["newEvents"],
         0
     );
     assert_eq!(
@@ -371,8 +377,10 @@ fn full_log_replay_repairs_two_historical_hashes_without_identities() {
         id: "copy".into(),
         ..source.clone()
     };
+    settings.sources.push(copy.clone());
+    store.save_settings(&settings).unwrap();
     assert_eq!(
-        aieyes_core::import::scan(&store, &Settings::default(), &copy).unwrap()["newEvents"],
+        aieyes_core::import::scan(&store, &settings, &copy).unwrap()["newEvents"],
         0
     );
     drop(store);

@@ -76,7 +76,7 @@ window.AieyesUI = {
   },
   sourceEnabled(settings, source) {
     const agents = (settings?.agents ?? []).filter(agent => agent.provider === source.provider);
-    return source.enabled && agents.length <= 1 &&
+    return source.enabled && source.machineBinding !== 'unbound' && (source.hostId != null || settings?.localDeviceEnabled !== false) && agents.length <= 1 &&
       (!agents.length || (agents[0].enabled && agents[0].machineIds.includes(source.hostId ?? 'local'))) &&
       (source.hostId == null || (settings?.hosts ?? []).some(host => host.id === source.hostId && host.enabled));
   },

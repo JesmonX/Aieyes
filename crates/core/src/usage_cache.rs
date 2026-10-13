@@ -1,6 +1,6 @@
 //! Disposable daily projections. Raw events and their source memberships remain authoritative.
 use crate::{models::*, pricing, store::Store};
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use chrono::{Duration, Local, TimeZone};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -152,7 +152,7 @@ pub(crate) struct Pending {
     payload: Option<String>,
 }
 
-fn boundary(day: chrono::NaiveDate) -> i64 {
+pub(crate) fn boundary(day: chrono::NaiveDate) -> i64 {
     let midnight = day.and_hms_opt(0, 0, 0).unwrap();
     // Some time zones advance their clocks at midnight. Use the first valid
     // local instant, including the rare case of an entirely skipped date.
@@ -190,27 +190,86 @@ fn merge(to: &mut Aggregate, from: &Aggregate) {
     to.events += from.events;
 }
 
-pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboard, Vec<Pending>)> {
+pub(crate) struct DateBounds {
+    pub start: chrono::NaiveDate,
+    pub end: chrono::NaiveDate,
+    pub trend_start: chrono::NaiveDate,
+    pub heat_start: chrono::NaiveDate,
+}
+pub(crate) fn date_bounds(store: &Store, f: &Filter, summary: bool) -> Result<DateBounds> {
     let today = Local::now().date_naive();
-    let now = now();
-    let start = today
-        - Duration::days(if summary {
-            0
-        } else {
-            f.days.unwrap_or(1).clamp(1, 3660) as i64 - 1
-        });
-    let trend_start = if summary {
-        today
+    let parse = |raw: &str| -> Result<chrono::NaiveDate> {
+        let day = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+            .context("日期格式必须为 YYYY-MM-DD")?;
+        ensure!(
+            raw.len() == 10 && day.to_string() == raw,
+            "日期格式必须为 YYYY-MM-DD"
+        );
+        Ok(day)
+    };
+    let (start, end) = match &f.date_range {
+        Some(DateRange::Custom { start, end }) => {
+            let (start, end) = (parse(start)?, parse(end)?);
+            ensure!(start <= end, "开始日期不能晚于结束日期");
+            (start, end)
+        }
+        Some(DateRange::All) => {
+            let settings = store.settings()?;
+            let shared = serde_json::to_string(
+                &settings
+                    .sources
+                    .iter()
+                    .filter(|s| s.codex_home_id.is_some())
+                    .map(|s| &s.id)
+                    .collect::<Vec<_>>(),
+            )?;
+            let first: Option<i64> = store.db.query_row("SELECT MIN(stamp) FROM events e WHERE stamp<=?1 AND (?2 IS NULL OR provider=?2) AND (?3 IS NULL OR (?3='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?3 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6))))) AND (?4 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?4)) AND (?5 IS NULL OR model=?5)", params![now(), f.provider, f.account_id, f.source_id, f.model, shared], |r| r.get(0))?;
+            (
+                first
+                    .and_then(|stamp| Local.timestamp_opt(stamp, 0).single())
+                    .map(|time| time.date_naive())
+                    .unwrap_or(today),
+                today,
+            )
+        }
+        None => (
+            today
+                - Duration::days(if summary {
+                    0
+                } else {
+                    f.days.unwrap_or(1).clamp(1, 3660) as i64 - 1
+                }),
+            today,
+        ),
+    };
+    let trend_start = if f.date_range.is_some() || summary {
+        start
     } else {
         start.min(today - Duration::days(6))
     };
-    let heat_start = if summary {
-        today
+    let heat_start = if f.date_range.is_some() || summary {
+        start
     } else {
         today - Duration::days(364)
     };
+    Ok(DateBounds {
+        start,
+        end,
+        trend_start,
+        heat_start,
+    })
+}
+
+pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboard, Vec<Pending>)> {
+    let DateBounds {
+        start,
+        end: last_day,
+        trend_start,
+        heat_start,
+    } = date_bounds(store, f, summary)?;
+    let now = now();
     let earliest = start.min(heat_start);
-    let last = boundary(today + Duration::days(1));
+    let last = boundary(last_day + Duration::days(1));
     let settings = store.settings()?;
     let mut shared: Vec<_> = settings
         .sources
@@ -240,7 +299,8 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
     let mut gaps = BTreeMap::<String, PricingGap>::new();
     let mut options = std::collections::BTreeSet::new();
     let mut pending = vec![];
-    for i in 0..=(today - earliest).num_days() {
+    for i in 0..=(last_day - earliest).num_days() {
+        crate::operations::check()?;
         let date = earliest + Duration::days(i);
         let day = date.to_string();
         let from = boundary(date);
@@ -379,7 +439,7 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
         }
     }
     let sequence = |from: chrono::NaiveDate, mut map: BTreeMap<String, Aggregate>| {
-        (0..=(today - from).num_days())
+        (0..=(last_day - from).num_days())
             .map(|i| {
                 let key = (from + Duration::days(i)).to_string();
                 let mut row = map.remove(&key).unwrap_or_default();
@@ -503,6 +563,108 @@ mod tests {
         assert!(
             read(store, filter, false).unwrap().1.is_empty(),
             "second read must use cache, not fallback"
+        );
+    }
+    #[test]
+    fn explicit_ranges_include_both_endpoints_leap_days_and_follow_filters() {
+        let (_root, store, settings) = fixture();
+        let stamp = |year, month, day| {
+            boundary(chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap()) + 3600
+        };
+        for (source, id, year, month, day, model) in [
+            (0, "old", 2022, 12, 31, "older"),
+            (0, "first", 2024, 2, 28, "fixture"),
+            (0, "leap", 2024, 2, 29, "fixture"),
+            (0, "last", 2024, 3, 1, "fixture"),
+            (0, "outside", 2024, 3, 2, "fixture"),
+            (1, "other-source", 2020, 1, 1, "fixture"),
+        ] {
+            let mut row = event(&settings.sources[source], id, stamp(year, month, day));
+            row.model = model.into();
+            store.put_event(&row, &[], &settings).unwrap();
+        }
+        let filter = Filter {
+            source_id: Some("a".into()),
+            days: Some(1),
+            date_range: Some(DateRange::Custom {
+                start: "2024-02-28".into(),
+                end: "2024-03-01".into(),
+            }),
+            ..Default::default()
+        };
+        parity(&store, &filter);
+        let dashboard = store.dashboard(&filter).unwrap();
+        assert_eq!(dashboard.summary.total, 360);
+        assert_eq!(dashboard.heatmap.len(), 3);
+        assert_eq!(dashboard.trend_days.len(), 3);
+        assert_eq!(dashboard.heatmap[1].key, "2024-02-29");
+        let all = Filter {
+            date_range: Some(DateRange::All),
+            ..filter.clone()
+        };
+        parity(&store, &all);
+        let dashboard = store.dashboard(&all).unwrap();
+        assert_eq!(dashboard.heatmap.first().unwrap().key, "2022-12-31");
+        assert_eq!(dashboard.summary.total, 600);
+        let model = Filter {
+            model: Some("fixture".into()),
+            ..all
+        };
+        parity(&store, &model);
+        assert_eq!(
+            store
+                .dashboard(&model)
+                .unwrap()
+                .heatmap
+                .first()
+                .unwrap()
+                .key,
+            "2024-02-28"
+        );
+        let no_match = Filter {
+            provider: Some("claude".into()),
+            ..model
+        };
+        assert_eq!(store.dashboard(&no_match).unwrap().heatmap.len(), 1);
+    }
+    #[test]
+    fn custom_dates_reject_invalid_or_reversed_bounds_and_keep_year_boundaries() {
+        let (_root, store, _) = fixture();
+        for (start, end) in [
+            ("2023-02-29", "2023-03-01"),
+            ("2024-2-28", "2024-03-01"),
+            ("2024-03-01", "2024-02-28"),
+            ("no-date", "2024-01-01"),
+        ] {
+            assert!(
+                store
+                    .dashboard(&Filter {
+                        date_range: Some(DateRange::Custom {
+                            start: start.into(),
+                            end: end.into()
+                        }),
+                        ..Default::default()
+                    })
+                    .is_err()
+            );
+        }
+        let filter = Filter {
+            date_range: Some(DateRange::Custom {
+                start: "2023-12-31".into(),
+                end: "2024-01-01".into(),
+            }),
+            ..Default::default()
+        };
+        parity(&store, &filter);
+        assert_eq!(
+            store
+                .dashboard(&filter)
+                .unwrap()
+                .heatmap
+                .iter()
+                .map(|d| d.key.as_str())
+                .collect::<Vec<_>>(),
+            ["2023-12-31", "2024-01-01"]
         );
     }
     #[test]

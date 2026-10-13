@@ -74,6 +74,14 @@ pub struct ProxyConfig {
     pub url: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MachineBinding {
+    #[default]
+    Bound,
+    Unbound,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Source {
@@ -86,6 +94,8 @@ pub struct Source {
     pub account_id: String,
     pub path: String,
     pub host_id: Option<String>,
+    pub machine_binding: MachineBinding,
+    pub last_machine_name: Option<String>,
     pub enabled: bool,
     pub quota_command: String,
     pub quota_pre_command: String,
@@ -104,6 +114,8 @@ impl Default for Source {
             account_id: String::new(),
             path: String::new(),
             host_id: None,
+            machine_binding: MachineBinding::Bound,
+            last_machine_name: None,
             enabled: true,
             quota_command: String::new(),
             quota_pre_command: String::new(),
@@ -215,6 +227,7 @@ pub struct Host {
     pub shell: String,
     pub pre_command: String,
     pub enabled: bool,
+    pub monitoring_enabled: bool,
     pub metrics: Vec<String>,
     pub devices: Vec<String>,
     pub details: Vec<String>,
@@ -233,6 +246,7 @@ impl Default for Host {
             shell: crate::ssh::DEFAULT_SHELL.into(),
             pre_command: String::new(),
             enabled: true,
+            monitoring_enabled: true,
             metrics: ["cpu", "memory", "gpu", "filesystems", "disk", "network"]
                 .iter()
                 .map(|s| s.to_string())
@@ -315,6 +329,7 @@ pub struct Settings {
     pub server_refresh_seconds: u64,
     pub server_foreground_refresh_seconds: u64,
     pub local_monitor: LocalMonitor,
+    pub local_device_enabled: bool,
     pub menu_metric: String,
     pub model_mappings: std::collections::BTreeMap<String, String>,
     pub proxy_test_urls: Vec<String>,
@@ -342,6 +357,7 @@ impl Default for Settings {
             server_refresh_seconds: 10,
             server_foreground_refresh_seconds: 2,
             local_monitor: LocalMonitor::default(),
+            local_device_enabled: true,
             menu_metric: "icon".into(),
             model_mappings: Default::default(),
             proxy_test_urls: crate::network::default_test_urls(),
@@ -506,10 +522,10 @@ impl Settings {
             }
         }
         if self.version < 5 {
-            self.history_refresh_seconds = self.refresh_seconds;
+            self.history_refresh_seconds = self.refresh_seconds.max(10);
         }
         // Version 6 drops the unused githubRepository key during deserialization.
-        self.version = self.version.max(7);
+        self.version = self.version.max(8);
         self.configuration_issues.clear();
         let mut providers = std::collections::HashSet::new();
         for agent in &self.agents {
@@ -525,8 +541,14 @@ impl Settings {
         }
     }
     pub fn monitored_hosts(&self) -> Vec<Host> {
-        std::iter::once(self.local_monitor.host())
+        let mut local = self.local_monitor.host();
+        local.enabled &= self.local_device_enabled;
+        std::iter::once(local)
             .chain(self.hosts.clone())
+            .map(|mut host| {
+                host.enabled &= host.monitoring_enabled;
+                host
+            })
             .collect()
     }
     pub fn source_enabled(&self, source: &Source) -> bool {
@@ -538,6 +560,8 @@ impl Settings {
                     .any(|id| id == source.host_id.as_deref().unwrap_or("local"))
         });
         source.enabled
+            && source.machine_binding == MachineBinding::Bound
+            && (source.host_id.is_some() || self.local_device_enabled)
             && enabled
             && agents.next().is_none()
             && source
@@ -726,6 +750,13 @@ impl Dashboard {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum DateRange {
+    All,
+    Custom { start: String, end: String },
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Filter {
@@ -734,6 +765,7 @@ pub struct Filter {
     pub account_id: Option<String>,
     pub model: Option<String>,
     pub days: Option<u32>,
+    pub date_range: Option<DateRange>,
 }
 
 pub fn now() -> i64 {

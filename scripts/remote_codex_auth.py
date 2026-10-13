@@ -856,6 +856,8 @@ def call(request):
         read(operation(root, op))
         atomic(root / '.aieyes/state' / (op + '.cancel'), True)
         return dict(cancelRequested=True)
+    if method == 'home.identity':
+        return read(root / '.aieyes/state/home.json')
     with Lock(root):
         if method == 'enable':
             require_file(root)

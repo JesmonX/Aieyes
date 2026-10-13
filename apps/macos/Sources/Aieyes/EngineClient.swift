@@ -6,6 +6,7 @@ final class EngineClient: @unchecked Sendable {
         var complete: (Result<Data, Error>) -> Void
         var progress: (@Sendable (String) -> Void)?
         var sample: (@Sendable (HostResult) -> Void)?
+        var quota: (@Sendable (Quota) -> Void)?
     }
     private static let registryLock = NSLock()
     private static let clients = NSHashTable<EngineClient>.weakObjects()
@@ -24,9 +25,11 @@ final class EngineClient: @unchecked Sendable {
     private var stopped = false
     private let configuration: EngineClient?
     private let queries: EngineClient?
+    private let quotas: EngineClient?
     init(configurationOnly: Bool = false) {
         configuration = configurationOnly ? nil : EngineClient(configurationOnly: true)
         queries = configurationOnly ? nil : EngineClient(configurationOnly: true)
+        quotas = configurationOnly ? nil : EngineClient(configurationOnly: true)
         Self.registryLock.lock(); Self.clients.add(self); Self.registryLock.unlock()
     }
     private func startLocked() throws {
@@ -67,6 +70,7 @@ final class EngineClient: @unchecked Sendable {
             let request = (value["requestId"] as? Int).flatMap { pending[$0] } ?? pending.values.first
             lifecycle.unlock()
             if value["kind"] as? String == "hosts.sample", let row = value["row"], let data = try? JSONSerialization.data(withJSONObject: row), let sample = try? JSONDecoder().decode(HostResult.self, from: data) { request?.sample?(sample) }
+            else if value["kind"] as? String == "quotas.refresh", let row = value["row"], let data = try? JSONSerialization.data(withJSONObject: row), let sample = try? JSONDecoder().decode(Quota.self, from: data) { request?.quota?(sample) }
             else if let stage = value["stage"] as? String { request?.progress?(stage) }
             return
         }
@@ -84,7 +88,7 @@ final class EngineClient: @unchecked Sendable {
         let requests = Array(pending.values); pending.removeAll(); lifecycle.unlock()
         for request in requests { request.complete(.failure(ClientError.message("核心连接已断开"))) }
     }
-    private func send<T: Decodable>(_ method: String, params: [String: Any], onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil) async throws -> T {
+    private func send<T: Decodable>(_ method: String, params: [String: Any], onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil, onQuotaSample: (@Sendable (Quota) -> Void)? = nil) async throws -> T {
         let payload = try JSONSerialization.data(withJSONObject: params)
         let data: Data = try await withCheckedThrowingContinuation { continuation in
             queue.async {
@@ -95,7 +99,7 @@ final class EngineClient: @unchecked Sendable {
                     try self.startLocked(); self.nextID += 1; let id = self.nextID; requestID = id
                     let parameters = try JSONSerialization.jsonObject(with: payload)
                     let request = try JSONSerialization.data(withJSONObject: ["jsonrpc":"2.0", "id":id, "method":method, "params":parameters])
-                    self.pending[id] = Pending(complete: { continuation.resume(with: $0) }, progress: onProgress, sample: onHostSample)
+                    self.pending[id] = Pending(complete: { continuation.resume(with: $0) }, progress: onProgress, sample: onHostSample, quota: onQuotaSample)
                     try self.input?.write(contentsOf: request + Data([10])); self.lifecycle.unlock()
                 } catch {
                     if let id = requestID { self.pending.removeValue(forKey: id) }
@@ -105,10 +109,11 @@ final class EngineClient: @unchecked Sendable {
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
-    func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self, onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil) async throws -> T {
+    func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self, onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil, onQuotaSample: (@Sendable (Quota) -> Void)? = nil) async throws -> T {
+        if CoreContract.methodLanes[method] == "quotas", let quotas { return try await quotas.call(method, params: params, as: type, onProgress: onProgress, onQuotaSample: onQuotaSample) }
         if CoreContract.methodLanes[method] == "dashboard", let queries { return try await queries.call(method, params: params, as: type, onProgress: onProgress) }
         if CoreContract.configurationMethods.contains(method), let configuration { return try await configuration.call(method, params: params, as: type, onProgress: onProgress) }
-        return try await send(method, params: params, onProgress: onProgress, onHostSample: onHostSample)
+        return try await send(method, params: params, onProgress: onProgress, onHostSample: onHostSample, onQuotaSample: onQuotaSample)
     }
     static func coordinateUpdate(_ method: String) async -> [String] {
         if method == "operations.prepareUpdate" { setPreparing(true) }
@@ -126,7 +131,7 @@ final class EngineClient: @unchecked Sendable {
         return all.filter { client in client.lifecycle.lock(); defer { client.lifecycle.unlock() }; return client.process?.isRunning == true }
     }
     func stop() {
-        configuration?.stop(); queries?.stop()
+        configuration?.stop(); queries?.stop(); quotas?.stop()
         lifecycle.lock(); stopped = true; try? input?.close(); let old = process; lifecycle.unlock()
         if old?.isRunning == true { old?.terminate() }
     }
@@ -194,6 +199,37 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 }
 
 
+@MainActor final class AccountStatusProjection: ObservableObject {
+    @Published private(set) var rows: [AccountDeviceStatus] = []
+    func replace(_ values: [AccountDeviceStatus]) {
+        let sorted = values.sorted { $0.id < $1.id }
+        if rows != sorted { rows = sorted }
+    }
+}
+@MainActor final class AccountStatusStore {
+    private(set) var rows: [AccountDeviceStatus] = []
+    private var projections: [String: AccountStatusProjection] = [:]
+    func projection(_ key: String) -> AccountStatusProjection {
+        if let value = projections[key] { return value }
+        let value = AccountStatusProjection()
+        value.replace(rows.filter { $0.accountKey == key }); projections[key] = value
+        return value
+    }
+    func replace(_ values: [AccountDeviceStatus]) {
+        let sorted = values.sorted { $0.id < $1.id }
+        guard rows != sorted else { return }
+        rows = sorted
+        let groups = Dictionary(grouping: rows, by: \.accountKey)
+        for (key, value) in projections { value.replace(groups[key] ?? []) }
+    }
+    func upsert(_ row: AccountDeviceStatus) {
+        if let index = rows.firstIndex(where: { $0.id == row.id }) {
+            guard rows[index] != row else { return }; rows[index] = row
+        } else { rows.append(row); rows.sort { $0.id < $1.id } }
+        projections[row.accountKey]?.replace(rows.filter { $0.accountKey == row.accountKey })
+    }
+}
+
 @MainActor final class AppModel: ObservableObject {
     private let automaticEngine = EngineClient(configurationOnly: true)
     private var automaticTask: Task<Void, Never>?
@@ -224,7 +260,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     let engine = EngineClient()
     let accountEngine = EngineClient()
-    @Published var accountStatuses: [AccountDeviceStatus] = []
+    let accountStatusStore = AccountStatusStore()
+    var accountStatuses: [AccountDeviceStatus] {
+        get { accountStatusStore.rows }
+        set { accountStatusStore.replace(newValue) }
+    }
     @Published var accountStatusBusy = false
     var accountStatusNeedsRefresh = false
     var accountStatusRevision = 0
@@ -271,7 +311,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 if Task.isCancelled || installingUpdate || revision != accountStatusRevision { return }
                 do {
                     let row: AccountDeviceStatus = try await accountEngine.call("accounts.status.refresh", params: ["accountKey":account.key,"sourceId":source.id])
-                    if revision == accountStatusRevision { accountStatuses.removeAll { $0.id == row.id }; accountStatuses.append(row) }
+                    if revision == accountStatusRevision { accountStatusStore.upsert(row) }
                 } catch { /* The per-device result is retained; a concurrent settings edit invalidates it. */ }
             }
         }
@@ -284,8 +324,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         catch { if reportFailure { settingsMessage = "登录已确认，账户设置刷新失败：" + error.localizedDescription }; return }
         guard settings == before else { return }
         let cleanDraft = settingsDraft == before
-        settings = saved
-        if cleanDraft { settingsDraft = saved }
+        if settings != saved { settings = saved }
+        if cleanDraft && settingsDraft != saved { settingsDraft = saved }
     }
     func refreshAntigravityAccount(sourceID: String, status: AccountDeviceStatus? = nil) async throws {
         guard let source = settings.sources.first(where: { $0.id == sourceID }),
@@ -300,7 +340,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
               settings.sources.contains(where: { $0.id == sourceID && $0.accountId == account.id && $0.enabled }) else {
             throw ClientError.message("账户连接已变化，请重新检查")
         }
-        accountStatuses.removeAll { $0.id == row.id }; accountStatuses.append(row)
+        accountStatusStore.upsert(row)
         // Owned by the model, so closing the login sheet does not cancel quota/settings reads.
         if antigravityRefreshTasks[sourceID] == nil {
             antigravityRefreshTasks[sourceID] = Task {
@@ -323,10 +363,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 
     private let sessionEngine = EngineClient(configurationOnly: true)
     private var sessionTask: Task<Void, Never>?
-    @Published var sessions: [LiveSession] = []
-    @Published var sessionSources: [SessionSourceHealth] = []
-    @Published var sessionsUnavailable = false
-    @Published var petState = PetState.idle
+    let live = LiveSessionState()
+    var sessions: [LiveSession] { get { live.sessions } set { if live.sessions != newValue { live.sessions = newValue } } }
+    var sessionSources: [SessionSourceHealth] { get { live.sources } set { if live.sources != newValue { live.sources = newValue } } }
+    var sessionsUnavailable: Bool { get { live.unavailable } set { if live.unavailable != newValue { live.unavailable = newValue } } }
+    var petState: PetState { get { live.pet } set { if live.pet != newValue { live.pet = newValue } } }
     @Published var importedPet: ImportedPet?
     @Published var petImportError: String?
     @Published var petImportBusy = false
@@ -353,7 +394,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         }
     }
     var activeSessions: [LiveSession] { sessions.filter { $0.phase.active } }
-    private var coreSessionSummary: String?
+    private var coreSessionSummary: String? { get { live.summary } set { if live.summary != newValue { live.summary = newValue } } }
     var sessionPhase: SessionPhase? { sessions.first?.phase ?? (sessionsUnavailable ? .unknown : nil) }
     var sessionSummary: String {
         if let summary = coreSessionSummary { return summary }
@@ -362,7 +403,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         return activeSessions.isEmpty ? "无活跃会话" : "\(activeSessions.count) 个活跃会话"
     }
     func manageSessionHooks(sourceID: String, action: String) async throws -> [SessionHookStatus] {
-        try await engine.call("sessions.hooks." + action, params: ["sourceId": sourceID])
+        let rows: [SessionHookStatus] = try await engine.call("sessions.hooks." + action, params: ["sourceId": sourceID])
+        for row in rows { if let index = sessionSources.firstIndex(where: { $0.sourceId == row.sourceId }) { sessionSources[index].hooks = row.state } }
+        return rows
     }
     func refreshSessions() async {
         guard !sessionBusy, !stopped, !installingUpdate else { return }
@@ -374,7 +417,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             sessions = result.sessions; sessionSources = result.sources ?? []; sessionsUnavailable = result.unavailable; petState = result.pet ?? .unknown; coreSessionSummary = result.summary
             let selection: PetSelection = try await sessionEngine.call("pets.current")
             guard !stopped, !installingUpdate, !Task.isCancelled else { return }
-            importedPet = selection.pet; petImportError = selection.error
+            if importedPet != selection.pet { importedPet = selection.pet }; if petImportError != selection.error { petImportError = selection.error }
         } catch {
             guard !stopped, !installingUpdate, !Task.isCancelled else { return }
             sessionsUnavailable = true; petState = .unknown; coreSessionSummary = nil
@@ -414,10 +457,29 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var settingsSection: String?
     @Published var selectedModel = "all" { didSet { persistDashboardFilters() } }
     @Published var range = 1 { didSet { persistDashboardFilters() } }
+    @Published var dateRange: DashboardDateRange? { didSet { persistDashboardFilters() } }
+    var isToday: Bool { dateRange == nil && range == 1 }
+    var rangeTitle: String { dateRange.map { $0.kind == "all" ? "所有" : ($0.start ?? "") + " 至 " + ($0.end ?? "") } ?? (range == 1 ? "今日" : "最近 \(range) 天") }
+    var rangeChoice: String {
+        get { dateRange?.kind ?? String(range) }
+        set {
+            if newValue == "all" { dateRange = DashboardDateRange(kind: "all") }
+            else if newValue == "custom" { dateRange = DashboardDateRange(kind: "custom", start: DashboardDateRange.day(Calendar.current.date(byAdding: .day, value: -6, to: Date())!), end: DashboardDateRange.day(Date())) }
+            else { dateRange = nil; range = Int(newValue) ?? 1 }
+        }
+    }
+    var customStart: Date {
+        get { DashboardDateRange.date(dateRange?.start) }
+        set { dateRange = DashboardDateRange(kind: "custom", start: DashboardDateRange.day(newValue), end: dateRange?.end ?? DashboardDateRange.day(Date())) }
+    }
+    var customEnd: Date {
+        get { DashboardDateRange.date(dateRange?.end) }
+        set { dateRange = DashboardDateRange(kind: "custom", start: dateRange?.start ?? DashboardDateRange.day(Date()), end: DashboardDateRange.day(newValue)) }
+    }
     private var filterPersistenceEnabled = false
     private func persistDashboardFilters() {
         guard filterPersistenceEnabled else { return }
-        DashboardFilterPreference(provider: provider, source: selectedSource, account: selectedAccount, model: selectedModel, days: range).save()
+        DashboardFilterPreference(provider: provider, source: selectedSource, account: selectedAccount, model: selectedModel, days: range, dateRange: dateRange).save()
     }
     @Published var busy = false { didSet { scheduleRefreshes() } }
     @Published private(set) var rescanning = false
@@ -498,7 +560,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     init(autostart: Bool = true) {
         guard autostart else { return }
         let saved = DashboardFilterPreference.read()
-        provider = saved.provider; selectedSource = saved.source; selectedAccount = saved.account; selectedModel = saved.model; range = saved.days
+        provider = saved.provider; selectedSource = saved.source; selectedAccount = saved.account; selectedModel = saved.model; range = saved.days; dateRange = saved.dateRange
         filterPersistenceEnabled = true
         schedulingEnabled = true
         startAutomatic()
@@ -547,8 +609,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     private func reloadOnce(request: Int) async -> Bool {
         dashboardPending = true; dashboardError = nil
-        let scope = [range == 1 ? "今日" : "最近 \(range) 天", provider == "all" ? "全部 Agent" : Format.provider(provider), settings.historicalAccounts.first { $0.key == selectedAccount }.map { settings.accountFilterName($0) } ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
+        let scope = [rangeTitle, provider == "all" ? "全部 Agent" : Format.provider(provider), settings.historicalAccounts.first { $0.key == selectedAccount }.map { settings.accountFilterName($0) } ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
         var params: [String: Any] = ["days":range]
+        if let dateRange { params["dateRange"] = dateRange.parameters }
         if provider != "all" { params["provider"] = provider }
         if selectedAccount == "none" { params["accountId"] = "" }
         else if let account = settings.historicalAccounts.first(where: { $0.key == selectedAccount }) { params["accountId"] = account.id; params["provider"] = account.provider }
@@ -656,7 +719,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         await collectHistory(sourceID: sourceID, full: true)
     }
     private func collectHistory(sourceID: String?, full: Bool) async {
-        guard !installingUpdate, !busy, !quotaBusy, estimateBusy.isEmpty, !full || !settingsSaving else { return }
+        guard !installingUpdate, !busy, estimateBusy.isEmpty, !full || !settingsSaving else { return }
         let key = full ? "rescan" : "scan", label = full ? "全量重扫" : "同步记录"
         busy = true; activity = label; beginRefresh(key)
         if full { rescanning = true; rescanMessage = nil; rescanFailed = false }
@@ -684,13 +747,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         }
     }
     func refreshQuotas(accountID: String? = nil, dueOnly: Bool = false) async {
-        guard !installingUpdate, !quotaBusy, !busy, estimateBusy.isEmpty, hasQuotaAccounts else { return }
+        guard !installingUpdate, !quotaBusy, hasQuotaAccounts else { return }
         quotaBusy = true; quotaError = nil; beginRefresh("quotas")
         defer { quotaBusy = false; invalidateQuotaSchedule() }
         do {
             var params: [String: Any] = ["dueOnly": dueOnly]
             if let accountID { params["accountId"] = accountID }
-            let result: [Quota] = try await engine.call("quotas.refresh", params: params)
+            let result: [Quota] = try await engine.call("quotas.refresh", params: params, onQuotaSample: { [weak self] row in Task { @MainActor in self?.acceptQuotaSamples([row]) } })
+            acceptQuotaSamples(result)
             if dueOnly && result.isEmpty { refreshStates["quotas"]?.busy = false; return }
             if result.contains(where: { q in q.identity.map { id in settings.accounts.contains { $0.id == q.accountId && $0.provider == q.provider && $0.identityKey != id.key } } ?? false }) {
                 let before = settings
@@ -705,6 +769,24 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let loaded = await reload()
             finishRefresh("quotas", failures: failures + (loaded ? [] : [ActionFailure(action: "quotas", name: "概览", reason: message ?? "读取失败")]), itemID: accountID)
         } catch { quotaError = error.localizedDescription; finishRefresh("quotas", failures: [ActionFailure(action: "quotas", itemID: accountID, name: "账户限额", reason: error.localizedDescription)], itemID: accountID) }
+    }
+    func acceptQuotaSamples(_ rows: [Quota]) {
+        func merge(_ old: [Quota]) -> [Quota] {
+            var result = old
+            for var row in rows {
+                guard settings.accounts.contains(where: { $0.key == row.id && $0.archived != true }) else { continue }
+                if let index = result.firstIndex(where: { $0.id == row.id }) {
+                    if let error = row.error { row = result[index]; row.error = error }
+                    else if result[index].updatedAt > row.updatedAt { continue }
+                    if result[index] != row { result[index] = row }
+                } else { result.append(row) }
+            }
+            return result
+        }
+        let main = merge(dashboard.quotas), menu = merge(menuDashboard.quotas), panel = merge(panelDashboard.quotas)
+        if dashboard.quotas != main { dashboard.quotas = main }
+        if menuDashboard.quotas != menu { menuDashboard.quotas = menu }
+        if panelDashboard.quotas != panel { panelDashboard.quotas = panel }
     }
     private var hostVersions: [String: (String, UInt64)] = [:]
     func acceptHostSamples(_ rows: [HostResult]) {
@@ -764,7 +846,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let from = mappingModel.trimmingCharacters(in: .whitespacesAndNewlines), to = mappingID.trimmingCharacters(in: .whitespacesAndNewlines)
             if includeMappings && (!from.isEmpty || !to.isEmpty) {
                 guard !from.isEmpty && !to.isEmpty else { throw ClientError.message("请补全模型映射两端，输入已保留") }
-                guard next.modelMappings[from] == nil || next.modelMappings[from] == to else { throw ClientError.message("该模型已有映射，请先移除原映射再添加新值") }
+                guard next.modelMappings[from] == nil || next.modelMappings[from] == to else { throw ClientError.message("该模型已有映射，请在已有映射中编辑") }
                 next.modelMappings[from] = to
             }
             let success = await save(next, base: base, refreshDashboard: refreshDashboard)
@@ -817,7 +899,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         } catch { message = error.localizedDescription; return false }
     }
     func syncPrices() async {
-        guard !busy, !quotaBusy else { return }; busy = true; activity = "同步价格"; beginRefresh("prices"); defer { busy = false; activity = "" }
+        guard !busy else { return }; busy = true; activity = "同步价格"; beginRefresh("prices"); defer { busy = false; activity = "" }
         do { let _: Acknowledgement = try await engine.call("prices.sync"); await loadPrices(force: true); if let error = priceCatalog.error { throw ClientError.message(error) }; let loaded = await reload(); message = loaded ? "价格已更新" : message
             finishRefresh("prices", failures: loaded ? [] : [ActionFailure(action: "prices", name: "概览", reason: message ?? "读取失败")]) }
         catch { message = error.localizedDescription; finishRefresh("prices", failures: [ActionFailure(action: "prices", name: "价格", reason: error.localizedDescription)]) }
@@ -869,7 +951,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             }
         }
     }
-    private var historyBlocked: Bool { busy || quotaBusy || !estimateBusy.isEmpty }
+    private var historyBlocked: Bool { busy || !estimateBusy.isEmpty }
     private var metricsDeadline: Date { lastMetrics.addingTimeInterval(Double(serverTabVisible ? settings.foregroundInterval : settings.serverRefreshSeconds)) }
     private var pendingResets: [(Quota, Double, String)] {
         dashboard.quotas.flatMap { quota in quota.windows.compactMap { window in
@@ -891,6 +973,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         if !serverBusy, settings.monitoredHosts.contains(where: \.enabled) { deadlines.append(metricsDeadline) }
         if !historyBlocked {
             deadlines.append(lastScan.addingTimeInterval(Double(settings.historyInterval)))
+        }
+        if !quotaBusy {
             if quotaScheduleKnown, let quotaNextAttempt { deadlines.append(quotaNextAttempt) }
             deadlines += pendingResets.map { Date(timeIntervalSince1970: $0.1) }
         }
@@ -909,11 +993,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         let now = Date()
         if panelVisible, !networkBusy, now.timeIntervalSince(lastNetworkAttempt) >= 300 { Task { await testNetwork(force: false) } }
         if !serverBusy, settings.monitoredHosts.contains(where: \.enabled), now >= metricsDeadline { Task { await sampleHosts() } }
-        guard !historyBlocked else { return }
+        if !historyBlocked, now.timeIntervalSince(lastScan) >= Double(settings.historyInterval) { Task { await scan() } }
+        guard !quotaBusy else { return }
         if let (quota, _, key) = pendingResets.first(where: { $0.1 <= now.timeIntervalSince1970 }) {
             resetConfirmations.insert(key); Task { await refreshQuotas(accountID: quota.accountId) }; return
         }
-        if now.timeIntervalSince(lastScan) >= Double(settings.historyInterval) { Task { await scan() }; return }
         if quotaScheduleKnown, let next = quotaNextAttempt, now >= next {
             quotaNextAttempt = nil; Task { await refreshQuotas(dueOnly: true) }
         }

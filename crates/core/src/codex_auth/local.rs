@@ -449,6 +449,7 @@ fn login(
 pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
     let root = loc.root()?;
     match method {
+        "home.identity" => files::read(&root.join(".aieyes/state/home.json")),
         "enable" => {
             let _lock = files::lock(&root)?;
             file_mode(&root)?;

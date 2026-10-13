@@ -903,7 +903,7 @@ impl Engine {
                 let rows = if let Some(q) = observed {
                     vec![q]
                 } else {
-                    self.read_quotas(&json!({"accountKey":key}))?
+                    self.read_quotas(&json!({"accountKey":key,"samplingSourceIds":ids}))?
                 };
                 let q = rows
                     .iter()

@@ -27,7 +27,11 @@ function fixture() {
       case 'hello':return {version:'test'};
       case 'settings.get':return structuredClone(r.settings);
       case 'settings.save':r.settings=structuredClone(args.params);r.saved.push(structuredClone(args.params));return {};
-      case 'settings.patch':r.settings=structuredClone(args.params.settings);r.saved.push(structuredClone(r.settings));return structuredClone(r.settings);
+      case 'settings.patch':{
+        const next=structuredClone(args.params.settings),removed=r.settings.hosts.filter(h=>!next.hosts.some(n=>n.id===h.id));
+        for(const source of next.sources){const host=removed.find(h=>h.id===source.hostId);if(host)Object.assign(source,{enabled:false,machineBinding:'unbound',lastMachineName:host.name});}
+        r.settings=next;r.saved.push(structuredClone(r.settings));return structuredClone(r.settings);
+      }
       case 'sources.scan':if(r.failScan)throw new Error('测试扫描失败');return r.scanRows;
       case 'quotas.refresh':if(r.failQuota)throw new Error('测试限额失败');return r.quotaRows;
       case 'hosts.sample':if(r.failHosts)throw new Error('测试采样 RPC 失败');return structuredClone(r.hosts);
@@ -103,7 +107,7 @@ function fixture() {
     await page.locator('[data-remove=host]').click();assert.match(await page.locator('#editor-fields').textContent(),/远端记录/);
     assert.equal(await page.evaluate(()=>state.settings.hosts.length),1);await discardEditor(page);
     await page.locator('[data-remove=host]').click();await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open&&!state.settingsSaving);
-    assert.deepEqual(await page.evaluate(()=>[state.settings.hosts.length,state.settings.sources[0].hostId,state.settings.sources[0].enabled]),[0,null,false]);
+    assert.deepEqual(await page.evaluate(()=>[state.settings.hosts.length,state.settings.sources[0].hostId,state.settings.sources[0].enabled,state.settings.sources[0].machineBinding]),[0,'host',false,'unbound']);
     assert.equal(await page.locator('#add-item').evaluate(el=>el===document.activeElement),true,'Removing the last host returns focus to Add host');
     await page.evaluate(()=>{review.empty=false;});await page.locator('[data-page=agent]').click();await page.evaluate(()=>loadDashboard());
     await page.locator('#model').selectOption('Model A');await page.waitForFunction(()=>state.dashboard.dayModels.every(row=>row.model==='Model A'));

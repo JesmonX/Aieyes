@@ -92,8 +92,12 @@ function fixture(){
       assert.equal(await page.evaluate(()=>apiFixture.selected.kind),'account');
       await page.evaluate(()=>AieyesAutomatic.open(['s']));
       assert.equal(await page.locator('[data-auto-mode]').count(),0);
-      await page.locator('[data-auto-save="s"]').click();await page.locator('[data-auto-consent="s"]').waitFor();
-      assert(await page.locator('[data-auto-save="s"]').isDisabled());await page.locator('[data-auto-consent="s"]').check();await page.locator('[data-auto-save="s"]').click();
+      assert(await page.locator('[data-auto-save="s"]').isChecked());
+      await page.locator('[data-auto-save="s"]').click();
+      await page.waitForFunction(()=>!state.settings.sources[0].autoValuation?.enabled&&!document.querySelector('#quota-dialog').dataset.busy);
+      assert.equal(await page.locator('#auto-consent').count(),0);
+      await page.locator('[data-auto-save="s"]').click();await page.locator('#auto-consent[open]').waitFor();
+      assert.equal(await page.locator('[data-auto-save="s"]').isChecked(),false);await page.locator('#auto-consent [data-confirm]').click();
       await page.waitForFunction(()=>state.settings.sources[0].autoValuation?.enabled===true);
       const configured=await page.evaluate(()=>apiFixture.calls.filter(c=>c.method==='autoEstimates.configure').at(-1).params);
       assert.equal(configured.confirmed,true);assert(!('mode' in configured));

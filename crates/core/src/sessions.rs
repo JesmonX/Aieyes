@@ -60,6 +60,18 @@ impl Phase {
             Self::Failed => "执行失败",
         }
     }
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::Thinking => "thinking",
+            Self::Tool => "tool",
+            Self::Complete => "complete",
+            Self::Interrupted => "interrupted",
+            Self::Unknown => "unknown",
+            Self::NeedsInput => "needsInput",
+            Self::Failed => "failed",
+        }
+    }
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -108,10 +120,43 @@ impl Snapshot {
     pub fn active_count(&self) -> usize {
         self.sessions.iter().filter(|s| s.phase.active()).count()
     }
+    pub fn phase_counts(&self) -> std::collections::BTreeMap<String, usize> {
+        let mut counts = std::collections::BTreeMap::new();
+        for session in &self.sessions {
+            *counts.entry(session.phase.key().into()).or_default() += 1;
+        }
+        counts
+    }
+    pub fn count_labels(&self) -> Vec<String> {
+        let counts = self.phase_counts();
+        [
+            ("needsInput", "等待"),
+            ("failed", "失败"),
+            ("working", "工作"),
+            ("thinking", "思考"),
+            ("tool", "工具"),
+            ("complete", "完成"),
+            ("interrupted", "中断"),
+            ("unknown", "待定"),
+        ]
+        .into_iter()
+        .filter_map(|(key, label)| {
+            counts.get(key).map(|count| {
+                format!(
+                    "{label}{}",
+                    if *count > 99 {
+                        "99+".into()
+                    } else {
+                        count.to_string()
+                    }
+                )
+            })
+        })
+        .collect()
+    }
     pub fn summary(&self) -> String {
-        let count = self.active_count();
         let text = match self.phase() {
-            Some(p) if count > 0 => format!("{} · {} 个会话", p.label(), count),
+            Some(_) if self.sessions.len() > 1 => self.count_labels().join(" · "),
             Some(p) => p.label().into(),
             None => "无活跃会话".into(),
         };

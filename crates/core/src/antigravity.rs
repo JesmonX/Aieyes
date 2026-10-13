@@ -394,6 +394,8 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
             issues.push(issue);
         }
         let tx = store.write_transaction()?;
+        let current = crate::import::current_settings(store, settings, source)?;
+        let settings = &current;
         for row in read.events {
             read_bytes += serde_json::to_vec(&row)?.len();
             if let Some(event) = usage::parse(source, &mut ParseState::default(), &row)
@@ -426,7 +428,10 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         ));
         status["failedAt"] = json!(now());
     }
+    let tx = store.write_transaction()?;
+    crate::import::current_settings(store, settings, source)?;
     store.source_status(&source.id, &status)?;
+    tx.commit()?;
     Ok(status)
 }
 

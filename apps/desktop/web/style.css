@@ -842,3 +842,31 @@ body:not([data-platform=windows]) .font-notice { display:none; }
 .agent-machines > .agent-machine { border-top:1px solid var(--border); padding:8px 4px; }
 .agent-machine > .list-row { border:0; min-height:40px; padding:4px 0; gap:16px; }
 .agent-machine .agent-auto-valuation { padding:8px 12px; margin-top:4px; border-radius:10px; background:var(--surface-soft); }
+
+/* A single compact machine row; details and credentials stay in their own views. */
+.agent-machines > .agent-machine.list-row { flex-wrap:nowrap; gap:10px; min-height:44px; padding:8px 0; }
+.agent-machine > label { flex:0 1 auto; max-width:34%; }
+.agent-machine .machine-current { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.agent-machine > .tiny,.agent-machine > button { flex-shrink:0; }
+.machine-menu { position:relative; flex-shrink:0; }
+.machine-menu > summary { cursor:pointer; list-style:none; padding:4px 8px; }
+.machine-menu-body { position:absolute; right:0; top:100%; z-index:30; width:max-content; max-width:300px; padding:8px; border:1px solid var(--border); border-radius:10px; background:var(--surface); box-shadow:0 8px 30px #0002; display:grid; gap:6px; }
+#session-hooks { width:580px; }
+#manual-sampling > summary { cursor:pointer; font-weight:600; margin:12px 0; }
+
+.prices-list { height:322px; max-height:322px; padding:0; overflow:auto; position:relative; scrollbar-gutter:stable; }
+.price-list-spacer { position:relative; }
+.prices-list .price-virtual-row { position:absolute; left:0; right:0; height:64px; min-height:64px; box-sizing:border-box; margin:0; padding:8px 16px; flex-wrap:nowrap; }
+.price-virtual-row .row-body { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#existing-mappings > summary { cursor:pointer; margin:12px 0; }
+#existing-mappings [data-mapping-rows] { max-height:180px; overflow:auto; }
+
+.range-controls { display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
+.custom-date-controls { display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap; }
+.custom-date-controls label { font-size:12px; display:grid; gap:4px; }
+.custom-date-controls input { width:145px; }
+.heat-year > summary { cursor:pointer; font-weight:600; padding:10px 0; }
+.heat-year-content { padding:8px 0; }
+.daily-table { max-height:420px; overflow:auto; }
+.pet-scale-control input[type=range] { flex:1; min-width:80px; max-width:280px; padding:0; }
+.pet-scale-control output { min-width:3.5em; text-align:right; font-variant-numeric:tabular-nums; }

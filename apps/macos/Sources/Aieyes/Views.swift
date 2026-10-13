@@ -115,6 +115,7 @@ struct RootView: View {
         .onChange(of: model.selectedSource) { _, _ in model.requestDashboardReload() }
         .onChange(of: model.selectedModel) { _, _ in model.requestDashboardReload() }
         .onChange(of: model.range) { _, _ in model.requestDashboardReload() }
+        .onChange(of: model.dateRange) { _, _ in model.requestDashboardReload() }
     }
     @ViewBuilder private var rootBackground: some View {
         if compact {
@@ -137,8 +138,8 @@ struct RootView: View {
             Picker("页面", selection: Binding(get: { activePage }, set: { tab = $0 })) { Text("Agent").tag("agent"); Text("服务器").tag("servers") }
                 .pickerStyle(.segmented).labelsHidden().frame(maxWidth: .infinity)
             Menu {
-                Button(model.refreshLabel("scan")) { Task { await model.scan() } }.disabled(model.busy || model.quotaBusy)
-                Button(model.refreshLabel("quotas")) { Task { await model.refreshQuotas() } }.disabled(model.quotaBusy || model.busy)
+                Button(model.refreshLabel("scan")) { Task { await model.scan() } }.disabled(model.busy)
+                Button(model.refreshLabel("quotas")) { Task { await model.refreshQuotas() } }.disabled(model.quotaBusy)
                 Button(model.refreshLabel("prices")) { Task { await model.syncPrices() } }.disabled(model.busy || model.quotaBusy)
                 Button(model.refreshLabel("hosts")) { Task { await model.sampleHosts() } }.disabled(model.serverBusy)
             } label: {
@@ -198,9 +199,15 @@ struct RootView: View {
         activeFilters
 
         HStack(alignment: .firstTextBaseline) {
-            Text(model.range == 1 ? "今日概览" : "使用概览").font(.system(size: compact ? 17 : 22, weight: .semibold)); RefreshIndicator(model: model, key: "scan")
+            Text(model.isToday ? "今日概览" : "使用概览").font(.system(size: compact ? 17 : 22, weight: .semibold)); RefreshIndicator(model: model, key: "scan")
             Spacer()
-            Group { Picker("时间范围", selection: $model.range) { Text("今日").tag(1); Text("最近 7 天").tag(7); Text("最近 30 天").tag(30); Text("最近 90 天").tag(90); Text("最近一年").tag(365) }.labelsHidden().fixedSize() }
+            Group { Picker("时间范围", selection: Binding(get: { model.rangeChoice }, set: { model.rangeChoice = $0 })) { Text("今日").tag("1"); Text("最近 7 天").tag("7"); Text("最近 30 天").tag("30"); Text("最近 90 天").tag("90"); Text("最近一年").tag("365"); Text("所有").tag("all"); Text("自定义日期").tag("custom") }.labelsHidden().fixedSize() }
+        }
+        if model.dateRange?.kind == "custom" {
+            VStack(alignment: .leading, spacing: 8) {
+                DatePicker("开始日期", selection: Binding(get: { model.customStart }, set: { model.customStart = $0 }), in: ...model.customEnd, displayedComponents: .date)
+                DatePicker("结束日期", selection: Binding(get: { model.customEnd }, set: { model.customEnd = $0 }), in: model.customStart..., displayedComponents: .date)
+            }.font(AppFont.secondary)
         }
         if hasUsageData {
             HStack(spacing: 10) {
@@ -215,17 +222,17 @@ struct RootView: View {
         }
         if hasUsageData {
             if compact {
-                DisclosureGroup("近 \(max(7, model.range)) 天趋势与每日明细", isExpanded: $trendExpanded) { UsageChart(days: recentDays, rows: recentRows, cost: false).frame(minHeight: 220); DailyUsage(days: recentDays, rows: recentRows, compact: true) }.font(AppFont.secondary)
+                DisclosureGroup(model.dateRange == nil ? "近 \(max(7, model.range)) 天趋势与每日明细" : "所选日期趋势与每日明细", isExpanded: $trendExpanded) { UsageChart(days: recentDays, rows: recentRows, cost: false).frame(minHeight: 220); DailyUsage(days: recentDays, rows: recentRows, compact: true) }.font(AppFont.secondary)
                 Button { model.showDetailPage?("agent") } label: { Text("用量详情").frame(maxWidth: .infinity) }.buttonStyle(.bordered).accessibilityLabel("打开用量详情")
             } else {
                 Text("日期、来源、模型筛选作用于用量分析；今日视图的趋势仍为近 7 天，热力图为过去 365 天。").font(AppFont.secondary).foregroundStyle(.secondary)
-                HStack { Text(model.range == 1 ? "近 7 天趋势" : "使用趋势").font(AppFont.section); Spacer(); Picker("统计指标", selection: $costMode) { Text("Token").tag(false); Text("API 等价成本").tag(true) }.pickerStyle(.segmented).frame(width: 230) }
+                HStack { Text(model.isToday ? "近 7 天趋势" : "使用趋势").font(AppFont.section); Spacer(); Picker("统计指标", selection: $costMode) { Text("Token").tag(false); Text("API 等价成本").tag(true) }.pickerStyle(.segmented).frame(width: 230) }
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 18) { trendSurface.frame(minWidth: 450); modelSurface.frame(minWidth: 350) }
                     VStack(spacing: 18) { trendSurface; modelSurface }
                 }
                 Surface(title: "每日明细 · 可选择与复制精确数值") { DailyUsage(days: model.dashboard.trendDays, rows: model.dashboard.dayModels, compact: false, cost: costMode) }
-                Surface(title: "过去 365 天") { Heatmap(days: model.dashboard.heatmap, cost: costMode) }
+                Surface(title: model.dateRange == nil ? "过去 365 天" : "所选日期用量") { if model.dateRange == nil { Heatmap(days: model.dashboard.heatmap, cost: costMode) } else { YearlyHeatmaps(days: model.dashboard.heatmap, cost: costMode) } }
             }
         }
     }
@@ -236,10 +243,10 @@ struct RootView: View {
         let failed = model.dashboard.sources.contains { $0.enabled && ($0.status?.error != nil || $0.status?.partial == true) }
         return Surface(title: onlyQuota ? "此来源提供账户限额" : failed ? "记录同步失败" : hasActiveFilters ? "没有匹配的用量记录" : model.dataTime == 0 ? "尚未同步用量记录" : "此时间范围暂无用量") {
             Text(onlyQuota ? "查看实时余额与限额；接入日志后即可分析用量。" : failed ? "请检查对应来源的错误后重试。" : "保留筛选与日期入口，可同步记录或扩大范围。").font(AppFont.secondary).foregroundStyle(.secondary)
-            HStack { if onlyQuota { Button("添加日志来源") { model.openSettings(.init(provider: "codex", section: "machines")) } } else { Button("同步记录") { Task { await model.scan() } }; Button("扩大到最近一年") { model.range = 365; if compact { model.showDetailPage?("agent") } }; if hasActiveFilters { Button("清除筛选") { model.provider = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; model.selectedModel = "all" } } } }
+            HStack { if onlyQuota { Button("添加日志来源") { model.openSettings(.init(provider: "codex", section: "machines")) } } else { Button("同步记录") { Task { await model.scan() } }; Button("扩大到最近一年") { model.rangeChoice = "365"; if compact { model.showDetailPage?("agent") } }; if hasActiveFilters { Button("清除筛选") { model.provider = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; model.selectedModel = "all" } } } }
         }
     }
-    private var hasActiveFilters: Bool { model.provider != "all" || model.selectedAccount != "all" || model.selectedSource != "all" || model.selectedModel != "all" || model.range != 1 }
+    private var hasActiveFilters: Bool { model.provider != "all" || model.selectedAccount != "all" || model.selectedSource != "all" || model.selectedModel != "all" || !model.isToday }
     private var hasUsageData: Bool {
         model.dashboard.summary.total > 0 || model.dashboard.trendDays.contains { $0.total > 0 } || model.dashboard.heatmap.contains { $0.total > 0 }
     }
@@ -262,13 +269,13 @@ struct RootView: View {
             if compact { DisclosureGroup("已筛选 \(filterCount) 项") { filterChips } } else { filterChips }
         }
     }
-    private var filterCount: Int { [model.provider != "all", model.selectedAccount != "all", model.range != 1, model.selectedSource != "all", model.selectedModel != "all"].filter { $0 }.count }
+    private var filterCount: Int { [model.provider != "all", model.selectedAccount != "all", !model.isToday, model.selectedSource != "all", model.selectedModel != "all"].filter { $0 }.count }
     private var filterChips: some View {
             FlowLayout {
                 if model.provider != "all" { filterChip("Agent：" + Format.provider(model.provider)) { model.provider = "all" } }
                 if model.selectedAccount != "all" { filterChip("账户：" + (model.selectedAccount == "none" ? "未关联账户" : model.settings.historicalAccounts.first { $0.key == model.selectedAccount }?.name ?? model.selectedAccount)) { model.selectedAccount = "all" } }
-                if model.range != 1 { filterChip("最近 \(model.range) 天") { model.range = 1 } }
-                Button("清除全部") { model.provider = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; model.selectedModel = "all"; model.range = 1 }
+                if !model.isToday { filterChip(model.rangeTitle) { model.rangeChoice = "1" } }
+                Button("清除全部") { model.provider = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; model.selectedModel = "all"; model.rangeChoice = "1" }
                 if model.selectedSource != "all" {
                     filterChip("数据源：" + (model.settings.sources.first { $0.id == model.selectedSource }?.name ?? model.selectedSource)) { model.selectedSource = "all" }
                 }
@@ -281,7 +288,7 @@ struct RootView: View {
             Button(action: clear) { Image(systemName: "xmark.circle.fill").frame(width: 28, height: 28) }.buttonStyle(.plain).accessibilityLabel("清除" + title)
         }.padding(.leading, 10).background(Palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
-    private var recentDays: [Aggregate] { Array(usageDashboard.trendDays.suffix(max(7, model.range))) }
+    private var recentDays: [Aggregate] { model.dateRange == nil ? Array(usageDashboard.trendDays.suffix(max(7, model.range))) : usageDashboard.trendDays }
     private var selectableSources: [AgentSource] {
         let account = model.settings.historicalAccounts.first { $0.key == model.selectedAccount }
         return model.settings.sources.filter { source in
@@ -296,39 +303,7 @@ struct RootView: View {
         let dates = Set(recentDays.map(\.key))
         return usageDashboard.dayModels.filter { dates.contains($0.day) }
     }
-    private var sessionStrip: some View {
-        DisclosureGroup(isExpanded: $sessionsExpanded) {
-            VStack(spacing: 12) {
-                ForEach(model.sessions) { session in
-                    HStack(spacing: 10) {
-                        ActivityIndicator(phase: session.phase)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(Format.provider(session.provider) + " · " + session.machine).lineLimit(1)
-                            SurfaceTimeline(interval: 60) { context in
-                                Text("会话 " + String(URL(fileURLWithPath: session.id).deletingPathExtension().lastPathComponent.prefix(8)) + " · " + Format.relative(session.updatedAt, now: context.date)).font(AppFont.secondary).foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer()
-                        Text(session.phase.rawValue).foregroundStyle(session.phase.color)
-                    }
-                }
-                if model.sessions.isEmpty { Text(model.sessionsUnavailable ? "读取失败" : "暂无会话动态").foregroundStyle(.secondary) }
-                ForEach(model.sessionSources.filter { $0.state != "healthy" }) { source in
-                    let machine = source.machineId == "local" ? "本机" : model.settings.hosts.first(where: { $0.id == source.machineId })?.name ?? source.machineId
-                    Text(Format.provider(source.provider) + " · " + machine + "：" + source.message)
-                        .font(AppFont.secondary).foregroundStyle(Palette.warn).frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }.padding(.top, 12)
-        } label: {
-            HStack(spacing: 9) {
-                ActivityIndicator(phase: model.sessionPhase)
-                Text(model.sessionSummary).font(.system(size: 15, weight: .medium)).help("已启用的本机和 SSH Codex / Claude / AGY 会话")
-                Spacer()
-                if let phase = model.sessionPhase { Text(phase.rawValue).font(AppFont.secondary).foregroundStyle(phase.color) }
-            }
-        }
-        .padding(compact ? 4 : 14).modifier(NeutralCard())
-    }
+    private var sessionStrip: some View { SessionStrip(model: model, live: model.live, expanded: $sessionsExpanded, compact: compact) }
     private var displayedQuotaAccounts: [AgentAccount] {
         let selections = PanelAccountPreference.selections(panelAccounts, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])
         return model.quotaAccounts.filter { account in
@@ -354,8 +329,8 @@ struct RootView: View {
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, defaultExpanded: displayedQuotaAccounts.count == 1, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, deviceCounts: model.accountDeviceCounts(quota.id), onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } }
-            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, deviceCounts: model.accountDeviceCounts(quota.id), onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } } }
+            if compact { ForEach(displayedQuotas) { quota in AccountObservedQuota(model: model, quota: quota, compact: true, defaultExpanded: displayedQuotaAccounts.count == 1) } }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in AccountObservedQuota(model: model, quota: quota) } } }
         }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
     private var filteredHosts: [Host] {
@@ -488,6 +463,18 @@ struct UsageChart: View {
 struct DailyUsage: View {
     var days: [Aggregate], rows: [DayModel], compact: Bool
     var cost = false
+    var body: some View {
+        let grouped = Dictionary(grouping: rows, by: \.day)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(days.reversed()) { day in DailyUsageDay(day: day, rows: grouped[day.key] ?? [], cost: cost) }
+            }
+        }.frame(height: min(400, CGFloat(days.count) * 38 + 10))
+    }
+}
+private struct DailyUsageDay: View {
+    let day: Aggregate, rows: [DayModel], cost: Bool
+    @State private var expanded = false
     private func exact(_ usage: Aggregate) -> String { String(format: "%.0f Token · %.6f USD", usage.total, usage.cost) + " · 读取命中率 " + Format.percent(usage.tokens.cacheRate.map { $0 * 100 }) }
     private func display(_ usage: Aggregate) -> String { Format.compact(usage.total) + " Token · " + String(format: "%.6f USD", usage.cost) + " · 读取命中率 " + Format.percent(usage.tokens.cacheRate.map { $0 * 100 }) }
     private func modelRow(_ row: DayModel, day: String) -> some View {
@@ -504,18 +491,30 @@ struct DailyUsage: View {
             } }
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(days.reversed()) { day in
-                DisclosureGroup {
-                    Text(display(day)).help(exact(day)).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
-                    ForEach(rows.filter { $0.day == day.key }) { row in
-                        modelRow(row, day: day.key)
-                    }
-                    if day.total == 0 { Text("当日用量为零").font(AppFont.secondary).foregroundStyle(.secondary) }
-                } label: { HStack { Text(day.key); Spacer(); Text(cost ? Format.money(day.cost) + " USD" : Format.compact(day.total) + " Token").monospacedDigit() }.font(AppFont.secondary) }
+        DisclosureGroup(isExpanded: $expanded) {
+            if expanded {
+                Text(display(day)).help(exact(day)).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
+                ForEach(rows) { row in modelRow(row, day: day.key) }
+                if day.total == 0 { Text("当日用量为零").font(AppFont.secondary).foregroundStyle(.secondary) }
             }
+        } label: { HStack { Text(day.key); Spacer(); Text(cost ? Format.money(day.cost) + " USD" : Format.compact(day.total) + " Token").monospacedDigit() }.font(AppFont.secondary) }
+    }
+}
+private struct YearlyHeatmaps: View {
+    let days: [Aggregate], cost: Bool
+    var body: some View {
+        let grouped = Dictionary(grouping: days) { String($0.key.prefix(4)) }
+        let years = grouped.keys.sorted(by: >)
+        LazyVStack(alignment: .leading, spacing: 12) {
+            ForEach(years, id: \.self) { year in YearHeatmap(year: year, days: grouped[year] ?? [], cost: cost, initiallyExpanded: year == years.first) }
         }
     }
+}
+private struct YearHeatmap: View {
+    let year: String, days: [Aggregate], cost: Bool
+    @State private var expanded: Bool
+    init(year: String, days: [Aggregate], cost: Bool, initiallyExpanded: Bool) { self.year = year; self.days = days; self.cost = cost; _expanded = State(initialValue: initiallyExpanded) }
+    var body: some View { DisclosureGroup(year, isExpanded: $expanded) { if expanded { Heatmap(days: days, cost: cost) } } }
 }
 
 struct ModelChart: View {
@@ -594,6 +593,29 @@ struct Heatmap: View {
         }.sheet(isPresented: $showDay) { if days.indices.contains(selected) { let day = days[selected]; VStack(alignment: .leading, spacing: 14) { Text(day.key).font(AppFont.title); Text(label(day)).textSelection(.enabled); CacheSummaryCard(tokens: day.tokens); Button("关闭") { showDay = false }.keyboardShortcut(.cancelAction) }.padding(24).frame(width: 520) } }
     }
     private func move(_ offset: Int) { selected = min(max(0, days.count - 1), max(0, selected + offset)) }
+}
+
+private struct AccountObservedQuota: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var status: AccountStatusProjection
+    let quota: Quota
+    var compact = false
+    var defaultExpanded = true
+    init(model: AppModel, quota: Quota, compact: Bool = false, defaultExpanded: Bool = true) {
+        self.model = model; self.quota = quota; self.compact = compact; self.defaultExpanded = defaultExpanded
+        status = model.accountStatusStore.projection(quota.id)
+    }
+    var body: some View {
+        QuotaCard(quota: quota, compact: compact, collapsible: true, defaultExpanded: defaultExpanded,
+            estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id },
+            deviceCounts: model.accountDeviceCounts(quota.id),
+            onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil,
+            onEstimate: { group in model.showEstimate?(quota, false, group) },
+            onCredits: { model.showEstimate?(quota, true, nil) },
+            creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id },
+            quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id },
+            creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id })
+    }
 }
 
 struct QuotaCard: View {
@@ -1088,5 +1110,45 @@ struct RefreshIndicator: View {
                 if key == "scan", let message = model.message { Text(message).font(AppFont.secondary).textSelection(.enabled) }
             }.padding(16).frame(width: 360)
         }
+    }
+}
+
+private struct SessionStrip: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var live: LiveSessionState
+    @Binding var expanded: Bool
+    var compact: Bool
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            VStack(spacing: 12) {
+                ForEach(model.sessions) { session in
+                    HStack(spacing: 10) {
+                        ActivityIndicator(phase: session.phase)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(Format.provider(session.provider) + " · " + session.machine).lineLimit(1)
+                            SurfaceTimeline(interval: 60) { context in
+                                Text("会话 " + String(URL(fileURLWithPath: session.id).deletingPathExtension().lastPathComponent.prefix(8)) + " · " + Format.relative(session.updatedAt, now: context.date)).font(AppFont.secondary).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Text(session.phase.rawValue).foregroundStyle(session.phase.color)
+                    }
+                }
+                if model.sessions.isEmpty { Text(model.sessionsUnavailable ? "读取失败" : "暂无会话动态").foregroundStyle(.secondary) }
+                ForEach(model.sessionSources.filter { $0.state != "healthy" }) { source in
+                    let machine = source.machineId == "local" ? "本机" : model.settings.hosts.first(where: { $0.id == source.machineId })?.name ?? source.machineId
+                    Text(Format.provider(source.provider) + " · " + machine + "：" + source.message)
+                        .font(AppFont.secondary).foregroundStyle(Palette.warn).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }.padding(.top, 12)
+        } label: {
+            HStack(spacing: 9) {
+                ActivityIndicator(phase: model.sessionPhase)
+                Text(model.sessionSummary).font(.system(size: 15, weight: .medium)).help("已启用的本机和 SSH Codex / Claude / AGY 会话")
+                Spacer()
+                if let phase = model.sessionPhase { Text(phase.rawValue).font(AppFont.secondary).foregroundStyle(phase.color) }
+            }
+        }
+        .padding(compact ? 4 : 14).modifier(NeutralCard())
     }
 }

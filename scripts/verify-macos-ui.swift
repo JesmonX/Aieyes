@@ -133,6 +133,12 @@ for line in sys.stdin:
     elif method=='network.test': response['result']=dict(testedAt=1790000000,mode='system',averageMs=73,status='ok',sites=[])
     elif method=='quotas.order.set': response['result']=req['params']['keys']
     elif method=='settings.patch':
+        previous=json.load(open(root+'/settings.json'))
+        retained={h['id'] for h in req['params']['settings'].get('hosts',[])}
+        removed={h['id']:h for h in previous.get('hosts',[]) if h['id'] not in retained}
+        for source in req['params']['settings'].get('sources',[]):
+            if source.get('hostId') in removed:
+                source.update(machineBinding='unbound',enabled=False,lastMachineName=removed[source['hostId']]['name'])
         with open(root+'/settings.json','w') as config: json.dump(req['params']['settings'],config)
         response['result']=req['params']['settings']
     elif method in ['sources.scan','prices.list','hosts.sample']: response['result']=[]
@@ -288,12 +294,13 @@ for line in sys.stdin:
         let previousSample = MetricSample(timestamp: Date().timeIntervalSince1970 - 5, uptime: 10, load: [0], errors: [:])
         model.hosts = [HostResult(id: "fixture-host", name: "Fixture", sample: previousSample, error: nil)]
         await model.sampleHosts()
-        precondition(model.hosts[0].error == "模拟采样连接失败" && model.hosts[0].sample?.timestamp == previousSample.timestamp)
+        let failedHost = model.hosts.first { $0.id == "fixture-host" }
+        precondition(failedHost?.error == "模拟采样连接失败" && failedHost?.sample?.timestamp == previousSample.timestamp)
         let samplesBeforeTick = try calls("hosts.sample")
         model.tick()
         try await Task.sleep(nanoseconds: 80_000_000)
         let samplesAfterTick = try calls("hosts.sample")
-        precondition(samplesBeforeTick == 1 && samplesAfterTick == 1, "RPC failures must not retry on every 0.5s tick")
+        precondition(samplesBeforeTick >= 1 && samplesAfterTick == samplesBeforeTick, "RPC failures must not retry on every 0.5s tick: \(samplesBeforeTick) -> \(samplesAfterTick)")
         let priceSaved = await model.savePrice(ModelPrice(id: "fixture/price", name: "Fixture"))
         precondition(!priceSaved && model.message == "模拟价格保存失败")
         let estimate = QuotaEstimate(id: "sample", accountKey: "codex:fixture", windowId: "seven_day", windowName: "7d", sourceIds: [], sourceNames: [], status: "active", reason: "", startedAt: 1, checkpointAt: 2, endedAt: nil, consumedPercent: 1, cost: 1, totalTokens: 100, pricedTokens: 100, weeklyValue: nil, calculationNote: "测试采样")
@@ -362,7 +369,7 @@ for line in sys.stdin:
         precondition(model.settings == linkedConfiguration && model.settingsDraft == linkedConfiguration, "Failed removal must preserve the committed host and its connections")
         try FileManager.default.removeItem(at: failureMarker)
         await model.removeConfiguration(removal)
-        precondition(model.settings.hosts.isEmpty && model.settings.sources[0].hostId == nil && !model.settings.sources[0].enabled)
+        precondition(model.settings.hosts.isEmpty && model.settings.sources[0].hostId == "linked-host" && model.settings.sources[0].unbound && !model.settings.sources[0].enabled)
         precondition(model.settings.agents?.first?.machineIds == ["local"])
         let persistedRemoval = try JSONDecoder().decode(Settings.self, from: Data(contentsOf: root.appendingPathComponent("settings.json")))
         precondition(persistedRemoval == model.settings && model.settingsDraft == model.settings, "Confirmed removal persists immediately")

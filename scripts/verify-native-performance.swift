@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import ScreenCaptureKit
+import Combine
 @testable import Aieyes
 
 @MainActor final class PerformanceDelegate: NSObject, NSApplicationDelegate {
@@ -21,6 +22,17 @@ import ScreenCaptureKit
         let root = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? ".local/performance-2026-10-08")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let model = AppModel(autostart: false)
+        var appNotifications = 0, firstNotifications = 0, secondNotifications = 0
+        let appObserver = model.objectWillChange.sink { appNotifications += 1 }
+        let first = model.accountStatusStore.projection("codex:first"), second = model.accountStatusStore.projection("codex:second")
+        let firstObserver = first.objectWillChange.sink { firstNotifications += 1 }
+        let secondObserver = second.objectWillChange.sink { secondNotifications += 1 }
+        var row = try JSONDecoder().decode(AccountDeviceStatus.self, from: Data(#"{"accountKey":"codex:first","sourceId":"local","machineId":"local","current":true,"credential":true}"#.utf8))
+        for stamp in 1...30 { row.checkedAt = Double(stamp); model.accountStatusStore.upsert(row) }
+        model.accountStatusStore.upsert(row)
+        for frame in 1...30 { var pet = PetState.idle; pet.label = "工作\(frame)"; model.petState = pet }
+        precondition(appNotifications == 0 && firstNotifications == 30 && secondNotifications == 0, "Live/account updates must only notify their own projections")
+        appObserver.cancel(); firstObserver.cancel(); secondObserver.cancel()
         model.settingsLoaded = true
         model.settingsDraft = model.settings
         let view = NSHostingView(rootView: SettingsView(model: model).background(Color(nsColor: .windowBackgroundColor)))
@@ -31,7 +43,7 @@ import ScreenCaptureKit
         for count in [466, 1000] {
             model.prices = (0..<count).map { ModelPrice(id: "provider/model-\($0)", name: "Model \($0)", input: 1e-6, output: 3e-6) }
             var durations: [Double] = []
-            for _ in 0..<3 {
+            for _ in 0..<16 {
                 model.settingsTab = "general"
                 try await Task.sleep(for: .milliseconds(80)); view.layoutSubtreeIfNeeded()
                 let start = ContinuousClock.now
@@ -41,7 +53,8 @@ import ScreenCaptureKit
                 let duration = start.duration(to: .now)
                 durations.append(Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15)
             }
-            measurements.append(["models": count, "switchMilliseconds": durations])
+            let hot = Array(durations.dropFirst()), p95 = hot.sorted()[Int(ceil(Double(hot.count) * 0.95)) - 1]
+            measurements.append(["models": count, "coldMilliseconds": durations[0], "hotSwitchMilliseconds": hot, "hotP95Milliseconds": p95])
             try image(view, to: root.appendingPathComponent("prices-\(count).png"))
         }
         window.close()
@@ -97,7 +110,7 @@ import ScreenCaptureKit
                 model.message = nil; model.setWindowVisible(false, window: "panel"); popover.close(); anchor.close()
             }
         }
-        let report: [String: Any] = ["pricing": measurements, "popovers": panels, "reduceTransparency": NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
+        let report: [String: Any] = ["pricing": measurements, "popovers": panels, "statusNotifications": ["app": appNotifications, "changedAccount": firstNotifications, "unchangedAccount": secondNotifications], "reduceTransparency": NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
             "note": "Synthetic mouseMoved events and content refresh verify tint isolation, not physical-pointer tracking or absence of the reported intermittent seam."]
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: root.appendingPathComponent("report.json"))
         print(String(data: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), encoding: .utf8)!)

@@ -360,7 +360,7 @@
       "updateBehavior": "finish"
     },
     "codexAuth.quota": {
-      "lane": "main",
+      "lane": "quotas",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
@@ -653,7 +653,7 @@
       "updateBehavior": "finish"
     },
     "quotas.refresh": {
-      "lane": "main",
+      "lane": "quotas",
       "invalidates": [
         "data"
       ],
@@ -724,6 +724,16 @@
       "updateBehavior": "finish"
     },
     "sources.configure": {
+      "lane": "configuration",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "sources.rebind": {
       "lane": "configuration",
       "invalidates": [
         "settings",
@@ -853,5 +863,5 @@
       "updateBehavior": "cancel"
     }
   },
-  "contractHash": "bc9627f636ed1f7e59cf02cebd8bcc352cc2775ed0dbf01ba7b110b28b3c6849"
+  "contractHash": "37a32ab04fe2e584e82b974ee507dc582b091856f5ae7a59f057af93623a52db"
 };

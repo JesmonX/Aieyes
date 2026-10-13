@@ -9,6 +9,7 @@ pub enum Lane {
     Configuration,
     Accounts,
     Dashboard,
+    Quotas,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,7 +70,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "codexAuth.profiles.bind", lane: Lane::Main, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.profiles.list", lane: Lane::Main, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.profiles.remove", lane: Lane::Main, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "codexAuth.quota", lane: Lane::Main, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "codexAuth.quota", lane: Lane::Quotas, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.reconcile", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.status", lane: Lane::Main, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexAuth.switch.commit", lane: Lane::Main, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -107,7 +108,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "quotaEstimates.start", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "quotaEstimates.stop", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "quotas.order.set", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "quotas.refresh", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: Some("quotas") },
+    Method { name: "quotas.refresh", lane: Lane::Quotas, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: Some("quotas") },
     Method { name: "quotas.schedule", lane: Lane::Dashboard, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sessions.hooks.remove", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sessions.hooks.repair", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -117,6 +118,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "settings.patch", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "settings.save", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sources.configure", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sources.rebind", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sources.remove", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sources.rescan", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: true, refresh_key: Some("rescan") },
     Method { name: "sources.scan", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: Some("scan") },
@@ -148,7 +150,7 @@ pub const EXCLUDED_FS_TYPES: &[&str] = &["tmpfs", "devtmpfs", "squashfs", "overl
 pub const EXCLUDED_FS_PATHS: &[&str] = &["/snap", "/var/lib/snapd/snap", "/run", "/efi", "/boot/efi", "/dev", "/proc", "/sys", "/system/volumes/preboot", "/system/volumes/vm", "/system/volumes/update", "/system/volumes/xarts", "/system/volumes/iscpreboot", "/system/volumes/hardware"];
 pub const FIVE_HOUR_MINUTES: i64 = 300;
 pub const WEEK_MINUTES: i64 = 10080;
-pub const CONTRACT_HASH: &str = "bc9627f636ed1f7e59cf02cebd8bcc352cc2775ed0dbf01ba7b110b28b3c6849";
+pub const CONTRACT_HASH: &str = "37a32ab04fe2e584e82b974ee507dc582b091856f5ae7a59f057af93623a52db";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

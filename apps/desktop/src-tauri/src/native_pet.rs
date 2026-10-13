@@ -155,7 +155,6 @@ impl NativePet {
                     hInstance: instance.into(),
                     lpszClassName: w!("AieyesNativePet"),
                     hCursor: LoadCursorW(None, IDC_HAND).unwrap_or_default(),
-                    style: CS_DROPSHADOW,
                     ..Default::default()
                 };
                 RegisterClassW(&class);
@@ -368,17 +367,37 @@ unsafe fn animate(hwnd: HWND) {
         SetTimer(Some(hwnd), PET_TIMER, 100, None);
     }
 }
+unsafe fn pet_height(hwnd: HWND) -> f64 {
+    let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Surface;
+    if pointer.is_null() {
+        return HEIGHT;
+    }
+    serde_json::from_value::<aieyes_core::pets::PetState>((&*pointer).info.borrow()["pet"].clone())
+        .map(|state| aieyes_core::pets::height(&state))
+        .unwrap_or(HEIGHT)
+}
+unsafe fn pet_scale(hwnd: HWND) -> f64 {
+    let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Surface;
+    if pointer.is_null() {
+        return 1.0;
+    }
+    aieyes_core::pets::normalized_scale(
+        (&*pointer).info.borrow()["petScale"]
+            .as_f64()
+            .unwrap_or(1.0),
+    )
+}
 unsafe fn reshape(hwnd: HWND) {
     let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_LAYERED.0) as isize);
-    let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
+    let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0 * pet_scale(hwnd);
     let _ = SetWindowPos(
         hwnd,
         None,
         0,
         0,
         (WIDTH * scale).round() as i32,
-        (HEIGHT * scale).round() as i32,
+        (pet_height(hwnd) * scale).round() as i32,
         SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
     );
     SetWindowRgn(hwnd, None, true);
@@ -530,7 +549,16 @@ unsafe extern "system" fn window_proc(
                                     .unwrap_or_else(pet::Sprite::empty),
                             );
                         }
+                        let previous_height = pet_height(hwnd);
+                        let previous_scale = pet_scale(hwnd);
                         surface.info.replace(info);
+                        if pet_height(hwnd) != previous_height || pet_scale(hwnd) != previous_scale
+                        {
+                            reshape(hwnd);
+                            let mut rect = RECT::default();
+                            let _ = GetWindowRect(hwnd, &mut rect);
+                            place(hwnd, Some((rect.left, rect.top)), false);
+                        }
                         if changed {
                             surface.pet_start.set(std::time::Instant::now());
                         }
