@@ -95,6 +95,7 @@ import Combine
             } else if let window = event.window,
                       window !== self.popover.contentViewController?.view.window,
                       window !== self.statusItem.button?.window,
+                      window !== self.petWindow?.window,
                       window.level.rawValue < NSWindow.Level.popUpMenu.rawValue {
                 // A popup menu tracks in its own window; selecting an item must
                 // not tear down its parent popover before the action is delivered.
