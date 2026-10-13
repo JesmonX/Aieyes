@@ -16,6 +16,8 @@ node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-r
 
 示例标签必须替换为实际待发布版本。旧客户端没有安装器，需要先手动安装一次首个支持应用内更新的版本；之后才能一键升级。不能通过修改 Release 说明给已安装的旧程序补上更新器。
 
+在 `docs/release-notes/<标签>.md` 编写更新日志，以最近一次已公开的稳定 Release 为起点，核对该标签到待发布提交之间的完整日志与最终差异。按功能和修复归纳整个版本区间，写明起止版本并附比较链接；不要只描述最后一个提交，也不要把期间已被替换的实现当作当前功能。Release 页面和应用内更新说明共用这份文件。
+
 ## 一次性配置更新签名
 
 更新签名不需要 Apple Developer 或 Windows 证书，但需要两组长期密钥。公钥内置应用；私钥仅用于发布签名。使用仓库 Variables/Secrets，不能把测试密钥用于正式更新，不能每次发布重新生成密钥。
