@@ -569,6 +569,10 @@ pub struct ParseState {
     pub last_timestamp: i64,
     pub model_provider: String,
     pub session_started_at: Option<i64>,
+    pub inherited_history: Option<crate::codex_history::InheritedHistory>,
+    pub first_inherited_count: bool,
+    #[serde(skip)]
+    pub counter_correction: Option<crate::codex_history::CounterCorrection>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

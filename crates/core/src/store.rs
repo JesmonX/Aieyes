@@ -10,6 +10,7 @@ pub struct Store {
     pub root: PathBuf,
     pub db: Connection,
     pub(crate) usage_memory: std::cell::RefCell<crate::usage_cache::Memory>,
+    #[cfg(test)]
     pub(crate) billing_memory: std::cell::RefCell<crate::codex_api::usage::BillingCache>,
 }
 /// Keep a short committed/rolled-back write visible to the updater until SQLite
@@ -51,22 +52,28 @@ impl Store {
         CREATE TABLE IF NOT EXISTS quota_history(id INTEGER PRIMARY KEY,account_key TEXT NOT NULL,stamp INTEGER NOT NULL,payload TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS quota_history_account ON quota_history(account_key,stamp);
         CREATE TABLE IF NOT EXISTS estimates(kind TEXT NOT NULL CHECK(kind IN ('quota','credits')),id TEXT NOT NULL,account_key TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(kind,id));
-        CREATE UNIQUE INDEX IF NOT EXISTS estimates_active ON estimates(kind,account_key) WHERE status IN ('active','pending');
+        DROP INDEX IF EXISTS estimates_active;
+        CREATE UNIQUE INDEX IF NOT EXISTS estimates_manual_active ON estimates(kind,account_key) WHERE status IN ('active','pending') AND COALESCE(json_extract(payload,'$.samplingMode'),'')!='automatic';
+        CREATE UNIQUE INDEX IF NOT EXISTS estimates_automatic_active ON estimates(kind,account_key,json_extract(payload,'$.windowId')) WHERE status IN ('active','pending') AND json_extract(payload,'$.samplingMode')='automatic';
         CREATE TABLE IF NOT EXISTS capacity_samples(account_key TEXT NOT NULL,stamp INTEGER NOT NULL,five REAL NOT NULL,week REAL NOT NULL,PRIMARY KEY(account_key,stamp));
         ")?;
         crate::usage_cache::setup(&db)?;
         crate::remote_history::setup(&db)?;
         crate::codex_api::usage::setup(&db)?;
+        crate::history_corrections::setup(&db)?;
+        crate::codex_routes::setup(&db)?;
         let store = Self {
             root: root.to_path_buf(),
             db,
             usage_memory: Default::default(),
+            #[cfg(test)]
             billing_memory: Default::default(),
         };
         store.migrate_estimate_tables()?;
         store.migrate_antigravity()?;
         store.migrate_usage_ids()?;
         store.bootstrap_capacity()?;
+        store.repair_history_estimates()?;
         Ok(store)
     }
     /// Acquire the writer before reading a snapshot; never upgrade a stale WAL reader.
@@ -505,6 +512,31 @@ impl Store {
         prices: &[ModelPrice],
         settings: &Settings,
     ) -> Result<bool> {
+        self.put_event_inner(e, prices, settings, None)
+    }
+    pub(crate) fn put_counter_correction(
+        &self,
+        correction: &crate::codex_history::CounterCorrection,
+        prices: &[ModelPrice],
+        settings: &Settings,
+    ) -> Result<bool> {
+        if self.db.is_autocommit() {
+            self.prepare_history_corrections()?;
+        }
+        self.put_event_inner(
+            &correction.event,
+            prices,
+            settings,
+            Some(&correction.history),
+        )
+    }
+    fn put_event_inner(
+        &self,
+        e: &UsageEvent,
+        prices: &[ModelPrice],
+        settings: &Settings,
+        correction: Option<&crate::codex_history::InheritedHistory>,
+    ) -> Result<bool> {
         // Imports already own a transaction. Direct writes need the same atomicity
         // when an old identity resolves to more than one stored hash.
         let transaction = if self.db.is_autocommit() {
@@ -601,6 +633,9 @@ impl Store {
                 }
             }
         }
+        if let Some(proof) = correction {
+            self.save_counter_correction(&next, proof)?;
+        }
         let inserted = self.merge_usage_event(next, &e.source_id, prices, settings)?;
         if let Some(transaction) = transaction {
             transaction.commit()?;
@@ -663,6 +698,17 @@ impl Store {
             next.tokens.cache_read = next.tokens.cache_read.max(prior.tokens.cache_read);
             next.tokens.cache_write = next.tokens.cache_write.max(prior.tokens.cache_write);
             next.tokens.reasoning = next.tokens.reasoning.max(prior.tokens.reasoning);
+        }
+        // A proved counter correction is authoritative even when an older parser
+        // or a second copy later supplies the original, larger cumulative value.
+        if let Some(corrected) = self.corrected_usage(&next.id)? {
+            next.tokens = corrected.tokens;
+            next.attribution = corrected.attribution;
+            next.interval_start = corrected.interval_start;
+            next.interval_evidence = corrected.interval_evidence;
+            if next.attribution == "unresolved-inheritance" {
+                next.billing = BillingEvidence::default();
+            }
         }
         let price = frozen
             .as_ref()
@@ -1000,7 +1046,6 @@ impl Store {
                 d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":settings.source_enabled(source),"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"autoValuation":source.auto_valuation,"autoValuationStatus":self.automatic_status(&source.id)?}));
             }
         }
-        d.billing_summary = self.billing_summary(f)?;
         d.price_updated_at =
             self.db
                 .query_row("SELECT MAX(fetched_at) FROM price_history", [], |r| {
@@ -1091,6 +1136,9 @@ impl Store {
         let prices = self.prices()?;
         while let Some(row) = rows.next()? {
             let e: UsageEvent = serde_json::from_str(&row.get::<_, String>(0)?)?;
+            if e.tokens.total() == 0 {
+                continue;
+            }
             let cost: f64 = row.get(1)?;
             let n: u64 = row.get(2)?;
             let Some(date) = Local

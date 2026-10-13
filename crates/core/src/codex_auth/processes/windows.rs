@@ -139,7 +139,7 @@ fn sandbox_service(pid: u32, path: &str, services: &[Service]) -> bool {
                     .is_some_and(|image| normalize(image) == normalize(path))
         })
 }
-fn observe() -> Result<Vec<Observation>> {
+pub(super) fn observe() -> Result<Vec<Observation>> {
     let mut service_rows = None;
     let mut system = System::new();
     system.refresh_processes_specifics(
@@ -219,13 +219,17 @@ fn observe() -> Result<Vec<Observation>> {
         } else {
             name
         };
-        let auth_usage = if !verified || (name == "codex" && (args.is_empty() || env.is_empty())) {
-            Usage::UnknownProfile
-        } else if name == "codex" {
-            process_auth::inspect(&args, &env, started)
-        } else {
-            Usage::Account
-        };
+        let mut auth_usage =
+            if !verified || (name == "codex" && (args.is_empty() || env.is_empty())) {
+                Usage::UnknownProfile
+            } else if name == "codex" {
+                process_auth::inspect(&args, &env, started)
+            } else {
+                Usage::Account
+            };
+        if auth_usage == Usage::IndependentApi && process_auth::uses_default(&args) {
+            auth_usage = Usage::DefaultApi;
+        }
         let home = process_auth::environment(&env, "CODEX_HOME")
             .map(PathBuf::from)
             .or_else(|| {

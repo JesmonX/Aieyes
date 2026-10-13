@@ -65,7 +65,7 @@ window.AieyesUI = {
   },
   estimateIssue(record) {
     if (record.status==='pending') return record.reason || '待确认';
-    return ({boundary:'用量边界待确认',noUsage:'暂无有效用量',unpriced:'模型价格不完整',insufficientUsage:'尚未达到采样阈值',invalidPrice:'价格数据无效'})[record.calculationStatus] || record.calculationNote || '尚无估值';
+    return ({boundary:'用量边界待确认',noUsage:'暂无有效用量',unpriced:'模型价格不完整',insufficientUsage:'等待可确认的消耗',invalidPrice:'价格数据无效'})[record.calculationStatus] || record.calculationNote || '尚无估值';
   },
   estimateEntries(records = [], credits = false) {
     const all=this.canonicalEstimates(records);

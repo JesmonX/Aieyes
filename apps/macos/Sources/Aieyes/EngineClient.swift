@@ -199,14 +199,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private var automaticTask: Task<Void, Never>?
     @Published var automaticSaving = false
     @Published var automaticError: String?
-    func configureAutomatic(_ source: AgentSource, enabled: Bool, confirmed: Bool, mode: String = "subscription") async {
+    func configureAutomatic(_ source: AgentSource, enabled: Bool, confirmed: Bool) async {
         guard !automaticSaving else { return }
         automaticSaving = true; automaticError = nil
         defer { automaticSaving = false }
         do {
             struct Saved: Decodable { var settings: Settings }
             let baseline: Any = try source.autoValuation.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()
-            let result: Saved = try await engine.call("autoEstimates.configure", params: ["sourceId":source.id,"enabled":enabled,"confirmed":confirmed,"mode":mode,"baseConfig":baseline])
+            let result: Saved = try await engine.call("autoEstimates.configure", params: ["sourceId":source.id,"enabled":enabled,"confirmed":confirmed,"baseConfig":baseline])
             acceptConfiguration(result.settings); await reload()
         } catch { automaticError = error.localizedDescription }
     }

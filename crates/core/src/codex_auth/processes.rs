@@ -272,9 +272,7 @@ fn observe(with_home: bool) -> Result<Vec<Observation>> {
         if (with_home || name == "codex")
             && let Some((args, env)) = process_launch(pid)
         {
-            if with_home {
-                home = environment_home(&env);
-            }
+            home = environment_home(&env);
             if name == "codex" && !with_home {
                 #[cfg(target_os = "linux")]
                 let started = process_started(pid);
@@ -290,6 +288,9 @@ fn observe(with_home: bool) -> Result<Vec<Observation>> {
                     .map(std::time::SystemTime::from)
                 };
                 auth_usage = process_auth::inspect(&args, &env, started);
+                if auth_usage == Usage::IndependentApi && process_auth::uses_default(&args) {
+                    auth_usage = Usage::DefaultApi;
+                }
             }
         }
         if with_home && home.is_none() && process_finished(pid) {
@@ -317,7 +318,7 @@ fn observe(with_home: bool) -> Result<Vec<Observation>> {
 fn independent_processes(observations: &[Observation]) -> std::collections::HashSet<u32> {
     let mut protected: std::collections::HashSet<_> = observations
         .iter()
-        .filter(|p| p.auth_usage == Usage::IndependentApi)
+        .filter(|p| matches!(p.auth_usage, Usage::IndependentApi | Usage::DefaultApi))
         .map(|p| p.pid)
         .collect();
     loop {
@@ -335,7 +336,7 @@ fn independent_processes(observations: &[Observation]) -> std::collections::Hash
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn switch_targets(observations: &[Observation], confirmed: &[Running]) -> Vec<Running> {
     switch_review(observations, confirmed).0
 }
@@ -458,11 +459,13 @@ pub(super) fn isolated_switch_test() -> impl Drop {
     Reset(ISOLATE_SWITCH.replace(true))
 }
 
-pub fn list_for_switch() -> Result<Vec<Running>> {
+#[cfg(test)]
+fn list_for_switch() -> Result<Vec<Running>> {
     read_for_switch(&[])
 }
 
-pub fn review_for_switch() -> Result<(Vec<Running>, Vec<Running>)> {
+#[cfg(test)]
+fn review_for_switch() -> Result<(Vec<Running>, Vec<Running>)> {
     #[cfg(test)]
     if ISOLATE_SWITCH.get() {
         return Ok((vec![], vec![]));
@@ -477,6 +480,56 @@ pub fn review_for_switch() -> Result<(Vec<Running>, Vec<Running>)> {
     }
 }
 
+fn review_at(root: &Path, confirmed: &[Running]) -> Result<(Vec<Running>, Vec<Running>)> {
+    #[cfg(test)]
+    if ISOLATE_SWITCH.get() {
+        return Ok((vec![], vec![]));
+    }
+    #[cfg(unix)]
+    let mut rows = observe(false)?;
+    #[cfg(windows)]
+    let mut rows = windows::observe()?;
+    scope_default_api(&mut rows, root);
+    Ok(switch_review(&rows, confirmed))
+}
+fn scope_default_api(rows: &mut [Observation], root: &Path) {
+    for row in rows {
+        if row.auth_usage == Usage::DefaultApi {
+            if row.home.as_deref() == Some(root) {
+                row.auth_usage = Usage::Account;
+            } else if row.home.is_none() {
+                row.auth_usage = Usage::UnknownProfile;
+            }
+        }
+    }
+}
+pub fn review_for_switch_at(root: &Path) -> Result<(Vec<Running>, Vec<Running>)> {
+    review_at(root, &[])
+}
+pub fn list_for_switch_at(root: &Path) -> Result<Vec<Running>> {
+    Ok(review_at(root, &[])?.0)
+}
+pub fn close_for_switch_at(root: &Path, expected: &[Running]) -> Result<()> {
+    #[cfg(windows)]
+    let signal = |pid| {
+        windows::terminate(
+            expected
+                .iter()
+                .find(|p| p.pid == pid)
+                .expect("confirmed PID"),
+        )
+    };
+    #[cfg(unix)]
+    let signal = terminate;
+    close_with(
+        expected,
+        || Ok(review_at(root, expected)?.0),
+        signal,
+        Duration::from_secs(10),
+    )
+}
+
+#[cfg(test)]
 fn read_for_switch(confirmed: &[Running]) -> Result<Vec<Running>> {
     // Compile-time-only isolation: coordinator tests must never signal host apps.
     #[cfg(test)]
@@ -564,26 +617,6 @@ fn process_depth(p: &Running, rows: &[Running]) -> usize {
     depth
 }
 
-pub fn close_for_switch(expected: &[Running]) -> Result<()> {
-    #[cfg(windows)]
-    let signal = |pid| {
-        windows::terminate(
-            expected
-                .iter()
-                .find(|p| p.pid == pid)
-                .expect("confirmed PID"),
-        )
-    };
-    #[cfg(unix)]
-    let signal = terminate;
-    close_with(
-        expected,
-        || read_for_switch(expected),
-        signal,
-        Duration::from_secs(10),
-    )
-}
-
 #[cfg(unix)]
 fn terminate(pid: u32) -> Result<()> {
     #[cfg(unix)]
@@ -603,6 +636,31 @@ fn terminate(pid: u32) -> Result<()> {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    #[test]
+    fn default_api_in_target_home_closes_while_explicit_and_other_homes_survive() {
+        let root = Path::new("/fixture");
+        let make = |pid, home: &str, usage| Observation {
+            pid,
+            parent_pid: 1,
+            fingerprint: pid.to_string(),
+            name: "codex".into(),
+            executable: "/bin/codex".into(),
+            home: Some(home.into()),
+            auth_usage: usage,
+        };
+        let mut rows = vec![
+            make(10, "/fixture", Usage::DefaultApi),
+            make(20, "/elsewhere", Usage::DefaultApi),
+            make(30, "/fixture", Usage::IndependentApi),
+        ];
+        scope_default_api(&mut rows, root);
+        let (close, preserved) = switch_review(&rows, &[]);
+        assert_eq!(close.iter().map(|p| p.pid).collect::<Vec<_>>(), [10]);
+        assert_eq!(
+            preserved.iter().map(|p| p.pid).collect::<Vec<_>>(),
+            [20, 30]
+        );
+    }
     #[test]
     fn linux_start_ticks_preserve_fractional_seconds_and_reject_invalid_data() {
         let stat = format!("123 (fixture ) with spaces) S {}1250", "0 ".repeat(18));

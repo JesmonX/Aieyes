@@ -130,6 +130,113 @@ def _agy_iter(path):
     finally:
         db.close()
 
+def _codex_home(root):
+    home = os.path.dirname(root) if os.path.isfile(root) else root
+    parts = home.split(os.sep)
+    for index in range(len(parts) - 1, -1, -1):
+        if parts[index] in ('sessions', 'archived_sessions'):
+            return os.sep.join(parts[:index]) or os.sep
+    return home
+
+
+class _CodexHistory:
+    """Only export a verified counter and its proof; parent conversation text stays remote."""
+    def __init__(self, root):
+        import sqlite3
+        self.paths, self.cache = {}, {}
+        home = _codex_home(root)
+        folders = sorted(set([root, os.path.join(home, 'sessions'), os.path.join(home, 'archived_sessions')]), key=len)
+        visited = []
+        def walk(folder):
+            for directory, children, names in os.walk(folder, followlinks=False):
+                children[:] = [name for name in children if name != '.aieyes' and not os.path.islink(os.path.join(directory, name))]
+                for name in names:
+                    path = os.path.join(directory, name)
+                    if name.endswith('.jsonl') and not os.path.islink(path):
+                        yield path
+        for folder in folders:
+            if any(os.path.commonpath([folder, earlier]) == earlier for earlier in visited):
+                continue
+            visited.append(folder)
+            paths = [folder] if os.path.isfile(folder) else walk(folder)
+            for path in paths:
+                try:
+                    import re
+                    match = re.search(r'([0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})\.jsonl$', path)
+                    if match:
+                        self.paths.setdefault(match.group(1), path)
+                        continue
+                    with open(path, 'rb') as stream:
+                        row = json.loads(stream.readline(1024 * 1024))
+                    if row.get('type') == 'session_meta':
+                        payload = row.get('payload') or {}
+                        identity = payload.get('id') or payload.get('session_id')
+                        if identity:
+                            self.paths.setdefault(identity, path)
+                except (OSError, ValueError):
+                    pass
+        database = os.path.join(home, 'state_5.sqlite')
+        if os.path.isfile(database):
+            try:
+                from pathlib import Path
+                with sqlite3.connect(Path(database).as_uri() + '?mode=ro', uri=True) as db:
+                    for identity, path in db.execute('SELECT id,rollout_path FROM threads'):
+                        if os.path.isfile(path):
+                            self.paths[identity] = path
+            except (OSError, sqlite3.Error):
+                pass
+
+    def resolve(self, base):
+        thread, end = base.get('thread_id', ''), base.get('end_byte_offset')
+        try:
+            return self._resolve(thread, end, [])
+        except (OSError, ValueError, TypeError, KeyError):
+            return dict(parentThread=thread, endByteOffset=end if isinstance(end, int) and end >= 0 else 0,
+                        tokens=None, timestamp=None, proof='', issue='父会话历史缺失、损坏或边界无效')
+
+    def _resolve(self, thread, end, ancestors):
+        import hashlib
+        from datetime import datetime
+        if not thread or thread in ancestors or len(ancestors) >= 64 or type(end) is not int or end < 0:
+            raise ValueError('invalid history reference')
+        if (thread, end) in self.cache:
+            return self.cache[(thread, end)]
+        digest, offset, tokens, stamp, parent = hashlib.sha256(), 0, None, None, None
+        with open(self.paths[thread], 'rb') as stream:
+            if end > os.fstat(stream.fileno()).st_size:
+                raise ValueError('incomplete parent')
+            while offset < end:
+                line = stream.readline(min(end - offset, 16 * 1024 * 1024) + 1)
+                if not line.endswith(b'\n') or len(line) > 16 * 1024 * 1024 or offset + len(line) > end:
+                    raise ValueError('invalid boundary')
+                offset += len(line)
+                digest.update(line)
+                row = json.loads(line)
+                payload = row.get('payload') or {}
+                if row.get('type') == 'session_meta':
+                    if (payload.get('id') or payload.get('session_id')) != thread:
+                        raise ValueError('wrong parent')
+                    parent = payload.get('history_base')
+                if row.get('type') == 'event_msg' and payload.get('type') == 'token_count':
+                    usage = (payload.get('info') or {}).get('total_token_usage')
+                    if not isinstance(usage, dict):
+                        continue
+                    values = [usage.get(key, 0) for key in ('input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'reasoning_output_tokens')]
+                    if 'input_tokens' not in usage or any(type(v) is not int or v < 0 for v in values) or values[0] < values[2] + values[3]:
+                        raise ValueError('invalid counter')
+                    tokens = dict(input=values[0]-values[2]-values[3], output=values[1], cacheRead=values[2], cacheWrite=values[3], reasoning=values[4])
+                    raw = row.get('timestamp')
+                    stamp = int(datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp()) if isinstance(raw, str) else raw
+        if parent:
+            inherited = self._resolve(parent.get('thread_id'), parent.get('end_byte_offset'), ancestors + [thread])
+            digest.update(inherited['proof'].encode())
+            if tokens is None:
+                tokens, stamp = inherited['tokens'], inherited['timestamp']
+        result = dict(parentThread=thread, endByteOffset=end, tokens=tokens or dict(input=0, output=0, cacheRead=0, cacheWrite=0, reasoning=0), timestamp=stamp, proof=digest.hexdigest(), issue='')
+        self.cache[(thread, end)] = result
+        return result
+
+
 def _project(value, provider):
     event = None
     if provider == "codex":
@@ -137,10 +244,14 @@ def _project(value, provider):
         kind = value.get("type")
         if kind == "session_meta":
             event = {"type": kind, "timestamp": value.get("timestamp"), "payload": {"timestamp": payload.get("timestamp"), "id": payload.get("id", payload.get("session_id")), "model_provider": payload.get("model_provider")}}
+            if isinstance(payload.get('history_base'), dict):
+                event['payload']['history_base'] = {k: payload['history_base'].get(k) for k in ('thread_id', 'end_byte_offset')}
         elif kind == "turn_context":
-            event = {"type": kind, "payload": {"model": payload.get("model")}}
+            event = {"type": kind, "payload": {"model": payload.get("model"), "turn_id": payload.get("turn_id")}}
         elif kind == "event_msg" and payload.get("type") in ("task_started", "task_complete", "turn_aborted"):
             event = {"type": kind, "timestamp": value.get("timestamp"), "payload": {"type": payload["type"]}}
+            if isinstance(payload.get("turn_id"), str) and payload["turn_id"]:
+                event["payload"]["turn_id"] = payload["turn_id"]
         elif kind == "event_msg" and payload.get("type") == "token_count":
             event = {"type": kind, "timestamp": value.get("timestamp"), "payload": {
                 "type": "token_count", "info": payload.get("info"), "rate_limits": payload.get("rate_limits")}}
@@ -154,11 +265,72 @@ def _project(value, provider):
     return event
 
 
+def _native_routes(root, cursor, emit):
+    import hashlib
+    import re
+    import sqlite3
+    from pathlib import Path
+    from urllib.parse import urlsplit
+    home = _codex_home(root)
+    path = os.path.join(home, 'logs_2.sqlite')
+    if not os.path.isfile(path):
+        return
+    metadata = os.stat(path)
+    identity = [metadata.st_dev, metadata.st_ino]
+    db = sqlite3.connect(Path(path).as_uri() + '?mode=ro', uri=True, timeout=5)
+    try:
+        db.execute('PRAGMA query_only=ON')
+        db.execute('BEGIN')
+        maximum = db.execute('SELECT COALESCE(MAX(id),0) FROM logs').fetchone()[0]
+        after = cursor.get('after', 0) if cursor.get('identity') == identity else 0
+        if after > maximum:
+            after = 0
+        targets = ('codex_http_client::client', 'codex_api::endpoint::responses_websocket', 'codex_api::sse::responses', 'codex_core::client')
+        patterns = {}
+        def fields(body, key):
+            if key not in patterns:
+                patterns[key] = re.compile(r'(?<![\w.])' + re.escape(key) + r'=(?:"((?:\\.|[^"\\])*)"|([^\s}\]]+))')
+            return [json.loads('"' + m.group(1) + '"') if m.group(1) is not None else m.group(2) for m in patterns[key].finditer(body)]
+        def unique(body, keys, fallback=None):
+            values = {v for key in keys for v in fields(body, key) if re.fullmatch(r'[\w-]{1,128}', v, re.ASCII)}
+            if fallback:
+                values.add(fallback)
+            return next(iter(values)) if len(values) == 1 else None
+        batch = []
+        query = db.execute('SELECT id,ts,ts_nanos,target,feedback_log_body,thread_id,process_uuid FROM logs WHERE id>? AND id<=? AND target IN (?,?,?,?) ORDER BY id', (after, maximum, *targets))
+        for row_id, stamp, nanos, target, body, thread, process in query:
+            body = body or ''
+            urls = fields(body, 'url') + fields(body, 'endpoint')
+            if not urls and target != 'codex_http_client::client':
+                urls = re.findall(r'(?:https|http|wss|ws)://[^\s"<>]+', body)
+            session, turn = unique(body, ('thread_id', 'thread.id', 'conversation.id'), thread), unique(body, ('turn_id', 'turn.id'))
+            statuses = fields(body, 'status')
+            status = int(statuses[-1]) if statuses and statuses[-1].isdigit() else None
+            for raw in set(urls):
+                url = urlsplit(raw.rstrip('),.;\\'))
+                path_name = url.path.rstrip('/')
+                if url.scheme not in ('http', 'https', 'ws', 'wss') or not url.hostname or not path_name.endswith(('/responses', '/responses/compact', '/chat/completions')):
+                    continue
+                if len(url.hostname) > 253 or len(path_name) > 4096:
+                    continue
+                category = 'subscription' if url.hostname == 'chatgpt.com' and path_name.startswith('/backend-api/codex/') else 'api'
+                safe_id = hashlib.sha256(json.dumps([row_id, stamp, nanos, process, url.hostname, path_name]).encode()).hexdigest()
+                batch.append(dict(id=safe_id, stamp=stamp, nanos=nanos, sessionId=session, turnId=turn, processId=process, host=url.hostname, path=path_name, category=category, status=status))
+            if len(batch) >= 256:
+                emit('routes', routes=batch, cursor=dict(identity=identity, after=row_id))
+                batch = []
+        if batch or maximum != after or cursor.get('identity') != identity:
+            emit('routes', routes=batch, cursor=dict(identity=identity, after=maximum))
+    finally:
+        db.close()
+
+
 def _incremental(request):
     import hashlib
     root = os.path.abspath(os.path.expanduser(request['path']))
     provider = request['provider']
     cursors = request.get('cursors', {})
+    history = _CodexHistory(root) if provider == 'codex' else None
     issues, failed, invalid_records, read_bytes, file_count = [], 0, 0, 0, 0
 
     def emit(kind, **fields):
@@ -187,6 +359,14 @@ def _incremental(request):
     def jsonl(path):
         nonlocal read_bytes
         old = cursors.get(path, {})
+        inherited = old.get('inheritedHistory')
+        if inherited and history:
+            refreshed = history.resolve(dict(thread_id=inherited['parentThread'], end_byte_offset=inherited['endByteOffset']))
+            if (refreshed.get('tokens'), refreshed.get('proof')) != (inherited.get('tokens'), inherited.get('proof')):
+                old = {}
+                inherited = refreshed
+        if old and inherited and inherited.get('tokens') is None:
+            issue(path, '父会话历史尚未找到；首段累计暂不计入', 'missingHistoryBase')
         with open(path, 'rb') as stream:
             metadata = os.fstat(stream.fileno())
             size = metadata.st_size
@@ -210,6 +390,8 @@ def _incremental(request):
                 cursor = dict(identity=identity, prefixBytes=prefix_size, prefix=prefix,
                               offset=offset, size=size, mtimeNs=metadata.st_mtime_ns,
                               anchor=digest(stream, max(0, offset - 128), min(offset, 128)))
+                if inherited:
+                    cursor['inheritedHistory'] = inherited
                 emit('batch', path=path, reset=reset, events=events, cursor=cursor)
                 reset, events, bytes_in_batch, last_commit = False, [], 0, offset
                 stream.seek(offset)
@@ -232,6 +414,11 @@ def _incremental(request):
                         flush()
                     continue
                 event = _project(value, provider)
+                if event and history and event['type'] == 'session_meta' and 'history_base' in event['payload']:
+                    inherited = history.resolve(event['payload']['history_base'])
+                    event['inheritedHistory'] = inherited
+                    if inherited['tokens'] is None:
+                        issue(path, inherited['issue'], 'missingHistoryBase')
                 encoded = len(json.dumps(event).encode('utf-8')) if event else 0
                 if encoded > 768 * 1024:
                     raise ValueError('单条统计记录过大，保留上次游标')
@@ -322,6 +509,8 @@ def _incremental(request):
                     except Exception as error:
                         failed += 1
                         issue(path, error)
+        if provider == 'codex':
+            _native_routes(root, request.get('routeCursor') or {}, emit)
         emit('done', files=file_count, readBytes=read_bytes, issues=issues,
              partial=any(row['code'] != 'unknownModel' for row in issues),
              failedFiles=failed, invalidRecords=invalid_records)

@@ -426,7 +426,11 @@ fn api_locations_and_revisions_are_checked_before_any_target_changes() {
                 json!({"sourceId":"s","id":"fixture","revision":"stale"}),
             )
             .unwrap_err();
-        assert!(error.to_string().contains("设置已变化"));
+        assert!(error.to_string().contains(if action == "default" {
+            "switch.prepare"
+        } else {
+            "设置已变化"
+        }));
     }
     let before = serde_json::to_value(store.settings().unwrap()).unwrap();
     engine.call("autoEstimates.configure",json!({"sourceId":"s","enabled":true,"confirmed":true,"mode":"subscription","baseConfig":before["sources"][0]["autoValuation"]})).unwrap();

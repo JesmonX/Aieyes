@@ -20,17 +20,25 @@ use std::{
 };
 
 pub const CONSENT_VERSION: u32 = 1;
+const BASELINE_VERSION: u32 = 2;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoValuationConfig {
     pub enabled: bool,
     pub consent_version: u32,
-    /// Empty in legacy settings: retain the original subscription-only consent.
+    /// Read old consent modes for migration; classification now always follows evidence.
+    #[serde(skip_serializing)]
     pub mode: String,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoSegment {
+    /// Weekly windows keep their own delayed counter and usage interval.
+    pub pool: String,
+    pub prices: Vec<Value>,
+    #[serde(default = "segment_valid")]
+    pub valid: bool,
+    pub note: String,
     pub started_at: i64,
     pub ended_at: i64,
     pub reset_at: i64,
@@ -41,12 +49,17 @@ pub struct AutoSegment {
     pub weekly_consumed: f64,
     pub weekly_cost: f64,
 }
+fn segment_valid() -> bool {
+    true
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Baseline {
+    version: u32,
     quota: Option<QuotaSnapshot>,
     config: String,
     source_ids: Vec<String>,
+    pending: BTreeMap<String, QuotaSnapshot>,
 }
 
 fn enabled(s: &Source) -> bool {
@@ -120,7 +133,7 @@ fn interval_kind(a: &QuotaSnapshot, b: &QuotaSnapshot) -> Option<&'static str> {
         })
         .collect::<Option<Vec<_>>>()?;
     if pairs.iter().any(|(old, new)| {
-        old.resets_at != new.resets_at
+        !same_cycle(old.resets_at, new.resets_at, b.updated_at)
             || old.resets_at.is_none_or(|t| t <= b.updated_at)
             || new.used_percent < old.used_percent
     }) {
@@ -153,9 +166,119 @@ fn interval_kind(a: &QuotaSnapshot, b: &QuotaSnapshot) -> Option<&'static str> {
         })
     {
         Some("credits")
+    } else if !quota_changed && credit_unchanged {
+        Some("idle")
     } else {
         None
     }
+}
+
+pub(crate) fn same_cycle(anchor: Option<i64>, observed: Option<i64>, stamp: i64) -> bool {
+    anchor
+        .zip(observed)
+        .is_some_and(|(a, b)| a > stamp && b > stamp && a.abs_diff(b) <= 10)
+}
+
+fn anchored(old: &QuotaSnapshot, next: &QuotaSnapshot) -> QuotaSnapshot {
+    let mut value = next.clone();
+    for w in &mut value.windows {
+        if let Some(previous) = old.windows.iter().find(|v| window_id(v) == window_id(w))
+            && same_cycle(previous.resets_at, w.resets_at, next.updated_at)
+            && w.used_percent >= previous.used_percent
+        {
+            w.resets_at = previous.resets_at;
+        }
+    }
+    value
+}
+
+pub(crate) fn recalculate(e: &mut Estimate) {
+    let accepted: Vec<_> = e
+        .automatic_segments
+        .iter()
+        .filter(|s| s.valid)
+        .cloned()
+        .collect();
+    e.cost = accepted
+        .iter()
+        .filter(|s| s.pool != "weekly")
+        .map(|s| s.cost)
+        .sum();
+    e.total_tokens = accepted
+        .iter()
+        .filter(|s| s.pool != "weekly")
+        .map(|s| s.tokens)
+        .sum();
+    e.priced_tokens = accepted
+        .iter()
+        .filter(|s| s.pool != "weekly")
+        .map(|s| s.priced_tokens)
+        .sum();
+    let used: f64 = accepted
+        .iter()
+        .filter(|s| s.pool != "weekly")
+        .map(|s| s.consumed)
+        .sum();
+    let weekly: f64 = accepted
+        .iter()
+        .map(|s| {
+            if s.pool == "weekly" {
+                s.consumed
+            } else {
+                s.weekly_consumed
+            }
+        })
+        .sum();
+    let weekly_cost: f64 = accepted
+        .iter()
+        .map(|s| {
+            if s.pool == "weekly" {
+                s.cost
+            } else {
+                s.weekly_cost
+            }
+        })
+        .sum();
+    let main = crate::estimates::finite_value(e.cost, used, 100.0)
+        .filter(|_| e.total_tokens > 0 && e.priced_tokens == e.total_tokens);
+    let week = crate::estimates::finite_value(weekly_cost, weekly, 100.0).filter(|_| {
+        accepted
+            .iter()
+            .filter(|s| s.pool == "weekly" || s.weekly_consumed > 0.0)
+            .all(|s| s.tokens > 0 && s.tokens == s.priced_tokens)
+    });
+    match e {
+        Estimate::Quota(v) => {
+            v.consumed_percent = used;
+            if v.valuation_mode == "fiveHour" {
+                v.five_hour_value = main;
+                v.weekly_direct_value = week;
+                v.weekly_value = week;
+                v.weekly_ratio_value = main
+                    .zip(v.capacity.ratio)
+                    .map(|(a, b)| a * b)
+                    .filter(|v| v.is_finite());
+            } else {
+                v.weekly_value = main;
+            }
+        }
+        Estimate::Credit(v) => {
+            v.consumed_credits = used;
+            v.value_per500 = main.and_then(|_| crate::estimates::finite_value(v.cost, used, 500.0));
+            v.value_per1000 =
+                main.and_then(|_| crate::estimates::finite_value(v.cost, used, 1000.0));
+        }
+    }
+    e.calculation_status = if e.has_value() { "ready" } else { "noUsage" }.into();
+    e.calculation_note =
+        if e.has_value() && (used > 0.0 && used < 5.0 || weekly > 0.0 && weekly < 5.0) {
+            "自动估值 · 小样本，数值会随用量积累更新"
+        } else if e.has_value() {
+            "自动估值 · 仅计入可确认归属的有效区间"
+        } else {
+            "等待可确认归属且价格完整的样本"
+        }
+        .into();
 }
 
 impl Store {
@@ -260,8 +383,13 @@ impl Store {
         ]))?))
     }
 
-    /// Persist one authoritative observation. Used by the background coordinator and regression tests.
-    pub fn advance_automatic(&self, q: &QuotaSnapshot, ids: &[String], config: &str) -> Result<()> {
+    /// Persist one authoritative observation and independently pair each pool's rounded counter.
+    pub fn advance_automatic(
+        &self,
+        snapshot: &QuotaSnapshot,
+        ids: &[String],
+        config: &str,
+    ) -> Result<()> {
         let tx = self.write_transaction()?;
         let settings = self.settings()?;
         ensure!(
@@ -272,12 +400,12 @@ impl Store {
                     .any(|s| &s.id == id && enabled(s) && settings.source_enabled(s))),
             "自动估值来源已变化"
         );
-        let key = format!("{}:{}", q.provider, q.account_id);
+        let key = format!("{}:{}", snapshot.provider, snapshot.account_id);
         ensure!(
             self.automatic_fingerprint(&settings, ids, &key)? == config,
             "采样过程中登录或来源设置变化"
         );
-        let previous: Baseline = self.auto_get(&baseline_key(&key))?;
+        let mut baseline: Baseline = self.auto_get(&baseline_key(&key))?;
         if self.estimates()?.iter().any(|e| {
             e.sampling_mode != "automatic"
                 && e.status != "completed"
@@ -288,80 +416,108 @@ impl Store {
             tx.commit()?;
             return Ok(());
         }
-        if !valid(q) {
+        if !valid(snapshot) {
             self.invalidate_automatic_sources(ids)?;
             self.automatic_status_set(ids, "waiting", "等待有效的实时订阅限额", &key)?;
             tx.commit()?;
             return Ok(());
         }
-        let old = previous.quota.as_ref().filter(|old| {
-            previous.config == config
-                && previous.source_ids == ids
-                && old.account_id == q.account_id
-                && old.provider == q.provider
+        let previous = baseline.quota.clone().filter(|q| {
+            baseline.version == BASELINE_VERSION
+                && baseline.config == config
+                && baseline.source_ids == ids
+                && q.account_id == snapshot.account_id
+                && q.provider == snapshot.provider
         });
-        if old.is_none() {
+        let Some(old) = previous else {
             self.invalidate_automatic_sources(ids)?;
             self.auto_put(
                 &baseline_key(&key),
                 &Baseline {
-                    quota: Some(q.clone()),
+                    version: BASELINE_VERSION,
+                    quota: Some(snapshot.clone()),
                     config: config.into(),
                     source_ids: ids.to_vec(),
+                    pending: BTreeMap::new(),
                 },
             )?;
-            self.automatic_status_set(ids, "collecting", "已建立基线，正在积累样本", &key)?;
+            self.automatic_status_set(ids, "collecting", "已建立基线，等待首个可靠样本", &key)?;
+            tx.commit()?;
+            return Ok(());
+        };
+        if snapshot.updated_at <= old.updated_at {
             tx.commit()?;
             return Ok(());
         }
-        let old = old.unwrap();
-        if q.updated_at <= old.updated_at {
-            tx.commit()?;
-            return Ok(());
-        }
+        let q = anchored(&old, snapshot);
         if old.plan != q.plan {
             self.invalidate_automatic_sources(ids)?;
         }
-        let kind = interval_kind(old, q);
+        let kind = interval_kind(&old, &q);
         let mut accepted = false;
         if let Some(kind) = kind {
-            let windows = q
+            let windows: Vec<_> = q
                 .windows
                 .iter()
-                .filter(|w| crate::estimates::eligible(q, w))
-                .filter(|w| {
-                    w.window_minutes == Some(crate::contracts::FIVE_HOUR_MINUTES)
-                        || !q.windows.iter().any(|v| {
-                            crate::estimates::eligible(q, v)
-                                && v.group_id == w.group_id
-                                && v.window_minutes == Some(crate::contracts::FIVE_HOUR_MINUTES)
+                .filter(|w| crate::estimates::eligible(&q, w))
+                .collect();
+            // (pending counter, containing record, independent weekly segment)
+            let mut targets: Vec<(Option<&QuotaWindow>, Option<&QuotaWindow>, bool)> = Vec::new();
+            if kind != "credits" {
+                for window in &windows {
+                    let five = (window.window_minutes == Some(crate::contracts::WEEK_MINUTES))
+                        .then(|| {
+                            windows
+                                .iter()
+                                .find(|v| {
+                                    v.group_id == window.group_id
+                                        && v.window_minutes
+                                            == Some(crate::contracts::FIVE_HOUR_MINUTES)
+                                })
+                                .copied()
                         })
-                })
-                .collect::<Vec<_>>();
-            let targets: Vec<Option<&QuotaWindow>> = if kind == "credits" {
-                vec![None]
-            } else {
-                windows.into_iter().map(Some).collect()
-            };
-            for window in targets {
-                let consumed = if let Some(w) = window {
-                    w.used_percent
-                        - old
-                            .windows
-                            .iter()
-                            .find(|v| window_id(v) == window_id(w))
-                            .map(|v| v.used_percent)
-                            .unwrap_or(w.used_percent)
-                } else {
-                    (balance(old).unwrap() - balance(q).unwrap()) as f64 / 1e18
-                };
-                if consumed <= 0.0 {
-                    continue;
+                        .flatten();
+                    targets.push((Some(window), Some(five.unwrap_or(window)), five.is_some()));
                 }
+            }
+            let exhausted = q
+                .windows
+                .iter()
+                .any(|w| crate::estimates::eligible(&q, w) && w.used_percent == 100.0);
+            if kind == "credits" || kind == "idle" && exhausted {
+                targets.push((None, None, false));
+            }
+            // Quota usage cannot later be charged to credits, or vice versa.
+            if kind == "quota" || !exhausted {
+                baseline.pending.remove("credits");
+            }
+            if kind == "credits" {
+                baseline.pending.retain(|id, _| id == "credits");
+            }
+            for (window, record_window, weekly) in targets {
+                let pool = window.map(window_id).unwrap_or("credits").to_owned();
+                let from = baseline
+                    .pending
+                    .get(&pool)
+                    .cloned()
+                    .unwrap_or_else(|| old.clone());
+                let consumed = if let Some(w) = window {
+                    from.windows
+                        .iter()
+                        .find(|v| window_id(v) == window_id(w))
+                        .map(|v| w.used_percent - v.used_percent)
+                        .unwrap_or(0.0)
+                } else {
+                    balance(&from)
+                        .zip(balance(&q))
+                        .map(|(a, b)| (a - b) as f64 / 1e18)
+                        .unwrap_or(0.0)
+                };
                 let group = window
                     .filter(|_| crate::providers::antigravity(&q.provider))
                     .map(crate::antigravity::window_group);
-                let mut common = EstimateCommon {
+                let mut sample = EstimateCommon {
+                    sampling_mode: "automatic".into(),
                     account_key: key.clone(),
                     source_ids: ids.to_vec(),
                     shared_source_ids: ids
@@ -374,37 +530,50 @@ impl Store {
                         })
                         .cloned()
                         .collect(),
-                    started_at: old.updated_at,
+                    started_at: from.updated_at,
                     checkpoint_at: q.updated_at,
                     ..Default::default()
                 };
-                self.calculate_usage(&mut common, group)?;
-                if !common.cost.is_finite()
-                    || common.cost < 0.0
-                    || common.calculation_status != "ready"
-                    || common.priced_tokens != common.total_tokens
+                self.calculate_usage(&mut sample, group)?;
+                let reliable = sample.calculation_status == "ready"
+                    && sample.cost.is_finite()
+                    && sample.cost >= 0.0
+                    && sample.priced_tokens == sample.total_tokens;
+                if consumed == 0.0 && (reliable || sample.calculation_status == "noUsage") {
+                    baseline.pending.entry(pool).or_insert(from);
+                    continue;
+                }
+                // Every positive counter observation consumes this pending span even when unusable.
+                baseline.pending.insert(pool, q.clone());
+                if consumed <= 0.0
+                    || !reliable
+                    || crate::estimates::finite_value(sample.cost, consumed, 1000.0).is_none()
                 {
                     continue;
                 }
-                let win = window.map(window_id).unwrap_or("credits");
-                let mut record = self.estimates()?.into_iter().find(|e| {
+                let win = record_window.map(window_id).unwrap_or("credits");
+                let existing = self.estimates()?.into_iter().find(|e| {
                     e.sampling_mode == "automatic"
                         && e.status == "active"
                         && e.account_key == key
                         && e.window_id == win
                 });
-                if record.is_none() {
+                let mut record = if let Some(e) = existing {
+                    e
+                } else {
+                    let mut common = sample.clone();
                     common.id = format!(
                         "auto-{}-{}",
-                        kind,
+                        win,
                         std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)?
                             .as_nanos()
                     );
-                    common.sampling_mode = "automatic".into();
                     common.status = "active".into();
                     common.window_id = win.into();
-                    common.window_name = window.map(|w| w.name.clone()).unwrap_or("Credits".into());
+                    common.window_name = record_window
+                        .map(|w| w.name.clone())
+                        .unwrap_or("Credits".into());
                     common.source_config = crate::estimates::source_config(&settings, ids, &key)?;
                     common.source_names = ids
                         .iter()
@@ -420,11 +589,12 @@ impl Store {
                     common.total_tokens = 0;
                     common.priced_tokens = 0;
                     common.prices.clear();
-                    record = Some(if let Some(window) = window {
+                    common.calculation_version = 3;
+                    if let Some(w) = record_window {
                         Estimate::Quota(QuotaEstimate {
                             common,
                             group_id: group.map(str::to_owned),
-                            valuation_mode: if window.window_minutes
+                            valuation_mode: if w.window_minutes
                                 == Some(crate::contracts::FIVE_HOUR_MINUTES)
                             {
                                 "fiveHour".into()
@@ -439,132 +609,46 @@ impl Store {
                             common,
                             ..Default::default()
                         })
-                    });
-                }
-                let mut e = record.unwrap();
-                let mut sample = EstimateCommon {
-                    account_key: key.clone(),
-                    source_ids: ids.to_vec(),
-                    shared_source_ids: e.shared_source_ids.clone(),
-                    started_at: old.updated_at,
-                    checkpoint_at: q.updated_at,
-                    ..Default::default()
+                    }
                 };
-                self.calculate_usage(&mut sample, group)?;
-                let weekly = window
-                    .filter(|w| w.window_minutes == Some(crate::contracts::FIVE_HOUR_MINUTES))
-                    .and_then(|_| {
-                        crate::capacity::window(
-                            q,
-                            crate::contracts::WEEK_MINUTES,
-                            group.unwrap_or(""),
-                        )
-                    })
-                    .and_then(|w| {
-                        old.windows
-                            .iter()
-                            .find(|v| window_id(v) == window_id(w))
-                            .map(|v| w.used_percent - v.used_percent)
-                    })
-                    .unwrap_or(0.0);
-                let segment = AutoSegment {
-                    started_at: old.updated_at,
+                record.automatic_segments.push(AutoSegment {
+                    pool: if weekly { "weekly" } else { "primary" }.into(),
+                    prices: sample.prices.clone(),
+                    valid: true,
+                    started_at: from.updated_at,
                     ended_at: q.updated_at,
                     reset_at: window.and_then(|w| w.resets_at).unwrap_or(0),
                     cost: sample.cost,
                     tokens: sample.total_tokens,
                     priced_tokens: sample.priced_tokens,
                     consumed,
-                    weekly_consumed: weekly,
-                    weekly_cost: if weekly > 0.0 { sample.cost } else { 0.0 },
-                };
-                if let Some(last) = e
-                    .automatic_segments
-                    .last_mut()
-                    .filter(|s| s.ended_at == segment.started_at && s.reset_at == segment.reset_at)
-                {
-                    last.ended_at = segment.ended_at;
-                    last.cost += segment.cost;
-                    last.tokens += segment.tokens;
-                    last.priced_tokens += segment.priced_tokens;
-                    last.consumed += segment.consumed;
-                    last.weekly_consumed += segment.weekly_consumed;
-                    last.weekly_cost += segment.weekly_cost;
-                } else {
-                    e.automatic_segments.push(segment);
-                }
-                e.cost += sample.cost;
-                e.total_tokens += sample.total_tokens;
-                e.priced_tokens += sample.priced_tokens;
-                e.checkpoint_at = q.updated_at;
-                for p in sample.prices {
-                    if !e.prices.contains(&p) {
-                        e.prices.push(p);
+                    ..Default::default()
+                });
+                record.started_at = record.started_at.min(from.updated_at);
+                record.checkpoint_at = q.updated_at;
+                for price in sample.prices {
+                    if !record.prices.contains(&price) {
+                        record.prices.push(price);
                     }
                 }
-                let used = e.automatic_segments.iter().map(|s| s.consumed).sum::<f64>();
-                let ready = used + 0.000001 >= 5.0;
-                e.calculation_status = if ready { "ready" } else { "insufficientUsage" }.into();
-                e.calculation_note = if ready {
-                    "自动估值 · 仅计入可确认归属的有效区间"
-                } else {
-                    "自动估值 · 正在积累样本，至少消耗 5 个百分点或 5 credits"
+                if let Estimate::Quota(v) = &mut record {
+                    v.capacity = self.capacity_for_group(&key, group.unwrap_or(""), now())?;
                 }
-                .into();
-                match &mut e {
-                    Estimate::Quota(v) => {
-                        v.consumed_percent = used;
-                        if ready {
-                            if v.valuation_mode == "fiveHour" {
-                                v.five_hour_value = Some(v.cost * 100.0 / used);
-                                let week = v
-                                    .automatic_segments
-                                    .iter()
-                                    .map(|s| s.weekly_consumed)
-                                    .sum::<f64>();
-                                let cost = v
-                                    .automatic_segments
-                                    .iter()
-                                    .map(|s| s.weekly_cost)
-                                    .sum::<f64>();
-                                if week >= 5.0 {
-                                    v.weekly_value = Some(cost * 100.0 / week);
-                                    v.weekly_direct_value = v.weekly_value;
-                                }
-                                v.capacity =
-                                    self.capacity_for_group(&key, group.unwrap_or(""), now())?;
-                                v.weekly_ratio_value =
-                                    v.five_hour_value.zip(v.capacity.ratio).map(|(a, b)| a * b);
-                            } else {
-                                v.weekly_value = Some(v.cost * 100.0 / used);
-                            }
-                        }
-                    }
-                    Estimate::Credit(v) => {
-                        v.consumed_credits = used;
-                        if ready {
-                            v.value_per1000 = Some(v.cost * 1000.0 / used);
-                            v.value_per500 = Some(v.cost * 500.0 / used);
-                        }
-                    }
-                }
-                self.save_estimate(&e)?;
+                recalculate(&mut record);
+                self.save_estimate(&record)?;
                 accepted = true;
             }
+        } else {
+            // Mixed consumption, top-ups, reset, plan changes and data gaps break all pending pairs.
+            baseline.pending.clear();
         }
-        self.auto_put(
-            &baseline_key(&key),
-            &Baseline {
-                quota: Some(q.clone()),
-                config: config.into(),
-                source_ids: ids.to_vec(),
-            },
-        )?;
+        baseline.quota = Some(q);
+        self.auto_put(&baseline_key(&key), &baseline)?;
         self.automatic_status_set(
             ids,
             if accepted { "sampling" } else { "waiting" },
             if accepted {
-                "自动更新有效样本"
+                "已更新可靠样本；小样本也会立即显示"
             } else {
                 "等待可确认归属且价格完整的样本；已保留有效估值"
             },
@@ -587,23 +671,15 @@ impl Engine {
             .find(|s| s.id == id)
             .context("数据源已删除")?;
         let enable = p["enabled"].as_bool().context("请选择开启或关闭")?;
-        let mode = p["mode"].as_str().unwrap_or("subscription");
-        ensure!(matches!(mode, "subscription" | "mixed"), "自动估值模式无效");
-        ensure!(
-            mode != "mixed" || source.provider == "codex",
-            "混用估值仅适用于 Codex"
-        );
         ensure!(
             !enable || (p["confirmed"] == true && source.provider != "deepseek"),
-            "请确认所选计费方式，并纳入影响订阅额度的所有设备用量"
+            "请确认已纳入影响订阅额度的所有设备用量"
         );
         if let Some(expected) = p.get("baseConfig") {
             let expected: Option<AutoValuationConfig> = serde_json::from_value(expected.clone())?;
             let normalize = |mut config: Option<AutoValuationConfig>| {
-                if let Some(c) = &mut config
-                    && c.mode.is_empty()
-                {
-                    c.mode = "subscription".into();
+                if let Some(c) = &mut config {
+                    c.mode.clear();
                 }
                 serde_json::to_value(config)
             };
@@ -615,7 +691,7 @@ impl Engine {
         source.auto_valuation = enable.then_some(AutoValuationConfig {
             enabled: true,
             consent_version: CONSENT_VERSION,
-            mode: mode.into(),
+            mode: String::new(),
         });
         // Consent changes do not change the token scope of an ongoing manual sample.
         // Keep its original checkpoint and status; the automatic worker waits for it.
@@ -769,7 +845,20 @@ impl Engine {
             ids.sort();
             let attempt_key = format!("automatic-attempt:{key}");
             let attempted: i64 = self.store.auto_get(&attempt_key)?;
-            if (0..30).contains(&(now() - attempted)) {
+            let last: Baseline = self.store.auto_get(&baseline_key(&key))?;
+            let observed: Option<String> = self.store.db.query_row("SELECT payload FROM quota_history WHERE account_key=?1 ORDER BY stamp DESC,id DESC LIMIT 1", [&key], |r|r.get(0)).optional()?;
+            let observed = observed
+                .map(|raw| serde_json::from_str::<QuotaSnapshot>(&raw))
+                .transpose()?
+                .filter(|q| {
+                    valid(q)
+                        && (now() - q.updated_at).abs() <= 120
+                        && last
+                            .quota
+                            .as_ref()
+                            .is_none_or(|p| q.updated_at > p.updated_at)
+                });
+            if (0..30).contains(&(now() - attempted)) && observed.is_none() {
                 continue;
             }
             if self.store.estimates()?.iter().any(|e| {
@@ -785,12 +874,12 @@ impl Engine {
                 changed = true;
                 continue;
             }
-            let last: Baseline = self.store.auto_get(&baseline_key(&key))?;
             if last
                 .quota
                 .as_ref()
                 .is_some_and(|q| now() - q.updated_at < 30 && now() >= q.updated_at)
                 && last.source_ids == ids
+                && observed.is_none()
             {
                 continue;
             }
@@ -805,11 +894,17 @@ impl Engine {
                 })
                 .collect::<Result<Vec<_>>>()?;
             let fingerprint = self.store.automatic_fingerprint(&settings, &ids, &key)?;
-            self.store.auto_put(&attempt_key, &now())?;
+            if observed.is_none() {
+                self.store.auto_put(&attempt_key, &now())?;
+            }
             let outcome = (|| -> Result<()> {
                 self.verify_sampling_identities(&ids, &key)?;
                 self.sync_estimate_sources(&ids)?;
-                let rows = self.read_quotas(&json!({"accountKey":key}))?;
+                let rows = if let Some(q) = observed {
+                    vec![q]
+                } else {
+                    self.read_quotas(&json!({"accountKey":key}))?
+                };
                 let q = rows
                     .iter()
                     .find(|q| format!("{}:{}", q.provider, q.account_id) == key)
@@ -973,7 +1068,7 @@ mod tests {
                         ..Default::default()
                     },
                     billing: BillingEvidence {
-                        category: if api { "api" } else { "unknown" }.into(),
+                        category: if api { "api" } else { "subscription" }.into(),
                         evidence: "fixture".into(),
                     },
                     interval_start: Some(q.updated_at),
@@ -1310,7 +1405,7 @@ mod tests {
         let value = rows[0].quota().unwrap();
         assert_eq!(value.cost, 3.0);
         assert_eq!(value.five_hour_value, Some(20.0));
-        assert_eq!(value.weekly_direct_value, Some(40.0));
+        assert_eq!(value.weekly_direct_value, Some(60.0));
         let mut stale = q.clone();
         stale.updated_at += 30;
         stale.credits_updated_at = Some(q.updated_at);
@@ -1439,5 +1534,90 @@ mod tests {
                 .iter()
                 .any(|v| v.sampling_mode == "automatic")
         );
+    }
+
+    #[test]
+    fn small_samples_display_immediately_and_zero_snapshots_preserve_cost() {
+        let (_dir, e, mut q) = setup(false);
+        observe(&e, &q);
+        event(&e, &q, "rounded-1", 100, false);
+        q.updated_at += 30;
+        observe(&e, &q);
+        event(&e, &q, "rounded-2", 200, false);
+        q.updated_at += 30;
+        observe(&e, &q);
+        assert!(e.store.estimates().unwrap().is_empty());
+        q.updated_at += 30;
+        q.windows[0].used_percent += 1.0;
+        observe(&e, &q);
+        let all = e.store.estimates().unwrap();
+        assert_eq!(all[0].cost, 3.0);
+        assert_eq!(all[0].quota().unwrap().weekly_value, Some(300.0));
+        assert_eq!(all[0].calculation_status, "ready");
+        assert!(all[0].calculation_note.contains("小样本"));
+        event(&e, &q, "next", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 3.0;
+        observe(&e, &q);
+        assert_eq!(
+            e.store.estimates().unwrap()[0]
+                .quota()
+                .unwrap()
+                .weekly_value,
+            Some(100.0)
+        );
+    }
+
+    #[test]
+    fn reset_jitter_uses_fixed_anchor_and_uncertain_pending_is_discarded() {
+        let (_dir, e, mut q) = setup(false);
+        observe(&e, &q);
+        let reset = q.windows[0].resets_at.unwrap();
+        event(&e, &q, "small", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 1.0;
+        q.windows[0].resets_at = Some(reset + 6);
+        observe(&e, &q);
+        assert_eq!(e.store.estimates().unwrap()[0].cost, 1.0);
+        event(&e, &q, "pending", 100, false);
+        q.updated_at += 30;
+        q.windows[0].resets_at = Some(reset + 9);
+        observe(&e, &q);
+        event(&e, &q, "drift", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 1.0;
+        q.windows[0].resets_at = Some(reset + 12);
+        observe(&e, &q);
+        assert_eq!(
+            e.store.estimates().unwrap()[0].cost,
+            1.0,
+            "jitter must not accumulate beyond the original 10-second anchor"
+        );
+        event(&e, &q, "unknown", 100, false);
+        e.store.db.execute("UPDATE events SET payload=json_set(payload,'$.billing.category','unknown') WHERE id='unknown'",[]).unwrap();
+        q.updated_at += 30;
+        observe(&e, &q);
+        event(&e, &q, "confirmed", 50, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 0.5;
+        observe(&e, &q);
+        assert_eq!(e.store.estimates().unwrap()[0].cost, 1.5);
+    }
+
+    #[test]
+    fn tiny_credit_sample_after_zero_snapshots_is_finite() {
+        let (_dir, e, mut q) = setup(false);
+        q.windows[0].used_percent = 100.0;
+        observe(&e, &q);
+        event(&e, &q, "credit-rounded", 100, false);
+        q.updated_at += 30;
+        observe(&e, &q);
+        q.updated_at += 30;
+        q.credits.as_mut().unwrap().balance = Some("999.9".into());
+        observe(&e, &q);
+        let all = e.store.estimates().unwrap();
+        let value = all[0].credit().unwrap();
+        assert_eq!(value.consumed_credits, 0.1);
+        assert_eq!(value.value_per1000, Some(10000.0));
     }
 }

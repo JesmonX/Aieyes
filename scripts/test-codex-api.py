@@ -1,4 +1,4 @@
-"""Responses gateway regression tests. All credentials and HTTP traffic are fixtures."""
+"""Native API connection and legacy ledger regression tests. All credentials and traffic are fixtures."""
 import ast
 import contextlib
 import copy
@@ -86,6 +86,67 @@ class APITests(unittest.TestCase):
 
     def manage(self,action,**params):
         return api.manage(dict(action=action,home=str(self.home),sourceId='source',binary='/fixture/codex',params=params),SCRIPT.read_text(),TOMLI)
+
+    def direct(self, action, **params):
+        return api.direct_manage(dict(action=action, home=str(self.home), sourceId='source', binary='/fixture/codex', params=params), '', TOMLI)
+
+    def test_direct_save_is_inert_and_native_selection_preserves_account_and_model(self):
+        api.atomic(self.home/'auth.json', dict(auth_mode='chatgpt', fixture='unchanged'))
+        values = dict(model='kept-model', model_reasoning_effort='high', network=dict(proxy_url='http://127.0.0.1:12345'), model_providers=dict(unrelated=dict(base_url='https://fixture.invalid/v1')))
+        api.atomic(self.home/'config.toml', api.toml_text(values), raw=True)
+        auth, config = (self.home/'auth.json').read_bytes(), (self.home/'config.toml').read_bytes()
+        with patch.object(api, 'ensure_started', side_effect=AssertionError('no service')):
+            result = self.direct('deploy', connection=self.connection, apiKey='PRIVATE_FIXTURE_KEY', baseRevision='')
+            self.assertTrue(result['saved']); self.assertEqual(self.writes, 0)
+            self.assertEqual((self.home/'config.toml').read_bytes(), config)
+            self.assertFalse((self.root/'runtime.json').exists())
+            self.assertFalse((self.root/'gateway.py').exists())
+            target = dict(kind='api', connectionId='fixture', revision='one', sourceId='source')
+            for selected in (target, dict(kind='account'), target):
+                prepared = api.direct_prepare(self.home, selected)
+                api.direct_select(self.home, prepared)
+                self.assertEqual(api.direct_selected(self.home)['kind'], selected['kind'])
+                current = api.config(self.home)
+                for key in ('model', 'model_reasoning_effort', 'network'): self.assertEqual(current[key], values[key])
+                self.assertEqual(current['model_providers']['unrelated'], values['model_providers']['unrelated'])
+                self.assertEqual((self.home/'auth.json').read_bytes(), auth)
+            private = api.direct_latest(self.root, 'fixture')
+            self.assertEqual(set(private['connection']), {'id','sourceId','revision','name','baseUrl'})
+            self.assertNotIn('PRIVATE_FIXTURE_KEY', (self.home/'config.toml').read_text())
+            self.assertEqual(api.direct_key(self.root,'fixture','one').stat().st_mode & 0o777, 0o600)
+            prepared = api.direct_prepare(self.home, target)
+            updated = dict(self.connection, revision='two', name='Updated')
+            self.direct('deploy', connection=updated, apiKey='', baseRevision='one')
+            self.assertEqual(api.direct_selected(self.home)['revision'], 'one')
+            self.assertEqual(api.direct_latest(self.root,'fixture')['apiKey'], 'PRIVATE_FIXTURE_KEY')
+            with self.assertRaisesRegex(ValueError, '设置已变化'): api.direct_select(self.home, prepared)
+            with self.assertRaisesRegex(ValueError, '检查后'): self.direct('default', id='fixture')
+        self.assertEqual(self.writes, 0)
+        self.assertFalse((self.root/'meter.sqlite').exists())
+
+    def test_direct_rejects_corruption_and_removes_keys_without_erasing_the_ledger(self):
+        self.direct('deploy', connection=self.connection, apiKey='PRIVATE_FIXTURE_KEY', baseRevision='')
+        pointer=api.direct_index(self.root,'fixture')
+        original=pointer.read_bytes();pointer.write_text('{bad json')
+        with self.assertRaises(ValueError): self.direct('deploy',connection=dict(self.connection,revision='two'),apiKey='new',baseRevision='')
+        pointer.write_bytes(original)
+        api.atomic(self.root/'connections/fixture.json',self.private)
+        other=copy.deepcopy(self.private);other['connection']['id']='fixture-other'
+        api.atomic(self.root/'connections/fixture-other.json',other)
+        self.direct('deploy',connection=other['connection'],apiKey='other-key',baseRevision='one')
+        api.record(self.root,dict(id='historical',timestamp=1,status='completed'))
+        ledger=api.ledger(self.root,-1)
+        with patch.object(api,'direct_running',return_value=True):
+            with self.assertRaisesRegex(ValueError,'仍有 Codex'): self.direct('remove',id='fixture',revision='one')
+        self.assertTrue(pointer.exists())
+        with patch.object(api,'direct_running',return_value=False):
+            self.assertTrue(self.direct('remove',id='fixture',revision='one')['legacyLedger'])
+        self.assertFalse(pointer.exists())
+        self.assertFalse(api.direct_key(self.root,'fixture','one').exists())
+        self.assertFalse((self.root/'connections/fixture.json').exists())
+        self.assertTrue(api.direct_key(self.root,'fixture-other','one').exists())
+        self.assertEqual(api.ledger(self.root,-1),ledger)
+        self.assertEqual(self.writes,0,'A service used by other connections must stay registered')
 
     def deploy(self,connection=None,**params):
         with patch.object(api,'ensure_started'):

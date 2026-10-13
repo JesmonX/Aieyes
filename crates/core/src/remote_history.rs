@@ -89,9 +89,22 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         drop(q);
         cursors
     };
-    let request =
-        json!({"protocol":2,"path":source.path,"provider":source.provider,"cursors":cursors});
+    let route_key = format!("remote-route-cursor:{}:{config}", source.id);
+    let route_cursor: Option<String> = store
+        .db
+        .query_row("SELECT value FROM kv WHERE key=?1", [&route_key], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    let route_cursor: Value = route_cursor
+        .map(|raw| serde_json::from_str(&raw))
+        .transpose()?
+        .unwrap_or(Value::Null);
+    let request = json!({"protocol":2,"path":source.path,"provider":source.provider,"cursors":cursors,"routeCursor":route_cursor});
     let prices = store.prices()?;
+    if source.provider == "codex" {
+        store.prepare_history_corrections()?;
+    }
     let mut count = 0;
     let mut completed = None;
     let mut started = false;
@@ -111,6 +124,29 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         started = true;
         ensure!(completed.is_none(), "远程统计协议在结束后仍返回数据");
         match frame["kind"].as_str() {
+            Some("routes") => {
+                let current = store.settings()?;
+                let current_source = current
+                    .sources
+                    .iter()
+                    .find(|s| s.id == source.id && s.enabled)
+                    .context("来源配置已改变")?;
+                let current_host = current
+                    .hosts
+                    .iter()
+                    .find(|h| h.id == host.id && h.enabled)
+                    .context("主机配置已改变")?;
+                ensure!(
+                    configuration(current_source, current_host) == config,
+                    "来源配置已改变，同步已停止"
+                );
+                let routes: Vec<crate::codex_routes::Route> =
+                    serde_json::from_value(frame["routes"].clone())?;
+                let tx = store.write_transaction()?;
+                store.put_codex_routes(&source.id, &routes)?;
+                store.db.execute("INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![route_key,frame["cursor"].to_string()])?;
+                tx.commit()?;
+            }
             Some("batch") => {
                 let current = store.settings()?;
                 let current_source = current
@@ -143,6 +179,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
     result["newEvents"] = json!(count);
     result["updatedAt"] = json!(now());
     store.source_status(&source.id, &result)?;
+    store.repair_history_estimates()?;
     Ok(result)
 }
 
@@ -170,9 +207,22 @@ fn apply_batch(
         });
     let mut count = 0;
     for row in frame["events"].as_array().context("远程批次缺少事件")? {
-        if let Some(event) = usage::parse(source, &mut state, row)
-            && store.put_event(&event, prices, settings)?
-        {
+        let parsed = usage::parse(source, &mut state, row);
+        if state.first_inherited_count && row["inheritedHistory"].is_object() {
+            crate::codex_history::seed(
+                &mut state,
+                serde_json::from_value(row["inheritedHistory"].clone())?,
+            );
+        }
+        let changed = if let Some(correction) = state.counter_correction.take() {
+            store.put_counter_correction(&correction, prices, settings)?
+                && correction.event.tokens.total() > 0
+        } else if let Some(event) = parsed {
+            store.put_event(&event, prices, settings)?
+        } else {
+            false
+        };
+        if changed {
             count += 1;
         }
         if source.provider == "codex"

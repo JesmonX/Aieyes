@@ -21,7 +21,7 @@
   async function prepareSwitch(profileId) {
     const profile=info?.profiles.find(p=>p.id===profileId);
     if(!profile)return;
-    const review={sourceId,accountId:targetAccountId,profileId,name:profile.name,currentName:info.profiles.find(p=>p.current)?.name||'当前登录',sourceName:selected()?.name||'',path:selected()?.path||''};
+    const review={sourceId,accountId:targetAccountId,profileId,name:profile.name,currentName:info.selected?.kind==='api'?info.selected.name||'当前 API':info.profiles.find(p=>p.current)?.name||'当前登录',sourceName:selected()?.name||'',path:selected()?.path||''};
     switchReview=review;switchedReview=null;prepared=null;switchError='';paint();
     try {
       const result=await call('switch.prepare',{profileId});
@@ -65,7 +65,7 @@
       <div class="codex-switch-body">
         <p id="codex-switch-summary"><strong>${e(switchReview.currentName)} → ${e(switchReview.name)}</strong></p>
         <p class="muted">${e(switchReview.sourceName)} · ${e(switchReview.path)}</p>
-        <p class="warning">切换账号将关闭此设备上使用登录账号的 Codex 和 ChatGPT 进程及应用；已确认使用独立 API 凭据的实例及其辅助进程会保留。请先保存工作。</p>
+        <p class="warning">确认后将关闭下面列出的受影响进程，包含使用当前默认 API 的实例；已确认使用独立 API 配置的实例及其辅助进程会保留。请先保存工作。</p>
         ${switchError?`<p class="error" role="alert">${e(switchError)}</p>`:''}
         ${busy?`<p role="status">${prepared?'正在切换…':'正在检查…'}</p>`:''}
         ${prepared?.preservedProcesses?.length?`<p class="muted">将保留 ${prepared.preservedProcesses.length} 个使用独立 API 凭据的进程（含辅助进程）。</p>`:''}
@@ -112,6 +112,7 @@
     return `<div class="card"><h2>${intent==='switch'?'切换账户':'Codex 登录'}</h2><p class="muted">${intent==='switch'?'选择目标账号后，检查并确认切换。':account?'在所选机器登录「'+e(account.name)+'」，请使用同一个账号。':'登录或读取成功后自动添加账号，以邮箱命名；已添加的同一账号会自动识别。'}切换会改变机器当前使用的账号。</p>${sources.length?`<label>运行位置<select id="auth-source" ${busy||operation?'disabled':''}>${sources.map(s=>`<option value="${e(s.id)}" ${s.id===sourceId?'selected':''}>${e(s.name)} · ${s.hostId?'SSH':'本机'}</option>`).join('')}</select></label><p class="tiny muted">${e(source.path)}</p>`:'<p>请先在 Agents 启用 Codex 并选择机器。</p>'}${error?`<p class="error" role="alert">${e(error)} <button data-auth="refresh" ${busy?'disabled':''}>重试读取</button></p>`:''}${notice?`<p role="status">${e(notice)}</p>`:''}${busy?'<p role="status">正在处理…</p>':''}
     <fieldset ${busy||dirty||!source||operation?'disabled':''} style="border:0;padding:0"><div class="actions">${source&&intent==='login'?`<button data-auth="adopt">读取当前登录账号</button><button data-auth="login">${account?'登录此账号':'登录新账号'}</button>`:''}</div>
     ${info?`<p class="tiny muted">${e(info.version||'CLI 版本未知')} · 认证存储 ${e(info.storageMode)} · 检测到 ${info.processes?.length??0} 个相关进程</p>`:''}
+    ${info?.selected?.kind==='api'?`<p class="muted">当前使用 ${e(info.selected.name||'API')}。${info.storedIdentity?'本机账号凭据仍已保存，可切换回账号。':''}</p>`:''}
     ${visibleProfiles().map(p=>`<div class="list-row"><div class="row-body"><strong>${e(p.name)}</strong>${p.current?' · 当前日常账号':''}<small>${e(p.identity.email)} · ${e(p.identity.plan)}</small></div>${intent!=='login'||state.settings.accounts.some(a=>window.AieyesAgentSettings.profiles(a).includes(source.codexHomeId+':'+p.id))?'':`<button data-profile="${e(p.id)}" data-auth="bind">添加此账号</button>`}${intent==='login'?`<button data-profile="${e(p.id)}" data-auth="reauth">重新登录</button>`:''}${p.current?'':((intent==='switch'||!!targetAccountId)?`<button data-profile="${e(p.id)}" data-auth="switch">切换到此账户</button>`:`<button data-profile="${e(p.id)}" data-auth="remove">移除</button>`)}</div>`).join('')}
     </fieldset>${switchDialog()}
     ${operation?`<div class="card" role="status"><h3>等待授权</h3>${operation.userCode?`<p>设备码：<strong>${e(operation.userCode)}</strong> <button data-auth="copyCode">复制设备码</button></p>`:''}${operation.authUrl?'<button data-auth="open">打开登录页面</button><button data-auth="copyUrl">复制登录链接</button>':'<p>正在准备登录…</p>'}<button data-auth="cancelLogin">取消登录</button><p class="tiny muted">请在浏览器完成授权。登录最多等待 10 分钟。</p></div>`:''}</div>`;

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::io::Write;
 
 fn token(stamp: i64, total: u64, last: u64) -> Value {
-    json!({"type":"event_msg","timestamp":stamp,"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":total,"output_tokens":0},"last_token_usage":{"input_tokens":last,"output_tokens":0}}}})
+    json!({"type":"event_msg","timestamp":stamp,"payload":{"type":"token_count","rate_limits":{"plan_type":"plus","primary":{"used_percent":10}},"info":{"total_token_usage":{"input_tokens":total,"output_tokens":0},"last_token_usage":{"input_tokens":last,"output_tokens":0}}}})
 }
 fn source() -> Source {
     Source {

@@ -19,6 +19,18 @@ fn run() -> anyhow::Result<()> {
         return Ok(());
     }
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if let Some(i) = args.iter().position(|a| a == "--codex-api-key") {
+        return aieyes_core::codex_api::key(
+            std::path::Path::new(
+                args.get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("Missing API root"))?,
+            ),
+            args.get(i + 2)
+                .ok_or_else(|| anyhow::anyhow!("Missing API id"))?,
+            args.get(i + 3)
+                .ok_or_else(|| anyhow::anyhow!("Missing API revision"))?,
+        );
+    }
     if let Some(i) = args.iter().position(|a| a == "--wake-service") {
         let root = args
             .get(i + 1)

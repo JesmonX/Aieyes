@@ -14,6 +14,191 @@ fn root() -> (tempfile::TempDir, std::path::PathBuf) {
     (d, p)
 }
 
+#[cfg(unix)]
+#[test]
+fn direct_api_switch_is_confirmed_and_preserves_account_model_and_network() {
+    use std::os::unix::fs::PermissionsExt;
+    let _processes = super::processes::isolated_switch_test();
+    let (_temp, home) = root();
+    let account = auth("fixture", "team", "PRIVATE_REFRESH");
+    files::atomic(&home.join("auth.json"), &account).unwrap();
+    files::save_profile(&home, "account", "Saved account", &account).unwrap();
+    let config = "model='kept-model'\nmodel_reasoning_effort='high'\n[model_providers.unrelated]\nbase_url='https://fixture.invalid/v1'\n[projects.fixture]\ntrust_level='trusted'\n[network]\nproxy_url='http://127.0.0.1:12345'\n";
+    fs::write(home.join("config.toml"), config).unwrap();
+    let before_auth = fs::read(home.join("auth.json")).unwrap();
+    let cli = home.join("mock-codex");
+    fs::write(
+        &cli,
+        r#"#!/usr/bin/env python3
+import sys,json,os,pathlib
+if '--version' in sys.argv:
+ print('codex-cli 0.162.1');sys.exit(0)
+assert not pathlib.Path(os.environ['CODEX_HOME'],'auth.json').exists()
+for line in sys.stdin:
+ assert 'PRIVATE_REFRESH' not in line
+ v=json.loads(line)
+ if v.get('method')=='initialized': continue
+ result={'account':{'type':'chatgpt'}} if v.get('method')=='account/read' else {}
+ print(json.dumps({'id':v['id'],'result':result}),flush=True)
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut engine = crate::Engine::open(&home.join("data")).unwrap();
+    engine
+        .store
+        .save_settings(&Settings {
+            sources: vec![Source {
+                id: "source".into(),
+                provider: "codex".into(),
+                path: home.to_string_lossy().into(),
+                codex_home_id: Some("home".into()),
+                codex_binary: cli.to_string_lossy().into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    let saved=engine.call("codexApi.save",json!({"connection":{"sourceId":"source","name":"Fixture API","baseUrl":"https://fixture.invalid/v1","model":"discarded","effort":"low","prices":[{"id":"unused","input":9}]},"apiKey":"PRIVATE_API_KEY"})).unwrap();
+    let mut connection = saved["connection"].clone();
+    assert!(
+        !serde_json::to_string(&saved)
+            .unwrap()
+            .contains("PRIVATE_API_KEY")
+    );
+    assert_eq!(connection["model"], "");
+    assert_eq!(connection["prices"], json!([]));
+    assert_eq!(
+        fs::read_to_string(home.join("config.toml")).unwrap(),
+        config
+    );
+    for file in ["runtime.json", "meter.sqlite"] {
+        assert!(!home.join(".aieyes/api").join(file).exists());
+    }
+    engine
+        .call("sources.scan", json!({"sourceId":"source"}))
+        .unwrap();
+    assert_eq!(
+        engine
+            .store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM kv WHERE key LIKE 'api-ledger-cursor:%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert!(
+        engine
+            .call(
+                "codexApi.default",
+                json!({"sourceId":"source","id":connection["id"]})
+            )
+            .is_err()
+    );
+    let target = |c: &Value| json!({"sourceId":"source","target":{"kind":"api","connectionId":c["id"],"revision":c["revision"]}});
+    let prepared = engine
+        .call("codexAuth.switch.prepare", target(&connection))
+        .unwrap();
+    let operation = home.join(".aieyes/state").join(format!(
+        "{}.json",
+        prepared["operationId"].as_str().unwrap()
+    ));
+    let mut review = files::read(&operation).unwrap();
+    review["processes"] =
+        json!([{"pid":123,"fingerprint":"fixture","name":"Codex","canClose":true}]);
+    files::atomic(&operation, &review).unwrap();
+    let error=engine.call("codexAuth.switch.commit",json!({"sourceId":"source","operationId":prepared["operationId"],"closeProcesses":false})).unwrap_err();
+    assert!(error.to_string().contains("尚未授权关闭"));
+    assert_eq!(fs::read(home.join("auth.json")).unwrap(), before_auth);
+    let prepared = engine
+        .call("codexAuth.switch.prepare", target(&connection))
+        .unwrap();
+    let saved = engine
+        .call(
+            "codexApi.save",
+            json!({"connection":connection,"apiKey":""}),
+        )
+        .unwrap();
+    connection = saved["connection"].clone();
+    assert!(
+        engine
+            .call(
+                "codexAuth.switch.commit",
+                json!({"sourceId":"source","operationId":prepared["operationId"]})
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("设置已变化")
+    );
+    let prepared = engine
+        .call("codexAuth.switch.prepare", target(&connection))
+        .unwrap();
+    fs::write(
+        home.join("config.toml"),
+        config.replace("kept-model", "changed-model"),
+    )
+    .unwrap();
+    assert!(
+        engine
+            .call(
+                "codexAuth.switch.commit",
+                json!({"sourceId":"source","operationId":prepared["operationId"]})
+            )
+            .is_err()
+    );
+    for next in [
+        target(&connection),
+        json!({"sourceId":"source","profileId":"account"}),
+        target(&connection),
+    ] {
+        let prepared = engine
+            .call("codexAuth.switch.prepare", next.clone())
+            .unwrap();
+        assert_eq!(prepared["processes"], json!([]));
+        let params = json!({"sourceId":"source","operationId":prepared["operationId"],"closeProcesses":false});
+        let result = engine
+            .call("codexAuth.switch.commit", params.clone())
+            .unwrap();
+        assert_eq!(result["status"], "succeeded");
+        let replay = engine.call("codexAuth.switch.commit", params).unwrap();
+        assert_eq!(replay["status"], "succeeded");
+        assert_eq!(replay["target"], result["target"]);
+        assert_eq!(fs::read(home.join("auth.json")).unwrap(), before_auth);
+        let values: toml::Value =
+            toml::from_str(&fs::read_to_string(home.join("config.toml")).unwrap()).unwrap();
+        assert_eq!(values["model"].as_str(), Some("changed-model"));
+        assert_eq!(values["model_reasoning_effort"].as_str(), Some("high"));
+        assert_eq!(
+            values["network"]["proxy_url"].as_str(),
+            Some("http://127.0.0.1:12345")
+        );
+        assert!(values["model_providers"].get("unrelated").is_some());
+        let status = engine
+            .call("codexAuth.profiles.list", json!({"sourceId":"source"}))
+            .unwrap();
+        assert_eq!(
+            status["selected"]["kind"],
+            if next["target"]["kind"] == "api" {
+                "api"
+            } else {
+                "account"
+            }
+        );
+        assert_eq!(
+            status["storedIdentity"],
+            files::identity(&account).unwrap().key
+        );
+        if next["target"]["kind"] == "api" {
+            assert!(status["currentIdentity"].is_null());
+        }
+    }
+    assert!(!home.join(".aieyes/api/runtime.json").exists());
+    assert!(!home.join(".aieyes/api/meter.sqlite").exists());
+}
+
 #[test]
 fn reconciliation_links_existing_login_once_without_switching_or_restoring_archives() {
     let (_d, r) = root();
@@ -396,7 +581,7 @@ fn stale_switch_cannot_replace_changed_credentials() {
         &json!({"operationId":prepared["operationId"],"closeProcesses":true}),
     )
     .unwrap_err();
-    assert!(error.to_string().contains("凭据已更新"));
+    assert!(error.to_string().contains("凭据或配置已更新"));
     assert_eq!(files::read(&r.join("auth.json")).unwrap(), changed);
 }
 #[test]

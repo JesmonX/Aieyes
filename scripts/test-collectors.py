@@ -23,6 +23,9 @@ class Collectors(unittest.TestCase):
                 {"type": "response_item", "payload": {"text": "private-text"}},
                 {"type": "event_msg", "timestamp": "2026-10-03T00:00:00Z", "payload": {"type": "task_started", "prompt": "private-text"}},
                 {"type": "event_msg", "timestamp": "2026-10-03T00:00:00Z", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 10}}, "rate_limits": None}},
+                {"type": "turn_context", "payload": {"model": "test", "turn_id": "turn-one", "cwd": "private-path"}},
+                {"type": "event_msg", "timestamp": "2026-10-03T00:00:01Z", "payload": {"type": "task_started", "turn_id": "turn-one", "prompt": "private-text"}},
+                {"type": "event_msg", "timestamp": "2026-10-03T00:00:02Z", "payload": {"type": "task_complete", "turn_id": "turn-one", "last_agent_message": "private-text"}},
             ]
             path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
             output = io.StringIO()
@@ -31,8 +34,12 @@ class Collectors(unittest.TestCase):
             text = output.getvalue()
             self.assertNotIn("private-text", text)
             self.assertNotIn("private-path", text)
-            self.assertEqual(len(json.loads(text)["files"][0]["events"]), 4)
-            self.assertEqual(json.loads(text)["files"][0]["events"][2]["payload"], {"type": "task_started"})
+            projected = json.loads(text)["files"][0]["events"]
+            self.assertEqual(len(projected), 7)
+            self.assertEqual(projected[2]["payload"], {"type": "task_started"})
+            self.assertEqual(projected[4]["payload"], {"model": "test", "turn_id": "turn-one"})
+            self.assertEqual(projected[5]["payload"], {"type": "task_started", "turn_id": "turn-one"})
+            self.assertEqual(projected[6]["payload"], {"type": "task_complete", "turn_id": "turn-one"})
 
     def test_remote_quota_returns_only_usage_and_sanitizes_errors(self):
         module = runpy.run_path(str(SCRIPTS / "remote_quota.py"))

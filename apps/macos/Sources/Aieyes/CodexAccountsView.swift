@@ -5,7 +5,7 @@ struct CodexProfile: Decodable, Identifiable {
     var id: String, name: String, identity: Identity, current: Bool?
 }
 struct CodexProcess: Decodable, Identifiable { var pid: Int, name: String, canClose: Bool; var parentPid: Int?, blockingReason: String?; var id: Int { pid } }
-struct CodexInspection: Decodable { var profiles: [CodexProfile], processes: [CodexProcess], version: String?, storageMode: String }
+struct CodexInspection: Decodable { var profiles: [CodexProfile], processes: [CodexProcess], version: String?, storageMode: String; var storedIdentity: String?, selected: CodexSelectedConnection? }
 struct CodexOperation: Decodable, Identifiable {
     var operationId: String, status: String, authUrl: String?, userCode: String?, error: String?, message: String?, processes: [CodexProcess]?
     var accountArchived: Bool?, quotaEnabled: Bool?

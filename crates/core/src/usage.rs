@@ -2,7 +2,7 @@ use crate::contracts::{FIVE_HOUR_MINUTES, WEEK_MINUTES};
 use crate::models::*;
 use serde_json::Value;
 
-pub const PARSER_VERSION: u32 = 4;
+pub const PARSER_VERSION: u32 = 5;
 
 fn count(v: &Value, name: &str) -> u64 {
     v.get(name).and_then(Value::as_u64).unwrap_or(0)
@@ -65,6 +65,7 @@ pub fn event_id(provider: &str, source_id: &str, account_id: &str, identity: &st
 
 pub fn parse(source: &Source, state: &mut ParseState, v: &Value) -> Option<UsageEvent> {
     state.parser_version = PARSER_VERSION;
+    state.counter_correction = None;
     match source.provider.as_str() {
         "codex" => parse_codex(source, state, v),
         "claude" => parse_claude(source, state, v),
@@ -85,11 +86,34 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             None
         }
         "session_meta" => {
+            if let Some(id) = payload["id"].as_str().or(payload["session_id"].as_str())
+                && id != state.session_id
+            {
+                *state = ParseState {
+                    session_id: id.into(),
+                    parser_version: PARSER_VERSION,
+                    ..Default::default()
+                };
+            }
             state.session_started_at =
                 timestamp(&payload["timestamp"]).or_else(|| timestamp(&v["timestamp"]));
             state.model_provider = payload["model_provider"].as_str().unwrap_or("").into();
             if let Some(id) = payload["id"].as_str().or(payload["session_id"].as_str()) {
                 state.session_id = id.into();
+            }
+            if payload["history_base"].is_object() && state.last_cumulative.is_none() {
+                state.inherited_history = Some(crate::codex_history::InheritedHistory {
+                    parent_thread: payload["history_base"]["thread_id"]
+                        .as_str()
+                        .unwrap_or("")
+                        .into(),
+                    end_byte_offset: payload["history_base"]["end_byte_offset"]
+                        .as_u64()
+                        .unwrap_or(0),
+                    issue: "父会话历史尚未解析".into(),
+                    ..Default::default()
+                });
+                state.first_inherited_count = true;
             }
             None
         }
@@ -103,23 +127,35 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
         "event_msg" if payload["type"] == "token_count" => {
             let stamp = timestamp(&v["timestamp"])?;
             let cumulative = codex_tokens(&payload["info"]["total_token_usage"])?;
-            if state.last_cumulative.as_ref() == Some(&cumulative) {
+            let inherited = state
+                .first_inherited_count
+                .then(|| state.inherited_history.clone())
+                .flatten();
+            if state.last_cumulative.as_ref() == Some(&cumulative) && inherited.is_none() {
                 return None;
             }
             let mut interval_start = (state.last_timestamp > 0)
                 .then_some(state.last_timestamp)
                 .or(state.session_started_at);
-            let (tokens, attribution) = match &state.last_cumulative {
-                None => (cumulative.clone(), "session-summary"),
-                Some(prev) => {
-                    if let Some(delta) = cumulative.checked_delta(prev) {
-                        (delta, "event")
-                    } else {
-                        state.cumulative_segment += 1;
-                        (
-                            codex_tokens(&payload["info"]["last_token_usage"])?,
-                            "counter-reset",
-                        )
+            let (tokens, attribution) = if inherited.as_ref().is_some_and(|h| h.tokens.is_none()) {
+                // Keep a recoverable, zero-valued tombstone instead of charging an
+                // inherited counter whose parent has not arrived yet.
+                (Tokens::default(), "unresolved-inheritance")
+            } else {
+                match &state.last_cumulative {
+                    None => (cumulative.clone(), "session-summary"),
+                    Some(prev) => {
+                        if let Some(delta) = cumulative.checked_delta(prev) {
+                            (delta, "event")
+                        } else {
+                            if inherited.is_none() {
+                                state.cumulative_segment += 1;
+                            }
+                            (
+                                codex_tokens(&payload["info"]["last_token_usage"])?,
+                                "counter-reset",
+                            )
+                        }
                     }
                 }
             };
@@ -135,7 +171,8 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             }
             state.last_cumulative = Some(cumulative.clone());
             state.last_timestamp = stamp;
-            if tokens.total() == 0 {
+            state.first_inherited_count = false;
+            if tokens.total() == 0 && inherited.is_none() {
                 return None;
             }
             let identity = format!(
@@ -181,7 +218,16 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             if task_boundary.is_some() {
                 parsed.interval_evidence = "task-request-v2".into();
             }
-            Some(parsed)
+            if let Some(history) = inherited {
+                if history.tokens.is_some() {
+                    parsed.attribution = "inherited-counter".into();
+                }
+                state.counter_correction = Some(crate::codex_history::CounterCorrection {
+                    event: parsed.clone(),
+                    history,
+                });
+            }
+            (parsed.tokens.total() > 0).then_some(parsed)
         }
         _ => None,
     }

@@ -101,7 +101,11 @@ def toml_text(value):
 
 def home_root(request):
     home = safe(pathlib.Path(os.path.expanduser(request['home'])))
-    if home.name in ('sessions', 'archived_sessions'): home = home.parent
+    for parent in [home, *home.parents]:
+        if parent.name in ('sessions', 'archived_sessions'):
+            home = parent.parent
+            break
+    if home.suffix == '.jsonl': home = home.parent
     if not home.is_dir(): raise ValueError('Codex 目录不存在')
     return home, home / '.aieyes/api'
 
@@ -128,7 +132,7 @@ def validate_connection(c):
     url=urllib.parse.urlsplit(c['baseUrl'])
     if url.scheme not in ('http','https') or not url.hostname or url.username or url.password or url.query or url.fragment:
         raise ValueError('Base URL 应为不含凭据、查询参数的 HTTP(S) 地址')
-    if not c.get('name','').strip() or not c.get('model','').strip(): raise ValueError('请输入 API 名称与模型 ID')
+    if not c.get('name','').strip() or len(c['name']) > 100: raise ValueError('请输入 API 名称（最多 100 字）')
     for price in c.get('prices',[]):
         if not price.get('id'): raise ValueError('请输入价格对应的模型 ID')
         for key in ('input','output','cacheRead','cacheWrite'):
@@ -526,12 +530,187 @@ def manage(request, script, tomli):
         raise ValueError('未知 API 操作')
 
 
+def direct_index(root, identifier): return root/'direct/current'/(ident(identifier)+'.json')
+def direct_key(root, identifier, version): return root/'direct/keys'/(ident(identifier)+'-'+ident(version)+'.json')
+
+
+def direct_latest(root, identifier):
+    pointer = direct_index(root, identifier)
+    if pointer.exists():
+        c = read(pointer)
+        return read(direct_key(root, identifier, c['revision']))
+    return read(root/'connections'/(ident(identifier)+'.json'))
+
+
+def direct_simple(c):
+    return {key: c[key] for key in ('id', 'sourceId', 'name', 'baseUrl', 'revision')}
+
+
+def direct_store(root, c, key):
+    path, pointer = direct_key(root, c['id'], c['revision']), direct_index(root, c['id'])
+    private(path.parent); private(pointer.parent)
+    saved = dict(connection=direct_simple(c), apiKey=key)
+    if path.exists() and read(path) != saved:
+        raise ValueError('API 修订已存在且内容不同，请重新保存')
+    if not path.exists(): atomic(path, saved)
+    atomic(pointer, saved['connection'])
+
+
+def direct_selected(home):
+    values = config(home)
+    provider_name = values.get('model_provider', 'openai')
+    table = values.get('model_providers', {}).get(provider_name, {})
+    if provider_name == 'openai' or table.get('requires_openai_auth') is True:
+        auth = read(home/'auth.json') if (home/'auth.json').exists() else {}
+        return dict(kind='api' if auth.get('auth_mode') == 'apikey' or auth.get('OPENAI_API_KEY') else 'account', provider=provider_name)
+    result = dict(kind='api', provider=provider_name, name=table.get('name'))
+    if provider_name.startswith('aieyes_api_') and '_' in provider_name[len('aieyes_api_'):]:
+        result['connectionId'], result['revision'] = provider_name[len('aieyes_api_'):].rsplit('_', 1)
+    return result
+
+
+DIRECT_READER = '''import json,os,pathlib,re,sys
+root=pathlib.Path(sys.argv[1])
+identity,version=sys.argv[2:4]
+if not all(re.fullmatch(r"[A-Za-z0-9_-]+",v) for v in (identity,version)): raise SystemExit("Invalid API identity")
+path=root/"direct/keys"/(identity+"-"+version+".json")
+if any(p.is_symlink() for p in [path,*path.parents]): raise SystemExit("Unsafe API path")
+with path.open() as file: key=json.load(file)["apiKey"]
+if not key or any(c in key for c in (chr(0),chr(10),chr(13))): raise SystemExit("Invalid API key")
+print(key)
+'''
+
+
+def direct_prepare(home, target):
+    root = home/'.aieyes/api'
+    result = dict(target)
+    if target.get('kind') == 'api':
+        saved = direct_latest(root, target['connectionId']); c = direct_simple(saved['connection'])
+        if c['revision'] != target.get('revision') or target.get('sourceId', c['sourceId']) != c['sourceId']:
+            raise ValueError('API 设置或设备已变化，请重新检查')
+        validate_connection(c)
+        if not saved.get('apiKey') or any(char in saved['apiKey'] for char in ('\n', '\r', '\0')):
+            raise ValueError('API Key 无效')
+        if config(home).get('forced_login_method') not in (None, 'api'):
+            raise ValueError('此 home 限制了登录方式')
+        direct_store(root, c, saved['apiKey'])
+        helper = root/('direct/key_reader_' + hashlib.sha256(DIRECT_READER.encode()).hexdigest()[:16] + '.py')
+        if not helper.exists(): atomic(helper, DIRECT_READER, raw=True)
+        result.update(helper=str(helper), name=c['name'])
+    elif target.get('kind') != 'account':
+        raise ValueError('切换目标无效')
+    result['configRevision'] = revision(home)
+    return result
+
+
+def direct_select(home, target):
+    root = home/'.aieyes/api'; private(root)
+    import fcntl
+    with open(root/'config.lock', 'a+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if revision(home) != target.get('configRevision'): raise ValueError('Codex 配置已变化，请重新检查')
+        values = config(home); backup = root/'account-selection.json'
+        if target['kind'] == 'api':
+            saved = direct_latest(root, target['connectionId']); c = saved['connection']
+            if c['revision'] != target['revision']: raise ValueError('API 设置已变化，请重新检查')
+            if direct_selected(home)['kind'] == 'account': atomic(backup, dict(model_provider=values.get('model_provider')))
+            name = provider(c)
+            values.setdefault('model_providers', {})[name] = dict(name=c['name'], base_url=c['baseUrl'], wire_api='responses', requires_openai_auth=False, supports_websockets=False,
+                auth=dict(command=sys.executable, args=[target['helper'], str(root), c['id'], c['revision']]))
+            values['model_provider'] = name
+        else:
+            old = backup if backup.exists() else root/'default-backup.json'
+            saved = read(old) if old.exists() else {}
+            name = saved.get('model_provider') or 'openai'
+            if name != 'openai' and values.get('model_providers', {}).get(name, {}).get('requires_openai_auth') is not True: name = 'openai'
+            values['model_provider'] = name
+        write_default(home, root, values, target['configRevision'])
+        return revision(home)
+
+
+def direct_restore(home, values, written):
+    write_default(home, home/'.aieyes/api', values, written)
+
+
+def direct_running(home):
+    for entry in pathlib.Path('/proc').iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid(): continue
+        try:
+            if entry.stat().st_uid != os.getuid(): continue
+            if not (entry/'comm').read_text().strip().lower().startswith('codex'): continue
+            env = dict(item.decode().split('=',1) for item in (entry/'environ').read_bytes().split(b'\0') if b'=' in item)
+            location = pathlib.Path(env['CODEX_HOME']) if env.get('CODEX_HOME') else pathlib.Path(env['HOME'])/'.codex'
+            if location.resolve() == home.resolve(): return True
+        except (OSError,ValueError,KeyError):
+            if entry.exists(): return True
+    return False
+
+
+def direct_manage(request, script, tomli):
+    home, root = home_root(request); action = request['action']; params = request.get('params') or {}
+    if action == 'ledger': return ledger(root, params.get('cursor',-1))
+    if action == 'status': return dict(configRevision=revision(home), defaultProvider=config(home).get('model_provider'), selected=direct_selected(home))
+    if action in ('default','command'): raise ValueError('请通过账号切换检查后切换 API')
+    private(root)
+    import fcntl
+    with open(root/'config.lock','a+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if action == 'deploy':
+            c = direct_simple(params['connection']); validate_connection(c)
+            try: old = direct_latest(root, c['id'])
+            except FileNotFoundError: old = {}
+            if old.get('connection',{}).get('revision','') != params.get('baseRevision',''): raise ValueError('目标设备 API 设置已变化，请重新读取')
+            if old and old['connection']['sourceId'] != request['sourceId']: raise ValueError('API 连接不属于所选设备目录')
+            key = params.get('apiKey') or old.get('apiKey')
+            if not key or any(c in key for c in ('\n','\r','\0')): raise ValueError('请输入有效的 API Key')
+            direct_store(root, c, key)
+            return dict(saved=True, configRevision=revision(home))
+        saved = direct_latest(root, params['id']); c = saved['connection']
+        if c['sourceId'] != request['sourceId']: raise ValueError('API 连接不属于所选设备目录')
+        if action == 'probe':
+            req=urllib.request.Request(c['baseUrl'].rstrip('/')+'/models',headers={'Authorization':'Bearer '+saved['apiKey']})
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, *args): return None
+            try:
+                with urllib.request.build_opener(NoRedirect()).open(req,timeout=20) as response: status=response.code
+            except urllib.error.HTTPError as error: status=error.code
+            return dict(reachable=200<=status<300,httpStatus=status,message='API 认证可用' if status<300 else '模型列表查询未成功；部分服务不支持此接口')
+        if action == 'remove':
+            if c['revision'] != params.get('revision'): raise ValueError('API 设置已变化，请刷新后重试')
+            if direct_selected(home).get('connectionId') == c['id']: raise ValueError('请先切换到账号或其他 API，再移除此连接')
+            if direct_running(home): raise ValueError('此目录仍有 Codex 会话，退出后再移除 API 连接')
+            identifier = ident(c['id'])
+            belongs = lambda name: name.startswith('aieyes_api_') and name[len('aieyes_api_'):].rsplit('_', 1)[0] == identifier
+            legacy = root/'connections'/(identifier+'.json')
+            last = legacy.exists() and len(list((root/'connections').glob('*.json'))) == 1
+            paths = [direct_index(root, identifier), legacy]
+            paths += [path for path in (root/'direct/keys').glob(identifier+'-*.json') if read(path)['connection']['id'] == identifier]
+            paths += [path for path in home.glob('aieyes_api_*.config.toml') if belongs(path.name[:-len('.config.toml')])]
+            files = backup_files(paths)
+            cron = [line for line in cron_lines() if line.endswith(cron_tag(root))] if last else None
+            expected, values = revision(home), config(home)
+            providers = values.get('model_providers', {})
+            names = [name for name in providers if belongs(name)]
+            for name in names: del providers[name]
+            try:
+                if last: set_cron(root, [])
+                for path in paths:
+                    if path.exists(): safe(path).unlink()
+                if names: write_default(home, root, values, expected)
+            except Exception:
+                restore_files(files)
+                if cron is not None: set_cron(root, cron)
+                raise
+            return dict(removed=True, legacyLedger=(root/'meter.sqlite').exists())
+        raise ValueError('未知 API 操作')
+
+
 def dispatch(request,script,tomli):
-    try: return manage(request,script,tomli)
+    try: return direct_manage(request,script,tomli)
     except ValueError as error: return dict(error=str(error))
-    except FileNotFoundError: return dict(error='API 文件或目标依赖缺失；请检查 Python 3、crontab 与部署')
+    except FileNotFoundError: return dict(error='API 文件或目标依赖缺失；请检查 Python 3 与连接配置')
     except PermissionError: return dict(error='API 文件或目标命令权限不足')
-    except Exception: return dict(error='API 操作失败；请检查目标连接、服务与配置')
+    except Exception: return dict(error='API 操作失败；请检查目标连接与配置')
 
 
 if __name__=='__main__':

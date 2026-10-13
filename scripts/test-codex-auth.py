@@ -188,6 +188,43 @@ class CoordinatorTests(unittest.TestCase):
         a.atomic(self.root/'auth.json',credential('two','rotated'))
         with self.assertRaisesRegex(ValueError,'凭据'): self.call('switch.commit',operationId=op,closeProcesses=True)
 
+    def test_api_account_switch_and_failed_credential_write_restore_native_selection(self):
+        class Rpc:
+            def __init__(self,*args): pass
+            def __enter__(self): return self
+            def __exit__(self,*args): pass
+            def login(self,auth): return {}
+            def call(self,*args): return {}
+        api=a.api_helpers()
+        c=dict(id='fixture',revision='one',sourceId='source',name='Fixture',baseUrl='https://fixture.invalid/v1')
+        api['direct_store'](self.root/'.aieyes/api',c,'PRIVATE_FIXTURE_KEY')
+        (self.root/'config.toml').write_text('model="kept"\nmodel_reasoning_effort="high"\n')
+        auth_bytes=(self.root/'auth.json').read_bytes()
+        prepared=self.call('switch.prepare',target=dict(kind='api',connectionId='fixture',revision='one'))
+        with patch.object(a,'Rpc',side_effect=AssertionError('API selection does not query an account')):
+            result=self.call('switch.commit',operationId=prepared['operationId'])
+        self.assertEqual(result['status'],'succeeded')
+        self.assertEqual((self.root/'auth.json').read_bytes(),auth_bytes)
+        status=self.call('status')
+        self.assertIsNone(status['currentIdentity'])
+        self.assertEqual(status['storedIdentity'],a.identity(self.one)['key'])
+        config=a.config(self.root)
+        self.assertEqual(config['model'],'kept');self.assertEqual(config['model_reasoning_effort'],'high')
+        op=self.call('switch.prepare',target=dict(kind='account',profileId='two'))['operationId']
+        original=a.atomic
+        def fail_auth(path,value):
+            if path==self.root/'auth.json': raise PermissionError('fixture write denied')
+            return original(path,value)
+        with patch.object(a,'Rpc',Rpc),patch.object(a,'atomic',side_effect=fail_auth):
+            with self.assertRaises(PermissionError): self.call('switch.commit',operationId=op)
+        self.assertEqual((self.root/'auth.json').read_bytes(),auth_bytes)
+        self.assertEqual(a.config(self.root),config)
+        op=self.call('switch.prepare',profileId='one')['operationId']
+        with patch.object(a,'Rpc',Rpc):
+            self.assertEqual(self.call('switch.commit',operationId=op)['status'],'succeeded')
+        self.assertEqual(api['direct_selected'](self.root)['kind'],'account')
+        self.assertEqual((self.root/'auth.json').read_bytes(),auth_bytes)
+
     def test_external_change_during_switch_validation_aborts(self):
         root=self.root
         changed=credential('one','external-change')
@@ -278,7 +315,7 @@ class CoordinatorTests(unittest.TestCase):
         def terminate(pid, sig):
             order.append(pid)
             current[:] = [p for p in current if p['pid'] != pid]
-        with patch.object(a, 'switch_running', side_effect=lambda *args: list(current)), patch.object(a.os, 'kill', side_effect=terminate):
+        with patch.object(a, 'switch_running', side_effect=lambda *args, **kwargs: list(current)), patch.object(a.os, 'kill', side_effect=terminate):
             a.close_processes(self.root, rows)
         self.assertEqual(order, [90,50,20,10])
         with patch.object(a, 'switch_running', return_value=[dict(rows[0], fingerprint='reused')]), patch.object(a.os, 'kill') as kill:

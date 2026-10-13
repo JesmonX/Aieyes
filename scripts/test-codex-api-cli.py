@@ -87,28 +87,26 @@ def serve(handler):
 
 
 def run(binary):
-    with tempfile.TemporaryDirectory(prefix='aieyes-api-cli-') as temporary,serve(Fixture) as upstream,serve(api.Handler) as gateway:
+    with tempfile.TemporaryDirectory(prefix='aieyes-api-cli-') as temporary,serve(Fixture) as upstream:
         home=pathlib.Path(temporary).resolve();root=home/'.aieyes/api'
-        api.private(root);api.private(root/'connections');gateway.root=root
         endpoint='http://127.0.0.1:%d'%upstream.server_port
-        c=dict(id='fixture',revision='one',sourceId='cli',name='Fixture API',baseUrl=endpoint+'/v1',model='gpt-6-luna',effort='low',proxy={'mode':'direct'},prices=[])
-        api.atomic(root/'connections/fixture.json',dict(connection=c,apiKey='fixture-upstream-secret',localToken='fixture-local-token',proxyEnvironment={}))
-        api.atomic(root/'runtime.json',dict(port=gateway.server_port))
-        api.atomic(root/'gateway.py','TOMLI='+repr(api.TOMLI)+'\n'+(ROOT/'remote_codex_api.py').read_text(),raw=True)
+        c=dict(id='fixture',revision='one',sourceId='cli',name='Fixture API',baseUrl=endpoint+'/v1')
         claims={'exp':4102444800,'email':'fixture@example.invalid','https://api.openai.com/auth':{'chatgpt_user_id':'fixture-user','chatgpt_account_id':'fixture-workspace','chatgpt_plan_type':'plus'}}
         token='e30.'+base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip('=')+'.fixture'
         auth=dict(auth_mode='chatgpt',tokens=dict(access_token=token,id_token=token,refresh_token='fixture-refresh-token',account_id='fixture-workspace'))
         api.atomic(home/'auth.json',auth)
-        values=dict(model=c['model'],openai_base_url=endpoint+'/v1',chatgpt_base_url=endpoint,analytics={'enabled':False},features={'shell_tool':False,'apps':False,'enable_request_compression':False})
+        values=dict(model='gpt-6-luna',model_reasoning_effort='low',openai_base_url=endpoint+'/v1',chatgpt_base_url=endpoint,analytics={'enabled':False},features={'shell_tool':False,'apps':False,'enable_request_compression':False})
         api.atomic(home/'config.toml',api.toml_text(values),raw=True)
-        profile=dict(model=c['model'],model_provider=api.provider(c),model_providers={api.provider(c):api.provider_table(root,c,{'port':gateway.server_port})})
-        api.atomic(home/(api.provider(c)+'.config.toml'),api.toml_text(profile),raw=True)
         original_auth=(home/'auth.json').read_bytes()
+        original_config=(home/'config.toml').read_bytes()
+        request=dict(home=str(home),sourceId='cli',binary=binary)
+        api.direct_manage(dict(request,action='deploy',params=dict(connection=c,apiKey='fixture-upstream-secret',baseRevision='')),'',{})
+        assert (home/'config.toml').read_bytes()==original_config
+        assert not (root/'runtime.json').exists() and not (root/'gateway.py').exists()
         env={k:v for k,v in os.environ.items() if k in ('PATH','HOME','TMPDIR','LANG','LC_ALL','SYSTEMROOT','WINDIR')}
         env['CODEX_HOME']=str(home)
-        def cli(session=None,profile=False):
+        def cli(session=None):
             args=[binary,'--no-daemon']
-            if profile: args+=['--profile',api.provider(c)]
             args+=['exec','--skip-git-repo-check','--json']
             if session: args+=['resume',session]
             args+=['Reply only OK. Do not use tools.']
@@ -118,28 +116,23 @@ def run(binary):
                 with contextlib.suppress(ValueError): rows.append(json.loads(line))
             if result.returncode or not any(row.get('type')=='turn.completed' for row in rows):
                 detail=result.stderr.decode()+result.stdout.decode()
-                for secret in (token,'fixture-upstream-secret','fixture-local-token','fixture-refresh-token'): detail=detail.replace(secret,'[fixture credential]')
+                for secret in (token,'fixture-upstream-secret','fixture-refresh-token'): detail=detail.replace(secret,'[fixture credential]')
                 raise AssertionError('Codex fixture call failed:\n'+detail[-6000:])
             return next(row['thread_id'] for row in rows if row.get('type')=='thread.started')
-        # Explicit API profile -> subscription -> explicit API profile, one shared conversation.
-        session=cli(profile=True)
-        assert cli(session)==session
-        assert cli(session,profile=True)==session
-        assert upstream.routes==['api','subscription','api'],upstream.routes
+        # The coordinator closes reviewed instances before this native selection.
+        # Each fixture invocation has already exited, so there are no processes to close.
+        session=cli()
+        for target in [dict(kind='api',connectionId=c['id'],revision=c['revision']),dict(kind='account'),dict(kind='api',connectionId=c['id'],revision=c['revision'])]:
+            prepared=api.direct_prepare(home,target)
+            api.direct_select(home,prepared)
+            assert cli(session)==session
+            assert (home/'auth.json').read_bytes()==original_auth
+            current=api.config(home)
+            for key,value in values.items(): assert current[key]==value
+        assert upstream.routes==['subscription','api','subscription','api'],upstream.routes
         assert (home/'auth.json').read_bytes()==original_auth
-        records=api.ledger(root,-1)['records']
-        assert len(records)==2,records
-        assert all(v['status']=='completed' and v['sessionId']==session and v['turnId'] for v in records),records
-        assert len({v['turnId'] for v in records})==2
-        # Default changes apply to subsequent launches without rewriting login credentials.
-        request=dict(home=str(home),sourceId='cli',binary=binary,action='default')
-        api.manage(dict(request,params=dict(id='fixture',revision='one',configRevision=api.revision(home))),'',{})
-        second=cli()
-        api.manage(dict(request,params=dict(id='subscription',configRevision=api.revision(home))),'',{})
-        assert cli(second)==second
-        assert upstream.routes[-2:]==['api','subscription'],upstream.routes
-        assert (home/'auth.json').read_bytes()==original_auth
-        print(json.dumps(dict(cli=pathlib.Path(binary).name,turns=len(upstream.routes),routes=upstream.routes,apiRequests=len(api.ledger(root,-1)['records']),sameConversationResumed=True,sharedAuthUnchanged=True)))
+        assert not (root/'meter.sqlite').exists() and not (root/'runtime.json').exists()
+        print(json.dumps(dict(cli=pathlib.Path(binary).name,turns=len(upstream.routes),routes=upstream.routes,sameConversationResumed=True,sharedAuthUnchanged=True,noGateway=True)))
 
 
 if __name__=='__main__':

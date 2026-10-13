@@ -459,9 +459,6 @@ import Combine
                 for dark in [false, true] {
                     try await capture(Form { CodexAPISettingsSection(model: model) }.formStyle(.grouped), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("codex-api-settings-\(dark ? "dark" : "light").png"))
                     try await capture(CodexAPIEditor(model: model, connection: connection, onSaved: {}), size: NSSize(width: 630, height: 670), dark: dark, to: root.appendingPathComponent("codex-api-editor-\(dark ? "dark" : "light").png"))
-                    if let billing = model.dashboard.billingSummary {
-                        try await capture(CodexBillingSummaryView(billing: billing), size: NSSize(width: 420, height: 320), dark: dark, to: root.appendingPathComponent("codex-api-billing-\(dark ? "dark" : "light").png"))
-                    }
                 }
             }
             if let account = model.settings.accounts.first {

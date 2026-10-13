@@ -2,7 +2,7 @@
 pub mod files;
 pub mod local;
 mod process_auth;
-mod processes;
+pub(crate) mod processes;
 pub(crate) mod remote;
 mod rpc;
 use crate::{Engine, models::*, quota, store::expand};
@@ -35,15 +35,17 @@ pub fn location(source: &Source, settings: &Settings) -> local::Location {
 }
 pub fn home_path(path: &str) -> String {
     let path = path.trim_end_matches(['/', '\\']);
-    for suffix in [
-        "/sessions",
-        "/archived_sessions",
-        "\\sessions",
-        "\\archived_sessions",
-    ] {
-        if let Some(root) = path.strip_suffix(suffix) {
-            return root.into();
+    for (index, _) in path.match_indices(['/', '\\']).rev() {
+        let tail = &path[index + 1..];
+        let component = tail.split(['/', '\\']).next().unwrap_or("");
+        if matches!(component, "sessions" | "archived_sessions") {
+            return path[..index.max(1)].into();
         }
+    }
+    if path.ends_with(".jsonl")
+        && let Some(index) = path.rfind(['/', '\\'])
+    {
+        return path[..index.max(1)].into();
     }
     path.into()
 }
@@ -203,7 +205,7 @@ pub fn validate_settings(s: &Settings) -> Result<()> {
     Ok(())
 }
 impl Engine {
-    pub(crate) fn codex_auth_call(&mut self, method: &str, params: Value) -> Result<Value> {
+    pub(crate) fn codex_auth_call(&mut self, method: &str, mut params: Value) -> Result<Value> {
         let method = method.strip_prefix("codexAuth.").context("账号操作无效")?;
         if method == "reconcile" {
             return self.reconcile_codex(params);
@@ -306,6 +308,19 @@ impl Engine {
             source.codex_home_id.is_some() || method == "inspect",
             "请先启用此来源的多账号管理"
         );
+        if method == "switch.prepare" && params["target"]["kind"] == "api" {
+            let c = settings
+                .codex_apis
+                .iter()
+                .find(|c| Some(c.id.as_str()) == params["target"]["connectionId"].as_str())
+                .context("API 连接已移除，请刷新后重试")?;
+            ensure!(
+                c.source_id == source.id
+                    && params["target"]["revision"].as_str() == Some(c.revision.as_str()),
+                "API 连接或设备设置已变化，请刷新后重试"
+            );
+            params["target"]["sourceId"] = json!(source.id);
+        }
         if method == "profiles.bind" {
             let profile = params["profileId"].as_str().context("请选择账号档案")?;
             let info = backend(&source, &settings, "profiles.list", &json!({}))?;

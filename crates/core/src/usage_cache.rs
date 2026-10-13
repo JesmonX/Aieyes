@@ -291,6 +291,9 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
             ])?;
             while let Some(row) = rows.next()? {
                 let e: UsageEvent = serde_json::from_str(&row.get::<_, String>(0)?)?;
+                if e.tokens.total() == 0 {
+                    continue;
+                }
                 let cost: f64 = row.get(1)?;
                 let covered: u64 = row.get(2)?;
                 let entry = data.entry(e.model.clone()).or_default();

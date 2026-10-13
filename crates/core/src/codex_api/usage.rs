@@ -1,7 +1,9 @@
 use super::*;
 use rusqlite::OptionalExtension;
+#[cfg(test)]
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
 #[derive(Default)]
 pub(crate) struct BillingCache {
     revision: i64,
@@ -53,13 +55,12 @@ pub(crate) fn sync(store: &Store, settings: &Settings, source: &Source) -> Resul
         .db
         .query_row("SELECT value FROM kv WHERE key=?1", [&key], |r| r.get(0))
         .optional()?;
-    if cursor.is_none()
-        && !settings.codex_apis.iter().any(|c| c.source_id == source.id)
-        && !source
-            .auto_valuation
-            .as_ref()
-            .is_some_and(|v| v.mode == "mixed")
-    {
+    let legacy_connection = settings
+        .codex_apis
+        .iter()
+        .any(|c| c.source_id == source.id && !c.model.is_empty());
+    let local_ledger = source.host_id.is_none() && api_root(source)?.join("meter.sqlite").is_file();
+    if cursor.is_none() && !legacy_connection && !local_ledger {
         return Ok(());
     }
     let after = cursor.and_then(|s| s.parse::<i64>().ok()).unwrap_or(-1);
@@ -117,6 +118,9 @@ impl Store {
         if event.provider != "codex" || event.turn_id.is_empty() {
             return Ok(event.billing.category.clone());
         }
+        if let Some(category) = self.native_billing(event)? {
+            return Ok(category);
+        }
         // Match through the turn and response indexes instead of sorting the full ledger per event.
         let mut query = self.db.prepare("SELECT DISTINCT r.status FROM api_requests r
             WHERE r.source_id IN (SELECT source_id FROM event_sources WHERE event_id=?3)
@@ -144,6 +148,7 @@ impl Store {
         Ok(!uncertain)
     }
 
+    #[cfg(test)]
     pub(crate) fn billing_summary(&self, filter: &Filter) -> Result<Value> {
         use chrono::{Duration as Days, Local, TimeZone};
         if filter.provider.as_deref().is_some_and(|v| v != "codex") {

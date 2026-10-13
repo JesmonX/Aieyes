@@ -138,7 +138,7 @@ fn reset_pauses_at_last_valid_checkpoint_and_requires_explicit_restart() {
     );
 }
 #[test]
-fn low_sample_missing_price_and_ambiguous_boundary_never_produce_a_number() {
+fn small_samples_display_immediately_and_bad_intervals_keep_the_valid_value() {
     let (_dir, store, source, mut q) = setup();
     let e = store
         .begin_estimate(&q, "weekly", vec![source.id.clone()], None)
@@ -147,15 +147,9 @@ fn low_sample_missing_price_and_ambiguous_boundary_never_produce_a_number() {
     q.updated_at += 10;
     q.windows[0].used_percent = 22.0;
     store.quota(&q).unwrap();
-    assert!(
-        store
-            .estimate_for(&e.id, false)
-            .unwrap()
-            .quota()
-            .unwrap()
-            .weekly_value
-            .is_none()
-    );
+    let small = store.estimate_for(&e.id, false).unwrap();
+    assert_eq!(small.quota().unwrap().weekly_value, Some(50.0));
+    assert!(small.calculation_note.contains("小样本"));
     let mut event = usage::parse(
         &source,
         &mut ParseState::default(),
@@ -174,6 +168,15 @@ fn low_sample_missing_price_and_ambiguous_boundary_never_produce_a_number() {
             .unwrap()
             .calculation_note
             .contains("价格")
+    );
+    assert_eq!(
+        store
+            .estimate_for(&e.id, false)
+            .unwrap()
+            .quota()
+            .unwrap()
+            .weekly_value,
+        Some(50.0)
     );
     event.id = "boundary".into();
     event.attribution = "session-summary".into();

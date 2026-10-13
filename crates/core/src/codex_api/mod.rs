@@ -1,5 +1,7 @@
 //! Managed API connections share Codex history, with request-level billing evidence.
+pub(crate) mod direct;
 pub mod gateway;
+pub use direct::key;
 mod scheduler;
 pub(crate) mod usage;
 use crate::{Engine, models::*, process, store::Store};
@@ -58,13 +60,7 @@ fn atomic(path: &Path, value: &impl Serialize) -> Result<()> {
     crate::codex_auth::files::atomic(path, &serde_json::to_value(value)?)
 }
 fn api_root(source: &Source) -> Result<PathBuf> {
-    let mut home = crate::store::expand(&source.path);
-    if home
-        .file_name()
-        .is_some_and(|v| v == "sessions" || v == "archived_sessions")
-    {
-        home.pop();
-    }
+    let home = crate::store::expand(&crate::codex_auth::home_path(&source.path));
     crate::codex_auth::files::safe(&home)?;
     ensure!(home.is_dir(), "Codex 目录不存在");
     Ok(home.join(".aieyes/api"))
@@ -111,10 +107,8 @@ fn validate(c: &Connection) -> Result<()> {
             && url.fragment().is_none(),
         "Base URL 应为不含凭据、查询参数的 HTTP(S) 地址"
     );
-    ensure!(
-        !c.model.is_empty() && c.model.len() <= 200 && !c.model.chars().any(char::is_control),
-        "请输入模型 ID"
-    );
+    // Older private gateway records can still contain these fields. New connections
+    // inherit Codex's model/network settings and never collect a price here.
     ensure!(
         [
             "", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
@@ -353,6 +347,11 @@ fn select_api(
     }
     Ok(())
 }
+fn belongs_to(name: &str, id: &str) -> bool {
+    name.strip_prefix("aieyes_api_")
+        .and_then(|tail| tail.rsplit_once('_'))
+        .is_some_and(|(owner, _)| owner == id)
+}
 fn remove_provider_tables(values: &mut toml::Table, id: &str) -> bool {
     let Some(providers) = values
         .get_mut("model_providers")
@@ -361,8 +360,7 @@ fn remove_provider_tables(values: &mut toml::Table, id: &str) -> bool {
         return false;
     };
     let count = providers.len();
-    let prefix = format!("aieyes_api_{id}_");
-    providers.retain(|name, _| !name.starts_with(&prefix));
+    providers.retain(|name, _| !belongs_to(name, id));
     count != providers.len()
 }
 fn write_default(root: &Path, values: &toml::Table, expected: &str) -> Result<()> {
@@ -744,7 +742,11 @@ fn local(source: &Source, action: &str, params: &Value) -> Result<Value> {
 }
 fn target(settings: &Settings, source: &Source, action: &str, params: &Value) -> Result<Value> {
     let Some(host_id) = &source.host_id else {
-        return local(source, action, params);
+        return if action == "ledger" {
+            local(source, action, params)
+        } else {
+            direct::local(source, action, params)
+        };
     };
     let mut host = settings
         .hosts
@@ -785,6 +787,10 @@ fn target(settings: &Settings, source: &Source, action: &str, params: &Value) ->
 impl Engine {
     pub(crate) fn codex_api_call(&mut self, method: &str, p: Value) -> Result<Value> {
         let action = method.strip_prefix("codexApi.").context("API 操作无效")?;
+        ensure!(
+            !matches!(action, "default" | "command"),
+            "请通过 codexAuth.switch.prepare / commit 检查后切换账号或 API"
+        );
         let mutation = matches!(action, "save" | "deploy" | "remove" | "default");
         let _guard = mutation.then(|| lock_operations(&self.store)).transpose()?;
         let settings = self.store.settings()?;
@@ -802,6 +808,10 @@ impl Engine {
             .context("Codex 数据源不存在")?;
         if action == "save" || action == "deploy" {
             let mut c: Connection = serde_json::from_value(p["connection"].clone())?;
+            c.model.clear();
+            c.effort.clear();
+            c.proxy = ProxyConfig::default();
+            c.prices.clear();
             if c.id.is_empty() {
                 c.id = new_id();
             }
@@ -831,7 +841,6 @@ impl Engine {
             );
             next.codex_apis.retain(|v| v.id != c.id);
             next.codex_apis.push(c.clone());
-            usage::retain_ledger(&self.store, source)?;
             self.store.save_settings(&next)?;
             tx.commit()?;
             return Ok(
@@ -859,7 +868,9 @@ impl Engine {
             let mut next = self.store.settings()?;
             next.codex_apis
                 .retain(|c| Some(c.id.as_str()) != p["id"].as_str());
-            usage::retain_ledger(&self.store, source)?;
+            if result["legacyLedger"] == true {
+                usage::retain_ledger(&self.store, source)?;
+            }
             self.store.save_settings(&next)?;
             tx.commit()?;
             let _ = usage::sync(&self.store, &settings, source);

@@ -81,13 +81,29 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     }
     let prices = store.prices()?;
     let files = paths(source)?;
+    let mut history = if source.provider == "codex" {
+        store.prepare_history_corrections()?;
+        Some(crate::codex_history::Resolver::new(source, &files))
+    } else {
+        None
+    };
     let mut count = 0;
     let mut malformed = 0;
     let mut read_bytes = 0;
+    let mut missing_history = 0;
     for path in &files {
-        let (n, b, m) = scan_file(store, settings, source, path, &prices, full)?;
+        let (n, b, m, missing) = scan_file(
+            store,
+            settings,
+            source,
+            path,
+            &prices,
+            full,
+            history.as_mut(),
+        )?;
         count += n;
         read_bytes += b;
+        missing_history += missing;
         malformed += m;
     }
     let mut result = json!({"updatedAt":now(),"newEvents":count,"files":files.len(),"readBytes":read_bytes,"malformedLines":malformed});
@@ -95,7 +111,16 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         result["partial"] = json!(true);
         result["issues"] = json!([{"code":"invalidRecord","message":format!("{malformed} 行记录格式无效，已保留其他可读取的历史。") }]);
     }
+    if missing_history > 0 {
+        result["partial"] = json!(true);
+        result["missingHistoryBases"] = json!(missing_history);
+        if !result["issues"].is_array() {
+            result["issues"] = json!([]);
+        }
+        result["issues"].as_array_mut().unwrap().push(json!({"code":"missingHistoryBase","message":format!("{missing_history} 个会话缺少可验证的父历史，首段累计暂不计入；父记录恢复后自动补全。") }));
+    }
     store.source_status(&source.id, &result)?;
+    store.repair_history_estimates()?;
     Ok(result)
 }
 
@@ -106,7 +131,8 @@ fn scan_file(
     path: &Path,
     prices: &[ModelPrice],
     full: bool,
-) -> Result<(u64, u64, u64)> {
+    mut history: Option<&mut crate::codex_history::Resolver>,
+) -> Result<(u64, u64, u64, u64)> {
     let file = File::open(path).context("打开记录失败")?;
     let len = file.metadata()?.len();
     let mut reader = BufReader::new(file);
@@ -120,11 +146,21 @@ fn scan_file(
     } else {
         store.cursor(&source.id, &key)?
     };
+    let parent_changed = cursor
+        .as_ref()
+        .and_then(|(_, _, state)| state.inherited_history.as_ref())
+        .is_some_and(|old| {
+            history.as_deref_mut().is_some_and(|r| {
+                let fresh = r.refresh(old);
+                fresh.proof != old.proof || fresh.tokens != old.tokens
+            })
+        });
     let (offset, mut state) = match cursor {
         Some((s, o, p))
             if s == signature
                 && o <= len
-                && (source.provider != "codex" || p.parser_version == usage::PARSER_VERSION) =>
+                && (source.provider != "codex" || p.parser_version == usage::PARSER_VERSION)
+                && !parent_changed =>
         {
             (o, p)
         }
@@ -137,7 +173,17 @@ fn scan_file(
         ),
     };
     if offset == len {
-        return Ok((0, 0, 0));
+        return Ok((
+            0,
+            0,
+            0,
+            u64::from(
+                state
+                    .inherited_history
+                    .as_ref()
+                    .is_some_and(|h| h.tokens.is_none()),
+            ),
+        ));
     }
     reader.seek(SeekFrom::Start(offset))?;
     let mut pos = offset;
@@ -173,9 +219,22 @@ fn scan_file(
         for line in rows {
             match serde_json::from_slice::<Value>(&line) {
                 Ok(v) => {
-                    if let Some(e) = usage::parse(source, &mut state, &v)
-                        && store.put_event(&e, prices, settings)?
+                    let baseline = history.as_deref_mut().and_then(|r| r.metadata(&v));
+                    let parsed = usage::parse(source, &mut state, &v);
+                    if state.first_inherited_count
+                        && let Some(baseline) = baseline
                     {
+                        crate::codex_history::seed(&mut state, baseline);
+                    }
+                    let changed = if let Some(correction) = state.counter_correction.take() {
+                        store.put_counter_correction(&correction, prices, settings)?
+                            && correction.event.tokens.total() > 0
+                    } else if let Some(e) = parsed {
+                        store.put_event(&e, prices, settings)?
+                    } else {
+                        false
+                    };
+                    if changed {
                         inserted += 1;
                     }
                     if source.provider == "codex"
@@ -199,7 +258,17 @@ fn scan_file(
         store.set_cursor(&source.id, &key, &signature, pos, &state)?;
         tx.commit()?;
     }
-    Ok((inserted, pos - offset, malformed))
+    Ok((
+        inserted,
+        pos - offset,
+        malformed,
+        u64::from(
+            state
+                .inherited_history
+                .as_ref()
+                .is_some_and(|h| h.tokens.is_none()),
+        ),
+    ))
 }
 
 #[cfg(test)]

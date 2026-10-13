@@ -7,6 +7,37 @@ pub(super) enum Usage {
     Account,
     IndependentApi,
     UnknownProfile,
+    DefaultApi,
+}
+
+pub(super) fn uses_default(args: &[String]) -> bool {
+    let mut index = 1;
+    while let Some(arg) = args.get(index) {
+        if arg == "--" {
+            break;
+        }
+        if arg == "--profile" || arg.starts_with("--profile=") || arg.starts_with("-p") {
+            return false;
+        }
+        let raw = if arg == "--config" || arg == "-c" {
+            index += 1;
+            args.get(index).map(String::as_str)
+        } else {
+            arg.strip_prefix("--config=").or_else(|| {
+                arg.strip_prefix("-c")
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.strip_prefix('=').unwrap_or(s))
+            })
+        };
+        if raw
+            .and_then(|s| s.split_once('='))
+            .is_some_and(|(key, _)| key.trim().trim_matches(['\'', '"']) == "model_provider")
+        {
+            return false;
+        }
+        index += 1;
+    }
+    true
 }
 
 pub(super) fn environment<'a>(env: &'a [u8], key: &str) -> Option<&'a str> {
@@ -350,6 +381,29 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn default_selection_distinguishes_explicit_provider_and_profile_overrides() {
+        for args in [
+            vec!["codex"],
+            vec!["codex", "--model", "example"],
+            vec!["codex", "-c", "model_reasoning_effort='high'"],
+        ] {
+            assert!(uses_default(
+                &args.into_iter().map(str::to_owned).collect::<Vec<_>>()
+            ));
+        }
+        for args in [
+            vec!["codex", "--profile", "api"],
+            vec!["codex", "--profile=api"],
+            vec!["codex", "-c", "model_provider='api'"],
+            vec!["codex", "--config=model_provider='api'"],
+        ] {
+            assert!(!uses_default(
+                &args.into_iter().map(str::to_owned).collect::<Vec<_>>()
+            ));
+        }
+    }
+
+    #[test]
     fn shared_profile_and_override_cases() {
         let cases: Vec<Value> = serde_json::from_str(include_str!(
             "../../../../scripts/fixtures/codex-process-auth.json"
@@ -392,6 +446,7 @@ mod tests {
                 Usage::Account => "account",
                 Usage::IndependentApi => "independentApi",
                 Usage::UnknownProfile => "unknownProfile",
+                Usage::DefaultApi => "defaultApi",
             };
             assert_eq!(
                 actual,

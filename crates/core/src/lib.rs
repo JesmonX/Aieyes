@@ -7,10 +7,13 @@ pub mod automatic;
 pub mod capacity;
 pub mod codex_api;
 pub mod codex_auth;
+pub mod codex_history;
+mod codex_routes;
 pub mod contracts;
 pub mod credentials;
 pub mod estimates;
 pub mod file_lock;
+mod history_corrections;
 mod host_sampling;
 pub mod import;
 pub mod metrics;
@@ -456,12 +459,14 @@ impl Engine {
                     let result = if source.host_id.is_some() {
                         fetched.remove(&source.id).context("远程读取结果缺失")?
                     } else {
-                        if full {
-                            self.progress(&format!("全量重扫 · {}", source.name));
-                            import::rescan(&self.store, &settings, source)
-                        } else {
-                            import::scan(&self.store, &settings, source)
-                        }
+                        codex_routes::sync(&self.store, source).and_then(|_| {
+                            if full {
+                                self.progress(&format!("全量重扫 · {}", source.name));
+                                import::rescan(&self.store, &settings, source)
+                            } else {
+                                import::scan(&self.store, &settings, source)
+                            }
+                        })
                     };
                     let result = result.and_then(|value| {
                         codex_api::usage::sync(&self.store, &settings, source)?;

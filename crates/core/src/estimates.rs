@@ -115,6 +115,20 @@ pub struct EstimateSegment {
 }
 
 impl Estimate {
+    pub(crate) fn clear_values(&mut self) {
+        match self {
+            Self::Quota(e) => {
+                e.five_hour_value = None;
+                e.weekly_value = None;
+                e.weekly_direct_value = None;
+                e.weekly_ratio_value = None;
+            }
+            Self::Credit(e) => {
+                e.value_per500 = None;
+                e.value_per1000 = None;
+            }
+        }
+    }
     pub fn quota(&self) -> Option<&QuotaEstimate> {
         if let Self::Quota(e) = self {
             Some(e)
@@ -192,17 +206,28 @@ fn decode_estimate(kind: &str, raw: &str) -> Result<Estimate> {
     Ok(serde_json::from_value(value)?)
 }
 
-fn value_ready(e: &mut EstimateCommon, insufficient: bool, note: &str) -> bool {
+pub(crate) fn finite_value(cost: f64, consumed: f64, scale: f64) -> Option<f64> {
+    if !cost.is_finite() || cost < 0.0 || !consumed.is_finite() || consumed <= 0.0 {
+        return None;
+    }
+    let value = cost / consumed * scale;
+    value.is_finite().then_some(value)
+}
+
+fn value_ready(e: &mut EstimateCommon, consumed: f64, note: &str) -> bool {
     if e.calculation_status != "ready" {
         return false;
     }
-    if insufficient {
+    if consumed <= 0.0 || !consumed.is_finite() {
         e.calculation_status = "insufficientUsage".into();
-        e.calculation_note = note.into();
-    } else if !e.cost.is_finite() || e.cost < 0.0 {
+        e.calculation_note = "等待可确认的正向消耗；已保留有效估值".into();
+    } else if finite_value(e.cost, consumed, 1000.0).is_none() {
         e.calculation_status = "invalidPrice".into();
         e.calculation_note = "价格数据无效".into();
     } else {
+        if consumed < 5.0 {
+            e.calculation_note = note.into();
+        }
         return true;
     }
     false
@@ -332,6 +357,73 @@ fn shared_sources(settings: &Settings, ids: &[String]) -> Vec<String> {
 }
 
 impl Store {
+    pub(crate) fn recalculate_history_values(&self, e: &mut Estimate) -> Result<()> {
+        // A prior invalidation may have found no usable rows. Preserve the
+        // original price basis so later parent arrival can repair the same span.
+        let frozen = e.repair_prices.clone().unwrap_or_else(|| e.prices.clone());
+        e.repair_prices = Some(frozen.clone());
+        if e.sampling_mode == "automatic" {
+            let group = e.quota().and_then(|v| v.group_id.clone());
+            for index in 0..e.automatic_segments.len() {
+                let segment = &e.automatic_segments[index];
+                let mut sample = EstimateCommon {
+                    sampling_mode: "automatic".into(),
+                    account_key: e.account_key.clone(),
+                    source_ids: e.source_ids.clone(),
+                    shared_source_ids: e.shared_source_ids.clone(),
+                    started_at: segment.started_at,
+                    checkpoint_at: segment.ended_at,
+                    repair_prices: Some(if segment.prices.is_empty() {
+                        frozen.clone()
+                    } else {
+                        segment.prices.clone()
+                    }),
+                    ..Default::default()
+                };
+                self.calculate_usage(&mut sample, group.as_deref())?;
+                let segment = &mut e.automatic_segments[index];
+                if segment.pool.is_empty() && segment.weekly_consumed > 0.0 {
+                    if segment.weekly_cost == segment.cost {
+                        segment.weekly_cost = sample.cost;
+                    } else {
+                        segment.weekly_consumed = 0.0;
+                        segment.weekly_cost = 0.0;
+                    }
+                }
+                segment.cost = sample.cost;
+                segment.tokens = sample.total_tokens;
+                segment.priced_tokens = sample.priced_tokens;
+                segment.valid = sample.calculation_status == "ready"
+                    && finite_value(sample.cost, segment.consumed, 1000.0).is_some();
+                segment.note = sample.calculation_note;
+                if !sample.prices.is_empty() {
+                    segment.prices = sample.prices;
+                }
+            }
+            crate::automatic::recalculate(e);
+            return Ok(());
+        }
+        if let Estimate::Quota(quota) = e
+            && quota.valuation_mode == "fiveHour"
+        {
+            for index in 0..quota.segments.len() {
+                let old = &quota.segments[index];
+                let mut part = quota.clone();
+                part.repair_prices = Some(old.prices.clone());
+                part.segment_started_at = old.started_at;
+                part.checkpoint_at = old.ended_at;
+                part.baseline_percent = 0.0;
+                part.checkpoint_percent = old.five_percent;
+                part.weekly_baseline_percent = 0.0;
+                part.weekly_checkpoint_percent = old.weekly_percent.unwrap_or(0.0);
+                quota.segments[index] = self.current_segment(&part)?;
+            }
+        }
+        self.calculate_estimate(e)?;
+        e.prices = frozen;
+        Ok(())
+    }
+
     fn ensure_shared_sample_available(&self, ids: &[String], account_key: &str) -> Result<()> {
         ensure!(
             !self.active_estimates()?.iter().any(|e| {
@@ -541,7 +633,7 @@ impl Store {
                 }
                 if !w.used_percent.is_finite() || !(0.0..=100.0).contains(&w.used_percent) {
                     Some("额度数值异常")
-                } else if w.resets_at != Some(e.reset_at)
+                } else if !crate::automatic::same_cycle(Some(e.reset_at), w.resets_at, q.updated_at)
                     || q.updated_at >= e.reset_at
                     || w.used_percent + 0.001 < e.checkpoint_percent
                 {
@@ -574,26 +666,23 @@ impl Store {
         }
     }
     fn calculate_quota(&self, e: &mut QuotaEstimate) -> Result<()> {
-        e.calculation_version = 2;
+        e.calculation_version = 3;
         if e.valuation_mode == "fiveHour" {
             return self.calculate_five_hour(e);
         }
-        e.weekly_value = None;
         e.consumed_percent = e.checkpoint_percent - e.baseline_percent;
         self.calculate_usage(&mut e.common, e.group_id.as_deref())?;
         if value_ready(
             &mut e.common,
-            e.consumed_percent + 0.000001 < 5.0,
-            "样本不足：至少消耗 5 个百分点",
+            e.consumed_percent,
+            "小样本：额度消耗较少，估值会随样本积累更新",
         ) {
-            e.weekly_value = Some(e.cost * 100.0 / e.consumed_percent);
+            e.weekly_value = finite_value(e.cost, e.consumed_percent, 100.0);
         }
         Ok(())
     }
     fn calculate_credit(&self, e: &mut CreditEstimate) -> Result<()> {
-        e.calculation_version = 2;
-        e.value_per500 = None;
-        e.value_per1000 = None;
+        e.calculation_version = 3;
         e.consumed_credits = e
             .baseline_balance
             .as_deref()
@@ -605,11 +694,11 @@ impl Store {
         self.calculate_usage(&mut e.common, None)?;
         if value_ready(
             &mut e.common,
-            e.consumed_credits < 5.0,
-            "样本不足：至少消耗 5 credits",
+            e.consumed_credits,
+            "小样本：credits 消耗较少，估值会随样本积累更新",
         ) {
-            e.value_per500 = Some(e.cost * 500.0 / e.consumed_credits);
-            e.value_per1000 = Some(e.cost * 1000.0 / e.consumed_credits);
+            e.value_per500 = finite_value(e.cost, e.consumed_credits, 500.0);
+            e.value_per1000 = finite_value(e.cost, e.consumed_credits, 1000.0);
         }
         Ok(())
     }
@@ -626,14 +715,10 @@ impl Store {
         e.excluded_api_tokens = 0;
         e.prices.clear();
         let settings = self.settings()?;
-        let mixed = provider == "codex"
-            && settings.sources.iter().any(|s| {
-                e.source_ids.contains(&s.id)
-                    && (s.auto_valuation.as_ref().is_some_and(|v| v.mode == "mixed")
-                        || settings.codex_apis.iter().any(|c| c.source_id == s.id))
-            });
-        let mut unknown_billing =
-            mixed && !self.api_interval_complete(&e.source_ids, e.started_at, e.checkpoint_at)?;
+        let strict = provider == "codex";
+        let mut unknown_billing = strict
+            && (!self.api_interval_complete(&e.source_ids, e.started_at, e.checkpoint_at)?
+                || !self.native_interval_complete(&e.source_ids, e.started_at, e.checkpoint_at)?);
         let mut boundary = false;
         let mut unmapped_group = false;
         // EXISTS avoids multiplying events observed through several selected sources.
@@ -659,12 +744,19 @@ impl Store {
         for row in rows {
             let (raw, mut cost, mut priced, mut price) = row?;
             let event: UsageEvent = serde_json::from_str(&raw)?;
+            if event.attribution == "unresolved-inheritance" {
+                unknown_billing = true;
+                continue;
+            }
+            if event.tokens.total() == 0 {
+                continue;
+            }
             let billing = self.effective_billing(&event)?;
             if billing == "api" {
                 e.excluded_api_tokens += event.tokens.total();
                 continue;
             }
-            if mixed && billing != "subscription" {
+            if strict && billing != "subscription" {
                 unknown_billing = true;
                 continue;
             }
@@ -722,7 +814,7 @@ impl Store {
         }
         e.calculation_note = if unknown_billing {
             e.calculation_status = "unknownBilling".into();
-            "存在未归属用量或不完整 API 请求，本区间不参与订阅估值；已保留有效值"
+            "存在未归属、缺失父历史或不完整请求，本区间不参与估值；已保留有效值"
         } else if unmapped_group {
             e.calculation_status = "unmappedGroup".into();
             "存在无法归属额度组的模型，请补全模型映射后重新计算"
@@ -924,7 +1016,8 @@ impl Store {
         part.valuation_mode.clear();
         part.started_at = e.segment_started_at;
         self.calculate_quota(&mut part)?;
-        let valid = !["boundary", "unmappedGroup"].contains(&part.calculation_status.as_str())
+        let valid = ["ready", "insufficientUsage", "noUsage"]
+            .contains(&part.calculation_status.as_str())
             && part.priced_tokens == part.total_tokens
             && part.cost.is_finite()
             && part.cost >= 0.0
@@ -955,10 +1048,6 @@ impl Store {
         e.excluded_api_tokens = 0;
         e.consumed_percent = 0.0;
         e.prices.clear();
-        e.five_hour_value = None;
-        e.weekly_direct_value = None;
-        e.weekly_ratio_value = None;
-        e.weekly_value = None;
         let (mut week_cost, mut week_percent) = (0.0, 0.0);
         let mut valid = true;
         for part in &parts {
@@ -999,22 +1088,23 @@ impl Store {
         } else if e.total_tokens == 0 {
             e.calculation_status = "noUsage".into();
             "暂无可计入的订阅用量".into()
-        } else if e.consumed_percent + 0.000001 < 5.0 {
+        } else if finite_value(e.cost, e.consumed_percent, 100.0).is_none() {
             e.calculation_status = "insufficientUsage".into();
-            "样本不足：5h 至少消耗 5 个百分点".into()
+            "等待可确认的正向消耗；已保留有效估值".into()
         } else {
             e.calculation_status = "ready".into();
-            e.five_hour_value = Some(e.cost * 100.0 / e.consumed_percent);
-            if week_percent > 0.000001 {
-                e.weekly_direct_value = Some(week_cost * 100.0 / week_percent);
+            e.five_hour_value = finite_value(e.cost, e.consumed_percent, 100.0);
+            if let Some(value) = finite_value(week_cost, week_percent, 100.0) {
+                e.weekly_direct_value = Some(value);
                 e.weekly_value = e.weekly_direct_value;
             }
             e.weekly_ratio_value = e
                 .five_hour_value
                 .zip(e.capacity.ratio)
-                .map(|(value, ratio)| value * ratio);
-            if week_percent > 0.0 && week_percent < 5.0 {
-                "5h 采样估值 · 7d 同期样本较少".into()
+                .map(|(value, ratio)| value * ratio)
+                .filter(|v| v.is_finite());
+            if e.consumed_percent < 5.0 || week_percent > 0.0 && week_percent < 5.0 {
+                "小样本：估值会随 5h / 7d 用量积累更新".into()
             } else {
                 "5h 采样估值 · 正常重置后自动接续".into()
             }
@@ -1046,10 +1136,15 @@ impl Store {
             if let Some(w) = primary.filter(|w| {
                 crate::capacity::valid(w) && w.resets_at.is_some_and(|t| t > q.updated_at)
             }) {
-                let reset = w.resets_at != Some(e.reset_at) || q.updated_at >= e.reset_at;
+                let reset =
+                    !crate::automatic::same_cycle(Some(e.reset_at), w.resets_at, q.updated_at);
                 let weekly_reset = !e.weekly_window_id.is_empty()
                     && weekly.is_some_and(|w| {
-                        w.resets_at != Some(e.weekly_reset_at) || q.updated_at >= e.weekly_reset_at
+                        !crate::automatic::same_cycle(
+                            Some(e.weekly_reset_at),
+                            w.resets_at,
+                            q.updated_at,
+                        )
                     });
                 if !e.weekly_window_id.is_empty()
                     && weekly.is_none_or(|w| {

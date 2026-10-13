@@ -19,36 +19,23 @@ private struct AutomaticValuationSourceControls: View {
     @ObservedObject var model: AppModel
     let source: AgentSource
     @State private var confirmed = false
-    @State private var mode = "subscription"
     private var enabled: Bool { source.autoValuation?.enabled == true }
-    private var savedMode: String { source.autoValuation?.mode == "mixed" ? "mixed" : "subscription" }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(source.name)
-            if source.provider == "codex" {
-                Picker("计费方式", selection: $mode) {
-                    Text("仅订阅与 credits").tag("subscription")
-                    Text("订阅与 API 混用").tag("mixed")
-                }
-            }
-            if !enabled || mode != savedMode {
-                Toggle(mode == "mixed" ? "我确认影响订阅额度的所有设备用量均已纳入；API 用量通过计量服务识别，未归属或不完整的区间不参与订阅及 credits 估值。" : "我确认仅使用订阅账号及其 credits，不使用 API／中转；影响额度的所有设备用量均已纳入。", isOn: $confirmed)
+            if !enabled {
+                Toggle("我确认影响订阅额度的所有设备用量均已纳入；按日志识别 API，不确定的区间跳过。", isOn: $confirmed)
             }
             HStack {
                 Button(enabled ? "关闭自动估值" : "开启自动估值") {
-                    Task { await model.configureAutomatic(source, enabled: !enabled, confirmed: confirmed, mode: mode); confirmed = false }
+                    Task { await model.configureAutomatic(source, enabled: !enabled, confirmed: confirmed); confirmed = false }
                 }.disabled(!enabled && !confirmed)
-                if enabled && mode != savedMode {
-                    Button("保存计费方式") { Task { await model.configureAutomatic(source, enabled: true, confirmed: confirmed, mode: mode); confirmed = false } }.disabled(!confirmed)
-                }
             }
             if enabled {
                 Text(model.dashboard.sources.first { $0.id == source.id }?.autoValuationStatus?.note ?? "等待首个实时订阅快照").font(AppFont.secondary).foregroundStyle(.secondary)
             }
         }.disabled(model.automaticSaving)
-            .onAppear { mode = savedMode }
-            .onChange(of: mode) { _, _ in confirmed = false }
-            .onChange(of: savedMode) { _, value in mode = value; confirmed = false }
+            .onChange(of: enabled) { _, _ in confirmed = false }
     }
 }
 
@@ -282,7 +269,7 @@ struct QuotaEstimateView: View {
                         if sources.contains(where: { $0.codexHomeId != nil }) {
                             Text("共享目录只计算本次采样时段。采样期间请只使用此账户；切换账户前结束采样，切换后重新开始。").font(AppFont.secondary).foregroundStyle(.secondary)
                         }
-                        Text(credits ? "建议开始后新建会话，至少消耗 5 credits 且价格完整后输出估值。充值或包含额度恢复后需要开始新一段。" : "建议开始后新建会话。跨起始边界的累计用量会使本次结果不可用；5h 至少消耗 5 个百分点后输出估值；7d 同期消耗较少时会标注样本较少。").font(AppFont.secondary).foregroundStyle(.secondary)
+                        Text(credits ? "建议开始后新建会话。出现可确认的 credits 消耗且价格完整后即显示估值；小样本会有提示。充值或包含额度恢复后需要开始新一段。" : "建议开始后新建会话。出现可确认的额度消耗且价格完整后即显示估值；小样本会有提示。跨起始边界的累计用量不参与计算。").font(AppFont.secondary).foregroundStyle(.secondary)
                         Button("开始采样") { perform("start", ["accountKey": quota.id, "windowId": credits ? "credits" : window, "sourceIds": Array(selected), "confirmed": confirmed]) }.buttonStyle(.borderedProminent).disabled(!confirmed || selected.isEmpty || (!credits && window.isEmpty) || busy)
                     } else {
                         Text(sources.isEmpty ? "需要可采集 Token 的关联数据源，请检查数据目录和账户关联。" : credits ? "需要明确且有限的 credits 余额；请刷新账户限额。" : "此额度池缺少可靠的模型映射，暂不支持估值。").foregroundStyle(.secondary)

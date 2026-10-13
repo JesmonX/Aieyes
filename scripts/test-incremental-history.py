@@ -12,11 +12,11 @@ from unittest.mock import patch
 SCRIPT = pathlib.Path(__file__).with_name('remote_history.py')
 
 
-def collect(path, provider='custom', cursors=None):
+def collect(path, provider='custom', cursors=None, route_cursor=None):
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         try:
-            runpy.run_path(str(SCRIPT), init_globals={'REQUEST': dict(path=str(path), provider=provider, protocol=2, cursors=cursors or {})})
+            runpy.run_path(str(SCRIPT), init_globals={'REQUEST': dict(path=str(path), provider=provider, protocol=2, cursors=cursors or {}, routeCursor=route_cursor or {})})
         except SystemExit as error:
             assert error.code == 0
     lines = output.getvalue().splitlines()
@@ -37,6 +37,64 @@ def record(number, model='fixture'):
 
 
 class IncrementalHistory(unittest.TestCase):
+    def test_fork_resolves_archived_multilevel_parent_and_rechecks_changed_proof(self):
+        with tempfile.TemporaryDirectory() as root:
+            home=pathlib.Path(root);sessions=home/'sessions/2026/10/13';archive=home/'archived_sessions'
+            sessions.mkdir(parents=True);archive.mkdir()
+            def line(value): return json.dumps(value)+'\n'
+            def meta(identity, base=None): return line(dict(type='session_meta',payload=dict(id=identity,history_base=base) if base else dict(id=identity)))
+            def count(total): return line(dict(type='event_msg',timestamp=1800000000,payload=dict(type='token_count',info=dict(total_token_usage=dict(input_tokens=total)))))
+            parent=meta('parent')+line(dict(type='response_item',payload=dict(text='PRIVATE_PARENT_TEXT')))+count(900)
+            middle=meta('middle',dict(thread_id='parent',end_byte_offset=len(parent.encode())))
+            child=meta('child',dict(thread_id='middle',end_byte_offset=len(middle.encode())))+count(1000)
+            (archive/'parent.jsonl').write_text(parent+count(9999));(archive/'middle.jsonl').write_text(middle)
+            (sessions/'child.jsonl').write_text(child)
+            first=collect(sessions,'codex')
+            inherited=events(first)[0]['inheritedHistory']
+            self.assertEqual(inherited['tokens']['input'],900)
+            self.assertNotIn('PRIVATE_PARENT_TEXT',json.dumps(first))
+            self.assertEqual(collect(sessions,'codex',cursors(first))[-1]['readBytes'],0)
+            (archive/'parent.jsonl').write_text(parent.replace('900','800')+count(9999))
+            changed=collect(sessions,'codex',cursors(first))
+            self.assertEqual(events(changed)[0]['inheritedHistory']['tokens']['input'],800)
+            self.assertTrue(changed[0]['reset'])
+            self.assertNotEqual(events(changed)[0]['inheritedHistory']['proof'],inherited['proof'])
+
+    def test_missing_fork_parent_recovers_without_a_stale_missing_issue(self):
+        with tempfile.TemporaryDirectory() as root:
+            home=pathlib.Path(root)
+            parent=json.dumps(dict(type='session_meta',payload=dict(id='parent')))+'\n'
+            child=dict(type='session_meta',payload=dict(id='child',history_base=dict(thread_id='parent',end_byte_offset=len(parent))))
+            (home/'child.jsonl').write_text(json.dumps(child)+'\n')
+            first=collect(home,'codex');self.assertTrue(first[-1]['partial'])
+            (home/'parent.jsonl').write_text(parent)
+            restored=collect(home,'codex',cursors(first))
+            self.assertFalse(restored[-1]['partial'])
+            self.assertEqual(next(e for e in events(restored) if e.get('inheritedHistory'))['inheritedHistory']['tokens']['input'],0)
+
+    def test_native_routes_are_incremental_and_never_export_private_request_fields(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as root:
+            home=pathlib.Path(root);sessions=home/'sessions/2026/10/13';sessions.mkdir(parents=True)
+            with sqlite3.connect(home/'logs_2.sqlite') as db:
+                db.execute('CREATE TABLE logs(id INTEGER PRIMARY KEY,ts INTEGER,ts_nanos INTEGER,target TEXT,feedback_log_body TEXT,thread_id TEXT,process_uuid TEXT)')
+                def insert(identity,body):
+                    db.execute("INSERT INTO logs VALUES(?,1800000000,0,'codex_http_client::client',?,'session','process')",(identity,body));db.commit()
+                insert(1,'url="https://secret:password@api.openai.com/v1/responses?api_key=PRIVATE" turn_id="turn" status=200 request_body="PROMPT"')
+                insert(2,'url="https://api.openai.com/v1/models" status=200')
+                first=collect(sessions,'codex');route=next(f for f in first if f['kind']=='routes')
+                self.assertEqual(len(route['routes']),1)
+                self.assertEqual(route['routes'][0]['category'],'api')
+                self.assertEqual(route['routes'][0]['turnId'],'turn')
+                for forbidden in ('secret','password','PRIVATE','PROMPT','api_key'): self.assertNotIn(forbidden,json.dumps(first))
+                second=collect(sessions,'codex',route_cursor=route['cursor'])
+                self.assertFalse(any(f['kind']=='routes' for f in second))
+                insert(3,'url="https://chatgpt.com/backend-api/codex/responses" turn_id="next" status=200')
+                third=collect(sessions,'codex',route_cursor=route['cursor'])
+                new=next(f for f in third if f['kind']=='routes')
+                self.assertEqual(len(new['routes']),1)
+                self.assertEqual(new['routes'][0]['category'],'subscription')
+
     def test_append_partial_line_replacement_and_truncation(self):
         with tempfile.TemporaryDirectory() as root:
             path = pathlib.Path(root) / 'fixture.jsonl'

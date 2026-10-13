@@ -260,36 +260,6 @@
       "updateBehavior": "cancel"
     },
     {
-      "name": "codexApi.command",
-      "lane": "accounts",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "observe"
-    },
-    {
-      "name": "codexApi.default",
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": true,
-      "refreshKey": null,
-      "updateBehavior": "finish"
-    },
-    {
-      "name": "codexApi.deploy",
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": true,
-      "refreshKey": null,
-      "updateBehavior": "finish"
-    },
-    {
       "name": "codexApi.list",
       "lane": "accounts",
       "invalidates": [],

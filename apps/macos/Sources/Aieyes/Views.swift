@@ -209,9 +209,6 @@ struct RootView: View {
             }
             if !compact { CacheSummaryCard(tokens: usageDashboard.summary.tokens) }
         } else if !model.settings.sources.isEmpty { usageEmptyState }
-        if let billing = usageDashboard.billingSummary, billing.visible {
-            CodexBillingSummaryView(billing: billing, compact: compact)
-        }
         quotaSection
         if !model.runningEstimates.isEmpty {
             Button { model.showSampling?() } label: { HStack { Text(model.samplingSummary); Spacer(); Text("管理采样"); Image(systemName: "chevron.right") }.font(AppFont.secondary) }.buttonStyle(.plain).foregroundStyle(model.samplingNeedsAttention ? Palette.warn : Palette.accent)

@@ -21,6 +21,17 @@ VERSION = 1
 CLIENT_VERSION = globals().get('_aieyes_client_version', 'development')
 
 
+def api_helpers():
+    global _aieyes_api
+    if '_aieyes_api' not in globals():
+        # Local offline tests load this module by filename; SSH and deployed runners embed it.
+        source = pathlib.Path(__file__).with_name('remote_codex_api.py').read_text()
+        _aieyes_api = {'__name__': 'aieyes_api', 'TOMLI': globals().get('_aieyes_tomli_sources', {})}
+        exec(compile(source, '<aieyes-api>', 'exec'), _aieyes_api)
+        _aieyes_api['parse_toml'] = parse_toml
+    return _aieyes_api
+
+
 def identifier(value):
     if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9-]{1,80}', value):
         raise ValueError('管理标识无效')
@@ -316,7 +327,24 @@ def process_auth_usage(args, env, started, system=pathlib.Path('/etc/codex/confi
         return fallback
 
 
-def switch_running(confirmed=(), proc_root=pathlib.Path('/proc'), preserved=None):
+def default_selection(args):
+    index = 1
+    while index < len(args):
+        arg = args[index]
+        if arg == '--': break
+        if arg == '--profile' or arg.startswith(('--profile=', '-p')): return False
+        raw = None
+        if arg in ('--config', '-c'):
+            index += 1
+            if index < len(args): raw = args[index]
+        elif arg.startswith('--config='): raw = arg.split('=', 1)[1]
+        elif arg.startswith('-c'): raw = arg[2:].lstrip('=')
+        if raw and raw.split('=', 1)[0].strip().strip('\'"') == 'model_provider': return False
+        index += 1
+    return True
+
+
+def switch_running(confirmed=(), proc_root=pathlib.Path('/proc'), preserved=None, home=None):
     """Switch scope covers this user's app trees, independently of CODEX_HOME."""
     rows = []
     try:
@@ -345,6 +373,9 @@ def switch_running(confirmed=(), proc_root=pathlib.Path('/proc'), preserved=None
                     args = (entry / 'cmdline').read_bytes().rstrip(b'\0').decode().split('\0')
                     env = dict(item.decode().split('=', 1) for item in (entry / 'environ').read_bytes().split(b'\0') if b'=' in item)
                     usage = process_auth_usage(args, env, boot + int(stat[19]) / ticks if boot is not None else None)
+                    if home is not None and usage == 'independentApi' and default_selection(args):
+                        launch_home = pathlib.Path(env['CODEX_HOME']) if env.get('CODEX_HOME') else pathlib.Path(env['HOME'])/'.codex'
+                        if launch_home.resolve() == home.resolve(): usage = 'account'
                 except (OSError, ValueError): pass
             rows.append(dict(pid=int(entry.name), parentPid=int(stat[1]), name=name,
                              fingerprint=revision([entry.name, stat[19], executable, usage]), canClose=True, authUsage=usage))
@@ -396,7 +427,7 @@ def close_processes(root, expected):
     if any(not p['canClose'] for p in expected):
         raise ValueError('无法确认部分进程归属，请手动关闭 Codex 和 ChatGPT 后重试')
     def checked():
-        actual = switch_running(expected)
+        actual = switch_running(expected, home=root)
         if any(not p['canClose'] for p in actual):
             raise ValueError('进程认证方式或依赖已变化，账号未切换，请重新检查')
         if any(not any(p['pid'] == old['pid'] and p['fingerprint'] == old['fingerprint'] for old in expected) for p in actual):
@@ -761,7 +792,7 @@ def snapshot(root):
         auth = revision(read(root / 'auth.json'))
     except FileNotFoundError:
         auth = None
-    return dict(auth=auth, profiles=[dict(id=p['id'], auth=revision(read(profile_path(root, p['id']) / 'auth.json'))) for p in profiles(root)])
+    return dict(auth=auth, config=revision(config(root)), profiles=[dict(id=p['id'], auth=revision(read(profile_path(root, p['id']) / 'auth.json'))) for p in profiles(root)])
 
 
 def call(request):
@@ -773,7 +804,9 @@ def call(request):
         raise ValueError('Codex 目录不存在')
     root = root.resolve()
     if method == 'status':
-        active_key = active(root)
+        stored = active(root)
+        selected = api_helpers()['direct_selected'](root)
+        active_key = stored if selected['kind'] == 'account' else None
         rows = []
         for p in profiles(root):
             try:
@@ -781,18 +814,21 @@ def call(request):
             except (OSError, ValueError, KeyError):
                 available = False
             rows.append(dict(id=p['id'], identityKey=p['identity']['key'], credential=available))
-        return dict(storageMode=mode(root), currentIdentity=active_key, currentCredential=active_key is not None, profiles=rows)
+        return dict(storageMode=mode(root), currentIdentity=active_key, currentCredential=active_key is not None, storedIdentity=stored, storedCredential=stored is not None, selected=selected, profiles=rows)
     if method in ('inspect', 'list', 'profiles.list'):
+        stored = active(root)
+        selected = api_helpers()['direct_selected'](root)
+        current = stored if selected['kind'] == 'account' else None
         rows = profiles(root)
         for p in rows:
-            p['current'] = active(root) == p['identity']['key']
+            p['current'] = current == p['identity']['key']
         if method == 'profiles.list':
-            return dict(protocolVersion=1, path=str(root), storageMode=mode(root), currentIdentity=active(root), profiles=rows)
+            return dict(protocolVersion=1, path=str(root), storageMode=mode(root), currentIdentity=current, storedIdentity=stored, selected=selected, profiles=rows)
         try:
             version = subprocess.check_output([os.path.expanduser(loc.get('binary') or 'codex'), '--version'], timeout=5, stderr=subprocess.DEVNULL).decode().strip()[:80]
         except (OSError, subprocess.SubprocessError):
             version = None
-        return dict(protocolVersion=1, path=str(root), version=version, storageMode=mode(root), currentIdentity=active(root), profiles=rows, processes=running(root))
+        return dict(protocolVersion=1, path=str(root), version=version, storageMode=mode(root), currentIdentity=current, storedIdentity=stored, selected=selected, profiles=rows, processes=running(root))
     if method == 'model.list':
         with Lock(root):
             require_file(root)
@@ -875,52 +911,66 @@ def call(request):
             return dict(profile=save_profile(root, uuid.uuid4().hex, params.get('name') or '', auth))
         if method == 'switch.prepare':
             require_file(root)
-            p = profile(root, params['profileId'])
+            target = dict(params.get('target') or dict(kind='account', profileId=params.get('profileId')))
+            if target['kind'] == 'account':
+                p = profile(root, target['profileId'])
+                policy(root, current_auth(root, p))
+                target['name'] = p['name']
+            target = api_helpers()['direct_prepare'](root, target)
             op = uuid.uuid4().hex
             preserved = []
-            value = dict(operationId=op, status='prepared', profileId=p['id'], revision=revision(snapshot(root)), processes=switch_running(preserved=preserved), preservedProcesses=preserved, expiresAt=int(time.time()) + 120)
+            value = dict(operationId=op, status='prepared', profileId=target.get('profileId'), target=target, revision=revision(snapshot(root)), processes=switch_running(preserved=preserved, home=root), preservedProcesses=preserved, expiresAt=int(time.time())+120)
             atomic(operation(root, op), value)
             return value
         if method == 'switch.commit':
             require_file(root)
-            op = identifier(params['operationId'])
-            record = read(operation(root, op))
-            if record['status'] == 'succeeded':
-                return record
+            op = identifier(params['operationId']); record = read(operation(root, op))
+            if record['status'] == 'succeeded': return record
+            target = record.get('target')
+            if not target: raise ValueError('切换检查版本已更新，请重新检查')
+            def auth_revision():
+                return revision(read(root/'auth.json')) if (root/'auth.json').exists() else None
             if record['status'] == 'committing':
-                if revision(read(root / 'auth.json')) == record['targetRevision']:
-                    record['status'] = 'succeeded'
-                    atomic(operation(root, op), record)
-                    return record
-                raise ValueError('上次切换未完成，请重新检查当前账号')
-            if record['status'] != 'prepared' or record['expiresAt'] < time.time():
-                raise ValueError('切换检查已过期，请重新检查')
-            if record['revision'] != revision(snapshot(root)):
-                raise ValueError('凭据已更新，请重新检查后切换')
-            if record['processes'] and not params.get('closeProcesses'):
-                raise ValueError('Codex / ChatGPT 正在运行，尚未授权关闭')
+                if auth_revision() == record.get('targetRevision') and api_helpers()['revision'](root) == record.get('targetConfigRevision'):
+                    record['status'] = 'succeeded'; atomic(operation(root, op), record); return record
+                raise ValueError('上次切换未完成，请重新检查当前登录方式')
+            if record['status'] != 'prepared' or record['expiresAt'] < time.time(): raise ValueError('切换检查已过期，请重新检查')
+            if record['revision'] != revision(snapshot(root)): raise ValueError('凭据或配置已更新，请重新检查后切换')
+            validated = api_helpers()['direct_prepare'](root, target)
+            if validated['configRevision'] != target['configRevision']: raise ValueError('Codex 配置已变化，请重新检查')
+            auth = None
+            if target['kind'] == 'account':
+                p = profile(root, target['profileId']); auth = current_auth(root, p); policy(root, auth)
+                with Rpc(loc, layout(root, p['id'], 'query')) as rpc:
+                    rpc.login(auth); rpc.call('account/rateLimits/read', None)
+            if record['revision'] != revision(snapshot(root)): raise ValueError('验证期间凭据已改变，请重新检查后切换')
+            if record['processes'] and not params.get('closeProcesses'): raise ValueError('Codex / ChatGPT 正在运行，尚未授权关闭')
             close_processes(root, record['processes'])
-            p = profile(root, record['profileId'])
-            auth = current_auth(root, p)
-            policy(root, auth)
-            with Rpc(loc, layout(root, p['id'], 'query')) as rpc:
-                rpc.login(auth)
-                rpc.call('account/rateLimits/read', None)
-            if switch_running():
-                raise ValueError('Codex / ChatGPT 已重新启动，账号未切换')
-            if record['revision'] != revision(snapshot(root)):
-                raise ValueError('验证期间凭据已改变，请重新检查后切换')
-            old = read(root / 'auth.json') if (root / 'auth.json').exists() else None
+            if switch_running(home=root): raise ValueError('Codex / ChatGPT 已重新启动，尚未切换')
+            if record['revision'] != revision(snapshot(root)): raise ValueError('关闭进程期间凭据或配置已更新，请重新检查')
+            old = read(root/'auth.json') if (root/'auth.json').exists() else None
             if old:
-                ident = identity(old)
-                prior = next((p for p in profiles(root) if p['identity']['key'] == ident['key']), None)
-                save_profile(root, prior['id'] if prior else uuid.uuid4().hex, prior['name'] if prior else '之前的 ChatGPT', old)
-            record.update(status='committing', targetRevision=revision(auth))
+                try: ident = identity(old)
+                except ValueError: ident = None
+                if ident:
+                    prior = next((p for p in profiles(root) if p['identity']['key'] == ident['key']), None)
+                    save_profile(root, prior['id'] if prior else uuid.uuid4().hex, prior['name'] if prior else '之前的 ChatGPT', old)
+            before = config(root)
+            record.update(status='committing', targetRevision=revision(auth or old) if auth or old else None)
             atomic(operation(root, op), record)
-            if (read(root / 'auth.json') if (root / 'auth.json').exists() else None) != old:
-                raise ValueError('外部凭据已变化，账号未切换')
-            atomic(root / 'auth.json', auth)
-            record.update(status='succeeded', message='账号已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话')
+            written = api_helpers()['direct_select'](root, target)
+            record['targetConfigRevision'] = written
+            try:
+                atomic(operation(root, op), record)
+                if switch_running(home=root): raise ValueError('切换期间 Codex / ChatGPT 已重新启动，请重新检查')
+                if (read(root/'auth.json') if (root/'auth.json').exists() else None) != old: raise ValueError('外部凭据已变化，尚未切换')
+                if auth is not None: atomic(root/'auth.json', auth)
+                if auth_revision() != record['targetRevision']: raise ValueError('切换后凭据被其他程序修改，请重新检查')
+            except Exception:
+                api_helpers()['direct_restore'](root, before, written)
+                record['status'] = 'failed'; atomic(operation(root, op), record)
+                raise
+            record.update(status='succeeded', message='登录方式已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话')
             atomic(operation(root, op), record)
             return record
         if method == 'profiles.remove':

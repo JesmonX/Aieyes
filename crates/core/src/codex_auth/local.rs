@@ -112,14 +112,18 @@ fn file_mode(root: &Path) -> Result<()> {
     Ok(())
 }
 fn inspect(loc: &Location, root: &Path, runtime: bool) -> Result<Value> {
-    let active = current(root);
+    let stored = current(root);
+    let selected = crate::codex_api::direct::selected(root)?;
+    let active = (selected["kind"] == "account")
+        .then(|| stored.clone())
+        .flatten();
     let rows = files::profiles(root)?.into_iter().map(|p| {
         let is_current = active.as_deref() == Some(&p.identity.key);
         json!({"id":p.id,"name":p.name,"identity":p.identity,"updatedAt":p.updated_at,"current":is_current})
     }).collect::<Vec<_>>();
     if !runtime {
         return Ok(
-            json!({"protocolVersion":1,"path":root,"storageMode":mode(root)?,"currentIdentity":active,"profiles":rows}),
+            json!({"protocolVersion":1,"path":root,"storageMode":mode(root)?,"currentIdentity":active,"storedIdentity":stored,"selected":selected,"profiles":rows}),
         );
     }
     let mut cmd = crate::process::cli_command(&crate::quota::resolve_codex(&loc.binary));
@@ -134,17 +138,21 @@ fn inspect(loc: &Location, root: &Path, runtime: bool) -> Result<Value> {
                 .collect::<String>()
         });
     Ok(
-        json!({"protocolVersion":1,"path":root,"version":version,"storageMode":mode(root)?,"currentIdentity":active,"profiles":rows,"processes":processes::list(root)?}),
+        json!({"protocolVersion":1,"path":root,"version":version,"storageMode":mode(root)?,"currentIdentity":active,"storedIdentity":stored,"selected":selected,"profiles":rows,"processes":processes::list(root)?}),
     )
 }
 fn status(root: &Path) -> Result<Value> {
     let mode = mode(root)?;
     let path = root.join("auth.json");
-    let active = if path.exists() {
-        Some(files::identity(&files::read(&path)?)?.key)
+    let stored = if path.exists() {
+        files::identity(&files::read(&path)?).ok().map(|v| v.key)
     } else {
         None
     };
+    let selected = crate::codex_api::direct::selected(root)?;
+    let active = (selected["kind"] == "account")
+        .then(|| stored.clone())
+        .flatten();
     let rows = files::profiles(root)?
         .into_iter()
         .map(|p| {
@@ -153,11 +161,11 @@ fn status(root: &Path) -> Result<Value> {
         })
         .collect::<Vec<_>>();
     Ok(
-        json!({"storageMode":mode,"currentIdentity":active,"currentCredential":active.is_some(),"profiles":rows}),
+        json!({"storageMode":mode,"currentIdentity":active,"currentCredential":active.is_some(),"storedIdentity":stored,"storedCredential":stored.is_some(),"selected":selected,"profiles":rows}),
     )
 }
 fn snapshot(root: &Path) -> Value {
-    json!({"auth": files::read(&root.join("auth.json")).ok().map(|v| files::revision(&v)),"profiles":files::profiles(root).ok().map(|v| v.into_iter().map(|p| json!({"id":p.id,"auth":files::read(&files::profile_path(root,&p.id).unwrap().join("auth.json")).ok().map(|v| files::revision(&v))})).collect::<Vec<_>>())})
+    json!({"config":config(root).ok().map(|v|crate::models::hash(&v.to_string())),"auth": files::read(&root.join("auth.json")).ok().map(|v| files::revision(&v)),"profiles":files::profiles(root).ok().map(|v| v.into_iter().map(|p| json!({"id":p.id,"auth":files::read(&files::profile_path(root,&p.id).unwrap().join("auth.json")).ok().map(|v| files::revision(&v))})).collect::<Vec<_>>())})
 }
 fn operation(root: &Path, id: &str) -> Result<PathBuf> {
     Ok(root
@@ -584,13 +592,23 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             let _lock = files::lock(&root)?;
             file_mode(&root)?;
             recover(&root)?;
-            let p = files::profile(
-                &root,
-                params["profileId"].as_str().context("请选择目标账号")?,
-            )?;
+            let mut target = params
+                .get("target")
+                .cloned()
+                .unwrap_or_else(|| json!({"kind":"account","profileId":params["profileId"]}));
+            if target["kind"] == "account" {
+                let p = files::profile(
+                    &root,
+                    target["profileId"].as_str().context("请选择目标账号")?,
+                )?;
+                policy(&root, &read_authority(&root, &p)?)?;
+                target["name"] = json!(p.name);
+            }
+            let target = crate::codex_api::direct::prepare(&root, &target)?;
             let op = files::new_id();
-            let (running, preserved) = processes::review_for_switch()?;
-            let record = json!({"operationId":op,"status":"prepared","profileId":p.id,"revision":files::revision(&snapshot(&root)),"processes":running,"preservedProcesses":preserved,"expiresAt":now()+120});
+            let (running, preserved) = processes::review_for_switch_at(&root)?;
+            let record = json!({"operationId":op,"status":"prepared","profileId":target["profileId"],"target":target,
+                "revision":files::revision(&snapshot(&root)),"processes":running,"preservedProcesses":preserved,"expiresAt":now()+120});
             update_operation(&root, &op, &record)?;
             Ok(record)
         }
@@ -602,11 +620,22 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             if record["status"] == "succeeded" {
                 return Ok(record);
             }
+            let target = record["target"].clone();
+            ensure!(target.is_object(), "切换检查版本已更新，请重新检查");
+            let auth_revision = || {
+                files::read(&root.join("auth.json"))
+                    .ok()
+                    .map(|a| files::revision(&a))
+            };
             if record["status"] == "committing" {
                 ensure!(
-                    files::revision(&files::read(&root.join("auth.json"))?)
-                        == record["targetRevision"].as_str().unwrap_or(""),
-                    "上次切换未完成，请重新检查当前账号"
+                    json!(auth_revision()) == record["targetRevision"]
+                        && record["targetConfigRevision"]
+                            == crate::codex_api::direct::prepare(
+                                &root,
+                                &json!({"kind":"account"})
+                            )?["configRevision"],
+                    "上次切换未完成，请重新检查当前登录方式"
                 );
                 record["status"] = json!("succeeded");
                 update_operation(&root, op, &record)?;
@@ -619,7 +648,29 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             );
             ensure!(
                 record["revision"] == files::revision(&snapshot(&root)),
-                "凭据已更新，请重新检查后切换"
+                "凭据或配置已更新，请重新检查后切换"
+            );
+            let validated = crate::codex_api::direct::prepare(&root, &target)?;
+            ensure!(
+                validated["configRevision"] == target["configRevision"],
+                "Codex 配置已变化，请重新检查"
+            );
+            let auth = if target["kind"] == "account" {
+                let profile = target["profileId"].as_str().context("目标档案缺失")?;
+                let p = files::profile(&root, profile)?;
+                let auth = read_authority(&root, &p)?;
+                policy(&root, &auth)?;
+                let query = layout(&root, profile, "query")?;
+                let mut rpc = Rpc::start(&loc.binary, &query, &loc.proxy, false)?;
+                rpc.login_external(&auth)?;
+                rpc.quota(&auth, &mut || Ok(auth.clone()))?;
+                Some(auth)
+            } else {
+                None
+            };
+            ensure!(
+                record["revision"] == files::revision(&snapshot(&root)),
+                "验证期间凭据已改变，请重新检查后切换"
             );
             let running: Vec<processes::Running> =
                 serde_json::from_value(record["processes"].clone())?;
@@ -627,38 +678,28 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 running.is_empty() || params["closeProcesses"] == true,
                 "Codex / ChatGPT 正在运行，尚未授权关闭"
             );
-            processes::close_for_switch(&running)?;
-            let profile = record["profileId"].as_str().context("目标档案缺失")?;
-            let p = files::profile(&root, profile)?;
-            let auth = read_authority(&root, &p)?;
-            policy(&root, &auth)?;
-            let query = layout(&root, profile, "query")?;
-            {
-                let mut rpc = Rpc::start(&loc.binary, &query, &loc.proxy, false)?;
-                rpc.login_external(&auth)?;
-                rpc.quota(&auth, &mut || Ok(auth.clone()))?;
-            }
+            processes::close_for_switch_at(&root, &running)?;
             ensure!(
-                processes::list_for_switch()?.is_empty(),
-                "Codex / ChatGPT 已重新启动，账号未切换"
+                processes::list_for_switch_at(&root)?.is_empty(),
+                "Codex / ChatGPT 已重新启动，尚未切换"
             );
             ensure!(
                 record["revision"] == files::revision(&snapshot(&root)),
-                "验证期间凭据已改变，请重新检查后切换"
+                "关闭进程期间凭据或配置已更新，请重新检查"
             );
             let old = files::read(&root.join("auth.json")).ok();
-            if let Some(ref old) = old {
-                let ident = files::identity(old)?;
+            if let Some(old) = &old
+                && let Ok(ident) = files::identity(old)
+            {
                 let prior = files::profiles(&root)?
                     .into_iter()
                     .find(|p| p.identity.key == ident.key);
-                let prior_id = prior
-                    .as_ref()
-                    .map(|p| p.id.clone())
-                    .unwrap_or_else(files::new_id);
                 files::save_profile(
                     &root,
-                    &prior_id,
+                    &prior
+                        .as_ref()
+                        .map(|p| p.id.clone())
+                        .unwrap_or_else(files::new_id),
                     prior
                         .as_ref()
                         .map(|p| p.name.as_str())
@@ -666,24 +707,39 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                     old,
                 )?;
             }
+            let before = config(&root)?;
             record["status"] = json!("committing");
-            record["targetRevision"] = json!(files::revision(&auth));
+            record["targetRevision"] = json!(auth.as_ref().or(old.as_ref()).map(files::revision));
             update_operation(&root, op, &record)?;
-            ensure!(
-                files::read(&root.join("auth.json"))
-                    .ok()
-                    .as_ref()
-                    .map(files::revision)
-                    == old.as_ref().map(files::revision),
-                "外部凭据已变化，账号未切换"
-            );
-            files::atomic(&root.join("auth.json"), &auth)?;
-            ensure!(
-                files::revision(&files::read(&root.join("auth.json"))?) == files::revision(&auth),
-                "切换后凭据被其他程序修改，请重新检查当前账号"
-            );
+            let written = crate::codex_api::direct::select(&root, &target)?;
+            record["targetConfigRevision"] = json!(written);
+            let applied = (|| -> Result<()> {
+                update_operation(&root, op, &record)?;
+                ensure!(
+                    processes::list_for_switch_at(&root)?.is_empty(),
+                    "切换期间 Codex / ChatGPT 已重新启动，请重新检查"
+                );
+                ensure!(
+                    auth_revision() == old.as_ref().map(files::revision),
+                    "外部凭据已变化，尚未切换"
+                );
+                if let Some(auth) = &auth {
+                    files::atomic(&root.join("auth.json"), auth)?;
+                }
+                ensure!(
+                    json!(auth_revision()) == record["targetRevision"],
+                    "切换后凭据被其他程序修改，请重新检查"
+                );
+                Ok(())
+            })();
+            if let Err(error) = applied {
+                crate::codex_api::direct::restore(&root, &before, &written)?;
+                record["status"] = json!("failed");
+                update_operation(&root, op, &record)?;
+                return Err(error);
+            }
             record["status"] = json!("succeeded");
-            record["message"] = json!("账号已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话");
+            record["message"] = json!("登录方式已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话");
             update_operation(&root, op, &record)?;
             Ok(record)
         }
