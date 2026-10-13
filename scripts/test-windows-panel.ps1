@@ -171,6 +171,8 @@ try {
     $background.Text='Aieyes isolated background input target';$background.FormBorderStyle='None';$background.WindowState='Maximized';$background.BackColor=[Drawing.Color]::FromArgb(49,67,83)
     $background.Show();$background.Activate();Pump 300
     $null=[PanelProbe]::SetForegroundWindow($background.Handle)
+    Click-At 25 200
+    Wait-For { [PanelProbe]::GetForegroundWindow() -eq $background.Handle } 'background focus established before pet click'
     Capsule-Click
     Wait-For {Panel-Visible} 'open panel'
     Assert-That ([PanelProbe]::GetForegroundWindow() -eq $background.Handle) 'opening preserves background keyboard focus'

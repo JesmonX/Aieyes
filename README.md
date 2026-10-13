@@ -1,6 +1,6 @@
 # Aieyes
 
-跨平台 Agent 用量与 SSH 服务器监控工具。macOS 使用原生菜单栏，Windows 默认使用悬浮球，Linux 优先使用状态栏、不支持时自动回退悬浮球。SwiftUI/AppKit 与 Tauri 界面共享 Rust 核心和 SQLite 本地存储。
+跨平台 Agent 用量与 SSH 服务器监控工具。macOS 使用原生菜单栏，Windows 默认使用状态联动小猫，macOS/Linux 可在设置中打开宠物；Linux 默认优先使用状态栏、不支持时自动回退悬浮球。SwiftUI/AppKit 与 Tauri 界面共享 Rust 核心和 SQLite 本地存储。
 
 ## 下载安装包
 
@@ -129,3 +129,5 @@ dist/Aieyes.app/Contents/MacOS/Aieyes --render "$PWD/.local/previews"
 紧凑资源布局、Antigravity 统一与分组估值的迁移和验证见 [实施记录](docs/compact-antigravity.md)。
 
 Codex 多账号管理的启用方式、凭据协调与验收边界见 [Codex 账号管理](docs/codex-accounts.md)。
+
+桌面宠物：内置小猫根据本机 Codex 会话切换思考、执行工具、等待输入、完成等动作，支持减少动画。Windows 自动模式默认启用，也可切回胶囊；macOS/Linux 默认关闭。映射、设置和测试范围见 [桌面宠物](docs/desktop-pets.md)。

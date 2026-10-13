@@ -53,6 +53,7 @@ private final class PetHost: NSHostingView<PetView> {
         let hide = NSMenuItem(title: "隐藏宠物（可在设置中恢复）", action: #selector(hidePet), keyEquivalent: ""); hide.target=self; menu.addItem(hide)
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
+    override func accessibilityPerformPress() -> Bool { open?(self); return true }
     @objc private func openPanel() { open?(self) }
     @objc private func hidePet() { UserDefaults.standard.set(false, forKey: "aieyes.pet.enabled") }
 }

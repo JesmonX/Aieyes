@@ -41,5 +41,5 @@ swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/Mo
 swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/ConfigurationActions.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-configuration-lane.swift -o .build/verify-configuration-lane
 .build/verify-configuration-lane
 
-swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/ConfigurationActions.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-pets.swift -o .build/verify-pets
+swiftc -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/ConfigurationActions.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift apps/macos/Sources/Aieyes/PetWindow.swift scripts/verify-pets.swift -o .build/verify-pets
 .build/verify-pets
