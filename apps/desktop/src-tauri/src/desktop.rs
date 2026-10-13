@@ -1058,6 +1058,14 @@ pub fn desktop_detail(app: AppHandle, view: Value) -> Result<(), String> {
 pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
     match action {
         value if value.starts_with("edit-account:") => show_main(app, value),
+        value if value.starts_with("settings-target:") => {
+            let target: Value = serde_json::from_str(&value["settings-target:".len()..])
+                .map_err(|_| "设置入口无效")?;
+            if !target.is_object() {
+                return Err("设置入口无效".into());
+            }
+            show_main(app, value)
+        }
         "focus-panel" => set_panel(app, true),
         "dismiss-panel" => {
             #[cfg(target_os = "windows")]

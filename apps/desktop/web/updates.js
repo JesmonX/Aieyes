@@ -142,7 +142,7 @@
     const panel=document.querySelector('#panel-update');if(panel)panel.onclick=async()=>{await invoke('desktop_action',{action:'open'});await run('updates_panel_check');};
     await window.__TAURI__.event.listen('updates:status', event => accept(event.payload));
     accept(await invoke('updates_info'));
-    if (state.page === 'settings' && state.settingsTab === 'general') renderSettings();
+    if (state.page === 'settings' && state.settingsTab === 'general' && state.generalTab === 'updates') renderSettings();
   }
   Promise.resolve(appReady).then(boot).catch(error => { status.message = String(error); status.phase = 'error'; updateView(); });
 })();

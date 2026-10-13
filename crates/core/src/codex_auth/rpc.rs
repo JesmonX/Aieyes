@@ -253,6 +253,87 @@ impl Rpc {
             Ok(Some(json!({"accessToken":e["accessToken"],"chatgptAccountId":e["chatgptAccountId"],"chatgptPlanType":e["chatgptPlanType"]})))
         })
     }
+
+    /// An isolated turn using access tokens only. The daily CLI remains the
+    /// authority for refresh-token rotation while it is running.
+    pub fn wake_turn(
+        &mut self,
+        auth: &Value,
+        manifest: &crate::wakeups::Manifest,
+        cwd: &std::path::Path,
+        latest: &mut dyn FnMut() -> Result<Value>,
+    ) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let identity = super::files::identity(auth)?;
+        let mut revision = hash(auth["tokens"]["access_token"].as_str().unwrap_or(""));
+        let mut refresh = |params: &Value| -> Result<Option<Value>> {
+            ensure!(
+                params["previousAccountId"]
+                    .as_str()
+                    .is_none_or(|id| id == identity.workspace),
+                "刷新请求工作区不一致"
+            );
+            let next = latest()?;
+            ensure!(
+                super::files::identity(&next)?.key == identity.key,
+                "账号已改变，已停止唤醒"
+            );
+            let next_revision = hash(next["tokens"]["access_token"].as_str().unwrap_or(""));
+            if next_revision == revision {
+                return Ok(None);
+            }
+            revision = next_revision;
+            let e = super::files::external(&next)?;
+            Ok(Some(
+                json!({"accessToken":e["accessToken"],"chatgptAccountId":e["chatgptAccountId"],"chatgptPlanType":e["chatgptPlanType"]}),
+            ))
+        };
+        let thread = self.call(
+            "thread/start",
+            json!({
+                "model":manifest.model,"modelProvider":"openai","cwd":cwd,
+                "approvalPolicy":"never","sandbox":"read-only","ephemeral":true,
+                "baseInstructions":"Reply briefly. Do not use tools.",
+                "config":{"features.shell_tool":false}
+            }),
+            &mut refresh,
+        )?;
+        let thread_id = thread["thread"]["id"]
+            .as_str()
+            .context("唤醒会话响应无效")?;
+        let mut params = json!({"threadId":thread_id,"input":[{"type":"text","text":manifest.args.last().context("唤醒提示词缺失")?}]});
+        if !manifest.effort.is_empty() {
+            params["effort"] = json!(manifest.effort);
+        }
+        let turn = self.call("turn/start", params, &mut refresh)?;
+        let turn_id = turn["turn"]["id"].as_str().context("唤醒轮次响应无效")?;
+        loop {
+            ensure!(Instant::now() < deadline, "Codex 唤醒超时");
+            let event = self.receive(deadline.saturating_duration_since(Instant::now()))?;
+            if let Some(id) = event.get("id") {
+                let result = if event["method"] == "account/chatgptAuthTokens/refresh" {
+                    refresh(&event["params"])?
+                } else {
+                    None
+                };
+                self.send(&match result {
+                    Some(value) => json!({"id":id,"result":value}),
+                    None => json!({"id":id,"error":{"code":-32000,"message":"Wakeup does not authorize tools or credential rotation"}}),
+                })?;
+            }
+            if event["method"] == "turn/completed"
+                && event["params"]["threadId"] == thread_id
+                && event["params"]["turn"]["id"] == turn_id
+            {
+                let status = &event["params"]["turn"]["status"];
+                ensure!(
+                    *status == "completed",
+                    "Codex 模型调用未完成；请检查认证、模型及网络"
+                );
+                return Ok(());
+            }
+        }
+    }
 }
 impl Drop for Rpc {
     fn drop(&mut self) {

@@ -31,6 +31,22 @@ fn run() -> anyhow::Result<()> {
             args.get(i + 2).map(String::as_str),
         );
     }
+    if let Some(i) = args.iter().position(|a| a == "--codex-api-service") {
+        return aieyes_core::codex_api::gateway::serve(std::path::Path::new(
+            args.get(i + 1)
+                .ok_or_else(|| anyhow::anyhow!("Missing API root"))?,
+        ));
+    }
+    if let Some(i) = args.iter().position(|a| a == "--codex-api-token") {
+        return aieyes_core::codex_api::token(
+            std::path::Path::new(
+                args.get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("Missing API root"))?,
+            ),
+            args.get(i + 2)
+                .ok_or_else(|| anyhow::anyhow!("Missing API id"))?,
+        );
+    }
     let root = args
         .windows(2)
         .find(|a| a[0] == "--data-dir")

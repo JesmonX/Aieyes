@@ -21,6 +21,12 @@ static RUNNER_PATH: OnceLock<PathBuf> = OnceLock::new();
 pub fn set_runner_path(path: PathBuf) {
     let _ = RUNNER_PATH.set(path);
 }
+pub(crate) fn runtime_binary() -> Result<PathBuf> {
+    Ok(RUNNER_PATH
+        .get()
+        .cloned()
+        .unwrap_or(std::env::current_exe()?))
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Task {
@@ -464,7 +470,25 @@ fn remote(host: &Host, mut request: Value) -> Result<Value> {
     }
     let mut host = host.clone();
     host.pre_command.clear();
-    let v = ssh::python(&host, &script, &[serde_json::to_string(&request)?])?;
+    // Bundled helpers exceed Linux's per-argument limit after shell quoting.
+    // Keep the entire request off argv, including any initialization environment.
+    let loader = "import json,sys; p=json.load(sys.stdin); sys.argv=['aieyes-wakeup',json.dumps(p['request'])]; exec(compile(p['script'],'<aieyes-wakeup>','exec'),{'__name__':'__main__'})";
+    let command = ssh::command(
+        &host,
+        &format!("exec python3 -c {}", process::quote(loader)),
+    )?;
+    let output = process::run(
+        command,
+        serde_json::to_vec(&json!({"script":script,"request":request}))?,
+        Duration::from_secs(90),
+    )?;
+    let v: Value = serde_json::from_slice(
+        output
+            .split(|b| *b == b'\n')
+            .rev()
+            .find(|v| !v.is_empty())
+            .context("远程唤醒操作没有返回数据")?,
+    )?;
     if let Some(error) = v["error"].as_str() {
         anyhow::bail!("{error}");
     }

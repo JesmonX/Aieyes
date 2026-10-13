@@ -125,7 +125,7 @@ function installFixture(data) {
       }
       if(surface==='index.html') {
         await page.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
-        assert.equal(await page.locator('input[role=switch]').first().evaluate(el=>el.getBoundingClientRect().height),21);
+        await page.locator('[data-general-page=desktop]').click();assert.equal(await page.locator('input[role=switch]').first().evaluate(el=>el.getBoundingClientRect().height),21);await page.locator('[data-general-page=appearance]').click();
         await page.locator('#font-license').click();await page.locator('#quota-dialog').waitFor({state:'visible'});
         assert.match(await page.locator('#quota-dialog').innerText(),/HarmonyOS Sans Fonts License Agreement/);
         await page.locator('#quota-dialog').evaluate(el=>el.getAnimations().forEach(a=>a.finish()));

@@ -158,7 +158,7 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
     private_dir(root)?;
     let mut lock = rusqlite::Connection::open(root.join("runner.sqlite"))?;
     lock.busy_timeout(Duration::from_secs(3))?;
-    lock.execute_batch("CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY,task TEXT,occurrence TEXT UNIQUE,started INTEGER,ended INTEGER,status TEXT,model TEXT,effort TEXT); CREATE TABLE IF NOT EXISTS leases(account TEXT PRIMARY KEY,expires INTEGER);")?;
+    lock.execute_batch("CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY,task TEXT,occurrence TEXT UNIQUE,started INTEGER,ended INTEGER,status TEXT,model TEXT,effort TEXT); CREATE TABLE IF NOT EXISTS leases(account TEXT PRIMARY KEY,expires INTEGER); CREATE TABLE IF NOT EXISTS run_diagnostics(run_id INTEGER PRIMARY KEY,stage TEXT,code TEXT,message TEXT);")?;
     let local = Local::now();
     let slot = format!("{:02}:{:02}", local.hour(), local.minute());
     let mut jobs = Vec::new();
@@ -212,8 +212,12 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
             .map(|(m, row)| {
                 scope.spawn(move || -> Result<()> {
                     let cwd = root.join("work").join(&m.id);
+                    let mut stage = "prepare";
                     let result = private_dir(&cwd)
-                        .and_then(|_| auth_check(&m, &cwd))
+                        .and_then(|_| {
+                            stage = "authentication";
+                            auth_check(&m, &cwd)
+                        })
                         .and_then(|_| {
                             if let Some(reference) = &m.codex_profile_id {
                                 let (_, profile) =
@@ -225,11 +229,9 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                                     pre_command: m.pre_command.clone(),
                                     shell: m.shell.clone(),
                                 };
-                                crate::codex_auth::local::with_credentials(&loc, profile, |path| {
-                                    let mut bound = m.clone();
-                                    bound.config_path = path.to_string_lossy().into();
-                                    invoke(&bound, &bound.args, &cwd, 120)
-                                })
+                                stage = "codex-turn";
+                                crate::codex_auth::local::wakeup(&loc, profile, &m, &cwd)?;
+                                Ok(b"{\"type\":\"turn.completed\"}".to_vec())
                             } else {
                                 ensure!(
                                     !Path::new(&m.config_path)
@@ -244,6 +246,7 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                             ensure!(response_ok(&m.provider, &bytes), "模型没有返回成功完成事件");
                             Ok(())
                         });
+                    let detail = result.as_ref().err().map(|e| diagnostic(stage, e));
                     let status = match result {
                         Ok(()) => "success",
                         Err(ref e) if e.to_string().contains("超时") => "timeout",
@@ -255,6 +258,12 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                         "UPDATE runs SET status=?1,ended=?2 WHERE id=?3",
                         rusqlite::params![status, now(), row],
                     )?;
+                    if let Some((code, message)) = detail {
+                        db.execute(
+                            "INSERT OR REPLACE INTO run_diagnostics VALUES(?1,?2,?3,?4)",
+                            rusqlite::params![row, stage, code, message],
+                        )?;
+                    }
                     db.execute("DELETE FROM leases WHERE account=?1", [m.account_key])?;
                     Ok(())
                 })
@@ -277,6 +286,55 @@ pub fn history(root: &Path, id: &str) -> Result<Vec<Value>> {
         root.join("runner.sqlite"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )?;
-    let mut stmt = db.prepare("SELECT started,ended,status,model,effort FROM runs WHERE task=?1 ORDER BY id DESC LIMIT 30")?;
-    Ok(stmt.query_map([id], |r| Ok(json!({"startedAt":r.get::<_,i64>(0)?,"endedAt":r.get::<_,Option<i64>>(1)?,"status":r.get::<_,String>(2)?,"model":r.get::<_,String>(3)?,"effort":r.get::<_,String>(4)?})))?.collect::<rusqlite::Result<Vec<_>>>()?)
+    let has_details: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='run_diagnostics')",
+        [],
+        |r| r.get(0),
+    )?;
+    let sql = if has_details {
+        "SELECT r.started,r.ended,r.status,r.model,r.effort,d.stage,d.code,d.message FROM runs r LEFT JOIN run_diagnostics d ON d.run_id=r.id WHERE r.task=?1 ORDER BY r.id DESC LIMIT 30"
+    } else {
+        "SELECT started,ended,status,model,effort,NULL,NULL,NULL FROM runs WHERE task=?1 ORDER BY id DESC LIMIT 30"
+    };
+    let mut stmt = db.prepare(sql)?;
+    Ok(stmt.query_map([id], |r| Ok(json!({"startedAt":r.get::<_,i64>(0)?,"endedAt":r.get::<_,Option<i64>>(1)?,"status":r.get::<_,String>(2)?,"model":r.get::<_,String>(3)?,"effort":r.get::<_,String>(4)?,"stage":r.get::<_,Option<String>>(5)?,"errorCode":r.get::<_,Option<String>>(6)?,"message":r.get::<_,Option<String>>(7)?})))?.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Persist fixed diagnostics only: upstream output may contain credentials.
+pub(crate) fn diagnostic(stage: &str, error: &anyhow::Error) -> (&'static str, &'static str) {
+    let text = error.to_string();
+    if text.contains("超时") {
+        ("timeout", "调用超时；请检查目标网络与代理")
+    } else if text.contains("接口不兼容") {
+        ("incompatible-cli", "CLI 接口不兼容；请升级 Codex")
+    } else if text.contains("前置命令") {
+        ("pre-command", "前置命令失败；请检查非交互 shell 环境")
+    } else if text.contains("账号已改变") || text.contains("身份") || text.contains("工作区")
+    {
+        ("identity-changed", "账号身份已变化；请检查任务绑定")
+    } else if text.contains("认证")
+        || text.contains("登录")
+        || text.contains("凭据")
+        || text.contains("续期")
+    {
+        ("authentication", "订阅认证不可用；请刷新登录状态后重试")
+    } else if text.contains("正在执行的账号操作") {
+        ("account-busy", "账号管理操作进行中；本次唤醒未执行")
+    } else if text.contains("无法启动")
+        || error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    {
+        (
+            "dependency-missing",
+            "任务文件或可执行文件不存在；请重新部署并检查 CLI 路径",
+        )
+    } else if stage == "prepare" {
+        ("task-files", "任务目录不可用；请检查权限并重新部署")
+    } else {
+        (
+            "model-request",
+            "模型请求未成功完成；请检查模型、认证与代理",
+        )
+    }
 }

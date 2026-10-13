@@ -87,7 +87,7 @@ struct EstimateEntry: View {
         return EstimatePresentation.summary(records)
     }
     private var help: String {
-        entries.map { $0.label + " ≈ " + Format.money($0.value) + " USD · " + ($0.historical ? "历史采样 · " : "") + Format.date($0.record.checkpointAt) }.joined(separator: "\n") + (credits ? "" : "\n7d 顺序：容量倍率 / 同期消耗（旧记录为整周）")
+        entries.map { $0.label + " ≈ " + Format.money($0.value) + " USD · " + ($0.historical ? "历史采样 · " : "") + Format.date($0.record.checkpointAt) }.joined(separator: "\n") + (credits ? "" : "\n7d 左值：5h 等价值 × 近期容量倍率；右值：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。")
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {

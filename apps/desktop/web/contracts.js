@@ -219,6 +219,74 @@
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
+    "codexApi.command": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    "codexApi.default": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "codexApi.deploy": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "codexApi.list": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    "codexApi.probe": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    "codexApi.remove": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "codexApi.save": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "codexApi.status": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
     "codexAuth.adopt": {
       "lane": "main",
       "invalidates": [
@@ -777,5 +845,5 @@
       "updateBehavior": "cancel"
     }
   },
-  "contractHash": "eae7986bd3cc31bcd50b7578716885eaf1c3bea3f7762fd4002d80547b271c16"
+  "contractHash": "5407be93d59f6d0118559716158823243feb38126e51f7d66dbc56c4ee6fca86"
 };

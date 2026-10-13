@@ -148,6 +148,30 @@ for line in sys.stdin:
         defer { model.engine.stop(); model.metricsEngine.stop(); model.networkEngine.stop() }
         await model.bootstrap()
         precondition(model.settings == settings && model.settingsDraft == settings && !model.settingsDirty)
+        var settingsOpens = 0
+        model.showSettings = { settingsOpens += 1 }
+        model.settingsAgent = "claude"; model.settingsTab = "prices"
+        model.openSettings()
+        precondition(model.settingsTab == "integrations" && model.settingsAgent == "claude")
+        model.openSettings(.init(category: "sources", provider: "codex", section: "machines"))
+        precondition(model.settingsTab == "integrations" && model.settingsAgent == "codex" && model.settingsSection == "machines")
+        model.openSettings(.init(category: "hosts", hostID: "local"))
+        precondition(model.settingsTab == "servers" && model.requestedHostID == "local" && !model.requestHostEditor)
+        model.openSettings(.init(category: "servers", section: "add-host"))
+        precondition(model.requestHostEditor && model.requestedHostID == nil)
+        model.openSettings(.init(category: "general", section: "network"))
+        precondition(model.generalPage == "network")
+        model.openPricing()
+        precondition(model.settingsTab == "prices" && settingsOpens == 6)
+        model.openSettings()
+        let previousProvider = model.provider
+        model.provider = "claude"
+        var managedQuota: Quota?
+        model.showEstimate = { quota, _, _ in managedQuota = quota }
+        await model.openEstimate(accountKey: "codex:missing-quota")
+        precondition(managedQuota?.id == "codex:missing-quota" && managedQuota?.windows.isEmpty == true, "Sampling management remains available without a current quota snapshot")
+        precondition(model.provider == "claude" && model.dashboard.summary.total == dashboard.summary.total, "Sampling management must preserve the overview filter and usage snapshot")
+        model.provider = previousProvider; model.showEstimate = nil
         let legacyWindow = try JSONDecoder().decode(QuotaWindow.self, from: Data(#"{"id":"","name":"Claude · 7d","usedPercent":20,"windowMinutes":10080,"groupName":""}"#.utf8))
         precondition(legacyWindow.id == "Claude · 7d" && legacyWindow.groupLabel == "Claude")
         model.settingsDraft.refreshSeconds = 321

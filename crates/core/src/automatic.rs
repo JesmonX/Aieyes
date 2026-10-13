@@ -25,6 +25,8 @@ pub const CONSENT_VERSION: u32 = 1;
 pub struct AutoValuationConfig {
     pub enabled: bool,
     pub consent_version: u32,
+    /// Empty in legacy settings: retain the original subscription-only consent.
+    pub mode: String,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -585,19 +587,35 @@ impl Engine {
             .find(|s| s.id == id)
             .context("数据源已删除")?;
         let enable = p["enabled"].as_bool().context("请选择开启或关闭")?;
+        let mode = p["mode"].as_str().unwrap_or("subscription");
+        ensure!(matches!(mode, "subscription" | "mixed"), "自动估值模式无效");
+        ensure!(
+            mode != "mixed" || source.provider == "codex",
+            "混用估值仅适用于 Codex"
+        );
         ensure!(
             !enable || (p["confirmed"] == true && source.provider != "deepseek"),
-            "请同意仅使用订阅账号及其 credits、不使用 API／中转，并纳入所有设备用量"
+            "请确认所选计费方式，并纳入影响订阅额度的所有设备用量"
         );
         if let Some(expected) = p.get("baseConfig") {
+            let expected: Option<AutoValuationConfig> = serde_json::from_value(expected.clone())?;
+            let normalize = |mut config: Option<AutoValuationConfig>| {
+                if let Some(c) = &mut config
+                    && c.mode.is_empty()
+                {
+                    c.mode = "subscription".into();
+                }
+                serde_json::to_value(config)
+            };
             ensure!(
-                *expected == serde_json::to_value(&source.auto_valuation)?,
+                normalize(expected)? == normalize(source.auto_valuation.clone())?,
                 "自动估值设置已变化，请刷新后重试"
             );
         }
         source.auto_valuation = enable.then_some(AutoValuationConfig {
             enabled: true,
             consent_version: CONSENT_VERSION,
+            mode: mode.into(),
         });
         // Consent changes do not change the token scope of an ongoing manual sample.
         // Keep its original checkpoint and status; the automatic worker waits for it.
@@ -886,6 +904,7 @@ mod tests {
             auto_valuation: Some(AutoValuationConfig {
                 enabled: true,
                 consent_version: CONSENT_VERSION,
+                mode: String::new(),
             }),
             ..Default::default()
         };
@@ -942,6 +961,7 @@ mod tests {
         e.store
             .put_event(
                 &UsageEvent {
+                    turn_id: String::new(),
                     id: id.into(),
                     source_id: source.id.clone(),
                     account_id: source.account_id.clone(),

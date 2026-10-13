@@ -49,7 +49,7 @@ db.execute('INSERT INTO event_sources VALUES(?,?)',(event['id'],'fixture'));db.c
     await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
     assert.equal(await page.evaluate(()=>state.dashboard.summary.total),200);
     assert.equal(calls.filter(call=>call.method==='sources.rescan').length,0);
-    await page.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
+    await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='refresh';render();});
     await page.locator('#history-rescan').click();await page.locator('#cancel-editor').click();
     assert.equal(calls.filter(call=>call.method==='sources.rescan').length,0,'Cancelling must not replay history');
     holdRescan=true;await page.locator('#history-rescan').click();await page.getByRole('button',{name:'开始重扫',exact:true}).click();

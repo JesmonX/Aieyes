@@ -91,7 +91,7 @@ impl Store {
         let next = normalize(next)?;
         // These values are managed by account deletion and provider migrations.
         // Unchanged stale values remain valid during concurrent system updates.
-        for key in ["deletedAccounts", "accountAliases"] {
+        for key in ["deletedAccounts", "accountAliases", "codexApis"] {
             ensure!(
                 base[key] == next[key],
                 "{key} 为只读设置，请使用账户操作修改"
@@ -492,6 +492,7 @@ mod tests {
         let mut settings = engine.store.settings().unwrap();
         settings.sources[0].codex_home_id = Some("home".into());
         settings.sources[0].auto_valuation = Some(crate::automatic::AutoValuationConfig {
+            mode: String::new(),
             enabled: true,
             consent_version: crate::automatic::CONSENT_VERSION,
         });

@@ -6,7 +6,7 @@
   const savedSources = () => (state.settings?.sources ?? []).filter(s => s.provider === 'codex' && s.enabled);
   const selected = () => savedSources().find(s => s.id === sourceId);
   const targetAccount = () => state.settings.accounts.find(a=>a.provider==='codex'&&a.id===targetAccountId);
-  const paint = () => { if(window.AieyesAccountTargets?.paintAuth())return; if (state.page === 'settings' && state.settingsTab === 'accounts') renderSettings(false); };
+  const paint = () => { if(window.AieyesAccountTargets?.paintAuth())return; if (state.page === 'settings' && state.settingsTab === 'integrations') renderSettings(false); };
   async function call(method, params = {}) { return api('codexAuth.' + method, {sourceId,accountId:targetAccountId, ...params}); }
   async function settingsChanged() {
     window.AieyesAgentSettings.accept(await api('settings.get'));

@@ -21,14 +21,14 @@
     return info.reason || `当前使用${info.effectiveMode === 'floating' ? '悬浮球' : '系统状态栏'}。`;
   }
   async function navigate(page) {
-    if(page.startsWith("edit-account:")){await window.AieyesApp.ready;state.page="settings";state.settingsTab="sources";render();const index=state.settings.accounts.findIndex(a=>a.provider+":"+a.id===page.slice(13));if(index>=0)editAccount(index);return;}
+    if(page.startsWith('settings-target:')){try{await window.AieyesApp.openSettings(JSON.parse(page.slice(16)));}catch(error){notify(String(error),'error');}return;}
+    if(page.startsWith("edit-account:")){await window.AieyesApp.ready;await window.AieyesApp.openSettings({accountKey:page.slice(13)});return;}
     if (page === 'add-source' || page === 'add-host' || page === 'add-quota') {
       await window.AieyesApp.openSetupInMain(page === 'add-host' ? 'hosts' : page === 'add-quota' ? 'quota' : 'sources');
       return;
     }
-    state.page = page === 'settings' || page === 'prices' ? 'settings' : 'agent';
-    if (state.page === 'settings') state.settingsTab = page === 'prices' ? 'prices' : 'general';
-    if (page === 'prices') state.prices = await api('prices.list');
+    if(page==='settings'||page==='prices'){await window.AieyesApp.openSettings(page==='prices'?{category:'prices'}:{});return;}
+    state.page = 'agent';
     render();
   }
   async function bindTitlebar(info) {

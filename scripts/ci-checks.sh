@@ -17,6 +17,7 @@ for script in test-release.py test-collectors.py test-wakeups.py test-incrementa
 done
 if "$PYTHON" -c 'import os, sys; sys.exit(os.name == "nt")'; then
   "$PYTHON" scripts/test-codex-auth.py
+  "$PYTHON" scripts/test-codex-api.py
 else
   echo 'Remote Codex POSIX permissions/locking tests require Unix; covered by the Unix check jobs.'
 fi

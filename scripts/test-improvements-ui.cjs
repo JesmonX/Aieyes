@@ -50,7 +50,7 @@ function fixture(){
       const page=await browser.newPage({viewport:{width:surface==='floating.html'?450:1120,height:760}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));
       await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy&&window.AieyesNetwork&&window.AieyesUpdates);
       if(surface==='index.html'){
-        await page.evaluate(()=>{state.page='settings';state.settingsTab='general';renderSettings();});
+        await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='network';renderSettings();});
         await page.locator('#field-appMode').selectOption('custom');await page.locator('#field-appHost').fill('127.0.0.1');await page.locator('#field-appPort').fill('7890');
         await page.locator('#app-proxy-test').click();await page.waitForFunction(()=>document.querySelector('#app-proxy-result').textContent==='代理 73 ms');
         const probe=await page.evaluate(()=>feature.calls.find(c=>c.args?.method==='network.test').args.params);assert.equal(probe.proxy.url,'http://127.0.0.1:7890');assert.deepEqual(probe.urls,['https://fixture.invalid/a','https://fixture.invalid/b']);
@@ -58,10 +58,11 @@ function fixture(){
         await page.evaluate(()=>{renderSettings();state.lastQuota=12345;});
         await page.locator('#app-proxy-test').click();await page.waitForFunction(()=>document.querySelector('#app-proxy-result').textContent==='连接不稳定');
         await commitSettings(page); // Settle the proxy autosave before measuring the next edit.
+        assert.equal(await page.locator('#app-proxy-result').textContent(),'连接不稳定','Autosave preserves the proxy diagnostic');
+        await page.locator('[data-general-page=refresh]').click();
         const ordinarySaveStart=await page.evaluate(()=>feature.calls.length);
         await page.locator('#field-refreshSeconds').fill('600');await commitSettings(page);await page.waitForFunction(()=>feature.settings.refreshSeconds===600&&!state.busy&&!state.settingsSaving);
         assert.deepEqual(await page.evaluate(start=>feature.calls.slice(start).map(c=>c.args?.method).filter(method=>method&&method!=='quotas.schedule'),ordinarySaveStart),['settings.patch','settings.get','dashboard']);assert.equal(await page.evaluate(()=>state.lastQuota),0,'Preserved proxy draft is saved and invalidates quota polling');
-        assert.equal(await page.locator('#app-proxy-result').textContent(),'连接不稳定','Autosave preserves the proxy diagnostic');
         const unchangedStart=await page.evaluate(()=>{state.lastQuota=12345;document.querySelector('#field-refreshSeconds').dispatchEvent(new Event('change',{bubbles:true}));return feature.calls.length;});await commitSettings(page);
         assert.deepEqual(await page.evaluate(start=>feature.calls.slice(start).map(c=>c.args?.method).filter(method=>method&&method!=='quotas.schedule'),unchangedStart),[],'A queued unchanged draft must not save or reload again');assert.equal(await page.evaluate(()=>state.lastQuota),12345,'An unchanged draft does not reset polling');
         await page.evaluate(async()=>{state.settingsTab='prices';state.prices=await api('prices.list');renderSettings();});await page.locator('#field-mappingModel').fill('日志别名');await page.locator('[data-map-price="provider/model-49"]').click();
