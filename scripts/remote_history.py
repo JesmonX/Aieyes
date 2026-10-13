@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import sys
@@ -179,7 +180,7 @@ class _CodexHistory:
         if os.path.isfile(database):
             try:
                 from pathlib import Path
-                with sqlite3.connect(Path(database).as_uri() + '?mode=ro', uri=True) as db:
+                with contextlib.closing(sqlite3.connect(Path(database).as_uri() + '?mode=ro', uri=True)) as db:
                     for identity, path in db.execute('SELECT id,rollout_path FROM threads'):
                         if os.path.isfile(path):
                             self.paths[identity] = path

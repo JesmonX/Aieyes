@@ -459,25 +459,17 @@ pub(super) fn isolated_switch_test() -> impl Drop {
     Reset(ISOLATE_SWITCH.replace(true))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn list_for_switch() -> Result<Vec<Running>> {
     read_for_switch(&[])
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn review_for_switch() -> Result<(Vec<Running>, Vec<Running>)> {
-    #[cfg(test)]
     if ISOLATE_SWITCH.get() {
         return Ok((vec![], vec![]));
     }
-    #[cfg(unix)]
-    {
-        Ok(switch_review(&observe(false)?, &[]))
-    }
-    #[cfg(windows)]
-    {
-        windows::review(&[])
-    }
+    Ok(switch_review(&observe(false)?, &[]))
 }
 
 fn review_at(root: &Path, confirmed: &[Running]) -> Result<(Vec<Running>, Vec<Running>)> {
@@ -529,21 +521,13 @@ pub fn close_for_switch_at(root: &Path, expected: &[Running]) -> Result<()> {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn read_for_switch(confirmed: &[Running]) -> Result<Vec<Running>> {
     // Compile-time-only isolation: coordinator tests must never signal host apps.
-    #[cfg(test)]
     if ISOLATE_SWITCH.get() {
         return Ok(vec![]);
     }
-    #[cfg(unix)]
-    {
-        Ok(switch_targets(&observe(false)?, confirmed))
-    }
-    #[cfg(windows)]
-    {
-        Ok(windows::review(confirmed)?.0)
-    }
+    Ok(switch_targets(&observe(false)?, confirmed))
 }
 
 #[cfg(windows)]
@@ -731,6 +715,24 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn spawn_fixture(command: &mut Command) -> std::io::Result<std::process::Child> {
+        // Parallel process creation can briefly inherit a writable handle to a
+        // freshly copied fixture. Linux rejects exec until that handle closes.
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            match command.spawn() {
+                Err(error)
+                    if error.raw_os_error() == Some(libc::ETXTBSY)
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                result => return result,
+            }
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn native_profile_switch_preserves_api_fixture_and_closes_login_fixture() {
         let directory = tempfile::tempdir().unwrap();
@@ -752,18 +754,20 @@ mod tests {
         );
         std::fs::write(home.join("api.config.toml"), "model_provider='gateway'\n[model_providers.gateway]\nbase_url='https://fixture.invalid/v1'\nexperimental_bearer_token='FIXTURE_SECRET_NEVER_EXPOSE'\nrequires_openai_auth=false\n").unwrap();
         std::fs::write(home.join("login.config.toml"), "model='fixture-model'\n").unwrap();
-        let mut api = Command::new(&executable)
-            .args(["--profile", "api"])
-            .env("CODEX_HOME", &home)
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut login = Command::new(&executable)
-            .args(["--profile=login"])
-            .env("CODEX_HOME", &home)
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut api = spawn_fixture(
+            Command::new(&executable)
+                .args(["--profile", "api"])
+                .env("CODEX_HOME", &home)
+                .stdout(std::process::Stdio::piped()),
+        )
+        .unwrap();
+        let mut login = spawn_fixture(
+            Command::new(&executable)
+                .args(["--profile=login"])
+                .env("CODEX_HOME", &home)
+                .stdout(std::process::Stdio::piped()),
+        )
+        .unwrap();
         let api_id = api.id();
         let login_id = login.id();
         let result = (|| -> Result<()> {
@@ -928,11 +932,12 @@ mod tests {
         let cli = dir.path().join("codex");
         std::fs::copy("/bin/sleep", &cli).unwrap();
         let mut children = [app, cli].map(|exe| {
-            Command::new(exe)
-                .arg("30")
-                .env("CODEX_HOME", "/nonexistent-fixture-home")
-                .spawn()
-                .unwrap()
+            spawn_fixture(
+                Command::new(exe)
+                    .arg("30")
+                    .env("CODEX_HOME", "/nonexistent-fixture-home"),
+            )
+            .unwrap()
         });
         let ids = children.each_ref().map(|child| child.id());
         // Restrict reads AND signals to our own disposable children, even though
@@ -976,11 +981,8 @@ mod tests {
         let root = dir.path().canonicalize().unwrap();
         let executable = root.join("codex");
         std::fs::copy("/bin/sleep", &executable).unwrap();
-        let mut child = Command::new(executable)
-            .arg("30")
-            .env("CODEX_HOME", &root)
-            .spawn()
-            .unwrap();
+        let mut child =
+            spawn_fixture(Command::new(executable).arg("30").env("CODEX_HOME", &root)).unwrap();
         let read = || -> Result<Vec<Running>> {
             Ok(list(&root)?
                 .into_iter()

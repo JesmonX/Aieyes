@@ -252,9 +252,6 @@ pub(super) fn observe() -> Result<Vec<Observation>> {
     }
     Ok(rows)
 }
-pub(super) fn review(confirmed: &[Running]) -> Result<(Vec<Running>, Vec<Running>)> {
-    Ok(switch_review(&observe()?, confirmed))
-}
 pub(super) fn list(root: &Path) -> Result<Vec<Running>> {
     Ok(observe()?
         .iter()

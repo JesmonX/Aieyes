@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import runpy
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -38,45 +39,50 @@ def record(number, model='fixture'):
 
 class IncrementalHistory(unittest.TestCase):
     def test_fork_resolves_archived_multilevel_parent_and_rechecks_changed_proof(self):
-        with tempfile.TemporaryDirectory() as root:
-            home=pathlib.Path(root);sessions=home/'sessions/2026/10/13';archive=home/'archived_sessions'
-            sessions.mkdir(parents=True);archive.mkdir()
-            def line(value): return json.dumps(value)+'\n'
-            def meta(identity, base=None): return line(dict(type='session_meta',payload=dict(id=identity,history_base=base) if base else dict(id=identity)))
-            def count(total): return line(dict(type='event_msg',timestamp=1800000000,payload=dict(type='token_count',info=dict(total_token_usage=dict(input_tokens=total)))))
-            parent=meta('parent')+line(dict(type='response_item',payload=dict(text='PRIVATE_PARENT_TEXT')))+count(900)
-            middle=meta('middle',dict(thread_id='parent',end_byte_offset=len(parent.encode())))
-            child=meta('child',dict(thread_id='middle',end_byte_offset=len(middle.encode())))+count(1000)
-            (archive/'parent.jsonl').write_text(parent+count(9999));(archive/'middle.jsonl').write_text(middle)
-            (sessions/'child.jsonl').write_text(child)
-            first=collect(sessions,'codex')
-            inherited=events(first)[0]['inheritedHistory']
-            self.assertEqual(inherited['tokens']['input'],900)
-            self.assertNotIn('PRIVATE_PARENT_TEXT',json.dumps(first))
-            self.assertEqual(collect(sessions,'codex',cursors(first))[-1]['readBytes'],0)
-            (archive/'parent.jsonl').write_text(parent.replace('900','800')+count(9999))
-            changed=collect(sessions,'codex',cursors(first))
-            self.assertEqual(events(changed)[0]['inheritedHistory']['tokens']['input'],800)
-            self.assertTrue(changed[0]['reset'])
-            self.assertNotEqual(events(changed)[0]['inheritedHistory']['proof'],inherited['proof'])
+        for newline in ('\n', '\r\n'):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as root:
+                home=pathlib.Path(root);sessions=home/'sessions/2026/10/13';archive=home/'archived_sessions'
+                sessions.mkdir(parents=True);archive.mkdir()
+                def line(value): return (json.dumps(value,ensure_ascii=False)+newline).encode('utf-8')
+                def meta(identity, base=None): return line(dict(type='session_meta',payload=dict(id=identity,history_base=base) if base else dict(id=identity)))
+                def count(total): return line(dict(type='event_msg',timestamp=1800000000,payload=dict(type='token_count',info=dict(total_token_usage=dict(input_tokens=total)))))
+                parent=meta('parent')+line(dict(type='response_item',payload=dict(text='PRIVATE_PARENT_TEXT 中文')))+count(900)
+                middle=meta('middle',dict(thread_id='parent',end_byte_offset=len(parent)))
+                child=meta('child',dict(thread_id='middle',end_byte_offset=len(middle)))+count(1000)
+                (archive/'parent.jsonl').write_bytes(parent+count(9999));(archive/'middle.jsonl').write_bytes(middle)
+                (sessions/'child.jsonl').write_bytes(child)
+                with contextlib.closing(sqlite3.connect(home/'state_5.sqlite')) as db:
+                    db.execute('CREATE TABLE threads(id TEXT PRIMARY KEY,rollout_path TEXT)')
+                    db.execute('INSERT INTO threads VALUES(?,?)',('parent',str(archive/'parent.jsonl')))
+                    db.commit()
+                first=collect(sessions,'codex')
+                inherited=events(first)[0]['inheritedHistory']
+                self.assertEqual(inherited['tokens']['input'],900)
+                self.assertNotIn('PRIVATE_PARENT_TEXT',json.dumps(first))
+                self.assertEqual(collect(sessions,'codex',cursors(first))[-1]['readBytes'],0)
+                (archive/'parent.jsonl').write_bytes(parent.replace(b'900',b'800')+count(9999))
+                changed=collect(sessions,'codex',cursors(first))
+                self.assertEqual(events(changed)[0]['inheritedHistory']['tokens']['input'],800)
+                self.assertTrue(changed[0]['reset'])
+                self.assertNotEqual(events(changed)[0]['inheritedHistory']['proof'],inherited['proof'])
 
     def test_missing_fork_parent_recovers_without_a_stale_missing_issue(self):
-        with tempfile.TemporaryDirectory() as root:
-            home=pathlib.Path(root)
-            parent=json.dumps(dict(type='session_meta',payload=dict(id='parent')))+'\n'
-            child=dict(type='session_meta',payload=dict(id='child',history_base=dict(thread_id='parent',end_byte_offset=len(parent))))
-            (home/'child.jsonl').write_text(json.dumps(child)+'\n')
-            first=collect(home,'codex');self.assertTrue(first[-1]['partial'])
-            (home/'parent.jsonl').write_text(parent)
-            restored=collect(home,'codex',cursors(first))
-            self.assertFalse(restored[-1]['partial'])
-            self.assertEqual(next(e for e in events(restored) if e.get('inheritedHistory'))['inheritedHistory']['tokens']['input'],0)
+        for newline in ('\n', '\r\n'):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as root:
+                home=pathlib.Path(root)
+                parent=(json.dumps(dict(type='session_meta',payload=dict(id='parent')))+newline).encode('utf-8')
+                child=dict(type='session_meta',payload=dict(id='child',history_base=dict(thread_id='parent',end_byte_offset=len(parent))))
+                (home/'child.jsonl').write_bytes((json.dumps(child)+newline).encode('utf-8'))
+                first=collect(home,'codex');self.assertTrue(first[-1]['partial'])
+                (home/'parent.jsonl').write_bytes(parent)
+                restored=collect(home,'codex',cursors(first))
+                self.assertFalse(restored[-1]['partial'])
+                self.assertEqual(next(e for e in events(restored) if e.get('inheritedHistory'))['inheritedHistory']['tokens']['input'],0)
 
     def test_native_routes_are_incremental_and_never_export_private_request_fields(self):
-        import sqlite3
         with tempfile.TemporaryDirectory() as root:
             home=pathlib.Path(root);sessions=home/'sessions/2026/10/13';sessions.mkdir(parents=True)
-            with sqlite3.connect(home/'logs_2.sqlite') as db:
+            with contextlib.closing(sqlite3.connect(home/'logs_2.sqlite')) as db:
                 db.execute('CREATE TABLE logs(id INTEGER PRIMARY KEY,ts INTEGER,ts_nanos INTEGER,target TEXT,feedback_log_body TEXT,thread_id TEXT,process_uuid TEXT)')
                 def insert(identity,body):
                     db.execute("INSERT INTO logs VALUES(?,1800000000,0,'codex_http_client::client',?,'session','process')",(identity,body));db.commit()
