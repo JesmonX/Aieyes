@@ -106,6 +106,11 @@ function Choose-MenuItem([uint32]$Index,[string]$Expected) {
     Pump 200
 }
 function Panel-Visible { $script:panel=[PanelProbe]::Find($app.Id,'Aieyes 面板',$false);return $script:panel -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:panel) }
+function Panel-HasFocus {
+    $foreground=[PanelProbe]::GetForegroundWindow();[uint32]$owner=0
+    $null=[PanelProbe]::GetWindowThreadProcessId($foreground,[ref]$owner)
+    return $owner -eq [uint32]$app.Id -and $foreground -ne $background.Handle
+}
 function Screenshot([string]$Name) {
     $bounds=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds
     $bitmap=New-Object System.Drawing.Bitmap $bounds.Width,$bounds.Height
@@ -180,7 +185,8 @@ try {
     $former=Bounds $script:panel
     # Deliberate interaction can activate the panel (enabling text/keyboard input).
     Click-At ($former.Left+200) ($former.Top+90)
-    Assert-That ([PanelProbe]::GetForegroundWindow() -eq $script:panel) 'panel interaction can acquire keyboard focus'
+    Wait-For {Panel-HasFocus} 'panel interaction acquires keyboard focus' 3
+    Assert-That (Panel-HasFocus) 'panel interaction can acquire keyboard focus'
     Click-At 25 200
     Wait-For {-not (Panel-Visible)} 'outside click closes panel'
     Assert-That ([PanelProbe]::GetAncestor([PanelProbe]::WindowFromPoint([PanelProbe+Point]::new($former.Left+100,$former.Top+100)),2) -eq $background.Handle) 'closed panel does not intercept desktop hit testing'
