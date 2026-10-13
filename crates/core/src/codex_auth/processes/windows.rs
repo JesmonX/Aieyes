@@ -402,6 +402,11 @@ pub(super) fn terminate(expected: &Running) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn review(confirmed: &[Running]) -> Result<(Vec<Running>, Vec<Running>)> {
+        Ok(switch_review(&observe()?, confirmed))
+    }
+
     #[test]
     fn sandbox_requires_registered_pid_name_and_image() {
         let path = r"C:\Codex\codex-windows-sandbox-service.exe";
