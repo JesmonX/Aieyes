@@ -218,10 +218,11 @@ def read_file(path, provider, hook, cursor):
 
 def read_db(path):
     import sqlite3
+    from contextlib import closing
     stat=path.stat(); wal=pathlib.Path(str(path)+'-wal')
     modified=int(max(stat.st_mtime, wal.stat().st_mtime if wal.exists() else 0))
     uri=path.resolve().as_uri()+'?mode=ro'
-    with sqlite3.connect(uri,uri=True,timeout=.1) as db:
+    with closing(sqlite3.connect(uri,uri=True,timeout=.1)) as db:
         db.execute('PRAGMA query_only=ON')
         session=db.execute('SELECT cascade_id FROM trajectory_meta LIMIT 1').fetchone()[0]
         steps=db.execute('SELECT idx,step_type,status FROM steps ORDER BY idx DESC LIMIT 2048').fetchall()[::-1]

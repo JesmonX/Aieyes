@@ -1,4 +1,5 @@
 import importlib.util,json,os,pathlib,sqlite3,subprocess,sys,tempfile,unittest
+from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('sessions',ROOT/'scripts/session_remote.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);m.SCRIPT=(ROOT/'scripts/session_remote.py').read_text()
@@ -56,6 +57,15 @@ class ObserverTests(unittest.TestCase):
             p=pathlib.Path(temp)/'s.db';db=sqlite3.connect(p)
             try:
                 db.executescript("PRAGMA journal_mode=WAL;CREATE TABLE trajectory_meta(cascade_id TEXT);INSERT INTO trajectory_meta VALUES('s');CREATE TABLE steps(idx INTEGER,step_type INTEGER,status INTEGER,payload TEXT);INSERT INTO steps VALUES(0,14,3,'SECRET'),(1,138,9,'SECRET');");db.commit()
-                row=m.read_db(p);self.assertEqual(row['steps'],[(0,14,3),(1,138,9)]);self.assertNotIn('SECRET',json.dumps(row))
+                reader=sqlite3.connect(p.resolve().as_uri()+'?mode=ro',uri=True)
+                with patch.object(sqlite3,'connect',return_value=reader):row=m.read_db(p)
+                self.assertEqual(row['steps'],[(0,14,3),(1,138,9)]);self.assertNotIn('SECRET',json.dumps(row))
+                with self.assertRaises(sqlite3.ProgrammingError):reader.execute('SELECT 1')
             finally:db.close()
+    def test_invalid_database_closes_reader(self):
+        with tempfile.TemporaryDirectory() as temp:
+            p=pathlib.Path(temp)/'invalid.db';sqlite3.connect(p).close()
+            reader=sqlite3.connect(p.resolve().as_uri()+'?mode=ro',uri=True)
+            with patch.object(sqlite3,'connect',return_value=reader),self.assertRaises(sqlite3.OperationalError):m.read_db(p)
+            with self.assertRaises(sqlite3.ProgrammingError):reader.execute('SELECT 1')
 if __name__=='__main__':unittest.main()

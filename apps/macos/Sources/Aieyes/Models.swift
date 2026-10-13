@@ -371,7 +371,11 @@ struct CodexAPIConnection: Codable, Equatable, Identifiable {
 struct CodexBillingSummary: Codable {
     var apiCost: Double?, apiTokens: Double?, apiPricedTokens: Double?, apiHistoryTokens: Double?, apiUnmeteredTokens: Double?
     var subscriptionEquivalentCost: Double?, subscriptionTokens: Double?, subscriptionPricedTokens: Double?, unknownTokens: Double?, incompleteRequests: Int?
-    var visible: Bool { (apiTokens ?? 0) + (subscriptionTokens ?? 0) + (unknownTokens ?? 0) + (apiUnmeteredTokens ?? 0) > 0 || (incompleteRequests ?? 0) > 0 }
+    var visible: Bool {
+        let accountedTokens: Double = (apiTokens ?? 0) + (subscriptionTokens ?? 0)
+        let otherTokens: Double = (unknownTokens ?? 0) + (apiUnmeteredTokens ?? 0)
+        return accountedTokens + otherTokens > 0 || (incompleteRequests ?? 0) > 0
+    }
 }
 struct DeviceMetric: Codable, Identifiable, Equatable {
     var id: String, name: String?, device: String?, type: String?
