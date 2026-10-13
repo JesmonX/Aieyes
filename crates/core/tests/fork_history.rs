@@ -195,7 +195,9 @@ fn partial_parent_boundary_does_not_guess_a_baseline() {
 #[test]
 fn historical_estimate_is_repaired_with_original_prices_and_audit_after_parent_arrives() {
     let temp = tempfile::tempdir().unwrap();
-    let stamp = now() - 100;
+    // Keep the initial quota clear of its 120-second freshness boundary while
+    // slower hosts initialize the database and prices below.
+    let stamp = now() - 30;
     let parent = meta("parent", stamp - 100, None) + &count(stamp - 90, 900, 900);
     let mut billed: Value = serde_json::from_str(count(stamp, 1000, 100).trim()).unwrap();
     billed["payload"]["rate_limits"] = json!({"plan_type":"plus","primary":{"used_percent":20}});
