@@ -82,9 +82,10 @@ function fixture() {
     }
     await page.emulateMedia({colorScheme:'light'});
     await page.locator('#add-first-source').click();
-    assert.equal(await page.locator('[data-settings-tab=sources]').getAttribute('aria-selected'),'true');
+    assert.equal(await page.locator('[data-settings-tab=integrations]').getAttribute('aria-selected'),'true');
+    await page.locator('[data-settings-agent=deepseek]').click();
     assert.equal(await page.locator('[data-agent-enable=deepseek]').isChecked(),false);
-    assert.match(await page.locator('.agent-setup').filter({has:page.locator('[data-agent-enable=deepseek]')}).textContent(),/API Key.*余额/);
+    assert.match(await page.locator('.agent-integration-header').textContent(),/API Key.*余额/);
     assert.equal(await page.locator('#editor[open]').count(),0);
     assert.equal(await page.evaluate(()=>state.settings.sources.length),0);
     await page.locator('[data-settings-tab=hosts]').click();await page.locator('[data-edit=host]').click();

@@ -2,7 +2,7 @@ use crate::contracts::{FIVE_HOUR_MINUTES, WEEK_MINUTES};
 use crate::models::*;
 use serde_json::Value;
 
-pub const PARSER_VERSION: u32 = 2;
+pub const PARSER_VERSION: u32 = 4;
 
 fn count(v: &Value, name: &str) -> u64 {
     v.get(name).and_then(Value::as_u64).unwrap_or(0)
@@ -33,6 +33,7 @@ fn event(
     attribution: &str,
 ) -> UsageEvent {
     UsageEvent {
+        turn_id: state.turn_id.clone(),
         id: event_id(&source.provider, &source.id, &source.account_id, &identity),
         import_identity: Some(identity),
         source_id: source.id.clone(),
@@ -76,6 +77,7 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
     match v["type"].as_str()? {
         "event_msg" if payload["type"] == "task_started" => {
             state.task_started_at = timestamp(&v["timestamp"]);
+            state.turn_id = payload["turn_id"].as_str().unwrap_or("").into();
             None
         }
         "event_msg" if payload["type"] == "task_complete" || payload["type"] == "turn_aborted" => {
@@ -92,6 +94,7 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             None
         }
         "turn_context" => {
+            state.turn_id = payload["turn_id"].as_str().unwrap_or("").into();
             if let Some(model) = payload["model"].as_str() {
                 state.model = model.into();
             }
@@ -155,6 +158,25 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                 identity,
                 attribution,
             );
+            let limits = &payload["rate_limits"];
+            // A cumulative catch-up can cross providers or turns. Only the last
+            // request's complete delta may inherit its response's quota evidence.
+            let request_complete =
+                codex_tokens(&payload["info"]["last_token_usage"]).as_ref() == Some(&parsed.tokens);
+            if request_complete {
+                parsed.billing.evidence = "codex-request-v4".into();
+            }
+            if request_complete
+                && limits["plan_type"]
+                    .as_str()
+                    .is_some_and(|p| !["api", "free", ""].contains(&p))
+                && (limits["primary"].is_object() || limits["secondary"].is_object())
+            {
+                parsed.billing = BillingEvidence {
+                    category: "subscription".into(),
+                    evidence: "codex-response-rate-limits".into(),
+                };
+            }
             parsed.interval_start = interval_start;
             if task_boundary.is_some() {
                 parsed.interval_evidence = "task-request-v2".into();

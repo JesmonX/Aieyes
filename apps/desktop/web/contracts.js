@@ -219,6 +219,74 @@
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
+    "codexApi.command": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    "codexApi.default": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "codexApi.deploy": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "codexApi.list": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    "codexApi.probe": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    "codexApi.remove": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "codexApi.save": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "codexApi.status": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
     "codexAuth.adopt": {
       "lane": "main",
       "invalidates": [
@@ -812,5 +880,5 @@
       "updateBehavior": "cancel"
     }
   },
-  "contractHash": "059ec50602f45950a56e33e527b820ce735081e8ac36859eeb6f269b4b42cee4"
+  "contractHash": "e4e0ee5087d8e90875259e102e097b0ec45fc9359e7906e08a9f97d9650f5830"
 };

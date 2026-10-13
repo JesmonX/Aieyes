@@ -147,7 +147,7 @@ import Combine
         NSApp.activate(ignoringOtherApps: true)
     }
     @objc private func detailAction() { openDetail() }
-    @objc private func settingsAction() { openSettings() }
+    @objc private func settingsAction() { model.openSettings() }
     @objc private func samplingAction() { openSampling() }
     @objc private func wake() { model.resumeAfterWake() }
     private func scheduleTitleUpdate() {
@@ -415,6 +415,7 @@ import Combine
             await model.refreshSessions()
             await model.testNetwork()
             if ProcessInfo.processInfo.environment["AIEYES_UI_SCENARIO"] != nil { await model.scan(); await model.refreshQuotas(); await model.sampleHosts() }
+            UserDefaults.standard.setVolatileDomain(NativePanelKey.snapshotOverrides(panelQuotaExpanded: model.quotaAccounts.count <= 1), forName: UserDefaults.argumentDomain)
             let root = URL(fileURLWithPath: directory)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             for dark in [false, true] {
@@ -435,6 +436,33 @@ import Combine
             for tab in ["sources", "accounts", "servers", "prices", "wakeups", "general"] {
                 model.settingsTab = tab
                 for dark in [false, true] { try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("settings-\(tab)-\(dark ? "dark" : "light").png")) }
+            }
+            model.settingsTab = "integrations"
+            for agent in model.agentConfigurations {
+                model.settingsAgent = agent.provider
+                for dark in [false, true] {
+                    try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("settings-agent-\(agent.provider)-\(dark ? "dark" : "light").png"))
+                    if agent.provider != "deepseek" {
+                        try await capture(AgentValuationView(model: model, provider: agent.provider), size: NSSize(width: 660, height: 650), dark: dark, to: root.appendingPathComponent("agent-valuation-\(agent.provider)-\(dark ? "dark" : "light").png"))
+                    }
+                }
+            }
+            model.settingsAgent = "codex"; model.settingsTab = "general"
+            for page in ["appearance", "desktop", "network", "refresh", "updates"] {
+                model.generalPage = page
+                for dark in [false, true] {
+                    try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("settings-general-\(page)-\(dark ? "dark" : "light").png"))
+                }
+            }
+            model.generalPage = "appearance"
+            if let connection = model.settings.codexApis?.first {
+                for dark in [false, true] {
+                    try await capture(Form { CodexAPISettingsSection(model: model) }.formStyle(.grouped), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("codex-api-settings-\(dark ? "dark" : "light").png"))
+                    try await capture(CodexAPIEditor(model: model, connection: connection, onSaved: {}), size: NSSize(width: 630, height: 670), dark: dark, to: root.appendingPathComponent("codex-api-editor-\(dark ? "dark" : "light").png"))
+                    if let billing = model.dashboard.billingSummary {
+                        try await capture(CodexBillingSummaryView(billing: billing), size: NSSize(width: 420, height: 320), dark: dark, to: root.appendingPathComponent("codex-api-billing-\(dark ? "dark" : "light").png"))
+                    }
+                }
             }
             if let account = model.settings.accounts.first {
                 for dark in [false, true] { try await capture(AccountDevicesView(model: model, account: account), size: NSSize(width: 680, height: 650), dark: dark, to: root.appendingPathComponent("account-devices-\(dark ? "dark" : "light").png")) }

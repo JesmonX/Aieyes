@@ -164,6 +164,11 @@ fn claims(token: &str) -> Value {
         .and_then(|s| serde_json::from_slice(&s).ok())
         .unwrap_or(Value::Null)
 }
+pub(super) fn access_expired(auth: &Value) -> bool {
+    claims(auth["tokens"]["access_token"].as_str().unwrap_or(""))["exp"]
+        .as_i64()
+        .is_some_and(|exp| exp <= now() + 30)
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Identity {

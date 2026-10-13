@@ -38,6 +38,8 @@ impl Tokens {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageEvent {
+    #[serde(default)]
+    pub turn_id: String,
     pub id: String,
     // Persist stable identities for safe re-keying; old records may omit them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -295,6 +297,7 @@ impl LocalMonitor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub codex_apis: Vec<crate::codex_api::Connection>,
     #[serde(skip_deserializing)]
     pub configuration_issues: Vec<String>,
     pub deleted_accounts: Vec<Account>,
@@ -319,6 +322,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            codex_apis: vec![],
             configuration_issues: vec![],
             deleted_accounts: vec![],
             history_show_deleted_accounts: false,
@@ -555,6 +559,7 @@ impl Settings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ParseState {
+    pub turn_id: String,
     pub parser_version: u32,
     pub task_started_at: Option<i64>,
     pub session_id: String,
@@ -672,6 +677,8 @@ pub struct PricingGap {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Dashboard {
+    #[serde(default)]
+    pub billing_summary: Value,
     pub generated_at: i64,
     pub summary: Aggregate,
     #[serde(skip_serializing)]

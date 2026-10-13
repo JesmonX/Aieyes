@@ -54,6 +54,20 @@ function fixture(){
     failSave=true;await panel.locator('[data-theme-toggle]').click();await panel.getByText('模拟主题保存失败',{exact:false}).waitFor();await panel.waitForFunction(()=>!state.themeSaving);await expectTheme('light');failSave=false;
     await panel.locator('[data-theme-toggle]').click();await expectTheme('dark');await panel.waitForFunction(()=>!state.themeSaving);assert(await panel.locator('#message').isHidden());
     await main.reload();await main.evaluate(()=>AieyesApp.ready);await expectTheme('dark');
+    // A sibling theme change also updates an inactive appearance page, preserving a failed local edit.
+    await main.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
+    failSave=true;await main.locator('[name=appearanceAccent]').selectOption('blue');
+    await main.waitForFunction(()=>!state.generalSavePending&&state.saveError==='模拟主题保存失败');
+    await main.locator('[data-general-page=network]').click();failSave=false;
+    await panel.locator('[data-theme-toggle]').click();await expectTheme('light');
+    await main.locator('[data-general-page=appearance]').click();
+    assert.equal(await main.locator('[name=appearanceTheme]').inputValue(),'light','Inactive appearance page adopts the saved sibling theme');
+    assert.equal(await main.locator('[name=appearanceAccent]').inputValue(),'blue','Failed local appearance edit is retained');
+    await main.locator('#settings-retry-save').click();
+    await main.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&!state.saveError);
+    assert.deepEqual((await rpc('settings.get')).appearance,{theme:'light',accent:'blue',chartPalette:'classic',chartContrast:'high'});
+    for(const page of [main,panel])await page.waitForFunction(()=>document.documentElement.dataset.accent==='blue');
+    await panel.locator('[data-theme-toggle]').click();await expectTheme('dark');
     // Exercise the saved controls against the real core, including every theme/contrast combination.
     await main.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
     for(const palette of ['classic','tableau','tol','set2','nord']){
@@ -96,6 +110,6 @@ function fixture(){
       await page.screenshot({path:path.join(out,name+'-dark.png'),fullPage:true});
       assert.equal(await page.evaluate(()=>themeNative.at(-1).theme),'dark');
     }
-    assert.deepEqual(errors,[]);console.log('Theme: bidirectional main/panel sync, stale rerender, settings picker, system mode, drafts, failed saves, reload and 20 chart palette variants passed');
+    assert.deepEqual(errors,[]);console.log('Theme: bidirectional main/panel sync, inactive appearance page, retained failed drafts, stale rerender, settings picker, system mode, failed saves, reload and 20 chart palette variants passed');
   }finally{if(browser)await browser.close();server.close();core.stdin.end();if(core.exitCode===null)await new Promise(resolve=>core.once('exit',resolve));fs.rmSync(root,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);core.kill();process.exitCode=1;});

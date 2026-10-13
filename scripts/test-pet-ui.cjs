@@ -69,7 +69,7 @@ function fixture(data){
     await page.locator('#ball').focus();await page.keyboard.press('Enter');assert.equal(await page.locator('body').getAttribute('data-view'),'panel');await page.keyboard.press('Escape');
     await page.locator('#ball').dispatchEvent('pointerdown',{button:0,buttons:1,clientX:50,clientY:60});await page.locator('#ball').dispatchEvent('pointermove',{buttons:1,clientX:65,clientY:70});assert.equal(await page.evaluate(()=>petTest.dragged),true);
     await page.emulateMedia({forcedColors:'active'});await page.locator('#ball').screenshot({path:path.join(out,'high-contrast.png')});
-    await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.settings);await page.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
+    await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.settings);await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='desktop';render();});
     await page.locator('#desktop-mode').selectOption('tray');await page.waitForFunction(()=>petTest.info.mode==='tray');await page.locator('#desktop-mode').selectOption('pet');await page.waitForFunction(()=>petTest.info.petEnabled);
     assert.deepEqual(await page.locator('#desktop-mode option').evaluateAll(options=>options.map(o=>o.value)),['pet','tray']);
     await page.locator('#import-pet').click();await page.waitForFunction(()=>document.querySelector('#current-pet').textContent.includes('导入成功'));

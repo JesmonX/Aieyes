@@ -30,7 +30,7 @@ Claude Code 实时查询读取来源目录下的 `.credentials.json`；默认 ma
 
 ## 账户与数据源
 
-「设置 → Agents」启用 Agent、选择机器并管理数据目录；「设置 → 账户」添加实际登录账户、设置名称、限额查询与优先查询位置，并连接各设备。登录取消或失败不留下空账户。详见 [Agents 与账户设置](agents-and-accounts-settings.md)。
+「设置 → Agent 接入」选择并启用 Agent，在同页添加实际登录账户、设置名称、限额查询与优先查询位置，并在「机器与目录」连接设备和管理数据目录。登录取消或失败不留下空账户。详见 [Agents 与账户设置](agents-and-accounts-settings.md)。
 
 - 本机和服务器登录同一账户：创建一个账户，再让两个数据源都选择它。限额按账户显示一次，记录可按任一数据源筛选。
 - 本机使用两个 Codex 账户：创建两个账户，为各自的 `CODEX_HOME` 目录添加数据源并分别关联。不同账户的相同事件标识也不会合并。
@@ -90,18 +90,18 @@ OpenRouter 请求路径为 `/api/v1/models`；读取 `pricing.prompt`、`complet
 
 ## 连接与更新
 
-「设置 → 通用 → 连接」配置应用代理；本机来源可覆盖代理或跟随应用。指定代理可选择 HTTP、HTTPS、SOCKS5、SOCKS5H，填写 Host 与端口，自动生成地址；IPv6 自动补方括号。自定义 URL 保留高级地址输入。配置继续保存为 `mode` 与 `url`，旧地址自动回填。
+「设置 → 常规 → 网络代理」配置应用代理；本机来源可覆盖代理或跟随应用。指定代理可选择 HTTP、HTTPS、SOCKS5、SOCKS5H，填写 Host 与端口，自动生成地址；IPv6 自动补方括号。自定义 URL 保留高级地址输入。配置继续保存为 `mode` 与 `url`，旧地址自动回填。
 
 更新由各平台外壳处理：macOS 使用签名 Sparkle appcast，Windows/Linux 使用签名 Tauri 更新源，支持安装与重启。核心只提供更新传输代理，不提供旧的 `updates.check` / `updates.open` RPC。
 
 ## 界面统计与状态
 
-概览的输入是非缓存输入，缓存是读取与写入之和，与输出互不重复。缓存命中率仍按缓存读取 / 全部输入计算。概览不显示记录数量、计价覆盖文字或数据来源板块；来源筛选继续可用，导入错误在 Agents 的目录设置查看。
+概览的输入是非缓存输入，缓存是读取与写入之和，与输出互不重复。缓存命中率仍按缓存读取 / 全部输入计算。概览不显示记录数量、计价覆盖文字或数据来源板块；来源筛选继续可用，导入错误在 Agent 的目录设置查看。
 
 服务器顶部显示 CPU、内存和各选中 GPU 圆环，设备容量、CPU 核心、Swap 与磁盘忙碌率使用状态条。70% 起为提醒色，90% 起为高占用色；缺失值显示「—」，零容量不产生百分比。网络与磁盘吞吐直接显示速率。暂停、等待采样、正常、延迟、连接失败及部分采集失败以短状态标记。
 
 ## Codex 多账号
 
-同一 home 可启用共享历史和独立账号额度。在「设置 → Codex 账号」登录、关联和切换；详情与兼容要求见 [Codex 账号管理](codex-accounts.md)。
+同一 home 可启用共享历史和独立账号额度。在「设置 → Agent 接入 → Codex」登录、关联和切换；详情与兼容要求见 [Codex 账号管理](codex-accounts.md)。
 
 Antigravity 身份元数据由 `scripts/agy_identity.py` 在登录机器上读取，订阅来自当前 CLI 使用的 `aicode.googleapis.com/v1:fetchLicenses`，与 `/usage` 的额度解析独立。身份绑定、错误降级和测试入口见 [刷新、监控与 Antigravity](refresh-monitoring-antigravity.md)。

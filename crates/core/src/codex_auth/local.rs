@@ -710,6 +710,42 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
 }
 
 /// Holds the home lease through inference and persists rotated credentials even on failure.
+pub fn wakeup(
+    loc: &Location,
+    profile_id: &str,
+    manifest: &crate::wakeups::Manifest,
+    cwd: &Path,
+) -> Result<()> {
+    let root = loc.root()?;
+    let _lock = files::lock(&root)?;
+    file_mode(&root)?;
+    recover(&root)?;
+    let profile = files::profile(&root, profile_id)?;
+    let mut auth = read_authority(&root, &profile)?;
+    // Only inactive credentials may be renewed by the scheduler. Never retry a
+    // model turn, whose response may have been lost after a successful charge.
+    if files::access_expired(&auth)
+        && (current(&root).as_deref() != Some(&profile.identity.key)
+            || processes::list(&root)?.is_empty())
+    {
+        auth = renew(loc, &root, &profile)?;
+    }
+    let home = layout(&root, profile_id, "wake")?;
+    let mut rpc = Rpc::start_with_pre_command(
+        &loc.binary,
+        &home,
+        &loc.proxy,
+        false,
+        &loc.pre_command,
+        &loc.shell,
+    )?;
+    rpc.login_external(&auth)?;
+    rpc.wake_turn(&auth, manifest, cwd, &mut || {
+        read_authority(&root, &profile)
+    })
+}
+
+/// Holds the home lease through inference and persists rotated credentials even on failure.
 pub fn with_credentials<T>(
     loc: &Location,
     profile_id: &str,

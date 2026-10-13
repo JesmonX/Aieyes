@@ -34,6 +34,11 @@ function fixture(){
  for(const surface of ['index.html','floating.html']){
   const page=await browser.newPage({viewport:{width:surface==='floating.html'?450:1120,height:760}}),errors=[];page.on('pageerror',e=>{errors.push(String(e));console.error('Page error:',e);});await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.evaluate(()=>AieyesApp.ready);if(!await page.locator('[data-quota]').count())console.log(surface,await page.locator('body').innerText(),errors);
   const card=page.locator('[data-quota="codex:a"]');await card.waitFor();
+  if(surface==='floating.html'){
+   const disclosure=card.locator('.quota-disclosure');
+   assert.equal(await disclosure.evaluate(element=>element.open),false,'Multiple panel accounts start collapsed');
+   await disclosure.locator(':scope > summary').click();
+  }
   assert.match(await card.innerText(),/52.15/);assert.match(await card.innerText(),/用量边界待确认/);assert.doesNotMatch(await card.innerText(),/样本不足/);
   assert.equal(await card.locator('.subscription-badge').evaluate(e=>getComputedStyle(e).fontSize),'14px');
   assert(await page.locator('[data-quota="antigravity:new"]').isVisible());
@@ -57,6 +62,8 @@ function fixture(){
   await page.emulateMedia({colorScheme:'light'});assert.equal(await page.locator('html').getAttribute('data-theme'),'dark','Explicit dark remains dark on a light system');
   if(surface==='index.html'){
    await page.evaluate(()=>{samplingFixture.settings=structuredClone(state.settings);state.page='settings';state.settingsTab='general';render();});
+   assert.equal(await page.locator('[name=appearanceTheme]').inputValue(),'dark','Appearance opens with the current saved theme');
+   assert.equal(await page.locator('[name=appearanceAccent]').inputValue(),'purple','Appearance opens with the current saved accent');
    await page.locator('[name=appearanceTheme]').selectOption('light');
    await page.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&samplingFixture.settings.appearance?.theme==='light');
    await page.locator('[name=appearanceAccent]').selectOption('teal');

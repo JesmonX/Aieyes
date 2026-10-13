@@ -434,6 +434,62 @@ for line in sys.stdin:
 }
 
 #[test]
+fn wake_turn_requires_matching_completion_and_never_sends_refresh_tokens() {
+    for status in ["completed", "failed"] {
+        let script = r#"
+import sys,json
+status=sys.argv[1]
+for line in sys.stdin:
+ v=json.loads(line)
+ assert 'SECRET_REFRESH' not in line
+ method=v.get('method')
+ if method=='initialize': result={}
+ elif method=='account/login/start':
+  assert v['params']['type']=='chatgptAuthTokens';result={}
+ elif method=='account/read': result={'account':{'type':'chatgpt'}}
+ elif method=='thread/start':
+  assert v['params']['ephemeral'] and v['params']['modelProvider']=='openai'
+  assert v['params']['approvalPolicy']=='never' and v['params']['sandbox']=='read-only'
+  result={'thread':{'id':'thread'}}
+ elif method=='turn/start':
+  print(json.dumps({'method':'turn/completed','params':{'threadId':'another','turn':{'id':'turn','status':'completed'}}}),flush=True)
+  print(json.dumps({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':'earlier','status':'completed'}}}),flush=True)
+  print(json.dumps({'id':v['id'],'result':{'turn':{'id':'turn'}}}),flush=True)
+  print(json.dumps({'id':99,'method':'item/commandExecution/requestApproval','params':{}}),flush=True)
+  refusal=json.loads(sys.stdin.readline());assert 'error' in refusal
+  print(json.dumps({'method':'turn/completed','params':{'threadId':'thread','turn':{'id':'turn','status':status}}}),flush=True)
+  continue
+ else: continue
+ print(json.dumps({'id':v['id'],'result':result}),flush=True)
+"#;
+        let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+        command.args(["-u", "-c", script, status]);
+        let mut rpc = Rpc::command(command).unwrap();
+        let a = auth("one", "team", "SECRET_REFRESH");
+        rpc.login_external(&a).unwrap();
+        let m = crate::wakeups::Manifest {
+            codex_profile_id: Some("home:fixture".into()),
+            version: 1,
+            id: "wake".into(),
+            account_key: "codex:a".into(),
+            provider: "codex".into(),
+            model: "fixture".into(),
+            effort: "low".into(),
+            binary: String::new(),
+            args: vec!["Reply OK".into()],
+            config_path: String::new(),
+            pre_command: String::new(),
+            shell: String::new(),
+            proxy: Default::default(),
+            times: vec![],
+            enabled: true,
+        };
+        let result = rpc.wake_turn(&a, &m, std::path::Path::new("."), &mut || Ok(a.clone()));
+        assert_eq!(result.is_ok(), status == "completed");
+    }
+}
+
+#[test]
 fn refresh_journal_recovers_after_response_loss_without_touching_active_account() {
     let (_d, r) = root();
     let _lease = files::lock(&r).unwrap();
@@ -491,6 +547,7 @@ fn shared_history_totals_survive_and_profile_quotas_stay_visible() {
     };
     store.save_settings(&settings).unwrap();
     let event = UsageEvent {
+        turn_id: String::new(),
         id: "event".into(),
         source_id: "source".into(),
         provider: "codex".into(),

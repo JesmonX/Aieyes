@@ -50,6 +50,8 @@ struct RootView: View {
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     var compact = true
     var nativePanelBackground = false
+    private let snapshotPage: String?
+    private var activePage: String { snapshotPage ?? tab }
     @AppStorage private var tab: String
     @AppStorage private var costMode: Bool
     @AppStorage private var serverFilter: String
@@ -59,6 +61,7 @@ struct RootView: View {
     private var usageDashboard: Dashboard { compact ? model.panelDashboard : model.dashboard }
     init(model: AppModel, compact: Bool = true, page: String = "agent", nativePanelBackground: Bool = false) {
         self.model = model; self.compact = compact; self.nativePanelBackground = nativePanelBackground
+        self.snapshotPage = CommandLine.arguments.contains("--render") ? page : nil
         _tab = AppStorage(wrappedValue: page, NativePanelKey.scoped(.panelPage, .detailPage, compact: compact))
         _serverFilter = AppStorage(wrappedValue: "all", NativePanelKey.scoped(.panelServerFilter, .detailServerFilter, compact: compact))
         _trendExpanded = AppStorage(wrappedValue: false, NativePanelKey.scoped(.panelTrend, .detailTrend, compact: compact))
@@ -69,7 +72,7 @@ struct RootView: View {
         usageObservedContent
             .onChange(of: tab) { _, value in if !compact { model.detailPage = value }; model.setServerVisible(value == "servers", window: compact ? "panel" : "detail"); if value == "servers" { Task { await model.sampleHosts() } } }
             .onChange(of: model.requestedDetailPage) { _, page in if !compact, let page { tab = page; model.requestedDetailPage = nil } }
-            .onAppear { if !compact, let page = model.requestedDetailPage { tab = page; model.requestedDetailPage = nil }; model.setServerVisible(tab == "servers", window: compact ? "panel" : "detail") }
+            .onAppear { if !compact, let page = model.requestedDetailPage { tab = page; model.requestedDetailPage = nil }; model.setServerVisible(activePage == "servers", window: compact ? "panel" : "detail") }
     }
     // Keep each modifier chain small enough for release-build type checking.
     private var rootLayout: some View {
@@ -78,7 +81,7 @@ struct RootView: View {
             Divider().opacity(0.55)
             ScrollView {
                 Group {
-                    if tab == "servers" { LazyVStack(alignment: .leading, spacing: compact ? 8 : 12) { serverContent } }
+                    if activePage == "servers" { LazyVStack(alignment: .leading, spacing: compact ? 8 : 12) { serverContent } }
                     else { VStack(alignment: .leading, spacing: compact ? 8 : 22) { agentContent } }
                 }.padding(compact ? 12 : 24).background(OverlayScrollStyle())
             }
@@ -88,12 +91,13 @@ struct RootView: View {
     }
     private var styledContent: some View {
         rootLayout
+        .accessibilityIdentifier(activePage == "servers" ? "server-overview" : "agent-overview")
         .frame(width: compact ? 450 : nil, height: compact ? model.panelHeight : nil)
         .frame(minWidth: compact ? nil : 760, minHeight: compact ? nil : 480)
         .background { rootBackground }
         .environment(\.translucentPanel, compact)
         .environment(\.surfaceActive, model.isWindowVisible(compact ? "panel" : "detail"))
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: tab)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: activePage)
         .font(AppFont.body).disabled(model.installingUpdate)
         .aieyesAccent()
     }
@@ -130,7 +134,7 @@ struct RootView: View {
     private var header: some View {
         HStack(spacing: 12) {
             BrandMark().frame(width: 34, height: 34)
-            Picker("页面", selection: $tab) { Text("Agent").tag("agent"); Text("服务器").tag("servers") }
+            Picker("页面", selection: Binding(get: { activePage }, set: { tab = $0 })) { Text("Agent").tag("agent"); Text("服务器").tag("servers") }
                 .pickerStyle(.segmented).labelsHidden().frame(maxWidth: .infinity)
             Menu {
                 Button(model.refreshLabel("scan")) { Task { await model.scan() } }.disabled(model.busy || model.quotaBusy)
@@ -145,7 +149,7 @@ struct RootView: View {
     private var footerStatus: String { (tab == "servers" ? model.serverStatusText : model.statusText) + " · 出站 · " + (model.networkBusy ? "测试中…" : model.networkTest?.label ?? "连接未测试") }
     private var footer: some View {
         VStack(alignment: .leading, spacing: compact ? 3 : 8) {
-            Button { Task { if tab == "servers" { await model.sampleHosts() } else { await model.scan() } } } label: {
+            Button { Task { if activePage == "servers" { await model.sampleHosts() } else { await model.scan() } } } label: {
                 HStack(spacing: 6) {
                     Circle().fill(model.busy || model.quotaBusy || model.serverBusy ? Palette.accent : !model.actionFailures.isEmpty ? Palette.danger : (tab == "servers" ? model.serverStatusText.contains("延迟") : model.statusText.contains("延迟") || model.dataTime == 0) ? Palette.warn : Palette.ok).frame(width: 7, height: 7)
                     Text(footerStatus).font(.system(size: compact ? 12 : 14)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
@@ -157,9 +161,9 @@ struct RootView: View {
                 ThemeToggleButton(model: model)
                 if compact {
                     UpdateMenuButton()
-                    Button { model.showDetailPage?(tab) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("打开详情").accessibilityLabel("打开详情")
+                    Button { model.showDetailPage?(activePage) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("打开详情").accessibilityLabel("打开详情")
                 }
-                Button { model.showSettings?() } label: { Image(systemName: "gearshape").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("设置").accessibilityLabel("设置").keyboardShortcut(",")
+                Button { model.openSettings() } label: { Image(systemName: "gearshape").frame(width: 28, height: 28).contentShape(Rectangle()) }.help("设置").accessibilityLabel("设置").keyboardShortcut(",")
                 Menu {
                     if compact { Button("面板显示账户…") { model.showPanelAccounts?() }; Button(model.isPinned ? "取消固定面板" : "固定面板") { model.isPinned.toggle() }; Divider() }
                     Button(model.networkBusy ? "出站测试中…" : "测试出站连接") { Task { await model.testNetwork() } }.disabled(model.networkBusy)
@@ -205,6 +209,9 @@ struct RootView: View {
             }
             if !compact { CacheSummaryCard(tokens: usageDashboard.summary.tokens) }
         } else if !model.settings.sources.isEmpty { usageEmptyState }
+        if let billing = usageDashboard.billingSummary, billing.visible {
+            CodexBillingSummaryView(billing: billing, compact: compact)
+        }
         quotaSection
         if !model.runningEstimates.isEmpty {
             Button { model.showSampling?() } label: { HStack { Text(model.samplingSummary); Spacer(); Text("管理采样"); Image(systemName: "chevron.right") }.font(AppFont.secondary) }.buttonStyle(.plain).foregroundStyle(model.samplingNeedsAttention ? Palette.warn : Palette.accent)
@@ -232,7 +239,7 @@ struct RootView: View {
         let failed = model.dashboard.sources.contains { $0.enabled && ($0.status?.error != nil || $0.status?.partial == true) }
         return Surface(title: onlyQuota ? "此来源提供账户限额" : failed ? "记录同步失败" : hasActiveFilters ? "没有匹配的用量记录" : model.dataTime == 0 ? "尚未同步用量记录" : "此时间范围暂无用量") {
             Text(onlyQuota ? "查看实时余额与限额；接入日志后即可分析用量。" : failed ? "请检查对应来源的错误后重试。" : "保留筛选与日期入口，可同步记录或扩大范围。").font(AppFont.secondary).foregroundStyle(.secondary)
-            HStack { if onlyQuota { Button("添加日志来源") { model.requestedSourceProvider = "codex"; model.showSettings?() } } else { Button("同步记录") { Task { await model.scan() } }; Button("扩大到最近一年") { model.range = 365; if compact { model.showDetailPage?("agent") } }; if hasActiveFilters { Button("清除筛选") { model.provider = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; model.selectedModel = "all" } } } }
+            HStack { if onlyQuota { Button("添加日志来源") { model.openSettings(.init(provider: "codex", section: "machines")) } } else { Button("同步记录") { Task { await model.scan() } }; Button("扩大到最近一年") { model.range = 365; if compact { model.showDetailPage?("agent") } }; if hasActiveFilters { Button("清除筛选") { model.provider = "all"; model.selectedAccount = "all"; model.selectedSource = "all"; model.selectedModel = "all" } } } }
         }
     }
     private var hasActiveFilters: Bool { model.provider != "all" || model.selectedAccount != "all" || model.selectedSource != "all" || model.selectedModel != "all" || model.range != 1 }
@@ -249,9 +256,9 @@ struct RootView: View {
         }
     }
     @ViewBuilder private var connectionButtons: some View {
-        Button("设置 Agents", systemImage: "folder") { model.settingsTab = "sources"; model.showSettings?() }
-        Button("账户限额", systemImage: "person.crop.circle") { model.settingsTab = "accounts"; model.showSettings?() }
-        Button("SSH 主机", systemImage: "server.rack") { model.settingsTab = "servers"; model.requestHostEditor = true; model.showSettings?() }
+        Button("Agent 接入", systemImage: "folder") { model.openSettings(.init(section: "machines")) }
+        Button("账户限额", systemImage: "person.crop.circle") { model.openSettings(.init(section: "accounts")) }
+        Button("SSH 主机", systemImage: "server.rack") { model.openSettings(.init(category: "servers", section: "add-host")) }
     }
     @ViewBuilder private var activeFilters: some View {
         if hasActiveFilters {
@@ -350,7 +357,7 @@ struct RootView: View {
                     if let retry = model.quotaNextAttempt { Text("下次自动重试：" + retry.formatted(date: .omitted, time: .shortened)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 }
             }
-            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, deviceCounts: model.accountDeviceCounts(quota.id), onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } }
+            if compact { ForEach(displayedQuotas) { quota in QuotaCard(quota: quota, compact: true, collapsible: true, defaultExpanded: displayedQuotaAccounts.count == 1, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, deviceCounts: model.accountDeviceCounts(quota.id), onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } }
             else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 16, alignment: .top)], alignment: .leading, spacing: 16) { ForEach(model.dashboard.quotas) { quota in QuotaCard(quota: quota, collapsible: true, estimate: model.dashboard.quotaEstimates?.first { $0.accountKey == quota.id }, deviceCounts: model.accountDeviceCounts(quota.id), onSwitch: model.canSwitchAccount(quota.id) ? { model.showAccountSwitch?(quota.id) } : nil, onEstimate: { group in model.showEstimate?(quota, false, group) }, onCredits: { model.showEstimate?(quota, true, nil) }, creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id }, quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id }, creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id }) } } }
         }.animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.86), value: model.dashboard.quotaOrder)
     }
@@ -364,11 +371,14 @@ struct RootView: View {
         }
     }
     @ViewBuilder private var serverContent: some View {
-        HStack { VStack(alignment: .leading, spacing: 4) { HStack { Text("服务器").font(.system(size: compact ? 20 : 22, weight: .semibold, design: .default)); RefreshIndicator(model: model, key: "hosts") }; Text("\(model.settings.monitoredHosts.filter(\.enabled).count) 台主机").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button { model.settingsTab = "servers"; model.requestHostEditor = true; model.showSettings?() } label: { Image(systemName: "plus") }.help("添加主机") }
-        if model.settings.monitoredHosts.isEmpty { EmptyCard(icon: "server.rack", title: "添加服务器", subtitle: "", action: { model.settingsTab = "servers"; model.requestHostEditor = true; model.showSettings?() }) }
+        HStack { VStack(alignment: .leading, spacing: 4) { HStack { Text("服务器").font(.system(size: compact ? 20 : 22, weight: .semibold, design: .default)); RefreshIndicator(model: model, key: "hosts") }; Text("\(model.settings.monitoredHosts.filter(\.enabled).count) 台主机").font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Button { model.openSettings(.init(category: "servers", section: "add-host")) } label: { Image(systemName: "plus") }.help("添加 SSH 主机").accessibilityLabel("添加 SSH 主机") }
+        if model.settings.monitoredHosts.isEmpty { EmptyCard(icon: "server.rack", title: "添加服务器", subtitle: "", action: { model.openSettings(.init(category: "servers", section: "add-host")) }) }
         Picker("服务器筛选", selection: $serverFilter) { Text("全部").tag("all"); Text("异常").tag("errors"); Text("已暂停").tag("paused") }.pickerStyle(.segmented)
+        if !model.settings.monitoredHosts.isEmpty && filteredHosts.isEmpty {
+            Surface { Text("当前筛选没有匹配的服务器").foregroundStyle(.secondary); Button("清除筛选") { serverFilter = "all" } }
+        }
         ForEach(filteredHosts) { host in
-            ServerCard(host: host, result: model.hosts.first(where: { $0.id == host.id }), compact: compact, onRefresh: { Task { await model.sampleHosts(hostID: host.id) } }).equatable()
+            ServerCard(host: host, result: model.hosts.first(where: { $0.id == host.id }), compact: compact, onRefresh: { Task { await model.sampleHosts(hostID: host.id) } }, onSettings: { model.openSettings(.init(category: "servers", hostID: host.id)) }).equatable()
         }
     }
 }
@@ -382,7 +392,7 @@ struct ThemeToggleButton: View {
         Button { Task { await model.toggleTheme(currentlyDark: dark) } } label: {
             Image(systemName: dark ? "sun.max" : "moon")
                 .frame(width: 28, height: 28).contentShape(Rectangle())
-        }.help(label).accessibilityLabel(label)
+        }.help(label + "；括号内为缓存读取命中率：缓存读取 ÷（普通输入＋缓存读取＋缓存写入），不包含输出 Token。点击查看明细。").accessibilityLabel(label)
             .disabled(!model.settingsLoaded || model.settingsSaving)
     }
 }
@@ -604,13 +614,15 @@ struct QuotaCard: View {
     var creditHistory: [QuotaEstimate] = []
     private var bestCredit: QuotaEstimate? { EstimatePresentation.credit(creditHistory) ?? creditEstimate }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage private var storedExpanded: Bool
-    private var expanded: Bool { !collapsible || storedExpanded }
-    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, deviceCounts: AccountDeviceCounts? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = []) {
+    private var defaultExpanded: Bool
+    @AppStorage private var storedExpanded: Bool?
+    private var expanded: Bool { !collapsible || (storedExpanded ?? defaultExpanded) }
+    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, defaultExpanded: Bool = true, sourceName: String = "", estimate: QuotaEstimate? = nil, deviceCounts: AccountDeviceCounts? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = []) {
+        self.defaultExpanded = defaultExpanded
         self.deviceCounts = deviceCounts; self.onSwitch = onSwitch
         self.quotaHistory = quotaHistory; self.creditHistory = creditHistory
         self.collapsible = collapsible; self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
-        _storedExpanded = AppStorage(wrappedValue: true, NativePanelKey.expansion(.quota, id: quota.id, compact: compact))
+        _storedExpanded = AppStorage(NativePanelKey.expansion(.quota, id: quota.id, compact: compact))
     }
     var body: some View {
         fullCard
@@ -661,7 +673,7 @@ struct QuotaCard: View {
         return text
     }
     @ViewBuilder private var cardHeader: some View {
-            Button { withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)) { if collapsible { storedExpanded.toggle() } } } label: {
+            Button { withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)) { if collapsible { storedExpanded = !expanded } } } label: {
             HStack(spacing: 8) {
                 ProviderMark(provider: quota.provider)
                 VStack(alignment: .leading, spacing: 2) {
@@ -678,22 +690,19 @@ struct QuotaCard: View {
             }.buttonStyle(.plain).help(collapsible ? (expanded ? "折叠限额" : "展开限额") : quota.name)
                 .accessibilityLabel(headerAccessibility)
             if let onSwitch {
-                HStack(spacing: 12) {
-                Button(action: onSwitch) {
-                    Label("切换为此账号", systemImage: "arrow.left.arrow.right")
-                        .font(AppFont.secondary.weight(.medium))
-                        .foregroundStyle(Palette.accent)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.accent.opacity(0.30), lineWidth: 1) }
-                        .contentShape(RoundedRectangle(cornerRadius: 8))
-                }.buttonStyle(.plain)
-                if let deviceCounts {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(deviceCounts.loginText); Text(deviceCounts.usageText)
-                        if deviceCounts.pending { Text("有设备待确认").font(.system(size: 10)) }
-                    }.font(AppFont.secondary).foregroundStyle(.secondary).monospacedDigit().fixedSize()
-                }
+                FlowLayout(spacing: 8) {
+                    Button(action: onSwitch) {
+                        Label("切换为此账号", systemImage: "arrow.left.arrow.right")
+                            .font(AppFont.secondary.weight(.medium)).foregroundStyle(Palette.accent)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.accent.opacity(0.30), lineWidth: 1) }
+                            .contentShape(RoundedRectangle(cornerRadius: 8))
+                    }.buttonStyle(.plain)
+                    if let deviceCounts {
+                        Text(deviceCounts.inlineSummary).font(AppFont.secondary).foregroundStyle(.secondary)
+                            .monospacedDigit().lineLimit(1).fixedSize(horizontal: true, vertical: false).help(deviceCounts.summary)
+                    }
                 }
             }
             if expanded {
@@ -766,13 +775,15 @@ struct ServerCard: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.host == rhs.host && lhs.result == rhs.result && lhs.compact == rhs.compact }
     var host: Host, result: HostResult?, compact: Bool
     var onRefresh: () -> Void = {}
+    var onSettings: () -> Void = {}
     @AppStorage private var expanded: Bool
-    init(host: Host, result: HostResult?, compact: Bool, onRefresh: @escaping () -> Void = {}) {
-        self.host = host; self.result = result; self.compact = compact; self.onRefresh = onRefresh
+    init(host: Host, result: HostResult?, compact: Bool, onRefresh: @escaping () -> Void = {}, onSettings: @escaping () -> Void = {}) {
+        self.host = host; self.result = result; self.compact = compact; self.onRefresh = onRefresh; self.onSettings = onSettings
         _expanded = AppStorage(wrappedValue: false, NativePanelKey.expansion(.server, id: host.id, compact: compact))
     }
     var body: some View {
         Surface(spacing: 8, padding: 12) {
+            HStack(spacing: 8) {
             DisclosureGroup(isExpanded: $expanded) {
                 EmptyView()
             } label: {
@@ -789,6 +800,8 @@ struct ServerCard: View, Equatable {
                     }
 
                 }
+            }
+                Button("监控设置", action: onSettings).font(AppFont.secondary).accessibilityLabel((host.name.isEmpty ? host.target : host.name) + "的监控设置")
             }
             ServerResourceSummary(host: host, sample: result?.sample)
                 .opacity(host.enabled ? 1 : 0.65)
@@ -1052,16 +1065,22 @@ struct RefreshIndicator: View {
     let key: String
     @State private var showing = false
     private var failures: [ActionFailure] { model.actionFailures.filter { $0.action == key || (key == "scan" && $0.action == "prices") } }
+    private var hasError: Bool { !failures.isEmpty || (key == "scan" && model.dashboardError != nil) }
+    private var statusLabel: String {
+        model.refreshLabel(key) + "状态 · " + (model.refreshStates[key]?.busy == true ? "进行中" : hasError ? "部分失败" : model.refreshStates[key]?.succeededAt != nil ? "已更新" : "尚未刷新") + "；点击查看详情"
+    }
     var body: some View {
         Button { showing.toggle() } label: {
             ZStack {
                 if model.refreshStates[key]?.busy == true || (key == "scan" && model.dashboardPending) { ProgressView().controlSize(.small).scaleEffect(0.7) }
-                else { Image(systemName: failures.isEmpty && (key != "scan" || model.dashboardError == nil) ? "arrow.clockwise" : "exclamationmark.circle").foregroundStyle(failures.isEmpty ? Color.secondary : Palette.warn) }
+                else { Image(systemName: hasError ? "exclamationmark.circle" : model.refreshStates[key]?.succeededAt != nil ? "checkmark.circle" : "info.circle").foregroundStyle(hasError ? Palette.warn : Color.secondary) }
             }.frame(width: 22, height: 22)
-        }.buttonStyle(.plain).help(model.refreshLabel(key)).accessibilityLabel(model.refreshLabel(key))
+        }.buttonStyle(.plain).help(statusLabel).accessibilityLabel(statusLabel)
         .popover(isPresented: $showing) {
             VStack(alignment: .leading, spacing: 12) {
-                Text(model.refreshLabel(key)).font(AppFont.section)
+                Text(model.refreshLabel(key) + "状态").font(AppFont.section)
+                if let time = model.refreshStates[key]?.succeededAt { Text("上次成功：" + time.formatted(date: .abbreviated, time: .shortened)).font(AppFont.secondary) }
+                else { Text(model.refreshStates[key]?.busy == true ? "正在刷新…" : "尚未刷新").font(AppFont.secondary) }
                 ForEach(failures) { failure in
                     HStack { VStack(alignment: .leading) { Text(failure.name); Text(failure.reason).font(AppFont.secondary).textSelection(.enabled) }; Spacer(); Button("重试") { Task { await model.retry(failure) } } }
                 }

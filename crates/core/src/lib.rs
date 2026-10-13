@@ -5,6 +5,7 @@ mod agy_identity;
 pub mod antigravity;
 pub mod automatic;
 pub mod capacity;
+pub mod codex_api;
 pub mod codex_auth;
 pub mod contracts;
 pub mod credentials;
@@ -187,6 +188,7 @@ impl Engine {
             let aliases = self.store.settings()?.account_aliases;
             if method == "settings.save" {
                 params["accountAliases"] = serde_json::to_value(&aliases)?;
+                params["codexApis"] = serde_json::to_value(self.store.settings()?.codex_apis)?;
             }
             providers::normalize_value(&mut params, &aliases);
             if method == "quotas.order.set"
@@ -212,6 +214,7 @@ impl Engine {
             | "accounts.cleanup.list"
             | "accounts.deployments.sync" => self.account_call(method, params),
             name if name.starts_with("agyAuth.") => self.agy_auth_call(name, params),
+            name if name.starts_with("codexApi.") => self.codex_api_call(name, params),
             name if name.starts_with("codexAuth.") => self.codex_auth_call(name, params),
             name if name.starts_with("wakeups.") => self.wakeup_call(name, params),
             name if name.starts_with("quotaEstimates.") || name.starts_with("creditEstimates.") => {
@@ -460,6 +463,10 @@ impl Engine {
                             import::scan(&self.store, &settings, source)
                         }
                     };
+                    let result = result.and_then(|value| {
+                        codex_api::usage::sync(&self.store, &settings, source)?;
+                        Ok(value)
+                    });
                     match result {
                         Ok(value) => {
                             if value["error"].is_string()

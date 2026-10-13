@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 """No real CLI inference, SSH connection or system scheduler is used by these tests."""
 from contextlib import closing
 import datetime
@@ -196,14 +197,15 @@ for line in sys.stdin:
     def test_deploy_update_rollback_disable_remove(self):
         with tempfile.TemporaryDirectory() as temporary:
             home=pathlib.Path(temporary)
-            with patch.object(wake.pathlib.Path,'home',return_value=home),patch.object(wake,'probe',return_value={}),patch.object(wake,'resolve',side_effect=lambda m:m),patch.object(wake,'crontab'),patch.object(wake.sys,'platform','linux'):
-                req={'action':'deploy','namespace':'a'*20,'manifest':self.manifest(),'script':'original runner'}
+            with patch.object(wake.pathlib.Path,'home',return_value=home),patch.object(wake,'probe',return_value={}),patch.object(wake,'resolve',side_effect=lambda m:m),patch.object(wake,'crontab'),patch.object(wake.sys,'platform','linux'),patch.object(wake.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=(wake.tag(home/'.local/share/aieyes-wakeups'/('a'*20))).encode())):
+                req={'action':'deploy','namespace':'a'*20,'manifest':self.manifest(),'script':'original runner','authHelper':'fixture_version=1'}
                 result=wake.manage(req);root=pathlib.Path(result['root']);path=root/'tasks/wake-test.json'
                 original=path.read_text()
                 with patch.object(wake,'crontab',side_effect=ValueError('install failed')):
-                    changed=dict(req,manifest=dict(self.manifest(),model='new'),script='updated runner')
+                    changed=dict(req,manifest=dict(self.manifest(),model='new'),script='updated runner',authHelper='fixture_version=2')
                     with self.assertRaises(ValueError):wake.manage(changed)
                 self.assertEqual(path.read_text(),original);self.assertEqual((root/'runner.py').read_text(),'original runner')
+                self.assertEqual((root/'codex_auth.py').read_text(),'fixture_version=1')
                 control={'root':str(root),'id':'wake-test'}
                 wake.manage(dict(control,action='disable'));self.assertFalse(json.loads(path.read_text())['enabled'])
                 wake.manage(dict(control,action='enable'));self.assertTrue(json.loads(path.read_text())['enabled'])
@@ -233,7 +235,9 @@ for line in sys.stdin:
             self.assertNotIn('secret',json.dumps(wake.history(root,'wake-test')))
 
     def test_independent_accounts_start_together_and_same_account_is_skipped(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        scheduled = datetime.datetime.now()
+        with tempfile.TemporaryDirectory() as temporary, patch.object(wake.datetime, 'datetime', wraps=datetime.datetime) as clock:
+            clock.now.return_value = scheduled
             root = pathlib.Path(temporary)
             for identifier, account in [('wake-a', 'a'), ('wake-b', 'b'), ('wake-c', 'a')]:
                 m = dict(self.manifest(), id=identifier, accountKey=account)

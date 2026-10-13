@@ -21,7 +21,7 @@ Windows 使用本地鸿蒙黑体，内容尺寸以原生 macOS 界面为参照�
 
 字体文件来自 OpenHarmony 的 `resources` 仓库，固定版本及 SHA-256 位于 [sources.json](../apps/desktop/web/fonts/sources.json)。Regular、Medium、Bold 三个原始 TTF 共约 23.5 MiB；没有子集化或修改。WebView 使用本地 `@font-face`，原生桌宠文字使用 GDI+ 私有字体集合，不需要用户安装字体。代码、路径仍使用等宽字体。
 
-在「设置 → 通用 → 外观」展示字体署名和完整许可。打包前运行 `check-bundled-fonts.cjs` 检查文件尺寸、哈希及许可。正文和图表共用字体，字体加载完成后重绘图表。模型分布及每日模型明细的复制按钮已移除，文字仍可选中复制。
+在「设置 → 常规 → 外观」展示字体署名和完整许可。打包前运行 `check-bundled-fonts.cjs` 检查文件尺寸、哈希及许可。正文和图表共用字体，字体加载完成后重绘图表。模型分布及每日模型明细的复制按钮已移除，文字仍可选中复制。
 
 ## 原生材质
 

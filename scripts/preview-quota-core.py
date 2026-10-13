@@ -85,6 +85,10 @@ if scenario:
     dashboard['sources'] = [dict(src,status=dict(updatedAt=stamp,error='模拟读取失败' if scenario == 'failure' else None)) for src in settings['sources']]
     dashboard['quotas'] = quotas
     dashboard['quotaOrder'] = [q['provider']+':'+q['accountId'] for q in quotas]
+if scenario == 'api':
+    api_source=settings['sources'][0]
+    settings['codexApis']=[dict(id='fixture-api',sourceId=api_source['id'],name='Responses API · 团队接口',baseUrl='https://api.example.invalid/v1',model='test-model',effort='low',proxy=dict(mode='direct',url=''),prices=[price],revision='fixture-revision')]
+    dashboard['billingSummary']=dict(apiCost=12.45,apiTokens=1000000,apiPricedTokens=950000,apiHistoryTokens=980000,apiUnmeteredTokens=20000,subscriptionEquivalentCost=34.56,subscriptionTokens=2200000,subscriptionPricedTokens=2200000,unknownTokens=1500,incompleteRequests=2,currency='USD')
 # The browser and native renderer consume exactly the same synthetic data.
 if '--fixture' in sys.argv:
     print(json.dumps(dict(settings=settings, dashboard=dashboard, prices=[price], hosts=hosts, wakeups=wakeups)))
@@ -97,5 +101,6 @@ for line in sys.stdin:
     scan = [dict(id=src['id'], error='连接失败：模拟日志不可读取') for src in settings['sources']] if scenario == 'failure' else []
     network=dict(testedAt=stamp,mode='system',averageMs=73,status='ok',sites=[dict(url='https://api.github.com/rate_limit',latencyMs=60,error=None),dict(url='https://openrouter.ai',latencyMs=86,error=None)])
     statuses = [dict(accountKey=a['provider']+':'+a['id'],sourceId=s['id'],machineId=s.get('hostId') or 'local',current=i == 0 and s.get('accountId') == a['id'],credential=s.get('accountId') == a['id'],checkedAt=stamp) for i,a in enumerate(settings['accounts']) for s in settings['sources'] if s['provider']==a['provider']]
-    result={'accounts.status.get':statuses,'accounts.status.refresh':next((v for v in statuses if v['accountKey']==r.get('params',{}).get('accountKey') and v['sourceId']==r.get('params',{}).get('sourceId')),{}),'accounts.cleanup.list':[],'accounts.deployments.sync':{'failedTasks':[]},'accounts.deletion.preview':{'tasks':[]},'settings.get':settings,'dashboard':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts,'network.test':network,'network.status':network}.get(r['method'],{})
+    result={'accounts.status.get':statuses,'accounts.status.refresh':next((v for v in statuses if v['accountKey']==r.get('params',{}).get('accountKey') and v['sourceId']==r.get('params',{}).get('sourceId')),{}),'accounts.cleanup.list':[],'accounts.deployments.sync':{'failedTasks':[]},'accounts.deletion.preview':{'tasks':[]},'settings.get':settings,'dashboard':dashboard,'dashboard.summary':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts,'network.test':network,'network.status':network}.get(r['method'],{})
+    if r['method']=='codexApi.status': result=dict(configRevision='fixture-config',defaultProvider='aieyes_api_fixture-api_fixture-revision',installed=True,ready=True)
     print(json.dumps(dict(jsonrpc='2.0',id=r['id'],result=result)),flush=True)

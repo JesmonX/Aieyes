@@ -44,12 +44,12 @@ struct SettingsView: View {
             if let message = model.settingsMessage ?? model.message { HStack { Text(message).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.settingsMessage = nil; model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭提示") }.padding(.horizontal, 22).padding(.bottom, 10) }
             ForEach(model.settings.configurationIssues ?? [], id: \.self) { Text($0).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled).padding(.horizontal, 22) }
             Picker("设置分类", selection: $model.settingsTab) {
-                Text("Agents").tag("sources"); Text("服务器").tag("servers"); Text("价格").tag("prices"); Text("账户").tag("accounts"); Text("定时唤醒").tag("wakeups"); Text("通用").tag("general")
+                Text("Agent 接入").tag("integrations"); Text("服务器").tag("servers"); Text("价格").tag("prices"); Text("定时唤醒").tag("wakeups"); Text("常规").tag("general")
             }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 22).padding(.bottom, 12)
             Divider().opacity(0.5)
             Group {
                 switch model.settingsTab {
-                case "accounts", "codexAuth": AccountsSettingsView(model: model) { accountEditor = $0 }
+                case "integrations", "accounts", "codexAuth": AgentsSettingsView(model: model)
                 case "wakeups": WakeupsView(model: model)
                 case "sources": AgentsSettingsView(model: model)
                 case "servers": servers
@@ -57,7 +57,7 @@ struct SettingsView: View {
                 case "general", "connection": general
                 default: AgentsSettingsView(model: model)
                 }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16).disabled((model.settingsSaving && model.settingsTab != "accounts") || model.repricing || !model.settingsLoaded)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16).disabled((model.settingsSaving && model.settingsTab != "integrations") || model.repricing || !model.settingsLoaded)
         }
         .font(AppFont.body).disabled(model.installingUpdate)
         .alert("全量重扫历史记录", isPresented: $confirmRescan) {
@@ -67,16 +67,18 @@ struct SettingsView: View {
             Text("将从头读取所有已启用本机及服务器数据源的完整日志，修复可确认的历史重复。已有历史和价格快照会保留；日志较多时可能需要较长时间。")
         }
         .frame(minWidth: 620, idealWidth: 760, minHeight: 440, idealHeight: 600).aieyesAccent()
-        .onAppear { if model.settingsTab == "codexAuth" { model.settingsTab = "accounts" }; if model.settingsTab == "connection" { model.settingsTab = "general" }; consumeEditorRequest() }
+        .onAppear { normalizeCategory(); consumeEditorRequest() }
+        .onChange(of: model.settingsTab) { _, _ in normalizeCategory() }
         .onChange(of: model.settingsDraft) { _, _ in
             guard model.settingsTab == "general", !model.settingsSaving, model.settingsDirty else { return }
             autoSaveTask?.cancel()
             autoSaveTask = Task { do { try await Task.sleep(for: .milliseconds(600)) } catch { return }; await model.saveGeneralConfiguration() }
         }
-        .onChange(of: model.settingsMessage) { _, message in if let message { for (key,label) in [("quota","Agent 限额"),("history","Agent 记录"),("foreground","服务器前台"),("background","服务器刷新")] where message.contains(label) { model.settingsTab = "general"; generalField = key } } }
+        .onChange(of: model.settingsMessage) { _, message in if let message { for (key,label) in [("quota","Agent 限额"),("history","Agent 记录"),("foreground","服务器前台"),("background","服务器刷新")] where message.contains(label) { model.settingsTab = "general"; model.generalPage = "refresh"; generalField = key } } }
         .task(id: model.settingsTab) { if model.settingsTab == "prices" { await catalog.load() } }
         .onChange(of: model.requestedSourceProvider) { _, _ in consumeEditorRequest() }
         .onChange(of: model.requestedAccountKey) { _, _ in consumeEditorRequest() }
+        .onChange(of: model.requestedHostID) { _, _ in consumeEditorRequest() }
         .onChange(of: model.requestHostEditor) { _, _ in consumeEditorRequest() }
         .sheet(item: $removal) { request in
             DangerConfirmation(title: request.title, explanation: request.explanation, affected: request.affected, confirmLabel: request.kind == "account" ? "归档并保留历史" : "确认移除", cancel: { removal = nil }, confirm: { removal = nil; Task { await model.removeConfiguration(request) } })
@@ -91,10 +93,23 @@ struct SettingsView: View {
             priceEditor = nil
         } }
     }
+    private func normalizeCategory() {
+        if model.settingsTab == "connection" { model.generalPage = "network" }
+        model.settingsTab = SettingsDestination(category: model.settingsTab).normalizedCategory
+    }
     private func consumeEditorRequest() {
-        if let key = model.requestedAccountKey { accountEditor = draft.accounts.first { $0.key == key }; model.requestedAccountKey = nil }
-        if model.requestedSourceProvider != nil {
-            model.settingsTab = "sources"; model.requestedSourceProvider = nil
+        if let key = model.requestedAccountKey {
+            accountEditor = draft.accounts.first { $0.key == key }
+            if let accountEditor { model.settingsAgent = accountEditor.provider; model.settingsTab = "integrations" }
+            model.requestedAccountKey = nil
+        }
+        if let provider = model.requestedSourceProvider {
+            model.settingsTab = "integrations"; model.settingsAgent = provider; model.requestedSourceProvider = nil
+        }
+        if let id = model.requestedHostID {
+            if let host = model.settings.monitoredHosts.first(where: { $0.id == id }) { editHost(host) }
+            else { model.settingsMessage = "此服务器已移除，请重新选择。" }
+            model.requestedHostID = nil
         }
         if model.requestHostEditor { editHost(Host()); model.requestHostEditor = false }
     }
@@ -174,7 +189,10 @@ struct SettingsView: View {
         }.padding(16) }.textFieldStyle(.roundedBorder) }
     }
     private var general: some View {
-        Form {
+        HStack(alignment: .top, spacing: 12) {
+            SettingsSidebar(title: "常规设置分类", items: [("appearance", "外观"), ("desktop", "桌面显示"), ("network", "网络代理"), ("refresh", "刷新与历史"), ("updates", "更新")], selection: $model.generalPage)
+            Form {
+            if model.generalPage == "appearance" {
             Section("外观") {
                 Picker("主题", selection: Binding(get: { model.settingsDraft.appearance?.theme ?? "system" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.theme = value; model.settingsDraft.appearance = appearance })) {
                     Text("跟随系统").tag("system"); Text("浅色").tag("light"); Text("深色").tag("dark")
@@ -191,6 +209,8 @@ struct SettingsView: View {
                 ChartPalettePreview(preset: model.settingsDraft.appearance?.chartPalette ?? "classic", contrast: model.settingsDraft.appearance?.chartContrast ?? "high")
                 Text("配色随明暗主题调整，适用于模型柱形图与分布图。高对比度适合小色块；低对比度适合柔和展示，可结合图例与明细读取。").font(AppFont.secondary).foregroundStyle(.secondary)
             }
+            }
+            if model.generalPage == "desktop" {
             Section("桌面宠物") {
                 Toggle("显示桌面宠物（本机，立即生效）", isOn: $petEnabled)
                 HStack {
@@ -206,10 +226,12 @@ struct SettingsView: View {
                 Text("支持 ZIP / pet.json，PNG / WebP 图集。首次使用会导入月薪喵（kiffin）。桌宠跟随已启用的本机和 SSH Codex、Claude、AGY 会话；单击打开面板，拖动移动。").font(AppFont.secondary).foregroundStyle(.secondary)
             }
             Section("菜单栏") {
-                Toggle("显示活跃会话计数（本机，立即生效）", isOn: $showMenuCount)
+                Toggle("显示活跃会话计数（本机及 SSH，立即生效）", isOn: $showMenuCount)
                 Text("菜单栏口径：今日全部数据，不受面板和详情筛选影响。").font(AppFont.secondary).foregroundStyle(.secondary)
                 Picker("显示内容", selection: $model.settingsDraft.menuMetric) { Text("图标").tag("icon"); Text("今日全部 Token").tag("tokens"); Text("首个账户剩余额度").tag("quota"); Text("首台服务器 CPU").tag("cpu") }
             }
+            }
+            if model.generalPage == "refresh" {
             Section("刷新") {
                 TextField("Agent 限额间隔（秒）", value: $model.settingsDraft.refreshSeconds, format: .number).focused($generalField, equals: "quota")
                 TextField("Agent 记录间隔（秒）", value: $model.settingsDraft.historyInterval, format: .number).focused($generalField, equals: "history")
@@ -228,12 +250,37 @@ struct SettingsView: View {
                 if model.rescanning { ProgressView("正在重新读取完整日志…").controlSize(.small) }
                 if let result = model.rescanMessage { Text(result).font(AppFont.secondary).foregroundStyle(model.rescanFailed ? Palette.warn : Color.secondary).textSelection(.enabled) }
             }
-            Section("连接") {
-                ProxyFields(proxy: $model.settingsDraft.proxy, testURLs: model.settingsDraft.proxyTestUrls)
-                TextField("测试地址（逗号分隔）", text: Binding(get: { (model.settingsDraft.proxyTestUrls ?? ["https://api.github.com/rate_limit", "https://openrouter.ai"]).joined(separator: ", ") }, set: { model.settingsDraft.proxyTestUrls = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }))
             }
-            Section("更新") { UpdateSettingsView() }
-        }.formStyle(.grouped)
+            if model.generalPage == "network" {
+            Section("网络代理") {
+                ProxyFields(proxy: $model.settingsDraft.proxy, testURLs: model.settingsDraft.proxyTestUrls)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("测试地址（逗号分隔）")
+                    TextField("测试地址（逗号分隔）", text: Binding(get: { (model.settingsDraft.proxyTestUrls ?? ["https://api.github.com/rate_limit", "https://openrouter.ai"]).joined(separator: ", ") }, set: { model.settingsDraft.proxyTestUrls = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }), axis: .vertical).labelsHidden().textFieldStyle(.roundedBorder).lineLimit(2...4)
+                }
+            }
+            }
+            if model.generalPage == "updates" { Section("更新") { UpdateSettingsView() } }
+            }.formStyle(.grouped)
+        }.padding(.top, 12)
+    }
+}
+
+struct SettingsSidebar: View {
+    var title: String
+    var items: [(String, String)]
+    @Binding var selection: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(items, id: \.0) { key, label in
+                Button { selection = key } label: {
+                    Text(label).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 9)
+                        .foregroundStyle(selection == key ? Palette.accent : Color.primary)
+                        .background(selection == key ? Palette.accent.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityAddTraits(selection == key ? .isSelected : [])
+            }
+        }.padding(7).frame(width: 140).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12)).accessibilityLabel(title)
     }
 }
 

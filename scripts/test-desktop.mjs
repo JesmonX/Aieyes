@@ -323,11 +323,13 @@ test('main window escapes source names and can navigate from the native menu', a
   const h = harness('desktop.js',{sessions:[{id:'12345678abcdefgh',source:'<img src=x onerror=evil()>',phase:'tool',updatedAt:1}]}); await flush();
   assert.ok(h.element('#session-list').innerHTML.includes('&lt;img'));
   assert.ok(!h.element('#session-list').innerHTML.includes('<img'));
-  h.events.get('desktop:navigate')({payload:'settings'});
-  assert.equal(h.state.page,'settings');
-  assert.equal(h.state.settingsTab,'general');
+  const destinations=[];
+  h.window.AieyesApp={ready:Promise.resolve(),openSettings:async target=>destinations.push(JSON.parse(JSON.stringify(target)))};
+  h.events.get('desktop:navigate')({payload:'settings'}); await flush();
   h.events.get('desktop:navigate')({payload:'prices'}); await flush();
-  assert.equal(h.state.settingsTab,'prices');
+  h.events.get('desktop:navigate')({payload:'settings-target:{"category":"hosts","hostId":"host"}'}); await flush();
+  h.events.get('desktop:navigate')({payload:'edit-account:claude:work'}); await flush();
+  assert.deepEqual(destinations,[{},{category:'prices'},{category:'hosts',hostId:'host'},{accountKey:'claude:work'}]);
   h.window.AieyesDesktop.bindSettings();
   const mode = h.element('#desktop-mode');
   mode.value='tray';
