@@ -36,8 +36,12 @@ struct SyntheticServers: View {
         for line in sys.stdin:
             request=json.loads(line);method=request['method']
             with (root/'calls').open('a') as log:log.write(method+'\\n')
-            if method=='settings.get':result=json.loads((root/'settings.json').read_text())
+            if method=='hello':result={}
+            elif method=='settings.get':result=json.loads((root/'settings.json').read_text())
             elif method.startswith('dashboard'):result=json.loads((root/'dashboard.json').read_text())
+            elif method=='sessions.list':result={'sessions':[],'unavailable':False}
+            elif method=='pets.current':result={'pet':None,'error':None}
+            elif method=='autoEstimates.tick':result={'changed':False}
             elif method=='quotas.schedule':result={'nextDueAt':None}
             elif method=='hosts.sample':result={'rows':[]}
             elif method=='network.test':result={'testedAt':time.time(),'mode':'direct','status':'ok','sites':[]}
