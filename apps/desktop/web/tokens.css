@@ -188,6 +188,8 @@
   --phase-complete: #219355;
   --phase-interrupted: #b1761f;
   --phase-unknown: #895712;
+  --phase-needsInput: #ab6b14;
+  --phase-failed: #ba394c;
 }
 :root[data-theme=dark] {
   --phase-idle: #91a0b7;
@@ -197,6 +199,8 @@
   --phase-complete: #44ad76;
   --phase-interrupted: #d9a44c;
   --phase-unknown: #e0b062;
+  --phase-needsInput: #e8b25c;
+  --phase-failed: #ef788a;
 }
 @media (forced-colors: active) { :root:root {
   --phase-idle: CanvasText;
@@ -206,5 +210,7 @@
   --phase-complete: CanvasText;
   --phase-interrupted: CanvasText;
   --phase-unknown: CanvasText;
+  --phase-needsInput: CanvasText;
+  --phase-failed: CanvasText;
 } }
 /* END GENERATED PHASE COLORS */

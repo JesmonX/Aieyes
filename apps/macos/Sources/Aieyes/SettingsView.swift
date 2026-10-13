@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var accountEditor: AgentAccount?
     @State private var hostEditor: HostEditorRequest?
     @State private var priceEditor: ModelPrice?
+    @AppStorage("aieyes.pet.enabled") private var petEnabled = false
     @AppStorage(NativePanelKey.showCount.rawValue) private var showMenuCount = false
     @State private var removal: RemovalRequest?
     @State private var confirmRescan = false
@@ -189,6 +190,10 @@ struct SettingsView: View {
                 }
                 ChartPalettePreview(preset: model.settingsDraft.appearance?.chartPalette ?? "classic", contrast: model.settingsDraft.appearance?.chartContrast ?? "high")
                 Text("配色随明暗主题调整，适用于模型柱形图与分布图。高对比度适合小色块；低对比度适合柔和展示，可结合图例与明细读取。").font(AppFont.secondary).foregroundStyle(.secondary)
+            }
+            Section("桌面宠物") {
+                Toggle("显示桌面宠物（本机，立即生效）", isOn: $petEnabled)
+                Text("小猫随本机 Codex 状态行动；单击打开面板，拖动移动，右键可隐藏。遵循系统减少动态效果设置。").font(AppFont.secondary).foregroundStyle(.secondary)
             }
             Section("菜单栏") {
                 Toggle("显示活跃会话计数（本机，立即生效）", isOn: $showMenuCount)

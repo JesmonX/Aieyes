@@ -19,6 +19,8 @@ pub enum Phase {
     Complete,
     Interrupted,
     Unknown,
+    NeedsInput,
+    Failed,
 }
 impl Phase {
     pub fn active(self) -> bool {
@@ -32,6 +34,8 @@ impl Phase {
             Self::Complete => "已完成",
             Self::Interrupted => "已中断",
             Self::Unknown => "状态待确认",
+            Self::NeedsInput => "等待输入",
+            Self::Failed => "执行失败",
         }
     }
 }
@@ -176,7 +180,10 @@ impl SessionMonitor {
                 if phase.active() && elapsed > 180 {
                     phase = Phase::Unknown;
                 }
-                if phase.active() || phase == Phase::Unknown || elapsed < 90 {
+                if phase.active()
+                    || matches!(phase, Phase::Unknown | Phase::NeedsInput)
+                    || elapsed < 90
+                {
                     snapshot.sessions.push(LiveSession {
                         id: crate::models::hash(&path.to_string_lossy()),
                         source: source.clone(),
@@ -215,6 +222,7 @@ fn read_tail(path: &PathBuf) -> std::io::Result<Option<Phase>> {
 }
 fn parse(data: &[u8]) -> Option<Phase> {
     let mut phase = None;
+    let mut waiting = HashSet::new();
     for line in data
         .split_inclusive(|b| *b == b'\n')
         .filter(|l| l.last() == Some(&b'\n'))
@@ -225,19 +233,54 @@ fn parse(data: &[u8]) -> Option<Phase> {
         let kind = row["payload"]["type"].as_str().unwrap_or("");
         match row["type"].as_str() {
             Some("event_msg") => match kind {
-                "task_started" => phase = Some(Phase::Working),
-                "task_complete" => phase = Some(Phase::Complete),
+                "task_started" => {
+                    waiting.clear();
+                    phase = Some(Phase::Working);
+                }
+                "task_complete" => {
+                    waiting.clear();
+                    phase = Some(Phase::Complete);
+                }
                 "turn_aborted" => phase = Some(Phase::Interrupted),
+                "error" => phase = Some(Phase::Failed),
                 _ => {}
             },
             Some("response_item")
-                if !matches!(phase, Some(Phase::Complete | Phase::Interrupted)) =>
+                if !matches!(
+                    phase,
+                    Some(Phase::Complete | Phase::Interrupted | Phase::Failed)
+                ) =>
             {
                 match kind {
-                    "reasoning" => phase = Some(Phase::Thinking),
-                    "function_call" | "custom_tool_call" => phase = Some(Phase::Tool),
+                    "reasoning" => {
+                        if waiting.is_empty() {
+                            phase = Some(Phase::Thinking);
+                        }
+                    }
+                    "function_call" | "custom_tool_call" => {
+                        let name = row["payload"]["name"].as_str().unwrap_or("");
+                        phase = Some(
+                            if name.rsplit("::").next().unwrap_or(name).rsplit('.').next()
+                                == Some("request_user_input")
+                            {
+                                waiting.insert(
+                                    row["payload"]["call_id"].as_str().unwrap_or("").to_owned(),
+                                );
+                                Phase::NeedsInput
+                            } else if waiting.is_empty() {
+                                Phase::Tool
+                            } else {
+                                Phase::NeedsInput
+                            },
+                        );
+                    }
                     "function_call_output" | "custom_tool_call_output" => {
-                        phase = Some(Phase::Working)
+                        waiting.remove(row["payload"]["call_id"].as_str().unwrap_or(""));
+                        phase = Some(if waiting.is_empty() {
+                            Phase::Working
+                        } else {
+                            Phase::NeedsInput
+                        });
                     }
                     _ => {}
                 }
@@ -258,6 +301,23 @@ mod tests {
             "{}\n",
             json!({"type":kind,"payload":{"type":event,"text":"private prompt"}})
         )
+    }
+    #[test]
+    fn pet_input_wait_survives_unrelated_parallel_tool_output() {
+        let call=json!({"type":"response_item","payload":{"type":"function_call","name":"functions.request_user_input","call_id":"ask"}}).to_string()+"\n";
+        assert_eq!(parse(call.as_bytes()), Some(Phase::NeedsInput));
+        let other=json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"other"}}).to_string()+"\n";
+        let log = call
+            + &other
+            + &row("response_item", "function_call")
+            + &row("response_item", "reasoning");
+        assert_eq!(parse(log.as_bytes()), Some(Phase::NeedsInput));
+        let answer=json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"ask"}}).to_string()+"\n";
+        assert_eq!(parse((log + &answer).as_bytes()), Some(Phase::Working));
+        assert_eq!(
+            parse(row("event_msg", "error").as_bytes()),
+            Some(Phase::Failed)
+        );
     }
     #[test]
     fn lifecycle_terminal_events_and_partial_records() {

@@ -11,6 +11,7 @@ import Combine
     private var statusItem: NSStatusItem!
     private var statusLabel: NSHostingView<MenuActivityLabel>?
     private let popover = NSPopover()
+    private var petWindow: PetWindowController?
     private let dockPresence = DockPresence()
     private var appearanceController: AppAppearanceController?
     private var detailWindow: NSWindow?
@@ -71,6 +72,12 @@ import Combine
         popover.contentViewController = PanelContainer(model: model)
         appearanceController?.updatePanel()
         popover.contentSize = NSSize(width: 450, height: 720)
+        petWindow = PetWindowController(model: model, open: { [weak self] anchor in
+            guard let self else { return }
+            if self.popover.isShown { self.popover.performClose(nil); return }
+            self.popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+            self.model.setWindowVisible(true, window: "panel")
+        })
         model.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification).sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)

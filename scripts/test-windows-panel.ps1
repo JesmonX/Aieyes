@@ -1,5 +1,5 @@
 # Interactive Windows regression against the built app. Isolated data, no real accounts.
-param([string]$Binary = "$PSScriptRoot/../apps/desktop/src-tauri/target/release/aieyes-desktop.exe", [switch]$VerifyMaterials)
+param([string]$Binary = "$PSScriptRoot/../apps/desktop/src-tauri/target/release/aieyes-desktop.exe", [switch]$VerifyMaterials, [switch]$LegacyCapsule)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type @'
@@ -27,6 +27,14 @@ public static class PanelProbe {
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h,uint message,IntPtr w,IntPtr l);
   [DllImport("user32.dll")] public static extern bool GetMenuItemRect(IntPtr owner,IntPtr menu,uint item,out Rect rect);
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetMenuString(IntPtr menu,uint item,StringBuilder text,int size,uint flags);
+  [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
+  [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr desktop);
+  [DllImport("user32.dll")] public static extern bool SwitchDesktop(IntPtr desktop);
+  public static bool InputDesktopAvailable() {
+    var desktop=OpenInputDesktop(0,false,0x100);
+    if(desktop==IntPtr.Zero)return false;
+    bool available=SwitchDesktop(desktop);CloseDesktop(desktop);return available;
+  }
   public static IntPtr FindMenu(uint pid) {
     IntPtr found=IntPtr.Zero;
     EnumWindows((h,p)=>{uint owner;GetWindowThreadProcessId(h,out owner);if(owner!=pid||!IsWindowVisible(h))return true;
@@ -44,8 +52,8 @@ $null = [PanelProbe]::SetProcessDPIAware()
 $out = Join-Path $PSScriptRoot '../.local/windows-ui-sync/native'
 New-Item -ItemType Directory -Force $out | Out-Null
 $result = [ordered]@{status='running'; checks=@(); dpi=$null; reason=$null}
-if (-not [Environment]::UserInteractive) {
-    $result.status='not-run'; $result.reason='Windows runner has no interactive desktop'
+if (-not [Environment]::UserInteractive -or -not [PanelProbe]::InputDesktopAvailable()) {
+    $result.status='not-run'; $result.reason='Windows runner has no accessible input desktop (locked or non-interactive)'
     $result | ConvertTo-Json | Set-Content (Join-Path $out 'result.json')
     Write-Output $result.reason
     exit 0
@@ -144,15 +152,21 @@ $testData=Join-Path ([IO.Path]::GetTempPath()) ('aieyes-panel-'+[guid]::NewGuid(
 New-Item -ItemType Directory $testData | Out-Null
 $env:AIEYES_DATA_DIR=$testData
 $env:WEBVIEW2_USER_DATA_FOLDER=Join-Path $testData 'webview2'
+if($LegacyCapsule){'{"mode":"floating"}' | Set-Content -Encoding utf8 (Join-Path $testData 'desktop.json')}
+$resolvedTestData=[IO.Path]::GetFullPath($testData)
+if(-not $resolvedTestData.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()),[StringComparison]::OrdinalIgnoreCase) -or (Split-Path $resolvedTestData -Leaf) -notlike 'aieyes-panel-*'){throw 'Unexpected test directory'}
 $app=$null;$background=$null
 try {
     $startup=[Diagnostics.Stopwatch]::StartNew()
-    $app=Start-Process -FilePath (Resolve-Path $Binary) -PassThru -RedirectStandardOutput (Join-Path $out 'app-stdout.log') -RedirectStandardError (Join-Path $out 'app-stderr.log')
+    $app=Start-Process -FilePath (Resolve-Path $Binary) -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $out 'app-stdout.log') -RedirectStandardError (Join-Path $out 'app-stderr.log')
     # A fresh runner initializes both WebViews before creating the capsule.
     # Give cold startup its own budget; keep interaction deadlines at 15 seconds.
     Wait-For { $script:capsule=[PanelProbe]::Find($app.Id,'AieyesNativeCapsule',$true);$script:capsule -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:capsule) } 'native capsule startup' 60
     $result.startupMilliseconds=$startup.ElapsedMilliseconds
     $result.dpi=[PanelProbe]::GetDpiForWindow($script:capsule)
+    $expectedHeight=$(if($LegacyCapsule){44}else{168})*$result.dpi/96
+    Wait-For { $r=Bounds $script:capsule; [Math]::Abs(($r.Bottom-$r.Top)-$expectedHeight) -le 2 } 'DPI-scaled pet or capsule dimensions'
+    Screenshot $(if($LegacyCapsule){'capsule-startup'}else{'pet-startup'})
     $background=New-Object System.Windows.Forms.Form
     $background.Text='Aieyes isolated background input target';$background.FormBorderStyle='None';$background.WindowState='Maximized';$background.BackColor=[Drawing.Color]::FromArgb(49,67,83)
     $background.Show();$background.Activate();Pump 300
@@ -221,7 +235,7 @@ try {
     $env:AIEYES_DATA_DIR=$oldData
     $env:WEBVIEW2_USER_DATA_FOLDER=$oldWebviewData
     for($attempt=0;$attempt -lt 20;$attempt++) {
-        try {Remove-Item -Recurse -Force $testData;break}
+        try {Remove-Item -LiteralPath $resolvedTestData -Recurse -Force;break}
         catch {if($attempt -eq 19){$result.cleanupWarning=$_.ToString();Write-Warning 'Temporary test directory is still locked'}else{Pump 100}}
     }
     $result | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $out 'result.json')

@@ -23,6 +23,21 @@ const HIDE_MENU_ID: &str = "hide";
 /// Linux WebView capsule size in logical pixels; Windows uses its own native window.
 const BALL_SIZE: f64 = 144.0;
 const BALL_HEIGHT: f64 = 44.0;
+fn pet_enabled(mode: Mode, windows: bool) -> bool {
+    mode == Mode::Pet || (mode == Mode::Auto && windows)
+}
+fn entry_size(app: &AppHandle) -> (f64, f64) {
+    let pet = app
+        .state::<Desktop>()
+        .state
+        .lock()
+        .is_ok_and(|s| pet_enabled(s.preferences.mode, cfg!(windows)));
+    if pet {
+        (144.0, 168.0)
+    } else {
+        (BALL_SIZE, BALL_HEIGHT)
+    }
+}
 /// Panel size in logical pixels; height is clamped to the monitor work area.
 const PANEL_WIDTH: f64 = 450.0;
 const PANEL_HEIGHT: f64 = 720.0;
@@ -37,6 +52,7 @@ pub enum Mode {
     Auto,
     Tray,
     Floating,
+    Pet,
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct Position {
@@ -59,7 +75,6 @@ struct ShellState {
     hidden: bool,
     panel: bool,
     panel_page: String,
-    panel_anchor: Option<Position>,
     pin: bool,
     reason: String,
     page: String,
@@ -106,7 +121,7 @@ pub struct Desktop {
 
 // Never hide the only usable entry point when tray support is absent.
 fn use_floating(mode: Mode, windows: bool, tray_available: bool) -> bool {
-    !tray_available || mode == Mode::Floating || (mode == Mode::Auto && windows)
+    !tray_available || matches!(mode, Mode::Floating | Mode::Pet) || (mode == Mode::Auto && windows)
 }
 
 /// Hiding the only entry point would strand the app; a usable tray is required.
@@ -339,11 +354,12 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     let auto = MenuItem::with_id(
         app,
         "auto",
-        "跟随系统（Windows 悬浮球 / Linux 状态栏）",
+        "跟随系统（Windows 宠物 / Linux 状态栏）",
         true,
         None::<&str>,
     )?;
-    let floating = MenuItem::with_id(app, "floating", "使用悬浮球", true, None::<&str>)?;
+    let floating = MenuItem::with_id(app, "floating", "使用悬浮胶囊", true, None::<&str>)?;
+    let pet = MenuItem::with_id(app, "pet", "使用桌面宠物", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset-position", "重置悬浮球位置", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, HIDE_MENU_ID, "暂时隐藏悬浮球", false, None::<&str>)?;
     let refresh = MenuItem::with_id(
@@ -367,6 +383,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             &settings,
             &auto,
             &floating,
+            &pet,
             &reset,
             &hide,
             &quit,
@@ -383,7 +400,6 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             hidden: false,
             panel: false,
             panel_page: "agent".into(),
-            panel_anchor: None,
             pin: false,
             reason: String::new(),
             page: "agent".into(),
@@ -505,13 +521,16 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
         WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("floating.html".into()))
             .title("Aieyes 面板")
             .inner_size(
-                if cfg!(windows) {
-                    PANEL_WIDTH
-                } else {
-                    BALL_SIZE
-                },
+                if cfg!(windows) { PANEL_WIDTH } else { 144.0 },
                 if cfg!(windows) {
                     PANEL_HEIGHT
+                } else if app
+                    .state::<Desktop>()
+                    .state
+                    .lock()
+                    .is_ok_and(|s| pet_enabled(s.preferences.mode, false))
+                {
+                    168.0
                 } else {
                     BALL_HEIGHT
                 },
@@ -964,6 +983,8 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "platform": std::env::consts::OS, "material": materials.main.kind, "mode": state.preferences.mode,
         "effectiveMode": if state.floating { "floating" } else { "tray" },
         "reason": state.reason,
+        "petEnabled": pet_enabled(state.preferences.mode, cfg!(windows)),
+        "pet": aieyes_core::pets::project(&state.snapshot),
         "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
@@ -985,7 +1006,22 @@ pub fn desktop_mode(app: AppHandle, mode: Mode) -> Result<Value, String> {
         }
     }
     apply_mode(&app)?;
+    #[cfg(not(target_os = "windows"))]
+    if let Some(window) = app.get_webview_window("floating") {
+        let panel = app.state::<Desktop>().state.lock().is_ok_and(|s| s.panel);
+        if !panel {
+            let (w, h) = entry_size(&app);
+            window
+                .set_size(tauri::LogicalSize::new(w, h))
+                .map_err(|e| e.to_string())?;
+            restore_position(&app).map_err(|e| e.to_string())?;
+        }
+    }
     let info = desktop_info(app.clone())?;
+    #[cfg(target_os = "windows")]
+    if let Some(capsule) = app.try_state::<crate::capsule::Capsule>() {
+        capsule.status(info.clone());
+    }
     let _ = app.emit("desktop:status", &info);
     Ok(info)
 }
@@ -1127,6 +1163,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         "add-quota" => show_main(app, "add-quota"),
         "auto" => desktop_mode(app.clone(), Mode::Auto).map(|_| ()),
         "floating" => desktop_mode(app.clone(), Mode::Floating).map(|_| ()),
+        "pet" => desktop_mode(app.clone(), Mode::Pet).map(|_| ()),
         "reset-position" => {
             {
                 let desktop = app.state::<Desktop>();
@@ -1245,8 +1282,8 @@ fn restore_web_position(app: &AppHandle) -> tauri::Result<()> {
         .or(window.primary_monitor()?);
     if let Some(monitor) = monitor {
         let a = monitor.work_area();
-        let ball = (BALL_SIZE * monitor.scale_factor()).ceil() as i32;
-        let ball_height = (BALL_HEIGHT * monitor.scale_factor()).ceil() as i32;
+        let ball = (entry_size(app).0 * monitor.scale_factor()).ceil() as i32;
+        let ball_height = (entry_size(app).1 * monitor.scale_factor()).ceil() as i32;
         let default = Position {
             x: a.position.x + a.size.width as i32 - ball - 24,
             y: a.position.y + (a.size.height as i32 - ball_height) / 2,
@@ -1314,16 +1351,10 @@ fn set_web_panel(app: &AppHandle, open: bool) -> Result<(), String> {
     }
     let window = app.get_webview_window("floating").ok_or("悬浮球不可用")?;
     let scale = window.scale_factor().map_err(|error| error.to_string())?;
-    let ball = (BALL_SIZE * scale).round() as i32;
-    let ball_height = (BALL_HEIGHT * scale).round() as i32;
+    let ball = (entry_size(app).0 * scale).round() as i32;
+    let ball_height = (entry_size(app).1 * scale).round() as i32;
     if open {
         let position = window.outer_position().map_err(|error| error.to_string())?;
-        if let Ok(mut state) = desktop.state.lock() {
-            state.panel_anchor = Some(Position {
-                x: position.x,
-                y: position.y,
-            });
-        }
         let monitor = window
             .current_monitor()
             .map_err(|error| error.to_string())?
@@ -1362,9 +1393,6 @@ fn set_web_panel(app: &AppHandle, open: bool) -> Result<(), String> {
             .set_size(PhysicalSize::new(ball as u32, ball_height as u32))
             .map_err(|error| error.to_string())?;
         let _ = restore_position(app);
-        if let Ok(mut state) = desktop.state.lock() {
-            state.panel_anchor = None;
-        }
     }
     emit_shell(app);
     Ok(())
@@ -1407,8 +1435,8 @@ fn snap_ball(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let scale = window.scale_factor().map_err(|error| error.to_string())?;
-    let ball = (BALL_SIZE * scale).round() as i32;
-    let ball_height = (BALL_HEIGHT * scale).round() as i32;
+    let ball = (entry_size(app).0 * scale).round() as i32;
+    let ball_height = (entry_size(app).1 * scale).round() as i32;
     let position = window.outer_position().map_err(|error| error.to_string())?;
     let monitor = window
         .current_monitor()
@@ -1583,6 +1611,8 @@ fn icon(phase: Option<Phase>, dark: bool) -> tauri::image::Image<'static> {
         Some(Phase::Complete) => "complete",
         Some(Phase::Interrupted) => "interrupted",
         Some(Phase::Unknown) => "unknown",
+        Some(Phase::NeedsInput) => "needsInput",
+        Some(Phase::Failed) => "failed",
         None => "idle",
     };
     let [r, g, b] = crate::phase_colors::rgb(key, dark);
@@ -1687,9 +1717,13 @@ mod tests {
     }
     #[test]
     fn platform_defaults_and_tray_failure_always_leave_an_entry_point() {
+        assert!(pet_enabled(Mode::Auto, true));
+        assert!(!pet_enabled(Mode::Auto, false));
+        assert!(pet_enabled(Mode::Pet, false));
+        assert!(!pet_enabled(Mode::Floating, true));
         assert!(use_floating(Mode::Auto, true, true));
         assert!(!use_floating(Mode::Auto, false, true));
-        for mode in [Mode::Auto, Mode::Tray, Mode::Floating] {
+        for mode in [Mode::Auto, Mode::Tray, Mode::Floating, Mode::Pet] {
             for windows in [true, false] {
                 assert!(use_floating(mode, windows, false));
             }

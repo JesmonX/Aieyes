@@ -3,13 +3,13 @@ import SwiftUI
 
 // Only lifecycle metadata is retained; prompts and tool arguments are never displayed.
 enum SessionPhase: String {
-    case idle = "空闲", working = "进行中", thinking = "思考中", tool = "执行工具", complete = "已完成", interrupted = "已中断", unknown = "状态待确认"
+    case idle = "空闲", working = "进行中", thinking = "思考中", tool = "执行工具", complete = "已完成", interrupted = "已中断", unknown = "状态待确认", needsInput = "等待输入", failed = "执行失败"
     var active: Bool { self == .working || self == .thinking || self == .tool }
     var color: Color {
-        switch self { case .idle: return .secondary; case .working: return Palette.accent; case .thinking: return Palette.accent; case .tool: return Palette.accent; case .complete: return Palette.ok; case .interrupted: return Palette.warn; case .unknown: return .secondary }
+        switch self { case .idle: return .secondary; case .working: return Palette.accent; case .thinking: return Palette.accent; case .tool: return Palette.accent; case .complete: return Palette.ok; case .interrupted: return Palette.warn; case .needsInput: return Palette.warn; case .failed: return Palette.danger; case .unknown: return .secondary }
     }
     var symbol: String {
-        switch self { case .idle: return "circle.dotted"; case .working: return "waveform"; case .thinking: return "sparkles"; case .tool: return "gearshape.2"; case .complete: return "checkmark"; case .interrupted: return "pause.fill"; case .unknown: return "questionmark" }
+        switch self { case .idle: return "circle.dotted"; case .working: return "waveform"; case .thinking: return "sparkles"; case .tool: return "gearshape.2"; case .complete: return "checkmark"; case .interrupted: return "pause.fill"; case .needsInput: return "hand.raised.fill"; case .failed: return "exclamationmark.triangle"; case .unknown: return "questionmark" }
     }
 }
 struct LiveSession: Identifiable, Decodable {
@@ -23,11 +23,11 @@ struct LiveSession: Identifiable, Decodable {
         id = try row.decode(String.self, forKey: .id)
         source = try row.decode(String.self, forKey: .source)
         let key = try row.decode(String.self, forKey: .phase)
-        phase = ["working": .working, "thinking": .thinking, "tool": .tool, "complete": .complete, "interrupted": .interrupted, "unknown": .unknown][key] ?? .unknown
+        phase = ["working": .working, "thinking": .thinking, "tool": .tool, "complete": .complete, "interrupted": .interrupted, "unknown": .unknown, "needsInput": .needsInput, "failed": .failed][key] ?? .unknown
         updatedAt = Date(timeIntervalSince1970: try row.decode(Double.self, forKey: .updatedAt))
     }
 }
-struct SessionSnapshot: Decodable { var sessions: [LiveSession]; var unavailable: Bool }
+struct SessionSnapshot: Decodable { var sessions: [LiveSession]; var unavailable: Bool; var pet: PetState? = nil }
 
 struct ActivityIndicator: View {
     var phase: SessionPhase?
@@ -92,5 +92,18 @@ struct SurfaceTimeline<Content: View>: View {
     var body: some View {
         if active { TimelineView(.periodic(from: .now, by: interval)) { content(SurfaceTimeContext(date: $0.date)) } }
         else { content(SurfaceTimeContext(date: .now)) }
+    }
+}
+
+// Core-selected activity and shared sprite timing; no client-side priority rules.
+struct PetState: Decodable, Equatable {
+    var behavior: String, label: String, row: Int, frames: Int, frameMs: Double, key: String
+    static let idle = PetState(behavior: "idle", label: "空闲", row: 0, frames: 6, frameMs: 900, key: "idle")
+    static let unknown = PetState(behavior: "unknown", label: "状态不可用", row: 6, frames: 6, frameMs: 260, key: "unknown")
+    func frame(elapsed: TimeInterval, reduced: Bool) -> Int {
+        if reduced { return row * 8 }
+        let ms = max(0, elapsed * 1000), cycle = Double(frames) * frameMs
+        if row != 0 && ms >= cycle * 3 { return Int((ms - cycle * 3) / 900) % 6 }
+        return row * 8 + Int(ms / frameMs) % frames
     }
 }

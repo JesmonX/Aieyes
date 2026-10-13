@@ -3,6 +3,7 @@
 (() => {
   const mark = path => `<svg viewBox="0 0 24 24"><path d="${path}"/></svg>`;
   const phases = {
+    needsInput:[mark('M12 5v9m0 4h.01'),'等待输入'], failed:[mark('m6 6 12 12M6 18 18 6'),'执行失败'],
     working:[mark('M8 5v14l11-7Z'),'进行中'], thinking:[mark('M12 3 9 9 3 12l6 3 3 6 3-6 6-3-6-3Z'),'思考中'],
     tool:[mark('m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18'),'执行工具'], complete:[mark('m5 12 4 4L19 6'),'已完成'],
     interrupted:[mark('M8 5v14M16 5v14'),'已中断'], unknown:[mark('M9 8a3 3 0 1 1 5 2c-2 1-2 2-2 4m0 4h.01'),'状态待确认'],

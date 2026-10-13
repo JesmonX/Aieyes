@@ -15,6 +15,10 @@ pub fn rgb(phase: &str, dark: bool) -> [u8; 3] {
         ("interrupted", true) => [217, 164, 76],
         ("unknown", false) => [137, 87, 18],
         ("unknown", true) => [224, 176, 98],
+        ("needsInput", false) => [171, 107, 20],
+        ("needsInput", true) => [232, 178, 92],
+        ("failed", false) => [186, 57, 76],
+        ("failed", true) => [239, 120, 138],
         (_, true) => rgb("idle", true),
         _ => rgb("idle", false),
     }

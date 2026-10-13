@@ -318,10 +318,13 @@ fn main() {
             ));
             updates::setup(app.handle(), &root);
             desktop::setup(app, &root)?;
-            let automatic_app=app.handle().clone();
-            app.manage(aieyes_core::automatic::Background::start(&root,move||{
-                let _=automatic_app.emit("desktop:data-changed","autoEstimates.tick");
-            }));
+            let automatic_app = app.handle().clone();
+            app.manage(aieyes_core::automatic::Background::start(
+                &root,
+                move || {
+                    let _ = automatic_app.emit("desktop:data-changed", "autoEstimates.tick");
+                },
+            ));
             Ok(())
         })
         .on_window_event(desktop::on_window_event)

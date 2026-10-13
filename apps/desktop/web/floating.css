@@ -24,3 +24,14 @@ body[data-native-capsule=true] #ball { display:none; }
 body[data-phase=idle] { --phase-color:var(--phase-idle); }
 body[data-phase=unknown] { --phase-color:var(--phase-unknown); }
 @media(forced-colors:active) { #count { border:1px solid CanvasText; } }
+
+/* Transparent sprite surface; the panel retains its own layout and materials. */
+#pet-sprite { display:none; }
+body[data-pet=true] #ball { width:144px; height:168px; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; display:block; }
+body[data-pet=true] #ball:hover, body[data-pet=true] #ball:active { background:transparent; box-shadow:none; }
+body[data-pet=true] #ball .eye { display:none; }
+body[data-pet=true] #pet-sprite { display:block; width:132px; height:143px; margin:0 auto; background-image:url('pet-cat.png'); background-size:800% 900%; pointer-events:none; }
+body[data-pet=true] #phase { position:absolute; bottom:4px; left:50%; transform:translateX(-50%); padding:2px 9px; background:var(--capsule-bg); color:var(--capsule-ink); border-radius:10px; font-size:12px; }
+body[data-pet=true] #count { position:absolute; right:1px; top:18px; }
+body[data-pet=true][data-native-capsule=true] #ball { display:none; }
+@media(forced-colors:active) { body[data-pet=true] #phase { background:Canvas; color:CanvasText; border:1px solid CanvasText; } }

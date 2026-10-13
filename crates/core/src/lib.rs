@@ -17,6 +17,7 @@ pub mod models;
 pub mod monitoring;
 pub mod network;
 pub mod operations;
+pub mod pets;
 pub mod pricing;
 pub mod process;
 pub mod providers;
@@ -217,10 +218,14 @@ impl Engine {
                 self.store
                     .set_quota_order(serde_json::from_value(params["keys"].clone())?)?,
             )?),
-            "sessions.list" => Ok(serde_json::to_value(
-                self.sessions
-                    .read(&self.store.settings()?, std::time::SystemTime::now()),
-            )?),
+            "sessions.list" => {
+                let snapshot = self
+                    .sessions
+                    .read(&self.store.settings()?, std::time::SystemTime::now());
+                let mut value = serde_json::to_value(&snapshot)?;
+                value["pet"] = serde_json::to_value(pets::project(&snapshot))?;
+                Ok(value)
+            }
             "hello" => Ok(
                 json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"contractHash":contracts::CONTRACT_HASH}),
             ),

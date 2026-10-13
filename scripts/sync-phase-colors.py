@@ -28,7 +28,7 @@ if '--check' in sys.argv:
     for key, value in table.items():
         color = value["mac"] if "." in value["mac"] else "." + value["mac"]
         assert f'case .{key}: return {color}' in swift, f'macOS mapping missing: {key}'
-    print('Seven-phase CSS/Rust colors and macOS semantic mappings agree')
+    print('Phase CSS/Rust colors and macOS semantic mappings agree')
 else:
     path.write_text(updated, encoding='utf-8')
     rustpath.write_text(rust, encoding='utf-8')

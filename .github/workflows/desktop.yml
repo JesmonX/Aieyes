@@ -7,7 +7,7 @@ on:
         type: boolean
         default: false
   push:
-    branches: [main]
+    branches: [main, 'feat/**']
     paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'docs/chart-palettes.json', 'Cargo.*', '.github/workflows/desktop.yml']
   pull_request:
     paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'docs/chart-palettes.json', 'Cargo.*', '.github/workflows/desktop.yml']
@@ -61,6 +61,7 @@ jobs:
           name: UI-previews-${{ runner.os }}
           path: |
             .local/ui-previews/*.png
+            .local/pets/*.png
             .local/windows-ui-sync/browser/*
           include-hidden-files: true
           if-no-files-found: ignore

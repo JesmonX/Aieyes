@@ -57,6 +57,7 @@ dependencies = [
  "base64 0.22.1",
  "libloading",
  "minisign-verify",
+ "png 0.18.1",
  "semver",
  "serde",
  "serde_json",

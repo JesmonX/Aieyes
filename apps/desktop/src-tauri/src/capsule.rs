@@ -23,6 +23,9 @@ use windows::{
 
 use std::result::Result::Ok;
 use windows::Win32::Graphics::GdiPlus::Ok as GDI_OK;
+#[path = "capsule_pet.rs"]
+mod pet;
+const PET_TIMER: usize = 42;
 const WAKE: u32 = WM_APP + 41;
 pub const WIDTH: f64 = 144.0;
 pub const HEIGHT: f64 = 44.0;
@@ -111,6 +114,8 @@ struct Surface {
     menu_active: Cell<bool>,
     tooltip_text: RefCell<Vec<u16>>,
     font: CapsuleFont,
+    pet_sprite: pet::Sprite,
+    pet_start: Cell<std::time::Instant>,
 }
 impl Capsule {
     pub fn start(app: AppHandle, position: Option<(i32, i32)>) -> Result<Self, String> {
@@ -169,6 +174,8 @@ impl Capsule {
                     menu_active: Cell::new(false),
                     tooltip_text: RefCell::new(Vec::new()),
                     font: CapsuleFont::new(),
+                    pet_sprite: pet::Sprite::new(),
+                    pet_start: Cell::new(std::time::Instant::now()),
                 });
                 let result = CreateWindowExW(
                     WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
@@ -355,11 +362,35 @@ unsafe fn area(hwnd: HWND) -> RECT {
     );
     monitor.rcWork
 }
+unsafe fn is_pet(hwnd: HWND) -> bool {
+    let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Surface;
+    !pointer.is_null()
+        && (*pointer).info.borrow()["petEnabled"]
+            .as_bool()
+            .unwrap_or(true)
+}
+unsafe fn animate(hwnd: HWND) {
+    let _ = KillTimer(Some(hwnd), PET_TIMER);
+    if is_pet(hwnd) && IsWindowVisible(hwnd).as_bool() && !pet::reduced_motion() {
+        SetTimer(Some(hwnd), PET_TIMER, 100, None);
+    }
+}
 unsafe fn reshape(hwnd: HWND) {
+    let pet = is_pet(hwnd);
+    let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+    SetWindowLongPtrW(
+        hwnd,
+        GWL_EXSTYLE,
+        if pet {
+            style | WS_EX_LAYERED.0
+        } else {
+            style & !WS_EX_LAYERED.0
+        } as isize,
+    );
     let scale = GetDpiForWindow(hwnd).max(96) as f64 / 96.0;
     let (width, height) = (
         (WIDTH * scale).round() as i32,
-        (HEIGHT * scale).round() as i32,
+        ((if pet { 168.0 } else { HEIGHT }) * scale).round() as i32,
     );
     let _ = SetWindowPos(
         hwnd,
@@ -370,10 +401,15 @@ unsafe fn reshape(hwnd: HWND) {
         height,
         SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER,
     );
-    let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, height, height);
-    if SetWindowRgn(hwnd, Some(region), true) == 0 {
-        let _ = DeleteObject(region.into());
+    if pet {
+        SetWindowRgn(hwnd, None, true);
+    } else {
+        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, height, height);
+        if SetWindowRgn(hwnd, Some(region), true) == 0 {
+            let _ = DeleteObject(region.into());
+        }
     }
+    animate(hwnd);
     let _ = InvalidateRect(Some(hwnd), None, false);
 }
 unsafe fn place(hwnd: HWND, position: Option<(i32, i32)>, snap: bool) {
@@ -512,7 +548,19 @@ unsafe extern "system" fn window_proc(
                         surface
                             .dark
                             .set(info["dark"].as_bool().unwrap_or(surface.dark.get()));
+                        let changed = surface.info.borrow()["pet"]["key"] != info["pet"]["key"];
+                        let previous = is_pet(hwnd);
                         surface.info.replace(info);
+                        if changed {
+                            surface.pet_start.set(std::time::Instant::now());
+                        }
+                        if previous != is_pet(hwnd) {
+                            reshape(hwnd);
+                            let mut rect = RECT::default();
+                            let _ = GetWindowRect(hwnd, &mut rect);
+                            place(hwnd, Some((rect.left, rect.top)), false);
+                        }
+                        animate(hwnd);
                         let title = format!(
                             "Aieyes · {} · 单击打开面板，右键菜单",
                             surface.info.borrow()["summary"].as_str().unwrap_or("")
@@ -524,6 +572,7 @@ unsafe extern "system" fn window_proc(
                     }
                     Command::Visible(show) => {
                         let _ = ShowWindow(hwnd, if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
+                        animate(hwnd);
                     }
                     Command::Position(position) => {
                         place(hwnd, position, false);
@@ -557,7 +606,12 @@ unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == PET_TIMER => {
+            let _ = InvalidateRect(Some(hwnd), None, false);
+            LRESULT(0)
+        }
         WM_SETTINGCHANGE | WM_THEMECHANGED => {
+            animate(hwnd);
             crate::desktop::refresh_materials(&surface.app);
             let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
@@ -711,8 +765,30 @@ unsafe fn high_contrast() -> bool {
     .is_ok()
         && settings.dwFlags.contains(HCF_HIGHCONTRASTON)
 }
-// No timers or breathing animation: the native capsule is always motion-reduced.
+// The legacy capsule stays static; pet animation has its own reduced-motion timer.
 unsafe fn paint(hwnd: HWND, surface: &Surface) {
+    if is_pet(hwnd) {
+        let mut ps = PAINTSTRUCT::default();
+        BeginPaint(hwnd, &mut ps);
+        let info = surface.info.borrow();
+        let state: aieyes_core::pets::PetState = serde_json::from_value(info["pet"].clone())
+            .unwrap_or_else(|_| aieyes_core::pets::project(&Default::default()));
+        let frame = aieyes_core::pets::frame(
+            &state,
+            surface.pet_start.get().elapsed().as_millis() as u64,
+            pet::reduced_motion(),
+        );
+        pet::paint(
+            hwnd,
+            &surface.pet_sprite,
+            &state,
+            frame,
+            surface.font.font,
+            &info,
+        );
+        let _ = EndPaint(hwnd, &ps);
+        return;
+    }
     let contrast = high_contrast();
     let mut ps = PAINTSTRUCT::default();
     let dc = BeginPaint(hwnd, &mut ps);

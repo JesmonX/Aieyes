@@ -324,6 +324,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private let sessionEngine = EngineClient(configurationOnly: true)
     @Published var sessions: [LiveSession] = []
     @Published var sessionsUnavailable = false
+    @Published var petState = PetState.idle
     private var sessionBusy = false { didSet { scheduleRefreshes() } }
     private var lastSessionRead = Date.distantPast
     var activeSessions: [LiveSession] { sessions.filter { $0.phase.active } }
@@ -341,8 +342,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         defer { sessionBusy = false }
         do {
             let result: SessionSnapshot = try await sessionEngine.call("sessions.list")
-            sessions = result.sessions; sessionsUnavailable = result.unavailable
-        } catch { sessionsUnavailable = true }
+            sessions = result.sessions; sessionsUnavailable = result.unavailable; petState = result.pet ?? .unknown
+        } catch { sessionsUnavailable = true; petState = .unknown }
     }
     @Published var dashboard = Dashboard()
     @Published private(set) var menuDashboard = Dashboard()
