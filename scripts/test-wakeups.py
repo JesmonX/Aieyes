@@ -119,7 +119,10 @@ for line in sys.stdin:
                 m = dict(self.manifest(), proxy={'mode': mode, 'url': 'http://obsolete.invalid:8080'})
                 self.assertEqual(wake.call(m, ['--help']), 'fixture')
                 actual = run.call_args.kwargs['env']
-                for key, value in inherited.items(): self.assertEqual(actual[key], value)
+                # Windows os.environ canonicalizes names to uppercase; POSIX
+                # keeps case, including the lowercase proxy variable above.
+                for key, value in inherited.items():
+                    self.assertEqual(actual[key.upper() if os.name == 'nt' else key], value)
                 self.assertEqual(wake.auth_location(m)['proxy'], {'mode': 'system'})
 
     @unittest.skipUnless(os.name == 'posix', 'Remote runner requires a POSIX host')
