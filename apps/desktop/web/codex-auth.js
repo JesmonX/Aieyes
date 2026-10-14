@@ -3,7 +3,7 @@
   const e = value => escapeHTML(value ?? '');
   let intent = 'login', needsRefresh = false, targetAccountId = '', sourceId = '', info = null, busy = false, error = '', notice = '', prepared = null, operation = null, timer;
   let switchReview = null, switchError = '', switchedReview = null, prepareOnOpen = false;
-  const savedSources = () => (state.settings?.sources ?? []).filter(s => s.provider === 'codex' && s.enabled);
+  const savedSources = () => (state.settings?.sources ?? []).filter(s => s.provider === 'codex' && AieyesUI.sourceEnabled(state.settings,s));
   const selected = () => savedSources().find(s => s.id === sourceId);
   const targetAccount = () => state.settings.accounts.find(a=>a.provider==='codex'&&a.id===targetAccountId);
   const paint = () => { if(window.AieyesAccountTargets?.paintAuth())return; if (state.page === 'settings' && state.settingsTab === 'integrations') renderSettings(false); };
@@ -73,7 +73,7 @@
         <ul class="codex-switch-processes">${processes.map(p=>`<li>${e(p.name)} · PID ${p.pid}${p.parentPid?`<small>父进程 PID ${p.parentPid}</small>`:''}${p.canClose?'':`<small class="error">${e(p.blockingReason||'无法确认归属，请手动关闭后重新检查')}</small>`}</li>`).join('')}</ul>`:''}
         <p class="muted">切换后请按需手动重新打开 Codex 或 ChatGPT 并恢复会话。</p>
       </div>
-      <div class="dialog-foot"><button data-auth="cancelSwitch" ${busy?'disabled':''} autofocus>取消</button><button data-auth="retrySwitch" ${busy?'disabled':''}>重新检查</button><button class="primary" data-auth="commit" ${busy||!prepared||blocked||settingsFormsDirty()?'disabled':''}>${processes.length?'关闭并切换':'确认切换'}</button></div>
+      <div class="dialog-foot"><button data-auth="cancelSwitch" ${busy?'disabled':''} autofocus>取消</button><button data-auth="retrySwitch" ${busy?'disabled':''}>重新检查</button><button class="primary" data-auth="commit" ${busy||!prepared||blocked?'disabled':''}>${processes.length?'关闭并切换':'确认切换'}</button></div>
     </dialog>`;
   }
 
@@ -108,9 +108,9 @@
   function html() {
     const sources = savedSources();
     if (!sourceId || !sources.some(s => s.id === sourceId)) { sourceId = sources[0]?.id ?? ''; info = null; }
-    const source = selected(), account=targetAccount(), dirty = settingsFormsDirty();
-    return `<div class="card"><h2>${intent==='switch'?'切换账户':'Codex 登录'}</h2><p class="muted">${intent==='switch'?'选择目标账号后，检查并确认切换。':account?'在所选机器登录「'+e(account.name)+'」，请使用同一个账号。':'登录或读取成功后自动添加账号，以邮箱命名；已添加的同一账号会自动识别。'}切换会改变机器当前使用的账号。</p>${sources.length?`<label>运行位置<select id="auth-source" ${busy||operation?'disabled':''}>${sources.map(s=>`<option value="${e(s.id)}" ${s.id===sourceId?'selected':''}>${e(s.name)} · ${s.hostId?'SSH':'本机'}</option>`).join('')}</select></label><p class="tiny muted">${e(source.path)}</p>`:'<p>请先在 Agents 启用 Codex 并选择机器。</p>'}${error?`<p class="error" role="alert">${e(error)} <button data-auth="refresh" ${busy?'disabled':''}>重试读取</button></p>`:''}${notice?`<p role="status">${e(notice)}</p>`:''}${busy?'<p role="status">正在处理…</p>':''}
-    <fieldset ${busy||dirty||!source||operation?'disabled':''} style="border:0;padding:0"><div class="actions">${source&&intent==='login'?`<button data-auth="adopt">读取当前登录账号</button><button data-auth="login">${account?'登录此账号':'登录新账号'}</button>`:''}</div>
+    const source = selected(), account=targetAccount();
+    return `<div class="card"><h2>${intent==='switch'?'切换账户':'Codex 登录'}</h2><p class="muted">${intent==='switch'?'选择目标账号后，检查并确认切换。':account?'在所选机器登录「'+e(account.name)+'」，请使用同一个账号。':'登录或读取成功后自动添加账号，以邮箱命名；已添加的同一账号会自动识别。'}切换会改变机器当前使用的账号。</p>${sources.length?`<label>运行位置<select id="auth-source" ${busy||operation?'disabled':''}>${sources.map(s=>`<option value="${e(s.id)}" ${s.id===sourceId?'selected':''}>${e(s.name)} · ${e(s.hostId?(state.settings.hosts.find(h=>h.id===s.hostId)?.name??s.hostId):'本机')} · ${e(s.path)}</option>`).join('')}</select></label><p class="tiny muted source-path" title="${e(source.path)}">${e(AieyesUI.shortPath(source.path))}</p>`:'<p>没有可用的 Codex 目录。请启用 Agent、选择机器并恢复采集。</p><button type="button" data-auth-settings>打开机器设置</button>'}${error?`<p class="error" role="alert">${e(error)} <button data-auth="refresh" ${busy?'disabled':''}>重试读取</button></p>`:''}${notice?`<p role="status">${e(notice)}</p>`:''}${busy?'<p role="status">正在处理…</p>':''}
+    <fieldset ${busy||!source||operation?'disabled':''} style="border:0;padding:0"><div class="actions">${source&&intent==='login'?`<button data-auth="adopt">读取当前登录账号</button><button data-auth="login">${account?'登录此账号':'登录新账号'}</button>`:''}</div>
     ${info?`<p class="tiny muted">${e(info.version||'CLI 版本未知')} · 认证存储 ${e(info.storageMode)} · 检测到 ${info.processes?.length??0} 个相关进程</p>`:''}
     ${info?.selected?.kind==='api'?`<p class="muted">当前使用 ${e(info.selected.name||'API')}。${info.storedIdentity?'本机账号凭据仍已保存，可切换回账号。':''}</p>`:''}
     ${visibleProfiles().map(p=>`<div class="list-row"><div class="row-body"><strong>${e(p.name)}</strong>${p.current?' · 当前日常账号':''}<small>${e(p.identity.email)} · ${e(p.identity.plan)}</small></div>${intent!=='login'||state.settings.accounts.some(a=>window.AieyesAgentSettings.profiles(a).includes(source.codexHomeId+':'+p.id))?'':`<button data-profile="${e(p.id)}" data-auth="bind">添加此账号</button>`}${intent==='login'?`<button data-profile="${e(p.id)}" data-auth="reauth">重新登录</button>`:''}${p.current?'':((intent==='switch'||!!targetAccountId)?`<button data-profile="${e(p.id)}" data-auth="switch">切换到此账户</button>`:`<button data-profile="${e(p.id)}" data-auth="remove">移除</button>`)}</div>`).join('')}
@@ -124,7 +124,7 @@
       await ensureManaged();
       prepared = null; operation = await call('login.start',{profileId:profileId??null,deviceCode:!!selected().hostId});
       remember(); poll();
-    });
+    },'confirmation');
   }
   function bind() {
     if(needsRefresh&&!busy&&!operation&&sourceId){needsRefresh=false;queueMicrotask(()=>run(async()=>{
@@ -140,13 +140,14 @@
       if(!dialog.open)dialog.showModal();
       dialog.oncancel=event=>{event.preventDefault();if(!busy){switchReview=null;prepared=null;paint();}};
     }
+    document.querySelector('[data-auth-settings]')?.addEventListener('click',()=>openSettings({provider:'codex',section:'machines'}));
     const selector = document.getElementById('auth-source');
     if (selector) selector.onchange = () => { sourceId=selector.value; info=null; prepared=null; switchReview=null; switchedReview=null; run(refresh); };
     document.querySelectorAll('[data-auth]').forEach(button => button.onclick = () => {
       const action = button.dataset.auth, profileId = button.dataset.profile;
       if (action==='login'||action==='reauth') return login(profileId);
       if (action==='bind') return run(async()=>{await call('profiles.bind',{profileId,accountId:targetAccountId});await settingsChanged();await refresh();});
-      if (action==='remove') return showEditor('移除账号档案','<p>删除此位置保存的登录凭据，历史记录保留。</p>',async()=>{await call('profiles.remove',{profileId});await settingsChanged();await refresh();paint();});
+      if (action==='remove') return showEditor('移除账号档案','<p>删除此位置保存的登录凭据，历史记录保留。</p>',async()=>{await call('profiles.remove',{profileId});await settingsChanged();await refresh();paint();},'confirmation');
       run(async()=>{
         if (action==='refresh') { if(switchedReview)await refreshAfterSwitch(switchedReview);else await refresh(); }
         if (action==='adopt') { await ensureManaged();await call('adopt',{accountId:targetAccountId});await settingsChanged(); await refresh(); }

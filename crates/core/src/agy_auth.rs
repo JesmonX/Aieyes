@@ -259,11 +259,10 @@ fn command(source: &Source, settings: &Settings) -> Result<CommandBuilder> {
             .iter()
             .find(|a| a.provider == source.provider && a.id == source.account_id);
         host.pre_command = crate::accounts::pre_command(settings, account, source);
-        let environment = quota::agy_proxy(source);
         ssh::account_command(
             &host,
             &format!(
-                "{environment}export AGY_CLI_DISABLE_AUTO_UPDATE=true\naieyes_auth_dir=$(mktemp -d) || exit 1\ntrap 'rmdir \"$aieyes_auth_dir\" 2>/dev/null' EXIT\ncd \"$aieyes_auth_dir\" || exit 1\n{} --log-file /dev/null --prompt-interactive /usage",
+                "export AGY_CLI_DISABLE_AUTO_UPDATE=true\naieyes_auth_dir=$(mktemp -d) || exit 1\ntrap 'rmdir \"$aieyes_auth_dir\" 2>/dev/null' EXIT\ncd \"$aieyes_auth_dir\" || exit 1\n{} --log-file /dev/null --prompt-interactive /usage",
                 process::quote(binary)
             ),
         )?
@@ -435,19 +434,29 @@ impl Engine {
         let source = settings
             .sources
             .iter()
-            .find(|s| params["sourceId"] == s.id && s.provider == "antigravity" && s.enabled)
-            .context("请选择已启用的 Antigravity 目录")?;
+            .find(|s| params["sourceId"] == s.id && s.provider == "antigravity")
+            .context("请选择 Antigravity 目录")?;
+        if !matches!(method, "agyAuth.status" | "agyAuth.cancel") {
+            ensure!(
+                settings.source_enabled(source),
+                "目标机器或 Agent 已暂停或未选择，请在设置中恢复"
+            );
+        }
         let account = settings
             .accounts
             .iter()
             .find(|a| a.provider == source.provider && a.id == source.account_id);
+        let mut runtime_source = source.clone();
+        if runtime_source.host_id.is_some() {
+            runtime_source.proxy = None;
+        }
         let configuration = json!([
-            source,
+            runtime_source,
             source
                 .host_id
                 .as_ref()
                 .and_then(|id| settings.hosts.iter().find(|h| &h.id == id)),
-            settings.proxy,
+            source.host_id.is_none().then_some(&settings.proxy),
             crate::accounts::pre_command(&settings, account, source)
         ])
         .to_string();

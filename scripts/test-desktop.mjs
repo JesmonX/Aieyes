@@ -65,6 +65,21 @@ test('native and Web share panel preference and valuation window fixtures', () =
     assert.deepEqual([...actual],row.expected,row.name);
   }
 });
+test('valuation fields follow the current account plan and quota windows', () => {
+  const window = {};
+  vm.runInNewContext(read('contracts.js'), {window});
+  vm.runInNewContext(read('ui-state.js'), {window});
+  const fixture = JSON.parse(readFileSync(new URL('fixtures/estimate-presentation.json', import.meta.url), 'utf8'));
+  for (const row of fixture.cases) {
+    const records = (row.records ?? [{}]).map(record => ({...fixture.record, ...record}));
+    assert.equal(window.AieyesUI.estimateLine(records,row.quota,row.group),row.summary,row.name);
+    assert.deepEqual([...window.AieyesUI.estimateEntries(records,false,row.quota,row.group)].map(e=>e.field),row.fields,row.name);
+    const visible=window.AieyesUI.estimateVisibility(row.quota,records,row.group);
+    const help=window.AieyesUI.estimateHelp(row.quota,records,row.group);
+    if(!visible.five)assert.doesNotMatch(help,/5h|容量倍率/,row.name);
+    if(!visible.direct)assert.doesNotMatch(help,/同期|周额度消耗比例|整周/,row.name);
+  }
+});
 test('panel account choices cap each Agent and preserve explicit empty choices', () => {
   const data=new Map(),window={};
   vm.runInNewContext(read('contracts.js'), {window});

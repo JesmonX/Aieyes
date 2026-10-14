@@ -628,6 +628,14 @@
       "updateBehavior": "observe"
     },
     {
+      "name": "pets.asset",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
       "name": "pets.current",
       "lane": "configuration",
       "invalidates": [],
@@ -637,6 +645,22 @@
     },
     {
       "name": "pets.import",
+      "lane": "network",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
+      "name": "pets.list",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
+      "name": "pets.select",
       "lane": "configuration",
       "invalidates": [],
       "invalidateOnFailure": false,
@@ -882,7 +906,7 @@
     },
     {
       "name": "wakeups.delete",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -892,7 +916,7 @@
     },
     {
       "name": "wakeups.deploy",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -902,7 +926,7 @@
     },
     {
       "name": "wakeups.disable",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -912,7 +936,7 @@
     },
     {
       "name": "wakeups.enable",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -922,7 +946,7 @@
     },
     {
       "name": "wakeups.history",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
@@ -930,7 +954,7 @@
     },
     {
       "name": "wakeups.list",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
@@ -938,7 +962,7 @@
     },
     {
       "name": "wakeups.probe",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
@@ -946,7 +970,7 @@
     },
     {
       "name": "wakeups.remove",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -956,7 +980,7 @@
     },
     {
       "name": "wakeups.run",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -966,7 +990,7 @@
     },
     {
       "name": "wakeups.save",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -976,11 +1000,88 @@
     },
     {
       "name": "wakeups.status",
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
     }
+  ],
+  "petFrameDurations": [
+    [
+      280,
+      110,
+      110,
+      140,
+      140,
+      320
+    ],
+    [
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      220
+    ],
+    [
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      220
+    ],
+    [
+      140,
+      140,
+      140,
+      280
+    ],
+    [
+      140,
+      140,
+      140,
+      140,
+      280
+    ],
+    [
+      140,
+      140,
+      140,
+      140,
+      140,
+      140,
+      140,
+      240
+    ],
+    [
+      150,
+      150,
+      150,
+      150,
+      150,
+      260
+    ],
+    [
+      120,
+      120,
+      120,
+      120,
+      120,
+      220
+    ],
+    [
+      150,
+      150,
+      150,
+      150,
+      150,
+      280
+    ]
   ]
 }

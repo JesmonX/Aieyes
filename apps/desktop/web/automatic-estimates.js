@@ -3,11 +3,11 @@ window.AieyesAutomatic=(()=>{
   const consent='我确认影响订阅额度的所有设备用量均已纳入；按日志识别 API，不确定的区间跳过。';
   const labels={collecting:'积累样本中',sampling:'自动采样中',waiting:'等待有效样本',waitingIdentity:'等待订阅登录',waitingManual:'等待手动采样结束',disabled:'已关闭'};
   const status=s=>state.dashboard?.sources?.find(row=>row.id===s.id)?.autoValuationStatus;
-  const description=s=>{const row=status(s);return !s.autoValuation?.enabled?'已关闭':!AieyesUI.sourceEnabled(state.settings,s)?'采集已暂停':(labels[row?.state]??'等待首个实时快照')+(row?.note?' · '+row.note:'');};
+  const description=s=>{const row=status(s);return !AieyesUI.sourceEnabled(state.settings,s)?'采集已暂停':!s.autoValuation?.enabled?'已关闭':(labels[row?.state]??'等待首个实时快照')+(row?.note?' · '+row.note:'');};
   const intro=provider=>provider==='codex'?'自动估值5h/7d限额和credits的价值':'自动估值5h/7d限额的价值';
   let saving=false;
   function html(sources){return sources.filter(s=>s.provider!=='deepseek').map(s=>`<section class="sampling-row" data-auto-row="${escapeHTML(s.id)}"><div class="between"><h4>${escapeHTML(s.name)}</h4><input type="checkbox" role="switch" data-auto-save="${escapeHTML(s.id)}" aria-label="自动估值 · ${escapeHTML(s.name)}" ${s.autoValuation?.enabled?'checked':''} ${saving?'disabled':''}></div><small>${escapeHTML(s.path)}</small><p class="tiny muted" data-auto-status="${escapeHTML(s.id)}">${escapeHTML(description(s))}</p><p class="error" data-auto-error hidden></p></section>`).join('');}
-  function summary(sources){const enabled=sources.filter(s=>s.autoValuation?.enabled),active=enabled.filter(s=>AieyesUI.sourceEnabled(state.settings,s));return !sources.length?'未配置目录':!enabled.length?'已关闭':!active.length?'已暂停':'已开启 '+active.length+'/'+sources.length;}
+  function summary(sources){const enabled=sources.filter(s=>s.autoValuation?.enabled),active=enabled.filter(s=>AieyesUI.sourceEnabled(state.settings,s));return !sources.length?'未配置目录':!sources.some(s=>AieyesUI.sourceEnabled(state.settings,s))?'已暂停':!enabled.length?'已关闭':!active.length?'已暂停':'已开启 '+active.length+'/'+sources.length;}
   function refresh(){
     document.querySelectorAll('[data-auto-status]').forEach(el=>{const s=state.settings?.sources?.find(s=>s.id===el.dataset.autoStatus);if(s)el.textContent=description(s);});
     document.querySelectorAll('[data-auto-save]').forEach(el=>{const source=state.settings?.sources?.find(s=>s.id===el.dataset.autoSave);el.checked=source?.autoValuation?.enabled===true;el.disabled=saving;});
@@ -36,7 +36,7 @@ window.AieyesAutomatic=(()=>{
   }
   function open(ids,returnProvider=document.querySelector('#quota-dialog')?.dataset.valuationProvider){
     const sources=state.settings.sources.filter(s=>ids.includes(s.id)&&s.provider!=='deepseek');
-    const dialog=quotaDialog('数据源自动估值','<p class="muted">'+intro(sources.some(s=>s.provider==='codex')?'codex':'')+'</p>'+html(sources));
+    const dialog=quotaDialog('数据源自动估值','<p class="muted">'+intro(sources.some(s=>s.provider==='codex')?'codex':'')+'</p>'+html(sources),'automatic');
     dialog.dataset.autoSources=JSON.stringify(ids);
     if(returnProvider){dialog.dataset.valuationProvider=returnProvider;const back=document.createElement('button');back.type='button';back.textContent='返回估值与采样';back.onclick=()=>openProviderEstimates(returnProvider);dialog.querySelector('.quota-dialog-body').prepend(back);}
   }
@@ -49,7 +49,7 @@ const manualSamplingExpanded=new Map();
 // Management always uses the unfiltered snapshot. Collapsed manual rows are not mounted.
 async function openProviderEstimates(provider) {
   if(state.estimateBusy){notify('采样操作正在保存，请稍后查看。');return;}
-  const dialog=quotaDialog((providers[provider]??provider)+' · 估值与采样','<p role="status">正在读取估值与采样记录…</p>');
+  const dialog=quotaDialog((providers[provider]??provider)+' · 估值与采样','<p role="status">正在读取估值与采样记录…</p>','valuation');
   const request=crypto.randomUUID();dialog.dataset.loadingRequest=request;
   let snapshot;
   try{snapshot=await api('dashboard.summary');}
@@ -57,11 +57,11 @@ async function openProviderEstimates(provider) {
   if(!dialog.open||dialog.dataset.loadingRequest!==request)return;
   const sources=state.settings.sources.filter(s=>s.provider===provider),accounts=state.settings.accounts.filter(a=>a.provider===provider&&!a.archived);
   const records=[...(snapshot.quotaEstimates??[]).map(e=>({...e,kind:'quota'})),...(snapshot.creditEstimates??[]).map(e=>({...e,kind:'credits'}))].filter(e=>e.accountKey.startsWith(provider+':')).sort((a,b)=>(b.checkpointAt??b.startedAt)-(a.checkpointAt??a.startedAt));
-  const recordHTML=record=>`<div class="sampling-row"><strong>${escapeHTML(historicalAccounts().find(a=>a.provider+':'+a.id===record.accountKey)?.name??record.accountKey)}</strong><span>${record.kind==='credits'?'credits 估值':'5h / 7d 额度估值'} · ${escapeHTML(estimateStatus(record))}</span><small>${date(record.startedAt)} → ${date(record.checkpointAt)}</small><button type="button" data-valuation-record="${records.indexOf(record)}">查看与管理</button></div>`;
+  const recordHTML=record=>`<div class="sampling-row"><strong>${escapeHTML(historicalAccounts().find(a=>a.provider+':'+a.id===record.accountKey)?.name??record.accountKey)}</strong><span>${record.kind==='credits'?'credits 估值':escapeHTML((AieyesUI.estimatePeriods(snapshot.quotas?.find(q=>q.provider+':'+q.accountId===record.accountKey),[record],record.groupId)+' 额度估值').trim())} · ${escapeHTML(estimateStatus(record))}</span><small>${date(record.startedAt)} → ${date(record.checkpointAt)}</small><button type="button" data-valuation-record="${records.indexOf(record)}">查看与管理</button></div>`;
   const running=records.filter(e=>e.status!=='completed'&&e.samplingMode!=='automatic'),history=records.filter(e=>e.status==='completed'&&e.samplingMode!=='automatic'),automaticHistory=records.filter(e=>e.samplingMode==='automatic');
   const automatic=sources.length?window.AieyesAutomatic.html(sources):'<p class="muted">添加数据目录后可配置自动估值。</p>';
   const manual=()=>accounts.map(a=>`<div class="list-row"><strong class="row-body">${escapeHTML(a.name)}</strong><button type="button" data-valuation-account="${escapeHTML(a.provider+':'+a.id)}">额度采样</button>${provider==='codex'?`<button type="button" data-valuation-account="${escapeHTML(a.provider+':'+a.id)}" data-kind="credits">credits 采样</button>`:''}</div>`).join('')||'<p class="muted">添加账户后可开始手动采样。</p>';
-  quotaDialog((providers[provider]??provider)+' · 估值与采样',`<h3>自动估值</h3><p class="muted">${AieyesAutomatic.intro(provider)}</p>${automatic}<details id="manual-sampling" ${manualSamplingExpanded.get(provider)?'open':''}><summary>手动采样（进行中 ${running.length}）</summary><div data-manual-body></div></details><h3>自动采样历史</h3>${automaticHistory.map(recordHTML).join('')||'<p class="muted">暂无记录。</p>'}`);
+  quotaDialog((providers[provider]??provider)+' · 估值与采样',`<h3>自动估值</h3><p class="muted">${AieyesAutomatic.intro(provider)}</p>${automatic}<details id="manual-sampling" ${manualSamplingExpanded.get(provider)?'open':''}><summary>手动采样（进行中 ${running.length}）</summary><div data-manual-body></div></details><h3>自动采样历史</h3>${automaticHistory.map(recordHTML).join('')||'<p class="muted">暂无记录。</p>'}`,'valuation');
   dialog.dataset.valuationProvider=provider;
   const bindRecords=()=>{
     dialog.querySelectorAll('[data-valuation-account]').forEach(button=>button.onclick=()=>openQuotaEstimate(button.dataset.valuationAccount,button.dataset.kind??'weekly','',snapshot));

@@ -8,11 +8,15 @@ extension AppModel {
         }
     }
     func acceptConfiguration(_ saved: Settings) {
-        for account in saved.accounts where !settings.accounts.contains(where: { $0.key == account.key }) { PanelAccountPreference.includeNew(account, accounts: saved.accounts) }
         invalidateAccountStatuses()
-        settings = saved; settingsDraft = saved; settingsMessage = "已保存"
+        mergeConfiguration(saved)
         if selectedAccount != "all" && selectedAccount != "none" && !settings.filterAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
         scheduleConfigurationRefresh()
+    }
+    func mergeConfiguration(_ saved: Settings, submitted: Settings? = nil, draftAtSubmission: Settings? = nil) {
+        let draft = SettingsDraftMerge.rebase(base: settings, draft: settingsDraft, saved: saved, submitted: submitted, draftAtSubmission: draftAtSubmission)
+        if settings != saved { settings = saved }
+        if settingsDraft != draft { settingsDraft = draft }
     }
     func scheduleConfigurationRefresh() {
         settingsRefreshTask?.cancel()
@@ -27,13 +31,17 @@ extension AppModel {
         synchronizeAccountDeployments()
     }
     func synchronizeAccountDeployments() {
+        deploymentSyncRequested = true
         guard deploymentSyncTask == nil else { return }
         deploymentSyncTask = Task {
             defer { deploymentSyncTask = nil }
-            do {
-                let result: AccountCleanupResult = try await accountEngine.call("accounts.deployments.sync")
-                deploymentSyncMessage = result.failedTasks?.isEmpty == false ? "配置已保存，部分唤醒部署待同步，可重试。" : nil
-            } catch { deploymentSyncMessage = "配置已保存，唤醒部署待同步：" + error.localizedDescription }
+            repeat {
+                deploymentSyncRequested = false
+                do {
+                    let result: AccountCleanupResult = try await accountEngine.call("accounts.deployments.sync")
+                    deploymentSyncMessage = result.failedTasks?.isEmpty == false ? "配置已保存，部分唤醒部署待同步，可重试。" : nil
+                } catch { deploymentSyncMessage = "配置已保存，唤醒部署待同步：" + error.localizedDescription }
+            } while deploymentSyncRequested && !Task.isCancelled
         }
     }
     /// Refresh the switched home without waiting for unrelated SSH checks. Repeated requests
@@ -68,7 +76,9 @@ extension AppModel {
     }
     func accountMachineIDs(_ provider: String, includePaused: Bool = false) -> [String] {
         let config = agentConfigurations.first { $0.provider == provider }
-        let active = (config?.enabled == true ? config?.machineIds ?? [] : []).filter { id in id == "local" ? settings.localDeviceEnabled != false : settings.hosts.contains { $0.id == id && $0.enabled } }
+        let active = (config?.enabled == true ? config?.machineIds ?? [] : []).filter { id in
+            settings.sources.contains { $0.provider == provider && ($0.hostId ?? "local") == id && settings.sourceEnabled($0) }
+        }
         if !includePaused { return Array(Set(active)).sorted { $0 == "local" && $1 != "local" || ($0 != "local" && $1 != "local" && $0 < $1) } }
         return Array(Set(active + settings.sources.filter { $0.provider == provider }.map { $0.hostId ?? "local" })).sorted { $0 == "local" && $1 != "local" || ($0 != "local" && $1 != "local" && $0 < $1) }
     }
@@ -100,29 +110,39 @@ extension AppModel {
         } catch { settingsMessage = error.localizedDescription }
     }
     func saveGeneralConfiguration() async {
-        guard (5...86400).contains(settingsDraft.refreshSeconds),
-              (10...86400).contains(settingsDraft.historyInterval),
-              (2...86400).contains(settingsDraft.foregroundInterval),
-              (2...86400).contains(settingsDraft.serverRefreshSeconds) else {
-            settingsMessage = "刷新间隔范围：额度 5–86400 秒，记录 10–86400 秒，服务器 2–86400 秒"
-            return
+        if let pending = generalSaveTask { await pending.value; return }
+        let work = Task { @MainActor in
+            defer { generalSaveTask = nil }
+            while !Task.isCancelled {
+                guard (5...86400).contains(settingsDraft.refreshSeconds),
+                      (10...86400).contains(settingsDraft.historyInterval),
+                      (2...86400).contains(settingsDraft.foregroundInterval),
+                      (2...86400).contains(settingsDraft.serverRefreshSeconds) else {
+                    settingsMessage = "刷新间隔范围：额度 5–86400 秒，记录 10–86400 秒，服务器 2–86400 秒"
+                    return
+                }
+                var next = settings
+                next.appearance = settingsDraft.appearance; next.proxy = settingsDraft.proxy
+                next.proxyTestUrls = settingsDraft.proxyTestUrls; next.menuMetric = settingsDraft.menuMetric
+                next.historyShowDeletedAccounts = settingsDraft.historyShowDeletedAccounts
+                next.historyRefreshSeconds = settingsDraft.historyRefreshSeconds
+                next.serverForegroundRefreshSeconds = settingsDraft.serverForegroundRefreshSeconds
+                next.localMonitor = settingsDraft.localMonitor
+                next.refreshSeconds = settingsDraft.refreshSeconds; next.serverRefreshSeconds = settingsDraft.serverRefreshSeconds
+                guard next != settings else { return }
+                do { try await persistConfiguration(next) }
+                catch { settingsMessage = error.localizedDescription; return }
+            }
         }
-        var next = settings
-        next.appearance = settingsDraft.appearance; next.proxy = settingsDraft.proxy
-        next.proxyTestUrls = settingsDraft.proxyTestUrls; next.menuMetric = settingsDraft.menuMetric
-        next.historyShowDeletedAccounts = settingsDraft.historyShowDeletedAccounts
-        next.historyRefreshSeconds = settingsDraft.historyRefreshSeconds; next.serverForegroundRefreshSeconds = settingsDraft.serverForegroundRefreshSeconds; next.localMonitor = settingsDraft.localMonitor; next.refreshSeconds = settingsDraft.refreshSeconds; next.serverRefreshSeconds = settingsDraft.serverRefreshSeconds
-        guard next != settings else { return }
-        do { try await persistConfiguration(next) } catch { settingsMessage = error.localizedDescription }
+        generalSaveTask = work
+        await work.value
     }
     func persistConfiguration(_ next: Settings, base: Settings? = nil) async throws {
-        guard !settingsSaving else { throw ClientError.message("正在保存，请稍后重试") }
-        let previous = settingsDraft
-        settingsDraft = next
-        guard await saveSettingsDraft(includeMappings: false, base: base) else {
-            settingsDraft = previous
+        guard await save(next, base: base) else {
+            settingsMessage = message ?? "保存失败，输入已保留"
             throw ClientError.message(settingsMessage ?? "保存失败，输入已保留")
         }
+        settingsMessage = "已保存 · " + Format.time(Date().timeIntervalSince1970)
         synchronizeAccountDeployments()
         Task { await loadAccountStatuses() }
     }
@@ -164,5 +184,64 @@ extension AppModel {
             next.agents = agents
         }
         do { try await persistConfiguration(next) } catch { settingsMessage = error.localizedDescription }
+    }
+}
+
+/// Rebase only local edits over a refreshed configuration. Array records are merged
+/// by their persisted identity, so login can add an account without replacing a draft.
+enum SettingsDraftMerge {
+    static func rebase(base: Settings, draft: Settings, saved: Settings, submitted: Settings? = nil, draftAtSubmission: Settings? = nil) -> Settings {
+        do {
+            let encoder = JSONEncoder()
+            let values = try [base, draft, saved].map { try JSONSerialization.jsonObject(with: encoder.encode($0)) }
+            let submittedValue = try submitted.map { try JSONSerialization.jsonObject(with: encoder.encode($0)) }
+            let originalDraft = try (draftAtSubmission ?? submitted).map { try JSONSerialization.jsonObject(with: encoder.encode($0)) }
+            let merged = merge(base: values[0], draft: values[1], saved: values[2], submitted: submittedValue, originalDraft: originalDraft, acknowledging: submitted != nil) ?? [:]
+            return try JSONDecoder().decode(Settings.self, from: JSONSerialization.data(withJSONObject: merged))
+        } catch { return draft }
+    }
+
+    private static func equal(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): return true
+        case let (left?, right?): return (left as AnyObject).isEqual(right)
+        default: return false
+        }
+    }
+    private static func identity(_ value: Any) -> String? {
+        guard let row = value as? [String: Any] else { return nil }
+        if let id = row["id"] as? String { return (row["provider"] as? String ?? "") + ":" + id }
+        for field in ["machineId", "sourceId", "provider"] { if let id = row[field] as? String { return field + ":" + id } }
+        return nil
+    }
+    private static func merge(base: Any?, draft: Any?, saved: Any?, submitted: Any?, originalDraft: Any?, acknowledging: Bool) -> Any? {
+        if equal(draft, saved) { return saved }
+        let unchangedDuringSave = !acknowledging || equal(draft, originalDraft)
+        if equal(base, draft), unchangedDuringSave { return saved }
+        // A successful save acknowledges only the submitted value. Core may trim or
+        // normalize it; subsequent input and unrelated drafts must remain intact.
+        if acknowledging, unchangedDuringSave, equal(draft, submitted) { return saved }
+        guard let draft else { return nil }
+        if let draft = draft as? [String: Any] {
+            let base = base as? [String: Any] ?? [:], saved = saved as? [String: Any] ?? [:]
+            let submitted = submitted as? [String: Any] ?? [:]
+            let originalDraft = originalDraft as? [String: Any] ?? [:]
+            var result = saved
+            for key in Set(base.keys).union(draft.keys).union(originalDraft.keys) {
+                result[key] = merge(base: base[key], draft: draft[key], saved: saved[key], submitted: submitted[key], originalDraft: originalDraft[key], acknowledging: acknowledging)
+            }
+            return result
+        }
+        if let draft = draft as? [Any], let base = base as? [Any], let saved = saved as? [Any],
+           (base + draft + saved).allSatisfy({ identity($0) != nil }) {
+            func records(_ rows: [Any]) -> [String: Any] { rows.reduce(into: [:]) { $0[identity($1)!] = $1 } }
+            let before = records(base), edited = records(draft), current = records(saved)
+            let submitted = records(submitted as? [Any] ?? [])
+            let originalDraft = records(originalDraft as? [Any] ?? [])
+            var seen = Set<String>()
+            let order = (saved + draft).compactMap(identity).filter { seen.insert($0).inserted }
+            return order.compactMap { merge(base: before[$0], draft: edited[$0], saved: current[$0], submitted: submitted[$0], originalDraft: originalDraft[$0], acknowledging: acknowledging) }
+        }
+        return draft
     }
 }

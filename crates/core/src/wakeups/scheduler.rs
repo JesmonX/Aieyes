@@ -157,6 +157,7 @@ fn register(root: &Path, exe: &Path, remove: bool) -> Result<()> {
 }
 pub fn deploy(root: &Path, m: &Manifest) -> Result<Value> {
     runner::private_dir(root)?;
+    let _lock = scheduler_lock(root)?;
     runner::private_dir(&root.join("tasks"))?;
     let source = RUNNER_PATH
         .get()
@@ -197,6 +198,11 @@ fn hash_bytes(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 pub fn control(root: &Path, id: &str, action: &str) -> Result<Value> {
+    let _lock = if matches!(action, "enable" | "disable" | "remove") {
+        Some(scheduler_lock(root)?)
+    } else {
+        None
+    };
     let path = root.join("tasks").join(format!("{id}.json"));
     match action {
         "history" => Ok(json!(runner::history(root, id)?)),
@@ -274,6 +280,26 @@ pub fn control(root: &Path, id: &str, action: &str) -> Result<Value> {
             Ok(json!({"removed":true}))
         }
         _ => anyhow::bail!("未知部署操作"),
+    }
+}
+fn scheduler_lock(root: &Path) -> Result<crate::file_lock::FileLock> {
+    runner::private_dir(root)?;
+    let path = root.join("deployment.lock");
+    let start = std::time::Instant::now();
+    loop {
+        crate::operations::check()?;
+        let file = fs::File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)?;
+        match crate::file_lock::FileLock::try_exclusive(file) {
+            Ok(lock) => return Ok(lock),
+            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < Duration::from_secs(25) => {
+                std::thread::sleep(Duration::from_millis(25))
+            }
+            Err(error) => return Err(error).context("任务调度器正在更新，请重试"),
+        }
     }
 }
 fn next_run_from<Tz: chrono::TimeZone>(

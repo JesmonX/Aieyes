@@ -626,8 +626,7 @@ pub(crate) fn agy(source: &Source, settings: &Settings) -> Result<Value> {
         ssh::account_command(
             &quota_host(host, source),
             &format!(
-                "{}export AGY_CLI_DISABLE_AUTO_UPDATE=true\nexec {} --print /usage --output-format json --print-timeout 30s --log-file /dev/null",
-                agy_proxy(source),
+                "export AGY_CLI_DISABLE_AUTO_UPDATE=true\nexec {} --print /usage --output-format json --print-timeout 30s --log-file /dev/null",
                 process::quote(binary)
             ),
         )?
@@ -668,21 +667,6 @@ pub(crate) fn agy(source: &Source, settings: &Settings) -> Result<Value> {
         .find(|l| !l.is_empty())
         .context("agy 没有返回数据")?;
     serde_json::from_slice(line).context("agy 返回格式不正确，请更新 agy")
-}
-
-pub(crate) fn agy_proxy(source: &Source) -> String {
-    match source.proxy.as_ref().map(|p| p.mode.as_str()) {
-        Some("direct") => {
-            "unset HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy\n".into()
-        }
-        Some("custom") => {
-            let url = process::quote(&source.proxy.as_ref().unwrap().url);
-            format!(
-                "export HTTPS_PROXY={url} HTTP_PROXY={url} ALL_PROXY={url} https_proxy={url} http_proxy={url} all_proxy={url}\n"
-            )
-        }
-        _ => String::new(),
-    }
 }
 
 fn parse_agy(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {

@@ -21,10 +21,10 @@ pub fn location(source: &Source, settings: &Settings) -> local::Location {
         },
         shell: crate::ssh::DEFAULT_SHELL.into(),
         proxy: if source.host_id.is_some() {
-            source.proxy.clone().unwrap_or(ProxyConfig {
+            ProxyConfig {
                 mode: "system".into(),
                 url: String::new(),
-            })
+            }
         } else {
             source
                 .proxy

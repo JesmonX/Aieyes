@@ -40,7 +40,7 @@ struct MultiSelectPicker: View {
                 Text(title)
                 Spacer()
                 Text(summary).foregroundStyle(.secondary)
-                Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                Image(systemName: "chevron.down").font(.system(size: DesignTokens.fontHint, weight: DesignTokens.weightStrong)).foregroundStyle(.secondary)
             }.font(AppFont.secondary).padding(.vertical, 5)
         }
         .focused($triggerFocused)

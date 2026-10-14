@@ -74,7 +74,7 @@
       }
     },
     {
-      "name": "removed choices use available accounts",
+      "name": "removed custom choices stay empty",
       "accounts": [
         {
           "id": "new",
@@ -96,9 +96,7 @@
         }
       },
       "expected": {
-        "antigravity": [
-          "antigravity:new"
-        ]
+        "antigravity": []
       }
     },
     {
@@ -467,6 +465,156 @@
         ],
         "claude": [
           "claude:c"
+        ]
+      }
+    },
+    {
+      "name": "auto seven accounts",
+      "accounts": [
+        {
+          "id": "0",
+          "name": "0",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "1",
+          "name": "1",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "2",
+          "name": "2",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "3",
+          "name": "3",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "4",
+          "name": "4",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "5",
+          "name": "5",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "6",
+          "name": "6",
+          "provider": "codex",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [],
+      "preference": {
+        "version": 2,
+        "providers": {
+          "codex": {
+            "mode": "auto",
+            "keys": [
+              "codex:0",
+              "codex:1",
+              "codex:2",
+              "codex:3",
+              "codex:4",
+              "codex:5",
+              "codex:6"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "codex": [
+          "codex:0",
+          "codex:1",
+          "codex:2",
+          "codex:3",
+          "codex:4"
+        ]
+      }
+    },
+    {
+      "name": "custom seven accounts",
+      "accounts": [
+        {
+          "id": "0",
+          "name": "0",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "1",
+          "name": "1",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "2",
+          "name": "2",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "3",
+          "name": "3",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "4",
+          "name": "4",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "5",
+          "name": "5",
+          "provider": "codex",
+          "quotaEnabled": true
+        },
+        {
+          "id": "6",
+          "name": "6",
+          "provider": "codex",
+          "quotaEnabled": true
+        }
+      ],
+      "order": [],
+      "preference": {
+        "version": 2,
+        "providers": {
+          "codex": {
+            "mode": "custom",
+            "keys": [
+              "codex:0",
+              "codex:1",
+              "codex:2",
+              "codex:3",
+              "codex:4",
+              "codex:5",
+              "codex:6"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "codex": [
+          "codex:0",
+          "codex:1",
+          "codex:2",
+          "codex:3",
+          "codex:4",
+          "codex:5",
+          "codex:6"
         ]
       }
     }

@@ -7,6 +7,10 @@ impl FileLock {
         file.try_lock()?;
         Ok(Self(file))
     }
+    pub fn try_shared(file: File) -> Result<Self, TryLockError> {
+        file.try_lock_shared()?;
+        Ok(Self(file))
+    }
 }
 impl Drop for FileLock {
     fn drop(&mut self) {

@@ -4,10 +4,7 @@
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
   let state=null, start=0, timer=null, enabled=false, frames=[], assetKey=null, loading=null, scale=1, painted=null;
   const context=sprite?.getContext('2d',{alpha:true});
-  function frame(s,elapsed,still=false){
-    if(still)return s.row*8;
-    return s.row*8+Math.floor(elapsed/s.frameMs)%s.frames;
-  }
+  const frame=window.AieyesPetAnimation.frame;
   function paint(force=true){
     if(!state||!sprite)return;
     const index=frame(state,Math.max(0,performance.now()-start),reduced.matches);
@@ -53,7 +50,7 @@
         frame.getContext('2d').drawImage(sheet,index%8*cellWidth,Math.floor(index/8)*cellHeight,cellWidth,cellHeight,0,0,cellWidth,cellHeight);
         return frame;
       });
-      assetKey=result.pet.spritePath;sprite.dataset.asset=assetKey;sprite.dataset.rows=String(rows);
+      assetKey=result.pet.spritePath;start=performance.now();sprite.dataset.asset=assetKey;sprite.dataset.rows=String(rows);
       paint();
     } catch(error) { frames=[];delete sprite.dataset.asset;paint(); }
     finally { if(loading===key)loading=null; }
@@ -64,7 +61,7 @@
     scale=Number.isFinite(info.petScale)?Math.min(2,Math.max(0.5,info.petScale)):1;
     ball.style.setProperty('--pet-scale',String(scale));
     document.body.dataset.pet=String(!!info.petEnabled);
-    if(info.pet){if(state?.key!==info.pet.key)start=performance.now();state=info.pet;}
+    if(info.pet){if(!state||state.key!==info.pet.key||AieyesPetAnimation.signature(state)!==AieyesPetAnimation.signature(info.pet))start=performance.now();state=info.pet;}
     if(state&&info.petEnabled){
       document.body.dataset.petBehavior=state.behavior;
       const phase={attention:'needsInput',blocked:'failed',success:'complete',rest:'interrupted',running:'working',working:'tool',thinking:'thinking',unknown:'unknown',idle:'idle'}[state.behavior]||'unknown';

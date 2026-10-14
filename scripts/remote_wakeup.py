@@ -1,5 +1,5 @@
 """Aieyes user-owned SSH deployment and headless runner (Python 3 stdlib only)."""
-from contextlib import closing
+from contextlib import closing, contextmanager
 import datetime
 import concurrent.futures
 import hashlib
@@ -75,13 +75,8 @@ def call(m, args, cwd=None, timeout=20):
         env['CODEX_HOME'] = m['configPath']
     if m['provider'] == 'claude':
         env['CLAUDE_CONFIG_DIR'] = m['configPath']
-    proxy = m.get('proxy') or {}
-    if proxy.get('mode') in ('direct', 'custom'):
-        for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NO_PROXY', 'no_proxy'):
-            env.pop(key, None)
-    if proxy.get('mode') == 'custom':
-        for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'):
-            env[key] = proxy['url']
+    # Legacy remote proxy fields are ignored. The account's pre-command owns
+    # initialization, including whether to inherit, clear or replace proxy env.
     argv = shell_argv(m, [m['binary']] + args, diagnostic=True)
     process = subprocess.Popen(argv, cwd=str(cwd or pathlib.Path.home()), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
@@ -111,7 +106,7 @@ def auth_helper():
 
 
 def auth_location(m):
-    return dict(path=m['configPath'], binary=m['binary'], proxy=m.get('proxy'),
+    return dict(path=m['configPath'], binary=m['binary'], proxy={'mode': 'system'},
                 preCommand=m.get('preCommand', ''), shell=m.get('shell') or '/bin/bash')
 
 
@@ -122,12 +117,6 @@ def codex_rpc(m, method, params):
     env = dict(os.environ, CODEX_HOME=m['configPath'])
     for key in CLEAR_ENV:
         env.pop(key, None)
-    proxy = m.get('proxy') or {}
-    if proxy.get('mode') in ('direct', 'custom'):
-        for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'NO_PROXY', 'no_proxy'):
-            env.pop(key, None)
-    if proxy.get('mode') == 'custom':
-        env.update({k: proxy['url'] for k in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')})
     # Stdio is the default, including CLI versions without the --stdio alias.
     argv = shell_argv(m, [m['binary'], 'app-server'])
     process = subprocess.Popen(argv, env=env, cwd=str(pathlib.Path.home()), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
@@ -382,6 +371,57 @@ def diagnostic(error):
     return 'model-request', '模型请求未成功完成；请检查模型、认证与代理'
 
 
+@contextmanager
+def scheduler_lock(base):
+    # A user has one crontab; serialize its read/modify/write across namespaces.
+    # Probing/authentication happens before this short local transaction.
+    private_dir(base)
+    with closing(sqlite3.connect(base / 'deployment.sqlite', timeout=25)) as db:
+        db.execute('BEGIN IMMEDIATE')
+        try:
+            yield
+        finally:
+            db.rollback()
+
+
+def install(root, m, request):
+    private_dir(root / 'tasks')
+    script = root / 'runner.py'
+    old_script = script.read_text() if script.exists() else None
+    atomic(script, request['script'])
+    helper = root / 'codex_auth.py'
+    old_helper = helper.read_text() if helper.exists() else None
+    if request.get('authHelper'):
+        atomic(helper, request['authHelper'])
+    path = root / 'tasks' / (m['id'] + '.json')
+    old = path.read_text() if path.exists() else None
+    atomic(path, json.dumps(m))
+    try:
+        crontab(root)
+        check = subprocess.run(['crontab', '-l'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if check.returncode or tag(root) not in check.stdout.decode() or json.loads(path.read_text()) != m:
+            raise ValueError('部署回读验证失败；请重新部署')
+    except Exception:
+        if old_helper is not None:
+            atomic(helper, old_helper)
+        elif helper.exists():
+            helper.unlink()
+        if old_script is not None:
+            atomic(script, old_script)
+        else:
+            script.unlink()
+        if old is not None:
+            atomic(path, old)
+        else:
+            path.unlink()
+        try:
+            crontab(root, remove=not any((root / 'tasks').glob('*.json')))
+        except Exception:
+            pass
+        raise
+    return {'root': str(root), 'timezone': timezone()}
+
+
 def manage(request):
     global _AUTH_HELPER
     if request.get('authHelper'):
@@ -401,41 +441,8 @@ def manage(request):
         root = base / namespace
         m = resolve(request['manifest'])
         probe(m)
-        private_dir(root / 'tasks')
-        script = root / 'runner.py'
-        old_script = script.read_text() if script.exists() else None
-        atomic(script, request['script'])
-        helper = root / 'codex_auth.py'
-        old_helper = helper.read_text() if helper.exists() else None
-        if request.get('authHelper'):
-            atomic(helper, request['authHelper'])
-        path = root / 'tasks' / (m['id'] + '.json')
-        old = path.read_text() if path.exists() else None
-        atomic(path, json.dumps(m))
-        try:
-            crontab(root)
-            check = subprocess.run(['crontab', '-l'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            if check.returncode or tag(root) not in check.stdout.decode() or json.loads(path.read_text()) != m:
-                raise ValueError('部署回读验证失败；请重新部署')
-        except Exception:
-            if old_helper is not None:
-                atomic(helper, old_helper)
-            elif helper.exists():
-                helper.unlink()
-            if old_script is not None:
-                atomic(script, old_script)
-            else:
-                script.unlink()
-            if old is not None:
-                atomic(path, old)
-            else:
-                path.unlink()
-            try:
-                crontab(root, remove=not any((root / 'tasks').glob('*.json')))
-            except Exception:
-                pass
-            raise
-        return {'root': str(root), 'timezone': timezone()}
+        with scheduler_lock(base):
+            return install(root, m, request)
     root = pathlib.Path(os.path.expanduser(request['root']))
     if root.parent != base or not re.fullmatch('[a-f0-9]{20}', root.name):
         raise ValueError('部署目录不属于 Aieyes')
@@ -457,19 +464,22 @@ def manage(request):
             raise ValueError('任务文件缺失；请重新部署')
         subprocess.Popen([sys.executable, str(root/'runner.py'), '--tick', str(root), identifier], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return {'started': True}
-    if action in ('enable', 'disable'):
-        if not path.is_file():
-            raise ValueError('任务文件缺失；请重新部署')
-        m = json.loads(path.read_text())
-        m['enabled'] = action == 'enable'
-        atomic(path, json.dumps(m))
-        return {'enabled': m['enabled']}
-    if action == 'remove':
-        if not any(p != path for p in (root/'tasks').glob('*.json')):
-            crontab(root, remove=True)
-        if path.exists():
-            path.unlink()
-        return {'removed': True}
+    if action in ('enable', 'disable', 'remove'):
+        with scheduler_lock(base):
+            if action in ('enable', 'disable'):
+                if not path.is_file():
+                    raise ValueError('任务文件缺失；请重新部署')
+                m = json.loads(path.read_text())
+                m['enabled'] = action == 'enable'
+                atomic(path, json.dumps(m))
+                return {'enabled': m['enabled']}
+            if action == 'remove':
+                if not any(p != path for p in (root/'tasks').glob('*.json')):
+                    crontab(root, remove=True)
+                if path.exists():
+                    path.unlink()
+                return {'removed': True}
+
     raise ValueError('未知部署操作')
 
 

@@ -243,14 +243,26 @@ impl Engine {
                 &self.store,
                 params["includeImage"].as_bool().unwrap_or(false),
             ),
+            "pets.list" => pet_import::list(&self.store),
+            "pets.select" => pet_import::select(
+                &self.store,
+                params["libraryId"].as_str().context("请选择库中的桌宠")?,
+            ),
+            "pets.asset" => pet_import::asset(
+                &self.store,
+                params["libraryId"].as_str().context("请选择库中的桌宠")?,
+            ),
             "sessions.hooks.status" | "sessions.hooks.repair" | "sessions.hooks.remove" => {
                 session_hooks::call(&self.store.settings()?, method, &params)
             }
             "pets.import" => {
-                let path = params["path"]
+                let input = params
+                    .get("input")
+                    .or_else(|| params.get("path"))
+                    .context("请输入桌宠链接、npx 命令、npm 包名或选择文件")?
                     .as_str()
-                    .context("请选择桌宠 ZIP 或 pet.json 文件")?;
-                pet_import::import(&self.store, Path::new(path))?;
+                    .context("桌宠导入内容必须是文本")?;
+                pet_import::import_input(&self.store, input)?;
                 pet_import::current(&self.store, false)
             }
             "hello" => Ok(

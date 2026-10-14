@@ -7,7 +7,7 @@ function fixture(){
   const now=Math.floor(Date.now()/1000),tokens={input:0,output:0,cacheRead:0,cacheWrite:0};
   const summary={tokens,total:0,cost:0,pricedTokens:0,events:0};
   const win=(id,name,minutes,groupName)=>({id,name,windowMinutes:minutes,usedPercent:35,resetsAt:now+10000,groupName});
-  const rows=[{provider:'codex',accountId:'c',name:'个人订阅',plan:'plus',sourceId:'c',updatedAt:now,origin:'live',windows:[win('weekly','7d',10080)]},{provider:'agy',accountId:'a',name:'工作空间 agy',sourceId:'a',updatedAt:now,origin:'live',windows:['Claude Opus','Claude Sonnet','Gemini Pro'].flatMap(g=>[win(g+':5h',g+' · 5h',300,g),win(g+':7d',g+' · 7d',10080,g)])}];
+  const rows=[{provider:'codex',accountId:'c',name:'个人订阅',plan:'pro',sourceId:'c',updatedAt:now,origin:'live',windows:[win('weekly','7d',10080)]},{provider:'agy',accountId:'a',name:'工作空间 agy',sourceId:'a',updatedAt:now,origin:'live',windows:['Claude Opus','Claude Sonnet','Gemini Pro'].flatMap(g=>[win(g+':5h',g+' · 5h',300,g),win(g+':7d',g+' · 7d',10080,g)])}];
   const settings={accounts:rows.map(q=>({id:q.accountId,name:q.name,provider:q.provider,quotaEnabled:true})),sources:rows.map(q=>({id:q.accountId,name:q.name,provider:q.provider,accountId:q.accountId,enabled:true,path:'/fixture'})),hosts:[],modelMappings:{},proxy:{mode:'system',url:''},refreshSeconds:300,serverRefreshSeconds:10};
   settings.sources[0].accountId='';settings.sources[0].codexHomeId='fixture-home';settings.accounts[0].quotaProfileId='fixture-home:profile';
   window.quotaFixture={rows,settings,order:['codex:c','antigravity:a'],records:[],calls:[],fail:false,panelOpen:true};
@@ -47,7 +47,41 @@ function fixture(){
    assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Expanded accounts show all model groups');
    assert.equal(await agy.locator('.quota-reset:visible').count(),6);
    const codex=page.locator('[data-quota="codex:c"]:visible');
-   assert.equal(await codex.locator('.subscription-badge').textContent(),'Plus');
+   assert.equal(await codex.locator('.subscription-badge').textContent(),'Pro');
+   const wasExpanded=await codex.locator('.quota-disclosure').evaluate(el=>el.open);
+   if(!wasExpanded)await codex.locator('.quota-title').click();
+   const presentation=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/estimate-presentation.json'),'utf8'));
+   const originalQuota=await page.evaluate(()=>structuredClone(quotaFixture.rows[0]));
+   const displayCases=[presentation.cases[0],presentation.cases[3],presentation.cases[4],presentation.cases[1],presentation.cases[10]];
+   for(const [index,row] of displayCases.entries()) {
+     await page.evaluate(async({row,record})=>{
+       Object.assign(quotaFixture.rows[0],{plan:row.quota.plan??'pro',windows:row.quota.windows});
+       quotaFixture.records=[{...record,accountKey:'codex:c',sourceIds:['c']}];await loadDashboard();
+     },{row,record:presentation.record});
+     const entry=codex.locator('[data-estimate]');
+     if(index===0)await entry.click();
+     await page.waitForFunction(expected=>{
+       const rows=[...document.querySelectorAll('#quota-dialog .estimate-result > .between')];
+       return rows.length===expected+1;
+     },row.fields.length);
+     const result=page.locator('#quota-dialog .estimate-result');
+     for(const [field,label] of [['fiveHourValue','本段 5h API 等价值'],['weeklyValue','7d 推算 · 同期消耗比例'],['weeklyRatioValue','7d 推算 · 近期容量倍率']])assert.equal(await result.getByText(label,{exact:true}).count(),row.fields.includes(field)?1:0,row.name);
+     if(!row.fields.includes('weeklyValue')) {
+       assert.doesNotMatch(await result.textContent(),/7d 直接估值|同期消耗比例/);
+     }
+     if(!row.fields.includes('fiveHourValue')) {
+       assert.doesNotMatch(await result.textContent(),/本段 5h|容量倍率|倍率学习中/);
+     }
+     if(index<2)await result.screenshot({path:path.join(output,`valuation-${index===0?'plus':'weekly'}-${surface}.png`)});
+     await page.locator('#quota-close').click();
+     await page.waitForFunction(expected=>document.querySelector('[data-estimate="codex:c"]')?.innerText.replace(/\s+/g,' ').trim()===expected,row.summary.replace(/\s+/g,' '));
+     const help=await entry.evaluate(el=>el.getAttribute('title')??el.getAttribute('data-hint'));
+     if(!row.fields.includes('weeklyValue'))assert.doesNotMatch(help,/7d 同期|周额度消耗比例/);
+     if(!row.fields.includes('fiveHourValue'))assert.doesNotMatch(help,/5h|容量倍率/);
+     if(index<displayCases.length-1)await entry.click();
+   }
+   await page.evaluate(async original=>{Object.assign(quotaFixture.rows[0],original);quotaFixture.records=[];await loadDashboard();},originalQuota);
+   if(!wasExpanded)await codex.locator('.quota-title').click();
    assert.equal(await agy.locator('.provider-mark').getAttribute('data-provider'),'antigravity');
    const resetCheck=await page.evaluate(()=>{
      const now=1800000000,window=quotaFixture.rows[0].windows[0],original=JSON.stringify(window),node=document.querySelector('[data-quota="codex:c"] [data-reset-at]');
@@ -158,6 +192,6 @@ function fixture(){
    for(const colorScheme of ['light','dark']){await page.emulateMedia({colorScheme});await page.screenshot({path:path.join(output,surface+'-'+colorScheme+'.png')});}
    assert.deepEqual(errors,[]);await page.close();
   }
-  console.log('Quota UI: agy compact/expanded, ordering retry, manual start/stop, live reset confirmation/restart, source validation, history, focus and panel Escape and shared-home sampling/source-level automatic consent and settings sync passed on both surfaces');
+  console.log('Quota UI: account-specific valuation fields, live plan/window changes, agy compact/expanded, ordering retry, manual start/stop, live reset confirmation/restart, source validation, history, focus, panel Escape and shared-home automatic consent/settings sync passed on both surfaces');
  }finally{await browser?.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});

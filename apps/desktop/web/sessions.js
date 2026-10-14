@@ -1,13 +1,7 @@
 /* Live session rows, shared by the details window and the floating panel so both
    surfaces stay identical. Fills the static #live-sessions markup of either page. */
 (() => {
-  const mark = path => `<svg viewBox="0 0 24 24"><path d="${path}"/></svg>`;
-  const phases = {
-    needsInput:[mark('M12 5v9m0 4h.01'),'等待输入'], failed:[mark('m6 6 12 12M6 18 18 6'),'执行失败'],
-    working:[mark('M8 5v14l11-7Z'),'进行中'], thinking:[mark('M12 3 9 9 3 12l6 3 3 6 3-6 6-3-6-3Z'),'思考中'],
-    tool:[mark('m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18'),'执行工具'], complete:[mark('m5 12 4 4L19 6'),'已完成'],
-    interrupted:[mark('M8 5v14M16 5v14'),'已中断'], unknown:[mark('M9 8a3 3 0 1 1 5 2c-2 1-2 2-2 4m0 4h.01'),'状态待确认'],
-  };
+  const phases = Object.fromEntries(Object.entries({idle:'空闲',needsInput:'等待输入',failed:'执行失败',working:'进行中',thinking:'思考中',tool:'执行工具',complete:'已完成',interrupted:'已中断',unknown:'状态待确认'}).map(([key,label])=>[key,[uiIcon(key),label]]));
   const escape = value => window.AieyesUI.escapeHTML(value);
   globalThis.renderLiveSessions = info => {
     const summary = document.querySelector('#session-summary');
@@ -15,6 +9,9 @@
     const warning = document.querySelector('#session-warning');
     if (!summary || !list || !warning) return;
     summary.textContent = info.summary;
+    const indicator=document.querySelector('#session-indicator');
+    if(indicator){const phase=info.unavailable?'unknown':Object.hasOwn(phases,info.phase)?info.phase:'idle';indicator.dataset.phase=phase;indicator.innerHTML=phases[phase][0];}
+
     list.innerHTML = info.sessions.map(s => {
       const [symbol, label] = phases[s.phase] || phases.unknown;
       return `<div class="live-row"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(({codex:'Codex',claude:'Claude Code',antigravity:'AGY'}[s.provider]||s.source||'Agent')+' · '+(s.machine||'本机'))}</strong><small>会话 ${escape(s.id.slice(0,8))} · ${new Intl.RelativeTimeFormat(undefined,{numeric:'auto'}).format(-Math.max(0,Math.round((Date.now()/1000-s.updatedAt)/60)),'minute')}</small></div><span>${label}</span></div>`;

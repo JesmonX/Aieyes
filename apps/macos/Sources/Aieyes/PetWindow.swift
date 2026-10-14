@@ -19,19 +19,20 @@ struct PetScaleControl: View {
 }
 
 @MainActor private enum PetSprites {
-    static var key: String?
-    static var cached: [CGImage] = []
-    static func frames(for asset: ImportedPet?) -> [CGImage] {
-        guard let asset else { key = nil; cached = []; return [] }
-        if key == asset.spritePath { return cached }
-        key = asset.spritePath; cached = []
+    private final class Frames { let images: [CGImage]; init(_ images: [CGImage]) { self.images = images } }
+    private static let cache: NSCache<NSString, Frames> = { let cache = NSCache<NSString, Frames>(); cache.totalCostLimit = 48 * 1024 * 1024; cache.countLimit = 36; return cache }()
+    static func frames(for asset: ImportedPet?, row: Int) -> [CGImage] {
+        guard let asset, row >= 0, row < asset.rows else { return [] }
+        let key = (asset.spritePath + ":" + String(row)) as NSString
+        if let cached = cache.object(forKey: key) { return cached.images }
         guard let image = NSImage(contentsOfFile: asset.spritePath),
               let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
               cg.width == asset.cellWidth * 8, cg.height == asset.cellHeight * asset.rows else { return [] }
-        cached = (0..<(8 * asset.rows)).compactMap {
-            cg.cropping(to: CGRect(x: ($0 % 8) * asset.cellWidth, y: ($0 / 8) * asset.cellHeight, width: asset.cellWidth, height: asset.cellHeight))
+        let frames = (0..<8).compactMap {
+            cg.cropping(to: CGRect(x: $0 * asset.cellWidth, y: row * asset.cellHeight, width: asset.cellWidth, height: asset.cellHeight))
         }
-        return cached
+        cache.setObject(Frames(frames), forKey: key, cost: cg.bytesPerRow * cg.height)
+        return frames
     }
 }
 // The timer checks a monotonic timeline; only actual frame changes publish to SwiftUI.
@@ -42,7 +43,7 @@ struct PetScaleControl: View {
     private var reduced = false
     private var timer: Timer?
     func configure(_ state: PetState, playing: Bool, reduced: Bool) {
-        if self.state.key != state.key { start = ProcessInfo.processInfo.systemUptime }
+        if self.state.animationIdentity != state.animationIdentity { start = ProcessInfo.processInfo.systemUptime }
         self.state = state; self.reduced = reduced
         tick()
         if playing && !reduced {
@@ -71,10 +72,11 @@ private struct PetSpriteView: View {
     @StateObject private var clock = PetAnimationClock()
     private func configure() { clock.configure(state, playing: enabled, reduced: reduced) }
     var body: some View {
-        let frames = PetSprites.frames(for: asset)
+        let frames = enabled ? PetSprites.frames(for: asset, row: state.row) : []
+        let index = clock.frame - state.row * 8
         Group {
-            if frames.indices.contains(clock.frame) {
-                Image(decorative: frames[clock.frame], scale: 1).resizable().interpolation(.high)
+            if frames.indices.contains(index) {
+                Image(decorative: frames[index], scale: 1).resizable().interpolation(.high)
             } else { Text("请导入桌宠").font(.system(size: 13 * scale)) }
         }.frame(width: 132 * scale, height: 143 * scale)
             .onAppear { configure() }
@@ -107,6 +109,8 @@ private struct PetView: View {
 private final class PetPanel: NSPanel { override var canBecomeKey: Bool { false } }
 private final class PetHost: NSHostingView<PetView> {
     var open: ((NSView, Bool) -> Void)?
+    var settings: (() -> Void)?
+    var petSettings: (() -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(point) ? self : nil }
     private var press: (point: NSPoint, origin: NSPoint)?
@@ -125,7 +129,7 @@ private final class PetHost: NSHostingView<PetView> {
     override func mouseUp(with event: NSEvent) {
         guard let window, press != nil else { return }
         press = nil
-        if dragged { PetWindowController.clamp(window); UserDefaults.standard.set(NSStringFromPoint(window.frame.origin), forKey: "aieyes.pet.position") }
+        if dragged { PetWindowController.clamp(window, snap: true, preferredPoint: NSEvent.mouseLocation); UserDefaults.standard.set(NSStringFromPoint(window.frame.origin), forKey: "aieyes.pet.position") }
         else { open?(self, true) }
     }
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -134,6 +138,8 @@ private final class PetHost: NSHostingView<PetView> {
         menu.autoenablesItems = false
         let open = NSMenuItem(title: "打开面板", action: #selector(openPanel), keyEquivalent: ""); open.target=self; menu.addItem(open)
         open.isEnabled = self.open != nil
+        let settings = NSMenuItem(title: "设置", action: #selector(openSettings), keyEquivalent: ""); settings.target = self; menu.addItem(settings)
+        let petSettings = NSMenuItem(title: "桌宠设置", action: #selector(openPetSettings), keyEquivalent: ""); petSettings.target = self; menu.addItem(petSettings)
         let hide = NSMenuItem(title: "隐藏宠物（可在设置中恢复）", action: #selector(hidePet), keyEquivalent: ""); hide.target=self; menu.addItem(hide)
         return menu
     }
@@ -142,6 +148,8 @@ private final class PetHost: NSHostingView<PetView> {
     }
     override func accessibilityPerformPress() -> Bool { open?(self, false); return true }
     @objc private func openPanel() { open?(self, false) }
+    @objc private func openSettings() { settings?() }
+    @objc private func openPetSettings() { petSettings?() }
     @objc private func hidePet() { UserDefaults.standard.set(false, forKey: "aieyes.pet.enabled") }
 }
 @MainActor final class PetWindowController {
@@ -155,6 +163,8 @@ private final class PetHost: NSHostingView<PetView> {
         panel.title="Aieyes 宠物"; panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
         panel.level = .floating; panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.hidesOnDeactivate=false
         let host=PetHost(rootView: PetView(model:model)); host.sizingOptions=[]; host.open=open; panel.contentView=host
+        host.settings = { [weak model] in model?.openSettings() }
+        host.petSettings = { [weak model] in model?.openSettings(.init(category: "general", section: "desktop")) }
         host.setAccessibilityRole(.button); host.setAccessibilityLabel("Aieyes 宠物，单击打开面板")
         if let saved=UserDefaults.standard.string(forKey:"aieyes.pet.position") { panel.setFrameOrigin(NSPointFromString(saved)) }
         else if let screen=NSScreen.main { panel.setFrameOrigin(NSPoint(x:screen.visibleFrame.maxX-168,y:screen.visibleFrame.midY)) }
@@ -178,9 +188,102 @@ private final class PetHost: NSHostingView<PetView> {
         Self.clamp(panel)
     }
     private func sync() { resize(); if UserDefaults.standard.bool(forKey:"aieyes.pet.enabled") { panel.orderFrontRegardless() } else { panel.orderOut(nil) } }
-    static func clamp(_ window:NSWindow) {
-        guard let screen=NSScreen.screens.first(where:{$0.visibleFrame.intersects(window.frame)}) ?? NSScreen.main else { return }
-        let area=screen.visibleFrame, frame=window.frame
-        window.setFrameOrigin(NSPoint(x:min(max(frame.minX,area.minX),max(area.minX,area.maxX-frame.width)), y:min(max(frame.minY,area.minY),max(area.minY,area.maxY-frame.height))))
+    static func clamp(_ window: NSWindow, snap: Bool = false, preferredPoint: NSPoint? = nil) {
+        window.setFrameOrigin(PetWindowGeometry.origin(frame: window.frame, areas: NSScreen.screens.map(\.visibleFrame), snap: snap, preferredPoint: preferredPoint))
+    }
+}
+
+enum PetWindowGeometry {
+    static func origin(frame: NSRect, areas: [NSRect], snap: Bool, preferredPoint: NSPoint? = nil) -> NSPoint {
+        let center = NSPoint(x: frame.midX, y: frame.midY)
+        let ranked = areas.sorted {
+            let a = $0.intersection(frame), b = $1.intersection(frame)
+            let left = a.isNull ? 0 : a.width * a.height, right = b.isNull ? 0 : b.width * b.height
+            if left != right { return left > right }
+            return hypot($0.midX - center.x, $0.midY - center.y) < hypot($1.midX - center.x, $1.midY - center.y)
+        }
+        guard let area = preferredPoint.flatMap({ point in areas.first { $0.contains(point) } }) ?? ranked.first else { return frame.origin }
+        let right = max(area.minX, area.maxX - frame.width), top = max(area.minY, area.maxY - frame.height)
+        var point = NSPoint(x: min(max(frame.minX, area.minX), right), y: min(max(frame.minY, area.minY), top))
+        if snap {
+            if point.x - area.minX <= 48 { point.x = area.minX } else if right - point.x <= 48 { point.x = right }
+            if point.y - area.minY <= 48 { point.y = area.minY } else if top - point.y <= 48 { point.y = top }
+        }
+        return point
+    }
+}
+
+private struct PetPreviewViewportKey: EnvironmentKey {
+    static let defaultValue: CGRect? = nil
+}
+extension EnvironmentValues {
+    var petPreviewViewport: CGRect? {
+        get { self[PetPreviewViewportKey.self] }
+        set { self[PetPreviewViewportKey.self] = newValue }
+    }
+}
+enum PetPreviewVisibility {
+    static func isVisible(_ frame: CGRect, viewport: CGRect, enclosing: CGRect?) -> Bool {
+        let clipped = viewport.intersection(enclosing ?? viewport).intersection(frame)
+        return !clipped.isNull && clipped.width > 0 && clipped.height > 0
+    }
+}
+
+struct PetLibraryView: View {
+    @ObservedObject var model: AppModel
+    @State private var input = ""
+    @Environment(\.surfaceActive) private var active
+    private var height: CGFloat { min(260, max(100, CGFloat(model.petLibrary.count) * 96)) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("桌宠资源", text: $input, prompt: Text("粘贴资源链接、npx 命令或 npm 包名"), axis: .vertical).labelsHidden().textFieldStyle(.roundedBorder).lineLimit(2...4)
+            HStack {
+                Button(model.petImportBusy ? "导入中…" : "导入") { let value = input; Task { await model.importPet(input: value); if model.petImportError == nil && input == value { input = "" } } }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.petImportBusy || model.petSelectionBusy != nil)
+                Button("选择本地文件…") {
+                    let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+                    panel.title = "选择桌宠 ZIP 或 pet.json"; panel.showsHiddenFiles = true
+                    if panel.runModal() == .OK, let url = panel.url { Task { await model.importPet(input: url.path) } }
+                }.disabled(model.petImportBusy || model.petSelectionBusy != nil)
+                if model.petImportBusy || (model.petLibraryBusy && model.petLibrary.isEmpty) { ProgressView().controlSize(.small) }
+            }
+            Text("只下载与解析素材，不运行 npx 或安装脚本。导入后立即启用，已添加的桌宠保留在下方。").font(AppFont.secondary).foregroundStyle(.secondary)
+            if let error = model.petImportError { Text(error).font(AppFont.secondary).foregroundStyle(Palette.danger).textSelection(.enabled) }
+            if let error = model.petLibraryError { HStack { Text(error).foregroundStyle(Palette.warn); Button("重试读取") { Task { await model.loadPetLibrary() } } }.font(AppFont.secondary) }
+            if !model.petLibrary.isEmpty {
+                GeometryReader { viewport in
+                    ScrollView { LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(model.petLibrary, id: \.libraryKey) { pet in
+                            PetLibraryRow(model: model, pet: pet, viewport: viewport.frame(in: .global), playing: active)
+                        }
+                    }.padding(4) }
+                }.frame(height: height)
+            }
+            ForEach(model.petLibraryWarnings) { warning in Text(warning.path + "：" + warning.error).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled) }
+        }.task { await model.loadPetLibrary() }
+    }
+}
+
+private struct PetLibraryRow: View {
+    @ObservedObject var model: AppModel
+    let pet: ImportedPet, viewport: CGRect, playing: Bool
+    @Environment(\.petPreviewViewport) private var enclosingViewport
+    @State private var visible = false
+    private var selected: Bool { model.importedPet?.libraryKey == pet.libraryKey }
+    var body: some View {
+        HStack(spacing: 10) {
+            Group { if visible && playing { PetSpriteView(state: .idle, asset: pet, scale: 0.5, enabled: true) } else { Color.clear.frame(width: 66, height: 71.5) } }.accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(pet.displayName).lineLimit(2).help(pet.displayName)
+                if let creator = pet.creator, !creator.isEmpty { Text(creator).font(AppFont.secondary).foregroundStyle(.secondary) }
+                if let source = pet.source, !source.isEmpty { Text(source).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(source) }
+                if let date = pet.importedAt { Text(date.replacingOccurrences(of: "T", with: " ").prefix(16)).font(AppFont.secondary).foregroundStyle(.secondary) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Button(selected ? "使用中" : model.petSelectionBusy == pet.libraryKey ? "切换中…" : "使用") { Task { await model.selectPet(pet) } }.disabled(selected || model.petImportBusy || model.petSelectionBusy != nil)
+        }.padding(8).background(selected ? Palette.accent.opacity(0.08) : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
+        .background { GeometryReader { geometry in
+            let showing = PetPreviewVisibility.isVisible(geometry.frame(in: .global), viewport: viewport, enclosing: enclosingViewport)
+            Color.clear.onChange(of: showing, initial: true) { _, next in visible = next }
+        } }
+        .onDisappear { visible = false }
     }
 }

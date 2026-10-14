@@ -2,6 +2,47 @@ import Foundation
 
 @main struct VerifyConfiguration {
     @MainActor static func main() async throws {
+        var baseDraft = Settings()
+        baseDraft.accounts = [AgentAccount(id: "a", name: "Original", provider: "codex")]
+        baseDraft.sources = [AgentSource(id: "s", name: "Directory", provider: "codex", accountId: "a", path: "/fixture")]
+        var pending = baseDraft
+        pending.modelMappings["pending"] = "vendor/model"
+        pending.accounts[0].name = "My edited name"
+        pending.proxy.mode = "direct"
+        var login = baseDraft
+        login.accounts[0].identityKey = "fixture-identity"
+        login.accounts.append(AgentAccount(id: "b", name: "New login", provider: "codex"))
+        login.sources[0].codexHomeId = "managed"
+        let rebased = SettingsDraftMerge.rebase(base: baseDraft, draft: pending, saved: login)
+        precondition(rebased.modelMappings["pending"] == "vendor/model" && rebased.proxy.mode == "direct")
+        precondition(rebased.accounts.count == 2 && rebased.accounts[0].name == "My edited name")
+        precondition(rebased.accounts[0].identityKey == "fixture-identity" && rebased.sources[0].codexHomeId == "managed")
+        var deleted = pending; deleted.accounts.removeAll()
+        let retainedNew = SettingsDraftMerge.rebase(base: baseDraft, draft: deleted, saved: login)
+        precondition(retainedNew.accounts.map(\.id) == ["b"], "An explicit removal and a newly authenticated account must both survive")
+        var submitted = baseDraft
+        submitted.proxy = ProxySettings(mode: "manual", url: "  http://127.0.0.1:7890  ")
+        var normalized = submitted
+        normalized.proxy.url = "http://127.0.0.1:7890"
+        var stillEditing = submitted
+        stillEditing.modelMappings["unsaved"] = "vendor/pending"
+        let acknowledged = SettingsDraftMerge.rebase(base: baseDraft, draft: stillEditing, saved: normalized, submitted: submitted)
+        precondition(acknowledged.proxy == normalized.proxy && acknowledged.modelMappings["unsaved"] == "vendor/pending", "Save normalization must acknowledge submitted input without erasing an unrelated draft")
+        stillEditing.proxy.url = "http://127.0.0.1:7891"
+        let laterInput = SettingsDraftMerge.rebase(base: baseDraft, draft: stillEditing, saved: normalized, submitted: submitted)
+        precondition(laterInput.proxy.url == stillEditing.proxy.url, "Input made while saving must stay queued")
+        var submittedReversal = baseDraft
+        submittedReversal.refreshSeconds = baseDraft.refreshSeconds + 1
+        submittedReversal.historyRefreshSeconds = 90
+        let reverted = SettingsDraftMerge.rebase(base: baseDraft, draft: baseDraft, saved: submittedReversal, submitted: submittedReversal, draftAtSubmission: submittedReversal)
+        precondition(reverted == baseDraft, "Returning the entire draft to its pre-save value, including an absent optional field, must remain a new edit")
+        let separateEditor = SettingsDraftMerge.rebase(base: baseDraft, draft: baseDraft, saved: submittedReversal, submitted: submittedReversal, draftAtSubmission: baseDraft)
+        precondition(separateEditor == submittedReversal, "An unchanged main draft still accepts changes from a separate editor")
+        var optionalBase = baseDraft; optionalBase.historyRefreshSeconds = 90
+        var cleared = optionalBase; cleared.historyRefreshSeconds = nil
+        var canonical = cleared; canonical.historyRefreshSeconds = 300
+        let acknowledgedClear = SettingsDraftMerge.rebase(base: optionalBase, draft: cleared, saved: canonical, submitted: cleared, draftAtSubmission: cleared)
+        precondition(acknowledgedClear.historyRefreshSeconds == 300, "Core normalization also acknowledges a submitted optional-field removal")
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("aieyes-config-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }

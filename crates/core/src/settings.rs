@@ -738,7 +738,7 @@ mod tests {
         let mut legacy: Settings = serde_json::from_value(json!({"version":7,"hosts":[{"id":"old","target":"fixture.invalid","enabled":false}],"localMonitor":{"enabled":false}})).unwrap();
         assert!(legacy.local_device_enabled && legacy.hosts[0].monitoring_enabled);
         legacy.migrate();
-        assert_eq!(legacy.version, 9);
+        assert_eq!(legacy.version, 10);
         assert!(legacy.monitored_hosts().iter().all(|host| !host.enabled));
         legacy.local_device_enabled = false;
         legacy.local_monitor.enabled = true;

@@ -1,12 +1,11 @@
-//! One acquisition path for all pets, including the offline first-run package.
-use crate::{file_lock::FileLock, store::Store};
+//! Validated assets shared by file, URL and npm imports. No installer is executed.
+mod acquire;
+mod library;
+use crate::store::Store;
 use anyhow::{Context, Result, bail, ensure};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use image::{ImageFormat, ImageReader};
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -18,7 +17,6 @@ const BUNDLED: &[u8] = include_bytes!("../assets/yuexinmiao1.codex-pet.zip");
 const MAX_PACKAGE: u64 = 64 * 1024 * 1024;
 const MAX_IMAGE: u64 = 32 * 1024 * 1024;
 const MAX_MANIFEST: u64 = 64 * 1024;
-const CURRENT: &str = "pet.current.v1";
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +28,12 @@ struct Manifest {
     spritesheet_path: String,
     #[serde(default = "v1")]
     sprite_version_number: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    creator: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    author: Option<Value>,
 }
 fn v1() -> u8 {
     1
@@ -38,6 +42,10 @@ fn v1() -> u8 {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportedPet {
+    #[serde(default)]
+    pub library_id: String,
+    #[serde(default)]
+    pub imported_at: String,
     pub id: String,
     pub display_name: String,
     pub description: String,
@@ -51,9 +59,32 @@ pub struct ImportedPet {
     pub cell_height: u32,
     pub source: Option<String>,
     pub creator: Option<String>,
+    #[serde(default)]
+    pub recovered: bool,
+}
+
+#[derive(Debug)]
+struct Acquisition {
+    manifest: Manifest,
+    bytes: Vec<u8>,
+    source: Option<String>,
+    creator: Option<String>,
+}
+fn creator_name(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(|v| {
+            v.as_str()
+                .or_else(|| v["name"].as_str())
+                .or_else(|| v["displayName"].as_str())
+                .or_else(|| v["username"].as_str())
+        })
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.len() <= 512)
+        .map(str::to_owned)
 }
 
 fn bounded(path: &Path, max: u64) -> Result<Vec<u8>> {
+    crate::operations::check()?;
     let meta = fs::symlink_metadata(path)?;
     ensure!(
         meta.is_file() && !meta.file_type().is_symlink(),
@@ -103,6 +134,7 @@ fn archive(bytes: &[u8]) -> Result<(Manifest, Vec<u8>)> {
     let mut files = BTreeMap::new();
     let mut expanded = 0u64;
     for i in 0..zip.len() {
+        crate::operations::check()?;
         let file = zip.by_index(i)?;
         ensure!(
             file.unix_mode().is_none_or(|m| m & 0o170000 != 0o120000),
@@ -159,6 +191,7 @@ fn unpacked(path: &Path) -> Result<(Manifest, Vec<u8>)> {
     Ok((m, bounded(&sheet, MAX_IMAGE)?))
 }
 fn normalize(m: &Manifest, bytes: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
+    crate::operations::check()?;
     let format = image::guess_format(bytes).context("图集不是有效图片")?;
     ensure!(
         matches!(format, ImageFormat::Png | ImageFormat::WebP),
@@ -185,16 +218,13 @@ fn normalize(m: &Manifest, bytes: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
     limits.max_alloc = Some(128 * 1024 * 1024);
     reader.limits(limits);
     let image = reader.decode().context("图集解码失败")?.to_rgba8();
+    crate::operations::check()?;
     let mut png = Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(image).write_to(&mut png, ImageFormat::Png)?;
     Ok((png.into_inner(), width / 8, height / rows))
 }
-fn selected(store: &Store) -> Result<Option<String>> {
-    Ok(store
-        .db
-        .query_row("SELECT value FROM kv WHERE key=?1", [CURRENT], |r| r.get(0))
-        .optional()?)
-}
+// The library commit is short and follows acquisition/normalization. A slow
+// download never holds either the library lock or the configuration lane.
 fn install(
     store: &Store,
     m: Manifest,
@@ -202,55 +232,16 @@ fn install(
     bundled: bool,
     only_if_empty: bool,
 ) -> Result<ImportedPet> {
-    let (png, cell_width, cell_height) = normalize(&m, &bytes)?;
-    let sprite_hash = format!("{:x}", Sha256::digest(&png));
-    let content_hash =
-        crate::models::hash(&format!("{}:{sprite_hash}", serde_json::to_string(&m)?));
-    let root = store.root.join("pets");
-    fs::create_dir_all(&root)?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(root.join("import.lock"))?;
-    // Imports are infrequent; SQLite serializes the selected-pet pointer across engines.
-    let _lock = FileLock::try_exclusive(lock).context("另一项桌宠导入正在进行，请重试")?;
-    if only_if_empty && let Some(value) = selected(store)? {
-        return Ok(serde_json::from_str(&value)?);
-    }
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_nanos();
-    let directory = root.join(format!("{content_hash}-{stamp}"));
-    fs::create_dir(&directory)?;
-    let sheet = directory.join("spritesheet.png");
-    let result = (|| {
-        let mut file = fs::File::create(&sheet)?;
-        file.write_all(&png)?;
-        file.sync_all()?;
-        let pet = ImportedPet {
-            id: m.id,
-            display_name: m.display_name,
-            description: m.description,
-            content_hash,
-            sprite_hash,
-            sprite_path: sheet.to_string_lossy().into_owned(),
-            sprite_version_number: m.sprite_version_number,
-            columns: 8,
-            rows: if m.sprite_version_number == 2 { 11 } else { 9 },
-            cell_width,
-            cell_height,
+    library::install(
+        store,
+        Acquisition {
+            manifest: m,
+            bytes,
             source: bundled.then(|| "https://codex-pet.org/zh/pets/yuexinmiao1/".into()),
             creator: bundled.then(|| "kiffin".into()),
-        };
-        // No renderer observes a partially written image. Failed imports leave this pointer alone.
-        store.db.execute("INSERT INTO kv(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [CURRENT, &serde_json::to_string(&pet)?])?;
-        Ok(pet)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(directory);
-    }
-    result
+        },
+        only_if_empty,
+    )
 }
 pub fn import(store: &Store, path: &Path) -> Result<ImportedPet> {
     let (m, bytes) = if path.file_name().is_some_and(|n| n == "pet.json") {
@@ -263,48 +254,55 @@ pub fn import(store: &Store, path: &Path) -> Result<ImportedPet> {
     } else {
         bail!("请选择 .zip、.codex-pet.zip 或 pet.json 文件");
     };
-    install(store, m, bytes, false, false)
+    library::install(
+        store,
+        Acquisition {
+            manifest: m,
+            bytes,
+            source: Some(path.to_string_lossy().into_owned()),
+            creator: None,
+        },
+        false,
+    )
+}
+pub fn import_input(store: &Store, input: &str) -> Result<ImportedPet> {
+    crate::operations::check()?;
+    let source = acquire::parse_input(input)?;
+    if let acquire::Input::Local(path) = source {
+        return import(store, &path);
+    }
+    // Client creation reads the app's local network preferences, never account
+    // proxy values. Local files don't initialize a network client.
+    let fetcher = acquire::HttpFetcher::new(&store.settings()?.proxy)?;
+    let acquired = acquire::resolve(source, &fetcher)?;
+    library::install(store, acquired, false)
 }
 pub fn current(store: &Store, include_image: bool) -> Result<Value> {
-    let result = (|| -> Result<Value> {
-        let raw = match selected(store)? {
-            Some(raw) => raw,
-            None => {
-                let (m, bytes) = archive(BUNDLED)?;
-                serde_json::to_string(&install(store, m, bytes, true, true)?)?
-            }
-        };
-        let pet: ImportedPet = serde_json::from_str(&raw)?;
-        let path = Path::new(&pet.sprite_path);
-        ensure!(
-            path.starts_with(store.root.join("pets")),
-            "桌宠缓存路径无效"
-        );
-        let png = bounded(path, 128 * 1024 * 1024).context("桌宠缓存丢失，请重新导入文件")?;
-        ensure!(
-            format!("{:x}", Sha256::digest(&png)) == pet.sprite_hash,
-            "桌宠缓存损坏，请重新导入文件"
-        );
-        let mut out = json!({"pet":pet,"error":null});
-        if include_image {
-            out["imageDataUrl"] =
-                Value::String(format!("data:image/png;base64,{}", STANDARD.encode(png)));
-        }
-        Ok(out)
-    })();
-    Ok(result.unwrap_or_else(|e| json!({"pet":null,"error":format!("{e:#}")})))
+    library::current(store, include_image)
+}
+pub fn list(store: &Store) -> Result<Value> {
+    library::list(store)
+}
+pub fn select(store: &Store, library_id: &str) -> Result<Value> {
+    library::select(store, library_id)
+}
+pub fn asset(store: &Store, library_id: &str) -> Result<Value> {
+    library::asset(store, library_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture(version: u8, format: ImageFormat) -> (Manifest, Vec<u8>) {
+    pub(super) fn fixture(version: u8, format: ImageFormat) -> (Manifest, Vec<u8>) {
         let m = Manifest {
             id: "test".into(),
             display_name: "测试".into(),
             description: String::new(),
             spritesheet_path: "spritesheet.png".into(),
             sprite_version_number: version,
+            source: None,
+            creator: None,
+            author: None,
         };
         let image = image::DynamicImage::new_rgba8(96, 13 * if version == 2 { 11 } else { 9 });
         let mut bytes = Cursor::new(Vec::new());
@@ -337,7 +335,7 @@ mod tests {
         assert_eq!(current(&store, false).unwrap()["pet"], first["pet"]);
         fs::write(first["pet"]["spritePath"].as_str().unwrap(), b"corrupt").unwrap();
         assert!(current(&store, false).unwrap()["error"].is_string());
-        assert!(selected(&store).unwrap().is_some());
+        assert!(library::selected(&store).unwrap().is_some());
     }
     #[test]
     fn successful_import_replaces_and_failure_preserves_selection() {

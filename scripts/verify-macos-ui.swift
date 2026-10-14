@@ -20,10 +20,33 @@ import Foundation
             let quota = try JSONDecoder().decode(Quota.self, from: JSONSerialization.data(withJSONObject: raw))
             precondition(EstimatePresentation.windows(quota).map(\.id) == row.expected, row.name)
         }
+        let presentation = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/estimate-presentation.json"))) as! [String: Any]
+        let recordBase = presentation["record"] as! [String: Any]
+        let fieldNames = ["five": "fiveHourValue", "week": "weeklyValue", "ratio": "weeklyRatioValue"]
+        for row in presentation["cases"] as! [[String: Any]] {
+            let name = row["name"] as! String
+            let group = row["group"] as? String
+            let quota: Quota?
+            if let raw = row["quota"] as? [String: Any] {
+                let base: [String: Any] = ["sourceId": "s", "accountId": "fixture", "name": "Fixture", "updatedAt": 2, "origin": "fixture"]
+                quota = try JSONDecoder().decode(Quota.self, from: JSONSerialization.data(withJSONObject: base.merging(raw) { _, next in next }))
+            } else { quota = nil }
+            let records = try ((row["records"] as? [[String: Any]]) ?? [[:]]).map { raw in
+                try JSONDecoder().decode(QuotaEstimate.self, from: JSONSerialization.data(withJSONObject: recordBase.merging(raw) { _, next in next }))
+            }
+            precondition(EstimatePresentation.summary(records, quota: quota, group: group) == row["summary"] as! String, name)
+            let fields = EstimatePresentation.entries(records, quota: quota, group: group).map { fieldNames[$0.id]! }
+            precondition(fields == row["fields"] as! [String], name)
+            let visible = EstimatePresentation.visibility(quota, records: records, group: group)
+            if !visible.five { precondition(!visible.help.contains("5h") && !visible.help.contains("容量倍率"), name) }
+            if !visible.direct { precondition(!visible.help.contains("同期") && !visible.help.contains("周额度消耗比例"), name) }
+        }
         let panelAccounts = (0..<20).map { AgentAccount(id: "a\($0)", name: "账户 \($0)", provider: "codex", quotaEnabled: true) }
         let order = panelAccounts.reversed().map(\.key)
         let defaults = PanelAccountPreference.selections("{}", accounts: panelAccounts, order: order)
         precondition(defaults["codex"] == Array(order.prefix(5)))
+        let manualAll = PanelAccountPreference.encode(["codex": panelAccounts.map(\.key)])
+        precondition(PanelAccountPreference.selections(manualAll, accounts: panelAccounts, order: order)["codex"]?.count == 20, "Manual panel selection is unlimited")
         let empty = PanelAccountPreference.selections("{\"codex\":[]}", accounts: panelAccounts, order: order)
         precondition(empty["codex"]?.isEmpty == true)
         let malformed = PanelAccountPreference.selections("invalid", accounts: panelAccounts, order: order)
@@ -34,7 +57,7 @@ import Foundation
         precondition(PanelAccountPreference.selections(PanelAccountPreference.encode(chosen), accounts: archivedAccounts, order: order)["codex"]?.isEmpty == true)
         let renamed = [AgentAccount(id: "replacement", name: "替换账户", provider: "agy", quotaEnabled: true)]
         let stale = PanelAccountPreference.encode(["agy": ["agy:removed"]])
-        precondition(PanelAccountPreference.selections(stale, accounts: renamed, order: [])["agy"] == ["agy:replacement"])
+        precondition(PanelAccountPreference.selections(stale, accounts: renamed, order: [])["agy"] == [], "An unavailable manual choice must not fall back to another account")
         precondition(PanelAccountPreference.selections(PanelAccountPreference.encode(["agy": []]), accounts: renamed, order: [])["agy"] == [])
         precondition(PanelAccountPreference.selections(PanelAccountPreference.encode(["agy": []], automatic: ["agy"]), accounts: renamed, order: [])["agy"] == ["agy:replacement"])
         let preferenceSuite = "aieyes-antigravity-" + UUID().uuidString
@@ -120,6 +143,13 @@ for line in sys.stdin:
         while os.path.exists(root+'/hold-account-status') and not os.path.exists(root+'/release-account-status') and time.monotonic()<deadline: time.sleep(.01)
         response['result']=json.load(open(root+'/account-status.json')) if os.path.exists(root+'/account-status.json') else []
     elif method=='accounts.status.refresh': response['error']=dict(message='不应再次检查已确认的登录')
+    elif method=='accounts.deployments.sync':
+        if os.path.exists(root+'/hold-deployment-sync'):
+            import time
+            open(root+'/deployment-sync-started','w').close()
+            deadline=time.monotonic()+10
+            while not os.path.exists(root+'/release-deployment-sync') and time.monotonic()<deadline: time.sleep(.01)
+        response['result']=dict(failedTasks=[])
     elif method=='prices.save': response['error']=dict(message='模拟价格保存失败')
     elif method=='prices.recalculate' and os.path.exists(root+'/fail-reprice'): response['error']=dict(message='模拟重算失败')
     elif method=='hosts.sample': response['error']=dict(message='模拟采样连接失败')
@@ -133,7 +163,13 @@ for line in sys.stdin:
     elif method=='network.test': response['result']=dict(testedAt=1790000000,mode='system',averageMs=73,status='ok',sites=[])
     elif method=='quotas.order.set': response['result']=req['params']['keys']
     elif method=='settings.patch':
+        if os.path.exists(root+'/hold-save'):
+            import time
+            open(root+'/save-started','w').close()
+            deadline=time.monotonic()+10
+            while not os.path.exists(root+'/release-save') and time.monotonic()<deadline: time.sleep(.01)
         previous=json.load(open(root+'/settings.json'))
+        req['params']['settings']['proxy']['url']=req['params']['settings']['proxy']['url'].strip()
         retained={h['id'] for h in req['params']['settings'].get('hosts',[])}
         removed={h['id']:h for h in previous.get('hosts',[]) if h['id'] not in retained}
         for source in req['params']['settings'].get('sources',[]):
@@ -211,13 +247,69 @@ for line in sys.stdin:
         let quotaDeadlineBeforeSaving = model.quotaNextAttempt
         let accepted = await model.saveSettingsDraft()
         precondition(accepted && !model.settingsDirty && model.settings.refreshSeconds == 60)
+        precondition(model.message != "刷新间隔无效", "Successful retry clears the previous save error")
         try await Task.sleep(nanoseconds: 30_000_000)
         let dashboardsAfterSaving = try calls("dashboard")
         precondition(dashboardsAfterSaving == dashboardsBeforeSaving && model.quotaNextAttempt == quotaDeadlineBeforeSaving, "Refresh interval saves must not reload history or reset quota polling")
+        // Continuous General editing queues a later value and keeps unrelated drafts.
+        model.settingsDraft.refreshSeconds = 321
+        model.mappingModel = "unfinished mapping"
+        try Data().write(to: root.appendingPathComponent("hold-save"))
+        let savingGeneral = Task { await model.saveGeneralConfiguration() }
+        while !FileManager.default.fileExists(atPath: root.appendingPathComponent("save-started").path) { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(model.settingsSaving)
+        model.settingsDraft.refreshSeconds = 432
+        model.settingsDraft.serverRefreshSeconds = 19
+        let queuedGeneral = Task { await model.saveGeneralConfiguration() }
+        try Data().write(to: root.appendingPathComponent("release-save"))
+        await savingGeneral.value; await queuedGeneral.value
+        precondition(model.settings.refreshSeconds == 432 && model.settings.serverRefreshSeconds == 19)
+        precondition(model.settingsDraft.refreshSeconds == 432 && model.mappingModel == "unfinished mapping" && !model.settingsSaving)
+        precondition(model.message != "已保存", "General saves use inline feedback")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("hold-save"))
+        model.mappingModel = ""
+        model.settingsDraft.refreshSeconds = 60; model.settingsDraft.serverRefreshSeconds = settings.serverRefreshSeconds
+        await model.saveGeneralConfiguration()
+        let beforeReverting = model.settings.refreshSeconds
+        for flag in ["release-save", "save-started"] { try? FileManager.default.removeItem(at: root.appendingPathComponent(flag)) }
+        try Data().write(to: root.appendingPathComponent("hold-save"))
+        model.settingsDraft.refreshSeconds = beforeReverting + 1
+        let saveBeforeReverting = Task { await model.saveGeneralConfiguration() }
+        while !FileManager.default.fileExists(atPath: root.appendingPathComponent("save-started").path) { try await Task.sleep(for: .milliseconds(10)) }
+        model.settingsDraft.refreshSeconds = beforeReverting
+        let queuedReversal = Task { await model.saveGeneralConfiguration() }
+        try Data().write(to: root.appendingPathComponent("release-save"))
+        await saveBeforeReverting.value; await queuedReversal.value
+        precondition(model.settings.refreshSeconds == beforeReverting && model.settingsDraft.refreshSeconds == beforeReverting, "Editing A to B and back to A during the save must persist the final A")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("hold-save"))
+        model.settingsDraft.proxy.url = "  http://127.0.0.1:7890  "
+        model.mappingModel = "mapping kept through normalization"
+        await model.saveGeneralConfiguration()
+        precondition(model.settingsDraft.proxy.url == "http://127.0.0.1:7890" && model.mappingModel == "mapping kept through normalization", "Normalized saves must complete without requeuing the submitted text")
+        model.settingsDraft.proxy = settings.proxy; model.mappingModel = ""
+        await model.saveGeneralConfiguration()
+        await model.deploymentSyncTask?.value
+        let synchronizationsBefore = try calls("accounts.deployments.sync")
+        try Data().write(to: root.appendingPathComponent("hold-deployment-sync"))
+        model.synchronizeAccountDeployments()
+        let syncDeadline = ProcessInfo.processInfo.systemUptime + 5
+        while !FileManager.default.fileExists(atPath: root.appendingPathComponent("deployment-sync-started").path) && ProcessInfo.processInfo.systemUptime < syncDeadline { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(FileManager.default.fileExists(atPath: root.appendingPathComponent("deployment-sync-started").path))
+        model.settingsDraft.serverRefreshSeconds = 18
+        await model.saveGeneralConfiguration()
+        precondition(model.settings.serverRefreshSeconds == 18 && !model.settingsSaving && model.deploymentSyncTask != nil, "Saving must complete while deployment synchronization is still waiting for the remote machine")
+        try Data().write(to: root.appendingPathComponent("release-deployment-sync"))
+        await model.deploymentSyncTask?.value
+        let synchronizationsAfter = try calls("accounts.deployments.sync")
+        precondition(synchronizationsAfter == synchronizationsBefore + 2, "A configuration change during synchronization must schedule one more pass")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("hold-deployment-sync"))
+        model.settingsDraft.serverRefreshSeconds = settings.serverRefreshSeconds
+        await model.saveGeneralConfiguration()
         let dashboardReadsBeforeReload = try calls("dashboard")
         await model.reload()
         let dashboardReadsAfterReload = try calls("dashboard")
         precondition(dashboardReadsAfterReload == dashboardReadsBeforeReload + 1, "The unfiltered one-day dashboard must be reused for menu data")
+        let queriesBeforeEnabling = try calls("quotas.refresh")
         model.settings.accounts[0].quotaEnabled = false
         model.settingsDraft = model.settings
         model.settingsDraft.accounts[0].quotaEnabled = true
@@ -225,7 +317,7 @@ for line in sys.stdin:
         precondition(enabled)
         try await Task.sleep(nanoseconds: 80_000_000)
         let queriesAfterEnabling = try calls("quotas.refresh")
-        precondition(queriesAfterEnabling == 2, "Enabling quota queries must trigger an immediate first read")
+        precondition(queriesAfterEnabling == queriesBeforeEnabling + 1, "Enabling quota queries must trigger an immediate first read")
         try Data().write(to: root.appendingPathComponent("hold-dashboard"))
         model.settingsDraft.sources[0].name = "Renamed fixture"
         let saveStarted = Date()
@@ -325,7 +417,7 @@ for line in sys.stdin:
         precondition(!failedRestart && model.samplingNeedsAttention && model.estimateErrors[estimate.accountKey] == "模拟采样同步失败")
         precondition(!model.panelVisible && model.estimateBusy.isEmpty)
         // Menu data is unfiltered and always today, even for an empty filtered view.
-        model.settings.menuMetric = "tokens"; model.selectedModel = "alpha"; model.range = 30
+        model.settings.menuMetric = "tokens"; model.settingsDraft.menuMetric = "tokens"; model.selectedModel = "alpha"; model.range = 30
         await model.reload()
         precondition(model.dashboard.summary.total == 77 && model.menuDashboard.summary.total == 123_456)
         precondition(model.menuText == Format.compact(123_456))
@@ -410,6 +502,16 @@ for line in sys.stdin:
         try FileManager.default.removeItem(at: root.appendingPathComponent("fail-theme"))
         await model.toggleTheme(currentlyDark: true)
         precondition(model.settings.appearance?.theme == "light" && model.settingsDraft.refreshSeconds == 321)
+        for flag in ["release-save", "save-started"] { try? FileManager.default.removeItem(at: root.appendingPathComponent(flag)) }
+        try Data().write(to: root.appendingPathComponent("hold-save"))
+        let delayedTheme = Task { await model.toggleTheme(currentlyDark: false) }
+        while !FileManager.default.fileExists(atPath: root.appendingPathComponent("save-started").path) { try await Task.sleep(for: .milliseconds(10)) }
+        var newerAppearance = model.settingsDraft.appearance ?? AppearanceSettings(); newerAppearance.theme = "system"
+        model.settingsDraft.appearance = newerAppearance
+        try Data().write(to: root.appendingPathComponent("release-save"))
+        await delayedTheme.value
+        precondition(model.settings.appearance?.theme == "dark" && model.settingsDraft.appearance?.theme == "system" && model.settingsDraft.refreshSeconds == 321, "Quick theme save must preserve a newer theme edit and unrelated drafts")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("hold-save"))
         let agyModel = AppModel(autostart: false)
         defer { agyModel.stop() }
         var agySettings = Settings()

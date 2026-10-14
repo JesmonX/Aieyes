@@ -10,6 +10,7 @@ pub enum Lane {
     Accounts,
     Dashboard,
     Quotas,
+    Wakeups,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,8 +96,11 @@ pub const METHODS: &[Method] = &[
     Method { name: "operations.prepareUpdate", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "operations.resume", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "operations.status", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "pets.asset", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "pets.current", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "pets.import", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "pets.import", lane: Lane::Network, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "pets.list", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "pets.select", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.list", lane: Lane::Main, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.recalculate", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.save", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
@@ -122,17 +126,17 @@ pub const METHODS: &[Method] = &[
     Method { name: "sources.remove", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sources.rescan", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: true, refresh_key: Some("rescan") },
     Method { name: "sources.scan", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: Some("scan") },
-    Method { name: "wakeups.delete", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
-    Method { name: "wakeups.deploy", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
-    Method { name: "wakeups.disable", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
-    Method { name: "wakeups.enable", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
-    Method { name: "wakeups.history", lane: Lane::Main, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "wakeups.list", lane: Lane::Main, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "wakeups.probe", lane: Lane::Main, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "wakeups.remove", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
-    Method { name: "wakeups.run", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
-    Method { name: "wakeups.save", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
-    Method { name: "wakeups.status", lane: Lane::Main, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "wakeups.delete", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "wakeups.deploy", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "wakeups.disable", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "wakeups.enable", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "wakeups.history", lane: Lane::Wakeups, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "wakeups.list", lane: Lane::Wakeups, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "wakeups.probe", lane: Lane::Wakeups, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "wakeups.remove", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "wakeups.run", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "wakeups.save", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "wakeups.status", lane: Lane::Wakeups, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
 ];
 #[rustfmt::skip]
 pub const PROVIDERS: &[Provider] = &[
@@ -150,7 +154,19 @@ pub const EXCLUDED_FS_TYPES: &[&str] = &["tmpfs", "devtmpfs", "squashfs", "overl
 pub const EXCLUDED_FS_PATHS: &[&str] = &["/snap", "/var/lib/snapd/snap", "/run", "/efi", "/boot/efi", "/dev", "/proc", "/sys", "/system/volumes/preboot", "/system/volumes/vm", "/system/volumes/update", "/system/volumes/xarts", "/system/volumes/iscpreboot", "/system/volumes/hardware"];
 pub const FIVE_HOUR_MINUTES: i64 = 300;
 pub const WEEK_MINUTES: i64 = 10080;
-pub const CONTRACT_HASH: &str = "37a32ab04fe2e584e82b974ee507dc582b091856f5ae7a59f057af93623a52db";
+#[rustfmt::skip]
+pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
+    &[280, 110, 110, 140, 140, 320],
+    &[120, 120, 120, 120, 120, 120, 120, 220],
+    &[120, 120, 120, 120, 120, 120, 120, 220],
+    &[140, 140, 140, 280],
+    &[140, 140, 140, 140, 280],
+    &[140, 140, 140, 140, 140, 140, 140, 240],
+    &[150, 150, 150, 150, 150, 260],
+    &[120, 120, 120, 120, 120, 220],
+    &[150, 150, 150, 150, 150, 280],
+];
+pub const CONTRACT_HASH: &str = "d16fe7635c68fdc1e494027f30cdaf6609b85224579de65ae31b4b70769fc4d7";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

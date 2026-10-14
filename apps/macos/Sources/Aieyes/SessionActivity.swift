@@ -118,23 +118,39 @@ struct SurfaceTimeline<Content: View>: View {
 // Core-selected activity and shared sprite timing; no client-side priority rules.
 struct PetState: Decodable, Equatable {
     var behavior: String, label: String, row: Int, frames: Int, frameMs: Double, key: String
+    var frameDurationsMs: [Int]? = nil
     var activeCount: Int?
     var phaseCounts: [String: Int]?
     var height: CGFloat { 168 + CGFloat(max(0, label.components(separatedBy: "\n").count - 1)) * 18 }
     static let idle = PetState(behavior: "idle", label: "空闲", row: 0, frames: 6, frameMs: 100, key: "idle")
     static let unknown = PetState(behavior: "unknown", label: "状态不可用", row: 6, frames: 6, frameMs: 100, key: "unknown")
+    var durations: [Int] {
+        if let frameDurationsMs, frameDurationsMs.count == frames, frameDurationsMs.allSatisfy({ $0 > 0 }) { return frameDurationsMs }
+        if frameDurationsMs?.isEmpty != false, CoreContract.petFrameDurations.indices.contains(row), CoreContract.petFrameDurations[row].count == frames { return CoreContract.petFrameDurations[row] }
+        return Array(repeating: max(1, Int(frameMs.isFinite ? frameMs : 100)), count: max(1, frames))
+    }
+    var animationIdentity: String { "\(key):\(row):" + durations.map(String.init).joined(separator: ",") }
     func frame(elapsed: TimeInterval, reduced: Bool) -> Int {
         if reduced { return row * 8 }
-        let ms = max(0, elapsed * 1000)
-        return row * 8 + Int(ms / frameMs) % frames
+        let values = durations, cycle = values.reduce(0, +)
+        var position = max(0, elapsed.isFinite ? elapsed * 1000 : 0).truncatingRemainder(dividingBy: Double(cycle))
+        for (index, duration) in values.enumerated() {
+            if position < Double(duration) { return row * 8 + index }
+            position -= Double(duration)
+        }
+        return row * 8
     }
 }
 
-struct ImportedPet: Decodable, Equatable {
+struct ImportedPet: Decodable, Equatable, Identifiable {
     var id: String, displayName: String, contentHash: String, spritePath: String
     var spriteVersionNumber: Int, rows: Int, cellWidth: Int, cellHeight: Int
+    var libraryId: String? = nil, importedAt: String? = nil, source: String? = nil, creator: String? = nil
+    var libraryKey: String { libraryId ?? contentHash }
 }
 struct PetSelection: Decodable { var pet: ImportedPet?; var error: String? }
+struct PetLibraryWarning: Decodable, Identifiable { var path: String, error: String; var id: String { path } }
+struct PetLibrary: Decodable { var pets: [ImportedPet]; var selectedLibraryId: String?; var warnings: [PetLibraryWarning] }
 
 // High-frequency lifecycle updates only invalidate the views that display them.
 @MainActor final class LiveSessionState: ObservableObject {

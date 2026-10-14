@@ -122,7 +122,7 @@ function browserFixture(){
     await page.locator('[data-device-collection="server"]').uncheck();
     await page.waitForFunction(()=>!state.settings.hosts.find(h=>h.id==='server').enabled&&!state.settingsCommitting);
     assert.equal(await page.evaluate(()=>monitoredHosts().find(h=>h.id==='server').enabled),true);
-    await showClaude();assert.equal(await page.locator('[data-agent-machine][value="server"]').count(),0);
+    await showClaude();assert.equal(await page.locator('[data-agent-machine][value="server"]').count(),1,'paused machines remain visible with a recovery action');assert(await page.locator('[data-agent-machine][value="server"]').isChecked());
     await page.locator('[data-agent-machine="claude"][value="local"]').uncheck();
     await page.waitForFunction(()=>!state.settingsSaving);
     assert.deepEqual((await rpc('settings.get')).agents.find(a=>a.provider==='claude').machineIds,['server']);
@@ -130,7 +130,7 @@ function browserFixture(){
     await showServers();await page.locator('[data-device-collection="local"]').uncheck();
     await page.waitForFunction(()=>state.settings.localDeviceEnabled===false&&!state.settingsCommitting);
     assert.equal(await page.evaluate(()=>monitoredHosts().find(h=>h.id==='local').enabled),true);
-    await showClaude();assert.equal(await page.locator('[data-agent-machine]').count(),0);
+    await showClaude();assert.equal(await page.locator('[data-agent-machine]').count(),2);
     await page.getByText('暂无可采集机器，请在服务器设置开启 Agent 采集。',{exact:true}).waitFor();
     await page.reload();await page.waitForFunction(()=>typeof state!=='undefined'&&state.settings&&!state.busy);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='hosts';render();});

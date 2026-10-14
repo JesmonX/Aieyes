@@ -1,5 +1,5 @@
 //! Public identity observations; the helper keeps local/SSH credentials on their machine.
-use crate::{accounts, models::*, network, process, quota, ssh};
+use crate::{accounts, models::*, network, process, ssh};
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -37,10 +37,7 @@ fn read_inner(source: &Source, settings: &Settings, identity_only: bool) -> Obse
                 .ok_or_else(|| anyhow::anyhow!("设备已暂停"))?
                 .clone();
             host.pre_command = pre;
-            ssh::account_command(
-                &host,
-                &format!("{}exec python3 -{flag}", quota::agy_proxy(source)),
-            )?
+            ssh::account_command(&host, &format!("exec python3 -{flag}"))?
         } else {
             let args = if identity_only {
                 vec!["-", "--identity-only"]

@@ -2,18 +2,42 @@ import Foundation
 import AppKit
 @main struct VerifyPets {
     @MainActor static func main() throws {
-        let idleCadence = (0...6).map { PetState.idle.frame(elapsed: Double($0 * 100 + 1) / 1000, reduced: false) }
-        precondition(idleCadence == [0,1,2,3,4,5,0])
+        let idleCadence = [1, 279, 281, 391, 501, 641, 781, 1101].map { PetState.idle.frame(elapsed: Double($0) / 1000, reduced: false) }
+        precondition(idleCadence == [0,0,1,2,3,4,5,0])
         precondition(PetState.unknown.frameMs == PetState.idle.frameMs)
-        for (row,count,ms) in [(0,6,100),(1,8,100),(2,8,100),(3,4,100),(4,5,100),(5,8,100),(6,6,100),(7,6,100),(8,6,100)] {
-            let pet=PetState(behavior:"fixture",label:"Fixture",row:row,frames:count,frameMs:Double(ms),key:"fixture")
-            precondition(pet.frame(elapsed:0,reduced:false)==row*8)
-            precondition(pet.frame(elapsed:100,reduced:true)==row*8)
-            precondition(pet.frame(elapsed:100,reduced:false)/8==row)
-            for step in 0..<(count * 8) {
-                precondition(pet.frame(elapsed: Double(step * 100 + 1) / 1000, reduced: false) == row * 8 + step % count)
+        for (row, values) in CoreContract.petFrameDurations.enumerated() {
+            let pet = PetState(behavior: "fixture", label: "Fixture", row: row, frames: values.count, frameMs: 100, key: "fixture", frameDurationsMs: values)
+            precondition(pet.frame(elapsed: 0, reduced: false) == row * 8)
+            precondition(pet.frame(elapsed: 100, reduced: true) == row * 8)
+            let cycle = values.reduce(0, +)
+            for repetition in 0..<4 {
+                var boundary = repetition * cycle
+                for (index, duration) in values.enumerated() {
+                    precondition(pet.frame(elapsed: Double(boundary + 1) / 1000, reduced: false) == row * 8 + index)
+                    precondition(pet.frame(elapsed: Double(boundary + duration - 1) / 1000, reduced: false) == row * 8 + index)
+                    boundary += duration
+                }
             }
         }
+        let legacyShort = PetState(behavior: "fixture", label: "Fixture", row: 0, frames: 2, frameMs: 90, key: "fixture")
+        precondition(legacyShort.frame(elapsed: 0.091, reduced: false) == 1 && legacyShort.frame(elapsed: 0.181, reduced: false) == 0)
+        var emptyDurations = PetState.idle
+        emptyDurations.frameDurationsMs = []
+        precondition(emptyDurations.frame(elapsed: 0.15, reduced: false) == 0, "Empty legacy durations share the row timing")
+        emptyDurations.frameDurationsMs = [0]
+        precondition(emptyDurations.frame(elapsed: 0.15, reduced: false) == 1, "Malformed explicit durations fall back to frameMs")
+        let area = NSRect(x: 0, y: 24, width: 1440, height: 850)
+        precondition(PetWindowGeometry.origin(frame: NSRect(x: 48, y: 200, width: 144, height: 168), areas: [area], snap: true).x == 0)
+        precondition(PetWindowGeometry.origin(frame: NSRect(x: 49, y: 200, width: 144, height: 168), areas: [area], snap: true).x == 49)
+        precondition(PetWindowGeometry.origin(frame: NSRect(x: 1250, y: 200, width: 144, height: 168), areas: [area], snap: true).x == 1296)
+        let otherArea = NSRect(x: -1280, y: 0, width: 1280, height: 800)
+        let onOtherScreen = PetWindowGeometry.origin(frame: NSRect(x: -1250, y: 40, width: 288, height: 336), areas: [area, otherArea], snap: true, preferredPoint: NSPoint(x: -1200, y: 80))
+        precondition(onOtherScreen == NSPoint(x: -1280, y: 0), "Snapping uses each display's work area and logical points at every pet scale")
+        let libraryViewport = CGRect(x: 200, y: 100, width: 360, height: 260)
+        let settingsViewport = CGRect(x: 180, y: 80, width: 400, height: 400)
+        precondition(PetPreviewVisibility.isVisible(CGRect(x: 204, y: 112, width: 352, height: 92), viewport: libraryViewport, enclosing: settingsViewport))
+        precondition(!PetPreviewVisibility.isVisible(CGRect(x: 204, y: 364, width: 352, height: 92), viewport: libraryViewport, enclosing: settingsViewport), "Rows beyond the library viewport must stop")
+        precondition(!PetPreviewVisibility.isVisible(CGRect(x: 204, y: 520, width: 352, height: 92), viewport: libraryViewport.offsetBy(dx: 0, dy: 420), enclosing: settingsViewport), "The entire library scrolled outside Settings must stop")
         let clock = PetAnimationClock()
         var clockState = PetState.idle
         clockState.key = "cadence"
@@ -27,6 +51,9 @@ import AppKit
             visited.insert(clock.frame)
         }
         precondition(visited == Set(0..<6), "Frequent count updates must not restart the animation")
+        clockState.key = "a-new-turn"
+        clock.configure(clockState, playing: true, reduced: false)
+        precondition(clock.frame == 0, "A new turn starts its own animation")
         clock.configure(clockState, playing: true, reduced: true)
         precondition(clock.frame == 0)
         clock.stop()
@@ -59,7 +86,7 @@ import AppKit
             guard let panel = NSApplication.shared.windows.first(where: { $0.title == "Aieyes 宠物" }) else { fatalError("missing pet panel") }
             precondition(!panel.isVisible && !panel.canBecomeKey && !panel.isOpaque)
             precondition(panel.frame.size == NSSize(width: 144, height: 168))
-            if let screen = NSScreen.main { precondition(screen.visibleFrame.contains(panel.frame)) }
+            precondition(NSScreen.screens.isEmpty || NSScreen.screens.contains { $0.visibleFrame.contains(panel.frame) }, "The pet must be inside a display's work area")
             defaults.set(true, forKey: "aieyes.pet.enabled")
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
             precondition(panel.isVisible)
@@ -67,10 +94,14 @@ import AppKit
             let event = NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 30, y: 30), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
             let menu = panel.contentView!.menu(for: event)!
             menu.update()
-            precondition(!menu.autoenablesItems && menu.items.count == 2 && menu.items.allSatisfy(\.isEnabled))
+            precondition(!menu.autoenablesItems && menu.items.map(\.title) == ["打开面板", "设置", "桌宠设置", "隐藏宠物（可在设置中恢复）"] && menu.items.allSatisfy(\.isEnabled))
             menu.performActionForItem(at: 0); menu.performActionForItem(at: 0)
             precondition(opens == 3, "The context menu always requests opening, never toggling")
             menu.performActionForItem(at: 1)
+            precondition(model.settingsTab == "integrations")
+            menu.performActionForItem(at: 2)
+            precondition(model.settingsTab == "general" && model.generalPage == "desktop")
+            menu.performActionForItem(at: 3)
             precondition(!defaults.bool(forKey: "aieyes.pet.enabled"))
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
             precondition(!panel.isVisible)
@@ -78,7 +109,7 @@ import AppKit
                 defaults.set(scale, forKey: "aieyes.pet.scale")
                 NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
                 precondition(panel.frame.width == 144 * scale && panel.frame.height == 168 * scale)
-                if let screen = NSScreen.main { precondition(screen.visibleFrame.contains(panel.frame)) }
+                precondition(NSScreen.screens.isEmpty || NSScreen.screens.contains { $0.visibleFrame.contains(panel.frame) }, "Scaled pets must remain inside their display's work area")
             }
             var pet = PetState.idle; pet.label = "等待1 · 工作2\n思考1"
             model.live.pet = pet
@@ -113,6 +144,6 @@ import AppKit
             }
         }
         print("Pet native window defaults, visibility, geometry, accessibility activation passed")
-        print("Pet uniform animation cadence, persistent state and reduced motion passed")
+        print("Pet shared variable frame timing, persistent state, logical snapping and reduced motion passed")
     }
 }

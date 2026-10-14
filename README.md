@@ -1,6 +1,6 @@
 # Aieyes
 
-跨平台 Agent 用量与 SSH 服务器监控工具。macOS、Windows、Linux 默认显示状态联动桌宠，首次通过文件导入器加载月薪喵，可在设置中导入其他公开桌宠文件或切换为菜单栏／托盘。SwiftUI/AppKit 与 Tauri 界面共享 Rust 核心和 SQLite 本地存储。
+跨平台 Agent 用量与 SSH 服务器监控工具。macOS、Windows、Linux 默认显示状态联动桌宠，首次离线加载月薪喵，可在设置中通过文件、资源链接、npx 命令或 npm 素材包导入桌宠，并在带 idle 预览的库中切换。也可切换为菜单栏／托盘。SwiftUI/AppKit 与 Tauri 界面共享 Rust 核心和 SQLite 本地存储。
 
 ## 下载安装包
 
@@ -40,9 +40,9 @@ open dist/Aieyes.app
 | Agent 接入与账户 | 按 Agent 管理账户、API 和机器目录，跨机器共享额度、操作即保存 |
 | Codex API | 本机及 SSH 设备接入 Responses API，确认后切换 API／订阅账号并共用对话历史；沿用 Codex 模型与网络设置，按实际请求路由区分自动估值用量 |
 | 远程历史、前置命令 | 限额查询可单独配置代理前置命令；远端只回传统计字段 |
-| 代理 | HTTP/HTTPS/SOCKS5、来源覆盖、连接测试与延迟；macOS 静态系统代理，其他平台代理环境变量；PAC 和代理认证界面尚未实现 |
+| 代理 | 本机 HTTP/HTTPS/SOCKS5、本机来源覆盖、连接测试与延迟；远程环境统一使用账户前置命令；PAC 和代理认证界面尚未实现 |
 | 应用内更新 | 显示当前版本，支持手动及每日检查、签名校验、一键安装重启；Linux 支持 AppImage 与 DEB |
-| 桌宠与会话状态 | 文件导入 PNG/WebP 图集，支持 v1 8×9 和 v2 8×11；默认月薪喵。本机及 SSH 的 Codex、Claude Code、AGY 会话共享状态与动画，Agent 的机器与目录设置可管理观察 hooks |
+| 桌宠与会话状态 | 文件、链接、npx／npm 素材导入，保留桌宠库与 idle 预览；支持 v1 8×9 和 v2 8×11 PNG/WebP 图集，默认月薪喵。三端共享逐帧时间，本机及 SSH 会话联动，详见[桌宠说明](docs/pets.md) |
 | Windows/Linux | 桌宠单击展开与 macOS 菜单栏一致的面板，悬停查看提示，支持贴边、隐藏和动态托盘；界面为半透明圆润风格（见 [Windows 界面刷新](docs/windows-ui-refresh.md)）；提供 Windows NSIS、Linux deb/AppImage，真实桌面交互和安装卸载仍需按平台验收 |
 
 服务器通过 CPU、内存圆环和 GPU／文件系统细进度条展示实时资源，尚未保存长期采样历史。Token 历史保存在 SQLite 中。
@@ -59,7 +59,7 @@ macOS 与 Windows/Linux 的 Agent 开关、机器勾选和服务器启停直接�
 
 Windows 悬浮面板同步设置与服务器采样，固定面板持续显示最新读数；错误与过期数据有明确状态，退出入口位于面板「更多」。本轮完整修复与验证见 [跨平台交互和 UI 评审](docs/cross-platform-ui-review-2026-10-05.md)。 10-06 后续统一刷新、空态、原生确认与中性卡片的落地和验收范围见 [实施记录](docs/ui-reform-2026-10-06-implementation.md)。后续面板层级、草稿保护、数据时间、分析交互和长流程改版见 [全面 UI 审计实施记录](docs/ui-audit-and-redesign-2026-10-06-implementation.md)。
 
-在「设置 → Agent 接入」选择并启用 Codex、Claude Code、Antigravity、DeepSeek 或自定义 Agent；支持本机／SSH 的 Agent 可在「机器与目录」多选机器，通过「目录设置」配置数据目录和 CLI。服务器 Shell 位于服务器高级设置。前置命令位于每个账户的设备设置，仅用于账户操作和唤醒，不参与历史同步及监控。在所选 Agent 的账户区域添加登录或 API Key：Codex 登录成功后自动添加账号并查询额度，取消或失败不创建空账户；Claude Code、Antigravity 使用各机器已有登录；DeepSeek 在本机查询余额。账户同时显示已登录／使用中的设备计数；优先查询位置在账户设置顶部。同一账户可以连接多个位置，额度只显示一份，凭据不跨机器复制。面板每种 Agent 可选择 0～5 个账户，可在 Agent 接入页或「更多 → 面板显示账户」调整。停用保留历史、账户和配置，已归档账户需要明确恢复，也可删除配置并保留历史与凭证。删除会清理关联唤醒任务，弃用设备可确认强制解除管理。迁移与验证说明见 [Agent 接入与账户设置](docs/agents-and-accounts-settings.md)。
+在「设置 → Agent 接入」选择并启用 Codex、Claude Code、Antigravity、DeepSeek 或自定义 Agent；支持本机／SSH 的 Agent 可在「机器与目录」多选机器，通过「目录设置」配置数据目录和 CLI。服务器 Shell 位于服务器高级设置。前置命令按账户和机器分别保存，仅在账户设备设置编辑；同机相关目录及既有唤醒部署自动同步，不参与历史同步及监控。在所选 Agent 的账户区域添加登录或 API Key：Codex 登录成功后自动添加账号并查询额度，取消或失败不创建空账户；Claude Code、Antigravity 使用各机器已有登录；DeepSeek 在本机查询余额。账户同时显示已登录／使用中的设备计数；优先查询位置在账户设置顶部。同一账户可以连接多个位置，额度只显示一份，凭据不跨机器复制。面板自动选择每种 Agent 排序前五个账户；手动选择不限数量，可选为空，并严格保留选择。可在 Agent 接入页或「更多 → 面板显示账户」调整或恢复自动模式。停用保留历史、账户和配置，已归档账户需要明确恢复，也可删除配置并保留历史与凭证。删除会清理关联唤醒任务，弃用设备可确认强制解除管理。迁移与验证说明见 [Agent 接入与账户设置](docs/agents-and-accounts-settings.md)。
 
 「设置 → Agent 接入 → Codex → API 连接」可添加官方或兼容 Responses API 的接口，密钥保存在所选设备。保存连接后，通过「切换到此 API」或「切换到已保存账号」检查受影响进程并确认切换，重新打开 Codex 后可恢复原对话。模型、推理强度与网络设置沿用 Codex 当前配置，新连接无需计量网关或系统后台任务。自动估值按实际请求路由排除已确认的 API 用量，可靠性不足的区间跳过。配置、估值边界及测试见 [Codex API 接入](docs/codex-api.md)。
 
@@ -68,6 +68,8 @@ Windows 悬浮面板同步设置与服务器采样，固定面板持续显示最
 限额支持账户排序；账户卡默认展开，单个账户也可折叠为摘要。悬浮小窗与主窗口均按概览、账户、其他细分排列；小窗点击总 Token 浮出输入、输出与缓存明细，主窗口直接显示明细。credit 余额显示当前余额的 API 等价美元价值，下一行是每 1000 credits 的估值入口。5h／7d 额度估值合并为单行，7d 按“容量倍率／同期消耗”排列。额度估值优先采样 5h 总额度，显示 5h 价值、7d 同期换算和近期容量倍率预估；正常周期重置后自动接续，异常或提前重置后需要确认。旧 7d 采样及历史保留。价格映射区位于顶部，每个模型支持一键填入右侧模型 ID；删除映射后完整重算会清除无法匹配的旧计价。悬浮面板底部显示连接状态与更新按钮，新版本附感叹号，固定与出站测试入口位于「更多」。使用口径与验证范围见 [5h 采样和连接功能](docs/five-hour-and-connection-improvements.md)，原有归因边界见 [限额估值与 UI 评审](docs/quota-value-and-macos-review.md)。
 
 Codex 账户新增 credits 余额及每 500 / 1000 credits 的 API 等价估值。设置中的“定时唤醒”支持每天多个固定时刻、本机或 SSH Linux 部署、模型与 effort 选择；退出应用后继续执行。使用方式、归因边界和验证范围见 [Credits 与定时唤醒](docs/credits-and-wakeups.md)。
+
+常规设置自动排队保存，连续输入期间保留新修改，就地显示保存状态；失败保留输入并可重试。登录、切换及 API 操作保留其他页面未保存的草稿。已关联账户可在机器离线或暂停时保存唤醒草稿，部署和运行前再检查可用性。
 
 ## 构建与验证
 
@@ -111,6 +113,8 @@ dist/Aieyes.app/Contents/MacOS/Aieyes --render "$PWD/.local/previews"
 
 菜单栏、桌宠和面板显示已启用的本机及 SSH Codex、Claude Code、AGY 会话状态。会话列表标明 Agent、机器、来源与更新时间，等待输入计入活跃数；动效遵循系统「减少动态效果」。
 
+桌宠右键菜单提供「设置」和直达「常规 → 桌面显示」的「桌宠设置」。三端拖动松手后在工作区边缘 48 逻辑像素内吸附；中断状态使用 idle 动画，文字保留「已中断」。导入格式、历史缓存恢复与动画规则见[桌宠导入与选择](docs/pets.md)。
+
 本机约每秒读取生命周期，SSH 每台机器独立约每 5 秒更新。Claude/AGY 自动接入观察 hooks，可在「设置 → Agent 接入 → 对应 Agent → 机器与目录」修复或停用。只记录生命周期元数据，来源故障单独呈现。边界与恢复规则见[桌面宠物与会话状态](docs/desktop-pets.md)。
 
 会话解析与过期行为由 Rust 核心测试覆盖；原生会话 RPC、模型解码及界面回归运行 `sh scripts/test-native.sh`。维护与按需验证入口见 [手动验证清单](docs/manual-verification.md)。
@@ -126,7 +130,7 @@ dist/Aieyes.app/Contents/MacOS/Aieyes --render "$PWD/.local/previews"
 
 应用使用直接的状态与操作文案。演示数据不混入真实统计；项目不包含真实登录凭据或服务器私钥。
 
-本轮 UI 实施与验收细则见 [2026-10-07 UI 优化实施](docs/ui-review-and-optimization-2026-10-07-implementation.md)。
+三端交互一致性、远程命令同步和桌宠库的实现与验证见 [2026-10-14 验收记录](docs/cross-platform-and-pet-implementation-2026-10-14.md)。此前 UI 优化见 [2026-10-07 UI 优化实施](docs/ui-review-and-optimization-2026-10-07-implementation.md)。
 
 采样误判修复、历史结果恢复、自动账户选择和主题配置见 [采样修复与统一外观](docs/sampling-repair-and-appearance.md)。
 
@@ -134,4 +138,4 @@ dist/Aieyes.app/Contents/MacOS/Aieyes --render "$PWD/.local/previews"
 
 Codex 多账号管理的启用方式、凭据协调与验收边界见 [Codex 账号管理](docs/codex-accounts.md)。
 
-桌面宠物：三端默认通过统一文件导入器导入月薪喵（kiffin）。只支持文件导入，兼容公开站点的 ZIP / pet.json、PNG / WebP、v1 / v2 图集；用户导入结果跨重启和升级保留。详见[桌面宠物](docs/desktop-pets.md)。
+桌面宠物：三端默认离线加载月薪喵（kiffin）。支持文件、资源链接、已适配站点页面和 npm 素材包，输入 npx 命令时只解析下载，不执行脚本。导入后可在桌宠库切换，选择跨重启和升级保留；兼容 PNG / WebP、v1 / v2 图集。详见[桌宠导入与选择](docs/pets.md)及[会话状态](docs/desktop-pets.md)。

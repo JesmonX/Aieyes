@@ -16,8 +16,7 @@
   }
   function updateButtons() {
     const dark=document.documentElement.dataset.theme==='dark',label=dark?'切换到浅色模式':'切换到深色模式';
-    const path=dark?'<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>':'<path d="M20.5 14a8.5 8.5 0 0 1-10.5-10.5A8.5 8.5 0 1 0 20.5 14Z"/>';
-    document.querySelectorAll('[data-theme-toggle]').forEach(button=>{button.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true">'+path+'</svg>';button.title=label;button.setAttribute('aria-label',label);button.disabled=busy;});
+    document.querySelectorAll('[data-theme-toggle]').forEach(button=>{button.innerHTML=globalThis.uiIcon?.(dark?'sun':'moon')??'';button.title=label;button.setAttribute('aria-label',label);button.disabled=busy;});
   }
   function apply(value = current) {
     const previousPreference=JSON.stringify(current);

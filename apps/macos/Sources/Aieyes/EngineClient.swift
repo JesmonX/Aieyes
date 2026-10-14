@@ -274,6 +274,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var antigravityRefreshTasks: [String: Task<Void, Never>] = [:]
     @Published var deploymentSyncMessage: String?
     var deploymentSyncTask: Task<Void, Never>?
+    var deploymentSyncRequested = false
     var settingsRefreshTask: Task<Void, Never>?
     let metricsEngine = EngineClient()
     let networkEngine = EngineClient()
@@ -323,9 +324,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         do { saved = try await accountEngine.call("settings.get") }
         catch { if reportFailure { settingsMessage = "登录已确认，账户设置刷新失败：" + error.localizedDescription }; return }
         guard settings == before else { return }
-        let cleanDraft = settingsDraft == before
-        if settings != saved { settings = saved }
-        if cleanDraft && settingsDraft != saved { settingsDraft = saved }
+        mergeConfiguration(saved)
     }
     func refreshAntigravityAccount(sourceID: String, status: AccountDeviceStatus? = nil) async throws {
         guard let source = settings.sources.first(where: { $0.id == sourceID }),
@@ -371,13 +370,61 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var importedPet: ImportedPet?
     @Published var petImportError: String?
     @Published var petImportBusy = false
+    @Published var petLibrary: [ImportedPet] = []
+    @Published var petLibraryWarnings: [PetLibraryWarning] = []
+    @Published var petLibraryError: String?
+    @Published var petLibraryBusy = false
+    @Published var petSelectionBusy: String?
+    private let petEngine = EngineClient(configurationOnly: true)
+    private var petSelectionRevision = 0
+    private var petLibraryRevision = 0
+    private var petLibraryTask: Task<Void, Never>?
     func importPet(path: String) async {
-        guard !petImportBusy else { return }
-        petImportBusy = true
+        await importPet(input: path)
+    }
+    func importPet(input: String) async {
+        guard !petImportBusy, petSelectionBusy == nil else { return }
+        petImportBusy = true; petImportError = nil; petSelectionRevision += 1
         defer { petImportBusy = false }
         do {
-            let result: PetSelection = try await engine.call("pets.import", params: ["path": path])
-            importedPet = result.pet; petImportError = result.error
+            let result: PetSelection = try await petEngine.call("pets.import", params: ["input": input])
+            if let error = result.error { throw ClientError.message(error) }
+            if let pet = result.pet { importedPet = pet }
+            await loadPetLibrary()
+        } catch { petImportError = error.localizedDescription }
+    }
+    func loadPetLibrary() async {
+        petLibraryRevision += 1
+        if let pending = petLibraryTask { await pending.value; return }
+        petLibraryBusy = true
+        let work = Task { @MainActor in
+            defer { petLibraryBusy = false; petLibraryTask = nil }
+            while !Task.isCancelled {
+                let revision = petLibraryRevision
+                do {
+                    let library: PetLibrary = try await petEngine.call("pets.list")
+                    guard revision == petLibraryRevision else { continue }
+                    petLibrary = library.pets; petLibraryWarnings = library.warnings; petLibraryError = nil
+                    return
+                } catch {
+                    guard revision == petLibraryRevision else { continue }
+                    petLibraryError = error.localizedDescription
+                    return
+                }
+            }
+        }
+        petLibraryTask = work
+        await work.value
+    }
+    func selectPet(_ pet: ImportedPet) async {
+        guard !petImportBusy, petSelectionBusy == nil else { return }
+        petSelectionBusy = pet.libraryKey; petImportError = nil; petSelectionRevision += 1
+        defer { petSelectionBusy = nil }
+        do {
+            let result: PetSelection = try await petEngine.call("pets.select", params: ["libraryId": pet.libraryKey])
+            if let error = result.error { throw ClientError.message(error) }
+            if let pet = result.pet { importedPet = pet }
+            await loadPetLibrary()
         } catch { petImportError = error.localizedDescription }
     }
     private var sessionBusy = false
@@ -415,9 +462,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let result: SessionSnapshot = try await sessionEngine.call("sessions.list")
             guard !stopped, !installingUpdate, !Task.isCancelled else { return }
             sessions = result.sessions; sessionSources = result.sources ?? []; sessionsUnavailable = result.unavailable; petState = result.pet ?? .unknown; coreSessionSummary = result.summary
+            let selectionRevision = petSelectionRevision
             let selection: PetSelection = try await sessionEngine.call("pets.current")
             guard !stopped, !installingUpdate, !Task.isCancelled else { return }
-            if importedPet != selection.pet { importedPet = selection.pet }; if petImportError != selection.error { petImportError = selection.error }
+            if selectionRevision == petSelectionRevision, !petImportBusy, petSelectionBusy == nil, importedPet != selection.pet { importedPet = selection.pet }
+            if let error = selection.error, petImportError == nil { petImportError = error }
         } catch {
             guard !stopped, !installingUpdate, !Task.isCancelled else { return }
             sessionsUnavailable = true; petState = .unknown; coreSessionSummary = nil
@@ -433,7 +482,12 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var settings = Settings() { didSet { invalidateQuotaSchedule() } }
     @Published var settingsDraft = Settings()
     @Published var settingsLoaded = false
+    @Published var settingsWindowVisible = false
     @Published var settingsSaving = false { didSet { scheduleRefreshes() } }
+    private var configurationSaveTask: Task<Bool, Never>?
+    private var pendingConfigurationSaves = 0
+    private var configurationSaveError: String?
+    var generalSaveTask: Task<Void, Never>?
     @Published private(set) var repricing = false { didSet { scheduleRefreshes() } }
     @Published var settingsMessage: String?
     @Published var mappingModel = ""
@@ -573,6 +627,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             if let hash = info.contractHash, hash != CoreContract.contractHash { throw ClientError.message("应用资源与核心版本不一致，请重新安装同一版本") }
             settings = try await engine.call("settings.get"); PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:]); settingsDraft = settings; settingsLoaded = true
             startSessionMonitoring()
+            synchronizeAccountDeployments()
             selectedAccount = settings.accountAliases?[selectedAccount] ?? (selectedAccount.hasPrefix("agy:") ? "antigravity:" + selectedAccount.dropFirst(4) : selectedAccount)
             if selectedAccount != "all" && selectedAccount != "none" && !settings.filterAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
             if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
@@ -758,7 +813,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             if dueOnly && result.isEmpty { refreshStates["quotas"]?.busy = false; return }
             if result.contains(where: { q in q.identity.map { id in settings.accounts.contains { $0.id == q.accountId && $0.provider == q.provider && $0.identityKey != id.key } } ?? false }) {
                 let before = settings
-                if let saved: Settings = try? await engine.call("settings.get"), settings == before { let clean = settingsDraft == before; settings = saved; if clean { settingsDraft = saved } }
+                if let saved: Settings = try? await engine.call("settings.get"), settings == before { mergeConfiguration(saved) }
             }
             var failures = result.compactMap { row -> ActionFailure? in
                 guard let error = row.error else { return nil }
@@ -838,10 +893,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         return nil
     }
     func saveSettingsDraft(refreshDashboard: Bool = true, includeMappings: Bool = true, base: Settings? = nil) async -> Bool {
-        guard !settingsSaving, !repricing else { return false }
-        settingsSaving = true; settingsMessage = nil
-        defer { settingsSaving = false }
+        guard !repricing else { return false }
+        settingsMessage = nil
         var next = settingsDraft
+        let enteredMapping = (mappingModel, mappingID)
         do {
             let from = mappingModel.trimmingCharacters(in: .whitespacesAndNewlines), to = mappingID.trimmingCharacters(in: .whitespacesAndNewlines)
             if includeMappings && (!from.isEmpty || !to.isEmpty) {
@@ -850,7 +905,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 next.modelMappings[from] = to
             }
             let success = await save(next, base: base, refreshDashboard: refreshDashboard)
-            if success { if includeMappings { mappingModel = ""; mappingID = "" }; settingsDraft = settings }
+            if success && includeMappings && mappingModel == enteredMapping.0 && mappingID == enteredMapping.1 { mappingModel = ""; mappingID = "" }
             settingsMessage = success ? "已保存配置 · " + Format.time(Date().timeIntervalSince1970) : message ?? "保存失败"
             return success
         } catch { settingsMessage = error.localizedDescription; return false }
@@ -859,9 +914,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         settingsDraft = settings; settingsMessage = nil; mappingModel = ""; mappingID = ""
     }
     func toggleTheme(currentlyDark: Bool) async {
-        guard settingsLoaded, !settingsSaving else { return }
-        settingsSaving = true
-        defer { settingsSaving = false }
+        guard settingsLoaded else { return }
+        let draftTheme = settingsDraft.appearance?.theme ?? "system"
         var next = settings
         var appearance = next.appearance ?? AppearanceSettings()
         appearance.theme = currentlyDark ? "light" : "dark"
@@ -869,20 +923,34 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         guard await save(next, refreshDashboard: false) else { return }
         // Preserve unrelated edits in the settings window.
         var draftAppearance = settingsDraft.appearance ?? AppearanceSettings()
+        guard draftAppearance.theme == draftTheme else { return }
         draftAppearance.theme = settings.appearance?.theme ?? appearance.theme
         settingsDraft.appearance = draftAppearance
     }
     func save(_ draft: Settings, base: Settings? = nil, refreshDashboard: Bool = true) async -> Bool {
+        let previous = configurationSaveTask, baseline = base ?? settings
+        let draftAtSubmission = settingsDraft
+        pendingConfigurationSaves += 1; settingsSaving = true
+        let work = Task { @MainActor in
+            _ = await previous?.value
+            let result = await performConfigurationSave(draft, base: baseline, draftAtSubmission: draftAtSubmission, refreshDashboard: refreshDashboard)
+            pendingConfigurationSaves -= 1; settingsSaving = pendingConfigurationSaves > 0
+            if pendingConfigurationSaves == 0 { configurationSaveTask = nil }
+            return result
+        }
+        configurationSaveTask = work
+        return await work.value
+    }
+    private func performConfigurationSave(_ draft: Settings, base: Settings, draftAtSubmission: Settings, refreshDashboard: Bool) async -> Bool {
         do {
             let data = try JSONEncoder().encode(draft)
             let params = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-            let baseline = try JSONSerialization.jsonObject(with: JSONEncoder().encode(base ?? settings))
+            let baseline = try JSONSerialization.jsonObject(with: JSONEncoder().encode(base))
             let saved: Settings = try await engine.call("settings.patch", params: ["base": baseline, "settings": params])
             let historyConfigurationChanged = settings.historyShowDeletedAccounts != saved.historyShowDeletedAccounts || settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.modelMappings != saved.modelMappings
             let quotaConfigurationChanged = settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.proxy != saved.proxy
             if settings.proxy != saved.proxy || settings.proxyTestUrls != saved.proxyTestUrls { networkRevision += 1; networkTest = nil; lastNetworkAttempt = .distantPast }
-            for account in saved.accounts where !settings.accounts.contains(where: { $0.key == account.key }) { PanelAccountPreference.includeNew(account, accounts: saved.accounts) }
-            settings = saved
+            mergeConfiguration(saved, submitted: draft, draftAtSubmission: draftAtSubmission)
             if quotaConfigurationChanged {
                 quotaNextAttempt = nil
                 invalidateAccountStatuses()
@@ -890,13 +958,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             }
             if selectedAccount != "all" && selectedAccount != "none" && !settings.filterAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
             if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
-            message = "已保存"
+            if message == configurationSaveError { message = nil }
+            configurationSaveError = nil
             if refreshDashboard { Task {
                 if historyConfigurationChanged { await reload() }
                 if quotaConfigurationChanged && hasQuotaAccounts { await refreshQuotas(dueOnly: true) }
             } }
             return true
-        } catch { message = error.localizedDescription; return false }
+        } catch { configurationSaveError = error.localizedDescription; message = configurationSaveError; return false }
     }
     func syncPrices() async {
         guard !busy else { return }; busy = true; activity = "同步价格"; beginRefresh("prices"); defer { busy = false; activity = "" }
@@ -1007,9 +1076,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         sessionTask?.cancel(); sessionTask = nil
         automaticTask?.cancel(); automaticEngine.stop()
         filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
-        deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel()
+        deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel(); generalSaveTask?.cancel(); petLibraryTask?.cancel()
         for task in antigravityRefreshTasks.values { task.cancel() }
-        priceCatalog.stop(); sessionEngine.stop(); accountEngine.stop(); engine.stop(); metricsEngine.stop(); networkEngine.stop()
+        priceCatalog.stop(); petEngine.stop(); sessionEngine.stop(); accountEngine.stop(); engine.stop(); metricsEngine.stop(); networkEngine.stop()
     }
     var menuText: String {
         switch settings.menuMetric {

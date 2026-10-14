@@ -1,0 +1,330 @@
+{
+  "record": {
+    "id": "sample",
+    "accountKey": "codex:fixture",
+    "kind": "quota",
+    "status": "completed",
+    "valuationMode": "fiveHour",
+    "fiveHourValue": 20,
+    "weeklyValue": 100,
+    "weeklyDirectValue": 100,
+    "weeklyRatioValue": 110,
+    "startedAt": 1,
+    "checkpointAt": 2,
+    "sourceIds": [
+      "s"
+    ],
+    "sourceNames": [
+      "Fixture"
+    ],
+    "windowName": "5h",
+    "windowId": "five",
+    "calculationNote": "Fixture",
+    "reason": "",
+    "consumedPercent": 10,
+    "totalTokens": 100,
+    "pricedTokens": 100,
+    "cost": 1,
+    "prices": []
+  },
+  "cases": [
+    {
+      "name": "Codex Plus hides direct weekly value",
+      "quota": {
+        "provider": "codex",
+        "plan": " Plus ",
+        "windows": [
+          {
+            "id": "300",
+            "name": "5h",
+            "windowMinutes": 300,
+            "usedPercent": 0
+          },
+          {
+            "id": "10080",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0
+          }
+        ]
+      },
+      "fields": [
+        "fiveHourValue",
+        "weeklyRatioValue"
+      ],
+      "summary": "5h ≈ $20.00  7d ≈ $110.00"
+    },
+    {
+      "name": "Codex Pro retains all three values",
+      "quota": {
+        "provider": "codex",
+        "plan": "pro",
+        "windows": [
+          {
+            "id": "300",
+            "name": "5h",
+            "windowMinutes": 300,
+            "usedPercent": 0
+          },
+          {
+            "id": "10080",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0
+          }
+        ]
+      },
+      "fields": [
+        "fiveHourValue",
+        "weeklyValue",
+        "weeklyRatioValue"
+      ],
+      "summary": "5h ≈ $20.00  7d ≈ $110.00/$100.00"
+    },
+    {
+      "name": "Plus rule is specific to Codex",
+      "quota": {
+        "provider": "claude",
+        "plan": "plus",
+        "windows": [
+          {
+            "id": "300",
+            "name": "5h",
+            "windowMinutes": 300,
+            "usedPercent": 0
+          },
+          {
+            "id": "10080",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0
+          }
+        ]
+      },
+      "fields": [
+        "fiveHourValue",
+        "weeklyValue",
+        "weeklyRatioValue"
+      ],
+      "summary": "5h ≈ $20.00  7d ≈ $110.00/$100.00"
+    },
+    {
+      "name": "Weekly quota overrides historical five hour values",
+      "quota": {
+        "provider": "codex",
+        "plan": "pro",
+        "windows": [
+          {
+            "id": "10080",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0
+          }
+        ]
+      },
+      "fields": [
+        "weeklyValue"
+      ],
+      "summary": "7d ≈ $100.00"
+    },
+    {
+      "name": "Longer quota hides five hour and capacity values",
+      "quota": {
+        "provider": "custom",
+        "windows": [
+          {
+            "id": "43200",
+            "name": "30d",
+            "windowMinutes": 43200,
+            "usedPercent": 0
+          }
+        ]
+      },
+      "fields": [
+        "weeklyValue"
+      ],
+      "summary": "7d ≈ $100.00"
+    },
+    {
+      "name": "Each Antigravity group uses its own windows",
+      "quota": {
+        "provider": "antigravity",
+        "windows": [
+          {
+            "id": "gemini:300",
+            "name": "5h",
+            "windowMinutes": 300,
+            "usedPercent": 0,
+            "groupId": "gemini",
+            "groupName": "gemini"
+          },
+          {
+            "id": "gemini:10080",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0,
+            "groupId": "gemini",
+            "groupName": "gemini"
+          },
+          {
+            "id": "claude-gpt:10080",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0,
+            "groupId": "claude-gpt",
+            "groupName": "claude-gpt"
+          }
+        ]
+      },
+      "group": "claude-gpt",
+      "records": [
+        {
+          "groupId": "claude-gpt"
+        }
+      ],
+      "fields": [
+        "weeklyValue"
+      ],
+      "summary": "7d ≈ $100.00"
+    },
+    {
+      "name": "Missing live snapshot falls back to saved plan and windows",
+      "records": [
+        {
+          "quotaPlan": "plus",
+          "checkpointWindows": [
+            {
+              "id": "300",
+              "name": "5h",
+              "windowMinutes": 300,
+              "usedPercent": 0
+            },
+            {
+              "id": "10080",
+              "name": "7d",
+              "windowMinutes": 10080,
+              "usedPercent": 0
+            }
+          ]
+        }
+      ],
+      "fields": [
+        "fiveHourValue",
+        "weeklyRatioValue"
+      ],
+      "summary": "5h ≈ $20.00  7d ≈ $110.00"
+    },
+    {
+      "name": "Current plan overrides historical plan",
+      "quota": {
+        "provider": "codex",
+        "plan": "pro",
+        "windows": [
+          {
+            "id": "300",
+            "name": "5h",
+            "windowMinutes": 300,
+            "usedPercent": 0
+          },
+          {
+            "id": "10080",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0
+          }
+        ]
+      },
+      "records": [
+        {
+          "quotaPlan": "plus"
+        }
+      ],
+      "fields": [
+        "fiveHourValue",
+        "weeklyValue",
+        "weeklyRatioValue"
+      ],
+      "summary": "5h ≈ $20.00  7d ≈ $110.00/$100.00"
+    },
+    {
+      "name": "Missing snapshot uses the latest weekly record",
+      "records": [
+        {
+          "id": "new",
+          "valuationMode": "",
+          "weeklyValue": 70,
+          "fiveHourValue": null,
+          "weeklyRatioValue": null,
+          "startedAt": 10
+        },
+        {
+          "id": "old"
+        }
+      ],
+      "fields": [
+        "weeklyValue"
+      ],
+      "summary": "7d ≈ $70.00"
+    },
+    {
+      "name": "Unvalued Plus placeholders contain only eligible periods",
+      "quota": {
+        "provider": "codex",
+        "plan": "plus",
+        "windows": [
+          {
+            "id": "300",
+            "name": "5h",
+            "windowMinutes": 300,
+            "usedPercent": 0
+          },
+          {
+            "id": "10080",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0
+          }
+        ]
+      },
+      "records": [],
+      "fields": [],
+      "summary": "5h ≈ —  7d ≈ —"
+    },
+    {
+      "name": "Plus without a five hour window hides all three values",
+      "quota": {
+        "provider": "codex",
+        "plan": "plus",
+        "windows": [
+          {
+            "id": "10080",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0
+          }
+        ]
+      },
+      "fields": [],
+      "summary": "额度估值"
+    },
+    {
+      "name": "Completed weekly snapshot overrides stale record mode",
+      "records": [
+        {
+          "checkpointWindows": [
+            {
+              "id": "10080",
+              "name": "7d",
+              "windowMinutes": 10080,
+              "usedPercent": 0
+            }
+          ]
+        }
+      ],
+      "fields": [
+        "weeklyValue"
+      ],
+      "summary": "7d ≈ $100.00"
+    }
+  ]
+}

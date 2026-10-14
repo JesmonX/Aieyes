@@ -45,7 +45,7 @@ import Foundation
         newAccount.quotaEnabled = true
         PanelAccountPreference.includeNew(newAccount, accounts: [newAccount], defaults: defaults)
         let included = defaults.string(forKey: NativePanelKey.accounts.rawValue)!
-        precondition(PanelAccountPreference.selections(included, accounts: [newAccount], order: [])["codex"] == [newAccount.key])
+        precondition(PanelAccountPreference.selections(included, accounts: [newAccount], order: [])["codex"] == [], "New accounts must not enter an explicit manual choice")
         let saved = DashboardFilterPreference(provider: "claude", source: "remote", account: "claude:a", model: "model", days: 30)
         saved.save(defaults: defaults)
         precondition(DashboardFilterPreference.read(defaults: defaults) == saved)

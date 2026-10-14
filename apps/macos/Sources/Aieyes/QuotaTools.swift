@@ -68,7 +68,7 @@ struct SamplingManagementView: View {
                         }
                     }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
-            }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+            }.padding(DesignTokens.dialogPadding).frame(maxWidth: .infinity, alignment: .leading)
         }.aieyesAccent().font(AppFont.body).disabled(model.installingUpdate)
     }
 }
@@ -116,7 +116,7 @@ struct AgentValuationView: View {
                     if let error { HStack { Text(error).foregroundStyle(Palette.warn); Button("重试读取") { Task { await load() } } } }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
-        }.padding(24).frame(width: 660, height: 650).aieyesAccent()
+        }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogValuationWidth, height: 650).aieyesAccent()
             .interactiveDismissDisabled(model.automaticSaving)
             .updateOperation("估值与采样", active: model.automaticSaving)
             .task(id: recordsRevision) { await load() }
@@ -131,7 +131,7 @@ struct AgentValuationView: View {
             ForEach(values, id: \.recordKey) { record in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack { Text(model.settings.historicalAccounts.first { $0.key == record.accountKey }?.name ?? record.accountKey); Spacer(); Button("查看与管理") { Task { await model.openEstimate(record) } } }
-                    Text((record.kind == "credits" ? "credits 估值" : "5h / 7d 额度估值") + " · " + record.statusLabel).font(AppFont.secondary).foregroundStyle(.secondary)
+                    Text((record.kind == "credits" ? "credits 估值" : (EstimatePresentation.visibility((snapshot ?? model.dashboard).quotas.first { $0.id == record.accountKey }, records: [record], group: record.groupId).periods + " 额度估值").trimmingCharacters(in: .whitespaces)) + " · " + record.statusLabel).font(AppFont.secondary).foregroundStyle(.secondary)
                     Text(Format.date(record.startedAt) + " → " + Format.date(record.checkpointAt)).font(AppFont.secondary).foregroundStyle(.secondary)
                     if let error = model.estimateErrors[record.accountKey] { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                 }.padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
@@ -174,7 +174,7 @@ struct QuotaOrderView: View {
             HStack { Spacer(); Button("取消") { close() }.keyboardShortcut(.cancelAction); Button(saving ? "保存中…" : "保存顺序") {
                 Task { await saveOrder() }
             }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }.disabled(saving)
-        }.aieyesAccent().font(AppFont.body).padding(24).frame(width: 440).onAppear { keys = model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key); initialKeys = keys }
+        }.aieyesAccent().font(AppFont.body).padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogSelectionWidth).onAppear { keys = model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key); initialKeys = keys }
         .updateDraftGuard("账户顺序", snapshot: draftSnapshot(keys), dirty: keys != initialKeys, saving: saving, save: { await saveOrder() }, discard: close)
     }
     @discardableResult private func saveOrder() async -> Bool {
@@ -201,19 +201,19 @@ struct PanelAccountsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("面板显示账户").font(AppFont.title)
-            Text("每个 Agent 可选择 0～5 个账户。仅影响本机面板，详情与采集保留全部账户。").font(AppFont.secondary).foregroundStyle(.secondary)
+            Text("自动显示每类前 5 个账户；手动选择不限数量，也可以不选。仅影响本机面板。").font(AppFont.secondary).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(Set(model.quotaAccounts.map(\.provider))).sorted(), id: \.self) { provider in
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack { ProviderIdentity(provider: provider); Text("· \(selected[provider]?.count ?? 0)/5"); Spacer(); Button(automatic.contains(provider) ? "自动选择" : "恢复默认显示") { automatic.insert(provider); selected[provider] = PanelAccountPreference.selections("{}", accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[provider] }.font(AppFont.secondary) }.font(AppFont.section)
+                            HStack { ProviderIdentity(provider: provider); Text("· \(selected[provider]?.count ?? 0) 个"); Spacer(); Button(automatic.contains(provider) ? "自动选择" : "恢复自动选择") { automatic.insert(provider); selected[provider] = PanelAccountPreference.selections("{}", accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[provider] }.font(AppFont.secondary) }.font(AppFont.section)
                             ForEach(model.quotaAccounts.filter { $0.provider == provider }, id: \.key) { account in
                                 Toggle(account.name, isOn: Binding(get: { selected[provider]?.contains(account.key) == true }, set: { enabled in
                                     automatic.remove(provider)
                                     var keys = selected[provider] ?? []
-                                    if enabled && keys.count < 5 { keys.append(account.key) } else if !enabled { keys.removeAll { $0 == account.key } }
+                                    if enabled && !keys.contains(account.key) { keys.append(account.key) } else if !enabled { keys.removeAll { $0 == account.key } }
                                     selected[provider] = keys
-                                })).disabled(selected[provider]?.contains(account.key) != true && (selected[provider]?.count ?? 0) >= 5)
+                                }))
                             }
                         }
                     }
@@ -221,8 +221,8 @@ struct PanelAccountsView: View {
                 }.padding(4)
             }
             HStack { Spacer(); Button("取消", action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button("保存面板选择") { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.borderedProminent) }
-        }.padding(24).font(AppFont.body).frame(width: 440, height: 480).aieyesAccent()
-            .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); initialDraft = snapshot; cancelFocused = true }
+        }.padding(DesignTokens.dialogPadding).font(AppFont.body).frame(width: DesignTokens.dialogSelectionWidth, height: 480).aieyesAccent()
+            .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); for (provider, choice) in PanelAccountPreference.decode(stored).providers where choice.mode == "custom" { selected[provider] = choice.keys }; initialDraft = snapshot; cancelFocused = true }
             .updateDraftGuard("面板显示账户", snapshot: snapshot, dirty: !initialDraft.isEmpty && initialDraft != snapshot, saving: false, save: { stored = draft; onClose(); return true }, discard: onClose)
     }
 }
@@ -243,17 +243,19 @@ struct QuotaEstimateView: View {
         guard let account = model.settings.accounts.first(where: { $0.provider == quota.provider && $0.id == quota.accountId }) else { return [] }
         return model.settings.usageSources.filter { account.uses($0) }
     }
-    private var windows: [QuotaWindow] { EstimatePresentation.windows(quota) }
+    private var currentQuota: Quota { model.dashboard.quotas.first { $0.id == quota.id && $0.updatedAt >= quota.updatedAt } ?? quota }
+    private var windows: [QuotaWindow] { EstimatePresentation.windows(currentQuota) }
+    private var visibility: EstimatePresentation.Visibility { EstimatePresentation.visibility(currentQuota, records: records, group: initialGroup) }
     private var records: [QuotaEstimate] { (credits ? (model.dashboard.creditEstimates ?? []) : (model.dashboard.quotaEstimates ?? [])).filter { $0.accountKey == quota.id } }
     private var current: QuotaEstimate? { records.first { $0.status != "completed" } }
     private var eligible: Bool { if credits { return quota.credits?.balance != nil && quota.credits?.unlimited == false }; return windows.contains { initialGroup == nil || $0.estimateGroup == initialGroup } }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack { VStack(alignment: .leading, spacing: 4) { Text(credits ? "credit 价值" : "5h / 7d 额度价值").font(AppFont.title); Text(quota.name).foregroundStyle(.secondary) }; Spacer(); Button("关闭") { close() }.keyboardShortcut(.cancelAction) }
+            HStack { VStack(alignment: .leading, spacing: 4) { Text(credits ? "credit 价值" : (visibility.periods + " 额度价值").trimmingCharacters(in: .whitespaces)).font(AppFont.title); Text(quota.name).foregroundStyle(.secondary) }; Spacer(); Button("关闭") { close() }.keyboardShortcut(.cancelAction) }
             if quota.provider == "codex" { Picker("采样口径", selection: $credits) { Text("额度价值").tag(false); Text("credit 价值").tag(true) }.pickerStyle(.segmented).disabled(busy) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(credits ? "按实际 credits 扣款与样本 API 等价成本，估算 credit 的 API 等价价值，不是可兑换余额。" : "主要采样 5h 额度，显示 5h 价值、7d 同期换算及近期倍率估算。正常重置后自动接续，结果取决于本次模型组合。").foregroundStyle(.secondary)
+                    Text(credits ? "按实际 credits 扣款与样本 API 等价成本，估算 credit 的 API 等价价值，不是可兑换余额。" : "按本次模型组合的 API 等价成本与额度消耗比例估算，不是可兑换余额。" + visibility.help).foregroundStyle(.secondary)
                     AutomaticValuationControls(model: model, sources: sources)
                     if let current {
                         if let group = current.groupId, let initialGroup, group != initialGroup { Text("当前账户正在采样其他模型组；每个账户同时保留一段采样。").foregroundStyle(.secondary) }
@@ -293,7 +295,7 @@ struct QuotaEstimateView: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 480)
-        }.aieyesAccent().font(AppFont.body).disabled(model.installingUpdate).padding(24).frame(minWidth: 470, idealWidth: 520)
+        }.aieyesAccent().font(AppFont.body).disabled(model.installingUpdate).padding(DesignTokens.dialogPadding).frame(minWidth: DesignTokens.dialogEstimateMinWidth, idealWidth: DesignTokens.dialogEstimateWidth)
         .onChange(of: credits) { _, _ in confirmed = false }
         .onAppear { selected = Set(sources.map(\.id)); window = windows.first { ($0.groupId ?? $0.groupName) == initialGroup }?.id ?? windows.first?.id ?? "" }
     }
@@ -305,7 +307,7 @@ struct QuotaEstimateView: View {
             if let group = e.groupId { Text(quota.windows.first { $0.estimateGroup == group }?.groupLabel ?? group).font(AppFont.section) }
             else if quota.provider == "antigravity" { Text("账户总体 · 旧记录").font(AppFont.section) }
             resultHeader(e)
-            if e.valuationMode == "fiveHour" { fiveHourValues(e) }
+            if e.kind != "credits" { quotaValues(e) }
             Text(e.calculationNote).font(AppFont.secondary).foregroundStyle(.secondary)
             if e.originalEstimateId != nil { Text("已修正 · 原采样记录保留").font(AppFont.secondary).foregroundStyle(.secondary) }
             else if e.samplingMode != "automatic" && e.status == "completed" && !e.hasValue { Button("按原记录修复估值") { perform("repair", ["id": e.id]) }.disabled(busy) }
@@ -321,24 +323,24 @@ struct QuotaEstimateView: View {
     }
     private func resultValue(_ e: QuotaEstimate) -> String {
         if e.kind == "credits" { return Format.creditValue(e) }
-        if e.valuationMode == "fiveHour" { return "5h / 7d" }
-        return amount(e.weeklyValue)
+        let periods = EstimatePresentation.visibility(currentQuota, records: [e], group: e.groupId).periods
+        return periods.isEmpty ? "额度估值" : periods
     }
     private func amount(_ value: Double?) -> String {
         guard let value else { return "—" }
         return Format.money(value) + " USD"
     }
-    private func fiveHourValues(_ e: QuotaEstimate) -> some View {
-        let values: [(String, Double?)] = [
-            ("本段 5h API 等价值", e.fiveHourValue),
-            ("7d 推算 · 同期消耗比例", e.weeklyDirectValue),
-            ("7d 推算 · 近期容量倍率", e.weeklyRatioValue)
-        ]
+    private func quotaValues(_ e: QuotaEstimate) -> some View {
+        let visible = EstimatePresentation.visibility(currentQuota, records: [e], group: e.groupId)
+        var values: [(String, Double?)] = []
+        if visible.five { values.append(("本段 5h API 等价值", e.fiveHourValue)) }
+        if visible.direct { values.append((e.valuationMode == "fiveHour" ? "7d 推算 · 同期消耗比例" : "7d 直接估值", e.weeklyDirectValue ?? e.weeklyValue)) }
+        if visible.ratio { values.append(("7d 推算 · 近期容量倍率", e.weeklyRatioValue)) }
         return VStack(alignment: .leading, spacing: 8) {
             ForEach(values, id: \.0) { label, value in
                 HStack { Text(label); Spacer(); Text(amount(value)).monospacedDigit() }.font(label.hasPrefix("本段") ? AppFont.section : AppFont.secondary)
             }
-            Text(capacityDescription(e.capacity)).font(AppFont.secondary).foregroundStyle(.secondary)
+            if visible.ratio { Text(capacityDescription(e.capacity)).font(AppFont.secondary).foregroundStyle(.secondary) }
         }
     }
     private func capacityDescription(_ capacity: CapacityInfo?) -> String {
@@ -370,8 +372,13 @@ struct QuotaEstimateView: View {
     }
     private func calculationRule(_ e: QuotaEstimate) -> String {
         if e.kind == "credits" { return "1000 credit 估值 = 样本成本 × 1000 ÷ 消耗 credit；结束后价格依据固定。" }
-        if e.valuationMode == "fiveHour" { return "5h / 7d 同期价值 = 有效成本 × 100 ÷ 对应消耗百分点；7d 倍率估算 = 5h 价值 × 近期容量倍率。结束后价格与倍率固定。" }
-        return "整周估值 = 样本 API 等价成本 × 100 ÷ 消耗百分点；结束后价格依据固定。"
+        let visible = EstimatePresentation.visibility(currentQuota, records: [e], group: e.groupId)
+        let rules = [
+            visible.five ? "5h 价值 = 有效成本 × 100 ÷ 5h 消耗百分点" : "",
+            visible.direct ? "7d 直接估值 = 样本 API 等价成本 × 100 ÷ 周额度消耗百分点" : "",
+            visible.ratio ? "7d 倍率估算 = 5h 价值 × 近期容量倍率" : ""
+        ].filter { !$0.isEmpty }
+        return (rules.isEmpty ? "按采样时段的 API 等价成本与对应额度消耗比例计算" : rules.joined(separator: "；")) + "；结束后价格与倍率固定。"
     }
     private func priceDetails(_ price: ModelPrice) -> some View {
         VStack(alignment: .leading, spacing: 5) {

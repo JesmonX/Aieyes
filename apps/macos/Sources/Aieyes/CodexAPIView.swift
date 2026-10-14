@@ -20,6 +20,8 @@ struct CodexAPISettingsSection: View {
     @State private var message: String?
     private var connections: [CodexAPIConnection] { model.settings.codexApis ?? [] }
     private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == "codex" } }
+    private var availableSources: [AgentSource] { sources.filter { model.settings.sourceEnabled($0) } }
+    private func available(_ id: String) -> Bool { availableSources.contains { $0.id == id } }
     var body: some View {
         if !sources.isEmpty || !connections.isEmpty {
             Section("Codex · API 连接") {
@@ -34,13 +36,14 @@ struct CodexAPISettingsSection: View {
                                 if isSelected(connection) && !isApplied(connection) { Text("有已保存的更改，切换后生效").font(AppFont.secondary).foregroundStyle(.secondary) }
                             }
                             Spacer()
-                            Button("设置") { editing = connection }
+                            Button("设置") { editing = connection }.disabled(!available(connection.sourceId))
                         }
                         HStack {
                             Button("测试连接") { perform { try await probe(connection) } }
                             Button(isApplied(connection) ? "正在使用" : "切换到此 API") { switching = APISwitchRequest(sourceID: connection.sourceId, connection: connection) }.disabled(isApplied(connection))
                             Button("移除") { removing = connection }
-                        }
+                        }.disabled(!available(connection.sourceId))
+                        if !available(connection.sourceId) { Text("此位置已暂停或未绑定，请在机器与采集设置中恢复。").font(AppFont.secondary).foregroundStyle(.secondary) }
                     }
                 }
                 ForEach(Array(Set(connections.map(\.sourceId))).sorted(), id: \.self) { sourceID in
@@ -49,13 +52,17 @@ struct CodexAPISettingsSection: View {
                         Spacer()
                         Button("刷新状态") { perform { try await refresh(sourceID) } }
                         Button("切换到已保存账号") { switching = APISwitchRequest(sourceID: sourceID) }
-                    }
+                    }.disabled(!available(sourceID))
                 }
-                Button("添加 API", systemImage: "plus") { var c = CodexAPIConnection(); c.sourceId = sources.first?.id ?? ""; editing = c }.disabled(sources.isEmpty)
+                Button("添加 API", systemImage: "plus") { var c = CodexAPIConnection(); c.sourceId = availableSources.first?.id ?? ""; editing = c }.disabled(availableSources.isEmpty)
+                if availableSources.isEmpty {
+                    Text("暂无可用位置。请启用 Codex、选择机器并开启目录采集。").font(AppFont.secondary).foregroundStyle(.secondary)
+                    Button("机器与采集设置") { model.openSettings(.init(provider: "codex", section: "machines")) }
+                }
                 if connections.isEmpty { Text("密钥保存在所选设备。").font(AppFont.secondary).foregroundStyle(.secondary) }
                 if let message { Text(message).font(AppFont.secondary).textSelection(.enabled) }
-            }.disabled(busy || model.settingsDirty)
-                .task { for id in Set(connections.map(\.sourceId)) { try? await refresh(id) } }
+            }.disabled(busy)
+                .task { for id in Set(connections.map(\.sourceId)) where available(id) { try? await refresh(id) } }
                 .sheet(item: $editing) { connection in
                     CodexAPIEditor(model: model, connection: connection) { editing = nil; Task { try? await refresh(connection.sourceId) } }
                 }
@@ -80,7 +87,7 @@ struct CodexAPISettingsSection: View {
     }
     private func location(_ id: String) -> String {
         guard let source = sources.first(where: { $0.id == id }) else { return "来源已移除" }
-        return model.machineName(source.hostId ?? "local") + " · " + source.name
+        return model.machineName(source.hostId ?? "local") + " · " + source.displayLocation
     }
     private func selectedLabel(_ id: String) -> String {
         guard let selected = statuses[id]?.selected else { return "状态待检查" }
@@ -88,7 +95,10 @@ struct CodexAPISettingsSection: View {
     }
     private func isSelected(_ c: CodexAPIConnection) -> Bool { statuses[c.sourceId]?.selected?.connectionId == c.id }
     private func isApplied(_ c: CodexAPIConnection) -> Bool { isSelected(c) && statuses[c.sourceId]?.selected?.revision == c.revision }
-    private func refresh(_ id: String) async throws { statuses[id] = try await model.engine.call("codexApi.status", params: ["sourceId":id]) }
+    private func refresh(_ id: String) async throws {
+        guard available(id) else { statuses[id] = nil; return }
+        statuses[id] = try await model.engine.call("codexApi.status", params: ["sourceId":id])
+    }
     private func probe(_ c: CodexAPIConnection) async throws {
         struct Probe: Decodable { var message: String; var httpStatus: Int? }
         let result: Probe = try await model.engine.call("codexApi.probe", params: ["sourceId":c.sourceId,"id":c.id])
@@ -113,14 +123,14 @@ struct CodexAPIEditor: View {
         self.model = model; self.connection = connection; self.onSaved = onSaved
         _draft = State(initialValue: connection)
     }
-    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == "codex" } }
+    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == "codex" && model.settings.sourceEnabled($0) } }
     private var dirty: Bool { draft != connection || !apiKey.isEmpty }
     var body: some View {
         VStack(spacing: 0) {
             HStack { Text(connection.id.isEmpty ? "添加 Codex API" : "设置 Codex API").font(AppFont.title); Spacer() }.padding()
             Form {
                 Picker("保存到设备", selection: $draft.sourceId) {
-                    ForEach(sources) { source in Text(model.machineName(source.hostId ?? "local") + " · " + source.name).tag(source.id) }
+                    ForEach(sources) { source in Text(model.machineName(source.hostId ?? "local") + " · " + source.displayLocation).tag(source.id) }
                 }.disabled(!connection.id.isEmpty)
                 TextField("连接名称", text: $draft.name)
                 TextField("Base URL", text: $draft.baseUrl)
@@ -130,9 +140,9 @@ struct CodexAPIEditor: View {
             }.formStyle(.grouped).disabled(busy)
             HStack {
                 Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
-                Button(busy ? "保存中…" : "保存") { Task { _ = await save() } }.buttonStyle(.borderedProminent).disabled(busy || draft.sourceId.isEmpty)
+                Button(busy ? "保存中…" : "保存") { Task { _ = await save() } }.buttonStyle(.borderedProminent).disabled(busy || !sources.contains(where: { $0.id == draft.sourceId }))
             }.padding()
-        }.frame(width: 530, height: 385).aieyesAccent().interactiveDismissDisabled(busy)
+        }.frame(width: DesignTokens.dialogApiWidth, height: 385).aieyesAccent().interactiveDismissDisabled(busy)
             .onDisappear { apiKey = "" }
             .updateOperation("Codex API 配置", active: busy)
             .updateDraftGuard("Codex API 连接", snapshot: draftSnapshot(draft) + String(apiKey.hashValue), dirty: dirty, saving: busy, save: { await save() }, discard: { apiKey = ""; dismiss() })
@@ -158,6 +168,7 @@ private struct CodexConnectionSwitchSheet: View {
     @State private var busy = false
     @State private var error: String?
     private var processes: [CodexProcess] { prepared?.processes ?? [] }
+    private var available: Bool { model.settings.sources.contains { $0.id == request.sourceID && model.settings.sourceEnabled($0) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("切换 Codex 登录方式").font(AppFont.title)
@@ -169,6 +180,7 @@ private struct CodexConnectionSwitchSheet: View {
             }
             Text("确认后会关闭下面列出的受影响进程。已确认使用独立 API 配置的实例会保留；请先保存工作。").foregroundStyle(.secondary)
             if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
+            if !available { Text("此位置已暂停或未绑定，请在机器与采集设置中恢复后重新检查。").foregroundStyle(.secondary) }
             if busy { ProgressView().controlSize(.small) }
             if prepared != nil && processes.isEmpty { Text("没有需要关闭的进程。") }
             ScrollView {
@@ -182,17 +194,17 @@ private struct CodexConnectionSwitchSheet: View {
             if let preserved = prepared?.preservedProcesses, !preserved.isEmpty { Text("将保留 \(preserved.count) 个独立 API 进程。").font(AppFont.secondary).foregroundStyle(.secondary) }
             HStack {
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("重新检查") { Task { await prepare() } }
+                Button("重新检查") { Task { await prepare() } }.disabled(!available)
                 Spacer()
                 Button(processes.isEmpty ? "确认切换" : "关闭并切换") { Task { await commit() } }
-                    .buttonStyle(.borderedProminent).disabled(prepared == nil || processes.contains { !$0.canClose })
-            }.disabled(busy || model.settingsDirty)
-        }.padding(24).frame(width: 530).aieyesAccent().interactiveDismissDisabled(busy)
+                    .buttonStyle(.borderedProminent).disabled(!available || prepared == nil || processes.contains { !$0.canClose })
+            }.disabled(busy)
+        }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogApiWidth).aieyesAccent().interactiveDismissDisabled(busy)
             .task { await prepare() }
             .updateOperation("Codex 登录切换", active: busy)
     }
     private func prepare() async {
-        guard !busy else { return }; busy = true; error = nil; prepared = nil; defer { busy = false }
+        guard !busy, available else { return }; busy = true; error = nil; prepared = nil; defer { busy = false }
         do {
             if model.settings.sources.first(where: { $0.id == request.sourceID })?.codexHomeId == nil {
                 let _: Acknowledgement = try await model.engine.call("codexAuth.enable", params: ["sourceId":request.sourceID])
@@ -210,7 +222,7 @@ private struct CodexConnectionSwitchSheet: View {
         } catch { self.error = error.localizedDescription }
     }
     private func commit() async {
-        guard !busy, let prepared else { return }; busy = true; error = nil; defer { busy = false }
+        guard !busy, available, let prepared else { return }; busy = true; error = nil; defer { busy = false }
         do {
             let result: CodexOperation = try await model.engine.call("codexAuth.switch.commit", params: ["sourceId":request.sourceID,"operationId":prepared.operationId,"closeProcesses":!processes.isEmpty])
             guard result.status == "succeeded" else { throw ClientError.message(result.error ?? "切换尚未完成，请重新检查") }

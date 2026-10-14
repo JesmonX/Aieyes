@@ -58,12 +58,16 @@ pub(crate) fn codex_switched(store: &Store, source: &Source, operation: &Value) 
 }
 fn fingerprint(settings: &Settings, account: &Account, source: &Source) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
+    let mut source = source.clone();
+    if source.host_id.is_some() {
+        source.proxy = None;
+    }
     json!([
         source,
-        settings.proxy,
+        source.host_id.is_none().then_some(&settings.proxy),
         account.identity_key,
         account.profile_refs(),
-        pre_command(settings, Some(account), source),
+        pre_command(settings, Some(account), &source),
         source
             .host_id
             .as_ref()
@@ -254,16 +258,27 @@ pub fn task_uses(account: &Account, settings: &Settings, record: &crate::wakeups
         })
 }
 pub fn lock_tasks(store: &Store) -> Result<crate::file_lock::FileLock> {
+    lock_task_ownership(store, false)
+}
+pub(crate) fn lock_task_ownership(
+    store: &Store,
+    shared: bool,
+) -> Result<crate::file_lock::FileLock> {
     let root = std::path::Path::new(store.db.path().context("数据目录不可用")?)
         .parent()
         .context("数据目录不可用")?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
+        .read(true)
         .write(true)
         .open(root.join("account-tasks.lock"))?;
-    crate::file_lock::FileLock::try_exclusive(file)
-        .map_err(|_| anyhow::anyhow!("有账户任务正在部署或删除，请稍后重试"))
+    let lock = if shared {
+        crate::file_lock::FileLock::try_shared(file)
+    } else {
+        crate::file_lock::FileLock::try_exclusive(file)
+    };
+    lock.map_err(|_| anyhow::anyhow!("有账户任务正在部署或删除，请稍后重试"))
 }
 pub fn ensure_not_deleting(store: &Store, account: &Account) -> Result<()> {
     ensure!(
@@ -350,7 +365,7 @@ impl Engine {
             return Ok(json!(rows));
         }
         if method == "accounts.deployments.sync" {
-            return self.sync_account_deployments();
+            return self.sync_account_deployments(&params);
         }
         let account_key = params["accountKey"].as_str().context("请选择账户")?;
         if method == "accounts.delete"
@@ -622,41 +637,37 @@ impl Engine {
         Ok(json!({"deleted":true,"settings":saved,"abandonedTasks":abandoned}))
     }
 
-    fn sync_account_deployments(&mut self) -> Result<Value> {
+    fn sync_account_deployments(&mut self, params: &Value) -> Result<Value> {
         let mut results = vec![];
-        for record in self.store.wakeups()? {
+        let mut synced = vec![];
+        for record in self
+            .store
+            .wakeups()?
+            .into_iter()
+            .filter(|r| params["taskId"].as_str().is_none_or(|id| r.task.id == id))
+        {
             let Some(deployment) = &record.deployment else {
                 continue;
             };
             if deployment.state != "settings-pending" {
                 continue;
             }
-            let enabled = deployment.enabled;
             let id = &record.task.id;
-            let result = self.wakeup_call(
-                "wakeups.deploy",
-                json!({"id":id,"preserveEnabled":enabled,"useDeployedTask":true}),
-            );
-            let result = result.and_then(|value| {
-                ensure!(
-                    value["deployment"]["state"] != "settings-pending",
-                    "同步期间配置再次变化，请重试同步"
-                );
-                Ok(value)
-            });
-            if let Err(e) = result {
-                if let Ok(mut current) = self.store.wakeup(id) {
-                    if let Some(d) = &mut current.deployment {
-                        d.state = "settings-pending".into();
-                    }
-                    self.store.save_wakeup(&current)?;
+            let result = (|| -> Result<Option<Value>> {
+                let _lock = crate::wakeups::lock_task(&self.store, id)?;
+                self.sync_wakeup_settings_unlocked(id)
+            })();
+            match result {
+                Err(e) => {
+                    let mut failure = public_task(&record);
+                    failure["error"] = json!(e.to_string());
+                    results.push(failure);
                 }
-                let mut failure = public_task(&record);
-                failure["error"] = json!(e.to_string());
-                results.push(failure);
+                Ok(Some(value)) => synced.push(value),
+                _ => {}
             }
         }
-        Ok(json!({"failedTasks":results}))
+        Ok(json!({"failedTasks":results,"syncedTasks":synced}))
     }
 }
 
@@ -962,6 +973,7 @@ mod tests {
             device_settings: vec![AccountDeviceSettings {
                 machine_id: "remote".into(),
                 pre_command: "other".into(),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -991,7 +1003,7 @@ mod tests {
         );
     }
     #[test]
-    fn conflicting_legacy_directories_remain_distinct_until_explicit_device_save() {
+    fn conflicting_legacy_directories_clear_commands_and_request_one_device_setting() {
         let mut s = Settings {
             version: 3,
             accounts: vec![Account {
@@ -1017,15 +1029,59 @@ mod tests {
             ..Default::default()
         };
         s.migrate();
-        assert!(s.accounts[0].device_settings.is_empty());
+        assert_eq!(s.accounts[0].device_settings.len(), 1);
+        let device = &s.accounts[0].device_settings[0];
+        assert_eq!(device.machine_id, "server");
+        assert!(device.pre_command_reset_required && device.pre_command.is_empty());
+        for source in &s.sources {
+            assert!(source.quota_pre_command.is_empty());
+            assert_eq!(pre_command(&s, Some(&s.accounts[0]), source), "");
+        }
+        let migrated = json!(s);
+        s.migrate();
+        assert_eq!(json!(s), migrated);
+    }
+    #[test]
+    fn legacy_remote_commands_migrate_for_current_settings_and_new_directories_inherit() {
+        let mut settings = Settings {
+            version: 9,
+            hosts: vec![Host {
+                id: "remote".into(),
+                pre_command: "host initialization".into(),
+                ..Default::default()
+            }],
+            accounts: vec![Account {
+                id: "a".into(),
+                ..Default::default()
+            }],
+            sources: vec![Source {
+                id: "s".into(),
+                account_id: "a".into(),
+                host_id: Some("remote".into()),
+                quota_pre_command: "account initialization".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        settings.migrate();
         assert_eq!(
-            pre_command(&s, Some(&s.accounts[0]), &s.sources[0]),
-            "first"
+            settings.accounts[0].device_settings[0].pre_command,
+            "account initialization"
         );
+        assert!(!settings.accounts[0].device_settings[0].pre_command_reset_required);
+        let next = Source {
+            id: "next".into(),
+            account_id: "a".into(),
+            host_id: Some("remote".into()),
+            ..Default::default()
+        };
         assert_eq!(
-            pre_command(&s, Some(&s.accounts[0]), &s.sources[1]),
-            "second"
+            pre_command(&settings, Some(&settings.accounts[0]), &next),
+            "account initialization"
         );
+        settings.sources.push(next);
+        settings.migrate();
+        assert_eq!(settings.accounts[0].device_settings.len(), 1);
     }
     #[test]
     fn lightweight_status_distinguishes_current_from_stored_and_invalidates_old_config() {
@@ -1065,6 +1121,7 @@ mod tests {
             .push(AccountDeviceSettings {
                 machine_id: "local".into(),
                 pre_command: "changed".into(),
+                ..Default::default()
             });
         e.store.save_settings(&settings).unwrap();
         let cached = e.account_call("accounts.status.get", json!({})).unwrap();

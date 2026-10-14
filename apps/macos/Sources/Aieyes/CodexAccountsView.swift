@@ -16,6 +16,7 @@ struct CodexOperation: Decodable, Identifiable {
 
 struct CodexAccountsView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
     var targetAccountID: String? = nil
     var initialSourceID: String? = nil
     var intent = "login"
@@ -39,7 +40,7 @@ struct CodexAccountsView: View {
     @State private var reauthID: String?
     @State private var removeProfile: CodexProfile?
     private let engine = EngineClient()
-    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == "codex" && $0.enabled } }
+    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == "codex" && model.settings.sourceEnabled($0) } }
     private var source: AgentSource? { sources.first { $0.id == sourceID } }
     private var accountID: String { targetAccountID ?? restoredAccountID }
     private var account: AgentAccount? { model.settings.accounts.first { $0.id == accountID && $0.provider == "codex" } }
@@ -56,7 +57,8 @@ struct CodexAccountsView: View {
             Section(intent == "switch" ? "切换账户" : "Codex 登录") {
                 Text(intent == "switch" ? "选择目标账号后，检查并确认切换。" : account.map { "在所选机器登录「" + $0.name + "」，请使用同一个账号。" } ?? "登录或读取成功后自动添加账号，以邮箱命名；已添加的同一账号会自动识别。").foregroundStyle(.secondary)
                 Text("切换会改变机器当前使用的账号。").foregroundStyle(.secondary)
-                Picker("运行位置", selection: $sourceID) { Text("请选择来源").tag(""); ForEach(sources) { Text($0.name + ($0.hostId == nil ? " · 本机" : " · SSH")).tag($0.id) } }.disabled(busy || operation != nil)
+                Picker("运行位置", selection: $sourceID) { Text("请选择来源").tag(""); ForEach(sources) { Text(model.machineName($0.hostId ?? "local") + " · " + $0.displayLocation).tag($0.id).help($0.path) } }.disabled(busy || operation != nil)
+                if sources.isEmpty { Text("暂无可用运行位置。请启用 Codex、选择机器并开启目录采集。").foregroundStyle(.secondary); Button("机器与采集设置") { model.openSettings(.init(provider: "codex", section: "machines")); dismiss() } }
                 if let source { Text(source.path).font(AppFont.secondary).textSelection(.enabled) }
                 if let error { HStack { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled); Button("重试读取") { perform { if let id = switchedProfileID { await refreshAfterSwitch(profileID: id) } else { try await refresh() } } }.disabled(busy) } }
                 if let notice { Text(notice).foregroundStyle(Palette.ok) }
@@ -65,7 +67,7 @@ struct CodexAccountsView: View {
                     Button("读取当前登录账号") { perform { try await ensureManaged(); let _: Acknowledgement = try await call("adopt", ["accountId":accountID]); try await settingsChanged(); try await refresh() } }
                     Button(account == nil ? "登录新账号" : "登录此账号") { reauthID = nil; loginSheet = true }
 
-                }.disabled(busy || model.settingsDirty || source == nil || operation != nil) }
+                }.disabled(busy || source == nil || operation != nil) }
                 if let info { Text("\(info.version ?? "CLI 版本未知") · 认证存储 \(info.storageMode) · \(info.processes.count) 个相关进程").font(AppFont.secondary).foregroundStyle(.secondary) }
             }
             ForEach(visibleProfiles) { profile in
@@ -81,7 +83,7 @@ struct CodexAccountsView: View {
                             if intent == "switch" || targetAccountID != nil { Button("切换到此账户") { perform { await prepareSwitch(profile) } } }
                             if intent == "login" { Button("移除", role: .destructive) { removeProfile = profile } }
                         }
-                    }.disabled(busy || model.settingsDirty || operation != nil)
+                    }.disabled(busy || operation != nil || source == nil)
                 }
             }
             if let operation {
@@ -96,6 +98,7 @@ struct CodexAccountsView: View {
         }.formStyle(.grouped).aieyesAccent()
         .updateOperation("Codex 账户操作", active: busy)
         .onChange(of: busy) { _, value in onBusyChanged(value) }
+        .onChange(of: sources.map(\.id)) { _, _ in if source == nil && operation == nil { sourceID = "" } }
         .task {
             if sourceID.isEmpty { sourceID = initialSourceID ?? sources.first?.id ?? "" }
             if let id = UserDefaults.standard.string(forKey:"codexLogin.operation"), let sid = UserDefaults.standard.string(forKey:"codexLogin.source"), sources.contains(where: { $0.id == sid }) {
@@ -104,7 +107,7 @@ struct CodexAccountsView: View {
         }
         .task(id: sourceID) {
             info = nil; prepared = nil; switchSheet = false; switchedProfileID = nil
-            if !sourceID.isEmpty { perform {
+            if source != nil { perform {
                 try await refresh()
                 if intent == "switch", targetAccountID != nil,
                    let profile = visibleProfiles.first(where: { $0.current != true && account?.profileRefs.contains((source?.codexHomeId ?? "") + ":" + $0.id) == true }) {
@@ -143,7 +146,7 @@ struct CodexAccountsView: View {
                         operation = result; loginSheet = false
                     }
                 }.buttonStyle(.borderedProminent) }.disabled(busy)
-            }.padding(24).frame(width:450).interactiveDismissDisabled(busy)
+            }.padding(DesignTokens.dialogPadding).frame(width:450).interactiveDismissDisabled(busy)
         }
         .sheet(item:$removeProfile) { profile in
             DangerConfirmation(title:"移除账号档案？",explanation:"删除此位置保存的登录凭据，历史记录保留。",affected:[profile.name],confirmLabel:"确认移除",cancel:{removeProfile = nil},confirm:{removeProfile = nil;perform { let _: Acknowledgement = try await call("profiles.remove",["profileId":profile.id]);try await settingsChanged();try await refresh() }})
@@ -193,8 +196,8 @@ struct CodexAccountsView: View {
                 Button((prepared?.processes ?? []).isEmpty ? "确认切换" : "关闭并切换") { perform { await commitSwitch() } }
                     .buttonStyle(.borderedProminent)
                     .disabled(prepared == nil || (prepared?.processes ?? []).contains { !$0.canClose })
-            }.disabled(busy || model.settingsDirty)
-        }.padding(24).frame(width: 530).interactiveDismissDisabled(busy).aieyesAccent()
+            }.disabled(busy)
+        }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogApiWidth).interactiveDismissDisabled(busy).aieyesAccent()
     }
     private func prepareSwitch(_ profile: CodexProfile) async {
         switchTarget = profile; switchSourceID = sourceID; switchError = nil
@@ -239,8 +242,6 @@ struct CodexAccountsView: View {
 
     private func settingsChanged() async throws {
         let saved: Settings = try await engine.call("settings.get")
-        let newAccounts = saved.accounts.filter { a in !model.settings.accounts.contains { $0.key == a.key } }
-        for account in newAccounts { PanelAccountPreference.includeNew(account, accounts: saved.accounts) }
         model.acceptConfiguration(saved)
     }
     private func ensureManaged() async throws {

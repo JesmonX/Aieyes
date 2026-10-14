@@ -361,7 +361,8 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         .unwrap_or_default();
     let status_item = MenuItem::with_id(app, "status", "正在读取会话状态…", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "打开 Aieyes", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let pet_settings = MenuItem::with_id(app, "pet-settings", "桌宠设置", true, None::<&str>)?;
     let tray = MenuItem::with_id(app, "tray", "仅系统状态栏 / 托盘", true, None::<&str>)?;
     let pet = MenuItem::with_id(app, "pet", "使用桌面宠物", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset-position", "重置桌宠位置", true, None::<&str>)?;
@@ -385,6 +386,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             &refresh,
             &open,
             &settings,
+            &pet_settings,
             &tray,
             &pet,
             &reset,
@@ -1217,6 +1219,10 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         }
         "open" => show_main(app, "agent"),
         "settings" => show_main(app, "settings"),
+        "pet-settings" => show_main(
+            app,
+            "settings-target:{\"tab\":\"general\",\"section\":\"desktop\"}",
+        ),
         "prices" => show_main(app, "prices"),
         "add-source" => show_main(app, "add-source"),
         "add-host" => show_main(app, "add-host"),

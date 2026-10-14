@@ -216,6 +216,7 @@ import Combine
         }
         if let window = settingsWindow { fitToVisibleScreen(window) }
         if let window = settingsWindow { showWindow(window) }
+        model.settingsWindowVisible = true
     }
     private func prepareUpdate() async -> Bool {
         model.installingUpdate = true
@@ -349,16 +350,21 @@ import Combine
     }
     func windowWillClose(_ notification: Notification) {
         if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(false, window: "detail") }
+        if (notification.object as? NSWindow) === settingsWindow { model.settingsWindowVisible = false }
     }
     func windowDidChangeOcclusionState(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === detailWindow else { return }
-        model.setWindowVisible(window.occlusionState.contains(.visible) && !window.isMiniaturized, window: "detail")
+        guard let window = notification.object as? NSWindow else { return }
+        let visible = window.occlusionState.contains(.visible) && !window.isMiniaturized
+        if window === detailWindow { model.setWindowVisible(visible, window: "detail") }
+        if window === settingsWindow { model.settingsWindowVisible = visible }
     }
     func windowDidMiniaturize(_ notification: Notification) {
         if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(false, window: "detail") }
+        if (notification.object as? NSWindow) === settingsWindow { model.settingsWindowVisible = false }
     }
     func windowDidDeminiaturize(_ notification: Notification) {
         if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(true, window: "detail") }
+        if (notification.object as? NSWindow) === settingsWindow { model.settingsWindowVisible = true }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if settingsWindow?.attachedSheet != nil { settingsWindow?.makeKeyAndOrderFront(nil); return .terminateCancel }
@@ -415,6 +421,7 @@ import Combine
             await model.reload()
             await model.loadPrices()
             await model.refreshSessions()
+            await model.loadPetLibrary()
             await model.testNetwork()
             if ProcessInfo.processInfo.environment["AIEYES_UI_SCENARIO"] != nil { await model.scan(); await model.refreshQuotas(); await model.sampleHosts() }
             UserDefaults.standard.setVolatileDomain(NativePanelKey.snapshotOverrides(panelQuotaExpanded: model.quotaAccounts.count <= 1), forName: UserDefaults.argumentDomain)
@@ -439,6 +446,10 @@ import Combine
                 model.settingsTab = tab
                 for dark in [false, true] { try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("settings-\(tab)-\(dark ? "dark" : "light").png")) }
             }
+            model.settingsTab = "servers"
+            for dark in [false, true] {
+                try await capture(SettingsView(model: model), size: NSSize(width: 620, height: 440), dark: dark, to: root.appendingPathComponent("settings-servers-small-\(dark ? "dark" : "light").png"))
+            }
             model.settingsTab = "integrations"
             for agent in model.agentConfigurations {
                 model.settingsAgent = agent.provider
@@ -454,6 +465,12 @@ import Combine
                 model.generalPage = page
                 for dark in [false, true] {
                     try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("settings-general-\(page)-\(dark ? "dark" : "light").png"))
+                }
+            }
+            await model.loadPetLibrary()
+            if !model.petLibrary.isEmpty {
+                for dark in [false, true] {
+                    try await capture(PetLibraryView(model: model).padding(20).environment(\.surfaceActive, true), size: NSSize(width: 530, height: 530), dark: dark, to: root.appendingPathComponent("pet-library-\(dark ? "dark" : "light").png"))
                 }
             }
             model.generalPage = "appearance"

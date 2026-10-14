@@ -11,11 +11,11 @@ struct FloatingTokenCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack { Text("总 Token"); Spacer(); Image(systemName: "sparkle") }.font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(Format.compact(total)).font(.system(size: 24, weight: .semibold))
-                    Text("(" + Format.percent(tokens.cacheRate.map { $0 * 100 }) + ")").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text(Format.compact(total)).font(.system(size: DesignTokens.fontNumber, weight: DesignTokens.weightStrong))
+                    Text("(" + Format.percent(tokens.cacheRate.map { $0 * 100 }) + ")").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary)
                 }.monospacedDigit()
-                Text("点击查看详情").font(.system(size: 11)).foregroundStyle(.secondary).opacity(hovering ? 1 : 0)
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(12).modifier(NeutralCard())
+                Text("点击查看详情").font(.system(size: DesignTokens.fontHint)).foregroundStyle(.secondary).opacity(hovering ? 1 : 0)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(DesignTokens.tokenCardPadding).modifier(NeutralCard())
         }.buttonStyle(.plain).onHover { hovering = $0 }.accessibilityLabel("总 Token，点击查看详情")
             .popover(isPresented: $expanded, arrowEdge: .bottom) {
                 CacheSummaryCard(tokens: tokens).padding(10).frame(width: 340)

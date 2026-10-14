@@ -1,5 +1,11 @@
 /* Shared UI semantics. Query timestamps deliberately never imply a successful sync. */
 window.AieyesUI = {
+  shortPath(path,limit=42) {
+    const text=Array.from(String(path??''));
+    if(text.length<=limit)return text.join('');
+    const head=Math.floor((limit-1)/3);
+    return text.slice(0,head).join('')+'…'+text.slice(-(limit-head-1)).join('');
+  },
   canonicalProvider(provider) { return provider === 'agy' ? 'antigravity' : provider; },
   canonicalAccountKey(key, aliases = {}) { return aliases[key] ?? (key?.startsWith('agy:') ? 'antigravity:' + key.slice(4) : key); },
   canonicalPayload(value, aliases = value?.accountAliases ?? {}) {
@@ -53,9 +59,8 @@ window.AieyesUI = {
     for(const provider of new Set([...eligible.map(a=>a.provider),...Object.keys(preference.providers)])) {
       const keys=sorted.filter(a=>a.provider===provider).map(a=>a.provider+':'+a.id), choice=preference.providers[provider];
       const saved=Array.isArray(choice?.keys)?choice.keys:[];
-      let values=choice?.mode==='custom'?saved.filter(k=>keys.includes(k)):keys;
-      if(choice?.mode==='custom'&&saved.length&&!values.length)values=keys;
-      selected[provider]=[...new Set(values)].slice(0,5);
+      const values=choice?.mode==='custom'?saved.filter(k=>keys.includes(k)):keys.slice(0,5);
+      selected[provider]=[...new Set(values)];
     }
     return selected;
   },
@@ -67,9 +72,34 @@ window.AieyesUI = {
     if (record.status==='pending') return record.reason || '待确认';
     return ({boundary:'用量边界待确认',noUsage:'暂无有效用量',unpriced:'模型价格不完整',insufficientUsage:'等待可确认的消耗',invalidPrice:'价格数据无效'})[record.calculationStatus] || record.calculationNote || '尚无估值';
   },
-  estimateEntries(records = [], credits = false) {
+  estimateVisibility(quota, records = [], group = '') {
+    const latest=this.canonicalEstimates(records)[0], scope=group||latest?.groupId||'';
+    const windows=quota?.windows?.length?quota.windows:(latest?.checkpointWindows??[]);
+    const rows=scope?windows.filter(w=>(w.groupId||w.groupName)===scope):windows;
+    const five=windows.length?rows.some(w=>w.windowMinutes===window.AieyesContract.windows.fiveHour):latest?.valuationMode==='fiveHour';
+    const provider=quota?.provider??latest?.accountKey?.split(':')[0];
+    const plan=String(quota?.plan||latest?.quotaPlan||'').trim().toLowerCase();
+    return {five,direct:!(provider==='codex'&&plan==='plus'),ratio:five};
+  },
+  estimatePeriods(quota, records = [], group = '') {
+    const visible=this.estimateVisibility(quota,records,group);
+    return [visible.five?'5h':'',visible.direct||visible.ratio?'7d':''].filter(Boolean).join(' / ');
+  },
+  estimateHelp(quota, records = [], group = '') {
+    const visible=this.estimateVisibility(quota,records,group);
+    if(visible.ratio&&visible.direct)return '7d 左值：5h 等价值 × 近期容量倍率；右值：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。';
+    if(visible.ratio)return '7d：5h 等价值 × 近期容量倍率；这些金额为 API 等价价值。';
+    if(visible.direct)return '7d：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。';
+    return '按采样时段的 API 等价成本与对应额度消耗比例计算。';
+  },
+  estimateEntries(records = [], credits = false, quota = null, group = '') {
     const all=this.canonicalEstimates(records);
-    return (credits ? [['valuePer1000','1000 credits']] : [['fiveHourValue','5h'],['weeklyValue','7d 整周'],['weeklyRatioValue','7d 容量倍率']]).flatMap(([field,label])=>{
+    const visible=this.estimateVisibility(quota,records,group);
+    return (credits ? [['valuePer1000','1000 credits']] : [
+      ...(visible.five?[['fiveHourValue','5h']]:[]),
+      ...(visible.direct?[['weeklyValue','7d 整周']]:[]),
+      ...(visible.ratio?[['weeklyRatioValue','7d 容量倍率']]:[])
+    ]).flatMap(([field,label])=>{
       const record=all.find(e=>e.status!=='pending'&&Number.isFinite(e[field]));
       return record?[{field,label:field==='weeklyValue'&&record.valuationMode==='fiveHour'?'7d 同期':label,value:record[field],record,historical:record!==all[0]||record.status==='completed'}]:[];
     });
@@ -150,16 +180,17 @@ window.AieyesUI = {
     const five=windows.filter(w=>w.windowMinutes===window.AieyesContract.windows.fiveHour),week=windows.filter(w=>w.windowMinutes===window.AieyesContract.windows.week);
     return five.length===1?five:q.provider==='claude'&&five.some(w=>w.id==='five_hour')?five.filter(w=>w.id==='five_hour'):week.length===1?week:week.filter(w=>q.provider==='claude'&&w.id==='seven_day');
   },
-  estimateLine(records=[]) {
-    const entries=this.estimateEntries(records), value=field=>entries.find(e=>e.field===field)?.value;
-    return '5h ≈ '+this.compactMoney(value('fiveHourValue'))+'  7d ≈ '+this.compactMoney(value('weeklyRatioValue'))+'/'+this.compactMoney(value('weeklyValue'));
+  estimateLine(records=[], quota=null, group='') {
+    const visible=this.estimateVisibility(quota,records,group),entries=this.estimateEntries(records,false,quota,group), value=field=>this.compactMoney(entries.find(e=>e.field===field)?.value);
+    const week=[visible.ratio?value('weeklyRatioValue'):null,visible.direct?value('weeklyValue'):null].filter(v=>v!==null);
+    return [visible.five?'5h ≈ '+value('fiveHourValue'):'',week.length?'7d ≈ '+week.join('/'):''].filter(Boolean).join('  ')||'额度估值';
   },
   migrateProviderPreferences(settings) {
     const aliases=settings?.accountAliases??{}, key=s=>aliases[s]??(s.startsWith('agy:')?'antigravity:'+s.slice(4):s);
     try {
       const marker=JSON.stringify(aliases); if(localStorage.getItem('aieyes.antigravity.preferences')===marker)return;
       const pref=this.panelPreference(), old=pref.providers.agy;
-      if(old){const current=pref.providers.antigravity;pref.providers.antigravity=current?{mode:current.mode==='custom'||old.mode==='custom'?'custom':'auto',keys:[...new Set([...(current.keys??[]),...(old.keys??[])].map(key))].slice(0,5)}:{...old,keys:(old.keys??[]).map(key)};delete pref.providers.agy;localStorage.setItem('aieyes.panel.accounts.v2',JSON.stringify(pref));}
+      if(old){const current=pref.providers.antigravity;pref.providers.antigravity=current?{mode:current.mode==='custom'||old.mode==='custom'?'custom':'auto',keys:[...new Set([...(current.keys??[]),...(old.keys??[])].map(key))]}:{...old,keys:(old.keys??[]).map(key)};delete pref.providers.agy;localStorage.setItem('aieyes.panel.accounts.v2',JSON.stringify(pref));}
       for(const name of Object.keys(localStorage)){if(name.startsWith('quota.expanded.v2.')&&name.includes('.agy:')){const i=name.indexOf('.agy:')+1,next=name.slice(0,i)+key(name.slice(i));if(localStorage.getItem(next)==null)localStorage.setItem(next,localStorage.getItem(name));}}
       const view=JSON.parse(localStorage.getItem('aieyes.panel.view')||'{}');if(view.provider==='agy')view.provider='antigravity';if(view.accountKey)view.accountKey=key(view.accountKey);localStorage.setItem('aieyes.panel.view',JSON.stringify(view));
       localStorage.setItem('aieyes.antigravity.preferences',marker);
@@ -203,7 +234,7 @@ window.AieyesUI = {
     for (const [name,value] of Object.entries(values ?? {})) {
       const el = form.elements.namedItem(name);
       if (!el) continue;
-      if (el.type === 'checkbox') el.checked = value; else el.value = value;
+      if (el.type === 'checkbox') el.checked = value; else if(el.value!==String(value)) el.value = value;
     }
   }
 };

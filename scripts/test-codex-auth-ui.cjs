@@ -130,7 +130,9 @@ function fixture(){
   await page.locator('[data-auth="open"]').click();assert.equal(await page.evaluate(()=>authTest.calls.find(c=>c.method==='codexAuth.openUrl').params.url),'https://auth.openai.com/device');
   await page.screenshot({path:path.resolve(__dirname,'../.local/codex-accounts.png'),fullPage:true});
   await page.locator('[data-auth="cancelLogin"]').click();await page.getByText('登录成功，已启用此账号的额度查询。',{exact:true}).waitFor();
-  await page.evaluate(()=>{state.settingsDraft.sources[0].name='未保存';renderSettings();});assert(await page.locator('[data-auth="adopt"]').isDisabled());
+  await page.evaluate(()=>{state.settingsDraft.sources[0].name='未保存';renderSettings();});assert(!await page.locator('[data-auth="adopt"]').isDisabled());
+  await page.evaluate(()=>AieyesAgentSettings.accept(structuredClone(state.settings)));
+  assert.equal(await page.evaluate(()=>state.settingsDraft.sources[0].name),'未保存','account refresh retains unrelated source draft');
   assert.deepEqual(errors,[]);console.log('Codex auth UI: visible confirmation, helper blocking/recheck, actual identity, stale observations, retry without recommit, reauthorization and dirty settings passed');
  }finally{if(browser)await browser.close();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -49,6 +49,7 @@ function fixture({platform, failStatus = false}) {
       if (method === 'accounts.status.get' && nav.failStatus) throw Error('模拟设备状态读取失败');
       if (['accounts.status.get','accounts.cleanup.list','sources.scan','prices.list','wakeups.list'].includes(method)) return [];
       if (method === 'accounts.deployments.sync') return {failedTasks: []};
+      if (method === 'codexAuth.inspect') return {profiles: [], processes: [], storageMode: 'file'};
       if (method === 'sessions.list') return {sessions: [], warnings: []};
       if (method === 'quotas.schedule') return {nextDueAt: stamp + 86400};
       return {};
@@ -57,7 +58,7 @@ function fixture({platform, failStatus = false}) {
 }
 
 (async () => {
-  const root = path.resolve(__dirname, '../apps/desktop/web'), out = path.resolve(__dirname, '../.local/ui-adjustments-20261013/web');
+  const root = path.resolve(__dirname, '../apps/desktop/web'), out = path.resolve(__dirname, '../.local/ui-review-20261014-implementation/web');
   fs.mkdirSync(out, {recursive: true});
   const server = http.createServer((req, res) => {
     if (serveFont(req, res)) return;
@@ -96,16 +97,16 @@ function fixture({platform, failStatus = false}) {
       assert.equal(await page.locator('#account-status-error').count(), 0, 'successful retry clears the retained error');
       assert(!await page.locator('#message').innerText().then(text => text.includes('模拟设备状态读取失败')), 'successful retry clears its own notification');
       await page.evaluate(() => openSettings({category: 'accounts', accountKey: 'codex:a5'}));
-      assert(await page.locator('[data-account-panel]').isDisabled());
-      assert.match(await page.locator('.account-config').innerText(), /5\/5.*最多显示 5/);
+      assert(!await page.locator('[data-account-panel]').isDisabled());
+      assert.match(await page.locator('.account-config').innerText(), /手动选择不限数量/);
       await page.locator('[data-account-panel-manage]').click();
       await page.locator('#quota-dialog[open]').waitFor();
-      assert(await page.locator('[data-panel-account="codex:a5"]').isDisabled());
-      await page.locator('[data-panel-account="codex:a0"]').uncheck();
+      assert(!await page.locator('[data-panel-account="codex:a5"]').isDisabled());
       await page.locator('[data-panel-account="codex:a5"]').check();
       const order = await page.evaluate(() => state.dashboard.quotaOrder);
       await page.locator('#panel-accounts-save').click();
       assert(await page.locator('[data-account-panel]').isChecked());
+      assert.equal(await page.evaluate(()=>AieyesUI.panelAccounts(state.settings).codex.length),6,'manual selection keeps all six accounts');
       assert.deepEqual(await page.evaluate(() => state.dashboard.quotaOrder), order);
 
       await page.locator('[data-settings-agent=deepseek]').click();
@@ -146,17 +147,45 @@ function fixture({platform, failStatus = false}) {
       await page.evaluate(() => navigationFixture.failSave = false);
       await page.locator('#settings-retry-save').click(); await settled(page);
       assert.equal(await page.evaluate(() => state.settings.refreshSeconds), 600);
+      const normalizedSaveCount=await page.evaluate(()=>navigationFixture.calls.filter(c=>c.args?.method==='settings.patch').length);
+      await page.locator('#field-refreshSeconds').fill('00660');await page.locator('#field-refreshSeconds').blur();await settled(page);
+      assert.equal(await page.locator('#field-refreshSeconds').inputValue(),'660','committed numeric spelling is normalized in place');
+      await page.waitForTimeout(300);
+      assert.equal(await page.evaluate(()=>navigationFixture.calls.filter(c=>c.args?.method==='settings.patch').length),normalizedSaveCount+1,'normalized values do not leave a dirty form or trigger another save');
+      await page.evaluate(()=>{navigationFixture.holdSave=true;delete navigationFixture.releaseSave;});
+      await page.locator('#field-refreshSeconds').fill('900');await page.locator('#field-refreshSeconds').blur();await page.waitForFunction(()=>navigationFixture.releaseSave);
+      await page.locator('#field-refreshSeconds').fill('660');await page.locator('#field-refreshSeconds').dispatchEvent('change');
+      await page.evaluate(()=>navigationFixture.releaseSave());await settled(page);
+      assert.equal(await page.evaluate(()=>state.settings.refreshSeconds),660,'changing A to B and back to A during a save queues the reverted value');
+      assert.equal(await page.locator('#field-refreshSeconds').inputValue(),'660');
+      assert.deepEqual(await page.evaluate(()=>navigationFixture.calls.filter(c=>c.args?.method==='settings.patch').slice(-2).map(c=>c.args.params.settings.refreshSeconds)),[900,660]);
 
       await page.locator('[data-general-page=appearance]').click();
-      await page.evaluate(() => {navigationFixture.holdSave = true; navigationFixture.settings.codexApis[0].name = '并发更新的 API';});
+      await page.evaluate(() => {navigationFixture.holdSave = true; delete navigationFixture.releaseSave; navigationFixture.settings.codexApis[0].name = '并发更新的 API';});
       await page.locator('#field-appearanceTheme').selectOption('dark');
       await page.waitForFunction(() => navigationFixture.releaseSave);
+      assert(!await page.locator('#field-appearanceAccent').isDisabled(),'saving keeps the current form interactive');
+      await page.locator('#field-appearanceAccent').selectOption('purple');
+      await page.locator('[data-general-page=network]').click();await page.locator('#field-proxyTestUrls').fill('https://queued.invalid');await page.locator('#field-proxyTestUrls').blur();
+      await page.locator('[data-general-page=appearance]').click();
+      await page.locator('#field-appearanceAccent').focus();
+      await page.evaluate(() => navigationFixture.releaseSave());
+      await settled(page);
+      assert.equal(await page.evaluate(()=>document.activeElement.id),'field-appearanceAccent','queued saves preserve focus');
+      assert.equal(await page.evaluate(()=>state.settings.appearance.accent),'purple','edits during the in-flight save are queued');
+      assert.deepEqual(await page.evaluate(()=>state.settings.proxyTestUrls),['https://queued.invalid'],'queued edits survive navigation between general forms');
+      assert(await page.locator('#message').isHidden(),'autosave has inline success feedback');
       await page.locator('[data-general-page=network]').click();
       await page.locator('#field-proxyTestUrls').fill('https://new.invalid'); await page.locator('#field-proxyTestUrls').blur();
       await page.evaluate(() => navigationFixture.releaseSave()); await settled(page);
       assert.deepEqual(await page.evaluate(() => state.settings.proxyTestUrls), ['https://new.invalid']);
       assert.equal(await page.evaluate(() => state.settings.codexApis[0].name), '并发更新的 API');
       assert.equal(await page.evaluate(() => state.settings.appearance.theme), 'dark');
+      await page.locator('#field-proxyTestUrls').fill('https://draft.invalid');
+      await page.evaluate(()=>{navigationFixture.settings.proxy.url='http://external.invalid:8080';AieyesAgentSettings.accept(structuredClone(navigationFixture.settings));renderSettings(false);});
+      assert.equal(await page.locator('#field-appHost').inputValue(),'external.invalid','a refreshed configuration updates untouched form fields');
+      assert.equal(await page.locator('#field-proxyTestUrls').inputValue(),'https://draft.invalid','configuration refresh preserves unrelated unsaved text');
+      await page.locator('#field-proxyTestUrls').focus();await page.locator('#field-proxyTestUrls').dispatchEvent('change');await settled(page);
 
       await page.locator('[data-page=agent]').click();
       const scans = await page.evaluate(() => navigationFixture.calls.filter(c => c.args?.method === 'sources.scan').length);
@@ -201,6 +230,21 @@ function fixture({platform, failStatus = false}) {
       assert.equal(await page.locator('#field-target').inputValue(), '');
       await page.locator('#cancel-editor').click();
       await page.locator('[data-page=settings]').click();
+      await page.locator('[data-settings-agent=codex]').click();
+      const localMenu=page.locator('.agent-machine:has([data-agent-machine][value=local]) .machine-menu'),remoteMenu=page.locator('.agent-machine:has([data-agent-machine][value=host]) .machine-menu');
+      await page.evaluate(()=>{const d=document.createElement('details');d.id='ordinary-disclosure';d.open=true;d.innerHTML='<summary>普通折叠区</summary><p>保持展开</p>';document.body.append(d);});
+      await localMenu.locator('summary').click();await page.keyboard.press('ArrowDown');
+      assert(await localMenu.locator('[role=menuitem]').first().evaluate(el=>el===document.activeElement));
+      await page.keyboard.press('End');assert(await localMenu.locator('[role=menuitem]').last().evaluate(el=>el===document.activeElement));
+      await page.keyboard.press('Home');assert(await localMenu.locator('[role=menuitem]').first().evaluate(el=>el===document.activeElement));
+      await page.keyboard.press('Escape');assert.equal(await localMenu.evaluate(el=>el.open),false);assert(await localMenu.locator('summary').evaluate(el=>el===document.activeElement));
+      await localMenu.locator('summary').click();await remoteMenu.locator('summary').focus();await page.keyboard.press('Enter');
+      assert.equal(await localMenu.evaluate(el=>el.open),false);assert.equal(await page.locator('.machine-menu[open]').count(),1);
+      await page.locator('#title').click();assert.equal(await page.locator('.machine-menu[open]').count(),0,'external clicks close the active machine menu');
+      await remoteMenu.locator('summary').click();await remoteMenu.locator('[data-device-enabled]').click();await settled(page);
+      assert.equal(await page.locator('.machine-menu[open]').count(),0,'selecting an operation closes its menu');
+      assert.equal(await page.locator('#ordinary-disclosure').evaluate(el=>el.open),true,'menu dismissal leaves ordinary disclosures alone');
+      await page.evaluate(()=>{document.getElementById('ordinary-disclosure').remove();navigationFixture.settings.hosts[0].enabled=true;AieyesAgentSettings.accept(structuredClone(navigationFixture.settings));renderSettings(false);});
       await page.screenshot({path: path.join(out, platform + '-integration.png')});
       await page.setViewportSize({width: 640, height: 440});
       for (const provider of ['codex','claude','antigravity','deepseek','custom']) {
@@ -239,6 +283,30 @@ function fixture({platform, failStatus = false}) {
       await page.evaluate(target => navigationFixture.emit('desktop:navigate', target), target);
       assert.equal(await page.locator('#field-target').inputValue(), 'fixture.invalid', 'panel target opens the matching host editor in the main window');
       await page.locator('#cancel-editor').click();
+      await page.evaluate(()=>{navigationFixture.settings.localMonitor={enabled:true,metrics:['cpu']};navigationFixture.settings.hosts[0].name='研发共享服务器与很长的机器名称用于核验窄窗口换行';navigationFixture.settings.sources.slice(0,2).forEach((s,i)=>{s.name='同名 Codex 目录用于检查长名称及路径缩略';s.path='/fixture/very/long/directory/path/for/separate/account-'+i+'/.codex';});AieyesAgentSettings.accept(structuredClone(navigationFixture.settings));state.settingsDraft=null;settingsForms.clear();notify('');document.getElementById('background-task')?.remove();});
+      for(const theme of ['light','dark']){
+        await page.setViewportSize({width:640,height:440});
+        await page.evaluate(theme=>{navigationFixture.settings.appearance.theme=theme;AieyesAgentSettings.accept(structuredClone(navigationFixture.settings));state.settingsDraft=null;settingsForms.clear();state.settingsTab='hosts';renderSettings(false);AieyesTheme.apply(state.settings.appearance);},theme);
+        assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'long machine names fit the narrow window');
+        const columns=await page.locator('.machine-row').evaluateAll(rows=>rows.map(row=>['.machine-info','.machine-monitor','.machine-collection','.machine-actions'].map(s=>Math.round(row.querySelector(s).getBoundingClientRect().x))));
+        assert.deepEqual(columns[0],columns[1],'local and remote rows reserve aligned action columns');
+        await page.screenshot({path:path.join(out,platform+'-hosts-narrow-'+theme+'.png')});
+        await page.evaluate(()=>{state.settingsTab='integrations';AieyesAgentSettings.navigate({provider:'codex'});renderSettings(false);});
+        await localMenu.locator('summary').click();
+        const paths=await localMenu.locator('[data-device-manage][data-intent=login] .source-path').allTextContents();assert(paths[0].includes('account-0')&&paths[1].includes('account-1'),'shortened duplicate directory paths preserve the distinguishing suffix');
+        const menuBox=await localMenu.locator('.machine-menu-body').boundingBox();assert(menuBox.y>=0&&menuBox.y+menuBox.height<=440,'long directory menus stay within the viewport and scroll');
+        await page.screenshot({path:path.join(out,platform+'-menu-narrow-'+theme+'.png')});await page.keyboard.press('Escape');
+        await panel.evaluate(theme=>{state.settings.appearance.theme=theme;render();},theme);
+        await panel.screenshot({path:path.join(out,platform+'-panel-narrow-'+theme+'.png')});
+        await panel.evaluate(()=>{navigationFixture.previousPanelPreference=localStorage.getItem('aieyes.panel.accounts.v2');localStorage.setItem('aieyes.panel.accounts.v2',JSON.stringify({version:2,providers:{codex:{mode:'custom',keys:Array.from({length:6},(_,i)=>'codex:a'+i)},claude:{mode:'custom',keys:[]},deepseek:{mode:'custom',keys:[]}}}));render();});
+        assert.equal(await panel.locator('.quota-card').count(),6,'all six manually selected accounts remain scrollable');
+        const navigation=await panel.locator('.panel-tabs').boundingBox();assert(Math.abs(navigation.x+navigation.width/2-225)<1,'panel navigation remains geometrically centered');
+        await panel.screenshot({path:path.join(out,platform+'-panel-multi-'+theme+'.png')});
+        await panel.evaluate(()=>{localStorage.setItem('aieyes.panel.accounts.v2',navigationFixture.previousPanelPreference);render();});
+      }
+      await localMenu.locator('summary').click();await localMenu.locator('[data-device-manage][data-intent=login]').first().click();await page.locator('#auth-source').waitFor();
+      assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'long directory labels in the login location selector fit the narrow window');
+      await page.screenshot({path:path.join(out,platform+'-login-long-path.png')});
       assert.deepEqual(errors, []); await context.close();
     }
     console.log('Settings navigation: Windows/Linux routes, minimum windows, keyboard navigation, status retry, limits, credentials, isolated saves, retained drafts, concurrent edits, missing-quota sampling, host entries, numeric help and compact defaults passed');

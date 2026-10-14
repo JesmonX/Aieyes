@@ -95,7 +95,7 @@ function fixture(){
    }
    else{
     await page.keyboard.press('Control+,');assert.equal(await page.locator('#general-form').count(),0);await page.locator('[data-settings-tab=general]').click();assert.equal(await page.locator('#settings-save-all').count(),0);assert.equal(await page.locator('#connection-form').count(),0);
-    await page.locator('[data-general-page=refresh]').click();await page.locator('#field-refreshSeconds').fill('180');await commitSettings(page);await page.waitForFunction(()=>state.settings.refreshSeconds===180);assert.match(await page.locator('#message').textContent(),/已保存/);assert.equal(await page.evaluate(()=>state.settings.refreshSeconds),180);assert.equal(await page.evaluate(()=>reform.saved.at(-1).refreshSeconds),180);
+    await page.locator('[data-general-page=refresh]').click();await page.locator('#field-refreshSeconds').fill('180');await commitSettings(page);await page.waitForFunction(()=>state.settings.refreshSeconds===180);assert.match(await page.locator('#settings-save-bar').textContent(),/已保存/);assert(await page.locator('#message').isHidden());assert.equal(await page.evaluate(()=>state.settings.refreshSeconds),180);assert.equal(await page.evaluate(()=>reform.saved.at(-1).refreshSeconds),180);
     await page.locator('[data-settings-tab=hosts]').click();await page.locator('[data-remove=h1]').click();assert.match(await page.locator('#editor-fields').textContent(),/本机 Codex/);assert.equal(await page.locator('#cancel-editor').evaluate(el=>el===document.activeElement),true);await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>state.settings.hosts.length),1);
     await page.keyboard.press('Control+Shift+D');
    }

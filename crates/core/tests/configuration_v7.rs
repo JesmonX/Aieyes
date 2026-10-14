@@ -71,6 +71,9 @@ fn account_targets_use_committed_agent_machine_host_and_archive_rules() {
     let mut machines = original.clone();
     machines.agents[0].machine_ids = vec!["online".into()];
     cases.push(("deselected local", machines, vec!["remote"]));
+    let mut local = original.clone();
+    local.local_device_enabled = false;
+    cases.push(("paused local collection", local, vec!["remote"]));
     let mut duplicate = original.clone();
     let mut conflicting = duplicate.agents[0].clone();
     conflicting.enabled = false;
@@ -107,6 +110,27 @@ fn account_targets_use_committed_agent_machine_host_and_archive_rules() {
                 .all(|target| target["canWake"] == true),
             "{name}: {targets}"
         );
+        let drafts = engine
+            .call("accounts.targets", json!({"includeUnavailable":true}))
+            .unwrap();
+        if name != "archived account" {
+            let rows = drafts.as_array().unwrap();
+            assert_eq!(
+                rows.len(),
+                5,
+                "{name}: paused sources remain visible for drafts"
+            );
+            for row in rows {
+                let id = row["sourceId"].as_str().unwrap();
+                assert_eq!(row["available"], expected.contains(&id), "{name}: {row}");
+                assert_eq!(row["canDraft"], id != "missing", "{name}: {row}");
+                if !expected.contains(&id) {
+                    assert_eq!(row["canWake"], false);
+                }
+            }
+        } else {
+            assert!(drafts.as_array().unwrap().is_empty());
+        }
     }
 }
 
@@ -128,7 +152,7 @@ fn legacy_profile_migrates_once_and_removed_connections_do_not_resurrect() {
         ..Default::default()
     };
     settings.migrate();
-    assert_eq!(settings.version, 9);
+    assert_eq!(settings.version, 10);
     assert_eq!(settings.accounts[0].connections.len(), 1);
     let first = json!(settings);
     settings.migrate();

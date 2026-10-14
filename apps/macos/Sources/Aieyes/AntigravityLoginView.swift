@@ -44,7 +44,7 @@ struct AntigravityLoginView: View {
                 if !active || status == nil { Button("重新登录 / 检查") { Task { await call("start") } }.disabled(sending) }
                 if active, status != nil { Button("取消授权") { Task { await call("cancel") } }.disabled(sending) }
             }
-        }.padding(24).frame(width: 540).textFieldStyle(.roundedBorder).interactiveDismissDisabled(active || sending)
+        }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogAgyWidth).textFieldStyle(.roundedBorder).interactiveDismissDisabled(active || sending)
         .task {
             model.agyLoginActive = true; await call("start")
             while !Task.isCancelled {

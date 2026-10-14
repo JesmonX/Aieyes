@@ -1,4 +1,5 @@
 //! Shared pet projection using the public Codex 8 x 9 animation layout.
+use crate::contracts::PET_FRAME_DURATIONS;
 use crate::sessions::{Phase, Snapshot};
 use serde::{Deserialize, Serialize};
 const FRAME_MS: u64 = 100;
@@ -19,6 +20,8 @@ pub struct PetState {
     pub row: u8,
     pub frames: u8,
     pub frame_ms: u64,
+    #[serde(default)]
+    pub frame_durations_ms: Vec<u64>,
     pub key: String,
     #[serde(default)]
     pub active_count: usize,
@@ -38,7 +41,7 @@ pub fn project(snapshot: &Snapshot) -> PetState {
             Some(Phase::Thinking) => ("thinking", "思考中", 8, 6),
             Some(Phase::Tool) => ("working", "执行工具", 7, 6),
             Some(Phase::Working) => ("running", "进行中", 1, 8),
-            Some(Phase::Interrupted) => ("rest", "已中断", 2, 8),
+            Some(Phase::Interrupted) => ("rest", "已中断", 0, 6),
             Some(Phase::Unknown) => ("unknown", "状态待确认", 6, 6),
             None => ("idle", "空闲", 0, 6),
         }
@@ -68,6 +71,7 @@ pub fn project(snapshot: &Snapshot) -> PetState {
         row,
         frames,
         frame_ms: FRAME_MS,
+        frame_durations_ms: PET_FRAME_DURATIONS[row as usize].to_vec(),
         key,
         active_count: snapshot.active_count(),
         phase_counts: snapshot.phase_counts(),
@@ -81,7 +85,37 @@ pub fn frame(state: &PetState, elapsed_ms: u64, reduced: bool) -> u32 {
     if reduced {
         return u32::from(state.row) * 8;
     }
-    u32::from(state.row) * 8 + (elapsed_ms / state.frame_ms % u64::from(state.frames)) as u32
+    let durations = if state.frame_durations_ms.is_empty() {
+        PET_FRAME_DURATIONS
+            .get(state.row as usize)
+            .copied()
+            .unwrap_or(&[])
+    } else {
+        state.frame_durations_ms.as_slice()
+    };
+    let index = if !durations.is_empty()
+        && durations.len() == usize::from(state.frames)
+        && durations.iter().all(|duration| *duration > 0)
+        && let Some(cycle) = durations
+            .iter()
+            .try_fold(0u64, |sum, d| sum.checked_add(*d))
+    {
+        let mut remainder = elapsed_ms % cycle;
+        durations
+            .iter()
+            .position(|duration| {
+                if remainder < *duration {
+                    true
+                } else {
+                    remainder -= *duration;
+                    false
+                }
+            })
+            .unwrap_or(0) as u32
+    } else {
+        (elapsed_ms / state.frame_ms.max(1) % u64::from(state.frames.max(1))) as u32
+    };
+    u32::from(state.row) * 8 + index
 }
 #[cfg(test)]
 mod tests {
@@ -120,12 +154,13 @@ mod tests {
         assert_eq!(project(&snapshot).behavior, "unknown");
     }
     #[test]
-    fn frames_use_one_cadence_and_preserve_the_selected_state() {
+    fn frames_follow_shared_durations_and_preserve_the_selected_state() {
         let idle = project(&Snapshot::default());
-        let idle_cadence: Vec<_> = (0..=6)
-            .map(|step| frame(&idle, step * 100 + 1, false))
+        let idle_cadence: Vec<_> = [0, 279, 280, 389, 390, 500, 640, 780, 1099, 1100]
+            .into_iter()
+            .map(|ms| frame(&idle, ms, false))
             .collect();
-        assert_eq!(idle_cadence, [0, 1, 2, 3, 4, 5, 0]);
+        assert_eq!(idle_cadence, [0, 0, 1, 1, 2, 3, 4, 5, 5, 0]);
         for phase in [
             Phase::Working,
             Phase::Thinking,
@@ -150,11 +185,15 @@ mod tests {
             assert_eq!(frame(&state, 0, true), u32::from(state.row) * 8);
             assert_eq!(frame(&state, 999999, true), frame(&state, 0, true));
             assert_eq!(state.frame_ms, idle.frame_ms);
-            for step in 0..u64::from(state.frames) * 8 {
-                assert_eq!(
-                    frame(&state, step * 100 + 1, false),
-                    u32::from(state.row) * 8 + (step % u64::from(state.frames)) as u32
-                );
+            let cycle: u64 = state.frame_durations_ms.iter().sum();
+            for repeat in 0..8 {
+                let mut start = cycle * repeat;
+                for (index, duration) in state.frame_durations_ms.iter().enumerate() {
+                    let expected = u32::from(state.row) * 8 + index as u32;
+                    assert_eq!(frame(&state, start, false), expected);
+                    assert_eq!(frame(&state, start + duration - 1, false), expected);
+                    start += duration;
+                }
             }
             assert_eq!(frame(&state, 100000, false) / 8, u32::from(state.row));
             for time in 0..10000 {
@@ -209,10 +248,31 @@ mod tests {
         assert_eq!(project(&snapshot).key, first.key);
         assert!(project(&snapshot).label.ends_with("部分状态不可用"));
         snapshot.sessions.retain(|s| s.phase == Phase::Interrupted);
-        assert_eq!(project(&snapshot).row, 2);
+        assert_eq!(project(&snapshot).row, 0);
+        assert_eq!(
+            project(&snapshot).frame_durations_ms,
+            PET_FRAME_DURATIONS[0]
+        );
         assert_eq!(project(&snapshot).active_count, 0);
         assert_eq!(normalized_scale(f64::NAN), 1.0);
         assert_eq!(normalized_scale(0.0), 0.5);
         assert_eq!(normalized_scale(3.0), 2.0);
+    }
+
+    #[test]
+    fn legacy_and_invalid_duration_arrays_use_safe_fallbacks() {
+        let mut state = project(&Snapshot::default());
+        state.frame_durations_ms.clear();
+        assert_eq!(frame(&state, 279, false), 0);
+        assert_eq!(frame(&state, 280, false), 1);
+        state.frame_durations_ms = vec![0; 6];
+        assert_eq!(frame(&state, 100, false), 1);
+        state.frame_durations_ms = vec![u64::MAX; 6];
+        assert_eq!(frame(&state, 100, false), 1);
+        state.row = 9;
+        state.frames = 0;
+        state.frame_ms = 0;
+        state.frame_durations_ms.clear();
+        assert_eq!(frame(&state, 100, false), 72);
     }
 }

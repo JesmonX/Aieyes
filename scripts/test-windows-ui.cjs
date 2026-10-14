@@ -4,18 +4,19 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {execFileSync}=require('node:child_process');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
 const root=path.resolve(__dirname,'../apps/desktop/web');
+const design=require('../docs/ui-design-tokens.json').dimensions;
 const out=path.resolve(process.env.AIEYES_UI_OUT || path.join(__dirname,'../.local/windows-ui-sync/browser'));
 function installFixture(data) {
   window.setInterval=()=>0;
   window.__fixture=data;
-  const info={platform:'windows',page:'agent',mode:'auto',effectiveMode:'floating',nativePet:true,panelOpen:true,panelPinned:false,material:'opaque',materials:{main:'opaque',floating:'opaque'},sessions:[],activeCount:0,summary:'暂无活跃会话'};
+  const info={platform:data.platform??'windows',page:'agent',mode:'auto',effectiveMode:'floating',nativePet:true,panelOpen:true,panelPinned:false,material:'opaque',materials:{main:'opaque',floating:'opaque'},sessions:[],activeCount:0,summary:'暂无活跃会话'};
   const listeners=new Map();
   window.__setDesktopMaterials=(main,floating)=>{info.materials={main,floating};for(const fn of listeners.get('desktop:status')||[])fn({payload:info});};
   window.__TAURI__={event:{listen:async(name,fn)=>{listeners.set(name,[...(listeners.get(name)||[]),fn]);return ()=>{};}},window:{getCurrentWindow:()=>({isMaximized:async()=>false,onResized:async()=>()=>{}})},core:{invoke:async(name,args)=>{
     if(name==='desktop_info')return info;
     if(name==='desktop_panel')return {...info,panelOpen:args.open};
     if(name!=='engine_call')return {};
-    return structuredClone({'hello':{version:'fixture'},'settings.get':data.settings,'dashboard':data.dashboard,'prices.list':data.prices,'hosts.sample':data.hosts,'sessions.list':[],'wakeups.list':data.wakeups,'quotas.refresh':data.dashboard.quotas,'sources.scan':[]}[args.method]??{});
+    return structuredClone({'hello':{version:'fixture'},'settings.get':data.settings,'dashboard':data.dashboard,'dashboard.summary':data.dashboard,'prices.list':data.prices,'hosts.sample':data.hosts,'sessions.list':[],'wakeups.list':data.wakeups,'quotas.refresh':data.dashboard.quotas,'sources.scan':data.scan??[],'accounts.status.get':data.accountStatuses??[],'accounts.targets':[],'network.status':data.network,'network.test':data.network}[args.method]??{});
   }}};
 }
 (async()=>{
@@ -41,7 +42,7 @@ function installFixture(data) {
         await page.evaluate(()=>window.AieyesTheme.loadFonts());
         const theme=dark?'dark':'light';
         await page.evaluate(dark=>{document.documentElement.dataset.theme=dark?'dark':'light';drawTrend();},dark);
-        const shot=async name=>{assert(!/TypeError|ReferenceError|SyntaxError/.test(await page.locator('body').innerText()),'no caught runtime errors in rendered UI');return page.screenshot({path:path.join(out,`${scenario}-${theme}-${name}.png`),animations:'disabled'});};
+        const shot=async name=>{await page.evaluate(async()=>{await AieyesTheme.loadFonts();await document.fonts.ready;});assert(!/TypeError|ReferenceError|SyntaxError/.test(await page.locator('body').innerText()),'no caught runtime errors in rendered UI');return page.screenshot({path:path.join(out,`${scenario}-${theme}-${name}.png`),animations:'disabled'});};
         await shot('overview');
         assert.equal(await page.locator('[data-copy-value]').count(),0,'model rows have no copy buttons');
         const sizes=await page.evaluate(()=>({
@@ -110,7 +111,7 @@ function installFixture(data) {
       for(const theme of ['light','dark'])for(const material of ['opaque','acrylic','blur']) {
         await page.evaluate(({theme,material,surface})=>{AieyesTheme.apply({theme,accent:'blue'});__setDesktopMaterials(surface==='index.html'?material:'opaque',surface==='floating.html'?material:'opaque');},{theme,material,surface});
         const metrics=await page.evaluate(()=>({material:document.documentElement.dataset.material,backing:getComputedStyle(document.body,'::before').backgroundColor,card:getComputedStyle(document.querySelector('.stat')).backgroundColor,bar:getComputedStyle(document.querySelector('.resource-bar,.track')).height,filter:document.querySelector('.filters select').getBoundingClientRect().height}));
-        assert.equal(metrics.material,material);assert.equal(metrics.bar,'4px');assert.equal(metrics.filter,26);
+        assert.equal(metrics.material,material);assert.equal(metrics.bar,'4px');assert.equal(metrics.filter,design['control-compact-height']);
         const alpha=color=>color.startsWith('rgba')?Number(color.match(/, ([\d.]+)\)$/)[1]):1;
         assert.equal(alpha(metrics.backing)<1,material!=='opaque',`${surface} ${theme} ${material} backing`);
         if(material!=='opaque')assert(alpha(metrics.card)<1);
@@ -125,7 +126,7 @@ function installFixture(data) {
       }
       if(surface==='index.html') {
         await page.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
-        await page.locator('[data-general-page=desktop]').click();assert.equal(await page.locator('input[role=switch]').first().evaluate(el=>el.getBoundingClientRect().height),21);await page.locator('[data-general-page=appearance]').click();
+        await page.locator('[data-general-page=desktop]').click();assert.equal(await page.locator('input[role=switch]').first().evaluate(el=>el.getBoundingClientRect().height),design['switch-height']);await page.locator('[data-general-page=appearance]').click();
         await page.locator('#font-license').click();await page.locator('#quota-dialog').waitFor({state:'visible'});
         assert.match(await page.locator('#quota-dialog').innerText(),/HarmonyOS Sans Fonts License Agreement/);
         await page.locator('#quota-dialog').evaluate(el=>el.getAnimations().forEach(a=>a.finish()));
@@ -166,6 +167,7 @@ function installFixture(data) {
       fs.writeFileSync(path.join(out,`fonts-${deviceScaleFactor}.json`),JSON.stringify({platform:process.platform,...fonts,resolved:resolved.fonts,weights},null,2));
       await page.screenshot({path:path.join(out,`panel-dpi-${deviceScaleFactor}.png`)});await context.close();
     }
+    await require('./ui-alignment-checks.cjs')({browser,url:`http://127.0.0.1:${server.address().port}`,data:materialData,installFixture,out});
     console.log('Windows UI sync: six scenarios, two themes, settings, geometry, hints, materials/accessibility, license, bundled font weights and fractional DPI passed');
   } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

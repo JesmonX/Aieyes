@@ -175,6 +175,7 @@ pub struct AccountConnection {
 pub struct AccountDeviceSettings {
     pub machine_id: String,
     pub pre_command: String,
+    pub pre_command_reset_required: bool,
 }
 
 impl Account {
@@ -486,7 +487,10 @@ impl Settings {
                 .iter()
                 .find_map(|c| c.profile_id.clone());
         }
-        if self.version < 4 {
+        {
+            // New associations use the same account × machine setting as migrated ones.
+            // Once present (including an explicit empty value), directory values never win.
+            let mut clear_sources = std::collections::BTreeSet::new();
             for account in &mut self.accounts {
                 let mut commands: std::collections::BTreeMap<
                     String,
@@ -507,17 +511,34 @@ impl Settings {
                     }
                 }
                 for (machine_id, values) in commands {
-                    if values.len() == 1
-                        && !account
-                            .device_settings
-                            .iter()
-                            .any(|d| d.machine_id == machine_id)
+                    if !account
+                        .device_settings
+                        .iter()
+                        .any(|d| d.machine_id == machine_id)
                     {
+                        let conflict = values.len() > 1;
+                        if conflict {
+                            for source in self.sources.iter().filter(|s| {
+                                account.uses_source(s) && s.host_id.as_ref() == Some(&machine_id)
+                            }) {
+                                clear_sources.insert(source.id.clone());
+                            }
+                        }
                         account.device_settings.push(AccountDeviceSettings {
                             machine_id,
-                            pre_command: values.into_iter().next().unwrap(),
+                            pre_command: if conflict {
+                                String::new()
+                            } else {
+                                values.into_iter().next().unwrap_or_default()
+                            },
+                            pre_command_reset_required: conflict,
                         });
                     }
+                }
+            }
+            for source in &mut self.sources {
+                if clear_sources.contains(&source.id) {
+                    source.quota_pre_command.clear();
                 }
             }
         }
@@ -532,7 +553,7 @@ impl Settings {
                 host.monitoring_enabled &= host.enabled;
             }
         }
-        self.version = self.version.max(9);
+        self.version = self.version.max(10);
         self.configuration_issues.clear();
         let mut providers = std::collections::HashSet::new();
         for agent in &self.agents {

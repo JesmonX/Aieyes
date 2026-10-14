@@ -486,17 +486,18 @@ unsafe fn native_menu(hwnd: HWND, surface: &Surface) {
         ),
         ("重建面板（用于界面无响应）", "refresh-floating"),
         ("打开主窗口", "open"),
-        ("设置…", "settings"),
+        ("设置", "settings"),
+        ("桌宠设置", "pet-settings"),
         ("重置位置", "reset-position"),
         ("暂时隐藏", "hide-ball"),
         ("退出 Aieyes", "quit"),
     ];
-    for (i, (label, _)) in rows.iter().enumerate() {
-        if i == 3 || i == 7 {
+    for (i, (label, action)) in rows.iter().enumerate() {
+        if *action == "open" || *action == "quit" {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         }
         let label: Vec<u16> = label.encode_utf16().chain(Some(0)).collect();
-        let flags = if i == 6 && !info["trayAvailable"].as_bool().unwrap_or(false) {
+        let flags = if *action == "hide-ball" && !info["trayAvailable"].as_bool().unwrap_or(false) {
             MF_STRING | MF_GRAYED
         } else {
             MF_STRING

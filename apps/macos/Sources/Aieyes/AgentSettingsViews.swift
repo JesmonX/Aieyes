@@ -26,8 +26,8 @@ struct AgentMachinesSection: View {
     private var unboundMachines: [String] { Array(Set(model.settings.sources.filter { $0.provider == agent.provider && $0.unbound }.compactMap(\.hostId))).filter { id in !model.settings.hosts.contains { $0.id == id } }.sorted() }
     var body: some View {
         Section("机器与目录 · 可多选") {
-            if model.settings.localDeviceEnabled != false { machine("local", name: "本机", available: true) }
-            ForEach(model.settings.hosts.filter(\.enabled)) { host in machine(host.id, name: host.name.isEmpty ? host.target : host.name, available: host.enabled) }
+            machine("local", name: "本机", available: model.settings.localDeviceEnabled != false)
+            ForEach(model.settings.hosts) { host in machine(host.id, name: host.name.isEmpty ? host.target : host.name, available: host.enabled) }
             ForEach(unboundMachines, id: \.self) { id in
                 machine(id, name: (model.settings.sources.first { $0.hostId == id }?.lastMachineName ?? id) + " · 机器未绑定", available: false, unbound: true)
             }
@@ -50,20 +50,22 @@ struct AgentMachinesSection: View {
             Toggle(name + (available || unbound ? "" : " · 采集已暂停"), isOn: Binding(get: { !unbound && agent.machineIds.contains(id) }, set: { selected in
                 var ids = agent.machineIds.filter { $0 != id }; if selected { ids.append(id) }
                 Task { await model.configureAgent(agent.provider, machines: ids) }
-            })).toggleStyle(.checkbox).disabled(!agent.enabled || unbound)
+            })).toggleStyle(.checkbox).disabled(!agent.enabled || unbound || !available).lineLimit(2).help(name)
             Spacer(minLength: 4)
             Button("目录 \(sources.count)") { directories = .init(provider: agent.provider, machine: id) }
             if !unbound { MachineSessionStatus(live: model.live, provider: agent.provider, sources: sources, collecting: sources.contains { model.settings.sourceEnabled($0) }) { hooks = .init(provider: agent.provider, machine: id) } }
-            Text(unbound || !available || !agent.enabled ? "估值暂停" : enabled == 0 ? "估值已关闭" : "估值 \(enabled)/\(sources.count)").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize()
+            Text(unbound || !available || !agent.enabled || !agent.machineIds.contains(id) || !sources.contains(where: { model.settings.sourceEnabled($0) }) ? "估值暂停" : enabled == 0 ? "估值已关闭" : "估值 \(enabled)/\(sources.count)").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize()
             if !unbound {
                 Menu {
                     ForEach(sources.filter { model.settings.sourceEnabled($0) }) { source in
                         if agent.provider == "codex" {
-                            Button("登录 · " + source.name) { authIntent = "login"; sourceToManage = source }
-                            Button("切换账户 · " + source.name) { authIntent = "switch"; sourceToManage = source }
+                            Button("登录 · " + source.displayLocation) { authIntent = "login"; sourceToManage = source }.help(source.path)
+                            Button("切换账户 · " + source.displayLocation) { authIntent = "switch"; sourceToManage = source }.help(source.path)
                         }
-                        if agent.provider == "antigravity" { Button("登录 / 检查 · " + source.name) { agySource = source } }
+                        if agent.provider == "antigravity" { Button("登录 / 检查 · " + source.displayLocation) { agySource = source }.help(source.path) }
                     }
+                    if !sources.contains(where: { model.settings.sourceEnabled($0) }) { Text("登录与切换需要启用 Agent、选择机器并开启目录采集") }
+                    Button("机器与采集设置") { model.openSettings(.init(category: "servers")) }
                     Button(available ? "暂停 Agent 采集" : "恢复 Agent 采集") { Task { await model.setDeviceEnabled(id, enabled: !available) } }
                 } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel(name + "操作")
             }
@@ -103,7 +105,7 @@ private struct MachineSessionHooksView: View {
                     ForEach(model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && !$0.unbound }) { source in SessionHookControls(model: model, source: source) }
                 } }
             }
-        }.padding(24).frame(width: 580, height: provider == "codex" ? 180 : 400).aieyesAccent()
+        }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogHooksWidth, height: provider == "codex" ? 180 : 400).aieyesAccent()
     }
 }
 
@@ -120,7 +122,7 @@ struct AgentAutomaticValuationView: View {
                 Button("完成") { dismiss() }.disabled(model.automaticSaving)
             }
             ScrollView { AutomaticValuationControls(model: model, sources: sources).frame(maxWidth: .infinity, alignment: .leading) }
-        }.padding(24).frame(width: 600, height: 440).aieyesAccent()
+        }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogAutomaticWidth, height: 440).aieyesAccent()
             .interactiveDismissDisabled(model.automaticSaving)
             .updateOperation("自动估值设置", active: model.automaticSaving)
     }
@@ -165,7 +167,7 @@ struct AgentDirectoriesView: View {
                 var params: [String: Any] = ["source": try JSONSerialization.jsonObject(with: JSONEncoder().encode(item))]
                 if sources.contains(where: { $0.id == source.id }) { params["baseSource"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(source)) }
                 let saved: Settings = try await model.engine.call("sources.configure", params: params)
-                model.settings = saved; model.settingsDraft = saved; editing = nil
+                model.acceptConfiguration(saved); editing = nil
                 Task { await model.reload() }
             }
         }
@@ -174,7 +176,7 @@ struct AgentDirectoriesView: View {
                 removing = nil; busy = true; error = nil
                 Task { defer { busy = false }; do {
                     let saved: Settings = try await model.engine.call("sources.remove", params: ["sourceId": source.id, "baseSource": try JSONSerialization.jsonObject(with: JSONEncoder().encode(source))])
-                    model.settings = saved; model.settingsDraft = saved; Task { await model.reload() }
+                    model.acceptConfiguration(saved); Task { await model.reload() }
                 } catch { self.error = error.localizedDescription } }
             })
         }
@@ -301,7 +303,7 @@ struct AccountsSettingsView: View {
         }
     }
     private func managementSource(_ provider: String, machine: String) -> AgentSource? {
-        let sources = model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && $0.enabled }
+        let sources = model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && model.settings.sourceEnabled($0) }
         return sources.first { source in model.accountStatuses.contains { $0.sourceId == source.id && ($0.current == true || $0.credential == true) } } ?? sources.first
     }
     private func currentAccount(_ provider: String, machine: String) -> String {
@@ -362,14 +364,17 @@ struct AccountDevicesView: View {
                     if let message = model.dashboard.quotas.first(where: { $0.id == account.key })?.error { Text("额度查询：" + message).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled) }
                     Picker("优先查询位置", selection: Binding(get: { account.quotaSourceId ?? "" }, set: { value in account.quotaSourceId = value.isEmpty ? nil : value; save { $0.quotaSourceId = value.isEmpty ? nil : value } })) {
                         Text("自动 · 优先本机").tag("")
-                        ForEach(model.settings.sources.filter { current.uses($0) }) { source in Text(model.machineName(source.hostId ?? "local") + " · " + source.name + (source.enabled ? "" : " · 已暂停")).tag(source.id) }
+                        ForEach(model.settings.sources.filter { current.uses($0) }) { source in Text(model.machineName(source.hostId ?? "local") + " · " + source.displayLocation + (model.settings.sourceEnabled(source) ? "" : " · 已暂停")).tag(source.id) }
                     }
                     TextField("查询间隔（秒）", text: $intervalText, prompt: Text("沿用全局 · \(model.settings.refreshSeconds) 秒")).focused($focusedField, equals: "interval")
                     Text("留空沿用全局间隔；自定义范围 5–86400 秒。").font(AppFont.secondary).foregroundStyle(.secondary)
                     TextField("账户名称", text: $account.name).focused($focusedField, equals: "name")
                     Toggle("归档账户", isOn: Binding(get: { account.archived == true }, set: { value in account.archived = value; save { $0.archived = value } }))
-                    Toggle("在面板显示", isOn: panelBinding).disabled(!current.quotaEnabled || (!panelBinding.wrappedValue && panelSelectionCount >= 5))
-                    Text("面板已选择 \(panelSelectionCount)/5 个账户；每个 Agent 最多显示 5 个账户。").font(AppFont.secondary).foregroundStyle(.secondary)
+                    Toggle("在面板显示", isOn: panelBinding).disabled(!current.quotaEnabled)
+                    Text("面板已选择 \(panelSelectionCount) 个账户；手动选择不限数量。").font(AppFont.secondary).foregroundStyle(.secondary)
+                    if !PanelAccountPreference.automatic(panelPreference, provider: account.provider) {
+                        Button("恢复自动选择") { var pref = PanelAccountPreference.decode(panelPreference); pref.providers[account.provider] = .init(); panelPreference = String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8) ?? "{}" }
+                    }
                     if account.provider != "codex" {
                         Button(account.provider == "deepseek" ? "更新 API Key" : "连接机器") {
                             focusedField = nil
@@ -386,11 +391,11 @@ struct AccountDevicesView: View {
                             HStack {
                                 VStack(alignment: .leading) { Text(source.name); Text(source.path).font(AppFont.secondary).foregroundStyle(.secondary) }
                                 Spacer()
-                                if account.provider == "antigravity", source.accountId == account.id { Button("登录 / 检查") { agySource = source }.disabled(!source.enabled) }
+                                if account.provider == "antigravity", source.accountId == account.id { Button("登录 / 检查") { agySource = source }.disabled(!model.settings.sourceEnabled(source)) }
                                 if account.provider == "codex" {
                                     if status?.current == true { Text("正在使用").foregroundStyle(.secondary) }
-                                    else if status?.credential == true { Button("切换到此账户") { openLogin(source, intent: "switch") }.disabled(!source.enabled || !model.accountMachineIDs(account.provider).contains(machine)) }
-                                    else { Button("登录") { openLogin(source, intent: "login") }.disabled(!source.enabled || !model.accountMachineIDs(account.provider).contains(machine)) }
+                                    else if status?.credential == true { Button("切换到此账户") { openLogin(source, intent: "switch") }.disabled(!model.settings.sourceEnabled(source)) }
+                                    else { Button("登录") { openLogin(source, intent: "login") }.disabled(!model.settings.sourceEnabled(source)) }
                                 }
                             }
                             if let message = status?.error ?? status?.note, !message.isEmpty { Text(message).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -398,11 +403,11 @@ struct AccountDevicesView: View {
                         }
                         if machine != "local" {
                             DisclosureGroup("前置命令") {
-                                TextEditor(text: Binding(get: { commands[machine] ?? inheritedCommand(machine) }, set: { commands[machine] = $0 })).font(.system(size: 13, design: .monospaced)).frame(height: 85).focused($focusedField, equals: machine)
+                                TextEditor(text: Binding(get: { commands[machine] ?? inheritedCommand(machine) }, set: { commands[machine] = $0 })).font(.system(size: DesignTokens.fontEntry, design: .monospaced)).frame(height: 85).focused($focusedField, equals: machine)
                                 Text("用于此账户的授权、切换、额度查询及定时唤醒；不用于同步历史或监控。清空后不执行。").font(AppFont.secondary).foregroundStyle(.secondary)
-                                if legacyCommands(machine).count > 1 && current.deviceSettings?.contains(where: { $0.machineId == machine }) != true {
-                                    Text("旧目录的命令不同，暂时分别保留。编辑完成后统一使用上方命令。").foregroundStyle(Palette.warn)
-                                    ForEach(model.settings.sources.filter { $0.provider == account.provider && $0.hostId == machine }) { source in Text(source.name + ": " + legacyCommand(source)).font(.system(size: 12, design: .monospaced)).textSelection(.enabled) }
+                                if current.deviceSettings?.first(where: { $0.machineId == machine })?.preCommandResetRequired == true {
+                                    Text("此机器的旧目录前置命令不一致，已清空，请重新设置。").foregroundStyle(Palette.warn)
+                                    Button("保存此机器的前置命令") { commands[machine] = commands[machine] ?? ""; saveEditedText(force: true) }
                                 }
 
                             }
@@ -465,8 +470,9 @@ struct AccountDevicesView: View {
     private var panelBinding: Binding<Bool> {
         Binding(get: { (PanelAccountPreference.selections(panelPreference, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[account.provider] ?? []).contains(account.key) }, set: { enabled in
             var pref = PanelAccountPreference.decode(panelPreference)
-            var keys = (PanelAccountPreference.selections(panelPreference, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[account.provider] ?? []).filter { $0 != account.key }
-            if enabled { guard keys.count < 5 else { error = "面板最多显示 5 个同类账户，请先调整面板选择。"; return }; keys.append(account.key) }
+            let selected = pref.providers[account.provider]?.mode == "custom" ? pref.providers[account.provider]?.keys ?? [] : PanelAccountPreference.selections(panelPreference, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[account.provider] ?? []
+            var keys = selected.filter { $0 != account.key }
+            if enabled { keys.append(account.key) }
             pref.providers[account.provider] = .init(mode: "custom", keys: keys)
             panelPreference = String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8) ?? "{}"
         })
@@ -491,7 +497,7 @@ struct DeleteArchivedAccountView: View {
             taskList
             deletionStatus
             deletionControls
-        }.padding(24).frame(width: 600, height: 430).interactiveDismissDisabled(busy)
+        }.padding(DesignTokens.dialogPadding).frame(width: 600, height: 430).interactiveDismissDisabled(busy)
         .updateDraftGuard("删除归档账户", snapshot: "", dirty: false, saving: busy, save: { false }, discard: { dismiss() })
         .task { await loadPreview() }
     }
@@ -551,7 +557,7 @@ struct AccountConnectionView: View {
     @State private var preparedKey: (key: String, path: String)?
     @State private var busy = false
     @State private var error: String?
-    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && $0.enabled && ($0.accountId.isEmpty || $0.accountId == (account?.id ?? "")) } }
+    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && model.settings.sourceEnabled($0) && ($0.accountId.isEmpty || $0.accountId == (account?.id ?? "")) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { Text(intent == "switch" ? "切换账户" : account == nil ? "添加账户" : provider == "deepseek" ? "更新 API Key" : "连接机器").font(AppFont.title); Spacer(); Button("完成") { dismiss() }.disabled(busy) }.padding(.horizontal, 20).padding(.top, 20)
@@ -564,8 +570,8 @@ struct AccountConnectionView: View {
                         Text("Key 保存在本机，只用于查询账户余额。").foregroundStyle(.secondary)
                     } else {
                         Section("已有登录的机器 · 可多选") {
-                            ForEach(sources) { source in HStack { Toggle(source.name, isOn: Binding(get: { selection.contains(source.id) }, set: { if $0 { selection.insert(source.id) } else { selection.remove(source.id) } })); if provider == "antigravity" { Button("登录 / 检查") { agySource = source } } } }
-                            if sources.isEmpty { Text("没有可用位置，请先在 Agent 接入选择机器；同一目录只能连接一个当前登录账户。").foregroundStyle(.secondary) }
+                            ForEach(sources) { source in HStack { Toggle(source.displayLocation, isOn: Binding(get: { selection.contains(source.id) }, set: { if $0 { selection.insert(source.id) } else { selection.remove(source.id) } })); if provider == "antigravity" { Button("登录 / 检查") { agySource = source } } } }
+                            if sources.isEmpty { Text("没有可用位置。请启用 Agent、选择机器并开启目录采集；同一目录只能连接一个当前登录账户。").foregroundStyle(.secondary); Button("机器与采集设置") { model.openSettings(.init(provider: provider, section: "machines")); dismiss() } }
                         }
                     }
                     if account == nil { Text("添加后可修改账号的显示名称。").foregroundStyle(.secondary) }
@@ -573,7 +579,7 @@ struct AccountConnectionView: View {
                     Button(busy ? "保存中…" : account == nil ? "添加账号" : provider == "deepseek" ? "更新 API Key" : "保存连接") { Task { await save() } }.buttonStyle(.borderedProminent).disabled(busy)
                 }.formStyle(.grouped).disabled(busy)
             }
-        }.frame(width: 640, height: 620).interactiveDismissDisabled(busy)
+        }.frame(width: DesignTokens.dialogAccountWidth, height: 620).interactiveDismissDisabled(busy)
         .updateDraftGuard("账户连接", snapshot: provider + draftSnapshot(selection.sorted()) + apiKey, dirty: !selection.isEmpty || !apiKey.isEmpty, saving: busy, save: { await save(); return error == nil }, discard: { dismiss() })
         .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
         .onAppear { provider = account?.provider ?? initialProvider ?? (initialSourceID != nil ? "codex" : model.agentConfigurations.first(where: { $0.enabled })?.provider ?? "") }
@@ -651,7 +657,7 @@ private struct RebindSourceView: View {
             }
             if let error { Text(error).foregroundStyle(Palette.danger) }
             HStack { Spacer(); Button("取消") { dismiss() }; Button(busy ? "验证中…" : "绑定") { Task { await save() } }.disabled(machine.isEmpty) }.disabled(busy)
-        }.padding(24).frame(width: 540).interactiveDismissDisabled(busy).aieyesAccent()
+        }.padding(DesignTokens.dialogPadding).frame(width: 540).interactiveDismissDisabled(busy).aieyesAccent()
     }
     private func save() async {
         busy = true; error = nil; defer { busy = false }

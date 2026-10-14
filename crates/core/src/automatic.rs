@@ -20,7 +20,7 @@ use std::{
 };
 
 pub const CONSENT_VERSION: u32 = 1;
-const BASELINE_VERSION: u32 = 2;
+const BASELINE_VERSION: u32 = 3;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoValuationConfig {
@@ -846,17 +846,25 @@ impl Engine {
             let attempt_key = format!("automatic-attempt:{key}");
             let attempted: i64 = self.store.auto_get(&attempt_key)?;
             let last: Baseline = self.store.auto_get(&baseline_key(&key))?;
+            let fingerprint = self.store.automatic_fingerprint(&settings, &ids, &key)?;
+            let same_scope = last.version == BASELINE_VERSION
+                && last.config == fingerprint
+                && last.source_ids == ids;
             let observed: Option<String> = self.store.db.query_row("SELECT payload FROM quota_history WHERE account_key=?1 ORDER BY stamp DESC,id DESC LIMIT 1", [&key], |r|r.get(0)).optional()?;
             let observed = observed
                 .map(|raw| serde_json::from_str::<QuotaSnapshot>(&raw))
                 .transpose()?
                 .filter(|q| {
-                    valid(q)
+                    // A cache can predate a login switch (including A -> B -> A).
+                    // Only an established, unchanged scope may reuse it; a new scope
+                    // needs a fresh read after identity verification and log sync.
+                    same_scope
+                        && valid(q)
                         && (now() - q.updated_at).abs() <= 120
                         && last
                             .quota
                             .as_ref()
-                            .is_none_or(|p| q.updated_at > p.updated_at)
+                            .is_some_and(|p| q.updated_at > p.updated_at)
                 });
             if (0..30).contains(&(now() - attempted)) && observed.is_none() {
                 continue;
@@ -874,11 +882,11 @@ impl Engine {
                 changed = true;
                 continue;
             }
-            if last
-                .quota
-                .as_ref()
-                .is_some_and(|q| now() - q.updated_at < 30 && now() >= q.updated_at)
-                && last.source_ids == ids
+            if same_scope
+                && last
+                    .quota
+                    .as_ref()
+                    .is_some_and(|q| now() - q.updated_at < 30 && now() >= q.updated_at)
                 && observed.is_none()
             {
                 continue;
@@ -893,7 +901,6 @@ impl Engine {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let fingerprint = self.store.automatic_fingerprint(&settings, &ids, &key)?;
             if observed.is_none() {
                 self.store.auto_put(&attempt_key, &now())?;
             }
@@ -1276,6 +1283,160 @@ mod tests {
         let new = all.iter().find(|v| v.account_key == "codex:b").unwrap();
         assert_eq!(new.status, "active");
         assert_eq!(new.cost, 2.0);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn switching_back_requires_a_new_quota_baseline_before_pairing_shared_usage() {
+        use crate::codex_auth::files;
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let home = std::fs::canonicalize(home).unwrap();
+        let auth = |user: &str| {
+            let token = URL_SAFE_NO_PAD.encode(
+                json!({"https://api.openai.com/auth":{
+                    "chatgpt_user_id":user,"chatgpt_account_id":user,"chatgpt_plan_type":"plus"
+                }})
+                .to_string(),
+            );
+            json!({"auth_mode":"chatgpt","tokens":{
+                "access_token":format!("header.{token}.signature"),
+                "refresh_token":"fixture","account_id":user
+            }})
+        };
+        let first = auth("a");
+        files::atomic(&home.join("auth.json"), &first).unwrap();
+        files::save_profile(&home, "one", "A", &first).unwrap();
+        files::save_profile(&home, "two", "B", &auth("b")).unwrap();
+        let mut e = Engine::open(&root.path().join("data")).unwrap();
+        let source = Source {
+            id: "s".into(),
+            name: "Shared".into(),
+            provider: "codex".into(),
+            path: home.to_string_lossy().into(),
+            codex_home_id: Some("home".into()),
+            auto_valuation: Some(AutoValuationConfig {
+                enabled: true,
+                consent_version: CONSENT_VERSION,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut q = QuotaSnapshot {
+            provider: "codex".into(),
+            account_id: "a".into(),
+            source_id: "s".into(),
+            plan: Some("plus".into()),
+            origin: "live".into(),
+            updated_at: now() - 100,
+            credits: Some(CreditsSnapshot {
+                has_credits: true,
+                balance: Some("1000".into()),
+                ..Default::default()
+            }),
+            windows: vec![QuotaWindow {
+                id: "week".into(),
+                name: "7d".into(),
+                window_minutes: Some(crate::contracts::WEEK_MINUTES),
+                used_percent: 10.0,
+                resets_at: Some(now() + 10000),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let response = root.path().join("quota.json");
+        let mut live = q.clone();
+        live.windows[0].used_percent = 30.0;
+        std::fs::write(&response, serde_json::to_vec(&live).unwrap()).unwrap();
+        e.store
+            .save_settings(&Settings {
+                sources: vec![
+                    source.clone(),
+                    Source {
+                        id: "query".into(),
+                        provider: "codex".into(),
+                        account_id: "a".into(),
+                        path: home.to_string_lossy().into(),
+                        quota_command: format!(
+                            "cat {}",
+                            crate::process::quote(&response.to_string_lossy())
+                        ),
+                        ..Default::default()
+                    },
+                ],
+                accounts: vec![
+                    Account {
+                        id: "a".into(),
+                        name: "A".into(),
+                        provider: "codex".into(),
+                        quota_profile_id: Some("home:one".into()),
+                        quota_source_id: Some("query".into()),
+                        ..Default::default()
+                    },
+                    Account {
+                        id: "b".into(),
+                        name: "B".into(),
+                        provider: "codex".into(),
+                        quota_profile_id: Some("home:two".into()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
+        e.store
+            .save_prices(&[ModelPrice {
+                id: "model".into(),
+                input: Some(0.01),
+                ..Default::default()
+            }])
+            .unwrap();
+        observe(&e, &q);
+        q.updated_at += 30;
+        e.store.quota(&q).unwrap();
+        files::atomic(&home.join("auth.json"), &auth("b")).unwrap();
+        crate::accounts::codex_switched(&e.store, &source, &json!("switch-b")).unwrap();
+        event(&e, &q, "other-account", 200, false);
+        files::atomic(&home.join("auth.json"), &first).unwrap();
+        crate::accounts::codex_switched(&e.store, &source, &json!("switch-a")).unwrap();
+
+        let switched_at = now();
+        e.tick_automatic().unwrap();
+        let baseline: Baseline = e.store.auto_get(&baseline_key("codex:a")).unwrap();
+        let mut fresh = baseline
+            .quota
+            .expect("a successful tick establishes a baseline");
+        assert!(
+            fresh.updated_at >= switched_at,
+            "a pre-switch cached snapshot cannot start the new interval"
+        );
+        assert_eq!(fresh.windows[0].used_percent, 30.0);
+        assert!(baseline.pending.is_empty());
+        event(&e, &fresh, "this-account", 100, false);
+        fresh.updated_at += 30;
+        fresh.credits_updated_at = Some(fresh.updated_at);
+        fresh.windows[0].used_percent += 5.0;
+        observe(&e, &fresh);
+        let records = e.store.estimates().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].account_key, "codex:a");
+        assert_eq!(
+            records[0].cost, 1.0,
+            "usage from B must not be paired with A's quota"
+        );
+        assert_eq!(records[0].quota().unwrap().weekly_value, Some(20.0));
+        // Normal refreshes may still reuse a newer snapshot in the unchanged scope.
+        event(&e, &fresh, "this-account-again", 200, false);
+        fresh.updated_at += 30;
+        fresh.credits_updated_at = Some(fresh.updated_at);
+        fresh.windows[0].used_percent += 10.0;
+        e.store.quota(&fresh).unwrap();
+        e.tick_automatic().unwrap();
+        let records = e.store.estimates().unwrap();
+        assert_eq!(records[0].checkpoint_at, fresh.updated_at);
+        assert_eq!(records[0].cost, 3.0);
     }
     #[test]
     fn disabling_persists_frozen_values_and_reopening_does_not_duplicate() {

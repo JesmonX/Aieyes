@@ -71,9 +71,15 @@ struct Shared(
 );
 
 impl Shared {
-    fn engine_for(&self, method: &str) -> Arc<Mutex<Engine>> {
+    fn engine_for(&self, method: &str) -> Option<Arc<Mutex<Engine>>> {
         use aieyes_core::contracts::{Lane, method as metadata};
-        match metadata(method).map_or(Lane::Main, |m| m.lane) {
+        if method == "codexAuth.reconcile" {
+            return None;
+        }
+        Some(match metadata(method).map_or(Lane::Main, |m| m.lane) {
+            // A fresh connection per request lets task status/deployment calls
+            // progress independently. Core task locks still serialize one task.
+            Lane::Wakeups => return None,
             Lane::Quotas => self.7.clone(),
             Lane::Dashboard => self.5.clone(),
             Lane::Configuration => self.3.clone(),
@@ -81,7 +87,7 @@ impl Shared {
             Lane::Network => self.2.clone(),
             Lane::Hosts => self.1.clone(),
             Lane::Main => self.0.clone(),
-        }
+        })
     }
 }
 
@@ -233,14 +239,6 @@ async fn engine_call(
     let guarded_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _operation = aieyes_core::operations::enter(&method).map_err(|e| e.to_string())?;
-        // Each machine check gets its own connection: an offline SSH host must
-        // not queue checks for every other machine behind the accounts lane.
-        if method == "codexAuth.reconcile" {
-            return Engine::open(&root)
-                .and_then(|mut engine| engine.call(&method, params))
-                .map_err(|e| e.to_string());
-        }
-        let mut engine = engine.lock().map_err(|_| "核心连接已断开".to_string())?;
         if guarded_app
             .state::<updates::Updates>()
             .installing
@@ -248,6 +246,11 @@ async fn engine_call(
         {
             return Err("正在安装更新，请稍候".into());
         }
+        let engine = match engine {
+            Some(engine) => engine,
+            None => Arc::new(Mutex::new(Engine::open(&root).map_err(|e| e.to_string())?)),
+        };
+        let mut engine = engine.lock().map_err(|_| "核心连接已断开".to_string())?;
         let progress_app = guarded_app.clone();
         engine
             .call_with_progress(
@@ -437,7 +440,7 @@ mod tests {
             Arc::new(Mutex::new(Engine::open(root.path()).unwrap())),
         );
         let _blocked = shared.0.lock().unwrap();
-        let lane = shared.engine_for("agents.set");
+        let lane = shared.engine_for("agents.set").unwrap();
         let start = std::time::Instant::now();
         let mut fast = lane
             .try_lock()
@@ -449,12 +452,18 @@ mod tests {
         .unwrap();
         assert!(start.elapsed() < std::time::Duration::from_millis(500));
         assert!(Arc::ptr_eq(
-            &shared.engine_for("accounts.create"),
+            &shared.engine_for("accounts.create").unwrap(),
             &shared.3
         ));
         assert!(Arc::ptr_eq(
-            &shared.engine_for("accounts.delete"),
+            &shared.engine_for("accounts.delete").unwrap(),
             &shared.4
+        ));
+        assert!(shared.engine_for("wakeups.status").is_none());
+        assert!(shared.engine_for("wakeups.save").is_none());
+        assert!(Arc::ptr_eq(
+            &shared.engine_for("pets.import").unwrap(),
+            &shared.2
         ));
     }
 

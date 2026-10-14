@@ -5,16 +5,17 @@ import SwiftUI
     @Published var errors: [String] = []
     @Published var checking = Set<String>()
     private var generation = 0
-    func load(_ model: AppModel, accountKey: String? = nil) async {
+    func load(_ model: AppModel, accountKey: String? = nil, includeUnavailable: Bool = false) async {
         generation += 1
         let revision = generation, reader = EngineClient()
-        let params: [String: Any] = accountKey.map { ["accountKey": $0] } ?? [:]
+        var params: [String: Any] = accountKey.map { ["accountKey": $0] } ?? [:]
+        if includeUnavailable { params["includeUnavailable"] = true }
         errors = []
         do {
             let initial: [AccountTarget] = try await reader.call("accounts.targets", params: params)
             guard revision == generation, !Task.isCancelled else { return }
             rows = initial
-            let sources = Set(rows.filter { $0.provider == "codex" }.map(\.sourceId))
+            let sources = Set(rows.filter { target in target.provider == "codex" && target.available != false && model.settings.sources.contains(where: { source in source.id == target.sourceId && model.settings.sourceEnabled(source) }) }.map(\.sourceId))
             checking = sources
             await withTaskGroup(of: (String, String?).self) { group in
                 for source in sources {
@@ -57,6 +58,10 @@ struct AccountTargetsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(targets.errors, id: \.self) { Text($0).foregroundStyle(Palette.warn).textSelection(.enabled) }
+                    if targets.rows.isEmpty {
+                        Text("暂无可登录或切换的机器。请启用 Agent、选择机器并开启目录采集。").foregroundStyle(.secondary)
+                        Button("打开机器与采集设置") { model.openSettings(.init(provider: "codex", section: "machines")) }
+                    }
                     ForEach(targets.rows) { target in
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
@@ -76,7 +81,7 @@ struct AccountTargetsView: View {
                     }
                 }
             }
-        }.padding(20).frame(minWidth: 550, minHeight: 360).aieyesAccent()
+        }.padding(20).frame(minWidth: DesignTokens.dialogTargetsWidth, minHeight: 360).aieyesAccent()
         .task { await targets.load(model, accountKey: accountKey) }
         .sheet(item: $loginSource, onDismiss: { Task { await targets.load(model, accountKey: accountKey) } }) { source in
             AccountConnectionView(model: model, account: account, initialSourceID: source.id, intent: intent)

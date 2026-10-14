@@ -1,21 +1,65 @@
 (() => {
-  let records=null, busy=false, error='', statuses={},statusErrors={},polls=new Map(), editorGeneration=0;
-  const statusLabels={success:'已完成',running:'运行中',failed:'调用失败，请检查登录、模型及代理',timeout:'调用超时',interrupted:'执行中断','skipped-overlap':'同账户任务运行中，已跳过'};
-  const draw=()=>{if(state.page==='settings'&&state.settingsTab==='wakeups')renderSettings();};
-  async function refresh(){try{records=await api('wakeups.list');draw();await Promise.all(records.filter(r=>r.deployment).map(r=>readStatus(r.task.id)));}catch(e){error=e.message??String(e);}draw();}
-  async function readStatus(id){try{statuses[id]=await api('wakeups.status',{id});delete statusErrors[id];}catch(e){delete statuses[id];statusErrors[id]=e.message??String(e);}}
-  function followRun(id,started,remaining=6){clearTimeout(polls.get(id));if(!remaining)return;polls.set(id,setTimeout(async()=>{await readStatus(id);draw();const last=statuses[id]?.history?.[0];if(!last||last.startedAt<started-1||last.status==='running')followRun(id,started,remaining-1);else polls.delete(id);},2500));}
-  function html(){return `<div class="card"><h2>定时唤醒</h2><p class="muted">部署到本机或 SSH Linux 服务器，使用目标机器已登录的订阅 CLI。每天按目标机器时区执行；错过时刻不补发，退出 Aieyes 后继续运行。</p><p class="tiny muted">任务草稿独立保存；修改后需要更新部署。本机任务在用户登录期间执行。</p><div class="actions"><button id="wake-add" class="primary" ${busy?'disabled':''}>${uiIcon('plus')} 新建任务</button><button id="wake-refresh" ${busy?'disabled':''}>刷新列表</button></div>${error?`<p class="error" role="alert">${escapeHTML(error)}</p>`:''}</div>${records===null?'<p>正在读取…</p>':!records.length?'<div class="empty">尚未配置定时任务</div>':records.map(r=>{
-    const t=r.task,d=r.deployment,s=statuses[t.id],last=s?.history?.[0];
-    return `<div class="card wake-task"><div class="between"><h3>${escapeHTML(t.name)}</h3><span>${d?(d.state==='settings-pending'?'部署待同步':d.state==='pending-removal'?'待移除':d.state==='deployment-unconfirmed'?'部署待确认':d.enabled?'已部署':'已停用'):'未部署'}</span></div><p>${escapeHTML(t.times.join('、'))} · ${escapeHTML(t.model)} · ${escapeHTML(t.effort||'模型默认 effort')}</p><p class="tiny muted">${escapeHTML(d?.target??'位置由数据源决定')} · ${escapeHTML(s?.timezone??d?.timezone??'跟随目标机器时区')}${d?.changed?' · 有尚未部署的更改':''}</p>${s?`<p class="tiny">${s.installed?'系统任务存在':'系统任务缺失'} · ${!d?.enabled?'已暂停':s.nextRunAt?'下次 '+date(s.nextRunAt):'下次执行待确认'}</p>`:''}${statusErrors[t.id]?`<p class="error">状态读取失败：${escapeHTML(statusErrors[t.id])}</p>`:''}${last?`<p class="tiny">${date(last.startedAt)} · ${escapeHTML(last.message||statusLabels[last.status]||last.status)} · ${escapeHTML(last.model)} / ${escapeHTML(last.effort||'默认')}</p>`:''}<div class="actions">${taskActions(r)}</div></div>`;
-  }).join('')}`;}
-  function needsDeploy(r){return !r.deployment || r.deployment.state==='deployment-unconfirmed' || statuses[r.task.id]?.installed===false;}
-  function taskActions(r){const id=escapeHTML(r.task.id),d=r.deployment;const button=(kind,label,primary=false)=>`<button ${primary?'class="primary"':''} data-wake-action="${kind}" data-wake-id="${id}" ${busy?'disabled':''}>${label}</button>`;return button('edit','编辑')+button(needsDeploy(r)||d?.changed?'deploy':'status',!d?'部署':needsDeploy(r)?'重新部署':d.changed?'更新部署':'查看运行结果',true)+'<details class="wake-more"><summary>更多操作</summary>'+(d?(!needsDeploy(r)?button(d.enabled?'disable':'enable',d.enabled?'停用':'启用')+button('run','立即运行'):'')+button('remove','移除自动任务'):button('delete','删除草稿'))+'</details>';}
-  async function action(id,kind){if(busy)return false;busy=true;error='';draw();try{const result=await api('wakeups.'+kind,{id});if(kind==='status'){statuses[id]=result;historyDialog(id,result);}if(!['status','run','history'].includes(kind))delete statuses[id];if(kind==='run'){notify('已启动一次唤醒，正在跟进运行结果');followRun(id,Date.now()/1000);}await refresh();return true;}catch(e){error=e.message??String(e);await refresh();return false;}finally{busy=false;draw();}}
+  let records=null, loading=false, error='', statuses={}, statusErrors={}, polls=new Map(), editorGeneration=0, listRevision=0;
+  const busyTasks=new Set(), taskErrors=new Map(), statusRequests=new Map(),statusRevisions=new Map(),autoSyncAttempted=new Set();
+  const statusLabels={success:'已完成',running:'运行中',failed:'调用失败，请检查登录、模型及网络',timeout:'调用超时',interrupted:'执行中断','skipped-overlap':'同账户任务运行中，已跳过'};
+  const visible=()=>state.page==='settings'&&state.settingsTab==='wakeups';
+  const draw=()=>{if(visible())renderSettings();};
+  function drawTask(id){
+    if(!visible())return;
+    const node=document.querySelector('[data-wake-row="'+CSS.escape(id)+'"]'),record=records?.find(r=>r.task.id===id);
+    if(!node||!record)return;
+    const more=node.querySelector('.wake-more')?.open,focus=node.contains(document.activeElement)?document.activeElement?.dataset.wakeAction:null;
+    node.outerHTML=taskHTML(record);const fresh=document.querySelector('[data-wake-row="'+CSS.escape(id)+'"]');
+    if(more)fresh.querySelector('.wake-more').open=true;
+    bindActions(fresh);if(focus)fresh.querySelector('[data-wake-action="'+CSS.escape(focus)+'"]')?.focus({preventScroll:true});
+  }
+  async function refresh({withStatuses=true}={}){
+    const revision=++listRevision;loading=true;
+    const button=$('#wake-refresh');if(button)button.disabled=true;
+    try{
+      const next=await api('wakeups.list');if(revision!==listRevision)return;
+      records=next;error='';draw();
+      if(withStatuses)for(const r of records.filter(r=>r.deployment))void readStatus(r.task.id);
+      for(const r of records.filter(r=>r.deployment?.state==='settings-pending'&&!autoSyncAttempted.has(r.task.id))){autoSyncAttempted.add(r.task.id);void action(r.task.id,'sync');}
+    }catch(e){if(revision===listRevision){error=e.message??String(e);draw();}}
+    finally{if(revision===listRevision){loading=false;const button=$('#wake-refresh');if(button)button.disabled=false;}}
+  }
+  function readStatus(id){
+    const revision=statusRevisions.get(id)??0,previous=statusRequests.get(id);
+    if(previous?.revision===revision)return previous.promise;
+    const request=(async()=>{
+      try{const value=await api('wakeups.status',{id});if((statusRevisions.get(id)??0)===revision){statuses[id]=value;delete statusErrors[id];taskErrors.get(id)?.delete('status');}}
+      catch(e){if((statusRevisions.get(id)??0)===revision)statusErrors[id]=e.message??String(e);}
+      finally{if(statusRequests.get(id)?.revision===revision)statusRequests.delete(id);drawTask(id);}
+    })();statusRequests.set(id,{revision,promise:request});drawTask(id);return request;
+  }
+  function followRun(id,started,remaining=6){clearTimeout(polls.get(id));if(!remaining)return;polls.set(id,setTimeout(async()=>{await readStatus(id);const last=statuses[id]?.history?.[0];if(!last||last.startedAt<started-1||last.status==='running')followRun(id,started,remaining-1);else polls.delete(id);},2500));}
+  function html(){return `<div class="card"><h2>定时唤醒</h2><p class="muted">部署到本机或 SSH Linux 服务器，使用目标机器已登录的订阅 CLI。每天按目标机器时区执行；错过时刻不补发，退出 Aieyes 后继续运行。</p><p class="tiny muted">离线或暂停时也可保存已关联账户的草稿；部署和运行时检查执行能力。修改草稿后需更新部署，本机任务在用户登录期间执行。</p><div class="actions"><button id="wake-add" class="primary">${uiIcon('plus')} 新建任务</button><button id="wake-refresh" ${loading?'disabled':''}>刷新列表</button></div>${error?`<p class="error" role="alert">${escapeHTML(error)}</p>`:''}</div>${records===null?'<p>正在读取…</p>':!records.length?'<div class="empty">尚未配置定时任务</div>':records.map(taskHTML).join('')}`;}
+  function taskHTML(r){
+    const t=r.task,d=r.deployment,s=statuses[t.id],last=s?.history?.[0],errors=taskErrors.get(t.id)??new Map();
+    return `<div class="card wake-task" data-wake-row="${escapeHTML(t.id)}"><div class="between"><h3>${escapeHTML(t.name)}</h3><span>${d?(d.state==='settings-pending'?'部署待同步':d.state==='pending-removal'?'待移除':d.state==='deployment-unconfirmed'?'部署待确认':d.enabled?'已部署':'已停用'):'未部署'}</span></div><p>${escapeHTML(t.times.join('、'))} · ${escapeHTML(t.model)} · ${escapeHTML(t.effort||'模型默认 effort')}</p><p class="tiny muted">${escapeHTML(d?.target??'位置由数据源决定')} · ${escapeHTML(s?.timezone??d?.timezone??'跟随目标机器时区')}${d?.changed?' · 有尚未部署的更改':''}</p>${s?`<p class="tiny">${s.installed?'系统任务存在':'系统任务缺失'} · ${!d?.enabled?'已暂停':s.nextRunAt?'下次 '+date(s.nextRunAt):'下次执行待确认'}</p>`:''}${statusRequests.has(t.id)?'<p class="tiny muted" role="status">正在读取运行状态…</p>':''}${statusErrors[t.id]?`<p class="error">状态读取失败：${escapeHTML(statusErrors[t.id])} <button data-wake-status-retry="${escapeHTML(t.id)}">重试读取</button></p>`:''}${[...errors].map(([kind,message])=>`<p class="error" role="alert">${escapeHTML(message)} <button data-wake-action="${escapeHTML(kind)}" data-wake-id="${escapeHTML(t.id)}" ${busyTasks.has(t.id)?'disabled':''}>重试</button></p>`).join('')}${last?`<p class="tiny">${date(last.startedAt)} · ${escapeHTML(last.message||statusLabels[last.status]||last.status)} · ${escapeHTML(last.model)} / ${escapeHTML(last.effort||'默认')}</p>`:''}<div class="actions">${taskActions(r)}</div></div>`;
+  }
+  function needsDeploy(r){return !r.deployment || ['deployment-unconfirmed','settings-pending'].includes(r.deployment.state) || statuses[r.task.id]?.installed===false;}
+  function taskActions(r){const id=escapeHTML(r.task.id),d=r.deployment;const button=(kind,label,primary=false)=>`<button ${primary?'class="primary"':''} data-wake-action="${kind}" data-wake-id="${id}" ${busyTasks.has(r.task.id)?'disabled':''}>${label}</button>`;return button('edit','编辑')+button(d?.state==='settings-pending'?'sync':needsDeploy(r)||d?.changed?'deploy':'status',!d?'部署':d.state==='settings-pending'?'同步部署':needsDeploy(r)?'重新部署':d.changed?'更新部署':'查看运行结果',true)+'<details class="wake-more"><summary>更多操作</summary>'+(d?(!needsDeploy(r)?button(d.enabled?'disable':'enable',d.enabled?'停用':'启用')+button('run','立即运行'):'')+button('remove','移除自动任务'):button('delete','删除草稿'))+'</details>';}
+  async function action(id,kind){
+    if(busyTasks.has(id))return false;busyTasks.add(id);statusRevisions.set(id,(statusRevisions.get(id)??0)+1);drawTask(id);
+    try{
+      const result=await api(kind==='sync'?'accounts.deployments.sync':'wakeups.'+kind,kind==='sync'?{taskId:id}:{id});
+      if(kind==='sync'&&result.failedTasks?.length)throw new Error(result.failedTasks.map(t=>t.error).join('；'));
+      taskErrors.get(id)?.delete(kind);
+      if(kind==='status'){statuses[id]=result;delete statusErrors[id];historyDialog(id,result);}
+      if(!['status','run','history'].includes(kind))delete statuses[id];
+      if(kind==='run'){notify('已启动一次唤醒，正在跟进运行结果');followRun(id,Date.now()/1000);}
+      if(!['status','run','history'].includes(kind))await refresh({withStatuses:false});
+      if(kind!=='status'&&!['delete','remove'].includes(kind)&&records?.some(r=>r.task.id===id&&r.deployment))void readStatus(id);
+      return true;
+    }catch(e){if(!taskErrors.has(id))taskErrors.set(id,new Map());taskErrors.get(id).set(kind,e.message??String(e));await refresh({withStatuses:false});return false;}
+    finally{busyTasks.delete(id);drawTask(id);}
+  }
   function historyDialog(id,s){if(state.estimateBusy){notify("后台采样操作进行中，运行状态已在任务列表更新");return;}quotaDialog('运行记录',`<p>${escapeHTML(s.timezone)} · 下次 ${date(s.nextRunAt)}</p>${(s.history??[]).map(h=>`<div class="list-row"><span>${date(h.startedAt)}</span><span>${escapeHTML(h.message||statusLabels[h.status]||h.status)}</span><span>${escapeHTML(h.model)} / ${escapeHTML(h.effort||'默认')}</span></div>`).join('')||'<p>还没有运行记录。</p>'}`);}
   async function edit(existing){
     const editorRevision=++editorGeneration;
-    let targets;try{targets=await api('accounts.targets');}catch(error){notify(String(error.message??error),'error');return;}
+    let targets;try{targets=await api('accounts.targets',{includeUnavailable:true});}catch(error){notify(String(error.message??error),'error');return;}
     if(editorRevision!==editorGeneration)return;
     const task=structuredClone(existing??{id:'',name:'订阅唤醒',sourceId:'',times:['08:00'],model:'',effort:'low',prompt:'Hi. Reply only OK. Do not use any tools.',binary:''});
     const sources=state.settings.sources.filter(s=>targets.some(t=>t.sourceId===s.id&&window.AieyesContract.wakeupProviders.includes(t.provider)) || existing?.sourceId===s.id);
@@ -23,7 +67,7 @@
     if(!task.sourceId)task.sourceId=sources[0].id;
     const deployed=records?.find(r=>r.task.id===task.id)?.deployment;
     const values=f=>({...task,name:f.get('name').trim(),sourceId:deployed?task.sourceId:f.get('sourceId'),codexProfileId:deployed?task.codexProfileId:(f.get('codexProfileId')||null),times:f.get('times').split(/[,，、\s]+/).filter(Boolean),model:f.get('model').trim(),effort:f.get('effort'),prompt:f.get('prompt'),binary:f.get('binary').trim()});
-    showEditor(existing?'编辑唤醒任务':'新建唤醒任务',`${field('name','名称',task.name)}<label>账户<select id="wake-account"></select></label><label>运行位置<select name="sourceId" id="wake-source">${sources.map(s=>option(s.id,`${s.name} · ${s.hostId?(state.settings.hosts.find(h=>h.id===s.hostId)?.name??s.hostId):'本机'}`,task.sourceId)).join('')}</select></label><div id="wake-profile"></div><fieldset class="wake-times"><legend>每天固定时刻 · 目标机器时区</legend><input type="hidden" id="field-times" name="times" value="${escapeHTML(task.times.join(','))}"><div id="wake-time-rows"></div><button type="button" id="wake-add-time">添加时刻</button><p id="wake-time-zone" class="muted tiny">读取执行能力后显示目标时区与本地时间换算</p></fieldset>${field('binary','CLI 路径（留空使用数据源配置）',task.binary)}<button id="wake-probe" type="button">读取模型与执行能力</button><p class="tiny muted" id="wake-capability">读取后按已知 API 价格推荐低价模型；保存草稿不会安装任务。</p><label>模型<input name="model" id="wake-model" list="wake-models" value="${escapeHTML(task.model)}" required><datalist id="wake-models"></datalist></label><label>Effort<select name="effort" id="wake-effort">${['','low','medium','high','xhigh','max','ultra'].map(e=>option(e,e||'模型默认（不传参数）',task.effort)).join('')}</select></label><label>提示词<textarea name="prompt" rows="3" maxlength="4000">${escapeHTML(task.prompt)}</textarea></label>`,async f=>{const value=values(f);if(!deployed&&!targets.some(t=>t.accountKey===$('#wake-account').value&&t.sourceId===value.sourceId&&(t.profileId??null)===(value.codexProfileId??null)&&t.canWake))throw new Error('此账号在所选位置尚不可唤醒，请检查登录与关联');await api('wakeups.save',{task:value});await refresh();});
+    showEditor(existing?'编辑唤醒任务':'新建唤醒任务',`${field('name','名称',task.name)}<label>账户<select id="wake-account"></select></label><label>运行位置<select name="sourceId" id="wake-source">${sources.map(s=>option(s.id,`${s.name} · ${s.hostId?(state.settings.hosts.find(h=>h.id===s.hostId)?.name??s.hostId):'本机'}`,task.sourceId)).join('')}</select></label><div id="wake-profile"></div><fieldset class="wake-times"><legend>每天固定时刻 · 目标机器时区</legend><input type="hidden" id="field-times" name="times" value="${escapeHTML(task.times.join(','))}"><div id="wake-time-rows"></div><button type="button" id="wake-add-time">添加时刻</button><p id="wake-time-zone" class="muted tiny">读取执行能力后显示目标时区与本地时间换算</p></fieldset>${field('binary','CLI 路径（留空使用数据源配置）',task.binary)}<button id="wake-probe" type="button">读取模型与执行能力</button><p class="tiny muted" id="wake-capability">读取后按已知 API 价格推荐低价模型；保存草稿不会安装任务。</p><label>模型<input name="model" id="wake-model" list="wake-models" value="${escapeHTML(task.model)}" required><datalist id="wake-models"></datalist></label><label>Effort<select name="effort" id="wake-effort">${['','low','medium','high','xhigh','max','ultra'].map(e=>option(e,e||'模型默认（不传参数）',task.effort)).join('')}</select></label><label>提示词<textarea name="prompt" rows="3" maxlength="4000">${escapeHTML(task.prompt)}</textarea></label>`,async f=>{const value=values(f);if(!deployed&&!targets.some(t=>t.accountKey===$('#wake-account').value&&t.sourceId===value.sourceId&&(t.profileId??null)===(value.codexProfileId??null)&&(t.canDraft??t.canWake)))throw new Error('此账户与所选目录尚未关联，请检查账户和执行档案');await api('wakeups.save',{task:value});await refresh();},'wakeup');
     if(deployed){$('#wake-source').disabled=true;$('#wake-source').insertAdjacentHTML('afterend','<p class="muted">已部署任务的运行位置已锁定；迁移前请先移除旧部署。</p>');}
     let targetZone=deployed?.timezone;const updateLocalTimes=()=>document.querySelectorAll('[data-local-time]').forEach(el=>el.textContent=AieyesUI.targetTimeLocal(times[Number(el.dataset.localTime)],targetZone));
     let times=[...task.times];function drawTimes(){const root=$('#wake-time-rows');root.innerHTML=times.map((time,i)=>'<div class="actions"><input type="time" data-wake-time="'+i+'" value="'+escapeHTML(time)+'" aria-label="目标时间 '+(i+1)+'" required><span data-local-time="'+i+'" class="muted tiny"></span><button type="button" data-remove-time="'+i+'" aria-label="移除时刻 '+escapeHTML(time)+'">移除</button></div>').join('');root.querySelectorAll('[data-wake-time]').forEach(input=>input.oninput=()=>{times[Number(input.dataset.wakeTime)]=input.value;$('#field-times').value=times.join(',');updateLocalTimes();});root.querySelectorAll('[data-remove-time]').forEach(b=>b.onclick=()=>{times.splice(Number(b.dataset.removeTime),1);$('#field-times').value=times.join(',');drawTimes();});updateLocalTimes();}drawTimes();$('#wake-add-time').onclick=()=>{times.push('08:00');$('#field-times').value=times.join(',');drawTimes();};
@@ -46,7 +90,7 @@
       if(!accounts.some(t=>t.accountKey===accountSelection)&&!deployed)accountSelection=accounts[0]?.accountKey??'';
       $('#wake-account').innerHTML=accounts.map(t=>option(t.accountKey,t.accountName,accountSelection)).join('');$('#wake-account').disabled=deployed;
       const current=$('#wake-source').value||task.sourceId,rows=[...new Map(targets.filter(t=>t.accountKey===accountSelection).map(t=>[t.sourceId,t])).values()];
-      $('#wake-source').innerHTML=rows.map(t=>option(t.sourceId,t.machineName+' · '+t.sourceName+(t.reason?' · '+t.reason:!t.canWake?' · 登录待关联':''),current)).join('');
+      $('#wake-source').innerHTML=rows.map(t=>option(t.sourceId,t.machineName+' · '+t.sourceName+' · '+t.path+((t.draftReason||t.reason)?' · '+(t.draftReason||t.reason):!t.canWake?' · 执行时检查可用性':''),current)).join('');
       if(deployed&&!rows.some(t=>t.sourceId===task.sourceId))$('#wake-source').innerHTML=option(task.sourceId,state.settings.sources.find(s=>s.id===task.sourceId)?.name??task.sourceId,task.sourceId);
       if(current!==$('#wake-source').value&&!deployed){task.codexProfileId=null;$('#wake-profile').innerHTML='';clearCapabilities();}
       profilePicker();
@@ -55,21 +99,24 @@
     $('#wake-source').onchange=()=>{task.codexProfileId=null;$('#wake-profile').innerHTML='';clearCapabilities();profilePicker();};
     $('#field-binary').addEventListener('input',clearCapabilities);
     populate();
-    void window.AieyesAccountTargets.refresh(null,(next,issues)=>{if(editorRevision!==editorGeneration||formElement!==$('#editor-form')||!$('#editor').open)return;targets=next;populate();if(issues.length)$('#wake-capability').textContent=issues.join('；');}).catch(error=>{if(editorRevision===editorGeneration&&formElement===$('#editor-form')&&$('#editor').open)$('#wake-capability').textContent=String(error.message??error);});
     $('#wake-probe').onclick=async()=>{const b=$('#wake-probe'),revision=++capabilityRevision,account=accountSelection;b.disabled=true;try{const form=$('#editor-form'),t=values(new FormData(form)),previousEffort=t.effort;t.model='';t.effort='';const info=await api('wakeups.probe',{task:t});if(editorRevision!==editorGeneration||revision!==capabilityRevision||account!==accountSelection||!$('#editor').open||form!==$('#editor-form')||form.elements.sourceId.value!==t.sourceId||(new FormData(form).get('codexProfileId')||null)!==(t.codexProfileId||null)||form.elements.binary.value.trim()!==t.binary)return;models=info.models??[];$('#wake-models').innerHTML=models.map(m=>`<option value="${escapeHTML(m.id)}">${m.referenceCost!=null?'参考成本 $'+m.referenceCost:'价格未知'}</option>`).join('');if(!$('#wake-model').value&&info.recommendedModel)$('#wake-model').value=info.recommendedModel;$('#wake-effort').innerHTML=['',...(info.efforts??[])].map(e=>option(e,e||'模型默认',(info.efforts??[]).includes(previousEffort)?previousEffort:(info.efforts??[]).includes('low')?'low':'')).join('');updateEffort();targetZone=info.timezone;updateLocalTimes();$('#wake-capability').textContent=info.timezone+' · '+info.message;$('#wake-time-zone').textContent='目标时区 '+info.timezone+' · 本机时区 '+Intl.DateTimeFormat().resolvedOptions().timeZone+'；下次具体执行时间以部署状态为准';}catch(e){if(editorRevision===editorGeneration&&revision===capabilityRevision&&$('#editor').open&&$('#wake-capability'))$('#wake-capability').textContent=e.message??String(e);}finally{b.disabled=false;}};
   }
   function bind(){
-    if(records===null&&!busy){busy=true;refresh().finally(()=>{busy=false;draw();});}
-    $('#wake-add').onclick=()=>edit();$('#wake-refresh').onclick=refresh;
-    document.querySelectorAll('[data-wake-action]').forEach(b=>b.onclick=()=>{
+    if(records===null&&!loading)void refresh();
+    $('#wake-add').onclick=()=>edit();$('#wake-refresh').onclick=()=>refresh();
+    bindActions(document);
+  }
+  function bindActions(root){
+    root.querySelectorAll('[data-wake-status-retry]').forEach(b=>b.onclick=()=>{void readStatus(b.dataset.wakeStatusRetry);});
+    root.querySelectorAll('[data-wake-action]').forEach(b=>b.onclick=()=>{
       const id=b.dataset.wakeId,kind=b.dataset.wakeAction,r=records.find(r=>r.task.id===id);
       if(kind==='edit'){edit(r.task);return;}
       if(['remove','delete'].includes(kind)){
-        showEditor(kind==='remove'?'移除自动任务':'删除任务草稿','<p>确认'+(kind==='remove'?'移除':'删除')+'「'+escapeHTML(r.task.name)+'」？</p><p>目标：'+escapeHTML(r.deployment?.target??state.settings.sources.find(s=>s.id===r.task.sourceId)?.name??'本机')+'</p><p>'+(kind==='remove'?'后续自动唤醒停止，运行历史保留。':'仅删除尚未部署的草稿，运行历史保留。')+'</p>',async()=>{if(!await action(id,kind))throw new Error(error||'移除失败');});
+        showEditor(kind==='remove'?'移除自动任务':'删除任务草稿','<p>确认'+(kind==='remove'?'移除':'删除')+'「'+escapeHTML(r.task.name)+'」？</p><p>目标：'+escapeHTML(r.deployment?.target??state.settings.sources.find(s=>s.id===r.task.sourceId)?.name??'本机')+'</p><p>'+(kind==='remove'?'后续自动唤醒停止，运行历史保留。':'仅删除尚未部署的草稿，运行历史保留。')+'</p>',async()=>{if(!await action(id,kind))throw new Error(taskErrors.get(id)?.get(kind)||'移除失败');},'confirmation');
         const submit=$('#editor-form button[type=submit]');submit.textContent=kind==='remove'?'确认移除':'删除草稿';submit.classList.add('danger');$('#cancel-editor').focus();
       }else action(id,kind);
     });
   }
 
-  window.AieyesWakeups={html,bind,get busy(){return busy;}};
+  window.AieyesWakeups={html,bind,get busy(){return busyTasks.size>0;}};
 })();

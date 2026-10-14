@@ -87,6 +87,35 @@ pub struct Deployment {
     pub state: String,
     pub timezone: String,
 }
+impl Deployment {
+    pub(crate) fn account_environment_changed(&self, settings: &Settings) -> bool {
+        let Some(source) = settings
+            .sources
+            .iter()
+            .find(|source| source.id == self.source.id)
+        else {
+            return true;
+        };
+        let account = settings.accounts.iter().find(|account| {
+            account.provider == self.source.provider && account.id == self.source.account_id
+        });
+        let previous_command = crate::accounts::pre_command(
+            &Settings {
+                hosts: self.host.clone().into_iter().collect(),
+                ..Default::default()
+            },
+            None,
+            &self.source,
+        );
+        crate::accounts::pre_command(settings, account, source) != previous_command
+            || (self.host.is_some()
+                && self
+                    .source
+                    .proxy
+                    .as_ref()
+                    .is_some_and(|proxy| proxy.mode != "system"))
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Record {
@@ -222,25 +251,53 @@ fn validate(task: &mut Task) -> Result<()> {
     task.times.dedup();
     Ok(())
 }
-fn source_for(s: &Settings, id: &str, profile: Option<&str>) -> Result<Source> {
+/// A draft needs a valid association, but never contacts or requires an enabled machine.
+pub(crate) fn source_for_draft(s: &Settings, id: &str, profile: Option<&str>) -> Result<Source> {
     let source = s
         .sources
         .iter()
-        .find(|v| v.id == id && s.source_enabled(v))
-        .context("请选择已启用的目标数据源")?
+        .find(|v| v.id == id)
+        .context("目标数据源已删除，请重新选择")?
         .clone();
     let mut source = source;
-    if source.codex_home_id.is_some() {
+    ensure!(
+        source.machine_binding == MachineBinding::Bound,
+        "目录尚未绑定机器，请先重新关联"
+    );
+    if let Some(home) = &source.codex_home_id {
+        ensure!(
+            source.provider == "codex"
+                && s.sources
+                    .iter()
+                    .filter(|s| s.codex_home_id.as_ref() == Some(home))
+                    .count()
+                    == 1,
+            "Codex home 关联不唯一，请先修复目录关联"
+        );
         let reference = profile.context("请选择此共享来源的唤醒账号")?;
-        let (bound, _) = crate::codex_auth::source_for_profile(s, reference)?;
-        ensure!(bound.id == source.id, "唤醒档案与来源不匹配");
-        source.account_id = s
+        let (bound_home, profile_id) = reference.split_once(':').context("账号档案引用无效")?;
+        crate::codex_auth::files::id(profile_id)?;
+        ensure!(bound_home == home, "唤醒档案与来源不匹配");
+        let mut accounts = s
             .accounts
             .iter()
-            .find(|a| a.has_profile(reference) && !a.archived)
-            .context("请先将账号档案关联到额度账户")?
-            .id
-            .clone();
+            .filter(|a| a.provider == source.provider && a.has_profile(reference));
+        let account = accounts.next().context("请先将账号档案关联到额度账户")?;
+        ensure!(
+            accounts.next().is_none(),
+            "账号档案被多个账户引用，请重新关联"
+        );
+        ensure!(!account.archived, "账户已归档，请先恢复账户");
+        ensure!(
+            account
+                .connections
+                .iter()
+                .any(|c| c.source_id == source.id && c.profile_id.as_deref() == Some(reference)),
+            "唤醒档案与来源关联不匹配"
+        );
+        source.account_id = account.id.clone();
+    } else {
+        ensure!(profile.is_none(), "此来源不使用账号档案，请重新选择目标");
     }
     ensure!(
         crate::providers::supports_wakeup(&source.provider),
@@ -254,10 +311,18 @@ fn source_for(s: &Settings, id: &str, profile: Option<&str>) -> Result<Source> {
     );
     if let Some(id) = &source.host_id {
         ensure!(
-            s.hosts.iter().any(|h| &h.id == id && h.enabled),
-            "目标服务器未启用"
+            s.hosts.iter().any(|h| &h.id == id),
+            "目标服务器已删除，请先重新关联"
         );
     }
+    Ok(source)
+}
+fn source_for(s: &Settings, id: &str, profile: Option<&str>) -> Result<Source> {
+    let source = source_for_draft(s, id, profile)?;
+    ensure!(
+        s.source_enabled(&source),
+        "目标机器或 Agent 已暂停或未选择，请在设置中恢复后重试"
+    );
     Ok(source)
 }
 fn config_root(source: &Source) -> String {
@@ -404,10 +469,11 @@ fn manifest(task: &Task, source: &Source, settings: &Settings) -> Result<Manifes
             .filter(|shell| !shell.trim().is_empty())
             .unwrap_or_else(|| ssh::DEFAULT_SHELL.into()),
         proxy: if source.host_id.is_some() {
-            source.proxy.clone().unwrap_or(ProxyConfig {
+            // Only the account × machine command configures the remote environment.
+            ProxyConfig {
                 mode: "system".into(),
                 url: String::new(),
-            })
+            }
         } else {
             network::effective_proxy(source.proxy.as_ref().unwrap_or(&settings.proxy))
         },
@@ -505,14 +571,27 @@ fn public_record(r: &Record) -> Value {
     json!({"task":r.task,"deployment":r.deployment.as_ref().map(|d|json!({"task":d.task,"deployedAt":d.deployed_at,"enabled":d.enabled,"state":d.state,"timezone":d.timezone,"target":d.host.as_ref().map(|h|h.name.as_str()).unwrap_or("本机"),"changed":d.state == "settings-pending" || serde_json::to_value(&r.task).ok()!=serde_json::to_value(&d.task).ok()}))})
 }
 impl Engine {
-    pub fn wakeup_call(&mut self, method: &str, p: Value) -> Result<Value> {
+    pub fn wakeup_call(&mut self, method: &str, mut p: Value) -> Result<Value> {
         let action = method.split_once('.').map(|(_, a)| a).unwrap_or("");
+        if action == "save" {
+            // Allocate the draft ID before selecting the operation lock.
+            let mut task: Task =
+                serde_json::from_value(p.get("task").cloned().unwrap_or(p.clone()))?;
+            validate(&mut task)?;
+            p = json!({"task":task});
+        }
         let _task_lock = if [
             "save", "deploy", "remove", "delete", "enable", "disable", "run",
         ]
         .contains(&action)
         {
-            Some(crate::accounts::lock_tasks(&self.store)?)
+            let id = if action == "save" {
+                p["task"]["id"].as_str()
+            } else {
+                p["id"].as_str()
+            }
+            .context("缺少任务 ID")?;
+            Some(lock_task(&self.store, id)?)
         } else {
             None
         };
@@ -534,7 +613,8 @@ impl Engine {
             let mut task: Task =
                 serde_json::from_value(p.get("task").cloned().unwrap_or(p.clone()))?;
             validate(&mut task)?;
-            let source = source_for(&settings, &task.source_id, task.codex_profile_id.as_deref())?;
+            let source =
+                source_for_draft(&settings, &task.source_id, task.codex_profile_id.as_deref())?;
             if let Some(account) = settings
                 .accounts
                 .iter()
@@ -649,6 +729,10 @@ impl Engine {
                 .as_ref()
                 .map(|_| format!("~/.local/share/aieyes-wakeups/{namespace}"))
                 .unwrap_or_else(|| local_root.to_string_lossy().into());
+            let was_settings_pending = r.deployment.as_ref().is_some_and(|deployed| {
+                deployed.state == "settings-pending"
+                    || deployed.account_environment_changed(&settings)
+            });
             let mut pending = r.deployment.clone().unwrap_or(Deployment {
                 task: deploying_task.clone(),
                 source: source.clone(),
@@ -659,7 +743,15 @@ impl Engine {
                 state: String::new(),
                 timezone: "目标机器时区".into(),
             });
-            pending.state = "deployment-unconfirmed".into();
+            pending.state = if was_settings_pending {
+                // Keep this marker until the new environment is confirmed,
+                // including failures after the target responded but before the
+                // local commit. A later start must still retry synchronization.
+                "settings-pending"
+            } else {
+                "deployment-unconfirmed"
+            }
+            .into();
             r.deployment = Some(pending);
             // Record ownership before touching the target, so a lost SSH response cannot orphan a job.
             self.store.save_wakeup(&r)?;
@@ -686,6 +778,9 @@ impl Engine {
                 });
             let mut deployed_source = source;
             deployed_source.quota_pre_command = m.pre_command.clone();
+            if deployed_source.host_id.is_some() {
+                deployed_source.proxy = None;
+            }
             r.deployment = Some(Deployment {
                 task: deploying_task.clone(),
                 source: deployed_source,
@@ -708,7 +803,22 @@ impl Engine {
             tx.commit()?;
             return Ok(public_record(&r));
         }
-        let d = r.deployment.as_mut().context("任务尚未部署")?;
+        if action == "run" || action == "enable" {
+            let deployed = r.deployment.as_ref().context("任务尚未部署")?;
+            if action == "run" {
+                source_for(
+                    &settings,
+                    &deployed.task.source_id,
+                    deployed.task.codex_profile_id.as_deref(),
+                )?;
+            }
+            // Removal or status recovery may have changed the display state.
+            // Always compare the actual deployed environment before starting.
+            if self.sync_wakeup_settings_unlocked(id)?.is_some() {
+                r = self.store.wakeup(id)?;
+            }
+        }
+        let d = r.deployment.as_ref().context("任务尚未部署")?;
         let result = if let Some(host) = &d.host {
             remote(host, json!({"action":action,"root":d.root,"id":id}))
         } else {
@@ -718,23 +828,69 @@ impl Engine {
             Ok(v) => v,
             Err(e) => {
                 if action == "remove" {
-                    d.state = "pending-removal".into();
-                    self.store.save_wakeup(&r)?;
+                    let tx = self.store.write_transaction()?;
+                    let mut latest = self.store.wakeup(id)?;
+                    if let Some(deployment) = &mut latest.deployment {
+                        deployment.state = "pending-removal".into();
+                    }
+                    self.store.save_wakeup(&latest)?;
+                    tx.commit()?;
                 }
                 return Err(e);
             }
         };
+        if matches!(action, "status" | "history" | "run") {
+            return Ok(value);
+        }
+        // A concurrent settings save may have marked this deployment pending
+        // while the target was responding. Merge only the operation's result.
+        let tx = self.store.write_transaction()?;
+        let mut latest = self.store.wakeup(id)?;
         match action {
-            "remove" => r.deployment = None,
+            "remove" => latest.deployment = None,
             "enable" | "disable" => {
+                let d = latest.deployment.as_mut().context("任务尚未部署")?;
                 d.enabled = action == "enable";
-                d.state = "deployed".into();
+                if d.state != "settings-pending" {
+                    d.state = "deployed".into();
+                }
             }
-            "status" | "history" | "run" => return Ok(value),
             _ => anyhow::bail!("未知任务操作"),
         }
-        self.store.save_wakeup(&r)?;
-        Ok(public_record(&r))
+        self.store.save_wakeup(&latest)?;
+        tx.commit()?;
+        Ok(public_record(&latest))
+    }
+    /// Caller holds this task's lock. Keep a failed update pending so the next
+    /// start, enable or retry cannot use the previously deployed environment.
+    pub(crate) fn sync_wakeup_settings_unlocked(&mut self, id: &str) -> Result<Option<Value>> {
+        let current = self.store.wakeup(id)?;
+        let deployment = current.deployment.as_ref().context("任务尚未部署")?;
+        if deployment.state != "settings-pending"
+            && !deployment.account_environment_changed(&self.store.settings()?)
+        {
+            return Ok(None);
+        }
+        let result = self
+            .wakeup_call_unlocked(
+                "wakeups.deploy",
+                json!({"id":id,"preserveEnabled":deployment.enabled,"useDeployedTask":true}),
+            )
+            .and_then(|value| {
+                ensure!(
+                    value["deployment"]["state"] != "settings-pending",
+                    "同步期间配置再次变化，请重试同步"
+                );
+                Ok(Some(value))
+            });
+        if result.is_err() {
+            let mut current = self.store.wakeup(id)?;
+            if let Some(deployment) = &mut current.deployment {
+                deployment.state = "settings-pending".into();
+                self.store.save_wakeup(&current)?;
+            }
+        }
+        result
     }
     fn local_probe(&self, m: &Manifest, source: &Source, settings: &Settings) -> Result<Value> {
         let help = runner::invoke(m, &["--help".into()], &std::env::temp_dir(), 15)?;
@@ -823,9 +979,224 @@ impl Engine {
     }
 }
 
+pub(crate) struct TaskLock {
+    _ownership: crate::file_lock::FileLock,
+    _task: crate::file_lock::FileLock,
+}
+pub(crate) fn lock_task(store: &Store, id: &str) -> Result<TaskLock> {
+    let ownership = crate::accounts::lock_task_ownership(store, true)?;
+    let file = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(store.root.join(format!("wakeup-{}.lock", hash(id))))?;
+    let task = crate::file_lock::FileLock::try_exclusive(file)
+        .map_err(|_| anyhow::anyhow!("此唤醒任务正在操作，请稍后重试"))?;
+    Ok(TaskLock {
+        _ownership: ownership,
+        _task: task,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn paused_targets_allow_valid_drafts_but_reject_deploy_probe_and_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let source = Source {
+            id: "source".into(),
+            provider: "claude".into(),
+            account_id: "account".into(),
+            path: "~/.claude".into(),
+            host_id: Some("remote".into()),
+            ..Default::default()
+        };
+        let host = Host {
+            id: "remote".into(),
+            enabled: false,
+            target: "fixture.invalid".into(),
+            ..Default::default()
+        };
+        let settings = Settings {
+            sources: vec![source.clone()],
+            hosts: vec![host.clone()],
+            accounts: vec![Account {
+                id: "account".into(),
+                name: "Fixture account".into(),
+                provider: "claude".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        engine.store.save_settings(&settings).unwrap();
+        let task = Task {
+            id: "wake-paused".into(),
+            name: "Paused draft".into(),
+            source_id: "source".into(),
+            model: "fixture-model".into(),
+            ..Default::default()
+        };
+        let saved = engine
+            .wakeup_call("wakeups.save", json!({"task":task}))
+            .unwrap();
+        assert!(saved["deployment"].is_null());
+        assert!(!dir.path().join("wakeups").exists());
+        for (method, params) in [
+            ("wakeups.deploy", json!({"id":task.id})),
+            ("wakeups.probe", json!({"task":task})),
+        ] {
+            assert!(
+                engine
+                    .wakeup_call(method, params)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("暂停")
+            );
+        }
+        let record = Record {
+            task: task.clone(),
+            deployment: Some(Deployment {
+                task: task.clone(),
+                source,
+                host: Some(host),
+                root: "~/fixture".into(),
+                deployed_at: 1,
+                enabled: false,
+                state: "deployed".into(),
+                timezone: "UTC".into(),
+            }),
+        };
+        engine.store.save_wakeup(&record).unwrap();
+        assert!(
+            engine
+                .wakeup_call("wakeups.run", json!({"id":task.id}))
+                .unwrap_err()
+                .to_string()
+                .contains("暂停")
+        );
+        let mut edited = task.clone();
+        edited.name = "Edited offline".into();
+        engine
+            .wakeup_call("wakeups.save", json!({"task":edited}))
+            .unwrap();
+        assert_eq!(
+            engine.store.wakeup(&task.id).unwrap().task.name,
+            "Edited offline"
+        );
+    }
+    #[test]
+    fn offline_shared_drafts_still_require_the_correct_unique_profile_association() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let source = Source {
+            id: "shared".into(),
+            path: "/fixture/codex".into(),
+            codex_home_id: Some("home".into()),
+            enabled: false,
+            ..Default::default()
+        };
+        let mut settings = Settings {
+            sources: vec![source],
+            local_device_enabled: false,
+            accounts: vec![Account {
+                id: "a".into(),
+                name: "Fixture account".into(),
+                connections: vec![AccountConnection {
+                    source_id: "shared".into(),
+                    profile_id: Some("home:profile".into()),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        engine.store.save_settings(&settings).unwrap();
+        let mut task = Task {
+            name: "Offline shared".into(),
+            source_id: "shared".into(),
+            codex_profile_id: Some("home:profile".into()),
+            model: "fixture-model".into(),
+            ..Default::default()
+        };
+        engine
+            .wakeup_call("wakeups.save", json!({"task":task}))
+            .unwrap();
+        for profile in [
+            None,
+            Some("other:profile"),
+            Some("home:unbound"),
+            Some("home:../../invalid"),
+        ] {
+            task.codex_profile_id = profile.map(str::to_owned);
+            assert!(
+                engine
+                    .wakeup_call("wakeups.save", json!({"task":task}))
+                    .is_err(),
+                "{profile:?}"
+            );
+        }
+        settings.accounts[0].archived = true;
+        engine.store.save_settings(&settings).unwrap();
+        task.codex_profile_id = Some("home:profile".into());
+        assert!(
+            engine
+                .wakeup_call("wakeups.save", json!({"task":task}))
+                .unwrap_err()
+                .to_string()
+                .contains("归档")
+        );
+    }
+    #[test]
+    fn a_busy_task_does_not_block_other_drafts_but_keeps_account_cleanup_exclusive() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(dir.path()).unwrap();
+        engine
+            .store
+            .save_settings(&Settings {
+                sources: vec![Source {
+                    id: "s".into(),
+                    path: "/fixture/codex".into(),
+                    account_id: "a".into(),
+                    ..Default::default()
+                }],
+                accounts: vec![Account {
+                    id: "a".into(),
+                    name: "Fixture account".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let held = lock_task(&engine.store, "wake-first").unwrap();
+        let mut task = Task {
+            id: "wake-first".into(),
+            name: "Draft".into(),
+            source_id: "s".into(),
+            model: "fixture".into(),
+            ..Default::default()
+        };
+        assert!(
+            engine
+                .wakeup_call("wakeups.save", json!({"task":task}))
+                .unwrap_err()
+                .to_string()
+                .contains("此唤醒任务")
+        );
+        task.id = "wake-second".into();
+        engine
+            .wakeup_call("wakeups.save", json!({"task":task}))
+            .unwrap();
+        assert!(crate::accounts::lock_tasks(&engine.store).is_err());
+        drop(held);
+        let _cleanup = crate::accounts::lock_tasks(&engine.store).unwrap();
+        assert!(
+            engine
+                .wakeup_call("wakeups.save", json!({"task":task}))
+                .is_err()
+        );
+    }
     #[cfg(unix)]
     fn check_local_model_probe_inherits_account_command(managed: bool) {
         use std::os::unix::fs::PermissionsExt;
@@ -871,6 +1242,7 @@ for line in sys.stdin:
                 device_settings: vec![AccountDeviceSettings {
                     machine_id: "local".into(),
                     pre_command: "export AIEYES_WAKE_FIXTURE=first".into(),
+                    ..Default::default()
                 }],
                 ..Default::default()
             }],
@@ -915,11 +1287,13 @@ for line in sys.stdin:
                 .map(|pre_command| AccountDeviceSettings {
                     machine_id: "local".into(),
                     pre_command: pre_command.into(),
+                    ..Default::default()
                 })
                 .into_iter()
                 .chain([AccountDeviceSettings {
                     machine_id: "other-machine".into(),
                     pre_command: "export AIEYES_WAKE_FIXTURE=wrong".into(),
+                    ..Default::default()
                 }])
                 .collect();
             engine.store.save_settings(&settings).unwrap();
@@ -1047,6 +1421,7 @@ for line in sys.stdin:
         settings.accounts[0].device_settings = vec![AccountDeviceSettings {
             machine_id: "remote".into(),
             pre_command: "export ACCOUNT_PROXY=fixture".into(),
+            ..Default::default()
         }];
         e.store.save_settings(&settings).unwrap();
         let record = e.store.wakeup("job").unwrap();
@@ -1060,6 +1435,294 @@ for line in sys.stdin:
             "export ACCOUNT_PROXY=fixture"
         );
         assert_eq!(public_record(&record)["deployment"]["changed"], true);
+    }
+    #[test]
+    fn failed_command_sync_stays_pending_before_run_or_enable_and_keeps_the_draft() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let source = Source {
+            id: "s".into(),
+            provider: "claude".into(),
+            account_id: "a".into(),
+            path: "~/.claude".into(),
+            host_id: Some("remote".into()),
+            ..Default::default()
+        };
+        // An invalid fixture target fails before any SSH process is started,
+        // after the attempted deployment has recorded ownership locally.
+        let host = Host {
+            id: "remote".into(),
+            target: "-invalid-fixture".into(),
+            ..Default::default()
+        };
+        let settings = Settings {
+            version: 10,
+            sources: vec![source.clone()],
+            hosts: vec![host.clone()],
+            accounts: vec![Account {
+                id: "a".into(),
+                name: "Fixture".into(),
+                provider: "claude".into(),
+                device_settings: vec![AccountDeviceSettings {
+                    machine_id: "remote".into(),
+                    pre_command: "export ACCOUNT_ENV=new".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        engine
+            .store
+            .db
+            .execute(
+                "INSERT OR REPLACE INTO kv VALUES('settings',?1)",
+                [json!(settings).to_string()],
+            )
+            .unwrap();
+        let task = Task {
+            id: "wake-pending".into(),
+            name: "Installed task".into(),
+            source_id: source.id.clone(),
+            model: "fixture".into(),
+            ..Default::default()
+        };
+        let mut draft = task.clone();
+        draft.name = "Unsynced draft".into();
+        draft.prompt = "Keep the draft prompt".into();
+        let record = Record {
+            task: draft.clone(),
+            deployment: Some(Deployment {
+                task: task.clone(),
+                source,
+                host: Some(host),
+                root: "~/fixture".into(),
+                deployed_at: 1,
+                enabled: false,
+                state: "settings-pending".into(),
+                timezone: "UTC".into(),
+            }),
+        };
+        engine.store.save_wakeup(&record).unwrap();
+        for method in [
+            "wakeups.deploy",
+            "wakeups.run",
+            "wakeups.run",
+            "wakeups.enable",
+            "wakeups.enable",
+        ] {
+            let error = engine
+                .wakeup_call(method, json!({"id":task.id}))
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("SSH 主机格式不正确"),
+                "{method}: {error}"
+            );
+            let current = engine.store.wakeup(&task.id).unwrap();
+            let deployed = current.deployment.unwrap();
+            assert_eq!(deployed.state, "settings-pending", "{method}");
+            assert!(!deployed.enabled, "{method}");
+            assert_eq!(json!(current.task), json!(draft));
+            assert_eq!(json!(deployed.task), json!(task));
+        }
+        let result = engine
+            .account_call("accounts.deployments.sync", json!({"taskId":task.id}))
+            .unwrap();
+        assert_eq!(result["failedTasks"].as_array().unwrap().len(), 1);
+        assert!(result["syncedTasks"].as_array().unwrap().is_empty());
+        assert_eq!(
+            engine
+                .store
+                .wakeup(&task.id)
+                .unwrap()
+                .deployment
+                .unwrap()
+                .state,
+            "settings-pending"
+        );
+    }
+    #[test]
+    fn upgrade_persists_conflict_reset_and_remote_proxy_sync_without_enabling_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(dir.path()).unwrap();
+        let host = Host {
+            id: "remote".into(),
+            target: "fixture.invalid".into(),
+            enabled: false,
+            pre_command: "legacy host".into(),
+            ..Default::default()
+        };
+        let sources = ["one", "two"]
+            .into_iter()
+            .map(|id| Source {
+                id: id.into(),
+                provider: "claude".into(),
+                account_id: "a".into(),
+                host_id: Some("remote".into()),
+                path: format!("~/.claude/{id}"),
+                quota_pre_command: format!("legacy {id}"),
+                proxy: Some(ProxyConfig {
+                    mode: "custom".into(),
+                    url: "http://legacy.invalid:8080".into(),
+                }),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let old = Settings {
+            version: 9,
+            sources: sources.clone(),
+            hosts: vec![host.clone()],
+            accounts: vec![Account {
+                id: "a".into(),
+                name: "Fixture account".into(),
+                provider: "claude".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        engine
+            .store
+            .db
+            .execute(
+                "INSERT OR REPLACE INTO kv VALUES('settings',?1)",
+                [json!(old).to_string()],
+            )
+            .unwrap();
+        engine
+            .store
+            .db
+            .execute(
+                "DELETE FROM kv WHERE key='account-commands.migrated.v10'",
+                [],
+            )
+            .unwrap();
+        for (index, source) in sources.into_iter().enumerate() {
+            let task = Task {
+                id: format!("wake-{}", source.id),
+                name: source.id.clone(),
+                source_id: source.id.clone(),
+                model: "fixture".into(),
+                ..Default::default()
+            };
+            engine
+                .store
+                .save_wakeup(&Record {
+                    task: task.clone(),
+                    deployment: Some(Deployment {
+                        task,
+                        source,
+                        host: Some(host.clone()),
+                        root: "~/fixture".into(),
+                        deployed_at: 1,
+                        enabled: index == 0,
+                        state: "deployed".into(),
+                        timezone: "UTC".into(),
+                    }),
+                })
+                .unwrap();
+        }
+        drop(engine);
+        engine = Engine::open(dir.path()).unwrap();
+        let mut settings = engine.store.settings().unwrap();
+        assert_eq!(settings.version, 10);
+        assert!(settings.accounts[0].device_settings[0].pre_command_reset_required);
+        for source in &settings.sources {
+            assert!(source.quota_pre_command.is_empty());
+            assert_eq!(
+                crate::accounts::pre_command(&settings, Some(&settings.accounts[0]), source),
+                ""
+            );
+            let task = Task {
+                source_id: source.id.clone(),
+                ..Default::default()
+            };
+            assert_eq!(
+                manifest(&task, source, &settings).unwrap().proxy.mode,
+                "system"
+            );
+        }
+        let records = engine.store.wakeups().unwrap();
+        assert!(
+            records
+                .iter()
+                .all(|r| r.deployment.as_ref().unwrap().state == "settings-pending")
+        );
+        let enabled = records
+            .iter()
+            .map(|r| r.deployment.as_ref().unwrap().enabled)
+            .collect::<Vec<_>>();
+        let result = engine
+            .account_call("accounts.deployments.sync", json!({}))
+            .unwrap();
+        assert_eq!(result["failedTasks"].as_array().unwrap().len(), 2);
+        let result = engine
+            .account_call("accounts.deployments.sync", json!({"taskId":"wake-one"}))
+            .unwrap();
+        assert_eq!(result["failedTasks"].as_array().unwrap().len(), 1);
+        assert_eq!(result["failedTasks"][0]["id"], "wake-one");
+        assert!(result["syncedTasks"].as_array().unwrap().is_empty());
+        assert_eq!(
+            engine
+                .store
+                .wakeups()
+                .unwrap()
+                .iter()
+                .map(|r| r.deployment.as_ref().unwrap().enabled)
+                .collect::<Vec<_>>(),
+            enabled
+        );
+        settings.accounts[0].device_settings[0] = AccountDeviceSettings {
+            machine_id: "remote".into(),
+            pre_command: "export SHARED=ready".into(),
+            ..Default::default()
+        };
+        engine.store.save_settings(&settings).unwrap();
+        drop(engine);
+        let reopened = Engine::open(dir.path()).unwrap().store.settings().unwrap();
+        assert!(!reopened.accounts[0].device_settings[0].pre_command_reset_required);
+        assert_eq!(
+            reopened.accounts[0].device_settings[0].pre_command,
+            "export SHARED=ready"
+        );
+    }
+    #[test]
+    fn remote_legacy_proxy_values_do_not_change_manifests_or_codex_locations() {
+        let task = Task {
+            model: "fixture".into(),
+            ..Default::default()
+        };
+        let mut source = Source {
+            host_id: Some("remote".into()),
+            ..Default::default()
+        };
+        let settings = Settings {
+            proxy: ProxyConfig {
+                mode: "custom".into(),
+                url: "http://local.invalid:8080".into(),
+            },
+            ..Default::default()
+        };
+        for mode in ["direct", "custom", "invalid-legacy"] {
+            source.proxy = Some(ProxyConfig {
+                mode: mode.into(),
+                url: "http://legacy.invalid:8080".into(),
+            });
+            let manifest = manifest(&task, &source, &settings).unwrap();
+            assert_eq!(manifest.proxy.mode, "system");
+            assert!(manifest.proxy.url.is_empty());
+            let location = crate::codex_auth::location(&source, &settings);
+            assert_eq!(location.proxy.mode, "system");
+            assert!(location.proxy.url.is_empty());
+        }
+        source.host_id = None;
+        source.proxy = Some(ProxyConfig {
+            mode: "direct".into(),
+            url: String::new(),
+        });
+        assert_eq!(
+            crate::codex_auth::location(&source, &settings).proxy.mode,
+            "direct"
+        );
     }
     #[test]
     fn response_requires_terminal_success_not_just_exit_zero() {

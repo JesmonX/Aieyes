@@ -7,6 +7,7 @@ impl Engine {
     pub(crate) fn account_targets(&mut self, params: &Value) -> Result<Value> {
         let settings = self.store.settings()?;
         let statuses = self.account_call("accounts.status.get", json!({}))?;
+        let include_unavailable = params["includeUnavailable"] == true;
         let mut rows = vec![];
         for account in settings.accounts.iter().filter(|a| {
             !a.archived
@@ -14,24 +15,11 @@ impl Engine {
                     .as_str()
                     .is_none_or(|k| k == crate::accounts::key(a))
         }) {
-            let Some(agent) = settings
-                .agents
-                .iter()
-                .find(|a| a.provider == account.provider && a.enabled)
-            else {
-                continue;
-            };
             for source in settings.sources.iter().filter(|s| {
                 s.provider == account.provider
-                    && settings.source_enabled(s)
-                    && agent
-                        .machine_ids
-                        .iter()
-                        .any(|id| id == s.host_id.as_deref().unwrap_or("local"))
-                    && s.host_id
-                        .as_ref()
-                        .is_none_or(|id| settings.hosts.iter().any(|h| &h.id == id && h.enabled))
+                    && (include_unavailable || settings.source_enabled(s))
             }) {
+                let available = settings.source_enabled(source);
                 let status = statuses.as_array().and_then(|rows| {
                     rows.iter().find(|r| {
                         r["accountKey"] == crate::accounts::key(account)
@@ -57,7 +45,7 @@ impl Engine {
                     };
                     let mut scoped = settings.clone();
                     scoped.accounts = vec![account.clone()];
-                    let reason = codex_auth::validate_settings(&scoped)
+                    let association_reason = codex_auth::validate_settings(&scoped)
                         .err()
                         .map(|e| e.to_string())
                         .or_else(|| {
@@ -69,6 +57,21 @@ impl Engine {
                                     })
                                 })
                                 .map(|_| "账号档案被多个账户引用，请重新关联".to_owned())
+                        });
+                    let draft_reason = association_reason.clone().or_else(|| {
+                        if !bound {
+                            Some("请先将此目录或账号档案关联到账户".to_owned())
+                        } else {
+                            crate::wakeups::source_for_draft(&settings, &source.id, profile)
+                                .err()
+                                .map(|error| error.to_string())
+                        }
+                    });
+                    let reason = association_reason
+                        .or_else(|| {
+                            (!available).then(|| {
+                                "目标机器或 Agent 已暂停或未选择，请在设置中恢复".to_owned()
+                            })
                         })
                         .or_else(|| status.and_then(|r| r["error"].as_str().map(str::to_owned)));
                     let credential = status.and_then(|r| {
@@ -85,10 +88,11 @@ impl Engine {
                     });
                     rows.push(json!({"accountKey":crate::accounts::key(account),"accountName":account.name,"provider":account.provider,
                         "sourceId":source.id,"sourceName":source.name,"path":source.path,"machineId":source.host_id.as_deref().unwrap_or("local"),
-                        "machineName":source.host_id.as_ref().and_then(|id| settings.hosts.iter().find(|h| &h.id == id)).map(|h| h.name.as_str()).unwrap_or("本机"),
+                        "machineName":source.host_id.as_ref().map(|id| settings.hosts.iter().find(|h| &h.id == id).map(|h| h.name.as_str()).unwrap_or_else(|| source.last_machine_name.as_deref().unwrap_or("已移除的机器"))).unwrap_or("本机"),
                         "profileId":profile,"current":status.map(|r| &r["current"]),"credential":credential,"checkedAt":status.map(|r| &r["checkedAt"]),
-                        "canWake":bound && credential != Some(false) && reason.is_none() && crate::providers::supports_wakeup(&account.provider),
-                        "canSwitch":account.provider == "codex" && profile.is_some() && credential == Some(true) && reason.is_none() && status.is_some_and(|r| r["current"] != true),"reason":reason}));
+                        "canDraft":draft_reason.is_none(),"draftReason":draft_reason,"available":available,
+                        "canWake":available && bound && credential != Some(false) && reason.is_none() && crate::providers::supports_wakeup(&account.provider),
+                        "canSwitch":available && account.provider == "codex" && profile.is_some() && credential == Some(true) && reason.is_none() && status.is_some_and(|r| r["current"] != true),"reason":reason}));
                 }
             }
         }

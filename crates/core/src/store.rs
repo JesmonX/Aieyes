@@ -74,6 +74,7 @@ impl Store {
         store.migrate_usage_ids()?;
         store.bootstrap_capacity()?;
         store.repair_history_estimates()?;
+        store.migrate_account_commands()?;
         Ok(store)
     }
     /// Acquire the writer before reading a snapshot; never upgrade a stale WAL reader.
@@ -350,9 +351,12 @@ impl Store {
                 "未绑定机器的目录必须暂停并保留原机器标识"
             );
         }
-        for proxy in
-            std::iter::once(&s.proxy).chain(s.sources.iter().filter_map(|s| s.proxy.as_ref()))
-        {
+        for proxy in std::iter::once(&s.proxy).chain(
+            s.sources
+                .iter()
+                .filter(|s| s.host_id.is_none())
+                .filter_map(|s| s.proxy.as_ref()),
+        ) {
             anyhow::ensure!(
                 ["system", "direct", "custom"].contains(&proxy.mode.as_str()),
                 "请选择代理模式"
@@ -516,30 +520,7 @@ impl Store {
         if !changed_models.is_empty() {
             self.reprice_in_transaction(s, true, Some(&changed_models))?;
         }
-        // Mark installed jobs dirty locally; network updates run on a separate lane.
-        for mut record in self.wakeups()? {
-            if let Some(deployed) = &record.deployment
-                && let Some(source) = s.sources.iter().find(|v| v.id == deployed.source.id)
-            {
-                let current_account = s.accounts.iter().find(|a| {
-                    a.provider == deployed.source.provider && a.id == deployed.source.account_id
-                });
-                let previous_command = crate::accounts::pre_command(
-                    &Settings {
-                        hosts: deployed.host.clone().into_iter().collect(),
-                        ..Default::default()
-                    },
-                    None,
-                    &deployed.source,
-                );
-                if crate::accounts::pre_command(s, current_account, source) != previous_command
-                    && deployed.state != "pending-removal"
-                {
-                    record.deployment.as_mut().unwrap().state = "settings-pending".into();
-                    self.save_wakeup(&record)?;
-                }
-            }
-        }
+        self.mark_wakeup_settings_pending(s)?;
         self.reconcile_estimates(s)?;
         let owns_transaction = transaction.is_some();
         if let Some(transaction) = transaction {
@@ -547,6 +528,54 @@ impl Store {
         }
         for reference in obsolete.into_iter().filter(|_| owns_transaction) {
             let _ = crate::credentials::delete(&reference);
+        }
+        Ok(())
+    }
+    /// The migration only changes Aieyes records; target machines are synchronized explicitly.
+    fn migrate_account_commands(&self) -> Result<()> {
+        let migrated: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM kv WHERE key='account-commands.migrated.v10')",
+            [],
+            |row| row.get(0),
+        )?;
+        if migrated {
+            return Ok(());
+        }
+        let tx = self.write_transaction()?;
+        let raw: Option<String> = tx
+            .query_row("SELECT value FROM kv WHERE key='settings'", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        if let Some(raw) = raw {
+            let mut settings: Settings = serde_json::from_str(&raw)?;
+            crate::providers::normalize_settings(&mut settings);
+            tx.execute(
+                "UPDATE kv SET value=?1 WHERE key='settings'",
+                [serde_json::to_string(&settings)?],
+            )?;
+            self.mark_wakeup_settings_pending(&settings)?;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO kv VALUES('account-commands.migrated.v10','true')",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+    // Mark installed jobs dirty locally; network updates run on a separate lane.
+    fn mark_wakeup_settings_pending(&self, s: &Settings) -> Result<()> {
+        for mut record in self.wakeups()? {
+            if let Some(deployed) = &record.deployment
+                && deployed.account_environment_changed(s)
+                && !matches!(
+                    deployed.state.as_str(),
+                    "pending-removal" | "settings-pending"
+                )
+            {
+                record.deployment.as_mut().unwrap().state = "settings-pending".into();
+                self.save_wakeup(&record)?;
+            }
         }
         Ok(())
     }

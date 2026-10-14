@@ -2,11 +2,12 @@
 window.AieyesCodexAPI = (() => {
   const e = value => escapeHTML(value ?? '');
   const sources = () => (state.settings?.sources ?? []).filter(s => s.provider === 'codex');
+  const available = source => Boolean(source&&AieyesUI.sourceEnabled(state.settings,source));
   const connections = () => state.settings?.codexApis ?? [];
   const statuses = new Map(), pending = new Set();
   let busy = false, notice = '', error = '';
   const paint = () => { if (state.page === 'settings' && state.settingsTab === 'integrations' && state.settingsAgent === 'codex') renderSettings(false); };
-  const location = source => source ? (source.hostId ? state.settings.hosts.find(h => h.id === source.hostId)?.name || source.hostId : '本机') + ' · ' + source.name : '来源已移除';
+  const location = source => source ? (source.hostId ? state.settings.hosts.find(h => h.id === source.hostId)?.name || source.hostId : '本机') + ' · ' + source.name + ' · ' + source.path : '来源已移除';
   async function status(sourceId) {
     const value = await api('codexApi.status', {sourceId});
     statuses.set(sourceId, value); return value;
@@ -20,10 +21,10 @@ window.AieyesCodexAPI = (() => {
         const source=sources().find(s=>s.id===c.sourceId), selected=statuses.get(c.sourceId)?.selected;
         const active=selected?.connectionId===c.id, applied=active&&selected.revision===c.revision;
         return '<div class="api-connection"><div class="list-row"><div class="row-body"><strong>'+e(c.name)+(active?' · 当前 API':'')+
-          '</strong><small>'+e(location(source))+'</small><small>'+e(c.baseUrl)+'</small>'+(active&&!applied?'<small>有已保存的更改，切换后生效</small>':'')+
+          '</strong><small>'+e(location(source))+'</small><small>'+e(c.baseUrl)+'</small>'+(active&&!applied?'<small>有已保存的更改，切换后生效</small>':'')+(!available(source)?'<small>采集已暂停或目录不可用；恢复后可切换。</small><button data-api-machine-settings>机器设置</button>':'')+
           '</div><button data-codex-api="edit" data-api-id="'+e(c.id)+'" '+(busy?'disabled':'')+'>设置</button></div><div class="actions">'+
           [['probe','测试连接'],['switch',applied?'正在使用':'切换到此 API'],['remove','移除']].map(([action,label])=>
-          '<button data-codex-api="'+action+'" data-api-id="'+e(c.id)+'" '+(busy||!source||action==='switch'&&applied?'disabled':'')+'>'+label+'</button>').join('')+'</div></div>';
+          '<button data-codex-api="'+action+'" data-api-id="'+e(c.id)+'" '+(busy||!source||action==='switch'&&(!available(source)||applied)?'disabled':'')+'>'+label+'</button>').join('')+'</div></div>';
       }).join('')+
       (!connections().length?'<p class="muted">尚未添加 API 连接。密钥保存在所选设备。</p>':'')+
       [...new Set(connections().map(c=>c.sourceId))].map(id=>{
@@ -31,7 +32,7 @@ window.AieyesCodexAPI = (() => {
         return '<div class="list-row"><span class="row-body tiny muted">'+e(location(sources().find(s=>s.id===id)))+' · '+
           (selected?selected.kind==='api'?'当前使用 '+e(selected.name||'API'):'当前使用账号':'状态待检查')+
           '</span><button data-codex-api="refresh" data-api-source="'+e(id)+'" '+(busy?'disabled':'')+'>刷新状态</button>'+
-          '<button data-codex-api="account" data-api-source="'+e(id)+'" '+(busy?'disabled':'')+'>切换到已保存账号</button></div>';
+          '<button data-codex-api="account" data-api-source="'+e(id)+'" '+(busy||!available(sources().find(s=>s.id===id))?'disabled':'')+'>切换到已保存账号</button></div>';
       }).join('')+'</section>';
   }
   function bind() {
@@ -53,14 +54,14 @@ window.AieyesCodexAPI = (() => {
         document.getElementById('field-apiKey').value='';
         window.AieyesAgentSettings.accept(saved.settings);statuses.delete(connection.sourceId);error='';notice='API 已保存，可检查并切换到此连接。';
         markSaved();paint();void loadDashboard();
-      });
+      },'api');
     document.getElementById('field-apiSource').disabled=Boolean(existing);
     document.getElementById('field-apiKey').autocomplete='new-password';
   }
   async function switchConnection(sourceId, connection) {
     if(busy)return;
     busy=true;error='';notice='';paint();
-    const dialog=quotaDialog('切换 Codex 登录方式','<p role="status">正在检查设备与切换目标…</p>');
+    const dialog=quotaDialog('切换 Codex 登录方式','<p role="status">正在检查设备与切换目标…</p>','api');
     let prepared=null, profileId='', inspection=null, working=false, epoch=0;
     const originalClose=dialog.onclose;
     const finish=()=>{if(!working)dialog.close();};
@@ -94,12 +95,12 @@ window.AieyesCodexAPI = (() => {
         (error?'<p class="error" role="alert">'+e(error)+'</p>':'')+
         (prepared?rows.length?'<ul>'+rows.map(p=>'<li>'+e(p.name)+' · PID '+p.pid+(p.canClose?'':' · '+e(p.blockingReason))+'</li>').join('')+'</ul>':'<p>没有需要关闭的进程。</p>':'')+
         (prepared?.preservedProcesses?.length?'<p class="tiny muted">将保留 '+prepared.preservedProcesses.length+' 个独立 API 进程。</p>':'')+
-        '<div class="actions"><button id="api-switch-cancel">取消</button><button id="api-switch-retry">重新检查</button><button class="primary" id="api-switch-confirm" '+(!prepared||blocked||settingsFormsDirty()?'disabled':'')+'>'+(rows.length?'关闭并切换':'确认切换')+'</button></div>';
+        '<div class="actions"><button id="api-switch-cancel">取消</button><button id="api-switch-retry">重新检查</button><button class="primary" id="api-switch-confirm" '+(!prepared||blocked?'disabled':'')+'>'+(rows.length?'关闭并切换':'确认切换')+'</button></div>';
       body.querySelector('#api-switch-cancel').onclick=finish;
       body.querySelector('#api-switch-retry').onclick=()=>{error='';void prepare();};
       const picker=body.querySelector('#api-switch-profile');if(picker)picker.onchange=()=>{profileId=picker.value;error='';void prepare();};
       body.querySelector('#api-switch-confirm').onclick=async()=>{
-        if(!prepared||working||settingsFormsDirty())return;setWorking(true);body.querySelectorAll('button,select').forEach(b=>b.disabled=true);
+        if(!prepared||working)return;setWorking(true);body.querySelectorAll('button,select').forEach(b=>b.disabled=true);
         try{
           const result=await api('codexAuth.switch.commit',{sourceId,operationId:prepared.operationId,closeProcesses:rows.length>0});
           if(result.status!=='succeeded')throw new Error(result.error||'切换尚未完成，请重新检查');
@@ -126,6 +127,7 @@ window.AieyesCodexAPI = (() => {
     }catch(err){error=String(err.message??err);}finally{busy=false;paint();}
   }
   document.addEventListener('click',event=>{
+    if(event.target.closest('[data-api-machine-settings]')){void openSettings({provider:'codex',section:'machines'});return;}
     const button=event.target.closest('[data-codex-api]');if(!button||busy)return;
     const action=button.dataset.codexApi,c=connections().find(v=>v.id===button.dataset.apiId);
     if(action==='add'||action==='edit')return edit(c);

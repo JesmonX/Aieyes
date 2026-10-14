@@ -13,9 +13,8 @@
         <button type="button" data-page="agent" class="active">Agent</button>
         <button type="button" data-page="servers">服务器</button>
       </nav>
-      <button type="button" data-theme-toggle aria-label="切换明暗模式" title="切换明暗模式"></button>
       <div class="panel-refresh-wrap">
-        <button type="button" id="panel-refresh" aria-label="刷新" aria-haspopup="true" aria-expanded="false" title="刷新"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6"/></svg></button>
+        <button type="button" id="panel-refresh" aria-label="刷新" aria-haspopup="true" aria-expanded="false" title="刷新" data-ui-icon="refresh"></button>
         <div id="panel-menu" class="panel-menu" role="menu" hidden>
           <button type="button" role="menuitem" data-refresh="scan">同步记录</button>
           <button type="button" role="menuitem" data-refresh="quotas">刷新限额</button>
@@ -26,22 +25,23 @@
     </header>
     <div class="panel-body">
       <div id="message" role="status" hidden></div>
-      <details id="live-sessions"><summary><span class="dot"></span><span id="session-summary">正在读取会话状态…</span><span class="muted" title="已启用的本机和 SSH Agent 会话状态">Codex / Claude / AGY</span></summary><div id="session-list"></div><p id="session-warning" class="error" hidden>部分日志不可读，状态可能不完整。</p></details>
+      <details id="live-sessions"><summary><span id="session-indicator" class="phase-mark session-phase" aria-hidden="true"></span><span id="session-summary">正在读取会话状态…</span><span class="muted" title="已启用的本机和 SSH Agent 会话状态">Codex / Claude / AGY</span></summary><div id="session-list"></div><p id="session-warning" class="error" hidden>部分日志不可读，状态可能不完整。</p></details>
       <section id="content"></section>
     </div>
     <footer class="panel-foot">
       <div class="panel-connection"><span id="activity" aria-live="polite">正在加载</span>
       </div><div class="panel-actions">
-      <button type="button" id="panel-update" aria-label="检查更新" title="检查更新"><svg viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5"/></svg><span class="update-badge" hidden>!</span></button>
-      <button type="button" id="panel-detail" aria-label="打开详情" title="打开详情（Ctrl+Shift+D）"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8M10 20H4v-6"/></svg></button>
-      <button type="button" id="panel-settings" aria-label="设置" title="设置（Ctrl+,）"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg></button>
-      <details id="panel-more" class="panel-more"><summary aria-label="更多操作" title="更多操作"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></summary><div class="panel-more-menu"><p>关闭面板后继续后台监测。</p><button type="button" id="panel-accounts">面板显示账户…</button><button type="button" id="panel-latency">测试出站连接</button><button type="button" id="panel-pin" data-pinned="false" aria-pressed="false">固定面板</button><button type="button" id="panel-quit">退出 Aieyes</button></div></details>
+      <button type="button" data-theme-toggle aria-label="切换明暗模式" title="切换明暗模式"></button>
+      <button type="button" id="panel-update" aria-label="检查更新" title="检查更新"><span data-ui-icon="download" aria-hidden="true"></span><span class="update-badge" hidden>!</span></button>
+      <button type="button" id="panel-detail" aria-label="打开详情" title="打开详情（Ctrl+Shift+D）" data-ui-icon="expand"></button>
+      <button type="button" id="panel-settings" aria-label="设置" title="设置（Ctrl+,）" data-ui-icon="settings"></button>
+      <details id="panel-more" class="panel-more"><summary aria-label="更多操作" title="更多操作" data-ui-icon="more"></summary><div class="panel-more-menu"><p>关闭面板后继续后台监测。</p><button type="button" id="panel-accounts">面板显示账户…</button><button type="button" id="panel-latency">测试出站连接</button><button type="button" id="panel-pin" data-pinned="false" aria-pressed="false">固定面板</button><button type="button" id="panel-quit">退出 Aieyes</button></div></details>
       </div>
     </footer>
   </div>
   <script src="icons.js"></script><script src="webview-guards.js"></script><script src="tooltip.js"></script>
   <script src="sessions.js"></script>
-  <script src="refresh.js"></script><script src="multiselect.js"></script><script src="ui-state.js"></script><script src="analysis.js"></script><script src="server-renderer.js"></script><script src="account-targets.js"></script><script src="codex-api.js"></script>
+  <script src="refresh.js"></script><script src="multiselect.js"></script><script src="ui-state.js"></script><script src="pet-animation.js"></script><script src="analysis.js"></script><script src="server-renderer.js"></script><script src="account-targets.js"></script><script src="codex-api.js"></script>
 <script src="app.js"></script><script src="automatic-estimates.js"></script><script src="agent-settings.js"></script>
   <script src="network.js"></script><script src="updates.js"></script><script src="pet.js"></script><script src="floating.js"></script>
 </body>

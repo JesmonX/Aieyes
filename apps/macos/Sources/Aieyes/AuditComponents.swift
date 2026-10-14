@@ -15,7 +15,7 @@ struct ProviderMark: View {
             if let image = Self.images[provider] {
                 Image(nsImage: image).resizable().renderingMode(provider == "codex" ? .template : .original).scaledToFit()
             } else { Image(systemName: "terminal").resizable().scaledToFit().foregroundStyle(.secondary) }
-        }.frame(width: 36, height: 36).help(Format.provider(provider)).accessibilityLabel(Format.provider(provider))
+        }.frame(width: DesignTokens.providerMarkSize, height: DesignTokens.providerMarkSize).help(Format.provider(provider)).accessibilityLabel(Format.provider(provider))
     }
 }
 struct ProviderIdentity: View {
@@ -25,7 +25,7 @@ struct ProviderIdentity: View {
 struct SubscriptionBadge: View {
     var plan: String
     var body: some View {
-        Text(Format.subscription(plan)).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+        Text(Format.subscription(plan)).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).lineLimit(1)
             .padding(.horizontal, 6).padding(.vertical, 3)
             .foregroundStyle(Palette.accent).background(Palette.accent.opacity(0.12), in: Capsule())
             .help(plan).accessibilityLabel("订阅 " + Format.subscription(plan))
@@ -79,15 +79,17 @@ struct FlowLayout: Layout {
 struct EstimateEntry: View {
     var records: [QuotaEstimate]
     var credits = false
+    var quota: Quota? = nil
+    var group: String? = nil
     var action: () -> Void
-    private var entries: [EstimatePresentation.Entry] { EstimatePresentation.entries(records, credits: credits) }
+    private var entries: [EstimatePresentation.Entry] { EstimatePresentation.entries(records, credits: credits, quota: quota, group: group) }
     private var latest: QuotaEstimate? { EstimatePresentation.canonical(records).first }
     private var label: String {
         if credits { return "credits估值（当前1000credits≈" + Format.compactMoney(entries.first?.value) + "）" }
-        return EstimatePresentation.summary(records)
+        return EstimatePresentation.summary(records, quota: quota, group: group)
     }
     private var help: String {
-        entries.map { $0.label + " ≈ " + Format.money($0.value) + " USD · " + ($0.historical ? "历史采样 · " : "") + Format.date($0.record.checkpointAt) }.joined(separator: "\n") + (credits ? "" : "\n7d 左值：5h 等价值 × 近期容量倍率；右值：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。")
+        entries.map { $0.label + " ≈ " + Format.money($0.value) + " USD · " + ($0.historical ? "历史采样 · " : "") + Format.date($0.record.checkpointAt) }.joined(separator: "\n") + (credits ? "" : "\n" + EstimatePresentation.visibility(quota, records: records, group: group).help)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -97,12 +99,12 @@ struct EstimateEntry: View {
                     Text(label).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85).layoutPriority(1)
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right")
-                }.font(.system(size: 13)).frame(minHeight: 30).contentShape(Rectangle())
+                }.font(.system(size: DesignTokens.fontEntry)).frame(minHeight: 30).contentShape(Rectangle())
             }.buttonStyle(.plain).foregroundStyle(Palette.accent).help(help).accessibilityLabel(label + "，" + help)
-            if entries.contains(where: { $0.record.originalEstimateId != nil }) { Text("已修正").font(.system(size: 12)).foregroundStyle(.secondary) }
-            if entries.contains(where: \.historical) { Text("历史采样").font(.system(size: 12)).foregroundStyle(.secondary).help(help) }
+            if entries.contains(where: { $0.record.originalEstimateId != nil }) { Text("已修正").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary) }
+            if entries.contains(where: \.historical) { Text("历史采样").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).help(help) }
             if let latest, !latest.hasValue || latest.status == "pending" {
-                Text("最新采样 · " + latest.statusLabel + " · " + latest.issueLabel).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text("最新采样 · " + latest.statusLabel + " · " + latest.issueLabel).font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }

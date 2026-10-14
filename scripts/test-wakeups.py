@@ -108,6 +108,49 @@ for line in sys.stdin:
         loc = helper.call.call_args.args[0]['location']
         self.assertEqual(loc['preCommand'], '')
         self.assertEqual(loc['shell'], '/bin/sh')
+        self.assertEqual(loc['proxy'], {'mode': 'system'})
+
+    def test_legacy_remote_proxy_neither_overrides_nor_clears_environment(self):
+        child = Mock(returncode=0)
+        child.communicate.return_value = (b'fixture', b'')
+        inherited = {'HTTP_PROXY': 'http://remote.invalid:3128', 'https_proxy': 'http://remote.invalid:3128', 'NO_PROXY': 'localhost'}
+        for mode in ('direct', 'custom'):
+            with self.subTest(mode=mode), patch.dict(os.environ, inherited), patch.object(wake.subprocess, 'Popen', return_value=child) as run:
+                m = dict(self.manifest(), proxy={'mode': mode, 'url': 'http://obsolete.invalid:8080'})
+                self.assertEqual(wake.call(m, ['--help']), 'fixture')
+                actual = run.call_args.kwargs['env']
+                for key, value in inherited.items(): self.assertEqual(actual[key], value)
+                self.assertEqual(wake.auth_location(m)['proxy'], {'mode': 'system'})
+
+    @unittest.skipUnless(os.name == 'posix', 'Remote runner requires a POSIX host')
+    def test_precommand_controls_remote_proxy_for_cli_and_codex_rpc(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            script = pathlib.Path(temporary) / 'fake-codex'
+            script.write_text('''#!/usr/bin/env python3
+import json, os, sys
+assert os.environ['HTTPS_PROXY'] == 'http://account.invalid:8080'
+if '--help' in sys.argv:
+    print('ready'); sys.exit(0)
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' in request:
+        print(json.dumps({'id': request['id'], 'result': {'ready': True}}), flush=True)
+''')
+            script.chmod(0o700)
+            m = dict(self.manifest(str(script)), proxy={'mode': 'custom', 'url': 'http://obsolete.invalid:8888'},
+                     preCommand='export HTTPS_PROXY=http://account.invalid:8080')
+            self.assertEqual(wake.call(m, ['--help']).strip(), 'ready')
+            self.assertEqual(wake.codex_rpc(m, 'account/read', {}), {'ready': True})
+
+    def test_slow_probe_does_not_take_scheduler_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = pathlib.Path(temporary)
+            namespace = 'b' * 20
+            def probe(manifest):
+                with wake.scheduler_lock(home / '.local/share/aieyes-wakeups'):
+                    return {}
+            with patch.object(wake.pathlib.Path, 'home', return_value=home), patch.object(wake, 'resolve', side_effect=lambda m:m), patch.object(wake, 'probe', side_effect=probe), patch.object(wake, 'install', return_value={'ready':True}), patch.object(wake.sys, 'platform', 'linux'):
+                self.assertEqual(wake.manage({'action':'deploy', 'namespace':namespace, 'manifest':self.manifest()}), {'ready':True})
 
     @unittest.skipUnless(os.name == 'posix', 'Remote runner requires a POSIX host')
     def test_codex_rpc_uses_default_stdio_for_older_cli(self):

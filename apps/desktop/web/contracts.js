@@ -545,6 +545,13 @@
       "refreshKey": null,
       "updateBehavior": "observe"
     },
+    "pets.asset": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
     "pets.current": {
       "lane": "configuration",
       "invalidates": [],
@@ -553,6 +560,20 @@
       "updateBehavior": "observe"
     },
     "pets.import": {
+      "lane": "network",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    "pets.list": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    "pets.select": {
       "lane": "configuration",
       "invalidates": [],
       "invalidateOnFailure": false,
@@ -772,7 +793,7 @@
       "updateBehavior": "cancel"
     },
     "wakeups.delete": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -781,7 +802,7 @@
       "updateBehavior": "finish"
     },
     "wakeups.deploy": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -790,7 +811,7 @@
       "updateBehavior": "finish"
     },
     "wakeups.disable": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -799,7 +820,7 @@
       "updateBehavior": "finish"
     },
     "wakeups.enable": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -808,28 +829,28 @@
       "updateBehavior": "finish"
     },
     "wakeups.history": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
     "wakeups.list": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "observe"
     },
     "wakeups.probe": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
     "wakeups.remove": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -838,7 +859,7 @@
       "updateBehavior": "finish"
     },
     "wakeups.run": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -847,7 +868,7 @@
       "updateBehavior": "finish"
     },
     "wakeups.save": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [
         "data"
       ],
@@ -856,12 +877,89 @@
       "updateBehavior": "finish"
     },
     "wakeups.status": {
-      "lane": "main",
+      "lane": "wakeups",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
     }
   },
-  "contractHash": "37a32ab04fe2e584e82b974ee507dc582b091856f5ae7a59f057af93623a52db"
+  "contractHash": "d16fe7635c68fdc1e494027f30cdaf6609b85224579de65ae31b4b70769fc4d7",
+  "petFrameDurations": [
+    [
+      280,
+      110,
+      110,
+      140,
+      140,
+      320
+    ],
+    [
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      220
+    ],
+    [
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      120,
+      220
+    ],
+    [
+      140,
+      140,
+      140,
+      280
+    ],
+    [
+      140,
+      140,
+      140,
+      140,
+      280
+    ],
+    [
+      140,
+      140,
+      140,
+      140,
+      140,
+      140,
+      140,
+      240
+    ],
+    [
+      150,
+      150,
+      150,
+      150,
+      150,
+      260
+    ],
+    [
+      120,
+      120,
+      120,
+      120,
+      120,
+      220
+    ],
+    [
+      150,
+      150,
+      150,
+      150,
+      150,
+      280
+    ]
+  ]
 };

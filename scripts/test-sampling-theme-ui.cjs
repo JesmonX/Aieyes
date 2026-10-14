@@ -39,7 +39,7 @@ function fixture(){
    assert.equal(await disclosure.evaluate(element=>element.open),false,'Multiple panel accounts start collapsed');
    await disclosure.locator(':scope > summary').click();
   }
-  assert.match(await card.innerText(),/52.15/);assert.match(await card.innerText(),/用量边界待确认/);assert.doesNotMatch(await card.innerText(),/样本不足/);
+  assert.doesNotMatch(await card.innerText(),/52.15/,'Codex Plus hides historical direct weekly estimates');assert.match(await card.innerText(),/用量边界待确认/);assert.doesNotMatch(await card.innerText(),/样本不足/);
   assert.equal(await card.locator('.subscription-badge').evaluate(e=>getComputedStyle(e).fontSize),'14px');
   assert(await page.locator('[data-quota="antigravity:new"]').isVisible());
   const selection=await page.evaluate(()=>{
@@ -49,7 +49,7 @@ function fixture(){
    const hidden=AieyesUI.panelAccounts(settings,[],{version:2,providers:{antigravity:{mode:'custom',keys:[]}}});
    const untouched=JSON.stringify(stale);AieyesUI.panelAccounts({accounts:[]},[],stale);
    return {result,hidden,unchanged:untouched===JSON.stringify(stale)};
-  });assert.deepEqual(selection.result.antigravity,['antigravity:new']);assert.deepEqual(selection.hidden.antigravity,[]);assert(selection.unchanged);
+  });assert.deepEqual(selection.result.antigravity,[]);assert.deepEqual(selection.hidden.antigravity,[]);assert(selection.unchanged);
   await page.locator('[data-estimate="codex:a"]').click();await page.locator('[data-estimate-repair="broken"]').click();await page.waitForFunction(()=>!state.estimateBusy);await page.locator('#quota-close').click();await page.waitForFunction(()=>document.querySelector('[data-quota="codex:a"]').innerText.includes('6.80'));
   assert.match(await card.innerText(),/6.80/);assert.match(await card.innerText(),/已修正/);assert.equal(await page.evaluate(()=>samplingFixture.records.filter(e=>e.id==='broken').length),1);
   await page.locator('[data-credit-estimate="codex:a"]').click();await page.locator('[data-estimate-repair="credit"]').click();await page.waitForFunction(()=>!state.estimateBusy);await page.locator('#quota-close').click();await page.waitForFunction(()=>document.querySelector('[data-quota="codex:a"]').innerText.includes('40.70'));assert.match(await card.innerText(),/40.70/);

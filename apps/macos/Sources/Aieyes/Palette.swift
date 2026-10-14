@@ -47,19 +47,19 @@ enum Palette {
     static func accent(named name: String) -> Color {
         let pair: (UInt32, UInt32)
         switch name {
-        case "blue": pair = (0x2166be, 0x8bbcff)
-        case "teal": pair = (0x16745f, 0x65ceae)
-        case "purple": pair = (0x8054b7, 0xccabff)
-        default: pair = (0x5566d9, 0xa3b3ff)
+        case "blue": pair = (DesignTokens.accentBlueLight, DesignTokens.accentBlueDark)
+        case "teal": pair = (DesignTokens.accentTealLight, DesignTokens.accentTealDark)
+        case "purple": pair = (DesignTokens.accentPurpleLight, DesignTokens.accentPurpleDark)
+        default: pair = (DesignTokens.accentLight, DesignTokens.accentDark)
         }
         return adaptive(pair.0, pair.1)
     }
     static var balanceBlue: Color { accent }
-    static let ok = adaptive(0x176e58, 0x5cc4a4)
-    static let warn = adaptive(0x895712, 0xe0b062)
-    static let danger = adaptive(0xb83245, 0xff929c)
-    static let cardBorder = adaptive(0x7b879d, 0x8794ad)
-    static let radiusCard: CGFloat = 16
+    static let ok = adaptive(DesignTokens.okLight, DesignTokens.okDark)
+    static let warn = adaptive(DesignTokens.warnLight, DesignTokens.warnDark)
+    static let danger = adaptive(DesignTokens.dangerLight, DesignTokens.dangerDark)
+    static let cardBorder = adaptive(DesignTokens.cardStrokeLight, DesignTokens.cardStrokeDark)
+    static let radiusCard: CGFloat = DesignTokens.radiusCard
     static func quota(_ used: Double) -> Color {
         guard used.isFinite else { return .secondary }
         let remaining = min(100, max(0, 100 - used))

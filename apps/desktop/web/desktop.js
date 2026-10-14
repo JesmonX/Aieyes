@@ -78,23 +78,12 @@
   }
   window.AieyesDesktop = {
     settingsHTML() {
-      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="pet">桌面宠物</option><option value="tray">系统状态栏 / 托盘</option></select></div><div class="form-row pet-scale-control"><label for="pet-scale">桌宠缩放</label><input id="pet-scale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="pet-scale-value" for="pet-scale">100%</output><button type="button" id="reset-pet-scale">恢复 100%</button></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">显示活跃会话计数（本机及 SSH，立即生效）</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">桌宠单击打开面板，悬停查看状态，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，显示偏好会保留。</p><div class="form-row"><span id="current-pet" role="status">正在读取桌宠…</span><button type="button" id="import-pet">导入桌宠文件…</button></div><p class="muted tiny">支持 .zip、.codex-pet.zip 或解压后的 pet.json，图集可为 PNG / WebP。首次使用会导入月薪喵（kiffin）。</p><div class="between"><button type="button" id="reset-ball">重置桌宠位置</button><button type="button" id="hide-ball">暂时隐藏桌宠</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
+      return `<div class="card"><h2>桌面显示</h2><div class="form-row"><label for="desktop-mode">显示方式</label><select id="desktop-mode"><option value="pet">桌面宠物</option><option value="tray">系统状态栏 / 托盘</option></select></div><div class="form-row pet-scale-control"><label for="pet-scale">桌宠缩放</label><input id="pet-scale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="pet-scale-value" for="pet-scale">100%</output><button type="button" id="reset-pet-scale">恢复 100%</button></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">显示活跃会话计数（本机及 SSH，立即生效）</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : '正在检测桌面…')}</p><p class="muted tiny">桌宠单击打开面板，悬停查看状态，拖动松手后自动贴边；隐藏后可从托盘菜单恢复，显示偏好会保留。</p>${window.AieyesPetLibrary?.html()??''}<div class="between"><button type="button" id="reset-ball">重置桌宠位置</button><button type="button" id="hide-ball">暂时隐藏桌宠</button><button type="button" id="quit-app">退出 Aieyes</button></div></div>`;
     },
     bindSettings() {
+      window.AieyesPetLibrary?.bind();
       const select = document.querySelector('#desktop-mode');
       if (!select) return;
-      const petStatus = document.querySelector('#current-pet');
-      const showPet = result => { if(petStatus)petStatus.textContent=result.error || (result.pet ? `${result.pet.displayName} · v${result.pet.spriteVersionNumber}` : '请选择桌宠文件'); };
-      api('pets.current').then(showPet).catch(error=>{petStatus.textContent=String(error);});
-      const importButton=document.querySelector('#import-pet');
-      importButton.onclick=async()=>{
-        importButton.disabled=true;
-        try {
-          const path=await invoke('select_local_path',{directory:false,initial:'~'});
-          if(path){showPet(await api('pets.import',{path}));notify('桌宠已导入');}
-        } catch(error){notify(String(error));}
-        finally{importButton.disabled=false;}
-      };
       select.value = current?.mode || 'pet';
       const scale=document.querySelector('#pet-scale');showScale(current?.petScale??1);
       scale.oninput=()=>changeScale(Number(scale.value));
