@@ -364,15 +364,14 @@ struct Settings: Codable, Equatable {
 
     var configurationIssues: [String]?
     var localDeviceEnabled: Bool?
-    var version = 8, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
+    var version = 9, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
     var refreshSeconds = 300, serverRefreshSeconds = 10, menuMetric = "icon"
     var historyRefreshSeconds: Int?, serverForegroundRefreshSeconds: Int?, localMonitor: LocalMonitor?
     var historyInterval: Int { get { historyRefreshSeconds ?? max(10, refreshSeconds) } set { historyRefreshSeconds = newValue } }
     var foregroundInterval: Int { get { serverForegroundRefreshSeconds ?? 2 } set { serverForegroundRefreshSeconds = newValue } }
     var monitoredHosts: [Host] {
-        var local = (localMonitor ?? LocalMonitor()).host
-        local.enabled = local.enabled && localDeviceEnabled != false
-        return [local] + hosts.map { var host = $0; host.enabled = host.enabled && host.monitoringEnabled != false; return host }
+        let local = (localMonitor ?? LocalMonitor()).host
+        return [local] + hosts.map { var host = $0; host.enabled = host.monitoringEnabled != false; return host }
     }
     func sourceEnabled(_ source: AgentSource) -> Bool {
         let configured = (agents ?? []).filter { $0.provider == source.provider }

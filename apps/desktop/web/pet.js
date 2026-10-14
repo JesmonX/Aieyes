@@ -2,16 +2,19 @@
 (() => {
   const sprite=document.querySelector('#pet-sprite'), ball=document.querySelector('#ball');
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
-  let state=null, start=0, timer=null, enabled=false, frames=[], assetKey=null, loading=null, scale=1;
+  let state=null, start=0, timer=null, enabled=false, frames=[], assetKey=null, loading=null, scale=1, painted=null;
   const context=sprite?.getContext('2d',{alpha:true});
   function frame(s,elapsed,still=false){
     if(still)return s.row*8;
     return s.row*8+Math.floor(elapsed/s.frameMs)%s.frames;
   }
-  function paint(){
+  function paint(force=true){
     if(!state||!sprite)return;
     const index=frame(state,Math.max(0,performance.now()-start),reduced.matches);
     const density=(window.devicePixelRatio||1)*scale, width=Math.round(132*density), height=Math.round(143*density);
+    const signature=[assetKey,index,width,height,frames.length].join(':');
+    if(!force&&signature===painted)return;
+    painted=signature;
     if(sprite.width!==width||sprite.height!==height){sprite.width=width;sprite.height=height;}
     context.clearRect(0,0,width,height);
     if(frames[index]){
@@ -20,9 +23,16 @@
     }
     sprite.dataset.frame=String(index);
   }
+  function tick(){
+    timer=null;
+    paint(false);
+    if(enabled&&!document.hidden&&!reduced.matches)timer=requestAnimationFrame(tick);
+  }
   function schedule(){
-    clearInterval(timer);timer=null;paint();
-    if(enabled&&!document.hidden&&!reduced.matches)timer=setInterval(paint,100);
+    paint(false);
+    if(enabled&&!document.hidden&&!reduced.matches){
+      if(timer===null)timer=requestAnimationFrame(tick);
+    }else if(timer!==null){cancelAnimationFrame(timer);timer=null;}
   }
   async function loadAsset(asset){
     const key=asset?.spritePath;
@@ -69,6 +79,6 @@
   }
   reduced.addEventListener('change',schedule);document.addEventListener('visibilitychange',schedule);
   window.addEventListener('resize',paint);
-  window.addEventListener('pagehide',()=>{clearInterval(timer);timer=null;});
+  window.addEventListener('pagehide',()=>{cancelAnimationFrame(timer);timer=null;});
   window.AieyesPet={update,frame};
 })();

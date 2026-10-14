@@ -23,6 +23,7 @@ struct SettingsView: View {
     @State private var confirmRescan = false
     @State private var mappingsExpanded = false
     @State private var hasVisitedPrices = false
+    @State private var savingServerSwitches: Set<String> = []
     private var mappingModel: String { get { model.mappingModel } nonmutating set { model.mappingModel = newValue } }
     private var mappingID: String { get { model.mappingID } nonmutating set { model.mappingID = newValue } }
     @FocusState private var mappingFocused: Bool
@@ -126,21 +127,44 @@ struct SettingsView: View {
         if model.requestHostEditor { editHost(Host()); model.requestHostEditor = false }
     }
     private func editHost(_ host: Host) { hostEditor = HostEditorRequest(host: host, baseline: model.settings) }
+    private func serverSwitch(_ id: String, resource: Bool) -> some View {
+        let key = id + (resource ? ":resources" : ":agents")
+        return Toggle(resource ? "资源监控" : "Agent 采集", isOn: Binding(get: {
+            if id == "local" { return resource ? model.settings.localMonitor?.enabled ?? true : model.settings.localDeviceEnabled != false }
+            guard let host = model.settings.hosts.first(where: { $0.id == id }) else { return false }
+            return resource ? host.monitoringEnabled != false : host.enabled
+        }, set: { value in
+            guard savingServerSwitches.insert(key).inserted else { return }
+            Task {
+                defer { savingServerSwitches.remove(key) }
+                var next = model.settings
+                if id == "local" {
+                    if resource { var local = next.localMonitor ?? LocalMonitor(); local.enabled = value; next.localMonitor = local }
+                    else { next.localDeviceEnabled = value }
+                } else if let index = next.hosts.firstIndex(where: { $0.id == id }) {
+                    if resource { next.hosts[index].monitoringEnabled = value }
+                    else { next.hosts[index].enabled = value }
+                }
+                do { try await model.persistConfiguration(next) }
+                catch { model.settingsMessage = error.localizedDescription }
+            }
+        })).toggleStyle(.switch).controlSize(.small).disabled(savingServerSwitches.contains(key))
+    }
     private var servers: some View {
         VStack(spacing: 12) {
             Form {
                 HStack(spacing: 12) {
                     Text("本机").font(AppFont.section)
-                    Toggle("资源监控", isOn: Binding(get: { model.settings.localMonitor?.enabled ?? true }, set: { value in Task { var next = model.settings; var local = next.localMonitor ?? LocalMonitor(); local.enabled = value; next.localMonitor = local; do { try await model.persistConfiguration(next) } catch { model.settingsMessage = error.localizedDescription } } })).toggleStyle(.switch).controlSize(.small)
+                    serverSwitch("local", resource: true)
                     Spacer()
-                    Button(model.settings.localDeviceEnabled == false ? "恢复整机采集" : "暂停整机采集") { Task { await model.setDeviceEnabled("local", enabled: model.settings.localDeviceEnabled == false) } }
+                    serverSwitch("local", resource: false)
                     Button("监控设置") { editHost((model.settings.localMonitor ?? LocalMonitor()).host) }
                 }.padding(.vertical, 7)
                 ForEach(model.settings.hosts) { host in HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 5) { Text(host.name.isEmpty ? host.target : host.name).font(AppFont.section); Text(host.enabled ? host.target : "整机采集已暂停").font(AppFont.secondary).foregroundStyle(.secondary) }
-                    Toggle("资源监控", isOn: Binding(get: { host.monitoringEnabled != false }, set: { value in Task { var next = model.settings; if let i = next.hosts.firstIndex(where: { $0.id == host.id }) { next.hosts[i].monitoringEnabled = value }; do { try await model.persistConfiguration(next) } catch { model.settingsMessage = error.localizedDescription } } })).toggleStyle(.switch).controlSize(.small)
+                    VStack(alignment: .leading, spacing: 5) { Text(host.name.isEmpty ? host.target : host.name).font(AppFont.section); Text(host.enabled ? host.target : "Agent 采集已暂停").font(AppFont.secondary).foregroundStyle(.secondary) }
+                    serverSwitch(host.id, resource: true)
                     Spacer()
-                    Button(host.enabled ? "暂停整机采集" : "恢复整机采集") { Task { await model.setDeviceEnabled(host.id, enabled: !host.enabled) } }
+                    serverSwitch(host.id, resource: false)
                     Button("编辑") { editHost(host) }.accessibilityLabel("编辑服务器 " + (host.name.isEmpty ? host.target : host.name))
                     Button { removal = model.removalRequest("host", id: host.id) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).help("移除主机").accessibilityLabel("移除服务器 " + (host.name.isEmpty ? host.target : host.name))
                 }.padding(.vertical, 7) }

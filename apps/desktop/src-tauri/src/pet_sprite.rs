@@ -77,6 +77,72 @@ pub(super) unsafe fn reduced_motion() -> bool {
     );
     !enabled.as_bool() || high_contrast()
 }
+// Reuse the layered-window DIB across frames; only size/DPI changes allocate a surface.
+struct Dib {
+    dc: HDC,
+    bitmap: HBITMAP,
+    old: HGDIOBJ,
+    bits: *mut u8,
+    width: i32,
+    height: i32,
+}
+impl Dib {
+    unsafe fn new(width: i32, height: i32) -> Option<Self> {
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        let dc = GetDC(None);
+        let memory = CreateCompatibleDC(Some(dc));
+        let header = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits = null_mut();
+        let bitmap = CreateDIBSection(Some(dc), &header, DIB_RGB_COLORS, &mut bits, None, 0);
+        ReleaseDC(None, dc);
+        let Ok(bitmap) = bitmap else {
+            let _ = DeleteDC(memory);
+            return None;
+        };
+        let old = SelectObject(memory, bitmap.into());
+        Some(Self {
+            dc: memory,
+            bitmap,
+            old,
+            bits: bits.cast(),
+            width,
+            height,
+        })
+    }
+}
+impl Drop for Dib {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.dc, self.old);
+            let _ = DeleteObject(self.bitmap.into());
+            let _ = DeleteDC(self.dc);
+        }
+    }
+}
+#[derive(Default)]
+pub(super) struct Renderer {
+    surface: Option<Dib>,
+    label: LabelCache,
+}
+#[derive(Default)]
+struct LabelCache {
+    key: Option<(i32, i32, String, u32, u32)>,
+    pixels: Vec<u8>,
+}
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn paint(
     hwnd: HWND,
     sprite: &Sprite,
@@ -84,37 +150,26 @@ pub(super) unsafe fn paint(
     frame: u32,
     font: *mut GpFont,
     info: &Value,
+    renderer: &mut Renderer,
 ) {
     let mut rect = RECT::default();
     if GetWindowRect(hwnd, &mut rect).is_err() {
         return;
     }
-    let width = rect.right - rect.left;
-    let height = rect.bottom - rect.top;
-    let dc = GetDC(None);
-    let memory = CreateCompatibleDC(Some(dc));
-    let header = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width,
-            biHeight: -height,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let mut bits = null_mut();
-    let Ok(bitmap) = CreateDIBSection(Some(dc), &header, DIB_RGB_COLORS, &mut bits, None, 0) else {
-        let _ = DeleteDC(memory);
-        ReleaseDC(None, dc);
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    if renderer
+        .surface
+        .as_ref()
+        .is_none_or(|s| s.width != width || s.height != height)
+    {
+        renderer.surface = Dib::new(width, height);
+    }
+    let Some(surface) = &renderer.surface else {
         return;
     };
-    std::ptr::write_bytes(bits, 0, (width * height * 4) as usize);
-    let old = SelectObject(memory, bitmap.into());
-    draw(
-        bits.cast(),
+    std::ptr::write_bytes(surface.bits, 0, (width * height * 4) as usize);
+    draw_cached(
+        surface.bits,
         width,
         height,
         sprite,
@@ -122,6 +177,7 @@ pub(super) unsafe fn paint(
         font,
         &state.label,
         info,
+        &mut renderer.label,
     );
     let blend = BLENDFUNCTION {
         BlendOp: AC_SRC_OVER as u8,
@@ -131,7 +187,7 @@ pub(super) unsafe fn paint(
     };
     let _ = UpdateLayeredWindow(
         hwnd,
-        Some(dc),
+        None,
         Some(&POINT {
             x: rect.left,
             y: rect.top,
@@ -140,20 +196,16 @@ pub(super) unsafe fn paint(
             cx: width,
             cy: height,
         }),
-        Some(memory),
+        Some(surface.dc),
         Some(&POINT { x: 0, y: 0 }),
         COLORREF(0),
         Some(&blend),
         ULW_ALPHA,
     );
-    SelectObject(memory, old);
-    let _ = DeleteObject(bitmap.into());
-    let _ = DeleteDC(memory);
-    ReleaseDC(None, dc);
 }
 // Render into premultiplied BGRA memory: HDC rendering loses the alpha channel.
 #[allow(clippy::too_many_arguments)]
-unsafe fn draw(
+unsafe fn draw_cached(
     bits: *mut u8,
     width: i32,
     height: i32,
@@ -162,6 +214,7 @@ unsafe fn draw(
     font: *mut GpFont,
     label: &str,
     info: &Value,
+    label_cache: &mut LabelCache,
 ) {
     let scale = width as f32 / 144.0;
     let mut graphics = null_mut();
@@ -209,15 +262,78 @@ unsafe fn draw(
             );
             GdipDisposeImage(image.cast());
         }
+        GdipDeleteGraphics(graphics);
+    }
+    if !canvas.is_null() {
+        GdipDisposeImage(canvas.cast());
+    }
+    let label = if sprite.frames.is_empty() {
+        "请导入桌宠"
+    } else if info["recovery"] == "failed" {
+        "恢复失败"
+    } else if info["recovery"] == "refreshing" {
+        "恢复中"
+    } else {
+        label
+    };
+    let contrast = high_contrast();
+    let background = if contrast {
+        system_argb(COLOR_WINDOW)
+    } else {
+        0xeef6f6f8
+    };
+    let foreground = if contrast {
+        system_argb(COLOR_WINDOWTEXT)
+    } else {
+        0xff243049
+    };
+    let key = (width, height, label.to_owned(), background, foreground);
+    if label_cache.key.as_ref() != Some(&key) {
+        label_cache.pixels = render_label(width, height, font, label, background, foreground);
+        label_cache.key = Some(key);
+    }
+    // Both layers contain premultiplied BGRA; source-over preserves transparent edges.
+    let pixels = std::slice::from_raw_parts_mut(bits, (width * height * 4) as usize);
+    for (dst, src) in pixels
+        .chunks_exact_mut(4)
+        .zip(label_cache.pixels.chunks_exact(4))
+    {
+        let inverse = 255 - u16::from(src[3]);
+        for channel in 0..4 {
+            dst[channel] = (u16::from(src[channel])
+                + (u16::from(dst[channel]) * inverse + 127) / 255)
+                .min(255) as u8;
+        }
+    }
+}
+// Grayscale coverage at 3x physical resolution, then area-filter once. ClearType
+// subpixels cannot be composed correctly onto a transparent layered window.
+unsafe fn render_label(
+    width: i32,
+    height: i32,
+    font: *mut GpFont,
+    label: &str,
+    background: u32,
+    foreground: u32,
+) -> Vec<u8> {
+    let high = vec![0u8; (width * height * 4 * 9) as usize];
+    let mut canvas = null_mut();
+    let mut graphics = null_mut();
+    let scale = width as f32 / 144.0;
+    if GdipCreateBitmapFromScan0(
+        width * 3,
+        height * 3,
+        width * 12,
+        0xe200b,
+        Some(high.as_ptr()),
+        &mut canvas,
+    ) == GDI_OK
+        && GdipGetImageGraphicsContext(canvas.cast(), &mut graphics) == GDI_OK
+    {
+        GdipScaleWorldTransform(graphics, scale * 3.0, scale * 3.0, MatrixOrderPrepend);
+        GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
         let mut brush = null_mut();
-        GdipCreateSolidFill(
-            if high_contrast() {
-                system_argb(COLOR_WINDOW)
-            } else {
-                0xeef6f6f8
-            },
-            &mut brush,
-        );
+        GdipCreateSolidFill(background, &mut brush);
         let (x, y, w, h) = (3.0, 145.0, 138.0, height as f32 / scale - 147.0);
         let diameter = 20.0_f32.min(h);
         let mut path = null_mut();
@@ -235,27 +351,13 @@ unsafe fn draw(
             GdipDeletePath(path);
         }
         GdipDeleteBrush(brush.cast());
-        let label = if sprite.frames.is_empty() {
-            "请导入桌宠"
-        } else if info["recovery"] == "failed" {
-            "恢复失败"
-        } else {
-            label
-        };
         let text: Vec<u16> = label.encode_utf16().collect();
         let mut format = null_mut();
         GdipCreateStringFormat(0, 0, &mut format);
         GdipSetStringFormatAlign(format, StringAlignmentCenter);
         GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
         GdipSetTextRenderingHint(graphics, TextRenderingHintAntiAliasGridFit);
-        GdipCreateSolidFill(
-            if high_contrast() {
-                system_argb(COLOR_WINDOWTEXT)
-            } else {
-                0xff243049
-            },
-            &mut brush,
-        );
+        GdipCreateSolidFill(foreground, &mut brush);
         GdipDrawString(
             graphics,
             PCWSTR(text.as_ptr()),
@@ -277,6 +379,49 @@ unsafe fn draw(
     if !canvas.is_null() {
         GdipDisposeImage(canvas.cast());
     }
+    downsample_label(&high, width as usize, height as usize)
+}
+fn downsample_label(high: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut pixels = vec![0; width * height * 4];
+    for y in 0..height {
+        for x in 0..width {
+            for channel in 0..4 {
+                let mut sum = 0u16;
+                for dy in 0..3 {
+                    for dx in 0..3 {
+                        sum +=
+                            u16::from(high[((y * 3 + dy) * width * 3 + x * 3 + dx) * 4 + channel]);
+                    }
+                }
+                pixels[(y * width + x) * 4 + channel] = ((sum + 4) / 9) as u8;
+            }
+        }
+    }
+    pixels
+}
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn draw(
+    bits: *mut u8,
+    width: i32,
+    height: i32,
+    sprite: &Sprite,
+    frame: u32,
+    font: *mut GpFont,
+    label: &str,
+    info: &Value,
+) {
+    draw_cached(
+        bits,
+        width,
+        height,
+        sprite,
+        frame,
+        font,
+        label,
+        info,
+        &mut LabelCache::default(),
+    );
 }
 #[cfg(test)]
 mod tests {
@@ -331,6 +476,110 @@ mod tests {
         .unwrap();
         assert_eq!(sprite.frames[0], [0, 0, 0, 0]);
         assert_eq!(sprite.frames[1], [100, 25, 50, 128]);
+    }
+    #[test]
+    fn status_text_has_coverage_and_invalidates_at_physical_size() {
+        unsafe {
+            let mut token = 0;
+            assert_eq!(
+                GdiplusStartup(
+                    &mut token,
+                    &GdiplusStartupInput {
+                        GdiplusVersion: 1,
+                        ..Default::default()
+                    },
+                    null_mut()
+                ),
+                GDI_OK
+            );
+            {
+                let font = PetFont::new();
+                assert!(!font.font.is_null());
+                for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+                    let width = (144.0_f64 * scale).round() as i32;
+                    let height = (186.0_f64 * scale).round() as i32;
+                    let pixels = render_label(
+                        width,
+                        height,
+                        font.font,
+                        "等待1 · 工作2\n思考1",
+                        0xeef6f6f8,
+                        0xff243049,
+                    );
+                    assert_eq!(pixels.len(), (width * height * 4) as usize);
+                    assert_eq!(pixels[3], 0);
+                    assert!(
+                        pixels.chunks_exact(4).any(|p| p[3] > 240 && p[0] < 180),
+                        "text strokes are visible"
+                    );
+                    assert!(
+                        pixels
+                            .chunks_exact(4)
+                            .all(|p| p[..3].iter().all(|c| *c <= p[3])),
+                        "filtered coverage stays premultiplied"
+                    );
+                }
+                let sprite = imported_sprite();
+                let mut cache = LabelCache::default();
+                let mut pixels = vec![0; 144 * 168 * 4];
+                draw_cached(
+                    pixels.as_mut_ptr(),
+                    144,
+                    168,
+                    &sprite,
+                    0,
+                    font.font,
+                    "空闲",
+                    &serde_json::json!({}),
+                    &mut cache,
+                );
+                let first = cache.pixels.clone();
+                let allocation = cache.pixels.as_ptr();
+                draw_cached(
+                    pixels.as_mut_ptr(),
+                    144,
+                    168,
+                    &sprite,
+                    1,
+                    font.font,
+                    "空闲",
+                    &serde_json::json!({}),
+                    &mut cache,
+                );
+                assert_eq!(
+                    cache.pixels.as_ptr(),
+                    allocation,
+                    "sprite frames reuse text pixels"
+                );
+                assert_eq!(cache.pixels, first);
+                draw_cached(
+                    pixels.as_mut_ptr(),
+                    144,
+                    168,
+                    &sprite,
+                    1,
+                    font.font,
+                    "等待输入",
+                    &serde_json::json!({}),
+                    &mut cache,
+                );
+                assert_ne!(cache.pixels, first);
+                let mut larger = vec![0; 288 * 336 * 4];
+                draw_cached(
+                    larger.as_mut_ptr(),
+                    288,
+                    336,
+                    &sprite,
+                    1,
+                    font.font,
+                    "等待输入",
+                    &serde_json::json!({}),
+                    &mut cache,
+                );
+                assert_eq!(cache.pixels.len(), larger.len());
+            }
+            GdiplusShutdown(token);
+        }
     }
     #[test]
     fn native_render_preserves_alpha_at_multiple_dpi() {

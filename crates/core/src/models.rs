@@ -525,7 +525,14 @@ impl Settings {
             self.history_refresh_seconds = self.refresh_seconds.max(10);
         }
         // Version 6 drops the unused githubRepository key during deserialization.
-        self.version = self.version.max(8);
+        if self.version < 9 {
+            // Preserve the effective resource-monitoring state before separating the switches.
+            self.local_monitor.enabled &= self.local_device_enabled;
+            for host in &mut self.hosts {
+                host.monitoring_enabled &= host.enabled;
+            }
+        }
+        self.version = self.version.max(9);
         self.configuration_issues.clear();
         let mut providers = std::collections::HashSet::new();
         for agent in &self.agents {
@@ -541,14 +548,11 @@ impl Settings {
         }
     }
     pub fn monitored_hosts(&self) -> Vec<Host> {
-        let mut local = self.local_monitor.host();
-        local.enabled &= self.local_device_enabled;
-        std::iter::once(local)
-            .chain(self.hosts.clone())
-            .map(|mut host| {
-                host.enabled &= host.monitoring_enabled;
+        std::iter::once(self.local_monitor.host())
+            .chain(self.hosts.iter().cloned().map(|mut host| {
+                host.enabled = host.monitoring_enabled;
                 host
-            })
+            }))
             .collect()
     }
     pub fn source_enabled(&self, source: &Source) -> bool {

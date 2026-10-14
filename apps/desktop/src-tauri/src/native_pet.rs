@@ -116,6 +116,9 @@ struct Surface {
     font: PetFont,
     pet_sprite: RefCell<pet::Sprite>,
     pet_start: Cell<std::time::Instant>,
+    timer_running: Cell<bool>,
+    painted_frame: Cell<Option<u32>>,
+    renderer: RefCell<pet::Renderer>,
 }
 impl NativePet {
     pub fn start(app: AppHandle, position: Option<(i32, i32)>) -> Result<Self, String> {
@@ -175,6 +178,9 @@ impl NativePet {
                     font: PetFont::new(),
                     pet_sprite: RefCell::new(pet::Sprite::empty()),
                     pet_start: Cell::new(std::time::Instant::now()),
+                    timer_running: Cell::new(false),
+                    painted_frame: Cell::new(None),
+                    renderer: RefCell::new(pet::Renderer::default()),
                 });
                 let result = CreateWindowExW(
                     WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
@@ -362,9 +368,22 @@ unsafe fn area(hwnd: HWND) -> RECT {
     monitor.rcWork
 }
 unsafe fn animate(hwnd: HWND) {
-    let _ = KillTimer(Some(hwnd), PET_TIMER);
-    if IsWindowVisible(hwnd).as_bool() && !pet::reduced_motion() {
-        SetTimer(Some(hwnd), PET_TIMER, 100, None);
+    let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Surface;
+    if pointer.is_null() {
+        return;
+    }
+    let surface = &*pointer;
+    let running = IsWindowVisible(hwnd).as_bool() && !pet::reduced_motion();
+    if running == surface.timer_running.get() {
+        return;
+    }
+    if running {
+        surface
+            .timer_running
+            .set(SetTimer(Some(hwnd), PET_TIMER, 16, None) != 0);
+    } else {
+        let _ = KillTimer(Some(hwnd), PET_TIMER);
+        surface.timer_running.set(false);
     }
 }
 unsafe fn pet_height(hwnd: HWND) -> f64 {
@@ -609,7 +628,18 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == PET_TIMER => {
-            let _ = InvalidateRect(Some(hwnd), None, false);
+            if let Ok(state) = serde_json::from_value::<aieyes_core::pets::PetState>(
+                surface.info.borrow()["pet"].clone(),
+            ) {
+                let frame = aieyes_core::pets::frame(
+                    &state,
+                    surface.pet_start.get().elapsed().as_millis() as u64,
+                    false,
+                );
+                if surface.painted_frame.get() != Some(frame) {
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+            }
             LRESULT(0)
         }
         WM_SETTINGCHANGE | WM_THEMECHANGED => {
@@ -786,6 +816,8 @@ unsafe fn paint(hwnd: HWND, surface: &Surface) {
         frame,
         surface.font.font,
         &info,
+        &mut surface.renderer.borrow_mut(),
     );
+    surface.painted_frame.set(Some(frame));
     let _ = EndPaint(hwnd, &ps);
 }

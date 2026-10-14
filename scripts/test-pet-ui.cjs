@@ -75,6 +75,24 @@ function fixture(data){
     await page.evaluate(()=>{delete petTest.info.recovery;petTest.emit(petTest.info.pet);});
     await page.emulateMedia({reducedMotion:'no-preference'});await page.evaluate(()=>petTest.emit({behavior:'running',label:'进行中',row:1,frames:8,frameMs:100,key:'fresh'}));
     await page.waitForFunction(()=>Number(document.querySelector('#pet-sprite').dataset.frame)>8);
+    // Frequent status updates must not starve the animation or introduce held/skipped frames.
+    const cadence=await page.evaluate(()=>new Promise(resolve=>{
+      petTest.emit({behavior:'idle',label:'空闲',row:0,frames:6,frameMs:100,key:'continuous'});
+      const started=performance.now(),gaps=[],frames=[];let changed=started,previous=0,updated=started;
+      function observe(now){
+        if(now-updated>=37){petTest.emit({...petTest.info.pet,activeCount:Math.floor(now)%4});updated=now;}
+        const frame=Number(document.querySelector('#pet-sprite').dataset.frame);
+        if(frame!==previous){gaps.push(now-changed);frames.push(frame);changed=now;previous=frame;}
+        if(now-started<30000)requestAnimationFrame(observe);else resolve({gaps,frames});
+      }
+      requestAnimationFrame(observe);
+    }));
+    assert(cadence.frames.length>=240,'30 seconds of frequent polls must keep the 10 fps animation progressing');
+    const sorted=cadence.gaps.slice().sort((a,b)=>a-b);
+    assert(sorted[Math.floor(sorted.length*0.95)]<180,'normal frame cadence remains close to 100 ms');
+    assert(Math.max(...cadence.gaps)<500,'no extra pauses under frequent status updates');
+    await page.evaluate(()=>petTest.emit({behavior:'running',label:'进行中',row:1,frames:8,frameMs:100,key:'fresh-after-cadence'}));
+    await page.waitForFunction(()=>Number(document.querySelector('#pet-sprite').dataset.frame)>8);
     const before=await page.locator('#pet-sprite').getAttribute('data-frame');await page.evaluate(()=>petTest.emit(petTest.info.pet));assert.notEqual(before,'8');assert.notEqual(await page.locator('#pet-sprite').getAttribute('data-frame'),'8','poll does not restart animation');
     assert.equal(await page.evaluate(()=>petTest.calls.filter(c=>c.args.method==='pets.current').length),1,'status polls reuse the loaded asset');
     await page.emulateMedia({reducedMotion:'reduce'});
@@ -89,7 +107,7 @@ function fixture(data){
     await page.waitForFunction(()=>document.querySelector('#pet-sprite').dataset.rows==='11');
     assert.equal(await page.locator('#pet-sprite').getAttribute('data-frame'),'64','v2 crops row 8 of 11');
     await page.locator('#ball').screenshot({path:path.join(out,'v2.png')});
-    for(const scale of [0.5,1.25,2]){
+    for(const scale of [0.5,1,1.25,1.5,2]){
       await page.evaluate(scale=>{petTest.info.petScale=scale;petTest.emit({...petTest.info.pet,label:'等待1 · 工作2\n思考1'});},scale);
       const box=await page.locator('#ball').boundingBox(),sprite=await page.locator('#pet-sprite').boundingBox();
       assert.equal(box.width,144*scale);assert.equal(box.height,186*scale);
@@ -107,7 +125,7 @@ function fixture(data){
       petTest.info.petAsset=petTest.selection.pet;petTest.emit({behavior:'idle',label:'透明边缘',row:0,frames:1,frameMs:100,key:'alpha'});
     },transparentEdgeAtlas());
     await page.waitForFunction(()=>document.querySelector('#pet-sprite').dataset.asset==='/fixture/alpha.png');
-    for(const scale of [0.5,1.25,2]){
+    for(const scale of [0.5,1,1.25,1.5,2]){
       await page.evaluate(scale=>{petTest.info.petScale=scale;petTest.emit(petTest.info.pet);},scale);
       const colors=await page.locator('#pet-sprite').evaluate(el=>{
         const pixels=el.getContext('2d').getImageData(0,0,el.width,el.height).data;let visible=0,fringe=0;

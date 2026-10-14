@@ -14,6 +14,22 @@ import AppKit
                 precondition(pet.frame(elapsed: Double(step * 100 + 1) / 1000, reduced: false) == row * 8 + step % count)
             }
         }
+        let clock = PetAnimationClock()
+        var clockState = PetState.idle
+        clockState.key = "cadence"
+        clock.configure(clockState, playing: true, reduced: false)
+        let began = ProcessInfo.processInfo.systemUptime
+        var visited = Set<Int>()
+        while ProcessInfo.processInfo.systemUptime - began < 1.3 {
+            clockState.activeCount = Int.random(in: 0...4)
+            clock.configure(clockState, playing: true, reduced: false)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.025))
+            visited.insert(clock.frame)
+        }
+        precondition(visited == Set(0..<6), "Frequent count updates must not restart the animation")
+        clock.configure(clockState, playing: true, reduced: true)
+        precondition(clock.frame == 0)
+        clock.stop()
         _ = NSApplication.shared
         let defaults = UserDefaults.standard
         let savedEnabled = defaults.object(forKey: "aieyes.pet.enabled")
@@ -58,7 +74,7 @@ import AppKit
             precondition(!defaults.bool(forKey: "aieyes.pet.enabled"))
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
             precondition(!panel.isVisible)
-            for scale in [0.5, 1.25, 2.0] {
+            for scale in [0.5, 1.0, 1.25, 1.5, 2.0] {
                 defaults.set(scale, forKey: "aieyes.pet.scale")
                 NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
                 precondition(panel.frame.width == 144 * scale && panel.frame.height == 168 * scale)
@@ -73,7 +89,7 @@ import AppKit
             RunLoop.main.run(until: Date().addingTimeInterval(0.15))
             let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath + "/.local/pets/native")
             try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            for scale in [0.5, 1.25, 2.0] {
+            for scale in [0.5, 1.0, 1.25, 1.5, 2.0] {
                 defaults.set(scale, forKey: "aieyes.pet.scale")
                 NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
                 for row in 0..<9 {

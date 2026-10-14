@@ -677,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_switches_and_device_pause_have_distinct_effects_after_migration() {
+    fn resource_and_agent_switches_are_independent_after_migration() {
         let (_root, mut engine) = fixture();
         engine
             .call(
@@ -710,10 +710,62 @@ mod tests {
                 .iter()
                 .all(|source| !paused.source_enabled(source))
         );
-        assert!(paused.monitored_hosts().iter().all(|host| !host.enabled));
-        let legacy: Settings = serde_json::from_value(json!({"version":7,"hosts":[{"id":"old","target":"fixture.invalid","enabled":false}],"localMonitor":{"enabled":false}})).unwrap();
+        assert!(paused.monitored_hosts().iter().all(|host| host.enabled));
+        for collecting in [false, true] {
+            for monitoring in [false, true] {
+                let mut next = paused.clone();
+                next.local_device_enabled = collecting;
+                next.hosts[0].enabled = collecting;
+                next.local_monitor.enabled = monitoring;
+                next.hosts[0].monitoring_enabled = monitoring;
+                engine.store.save_settings(&next).unwrap();
+                let saved = engine.store.settings().unwrap();
+                assert!(
+                    saved
+                        .monitored_hosts()
+                        .iter()
+                        .all(|host| host.enabled == monitoring)
+                );
+                assert!(
+                    saved
+                        .sources
+                        .iter()
+                        .all(|source| saved.source_enabled(source) == collecting)
+                );
+                assert_eq!(saved.agents, paused.agents);
+            }
+        }
+        let mut legacy: Settings = serde_json::from_value(json!({"version":7,"hosts":[{"id":"old","target":"fixture.invalid","enabled":false}],"localMonitor":{"enabled":false}})).unwrap();
         assert!(legacy.local_device_enabled && legacy.hosts[0].monitoring_enabled);
+        legacy.migrate();
+        assert_eq!(legacy.version, 9);
         assert!(legacy.monitored_hosts().iter().all(|host| !host.enabled));
+        legacy.local_device_enabled = false;
+        legacy.local_monitor.enabled = true;
+        legacy.hosts[0].monitoring_enabled = true;
+        legacy.migrate();
+        assert!(
+            legacy.monitored_hosts().iter().all(|host| host.enabled),
+            "migration is applied only once"
+        );
+        for collecting in [false, true] {
+            for monitoring in [false, true] {
+                let mut old = legacy.clone();
+                old.version = 8;
+                old.local_device_enabled = collecting;
+                old.hosts[0].enabled = collecting;
+                old.local_monitor.enabled = monitoring;
+                old.hosts[0].monitoring_enabled = monitoring;
+                old.migrate();
+                assert!(
+                    old.monitored_hosts()
+                        .iter()
+                        .all(|host| host.enabled == (collecting && monitoring))
+                );
+                assert_eq!(old.local_device_enabled, collecting);
+                assert_eq!(old.hosts[0].enabled, collecting);
+            }
+        }
     }
 
     #[test]

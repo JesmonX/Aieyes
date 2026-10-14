@@ -19,9 +19,15 @@
 - 账户历史、导入去重标识和机器凭证保留，不执行 logout。已删除账户默认不出现在账户筛选及当前／归档账户列表。“常规 → 刷新与历史 → 在筛选中显示已删除账户”可显示有历史记录的旧账户，名称标记为“已删除”；空账户不会返回筛选菜单。隐藏不影响总用量统计。主动重新添加是新账户，不自动恢复已删除配置。
 - 任务部署与删除使用独立文件锁协调，不在 SSH 等待期间持有配置数据库事务。强制删除本地任务、账户和未清理记录以一个事务提交。
 
+## 服务器开关
+
+服务器设置为本机和每台 SSH 主机提供独立的「资源监控」「Agent 采集」开关。关闭 Agent 采集不影响 CPU、内存等资源监控；关闭资源监控不影响 Agent 采集。保存失败恢复已保存状态。
+
+Agent 采集关闭的机器从 Agent 接入的「机器与目录」隐藏；目录、机器选择、账户关联和历史保留，重新开启后恢复显示。隐藏期间修改其他机器的选择不会移除原选择。机器未绑定的条目保留修复入口。
+
 ## 配置和接口
 
-- 配置版本 6，移除未使用的 `githubRepository`，保留版本 5 的独立刷新间隔。`agents[{provider,enabled,machineIds}]` 与 `connections[{sourceId,profileId?}]` 沿用版本 3。
+- 配置版本 9，将资源监控与 Agent 采集完全独立。旧配置按原来的实际监控状态迁移，升级不会启动此前暂停的资源监控。沿用版本 6 对未使用的 `githubRepository` 的移除及版本 5 的独立刷新间隔。`agents[{provider,enabled,machineIds}]` 与 `connections[{sourceId,profileId?}]` 沿用版本 3。
 - 新增 `Account.deviceSettings[{machineId,preCommand}]`。尚未授权也可保存设备设置；显式空命令不再继承旧值。迁移将明确的旧命令复制到对应账户设备；同机旧目录命令冲突时保留来源兼容值，界面逐项展示，直到用户明确统一。
 - `settings.patch({base,settings})` 按字段和记录标识合并，设备设置按 `machineId` 合并；同字段冲突整次回滚。`deletedAccounts` / `accountAliases` 是系统管理的只读字段，修改会明确报错；未改动的旧值可用于乐观合并。macOS 独立核心通道、Tauri 独立 Engine 执行配置读写，避免排在额度／SSH 后面。
 - `accounts.create({provider,name?})` 保留为旧配置的兼容入口，新界面的添加账号流程不调用它。旧的未命名 Codex 配置可用 `pendingName` 在后续登录时补齐邮箱名称，手动改名清除此标记。

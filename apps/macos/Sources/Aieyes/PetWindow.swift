@@ -34,31 +34,74 @@ struct PetScaleControl: View {
         return cached
     }
 }
+// The timer checks a monotonic timeline; only actual frame changes publish to SwiftUI.
+@MainActor final class PetAnimationClock: ObservableObject {
+    @Published private(set) var frame = 0
+    private var state = PetState.idle
+    private var start = ProcessInfo.processInfo.systemUptime
+    private var reduced = false
+    private var timer: Timer?
+    func configure(_ state: PetState, playing: Bool, reduced: Bool) {
+        if self.state.key != state.key { start = ProcessInfo.processInfo.systemUptime }
+        self.state = state; self.reduced = reduced
+        tick()
+        if playing && !reduced {
+            guard timer == nil else { return }
+            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.tick() }
+            }
+            timer.tolerance = 0.002
+            self.timer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        } else { stop() }
+    }
+    private func tick() {
+        let next = state.frame(elapsed: ProcessInfo.processInfo.systemUptime - start, reduced: reduced)
+        if next != frame { frame = next }
+    }
+    func stop() { timer?.invalidate(); timer = nil }
+    deinit { timer?.invalidate() }
+}
+private struct PetSpriteView: View {
+    let state: PetState
+    let asset: ImportedPet?
+    let scale: Double
+    let enabled: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduced
+    @StateObject private var clock = PetAnimationClock()
+    private func configure() { clock.configure(state, playing: enabled, reduced: reduced) }
+    var body: some View {
+        let frames = PetSprites.frames(for: asset)
+        Group {
+            if frames.indices.contains(clock.frame) {
+                Image(decorative: frames[clock.frame], scale: 1).resizable().interpolation(.high)
+            } else { Text("请导入桌宠").font(.system(size: 13 * scale)) }
+        }.frame(width: 132 * scale, height: 143 * scale)
+            .onAppear { configure() }
+            .onChange(of: state) { _, _ in configure() }
+            .onChange(of: enabled) { _, _ in configure() }
+            .onChange(of: reduced) { _, _ in configure() }
+            .onDisappear { clock.stop() }
+    }
+}
 private struct PetView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var live: LiveSessionState
     init(model: AppModel) { self.model = model; live = model.live }
     @AppStorage("aieyes.pet.enabled") private var enabled = true
     @AppStorage("aieyes.pet.scale") private var savedScale = 1.0
-    @Environment(\.accessibilityReduceMotion) private var reduced
-    @State private var start = Date()
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.1, paused: reduced || !enabled)) { tick in
-            let state = model.petState
-            let frames = PetSprites.frames(for: model.importedPet)
-            let frame = state.frame(elapsed: tick.date.timeIntervalSince(start), reduced: reduced)
-            let scale = PetAppearance.scale(savedScale)
-            VStack(spacing: 0) {
-                if frames.indices.contains(frame) {
-                    Image(decorative: frames[frame], scale: 1).resizable().interpolation(.high).frame(width: 132, height: 143)
-                } else { Text("请导入桌宠").font(.callout).frame(width: 132, height: 143) }
-                Text(state.label).font(.system(size: 12, weight: .medium)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 9).padding(.vertical, 3).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-            }.frame(width: 144, height: state.height)
-                .scaleEffect(scale, anchor: .topLeading)
-                .frame(width: 144 * scale, height: state.height * scale, alignment: .topLeading)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Aieyes · " + state.label).accessibilityHint("单击打开面板，拖动移动，右键菜单")
-        }.onChange(of: model.petState.key) { _, _ in start = Date() }
+        let state = live.pet
+        let scale = PetAppearance.scale(savedScale)
+        VStack(spacing: 0) {
+            PetSpriteView(state: state, asset: model.importedPet, scale: scale, enabled: enabled)
+            Text(state.label).font(.system(size: 12 * scale, weight: .medium))
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 9 * scale).padding(.vertical, 3 * scale)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10 * scale))
+        }.frame(width: 144 * scale, height: state.height * scale)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Aieyes · " + state.label).accessibilityHint("单击打开面板，拖动移动，右键菜单")
     }
 }
 private final class PetPanel: NSPanel { override var canBecomeKey: Bool { false } }
@@ -66,16 +109,22 @@ private final class PetHost: NSHostingView<PetView> {
     var open: ((NSView, Bool) -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(point) ? self : nil }
+    private var press: (point: NSPoint, origin: NSPoint)?
+    private var dragged = false
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
-        let start = NSEvent.mouseLocation, origin = window.frame.origin
-        var dragged = false
-        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
-            let point = NSEvent.mouseLocation
-            if hypot(point.x-start.x, point.y-start.y) > 4 { dragged = true }
-            if next.type == .leftMouseUp { break }
-            if dragged { window.setFrameOrigin(NSPoint(x: origin.x+point.x-start.x, y: origin.y+point.y-start.y)) }
-        }
+        press = (NSEvent.mouseLocation, window.frame.origin)
+        dragged = false
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let window, let press else { return }
+        let point = NSEvent.mouseLocation
+        if hypot(point.x - press.point.x, point.y - press.point.y) > 4 { dragged = true }
+        if dragged { window.setFrameOrigin(NSPoint(x: press.origin.x + point.x - press.point.x, y: press.origin.y + point.y - press.point.y)) }
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard let window, press != nil else { return }
+        press = nil
         if dragged { PetWindowController.clamp(window); UserDefaults.standard.set(NSStringFromPoint(window.frame.origin), forKey: "aieyes.pet.position") }
         else { open?(self, true) }
     }

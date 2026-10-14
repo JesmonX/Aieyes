@@ -289,7 +289,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await page.evaluate(()=>window.scrollTo(0,0));
     await page.screenshot({animations:'disabled',path:path.join(output,'servers-dark-compact.png'),fullPage:true});
     for(const [kind,label] of [['stale','数据已延迟'],['partial','部分采集失败'],['failed','连接失败'],['paused','已暂停'],['waiting','等待采样']]){
-      await page.evaluate(kind=>{state.settings.hosts[0].enabled=kind!=='paused';state.hosts=kind==='waiting'?[]:[{id:'host1',error:kind==='failed'?'连接失败':null,sample:{...window.fixtureHosts[0].sample,timestamp:Date.now()/1000-(kind==='stale'?20:0),errors:kind==='partial'?{gpu:'Unavailable'}:{}}}];renderServers();},kind);
+      await page.evaluate(kind=>{state.settings.hosts[0].monitoringEnabled=kind!=='paused';state.hosts=kind==='waiting'?[]:[{id:'host1',error:kind==='failed'?'连接失败':null,sample:{...window.fixtureHosts[0].sample,timestamp:Date.now()/1000-(kind==='stale'?20:0),errors:kind==='partial'?{gpu:'Unavailable'}:{}}}];renderServers();},kind);
       assert.equal(await page.locator('.host-status').textContent(),label);
     }
 

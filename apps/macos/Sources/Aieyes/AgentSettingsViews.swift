@@ -26,12 +26,16 @@ struct AgentMachinesSection: View {
     private var unboundMachines: [String] { Array(Set(model.settings.sources.filter { $0.provider == agent.provider && $0.unbound }.compactMap(\.hostId))).filter { id in !model.settings.hosts.contains { $0.id == id } }.sorted() }
     var body: some View {
         Section("机器与目录 · 可多选") {
-            machine("local", name: "本机", available: model.settings.localDeviceEnabled != false)
-            ForEach(model.settings.hosts) { host in machine(host.id, name: host.name.isEmpty ? host.target : host.name, available: host.enabled) }
+            if model.settings.localDeviceEnabled != false { machine("local", name: "本机", available: true) }
+            ForEach(model.settings.hosts.filter(\.enabled)) { host in machine(host.id, name: host.name.isEmpty ? host.target : host.name, available: host.enabled) }
             ForEach(unboundMachines, id: \.self) { id in
                 machine(id, name: (model.settings.sources.first { $0.hostId == id }?.lastMachineName ?? id) + " · 机器未绑定", available: false, unbound: true)
             }
-            if agent.machineIds.isEmpty { Text("未选择机器，暂不采集。").foregroundStyle(.secondary) }
+            if model.settings.localDeviceEnabled == false && !model.settings.hosts.contains(where: \.enabled) {
+                Text("暂无可采集机器，请在服务器设置开启 Agent 采集。").foregroundStyle(.secondary)
+            } else if !agent.machineIds.contains(where: { id in id == "local" ? model.settings.localDeviceEnabled != false : model.settings.hosts.contains { $0.id == id && $0.enabled } }) {
+                Text("未选择机器，暂不采集。").foregroundStyle(.secondary)
+            }
             Button("添加 SSH 主机") { model.openSettings(.init(category: "servers", section: "add-host")) }
         }.id("machines")
         .sheet(item: $directories) { selection in AgentDirectoriesView(model: model, provider: selection.provider, machine: selection.machine) }
@@ -60,7 +64,7 @@ struct AgentMachinesSection: View {
                         }
                         if agent.provider == "antigravity" { Button("登录 / 检查 · " + source.name) { agySource = source } }
                     }
-                    Button(available ? "暂停整机采集" : "恢复整机采集") { Task { await model.setDeviceEnabled(id, enabled: !available) } }
+                    Button(available ? "暂停 Agent 采集" : "恢复 Agent 采集") { Task { await model.setDeviceEnabled(id, enabled: !available) } }
                 } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel(name + "操作")
             }
         }.padding(.vertical, 3)

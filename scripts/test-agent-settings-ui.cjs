@@ -114,6 +114,41 @@ function browserFixture(){
     assert.equal(await page.locator('#settings-save-all').count(),0);
     await page.locator('[data-settings-agent=claude]').click();await page.locator('[data-agent-enable="claude"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').enabled);
     await page.locator('[data-agent-machine="claude"][value="server"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').machineIds.length===2);
+    // Server switches are independent, and hidden selections survive edits and reloads.
+    const showServers=()=>page.evaluate(()=>{state.settingsTab='hosts';render();});
+    const showClaude=()=>page.evaluate(()=>{state.settingsTab='sources';state.settingsAgent='claude';render();});
+    await showServers();
+    assert.equal(await page.locator('[data-device-collection][role=switch]').count(),2);
+    await page.locator('[data-device-collection="server"]').uncheck();
+    await page.waitForFunction(()=>!state.settings.hosts.find(h=>h.id==='server').enabled&&!state.settingsCommitting);
+    assert.equal(await page.evaluate(()=>monitoredHosts().find(h=>h.id==='server').enabled),true);
+    await showClaude();assert.equal(await page.locator('[data-agent-machine][value="server"]').count(),0);
+    await page.locator('[data-agent-machine="claude"][value="local"]').uncheck();
+    await page.waitForFunction(()=>!state.settingsSaving);
+    assert.deepEqual((await rpc('settings.get')).agents.find(a=>a.provider==='claude').machineIds,['server']);
+    await page.locator('[data-agent-machine="claude"][value="local"]').check();await page.waitForFunction(()=>!state.settingsSaving);
+    await showServers();await page.locator('[data-device-collection="local"]').uncheck();
+    await page.waitForFunction(()=>state.settings.localDeviceEnabled===false&&!state.settingsCommitting);
+    assert.equal(await page.evaluate(()=>monitoredHosts().find(h=>h.id==='local').enabled),true);
+    await showClaude();assert.equal(await page.locator('[data-agent-machine]').count(),0);
+    await page.getByText('暂无可采集机器，请在服务器设置开启 Agent 采集。',{exact:true}).waitFor();
+    await page.reload();await page.waitForFunction(()=>typeof state!=='undefined'&&state.settings&&!state.busy);
+    await page.evaluate(()=>{state.page='settings';state.settingsTab='hosts';render();});
+    assert.equal(await page.locator('[data-device-collection="server"]').isChecked(),false);
+    for(const id of ['local','server']){
+      await page.locator(`[data-device-collection="${id}"]`).check();
+      await page.waitForFunction(id=>!state.settingsCommitting&&(id==='local'?state.settings.localDeviceEnabled:state.settings.hosts.find(h=>h.id===id).enabled),id);
+      await page.locator(`[data-enable="${id}"]`).uncheck();
+      await page.waitForFunction(id=>!state.settingsCommitting&&!monitoredHosts().find(h=>h.id===id).enabled,id);
+      assert.equal(await page.locator(`[data-device-collection="${id}"]`).isChecked(),true);
+      await page.locator(`[data-enable="${id}"]`).check();await page.waitForFunction(()=>!state.settingsCommitting);
+    }
+    failSave=true;await page.locator('[data-device-collection="server"]').click();
+    await page.waitForFunction(()=>!state.settingsCommitting&&!document.querySelector('[data-device-collection="server"]').disabled);
+    assert.equal(await page.locator('[data-device-collection="server"]').isChecked(),true);failSave=false;
+    await showClaude();
+    assert.equal(await page.locator('[data-agent-machine="claude"][value="server"]').isChecked(),true);
+    assert.equal(await page.locator('[data-agent-machine="claude"][value="local"]').isChecked(),true);
     await page.screenshot({path:path.join(out,'agents.png'),fullPage:true});
     await page.locator('[data-settings-agent=codex]').click();await page.locator('[data-machine-directories="codex"][data-machine="local"]').click();await page.locator('[data-source-advanced="codex-local"]').click();
     assert(await page.locator('#field-hostId').isDisabled());assert.equal(await page.locator('#field-path').getAttribute('readonly'),null);assert.equal(await page.getByText('关联账户与限额',{exact:true}).count(),0);assert.equal(await page.locator('#field-quotaPreCommand').count(),0);
