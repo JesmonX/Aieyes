@@ -141,6 +141,11 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
             crate::antigravity::scan(store, settings, source)
         };
     }
+    if source.provider == "opencode"
+        && let Some(path) = crate::opencode::database(&source.path)
+    {
+        return crate::opencode::scan(store, settings, source, &path);
+    }
     let prices = store.prices()?;
     let files = paths(source)?;
     let mut history = if source.provider == "codex" {

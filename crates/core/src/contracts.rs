@@ -137,6 +137,8 @@ pub const METHODS: &[Method] = &[
     Method { name: "wakeups.run", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.save", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.status", lane: Lane::Wakeups, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "subscriptions.connect", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "subscriptions.openLogin", lane: Lane::Accounts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
 ];
 #[rustfmt::skip]
 pub const PROVIDERS: &[Provider] = &[
@@ -144,10 +146,15 @@ pub const PROVIDERS: &[Provider] = &[
     Provider { id: "claude", name: "Claude Code", default_path: "~/.claude", binary: "claude", requires_path: true, wakeup: true, discover_local: true },
     Provider { id: "antigravity", name: "Antigravity", default_path: "~/.gemini/antigravity-cli", binary: "agy", requires_path: false, wakeup: true, discover_local: true },
     Provider { id: "deepseek", name: "DeepSeek", default_path: "", binary: "", requires_path: false, wakeup: false, discover_local: false },
+    Provider { id: "zcode", name: "ZCode", default_path: "~/.aieyes/imports/zcode", binary: "", requires_path: false, wakeup: false, discover_local: false },
+    Provider { id: "qoder", name: "Qoder", default_path: "~/.aieyes/imports/qoder", binary: "", requires_path: false, wakeup: false, discover_local: false },
+    Provider { id: "grok", name: "Grok", default_path: "~/.aieyes/imports/grok", binary: "", requires_path: false, wakeup: false, discover_local: false },
+    Provider { id: "cursor", name: "Cursor", default_path: "~/.aieyes/imports/cursor", binary: "", requires_path: false, wakeup: false, discover_local: false },
+    Provider { id: "opencode", name: "OpenCode", default_path: "~/.local/share/opencode", binary: "", requires_path: false, wakeup: false, discover_local: true },
     Provider { id: "custom", name: "自定义", default_path: "~/.aieyes", binary: "", requires_path: true, wakeup: false, discover_local: false },
 ];
 #[rustfmt::skip]
-pub const PROVIDER_IDS: &[&str] = &["codex", "claude", "antigravity", "deepseek", "custom"];
+pub const PROVIDER_IDS: &[&str] = &["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "custom"];
 #[rustfmt::skip]
 pub const EXCLUDED_FS_TYPES: &[&str] = &["tmpfs", "devtmpfs", "squashfs", "overlay", "proc", "procfs", "sysfs", "devfs", "autofs", "cgroup", "cgroup2"];
 #[rustfmt::skip]
@@ -166,7 +173,7 @@ pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
     &[120, 120, 120, 120, 120, 220],
     &[150, 150, 150, 150, 150, 280],
 ];
-pub const CONTRACT_HASH: &str = "d16fe7635c68fdc1e494027f30cdaf6609b85224579de65ae31b4b70769fc4d7";
+pub const CONTRACT_HASH: &str = "724b06444e28be6cda113dd83eba2005ba4e2561d76648188ae262d7e2ba08f1";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

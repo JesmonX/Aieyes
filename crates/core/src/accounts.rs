@@ -11,6 +11,11 @@ pub fn default_name(provider: &str) -> String {
         "claude" => "Claude Code 账户",
         "antigravity" => "Antigravity 账户",
         "deepseek" => "DeepSeek 账户",
+        "zcode" => "ZCode 账户",
+        "qoder" => "Qoder 账户",
+        "grok" => "Grok 账户",
+        "cursor" => "Cursor 账户",
+        "opencode" => "OpenCode 账户",
         _ => "自定义 Agent 账户",
     }
     .into()
@@ -533,6 +538,12 @@ impl Engine {
                 .collect();
             return Ok(
                 json!({"current":current,"credential":credential,"profileCredentials":profile_credentials,"checkedAt":now(),"note": if identity.is_none() { "尚未验证账户身份，请读取当前登录或授权" } else { "" }}),
+            );
+        }
+        if source.subscription.is_some() && account.uses_source(source) {
+            let quota = crate::subscriptions::read(source, settings)?;
+            return Ok(
+                json!({"current":null,"credential":true,"authenticated":true,"identityConfirmed":false,"checkedAt":now(),"note":"订阅凭据有效；不会据此推断客户端当前账户","plan":quota.plan}),
             );
         }
         // Other providers cannot safely infer the identity of a machine's current login.

@@ -5,6 +5,11 @@
     "claude": "Claude Code",
     "antigravity": "Antigravity",
     "deepseek": "DeepSeek",
+    "zcode": "ZCode",
+    "qoder": "Qoder",
+    "grok": "Grok",
+    "cursor": "Cursor",
+    "opencode": "OpenCode",
     "custom": "自定义"
   },
   "wakeupProviders": [
@@ -17,6 +22,11 @@
     "claude": "~/.claude",
     "antigravity": "~/.gemini/antigravity-cli",
     "deepseek": "",
+    "zcode": "~/.aieyes/imports/zcode",
+    "qoder": "~/.aieyes/imports/qoder",
+    "grok": "~/.aieyes/imports/grok",
+    "cursor": "~/.aieyes/imports/cursor",
+    "opencode": "~/.local/share/opencode",
     "custom": "~/.aieyes"
   },
   "binaries": {
@@ -24,6 +34,11 @@
     "claude": "claude",
     "antigravity": "agy",
     "deepseek": "",
+    "zcode": "",
+    "qoder": "",
+    "grok": "",
+    "cursor": "",
+    "opencode": "",
     "custom": ""
   },
   "windows": {
@@ -882,9 +897,67 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    "subscriptions.connect": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "subscriptions.openLogin": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
     }
   },
-  "contractHash": "d16fe7635c68fdc1e494027f30cdaf6609b85224579de65ae31b4b70769fc4d7",
+  "subscriptions": {
+    "zcode": {
+      "hint": "Z.ai / 智谱 Coding Plan。先在官网登录并复制所属地区 API Key。",
+      "modes": {
+        "global": "Z.ai 国际版 API Key",
+        "cn": "智谱中国版 API Key"
+      },
+      "loginUrl": "https://zcode.z.ai/en/docs/configuration"
+    },
+    "qoder": {
+      "hint": "先在对应站点登录，复制用量请求的 Cookie。中国旧站点与 qoder.cn 新账户不互通。",
+      "modes": {
+        "global": "qoder.com Cookie",
+        "cn-legacy": "qoder.com.cn 旧站点 Cookie"
+      },
+      "loginUrl": "https://qoder.com/account/usage"
+    },
+    "grok": {
+      "hint": "订阅：运行 grok login 后从 ~/.grok/auth.json 复制所选账户的 key。API 余额需 Management API Key 和 Team ID。",
+      "modes": {
+        "subscription": "Grok 订阅登录令牌",
+        "api": "xAI API 余额"
+      },
+      "loginUrl": "https://grok.com"
+    },
+    "cursor": {
+      "hint": "在 Cursor 用量页登录，复制请求 Cookie（包含 WorkosCursorSessionToken）。",
+      "modes": {
+        "session": "Cursor 会话 Cookie"
+      },
+      "loginUrl": "https://cursor.com/dashboard"
+    },
+    "opencode": {
+      "hint": "Go 使用 API Key；Console 使用会话 Cookie 和 Workspace ID，可查询 Go 与 Zen 余额。外部模型订阅请连接对应服务商。",
+      "modes": {
+        "go": "Go API Key",
+        "console": "Console Cookie / Workspace"
+      },
+      "loginUrl": "https://opencode.ai/console"
+    }
+  },
+  "contractHash": "724b06444e28be6cda113dd83eba2005ba4e2561d76648188ae262d7e2ba08f1",
   "petFrameDurations": [
     [
       280,

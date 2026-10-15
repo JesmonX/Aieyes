@@ -86,6 +86,7 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
             Ok(q)
         }
         "deepseek" => deepseek(source, settings),
+        p if crate::subscriptions::supported(p) => crate::subscriptions::read(source, settings),
         "codex" => {
             let v = codex(source, settings)?;
             normalize(source, &v, "live")
