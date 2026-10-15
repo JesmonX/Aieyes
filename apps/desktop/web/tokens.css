@@ -67,6 +67,18 @@
   --pet-bg: #f6f6f8;
   --pet-ink: #252528;
   --control-selected: rgba(255,255,255,.96);
+
+  /* Web control finishes and the opaque fallback for panel-like settings cards. */
+  --settings-card-opaque: #f1f2f4;
+  --settings-card-fill: var(--settings-card-opaque);
+  --control-fill: rgba(255,255,255,.78);
+  --field-fill: rgba(255,255,255,.84);
+  --control-stroke: rgba(64,72,92,.22);
+  --control-bottom-stroke: rgba(64,72,92,.3);
+  --control-shadow: inset 0 1px 0 var(--highlight), 0 1px 2px rgba(22,36,72,.06);
+  --control-pressed-shadow: inset 0 1px 2px rgba(22,36,72,.08);
+  --checkbox-stroke: rgba(37,37,40,.58);
+  --control-chevron: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%2362626b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 :root[data-theme=dark] {
     --accent-deep: #8b9cfb; --accent-ink: #131a2a; --balance-blue: var(--accent);
@@ -89,6 +101,15 @@
   --control-selected: #62626b;
   --pet-bg: #29292e;
   --pet-ink: #efeff2;
+  --settings-card-opaque: #303238;
+  --control-fill: rgba(76,78,86,.78);
+  --field-fill: rgba(40,42,48,.86);
+  --control-stroke: rgba(220,224,240,.19);
+  --control-bottom-stroke: rgba(0,0,0,.32);
+  --control-shadow: inset 0 1px 0 var(--highlight), 0 1px 2px rgba(0,0,0,.18);
+  --control-pressed-shadow: inset 0 1px 2px rgba(0,0,0,.2);
+  --checkbox-stroke: rgba(239,239,242,.58);
+  --control-chevron: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%23b6b6c0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
 /* BEGIN GENERATED UI DESIGN TOKENS */
@@ -267,6 +288,7 @@
 /* Only enable alpha surfaces after the HWND has successfully acquired a backdrop. */
 :root[data-platform=windows]:where([data-material=acrylic],[data-material=blur]) {
   --card-fill:var(--panel);
+  --settings-card-fill:var(--panel);
   --window-tint:rgba(250,250,250,.18);
   --panel:rgba(255,255,255,.35); --surface-soft:rgba(255,255,255,.18);
   --surface-strong:rgba(244,244,247,.88); --control-selected:rgba(255,255,255,.92);
@@ -284,7 +306,7 @@
 
 /* Without vibrancy the surfaces must stand on their own. */
 @media (prefers-reduced-transparency: reduce) {
-  :root:root { --panel: var(--solid); --card-fill:var(--solid); --window-tint: var(--solid); --surface-strong: var(--solid); --surface-soft: var(--solid); --surface-sunken: var(--solid); --soft: rgba(120,140,200,.16); }
+  :root:root { --panel: var(--solid); --card-fill:var(--solid); --window-tint: var(--solid); --surface-strong: var(--solid); --surface-soft: var(--solid); --surface-sunken: var(--solid); --soft: rgba(120,140,200,.16); --settings-card-fill:var(--settings-card-opaque); --control-fill:var(--solid); --field-fill:var(--solid); }
 }
 @media (forced-colors: active) {
   :root:root {
@@ -293,6 +315,9 @@
     --card-border: CanvasText; --solid: Canvas; --soft: Canvas; --border: ButtonText; --hairline-strong: ButtonText;
     --control-selected: Highlight; --highlight: Canvas; --shadow-xs: none; --shadow: none; --shadow-lift: none; --shadow-float: none;
     --window-base: Canvas; --window-tint: Canvas; --window-edge: Canvas;
+    --settings-card-fill: Canvas; --control-fill: ButtonFace; --field-fill: Canvas;
+    --control-stroke: ButtonText; --control-bottom-stroke: ButtonText; --checkbox-stroke: ButtonText;
+    --control-shadow: none; --control-pressed-shadow: none;
   }
 }
 

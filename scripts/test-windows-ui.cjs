@@ -168,6 +168,7 @@ function installFixture(data) {
       await page.screenshot({path:path.join(out,`panel-dpi-${deviceScaleFactor}.png`)});await context.close();
     }
     await require('./ui-alignment-checks.cjs')({browser,url:`http://127.0.0.1:${server.address().port}`,data:materialData,installFixture,out});
+    await require('./control-appearance-checks.cjs')({browser,url:`http://127.0.0.1:${server.address().port}`,data:materialData,installFixture,out});
     console.log('Windows UI sync: six scenarios, two themes, settings, geometry, hints, materials/accessibility, license, bundled font weights and fractional DPI passed');
   } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

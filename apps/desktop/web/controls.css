@@ -1,42 +1,69 @@
-/* Shared control roles. Dimensions and colors come from ui-design-tokens.json.
+/* Shared control roles. Geometry comes from ui-design-tokens.json; Web finishes live in tokens.css.
    Window chrome and page layout live in style.css; compact layout lives in panel.css. */
 button,input,select,textarea { font:inherit; color:inherit; border-radius:var(--radius-control); }
 button {
   display:inline-flex; align-items:center; justify-content:center; gap:6px;
   min-height:var(--control-height); padding:2px var(--control-padding-x);
   font-size:var(--font-secondary); line-height:var(--line-secondary); font-weight:var(--weight-regular);
-  border:1px solid transparent; background:var(--surface-strong); box-shadow:none; cursor:pointer;
-  transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease);
+  border:1px solid var(--control-stroke); border-bottom-color:var(--control-bottom-stroke);
+  background:var(--control-fill); box-shadow:var(--control-shadow); cursor:pointer;
+  transition:background-color var(--t-fast) var(--ease),color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),box-shadow var(--t-fast) var(--ease);
 }
-button:hover { transform:none; background:color-mix(in srgb,var(--surface-strong) 94%,var(--ink)); }
-button:active:not(:disabled) { transform:none; background:color-mix(in srgb,var(--surface-strong) 85%,var(--ink)); box-shadow:none; }
+button:where(:enabled):hover { transform:none; background-color:color-mix(in srgb,var(--control-fill) 94%,var(--ink)); }
+button:where(:enabled):active { transform:none; background-color:color-mix(in srgb,var(--control-fill) 88%,var(--ink)); box-shadow:var(--control-pressed-shadow); }
 button:disabled { opacity:.45; cursor:default; transform:none; box-shadow:none; }
 .primary { background:var(--accent); color:var(--accent-ink); border-color:transparent; }
-.primary:hover { background:color-mix(in srgb,var(--accent) 90%,var(--ink)); color:var(--accent-ink); box-shadow:none; }
+.primary:enabled:hover { background-color:color-mix(in srgb,var(--accent) 92%,var(--ink)); color:var(--accent-ink); }
+.primary:enabled:active { background-color:color-mix(in srgb,var(--accent) 84%,var(--ink)); }
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 input,select,textarea {
   min-width:0; min-height:var(--input-height); padding:2px var(--control-padding-x);
-  line-height:var(--line-body); background:var(--panel); border:1px solid var(--border); box-shadow:none;
+  line-height:var(--line-body); background:var(--field-fill); border:1px solid var(--control-stroke); box-shadow:inset 0 1px 2px #00000004;
+  transition:background-color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),box-shadow var(--t-fast) var(--ease);
 }
-input:hover,select:hover,textarea:hover { border-color:var(--hairline-strong); }
+input:enabled:hover,select:enabled:hover,textarea:enabled:hover { border-color:var(--checkbox-stroke); }
 input:focus-visible,select:focus-visible,textarea:focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent); box-shadow:none; }
+input:disabled,select:disabled,textarea:disabled { opacity:.45; cursor:default; box-shadow:none; }
 select {
-  appearance:none; cursor:pointer; padding-right:28px;
-  background-image:url("data:image/svg+xml,%3Csvg width='12' height='16' viewBox='0 0 12 16' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m3 6 3-3 3 3M3 10l3 3 3-3' fill='none' stroke='%23808088' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat:no-repeat; background-position:right 7px center;
+  appearance:none; cursor:pointer; height:var(--input-height); padding-right:30px;
+  text-align:start; text-overflow:ellipsis; vertical-align:middle;
+  background-color:var(--control-fill); background-image:var(--control-chevron);
+  background-repeat:no-repeat; background-position:right 9px center; background-size:12px 12px;
+  border-bottom-color:var(--control-bottom-stroke); box-shadow:var(--control-shadow);
 }
-input[type=checkbox] { width:var(--checkbox-size); height:var(--checkbox-size); min-height:0; margin:0; padding:0; flex-shrink:0; accent-color:var(--accent); border-radius:4px; vertical-align:middle; cursor:pointer; }
-input[type=checkbox]:disabled { cursor:default; }
-input[type=checkbox][role=switch] { appearance:none; position:relative; width:var(--switch-width); height:var(--switch-height); flex:0 0 var(--switch-width); border:1px solid var(--border); border-radius:var(--r-pill); background:color-mix(in srgb,var(--ink) 18%,transparent); transition:background .18s var(--ease); }
-input[type=checkbox][role=switch]::after { content:''; position:absolute; top:1px; left:1px; width:var(--switch-thumb-size); height:var(--switch-thumb-size); border-radius:50%; background:#fff; box-shadow:0 1px 2px #0002; transition:transform .18s var(--ease); }
-input[type=checkbox][role=switch]:checked { background:var(--accent); border-color:transparent; }
-input[type=checkbox][role=switch]:checked::after { transform:translateX(calc(var(--switch-width) - var(--switch-height))); }
+select:enabled:hover { background-color:color-mix(in srgb,var(--control-fill) 96%,var(--ink)); }
+select:enabled:active { background-color:color-mix(in srgb,var(--control-fill) 90%,var(--ink)); }
+/* Options remain native, with an opaque backing when the host allows styling. */
+select option,select optgroup { background:var(--solid); color:var(--ink); }
+input[type=checkbox] { appearance:none; display:inline-grid; place-content:center; width:var(--checkbox-size); height:var(--checkbox-size); min-height:0; margin:0; padding:0; flex:0 0 var(--checkbox-size); accent-color:var(--accent); border:1px solid var(--checkbox-stroke); border-radius:4px; background:var(--control-fill); box-shadow:var(--control-shadow); vertical-align:middle; cursor:pointer; }
+input[type=checkbox]:not([role=switch])::after { content:''; width:12px; height:12px; background:var(--accent-ink); mask:url("data:image/svg+xml,%3Csvg viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m2.5 6 2.25 2.5 4.75-5' fill='none' stroke='white' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; opacity:0; transform:scale(.8); transition:opacity var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
+input[type=checkbox]:not([role=switch]):enabled:hover { border-color:var(--ink); background-color:color-mix(in srgb,var(--control-fill) 94%,var(--ink)); }
+input[type=checkbox]:not([role=switch]):is(:checked,:indeterminate) { background:var(--accent); border-color:var(--accent); box-shadow:inset 0 1px 0 var(--highlight); }
+input[type=checkbox]:not([role=switch]):is(:checked,:indeterminate)::after { opacity:1; transform:none; }
+input[type=checkbox]:not([role=switch]):indeterminate::after { width:8px; height:2px; mask:none; border-radius:1px; }
+input[type=checkbox]:not([role=switch]):is(:checked,:indeterminate):enabled:hover { background-color:color-mix(in srgb,var(--accent) 92%,var(--ink)); border-color:var(--accent); }
+input[type=checkbox]:not([role=switch]):enabled:active { box-shadow:var(--control-pressed-shadow); }
+input[type=checkbox]:not([role=switch]):enabled:active::after { transform:scale(.85); }
+input[type=checkbox][role=switch] { --switch-offset:0px; position:relative; width:var(--switch-width); height:var(--switch-height); flex-basis:var(--switch-width); border:1px solid var(--control-stroke); border-radius:var(--r-pill); background:color-mix(in srgb,var(--ink) 18%,transparent); box-shadow:inset 0 1px 2px #0000000a; }
+input[type=checkbox][role=switch]::after { content:''; position:absolute; top:1px; left:1px; width:var(--switch-thumb-size); height:var(--switch-thumb-size); border-radius:50%; background:#fff; box-shadow:0 1px 2px #0003; transform:translateX(var(--switch-offset)); transition:transform .18s var(--ease),background-color var(--t-fast) var(--ease); }
+input[type=checkbox][role=switch]:enabled:hover { background:color-mix(in srgb,var(--ink) 25%,transparent); }
+input[type=checkbox][role=switch]:checked { --switch-offset:calc(var(--switch-width) - var(--switch-height)); background:var(--accent); border-color:transparent; }
+input[type=checkbox][role=switch]:checked::after { background:var(--accent-ink); }
+input[type=checkbox][role=switch]:checked:enabled:hover { background:color-mix(in srgb,var(--accent) 92%,var(--ink)); border-color:transparent; }
+input[type=checkbox][role=switch]:enabled:active::after { transform:translateX(var(--switch-offset)) scale(.9); }
+input[type=checkbox]:not([role=switch]):disabled,input[type=checkbox][role=switch]:disabled { cursor:default; box-shadow:none; }
+/* Align the control with the first text line, including wrapped labels. */
+label:has(> input[type=checkbox]) { display:flex; align-items:flex-start; gap:var(--space-control); min-width:0; line-height:var(--line-body); overflow-wrap:anywhere; cursor:pointer; }
+label > input[type=checkbox] { margin-top:calc((var(--line-body) - var(--checkbox-size)) / 2); }
+label > input[type=checkbox][role=switch] { margin-top:calc((var(--line-body) - var(--switch-height)) / 2); }
+label:has(> input[type=checkbox]:disabled) { color:var(--muted); cursor:default; }
 
 /* Segmented choices retain one outline and a quiet selected segment. */
 .panel-tabs,.settings-tabs,.metric-picker { display:flex; align-items:stretch; gap:0; padding:0; border:0; border-radius:var(--radius-control); background:var(--surface-sunken); }
 .panel-tabs button,.settings-tabs button,.metric-picker button { flex:1; min-width:0; min-height:var(--control-compact-height); padding:3px 8px; border:0; border-radius:var(--radius-control); font-size:var(--font-entry); line-height:var(--line-secondary); font-weight:var(--weight-regular); background:transparent; color:var(--ink); box-shadow:none; }
-.panel-tabs button:hover,.settings-tabs button:hover,.metric-picker button:hover { background:var(--surface-soft); color:var(--ink); transform:none; box-shadow:none; }
-.panel-tabs button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true] { background:var(--segment-selected); color:var(--ink); box-shadow:none; }
+.panel-tabs button:enabled:hover,.settings-tabs button:enabled:hover,.metric-picker button:enabled:hover { background:var(--surface-soft); color:var(--ink); transform:none; box-shadow:none; }
+.panel-tabs button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true] { background:var(--segment-selected); color:var(--ink); box-shadow:var(--control-shadow); }
+.panel-tabs button:enabled:active,.settings-tabs button:enabled:active,.metric-picker button:enabled:active { background:var(--segment-selected); box-shadow:var(--control-pressed-shadow); }
 .settings-tabs { width:min(430px,100%); margin:0 auto var(--space-section); }
 .settings-tabs button { white-space:nowrap; }
 .settings-tabs button svg { display:none; }
@@ -44,7 +71,7 @@ input[type=checkbox][role=switch]:checked::after { transform:translateX(calc(var
 
 /* Shared inline controls and compact fields. */
 .filters { gap:var(--space-control); padding:0; border:0; }
-.filters select,#days { min-height:var(--control-compact-height); padding-top:2px; padding-bottom:2px; line-height:var(--line-secondary); font-size:var(--font-secondary); border:1px solid transparent; background-color:var(--surface-sunken); box-shadow:none; }
+.filters select,#days { height:var(--control-compact-height); min-height:var(--control-compact-height); padding-top:2px; padding-bottom:2px; line-height:var(--line-secondary); font-size:var(--font-secondary); }
 .filters select { flex:0 1 auto; width:auto; max-width:230px; }
 .subscription-badge { display:inline-block; max-width:120px; padding:3px 6px; border-radius:var(--r-pill); background:var(--soft); color:var(--accent); font-size:var(--font-secondary); line-height:var(--line-secondary); font-weight:var(--weight-strong); white-space:nowrap; }
 .quota-subscription { display:flex; justify-content:center; flex:0 1 var(--quota-badge-width); min-width:0; }
@@ -56,21 +83,26 @@ input[type=checkbox][role=switch]:checked::after { transform:translateX(calc(var
 .estimate-amount { color:var(--accent); font-variant-numeric:tabular-nums; }
 .panel-account-group legend button { margin-left:8px; font-size:var(--font-entry); }
 
-/* Forms and settings use the native page's quieter grouped surfaces. */
+/* Settings sit on the window backdrop, using the floating panel's card finish. */
 .settings-layout { display:grid; grid-template-columns:var(--settings-sidebar-width) minmax(0,1fr); gap:var(--space-layout); align-items:start; }
-.settings-sidebar { display:flex; flex-direction:column; gap:6px; position:sticky; top:12px; padding:7px; border-radius:var(--radius-overlay); background:var(--form-surface); }
+.settings-sidebar { display:flex; flex-direction:column; gap:6px; position:sticky; top:12px; padding:7px; border-radius:var(--radius-overlay); background:transparent; }
 .settings-sidebar button { width:100%; min-height:36px; padding:8px 10px; text-align:left; justify-content:flex-start; border:0; box-shadow:none; background:transparent; font-size:var(--font-body); white-space:normal; }
 .settings-sidebar button.active { color:var(--accent); background:var(--soft); }
-.settings-subpage { min-width:0; display:grid; gap:var(--settings-section-gap); }
+.settings-subpage { min-width:0; display:grid; gap:var(--settings-section-gap); container:settings-form / inline-size; }
 .settings-subpage > .card { margin:0; }
-.settings-block .card { background:var(--form-surface); border-color:transparent; }
+.settings-block .card { background:var(--settings-card-fill); border-color:var(--card-border); }
+.settings-block .card .card { background:transparent; border-color:transparent; border-radius:0; box-shadow:none; }
+.settings-block .card .card + .card { border-top-color:var(--border); }
 .settings-subpage .between { flex-wrap:wrap; gap:var(--space-control); }
 .form-row { display:grid; grid-template-columns:var(--form-label-width) minmax(0,1fr); align-items:center; gap:var(--space-card-content); margin:var(--space-card-content) 0; }
 .form-row > label { color:var(--ink); font-size:var(--font-body); }
-.form-row input,.form-row select { width:100%; }
+.form-row input:not([type=checkbox]),.form-row select { width:100%; }
 .form-row textarea { min-height:76px; resize:vertical; font-family:var(--font-code); font-size:var(--font-secondary); }
-[data-general-section=appearance] .form-row { grid-template-columns:minmax(0,1fr) minmax(110px,auto); margin:0; padding:8px 0; border-bottom:1px solid var(--border); }
-[data-general-section=appearance] .form-row select { justify-self:end; width:auto; max-width:100%; background-color:transparent; border-color:transparent; }
+[data-general-section=appearance] .form-row { grid-template-columns:minmax(0,1fr) 220px; margin:0; padding:8px 0; border-bottom:1px solid var(--border); }
+[data-general-section=appearance] .form-row select { justify-self:end; width:100%; max-width:100%; }
+@container settings-form (max-width:420px) {
+  [data-general-section=appearance] .form-row { grid-template-columns:minmax(0,1fr); gap:6px; }
+}
 .agent-integration-header h2 { display:flex; align-items:center; gap:var(--space-control); }
 .agent-integration-header > button { margin-top:12px; }
 .server-card-actions { display:flex; align-items:center; justify-content:flex-end; gap:var(--space-control); flex-wrap:wrap; }
@@ -85,7 +117,7 @@ dialog { border-radius:var(--radius-overlay); }
 .panel-menu,.panel-more-menu,.refresh-menu,.multi-panel { border-radius:var(--radius-overlay); }
 .dialog-head,.dialog-foot { gap:var(--space-control); padding:16px var(--dialog-padding); }
 #editor-fields { padding:8px var(--dialog-padding) 20px; }
-#editor textarea { border-radius:var(--radius-control); background:var(--panel); }
+#editor textarea { border-radius:var(--radius-control); background:var(--field-fill); }
 #quota-dialog { padding:var(--dialog-padding); border-radius:var(--radius-overlay); background:var(--solid); }
 /* Native sheet widths are preferred widths, capped by the current client area. */
 #editor { width:var(--dialog-source-width); }
@@ -110,8 +142,16 @@ dialog { border-radius:var(--radius-overlay); }
 .dialog-head button { flex-shrink:0; width:var(--icon-button-size); height:var(--icon-button-size); border-radius:var(--radius-control); }
 .dialog-head button svg { width:var(--icon-size); height:var(--icon-size); }
 .dialog-foot { flex-wrap:wrap; }
-.multi-trigger { min-height:32px; }
+.multi-trigger { display:flex; justify-content:space-between; gap:var(--space-control); width:100%; min-width:0; min-height:32px; text-align:start; }
+.multi-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.multi-trigger::after { content:''; width:12px; height:12px; flex:0 0 12px; background:var(--control-chevron) center / contain no-repeat; transition:transform var(--t-fast) var(--ease); }
+.multi-trigger[aria-expanded=true] { border-color:var(--accent); box-shadow:var(--control-shadow); }
+.multi-trigger[aria-expanded=true]::after { transform:rotate(180deg); }
 .multi-toolbar button { min-height:var(--control-height); padding:2px 8px; font-size:var(--font-secondary); }
+.multi-option { gap:var(--space-control); border-radius:var(--radius-control); }
+.multi-option:has(> input:checked),.multi-option:has(> input:focus-visible) { background:var(--soft); }
+.multi-option:active { background:color-mix(in srgb,var(--accent) 16%,transparent); }
+.multi-list { display:flex; flex-direction:column; gap:2px; }
 .hint { border-radius:var(--radius-control); background:var(--solid); font-size:var(--font-caption); line-height:var(--line-caption); box-shadow:var(--shadow); }
 .quota-chevron { transition:transform .2s var(--ease); }
 dialog[open] { animation:control-reveal .18s var(--ease); }
@@ -183,9 +223,20 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
 @media(forced-colors:active) {
   button,input,select,textarea,dialog,.panel-menu,.panel-more-menu,.refresh-menu,.multi-panel,.hint { background:Canvas; color:CanvasText; border-color:ButtonText; }
-  .panel-tabs button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true] { background:Highlight; color:HighlightText; }
+  nav button.active,aside nav button.active,.settings-sidebar button.active,.panel-tabs button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true] { forced-color-adjust:none; background:Highlight; color:HighlightText; box-shadow:none; }
+  .primary,.primary:enabled:hover,.primary:enabled:active { forced-color-adjust:none; background:Highlight; color:HighlightText; border-color:ButtonText; box-shadow:none; }
+  .primary:disabled { background:Canvas; color:GrayText; border-color:GrayText; }
+  input[type=checkbox]:not([role=switch]),input[type=checkbox]:not([role=switch]):is(:checked,:indeterminate,:enabled:hover) { appearance:auto; accent-color:auto; background:revert; border:revert; box-shadow:none; }
+  input[type=checkbox]:not([role=switch])::after { display:none; }
+  select { appearance:auto; background-image:none; padding-right:var(--control-padding-x); }
+  .multi-trigger::after { background:ButtonText; mask:var(--control-chevron) center / contain no-repeat; }
+  input[type=checkbox][role=switch] { forced-color-adjust:none; background:Canvas; border-color:ButtonText; }
+  input[type=checkbox][role=switch]:enabled:hover { background:Canvas; border-color:ButtonText; }
   input[type=checkbox][role=switch]::after { background:ButtonText; }
-  input[type=checkbox][role=switch]:checked { background:Highlight; }
+  input[type=checkbox][role=switch]:checked,input[type=checkbox][role=switch]:checked:enabled:hover { background:Highlight; border-color:ButtonText; }
   input[type=checkbox][role=switch]:checked::after { background:HighlightText; }
+  button:disabled,input:disabled,select:disabled,textarea:disabled { opacity:1; color:GrayText; border-color:GrayText; }
+  input[type=checkbox][role=switch]:disabled::after { background:GrayText; }
+  label:has(> input[type=checkbox]:disabled) { color:GrayText; }
   .settings-block .card { background:Canvas; border-color:CanvasText; }
 }

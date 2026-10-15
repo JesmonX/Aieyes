@@ -292,10 +292,6 @@ body.editor-open { overflow: hidden; }
 #codex-switch [data-auth=commit] { margin-left: auto; }
 
 /* --- Popover multiselect ------------------------------------------------ */
-.multi-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 38px; text-align: left; font-size: var(--font-secondary); }
-.multi-trigger::after { content: '⌄'; font-size: 17px; line-height: 1; color: var(--faint); transition: transform var(--t-base) var(--ease); }
-.multi-trigger[aria-expanded=true] { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
-.multi-trigger[aria-expanded=true]::after { transform: rotate(180deg); }
 .multi-panel {
   position: fixed; inset: auto; z-index: 100; margin: 0; padding: 12px; display: flex; flex-direction: column; gap: 10px; overflow: hidden;
   border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-strong); color: var(--ink);
@@ -307,7 +303,7 @@ body.editor-open { overflow: hidden; }
 .multi-toolbar button { min-height: 28px; padding: 4px 9px; font-size: 12px; }
 .multi-count { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .multi-list { overflow: auto; min-height: 0; overscroll-behavior: contain; }
-.multi-option { display: flex; align-items: center; gap: 9px; padding: 8px 7px; border-radius: var(--r-xs); cursor: pointer; font-size: var(--font-secondary); transition: background var(--t-fast) var(--ease); }
+.multi-option { padding: 8px 7px; font-size: var(--font-secondary); transition: background var(--t-fast) var(--ease); }
 .multi-option:hover { background: var(--soft); }
 .multi-option > span { overflow-wrap: anywhere; flex: 1; }
 .multi-option small { font-size: 12px; color: var(--muted); flex-shrink: 0; }
@@ -397,8 +393,6 @@ body.editor-open { overflow: hidden; }
 .quota-dialog-body { display: grid; gap: 12px; }
 .quota-dialog-body p { margin: 0; }
 .quota-dialog-body label { display: grid; gap: 7px; }
-.quota-dialog-body .quota-confirm { display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
-.quota-confirm input { margin-top: 5px; flex-shrink: 0; }
 .quota-order-row { display: flex; gap: 9px; align-items: center; padding: 9px; border-radius: 10px; }
 .quota-order-row > span:nth-child(2) { flex: 1; overflow-wrap: anywhere; }
 .quota-order-row.drop-target { background: var(--soft); outline: 1px solid var(--accent); }
@@ -709,23 +703,19 @@ input[name=path],input[name=identityFile],input[name=target] { font-family:var(-
 .agent-setup h2{display:flex;align-items:center;gap:8px;margin:0}
 .agent-machines{display:flex;flex-wrap:wrap;gap:12px 24px;border:0;padding:8px 0;margin:12px 0}
 .agent-machines legend{color:var(--muted);font-size:13px;margin-bottom:8px}
-.agent-machines label,.agent-setup .actions label{display:flex;align-items:center;gap:8px;margin:0}
-.agent-machines input,.agent-setup input[type=checkbox]{width:auto}
+.agent-machines label,.agent-setup .actions label{margin:0}
 
 .account-machine-summary{border-top:1px solid var(--border);margin-top:12px;padding-top:8px}.account-command-preview{white-space:pre-wrap;overflow-wrap:anywhere;padding:10px;background:var(--bg);border-radius:8px}.account-agent-group h2{display:flex;align-items:center;gap:8px}
 
 /* Account edits remain readable at normal and compact settings widths. */
-.account-config > label { display:grid; grid-template-columns:160px minmax(0,1fr); align-items:center; gap:12px; margin:14px 0; }
-.account-config > label > input,.account-config > label > select { width:100%; min-width:0; }
-.account-config > label:has([data-account-archive]) { display:flex; }
-.account-config > label > input[type=checkbox] { width:17px; }
+.account-config > label { margin:14px 0; }
+.account-config > label:not(:has(> input[type=checkbox])) { display:grid; grid-template-columns:160px minmax(0,1fr); align-items:center; gap:12px; }
+.account-config > label > input:not([type=checkbox]),.account-config > label > select { width:100%; min-width:0; }
 .account-config .actions { gap:12px; margin:12px 0; }
-.account-config .actions label { display:flex; align-items:center; gap:6px; }
 details:has([data-command-field]) > label { display:grid; gap:8px; margin:12px 0; }
 [data-command-field] { width:100%; min-height:90px; font-family:var(--font-code); }
 .agent-machines > .list-row { border:0; padding:4px 0; }
-.agent-setup > .between > label { display:flex; align-items:center; gap:8px; }
-@media(max-width:700px) { .account-config > label { grid-template-columns:1fr; gap:6px; } }
+@media(max-width:700px) { .account-config > label:not(:has(> input[type=checkbox])) { grid-template-columns:1fr; gap:6px; } }
 
 .header-actions { display:flex; align-items:center; gap:10px; }
 [data-theme-toggle] { display:grid; place-items:center; width:32px; height:32px; min-height:0; padding:0; flex-shrink:0; }

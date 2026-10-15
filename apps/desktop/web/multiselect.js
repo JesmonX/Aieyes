@@ -32,6 +32,8 @@
     const doc = root.ownerDocument;
     const trigger = doc.createElement('button');
     trigger.type = 'button'; trigger.className = 'multi-trigger';
+    const summaryLabel = doc.createElement('span'); summaryLabel.className = 'multi-label';
+    trigger.append(summaryLabel);
     const panel = doc.createElement('div');
     panel.className = 'multi-panel'; panel.id = `multi-panel-${++sequence}`;
     panel.hidden = true; panel.setAttribute('role', 'group'); panel.setAttribute('aria-label', config.title);
@@ -78,7 +80,7 @@
       const total = options.length, n = options.filter(o => selected.has(o.id)).length;
       const isAll = config.all ? config.all() : total > 0 && n === total;
       const summary = isAll ? '全部' : n ? `已选 ${n} / ${total}` : '未选择';
-      trigger.textContent = `${config.title} · ${summary}`;
+      summaryLabel.textContent = `${config.title} · ${summary}`;
       trigger.title = `${config.title}：${summary}`;
       trigger.disabled = Boolean(config.disabled?.());
       if (trigger.disabled && active === controller) close(false);
@@ -90,12 +92,14 @@
       const rect = trigger.getBoundingClientRect(), width = Math.min(380, window.innerWidth - 24);
       panel.style.width = `${width}px`;
       panel.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
-      const below = window.innerHeight - rect.bottom - 12;
+      const gap = 4, below = window.innerHeight - rect.bottom - 12 - gap;
       const topMargin = doc.body.dataset.platform === 'windows' ? 52 : 12;
-      const above = rect.top - topMargin;
-      const height = Math.min(360, Math.max(above, below));
-      panel.style.maxHeight = `${height}px`;
-      panel.style.top = `${below >= Math.min(360, above) ? rect.bottom + 4 : Math.max(topMargin, rect.top - height - 4)}px`;
+      const above = rect.top - topMargin - gap;
+      panel.style.maxHeight = `${Math.min(360, Math.max(0, window.innerHeight - topMargin - 12), Math.max(0, above, below))}px`;
+      // Measure after showing the popover so short lists also stay next to the trigger.
+      const height = panel.offsetHeight;
+      const top = below >= height ? rect.bottom + gap : rect.top - height - gap;
+      panel.style.top = `${Math.max(topMargin, Math.min(top, window.innerHeight - height - 12))}px`;
     }
     function outside(event) { if (!panel.contains(event.target) && !trigger.contains(event.target)) close(false); }
     function keydown(event) {
@@ -104,14 +108,15 @@
     function focusout(event) { if (!panel.contains(event.target) && event.target !== trigger) close(false); }
     function open() {
       active?.close(false); active = controller; search.value = ''; panel.hidden = false;
-      renderOptions(); position();
+      renderOptions();
       if (panel.showPopover) panel.showPopover();
+      position();
       trigger.setAttribute('aria-expanded', 'true'); search.focus();
       doc.addEventListener('pointerdown', outside, true); doc.addEventListener('keydown', keydown, true);
       doc.addEventListener('focusin', focusout); window.addEventListener('resize', reposition);
       doc.addEventListener('scroll', reposition, true);
     }
-    function reposition(event) { if (!panel.contains(event.target)) position(); }
+    function reposition(event) { if (event.type === 'resize' || !panel.contains(event.target)) position(); }
     function close(focus = true) {
       if (panel.hidePopover && panel.matches(':popover-open')) panel.hidePopover();
       panel.hidden = true; trigger.setAttribute('aria-expanded', 'false');
@@ -123,7 +128,7 @@
     }
     const controller = {refresh, close, destroy() {close(false); panel.remove();}};
     trigger.onclick = () => panel.hidden ? open() : close();
-    search.oninput = renderOptions;
+    search.oninput = () => {renderOptions(); position();};
     refresh(); return controller;
   }
   function recommendedFilesystem(id,type='') {
