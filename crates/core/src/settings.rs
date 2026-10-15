@@ -313,10 +313,11 @@ impl Engine {
         }
         if !remove {
             ensure!(
-                !next.sources.iter().any(|s| s.id != source.id
-                    && s.provider == source.provider
-                    && s.host_id == source.host_id
-                    && s.path == source.path),
+                source.subscription.is_some()
+                    || !next.sources.iter().any(|s| s.id != source.id
+                        && s.provider == source.provider
+                        && s.host_id == source.host_id
+                        && s.path == source.path),
                 "此机器已配置该目录"
             );
             let agent = next

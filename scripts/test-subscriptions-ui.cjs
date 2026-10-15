@@ -40,7 +40,7 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
       await page.evaluate(p=>{state.page='settings';state.settingsTab='integrations';AieyesAgentSettings.navigate({provider:p});render();},provider);
       await page.locator(`[data-account-add="${provider}"]`).click();
       assert.equal(await page.locator('#field-secret').getAttribute('type'),'password');
-      const previews=path.join(project,'.local/subscriptions');fs.mkdirSync(previews,{recursive:true});await page.screenshot({path:path.join(previews,provider+'.png')});
+      const previews=path.join(project,'.local/subscriptions');fs.mkdirSync(previews,{recursive:true});await page.screenshot({animations:'disabled',path:path.join(previews,provider+'.png')});
       await page.locator('#subscription-login').click();
       assert(calls.some(c=>c.method==='subscriptions.openLogin'&&c.params.provider===provider));
       await page.locator('#field-name').fill(provider+' fixture');await page.locator('#field-secret').fill('private-fixture-secret');

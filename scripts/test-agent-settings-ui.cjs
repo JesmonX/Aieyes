@@ -110,7 +110,7 @@ function browserFixture(){
     const mergedHost=(await rpc('settings.get')).hosts.find(h=>h.id==='server');
     assert.equal(mergedHost.name,'外部窗口更新');assert.equal(mergedHost.port,2222);assert.equal((await rpc('settings.get')).refreshSeconds,120);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='sources';render();});
-    assert.equal(await page.locator('[data-settings-agent]').count(),5);assert.equal(await page.locator('[data-agent-enable]').count(),1);
+    assert.equal(await page.locator('[data-settings-agent]').count(),await page.evaluate(()=>Object.keys(AieyesContract.providers).length));assert.equal(await page.locator('[data-agent-enable]').count(),1);
     assert.equal(await page.locator('#settings-save-all').count(),0);
     await page.locator('[data-settings-agent=claude]').click();await page.locator('[data-agent-enable="claude"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').enabled);
     await page.locator('[data-agent-machine="claude"][value="server"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').machineIds.length===2);

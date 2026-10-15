@@ -479,7 +479,9 @@ struct SourceEditor: View {
                         Text("本机").tag("local"); ForEach(hosts) { Text($0.name.isEmpty ? $0.target : $0.name).tag($0.id) }
                     }.disabled(true)
                 }
-                if source.provider == "deepseek" {
+                if source.subscription != nil {
+                    Text("此来源只查询订阅；历史请在机器与采集中添加独立目录。").font(AppFont.secondary).foregroundStyle(.secondary)
+                } else if source.provider == "deepseek" {
                     Text("API Key 请在账户页添加或更新。").font(AppFont.secondary).foregroundStyle(.secondary)
                     DisclosureGroup("高级设置") { TextField("API Key 文件（可选）", text: $source.path) }
                 } else {
@@ -494,7 +496,7 @@ struct SourceEditor: View {
                 DisclosureGroup(source.hostId == nil ? "高级连接选项 · CLI / 代理" : "高级连接选项 · CLI") {
                 if source.provider == "antigravity" { TextField("agy 程序", text: Binding(get: { source.agyBinary ?? "agy" }, set: { source.agyBinary = $0 })) }
                 if source.provider == "codex" { TextField("Codex 程序", text: $source.codexBinary) }
-                if source.provider == "custom" { TextField("限额查询命令", text: $source.quotaCommand) }
+                if source.provider == "custom" || CoreContract.subscriptionModes[source.provider] != nil { TextField("限额查询命令", text: $source.quotaCommand) }
                 if source.hostId == nil {
                     ProxyFields(proxy: Binding(get: { source.proxy ?? ProxySettings(mode: "inherit") }, set: { source.proxy = $0.mode == "inherit" ? nil : $0 }), inherit: true, inheritedProxy: appProxy, testURLs: testURLs)
                 }
@@ -515,7 +517,7 @@ struct SourceEditor: View {
         saving = true; error = nil; defer { saving = false }
         do {
             var next = source
-            if !["antigravity", "deepseek"].contains(next.provider), next.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ClientError.message("请输入数据目录") }
+            if !["antigravity", "deepseek"].contains(next.provider), CoreContract.subscriptionModes[next.provider] == nil, next.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ClientError.message("请输入数据目录") }
             if next.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { next.name = Format.provider(next.provider) }
             if next.provider == "deepseek" { next.hostId = nil }
             try await onSave(next)

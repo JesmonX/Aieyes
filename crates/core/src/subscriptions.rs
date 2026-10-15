@@ -741,7 +741,7 @@ mod tests {
             credentials::read(&source.subscription.as_ref().unwrap().credential_ref).unwrap(),
             "private-fixture"
         );
-        let mut rotate = params;
+        let mut rotate = params.clone();
         rotate["accountId"] = result["accountId"].clone();
         rotate["secret"] = json!("new-secret");
         let before = json!(settings);
@@ -751,6 +751,37 @@ mod tests {
                 .is_err()
         );
         assert_eq!(before, json!(engine.store.settings().unwrap()));
+        engine
+            .connect_subscription_using(params, |source, _, config, _, _| {
+                parse(source, config, &json!({"usage":{"rolling":{"percent":24}}}))
+            })
+            .unwrap();
+        let mut edited = source.clone();
+        edited.name = "Updated subscription".into();
+        engine
+            .call(
+                "sources.configure",
+                json!({"source":edited,"baseSource":source}),
+            )
+            .unwrap();
+        let saved = engine.store.settings().unwrap();
+        assert_eq!(
+            saved
+                .sources
+                .iter()
+                .filter(|s| s.subscription.is_some())
+                .count(),
+            2
+        );
+        assert_eq!(
+            saved
+                .sources
+                .iter()
+                .find(|s| s.id == source.id)
+                .unwrap()
+                .name,
+            "Updated subscription"
+        );
     }
 
     #[test]
