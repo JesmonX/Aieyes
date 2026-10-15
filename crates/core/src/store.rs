@@ -58,6 +58,7 @@ impl Store {
         CREATE TABLE IF NOT EXISTS capacity_samples(account_key TEXT NOT NULL,stamp INTEGER NOT NULL,five REAL NOT NULL,week REAL NOT NULL,PRIMARY KEY(account_key,stamp));
         ")?;
         crate::usage_cache::setup(&db)?;
+        crate::quota_notifications::setup(&db)?;
         crate::remote_history::setup(&db)?;
         crate::codex_api::usage::setup(&db)?;
         crate::history_corrections::setup(&db)?;
@@ -522,6 +523,7 @@ impl Store {
         }
         self.mark_wakeup_settings_pending(s)?;
         self.reconcile_estimates(s)?;
+        self.reconcile_reset_notifications(s)?;
         let owns_transaction = transaction.is_some();
         if let Some(transaction) = transaction {
             transaction.commit()?;

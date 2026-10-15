@@ -366,6 +366,16 @@ struct AccountDevicesView: View {
                         Text("自动 · 优先本机").tag("")
                         ForEach(model.settings.sources.filter { current.uses($0) }) { source in Text(model.machineName(source.hostId ?? "local") + " · " + source.displayLocation + (model.settings.sourceEnabled(source) ? "" : " · 已暂停")).tag(source.id) }
                     }
+                    if account.provider != "deepseek" {
+                        AccountResetNotificationPicker(title: "非预期重置提醒", value: account.quotaResetNotifications?.unexpected, inherited: model.settings.quotaResetNotifications?.unexpected ?? true) { value in
+                            var preferences = account.quotaResetNotifications ?? QuotaResetNotificationSettings(); preferences.unexpected = value; account.quotaResetNotifications = preferences
+                            save { next in var p = next.quotaResetNotifications ?? QuotaResetNotificationSettings(); p.unexpected = value; next.quotaResetNotifications = p }
+                        }
+                        AccountResetNotificationPicker(title: "自然重置提醒", value: account.quotaResetNotifications?.natural, inherited: model.settings.quotaResetNotifications?.natural ?? false) { value in
+                            var preferences = account.quotaResetNotifications ?? QuotaResetNotificationSettings(); preferences.natural = value; account.quotaResetNotifications = preferences
+                            save { next in var p = next.quotaResetNotifications ?? QuotaResetNotificationSettings(); p.natural = value; next.quotaResetNotifications = p }
+                        }
+                    }
                     TextField("查询间隔（秒）", text: $intervalText, prompt: Text("沿用全局 · \(model.settings.refreshSeconds) 秒")).focused($focusedField, equals: "interval")
                     Text("留空沿用全局间隔；自定义范围 5–86400 秒。").font(AppFont.secondary).foregroundStyle(.secondary)
                     TextField("账户名称", text: $account.name).focused($focusedField, equals: "name")
@@ -438,12 +448,15 @@ struct AccountDevicesView: View {
         guard !name.isEmpty else { error = "请输入账户名称"; return false }
         guard text.isEmpty || Int(text).map({ (5...86400).contains($0) }) == true else { error = "查询间隔范围为 5–86400 秒"; return false }
         let interval = Int(text), edits = commands
-        let flagsChanged = account.quotaEnabled != current.quotaEnabled || (account.archived == true) != (current.archived == true) || account.quotaSourceId != current.quotaSourceId
+        let notificationChanged = account.quotaResetNotifications != current.quotaResetNotifications
+        let flagsChanged = notificationChanged || account.quotaEnabled != current.quotaEnabled || (account.archived == true) != (current.archived == true) || account.quotaSourceId != current.quotaSourceId
         if !force && !flagsChanged && name == current.name && interval == current.quotaRefreshSeconds && edits.allSatisfy({ machine, command in current.deviceSettings?.first(where: { $0.machineId == machine })?.preCommand == command }) { return true }
         account.quotaRefreshSeconds = interval
+        let notificationPreferences = account.quotaResetNotifications
         let quotaEnabled = account.quotaEnabled, archived = account.archived, priority = account.quotaSourceId
         save { next in
             next.name = name; next.quotaRefreshSeconds = interval
+            if force || notificationChanged { next.quotaResetNotifications = notificationPreferences }
             if force || flagsChanged { next.quotaEnabled = quotaEnabled; next.archived = archived; next.quotaSourceId = priority }
             for (machine, command) in edits { var values = next.deviceSettings ?? []; values.removeAll { $0.machineId == machine }; values.append(.init(machineId: machine, preCommand: command)); next.deviceSettings = values }
         }
@@ -458,7 +471,7 @@ struct AccountDevicesView: View {
                 var next = model.settings
                 guard let i = next.accounts.firstIndex(where: { $0.key == account.key }) else { throw ClientError.message("账户已移除") }
                 change(&next.accounts[i]); try await model.persistConfiguration(next)
-                if account.name.trimmingCharacters(in: .whitespacesAndNewlines) == current.name && Int(intervalText.trimmingCharacters(in: .whitespacesAndNewlines)) == current.quotaRefreshSeconds && account.quotaEnabled == current.quotaEnabled && (account.archived == true) == (current.archived == true) && account.quotaSourceId == current.quotaSourceId && commands.allSatisfy({ machine, command in current.deviceSettings?.first(where: { $0.machineId == machine })?.preCommand == command }) { error = nil }
+                if account.name.trimmingCharacters(in: .whitespacesAndNewlines) == current.name && Int(intervalText.trimmingCharacters(in: .whitespacesAndNewlines)) == current.quotaRefreshSeconds && account.quotaEnabled == current.quotaEnabled && (account.archived == true) == (current.archived == true) && account.quotaSourceId == current.quotaSourceId && account.quotaResetNotifications == current.quotaResetNotifications && commands.allSatisfy({ machine, command in current.deviceSettings?.first(where: { $0.machineId == machine })?.preCommand == command }) { error = nil }
             } catch { self.error = error.localizedDescription }
             pendingSaveCount -= 1; busy = pendingSaveCount > 0
         }

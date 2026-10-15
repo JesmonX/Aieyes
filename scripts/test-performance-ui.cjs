@@ -17,7 +17,7 @@ const fixture=require('./fixtures/browser-ui.cjs');
    window.clearTimeout=id=>{active.delete(id);return originalClear(id);};
    try {
      state.settings={...settings,hosts:[],localMonitor:{...settings.localMonitor,enabled:false}};
-     state.lastScan=Date.now();quotaScheduleKnown=true;quotaDueAt=null;refreshStopped=false;
+     state.lastScan=Date.now();refreshStopped=false;
      window.__TAURI__.core.invoke=async(command,args)=>{
        if(command==='engine_call'){
          if(args.method==='quotas.schedule')return {nextDueAt:null};

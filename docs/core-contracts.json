@@ -846,6 +846,14 @@
       "updateBehavior": "finish"
     },
     {
+      "name": "quotaResetNotifications.take",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    {
       "name": "quotas.order.set",
       "lane": "main",
       "invalidates": [

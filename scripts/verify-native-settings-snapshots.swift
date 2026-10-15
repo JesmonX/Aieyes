@@ -18,10 +18,10 @@ for scenario in ["empty", "single", "multi", "long", "failure", "capacity"] {
         let text = try recognizedText(file)
         precondition(text.contains("台主机") && text.contains("监控设置"), "Server screenshot did not render server controls: " + file.path + "\n" + text)
         precondition(!text.contains("实时账户限额"), "Server screenshot rendered the Agent overview: " + file.path)
-        for page in ["appearance", "desktop", "network", "refresh", "updates"] {
+        for page in ["appearance", "desktop", "network", "refresh", "notifications", "updates"] {
             let settingsFile = root.appendingPathComponent(scenario + "/settings-general-" + page + "-" + theme + ".png")
             precondition(FileManager.default.fileExists(atPath: settingsFile.path), "Missing settings subpage: " + settingsFile.path)
         }
     }
 }
-print("Native snapshots render server controls and cover all five general settings subpages")
+print("Native snapshots render server controls and cover all six general settings subpages")

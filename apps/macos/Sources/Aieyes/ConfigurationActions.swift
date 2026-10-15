@@ -124,6 +124,7 @@ extension AppModel {
                 var next = settings
                 next.appearance = settingsDraft.appearance; next.proxy = settingsDraft.proxy
                 next.proxyTestUrls = settingsDraft.proxyTestUrls; next.menuMetric = settingsDraft.menuMetric
+                next.quotaResetNotifications = settingsDraft.quotaResetNotifications
                 next.historyShowDeletedAccounts = settingsDraft.historyShowDeletedAccounts
                 next.historyRefreshSeconds = settingsDraft.historyRefreshSeconds
                 next.serverForegroundRefreshSeconds = settingsDraft.serverForegroundRefreshSeconds

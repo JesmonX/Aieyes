@@ -20,6 +20,55 @@ fn interval(account: &Account, global: u64) -> i64 {
 fn due(last: Option<i64>, now: i64, seconds: i64) -> bool {
     last.is_none_or(|last| now < last || now - last >= seconds)
 }
+
+/// Native desktop owner of polling; hidden webviews never need to keep timers alive.
+#[derive(Default)]
+pub struct Poller {
+    confirmed: std::collections::HashSet<(String, i64)>,
+}
+impl Poller {
+    pub fn next(&mut self, engine: &Engine) -> Result<Option<Value>> {
+        let settings = engine.store.settings()?;
+        let now = crate::models::now();
+        let mut active = std::collections::HashSet::new();
+        let mut expired = None;
+        let mut query = engine.store.db.prepare("SELECT payload FROM quotas")?;
+        for raw in query.query_map([], |r| r.get::<_, String>(0))? {
+            let quota: QuotaSnapshot = serde_json::from_str(&raw?)?;
+            let key = format!("{}:{}", quota.provider, quota.account_id);
+            if !settings.accounts.iter().any(|a| {
+                crate::accounts::key(a) == key
+                    && a.quota_enabled
+                    && !a.archived
+                    && settings
+                        .sources
+                        .iter()
+                        .any(|s| settings.source_enabled(s) && a.uses_source(s))
+            }) {
+                continue;
+            }
+            for window in quota.windows {
+                if let Some(reset) = window.resets_at.filter(|r| *r > 0) {
+                    let id = (key.clone(), reset);
+                    if reset <= now && !self.confirmed.contains(&id) && expired.is_none() {
+                        expired = Some(id.clone());
+                    }
+                    active.insert(id);
+                }
+            }
+        }
+        self.confirmed.retain(|id| active.contains(id));
+        if let Some((key, reset)) = expired {
+            self.confirmed.insert((key.clone(), reset));
+            return Ok(Some(json!({"accountKey":key})));
+        }
+        let schedule = engine.quota_schedule()?;
+        Ok(schedule["nextDueAt"]
+            .as_i64()
+            .filter(|t| *t <= now)
+            .map(|_| json!({"dueOnly":true})))
+    }
+}
 impl Engine {
     pub(crate) fn quota_schedule(&self) -> Result<Value> {
         let settings = self.store.settings()?;

@@ -28,8 +28,9 @@ pub mod pricing;
 pub mod process;
 pub mod providers;
 pub mod quota;
+pub mod quota_notifications;
 mod quota_queries;
-mod quota_schedule;
+pub mod quota_schedule;
 mod remote_history;
 pub mod session_events;
 pub mod session_hooks;
@@ -209,6 +210,11 @@ impl Engine {
         }
         match method {
             "methods.manifest" => Ok(serde_json::to_value(contracts::METHODS)?),
+            "quotaResetNotifications.take" => {
+                Ok(serde_json::to_value(self.store.take_reset_notifications(
+                    params["since"].as_i64().context("缺少通知会话起始时间")?,
+                )?)?)
+            }
             "autoEstimates.configure" => self.configure_automatic(params),
             "autoEstimates.tick" => self.tick_automatic(),
             "accounts.targets" => self.account_targets(&params),

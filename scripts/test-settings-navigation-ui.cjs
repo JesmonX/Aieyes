@@ -126,7 +126,7 @@ function fixture({platform, failStatus = false}) {
       await page.locator('#cancel-editor').click();
 
       await page.locator('[data-settings-tab=general]').click();
-      assert.deepEqual(await page.locator('[data-general-page]').allTextContents(), ['外观','桌面显示','网络代理','刷新与历史','更新']);
+      assert.deepEqual(await page.locator('[data-general-page]').allTextContents(), ['外观','桌面显示','网络代理','刷新与历史','通知','更新']);
       for (const shortcut of ['Control+,', 'Meta+,']) {
         await page.keyboard.press(shortcut);
         assert.equal(await page.evaluate(() => state.settingsTab), 'integrations', shortcut + ' opens Agent integrations from another settings category');

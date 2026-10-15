@@ -679,6 +679,13 @@
       "refreshKey": null,
       "updateBehavior": "finish"
     },
+    "quotaResetNotifications.take": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
     "quotas.order.set": {
       "lane": "main",
       "invalidates": [
@@ -957,7 +964,7 @@
       "loginUrl": "https://opencode.ai/console"
     }
   },
-  "contractHash": "724b06444e28be6cda113dd83eba2005ba4e2561d76648188ae262d7e2ba08f1",
+  "contractHash": "9e82c294fb33fc93a4ae6b9bdc70a812fc4c6c87e44f64dbc874290e54e99838",
   "petFrameDurations": [
     [
       280,

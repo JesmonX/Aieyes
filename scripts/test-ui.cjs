@@ -305,8 +305,8 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await quotaPage.waitForFunction(()=>typeof state!=='undefined'&&state.lastQuota>0&&!state.busy);
     assert.equal(await quotaPage.evaluate(()=>window.engineCalls.filter(c=>c.method==='quotas.refresh').length),1);
     await quotaPage.evaluate(async()=>{
-      window.quotaFails=true;quotaScheduleKnown=true;quotaDueAt=Date.now()-1;state.lastScan=Date.now();
-      runScheduledRefreshes();
+      window.quotaFails=true;state.lastScan=Date.now();
+      await quotas();
     });
     await quotaPage.waitForFunction(()=>!state.busy);
     assert.equal(await quotaPage.evaluate(()=>window.engineCalls.filter(c=>c.method==='quotas.refresh').length),2);

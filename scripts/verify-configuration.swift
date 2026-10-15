@@ -55,6 +55,7 @@ import Foundation
         }
         var seed = Settings()
         seed.hosts = [Host(id: "shared", name: "Before", target: "fixture.invalid", enabled: false)]
+        seed.accounts = [AgentAccount(id: "notify", name: "Notify", provider: "codex", quotaEnabled: false)]
         let _: Acknowledgement = try await other.call("settings.save", params: parameters(seed))
         let baseline: Settings = try await other.call("settings.get")
         model.settings = baseline; model.settingsDraft = baseline; model.settingsLoaded = true
@@ -95,6 +96,21 @@ import Foundation
         precondition(enabled.sources[0].autoValuation?.consentVersion == 1 && model.settingsDraft == enabled)
         await model.configureAutomatic(enabled.sources[0], enabled: false, confirmed: false)
         precondition(model.automaticError == nil && model.settings.sources[0].autoValuation == nil)
+        model.settingsDraft.quotaResetNotifications = QuotaResetNotificationSettings(unexpected: false, natural: true)
+        await model.saveGeneralConfiguration()
+        let notificationSettings: Settings = try await other.call("settings.get")
+        precondition(notificationSettings.quotaResetNotifications?.unexpected == false && notificationSettings.quotaResetNotifications?.natural == true)
+        precondition(model.settingsDraft == notificationSettings, "Notification switches must settle after autosaving")
+        for preferences in [QuotaResetNotificationSettings(unexpected: true, natural: false), QuotaResetNotificationSettings()] {
+            var next = model.settings
+            next.accounts[0].quotaResetNotifications = preferences
+            try await model.persistConfiguration(next)
+            let saved: Settings = try await other.call("settings.get")
+            precondition(saved.accounts[0].quotaResetNotifications == preferences, "Account notification overrides must round-trip, including return to inheritance")
+            precondition(model.settingsDraft == saved)
+        }
+        print("Native notification defaults: real-core general autosave and draft synchronization passed")
+        print("Native account notification overrides: enable, disable and restore inheritance passed")
         print("Native source-level automatic opt-in and disable: real-core persistence and draft synchronization passed")
         print("Native production configuration actions: real-core concurrent fields merged, stale same-field edit rejected, committed settings preserved")
     }

@@ -254,7 +254,7 @@ struct SettingsView: View {
     }
     private var general: some View {
         HStack(alignment: .top, spacing: 12) {
-            SettingsSidebar(title: "常规设置分类", items: [("appearance", "外观"), ("desktop", "桌面显示"), ("network", "网络代理"), ("refresh", "刷新与历史"), ("updates", "更新")], selection: $model.generalPage)
+            SettingsSidebar(title: "常规设置分类", items: [("appearance", "外观"), ("desktop", "桌面显示"), ("network", "网络代理"), ("refresh", "刷新与历史"), ("notifications", "通知"), ("updates", "更新")], selection: $model.generalPage)
             GeometryReader { viewport in Form {
             if model.generalPage == "appearance" {
             Section("外观") {
@@ -316,6 +316,7 @@ struct SettingsView: View {
                 }
             }
             }
+            if model.generalPage == "notifications" { QuotaNotificationSettingsView(model: model, service: model.resetNotifications) }
             if model.generalPage == "updates" { Section("更新") { UpdateSettingsView() } }
             }.formStyle(.grouped).environment(\.petPreviewViewport, viewport.frame(in: .global)) }
         }.padding(.top, 12)

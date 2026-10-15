@@ -135,6 +135,7 @@ impl Default for Source {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Account {
+    pub quota_reset_notifications: crate::quota_notifications::Overrides,
     pub pending_name: bool,
     pub quota_refresh_seconds: Option<u64>,
     pub device_settings: Vec<AccountDeviceSettings>,
@@ -151,6 +152,7 @@ pub struct Account {
 impl Default for Account {
     fn default() -> Self {
         Self {
+            quota_reset_notifications: Default::default(),
             pending_name: false,
             quota_refresh_seconds: None,
             device_settings: vec![],
@@ -315,6 +317,7 @@ impl LocalMonitor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub quota_reset_notifications: crate::quota_notifications::Preferences,
     pub codex_apis: Vec<crate::codex_api::Connection>,
     #[serde(skip_deserializing)]
     pub configuration_issues: Vec<String>,
@@ -341,6 +344,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            quota_reset_notifications: Default::default(),
             codex_apis: vec![],
             configuration_issues: vec![],
             deleted_accounts: vec![],

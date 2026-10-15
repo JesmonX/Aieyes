@@ -461,7 +461,7 @@ import Combine
                 }
             }
             model.settingsAgent = "codex"; model.settingsTab = "general"
-            for page in ["appearance", "desktop", "network", "refresh", "updates"] {
+            for page in ["appearance", "desktop", "network", "refresh", "notifications", "updates"] {
                 model.generalPage = page
                 for dark in [false, true] {
                     try await capture(SettingsView(model: model), size: NSSize(width: 760, height: 600), dark: dark, to: root.appendingPathComponent("settings-general-\(page)-\(dark ? "dark" : "light").png"))

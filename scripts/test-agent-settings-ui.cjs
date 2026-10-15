@@ -167,6 +167,14 @@ function browserFixture(){
     await page.locator('[data-settings-agent=codex]').click();await page.waitForFunction(()=>!AieyesAgentSettings.statusBusy);assert.equal(await page.locator('#account-status-refresh').count(),0);assert.equal(await page.locator('[data-device-manage][data-intent="login"]').count(),1);assert.equal(await page.locator('[data-device-manage][data-intent="switch"]').count(),1);
     await page.locator('[data-settings-agent=claude]').click();await page.locator('[data-account-edit="'+connected.provider+':'+connected.id+'"]').click();await page.getByText('前置命令',{exact:true}).click();await page.locator('[data-command-field="server"]').fill('export ACCOUNT_FIXTURE=claude');await page.locator('[data-command-field="server"]').blur();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.deviceSettings?.some(d=>d.preCommand==='export ACCOUNT_FIXTURE=claude')));
     assert.equal((await rpc('settings.get')).accounts.find(a=>a.id===connected.id).deviceSettings[0].preCommand,'export ACCOUNT_FIXTURE=claude');
+    assert.equal(await page.locator('[data-account-reset=unexpected]').inputValue(),'inherit');
+    await page.locator('[data-account-reset=unexpected]').selectOption('off');
+    await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaResetNotifications?.unexpected===false));
+    await page.locator('[data-account-reset=natural]').selectOption('on');
+    await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaResetNotifications?.natural===true));
+    assert.deepEqual((await rpc('settings.get')).accounts.find(a=>a.id===connected.id).quotaResetNotifications,{unexpected:false,natural:true});
+    await page.locator('[data-account-reset=unexpected]').selectOption('inherit');
+    await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaResetNotifications?.unexpected===null&&a.quotaResetNotifications?.natural===true));
     await page.locator('#account-interval').fill('60');await page.locator('#account-interval').blur();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaRefreshSeconds===60));
     failSave=true;await page.locator('#account-name').fill('保留失败输入');await page.locator('#account-name').blur();await page.locator('[data-account-retry]').waitFor();assert.equal(await page.locator('#account-name').inputValue(),'保留失败输入');failSave=false;await page.locator('[data-account-retry]').click();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.name==='保留失败输入'));
     await page.locator('#account-interval').fill('4');await page.locator('#account-interval').blur();await page.getByText('查询间隔范围为 5–86400 秒',{exact:false}).first().waitFor();assert.equal((await rpc('settings.get')).accounts.find(a=>a.id===connected.id).quotaRefreshSeconds,60);
@@ -196,6 +204,19 @@ function browserFixture(){
     await page.locator('[data-auth="login"]').click();await page.locator('#editor-form button[type=submit]').click();await page.locator('[data-auth="cancelLogin"]').waitFor();authFailed=true;await page.getByText('模拟登录失败',{exact:false}).first().waitFor();assert.deepEqual((await rpc('settings.get')).accounts.map(a=>a.id),beforeCancelled);
     await page.locator('[data-auth="login"]').click();await page.locator('#editor-form button[type=submit]').click();await page.locator('[data-auth="cancelLogin"]').click();await page.locator('[data-auth="cancelLogin"]').waitFor({state:'detached'});assert.deepEqual((await rpc('settings.get')).accounts.map(a=>a.id),beforeCancelled);
     assert.equal(calls.filter(c=>c.method==='accounts.create').length,0);await page.locator('#accounts-back').click();
+    // Global notification preferences use the real configuration merge and survive navigation.
+    await page.evaluate(()=>{state.settingsTab='general';state.generalTab='notifications';renderSettings();});
+    assert.equal(await page.getByRole('checkbox',{name:'非预期重置时提醒',exact:true}).isChecked(),true);
+    assert.equal(await page.getByRole('checkbox',{name:'自然重置时也提醒',exact:true}).isChecked(),false);
+    await page.getByRole('checkbox',{name:'非预期重置时提醒',exact:true}).uncheck();
+    await page.waitForFunction(()=>state.settings.quotaResetNotifications?.unexpected===false&&!state.settingsCommitting);
+    await page.getByRole('checkbox',{name:'自然重置时也提醒',exact:true}).check();
+    await page.waitForFunction(()=>state.settings.quotaResetNotifications?.natural===true&&!state.settingsCommitting);
+    assert.deepEqual((await rpc('settings.get')).quotaResetNotifications,{unexpected:false,natural:true});
+    await page.locator('[data-general-page=appearance]').click();await page.locator('[data-general-page=notifications]').click();
+    assert.equal(await page.getByRole('checkbox',{name:'非预期重置时提醒',exact:true}).isChecked(),false);
+    assert.equal(await page.getByRole('checkbox',{name:'自然重置时也提醒',exact:true}).isChecked(),true);
+    await page.screenshot({path:path.join(out,'notifications.png'),fullPage:true});
     // Existing mappings are lazy, editable, and retain the editor on real-core conflicts.
     const mappingBase=await rpc('settings.get'),mappingNext=structuredClone(mappingBase);mappingNext.modelMappings={'fixture-old':'provider/old'};
     const mappingSaved=await rpc('settings.patch',{base:mappingBase,settings:mappingNext});

@@ -231,6 +231,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 }
 
 @MainActor final class AppModel: ObservableObject {
+    let resetNotifications = QuotaNotificationService()
     private let automaticEngine = EngineClient(configurationOnly: true)
     private var automaticTask: Task<Void, Never>?
     @Published var automaticSaving = false
@@ -626,6 +627,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let info: CoreInfo = try await engine.call("hello")
             if let hash = info.contractHash, hash != CoreContract.contractHash { throw ClientError.message("应用资源与核心版本不一致，请重新安装同一版本") }
             settings = try await engine.call("settings.get"); PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:]); settingsDraft = settings; settingsLoaded = true
+            resetNotifications.start()
             startSessionMonitoring()
             synchronizeAccountDeployments()
             selectedAccount = settings.accountAliases?[selectedAccount] ?? (selectedAccount.hasPrefix("agy:") ? "antigravity:" + selectedAccount.dropFirst(4) : selectedAccount)
@@ -1074,7 +1076,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func stop() {
         stopped = true; schedulingEnabled = false; timer?.invalidate(); timer = nil
         sessionTask?.cancel(); sessionTask = nil
-        automaticTask?.cancel(); automaticEngine.stop()
+        automaticTask?.cancel(); automaticEngine.stop(); resetNotifications.stop()
         filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
         deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel(); generalSaveTask?.cancel(); petLibraryTask?.cancel()
         for task in antigravityRefreshTasks.values { task.cancel() }

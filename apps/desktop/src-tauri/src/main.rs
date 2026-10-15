@@ -4,6 +4,7 @@ mod desktop;
 mod material;
 #[cfg(target_os = "windows")]
 mod native_pet;
+mod notifications;
 #[cfg(target_os = "windows")]
 mod passive_window;
 mod phase_colors;
@@ -306,6 +307,7 @@ fn main() {
     }
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let root = std::env::var_os("AIEYES_DATA_DIR")
@@ -333,6 +335,7 @@ fn main() {
                 Arc::new(Mutex::new(Engine::open(&root)?)),
             ));
             updates::setup(app.handle(), &root);
+            notifications::start(app.handle(), &root);
             desktop::setup(app, &root)?;
             let automatic_app = app.handle().clone();
             app.manage(aieyes_core::automatic::Background::start(
@@ -346,6 +349,8 @@ fn main() {
         .on_window_event(desktop::on_window_event)
         .invoke_handler(tauri::generate_handler![
             engine_call,
+            notifications::notifications_info,
+            notifications::notifications_test,
             select_local_path,
             check_local_path,
             updates::updates_info,
@@ -370,6 +375,9 @@ fn main() {
         .expect("Aieyes startup failed");
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
+            if let Some(state) = app.try_state::<notifications::Notifications>() {
+                state.stop();
+            }
             aieyes_core::process::terminate_query_children();
             desktop::save(app);
             #[cfg(target_os = "windows")]

@@ -50,7 +50,7 @@ pub(crate) fn completed(store: &Store, key: &str) -> Result<Option<String>> {
         )
         .optional()?)
 }
-fn fingerprint(settings: &Settings, account: &Account) -> Result<String> {
+pub(crate) fn fingerprint(settings: &Settings, account: &Account) -> Result<String> {
     let sources: Vec<_> = settings
         .sources
         .iter()
@@ -407,6 +407,8 @@ impl Engine {
                 }
                 for row in &rows {
                     self.store.quota(row)?;
+                    self.store
+                        .observe_quota_reset(row, &current, &final_signature)?;
                 }
                 self.store.db.execute("INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     rusqlite::params![format!("quota-result:{key}"), serde_json::to_string(&json!({"revision":crate::codex_auth::files::new_id(), "fingerprint":final_signature,"sourceId":params["sourceId"],"rows":rows}))?])?;

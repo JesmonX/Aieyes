@@ -111,6 +111,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "quotaEstimates.restart", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "quotaEstimates.start", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "quotaEstimates.stop", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "quotaResetNotifications.take", lane: Lane::Configuration, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "quotas.order.set", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "quotas.refresh", lane: Lane::Quotas, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: Some("quotas") },
     Method { name: "quotas.schedule", lane: Lane::Dashboard, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -173,7 +174,7 @@ pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
     &[120, 120, 120, 120, 120, 220],
     &[150, 150, 150, 150, 150, 280],
 ];
-pub const CONTRACT_HASH: &str = "724b06444e28be6cda113dd83eba2005ba4e2561d76648188ae262d7e2ba08f1";
+pub const CONTRACT_HASH: &str = "9e82c294fb33fc93a4ae6b9bdc70a812fc4c6c87e44f64dbc874290e54e99838";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

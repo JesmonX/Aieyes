@@ -464,6 +464,7 @@ function collectGeneralDraft(next,forms){
   for(const [formKey,{values,baseline}] of forms){
     const changed=key=>Object.hasOwn(values,key)&&values[key]!==baseline[key];
     const data=new FormData();for(const [key,value] of Object.entries(values))data.set(key,value);
+    for(const [field,key] of [['unexpectedResetNotification','unexpected'],['naturalResetNotification','natural']])if(changed(field))next.quotaResetNotifications={unexpected:true,natural:false,...next.quotaResetNotifications,[key]:data.get(field)==='true'};
     if(changed('historyShowDeletedAccounts'))next.historyShowDeletedAccounts=data.get('historyShowDeletedAccounts')==='true';
     for(const [field,key] of [['appearanceTheme','theme'],['appearanceAccent','accent'],['appearanceChartPalette','chartPalette'],['appearanceChartContrast','chartContrast']])if(changed(field))next.appearance={theme:'system',accent:'indigo',chartPalette:'classic',chartContrast:'high',...next.appearance,[key]:values[field]};
     if(Object.hasOwn(values,'appMode')&&Object.keys(values).some(key=>key.startsWith('app')&&changed(key)))next.proxy=proxyValue(data,'app');
@@ -905,7 +906,7 @@ function bindSettingsSidebar(attribute,onSelect) {
     button.onkeydown=event=>{const index=buttons.indexOf(button),next=event.key==='Home'?0:event.key==='End'?buttons.length-1:event.key==='ArrowDown'?(index+1)%buttons.length:event.key==='ArrowUp'?(index+buttons.length-1)%buttons.length:null;if(next==null)return;event.preventDefault();buttons[next].click();document.querySelector('['+attribute+'="'+CSS.escape(buttons[next].getAttribute(attribute))+'"]')?.focus();};
   }
 }
-const generalPages=[['appearance','外观'],['desktop','桌面显示'],['network','网络代理'],['refresh','刷新与历史'],['updates','更新']];
+const generalPages=[['appearance','外观'],['desktop','桌面显示'],['network','网络代理'],['refresh','刷新与历史'],['notifications','通知'],['updates','更新']];
 function generalSettingsHTML(s,tab=state.generalTab) {
   if(!generalPages.some(([key])=>key===tab)){tab='appearance';if(arguments.length<2)state.generalTab=tab;}
   let fields='',body='';
@@ -914,6 +915,10 @@ function generalSettingsHTML(s,tab=state.generalTab) {
   if(tab==='refresh'){
     fields=`<h2>刷新与历史</h2>${field('refreshSeconds','Agent 限额间隔（秒）',s.refreshSeconds,'','number')}${field('historyRefreshSeconds','Agent 记录间隔（秒）',s.historyRefreshSeconds??Math.max(10,s.refreshSeconds),'','number')}${field('serverForegroundRefreshSeconds','服务器前台间隔（秒）',s.serverForegroundRefreshSeconds??2,'','number')}${field('serverRefreshSeconds','服务器后台间隔（秒）',s.serverRefreshSeconds,'','number')}<h3>历史账户</h3><label><input id="field-historyShowDeletedAccounts" type="checkbox" name="historyShowDeletedAccounts" ${s.historyShowDeletedAccounts?'checked':''}>在筛选中显示已删除账户</label><p class="muted tiny">默认隐藏已删除账户；历史用量仍计入总统计。开启后仅显示有历史记录的已删除账户。</p>`;
     body=`<div class="card"><h2>历史记录 ${refreshIndicator('rescan')}</h2><p class="muted">手动从头读取所有已启用本机及服务器数据源的完整日志，修复可确认的历史重复。保留已有历史和价格快照；已丢失的日志无法恢复或核实。</p><button type="button" id="history-rescan">全量重扫</button><p id="history-rescan-status" role="status" aria-live="polite" hidden></p></div>`;
+  }
+  if(tab==='notifications'){
+    fields=`<h2>订阅额度重置提醒</h2><label><input type="checkbox" name="unexpectedResetNotification" ${(s.quotaResetNotifications?.unexpected??true)?'checked':''}>非预期重置时提醒</label><label><input type="checkbox" name="naturalResetNotification" ${s.quotaResetNotifications?.natural?'checked':''}>自然重置时也提醒</label><p class="muted tiny">账户可单独覆盖这些默认设置。额度一直满额时不提醒；仅在实时查询确认重置后通知。关闭窗口后仍会检测，退出应用或电脑休眠时暂停。</p>`;
+    body=window.AieyesNotifications?.settingsHTML()??'';
   }
   if(tab==='desktop')body=window.AieyesDesktop?.settingsHTML()??'';
   if(tab==='updates')body=window.AieyesUpdates?.settingsHTML()??'<div class="card"><p>正在读取更新信息…</p></div>';
@@ -940,7 +945,7 @@ function renderSettings(capture=true) {
     try{const response=await fetch('fonts/LICENSE.txt');if(!response.ok)throw new Error('字体许可读取失败');const license=await response.text();quotaDialog('HarmonyOS Sans 字体许可',`<pre class="font-license-text">${escapeHTML(license)}</pre>`);}
     catch(error){notify(String(error),'error');}
   };
-  bindSettingsDrafts();window.AieyesDesktop?.bindSettings();updateSettingsSaveBar();
+  bindSettingsDrafts();window.AieyesDesktop?.bindSettings();window.AieyesNotifications?.bind();updateSettingsSaveBar();
   updateChartPalettePreview();
   $('#general-form')?.addEventListener('change',updateChartPalettePreview);
   if(state.settingsTab==='wakeups')window.AieyesWakeups?.bind();
@@ -1340,42 +1345,22 @@ window.AieyesApp={
   applyHostSamples,
   openPanelAccounts,
 };
-// The panel refreshes on open and on manual action; periodic polling stays in the details window.
-const resetConfirmations=new Set();
-let refreshTimer,quotaScheduleRead=null,quotaScheduleRevision=0,quotaScheduleKnown=false,quotaDueAt=null,refreshStopped=false;
-function invalidateQuotaSchedule() {
-  quotaScheduleRevision++;quotaScheduleKnown=false;scheduleRefreshes();
-}
-async function readQuotaSchedule() {
-  if(quotaScheduleRead||PANEL||refreshStopped||!state.settings)return;
-  const revision=quotaScheduleRevision;
-  quotaScheduleRead=(async()=>{
-    try {
-      const schedule=await api('quotas.schedule');
-      if(revision===quotaScheduleRevision){quotaDueAt=Number.isFinite(schedule?.nextDueAt)?Math.max(Date.now()+1000,schedule.nextDueAt*1000):null;quotaScheduleKnown=true;}
-    }catch(_){if(revision===quotaScheduleRevision){quotaDueAt=Date.now()+30000;quotaScheduleKnown=true;}}
-  })();
-  try{await quotaScheduleRead;}finally{quotaScheduleRead=null;scheduleRefreshes();}
-}
+// Quota polling belongs to the native host, including while all webviews are hidden.
+let refreshTimer,refreshStopped=false;
+function invalidateQuotaSchedule() { scheduleRefreshes(); }
 function foregroundMetrics(){return (state.page==='servers'&&!document.hidden)||(state.panelOpen&&state.panelPage==='servers');}
 function metricsDeadline(){return state.lastMetrics+(foregroundMetrics()?(state.settings.serverForegroundRefreshSeconds??2):state.settings.serverRefreshSeconds)*1000;}
 function collectionBlocked(){return state.settingsCommitting||window.AieyesUpdates?.busy||$('#editor')?.open||state.estimateBusy||state.sharedEstimateOperations?.size||$('#quota-dialog')?.dataset.busy||state.busy||state.settingsSaving||['scan','rescan','prices'].some(key=>state.refreshState[key]?.busy);}
 function quotaCollectionBlocked(){return state.settingsCommitting||window.AieyesUpdates?.busy||state.quotaBusy||state.settingsSaving||state.refreshState.quotas?.busy;}
-function quotaResets(){return (state.dashboard?.quotas??[]).flatMap(q=>q.windows.map(w=>({q,w,key:q.provider+':'+q.accountId+':'+w.resetsAt}))).filter(({w,key})=>w.resetsAt&&!resetConfirmations.has(key));}
 function scheduleRefreshes() {
   clearTimeout(refreshTimer);
   if(PANEL||refreshStopped||!state.settings||window.AieyesUpdates?.busy)return;
   const now=Date.now();
   for(const key of ['lastScan','lastMetrics','lastQuota'])if(state[key]>now)state[key]=0;
-  if(!quotaScheduleKnown)void readQuotaSchedule();
   const deadlines=[];
   if(!state.serverBusy&&!state.refreshState.hosts?.busy&&monitoredHosts().some(h=>h.enabled))deadlines.push(metricsDeadline());
   if(!collectionBlocked()){
     deadlines.push(state.lastScan+(state.settings.historyRefreshSeconds??Math.max(10,state.settings.refreshSeconds))*1000);
-  }
-  if(!quotaCollectionBlocked()){
-    if(quotaScheduleKnown&&quotaDueAt!=null)deadlines.push(quotaDueAt);
-    deadlines.push(...quotaResets().map(({w})=>w.resetsAt*1000));
   }
   const next=Math.min(...deadlines.filter(Number.isFinite));
   if(Number.isFinite(next))refreshTimer=setTimeout(runScheduledRefreshes,Math.max(1,next-Date.now()));
@@ -1384,11 +1369,6 @@ function runScheduledRefreshes() {
   if(PANEL||refreshStopped||!state.settings||window.AieyesUpdates?.busy)return;
   if(!state.serverBusy&&!state.refreshState.hosts?.busy&&monitoredHosts().some(h=>h.enabled)&&Date.now()>=metricsDeadline())void sample();
   if(!collectionBlocked()&&Date.now()>=state.lastScan+(state.settings.historyRefreshSeconds??Math.max(10,state.settings.refreshSeconds))*1000)void scan();
-  if(!quotaCollectionBlocked()){
-    const expired=quotaResets().find(({w})=>w.resetsAt*1000<=Date.now());
-    if(expired){resetConfirmations.add(expired.key);void quotas(expired.q.accountId);}
-    else if(quotaScheduleKnown&&quotaDueAt!=null&&Date.now()>=quotaDueAt){quotaDueAt=null;void quotas(undefined,true);}
-  }
   scheduleRefreshes();
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)invalidateQuotaSchedule();else scheduleRefreshes();});
