@@ -105,3 +105,7 @@ OpenRouter 请求路径为 `/api/v1/models`；读取 `pricing.prompt`、`complet
 同一 home 可启用共享历史和独立账号额度。在「设置 → Agent 接入 → Codex」登录、关联和切换；详情与兼容要求见 [Codex 账号管理](codex-accounts.md)。
 
 Antigravity 身份元数据由 `scripts/agy_identity.py` 在登录机器上读取，订阅来自当前 CLI 使用的 `aicode.googleapis.com/v1:fetchLicenses`，与 `/usage` 的额度解析独立。身份绑定、错误降级和测试入口见 [刷新、监控与 Antigravity](refresh-monitoring-antigravity.md)。
+
+## 更多 Agent
+
+ZCode、Qoder、Grok、Cursor、OpenCode 的订阅类型、登录方式、计量单位和已验证范围见 [接入研究](agent-subscriptions.md)。五类均支持标准 JSONL；OpenCode 额外支持本机 SQLite v1/v2。

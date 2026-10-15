@@ -554,6 +554,9 @@ struct AccountConnectionView: View {
     @State private var provider = ""
     @State private var selection = Set<String>()
     @State private var apiKey = ""
+    @State private var useLocalLogin = false
+    @State private var subscriptionMode = ""
+    @State private var workspaceID = ""
     @State private var preparedKey: (key: String, path: String)?
     @State private var busy = false
     @State private var error: String?
@@ -565,7 +568,15 @@ struct AccountConnectionView: View {
             if provider == "codex" { CodexAccountsView(model: model, targetAccountID: account?.id, initialSourceID: initialSourceID, intent: intent, onBusyChanged: { busy = $0 }) }
             else {
                 Form {
-                    if provider == "deepseek" {
+                    if let modes = CoreContract.subscriptionModes[provider] {
+                        Text(CoreContract.subscriptionHints[provider] ?? "").foregroundStyle(.secondary)
+                        Button("打开官方登录 / 用量页") { Task { do { let _: [String: Bool] = try await model.engine.call("subscriptions.openLogin", params: ["provider": provider, "mode": subscriptionMode]) } catch { self.error = error.localizedDescription } } }
+                        Picker("订阅 / 地区", selection: $subscriptionMode) { ForEach(modes.keys.sorted(), id: \.self) { key in Text(modes[key] ?? key).tag(key) } }
+                        TextField("Workspace / Team ID（仅 Console 或 xAI API）", text: $workspaceID)
+                        SecureField("API Key / 登录令牌 / Cookie", text: $apiKey)
+                        if provider == "grok" || provider == "opencode" { Toggle("读取本机已登录凭据（仅 Grok 订阅 / OpenCode Go）", isOn: $useLocalLogin) }
+                        Text("验证成功后保存到系统凭据库；不会切换客户端账户。").foregroundStyle(.secondary)
+                    } else if provider == "deepseek" {
                         SecureField("API Key", text: $apiKey)
                         Text("Key 保存在本机，只用于查询账户余额。").foregroundStyle(.secondary)
                     } else {
@@ -580,17 +591,26 @@ struct AccountConnectionView: View {
                 }.formStyle(.grouped).disabled(busy)
             }
         }.frame(width: DesignTokens.dialogAccountWidth, height: 620).interactiveDismissDisabled(busy)
-        .updateDraftGuard("账户连接", snapshot: provider + draftSnapshot(selection.sorted()) + apiKey, dirty: !selection.isEmpty || !apiKey.isEmpty, saving: busy, save: { await save(); return error == nil }, discard: { dismiss() })
+        .updateDraftGuard("账户连接", snapshot: provider + draftSnapshot(selection.sorted()) + apiKey + subscriptionMode + workspaceID + String(useLocalLogin), dirty: !selection.isEmpty || !apiKey.isEmpty || useLocalLogin || !workspaceID.isEmpty, saving: busy, save: { await save(); return error == nil }, discard: { dismiss() })
         .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
         .onAppear { provider = account?.provider ?? initialProvider ?? (initialSourceID != nil ? "codex" : model.agentConfigurations.first(where: { $0.enabled })?.provider ?? "") }
-        .onChange(of: provider) { _, _ in selection = []; error = nil }
+        .onChange(of: provider) { _, _ in
+            selection = []; error = nil
+            let existing = model.settings.sources.first { $0.provider == provider && $0.accountId == account?.id && $0.subscription != nil }?.subscription
+            subscriptionMode = existing?.mode ?? (CoreContract.subscriptionModes[provider]?["global"] != nil ? "global" : provider == "grok" ? "subscription" : provider == "opencode" ? "go" : "session")
+            workspaceID = existing?.workspaceId ?? ""
+        }
     }
     private func save() async {
         busy = true; error = nil; defer { busy = false }
         do {
             let target = account?.id ?? ""
             let name = account?.name ?? Format.provider(provider) + " 账户"
-            if provider == "deepseek" {
+            if CoreContract.subscriptionModes[provider] != nil {
+                struct Result: Decodable { var settings: Settings }
+                let result: Result = try await model.engine.call("subscriptions.connect", params: ["provider": provider, "accountId": target, "name": name, "secret": apiKey, "useLocalLogin": useLocalLogin, "subscription": ["mode": subscriptionMode, "workspaceId": workspaceID]])
+                model.acceptConfiguration(result.settings)
+            } else if provider == "deepseek" {
                 guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ClientError.message("请输入 API Key") }
                 var next = model.settings
                 let id = target.isEmpty ? UUID().uuidString : target

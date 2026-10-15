@@ -20,6 +20,7 @@ pub mod metrics;
 pub mod models;
 pub mod monitoring;
 pub mod network;
+pub mod opencode;
 pub mod operations;
 pub mod pet_import;
 pub mod pets;
@@ -36,6 +37,7 @@ pub mod sessions;
 pub mod settings;
 pub mod ssh;
 pub mod store;
+pub mod subscriptions;
 pub mod update_transport;
 pub mod usage;
 mod usage_cache;
@@ -210,6 +212,8 @@ impl Engine {
             "autoEstimates.configure" => self.configure_automatic(params),
             "autoEstimates.tick" => self.tick_automatic(),
             "accounts.targets" => self.account_targets(&params),
+            "subscriptions.openLogin" => subscriptions::open_login(&params),
+            "subscriptions.connect" => self.connect_subscription(params),
             "accounts.create"
             | "accounts.status.get"
             | "accounts.status.refresh"
@@ -408,6 +412,7 @@ impl Engine {
                     .filter(|s| {
                         settings.source_enabled(s)
                             && s.provider != "deepseek"
+                            && s.subscription.is_none()
                             && params["sourceId"].as_str().is_none_or(|id| s.id == id)
                             && params["sourceIds"]
                                 .as_array()

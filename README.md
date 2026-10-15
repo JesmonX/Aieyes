@@ -34,6 +34,7 @@ open dist/Aieyes.app
 | Codex 限额、Bank Reset | 日志限额已验证；实时协议由本机 CLI 核对，联网读取待验证；Bank Reset 只读 |
 | Claude Code 限额 | 本机及远程 OAuth 读取、远程代理前置命令；联网读取待验证 |
 | Antigravity（agy CLI） | 本机及 SSH 会话 Token 采集、标准 JSONL 导入、模型组 5h/7d 限额与分组估值；旧 agy 数据自动迁移 |
+| ZCode / Qoder / Grok / Cursor / OpenCode | 新增订阅、余额与凭据连接；OpenCode 本机 SQLite 历史；协议与真实账户验证边界见 [接入研究](docs/agent-subscriptions.md) |
 | DeepSeek | 官方余额查询，显示币种、总额、赠送及充值余额；需配置 API Key |
 | OpenRouter 定价 | 缺失模型与维度清单、映射、手动补价、自动补计缺项、重算；联网同步待验证 |
 | Linux SSH 监控 | 可勾选挂载点及设备、13 项细分显示；独立并行采样、前台约 2 秒间隔；3 台实机验证通过 |

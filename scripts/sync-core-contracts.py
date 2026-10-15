@@ -76,6 +76,7 @@ pub fn provider(id: &str) -> Option<&'static Provider> {
 import subprocess
 rust = subprocess.run(['rustfmt','--edition','2024'], input=rust, encoding='utf-8', capture_output=True, check=True).stdout
 web = dict(providers={p['id']:p['name'] for p in providers}, wakeupProviders=[p['id'] for p in providers if p['wakeup']], defaultPaths={p['id']:p['defaultPath'] for p in providers}, binaries={p['id']:p['binary'] for p in providers}, windows=table['windows'], filesystems=table['filesystems'], methods={m['name']:{k:v for k,v in m.items() if k!='name'} for m in methods})
+web['subscriptions'] = {p['id']: p['subscription'] for p in providers if 'subscription' in p}
 web['contractHash'] = contract_hash
 web['petFrameDurations'] = pet_frames
 js = header + '(typeof window === "undefined" ? globalThis : window).AieyesContract = ' + json.dumps(web, ensure_ascii=False, indent=2) + ';\n'
@@ -86,6 +87,9 @@ swift += f'    static let providers = {array([p["id"] for p in providers])}\n'
 swift += f'    static let wakeupProviders = {array([p["id"] for p in providers if p["wakeup"]])}\n'
 for name, key in [('providerNames','name'),('defaultPaths','defaultPath'),('binaries','binary')]:
     swift += f'    static let {name}: [String: String] = [' + ', '.join(f'{q(p["id"])}: {q(p[key])}' for p in providers) + ']\n'
+for name, key in [('subscriptionHints', 'hint'), ('subscriptionLoginURLs', 'loginUrl')]:
+    swift += f'    static let {name}: [String: String] = [' + ', '.join(f'{q(p["id"])}: {q(p["subscription"][key])}' for p in providers if 'subscription' in p) + ']\n'
+swift += '    static let subscriptionModes: [String: [String: String]] = [' + ', '.join(q(p['id']) + ': [' + ', '.join(q(k) + ': ' + q(v) for k, v in p['subscription']['modes'].items()) + ']' for p in providers if 'subscription' in p) + ']\n'
 swift += f'    static let fiveHourMinutes = {table["windows"]["fiveHour"]}\n    static let weekMinutes = {table["windows"]["week"]}\n'
 swift += f'    static let excludedFilesystemTypes: Set<String> = {array(table["filesystems"]["excludedTypes"])}\n    static let excludedFilesystemPaths = {array(table["filesystems"]["excludedPaths"])}\n'
 swift += '    static let petFrameDurations: [[Int]] = ' + json.dumps(pet_frames) + '\n'
