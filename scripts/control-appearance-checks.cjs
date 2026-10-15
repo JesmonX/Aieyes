@@ -54,13 +54,22 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           }
           const surfaces=await page.evaluate(()=>({card:getComputedStyle(document.querySelector('#general-form')).backgroundColor,
             panel:getComputedStyle(document.documentElement).getPropertyValue('--panel').trim(),
-            sidebar:getComputedStyle(document.querySelector('.settings-sidebar')).backgroundColor}));
+            sidebar:getComputedStyle(document.querySelector('aside > nav')).backgroundColor}));
           assert.equal(alpha(surfaces.sidebar),0,'settings navigation shares the window backdrop');
           assert.equal(alpha(surfaces.card)<1,material!=='opaque','settings cards follow the material of their own window');
           if(material!=='opaque')assert.deepEqual(surfaces.card.match(/[\d.]+/g).map(Number),surfaces.panel.match(/[\d.]+/g).map(Number),'settings and floating cards share a surface');
           await capture(`appearance-${theme}-${material}`);
           if(material!=='opaque')continue;
           await page.setViewportSize({width:640,height:440});
+          const minimum=await page.locator('[data-general-section=appearance] .form-row').evaluateAll(rows=>rows.map(row=>({
+            row:row.getBoundingClientRect().toJSON(),label:row.querySelector('label').getBoundingClientRect().toJSON(),select:row.querySelector('select').getBoundingClientRect().toJSON()})));
+          for(const {row,label,select} of minimum) {
+            assert(select.y>=label.bottom||select.x>=label.right,'minimum-window choices do not overlap labels');
+            assert(select.x>=row.x&&select.right<=row.right,'minimum-window choices fit their form');
+          }
+          // The unified sidebar leaves more form width. Exercise the narrow
+          // container breakpoint independently from the overall window width.
+          await page.locator('.settings-subpage').evaluate(el=>el.style.maxWidth='400px');
           const narrow=await page.locator('[data-general-section=appearance] .form-row').evaluateAll(rows=>rows.map(row=>({
             row:row.getBoundingClientRect().toJSON(),label:row.querySelector('label').getBoundingClientRect().toJSON(),select:row.querySelector('select').getBoundingClientRect().toJSON()})));
           for(const {row,label,select} of narrow) {
@@ -69,6 +78,7 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           }
           assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'settings do not overflow the minimum window');
           await capture(`appearance-${theme}-minimum`);
+          await page.locator('.settings-subpage').evaluate(el=>el.style.maxWidth='');
         }
         await page.setViewportSize({width:1294,height:840});
         await page.evaluate(()=>{__setDesktopMaterials('opaque','opaque');state.settingsTab='integrations';renderSettings(false);window.scrollTo(0,0);});

@@ -54,6 +54,20 @@ enum Palette {
         }
         return adaptive(pair.0, pair.1)
     }
+    static func category(_ key: String) -> Color {
+        switch key {
+        case "codex": return adaptive(DesignTokens.categoryCodexLight, DesignTokens.categoryCodexDark)
+        case "claude": return adaptive(DesignTokens.categoryClaudeLight, DesignTokens.categoryClaudeDark)
+        case "antigravity": return adaptive(DesignTokens.categoryAntigravityLight, DesignTokens.categoryAntigravityDark)
+        case "deepseek": return adaptive(DesignTokens.categoryDeepseekLight, DesignTokens.categoryDeepseekDark)
+        case "cpu": return adaptive(DesignTokens.categoryCpuLight, DesignTokens.categoryCpuDark)
+        case "memory": return adaptive(DesignTokens.categoryMemoryLight, DesignTokens.categoryMemoryDark)
+        case "gpu": return adaptive(DesignTokens.categoryGpuLight, DesignTokens.categoryGpuDark)
+        case "storage": return adaptive(DesignTokens.categoryStorageLight, DesignTokens.categoryStorageDark)
+        case "network": return adaptive(DesignTokens.categoryNetworkLight, DesignTokens.categoryNetworkDark)
+        default: return accent
+        }
+    }
     static var balanceBlue: Color { accent }
     static let ok = adaptive(DesignTokens.okLight, DesignTokens.okDark)
     static let warn = adaptive(DesignTokens.warnLight, DesignTokens.warnDark)

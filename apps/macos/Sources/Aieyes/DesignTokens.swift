@@ -51,7 +51,7 @@ enum DesignTokens {
     static let statPadding: CGFloat = 14
     static let tokenCardPadding: CGFloat = 12
     static let radiusCard: CGFloat = 16
-    static let radiusControl: CGFloat = 6
+    static let radiusControl: CGFloat = 8
     static let radiusAccountSwitch: CGFloat = 8
     static let radiusOverlay: CGFloat = 12
     static let radiusBadge: CGFloat = 999
@@ -99,8 +99,8 @@ enum DesignTokens {
     static let dialogWakeupWidth: CGFloat = 550
     static let dialogHooksWidth: CGFloat = 580
     static let dialogAgyWidth: CGFloat = 540
-    static let cardBorderOpacity: Double = 0.22
-    static let panelCardOpacity: Double = 0.35
+    static let cardBorderOpacity: Double = 0.3
+    static let panelCardOpacity: Double = 0.46
     static let progressTrackOpacity: Double = 0.07
     static let chartGridOpacity: Double = 0.06
     static let modelChartInnerRatio: Double = 0.72
@@ -132,6 +132,15 @@ enum DesignTokens {
     static let surfaceStrongLight: UInt32 = 0xe9e9eb
     static let solidLight: UInt32 = 0xf7f7f8
     static let segmentSelectedLight: UInt32 = 0xceced0
+    static let categoryCodexLight: UInt32 = 0x256b91
+    static let categoryClaudeLight: UInt32 = 0xa35631
+    static let categoryAntigravityLight: UInt32 = 0x7953ba
+    static let categoryDeepseekLight: UInt32 = 0x385bc5
+    static let categoryCpuLight: UInt32 = 0x226dad
+    static let categoryMemoryLight: UInt32 = 0x297b68
+    static let categoryGpuLight: UInt32 = 0x8455b2
+    static let categoryStorageLight: UInt32 = 0x926314
+    static let categoryNetworkLight: UInt32 = 0x326d83
     static let inkDark: UInt32 = 0xefeff2
     static let mutedDark: UInt32 = 0xb6b6c0
     static let faintDark: UInt32 = 0xa4a4ae
@@ -151,4 +160,13 @@ enum DesignTokens {
     static let surfaceStrongDark: UInt32 = 0x414147
     static let solidDark: UInt32 = 0x29292e
     static let segmentSelectedDark: UInt32 = 0x63636b
+    static let categoryCodexDark: UInt32 = 0x77c4ea
+    static let categoryClaudeDark: UInt32 = 0xf2b18e
+    static let categoryAntigravityDark: UInt32 = 0xcaadfa
+    static let categoryDeepseekDark: UInt32 = 0xa0b7ff
+    static let categoryCpuDark: UInt32 = 0x87bef3
+    static let categoryMemoryDark: UInt32 = 0x83d3bc
+    static let categoryGpuDark: UInt32 = 0xc7a3ee
+    static let categoryStorageDark: UInt32 = 0xe7bf77
+    static let categoryNetworkDark: UInt32 = 0x84c6dd
 }

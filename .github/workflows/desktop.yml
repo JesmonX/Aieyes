@@ -64,6 +64,7 @@ jobs:
             .local/pets/*.png
             .local/windows-ui-sync/browser/*
             .local/windows-ui-sync/interactions/*.png
+            .local/ui-redesign-*/web/*.png
           include-hidden-files: true
           if-no-files-found: ignore
       - name: Windows account switching tests

@@ -1111,6 +1111,13 @@ pub fn desktop_action(app: AppHandle, action: String) -> Result<(), String> {
 }
 #[tauri::command]
 pub fn desktop_detail(app: AppHandle, view: Value) -> Result<(), String> {
+    let filter = detail_view(&view)?;
+    show_main(&app, filter["page"].as_str().unwrap_or("agent"))?;
+    app.emit_to("main", "desktop:detail-view", filter)
+        .map_err(|e| e.to_string())
+}
+
+fn detail_view(view: &Value) -> Result<Value, String> {
     let mut filter = serde_json::Map::new();
     for key in ["provider", "sourceId", "accountKey", "model"] {
         if let Some(value) = view[key].as_str() {
@@ -1119,32 +1126,33 @@ pub fn desktop_detail(app: AppHandle, view: Value) -> Result<(), String> {
     }
     filter.insert(
         "page".into(),
-        json!(if view["page"] == "servers" {
-            "servers"
-        } else {
-            "agent"
+        json!(match view["page"].as_str() {
+            Some("analysis") => "analysis",
+            Some("servers") => "servers",
+            _ => "agent",
         }),
     );
-    filter.insert(
-        "days".into(),
-        json!(
-            view["days"]
-                .as_u64()
-                .filter(|n| [1, 7, 30, 90, 365].contains(n))
-                .unwrap_or(1)
-        ),
-    );
-    filter.insert(
-        "cost".into(),
-        json!(view["cost"].as_bool().unwrap_or(false)),
-    );
-    let range: Option<aieyes_core::models::DateRange> =
-        serde_json::from_value(view["dateRange"].clone()).map_err(|_| "日期范围无效")?;
-    filter.insert("dateRange".into(), json!(range));
-    show_main(&app, "agent")?;
-    app.emit_to("main", "desktop:detail-view", filter)
-        .map_err(|e| e.to_string())
+    if let Some(days) = view["days"].as_u64() {
+        filter.insert(
+            "days".into(),
+            json!(if [1, 7, 30, 90, 365].contains(&days) {
+                days
+            } else {
+                1
+            }),
+        );
+    }
+    if let Some(cost) = view["cost"].as_bool() {
+        filter.insert("cost".into(), json!(cost));
+    }
+    if let Some(value) = view.get("dateRange") {
+        let range: Option<aieyes_core::models::DateRange> =
+            serde_json::from_value(value.clone()).map_err(|_| "日期范围无效")?;
+        filter.insert("dateRange".into(), json!(range));
+    }
+    Ok(Value::Object(filter))
 }
+
 pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
     match action {
         value if value.starts_with("edit-account:") => show_main(app, value),
@@ -1725,6 +1733,25 @@ fn icon(phase: Option<Phase>, dark: bool) -> tauri::image::Image<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detail_context_preserves_destination_and_optional_filters() {
+        assert_eq!(
+            detail_view(&json!({"page":"analysis", "provider":"codex", "accountKey":"codex:a"}))
+                .unwrap(),
+            json!({"page":"analysis", "provider":"codex", "accountKey":"codex:a"})
+        );
+        assert_eq!(
+            detail_view(&json!({"page":"servers"})).unwrap(),
+            json!({"page":"servers"})
+        );
+        assert_eq!(
+            detail_view(&json!({"page":"agent", "days":30, "cost":true, "dateRange":null}))
+                .unwrap(),
+            json!({"page":"agent", "days":30, "cost":true, "dateRange":null})
+        );
+        assert!(detail_view(&json!({"dateRange":{"kind":"invalid"}})).is_err());
+    }
+
     #[test]
     fn panel_requests_resolve_at_execution_and_ignore_stale_rebuilds() {
         assert_eq!(

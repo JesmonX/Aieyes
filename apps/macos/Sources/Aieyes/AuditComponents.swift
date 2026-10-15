@@ -47,7 +47,7 @@ struct QuotaResetLabel: View {
     var window: QuotaWindow
     var body: some View {
         SurfaceTimeline(interval: 30) { context in
-            Text(Format.quotaReset(window, now: context.date)).font(AppFont.secondary).foregroundStyle(.secondary)
+            Text(Format.quotaReset(window, now: context.date)).font(AppFont.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
         }
     }

@@ -40,10 +40,11 @@ function fixture(){
    const agy=page.locator('[data-quota="antigravity:a"]:visible');await agy.waitFor({state:'visible'});
    assert.equal(await agy.locator('.agy-group').count(),3);
    if(surface==='floating.html'){
-     assert.equal(await agy.locator('.resource-bar:visible').count(),2,'Multiple panel accounts default to key windows');
-     assert.equal(await agy.locator('.quota-reset:visible').count(),0);
+     assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Collapsed AGY accounts retain all model groups');
+     assert.equal(await agy.locator('.quota-reset:visible').count(),6);
      await agy.locator('.quota-title').click();
    }
+   if(!await agy.locator('.quota-disclosure').evaluate(el=>el.open))await agy.locator('.quota-title').click();
    assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Expanded accounts show all model groups');
    assert.equal(await agy.locator('.quota-reset:visible').count(),6);
    const codex=page.locator('[data-quota="codex:c"]:visible');
@@ -99,19 +100,19 @@ function fixture(){
      try {
        Date.now=()=>now*1000;
        q.windows=[{name:'5h',usedPercent:0,windowMinutes:300,resetsAt:now+7200},{name:'7d',usedPercent:20,windowMinutes:10080,resetsAt:now+172800}];
-       const snapshot=JSON.stringify(q.windows);renderAgent();const initial=nodes().map(n=>n.textContent);
+       const snapshot=JSON.stringify(q.windows);renderOverview();const initial=nodes().map(n=>n.textContent);
        Date.now=()=>(now+3600)*1000;quotaTimers.find(t=>t.ms===30000).fn();const later=nodes().map(n=>n.textContent);
        const unchanged=JSON.stringify(q.windows)===snapshot;
-       q.windows[0].usedPercent=0.001;renderAgent();const activated=nodes()[0].textContent;
-       q.windows[0].usedPercent=0;q.windows[1].usedPercent=0;renderAgent();const full=nodes().map(n=>n.textContent);
-       q.windows[0].usedPercent=null;renderAgent();quotaTimers.find(t=>t.ms===30000).fn();const missing=nodes()[0].textContent;
+       q.windows[0].usedPercent=0.001;renderOverview();const activated=nodes()[0].textContent;
+       q.windows[0].usedPercent=0;q.windows[1].usedPercent=0;renderOverview();const full=nodes().map(n=>n.textContent);
+       q.windows[0].usedPercent=null;renderOverview();quotaTimers.find(t=>t.ms===30000).fn();const missing=nodes()[0].textContent;
        Date.now=()=>(now+7200)*1000;quotaTimers.find(t=>t.ms===30000).fn();const expired=nodes()[0].textContent;
-       q.windows[0].resetsAt=null;renderAgent();const unknown=nodes()[0].textContent;quotaTimers.find(t=>t.ms===30000).fn();const unknownLater=nodes()[0].textContent;
-       q.windows[0].usedPercent=0;q.windows[1].resetsAt=null;renderAgent();const fullUnknown=nodes().map(n=>n.textContent);
+       q.windows[0].resetsAt=null;renderOverview();const unknown=nodes()[0].textContent;quotaTimers.find(t=>t.ms===30000).fn();const unknownLater=nodes()[0].textContent;
+       q.windows[0].usedPercent=0;q.windows[1].resetsAt=null;renderOverview();const fullUnknown=nodes().map(n=>n.textContent);
        quotaTimers.find(t=>t.ms===30000).fn();const fullUnknownLater=nodes().map(n=>n.textContent);
-       q.windows[0].resetsAt=now+9000;renderAgent();const refreshed=nodes()[0].textContent;
+       q.windows[0].resetsAt=now+9000;renderOverview();const refreshed=nodes()[0].textContent;
        return {initial,later,unchanged,activated,full,missing,expired,unknown,unknownLater,fullUnknown,fullUnknownLater,refreshed};
-     } finally {Date.now=clock;q.windows=saved;renderAgent();}
+     } finally {Date.now=clock;q.windows=saved;renderOverview();}
    });
    assert.match(fullWindowCheck.initial[0],/^2 小时后重置 · /);assert.match(fullWindowCheck.initial[1],/^2 天后重置 · /);
    assert.match(fullWindowCheck.later[0],/^1 小时后重置 · /);assert.equal(fullWindowCheck.initial[0].split(' · ')[1],fullWindowCheck.later[0].split(' · ')[1]);
@@ -124,7 +125,7 @@ function fixture(){
      const holder=document.createElement('div');holder.innerHTML=['codex','claude','antigravity','agy','deepseek','custom'].map(provider=>providerMark(AieyesUI.canonicalProvider(provider))).join('');document.body.append(holder);
      try { await Promise.all([...holder.querySelectorAll('img')].map(img=>img.decode()));return {images:holder.querySelectorAll('img').length,fallback:holder.querySelectorAll('svg').length}; } finally {holder.remove();}
    });assert.deepEqual(icons,{images:5,fallback:1});
-   await agy.locator('.quota-title').click();assert.equal(await agy.locator('.quota-reset:visible').count(),0,'Collapsed accounts hide reset details');assert.equal(await agy.locator('.resource-bar:visible').count(),2,'Collapsed accounts retain two key windows');await agy.locator('.quota-title').click();assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Expanding restores all model groups');
+   await agy.locator('.quota-title').click();assert.equal(await agy.locator('.quota-reset:visible').count(),6,'Collapsed accounts retain reset summaries');assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Collapsed AGY accounts retain all model windows');await agy.locator('.quota-title').click();assert.equal(await agy.locator('.resource-bar:visible').count(),6,'Expanding restores all model groups');
    await page.locator('#order-quotas').click();await page.locator('[data-order="antigravity:a"] [data-direction="-1"]').click();
    // Button reordering animates both rows. Native drag computes its target
    // before dragstart cancels those animations, so wait for stable positions.
@@ -168,6 +169,7 @@ function fixture(){
    await page.locator('#quota-close').click();
    if(surface==='index.html'){
      await page.evaluate(()=>{state.page='settings';state.settingsTab='sources';render();});
+     await page.locator('#agent-section-machines > summary').click();
      const automatic=page.locator('[data-auto-machine-status="local"][data-auto-provider="codex"]');
      assert.match(await automatic.textContent(),/已开启 1\/1/,'Machine rows expose valuation status');
      assert.equal(await page.locator('[data-machine-estimates]').count(),0,'No per-machine settings button');
@@ -176,12 +178,12 @@ function fixture(){
      await page.locator('#directories-back').click();
      await page.locator('[data-settings-agent=claude]').click();
      assert.match(await page.locator('[data-auto-machine-status="local"][data-auto-provider="claude"]').textContent(),/未配置目录/);
-     await page.locator('[data-agent-estimates="claude"]').click();
+     await page.locator('#agent-section-valuation > summary').click();await page.locator('[data-agent-estimates="claude"]').click();
      assert.match(await page.locator('#quota-dialog').innerText(),/自动估值5h\/7d限额的价值/);
      assert(!await page.locator('#quota-dialog').innerText().then(text=>text.includes('credits')));
      await page.locator('#quota-close').click();
      await page.screenshot({path:path.join(output,'source-automatic-settings.png'),fullPage:true});
-     await page.locator('[data-settings-agent=codex]').click();await page.locator('[data-agent-estimates="codex"]').click();
+     await page.locator('[data-settings-agent=codex]').click();await page.locator('#agent-section-valuation > summary').click();await page.locator('[data-agent-estimates="codex"]').click();
    }else await page.evaluate(()=>openProviderEstimates('codex'));
    await page.locator('[data-auto-save="c"]').click();
    await page.waitForFunction(()=>!state.settings.sources.find(s=>s.id==='c').autoValuation?.enabled&&!document.querySelector('#quota-dialog').dataset.busy);

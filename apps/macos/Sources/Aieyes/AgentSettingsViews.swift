@@ -7,8 +7,24 @@ struct AgentDirectorySelection: Identifiable {
 struct AgentsSettingsView: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            SettingsSidebar(title: "选择 Agent", items: model.agentConfigurations.map { ($0.provider, Format.provider($0.provider)) }, selection: $model.settingsAgent)
+        VStack(alignment: .leading, spacing: 12) {
+            ScrollViewReader { reader in
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ForEach(model.agentConfigurations) { agent in
+                            let selected = model.settingsAgent == agent.provider
+                            Button { model.settingsAgent = agent.provider } label: {
+                                Text(Format.provider(agent.provider)).font(AppFont.secondary)
+                                    .padding(.horizontal, 12).padding(.vertical, 8)
+                                    .foregroundStyle(selected ? Palette.category(agent.provider) : Color.secondary)
+                                    .background(selected ? Palette.category(agent.provider).opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
+                            }.buttonStyle(.plain).id(agent.provider).accessibilityAddTraits(selected ? .isSelected : [])
+                        }
+                    }
+                }.scrollIndicators(.hidden).frame(height: 38)
+                    .onAppear { reader.scrollTo(model.settingsAgent, anchor: .center) }
+                    .onChange(of: model.settingsAgent) { _, provider in reader.scrollTo(provider, anchor: .center) }
+            }
             AccountsSettingsView(model: model, provider: model.settingsAgent) { model.requestedAccountKey = $0.key }
                 .id(model.settingsAgent)
         }.padding(.top, 12)
@@ -213,18 +229,30 @@ struct AccountsSettingsView: View {
                             Toggle("启用 " + Format.provider(provider), isOn: Binding(get: { agent.enabled }, set: { value in Task { await model.configureAgent(provider, enabled: value, machines: value && agent.machineIds.isEmpty ? ["local"] : nil) } })).labelsHidden().toggleStyle(.switch).fixedSize()
                         }
                         if provider == "deepseek" { Text("添加 API Key，通过本机查询账户余额。").font(AppFont.secondary).foregroundStyle(.secondary) }
-                        else { Button("估值与采样") { showingValuation = true } }
                     }
                 }
-                if let provider, let agent = visibleAgents.first(where: { $0.provider == provider }), provider != "deepseek" { AgentMachinesSection(model: model, agent: agent) }
-                if let message = model.deploymentSyncMessage { HStack { Text(message); Button("重试同步") { model.synchronizeAccountDeployments() } } }
-                ForEach(visibleAgents) { agent in agentSection(agent) }
-                if provider == nil || provider == "codex" { CodexAPISettingsSection(model: model) }
-                archivedSection
-                cleanupSection
+                PersistentSection(key: sectionKey("accounts"), title: "账户", detail: "\(model.settings.accounts.filter { $0.archived != true && (provider == nil || $0.provider == provider) }.count) 个账户", tint: Palette.category(provider ?? "custom")) {
+                    if let message = model.deploymentSyncMessage { HStack { Text(message); Button("重试同步") { model.synchronizeAccountDeployments() } } }
+                    ForEach(visibleAgents) { agent in agentSection(agent) }
+                    archivedSection
+                    cleanupSection
+                }.id("accounts").background(ScrollMemory(key: "settings.agent." + (provider ?? "all")))
+                PersistentSection(key: sectionKey("api"), title: "API 连接", initiallyExpanded: false) {
+                    if provider == nil || provider == "codex" { CodexAPISettingsSection(model: model) }
+                    else { Text("此 Agent 的连接凭证在账户设置中管理。").font(AppFont.secondary).foregroundStyle(.secondary) }
+                }.id("api")
+                PersistentSection(key: sectionKey("machines"), title: "机器与目录", detail: "配置采集位置", initiallyExpanded: false) {
+                    if let provider, let agent = visibleAgents.first(where: { $0.provider == provider }), provider != "deepseek" { AgentMachinesSection(model: model, agent: agent) }
+                    else { Text("通过本机直接查询余额，无需日志目录。").font(AppFont.secondary).foregroundStyle(.secondary) }
+                }.id("machines")
+                PersistentSection(key: sectionKey("valuation"), title: "估值与采样", initiallyExpanded: false) {
+                    Text("按来源管理自动估值，查看采样状态和已有记录。").font(AppFont.secondary).foregroundStyle(.secondary)
+                    if provider != "deepseek" { Button("管理估值与采样") { showingValuation = true } }
+                    else { Text("余额由 API 直接提供，无需额度估值。").font(AppFont.secondary).foregroundStyle(.secondary) }
+                }.id("valuation")
             }.formStyle(.grouped)
-            .onAppear { if let section = model.settingsSection { reader.scrollTo(section, anchor: .top) } }
-            .onChange(of: model.settingsSection) { _, section in if let section { reader.scrollTo(section, anchor: .top) } }
+            .onAppear { if let section = model.settingsSection { UserDefaults.standard.set(true, forKey: sectionKey(section)); reader.scrollTo(section, anchor: .top) } }
+            .onChange(of: model.settingsSection) { _, section in if let section { UserDefaults.standard.set(true, forKey: sectionKey(section)); reader.scrollTo(section, anchor: .top) } }
         }
         .sheet(isPresented: $showingValuation) { if let provider { AgentValuationView(model: model, provider: provider) } }
         .task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? []; await model.loadAccountStatuses(refresh: true) }
@@ -234,6 +262,7 @@ struct AccountsSettingsView: View {
         .sheet(item: $sourceToManage, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { source in AccountConnectionView(model: model, initialSourceID: source.id, intent: authIntent) }
         .sheet(item: $deleting, onDismiss: { Task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? [] } }) { account in DeleteArchivedAccountView(model: model, account: account) }
     }
+    private func sectionKey(_ section: String) -> String { "settings.section." + (provider ?? "all") + "." + section }
     private func agentSection(_ agent: AgentConfiguration) -> some View {
         let accounts = model.settings.accounts.filter { $0.provider == agent.provider && $0.archived != true }
         return Section {

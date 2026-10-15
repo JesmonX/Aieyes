@@ -476,6 +476,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var dashboard = Dashboard()
     @Published private(set) var menuDashboard = Dashboard()
     @Published private(set) var panelDashboard = Dashboard()
+    @Published private(set) var overviewDashboard = Dashboard()
+    @Published var panelFilters = DashboardFilterPreference()
+    @Published var overviewFilters = DashboardFilterPreference()
     @Published private(set) var refreshStates: [String: RefreshStatus] = [:]
     @Published private(set) var actionFailures: [ActionFailure] = []
     @Published private(set) var fallbackModelOptions: [String] = []
@@ -534,7 +537,38 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private var filterPersistenceEnabled = false
     private func persistDashboardFilters() {
         guard filterPersistenceEnabled else { return }
-        DashboardFilterPreference(provider: provider, source: selectedSource, account: selectedAccount, model: selectedModel, days: range, dateRange: dateRange).save()
+        analysisFilters.save(scope: "analysis")
+    }
+    var analysisFilters: DashboardFilterPreference { DashboardFilterPreference(provider: provider, source: selectedSource, account: selectedAccount, model: selectedModel, days: range, dateRange: dateRange) }
+    func filters(for scope: String) -> DashboardFilterPreference { scope == "panel" ? panelFilters : scope == "overview" ? overviewFilters : analysisFilters }
+    func updateFilters(_ value: DashboardFilterPreference, scope: String, resetDependents: Bool = true) {
+        var next = value
+        let previous = filters(for: scope)
+        if resetDependents && previous.provider != next.provider { next.account = "all"; next.source = "all"; next.model = "all" }
+        else if resetDependents && previous.account != next.account { next.source = "all" }
+        guard next != previous else { return }
+        switch scope {
+        case "panel": panelFilters = next
+        case "overview": overviewFilters = next
+        default: provider = next.provider; selectedAccount = next.account; selectedSource = next.source; selectedModel = next.model; range = next.days; dateRange = next.dateRange
+        }
+        if filterPersistenceEnabled { next.save(scope: scope) }
+        requestDashboardReload()
+    }
+    func openAnalysis(from scope: String, account: String? = nil, provider: String? = nil) {
+        let source = filters(for: scope)
+        var next = analysisFilters
+        next.provider = provider ?? source.provider; next.account = account ?? source.account
+        next.source = "all"; next.model = "all"
+        updateFilters(next, scope: "analysis", resetDependents: false)
+        showDetailPage?("analysis")
+    }
+    func reconcileDashboardFilters() {
+        for scope in ["panel", "overview", "analysis"] {
+            var next = filters(for: scope)
+            next.reconcile(settings: settings)
+            updateFilters(next, scope: scope, resetDependents: false)
+        }
     }
     @Published var busy = false { didSet { scheduleRefreshes() } }
     @Published private(set) var rescanning = false
@@ -614,7 +648,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 
     init(autostart: Bool = true) {
         guard autostart else { return }
-        let saved = DashboardFilterPreference.read()
+        panelFilters = DashboardFilterPreference.read(scope: "panel"); overviewFilters = DashboardFilterPreference.read(scope: "overview")
+        let saved = DashboardFilterPreference.read(scope: "analysis")
         provider = saved.provider; selectedSource = saved.source; selectedAccount = saved.account; selectedModel = saved.model; range = saved.days; dateRange = saved.dateRange
         filterPersistenceEnabled = true
         schedulingEnabled = true
@@ -630,9 +665,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             resetNotifications.start()
             startSessionMonitoring()
             synchronizeAccountDeployments()
-            selectedAccount = settings.accountAliases?[selectedAccount] ?? (selectedAccount.hasPrefix("agy:") ? "antigravity:" + selectedAccount.dropFirst(4) : selectedAccount)
-            if selectedAccount != "all" && selectedAccount != "none" && !settings.filterAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
-            if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
+            reconcileDashboardFilters()
             Task { await loadAccountStatuses(refresh: true, provider: "codex") }
             await reload(); await scan(); await refreshQuotas()
         }
@@ -667,25 +700,22 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private func reloadOnce(request: Int) async -> Bool {
         dashboardPending = true; dashboardError = nil
         let scope = [rangeTitle, provider == "all" ? "全部 Agent" : Format.provider(provider), settings.historicalAccounts.first { $0.key == selectedAccount }.map { settings.accountFilterName($0) } ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
-        var params: [String: Any] = ["days":range]
-        if let dateRange { params["dateRange"] = dateRange.parameters }
-        if provider != "all" { params["provider"] = provider }
-        if selectedAccount == "none" { params["accountId"] = "" }
-        else if let account = settings.historicalAccounts.first(where: { $0.key == selectedAccount }) { params["accountId"] = account.id; params["provider"] = account.provider }
-        if selectedSource != "all" { params["sourceId"] = selectedSource }
-        if selectedModel != "all" { params["model"] = selectedModel }
-        let unfilteredSelected = params.count == 1 && range == 1
+        let analysis = analysisFilters, panelFilter = panelFilters, overviewFilter = overviewFilters
+        let params = analysis.parameters(settings: settings)
+        let unfilteredSelected = analysis == DashboardFilterPreference()
         let allModelsSelected = selectedModel == "all"
         do {
             let next: Dashboard = try await engine.call("dashboard", params: params)
             guard request == dashboardRequest else { return true }
-            let panel = next
+            let panel: Dashboard = panelFilter == analysis ? next : try await engine.call("dashboard", params: panelFilter.parameters(settings: settings))
+            guard request == dashboardRequest else { return true }
+            let overview: Dashboard = overviewFilter == analysis ? next : overviewFilter == panelFilter ? panel : try await engine.call("dashboard", params: overviewFilter.parameters(settings: settings))
             guard request == dashboardRequest else { return true }
             let unfiltered: Dashboard = unfilteredSelected ? next : try await engine.call("dashboard.summary")
             guard request == dashboardRequest else { return true }
             // Publish all surfaces together so a failed secondary query cannot mix filter scopes.
-            Palette.registerModels([next, panel, unfiltered].flatMap { ($0.modelOptions ?? []) + $0.models.map(\.key) + $0.dayModels.map(\.model) })
-            dashboard = next; panelDashboard = panel; menuDashboard = unfiltered
+            Palette.registerModels([next, panel, overview, unfiltered].flatMap { ($0.modelOptions ?? []) + $0.models.map(\.key) + $0.dayModels.map(\.model) })
+            dashboard = next; panelDashboard = panel; overviewDashboard = overview; menuDashboard = unfiltered
             appliedScope = scope; dashboardPending = false
             let names = next.dayModels.map(\.model)
             fallbackModelOptions = Array(Set(allModelsSelected ? names : fallbackModelOptions + names)).sorted()
@@ -844,6 +874,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         if dashboard.quotas != main { dashboard.quotas = main }
         if menuDashboard.quotas != menu { menuDashboard.quotas = menu }
         if panelDashboard.quotas != panel { panelDashboard.quotas = panel }
+        let overview = merge(overviewDashboard.quotas)
+        if overviewDashboard.quotas != overview { overviewDashboard.quotas = overview }
     }
     private var hostVersions: [String: (String, UInt64)] = [:]
     func acceptHostSamples(_ rows: [HostResult]) {
@@ -958,8 +990,6 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 invalidateAccountStatuses()
                 Task { await loadAccountStatuses(refresh: true, provider: "codex") }
             }
-            if selectedAccount != "all" && selectedAccount != "none" && !settings.filterAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
-            if selectedSource != "all" && !settings.sources.contains(where: { $0.id == selectedSource }) { selectedSource = "all" }
             if message == configurationSaveError { message = nil }
             configurationSaveError = nil
             if refreshDashboard { Task {

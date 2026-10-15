@@ -10,13 +10,13 @@ extension AppModel {
     func acceptConfiguration(_ saved: Settings) {
         invalidateAccountStatuses()
         mergeConfiguration(saved)
-        if selectedAccount != "all" && selectedAccount != "none" && !settings.filterAccounts.contains(where: { $0.key == selectedAccount }) { selectedAccount = "all" }
         scheduleConfigurationRefresh()
     }
     func mergeConfiguration(_ saved: Settings, submitted: Settings? = nil, draftAtSubmission: Settings? = nil) {
         let draft = SettingsDraftMerge.rebase(base: settings, draft: settingsDraft, saved: saved, submitted: submitted, draftAtSubmission: draftAtSubmission)
         if settings != saved { settings = saved }
         if settingsDraft != draft { settingsDraft = draft }
+        reconcileDashboardFilters()
     }
     func scheduleConfigurationRefresh() {
         settingsRefreshTask?.cancel()

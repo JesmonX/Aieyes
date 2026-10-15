@@ -13,6 +13,11 @@ import Foundation
         precondition(Format.usedCapacity(100, nil) == nil)
         precondition(Format.bytes(.nan) == "—")
         precondition(Format.bytes(0) == "0 B")
+        precondition(Format.counterTotal(0, 0) == "0")
+        precondition(Format.counterTotal(2, 3) == "5")
+        precondition(Format.counterTotal(nil, 0) == "—")
+        precondition(Format.counterTotal(0, nil) == "—")
+        precondition(Format.counterTotal(.nan, 0) == "—")
         var host = Host()
         precondition(host.shows("uptime"))
         host.details = ["gpuMemory"]

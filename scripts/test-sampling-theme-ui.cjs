@@ -34,9 +34,9 @@ function fixture(){
  for(const surface of ['index.html','floating.html']){
   const page=await browser.newPage({viewport:{width:surface==='floating.html'?450:1120,height:760}}),errors=[];page.on('pageerror',e=>{errors.push(String(e));console.error('Page error:',e);});await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.evaluate(()=>AieyesApp.ready);if(!await page.locator('[data-quota]').count())console.log(surface,await page.locator('body').innerText(),errors);
   const card=page.locator('[data-quota="codex:a"]');await card.waitFor();
-  if(surface==='floating.html'){
+  {
    const disclosure=card.locator('.quota-disclosure');
-   assert.equal(await disclosure.evaluate(element=>element.open),false,'Multiple panel accounts start collapsed');
+   assert.equal(await disclosure.evaluate(element=>element.open),false,'Account cards start collapsed');
    await disclosure.locator(':scope > summary').click();
   }
   assert.doesNotMatch(await card.innerText(),/52.15/,'Codex Plus hides historical direct weekly estimates');assert.match(await card.innerText(),/用量边界待确认/);assert.doesNotMatch(await card.innerText(),/样本不足/);

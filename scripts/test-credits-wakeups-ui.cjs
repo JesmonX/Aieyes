@@ -36,6 +36,7 @@ function fixture(){
   const page=await browser.newPage({viewport:{width:surface==='index.html'?1120:450,height:850}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
   assert.equal(await page.getByText('1234.13 credits',{exact:true}).count(),1);assert.equal(await page.getByText('Bank Reset · 2 次可用',{exact:true}).count(),1);
   const card=()=>page.locator('#content .quota-card');
+  await card().locator('.quota-title').click();
   assert.match(await card().locator('[data-credit-estimate]').textContent(),/^credits估值（当前1000credits≈—）$/);
   const expandedBalanceBox=await card().locator('.credit-row').boundingBox(),entryBox=await card().locator('[data-credit-estimate]').boundingBox();assert(entryBox.y>=expandedBalanceBox.y+expandedBalanceBox.height,'Credits estimate is on its own line below the balance');
   const decimals=[['1234.125','1234.13'],['1.005','1.01'],['10','10.00'],['0','0.00'],['-0.004','0.00'],['-1.005','-1.01'],['1e-3','0.00'],['9.999','10.00'],[null,'—'],['','—'],['NaN','—'],['12bad','—'],['Infinity','—']];

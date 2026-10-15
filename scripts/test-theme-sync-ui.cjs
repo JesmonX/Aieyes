@@ -1,4 +1,4 @@
-/* Two real browser windows share storage and a disposable core configuration. */
+/* Browser windows share storage and a disposable core configuration. */
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http'),readline=require('node:readline');
 const {spawn,execFileSync}=require('node:child_process');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
@@ -70,23 +70,24 @@ function fixture(){
     await panel.locator('[data-theme-toggle]').click();await expectTheme('dark');
     // Exercise the saved controls against the real core, including every theme/contrast combination.
     await main.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
+    const analysis=await context.newPage();analysis.on('pageerror',e=>errors.push(String(e)));
+    await analysis.goto(`http://127.0.0.1:${server.address().port}/index.html`);await analysis.evaluate(()=>AieyesApp.ready);await analysis.evaluate(()=>AieyesApp.navigatePage('analysis'));
     for(const palette of ['classic','tableau','tol','set2','nord']){
       await main.locator('[name=appearanceChartPalette]').selectOption(palette);
       await main.waitForFunction(p=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&state.settings.appearance.chartPalette===p,palette);
       for(const contrast of ['high','low']){
         await main.locator('[name=appearanceChartContrast]').selectOption(contrast);
         await main.waitForFunction(c=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&state.settings.appearance.chartContrast===c,contrast);
-        for(const page of [main,panel])await page.waitForFunction(({palette,contrast})=>document.documentElement.dataset.chartPalette===palette&&document.documentElement.dataset.chartContrast===contrast,{palette,contrast});
+        for(const page of [main,panel,analysis])await page.waitForFunction(({palette,contrast})=>document.documentElement.dataset.chartPalette===palette&&document.documentElement.dataset.chartContrast===contrast,{palette,contrast});
         const saved=(await rpc('settings.get')).appearance;assert.equal(saved.chartPalette,palette);assert.equal(saved.chartContrast,contrast);
         assert.equal(await main.locator('.chart-palette-sample').count(),2);
         await main.locator('#chart-palette-preview').screenshot({path:path.join(out,`palette-${palette}-${contrast}.png`)});
         for(const theme of ['light','dark']){
-          const result=await panel.evaluate(({theme})=>{
-            state.settings.appearance.theme=theme;state.page='agent';
+          const result=await analysis.evaluate(({theme})=>{
+            state.settings.appearance.theme=theme;state.page='analysis';
             const names=['chart-a','chart-b','chart-c'];
             const usage={tokens:{input:100,output:20,cacheRead:0,cacheWrite:0},total:120,cost:1,pricedTokens:120,events:1};
             state.dashboard.trendDays=[{...usage,key:'2026-10-11',total:360}];state.dashboard.dayModels=names.map(model=>({day:'2026-10-11',model,usage}));render();
-            document.querySelector('[data-agent-detail=panel-trend]').open=true;
             const ctx=document.querySelector('#trend').getContext('2d'),paint=[],original=ctx.fillRect;
             ctx.fillRect=function(...args){paint.push(this.fillStyle);return original.apply(this,args);};
             try{drawTrend();}finally{ctx.fillRect=original;}
@@ -98,6 +99,7 @@ function fixture(){
         }
       }
     }
+    await analysis.close();
     // Reload proves persistence rather than relying on the live storage broadcast.
     await panel.reload();await panel.evaluate(()=>AieyesApp.ready);
     assert.equal(await panel.locator('html').getAttribute('data-chart-palette'),'nord');assert.equal(await panel.locator('html').getAttribute('data-chart-contrast'),'low');

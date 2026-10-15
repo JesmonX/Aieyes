@@ -135,7 +135,7 @@ const settle=page=>page.evaluate(async()=>{
     await page.locator('#field-authMode-choice').click();await page.keyboard.press('ArrowDown');await page.keyboard.press('Escape');
     assert(await page.locator('#editor').evaluate(el=>el.open));assert(await page.locator('#field-authMode-choice').evaluate(el=>el===document.activeElement));
     await page.locator('#cancel-editor').click();await settle(page);
-    await page.evaluate(()=>{state.page='agent';render();});await settle(page);
+    await page.evaluate(()=>AieyesApp.navigatePage('analysis'));await settle(page);
     await page.locator('#provider-choice').click();
     const retained=await page.evaluate(async()=>{const control=document.querySelector('#provider-choice');await loadDashboard();return {same:control===document.querySelector('#provider-choice'),pending:pendingRender};});
     assert.deepEqual(retained,{same:true,pending:true});
@@ -157,7 +157,7 @@ const settle=page=>page.evaluate(async()=>{
       const fallback=await browser.newContext({viewport:{width:1040,height:800}});
       await fallback.addInitScript(fixture);
       await fallback.addInitScript(platform=>{if(platform==='linux')desktopInfo.platform='linux';else HTMLElement.prototype.showPopover=undefined;},platform);
-      const view=await fallback.newPage();await view.goto(url);await view.evaluate(()=>AieyesApp.ready);
+      const view=await fallback.newPage();await view.goto(url);await view.evaluate(()=>AieyesApp.ready);await view.evaluate(()=>AieyesApp.navigatePage('analysis'));
       assert.equal(await view.locator('.win-select').count(),0,`${platform} retains native selects`);
       await view.locator('#provider').selectOption('codex');assert.equal(await view.locator('#provider').inputValue(),'codex');
       await fallback.close();

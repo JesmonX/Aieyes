@@ -81,15 +81,48 @@ struct DashboardFilterPreference: Codable, Equatable {
     var provider = "all", source = "all", account = "all", model = "all"
     var days = 1
     var dateRange: DashboardDateRange?
-    static func read(defaults: UserDefaults = .standard) -> Self {
-        guard let data = defaults.data(forKey: NativePanelKey.filters.rawValue), var value = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
+    static func read(scope: String? = nil, defaults: UserDefaults = .standard) -> Self {
+        guard let data = scope.flatMap({ defaults.data(forKey: "dashboard.filters.v2." + $0) }) ?? defaults.data(forKey: NativePanelKey.filters.rawValue), var value = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
         if value.provider == "agy" { value.provider = "antigravity" }
         if !CoreContract.providers.contains(value.provider) && value.provider != "all" { value.provider = "all" }
         if let range = value.dateRange, !["all", "custom"].contains(range.kind) { value.dateRange = nil }
         if ![1, 7, 30, 90, 365].contains(value.days) { value.days = 1 }
         return value
     }
-    func save(defaults: UserDefaults = .standard) { defaults.set(try? JSONEncoder().encode(self), forKey: NativePanelKey.filters.rawValue) }
+    func save(scope: String? = nil, defaults: UserDefaults = .standard) { defaults.set(try? JSONEncoder().encode(self), forKey: scope.map { "dashboard.filters.v2." + $0 } ?? NativePanelKey.filters.rawValue) }
+    var isToday: Bool { dateRange == nil && days == 1 }
+    var rangeTitle: String { dateRange.map { $0.kind == "all" ? "所有" : ($0.start ?? "") + " 至 " + ($0.end ?? "") } ?? (days == 1 ? "今日" : "最近 \(days) 天") }
+    var rangeChoice: String {
+        get { dateRange?.kind ?? String(days) }
+        set {
+            if newValue == "all" { dateRange = DashboardDateRange(kind: "all") }
+            else if newValue == "custom" { dateRange = DashboardDateRange(kind: "custom", start: DashboardDateRange.day(Calendar.current.date(byAdding: .day, value: -6, to: Date())!), end: DashboardDateRange.day(Date())) }
+            else { dateRange = nil; days = Int(newValue) ?? 1 }
+        }
+    }
+    var customStart: Date {
+        get { DashboardDateRange.date(dateRange?.start) }
+        set { dateRange = DashboardDateRange(kind: "custom", start: DashboardDateRange.day(newValue), end: dateRange?.end ?? DashboardDateRange.day(Date())) }
+    }
+    var customEnd: Date {
+        get { DashboardDateRange.date(dateRange?.end) }
+        set { dateRange = DashboardDateRange(kind: "custom", start: dateRange?.start ?? DashboardDateRange.day(Date()), end: DashboardDateRange.day(newValue)) }
+    }
+    func parameters(settings: Settings) -> [String: Any] {
+        var params: [String: Any] = ["days": days]
+        if let dateRange { params["dateRange"] = dateRange.parameters }
+        if provider != "all" { params["provider"] = provider }
+        if account == "none" { params["accountId"] = "" }
+        else if let selected = settings.historicalAccounts.first(where: { $0.key == account }) { params["accountId"] = selected.id; params["provider"] = selected.provider }
+        if source != "all" { params["sourceId"] = source }
+        if model != "all" { params["model"] = model }
+        return params
+    }
+    mutating func reconcile(settings: Settings) {
+        account = settings.accountAliases?[account] ?? (account.hasPrefix("agy:") ? "antigravity:" + account.dropFirst(4) : account)
+        if account != "all", account != "none", !settings.filterAccounts.contains(where: { $0.key == account }) { account = "all" }
+        if source != "all", !settings.sources.contains(where: { $0.id == source }) { source = "all" }
+    }
 }
 
 enum PanelAccountPreference {
@@ -511,6 +544,10 @@ enum Format {
         if value >= 999_950 { return String(format: "%.2fM", value / 1_000_000) }
         if value >= 999.5 { return String(format: "%.1fK", value / 1_000) }
         return String(format: "%.0f", value)
+    }
+    static func counterTotal(_ received: Double?, _ sent: Double?) -> String {
+        guard let received, let sent, received.isFinite, sent.isFinite, received >= 0, sent >= 0, (received + sent).isFinite else { return "—" }
+        return compact(received + sent)
     }
     static func credits(_ value: String?) -> String {
         guard let value else { return "—" }

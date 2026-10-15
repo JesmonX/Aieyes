@@ -44,6 +44,9 @@ function installFixture(data) {
         await page.evaluate(dark=>{document.documentElement.dataset.theme=dark?'dark':'light';drawTrend();},dark);
         const shot=async name=>{await page.evaluate(async()=>{await AieyesTheme.loadFonts();await document.fonts.ready;});assert(!/TypeError|ReferenceError|SyntaxError/.test(await page.locator('body').innerText()),'no caught runtime errors in rendered UI');return page.screenshot({path:path.join(out,`${scenario}-${theme}-${name}.png`),animations:'disabled'});};
         await shot('overview');
+        const quotaBars=await page.locator('.resource-bar,.track').evaluateAll(elements=>elements.map(el=>getComputedStyle(el).height));
+        for(const height of quotaBars)assert.equal(height,'4px');
+        await page.evaluate(()=>AieyesApp.navigatePage('analysis'));await shot('analysis');
         assert.equal(await page.locator('[data-copy-value]').count(),0,'model rows have no copy buttons');
         const sizes=await page.evaluate(()=>({
           bars:[...document.querySelectorAll('.resource-bar,.track')].map(el=>getComputedStyle(el).height),
@@ -110,7 +113,7 @@ function installFixture(data) {
       const session=await context.newCDPSession(page);
       for(const theme of ['light','dark'])for(const material of ['opaque','acrylic','blur']) {
         await page.evaluate(({theme,material,surface})=>{AieyesTheme.apply({theme,accent:'blue'});__setDesktopMaterials(surface==='index.html'?material:'opaque',surface==='floating.html'?material:'opaque');},{theme,material,surface});
-        const metrics=await page.evaluate(()=>({material:document.documentElement.dataset.material,backing:getComputedStyle(document.body,'::before').backgroundColor,card:getComputedStyle(document.querySelector('.stat')).backgroundColor,bar:getComputedStyle(document.querySelector('.resource-bar,.track')).height,filter:document.querySelector('.filters select').getBoundingClientRect().height}));
+        const metrics=await page.evaluate(()=>({material:document.documentElement.dataset.material,backing:getComputedStyle(document.body,'::before').backgroundColor,card:getComputedStyle(document.querySelector('.overview-usage')).backgroundColor,bar:getComputedStyle(document.querySelector('.resource-bar,.track')).height,filter:document.querySelector('.filters select').getBoundingClientRect().height}));
         assert.equal(metrics.material,material);assert.equal(metrics.bar,'4px');assert.equal(metrics.filter,design['control-compact-height']);
         const alpha=color=>color.startsWith('rgba')?Number(color.match(/, ([\d.]+)\)$/)[1]):1;
         assert.equal(alpha(metrics.backing)<1,material!=='opaque',`${surface} ${theme} ${material} backing`);
@@ -150,7 +153,7 @@ function installFixture(data) {
       assert.equal(fonts.body,fonts.title);
       const session=await context.newCDPSession(page);await session.send('DOM.enable');await session.send('CSS.enable');
       const {root:documentNode}=await session.send('DOM.getDocument');
-      const {nodeId}=await session.send('DOM.querySelector',{nodeId:documentNode.nodeId,selector:'.overview-heading h2'});
+      const {nodeId}=await session.send('DOM.querySelector',{nodeId:documentNode.nodeId,selector:'.quota-heading h2'});
       const resolved=await session.send('CSS.getPlatformFontsForNode',{nodeId});
       assert(resolved.fonts.length>0,'record the fonts actually used to render Chinese headings');
       const weights=[];

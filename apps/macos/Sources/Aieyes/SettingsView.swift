@@ -46,9 +46,6 @@ struct SettingsView: View {
             }.padding(.horizontal, 22).padding(.vertical, 12)
             if let message = model.message, model.settingsMessage == nil, !message.hasPrefix("已保存") { HStack { Text(message).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭提示") }.padding(.horizontal, 22).padding(.bottom, 10) }
             ForEach(model.settings.configurationIssues ?? [], id: \.self) { Text($0).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled).padding(.horizontal, 22) }
-            Picker("设置分类", selection: $model.settingsTab) {
-                Text("Agent 接入").tag("integrations"); Text("服务器").tag("servers"); Text("价格").tag("prices"); Text("定时唤醒").tag("wakeups"); Text("常规").tag("general")
-            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 22).padding(.bottom, 12)
             Divider().opacity(0.5)
             ZStack(alignment: .top) {
                 // Keep the lazily created catalog and its native controls across
@@ -79,7 +76,7 @@ struct SettingsView: View {
         } message: {
             Text("将从头读取所有已启用本机及服务器数据源的完整日志，修复可确认的历史重复。已有历史和价格快照会保留；日志较多时可能需要较长时间。")
         }
-        .frame(minWidth: 620, idealWidth: 760, minHeight: 440, idealHeight: 600).aieyesAccent()
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity).aieyesAccent()
         .onAppear { normalizeCategory(); consumeEditorRequest() }
         .onChange(of: model.settingsTab, initial: true) { _, tab in normalizeCategory(); if tab == "prices" { hasVisitedPrices = true } }
         .onChange(of: model.settingsDraft) { _, _ in
@@ -254,7 +251,7 @@ struct SettingsView: View {
     }
     private var general: some View {
         HStack(alignment: .top, spacing: 12) {
-            SettingsSidebar(title: "常规设置分类", items: [("appearance", "外观"), ("desktop", "桌面显示"), ("network", "网络代理"), ("refresh", "刷新与历史"), ("notifications", "通知"), ("updates", "更新")], selection: $model.generalPage)
+
             GeometryReader { viewport in Form {
             if model.generalPage == "appearance" {
             Section("外观") {

@@ -74,6 +74,15 @@ import Foundation
         let savedPreference = preferences.string(forKey: "panel.accounts.v2")
         PanelAccountPreference.migrateAntigravity(aliases, defaults: preferences)
         precondition(preferences.string(forKey: "panel.accounts.v2") == savedPreference)
+        let legacyFilters = DashboardFilterPreference(provider: "codex", source: "old-source", account: "codex:old", model: "old-model", days: 30)
+        legacyFilters.save(defaults: preferences)
+        for scope in ["panel", "overview", "analysis"] { precondition(DashboardFilterPreference.read(scope: scope, defaults: preferences) == legacyFilters) }
+        let panelFilters = DashboardFilterPreference(provider: "claude", days: 1)
+        panelFilters.save(scope: "panel", defaults: preferences)
+        precondition(DashboardFilterPreference.read(scope: "panel", defaults: preferences) == panelFilters)
+        precondition(DashboardFilterPreference.read(scope: "overview", defaults: preferences) == legacyFilters)
+        precondition(DashboardFilterPreference.read(scope: "analysis", defaults: preferences) == legacyFilters)
+        precondition(DashboardFilterPreference.read(defaults: preferences) == legacyFilters, "Migration preserves legacy preferences")
         precondition(Format.subscription("ultra") == "Ultra")
         let legacyQuota = try JSONDecoder().decode(Quota.self, from: Data(#"{"sourceId":"s","accountId":"a","provider":"antigravity","name":"Custom","updatedAt":1,"origin":"live","windows":[]}"#.utf8))
         precondition(legacyQuota.identity == nil && legacyQuota.metadataError == nil)
@@ -554,13 +563,31 @@ for line in sys.stdin:
         await model.reload()
         let lastHistoryCall = try String(contentsOf: root.appendingPathComponent("calls.jsonl"), encoding: .utf8).split(separator: "\n").compactMap {
             try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
-        }.last { $0["method"] as? String == "dashboard" }
+        }.last { $0["method"] as? String == "dashboard" && ($0["params"] as? [String: Any])?["accountId"] as? String == "history" }
         let historyParams = lastHistoryCall?["params"] as? [String: Any]
         precondition(historyParams?["accountId"] as? String == "history" && historyParams?["provider"] as? String == "codex")
         precondition(model.appliedScope.contains("旧账户历史（已删除）"))
         model.settingsDraft.historyShowDeletedAccounts = false
         let historyHidden = await model.saveSettingsDraft()
         precondition(historyHidden && model.selectedAccount == "all" && model.settings.filterAccounts.isEmpty)
+        let workspace = AppModel(autostart: false)
+        defer { workspace.stop() }
+        workspace.settings = settings; workspace.settingsDraft = settings
+        workspace.range = 30; workspace.dateRange = DashboardDateRange(kind: "custom", start: "2026-09-01", end: "2026-09-30")
+        let originalAnalysis = workspace.analysisFilters
+        workspace.updateFilters(DashboardFilterPreference(provider: "deepseek", account: "deepseek:fixture"), scope: "panel", resetDependents: false)
+        workspace.updateFilters(DashboardFilterPreference(provider: "claude", days: 7), scope: "overview")
+        precondition(workspace.analysisFilters == originalAnalysis && workspace.panelFilters.account == "deepseek:fixture", "Ordinary filters stay local to their surface")
+        var destination: String?
+        workspace.showDetailPage = { destination = $0 }
+        workspace.openAnalysis(from: "panel")
+        precondition(destination == "analysis" && workspace.analysisFilters.account == "deepseek:fixture" && workspace.analysisFilters.provider == "deepseek")
+        precondition(workspace.analysisFilters.days == 30 && workspace.analysisFilters.dateRange == originalAnalysis.dateRange, "An explicit analysis jump carries identity and preserves analysis dates")
+        precondition(workspace.overviewFilters.provider == "claude" && workspace.overviewFilters.days == 7)
+        workspace.mergeConfiguration(Settings())
+        precondition(workspace.panelFilters.account == "all" && workspace.analysisFilters.account == "all", "Removed accounts are reconciled in every scope")
+        precondition(workspace.overviewFilters.days == 7 && workspace.analysisFilters.dateRange == originalAnalysis.dateRange)
+        print("Workspace filter migration, independent scopes, analysis context and removal reconciliation passed")
         print("Deleted account history is hidden by default, filters use the historical account identity, and hiding resets a stale selection")
         print("Antigravity login accepts committed identity immediately, rejects older status reads, retains identity after quota failure, and preserves drafts")
         print("Theme quick toggle saves globally, preserves unrelated drafts and retains theme after failure")

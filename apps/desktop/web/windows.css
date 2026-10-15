@@ -59,7 +59,7 @@ html[data-platform=windows][data-material=opaque] { --win-overlay-fill:var(--sol
 .win-select-group { padding:6px 8px 2px; color:var(--muted); font-size:var(--font-caption); }
 
 @media not (forced-colors:active) {
-  html[data-platform=windows] :is(.card,.stat):not(.card .card) {
+  html[data-platform=windows] :is(.card,.stat):not(.card .card):not([data-provider]) {
     background-image:var(--win-sheen);
     box-shadow:inset 0 1px 0 var(--win-edge),var(--win-card-shadow);
   }

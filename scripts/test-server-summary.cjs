@@ -38,8 +38,8 @@ function fixture(){
    await page.locator('[data-page=servers]').click();await page.waitForFunction(()=>!state.serverBusy);
    const card=page.locator('.server-card'),summary=card.locator(':scope > summary');
    assert.equal(await card.evaluate(el=>el.open),false);
-   assert.deepEqual(await summary.locator('.resource-ring strong').allTextContents(),['0.0%','25.0%']);
-   assert.equal(await summary.locator('.resource-ring:visible').count(),2);
+   assert.deepEqual(await summary.locator('.resource-block > strong').allTextContents(),['0%','25%']);
+   assert.equal(await summary.locator('.resource-block:visible').count(),2);
    assert.match(await summary.locator('[data-gpu="0"]').textContent(),/NVIDIA RTX 4090.*0\/24 GiB/);
    assert.match(await summary.locator('[data-gpu="1"]').textContent(),/NVIDIA A100 80GB PCIe.*60\/80 GiB/);
    assert.equal(await summary.locator('[data-gpu] .server-resource-strip').count(),6);
@@ -58,31 +58,35 @@ function fixture(){
     }
    }
    await summary.click();assert.equal(await card.evaluate(el=>el.open),true);
-   assert.equal(await card.locator('.resource-ring').count(),2,'Opening keeps exactly one resource overview');
+   assert.equal(await card.locator('.resource-block').count(),2,'Opening keeps exactly one resource overview');
    assert.equal(await card.locator('[data-metric="summary-host:gpu"] .resource-bar').count(),0);
    assert.equal(await card.locator('[data-metric="summary-host:cpu"] .resource-bar[aria-label="cpu"]').count(),0);
    assert.equal(await card.locator('[data-metric="summary-host:cpu"] .resource-bar[aria-label="cpu0"]').count(),0,'Collapsed groups allocate no device rows');
    assert.equal(await card.locator('[data-metric="summary-host:network"]').textContent().then(t=>t.includes('累计')),false);
    await card.locator('[data-metric="summary-host:cpu"] > summary').click();
    await card.locator('[data-metric="summary-host:cpu"] .resource-bar[aria-label="cpu0"]').waitFor();
+   await card.locator('[data-metric="summary-host:network"] > summary').click();
+   await card.locator('[data-metric="summary-host:network"] .metric-device').first().waitFor();
+   assert.match(await card.locator('[data-metric="summary-host:network"] .metric-detail').textContent(),/错误 \/ 丢包— \/ —/,'Missing network counters are not zero');
+   assert.match(await page.evaluate(()=>serverGroupContent('network',[{id:'zero',rxErrors:0,txErrors:0,rxDrops:0,txDrops:0}],serverFixture.host)),/0 \/ 0/,'Known zero counters remain zero');
    await page.evaluate(()=>sample());assert(await card.evaluate(el=>el.open));assert(await card.locator('[data-metric="summary-host:cpu"]').evaluate(el=>el.open));
    await summary.click();await page.evaluate(()=>sample());assert.equal(await card.evaluate(el=>el.open),false);
    await page.evaluate(()=>{state.settings.hosts[0].devices=['gpu:1','network:ib0','cpu:__none__','filesystems:/data'];renderServers();});
    assert.deepEqual(await card.locator('[data-gpu]').evaluateAll(es=>es.map(e=>e.dataset.gpu)),['1']);
    assert.deepEqual(await card.locator('[data-filesystem]').evaluateAll(es=>es.map(e=>e.dataset.filesystem)),['/data']);
    assert.deepEqual(await card.locator('[data-network-total]').evaluateAll(es=>es.map(e=>e.dataset.networkTotal)),['ib0']);
-   assert.equal(await summary.locator('.server-system-metrics .resource-ring').count(),2,'CPU total survives core filtering');
+   assert.equal(await summary.locator('.server-system-metrics .resource-block').count(),2,'CPU total survives core filtering');
    await page.evaluate(()=>{state.settings.hosts[0].details=[];renderServers();});
    assert.equal(await summary.locator('[data-host-uptime],[data-network-total]').count(),0);
    assert.equal(await summary.locator('[data-gpu] .server-resource-strip').count(),1);
    await page.evaluate(()=>{state.settings.hosts[0].details=['uptime'];state.settings.hosts[0].metrics=[];renderServers();});
-   assert.equal(await summary.locator('.resource-ring').count(),0);assert.equal(await summary.locator('[data-host-uptime]').count(),1);
+   assert.equal(await summary.locator('.resource-block').count(),0);assert.equal(await summary.locator('[data-host-uptime]').count(),1);
    await page.evaluate(()=>{state.settings.hosts[0]={...structuredClone(serverFixture.host),details:null,devices:[]};state.hosts[0].sample={...structuredClone(serverFixture.sample),gpu:[],memory:{total:0,available:0}};renderServers();});
    assert.equal(await summary.locator('[data-gpu]').count(),0);assert.match(await summary.textContent(),/GPU 无已选设备/);
-   assert.deepEqual(await summary.locator('.server-system-metrics .resource-ring strong').allTextContents(),['0.0%','—']);
+   assert.deepEqual(await summary.locator('.server-system-metrics .resource-block > strong').allTextContents(),['0%','—']);
    await page.evaluate(()=>{state.hosts[0].sample={timestamp:Date.now()/1000,load:[],errors:{gpu:'unavailable'},memory:{total:1024}};renderServers();});
    assert.match(await summary.textContent(),/GPU —/);assert.match(await summary.locator('[data-host-uptime]').textContent(),/—/);
-   assert.match(await summary.locator('.server-system-metrics').textContent(),/— \/ 1.0 KiB/);
+   assert.match(await summary.locator('.server-system-metrics').textContent(),/—\/1 KiB/);
    assert.doesNotMatch(await card.textContent(),/NaN|Infinity/);
    // The new independent setting remains editable with no collection groups.
    if(!panel){

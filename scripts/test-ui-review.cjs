@@ -86,7 +86,7 @@ function fixture() {
     }
     await page.emulateMedia({colorScheme:'light'});
     await page.locator('#add-first-source').click();
-    assert.equal(await page.locator('[data-settings-tab=integrations]').getAttribute('aria-selected'),'true');
+    assert.equal(await page.locator('[data-settings-tab=integrations]').getAttribute('aria-current'),'page');
     await page.locator('[data-settings-agent=deepseek]').click();
     assert.equal(await page.locator('[data-agent-enable=deepseek]').isChecked(),false);
     assert.match(await page.locator('.agent-integration-header').textContent(),/API Key.*余额/);
@@ -109,13 +109,14 @@ function fixture() {
     await page.locator('[data-remove=host]').click();await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open&&!state.settingsSaving);
     assert.deepEqual(await page.evaluate(()=>[state.settings.hosts.length,state.settings.sources[0].hostId,state.settings.sources[0].enabled,state.settings.sources[0].machineBinding]),[0,'host',false,'unbound']);
     assert.equal(await page.locator('#add-item').evaluate(el=>el===document.activeElement),true,'Removing the last host returns focus to Add host');
-    await page.evaluate(()=>{review.empty=false;});await page.locator('[data-page=agent]').click();await page.evaluate(()=>loadDashboard());
+    await page.evaluate(()=>{review.empty=false;});await page.locator('[data-page=analysis]').click();await page.evaluate(()=>loadDashboard());
     await page.locator('#model').selectOption('Model A');await page.waitForFunction(()=>state.dashboard.dayModels.every(row=>row.model==='Model A'));
     assert.deepEqual(await page.locator('#model option').allTextContents(),['全部模型','Model A','Model B']);
     await page.locator('#model').selectOption('Model B');
     const lastSuccess=await page.evaluate(()=>state.lastSuccessfulUpdate);
     await page.evaluate(async()=>{review.failScan=true;await scan();});
     assert.equal(await page.evaluate(()=>state.lastSuccessfulUpdate),lastSuccess);assert.match(await page.locator('#activity').textContent(),/失败/);
+    await page.locator('[data-page=agent]').click();await page.waitForFunction(()=>!state.dashboardPending);
     await page.evaluate(()=>{state.settings.accounts=[{id:'account',provider:'deepseek',name:'余额账户',quotaEnabled:true}];state.settings.sources.push({id:'balance',provider:'deepseek',accountId:'account',enabled:true,path:''});state.provider='';state.accountKey='';render();});
     assert.match(await page.locator('.quota-placeholder').textContent(),/尚未读取/);
     await page.evaluate(async()=>{review.failQuota=true;await quotas();});assert.match(await page.locator('.quota-placeholder').textContent(),/读取失败/);
@@ -131,7 +132,7 @@ function fixture() {
     await page.locator('[data-page=settings]').click();await page.locator('[data-settings-tab=prices]').click();await page.locator('#add-price').click();
     assert.equal(await page.locator('#field-id').count(),1);assert.deepEqual(await page.locator('#field-id').evaluate(el=>[...el.labels].map(label=>label.textContent)),['模型 ID']);
     await discardEditor(page);await page.locator('[data-settings-tab=prices]').focus();await page.keyboard.press('ArrowLeft');
-    assert.equal(await page.locator('[data-settings-tab=hosts]').getAttribute('aria-selected'),'true');
+    assert.equal(await page.locator('[data-settings-tab=hosts]').getAttribute('aria-current'),'page');
     await page.evaluate(()=>{state.settings.hosts=structuredClone(review.settings.hosts);state.settings.hosts=[{id:'host',name:'训练服务器',target:'gpu-lab',enabled:true,details:[]}];});
     await page.locator('[data-page=servers]').click();await page.waitForFunction(()=>!state.serverBusy);
     await page.locator('.server-card > summary').click();
@@ -142,12 +143,12 @@ function fixture() {
       const sample=structuredClone(review.hosts[0].sample);sample.cpu[0].utilization=77;
       applyHostSamples([{id:'host',error:'部分采样暂不可用',sample}]);
     });
-    await page.waitForFunction(()=>document.querySelector('.resource-ring strong')?.textContent==='77.0%');
-    assert.equal(await page.locator('.resource-ring strong').first().textContent(),'77.0%','An error row retains its own valid sample');
+    await page.waitForFunction(()=>document.querySelector('.resource-block > strong')?.textContent==='77%');
+    assert.equal(await page.locator('.resource-block > strong').first().textContent(),'77%','An error row retains its own valid sample');
     const beforeFailure=Date.now();await page.evaluate(async()=>{review.failHosts=true;await sample();});
     await page.waitForFunction(()=>document.querySelector('.server-card')?.textContent.includes('测试采样 RPC 失败'));
     assert.match(await page.locator('.server-card').textContent(),/测试采样 RPC 失败/);
-    assert.equal(await page.locator('.resource-ring strong').first().textContent(),'77.0%');
+    assert.equal(await page.locator('.resource-block > strong').first().textContent(),'77%');
     assert.ok(await page.evaluate(stamp=>state.hosts[0].lastAttemptAt>=stamp,beforeFailure));
     await page.evaluate(async()=>{review.failHosts=false;await sample();});
     assert.doesNotMatch(await page.locator('#message').textContent(),/测试采样 RPC 失败/,'A successful host retry clears its obsolete failure');
@@ -171,10 +172,10 @@ function fixture() {
     await panel.screenshot({animations:'disabled',path:path.join(previews,'floating-panel-fixed-light.png')});
     await panel.emulateMedia({colorScheme:'dark'});await panel.screenshot({animations:'disabled',path:path.join(previews,'floating-panel-fixed-dark.png')});await panel.emulateMedia({colorScheme:'light'});
     assert.equal(await panel.locator('body').getAttribute('data-view'),'panel','Changing theme preserves the current panel state');
-    await panel.evaluate(async()=>{review.empty=false;await loadDashboard();});await panel.locator('[data-agent-detail=panel-trend] > summary').click();await panel.locator('[data-day-toggle]').first().click();await panel.locator('[data-day-toggle]').first().focus();
-    await panel.evaluate(()=>loadDashboard());assert.equal(await panel.locator('[data-agent-detail][open]').count(),2);
-    assert.equal(await panel.locator('[data-day-toggle]').first().evaluate(el=>el===document.activeElement),true);
-    assert.equal(await panel.evaluate(()=>state.days),1,'Glance always shows today; historical range belongs to details');
+    await panel.evaluate(async()=>{review.empty=false;await loadDashboard();});assert.equal(await panel.locator('#trend').count(),0);
+    await panel.locator('[data-overview-agent=codex]').focus();await panel.evaluate(()=>loadDashboard());
+    assert.equal(await panel.locator('[data-overview-agent=codex]').evaluate(el=>el===document.activeElement),true,'Background refresh preserves the Agent selector focus');
+    assert.equal(await panel.evaluate(()=>state.days),1,'Glance starts at today');
     await panel.evaluate(async()=>{
       review.settings.sources=[{id:'new-source',name:'另一窗口添加的来源',provider:'codex',path:'~/.codex',enabled:true,accountId:''}];
       await reviewEmit('desktop:settings',null);
@@ -182,8 +183,8 @@ function fixture() {
     assert.equal(await panel.evaluate(()=>state.settings.sources[0].id),'new-source');
     await panel.locator('[data-page=servers]').click();await panel.waitForFunction(()=>!state.serverBusy);
     await panel.evaluate(async()=>{const rows=structuredClone(review.hosts);rows[0].sample.cpu[0].utilization=91;await reviewEmit('desktop:hosts',rows);});
-    await panel.waitForFunction(()=>document.querySelector('.resource-ring strong')?.textContent==='91.0%');
-    assert.equal(await panel.locator('.resource-ring strong').first().textContent(),'91.0%');
+    await panel.waitForFunction(()=>document.querySelector('.resource-block > strong')?.textContent==='91%');
+    assert.equal(await panel.locator('.resource-block > strong').first().textContent(),'91%');
     await panel.locator('.server-card > summary').click();await panel.locator('[data-metric="host:cpu"] > summary').focus();
     await panel.evaluate(()=>{window.previousCard=document.querySelector('.server-card');state.serverBusy=true;state.hosts[0].sample.timestamp=Date.now()/1000-11;reviewTimers.find(timer=>timer.ms===1000).fn();});
     assert.equal(await panel.locator('.host-status').textContent(),'数据已延迟');
@@ -191,8 +192,8 @@ function fixture() {
     assert.equal(await panel.locator('[data-metric="host:cpu"] > summary').evaluate(el=>el===document.activeElement),true);
     await panel.evaluate(async()=>{state.serverBusy=false;await reviewEmit('desktop:hosts-error','后台采样 RPC 失败');});
     assert.equal(await panel.locator('.host-status').textContent(),'连接失败');
-    await panel.waitForFunction(()=>document.querySelector('.resource-ring strong')?.textContent==='91.0%');
-    assert.equal(await panel.locator('.resource-ring strong').first().textContent(),'91.0%');
+    await panel.waitForFunction(()=>document.querySelector('.resource-block > strong')?.textContent==='91%');
+    assert.equal(await panel.locator('.resource-block > strong').first().textContent(),'91%');
     const panelSuccess=await panel.evaluate(()=>state.lastSuccessfulUpdate);
     await panel.evaluate(async()=>{review.quotaRows=[{provider:'deepseek',accountId:'a',name:'余额',windows:[],error:'账户凭证失效'}];await reviewEmit('desktop:data-changed','quotas.refresh');});
     assert.equal(await panel.locator('#activity').getAttribute('data-status'),'error');

@@ -187,7 +187,7 @@ function harness(file, initial = {}) {
   }};
   const state = {page:'agent',settingsTab:'accounts',settings:{accounts:[],sources:[],hosts:[]},hosts:[],dashboard:null,provider:'',accountKey:'',sourceId:'',model:'',days:1,cost:false,busy:false};
   const sandbox = {
-    window, document, state, console,
+    window, document, state, console, PANEL:file==='floating.js',
     Date: class extends Date { static now() { return now; } },
     notify: e => notices.push(e),
     render(){}, drawTrend(){}, flushRender(){}, updateActivity(){},

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Logical points / CSS pixels measured from the current native macOS UI. Platform fonts and native window materials retain their own implementations.",
+  "description": "Shared glass surfaces, readable typography and categorical accents; platform fonts and native materials remain native.",
   "dimensions": {
     "font-body": 15,
     "font-secondary": 14,
@@ -51,7 +51,7 @@
     "stat-padding": 14,
     "token-card-padding": 12,
     "radius-card": 16,
-    "radius-control": 6,
+    "radius-control": 8,
     "radius-account-switch": 8,
     "radius-overlay": 12,
     "radius-badge": 999,
@@ -101,8 +101,8 @@
     "dialog-agy-width": 540
   },
   "numbers": {
-    "card-border-opacity": 0.22,
-    "panel-card-opacity": 0.35,
+    "card-border-opacity": 0.3,
+    "panel-card-opacity": 0.46,
     "progress-track-opacity": 0.07,
     "chart-grid-opacity": 0.06,
     "model-chart-inner-ratio": 0.72,
@@ -110,31 +110,136 @@
     "heat-empty-opacity": 0.055
   },
   "weights": {
-    "regular": { "swift": "regular", "web": 400 },
-    "medium": { "swift": "medium", "web": 500 },
-    "strong": { "swift": "semibold", "web": 500 },
-    "bold": { "swift": "bold", "web": 700 }
+    "regular": {
+      "swift": "regular",
+      "web": 400
+    },
+    "medium": {
+      "swift": "medium",
+      "web": 500
+    },
+    "strong": {
+      "swift": "semibold",
+      "web": 500
+    },
+    "bold": {
+      "swift": "bold",
+      "web": 700
+    }
   },
   "colors": {
-    "ink": { "light": "252528", "dark": "efeff2" },
-    "muted": { "light": "6b6b73", "dark": "b6b6c0" },
-    "faint": { "light": "62626b", "dark": "a4a4ae" },
-    "accent": { "light": "5566d9", "dark": "a3b3ff" },
-    "accent-blue": { "light": "2166be", "dark": "8bbcff" },
-    "accent-teal": { "light": "16745f", "dark": "65ceae" },
-    "accent-purple": { "light": "8054b7", "dark": "ccabff" },
-    "ok": { "light": "176e58", "dark": "5cc4a4" },
-    "warn": { "light": "895712", "dark": "e0b062" },
-    "danger": { "light": "b83245", "dark": "ff929c" },
-    "card-stroke": { "light": "7b879d", "dark": "8794ad" },
-    "window-base": { "light": "ffffff", "dark": "222226" },
-    "panel": { "light": "ffffff", "dark": "29292e" },
-    "detail-window": { "light": "fbfcfc", "dark": "202020" },
-    "detail-card": { "light": "f1f1f1", "dark": "242424" },
-    "form-surface": { "light": "f7f7f7", "dark": "2e2e33" },
-    "surface-strong": { "light": "e9e9eb", "dark": "414147" },
-    "solid": { "light": "f7f7f8", "dark": "29292e" },
-    "segment-selected": { "light": "ceced0", "dark": "63636b" }
+    "ink": {
+      "light": "252528",
+      "dark": "efeff2"
+    },
+    "muted": {
+      "light": "6b6b73",
+      "dark": "b6b6c0"
+    },
+    "faint": {
+      "light": "62626b",
+      "dark": "a4a4ae"
+    },
+    "accent": {
+      "light": "5566d9",
+      "dark": "a3b3ff"
+    },
+    "accent-blue": {
+      "light": "2166be",
+      "dark": "8bbcff"
+    },
+    "accent-teal": {
+      "light": "16745f",
+      "dark": "65ceae"
+    },
+    "accent-purple": {
+      "light": "8054b7",
+      "dark": "ccabff"
+    },
+    "ok": {
+      "light": "176e58",
+      "dark": "5cc4a4"
+    },
+    "warn": {
+      "light": "895712",
+      "dark": "e0b062"
+    },
+    "danger": {
+      "light": "b83245",
+      "dark": "ff929c"
+    },
+    "card-stroke": {
+      "light": "7b879d",
+      "dark": "8794ad"
+    },
+    "window-base": {
+      "light": "ffffff",
+      "dark": "222226"
+    },
+    "panel": {
+      "light": "ffffff",
+      "dark": "29292e"
+    },
+    "detail-window": {
+      "light": "fbfcfc",
+      "dark": "202020"
+    },
+    "detail-card": {
+      "light": "f1f1f1",
+      "dark": "242424"
+    },
+    "form-surface": {
+      "light": "f7f7f7",
+      "dark": "2e2e33"
+    },
+    "surface-strong": {
+      "light": "e9e9eb",
+      "dark": "414147"
+    },
+    "solid": {
+      "light": "f7f7f8",
+      "dark": "29292e"
+    },
+    "segment-selected": {
+      "light": "ceced0",
+      "dark": "63636b"
+    },
+    "category-codex": {
+      "light": "256b91",
+      "dark": "77c4ea"
+    },
+    "category-claude": {
+      "light": "a35631",
+      "dark": "f2b18e"
+    },
+    "category-antigravity": {
+      "light": "7953ba",
+      "dark": "caadfa"
+    },
+    "category-deepseek": {
+      "light": "385bc5",
+      "dark": "a0b7ff"
+    },
+    "category-cpu": {
+      "light": "226dad",
+      "dark": "87bef3"
+    },
+    "category-memory": {
+      "light": "297b68",
+      "dark": "83d3bc"
+    },
+    "category-gpu": {
+      "light": "8455b2",
+      "dark": "c7a3ee"
+    },
+    "category-storage": {
+      "light": "926314",
+      "dark": "e7bf77"
+    },
+    "category-network": {
+      "light": "326d83",
+      "dark": "84c6dd"
+    }
   },
   "aliases": {
     "font-panel-body": "font-body",

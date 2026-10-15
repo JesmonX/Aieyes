@@ -53,8 +53,7 @@
       return;
     }
     if(page==='settings'||page==='prices'){await window.AieyesApp.openSettings(page==='prices'?{category:'prices'}:{});return;}
-    state.page = 'agent';
-    render();
+    await window.AieyesApp.navigatePage(['analysis','servers'].includes(page)?page:'agent');
   }
   async function bindTitlebar(info) {
     if (info.platform !== 'windows') return;
@@ -121,9 +120,8 @@
       await window.__TAURI__.event.listen('desktop:detail-view',async event=>{
         await window.AieyesApp?.ready;
         const view=event.payload;
-        for(const key of ['provider','sourceId','accountKey','model','days','dateRange','cost'])if(view[key]!==undefined)state[key]=view[key];
-        state.page=view.page==='servers'?'servers':'agent';
-        await loadDashboard();render();
+        const hasFilters=['provider','sourceId','accountKey','model','days','dateRange','cost'].some(key=>Object.hasOwn(view,key));
+        await window.AieyesApp.navigatePage(['analysis','servers'].includes(view.page)?view.page:'agent',hasFilters?view:undefined);
       });
       const info = await invoke('desktop_info');
       update(info);

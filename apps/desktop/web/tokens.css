@@ -164,7 +164,7 @@
   --stat-padding: 14px;
   --token-card-padding: 12px;
   --radius-card: 16px;
-  --radius-control: 6px;
+  --radius-control: 8px;
   --radius-account-switch: 8px;
   --radius-overlay: 12px;
   --radius-badge: 999px;
@@ -212,8 +212,8 @@
   --dialog-wakeup-width: 550px;
   --dialog-hooks-width: 580px;
   --dialog-agy-width: 540px;
-  --card-border-opacity: 0.22;
-  --panel-card-opacity: 0.35;
+  --card-border-opacity: 0.3;
+  --panel-card-opacity: 0.46;
   --progress-track-opacity: 0.07;
   --chart-grid-opacity: 0.06;
   --model-chart-inner-ratio: 0.72;
@@ -245,6 +245,15 @@
   --surface-strong: #e9e9eb;
   --solid: #f7f7f8;
   --segment-selected: #ceced0;
+  --category-codex: #256b91;
+  --category-claude: #a35631;
+  --category-antigravity: #7953ba;
+  --category-deepseek: #385bc5;
+  --category-cpu: #226dad;
+  --category-memory: #297b68;
+  --category-gpu: #8455b2;
+  --category-storage: #926314;
+  --category-network: #326d83;
 }
 :root[data-theme=dark] {
   --ink: #efeff2;
@@ -266,6 +275,15 @@
   --surface-strong: #414147;
   --solid: #29292e;
   --segment-selected: #63636b;
+  --category-codex: #77c4ea;
+  --category-claude: #f2b18e;
+  --category-antigravity: #caadfa;
+  --category-deepseek: #a0b7ff;
+  --category-cpu: #87bef3;
+  --category-memory: #83d3bc;
+  --category-gpu: #c7a3ee;
+  --category-storage: #e7bf77;
+  --category-network: #84c6dd;
 }
 /* END GENERATED UI DESIGN TOKENS */
 

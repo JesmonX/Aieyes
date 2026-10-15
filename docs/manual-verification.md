@@ -4,6 +4,8 @@
 
 自动化入口：`sh scripts/ci-checks.sh [--rust]`、`npm run test:ui --prefix apps/desktop`、`sh scripts/test-native.sh`。共享检查包含发布、采集、唤醒、增量历史、旧账户历史、Antigravity 身份、Node 交互、重置格式及生成契约；远端 Codex 权限/锁测试依赖 POSIX，在 Unix 检查任务执行。Web 测试链包含真实核心的主题同步；`verify-models.swift` 在原生测试链中使用真实核心输出。面板偏好和重置格式由两端读取同一组 JSON 夹具。
 
+统一工作区的导航、账户摘要、筛选隔离与本轮验证结果见 [2026-10-15 工作区 UI 改版](workspace-redesign-2026-10-15.md)。`node scripts/test-workspace-ui.cjs` 可单独运行工作区交互检查并生成 Web 预览，原生 24 张截图矩阵的命令见该记录。
+
 以下工具保留为按需验证或维护入口；性能基准、真实联网下载及截图矩阵不作为每次 CI 的默认步骤。
 
 | 工具 | 用途与入口 |

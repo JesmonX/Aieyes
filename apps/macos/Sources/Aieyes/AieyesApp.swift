@@ -15,8 +15,6 @@ import Combine
     private let dockPresence = DockPresence()
     private var appearanceController: AppAppearanceController?
     private var detailWindow: NSWindow?
-    private var pageControl: NSSegmentedControl?
-    private var settingsWindow: NSWindow?
     private var accountSwitchWindow: NSWindow?
     private var samplingWindow: NSWindow?
     private var quotaOrderWindow: NSWindow?
@@ -88,8 +86,11 @@ import Combine
         }
         localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
-            if event.type == .keyDown, event.window === self.detailWindow, event.modifierFlags.contains(.command), let key = event.charactersIgnoringModifiers, ["1", "2"].contains(key) {
-                self.model.requestedDetailPage = key == "1" ? "agent" : "servers"; return nil
+            if event.type == .keyDown, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, event.charactersIgnoringModifiers == "," {
+                self.openSettings(); return nil
+            }
+            if event.type == .keyDown, event.window === self.detailWindow, event.modifierFlags.contains(.command), let key = event.charactersIgnoringModifiers, ["1", "2", "3"].contains(key) {
+                self.model.requestedDetailPage = key == "1" ? "agent" : key == "2" ? "analysis" : "servers"; return nil
             }
             guard self.popover.isShown else { return event }
             if event.type == .keyDown {
@@ -136,7 +137,7 @@ import Combine
     @objc private func applicationDeactivated() { dismissOutsidePanel() }
     func popoverDidClose(_ notification: Notification) { model.setWindowVisible(false, window: "panel") }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        let windows = [settingsWindow, detailWindow, panelAccountsWindow, quotaOrderWindow, samplingWindow].compactMap { $0 } + Array(estimateWindows.values)
+        let windows = [detailWindow, panelAccountsWindow, quotaOrderWindow, samplingWindow].compactMap { $0 } + Array(estimateWindows.values)
         if let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first(where: { $0.isVisible || $0.isMiniaturized }) {
             showWindow(window)
         } else { showPopover() }
@@ -169,53 +170,38 @@ import Combine
         var tooltip = "Aieyes · 今日全部数据 · " + model.sessionSummary + (model.sessionPhase.map { " · " + $0.rawValue } ?? "")
         if !model.runningEstimates.isEmpty { tooltip += " · " + model.samplingSummary }
         if button.toolTip != tooltip { button.toolTip = tooltip; button.setAccessibilityLabel(tooltip) }
-        if let window = settingsWindow, window.isDocumentEdited != model.settingsDirty { window.isDocumentEdited = model.settingsDirty }
-        let page = model.detailPage == "servers" ? 1 : 0
-        if pageControl?.selectedSegment != page { pageControl?.selectedSegment = page }
+        if let window = detailWindow, window.isDocumentEdited != model.settingsDirty { window.isDocumentEdited = model.settingsDirty }
+
     }
     private func openDetail(page: String? = nil) {
         if let page { model.requestedDetailPage = page; model.detailPage = page }
-        else if detailWindow == nil, let saved = UserDefaults.standard.string(forKey: NativePanelKey.detailPage.rawValue), ["agent", "servers"].contains(saved) { model.detailPage = saved }
+        else if detailWindow == nil, let saved = UserDefaults.standard.string(forKey: NativePanelKey.detailPage.rawValue), ["agent", "analysis", "servers", "settings"].contains(saved) { model.detailPage = saved }
         popover.performClose(nil)
         if detailWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
             let toolbar = NSToolbar(identifier: "AieyesDetailsToolbar"); toolbar.delegate = self; toolbar.displayMode = .iconOnly; window.toolbar = toolbar; window.toolbarStyle = .unified
             window.contentMinSize = NSSize(width: 760, height: 480)
             window.title = "Aieyes"; window.titlebarAppearsTransparent = true; window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: RootView(model: model, compact: false, page: page ?? model.detailPage)); window.center(); window.delegate = self
+            window.contentView = NSHostingView(rootView: MainWindowView(model: model)); window.center(); window.delegate = self
             window.setFrameAutosaveName("AieyesDetails"); detailWindow = window
         }
         if let window = detailWindow { fitToVisibleScreen(window) }
         if let window = detailWindow { showWindow(window) }; model.setWindowVisible(true, window: "detail")
     }
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.init("pages"), .flexibleSpace, .init("refresh")] }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, .init("refresh")] }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarAllowedItemIdentifiers(toolbar) }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         let item = NSToolbarItem(itemIdentifier: identifier)
-        if identifier.rawValue == "pages" {
-            let control = NSSegmentedControl(labels: ["Agent", "服务器"], trackingMode: .selectOne, target: self, action: #selector(detailPageChanged(_:)))
-            control.selectedSegment = model.detailPage == "servers" ? 1 : 0; control.setAccessibilityLabel("详情页面，Command 1 切换 Agent，Command 2 切换服务器"); control.toolTip = "Agent（⌘1） · 服务器（⌘2）"; pageControl = control; item.view = control; item.label = "页面"
-        } else if identifier.rawValue == "refresh" {
+        if identifier.rawValue == "refresh" {
             let button = NSPopUpButton(frame: .zero, pullsDown: true); button.addItem(withTitle: "刷新")
             for (index, title) in ["同步记录", "刷新限额", "同步价格", "刷新服务器"].enumerated() { let entry = NSMenuItem(title: title, action: #selector(toolbarRefresh(_:)), keyEquivalent: ""); entry.tag = index; entry.target = self; button.menu?.addItem(entry) }
             button.setAccessibilityLabel("刷新选项"); item.view = button; item.label = "刷新"
         }
         return item
     }
-    @objc private func detailPageChanged(_ sender: NSSegmentedControl) { model.requestedDetailPage = sender.selectedSegment == 1 ? "servers" : "agent" }
     @objc private func toolbarRefresh(_ sender: NSMenuItem) { Task { switch sender.tag { case 0: await model.scan(); case 1: await model.refreshQuotas(); case 2: await model.syncPrices(); default: await model.sampleHosts() } } }
     private func openSettings() {
-        popover.performClose(nil)
-        if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 600), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-            window.title = "Aieyes 设置"; window.titlebarAppearsTransparent = true; window.isReleasedWhenClosed = false; window.delegate = self
-            window.contentMinSize = NSSize(width: 620, height: 440)
-            window.contentView = NSHostingView(rootView: SettingsView(model: model))
-            if let screen = NSScreen.main { window.setContentSize(NSSize(width: min(760, screen.visibleFrame.width - 40), height: min(600, screen.visibleFrame.height - 70))) }
-            window.center(); window.setFrameAutosaveName("AieyesSettings"); settingsWindow = window
-        }
-        if let window = settingsWindow { fitToVisibleScreen(window) }
-        if let window = settingsWindow { showWindow(window) }
+        openDetail(page: "settings")
         model.settingsWindowVisible = true
     }
     private func prepareUpdate() async -> Bool {
@@ -239,7 +225,7 @@ import Combine
         let editors = AppUpdater.shared.editorPreparations.sorted { $0.value.order > $1.value.order }.map(\.key)
         for id in editors {
             guard let editor = AppUpdater.shared.editorPreparations[id] else { continue }
-            guard await editor.prepare() else { settingsWindow?.makeKeyAndOrderFront(nil); return false }
+            guard await editor.prepare() else { detailWindow?.makeKeyAndOrderFront(nil); return false }
             try? await Task.sleep(for: .milliseconds(100))
         }
         guard model.settingsDirty else { completed = await quiesceForUpdate(); return completed }
@@ -325,7 +311,7 @@ import Combine
         window.setFrame(frame, display: true)
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard sender === settingsWindow else { return true }
+        guard sender === detailWindow else { return true }
         if approvingSettingsClose { approvingSettingsClose = false; return true }
         guard !model.settingsSaving, !model.repricing, sender.attachedSheet == nil else { return false }
         guard model.settingsDirty else { return true }
@@ -350,29 +336,29 @@ import Combine
     }
     func windowWillClose(_ notification: Notification) {
         if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(false, window: "detail") }
-        if (notification.object as? NSWindow) === settingsWindow { model.settingsWindowVisible = false }
+        if (notification.object as? NSWindow) === detailWindow { model.settingsWindowVisible = false }
     }
     func windowDidChangeOcclusionState(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         let visible = window.occlusionState.contains(.visible) && !window.isMiniaturized
         if window === detailWindow { model.setWindowVisible(visible, window: "detail") }
-        if window === settingsWindow { model.settingsWindowVisible = visible }
+        if window === detailWindow { model.settingsWindowVisible = visible && model.detailPage == "settings" }
     }
     func windowDidMiniaturize(_ notification: Notification) {
         if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(false, window: "detail") }
-        if (notification.object as? NSWindow) === settingsWindow { model.settingsWindowVisible = false }
+        if (notification.object as? NSWindow) === detailWindow { model.settingsWindowVisible = false }
     }
     func windowDidDeminiaturize(_ notification: Notification) {
         if (notification.object as? NSWindow) === detailWindow { model.setWindowVisible(true, window: "detail") }
-        if (notification.object as? NSWindow) === settingsWindow { model.settingsWindowVisible = true }
+        if (notification.object as? NSWindow) === detailWindow { model.settingsWindowVisible = model.detailPage == "settings" }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if settingsWindow?.attachedSheet != nil { settingsWindow?.makeKeyAndOrderFront(nil); return .terminateCancel }
+        if detailWindow?.attachedSheet != nil { detailWindow?.makeKeyAndOrderFront(nil); return .terminateCancel }
         guard model != nil else { return .terminateNow }
         guard !model.settingsSaving, !model.repricing else { return .terminateCancel }
         guard model.settingsDirty else { return .terminateNow }
         openSettings()
-        guard let window = settingsWindow, window.attachedSheet == nil else { return .terminateCancel }
+        guard let window = detailWindow, window.attachedSheet == nil else { return .terminateCancel }
         let alert = NSAlert()
         alert.messageText = "退出前保存配置更改？"
         alert.informativeText = "保存全部配置，或放弃本次未保存的更改。"
@@ -427,6 +413,29 @@ import Combine
             UserDefaults.standard.setVolatileDomain(NativePanelKey.snapshotOverrides(panelQuotaExpanded: model.quotaAccounts.count <= 1), forName: UserDefaults.argumentDomain)
             let root = URL(fileURLWithPath: directory)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            if ProcessInfo.processInfo.environment["AIEYES_UI_WORKSPACE_ONLY"] == "1" {
+                for dark in [false, true] {
+                    for page in ["agent", "analysis", "servers", "settings"] {
+                        model.detailPage = page; model.settingsTab = "integrations"; model.settingsAgent = "codex"
+                        try await capture(MainWindowView(model: model), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("workspace-\(page)-\(dark ? "dark" : "light").png"))
+                        try await capture(MainWindowView(model: model), size: NSSize(width: 760, height: 480), dark: dark, to: root.appendingPathComponent("workspace-\(page)-small-\(dark ? "dark" : "light").png"))
+                    }
+                    model.detailPage = "agent"
+                    for height in [720, 440] {
+                        model.panelHeight = CGFloat(height)
+                        try await capture(RootView(model: model), size: NSSize(width: 450, height: height), dark: dark, to: root.appendingPathComponent("workspace-panel-\(height)-\(dark ? "dark" : "light").png"))
+                    }
+                    model.panelHeight = 720
+                    try await capture(RootView(model: model).environment(\.previewAccessibleSurfaces, true), size: NSSize(width: 450, height: 720), dark: dark, to: root.appendingPathComponent("workspace-panel-accessible-\(dark ? "dark" : "light").png"))
+                    var preview = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+                    preview[NativePanelKey.panelSessions.rawValue] = true
+                    UserDefaults.standard.setVolatileDomain(preview, forName: UserDefaults.argumentDomain)
+                    try await capture(RootView(model: model), size: NSSize(width: 450, height: 720), dark: dark, to: root.appendingPathComponent("workspace-sessions-\(dark ? "dark" : "light").png"))
+                    preview[NativePanelKey.panelSessions.rawValue] = false
+                    UserDefaults.standard.setVolatileDomain(preview, forName: UserDefaults.argumentDomain)
+                }
+                NSApp.terminate(nil); return
+            }
             for dark in [false, true] {
                 try await capture(RootView(model: model), size: NSSize(width: 450, height: 720), dark: dark, to: root.appendingPathComponent("translucent-panel-\(dark ? "dark" : "light").png"), opaqueBackground: false)
                 try await capture(RootView(model: model).environment(\.previewAccessibleSurfaces, true), size: NSSize(width: 450, height: 720), dark: dark, to: root.appendingPathComponent("opaque-panel-\(dark ? "dark" : "light").png"), opaqueBackground: false)

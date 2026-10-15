@@ -20,7 +20,7 @@ function historyFixture(){
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const browser=await chromium.launch({headless:true});
   try{
     const page=await browser.newPage({viewport:{width:1120,height:800}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));
-    await page.addInitScript(fixture);await page.addInitScript(historyFixture);await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.evaluate(()=>AieyesApp.ready);
+    await page.addInitScript(fixture);await page.addInitScript(historyFixture);await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.evaluate(()=>AieyesApp.ready);await page.evaluate(()=>AieyesApp.navigatePage("analysis"));
     await page.evaluate(()=>{refreshStopped=true;clearTimeout(refreshTimer);});
     assert.deepEqual(await page.locator('#days option').allTextContents(),['今日','最近 7 天','最近 30 天','最近 90 天','最近一年','所有','自定义日期']);
     await page.locator('#days').selectOption('all');await page.waitForFunction(()=>state.appliedFilters.dateRange?.kind==='all'&&!state.dashboardPending);
@@ -43,7 +43,7 @@ function historyFixture(){
     if(!await page.locator('[data-heat-year="2024"]').evaluate(el=>el.open))await page.locator('[data-heat-year="2024"] > summary').click();
     await page.waitForFunction(()=>document.querySelectorAll('[data-heat-day]').length===3);
     assert.equal(await page.locator('[data-heat-day]').count(),3);
-    await page.reload();await page.evaluate(()=>AieyesApp.ready);
+    await page.reload();await page.evaluate(()=>AieyesApp.ready);await page.evaluate(()=>AieyesApp.navigatePage("analysis"));
     assert.equal(await page.locator('#days').inputValue(),'custom');assert.equal(await page.locator('#range-start').inputValue(),'2024-02-28');
     await page.locator('#days').selectOption('7');await page.waitForFunction(()=>state.appliedFilters.days===7&&!state.appliedFilters.dateRange&&!state.dashboardPending);
     assert.equal(await page.locator('#range-start').count(),0);assert.equal(await page.evaluate(()=>rangeQueries.at(-1).dateRange),null);

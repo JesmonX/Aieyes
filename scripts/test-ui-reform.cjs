@@ -86,8 +86,8 @@ function fixture(){
    await page.keyboard.press('Escape');
    await page.evaluate(async()=>{state.model='missing';await loadDashboard();});assert.equal(await page.locator('.stat').count(),0);if(panel)await page.locator('.panel-filter-summary > summary').click();assert.equal(await page.getByRole('button',{name:'清除全部',exact:true}).count(),1);await page.getByRole('button',{name:'清除全部',exact:true}).click();await page.waitForFunction(()=>state.dashboard.summary.total>0);
    if(panel){
-    assert.equal(await page.locator('[data-agent-detail=panel-trend]').evaluate(el=>el.open),false);
-    assert.equal(await page.locator('.quota-disclosure').first().evaluate(el=>el.open),true);
+    assert.equal(await page.locator('#trend').count(),0,'Trend charts live on the analysis page');
+    assert.equal(await page.locator('.quota-disclosure').first().evaluate(el=>el.open),false);
     for(const row of await page.locator('.quota-windows .quota-window > .between').all()){
      assert.equal(await row.isVisible(),true,'Single account shows all window names and remaining percentages');
      assert.match(await row.textContent(),/剩余 \d/);
@@ -105,8 +105,8 @@ function fixture(){
     if(panel&&scenario==='single'){
      await page.screenshot({animations:'disabled',path:path.join(output,'panel-small-layout.png')});
      const footer=await page.locator('.panel-foot').boundingBox();
-     for(const value of await page.locator('.stat-value').all()){
-      const box=await value.boundingBox();assert.ok(box.y+box.height<=footer.y,`Today values fit above the footer at 450×540: ${JSON.stringify({box,footer})}`);
+     for(const value of await page.locator('.quota-window strong').all()){
+      const box=await value.boundingBox();assert.ok(box.y+box.height<=footer.y,`Collapsed quota values fit above the footer at 450×540: ${JSON.stringify({box,footer})}`);
      }
     }
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,`${surface}/${scenario}/${theme} horizontal overflow`);

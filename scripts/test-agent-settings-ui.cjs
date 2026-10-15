@@ -113,6 +113,7 @@ function browserFixture(){
     assert.equal(await page.locator('[data-settings-agent]').count(),await page.evaluate(()=>Object.keys(AieyesContract.providers).length));assert.equal(await page.locator('[data-agent-enable]').count(),1);
     assert.equal(await page.locator('#settings-save-all').count(),0);
     await page.locator('[data-settings-agent=claude]').click();await page.locator('[data-agent-enable="claude"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').enabled);
+    await page.locator('#agent-section-machines > summary').click();
     await page.locator('[data-agent-machine="claude"][value="server"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').machineIds.length===2);
     // Server switches are independent, and hidden selections survive edits and reloads.
     const showServers=()=>page.evaluate(()=>{state.settingsTab='hosts';render();});
@@ -150,7 +151,7 @@ function browserFixture(){
     assert.equal(await page.locator('[data-agent-machine="claude"][value="server"]').isChecked(),true);
     assert.equal(await page.locator('[data-agent-machine="claude"][value="local"]').isChecked(),true);
     await page.screenshot({path:path.join(out,'agents.png'),fullPage:true});
-    await page.locator('[data-settings-agent=codex]').click();await page.locator('[data-machine-directories="codex"][data-machine="local"]').click();await page.locator('[data-source-advanced="codex-local"]').click();
+    await page.locator('[data-settings-agent=codex]').click();await page.locator('#agent-section-machines > summary').click();await page.locator('[data-machine-directories="codex"][data-machine="local"]').click();await page.locator('[data-source-advanced="codex-local"]').click();
     assert(await page.locator('#field-hostId').isDisabled());assert.equal(await page.locator('#field-path').getAttribute('readonly'),null);assert.equal(await page.getByText('关联账户与限额',{exact:true}).count(),0);assert.equal(await page.locator('#field-quotaPreCommand').count(),0);
     await page.locator('#field-codexBinary').fill('codex-fixture');failSave=true;await page.locator('#editor-form button[type=submit]').click();await page.getByText('模拟保存失败，输入已保留',{exact:true}).waitFor();assert.equal(await page.locator('#field-codexBinary').inputValue(),'codex-fixture');failSave=false;
     await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.getElementById('editor').open);assert.equal((await rpc('settings.get')).sources[0].codexBinary,'codex-fixture');

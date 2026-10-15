@@ -3,59 +3,7 @@ const fs = require('node:fs'), path = require('node:path'), http = require('node
 const {chromium} = require('../apps/desktop/node_modules/playwright');
 const {serveFont} = require('./ui-test-helpers.cjs');
 
-function fixture({platform, failStatus = false}) {
-  window.setInterval = () => 0;
-  const stamp = Math.floor(Date.now() / 1000);
-  const accounts = Array.from({length: 6}, (_, i) => ({id: 'a' + i, name: 'Codex 账号 ' + i, provider: 'codex', quotaEnabled: true}));
-  accounts.push({id: 'claude', name: 'Claude 账号', provider: 'claude', quotaEnabled: true}, {id: 'deepseek', name: 'DeepSeek 账号', provider: 'deepseek', quotaEnabled: true});
-  const sources = accounts.map(a => ({id: 's-' + a.id, provider: a.provider, accountId: a.id, name: a.name + '来源', path: '/fixture/' + a.id, enabled: true, hostId: null}));
-  const settings = {version: 6, accounts, sources, agents: ['codex','claude','antigravity','deepseek','custom'].map(provider => ({provider, enabled: sources.some(s => s.provider === provider), machineIds: ['local']})), hosts: [{id: 'host', name: '测试服务器', target: 'fixture.invalid', enabled: true, metrics: ['cpu'], details: [], devices: [], shell: '/bin/bash', identityFile: ''}], modelMappings: {}, refreshSeconds: 300, historyRefreshSeconds: 400, serverForegroundRefreshSeconds: 3, serverRefreshSeconds: 12, historyShowDeletedAccounts: true, proxy: {mode: 'custom', url: 'http://proxy.invalid:8080'}, proxyTestUrls: ['https://fixture.invalid'], appearance: {theme: 'system', accent: 'indigo', chartPalette: 'classic', chartContrast: 'high'}, codexApis: [{id: 'api', sourceId: 's-a0', name: '已有 API', model: 'fixture', baseUrl: 'https://fixture.invalid/v1'}]};
-  const usage = {total: 70000, cost: 1, pricedTokens: 70000, events: 1, tokens: {input: 30000, output: 10000, cacheRead: 28000, cacheWrite: 2000}};
-  const record = {id: 'running', accountKey: 'codex:a0', kind: 'quota', status: 'active', samplingMode: 'manual', valuationMode: 'fiveHour', fiveHourValue: 20, weeklyValue: 100, weeklyDirectValue: 100, weeklyRatioValue: 110, startedAt: stamp - 100, checkpointAt: stamp, sourceIds: ['s-a0'], sourceNames: ['Codex 账号 0来源'], windowName: '5h', windowId: 'five', calculationNote: '测试样本', reason: '', consumedPercent: 10, totalTokens: 70000, pricedTokens: 70000, cost: 1, prices: []};
-  const quotas = accounts.map(a => ({provider: a.provider, accountId: a.id, name: a.name, sourceId: 's-' + a.id, updatedAt: stamp, origin: 'live', windows: a.provider === 'deepseek' ? [] : [{id: 'five', name: '5h', windowMinutes: 300, usedPercent: 20, resetsAt: stamp + 1000}, {id: 'week', name: '7d', windowMinutes: 10080, usedPercent: 10, resetsAt: stamp + 100000}], credits: a.provider === 'codex' ? {balance: '100', unlimited: false} : null}));
-  const nav = window.navigationFixture = {settings, quotas, records: [record, {...record, id: 'history', status: 'completed', checkpointAt: stamp - 20}], calls: [], listeners: {}, failSave: false, holdSave: false, failStatus};
-  const copy = v => structuredClone(v);
-  nav.emit = (name, payload) => Promise.all((nav.listeners[name] || []).map(fn => fn({payload})));
-  function merge(base, next, current) {
-    const out = copy(current);
-    for (const key of Object.keys(next)) if (JSON.stringify(base[key]) !== JSON.stringify(next[key])) out[key] = copy(next[key]);
-    return out;
-  }
-  function dashboard(params = {}) {
-    const day = new Date().toISOString().slice(0, 10);
-    return {generatedAt: Date.now() / 1000, summary: usage, quotas: quotas.filter(q => (!params.provider || q.provider === params.provider) && (!params.accountId || q.accountId === params.accountId)), quotaOrder: accounts.map(a => a.provider + ':' + a.id), quotaEstimates: copy(nav.records), creditEstimates: [], models: [{...usage, key: 'fixture'}], modelOptions: ['fixture'], trendDays: [{...usage, key: day}], heatmap: [{...usage, key: day}], dayModels: [{day, model: 'fixture', usage}], pricingGaps: [], sources: sources.map(s => ({...s, status: {updatedAt: stamp}}))};
-  }
-  window.__TAURI__ = {
-    event: {async listen(name, fn) {(nav.listeners[name] ||= []).push(fn); return () => {}; }},
-    window: {getCurrentWindow: () => ({async isMaximized() {return false;}, async onResized() {return () => {};}})},
-    core: {async invoke(command, args) {
-      nav.calls.push({command, args: copy(args)});
-      if (command === 'desktop_info' || command === 'desktop_panel') return {platform, page: 'agent', mode: 'floating', effectiveMode: 'floating', sessions: [], panelOpen: true, materials: {main: 'opaque', floating: 'opaque'}};
-      if (command !== 'engine_call') return {};
-      const {method, params} = args;
-      if (method === 'hello') return {version: 'fixture'};
-      if (method === 'settings.get') return copy(nav.settings);
-      if (method === 'dashboard' || method === 'dashboard.summary') return dashboard(method === 'dashboard.summary' ? {} : params);
-      if (method === 'settings.patch') {
-        if (nav.holdSave) {nav.holdSave = false; await new Promise(resolve => nav.releaseSave = resolve);}
-        if (nav.failSave) throw Error('模拟保存失败');
-        nav.settings = merge(params.base, params.settings, nav.settings); return copy(nav.settings);
-      }
-      if (method === 'credentials.save') return {path: '/fixture/updated-key'};
-      if (method === 'quotas.refresh') return copy(quotas);
-      if (method === 'quotaEstimates.stop') {nav.records.find(r => r.id === params.id).status = 'completed'; return {};}
-      if (method === 'hosts.sample') return [{id: 'host', sample: {timestamp: Date.now()/1000, cpu: [{id: 'cpu', utilization: 12}], errors: {}}}];
-      if (method === 'accounts.status.refresh') return {accountKey: params.accountKey, sourceId: params.sourceId, machineId: 'local', current: params.accountKey.endsWith(':a0'), credential: true, checkedAt: stamp};
-      if (method === 'accounts.status.get' && nav.failStatus) throw Error('模拟设备状态读取失败');
-      if (['accounts.status.get','accounts.cleanup.list','sources.scan','prices.list','wakeups.list'].includes(method)) return [];
-      if (method === 'accounts.deployments.sync') return {failedTasks: []};
-      if (method === 'codexAuth.inspect') return {profiles: [], processes: [], storageMode: 'file'};
-      if (method === 'sessions.list') return {sessions: [], warnings: []};
-      if (method === 'quotas.schedule') return {nextDueAt: stamp + 86400};
-      return {};
-    }}
-  };
-}
+const {fixture}=require('./workspace-ui-fixture.cjs');
 
 (async () => {
   const root = path.resolve(__dirname, '../apps/desktop/web'), out = path.resolve(__dirname, '../.local/ui-review-20261014-implementation/web');
@@ -76,7 +24,7 @@ function fixture({platform, failStatus = false}) {
       await page.addInitScript(fixture, {platform, failStatus: true});
       await page.goto(url); await page.evaluate(() => AieyesApp.ready);
       await page.locator('[data-page=settings]').click();
-      assert.deepEqual(await page.locator('[data-settings-tab]').allTextContents(), ['Agent 接入','服务器','价格','定时唤醒','常规']);
+      assert.deepEqual(await page.locator('[data-settings-tab]').allTextContents(), ['接入与账户','机器与采集','模型价格','定时唤醒','外观']);
       assert.equal(await page.locator('[data-settings-agent]').count(), 5);
       assert.equal(await page.locator('[data-agent-enable]').count(), 1);
       await page.locator('#account-status-error').waitFor();
@@ -84,7 +32,7 @@ function fixture({platform, failStatus = false}) {
       await page.locator('[data-settings-agent=claude]').click();
       await page.locator('[data-settings-tab=prices]').click();
       await page.evaluate(() => navigationFixture.emit('desktop:navigate', 'settings'));
-      await page.locator('[data-settings-tab=integrations][aria-selected=true]').waitFor();
+      await page.locator('[data-settings-tab=integrations][aria-current=page]').waitFor();
       assert.equal(await page.locator('[data-settings-agent=claude]').getAttribute('aria-current'), 'page');
       assert.equal(await page.evaluate(() => navigationFixture.calls.filter(c => c.args?.method === 'accounts.status.get').length), failedStatusCalls, 'failed automatic status reads do not retry on every render');
       await page.locator('[data-account-retry-status]').click();
@@ -126,7 +74,7 @@ function fixture({platform, failStatus = false}) {
       await page.locator('#cancel-editor').click();
 
       await page.locator('[data-settings-tab=general]').click();
-      assert.deepEqual(await page.locator('[data-general-page]').allTextContents(), ['外观','桌面显示','网络代理','刷新与历史','通知','更新']);
+      assert.deepEqual(await page.locator('[data-general-page]').allTextContents(), ['外观','桌宠与会话','网络代理','刷新与历史','通知','更新与关于']);
       for (const shortcut of ['Control+,', 'Meta+,']) {
         await page.keyboard.press(shortcut);
         assert.equal(await page.evaluate(() => state.settingsTab), 'integrations', shortcut + ' opens Agent integrations from another settings category');
@@ -205,6 +153,7 @@ function fixture({platform, failStatus = false}) {
       await page.waitForFunction(() => !state.estimateBusy); await page.locator('#quota-close').click();
       await page.evaluate(() => navigationFixture.quotas.unshift(navigationFixture.missingQuota));
       await page.evaluate(() => openSettings({provider: 'codex'}));
+      await page.locator('#agent-section-valuation > summary').click();
       await page.locator('[data-agent-estimates=codex]').click();
       await page.locator('#manual-sampling').waitFor();
       assert.equal(await page.locator('#manual-sampling').evaluate(el=>el.open), false);
@@ -231,6 +180,7 @@ function fixture({platform, failStatus = false}) {
       await page.locator('#cancel-editor').click();
       await page.locator('[data-page=settings]').click();
       await page.locator('[data-settings-agent=codex]').click();
+      await page.locator('#agent-section-machines > summary').click();
       const localMenu=page.locator('.agent-machine:has([data-agent-machine][value=local]) .machine-menu'),remoteMenu=page.locator('.agent-machine:has([data-agent-machine][value=host]) .machine-menu');
       await page.evaluate(()=>{const d=document.createElement('details');d.id='ordinary-disclosure';d.open=true;d.innerHTML='<summary>普通折叠区</summary><p>保持展开</p>';document.body.append(d);});
       await localMenu.locator('summary').click();await page.keyboard.press('ArrowDown');
@@ -267,7 +217,8 @@ function fixture({platform, failStatus = false}) {
       assert.equal(await panel.locator('.quota-disclosure[open]').count(), 0, 'multiple displayed accounts initially collapse');
       await page.evaluate(() => localStorage.setItem('aieyes.panel.accounts.v2', JSON.stringify({version: 2, providers: {codex: {mode: 'custom', keys: ['codex:a0']}, claude: {mode: 'custom', keys: []}, deepseek: {mode: 'custom', keys: []}}})));
       await panel.waitForFunction(() => document.querySelectorAll('.quota-card').length === 1);
-      assert.equal(await panel.locator('.quota-disclosure[open]').count(), 1, 'a single account initially expands after selection changes');
+      assert.equal(await panel.locator('.quota-disclosure[open]').count(), 0, 'a single account also starts collapsed');
+      await panel.locator('.quota-title').click();
       const counts = panel.locator('.device-count-line').first(); await counts.waitFor();
       assert(await counts.evaluate(el => {const r = el.getBoundingClientRect(); return r.right <= innerWidth && r.height <= parseFloat(getComputedStyle(el).lineHeight) + 1;}));
       assert.match(await panel.locator('#token-summary').getAttribute('title'), /缓存读取 ÷（普通输入＋缓存读取＋缓存写入），不包含输出 Token/);

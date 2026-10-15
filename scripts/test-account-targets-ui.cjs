@@ -40,6 +40,7 @@ function fixture(){
   try{
     const page=await browser.newPage({reducedMotion:'reduce'}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
     assert.equal(await page.locator('[data-switch-account="codex:old"]').count(),0);
+    for(const key of ['codex:a','codex:b'])await page.locator('[data-quota="'+key+'"] > details > summary').click();
     await page.locator('[data-device-counts="codex:a"]').getByText('已登录设备 1/3 · 使用中设备 1/3',{exact:true}).waitFor();
     await page.locator('[data-device-counts="codex:a"]').getByText(/使用中设备 1\/3/).waitFor();
     assert.match(await page.locator('[data-device-counts="codex:b"]').innerText(),/使用中设备 0\/3/);

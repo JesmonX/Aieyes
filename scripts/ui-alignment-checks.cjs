@@ -64,7 +64,7 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
       await page.keyboard.press('Escape');await dialog.waitFor({state:'hidden'});
     };
     try {
-      await page.goto(url);await ready();
+      await page.goto(url);await ready();await page.evaluate(()=>AieyesApp.navigatePage('analysis'));
       for(const width of [640,900,1040,1294,1800]) {
         await page.setViewportSize({width,height:840});
         const geometry=await page.evaluate(()=>{
@@ -73,7 +73,7 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
           return {padding:getComputedStyle(document.querySelector('main')).paddingLeft,stats:rect(stats),cards:[...stats.children].map(rect),cache:rect(cache),cacheItems:[...cache.children].map(rect),overflow:document.documentElement.scrollWidth>innerWidth};
         });
         assert(!geometry.overflow,`${platform} ${width}: content must fit`);
-        assert.equal(geometry.padding,`${design['content-padding']}px`);
+        assert.equal(geometry.padding,`${width<=800?16:design['content-padding']}px`);
         near(geometry.cards[0].x,geometry.stats.x,'first stat begins at the content edge');
         near(geometry.cards.at(-1).right,geometry.stats.right,'two stats fill the entire row');
         near(geometry.cards[0].width,geometry.cards[1].width,'stat widths match');
@@ -118,6 +118,7 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
         await page.evaluate(()=>AieyesAgentSettings.advanced(state.settings.sources[0],'codex'));
         await checkDialog('#editor','dialog-source-width','source-editor'+suffix);
         await page.evaluate(()=>{state.page='settings';state.settingsTab='integrations';state.settingsAgent='codex';render();});
+        if(!await page.locator('#agent-section-api').evaluate(el=>el.open))await page.locator('#agent-section-api > summary').click();
         await page.locator('[data-codex-api=add]').click();
         await checkDialog('#editor','dialog-api-width','api-editor'+suffix);
         await page.evaluate(()=>openPanelAccounts());
@@ -134,7 +135,7 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
         await page.setViewportSize(viewport);
         const panel=await page.evaluate(()=>{
           const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
-          return {tabs:rect('.panel-tabs'),head:rect('.panel-head'),body:rect('.panel-body'),foot:rect('.panel-foot'),stats:rect('.stats'),cards:[...document.querySelectorAll('.stats .stat')].map(el=>({height:el.getBoundingClientRect().height})),buttons:[...document.querySelectorAll('.panel-actions > button,.panel-more > summary')].map(el=>el.getBoundingClientRect().toJSON()),overflow:document.documentElement.scrollWidth>innerWidth};
+          return {tabs:rect('.panel-tabs'),head:rect('.panel-head'),body:rect('.panel-body'),foot:rect('.panel-foot'),usage:rect('.overview-usage'),quota:rect('.quota-heading'),buttons:[...document.querySelectorAll('.panel-actions > button,.panel-more > summary')].map(el=>el.getBoundingClientRect().toJSON()),overflow:document.documentElement.scrollWidth>innerWidth};
         });
         assert(!panel.overflow,'compact panel fits its client area');
         near(panel.tabs.width,design['panel-tabs-width'],'visible segmented picker width');
@@ -144,9 +145,9 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
         near(panel.head.bottom,panel.body.y,'panel body begins below fixed header');
         near(panel.body.bottom,panel.foot.y,'panel body ends above fixed footer');
         near(panel.foot.bottom,viewport.height,'footer remains at the window edge');
-        near(panel.stats.x,design['panel-padding'],'compact content inset');
-        near(panel.stats.width,viewport.width-2*design['panel-padding'],'compact stat row width');
-        for(const card of panel.cards)near(card.height,design['panel-stat-height'],'compact stat card height');
+        near(panel.usage.x,design['panel-padding'],'compact content inset');
+        near(panel.usage.width,viewport.width-2*design['panel-padding'],'compact usage width');
+        assert(panel.usage.bottom<=panel.quota.y,'usage summary appears above account quotas');
         for(const [i,button] of panel.buttons.entries()) {
           near(button.width,design['icon-button-size'],'footer button size');
           if(i)near(button.x-panel.buttons[i-1].right,design['space-control'],'footer button gap');

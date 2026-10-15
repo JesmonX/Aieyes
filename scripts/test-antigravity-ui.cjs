@@ -35,6 +35,7 @@ function fixture(){
   assert.equal(await card.locator('.quota-email').getAttribute('title'),'a.very.long.account.name.for.layout.verification@example.test');
   const pref=await page.evaluate(()=>JSON.parse(localStorage.getItem('aieyes.panel.accounts.v2')));assert.deepEqual(pref.providers.antigravity.keys,['antigravity:legacy-shared']);assert(!pref.providers.agy);
   if(panel){assert.equal(await page.evaluate(()=>state.accountKey),'antigravity:legacy-shared');assert.equal(await page.evaluate(()=>state.provider),'antigravity');assert.equal(await card.locator('details').evaluate(e=>e.open),false);await card.locator('.quota-title').click();}
+  if(!await card.locator('.quota-disclosure').evaluate(el=>el.open))await card.locator('.quota-title').click();
   const entries=card.locator('[data-estimate]');assert.equal(await entries.count(),3);
   assert.equal(await entries.nth(0).innerText(),'5h ≈ $10.00 7d ≈ $50.00/$60.00');assert.equal(await entries.nth(1).innerText(),'5h ≈ $100.00 7d ≈ $500.00/$600.00');
   await page.evaluate(()=>{agyFixture.records.push({...agyFixture.records[0],id:'legacy',groupId:null,valuationMode:'weekly',fiveHourValue:null,weeklyRatioValue:null});state.dashboard.quotaEstimates=agyFixture.records;render();});
@@ -44,7 +45,7 @@ function fixture(){
   assert.equal(await page.evaluate(()=>agyFixture.calls.filter(c=>c.method==='quotaEstimates.start').at(-1).params.windowId),'Claude and GPT Models:300');
   await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();await page.locator('#quota-close').click();
   await entries.nth(2).click();assert.equal(await page.locator('#estimate-start').count(),0);assert.match(await page.locator('#quota-dialog').innerText(),/映射/);await page.locator('#quota-close').click();
-  const credit=page.locator('[data-quota="codex:c"]');assert.equal(await credit.locator('[data-credit-estimate]').innerText(),'credits估值（当前1000credits≈$200.00）');
+  await page.locator('[data-overview-agent=""]').click();await page.waitForFunction(()=>!state.dashboardPending);const credit=page.locator('[data-quota="codex:c"]');if(!await credit.locator('.quota-disclosure').evaluate(el=>el.open))await credit.locator('.quota-title').click();assert.equal(await credit.locator('[data-credit-estimate]').innerText(),'credits估值（当前1000credits≈$200.00）');
   for(const theme of ['light','dark'])for(const width of panel?[360,420,450]:[640,1120]){
     await page.emulateMedia({colorScheme:theme});await page.setViewportSize({width,height:850});
     await page.evaluate(()=>{for(const e of agyFixture.records){e.fiveHourValue=987654;e.weeklyRatioValue=987654321;e.weeklyValue=987654321012;}state.dashboard.quotaEstimates=agyFixture.records;render();});

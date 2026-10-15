@@ -48,6 +48,7 @@ function fixture(){
  try{
   browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1180,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
   await page.evaluate(()=>{state.page='settings';state.settingsTab='accounts';render();});
+  await page.locator('#agent-section-machines > summary').click();
   await page.locator('.machine-menu > summary').first().click();await page.locator('[data-device-manage][data-intent="switch"]').first().click();
   assert.equal(await page.getByRole('button',{name:'读取账号',exact:true}).count(),0);await page.getByText('工作账号',{exact:true}).waitFor();
   await page.locator('[data-auth="switch"]').click();

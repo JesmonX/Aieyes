@@ -38,12 +38,18 @@ if scenario:
     dashboard['models'] = [dict(usage, key='test-model')]
     dashboard['modelOptions'] = ['test-model']
     dashboard['dayModels'] = [dict(day=day['key'], model='test-model', usage=usage) for day in dashboard['trendDays']]
-    if scenario == 'compact':
+    if scenario in ['compact', 'workspace']:
         GiB = 1024**3
         host.update(metrics=['cpu','memory','gpu','filesystems'],details=['gpuMemory','gpuThermals','fsAvailable','fsType','inodes'])
         hosts[0]['sample'].update(memory=dict(total=32*GiB,available=24*GiB),gpu=[dict(id='0',name='NVIDIA A100 80GB PCIe',utilization=87,memoryUsedMiB=61440,memoryTotalMiB=81920),dict(id='1',name='NVIDIA RTX 4090',utilization=0,memoryUsedMiB=0,memoryTotalMiB=24576)],filesystems=[dict(id='/',used=25*GiB,total=100*GiB,available=75*GiB,type='ext4'),dict(id='/data',used=0,total=GiB,available=GiB)])
         dashboard['quotaEstimates'] = [estimate,dict(estimate,id='gemini-preview',accountKey='antigravity:antigravity',groupId='Gemini Models',sourceIds=['antigravity-source'],windowName='Gemini Models · 5h')]
         dashboard['creditEstimates'] = [dict(estimate,id='credit-preview',kind='credits',valuationMode='',windowId='credits',windowName='Credits',status='active',weeklyValue=None,fiveHourValue=None,consumedCredits=10,valuePer1000=240)]
+        if scenario == 'workspace':
+            quotas.insert(1, dict(quotas[0], accountId='codex-team', sourceId='codex-team-source', name='团队订阅', plan='pro'))
+            quotas.insert(2, dict(sourceId='claude-source',accountId='claude',provider='claude',name='Claude 工作账户',plan='Max',updatedAt=stamp,origin='live',windows=[window('claude:5h','5h',81,300),window('claude:7d','7d',38)]))
+            quotas.append(dict(sourceId='deepseek-source',accountId='deepseek',provider='deepseek',name='DeepSeek API',updatedAt=stamp,origin='live',windows=[],balances=[dict(currency='CNY',total='230.56',granted='30.00',toppedUp='200.56')],isAvailable=True))
+            settings['accounts'] = [dict(id=q['accountId'], provider=q['provider'], name=q['name'], quotaEnabled=True) for q in quotas]
+            settings['sources'] = [dict(source(q['provider']), id=q['sourceId'], accountId=q['accountId']) for q in quotas]
     elif scenario == 'single':
         settings['sources'] = settings['sources'][:1]; settings['accounts'] = settings['accounts'][:1]; quotas = quotas[:1]
     elif scenario in ['multi', 'capacity']:
@@ -91,6 +97,9 @@ if scenario == 'api':
     dashboard['billingSummary']=dict(apiCost=12.45,apiTokens=1000000,apiPricedTokens=950000,apiHistoryTokens=980000,apiUnmeteredTokens=20000,subscriptionEquivalentCost=34.56,subscriptionTokens=2200000,subscriptionPricedTokens=2200000,unknownTokens=1500,incompleteRequests=2,currency='USD')
 scan = [dict(id=src['id'], error='连接失败：模拟日志不可读取') for src in settings['sources']] if scenario == 'failure' else []
 network=dict(testedAt=stamp,mode='system',averageMs=73,status='ok',sites=[dict(url='https://api.github.com/rate_limit',latencyMs=60,error=None),dict(url='https://openrouter.ai',latencyMs=86,error=None)])
+sessions=dict(sessions=[],sources=[],unavailable=scenario=='failure')
+if scenario == 'workspace':
+    sessions['sessions'] = [dict(id='preview-'+p,source=p,provider=p,machine='本机',machineId='local',sourceId=p+'-source',phase=phase,updatedAt=stamp) for p,phase in [('codex','needsInput'),('claude','working')]]
 statuses = [dict(accountKey=a['provider']+':'+a['id'],sourceId=s['id'],machineId=s.get('hostId') or 'local',current=i == 0 and s.get('accountId') == a['id'],credential=s.get('accountId') == a['id'],checkedAt=stamp) for i,a in enumerate(settings['accounts']) for s in settings['sources'] if s['provider']==a['provider']]
 # The browser and native renderer consume exactly the same synthetic data.
 if '--fixture' in sys.argv:
@@ -101,6 +110,6 @@ for line in sys.stdin:
     if r['method'] == 'dashboard' and r.get('params', {}).get('model') == 'ui-filter-failure':
         print(json.dumps(dict(jsonrpc='2.0', id=r['id'], error=dict(code=-32000, message='模拟筛选查询失败'))), flush=True)
         continue
-    result={'accounts.status.get':statuses,'accounts.status.refresh':next((v for v in statuses if v['accountKey']==r.get('params',{}).get('accountKey') and v['sourceId']==r.get('params',{}).get('sourceId')),{}),'accounts.cleanup.list':[],'accounts.deployments.sync':{'failedTasks':[]},'accounts.deletion.preview':{'tasks':[]},'settings.get':settings,'dashboard':dashboard,'dashboard.summary':dashboard,'prices.list':[price],'sessions.list':[],'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts,'network.test':network,'network.status':network}.get(r['method'],{})
+    result={'accounts.status.get':statuses,'accounts.status.refresh':next((v for v in statuses if v['accountKey']==r.get('params',{}).get('accountKey') and v['sourceId']==r.get('params',{}).get('sourceId')),{}),'accounts.cleanup.list':[],'accounts.deployments.sync':{'failedTasks':[]},'accounts.deletion.preview':{'tasks':[]},'settings.get':settings,'dashboard':dashboard,'dashboard.summary':dashboard,'prices.list':[price],'sessions.list':sessions,'wakeups.list':wakeups,'sources.scan':scan,'quotas.refresh':quotas,'hosts.sample':hosts,'network.test':network,'network.status':network}.get(r['method'],{})
     if r['method']=='codexApi.status': result=dict(configRevision='fixture-config',defaultProvider='aieyes_api_fixture-api_fixture-revision',installed=True,ready=True)
     print(json.dumps(dict(jsonrpc='2.0',id=r['id'],result=result)),flush=True)

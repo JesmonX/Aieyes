@@ -53,6 +53,7 @@ function fixture(){
       assert.equal(await page.locator('.billing-breakdown').count(),0);
       if(surface==='floating.html'){assert.equal(errors.length,0,errors.join('\n'));await page.close();continue;}
       await page.evaluate(()=>{state.page='settings';state.settingsTab='integrations';state.settingsAgent='codex';render();});
+      await page.locator('#agent-section-api > summary').click();
       await page.locator('[data-codex-api="add"]').click();
       assert.equal(await page.locator('#field-apiModel,#field-apiEffort,#field-apiProxy,#field-apiPrices').count(),0);
       await page.locator('#field-apiName').fill('测试 API');await page.locator('#field-apiKey').fill('fixture-key');

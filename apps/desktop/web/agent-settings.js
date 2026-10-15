@@ -199,8 +199,15 @@
     let body;
     if(directorySelection)body=agentsHTML();
     else if(showCodex||state.settings.accounts.some(a=>accountKey(a)===detailKey))body=accountsHTML();
-    else body=`<section class="card agent-integration-header"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving?'disabled':''} ${agent.enabled?'checked':''}>启用</label></div>${agent.provider==='deepseek'?'<p class="muted">添加 API Key，通过本机查询账户余额。</p>':`<button type="button" data-agent-estimates="${e(agent.provider)}">估值与采样</button>`}</section>`+agentsHTML()+accountsHTML();
-    return `<div class="settings-layout">${settingsSidebar(configurations().map(a=>[a.provider,providers[a.provider]??a.provider]),agent.provider,'data-settings-agent','选择 Agent')}<div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
+    else {
+      const section=(key,title,detail,content,opened=false)=>`<details class="card settings-disclosure" id="agent-section-${key}" data-agent-detail="settings:${agent.provider}:${key}" data-persist-disclosure="settings:${agent.provider}:${key}" ${disclosureOpen('settings:'+agent.provider+':'+key,opened)?'open':''}><summary><strong>${title}</strong><small>${e(detail)}</small></summary><div class="settings-section-body">${content}</div></details>`;
+      body=`<section class="card agent-integration-header" data-provider="${e(agent.provider)}"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving?'disabled':''} ${agent.enabled?'checked':''}>启用</label></div>${agent.provider==='deepseek'?'<p class="muted">添加 API Key，通过本机查询账户余额。</p>':''}</section>`;
+      body+=section('accounts','账户',state.settings.accounts.filter(a=>a.provider===agent.provider&&!a.archived).length+' 个账户',accountsHTML(false),true);
+      body+=section('api','API 连接',agent.provider==='codex'?(state.settings.codexApis??[]).length+' 个连接':'由账户管理',agent.provider==='codex'?(window.AieyesCodexAPI?.html()??''):'<p class="muted">此 Agent 的连接凭证在账户设置中管理。</p>');
+      body+=section('machines','机器与目录',agent.machineIds.length+' 台机器',agent.provider==='deepseek'?'<p class="muted">通过本机直接查询账户余额，无需日志目录。</p>':agentsHTML());
+      body+=section('valuation','估值与采样','自动估值与采样记录',agent.provider==='deepseek'?'<p class="muted">余额由 API 直接提供，无需额度估值。</p>':`<p class="muted">按来源管理自动估值，查看采样状态和已有记录。</p><button type="button" data-agent-estimates="${e(agent.provider)}">管理估值与采样</button>`);
+    }
+    return `<div class="settings-layout"><nav class="settings-agent-selector" aria-label="选择 Agent">${configurations().map(a=>`<button type="button" data-settings-agent="${e(a.provider)}" ${a.provider===agent.provider?'class="active" aria-current="page"':''}>${e(providers[a.provider]??a.provider)}</button>`).join('')}</nav><div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
   }
   function agentsHTML() {
     if(directorySelection){const {provider,machine}=directorySelection,unbound=machine!=='local'&&!state.settings.hosts.some(h=>h.id===machine);return `<button id="directories-back">返回 Agent 接入</button><section class="card"><h2>${e(providers[provider])} · ${e(deviceName(machine))}</h2>${machineSources(provider,machine).map(s=>`<div class="list-row"><code class="row-body">${e(s.path)}</code>${s.machineBinding==='unbound'?`<span class="muted">机器未绑定</span><button data-source-rebind="${e(s.id)}">重新绑定机器</button>`:`<button data-source-advanced="${e(s.id)}">编辑目录</button>`}<button class="danger" data-source-remove="${e(s.id)}">移除目录配置</button></div>`).join('')}${unbound?'':`<button data-source-add="${e(provider)}">添加目录</button>`}<p class="muted">只配置采集位置，不移动文件。远程 Shell 位于服务器设置，前置命令位于账户设置。</p></section>`;}
@@ -214,14 +221,14 @@
       }).join('')}</fieldset>${!hosts.some(h=>!h.unbound&&h.enabled)?'<p class="muted">暂无可采集机器，请在服务器设置开启 Agent 采集。</p>':a.machineIds.some(id=>hosts.some(h=>!h.unbound&&h.id===id))?'':'<p class="muted">未选择机器，暂不采集。</p>'}<button data-agent-host>添加 SSH 主机</button></section>`;
     }).join('');
   }
-  function accountsHTML() {
+  function accountsHTML(includeAPI=true) {
     if(showCodex)return '<button id="accounts-back">返回账户</button>'+window.AieyesCodexAuth.html();
     const detail=state.settings.accounts.find(a=>accountKey(a)===detailKey);
     if(detail)return detailsHTML(detail);
     const row=a=>`<div class="list-row"><div class="row-body"><strong>${e(a.name)}</strong><small data-account-summary="${e(accountKey(a))}">${e(counts(a))}</small><small data-account-identity="${e(accountKey(a))}" class="account-identity">${e(identityText(statusRows.find(r=>r.accountKey===accountKey(a)&&r.current===true&&r.identity)))}</small></div><button data-account-edit="${e(accountKey(a))}">设置</button></div>`;
     const groups=configurations().filter(config=>config.provider===state.settingsAgent);
     return syncHTML()+groups.map(config=>`<section class="card account-agent-group" id="agent-accounts"><div class="between"><h2>账户</h2><button data-account-add="${e(config.provider)}" class="primary" ${config.enabled?'':'disabled'}>添加账户</button></div>${state.settings.accounts.filter(a=>a.provider===config.provider&&!a.archived).map(row).join('')||'<p class="muted">尚未添加账户</p>'}</section>`).join('')+
-    (state.settingsAgent==='codex'?(window.AieyesCodexAPI?.html()??''):'')+
+    (includeAPI&&state.settingsAgent==='codex'?(window.AieyesCodexAPI?.html()??''):'')+
     (state.settings.accounts.some(a=>a.archived&&a.provider===state.settingsAgent)?`<details class="card" data-agent-detail="archived-accounts"><summary>已归档账户</summary>${state.settings.accounts.filter(a=>a.archived&&a.provider===state.settingsAgent).map(a=>`<div class="list-row"><span class="row-body">${e(providers[a.provider])} · ${e(a.name)}</span><button data-account-restore="${e(accountKey(a))}">恢复</button><button class="danger" data-account-delete="${e(accountKey(a))}">删除账户</button></div>`).join('')}</details>`:'')+
     (cleanupRows.length?`<details class="card" data-agent-detail="abandoned-tasks"><summary>已解除管理的远端任务（可能仍在运行）</summary>${cleanupRows.map(r=>`<h3>${e(r.name)}</h3>${r.tasks.map(t=>`<p>${e(t.name)} · ${e(t.machine)} · <code>${e(t.root)}</code></p>`).join('')}`).join('')}</details>`:'');
   }
