@@ -158,7 +158,7 @@ function endRefresh(key,error,itemId=null){const r=state.refreshState[key];r.bus
 const timeLabel = stamp => new Date(stamp).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 let pendingRender=false;
 function interactionOpen() {
-  return Boolean(($('#token-popover')&&!$('#token-popover').hidden)||$('#editor')?.open||$('#quota-dialog')?.open||$('#panel-more')?.open||($('#panel-menu')&&!$('#panel-menu').hidden)||($('#refresh-menu')&&!$('#refresh-menu').hidden)||$('.machine-menu[open]'));
+  return Boolean(window.AieyesSingleSelect?.isOpen()||window.AieyesSelect?.isOpen?.()||($('#token-popover')&&!$('#token-popover').hidden)||$('#editor')?.open||$('#quota-dialog')?.open||$('#panel-more')?.open||($('#panel-menu')&&!$('#panel-menu').hidden)||($('#refresh-menu')&&!$('#refresh-menu').hidden)||$('.machine-menu[open]'));
 }
 function flushRender() {
   if(pendingRender&&!interactionOpen()){pendingRender=false;render();}
@@ -188,6 +188,7 @@ function rememberView() {
     scrollers:[...document.querySelectorAll('#content .daily-table,#content .prices-list')].map(el=>({className:el.className,top:el.scrollTop,left:el.scrollLeft}))};
 }
 function restoreView(view) {
+  window.AieyesSingleSelect?.mountAll($('#content'));
   for(const key of view.closed??[]){const el=document.querySelector('[data-agent-detail="'+CSS.escape(key)+'"]');if(el&&el.dataset.collapsible!=='false')el.open=false;}
   for(const [attribute,value] of view.opened){const el=document.querySelector(`[${attribute}="${CSS.escape(value)}"]`);if(el){el.open=true;if(el.tagName==='TBODY'){el.setAttribute('open','');el.querySelector('[data-day-toggle]')?.setAttribute('aria-expanded','true');el.querySelectorAll('.day-model').forEach(row=>row.hidden=false);}}}
   if(view.focus)document.querySelector(view.focus)?.focus({preventScroll:true});
@@ -529,6 +530,7 @@ function stat(label,value,detail,icon) {
   icon=uiIcon(({'✧':'sparkle','▱':'terminal','↗':'trend','$':'money'})[icon]??'sparkle');
   return `<div class="stat"><div class="stat-label"><span>${label}</span><b>${icon}</b></div><div class="stat-value">${value}</div>${detail?`<small>${detail}</small>`:''}</div>`; }
 function render() {
+  window.AieyesMotion?.captureNavigation();
   captureSettingsForms();savePanelView();
   document.querySelectorAll('[data-page]').forEach(b=>{const active=b.dataset.page===state.page;b.classList.toggle('active',active);if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
   const title=$('#title');if(title)title.textContent = {agent:'使用概览',servers:'服务器',settings:'设置'}[state.page];
@@ -602,6 +604,7 @@ function bindRangeControl(){
 }
 function renderAgent() {
   const d=state.dashboard;if(!d)return;
+  window.AieyesMotion?.captureNavigation();
   if(PANEL){renderAgentPanel(d);return;}
   const view=rememberView();
   const s=d.summary,t=s.tokens,models=d.models;
@@ -630,6 +633,7 @@ function renderAgent() {
   if($('#repair-pricing'))$('#repair-pricing').onclick=openPricing;
   shortenEmptyUsage(d);restoreView(view);
   bindAnalysis();requestAnimationFrame(drawTrend);
+  window.AieyesMotion?.didRender('agent');
 }
 function panelTrendExpanded(){try{return localStorage.getItem('aieyes.panel.trend')==='true';}catch(_){return false;}}
 function renderAgentPanel(d) {
@@ -651,6 +655,7 @@ function renderAgentPanel(d) {
   $('#open-detail').onclick=openDetail;
   bindSetup();shortenEmptyUsage(d);restoreView(view);
   bindAnalysis();requestAnimationFrame(drawTrend);
+  window.AieyesMotion?.didRender('agent');
 }
 function shortenEmptyUsage(d) {
   if(d.summary.total||(d.trendDays??[]).some(day=>day.total)||(d.heatmap??[]).some(day=>day.total))return;
@@ -806,7 +811,7 @@ function serverSummary(host,sample) {
   const filesystems=hostDevices(host,'filesystems',sample?.filesystems),fsSummary=enabled('filesystems')?`<div class="server-filesystems"><span class="muted">文件系统</span><div class="server-filesystem-list">${filesystems.length?filesystems.map(fs=>`<div data-filesystem="${escapeHTML(fs.id)}">${resourceStrip(fs.id,capacityPercent(fs.used,fs.total),capacityPair(fs.used,fs.total))}</div>`).join(''):`<span class="muted">${sample?.filesystems?'无已选挂载点':'—'}</span>`}</div></div>`:'';
   return `<div class="server-summary-metrics">${system?`<div class="server-system-metrics">${system}</div>`:''}${gpuCards?`<div class="server-gpu-list">${gpuCards}</div>`:enabled('gpu')?`<span class="muted">GPU ${sample?.gpu?'无已选设备':'—'}</span>`:''}${fsSummary}<div class="server-summary-facts">${hostShows(host,'uptime')?`<span data-host-uptime>连续运行 <strong>${uptimeText(sample?.uptime)}</strong></span>`:''}${hostShows(host,'networkTotals')&&enabled('network')?(networks.length?networks.map(n=>`<span class="server-network-total" data-network-total="${escapeHTML(n.id)}"><span>${escapeHTML(n.id)} 累计</span><strong>↓ ${bytes(n.rxBytes)} · ↑ ${bytes(n.txBytes)}</strong></span>`).join(''):`<span>累计流量 ${sample?.network?'无已选网卡':'—'}</span>`):''}<span class="server-sample-time muted">采样 ${date(sample?.timestamp)}${!host.enabled?' · 已暂停，保留旧读数':''}</span></div></div>`;
 }
-function renderServers() { window.AieyesServers.render(); }
+function renderServers() { window.AieyesMotion?.captureNavigation();window.AieyesServers.render();window.AieyesSingleSelect?.mountAll($('#content'));window.AieyesMotion?.didRender('servers'); }
 function serverGroupContent(key,value,host) {
   const show=key=>hostShows(host,key);
   const row=(name,value)=>`<div class="metric-row"><span>${escapeHTML(name)}</span><strong>${value}</strong></div>`;
@@ -926,6 +931,7 @@ function generalSettingsHTML(s,tab=state.generalTab) {
   return `<div class="settings-layout">${settingsSidebar(generalPages,tab,'data-general-page','常规设置分类')}<div class="settings-subpage" data-general-section="${tab}">${body}</div></div>`;
 }
 function renderSettings(capture=true) {
+  window.AieyesMotion?.captureNavigation();
   if(capture)captureSettingsForms();const view=rememberView();
   if(state.settingsTab==='connection')state.generalTab='network';
   state.settingsTab=settingsCategory(state.settingsTab);
@@ -1017,6 +1023,7 @@ function renderSettings(capture=true) {
   document.querySelectorAll('[data-unmap]').forEach(b=>b.onclick=()=>job('移除模型映射',async()=>{const next=structuredClone(state.settings);delete next.modelMappings[b.dataset.unmap];await saveSettings(next);renderSettings(false);}));
   if($('#reprice'))$('#reprice').onclick=()=>job('保存并重算',async()=>{const button=$('#reprice');state.repricing=true;button.disabled=true;button.textContent='保存并重算中…';try{await saveAllSettings({clearForms:false,refresh:false});await api('prices.recalculate');$('#mapping-form').reset();resetSettingsForm('mapping-form');await loadDashboard();renderSettings();notify('已保存并按当前价格重算');}finally{state.repricing=false;const current=$('#reprice');if(current){current.disabled=false;current.textContent='保存并重算';}}});
   restoreView(view);if(state.repricing&&$('#reprice')){$('#reprice').disabled=true;$('#reprice').textContent='保存并重算中…';}
+  window.AieyesMotion?.didRender('settings:'+state.settingsTab+':'+(state.settingsTab==='general'?state.generalTab:state.settingsTab==='integrations'?state.settingsAgent:''),$('#settings-panel'));
 }
 let editorSelectors=[],editorSaving=false,editorOpener=null,editorOpenerSelector=null,editorBaseline='',editorExtraSnapshot=()=>null;
 const editorSnapshot=()=>JSON.stringify([AieyesUI.formValues($('#editor-form')),editorExtraSnapshot()]);
@@ -1052,6 +1059,7 @@ function showEditor(title,html,onSubmit,kind='source'){
     else {$('#editor-error').tabIndex=-1;$('#editor-error').focus({preventScroll:true});}
   };
   queueMicrotask(()=>{editorBaseline=editorSnapshot();});
+  window.AieyesSingleSelect?.mountAll($('#editor'));
   // Keep native-window controls interactive; only the application page is inert.
   $('.shell').inert=true;$('#editor-backdrop').hidden=false;document.body.classList.add('editor-open');$('#editor').show();
   $('#cancel-editor').focus();
@@ -1214,7 +1222,7 @@ function editPrice(existing){const price=structuredClone(existing??{id:'',name:'
 }
 if(!PANEL){
   const aside=document.querySelector('aside'),toggle=document.createElement('button');toggle.id='sidebar-toggle';toggle.title='收起或展开导航';toggle.setAttribute('aria-label','收起或展开导航');toggle.innerHTML=uiIcon('menu');aside?.prepend(toggle);
-  const update=()=>{const saved=localStorage.getItem('sidebar.collapsed'),collapsed=saved==null?innerWidth<(document.documentElement.dataset.platform==='windows'?974:1000):saved==='true';document.body.classList.toggle('sidebar-collapsed',collapsed);toggle.setAttribute('aria-expanded',String(!collapsed));toggle.textContent=collapsed?'»':'«';};toggle.onclick=()=>{localStorage.setItem('sidebar.collapsed',String(!document.body.classList.contains('sidebar-collapsed')));update();};addEventListener('resize',update);update();
+  const update=()=>{const saved=localStorage.getItem('sidebar.collapsed'),collapsed=saved==null?innerWidth<(document.documentElement.dataset.platform==='windows'?974:1000):saved==='true';document.body.classList.toggle('sidebar-collapsed',collapsed);toggle.setAttribute('aria-expanded',String(!collapsed));toggle.textContent=collapsed?'»':'«';};toggle.onclick=()=>{localStorage.setItem('sidebar.collapsed',String(!document.body.classList.contains('sidebar-collapsed')));if(window.AieyesMotion)AieyesMotion.sidebar(update);else update();};addEventListener('resize',update);update();
 }
 document.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>{
   if(button.dataset.page==='settings'){void openSettings();return;}
@@ -1340,6 +1348,7 @@ async function boot(){
 }
 window.AieyesApp={
   openSettings,
+  flushRender,
   async openSetupInMain(kind){if(!state.settings)await appReady;await openSetup(['hosts','quota'].includes(kind)?kind:'sources');},
   async refreshPanel(){await appReady;await refreshExternalData(true);if(state.page==='servers'&&!state.hosts.length)await sample();},
   applyHostSamples,

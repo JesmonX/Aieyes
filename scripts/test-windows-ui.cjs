@@ -34,7 +34,7 @@ function installFixture(data) {
     for(const scenario of ['empty','single','multi','long','failure','capacity']) {
       const data=JSON.parse(execFileSync(process.platform==='win32'?'python':'python3',[path.join(__dirname,'preview-quota-core.py'),'--fixture'],{env:{...process.env,AIEYES_UI_SCENARIO:scenario,AIEYES_UI_STAMP:'1791342000'},encoding:'utf8'}));
       for(const dark of [false,true]) {
-        const context=await browser.newContext({viewport:{width:1294,height:840},colorScheme:dark?'dark':'light'});
+        const context=await browser.newContext({viewport:{width:1294,height:840},colorScheme:dark?'dark':'light',reducedMotion:'reduce'});
         await context.addInitScript(installFixture,data);
         const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(String(e)));
         await page.goto(`http://127.0.0.1:${server.address().port}`);
@@ -103,7 +103,7 @@ function installFixture(data) {
     const materialData=JSON.parse(execFileSync(process.platform==='win32'?'python':'python3',[path.join(__dirname,'preview-quota-core.py'),'--fixture'],{env:{...process.env,AIEYES_UI_SCENARIO:'single'},encoding:'utf8'}));
     const materialReport=[];
     for(const surface of ['index.html','floating.html']) {
-      const context=await browser.newContext({viewport:{width:surface==='index.html'?1294:450,height:surface==='index.html'?840:720}});
+      const context=await browser.newContext({viewport:{width:surface==='index.html'?1294:450,height:surface==='index.html'?840:720},reducedMotion:'reduce'});
       await context.addInitScript(installFixture,materialData);
       const page=await context.newPage();await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);
       await page.waitForFunction(()=>state.dashboard&&!state.busy);await page.evaluate(()=>AieyesTheme.loadFonts());
@@ -140,7 +140,7 @@ function installFixture(data) {
     fs.writeFileSync(path.join(out,'materials.json'),JSON.stringify(materialReport,null,2));
     // Bundled faces must render on all hosts; DPR checks include fractional scaling.
     for(const deviceScaleFactor of [1,1.25,1.5,2]) {
-      const context=await browser.newContext({viewport:{width:450,height:720},deviceScaleFactor});
+      const context=await browser.newContext({viewport:{width:450,height:720},deviceScaleFactor,reducedMotion:'reduce'});
       const data=JSON.parse(execFileSync(process.platform==='win32'?'python':'python3',[path.join(__dirname,'preview-quota-core.py'),'--fixture'],{env:{...process.env,AIEYES_UI_SCENARIO:'single'},encoding:'utf8'}));
       await context.addInitScript(installFixture,data);const page=await context.newPage();
       await page.goto(`http://127.0.0.1:${server.address().port}/floating.html`);await page.waitForFunction(()=>state.dashboard&&!state.busy);

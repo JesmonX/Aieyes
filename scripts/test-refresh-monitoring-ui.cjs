@@ -35,7 +35,7 @@ function fixture(){
   try{
     browser=await chromium.launch({headless:true});
     for(const surface of ['index.html','floating.html']){
-      const page=await browser.newPage({viewport:{width:surface==='index.html'?1120:450,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);
+      const page=await browser.newPage({viewport:{width:surface==='index.html'?1120:450,height:900},reducedMotion:'reduce'}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);
       await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.evaluate(()=>AieyesApp.ready);await page.waitForFunction(()=>!state.busy&&!state.quotaBusy);
       const heading=page.locator('.overview-heading'),position=await heading.boundingBox();
       await page.evaluate(()=>{refreshTest.hold=true;void scan();});await page.waitForFunction(()=>refreshTest.release);

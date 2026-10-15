@@ -40,6 +40,8 @@
       pin.setAttribute('aria-label', pin.title);
     }
     if (was && !panelOpen) {
+      window.AieyesSingleSelect?.closeActive(false);
+      window.AieyesMotion?.panel(false);
       closeMenu();
       const more = document.querySelector('#panel-more');
       if (more) more.open = false;
@@ -49,6 +51,7 @@
     if (!was && panelOpen) {
       window.AieyesNetwork?.refresh();
       if (typeof render === 'function') render();
+      window.AieyesMotion?.panel(true);
       requestAnimationFrame(() => { if (typeof drawTrend === 'function') drawTrend(); });
       // Mouse-opened floating surfaces preserve the other application's keyboard focus.
       const refresh=window.AieyesApp?.refreshPanel;

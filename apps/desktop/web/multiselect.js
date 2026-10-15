@@ -100,6 +100,8 @@
       const height = panel.offsetHeight;
       const top = below >= height ? rect.bottom + gap : rect.top - height - gap;
       panel.style.top = `${Math.max(topMargin, Math.min(top, window.innerHeight - height - 12))}px`;
+      panel.style.setProperty('--win-menu-origin',below>=height?'top center':'bottom center');
+      panel.style.setProperty('--win-menu-offset',below>=height?'4px':'-4px');
     }
     function outside(event) { if (!panel.contains(event.target) && !trigger.contains(event.target)) close(false); }
     function keydown(event) {
@@ -107,7 +109,8 @@
     }
     function focusout(event) { if (!panel.contains(event.target) && event.target !== trigger) close(false); }
     function open() {
-      active?.close(false); active = controller; search.value = ''; panel.hidden = false;
+      window.AieyesSingleSelect?.closeActive(false);
+      active?.close(false);window.AieyesMotion?.finishMenuExits(); active = controller; search.value = ''; panel.hidden = false;panel.removeAttribute('aria-hidden');
       renderOptions();
       if (panel.showPopover) panel.showPopover();
       position();
@@ -119,12 +122,13 @@
     function reposition(event) { if (event.type === 'resize' || !panel.contains(event.target)) position(); }
     function close(focus = true) {
       if (panel.hidePopover && panel.matches(':popover-open')) panel.hidePopover();
-      panel.hidden = true; trigger.setAttribute('aria-expanded', 'false');
+      panel.hidden = true;panel.setAttribute('aria-hidden','true'); trigger.setAttribute('aria-expanded', 'false');
       doc.removeEventListener('pointerdown', outside, true); doc.removeEventListener('keydown', keydown, true);
       doc.removeEventListener('focusin', focusout); window.removeEventListener('resize', reposition);
       doc.removeEventListener('scroll', reposition, true);
       if (active === controller) active = null;
       if (focus) trigger.focus();
+      queueMicrotask(()=>window.AieyesApp?.flushRender?.());
     }
     const controller = {refresh, close, destroy() {close(false); panel.remove();}};
     trigger.onclick = () => panel.hidden ? open() : close();
@@ -135,5 +139,5 @@
     const rules=globalThis.AieyesContract.filesystems,path=id.replace(/\\/g,'/').toLowerCase();
     return !rules.excludedTypes.includes(type.toLowerCase())&&!rules.excludedPaths.some(p=>path===p||path.startsWith(p+'/'));
   }
-  globalThis.AieyesSelect = {recommendedFilesystem,parse, deviceIds, deviceSelected, writeDevices, applySelection, filterOptions, mount};
+  globalThis.AieyesSelect = {recommendedFilesystem,parse, deviceIds, deviceSelected, writeDevices, applySelection, filterOptions, mount,isOpen:()=>Boolean(active),closeActive:(focus=false)=>active?.close(focus)};
 })();

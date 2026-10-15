@@ -1,4 +1,4 @@
-# Windows 外观对齐（2026-10-14）
+# Windows 外观与交互（2026-10-15）
 
 Windows 使用本地鸿蒙黑体，内容尺寸以当前原生 macOS 界面为参照，保留独立的左侧导航。概览、服务器、全部设置、弹窗和展开的悬浮面板共用控件与图表样式；Linux 使用同一套内容规则。主窗口与展开的悬浮面板分别请求原生桌面材质；网页仅在对应窗口的原生调用成功后启用半透明表面。
 
@@ -55,9 +55,26 @@ Web 专用的控件表面、边缘阴影与设置卡片降级色在 `tokens.css`
 
 复选框统一为 16 × 16，开关保持 42 × 20，标签间距为 8 像素并对齐首行。复选框保留原生输入、键盘、禁用及表单语义；高对比度模式恢复系统复选框外观。按钮、输入框和选择器共用轻边框、轻阴影及悬停、按下、焦点和禁用反馈。
 
-外观页的四个下拉框共用 220 像素列宽；可用内容宽度不足时，标签与选择器上下排列。普通选择器保持 26 像素、紧凑筛选器保持 24 像素，原生单选菜单继续负责展开交互。多选按钮与单选框共用箭头，长标题省略时保留完整提示。多选弹层显示后按实际高度定位，短列表贴近按钮，窗口缩放时重新限制在客户区内。
+外观页的四个下拉框共用 220 像素列宽；可用内容宽度不足时，标签与选择器上下排列。普通选择器保持 26 像素、紧凑筛选器保持 24 像素。Windows 的自绘单选菜单沿用原控件占位，Linux 与高对比度模式使用原生单选控件。多选按钮与单选框共用箭头，长标题省略时保留完整提示。弹层显示后按实际高度定位，短列表贴近按钮，窗口缩放时重新限制在客户区内。
 
 `test-windows-ui.cjs` 增加 [control-appearance-checks.cjs](../scripts/control-appearance-checks.cjs) 验收：Windows/Linux 明暗设置、透明与不透明表面、最小窗口、复选框与首行文字几何、100% / 125% / 150% / 200% 缩放、原生表单值、键盘选择、多选菜单缩放及高对比度。控件截图输出到指定 `AIEYES_UI_OUT` 目录下的 `controls/`。这些是 Chromium 合成数据检查，不替代 Windows 原生材质和系统 DPI 实测。
+
+## Windows 质感与动效（v0.1.41）
+
+[windows.css](../apps/desktop/web/windows.css) 在共享样式之上增加轻玻璃高光、卡片边缘和分层阴影，菜单与弹窗使用更实的底色以保证文字可读。覆盖主窗口、设置、按钮、输入控件、菜单、弹窗和展开的悬浮面板。配色取自已有主题，鸿蒙黑体、共享字号、布局尺寸、圆角和桌宠行为沿用原规范。只有弹出层使用网页模糊，卡片与行不重复叠加模糊；不透明材质和减少透明度设置会取消弹出层模糊。
+
+[single-select.js](../apps/desktop/web/single-select.js) 保留原生 `select` 作为表单值、校验和尺寸的来源，在相同矩形上显示可访问的单选按钮。方向键、Home / End、Page Up / Down 和输入文字只预览选项；Enter、Space 或 Tab 提交，Escape、再次点击按钮或点击外部取消预览。禁用选项会跳过，动态选项、属性赋值、表单重置与校验会同步到可见控件。单选与多选菜单互斥；下拉展开时后台刷新保留当前页面，关闭后补上延迟的数据更新。不支持 Popover API、高对比度和 Linux 保留原生单选控件。
+
+[motion.js](../apps/desktop/web/motion.js) 提供有限时长的弹性反馈：按钮按下 80 ms、菜单展开约 240 ms、导航选中背景及侧栏 260 ms、页面进入 220 ms、弹窗展开 300 ms。页面只在实际切换时进入，后台数据刷新不重播；侧栏先提交布局，再用位移和裁剪过渡。弹窗和菜单逻辑关闭、焦点恢复保持同步，CSS 负责退场画面。快速反向操作会终止旧动画，悬浮面板隐藏、页面隐藏和减少动态效果会清理待执行动画。
+
+真实动画开启的浏览器回归位于 [test-windows-interactions.cjs](../scripts/test-windows-interactions.cjs)，已接入 `npm --prefix apps/desktop run test:ui`。测试覆盖键盘提交与取消、单次表单事件、保存回退、原生值同步、动态选项和控件类型、多个禁用分组、焦点、嵌套 Escape、后台刷新保护、快速开合、窄窗口定位与动效中断。截图默认输出到 `.local/windows-ui-sync/interactions/`，Desktop CI 会保存这些图片。
+
+```sh
+npm --prefix apps/desktop run test:windows-interactions
+node scripts/preview-windows-motion.cjs
+```
+
+第二条命令用合成数据录制浅深色主窗口与面板，输出四段 WebM 和可直接打开的 `.local/windows-ui-sync/motion/index.html`；可用 `AIEYES_UI_OUT` 指定其他目录。录制使用实际页面与共享字体，原生材质状态由夹具模拟，不代表 DWM 实际桌面透出效果。
 
 ## 原生材质
 
@@ -92,7 +109,7 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --l
 
 此前 Windows 外观工作已在 macOS 宿主验证桌面 / 多选 Node 测试、Tauri Rust 测试、Clippy 和 Windows 原生模块交叉类型检查。当前交互回归使用 Agents 页面及 `settings.patch`，服务器移除后检查焦点返回“添加主机”。本轮样式改动的验证单独记录在上述实施记录中。
 
-Windows 实机尚未运行，本轮未生成 Windows 安装包。Windows 10 / 11 材质、混合 DPI、原生桌宠字体及安装流程仍需实机验收。已有交互测试增加了可选的桌面像素验证，在启用透明效果的交互桌面中运行：
+Windows / Linux 安装包及 Windows 原生面板交互由 Desktop 和 Release 工作流构建、验证。浏览器预览及托管 CI 不能替代 Windows 10 / 11 材质、混合 DPI、原生桌宠字体和安装流程的交互桌面验收。已有交互测试提供可选的桌面像素验证，在启用透明效果的交互桌面中运行：
 
 ```powershell
 ./scripts/build-desktop.ps1 release

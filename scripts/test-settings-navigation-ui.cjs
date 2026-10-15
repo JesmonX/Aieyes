@@ -171,7 +171,7 @@ function fixture({platform, failStatus = false}) {
       await page.locator('#field-appearanceAccent').focus();
       await page.evaluate(() => navigationFixture.releaseSave());
       await settled(page);
-      assert.equal(await page.evaluate(()=>document.activeElement.id),'field-appearanceAccent','queued saves preserve focus');
+      assert(await page.locator('#field-appearanceAccent').evaluate(el=>document.activeElement===(el.closest('.win-select')?.querySelector('[role=combobox]')??el)),'queued saves preserve focus on the visible control');
       assert.equal(await page.evaluate(()=>state.settings.appearance.accent),'purple','edits during the in-flight save are queued');
       assert.deepEqual(await page.evaluate(()=>state.settings.proxyTestUrls),['https://queued.invalid'],'queued edits survive navigation between general forms');
       assert(await page.locator('#message').isHidden(),'autosave has inline success feedback');
