@@ -10,10 +10,25 @@ fn fixture(count: usize, shared_home: bool) -> (tempfile::TempDir, Engine) {
     std::fs::write(root.path().join("quota.py"), r#"import json, os, sys, time
 root, account, delay = sys.argv[1:]
 def record(kind):
+    lock=os.open(os.path.join(root,'queries.lock'),os.O_CREAT|os.O_RDWR,0o600)
+    if os.name == 'nt':
+        import msvcrt
+        msvcrt.locking(lock,msvcrt.LK_LOCK,1)
+    else:
+        import fcntl
+        fcntl.flock(lock,fcntl.LOCK_EX)
     line = json.dumps({'kind':kind,'account':account,'time':time.monotonic()})+'\n'
     fd=os.open(os.path.join(root,'queries.jsonl'),os.O_CREAT|os.O_APPEND|os.O_WRONLY,0o600)
     os.write(fd,line.encode());os.close(fd)
+    if os.name == 'nt':
+        msvcrt.locking(lock,msvcrt.LK_UNLCK,1)
+    os.close(lock)
 record('start')
+deadline = time.monotonic() + 15
+while os.path.exists(os.path.join(root,'hold-queries')):
+    if time.monotonic() > deadline:
+        raise RuntimeError('fixture release timed out')
+    time.sleep(0.01)
 while os.path.exists(os.path.join(root,'wait-for-two')) and not os.path.exists(os.path.join(root,'two.ready')):
     time.sleep(0.01)
 time.sleep(float(delay))
@@ -144,10 +159,15 @@ fn process_worker() {
                             }
                             let mut file = OpenOptions::new()
                                 .create(true)
+                                .read(true)
                                 .append(true)
                                 .open(progress_root.join("progress.jsonl"))
                                 .unwrap();
+                            // Formatting JSON may write several chunks; serialize fixture
+                            // appends so concurrent processes cannot corrupt a record.
+                            file.lock().unwrap();
                             writeln!(file, "{}", row["row"]).unwrap();
+                            file.unlock().unwrap();
                         }
                     }),
                 )
@@ -161,8 +181,14 @@ fn processes_share_four_slots_publish_fast_results_and_cool_down_after_completio
     let mut settings = engine.store.settings().unwrap();
     settings.refresh_seconds = 60;
     engine.store.save_settings(&settings).unwrap();
+    // Process startup can exceed the fast query's 150ms on Windows CI. Hold the
+    // first wave until all four slots are observable, then measure completion.
+    let gate = root.path().join("hold-queries");
+    std::fs::write(&gate, "").unwrap();
     let first = worker(root.path(), "one", json!({"dueOnly":true}), false);
     let second = worker(root.path(), "two", json!({"dueOnly":true}), false);
+    wait_started(root.path(), 4);
+    std::fs::remove_file(gate).unwrap();
     finish(first);
     finish(second);
     let mut active = 0;
