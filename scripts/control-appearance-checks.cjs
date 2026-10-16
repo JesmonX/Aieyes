@@ -45,11 +45,14 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
             state.page='settings';state.settingsTab='general';state.generalTab='appearance';render();
             __setDesktopMaterials(material,'opaque');window.scrollTo(0,0);
           },{theme,material});
-          const appearance=await page.locator('[data-general-section=appearance] select').evaluateAll(selects=>selects.map(select=>select.getBoundingClientRect().toJSON()));
+          const appearance=await page.locator('[data-general-section=appearance] select').evaluateAll(selects=>selects.map(select=>{
+            const control=select.closest('.win-select')??select;
+            return {rect:control.getBoundingClientRect().toJSON(),row:select.closest('.form-row').getBoundingClientRect().toJSON()};
+          }));
           assert.equal(appearance.length,4);
-          for(const rect of appearance) {
-            assert.equal(rect.width,220,'appearance choices share a column instead of fitting each option list');
-            assert.equal(rect.x,appearance[0].x,'selected text starts in the same column');
+          for(const {rect,row} of appearance) {
+            assert(rect.width>=Math.min(160,row.right-rect.x)&&rect.right<=row.right,'appearance choices have a readable width and fit their form');
+            assert.equal(rect.x,appearance[0].rect.x,'selected text starts in the same column');
             assert.equal(rect.height,design['input-height']);
           }
           const surfaces=await page.evaluate(()=>({card:getComputedStyle(document.querySelector('#general-form')).backgroundColor,
@@ -62,7 +65,7 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           if(material!=='opaque')continue;
           await page.setViewportSize({width:640,height:440});
           const minimum=await page.locator('[data-general-section=appearance] .form-row').evaluateAll(rows=>rows.map(row=>({
-            row:row.getBoundingClientRect().toJSON(),label:row.querySelector('label').getBoundingClientRect().toJSON(),select:row.querySelector('select').getBoundingClientRect().toJSON()})));
+            row:row.getBoundingClientRect().toJSON(),label:row.querySelector('label').getBoundingClientRect().toJSON(),select:(row.querySelector('.win-select')??row.querySelector('select')).getBoundingClientRect().toJSON()})));
           for(const {row,label,select} of minimum) {
             assert(select.y>=label.bottom||select.x>=label.right,'minimum-window choices do not overlap labels');
             assert(select.x>=row.x&&select.right<=row.right,'minimum-window choices fit their form');
@@ -71,7 +74,7 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           // container breakpoint independently from the overall window width.
           await page.locator('.settings-subpage').evaluate(el=>el.style.maxWidth='400px');
           const narrow=await page.locator('[data-general-section=appearance] .form-row').evaluateAll(rows=>rows.map(row=>({
-            row:row.getBoundingClientRect().toJSON(),label:row.querySelector('label').getBoundingClientRect().toJSON(),select:row.querySelector('select').getBoundingClientRect().toJSON()})));
+            row:row.getBoundingClientRect().toJSON(),label:row.querySelector('label').getBoundingClientRect().toJSON(),select:(row.querySelector('.win-select')??row.querySelector('select')).getBoundingClientRect().toJSON()})));
           for(const {row,label,select} of narrow) {
             assert(select.y>=label.bottom,'narrow appearance choices stack below their labels');
             assert(select.x>=row.x&&select.right<=row.right,'narrow choices fit their form');

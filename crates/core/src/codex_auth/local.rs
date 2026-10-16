@@ -41,7 +41,8 @@ impl Location {
         let root = expand(&self.path);
         ensure!(root.is_dir(), "Codex 目录不存在");
         files::safe(&root)?;
-        std::fs::canonicalize(root).context("无法读取 Codex 目录")
+        // PowerShell/cmd launchers cannot reliably use verbatim Windows paths as cwd.
+        dunce::canonicalize(root).context("无法读取 Codex 目录")
     }
 }
 fn layout(root: &Path, profile: &str, kind: &str) -> Result<PathBuf> {

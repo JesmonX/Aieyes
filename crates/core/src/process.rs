@@ -258,6 +258,8 @@ pub(crate) fn cli_command_with_pre_command(
 
 #[cfg(windows)]
 fn resolve_windows_cli(program: &std::path::Path) -> std::path::PathBuf {
+    // Canonicalized CLI paths may use the verbatim prefix, unsupported by cmd shims.
+    let program = dunce::simplified(program);
     if program.is_absolute() || program.components().count() > 1 {
         return windows_executable(program).unwrap_or_else(|| program.to_owned());
     }
@@ -459,15 +461,31 @@ mod windows_tests {
         let script = dir.join("codex.cmd");
         std::fs::write(dir.join("codex"), "#!/bin/sh\n").unwrap();
         std::fs::write(&script, "@echo off\r\necho %~1\r\n").unwrap();
-        let mut cmd = cli_command(&dir.join("codex").to_string_lossy());
-        assert_eq!(cmd.get_program(), script.as_os_str());
-        cmd.arg("hello world");
-        assert_eq!(
-            String::from_utf8(run(cmd, vec![], Duration::from_secs(5)).unwrap())
-                .unwrap()
-                .trim(),
-            "hello world"
-        );
+        // Account homes are canonicalized, so also exercise verbatim CLI paths.
+        for directory in [dir.clone(), dir.canonicalize().unwrap()] {
+            let binary = directory.join("codex");
+            let mut cmd = cli_command(&binary.to_string_lossy());
+            assert_eq!(cmd.get_program(), script.as_os_str());
+            cmd.arg("hello world");
+            assert_eq!(
+                String::from_utf8(run(cmd, vec![], Duration::from_secs(5)).unwrap())
+                    .unwrap()
+                    .trim(),
+                "hello world"
+            );
+            let cmd = cli_command_with_pre_command(
+                &binary.to_string_lossy(),
+                &["hello world"],
+                "$env:AIEYES_CLI_INIT='ready'",
+                "",
+            );
+            assert_eq!(
+                String::from_utf8(run(cmd, vec![], Duration::from_secs(20)).unwrap())
+                    .unwrap()
+                    .trim(),
+                "hello world"
+            );
+        }
     }
 }
 pub(crate) fn classify_error(stderr: &str, code: Option<i32>) -> String {

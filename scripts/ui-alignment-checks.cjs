@@ -135,7 +135,8 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
         await page.setViewportSize(viewport);
         const panel=await page.evaluate(()=>{
           const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
-          return {tabs:rect('.panel-tabs'),head:rect('.panel-head'),body:rect('.panel-body'),foot:rect('.panel-foot'),usage:rect('.overview-usage'),quota:rect('.quota-heading'),buttons:[...document.querySelectorAll('.panel-actions > button,.panel-more > summary')].map(el=>el.getBoundingClientRect().toJSON()),overflow:document.documentElement.scrollWidth>innerWidth};
+          const body=document.querySelector('.panel-body');
+          return {tabs:rect('.panel-tabs'),head:rect('.panel-head'),body:rect('.panel-body'),bodyClientWidth:body.clientWidth,scrollbarGutter:body.offsetWidth-body.clientWidth,foot:rect('.panel-foot'),usage:rect('.overview-usage'),quota:rect('.quota-heading'),buttons:[...document.querySelectorAll('.panel-actions > button,.panel-more > summary')].map(el=>el.getBoundingClientRect().toJSON()),overflow:document.documentElement.scrollWidth>innerWidth};
         });
         assert(!panel.overflow,'compact panel fits its client area');
         near(panel.tabs.width,design['panel-tabs-width'],'visible segmented picker width');
@@ -146,7 +147,9 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
         near(panel.body.bottom,panel.foot.y,'panel body ends above fixed footer');
         near(panel.foot.bottom,viewport.height,'footer remains at the window edge');
         near(panel.usage.x,design['panel-padding'],'compact content inset');
-        near(panel.usage.width,viewport.width-2*design['panel-padding'],'compact usage width');
+        near(panel.body.width,viewport.width,'compact body fills the window');
+        near(panel.usage.width,panel.bodyClientWidth-2*design['panel-padding'],'compact usage fills the scrollable content width');
+        near(viewport.width-panel.usage.right,design['panel-padding']+panel.scrollbarGutter,'compact content ends before the scrollbar gutter');
         assert(panel.usage.bottom<=panel.quota.y,'usage summary appears above account quotas');
         for(const [i,button] of panel.buttons.entries()) {
           near(button.width,design['icon-button-size'],'footer button size');
