@@ -97,6 +97,13 @@ jobs:
           else
             git log -15 --pretty=format:'%s' > dist/release-notes.txt
           fi
+      - name: Windows CLI stdin forwarding regression
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          for attempt in {1..5}; do
+            cargo test -p aieyes-core --lib --locked initialization_preserves_home_paths_environment_arguments_and_stdin -- --nocapture
+          done
       - name: Shared checks
         shell: bash
         run: sh scripts/ci-checks.sh --rust
@@ -106,13 +113,6 @@ jobs:
         run: |
           for attempt in {1..10}; do
             cargo test -p aieyes-core --lib --locked native_profile_switch_preserves_api_fixture_and_closes_login_fixture
-          done
-      - name: Windows CLI stdin forwarding regression
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          for attempt in {1..5}; do
-            cargo test -p aieyes-core --lib --locked initialization_preserves_home_paths_environment_arguments_and_stdin -- --nocapture
           done
       - name: Prepare bundled core for desktop tests
         if: runner.os != 'macOS'
