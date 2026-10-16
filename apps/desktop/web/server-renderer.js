@@ -50,7 +50,7 @@
     const sample=result?.sample;
     patch(card.heading,`<div><h2 style="margin:0">${escapeHTML(host.name||host.target)}</h2><div class="sub">${escapeHTML(host.target)}</div></div><div class="server-card-actions"><button type="button" data-host-settings="${escapeHTML(host.id)}" aria-label="${escapeHTML(host.name||host.target)}的监控设置">监控设置</button><button type="button" class="host-status" data-host-status="${escapeHTML(host.id)}"><i aria-hidden="true"></i><span data-host-status-label></span></button></div>`);
     patch(card.summary,serverSummary(host,sample));
-    patch(card.health,`${result?.error?`<p class="server-feedback-summary">${escapeHTML(result.error)}</p>`:''}${Object.keys(sample?.errors??{}).filter(k=>(host.metrics??Object.keys(groups)).includes(k)).map(k=>`<p class="server-feedback-summary">${escapeHTML(groups[k]??k)} · 采集失败</p>`).join('')}`);
+    patch(card.health,`${result?.error?`<div class="server-feedback-summary">${AieyesUI.errorHTML(result.error,'服务器连接失败')}</div>`:''}${Object.keys(sample?.errors??{}).filter(k=>(host.metrics??Object.keys(groups)).includes(k)).map(k=>`<p class="server-feedback-summary">${escapeHTML(groups[k]??k)} · 采集失败</p>`).join('')}`);
     if(!card.el.open)return;
     const enabled=(host.metrics??Object.keys(groups)).filter(key=>sample?.[key]);
     for(const [key,group]of card.groups)if(!enabled.includes(key)){group.list?.dispose();group.el.remove();card.groups.delete(key);}
@@ -61,7 +61,7 @@
       if(key==='memory')patch(group.content,serverGroupContent(key,sample[key],host));
       else {group.list??=new DeviceList(group.content,key,host);group.list.update(hostDevices(host,key,sample[key]).filter(row=>key!=='cpu'||row.id!=='cpu'||(host.details??[]).includes('cpuTimes')),host);}
     }
-    patch(card.feedback,`${sample?`<div class="tiny muted">负载 ${(sample.load??[]).map(n=>n.toFixed(2)).join(' / ')}</div>`:''}${Object.keys(sample?.errors??{}).filter(k=>(host.metrics??Object.keys(groups)).includes(k)).map(k=>`<p class="error">${groups[k]??escapeHTML(k)} · 采集失败</p>`).join('')}${result?.error?`<p class="error">${escapeHTML(result.error)}</p>`:''}`);
+    patch(card.feedback,`${sample?`<div class="tiny muted">负载 ${(sample.load??[]).map(n=>n.toFixed(2)).join(' / ')}</div>`:''}${Object.keys(sample?.errors??{}).filter(k=>(host.metrics??Object.keys(groups)).includes(k)).map(k=>`<div class="error">${groups[k]??escapeHTML(k)} · 采集失败</div>`).join('')}${result?.error?`<div class="error">${escapeHTML(result.error)}</div>`:''}`);
   }
   function render(){
     const content=document.querySelector('#content');if(!content)return;

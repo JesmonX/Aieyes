@@ -15,8 +15,8 @@ window.AieyesCodexAPI = (() => {
   function html() {
     if (!sources().length && !connections().length) return '';
     return '<section class="card codex-api-settings"><div class="between"><h2>Codex · API 连接</h2><button data-codex-api="add" '+(busy || !sources().length ? 'disabled' : '')+'>添加 API</button></div>'+
-      '<p class="muted">保存 API 连接后，可在本机账号与 API 之间切换。沿用 Codex 当前的模型、推理强度和网络设置。</p>'+
-      (error ? '<p class="error" role="alert">'+e(error)+'</p>' : '')+(notice ? '<p role="status">'+e(notice)+'</p>' : '')+
+      '<p class="muted">添加 API 连接后可切换登录方式，沿用 Codex 的模型、推理强度和网络设置。</p>'+
+      (error ? '<div class="error" role="alert">'+e(error)+'</div>' : '')+(notice ? '<p role="status">'+e(notice)+'</p>' : '')+
       connections().map(c => {
         const source=sources().find(s=>s.id===c.sourceId), selected=statuses.get(c.sourceId)?.selected;
         const active=selected?.connectionId===c.id, applied=active&&selected.revision===c.revision;
@@ -30,9 +30,9 @@ window.AieyesCodexAPI = (() => {
       [...new Set(connections().map(c=>c.sourceId))].map(id=>{
         const selected=statuses.get(id)?.selected;
         return '<div class="list-row"><span class="row-body tiny muted">'+e(location(sources().find(s=>s.id===id)))+' · '+
-          (selected?selected.kind==='api'?'当前使用 '+e(selected.name||'API'):'当前使用账号':'状态待检查')+
+          (selected?selected.kind==='api'?'当前使用 '+e(selected.name||'API'):'当前使用账户':'状态待检查')+
           '</span><button data-codex-api="refresh" data-api-source="'+e(id)+'" '+(busy?'disabled':'')+'>刷新状态</button>'+
-          '<button data-codex-api="account" data-api-source="'+e(id)+'" '+(busy||!available(sources().find(s=>s.id===id))?'disabled':'')+'>切换到已保存账号</button></div>';
+          '<button data-codex-api="account" data-api-source="'+e(id)+'" '+(busy||!available(sources().find(s=>s.id===id))?'disabled':'')+'>切换到已保存账户</button></div>';
       }).join('')+'</section>';
   }
   function bind() {
@@ -47,7 +47,7 @@ window.AieyesCodexAPI = (() => {
       select('apiSource','保存到设备',sources().map(s=>[s.id,location(s)]),c.sourceId)+
       field('apiName','连接名称',c.name)+field('apiBaseUrl','Base URL',c.baseUrl,'https://api.openai.com/v1')+
       field('apiKey','API Key','',existing?'留空保留已保存的密钥':'填写 API Key','password')+
-      '<p class="tiny muted">支持官方 OpenAI 与兼容 Responses API 的服务。保存后可通过切换按钮启用。</p>',
+      '<p class="tiny muted">支持 OpenAI 和兼容 Responses API 的服务。保存后可切换使用。</p>',
       async f=>{
         const connection={...c,sourceId:existing?c.sourceId:f.get('apiSource'),name:f.get('apiName').trim(),baseUrl:f.get('apiBaseUrl').trim()};
         const saved=await api('codexApi.save',{connection,apiKey:f.get('apiKey')});
@@ -78,7 +78,7 @@ window.AieyesCodexAPI = (() => {
         if(!source?.codexHomeId){await api('codexAuth.enable',{sourceId});window.AieyesAgentSettings.accept(await api('settings.get'));}
         inspection=await api('codexAuth.inspect',{sourceId});
         if(!connection&&!profileId)profileId=inspection.profiles.find(p=>p.identity.key===inspection.storedIdentity)?.id||inspection.profiles[0]?.id||'';
-        if(!connection&&!profileId)throw new Error('此设备尚未保存账号，请在账号入口读取当前登录或登录。');
+        if(!connection&&!profileId)throw new Error('请先在此机器读取当前登录或登录账户。');
         const target=connection?{kind:'api',connectionId:connection.id,revision:connection.revision}:{kind:'account',profileId};
         const value=await api('codexAuth.switch.prepare',{sourceId,target});
         if(request!==epoch||!dialog.open)return;
@@ -88,11 +88,11 @@ window.AieyesCodexAPI = (() => {
     }
     function draw() {
       const rows=prepared?.processes??[], blocked=rows.some(p=>!p.canClose), body=dialog.querySelector('.quota-dialog-body');
-      const name=connection?.name||inspection?.profiles.find(p=>p.id===profileId)?.name||'已保存账号';
+      const name=connection?.name||inspection?.profiles.find(p=>p.id===profileId)?.name||'已保存账户';
       body.innerHTML='<p><strong>'+e(location(sources().find(s=>s.id===sourceId)))+' → '+e(name)+'</strong></p>'+
-        (!connection&&inspection?.profiles.length?'<label>目标账号<select id="api-switch-profile">'+inspection.profiles.map(p=>'<option value="'+e(p.id)+'" '+(p.id===profileId?'selected':'')+'>'+e(p.name)+'</option>').join('')+'</select></label>':'')+
+        (!connection&&inspection?.profiles.length?'<label>目标账户<select id="api-switch-profile">'+inspection.profiles.map(p=>'<option value="'+e(p.id)+'" '+(p.id===profileId?'selected':'')+'>'+e(p.name)+'</option>').join('')+'</select></label>':'')+
         '<p class="muted">确认后会关闭下面列出的受影响进程。已确认使用独立 API 配置的实例会保留；请先保存工作。</p>'+
-        (error?'<p class="error" role="alert">'+e(error)+'</p>':'')+
+        (error?'<div class="error" role="alert">'+e(error)+'</div>':'')+
         (prepared?rows.length?'<ul>'+rows.map(p=>'<li>'+e(p.name)+' · PID '+p.pid+(p.canClose?'':' · '+e(p.blockingReason))+'</li>').join('')+'</ul>':'<p>没有需要关闭的进程。</p>':'')+
         (prepared?.preservedProcesses?.length?'<p class="tiny muted">将保留 '+prepared.preservedProcesses.length+' 个独立 API 进程。</p>':'')+
         '<div class="actions"><button id="api-switch-cancel">取消</button><button id="api-switch-retry">重新检查</button><button class="primary" id="api-switch-confirm" '+(!prepared||blocked?'disabled':'')+'>'+(rows.length?'关闭并切换':'确认切换')+'</button></div>';
@@ -108,7 +108,7 @@ window.AieyesCodexAPI = (() => {
           notice=result.statusWarning||'登录方式已切换，可重新打开 Codex 并恢复会话。';
           try{
             window.AieyesAgentSettings.accept(await api('settings.get'));await status(sourceId);
-            if(await window.AieyesAgentSettings.refreshCodexSource(sourceId)===false)throw new Error('账号状态待刷新');
+            if(await window.AieyesAgentSettings.refreshCodexSource(sourceId)===false)throw new Error('账户状态待刷新');
             await loadDashboard();
           }catch(err){notice='登录方式已切换，状态刷新未完成；可点击刷新状态重试。';statuses.delete(sourceId);}
           setWorking(false);finish();

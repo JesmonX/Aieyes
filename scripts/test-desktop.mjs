@@ -5,6 +5,27 @@ import { readFileSync } from 'node:fs';
 
 const read = name => readFileSync(new URL(`../apps/desktop/web/${name}`, import.meta.url), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test('error presentation keeps known actions and safely exposes unknown diagnostics', () => {
+  const window = {};
+  vm.runInNewContext(read('ui-state.js'), {window});
+  const ui = window.AieyesUI;
+  assert.equal(ui.errorPresentation('请先连接订阅账户与运行机器').summary, '请先连接订阅账户与运行机器');
+  const raw = 'HTTP 500 <script>alert(1)</script>\nAuthorization: Bearer private-token\nCookie: session=private-cookie; other=secret\n{"api_key":"private-key","refresh_token":"private-refresh"}\nhttps://user:private-password@example.invalid/?access_token=private-query&retry=1\nsk-proj-privatekey1234';
+  const jsonCookie = ui.errorPresentation('{"cookie":"session=private-json-cookie; other=private-json-secondary"}');
+  assert.equal(jsonCookie.summary, '操作未完成');
+  assert(!jsonCookie.details.includes('private-json-cookie') && !jsonCookie.details.includes('private-json-secondary'));
+  const result = ui.errorPresentation(raw, '额度查询失败');
+  assert.equal(result.summary, '额度查询失败');
+  for (const secret of ['private-token','private-cookie','secret','private-key','private-refresh','private-password','private-query','privatekey1234']) assert(!result.details.includes(secret), secret);
+  assert.match(result.details, /HTTP 500/);
+  assert.match(result.details, /retry=1/);
+  const html = ui.errorHTML(raw, '额度查询失败');
+  assert(!html.includes('<script>'));
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /<details class="error-details">/);
+  assert.equal(ui.errorPresentation('查询失败，请重试\nHTTP 503').summary, '查询失败，请重试');
+});
+
 test('wakeup previews follow shared timezone and DST fixtures', () => {
   const window = {};
   vm.runInNewContext(read('ui-state.js'), {window});

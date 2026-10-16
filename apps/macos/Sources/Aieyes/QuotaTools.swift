@@ -8,9 +8,9 @@ struct AutomaticValuationControls: View {
         if !eligible.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("数据源自动估值").font(AppFont.section)
-                Text(eligible.contains { $0.provider == "codex" } ? "自动估值5h/7d限额和credits的价值" : "自动估值5h/7d限额的价值").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text(eligible.contains { $0.provider == "codex" } ? "估算 5 小时 / 7 天额度及 credits 的 API 等价价值" : "估算 5 小时 / 7 天额度的 API 等价价值").font(AppFont.secondary).foregroundStyle(.secondary)
                 ForEach(eligible) { source in AutomaticValuationSourceControls(model: model, source: source) }
-                if let error = model.automaticError { Text(error).foregroundStyle(Palette.warn) }
+                if let error = model.automaticError { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
             }
         }
     }
@@ -46,7 +46,7 @@ struct SamplingManagementView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("后台采样").font(AppFont.title)
-                Text("关闭窗口后采样继续。只有结束采样才会停止记录。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text("关闭窗口后继续采样，点击“结束采样”停止。").font(AppFont.secondary).foregroundStyle(.secondary)
                 if model.runningEstimates.isEmpty { Text("当前没有进行中的采样").foregroundStyle(.secondary) }
                 ForEach(model.runningEstimates, id: \.recordKey) { estimate in
                     VStack(alignment: .leading, spacing: 8) {
@@ -56,7 +56,7 @@ struct SamplingManagementView: View {
                         }
                         Text(estimate.calculationNote).font(AppFont.secondary)
                         if !estimate.reason.isEmpty { Text(estimate.reason).foregroundStyle(Palette.warn) }
-                        if let error = model.estimateErrors[estimate.accountKey] { Text(error).foregroundStyle(Palette.warn) }
+                        if let error = model.estimateErrors[estimate.accountKey] { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
                         if model.estimateBusy.contains(estimate.accountKey) { TimelineView(.periodic(from: .now, by: 1)) { context in
                             Text((model.estimateStages[estimate.accountKey] ?? "准备同步") + " · " + String(Int(context.date.timeIntervalSince(model.estimateStartedAt[estimate.accountKey] ?? context.date))) + " 秒").font(AppFont.secondary)
                         } }
@@ -103,7 +103,7 @@ struct AgentValuationView: View {
                                 Button("额度采样") { Task { await model.openEstimate(accountKey: account.key) } }
                                 if provider == "codex" { Button("credits 采样") { Task { await model.openEstimate(accountKey: account.key, credits: true) } } }
                             }
-                            if let error = model.estimateErrors[account.key] { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                            if let error = model.estimateErrors[account.key] { ErrorNotice(message: error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                         }
                     }
                     if accounts.isEmpty { Text("添加账户后可开始手动采样。").foregroundStyle(.secondary) }
@@ -113,7 +113,7 @@ struct AgentValuationView: View {
                     }
                     recordSection("自动采样历史", records.filter { $0.samplingMode == "automatic" })
                     if loading { ProgressView("正在读取采样记录…") }
-                    if let error { HStack { Text(error).foregroundStyle(Palette.warn); Button("重试读取") { Task { await load() } } } }
+                    if let error { HStack { ErrorNotice(message: error).foregroundStyle(Palette.warn); Button("重试读取") { Task { await load() } } } }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogValuationWidth, height: 650).aieyesAccent()
@@ -133,7 +133,7 @@ struct AgentValuationView: View {
                     HStack { Text(model.settings.historicalAccounts.first { $0.key == record.accountKey }?.name ?? record.accountKey); Spacer(); Button("查看与管理") { Task { await model.openEstimate(record) } } }
                     Text((record.kind == "credits" ? "credits 估值" : (EstimatePresentation.visibility((snapshot ?? model.dashboard).quotas.first { $0.id == record.accountKey }, records: [record], group: record.groupId).periods + " 额度估值").trimmingCharacters(in: .whitespaces)) + " · " + record.statusLabel).font(AppFont.secondary).foregroundStyle(.secondary)
                     Text(Format.date(record.startedAt) + " → " + Format.date(record.checkpointAt)).font(AppFont.secondary).foregroundStyle(.secondary)
-                    if let error = model.estimateErrors[record.accountKey] { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                    if let error = model.estimateErrors[record.accountKey] { ErrorNotice(message: error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                 }.padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
             }
         }
@@ -157,7 +157,7 @@ struct QuotaOrderView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("调整账户顺序").font(AppFont.title)
-            Text("拖动账户，或使用上下按钮。顺序应用于所有限额面板。").foregroundStyle(.secondary)
+            Text("拖动账户或使用上下按钮排序，应用于所有额度面板。").foregroundStyle(.secondary)
             List {
                 ForEach(keys, id: \.self) { key in
                     HStack {
@@ -170,7 +170,7 @@ struct QuotaOrderView: View {
                     }.buttonStyle(.borderless).padding(.vertical, 4)
                 }.onMove { from, to in withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { keys.move(fromOffsets: from, toOffset: to) } }
             }.frame(minHeight: 150, maxHeight: 300)
-            if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
+            if let error { ErrorNotice(message: error) }
             HStack { Spacer(); Button("取消") { close() }.keyboardShortcut(.cancelAction); Button(saving ? "保存中…" : "保存顺序") {
                 Task { await saveOrder() }
             }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }.disabled(saving)
@@ -201,7 +201,7 @@ struct PanelAccountsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("面板显示账户").font(AppFont.title)
-            Text("自动显示每类前 5 个账户；手动选择不限数量，也可以不选。仅影响本机面板。").font(AppFont.secondary).foregroundStyle(.secondary)
+            Text("自动显示每类前 5 个账户；手动选择可留空、不限数量。仅影响本机面板。").font(AppFont.secondary).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(Set(model.quotaAccounts.map(\.provider))).sorted(), id: \.self) { provider in
@@ -217,7 +217,7 @@ struct PanelAccountsView: View {
                             }
                         }
                     }
-                    if model.quotaAccounts.isEmpty { Text("尚无可显示限额的账户").foregroundStyle(.secondary) }
+                    if model.quotaAccounts.isEmpty { Text("尚无可显示额度的账户").foregroundStyle(.secondary) }
                 }.padding(4)
             }
             HStack { Spacer(); Button("取消", action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button("保存面板选择") { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.borderedProminent) }
@@ -255,10 +255,10 @@ struct QuotaEstimateView: View {
             if quota.provider == "codex" { Picker("采样口径", selection: $credits) { Text("额度价值").tag(false); Text("credit 价值").tag(true) }.pickerStyle(.segmented).disabled(busy) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(credits ? "按实际 credits 扣款与样本 API 等价成本，估算 credit 的 API 等价价值，不是可兑换余额。" : "按本次模型组合的 API 等价成本与额度消耗比例估算，不是可兑换余额。" + visibility.help).foregroundStyle(.secondary)
+                    Text(credits ? "按 credits 消耗与样本成本估算 API 等价价值，金额不可兑换。" : "按样本成本与额度消耗比例估算 API 等价价值，金额不可兑换。" + visibility.help).foregroundStyle(.secondary)
                     AutomaticValuationControls(model: model, sources: sources)
                     if let current {
-                        if let group = current.groupId, let initialGroup, group != initialGroup { Text("当前账户正在采样其他模型组；每个账户同时保留一段采样。").foregroundStyle(.secondary) }
+                        if let group = current.groupId, let initialGroup, group != initialGroup { Text("此账户正在采样其他模型组，请先结束当前采样。").foregroundStyle(.secondary) }
                         result(current)
                         if current.status == "pending" {
                             Text(current.reason).foregroundStyle(Palette.warn)
@@ -278,17 +278,17 @@ struct QuotaEstimateView: View {
                         }
                         confirmation
                         if sources.contains(where: { $0.codexHomeId != nil }) {
-                            Text("共享目录只计算本次采样时段。采样期间请只使用此账户；切换账户前结束采样，切换后重新开始。").font(AppFont.secondary).foregroundStyle(.secondary)
+                            Text("共享目录仅统计本次采样时段。切换账户前请结束采样，切换后重新开始。").font(AppFont.secondary).foregroundStyle(.secondary)
                         }
-                        Text(credits ? "建议开始后新建会话。出现可确认的 credits 消耗且价格完整后即显示估值；小样本会有提示。充值或包含额度恢复后需要开始新一段。" : "建议开始后新建会话。出现可确认的额度消耗且价格完整后即显示估值；小样本会有提示。跨起始边界的累计用量不参与计算。").font(AppFont.secondary).foregroundStyle(.secondary)
+                        Text(credits ? "开始后请新建会话。有可确认的 credits 消耗且价格完整时显示估值；充值或订阅额度恢复后请重新采样。" : "开始后请新建会话。有可确认的额度消耗且价格完整时显示估值；跨采样边界的累计用量不计入。").font(AppFont.secondary).foregroundStyle(.secondary)
                         Button("开始采样") { perform("start", ["accountKey": quota.id, "windowId": credits ? "credits" : window, "sourceIds": Array(selected), "confirmed": confirmed]) }.buttonStyle(.borderedProminent).disabled(!confirmed || selected.isEmpty || (!credits && window.isEmpty) || busy)
                     } else {
-                        Text(sources.isEmpty ? "需要可采集 Token 的关联数据源，请检查数据目录和账户关联。" : credits ? "需要明确且有限的 credits 余额；请刷新账户限额。" : "此额度池缺少可靠的模型映射，暂不支持估值。").foregroundStyle(.secondary)
+                        Text(sources.isEmpty ? "需要可采集 Token 的关联数据源，请检查数据目录和账户关联。" : credits ? "需要明确且有限的 credits 余额；请刷新账户额度。" : "此额度池缺少可靠的模型映射，暂不支持估值。").foregroundStyle(.secondary)
                     }
                     if busy { TimelineView(.periodic(from: .now, by: 1)) { context in
                         HStack { ProgressView().controlSize(.small); Text((model.estimateStages[quota.id] ?? "准备同步") + " · " + String(Int(context.date.timeIntervalSince(model.estimateStartedAt[quota.id] ?? context.date))) + " 秒") }.font(AppFont.secondary)
                     } }
-                    if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
+                    if let error { ErrorNotice(message: error) }
                     if records.contains(where: { $0.status == "completed" }) {
                         Divider(); Text("采样历史").font(AppFont.section)
                         ForEach(records.filter { $0.status == "completed" && (initialGroup == nil || $0.groupId == nil || $0.groupId == initialGroup) }) { result($0) }

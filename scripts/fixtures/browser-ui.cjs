@@ -17,7 +17,7 @@ module.exports = () => {
     event:{async listen(name,fn){window.__listeners[name]=fn;return ()=>{};}},
     window:{getCurrentWindow:()=>({async isMaximized(){return maximized;},async toggleMaximize(){maximized=!maximized;window.nativeCalls.push('maximize');},async minimize(){window.nativeCalls.push('minimize');},async close(){window.nativeCalls.push('close');},async onResized(){return ()=>{};}})},
     core:{async invoke(command,args){
-      if(command==='updates_info'||command==='updates_check')return {currentVersion:'0.1.1',latestVersion:'0.1.1',phase:command==='updates_check'?'current':'idle',message:command==='updates_check'?'当前已是最新版本 v0.1.1':'',automatic:true,prompt:false};
+      if(command==='updates_info'||command==='updates_check')return {currentVersion:'0.1.1',latestVersion:'0.1.1',phase:command==='updates_check'?'current':'idle',message:command==='updates_check'?'已是最新版本 v0.1.1':'',automatic:true,prompt:false};
       if(command==='desktop_info')return structuredClone(window.desktopInfo);
       if(command==='desktop_detail'||command==='desktop_panel'||command==='desktop_panel_pin'||command==='desktop_action'){
         window.desktopCalls.push({command,args:structuredClone(args)});

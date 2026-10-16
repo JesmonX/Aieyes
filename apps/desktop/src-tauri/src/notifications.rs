@@ -116,7 +116,7 @@ pub fn notifications_info(app: tauri::AppHandle) -> Value {
 #[tauri::command]
 pub fn notifications_test(app: tauri::AppHandle) -> Result<(), String> {
     let result = request(&app)
-        .and_then(|_| send(&app, "Aieyes 测试通知", "订阅额度重置提醒已连接系统通知。"));
+        .and_then(|_| send(&app, "Aieyes 测试通知", "收到此通知表示系统通知可正常显示。"));
     *app.state::<Notifications>().error.lock().unwrap() = result.as_ref().err().cloned();
     let _ = app.emit("desktop:notifications", ());
     result

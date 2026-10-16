@@ -104,7 +104,7 @@ class Lock:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             self.file.close()
-            raise ValueError('此 Codex 目录有正在执行的账号操作，请稍后重试') from None
+            raise ValueError('此 Codex 目录有正在执行的账户操作，请稍后重试') from None
 
     def __enter__(self):
         return self
@@ -164,7 +164,7 @@ def save_profile(root, profile_id, name, auth):
     folder = private(profile_path(root, profile_id))
     ident = identity(auth)
     if (folder / 'metadata.json').exists() and profile(root, profile_id)['identity']['key'] != ident['key']:
-        raise ValueError('账号身份发生变化，原档案已保留')
+        raise ValueError('账户身份发生变化，原档案已保留')
     value = dict(id=profile_id, name=name.strip() or ident['email'].strip() or 'Codex 账户', identity=ident, updatedAt=int(time.time()))
     atomic(folder / 'auth.json', auth)
     atomic(folder / 'metadata.json', value)
@@ -190,7 +190,7 @@ def authority(root, p):
 def current_auth(root, p):
     auth = read(authority(root, p))
     if identity(auth)['key'] != p['identity']['key']:
-        raise ValueError('账号身份改变，已停止操作')
+        raise ValueError('账户身份改变，已停止操作')
     return auth
 
 
@@ -429,7 +429,7 @@ def close_processes(root, expected):
     def checked():
         actual = switch_running(expected, home=root)
         if any(not p['canClose'] for p in actual):
-            raise ValueError('进程认证方式或依赖已变化，账号未切换，请重新检查')
+            raise ValueError('进程认证方式或依赖已变化，账户未切换，请重新检查')
         if any(not any(p['pid'] == old['pid'] and p['fingerprint'] == old['fingerprint'] for old in expected) for p in actual):
             raise ValueError('Codex / ChatGPT 已重新启动或运行进程已变化，请重新检查后切换')
         return actual
@@ -449,7 +449,7 @@ def close_processes(root, expected):
     end = time.monotonic() + 10
     while checked():
         if time.monotonic() >= end:
-            raise ValueError('Codex / ChatGPT 未退出，账号未切换，请手动关闭后重新检查')
+            raise ValueError('Codex / ChatGPT 未退出，账户未切换，请手动关闭后重新检查')
         time.sleep(.25)
 
 
@@ -660,7 +660,7 @@ def renew(loc, root, p):
     recover(root)
     is_current = active(root) == p['identity']['key']
     if is_current and running(root):
-        raise ValueError('当前账号由运行中的 Codex 续期；暂时显示缓存额度')
+        raise ValueError('当前账户由运行中的 Codex 续期；暂时显示缓存额度')
     auth = current_auth(root, p)
     managed = layout(root, p['id'], 'managed')
     atomic(managed / 'auth.json', auth)
@@ -695,7 +695,7 @@ def quota(loc, root, profile_id):
                     return value
                 result = rpc.call('account/rateLimits/read', None, refresh)
                 if active(root) != active_before:
-                    raise ValueError('日常账号已改变，已丢弃旧查询结果')
+                    raise ValueError('日常账户已改变，已丢弃旧查询结果')
                 return result
         try:
             return attempt(auth)
@@ -714,7 +714,7 @@ def quota(loc, root, profile_id):
                 if '接口不兼容' not in str(second):
                     raise
                 if active(root) == p['identity']['key'] and running(root):
-                    raise ValueError('当前账号暂时显示缓存额度') from None
+                    raise ValueError('当前账户暂时显示缓存额度') from None
                 managed = layout(root, profile_id, 'managed')
                 atomic(managed / 'auth.json', fresh)
                 atomic(root / '.aieyes/state/refresh.json', dict(profileId=p['id'], current=active(root) == p['identity']['key'], revision=revision(fresh)))
@@ -792,7 +792,7 @@ def login_worker(loc, root, op, name, replacement=None, before=None):
 
 
 def public_error(error):
-    return str(error) if isinstance(error, (ValueError, TimeoutError)) else '账号操作失败，请检查权限、CLI 与连接；凭据内容未写入诊断'
+    return str(error) if isinstance(error, (ValueError, TimeoutError)) else '账户操作失败，请检查权限、CLI 与连接；凭据内容未写入诊断'
 
 
 def snapshot(root):
@@ -805,7 +805,7 @@ def snapshot(root):
 
 def call(request):
     if request.get('version') != VERSION:
-        raise ValueError('账号助手版本不兼容')
+        raise ValueError('账户助手版本不兼容')
     loc, method, params = request['location'], request['method'], request.get('params') or {}
     root = safe(pathlib.Path(os.path.expanduser(loc['path'])))
     if not root.is_dir():
@@ -881,7 +881,7 @@ def call(request):
                 raise ValueError('请先关闭日常 Codex，再重新登录')
             journal = root / '.aieyes/state/refresh.json'
             if journal.exists() and read(journal)['profileId'] != replacement['id']:
-                raise ValueError('请先重新登录发生续期冲突的账号')
+                raise ValueError('请先重新登录发生续期冲突的账户')
         else:
             recover(root)
         if method == 'login.start':
@@ -889,7 +889,7 @@ def call(request):
             before = snapshot(root)
             name = (params.get('name') or '').strip()
             if len(name) > 100:
-                raise ValueError('账号名称不能超过 100 字')
+                raise ValueError('账户名称不能超过 100 字')
             op = uuid.uuid4().hex
             atomic(operation(root, op), dict(operationId=op, status='running', startedAt=int(time.time())))
             pid = os.fork()
@@ -987,13 +987,13 @@ def call(request):
             import shutil
             p = profile(root, params['profileId'])
             if active(root) == p['identity']['key']:
-                raise ValueError('不能移除日常使用中的账号，请先切换')
+                raise ValueError('不能移除日常使用中的账户，请先切换')
             shutil.rmtree(safe(profile_path(root, p['id'])))
             runtime = safe(root / '.aieyes/codex' / p['id'])
             if runtime.exists():
                 shutil.rmtree(runtime)
             return dict(removed=True)
-        raise ValueError('未知账号操作')
+        raise ValueError('未知账户操作')
 
 
 
@@ -1006,7 +1006,7 @@ def with_credentials(loc, profile_id):
         p = profile(root, profile_id)
         is_current = active(root) == p['identity']['key']
         if is_current and running(root):
-            raise ValueError('日常 Codex 正在使用此账号，已跳过唤醒')
+            raise ValueError('日常 Codex 正在使用此账户，已跳过唤醒')
         auth = current_auth(root, p)
         managed = layout(root, profile_id, 'managed')
         atomic(managed / 'auth.json', auth)
@@ -1039,7 +1039,7 @@ def wakeup(loc, profile_id, manifest, cwd):
                 raise ValueError('刷新请求工作区不一致')
             latest = current_auth(root, p)
             if identity(latest)['key'] != initial_identity['key']:
-                raise ValueError('账号已改变，已停止唤醒')
+                raise ValueError('账户已改变，已停止唤醒')
             if latest['tokens']['access_token'] == access:
                 return None
             access = latest['tokens']['access_token']

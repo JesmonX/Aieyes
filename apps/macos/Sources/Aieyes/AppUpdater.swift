@@ -184,7 +184,7 @@ import OSLog
         let reason = (info[SPUNoUpdateFoundReasonKey] as? NSNumber)?.intValue
         if let item = info[SPULatestAppcastItemFoundKey] as? SUAppcastItem { latestVersion = item.displayVersionString }
         switch reason {
-        case 1: phase = "current"; message = "当前已是最新版本 v\(currentVersion)"
+        case 1: phase = "current"; message = "已是最新版本 v\(currentVersion)"
         case 2: phase = "current"; message = "当前版本 v\(currentVersion) 高于最新稳定版 v\(latestVersion)"
         default: phase = "error"; message = "没有适用于当前系统的更新：" + error.localizedDescription
         }
@@ -212,7 +212,7 @@ import OSLog
         }
     }
     func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool, retryTerminatingApplication: @escaping () -> Void) {
-        phase = "installing"; message = applicationTerminated ? "正在安装更新…" : "正在等待应用退出；如取消过退出，可重试重启。"
+        phase = "installing"; message = applicationTerminated ? "正在安装更新…" : "正在等待应用退出；若已取消退出，请重试重启。"
         retryTermination = applicationTerminated ? nil : retryTerminatingApplication
     }
     func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) { hasUpdate = false; phase = "installed"; message = "更新已安装"; acknowledgement() }
@@ -234,7 +234,10 @@ struct UpdateSettingsView: View {
             Text("当前版本 v\(updater.currentVersion)")
             Toggle("启动时及每天检查更新", isOn: $updater.automatic)
             HStack { Button(updater.phase == "checking" ? "检查中…" : "检查更新") { updater.check() }.disabled(updater.busy); if updater.phase == "checking" { Button("取消检查") { updater.cancelDownload() } }; if updater.phase == "available" || (updater.busy && updater.phase != "checking") { Button(updater.busy ? "查看进度" : "查看更新") { updater.check() } } }
-            if !updater.message.isEmpty { Text(updater.message).font(AppFont.secondary).foregroundStyle(updater.phase == "error" ? Palette.warn : Color.secondary).textSelection(.enabled) }
+            if !updater.message.isEmpty {
+                if updater.phase == "error" { ErrorNotice(message: updater.message, context: "更新未完成") }
+                else { Text(updater.message).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) }
+            }
         }.aieyesAccent().font(AppFont.body)
     }
 }
@@ -245,7 +248,8 @@ struct UpdateWindowView: View {
             Text("Aieyes 更新").font(AppFont.title)
             Text("当前版本 v\(updater.currentVersion) → 新版本 v\(updater.latestVersion)").font(AppFont.section)
             ScrollView { Text(updater.notes.isEmpty ? "此版本包含改进与修复。" : updater.notes).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }.frame(maxHeight: .infinity)
-            Text(updater.message).font(AppFont.secondary).foregroundStyle(updater.phase == "error" ? Palette.warn : Color.secondary)
+            if updater.phase == "error" { ErrorNotice(message: updater.message, context: "更新未完成") }
+            else { Text(updater.message).font(AppFont.secondary).foregroundStyle(.secondary) }
             if updater.phase == "downloading" { UpdateProgressView(progress: updater.progress) }
             HStack {
                 if updater.phase == "downloading" { Button("取消下载") { updater.cancelDownload() } }
@@ -305,7 +309,7 @@ private struct UpdateDraftGuard: ViewModifier {
         AppUpdater.shared.editorPreparations[id] = (order, {
             guard !saving else { AppUpdater.shared.preparationError = title + "正在保存，请稍后重试"; return false }
             if !dirty { discard(); return true }
-            switch await updateChoice("更新前保存“" + title + "”中的更改？", message: "保存失败时保留输入，并回到编辑器显示具体错误。", buttons: ["保存并更新", "放弃更改并更新", "取消"]) {
+            switch await updateChoice("更新前保存“" + title + "”中的更改？", message: "保存失败时保留输入，并返回对应编辑器。", buttons: ["保存并更新", "放弃更改并更新", "取消"]) {
             case 0:
                 let saved = await save()
                 if !saved { AppUpdater.shared.preparationError = title + "保存失败，请检查编辑器中的错误提示" }

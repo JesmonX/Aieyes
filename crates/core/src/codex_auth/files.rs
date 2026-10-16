@@ -56,7 +56,7 @@ pub fn private_dir(path: &Path) -> Result<()> {
     {
         private_dir(parent)?;
     }
-    fs::create_dir_all(path).context("无法创建账号管理目录")?;
+    fs::create_dir_all(path).context("无法创建账户管理目录")?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -154,7 +154,7 @@ pub fn lock(root: &Path) -> Result<crate::file_lock::FileLock> {
     }
     let f = options.open(path)?;
     crate::file_lock::FileLock::try_exclusive(f)
-        .map_err(|_| anyhow::anyhow!("此 Codex 目录有正在执行的账号操作，请稍后重试"))
+        .map_err(|_| anyhow::anyhow!("此 Codex 目录有正在执行的账户操作，请稍后重试"))
 }
 fn claims(token: &str) -> Value {
     token
@@ -236,7 +236,7 @@ pub fn profile_path(root: &Path, profile: &str) -> Result<PathBuf> {
 }
 pub fn profile(root: &Path, profile: &str) -> Result<Profile> {
     serde_json::from_value(read(&profile_path(root, profile)?.join("metadata.json"))?)
-        .context("账号档案格式无效")
+        .context("账户档案格式无效")
 }
 pub fn save_profile(root: &Path, profile: &str, name: &str, auth: &Value) -> Result<Profile> {
     let path = profile_path(root, profile)?;
@@ -245,7 +245,7 @@ pub fn save_profile(root: &Path, profile: &str, name: &str, auth: &Value) -> Res
     if path.join("metadata.json").exists() {
         ensure!(
             self::profile(root, profile)?.identity.key == ident.key,
-            "账号身份发生变化，原档案已保留"
+            "账户身份发生变化，原档案已保留"
         );
     }
     let p = Profile {

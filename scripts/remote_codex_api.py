@@ -650,7 +650,7 @@ def direct_manage(request, script, tomli):
     home, root = home_root(request); action = request['action']; params = request.get('params') or {}
     if action == 'ledger': return ledger(root, params.get('cursor',-1))
     if action == 'status': return dict(configRevision=revision(home), defaultProvider=config(home).get('model_provider'), selected=direct_selected(home))
-    if action in ('default','command'): raise ValueError('请通过账号切换检查后切换 API')
+    if action in ('default','command'): raise ValueError('请通过账户切换检查后切换 API')
     private(root)
     import fcntl
     with open(root/'config.lock','a+') as lock:
@@ -677,7 +677,7 @@ def direct_manage(request, script, tomli):
             return dict(reachable=200<=status<300,httpStatus=status,message='API 认证可用' if status<300 else '模型列表查询未成功；部分服务不支持此接口')
         if action == 'remove':
             if c['revision'] != params.get('revision'): raise ValueError('API 设置已变化，请刷新后重试')
-            if direct_selected(home).get('connectionId') == c['id']: raise ValueError('请先切换到账号或其他 API，再移除此连接')
+            if direct_selected(home).get('connectionId') == c['id']: raise ValueError('请先切换到账户或其他 API，再移除此连接')
             if direct_running(home): raise ValueError('此目录仍有 Codex 会话，退出后再移除 API 连接')
             identifier = ident(c['id'])
             belongs = lambda name: name.startswith('aieyes_api_') and name[len('aieyes_api_'):].rsplit('_', 1)[0] == identifier

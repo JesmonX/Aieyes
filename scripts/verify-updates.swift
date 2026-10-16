@@ -16,7 +16,7 @@ import Combine
         precondition(!AppUpdater(defaults: defaults).automatic)
         var acknowledgements = 0
         updater.showUpdateNotFoundWithError(NSError(domain: SUSparkleErrorDomain, code: 1001, userInfo: [SPUNoUpdateFoundReasonKey: 1])) { acknowledgements += 1 }
-        precondition(updater.phase == "current" && updater.message.contains("当前已是最新版本"))
+        precondition(updater.phase == "current" && updater.message.contains("已是最新版本"))
         updater.showUpdateNotFoundWithError(NSError(domain: SUSparkleErrorDomain, code: 1001, userInfo: [SPUNoUpdateFoundReasonKey: 2])) { acknowledgements += 1 }
         precondition(updater.message.contains("高于最新稳定版"))
         updater.showUpdateNotFoundWithError(NSError(domain: SUSparkleErrorDomain, code: 1001, userInfo: [SPUNoUpdateFoundReasonKey: 3])) { acknowledgements += 1 }

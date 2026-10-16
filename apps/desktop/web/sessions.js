@@ -27,7 +27,7 @@
 
     const rows = active.map(s => {
       const [symbol, label] = phases[s.phase] || phases.unknown;
-      return `<div class="live-row" data-phase="${escape(s.phase)}"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(({codex:'Codex',claude:'Claude Code',antigravity:'AGY'}[s.provider]||s.source||'Agent')+' · '+(s.machine||'本机'))}</strong><small>最后更新 ${Number.isFinite(s.updatedAt)?escape(new Date(s.updatedAt*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})):'—'}</small></div><span>${label}</span></div>`;
+      return `<div class="live-row" data-phase="${escape(s.phase)}"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(({codex:'Codex',claude:'Claude Code',antigravity:'Antigravity'}[s.provider]||s.source||'Agent')+' · '+(s.machine||'本机'))}</strong><small>最后更新 ${Number.isFinite(s.updatedAt)?escape(new Date(s.updatedAt*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})):'—'}</small></div><span>${label}</span></div>`;
     }).join('') || '<p class="muted">暂无活跃会话</p>';
     if(list._rows!==rows){list.innerHTML=rows;list._rows=rows;}
     container.hidden=state.page!=='agent'||(!active.length&&!failures.length&&!info.unavailable);

@@ -274,18 +274,18 @@ pub(crate) fn source_for_draft(s: &Settings, id: &str, profile: Option<&str>) ->
                     == 1,
             "Codex home 关联不唯一，请先修复目录关联"
         );
-        let reference = profile.context("请选择此共享来源的唤醒账号")?;
-        let (bound_home, profile_id) = reference.split_once(':').context("账号档案引用无效")?;
+        let reference = profile.context("请选择此共享来源的唤醒账户")?;
+        let (bound_home, profile_id) = reference.split_once(':').context("账户档案引用无效")?;
         crate::codex_auth::files::id(profile_id)?;
         ensure!(bound_home == home, "唤醒档案与来源不匹配");
         let mut accounts = s
             .accounts
             .iter()
             .filter(|a| a.provider == source.provider && a.has_profile(reference));
-        let account = accounts.next().context("请先将账号档案关联到额度账户")?;
+        let account = accounts.next().context("请先将账户档案关联到额度账户")?;
         ensure!(
             accounts.next().is_none(),
-            "账号档案被多个账户引用，请重新关联"
+            "账户档案被多个账户引用，请重新关联"
         );
         ensure!(!account.archived, "账户已归档，请先恢复账户");
         ensure!(
@@ -297,7 +297,7 @@ pub(crate) fn source_for_draft(s: &Settings, id: &str, profile: Option<&str>) ->
         );
         source.account_id = account.id.clone();
     } else {
-        ensure!(profile.is_none(), "此来源不使用账号档案，请重新选择目标");
+        ensure!(profile.is_none(), "此来源不使用账户档案，请重新选择目标");
     }
     ensure!(
         crate::providers::supports_wakeup(&source.provider),
@@ -971,10 +971,10 @@ impl Engine {
         }
         ensure!(
             m.effort.is_empty() || source.provider == "codex" || help.contains("--effort"),
-            "当前 CLI 不支持 effort，请选择模型默认值"
+            "当前 CLI 不支持推理强度参数，请选择模型默认值"
         );
         Ok(
-            json!({"binary":m.binary,"models":models,"efforts":if source.provider=="codex"||help.contains("--effort"){vec!["low","medium","high","xhigh","max"]}else{vec![]},"timezone":chrono::Local::now().format("%Z %:z").to_string(),"message":if models.is_empty(){"CLI 未提供可核验的模型列表，请填写模型 ID；可用性将在实际运行时验证"}else{"按 1000 输入 + 100 输出 Token 的 API 等价价格推荐；部署后固定模型"}}),
+            json!({"binary":m.binary,"models":models,"efforts":if source.provider=="codex"||help.contains("--effort"){vec!["low","medium","high","xhigh","max"]}else{vec![]},"timezone":chrono::Local::now().format("%Z %:z").to_string(),"message":if models.is_empty(){"CLI 未提供模型列表，请填写模型 ID；运行时检查可用性"}else{"参考 1000 输入 + 100 输出 Token 的 API 等价成本推荐模型；部署后使用所选模型"}}),
         )
     }
 }

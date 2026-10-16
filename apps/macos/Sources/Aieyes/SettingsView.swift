@@ -37,8 +37,9 @@ struct SettingsView: View {
     }
     var body: some View {
         VStack(spacing: 0) {
+            if model.settingsSaving || model.settingsMessage != nil || !model.settingsLoaded {
             HStack {
-                Text(model.settingsSaving ? "正在保存…" : model.settingsMessage ?? "账户修改自动保存；目录与服务器在编辑器中保存。").font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled)
+                ErrorNotice(message: model.settingsSaving ? "正在保存…" : model.settingsMessage ?? "正在读取配置…", context: "设置操作未完成", tint: .secondary)
                 Spacer()
                 if model.settingsSaving { ProgressView().controlSize(.small) }
                 if !model.settingsLoaded { Button("重试读取") { Task { await model.bootstrap() } } }
@@ -47,6 +48,7 @@ struct SettingsView: View {
                     Button("恢复已保存配置") { model.discardSettingsDraft() }
                 }
             }.padding(.horizontal, 22).padding(.vertical, 12)
+            }
             if let message = model.message, model.settingsMessage == nil, !message.hasPrefix("已保存") { HStack { Text(message).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("关闭提示") }.padding(.horizontal, 22).padding(.bottom, 10) }
             ForEach(model.settings.configurationIssues ?? [], id: \.self) { Text($0).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled).padding(.horizontal, 22) }
             Divider().opacity(0.5)
@@ -87,7 +89,9 @@ struct SettingsView: View {
             autoSaveTask?.cancel()
             autoSaveTask = Task { do { try await Task.sleep(for: .milliseconds(600)) } catch { return }; await model.saveGeneralConfiguration() }
         }
-        .onChange(of: model.settingsMessage) { _, message in if let message { for (key,label) in [("quota","Agent 限额"),("history","Agent 记录"),("foreground","服务器前台"),("background","服务器刷新")] where message.contains(label) { model.settingsTab = "general"; model.generalPage = "refresh"; generalField = key } } }
+        .onChange(of: model.settingsValidationField) { _, field in
+            if let field { model.settingsTab = "general"; model.generalPage = "refresh"; generalField = field }
+        }
         .task(id: model.settingsTab) { if model.settingsTab == "prices" { await catalog.load() } }
         .onChange(of: model.requestedSourceProvider) { _, _ in consumeEditorRequest() }
         .onChange(of: model.requestedAccountKey) { _, _ in consumeEditorRequest() }
@@ -244,7 +248,7 @@ struct SettingsView: View {
                 if catalog.loading { ProgressView().controlSize(.small); Text("读取本地价格…").font(AppFont.secondary) }
             }
             if let error = catalog.error {
-                HStack { Text(error).foregroundStyle(Palette.warn); Spacer(); Button("重试读取") { Task { await catalog.load(force: true) } } }.font(AppFont.secondary)
+                HStack { ErrorNotice(message: error).foregroundStyle(Palette.warn); Spacer(); Button("重试读取") { Task { await catalog.load(force: true) } } }.font(AppFont.secondary)
             }
             ScrollView { LazyVStack(spacing: 8) {
                 ForEach(catalog.filtered) { price in
@@ -275,7 +279,7 @@ struct SettingsView: View {
                     Text("高对比度").tag("high"); Text("低对比度 · 柔和").tag("low")
                 }
                 ChartPalettePreview(preset: model.settingsDraft.appearance?.chartPalette ?? "classic", contrast: model.settingsDraft.appearance?.chartContrast ?? "high")
-                Text("配色随明暗主题调整，适用于模型柱形图与分布图。高对比度适合小色块；低对比度适合柔和展示，可结合图例与明细读取。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text("图表配色随明暗主题调整。高对比度适合小色块，低对比度更柔和。").font(AppFont.secondary).foregroundStyle(.secondary)
             }
             }
             if model.generalPage == "desktop" {
@@ -283,25 +287,25 @@ struct SettingsView: View {
                 Toggle("显示桌面宠物（本机，立即生效）", isOn: $petEnabled)
                 PetScaleControl()
                 PetLibraryView(model: model)
-                Text("支持 Codex v1 / v2 PNG、WebP 图集。桌宠跟随已启用的本机和 SSH Codex、Claude、AGY 会话；单击打开面板，拖动移动。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text("桌宠展示本机和 SSH 的 Codex、Claude Code、Antigravity 会话。单击打开面板，拖动移动。").font(AppFont.secondary).foregroundStyle(.secondary)
             }
             Section("菜单栏") {
-                Toggle("显示活跃会话计数（本机及 SSH，立即生效）", isOn: $showMenuCount)
-                Text("菜单栏口径：今日全部数据，不受面板和详情筛选影响。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Toggle("显示活跃会话数（本机与 SSH）", isOn: $showMenuCount)
+                Text("菜单栏显示今日全部数据，独立于页面筛选。").font(AppFont.secondary).foregroundStyle(.secondary)
                 Picker("显示内容", selection: $model.settingsDraft.menuMetric) { Text("图标").tag("icon"); Text("今日全部 Token").tag("tokens"); Text("首个账户剩余额度").tag("quota"); Text("首台服务器 CPU").tag("cpu") }
             }
             }
             if model.generalPage == "refresh" {
             Section("刷新") {
-                LabeledContent("Agent 限额间隔（秒）") { TextField("Agent 限额间隔（秒）", value: $model.settingsDraft.refreshSeconds, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "quota") }
-                LabeledContent("Agent 记录间隔（秒）") { TextField("Agent 记录间隔（秒）", value: $model.settingsDraft.historyInterval, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "history") }
+                LabeledContent("额度查询间隔（秒）") { TextField("额度查询间隔（秒）", value: $model.settingsDraft.refreshSeconds, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "quota") }
+                LabeledContent("日志同步间隔（秒）") { TextField("日志同步间隔（秒）", value: $model.settingsDraft.historyInterval, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "history") }
                 LabeledContent("服务器前台间隔（秒）") { TextField("服务器前台间隔（秒）", value: $model.settingsDraft.foregroundInterval, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "foreground") }
                 LabeledContent("服务器后台间隔（秒）") { TextField("服务器后台间隔（秒）", value: $model.settingsDraft.serverRefreshSeconds, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "background") }
             }
             Section("历史记录") {
                 Toggle("在筛选中显示已删除账户", isOn: Binding(get: { model.settingsDraft.historyShowDeletedAccounts == true }, set: { model.settingsDraft.historyShowDeletedAccounts = $0 }))
-                Text("默认隐藏已删除账户；历史用量仍计入总统计。开启后仅显示有历史记录的已删除账户。").font(AppFont.secondary).foregroundStyle(.secondary)
-                Text("手动从头读取所有已启用本机及服务器数据源的完整日志，修复可确认的历史重复。保留已有历史和价格快照；已丢失的日志无法恢复或核实。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text("在筛选中显示有历史记录的已删除账户；其用量始终计入总统计。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text("重新读取已启用来源的完整日志，修正可确认的重复记录。已有历史和价格快照保留。").font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack {
                     Button(model.rescanning ? "全量重扫中…" : "全量重扫") { confirmRescan = true }
                         .disabled(model.busy || model.quotaBusy || model.settingsSaving || !model.estimateBusy.isEmpty)
@@ -364,7 +368,7 @@ private struct ExistingMappingRow: View {
                     Button("保存") { Task { await save() } }
                     Button("取消") { editing = false; error = nil }
                 }.disabled(busy)
-                if let error { Text(error).foregroundStyle(Palette.danger) }
+                if let error { ErrorNotice(message: error).foregroundStyle(Palette.danger) }
             } else {
                 HStack {
                     Text(name); Image(systemName: "arrow.right"); Text(model.settingsDraft.modelMappings[name] ?? ""); Spacer()
@@ -445,7 +449,7 @@ struct ProxyFields: View {
                 Button(testing ? "测试中…" : "测试连接") { Task { await testConnection() } }.disabled(testing)
                 if let result { Text(result.label).help(result.detail).foregroundStyle(result.status == "ok" ? Color.secondary : Palette.warn) }
             }
-            if let testError { Text(testError).foregroundStyle(Palette.warn) }
+            if let testError { ErrorNotice(message: testError).foregroundStyle(Palette.warn) }
         }
         .disabled(testing)
         .updateOperation("编辑器代理检测", active: false)
@@ -497,16 +501,16 @@ struct SourceEditor: View {
                         }
                     }
                 }
-                if source.codexHomeId != nil { Text("更换目录将解除旧位置的账户连接；原文件和凭证保留。请在账户中读取新目录的登录信息。").font(AppFont.secondary).foregroundStyle(.secondary) }
+                if source.codexHomeId != nil { Text("更换目录会解除旧账户连接，保留原文件和凭据。之后请读取新目录的登录。").font(AppFont.secondary).foregroundStyle(.secondary) }
                 DisclosureGroup(source.hostId == nil ? "高级连接选项 · CLI / 代理" : "高级连接选项 · CLI") {
                 if source.provider == "antigravity" { TextField("agy 程序", text: Binding(get: { source.agyBinary ?? "agy" }, set: { source.agyBinary = $0 })) }
                 if source.provider == "codex" { TextField("Codex 程序", text: $source.codexBinary) }
-                if source.provider == "custom" || CoreContract.subscriptionModes[source.provider] != nil { TextField("限额查询命令", text: $source.quotaCommand) }
+                if source.provider == "custom" || CoreContract.subscriptionModes[source.provider] != nil { TextField("额度查询命令", text: $source.quotaCommand) }
                 if source.hostId == nil {
                     ProxyFields(proxy: Binding(get: { source.proxy ?? ProxySettings(mode: "inherit") }, set: { source.proxy = $0.mode == "inherit" ? nil : $0 }), inherit: true, inheritedProxy: appProxy, testURLs: testURLs)
                 }
                 }
-                if let error { Text(error).foregroundStyle(Palette.warn) }
+                if let error { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.roundedBorder).disabled(saving)
             HStack {
                 Button("取消") { cancel() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("保存后立即生效").font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
@@ -538,6 +542,9 @@ struct HostEditor: View {
     private func cancel() { if !initialDraft.isEmpty && initialDraft != draftValue { confirmDiscard = true } else { dismiss() } }
     @State var host: Host
     var model: AppModel? = nil
+    var initialSection: String? = nil
+    @State private var advancedExpanded = false
+    @FocusState private var shellFocused: Bool
     @State private var importSSH = false
     @State var password = ""
     var onSave: (Host, String) async throws -> Void
@@ -602,7 +609,7 @@ struct HostEditor: View {
                 TextField("SSH 别名或地址", text: $host.target, prompt: Text("my-server 或 user@host"))
                 LabeledContent("端口") { TextField("端口", text: Binding(get: { host.port.map(String.init) ?? "" }, set: { host.port = Int($0) }), prompt: Text("跟随配置")).labelsHidden().frame(width: DesignTokens.fieldHintWidth) }
                 Picker("登录方式", selection: Binding(get: { host.authMode ?? "ssh" }, set: { host.authMode = $0 })) {
-                    Text("SSH 配置 / 密钥").tag("ssh"); Text("账号密码").tag("password")
+                    Text("SSH 配置 / 密钥").tag("ssh"); Text("用户名和密码").tag("password")
                 }
                 TextField("用户名", text: Binding(get: { host.username ?? "" }, set: { host.username = $0 }), prompt: Text("跟随地址或 SSH 配置"))
                 if host.authMode == "password" { SecureField("密码（留空保留）", text: $password) }
@@ -617,7 +624,7 @@ struct HostEditor: View {
                 }
                 Section("设备") {
                     if let discoveryInfo { Text(discoveryInfo).font(AppFont.secondary).foregroundStyle(.secondary) }
-                    if let discoveryError { Text(discoveryError).font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                    if let discoveryError { ErrorNotice(message: discoveryError).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                     ForEach(groups.filter { $0.0 != "memory" }, id: \.0) { group, label in devicePicker(group, label) }
                 }
                 Section {
@@ -626,12 +633,12 @@ struct HostEditor: View {
                     }
                 }
                 }
-                DisclosureGroup("高级设置") {
-                    if host.id != "local" { TextField("远程 shell", text: $host.shell) }
+                DisclosureGroup("高级设置", isExpanded: $advancedExpanded) {
+                    if host.id != "local" { TextField("远程 Shell", text: $host.shell).focused($shellFocused) }
                     TextField("设备表达式", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/")).help("留空使用推荐设备；文件系统默认隐藏虚拟挂载。全选可显示全部")
                 }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.roundedBorder)
-            if let saveError { Text(saveError).foregroundStyle(Palette.warn).textSelection(.enabled) }
+            if let saveError { ErrorNotice(message: saveError) }
             HStack { Button("取消") { cancel() }.keyboardShortcut(.cancelAction); Spacer(); Text("保存后立即生效").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(saving ? "保存中…" : "保存") { Task { saving = true; saveError = nil; defer { saving = false }; host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; do { try await onSave(host, password) } catch { saveError = error.localizedDescription } } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty || saving) }.padding(20)
         }.font(AppFont.body).frame(width: DesignTokens.dialogHostWidth, height: EditorLayout.height(650)).onChange(of: connectionIdentity) { _, _ in discoveryRequest = UUID(); discovered = [:]; discoveryInfo = nil; discoveryError = "连接配置已更改，请重新读取设备" }
         .updateDraftGuard(host.id == "local" ? "本机监测" : "SSH 主机", snapshot: draftValue, dirty: !initialDraft.isEmpty && initialDraft != draftValue, saving: saving || discovering, save: {
@@ -639,7 +646,7 @@ struct HostEditor: View {
             host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }
             do { try await onSave(host,password); return true } catch { saveError = error.localizedDescription; return false }
         }, discard: { dismiss() })
-        .onAppear { devices = host.devices.joined(separator: ", "); initialDraft = draftValue }
+        .onAppear { devices = host.devices.joined(separator: ", "); initialDraft = draftValue; if initialSection == "shell" { advancedExpanded = true; shellFocused = true } }
         .interactiveDismissDisabled(initialDraft != draftValue)
         .discardDraftConfirmation($confirmDiscard) { dismiss() }
     }
@@ -672,7 +679,7 @@ struct PriceEditor: View {
                 LabeledContent("输入") { TextField("输入", text: $input, prompt: Text("待定价")).labelsHidden().frame(width: DesignTokens.fieldPriceWidth) }; LabeledContent("输出") { TextField("输出", text: $output, prompt: Text("待定价")).labelsHidden().frame(width: DesignTokens.fieldPriceWidth) }
                 LabeledContent("缓存读取") { TextField("缓存读取", text: $cacheRead, prompt: Text("待定价")).labelsHidden().frame(width: DesignTokens.fieldPriceWidth) }; LabeledContent("缓存写入") { TextField("缓存写入", text: $cacheWrite, prompt: Text("待定价")).labelsHidden().frame(width: DesignTokens.fieldPriceWidth) }
                 if !valid { Text("价格须为大于或等于 0 的数字；留空表示待定价。").foregroundStyle(Palette.warn) }
-                if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled).accessibilityLabel("保存失败，" + error) }
+                if let error { ErrorNotice(message: error).accessibilityLabel("保存失败，" + error) }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.roundedBorder).disabled(saving)
             HStack {
                 Button("取消") { cancel() }.keyboardShortcut(.cancelAction).disabled(saving)

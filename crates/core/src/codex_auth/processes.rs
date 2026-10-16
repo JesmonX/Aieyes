@@ -542,13 +542,13 @@ pub fn list(root: &Path) -> Result<Vec<Running>> {
 fn unchanged(actual: &[Running], expected: &[Running]) -> Result<()> {
     ensure!(
         actual.iter().all(|p| p.can_close),
-        "进程认证方式或依赖已变化，账号未切换，请重新检查"
+        "进程认证方式或依赖已变化，账户未切换，请重新检查"
     );
     ensure!(
         actual.iter().all(|p| expected
             .iter()
             .any(|old| p.pid == old.pid && p.fingerprint == old.fingerprint)),
-        "Codex / ChatGPT 已重新启动或运行进程已变化，账号未切换，请重新检查"
+        "Codex / ChatGPT 已重新启动或运行进程已变化，账户未切换，请重新检查"
     );
     Ok(())
 }
@@ -582,7 +582,7 @@ fn close_with(
         }
         ensure!(
             std::time::Instant::now() < until,
-            "Codex / ChatGPT 未退出，账号未切换，请手动关闭后重新检查"
+            "Codex / ChatGPT 未退出，账户未切换，请手动关闭后重新检查"
         );
         std::thread::sleep(Duration::from_millis(250));
     }

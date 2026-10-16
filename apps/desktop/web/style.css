@@ -656,6 +656,10 @@ input[name=path],input[name=identityFile],input[name=target] { font-family:var(-
 .settings-save-bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px; }
 .settings-save-bar > div { flex:1; min-width:180px; }
 .settings-save-bar p { margin:0; }
+.error-notice { min-width:0; overflow-wrap:anywhere; }
+.error-details { margin-top:6px; color:var(--muted); font-size:var(--font-secondary); }
+.error-details > summary { cursor:pointer; }
+.error-details > pre { white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; -webkit-user-select:text; max-height:240px; overflow:auto; }
 .settings-save-bar button { flex-shrink:0; }
 .settings-save-bar[data-dirty=true] .settings-draft-label { color:var(--warn); }
 .panel-account-group { border:1px solid var(--border); border-radius:var(--radius-control); margin:12px 0; padding:12px; }

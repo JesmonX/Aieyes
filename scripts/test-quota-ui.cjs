@@ -152,7 +152,7 @@ function fixture(){
    await page.evaluate(()=>openProviderEstimates('codex'));
    assert.equal(await page.locator('#manual-sampling').evaluate(el=>el.open),false);
    assert.equal(await page.locator('[data-valuation-record]').count(),0);
-   assert.match(await page.locator('#quota-dialog').innerText(),/自动估值5h\/7d限额和credits的价值/);
+   assert.match(await page.locator('#quota-dialog').innerText(),/估算 5 小时 \/ 7 天额度及 credits 的 API 等价价值/);
    const beforeConsent=await page.evaluate(()=>quotaFixture.calls.filter(c=>c.method==='autoEstimates.configure').length);
    await page.locator('[data-auto-save="c"]').click();await page.locator('#auto-consent [data-cancel]').click();
    assert.equal(await page.locator('[data-auto-save="c"]').isChecked(),false);
@@ -179,7 +179,7 @@ function fixture(){
      await page.locator('[data-settings-agent=claude]').click();
      assert.match(await page.locator('[data-auto-machine-status="local"][data-auto-provider="claude"]').textContent(),/未配置目录/);
      await page.locator('#agent-section-valuation > summary').click();await page.locator('[data-agent-estimates="claude"]').click();
-     assert.match(await page.locator('#quota-dialog').innerText(),/自动估值5h\/7d限额的价值/);
+     assert.match(await page.locator('#quota-dialog').innerText(),/估算 5 小时 \/ 7 天额度的 API 等价价值/);
      assert(!await page.locator('#quota-dialog').innerText().then(text=>text.includes('credits')));
      await page.locator('#quota-close').click();
      await page.screenshot({path:path.join(output,'source-automatic-settings.png'),fullPage:true});

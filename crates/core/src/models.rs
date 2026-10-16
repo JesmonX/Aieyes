@@ -566,7 +566,7 @@ impl Settings {
         for agent in &self.agents {
             if !providers.insert(&agent.provider) {
                 self.configuration_issues.push(format!(
-                    "{} 有冲突的重复配置，请在 Agents 重新选择机器并保存",
+                    "{} 有冲突的重复配置，请在接入与账户中重新选择机器并保存",
                     agent.provider
                 ));
             }

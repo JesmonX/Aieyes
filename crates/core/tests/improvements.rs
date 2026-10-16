@@ -321,7 +321,7 @@ fn manual_boundaries_report_progress_without_duplicate_quota_refresh_scans() {
         *stages.lock().unwrap(),
         vec![
             "同步来源 · fixture",
-            "读取实时限额",
+            "读取实时额度",
             "补齐尾部记录",
             "同步来源 · fixture",
             "保存采样起点"
@@ -346,7 +346,7 @@ fn manual_boundaries_report_progress_without_duplicate_quota_refresh_scans() {
         *stages.lock().unwrap(),
         vec![
             "同步来源 · fixture",
-            "读取实时限额",
+            "读取实时额度",
             "补齐尾部记录",
             "同步来源 · fixture",
             "保存采样结果"

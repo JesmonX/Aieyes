@@ -225,8 +225,7 @@ fn request(
         .read_to_end(&mut bytes)
         .context("订阅响应读取失败")?;
     ensure!(bytes.len() <= 2 * 1024 * 1024, "订阅响应过大");
-    serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow::anyhow!("订阅响应不是有效 JSON，请检查登录是否过期"))
+    serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("订阅响应格式无效，请检查登录状态"))
 }
 
 pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
@@ -580,7 +579,7 @@ pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<
             || source.provider == "opencode"
                 && config.mode == "console"
                 && (v.is_null() || v["access"].is_null()),
-        "未返回可识别的额度，请查看官方用量页；未知用量不代表零消耗"
+        "未返回可识别的额度，请在官方用量页查看"
     );
     Ok(q)
 }

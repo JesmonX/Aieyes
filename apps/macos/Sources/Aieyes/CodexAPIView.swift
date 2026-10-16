@@ -25,7 +25,7 @@ struct CodexAPISettingsSection: View {
     var body: some View {
         if !sources.isEmpty || !connections.isEmpty {
             Section("Codex · API 连接") {
-                Text("保存 API 连接后，可在本机账号与 API 之间切换。沿用 Codex 当前的模型、推理强度和网络设置。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text("添加 API 连接后可切换登录方式，沿用 Codex 的模型、推理强度和网络设置。").font(AppFont.secondary).foregroundStyle(.secondary)
                 ForEach(connections) { connection in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -43,7 +43,7 @@ struct CodexAPISettingsSection: View {
                             Button(isApplied(connection) ? "正在使用" : "切换到此 API") { switching = APISwitchRequest(sourceID: connection.sourceId, connection: connection) }.disabled(isApplied(connection))
                             Button("移除") { removing = connection }
                         }.disabled(!available(connection.sourceId))
-                        if !available(connection.sourceId) { Text("此位置已暂停或未绑定，请在机器与采集设置中恢复。").font(AppFont.secondary).foregroundStyle(.secondary) }
+                        if !available(connection.sourceId) { Text("请在“机器与采集”恢复此位置的采集或绑定。").font(AppFont.secondary).foregroundStyle(.secondary) }
                     }
                 }
                 ForEach(Array(Set(connections.map(\.sourceId))).sorted(), id: \.self) { sourceID in
@@ -51,7 +51,7 @@ struct CodexAPISettingsSection: View {
                         Text(location(sourceID) + " · " + selectedLabel(sourceID)).font(AppFont.secondary).foregroundStyle(.secondary)
                         Spacer()
                         Button("刷新状态") { perform { try await refresh(sourceID) } }
-                        Button("切换到已保存账号") { switching = APISwitchRequest(sourceID: sourceID) }
+                        Button("切换到已保存账户") { switching = APISwitchRequest(sourceID: sourceID) }
                     }.disabled(!available(sourceID))
                 }
                 Button("添加 API", systemImage: "plus") { var c = CodexAPIConnection(); c.sourceId = availableSources.first?.id ?? ""; editing = c }.disabled(availableSources.isEmpty)
@@ -91,7 +91,7 @@ struct CodexAPISettingsSection: View {
     }
     private func selectedLabel(_ id: String) -> String {
         guard let selected = statuses[id]?.selected else { return "状态待检查" }
-        return selected.kind == "api" ? "当前使用 " + (selected.name ?? "API") : "当前使用账号"
+        return selected.kind == "api" ? "当前使用 " + (selected.name ?? "API") : "当前使用账户"
     }
     private func isSelected(_ c: CodexAPIConnection) -> Bool { statuses[c.sourceId]?.selected?.connectionId == c.id }
     private func isApplied(_ c: CodexAPIConnection) -> Bool { isSelected(c) && statuses[c.sourceId]?.selected?.revision == c.revision }
@@ -135,8 +135,8 @@ struct CodexAPIEditor: View {
                 TextField("连接名称", text: $draft.name)
                 TextField("Base URL", text: $draft.baseUrl)
                 SecureField(connection.id.isEmpty ? "API Key" : "API Key（留空保留）", text: $apiKey)
-                Text("支持官方 OpenAI 与兼容 Responses API 的服务。保存后可通过切换按钮启用。").font(AppFont.secondary).foregroundStyle(.secondary)
-                if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
+                Text("支持 OpenAI 和兼容 Responses API 的服务。保存后可切换使用。").font(AppFont.secondary).foregroundStyle(.secondary)
+                if let error { ErrorNotice(message: error) }
             }.formStyle(.grouped).disabled(busy)
             HStack {
                 Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
@@ -174,13 +174,13 @@ private struct CodexConnectionSwitchSheet: View {
             Text("切换 Codex 登录方式").font(AppFont.title)
             if let connection = request.connection { Text("切换到 " + connection.name).font(AppFont.section) }
             else if let info {
-                Picker("目标账号", selection: $profileID) { ForEach(info.profiles) { Text($0.name).tag($0.id) } }
+                Picker("目标账户", selection: $profileID) { ForEach(info.profiles) { Text($0.name).tag($0.id) } }
                     .disabled(busy)
                     .onChange(of: profileID) { _, _ in if !busy { prepared = nil; Task { await prepare() } } }
             }
             Text("确认后会关闭下面列出的受影响进程。已确认使用独立 API 配置的实例会保留；请先保存工作。").foregroundStyle(.secondary)
-            if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
-            if !available { Text("此位置已暂停或未绑定，请在机器与采集设置中恢复后重新检查。").foregroundStyle(.secondary) }
+            if let error { ErrorNotice(message: error) }
+            if !available { Text("请在“机器与采集”恢复采集或绑定后重新检查。").foregroundStyle(.secondary) }
             if busy { ProgressView().controlSize(.small) }
             if prepared != nil && processes.isEmpty { Text("没有需要关闭的进程。") }
             ScrollView {
@@ -215,7 +215,7 @@ private struct CodexConnectionSwitchSheet: View {
             if let c = request.connection { target = ["kind":"api","connectionId":c.id,"revision":c.revision] }
             else {
                 if profileID.isEmpty { profileID = inspection.profiles.first(where: { $0.identity.key == inspection.storedIdentity })?.id ?? inspection.profiles.first?.id ?? "" }
-                guard !profileID.isEmpty else { throw ClientError.message("此设备尚未保存账号，请在账号入口读取当前登录或登录。") }
+                guard !profileID.isEmpty else { throw ClientError.message("请先在此机器读取当前登录或登录账户。") }
                 target = ["kind":"account","profileId":profileID]
             }
             prepared = try await model.engine.call("codexAuth.switch.prepare", params: ["sourceId":request.sourceID,"target":target])

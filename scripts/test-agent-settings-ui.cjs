@@ -191,7 +191,7 @@ function browserFixture(){
     await page.locator('#account-detail-back').click();await page.locator('.machine-menu > summary').first().click();await page.locator('[data-device-manage="codex-local"][data-intent="switch"]').click();await page.locator('[data-auth="switch"]').waitFor();unknown=true;await page.locator('[data-auth="switch"]').click();assert(await page.locator('[data-auth="commit"]').isDisabled());await page.locator('[data-auth="cancelSwitch"]').click();unknown=false;
     loggedIn=false;await page.locator('#accounts-back').click();await page.locator('.machine-menu > summary').first().click();await page.locator('[data-device-manage="codex-local"][data-intent="login"]').click();await page.locator('[data-auth="login"]').waitFor();
     await page.locator('#accounts-back').click();const beforeLogin=(await rpc('settings.get')).accounts.map(a=>a.id);await page.locator('[data-account-add="codex"]').click();await page.locator('[data-auth="login"]').waitFor();assert.equal(await page.locator('#auth-account').count(),0);assert.equal(await page.locator('#field-name').count(),0);assert.equal(await page.locator('#editor[open]').count(),0);assert.deepEqual((await rpc('settings.get')).accounts.map(a=>a.id),beforeLogin);await page.locator('[data-auth="login"]').click();assert.equal(await page.locator('#field-name').count(),0);await page.locator('#editor-form button[type=submit]').click();assert.equal(calls.filter(c=>c.method==='codexAuth.login.start').at(-1).params.name,undefined);await page.locator('[data-auth="copyUrl"]').waitFor();await page.locator('[data-auth="copyUrl"]').click();assert.equal(await page.evaluate(()=>window.copied),'https://auth.openai.com/device');await page.locator('[data-auth="copyCode"]').click();assert.equal(await page.evaluate(()=>window.copied),'TEST-CODE');
-    await page.screenshot({path:path.join(out,'login.png'),fullPage:true});authDone=true;loggedIn=true;await page.getByText('登录成功，已启用此账号的额度查询。',{exact:true}).waitFor();await page.locator('#accounts-back').click();await page.locator('[data-account-edit="codex:third"]').waitFor();assert.equal((await rpc('settings.get')).accounts.find(a=>a.id==='third').name,'third@example.test');assert.equal(calls.filter(c=>c.method==='codexAuth.profiles.bind').length,0);
+    await page.screenshot({path:path.join(out,'login.png'),fullPage:true});authDone=true;loggedIn=true;await page.getByText('登录成功，已启用此账户的额度查询。',{exact:true}).waitFor();await page.locator('#accounts-back').click();await page.locator('[data-account-edit="codex:third"]').waitFor();assert.equal((await rpc('settings.get')).accounts.find(a=>a.id==='third').name,'third@example.test');assert.equal(calls.filter(c=>c.method==='codexAuth.profiles.bind').length,0);
     await page.locator('[data-account-edit="codex:b"]').click();assert.equal(await page.locator('[data-account-login][data-intent="login"]').count(),0);await page.getByText('已登录设备 1/1 · 使用中设备 0/1',{exact:true}).waitFor();await page.getByText('已登录 · 未使用',{exact:true}).waitFor();await page.locator('[data-account-login="codex:b"][data-intent="switch"]').first().click();await page.locator('[data-auth="commit"]').waitFor();assert.equal(calls.filter(c=>c.method==='codexAuth.switch.prepare').at(-1).params.profileId,'two');assert.equal(await page.locator('[data-auth="login"]').count(),0);await page.locator('[data-auth="cancelSwitch"]').click();await page.locator('#accounts-back').click();await page.locator('#account-detail-back').click();
     // Archived accounts stay archived; restoring is explicit and immediate.
     assert((await rpc('settings.get')).accounts.find(a=>a.id==='old').archived);
@@ -207,16 +207,16 @@ function browserFixture(){
     assert.equal(calls.filter(c=>c.method==='accounts.create').length,0);await page.locator('#accounts-back').click();
     // Global notification preferences use the real configuration merge and survive navigation.
     await page.evaluate(()=>{state.settingsTab='general';state.generalTab='notifications';renderSettings();});
-    assert.equal(await page.getByRole('checkbox',{name:'非预期重置时提醒',exact:true}).isChecked(),true);
-    assert.equal(await page.getByRole('checkbox',{name:'自然重置时也提醒',exact:true}).isChecked(),false);
-    await page.getByRole('checkbox',{name:'非预期重置时提醒',exact:true}).uncheck();
+    assert.equal(await page.getByRole('checkbox',{name:'提前重置时提醒',exact:true}).isChecked(),true);
+    assert.equal(await page.getByRole('checkbox',{name:'到期重置时提醒',exact:true}).isChecked(),false);
+    await page.getByRole('checkbox',{name:'提前重置时提醒',exact:true}).uncheck();
     await page.waitForFunction(()=>state.settings.quotaResetNotifications?.unexpected===false&&!state.settingsCommitting);
-    await page.getByRole('checkbox',{name:'自然重置时也提醒',exact:true}).check();
+    await page.getByRole('checkbox',{name:'到期重置时提醒',exact:true}).check();
     await page.waitForFunction(()=>state.settings.quotaResetNotifications?.natural===true&&!state.settingsCommitting);
     assert.deepEqual((await rpc('settings.get')).quotaResetNotifications,{unexpected:false,natural:true});
     await page.locator('[data-general-page=appearance]').click();await page.locator('[data-general-page=notifications]').click();
-    assert.equal(await page.getByRole('checkbox',{name:'非预期重置时提醒',exact:true}).isChecked(),false);
-    assert.equal(await page.getByRole('checkbox',{name:'自然重置时也提醒',exact:true}).isChecked(),true);
+    assert.equal(await page.getByRole('checkbox',{name:'提前重置时提醒',exact:true}).isChecked(),false);
+    assert.equal(await page.getByRole('checkbox',{name:'到期重置时提醒',exact:true}).isChecked(),true);
     await page.screenshot({path:path.join(out,'notifications.png'),fullPage:true});
     // Existing mappings are lazy, editable, and retain the editor on real-core conflicts.
     const mappingBase=await rpc('settings.get'),mappingNext=structuredClone(mappingBase);mappingNext.modelMappings={'fixture-old':'provider/old'};

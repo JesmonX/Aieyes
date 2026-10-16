@@ -41,7 +41,7 @@ struct SetupGuideView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Surface(title: "你想用 Aieyes 做什么？") {
-                    Text("找到你的目标或问题，查看还需要哪些配置。状态来自已保存配置和上次观察结果，保存过设置不代表连接已验证。").foregroundStyle(.secondary)
+                    Text("选择目标完成配置，下方显示最近读取的状态。").foregroundStyle(.secondary)
                     FlowLayout(spacing: 12) {
                         Picker("使用场景", selection: Binding(get: { scene }, set: { savedScene = $0 })) {
                             Text("仅本机").tag("local"); Text("仅 SSH 服务器").tag("ssh"); Text("本机与 SSH").tag("mixed")
@@ -49,7 +49,7 @@ struct SetupGuideView: View {
                         Button(observations.loading ? "正在读取状态…" : "重新读取状态") { Task { await observations.load() } }.disabled(observations.loading)
                         Button("返回总览", action: finish)
                     }
-                    if !observations.errors.isEmpty { Text("部分状态读取失败，相关项目待确认。可以重新读取，或前往对应页面查看。").font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                    if !observations.errors.isEmpty { Text("部分状态读取失败，请重试或打开对应设置。").font(AppFont.secondary).foregroundStyle(Palette.warn) }
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 14, alignment: .top)], alignment: .leading, spacing: 14) {
                     ForEach(SetupGuide.goals.filter { $0.id != "hosts" || scene != "local" }) { goal in goalCard(goal) }
@@ -74,14 +74,14 @@ struct SetupGuideView: View {
     private func goalCard(_ goal: SetupGuide.Goal) -> some View {
         let rows = checks.rows(goal.id)
         let warnings = rows.filter { $0.level == "warn" }.count, pending = rows.filter { $0.level == "pending" }.count
-        let status = warnings > 0 ? "\(warnings) 项配置或异常需检查" : pending > 0 ? "\(pending) 项待配置或验证" : "查看当前配置与验证方法"
+        let status = warnings > 0 ? "\(warnings) 项需检查" : pending > 0 ? "\(pending) 项待配置或验证" : "查看当前状态"
         return Surface {
             DisclosureGroup(isExpanded: expansion(goal.id)) {
                 VStack(alignment: .leading, spacing: 12) {
                     Divider()
                     if goal.id == "network" { networkHelp }
                     else { ForEach(Array(goal.steps.enumerated()), id: \.offset) { index, text in Text("\(index + 1). " + text).fixedSize(horizontal: false, vertical: true) } }
-                    Text("当前配置").font(AppFont.secondary.weight(.semibold))
+                    Text("当前状态").font(AppFont.secondary.weight(.semibold))
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in checkRow(row) }
                     if goal.id == "usage" {
                         FlowLayout(spacing: 8) {
@@ -93,7 +93,11 @@ struct SetupGuideView: View {
                     FlowLayout(spacing: 8) {
                         ForEach(Array(goal.actions.enumerated()), id: \.offset) { _, action in Button(action.title) { model.openSettings(action.destination) } }
                     }
-                    Text("怎样确认生效：" + goal.verification).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if !goal.help.isEmpty {
+                        DisclosureGroup("更多说明") {
+                            Text(goal.help).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }.padding(.top, 12)
             } label: {
                 VStack(alignment: .leading, spacing: 8) {
@@ -107,19 +111,39 @@ struct SetupGuideView: View {
     private func checkRow(_ row: SetupGuide.Check) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(row.label).font(AppFont.secondary.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-            Text(row.text).font(AppFont.secondary).foregroundStyle(row.level == "warn" ? Palette.warn : Color.secondary).fixedSize(horizontal: false, vertical: true)
+            FlowLayout(spacing: 8) {
+                Text(row.status.title).font(AppFont.caption.weight(.medium))
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background((row.level == "warn" ? Palette.warn : row.level == "ok" ? Palette.ok : Palette.accent).opacity(0.12), in: Capsule())
+                    .foregroundStyle(row.level == "warn" ? Palette.warn : row.level == "ok" ? Palette.ok : Palette.accent)
+                Text(row.text).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let time = row.updatedAt, time > 0 {
+                Text("上次数据：" + Date(timeIntervalSince1970: time).formatted(date: .numeric, time: .standard)).font(AppFont.caption).foregroundStyle(.secondary)
+            }
+            if !row.details.isEmpty {
+                DisclosureGroup("状态说明") { Text(row.details).font(AppFont.secondary).foregroundStyle(.secondary) }
+            }
             Button("查看设置") { model.openSettings(row.destination) }
             Divider()
         }
     }
     @ViewBuilder private var networkHelp: some View {
-        if scene != "ssh" { Text("本机：进入网络代理，选择系统代理、直连或指定代理。Agent 的本机目录可单独覆盖应用代理，需要一起核对。") }
+        if scene != "ssh" {
+            Text("本机：检查应用代理及目录的独立代理。")
+            Button("网络设置") { model.openSettings(.init(category: "general", section: "network")) }
+        }
         if scene != "local" {
-            Text("服务器：进入“账户 → 对应机器 → 前置命令”，按远端实际网络填写以下一种方式。只有需要代理时才配置，服务器可直连时可以留空。")
-            command("export http_proxy=http://PROXY_HOST:PORT\nexport https_proxy=http://PROXY_HOST:PORT")
-            Text("或加载服务器上已有的代理脚本：").foregroundStyle(.secondary)
-            command("source /path/to/proxy")
-            Text("代理地址必须在服务器上可达；服务器中的 127.0.0.1 指服务器自身。SSH 的 ProxyJump / ProxyCommand 只决定 SSH 如何连接，应用代理不会自动传给远端 Agent。前置命令用于此账户在此机器上的授权、切换、额度查询及定时唤醒。")
+            Text("服务器：在下方选择账户与机器，按需配置前置命令。")
+            DisclosureGroup("服务器代理配置示例") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("设置服务器可访问的代理地址：")
+                    command("export http_proxy=http://PROXY_HOST:PORT\nexport https_proxy=http://PROXY_HOST:PORT")
+                    Text("或加载已有代理脚本：")
+                    command("source /path/to/proxy")
+                    Text("127.0.0.1 指服务器自身。应用代理不会自动传给远端；ProxyJump / ProxyCommand 仅用于 SSH 连接。前置命令用于账户授权、切换、额度查询和定时唤醒。")
+                }.font(AppFont.secondary).foregroundStyle(.secondary)
+            }
         }
     }
     private func command(_ text: String) -> some View {

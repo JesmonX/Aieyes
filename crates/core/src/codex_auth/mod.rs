@@ -98,13 +98,13 @@ pub fn source_for_profile<'a, 'b>(
     settings: &'a Settings,
     reference: &'b str,
 ) -> Result<(&'a Source, &'b str)> {
-    let (home, profile) = reference.split_once(':').context("账号档案引用无效")?;
+    let (home, profile) = reference.split_once(':').context("账户档案引用无效")?;
     files::id(profile)?;
     let source = settings
         .sources
         .iter()
         .find(|s| s.codex_home_id.as_deref() == Some(home) && settings.source_enabled(s))
-        .context("账号所在 Codex 数据源已停用或删除")?;
+        .context("账户所在 Codex 数据源已停用或删除")?;
     Ok((source, profile))
 }
 pub fn read_quota_at(
@@ -169,7 +169,7 @@ pub fn validate_settings(s: &Settings) -> Result<()> {
                 source.provider == "codex"
                     && source.account_id.is_empty()
                     && source.quota_command.is_empty(),
-                "共享 Codex 来源不关联历史账号或自定义额度命令"
+                "共享 Codex 来源不关联历史账户或自定义额度命令"
             );
             ensure!(homes.insert(home), "一个 Codex home 只能关联一个共享来源");
         }
@@ -181,32 +181,32 @@ pub fn validate_settings(s: &Settings) -> Result<()> {
                 .sources
                 .iter()
                 .find(|v| v.id == connection.source_id)
-                .context("账号连接的来源已删除，请重新关联")?;
+                .context("账户连接的来源已删除，请重新关联")?;
             ensure!(
                 source.provider == account.provider,
-                "账号连接的 Agent 不匹配"
+                "账户连接的 Agent 不匹配"
             );
             if let Some(reference) = &connection.profile_id {
-                let (home, _) = reference.split_once(':').context("账号档案引用无效")?;
+                let (home, _) = reference.split_once(':').context("账户档案引用无效")?;
                 ensure!(
                     source.codex_home_id.as_deref() == Some(home),
-                    "账号连接的来源与档案 home 不匹配，请重新读取登录并关联"
+                    "账户连接的来源与档案 home 不匹配，请重新读取登录并关联"
                 );
             }
         }
         for reference in account.profile_refs() {
-            ensure!(account.provider == "codex", "账号档案仅用于 Codex");
+            ensure!(account.provider == "codex", "账户档案仅用于 Codex");
             ensure!(
                 bindings.insert(reference),
-                "一个账号档案只能关联一个额度账户"
+                "一个账户档案只能关联一个额度账户"
             );
-            let (home, profile) = reference.split_once(':').context("账号档案引用无效")?;
+            let (home, profile) = reference.split_once(':').context("账户档案引用无效")?;
             files::id(profile)?;
             ensure!(
                 s.sources
                     .iter()
                     .any(|v| v.codex_home_id.as_deref() == Some(home)),
-                "账号档案所属 home 已删除，请先解除关联"
+                "账户档案所属 home 已删除，请先解除关联"
             );
         }
     }
@@ -214,7 +214,7 @@ pub fn validate_settings(s: &Settings) -> Result<()> {
 }
 impl Engine {
     pub(crate) fn codex_auth_call(&mut self, method: &str, mut params: Value) -> Result<Value> {
-        let method = method.strip_prefix("codexAuth.").context("账号操作无效")?;
+        let method = method.strip_prefix("codexAuth.").context("账户操作无效")?;
         if method == "reconcile" {
             return self.reconcile_codex(params);
         }
@@ -272,7 +272,7 @@ impl Engine {
                     .deployment
                     .as_ref()
                     .is_some_and(|d| d.source.id == source.id)),
-                "请先移除此来源已部署的旧唤醒任务，再启用多账号管理"
+                "请先移除此来源已部署的旧唤醒任务，再启用多账户管理"
             );
             let root = home_path(&source.path);
             for other in settings.sources.iter().filter(|s| {
@@ -288,7 +288,7 @@ impl Engine {
                 };
                 ensure!(
                     !same,
-                    "此 home 已有其他历史来源，请先保留单一来源再启用多账号管理"
+                    "此 home 已有其他历史来源，请先保留单一来源再启用多账户管理"
                 );
             }
             let info = backend(&source, &settings, "enable", &json!({}))?;
@@ -314,7 +314,7 @@ impl Engine {
         }
         ensure!(
             source.codex_home_id.is_some() || method == "inspect",
-            "请先启用此来源的多账号管理"
+            "请先启用此来源的多账户管理"
         );
         if method == "switch.prepare" && params["target"]["kind"] == "api" {
             let c = settings
@@ -330,12 +330,12 @@ impl Engine {
             params["target"]["sourceId"] = json!(source.id);
         }
         if method == "profiles.bind" {
-            let profile = params["profileId"].as_str().context("请选择账号档案")?;
+            let profile = params["profileId"].as_str().context("请选择账户档案")?;
             let info = backend(&source, &settings, "profiles.list", &json!({}))?;
             let p = info["profiles"]
                 .as_array()
                 .and_then(|rows| rows.iter().find(|p| p["id"] == profile))
-                .context("账号档案不存在")?;
+                .context("账户档案不存在")?;
             let reference = format!("{}:{profile}", source.codex_home_id.as_deref().unwrap());
             let identity = p["identity"]["key"].as_str().context("无法确认账户身份")?;
             let email = p["identity"]["email"].as_str().unwrap_or("").trim();
@@ -461,7 +461,7 @@ impl Engine {
         {
             // The credential replacement already succeeded; never ask a client to resubmit it
             // merely because the UI cache could not be invalidated.
-            result["statusWarning"] = json!("账号已切换，设备状态缓存更新失败，请重新检查设备状态");
+            result["statusWarning"] = json!("账户已切换，设备状态缓存更新失败，请重新检查设备状态");
         }
         let profile = if method == "adopt" {
             result["profile"]["id"].as_str()
@@ -510,7 +510,7 @@ impl Engine {
                 }
                 Err(error) if method == "switch.commit" => {
                     result["statusWarning"] = json!(format!(
-                        "账号已切换，但账户列表关联失败：{error}。请读取当前登录并添加到账户。"
+                        "账户已切换，但账户列表关联失败：{error}。请读取当前登录并添加到账户。"
                     ));
                 }
                 Err(error) => return Err(error),

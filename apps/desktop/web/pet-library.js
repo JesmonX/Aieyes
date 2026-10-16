@@ -6,10 +6,10 @@ window.AieyesPetLibrary=(()=>{
   let root=null,observer=null,removalObserver=null,timer=null,loading=null,retryAction=null,retryLabel='重试',revision=0;
   const label=value=>typeof value==='string'?value:value?.name??value?.url??'';
   const imported=pet=>{const date=new Date(pet.importedAt);return Number.isFinite(date.getTime())?date.toLocaleString(undefined,{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'';};
-  function html(){return `<section class="pet-library" id="pet-library"><h3>我的桌宠</h3><p id="current-pet" class="muted tiny" role="status">正在读取桌宠…</p><form id="pet-import-form"><label for="pet-import-input">链接、npx 命令或 npm 包名</label><input id="pet-import-input" type="text" value="${e(library.input)}" placeholder="https://… / npx … / @scope/package" autocomplete="off" spellcheck="false"><div class="actions"><button id="import-pet" type="submit">导入并使用</button><button id="select-pet-file" type="button">选择本地文件…</button></div></form><p class="muted tiny">自动识别 ZIP、pet.json、支持的桌宠网页、npx 命令和 npm 包名。导入成功后立即使用，已有桌宠会保留。</p><p id="pet-import-status" role="status"></p><button id="pet-import-retry" type="button" hidden>重试导入</button><div id="pet-library-warnings"></div><div id="pet-library-list" class="pet-library-grid"></div></section>`;}
+  function html(){return `<section class="pet-library" id="pet-library"><h3>我的桌宠</h3><p id="current-pet" class="muted tiny" role="status">正在读取桌宠…</p><form id="pet-import-form"><label for="pet-import-input">链接、npx 命令或 npm 包名</label><input id="pet-import-input" type="text" value="${e(library.input)}" placeholder="https://… / npx … / @scope/package" autocomplete="off" spellcheck="false"><div class="actions"><button id="import-pet" type="submit">导入并使用</button><button id="select-pet-file" type="button">选择本地文件…</button></div></form><p class="muted tiny">支持 ZIP、pet.json、桌宠链接、npx 命令和 npm 包名。导入后立即使用，已有桌宠保留。</p><p id="pet-import-status" role="status"></p><button id="pet-import-retry" type="button" hidden>重试导入</button><div id="pet-library-warnings"></div><div id="pet-library-list" class="pet-library-grid"></div></section>`;}
   function status(){
     if(!root?.isConnected)return;
-    const line=root.querySelector('#pet-import-status');line.textContent=library.error||library.status;line.className=library.error?'error':'muted tiny';
+    const line=root.querySelector('#pet-import-status');if(library.error)AieyesUI.showError(line,library.error,'桌宠操作失败');else line.textContent=library.status;line.className=library.error?'error':'muted tiny';
     const retry=root.querySelector('#pet-import-retry');retry.hidden=!library.error||!retryAction;retry.disabled=library.busy;retry.textContent=retryLabel;
     for(const id of ['import-pet','select-pet-file'])root.querySelector('#'+id).disabled=library.busy;
     root.querySelector('#import-pet').textContent=library.busy?'处理中…':'导入并使用';
@@ -24,9 +24,9 @@ window.AieyesPetLibrary=(()=>{
     list.innerHTML=library.pets.map(pet=>{
       const duplicate=library.pets.filter(other=>other.displayName===pet.displayName).length>1;
       const meta=[label(pet.creator),label(pet.source)].filter(Boolean).join(' · ');
-      return `<article class="pet-library-card" data-pet-id="${e(pet.libraryId)}"><canvas width="88" height="96" aria-label="${e(pet.displayName)} idle 预览"></canvas><div class="pet-library-info"><strong title="${e(pet.displayName)}">${e(pet.displayName)}</strong>${meta?`<small title="${e(meta)}">${e(meta)}</small>`:''}${duplicate||pet.displayName.startsWith('历史桌宠')?`<small>${e(imported(pet)||pet.libraryId.slice(0,12))}</small>`:''}<span class="pet-preview-error error" hidden></span></div><button type="button" data-pet-select="${e(pet.libraryId)}" aria-label="使用 ${e(pet.displayName)}">使用</button></article>`;
+      return `<article class="pet-library-card" data-pet-id="${e(pet.libraryId)}"><canvas width="88" height="96" aria-label="${e(pet.displayName)}空闲动画预览"></canvas><div class="pet-library-info"><strong title="${e(pet.displayName)}">${e(pet.displayName)}</strong>${meta?`<small title="${e(meta)}">${e(meta)}</small>`:''}${duplicate||pet.displayName.startsWith('历史桌宠')?`<small>${e(imported(pet)||pet.libraryId.slice(0,12))}</small>`:''}<span class="pet-preview-error error" hidden></span></div><button type="button" data-pet-select="${e(pet.libraryId)}" aria-label="使用 ${e(pet.displayName)}">使用</button></article>`;
     }).join('')||(library.loaded?'<p class="muted">还没有桌宠。</p>':'<p class="muted">正在读取列表…</p>');
-    root.querySelector('#pet-library-warnings').innerHTML=(library.warnings??[]).map(w=>`<p class="error">${e(w.path)}：${e(w.error)}</p>`).join('');
+    root.querySelector('#pet-library-warnings').innerHTML=(library.warnings??[]).map(w=>`<div class="error">${e(w.path)}：${e(w.error)}</div>`).join('');
     list.querySelectorAll('[data-pet-select]').forEach(button=>button.onclick=()=>select(button.dataset.petSelect));
     observePreviews();status();
   }

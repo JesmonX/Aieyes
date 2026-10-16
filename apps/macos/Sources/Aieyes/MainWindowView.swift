@@ -53,7 +53,7 @@ struct MainWindowView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(title).font(AppFont.title).padding(.horizontal, 22).padding(.vertical, 15)
                 if guideActive && model.detailPage == "settings" {
-                    HStack { Button("← 返回配置向导") { select("setup") }; Text("保存后返回，查看配置和验证状态").font(AppFont.secondary).foregroundStyle(.secondary); Spacer() }.padding(.horizontal, 22).padding(.bottom, 12)
+                    HStack { Button("← 返回配置向导") { select("setup") }; Text("保存后返回查看状态").font(AppFont.secondary).foregroundStyle(.secondary); Spacer() }.padding(.horizontal, 22).padding(.bottom, 12)
                 }
                 ZStack {
                     if model.detailPage == "setup" { SetupGuideView(model: model) { guideActive = false; select("agent") } }

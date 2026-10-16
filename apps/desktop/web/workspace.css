@@ -47,7 +47,14 @@ main,.settings-block { max-width:none; }
 .setup-checks [data-guide-level=warn] span { color:inherit; }
 .setup-checks [data-guide-level=ok] span { color:var(--muted); }
 .setup-command { white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; background:var(--soft); border-radius:var(--radius-control); user-select:text; }
-.setup-verify { padding-top:12px; color:var(--muted); }
+.setup-check-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; }
+.setup-checks .setup-status-badge { flex:none; padding:2px 7px; border-radius:999px; color:var(--accent); background:color-mix(in srgb,var(--accent) 12%,transparent); font-weight:600; }
+.setup-checks [data-guide-level=warn] .setup-status-badge { color:var(--warn); background:color-mix(in srgb,var(--warn) 12%,transparent); }
+.setup-checks [data-guide-level=ok] .setup-status-badge { color:var(--ok); background:color-mix(in srgb,var(--ok) 12%,transparent); }
+.setup-checks time { color:var(--muted); font-size:var(--font-caption); overflow-wrap:anywhere; }
+.setup-help, .setup-row-details { color:var(--muted); font-size:var(--font-secondary); }
+.setup-help > summary, .setup-row-details > summary { cursor:pointer; }
+.setup-help > p, .setup-row-details > p { margin:8px 0; }
 .setup-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
 .setup-toolbar .setup-scene { margin:0 auto 0 0; }
 .setup-read-error { color:var(--warn); }

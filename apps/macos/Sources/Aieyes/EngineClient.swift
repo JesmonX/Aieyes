@@ -494,6 +494,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var generalSaveTask: Task<Void, Never>?
     @Published private(set) var repricing = false { didSet { scheduleRefreshes() } }
     @Published var settingsMessage: String?
+    @Published var settingsValidationField: String?
     @Published var mappingModel = ""
     @Published var mappingID = ""
     var settingsDirty: Bool { settingsDraft != settings || !mappingModel.isEmpty || !mappingID.isEmpty }
@@ -751,17 +752,21 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         do { try await estimateAction(action, params: params, credits: credits); return true }
         catch { estimateErrors[accountKey] = error.localizedDescription; await reload(); return false }
     }
-    static let refreshLabels = ["scan": "同步记录", "rescan": "全量重扫", "quotas": "刷新限额", "prices": "同步价格", "hosts": "刷新服务器"]
+    static let refreshLabels = ["scan": "同步记录", "rescan": "全量重扫", "quotas": "刷新额度", "prices": "同步价格", "hosts": "刷新服务器"]
     var usageSources: [AgentSource] { settings.usageSources }
     var dataTime: Double {
         let stamps = usageSources.map { source in dashboard.sources.first { $0.id == source.id }?.status?.updatedAt ?? 0 }
         return stamps.min() ?? 0
     }
-    var statusText: String {
-        let delayed = usageSources.filter { source in
+    var delayedUsageCount: Int {
+        usageSources.filter { source in
             guard let stamp = dashboard.sources.first(where: { $0.id == source.id })?.status?.updatedAt else { return true }
             return Date().timeIntervalSince1970 - stamp > Double(max(60, settings.historyInterval * 2))
         }.count
+    }
+    var hasStaleUsage: Bool { delayedUsageCount > 0 || dataTime == 0 }
+    var statusText: String {
+        let delayed = delayedUsageCount
         let failed = usageSources.contains { source in
             let status = dashboard.sources.first { $0.id == source.id }?.status
             return status?.error != nil || status?.partial == true
@@ -769,12 +774,16 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         let prefix = dataTime > 0 ? "记录同步于 " + Format.time(dataTime) : usageSources.isEmpty ? "未接入用量来源" : "记录尚未全部同步"
         return prefix + " · " + (busy ? "同步中…" : failed || !actionFailures.isEmpty ? "部分失败" : delayed > 0 ? "\(delayed) 个来源有延迟" : usageSources.isEmpty ? "等待接入" : "记录已同步")
     }
-    var serverStatusText: String {
-        let enabled = settings.monitoredHosts.filter(\.enabled)
-        let updated = enabled.filter { host in
+    var updatedHostCount: Int {
+        settings.monitoredHosts.filter(\.enabled).filter { host in
             guard let result = hosts.first(where: { $0.id == host.id }), result.error == nil, let sample = result.sample else { return false }
             return sample.errors.isEmpty && Date().timeIntervalSince1970 - sample.timestamp <= 10
         }.count
+    }
+    var hasStaleHosts: Bool { updatedHostCount < settings.monitoredHosts.filter(\.enabled).count }
+    var serverStatusText: String {
+        let enabled = settings.monitoredHosts.filter(\.enabled)
+        let updated = updatedHostCount
         return "\(updated)/\(enabled.count) 台已更新" + (serverBusy ? " · 采样中…" : updated < enabled.count ? " · 存在延迟或失败" : "")
     }
     func refreshLabel(_ key: String) -> String {
@@ -853,11 +862,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 guard let error = row.error else { return nil }
                 return ActionFailure(action: "quotas", itemID: row.accountId, name: row.name, reason: error)
             }
-            if result.isEmpty { failures = [ActionFailure(action: "quotas", name: "账户限额", reason: "暂未获得限额数据，请检查关联数据源与账户设置。")] }
+            if result.isEmpty { failures = [ActionFailure(action: "quotas", name: "账户额度", reason: "暂未获得额度数据，请检查关联数据源与账户设置。")] }
             quotaError = failures.isEmpty ? nil : "部分账户读取失败，请逐项重试。"
             let loaded = await reload()
             finishRefresh("quotas", failures: failures + (loaded ? [] : [ActionFailure(action: "quotas", name: "概览", reason: message ?? "读取失败")]), itemID: accountID)
-        } catch { quotaError = error.localizedDescription; finishRefresh("quotas", failures: [ActionFailure(action: "quotas", itemID: accountID, name: "账户限额", reason: error.localizedDescription)], itemID: accountID) }
+        } catch { quotaError = error.localizedDescription; finishRefresh("quotas", failures: [ActionFailure(action: "quotas", itemID: accountID, name: "账户额度", reason: error.localizedDescription)], itemID: accountID) }
     }
     func acceptQuotaSamples(_ rows: [Quota]) {
         func merge(_ old: [Quota]) -> [Quota] {
@@ -921,10 +930,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             return RemovalRequest(kind: kind, itemID: id, title: "移除服务器「" + (host.name.isEmpty ? host.target : host.name) + "」？", explanation: linked.isEmpty ? "历史用量会保留。确认后立即生效。" : "以下 \(linked.count) 个数据源将暂停，并需要重新选择服务器。确认后立即生效。", affected: linked)
         }
         if kind == "source", let source = settings.sources.first(where: { $0.id == id }) {
-            return RemovalRequest(kind: kind, itemID: id, title: "移除数据源「" + source.name + "」？", explanation: "已导入的历史用量会保留。以此来源查询限额的账户需要重新选择来源；确认后立即生效。", affected: settings.accounts.filter { $0.quotaSourceId == id }.map(\.name))
+            return RemovalRequest(kind: kind, itemID: id, title: "移除数据源「" + source.name + "」？", explanation: "已导入的历史用量会保留。以此来源查询额度的账户需要重新选择来源；确认后立即生效。", affected: settings.accounts.filter { $0.quotaSourceId == id }.map(\.name))
         }
         if kind == "account", let account = settings.accounts.first(where: { $0.key == id }) {
-            return RemovalRequest(kind: kind, itemID: id, title: "归档账户「" + account.name + "」？", explanation: "停止展示此账户的实时限额，保留历史用量；确认后立即生效，可从已归档账户恢复。", affected: [])
+            return RemovalRequest(kind: kind, itemID: id, title: "归档账户「" + account.name + "」？", explanation: "停止展示此账户的实时额度，保留历史用量；确认后立即生效，可从已归档账户恢复。", affected: [])
         }
         return nil
     }
@@ -947,7 +956,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         } catch { settingsMessage = error.localizedDescription; return false }
     }
     func discardSettingsDraft() {
-        settingsDraft = settings; settingsMessage = nil; mappingModel = ""; mappingID = ""
+        settingsDraft = settings; settingsMessage = nil; settingsValidationField = nil; mappingModel = ""; mappingID = ""
     }
     func toggleTheme(currentlyDark: Bool) async {
         guard settingsLoaded else { return }

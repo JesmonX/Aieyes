@@ -23,7 +23,7 @@ function fixture(){
     if(method==='codexApi.probe')return {reachable:true,httpStatus:200,message:'API 认证可用'};
     if(method==='codexApi.remove'){settings.codexApis=[];return {settings:structuredClone(settings)};}
     if(method==='codexAuth.enable'){settings.sources[0].codexHomeId='home';return {homeId:'home'};}
-    if(method==='codexAuth.inspect')return {version:'codex-cli fixture',storageMode:'file',selected:structuredClone(f.selected),storedIdentity:identity.key,currentIdentity:f.selected.kind==='account'?identity.key:null,profiles:[{id:'account',name:'已保存账号',identity,current:f.selected.kind==='account'}],processes:[]};
+    if(method==='codexAuth.inspect')return {version:'codex-cli fixture',storageMode:'file',selected:structuredClone(f.selected),storedIdentity:identity.key,currentIdentity:f.selected.kind==='account'?identity.key:null,profiles:[{id:'account',name:'已保存账户',identity,current:f.selected.kind==='account'}],processes:[]};
     if(method==='codexAuth.switch.prepare'){
       if(f.pausePrepare)await new Promise(resolve=>f.releasePrepare=()=>{f.pausePrepare=false;resolve();});
       f.prepared=structuredClone(params.target);return {operationId:'op-'+(++f.operation),status:'prepared',target:f.prepared,processes:[{pid:42,name:'Codex',canClose:true}],preservedProcesses:[{pid:43,name:'独立 API',canClose:false}]};

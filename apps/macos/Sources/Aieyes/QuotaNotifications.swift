@@ -20,6 +20,7 @@ private struct QuotaResetEvent: Decodable {
 @MainActor final class QuotaNotificationService: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     @Published private(set) var permission = "系统通知状态未读取"
     @Published private(set) var error: String?
+    @Published private(set) var testMessage: String?
     private let engine = EngineClient(configurationOnly: true)
     private let since = Int(Date().timeIntervalSince1970)
     private var task: Task<Void, Never>?
@@ -93,8 +94,9 @@ private struct QuotaResetEvent: Decodable {
         catch { self.error = "通知发送失败：" + error.localizedDescription }
     }
     func test() async {
-        error = nil; await authorize()
-        await deliver(id: UUID().uuidString, title: "Aieyes 测试通知", body: "订阅额度重置提醒已连接系统通知。")
+        error = nil; testMessage = nil; await authorize()
+        await deliver(id: UUID().uuidString, title: "Aieyes 测试通知", body: "收到此通知表示系统通知可正常显示。")
+        if error == nil { testMessage = "测试通知已提交，请检查系统显示。" }
     }
     func stop() { stopped = true; task?.cancel(); task = nil; engine.stop() }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,

@@ -170,7 +170,7 @@ class CoordinatorTests(unittest.TestCase):
             def login(self,*_): pass
             def call(self,method,params,refresh): return refresh({'previousAccountId':'team'})
         with patch.object(a,'Rpc',Rpc),patch.object(a,'current_auth',side_effect=[self.one,self.two]),patch.object(a,'renew') as renew:
-            with self.assertRaisesRegex(ValueError,'账号已改变'): a.wakeup(self.loc,'one',dict(model='fixture',args=['OK']),self.root)
+            with self.assertRaisesRegex(ValueError,'账户已改变'): a.wakeup(self.loc,'one',dict(model='fixture',args=['OK']),self.root)
             renew.assert_not_called()
 
     def test_expired_active_wakeup_does_not_rotate_daily_cli_credentials(self):

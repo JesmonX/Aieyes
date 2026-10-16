@@ -154,7 +154,7 @@ pub(super) fn observe() -> Result<Vec<Observation>> {
         system
             .process(sysinfo::Pid::from_u32(std::process::id()))
             .is_some(),
-        "无法枚举 Windows 进程，账号未切换，请重新检查"
+        "无法枚举 Windows 进程，账户未切换，请重新检查"
     );
     let mut rows = Vec::new();
     for (pid, process) in system.processes() {
@@ -321,7 +321,7 @@ pub(super) fn terminate(expected: &Running) -> Result<()> {
     let (fingerprint, path, _) = identity(handle.0, expected.pid)?;
     ensure!(
         Some(fingerprint.as_str()) == expected.fingerprint.split(':').next(),
-        "进程已重新启动，账号未切换，请重新检查"
+        "进程已重新启动，账户未切换，请重新检查"
     );
     let mut windows = Windows {
         pid: expected.pid,
@@ -390,11 +390,11 @@ pub(super) fn terminate(expected: &Running) -> Result<()> {
     let result = unsafe { WaitForSingleObject(handle.0, 10_000) };
     ensure!(
         result != WAIT_TIMEOUT,
-        "Codex / ChatGPT 未退出，账号未切换，请保存工作并手动退出后重新检查"
+        "Codex / ChatGPT 未退出，账户未切换，请保存工作并手动退出后重新检查"
     );
     ensure!(
         result == WAIT_OBJECT_0,
-        "无法确认进程已退出，账号未切换，请重新检查"
+        "无法确认进程已退出，账户未切换，请重新检查"
     );
     Ok(())
 }

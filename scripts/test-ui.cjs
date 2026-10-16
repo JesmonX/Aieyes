@@ -228,7 +228,7 @@ const output = path.resolve(__dirname, '../.local/ui-previews');
     await page.locator('[data-general-page=updates]').click();
     await page.locator('#updates').click();
     await page.waitForFunction(()=>!state.busy);
-    await page.waitForFunction(()=>document.querySelector('#update-result').textContent.includes('当前已是最新版本'));
+    await page.waitForFunction(()=>document.querySelector('#update-result').textContent.includes('已是最新版本'));
     assert.match(await page.locator('#update-current').textContent(),/0\.1\.1/);
     assert.equal(await page.locator('#update-result a').count(),0);
     await page.screenshot({animations:'disabled',path:path.join(output,'general-light.png'),fullPage:true});

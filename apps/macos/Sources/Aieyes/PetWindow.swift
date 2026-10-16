@@ -247,9 +247,9 @@ struct PetLibraryView: View {
                 }.disabled(model.petImportBusy || model.petSelectionBusy != nil)
                 if model.petImportBusy || (model.petLibraryBusy && model.petLibrary.isEmpty) { ProgressView().controlSize(.small) }
             }
-            Text("只下载与解析素材，不运行 npx 或安装脚本。导入后立即启用，已添加的桌宠保留在下方。").font(AppFont.secondary).foregroundStyle(.secondary)
-            if let error = model.petImportError { Text(error).font(AppFont.secondary).foregroundStyle(Palette.danger).textSelection(.enabled) }
-            if let error = model.petLibraryError { HStack { Text(error).foregroundStyle(Palette.warn); Button("重试读取") { Task { await model.loadPetLibrary() } } }.font(AppFont.secondary) }
+            Text("导入后立即使用，已有桌宠保留。").font(AppFont.secondary).foregroundStyle(.secondary)
+            if let error = model.petImportError { ErrorNotice(message: error) }
+            if let error = model.petLibraryError { HStack { ErrorNotice(message: error).foregroundStyle(Palette.warn); Button("重试读取") { Task { await model.loadPetLibrary() } } }.font(AppFont.secondary) }
             if !model.petLibrary.isEmpty {
                 GeometryReader { viewport in
                     ScrollView { LazyVStack(alignment: .leading, spacing: 8) {
@@ -259,7 +259,7 @@ struct PetLibraryView: View {
                     }.padding(4) }
                 }.frame(height: height)
             }
-            ForEach(model.petLibraryWarnings) { warning in Text(warning.path + "：" + warning.error).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled) }
+            ForEach(model.petLibraryWarnings) { warning in ErrorNotice(message: warning.path + "：" + warning.error).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled) }
         }.task { await model.loadPetLibrary() }
     }
 }

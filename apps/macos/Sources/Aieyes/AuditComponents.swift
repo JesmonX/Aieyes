@@ -87,7 +87,7 @@ struct EstimateEntry: View {
     private var entries: [EstimatePresentation.Entry] { EstimatePresentation.entries(records, credits: credits, quota: quota, group: group) }
     private var latest: QuotaEstimate? { EstimatePresentation.canonical(records).first }
     private var label: String {
-        if credits { return "credits估值（当前1000credits≈" + Format.compactMoney(entries.first?.value) + "）" }
+        if credits { return "credits 估值（1000 credits ≈ " + Format.compactMoney(entries.first?.value) + "）" }
         return EstimatePresentation.summary(records, quota: quota, group: group)
     }
     private var help: String {

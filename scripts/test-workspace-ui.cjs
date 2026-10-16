@@ -106,7 +106,10 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     await panel.evaluate(()=>loadDashboard());
     assert.equal(await panel.locator('.panel-body').evaluate(el=>el.scrollTop),position,'Refresh preserves reading position');
     await panel.reload();await panel.evaluate(()=>AieyesApp.ready);
-    await panel.waitForFunction(position=>Math.abs(document.querySelector('.panel-body').scrollTop-position)<=1,position);
+    await panel.waitForFunction(position=>Math.abs(document.querySelector('.panel-body').scrollTop-position)<=1,position).catch(async error=>{
+      console.error('Panel restore diagnostics',await panel.evaluate(position=>({expected:position,actual:document.querySelector('.panel-body').scrollTop,height:document.querySelector('.panel-body').scrollHeight,viewport:document.querySelector('.panel-body').clientHeight,key:viewKey(),saved:viewPreferences.position(viewKey()),ready:state.dashboardPending,fonts:document.fonts.status}),position));
+      throw error;
+    });
     await panel.locator('#token-summary').click();
     const tokenBounds=await panel.evaluate(()=>{const body=document.querySelector('.panel-body').getBoundingClientRect(),pop=document.querySelector('#token-popover').getBoundingClientRect();return {inside:pop.top>=body.top&&pop.bottom<=body.bottom&&pop.left>=0&&pop.right<=innerWidth};});
     assert(tokenBounds.inside,'Token details fit above the footer, including from the bottom of the quota list');

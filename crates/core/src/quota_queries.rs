@@ -108,7 +108,7 @@ pub(crate) fn raw_codex_quota(
     source: &Source,
     params: &Value,
 ) -> Result<Value> {
-    let profile = params["profileId"].as_str().context("请选择账号档案")?;
+    let profile = params["profileId"].as_str().context("请选择账户档案")?;
     let reference = format!(
         "{}:{profile}",
         source.codex_home_id.as_deref().context("home 标识缺失")?

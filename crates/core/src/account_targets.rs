@@ -56,11 +56,11 @@ impl Engine {
                                             && a.has_profile(p)
                                     })
                                 })
-                                .map(|_| "账号档案被多个账户引用，请重新关联".to_owned())
+                                .map(|_| "账户档案被多个账户引用，请重新关联".to_owned())
                         });
                     let draft_reason = association_reason.clone().or_else(|| {
                         if !bound {
-                            Some("请先将此目录或账号档案关联到账户".to_owned())
+                            Some("请先将此目录或账户档案关联到账户".to_owned())
                         } else {
                             crate::wakeups::source_for_draft(&settings, &source.id, profile)
                                 .err()
@@ -112,7 +112,7 @@ impl Engine {
         let info = codex_auth::backend(&source, &settings, "status", &json!({}))?;
         ensure!(
             info["storageMode"] == "file",
-            "此机器的认证存储不支持账号管理"
+            "此机器的认证存储不支持账户管理"
         );
         let accounts: Vec<_> = settings
             .accounts

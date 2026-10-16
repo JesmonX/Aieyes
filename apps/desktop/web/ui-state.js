@@ -1,5 +1,27 @@
 /* Shared UI semantics. Query timestamps deliberately never imply a successful sync. */
 window.AieyesUI = {
+  errorPresentation(message, context = '操作未完成') {
+    const original = String(message ?? '').trim();
+    let text = original;
+    for (const [pattern,replacement] of [
+      [/(["']?cookie["']?\s*[:=]\s*["']?)[^\r\n]+/gi,'$1[已隐藏]'],
+      [/(bearer\s+)[a-z0-9._~+/=-]+/gi,'$1[已隐藏]'],
+      [/((?:["']?)(?:api[_ -]?key|access[_-]?token|refresh[_-]?token|token|authorization|password)(?:["']?)\s*[:=]\s*["']?)[^\s"';,}&]+/gi,'$1[已隐藏]'],
+      [/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g,'$1[已隐藏]@'],
+      [/\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{8,}/g,'[已隐藏]'],
+    ]) text = text.replace(pattern,replacement);
+    const first = text.split(/\r?\n/)[0], sourceFirst = original.split(/\r?\n/)[0];
+    const readable = /\p{Script=Han}/u.test(sourceFirst) && !['{','['].includes(sourceFirst[0]);
+    const summary = Array.from(first).length <= 72 && readable ? first : context;
+    return {summary,details:text && text !== summary ? text : ''};
+  },
+  errorHTML(message, context) {
+    const {summary,details} = this.errorPresentation(message,context), e = this.escapeHTML;
+    return `<div class="error-notice"><span>${e(summary)}</span>${details ? `<details class="error-details"><summary>错误详情</summary><pre tabindex="0">${e(details)}</pre></details>` : ''}</div>`;
+  },
+  showError(element, message, context) {
+    if (element) element.innerHTML = message ? this.errorHTML(message, context) : '';
+  },
   shortPath(path,limit=42) {
     const text=Array.from(String(path??''));
     if(text.length<=limit)return text.join('');

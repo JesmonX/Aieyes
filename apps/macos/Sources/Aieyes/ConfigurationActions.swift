@@ -117,13 +117,13 @@ extension AppModel {
         let work = Task { @MainActor in
             defer { generalSaveTask = nil }
             while !Task.isCancelled {
-                guard (5...86400).contains(settingsDraft.refreshSeconds),
-                      (10...86400).contains(settingsDraft.historyInterval),
-                      (2...86400).contains(settingsDraft.foregroundInterval),
-                      (2...86400).contains(settingsDraft.serverRefreshSeconds) else {
-                    settingsMessage = "刷新间隔范围：额度 5–86400 秒，记录 10–86400 秒，服务器 2–86400 秒"
+                let intervals = [("quota", settingsDraft.refreshSeconds, 5, "额度查询"), ("history", settingsDraft.historyInterval, 10, "日志同步"), ("foreground", settingsDraft.foregroundInterval, 2, "服务器前台监控"), ("background", settingsDraft.serverRefreshSeconds, 2, "服务器后台监控")]
+                if let (field, _, minimum, label) = intervals.first(where: { !(($0.2)...86400).contains($0.1) }) {
+                    settingsValidationField = field
+                    settingsMessage = label + "间隔须为 \(minimum)–86400 秒，输入已保留"
                     return
                 }
+                settingsValidationField = nil
                 var next = settings
                 next.appearance = settingsDraft.appearance; next.proxy = settingsDraft.proxy
                 next.proxyTestUrls = settingsDraft.proxyTestUrls; next.menuMetric = settingsDraft.menuMetric

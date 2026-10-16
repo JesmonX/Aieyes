@@ -2,6 +2,17 @@ import Foundation
 
 @main struct VerifyConfiguration {
     @MainActor static func main() async throws {
+        let validation = AppModel(autostart: false)
+        let intervals: [(String, WritableKeyPath<Settings, Int>, Int)] = [("quota", \.refreshSeconds, 5), ("history", \.historyInterval, 10), ("foreground", \.foregroundInterval, 2), ("background", \.serverRefreshSeconds, 2)]
+        for (field, path, minimum) in intervals {
+            validation.settingsDraft = Settings()
+            validation.settingsDraft[keyPath: path] = minimum - 1
+            await validation.saveGeneralConfiguration()
+            precondition(validation.settingsValidationField == field, "Validation targets fields by identity, independently of copy")
+            precondition(validation.settingsDraft[keyPath: path] == minimum - 1, "Invalid input remains available to edit")
+        }
+        validation.discardSettingsDraft()
+        precondition(validation.settingsValidationField == nil)
         var baseDraft = Settings()
         baseDraft.accounts = [AgentAccount(id: "a", name: "Original", provider: "codex")]
         baseDraft.sources = [AgentSource(id: "s", name: "Directory", provider: "codex", accountId: "a", path: "/fixture")]

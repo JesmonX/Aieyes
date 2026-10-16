@@ -45,7 +45,7 @@ function fixture(){
   assert.equal(await page.evaluate(()=>agyFixture.calls.filter(c=>c.method==='quotaEstimates.start').at(-1).params.windowId),'Claude and GPT Models:300');
   await page.locator('#estimate-stop').click();await page.locator('#estimate-start').waitFor();await page.locator('#quota-close').click();
   await entries.nth(2).click();assert.equal(await page.locator('#estimate-start').count(),0);assert.match(await page.locator('#quota-dialog').innerText(),/映射/);await page.locator('#quota-close').click();
-  await page.locator('[data-overview-agent=""]').click();await page.waitForFunction(()=>!state.dashboardPending);const credit=page.locator('[data-quota="codex:c"]');if(!await credit.locator('.quota-disclosure').evaluate(el=>el.open))await credit.locator('.quota-title').click();assert.equal(await credit.locator('[data-credit-estimate]').innerText(),'credits估值（当前1000credits≈$200.00）');
+  await page.locator('[data-overview-agent=""]').click();await page.waitForFunction(()=>!state.dashboardPending);const credit=page.locator('[data-quota="codex:c"]');if(!await credit.locator('.quota-disclosure').evaluate(el=>el.open))await credit.locator('.quota-title').click();assert.equal(await credit.locator('[data-credit-estimate]').innerText(),'credits 估值（1000 credits ≈ $200.00）');
   for(const theme of ['light','dark'])for(const width of panel?[360,420,450]:[640,1120]){
     await page.emulateMedia({colorScheme:theme});await page.setViewportSize({width,height:850});
     await page.evaluate(()=>{for(const e of agyFixture.records){e.fiveHourValue=987654;e.weeklyRatioValue=987654321;e.weeklyValue=987654321012;}state.dashboard.quotaEstimates=agyFixture.records;render();});

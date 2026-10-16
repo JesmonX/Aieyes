@@ -144,15 +144,15 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
                 .bearer_auth(token)
                 .header("anthropic-beta", "oauth-2025-04-20")
                 .send()
-                .map_err(|_| anyhow::anyhow!("限额连接失败"))?;
+                .map_err(|_| anyhow::anyhow!("额度查询连接失败"))?;
             anyhow::ensure!(
                 response.status().is_success(),
-                "限额查询失败（HTTP {}）",
+                "额度查询失败（HTTP {}）",
                 response.status().as_u16()
             );
             normalize(source, &response.json::<Value>()?, "live")
         }
-        _ => anyhow::bail!("此 Agent 暂未接入自动限额查询"),
+        _ => anyhow::bail!("此 Agent 暂未接入自动额度查询"),
     }
 }
 
@@ -248,7 +248,7 @@ pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapsh
             || !q.balances.is_empty()
             || q.bank_reset.is_some()
             || q.credits.is_some(),
-        "查询结果中没有限额数据"
+        "查询结果中没有额度数据"
     );
     anyhow::ensure!(
         q.windows
@@ -442,7 +442,7 @@ fn run_codex_rpc(
         };
         codex_rpc_result(wait(1)?)?;
         stage = match method {
-            "account/rateLimits/read" => "读取限额",
+            "account/rateLimits/read" => "读取额度",
             "account/read" => "读取账户",
             "model/list" => "读取模型",
             _ => "读取数据",
@@ -729,7 +729,7 @@ fn deepseek(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
         "DeepSeek 余额请使用本机数据源和 API Key"
     );
     let key = if source.path.trim().is_empty() {
-        std::env::var("DEEPSEEK_API_KEY").context("请在数据源中填写 DeepSeek API Key")?
+        std::env::var("DEEPSEEK_API_KEY").context("请在账户中添加 DeepSeek API Key")?
     } else {
         std::fs::read_to_string(expand(&source.path)).context("无法读取 DeepSeek API Key 文件")?
     };
@@ -867,7 +867,7 @@ mod codex_rpc_tests {
 
     #[test]
     fn rpc_errors_keep_stage_and_code_and_never_retry_authentication() {
-        for (case, expected) in [("init-error", "初始化失败"), ("auth", "读取限额失败")]
+        for (case, expected) in [("init-error", "初始化失败"), ("auth", "读取额度失败")]
         {
             let error = query(case, false).unwrap_err().to_string();
             assert!(
@@ -902,7 +902,7 @@ mod codex_rpc_tests {
         .unwrap_err()
         .to_string();
         assert!(
-            error.contains("读取限额失败") && error.contains("查询超时"),
+            error.contains("读取额度失败") && error.contains("查询超时"),
             "{error}"
         );
         assert!(

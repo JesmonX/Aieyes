@@ -292,7 +292,7 @@ pub(super) fn local(source: &Source, action: &str, params: &Value) -> Result<Val
     }
     ensure!(
         action != "default" && action != "command",
-        "请通过账号切换检查后切换 API"
+        "请通过账户切换检查后切换 API"
     );
     private_dir(&root)?;
     let file = std::fs::OpenOptions::new()
@@ -363,7 +363,7 @@ pub(super) fn local(source: &Source, action: &str, params: &Value) -> Result<Val
         );
         ensure!(
             selected(home)?["connectionId"] != id,
-            "请先切换到账号或其他 API，再移除此连接"
+            "请先切换到账户或其他 API，再移除此连接"
         );
         ensure!(
             crate::codex_auth::processes::list(home)?.is_empty(),

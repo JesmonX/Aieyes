@@ -199,7 +199,7 @@ import Combine
         let item = NSToolbarItem(itemIdentifier: identifier)
         if identifier.rawValue == "refresh" {
             let button = NSPopUpButton(frame: .zero, pullsDown: true); button.addItem(withTitle: "刷新")
-            for (index, title) in ["同步记录", "刷新限额", "同步价格", "刷新服务器"].enumerated() { let entry = NSMenuItem(title: title, action: #selector(toolbarRefresh(_:)), keyEquivalent: ""); entry.tag = index; entry.target = self; button.menu?.addItem(entry) }
+            for (index, title) in ["同步记录", "刷新额度", "同步价格", "刷新服务器"].enumerated() { let entry = NSMenuItem(title: title, action: #selector(toolbarRefresh(_:)), keyEquivalent: ""); entry.tag = index; entry.target = self; button.menu?.addItem(entry) }
             button.setAccessibilityLabel("刷新选项"); item.view = button; item.label = "刷新"
         }
         return item
@@ -244,7 +244,7 @@ import Combine
         var blockers = await EngineClient.coordinateUpdate("operations.prepareUpdate")
         var deadline = Date().addingTimeInterval(30)
         while !blockers.isEmpty {
-            AppUpdater.shared.preparationStatus("正在完成账号或配置操作：" + Array(Set(blockers)).sorted().joined(separator: "、"))
+            AppUpdater.shared.preparationStatus("正在完成账户或配置操作：" + Array(Set(blockers)).sorted().joined(separator: "、"))
             do { try await Task.sleep(for: .milliseconds(250)) } catch { _ = await EngineClient.coordinateUpdate("operations.resume"); return false }
             if Date() >= deadline {
                 guard await updateChoice("更新仍在等待", message: blockers.joined(separator: "、"), buttons: ["继续等待", "取消并返回"]) == 0 else { _ = await EngineClient.coordinateUpdate("operations.resume"); return false }
@@ -270,7 +270,7 @@ import Combine
     private func openAccountSwitch(_ key: String) {
         popover.performClose(nil)
         let window = accountSwitchWindow ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 470), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        window.title = "切换账号"; window.isReleasedWhenClosed = false
+        window.title = "切换账户"; window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: AccountTargetsView(model: model, accountKey: key))
         if accountSwitchWindow == nil { window.center() }
         accountSwitchWindow = window; fitToVisibleScreen(window); showWindow(window)

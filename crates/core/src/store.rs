@@ -314,7 +314,7 @@ impl Store {
                     s.sources.iter().any(|src| &src.id == id
                         && src.provider == account.provider
                         && account.uses_source(src)),
-                    "限额查询位置需关联此账户"
+                    "额度查询位置需关联此账户"
                 );
             }
         }
@@ -381,7 +381,7 @@ impl Store {
         }
         anyhow::ensure!(
             (5..=86400).contains(&s.refresh_seconds),
-            "Agent 限额刷新间隔范围为 5–86400 秒"
+            "额度查询刷新间隔范围为 5–86400 秒"
         );
         anyhow::ensure!(
             (10..=86400).contains(&s.history_refresh_seconds),
@@ -442,7 +442,7 @@ impl Store {
                             || account.profile_refs().is_empty()
                             || (account.quota_profile_id == next.quota_profile_id
                                 && account.profile_refs() == next.profile_refs()),
-                        "账号档案关联已改变，请重新读取配置并通过账号管理修改"
+                        "账户档案关联已改变，请重新读取配置并通过账户管理修改"
                     );
                 }
                 if !s
@@ -479,7 +479,7 @@ impl Store {
                                     || (verified_auth_change
                                         && old.machine_binding == MachineBinding::Unbound))
                                 && old.provider == source.provider,
-                            "受管理 Codex 来源的 home 与路径不能通过普通配置覆盖，请使用账号管理"
+                            "受管理 Codex 来源的 home 与路径不能通过普通配置覆盖，请使用账户管理"
                         );
                     }
                     if old.provider != source.provider {
@@ -1079,17 +1079,17 @@ impl Store {
                     account_id: account.id.clone(),
                     error: Some(
                         if linked.is_empty() {
-                            "关联数据源后可读取限额"
+                            "关联数据源后可读取额度"
                         } else {
-                            "尚未读取限额"
+                            "尚未读取额度"
                         }
                         .into(),
                     ),
                     ..Default::default()
                 });
             quota.name = account.name.clone();
-            if quota.error.as_deref() == Some("设置限额查询命令") {
-                quota.error = Some("请刷新限额；远程代理可在数据源中设置".into());
+            if quota.error.as_deref() == Some("设置额度查询命令") {
+                quota.error = Some("请刷新额度；远程代理可在数据源中设置".into());
             }
             d.quotas.push(quota);
         }

@@ -411,7 +411,7 @@ impl Engine {
             // observation started before a switch cannot overwrite the new account state.
             ensure!(
                 status_revision(&self.store, source)? == auth_revision,
-                "账号已切换，请重新检查设备状态"
+                "账户已切换，请重新检查设备状态"
             );
             let mut row = match result {
                 Ok(v) => v,
@@ -543,7 +543,7 @@ impl Engine {
         if source.subscription.is_some() && account.uses_source(source) {
             let quota = crate::subscriptions::read(source, settings)?;
             return Ok(
-                json!({"current":null,"credential":true,"authenticated":true,"identityConfirmed":false,"checkedAt":now(),"note":"订阅凭据有效；不会据此推断客户端当前账户","plan":quota.plan}),
+                json!({"current":null,"credential":true,"authenticated":true,"identityConfirmed":false,"checkedAt":now(),"note":"已验证查询凭据；客户端当前账户待确认","plan":quota.plan}),
             );
         }
         // Other providers cannot safely infer the identity of a machine's current login.
@@ -562,7 +562,7 @@ impl Engine {
             None
         };
         Ok(
-            json!({"current":null,"credential":credential,"checkedAt":now(),"note":"此 Agent 按目录连接；当前账户状态需由 Agent 确认"}),
+            json!({"current":null,"credential":credential,"checkedAt":now(),"note":"已连接目录；当前账户需在 Agent 中确认"}),
         )
     }
 

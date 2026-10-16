@@ -2,6 +2,15 @@ import Foundation
 
 @main struct VerifyModels {
     static func main() throws {
+        let knownError = UserFacingError("请先连接订阅账户与运行机器")
+        precondition(knownError.summary == "请先连接订阅账户与运行机器" && knownError.details == nil)
+        let jsonCookie = UserFacingError(#"{"cookie":"session=private-json-cookie; other=private-json-secondary"}"#)
+        precondition(jsonCookie.details?.contains("private-json-cookie") == false && jsonCookie.details?.contains("private-json-secondary") == false)
+        let rawError = "HTTP 500\nAuthorization: Bearer private-token\nCookie: session=private-cookie; other=secret\n{\"api_key\":\"private-key\",\"refresh_token\":\"private-refresh\"}\nhttps://user:private-password@example.invalid/?access_token=private-query&retry=1\nsk-proj-privatekey1234"
+        let safeError = UserFacingError(rawError, context: "额度查询失败")
+        precondition(safeError.summary == "额度查询失败")
+        for secret in ["private-token", "private-cookie", "secret", "private-key", "private-refresh", "private-password", "private-query", "privatekey1234"] { precondition(safeError.details?.contains(secret) == false) }
+        precondition(safeError.details?.contains("HTTP 500") == true && safeError.details?.contains("retry=1") == true)
         let automatic = try JSONDecoder().decode(AgentSource.self, from: Data(#"{"id":"s","name":"Shared","provider":"codex","path":"/fixture","accountId":"","enabled":true,"quotaCommand":"","quotaPreCommand":"","codexBinary":"codex","autoValuation":{"enabled":true,"consentVersion":1}}"#.utf8))
         precondition(automatic.autoValuation?.enabled == true && automatic.autoValuation?.consentVersion == 1)
         let roundtrip = try JSONDecoder().decode(AgentSource.self, from: JSONEncoder().encode(automatic))

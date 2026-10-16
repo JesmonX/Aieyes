@@ -418,7 +418,7 @@ impl Store {
         }
         if !valid(snapshot) {
             self.invalidate_automatic_sources(ids)?;
-            self.automatic_status_set(ids, "waiting", "等待有效的实时订阅限额", &key)?;
+            self.automatic_status_set(ids, "waiting", "等待实时订阅额度数据", &key)?;
             tx.commit()?;
             return Ok(());
         }

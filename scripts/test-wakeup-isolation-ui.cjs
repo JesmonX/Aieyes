@@ -82,14 +82,14 @@ function fixture(){
     assert.equal(await action('slow','deploy').count(),0,'a late pre-deployment status cannot restore the stale missing-task state');
 
     for(const id of ['fast','bad']){await row(id).locator('.wake-more summary').click();await action(id,'run').click();await row(id).getByText(id+' 运行失败',{exact:false}).waitFor();}
-    await page.evaluate(()=>wakeupFixture.failRun.fast=false);await row('fast').locator('p.error [data-wake-action=run]').click();
+    await page.evaluate(()=>wakeupFixture.failRun.fast=false);await row('fast').locator('.error [data-wake-action=run]').click();
     await page.waitForFunction(()=>!document.querySelector('[data-wake-row=fast]').textContent.includes('fast 运行失败'));
     assert.match(await row('bad').textContent(),/bad 运行失败/,'successful retry clears only that task and operation error');
 
     await page.evaluate(()=>wakeupFixture.releaseSync());
     await row('pending').getByText(/待同步：服务器离线/).waitFor();
-    assert.equal(await row('pending').locator('p.error [data-wake-action=sync]').count(),1);
-    await page.evaluate(()=>wakeupFixture.failSync=false);await row('pending').locator('p.error [data-wake-action=sync]').click();
+    assert.equal(await row('pending').locator('.error [data-wake-action=sync]').count(),1);
+    await page.evaluate(()=>wakeupFixture.failSync=false);await row('pending').locator('.error [data-wake-action=sync]').click();
     await page.waitForFunction(()=>document.querySelector('[data-wake-row=pending]').textContent.includes('已停用')&&!document.querySelector('[data-wake-row=pending]').textContent.includes('服务器离线'));
     assert.equal(await page.evaluate(()=>wakeupFixture.tasks.find(r=>r.task.id==='pending').deployment.enabled),false,'sync preserves the disabled deployment state');
     assert.match(await row('bad').textContent(),/bad 运行失败/);

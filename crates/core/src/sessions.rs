@@ -376,7 +376,7 @@ impl Reader {
         }
         let error = batch.error.or_else(|| {
             (hook_state.as_deref() == Some("error"))
-                .then(|| "会话 hooks 未就绪，正在使用日志恢复；可在 Agents 设置中修复接入".into())
+                .then(|| "实时会话监测未就绪，暂从日志读取；可在接入与账户中修复监测".into())
         });
         out.sources.push(SourceHealth {
             source_id: source.id.clone(),

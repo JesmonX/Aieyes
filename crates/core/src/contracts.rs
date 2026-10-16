@@ -175,7 +175,7 @@ pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
     &[120, 120, 120, 120, 120, 220],
     &[150, 150, 150, 150, 150, 280],
 ];
-pub const CONTRACT_HASH: &str = "c3b2debc010c18f330a24b31be27688bd56d648ba67287be722bed48b2425db5";
+pub const CONTRACT_HASH: &str = "0628daf2bf4d492638273797f003d5385db2e16ec29a57ba02821bc4e21a2cce";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

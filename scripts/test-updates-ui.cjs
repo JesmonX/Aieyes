@@ -18,7 +18,7 @@ function fixture() {
     if(command==='updates_later'){t.status.prompt=false;return structuredClone(t.status);}
     if(command==='updates_check'){
       t.emit({phase:'checking',message:'正在检查更新…',prompt:false});await new Promise(resolve=>setTimeout(resolve,60));
-      t.emit(t.next==='current'?{phase:'current',message:'当前已是最新版本 v1.2.3',latestVersion:'1.2.3'}:t.next==='newer'?{phase:'current',message:'当前版本 v1.2.3 高于最新稳定版 v1.0.0',latestVersion:'1.0.0'}:t.next==='error'?{phase:'error',message:'更新连接失败'}:{phase:'available',message:'发现新版本 v1.2.4',latestVersion:'1.2.4',notes:'改进与修复\n<script>bad()</script>',prompt:true});
+      t.emit(t.next==='current'?{phase:'current',message:'已是最新版本 v1.2.3',latestVersion:'1.2.3'}:t.next==='newer'?{phase:'current',message:'当前版本 v1.2.3 高于最新稳定版 v1.0.0',latestVersion:'1.0.0'}:t.next==='error'?{phase:'error',message:'更新连接失败'}:{phase:'available',message:'发现新版本 v1.2.4',latestVersion:'1.2.4',notes:'改进与修复\n<script>bad()</script>',prompt:true});
       return structuredClone(t.status);
     }
     if(command==='updates_download'){t.emit({phase:'available',message:'更新包已就绪'});return structuredClone(t.status);}
@@ -51,7 +51,7 @@ function fixture() {
     await page.goto(`http://127.0.0.1:${server.address().port}`);await page.waitForFunction(()=>window.AieyesUpdates&&state.settings&&!state.busy);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='updates';renderSettings();});
     assert.match(await page.locator('#update-current').textContent(),/1\.2\.3/);
-    await page.locator('#updates').click();await page.waitForFunction(()=>document.querySelector('#update-result').textContent.includes('当前已是最新'));
+    await page.locator('#updates').click();await page.waitForFunction(()=>document.querySelector('#update-result').textContent.includes('已是最新'));
     assert.equal(await page.locator('#update-dialog[open]').count(),0);
     await page.evaluate(()=>updateTest.next='newer');await page.locator('#updates').click();await page.waitForFunction(()=>document.querySelector('#update-result').textContent.includes('高于'));
     await page.evaluate(()=>updateTest.next='available');await page.locator('#updates').click();await page.waitForSelector('#update-dialog[open]');

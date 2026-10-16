@@ -215,7 +215,7 @@ def probe(m):
         if not selected or (m.get('effort') and m['effort'] not in selected['efforts']):
             raise ValueError('所选模型或 effort 当前不可用')
     if m.get('effort') and m['provider'] != 'codex' and '--effort' not in help_text:
-        raise ValueError('当前 CLI 不支持 effort，请选择模型默认值')
+        raise ValueError('当前 CLI 不支持推理强度参数，请选择模型默认值')
     return {'binary': m['binary'], 'models': models, 'efforts': ['low', 'medium', 'high', 'xhigh', 'max'] if '--effort' in help_text or m['provider'] == 'codex' else [], 'timezone': timezone(), 'message': '按 API 等价价格推荐；无法列出模型时请填写模型 ID，可用性将在实际运行时验证'}
 
 
@@ -300,7 +300,7 @@ def tick(root, manual=None):
                 output = '{"type":"turn.completed"}'
             else:
                 if m['provider'] == 'codex' and (pathlib.Path(m['configPath']) / '.aieyes/state/home.json').exists():
-                    raise ValueError('旧唤醒任务需绑定账号后重新部署')
+                    raise ValueError('旧唤醒任务需绑定账户后重新部署')
                 output = call(m, m['args'], cwd, 120)
             rows = []
             for line in output.splitlines():
@@ -361,8 +361,8 @@ def diagnostic(error):
     for needle, code, message in (
         ('前置命令', 'pre-command', '前置命令失败；请检查非交互 shell 环境'),
         ('接口不兼容', 'incompatible-cli', 'CLI 接口不兼容；请升级 Codex'),
-        ('正在执行的账号操作', 'account-busy', '账号管理操作进行中；本次唤醒未执行'),
-        ('身份', 'identity-changed', '账号身份已变化；请检查任务绑定'),
+        ('正在执行的账户操作', 'account-busy', '账户管理操作进行中；本次唤醒未执行'),
+        ('身份', 'identity-changed', '账户身份已变化；请检查任务绑定'),
         ('认证', 'authentication', '订阅认证不可用；请刷新登录状态后重试'),
         ('登录', 'authentication', '订阅认证不可用；请刷新登录状态后重试'),
         ('凭据', 'authentication', '订阅认证不可用；请刷新登录状态后重试')):

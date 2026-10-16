@@ -242,7 +242,7 @@ impl Rpc {
         self.call("account/rateLimits/read", Value::Null, &mut |p| {
             if let Some(previous) = p["previousAccountId"].as_str() { ensure!(previous == ident.workspace, "刷新请求工作区不一致"); }
             let next = latest()?;
-            ensure!(super::files::identity(&next)?.key == ident.key, "账号已改变，已丢弃查询结果");
+            ensure!(super::files::identity(&next)?.key == ident.key, "账户已改变，已丢弃查询结果");
             if hash(next["tokens"]["access_token"].as_str().unwrap_or("")) == old { return Ok(None); }
             let e = super::files::external(&next)?;
             Ok(Some(json!({"accessToken":e["accessToken"],"chatgptAccountId":e["chatgptAccountId"],"chatgptPlanType":e["chatgptPlanType"]})))
@@ -271,7 +271,7 @@ impl Rpc {
             let next = latest()?;
             ensure!(
                 super::files::identity(&next)?.key == identity.key,
-                "账号已改变，已停止唤醒"
+                "账户已改变，已停止唤醒"
             );
             let next_revision = hash(next["tokens"]["access_token"].as_str().unwrap_or(""));
             if next_revision == revision {

@@ -427,7 +427,7 @@ fn api_locations_and_revisions_are_checked_before_any_target_changes() {
             )
             .unwrap_err();
         assert!(error.to_string().contains(if action == "default" {
-            "switch.prepare"
+            "检查并确认切换"
         } else {
             "设置已变化"
         }));

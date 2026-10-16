@@ -6,7 +6,7 @@
   const busy = () => preparing || submitting || ['checking','downloading','verifying','installing'].includes(status.phase);
   const installing = () => ['downloading','verifying','installing'].includes(status.phase);
   function settingsHTML() {
-    return `<div class="card update-settings"><h2>应用更新</h2><p id="update-current">当前版本 ${escape(status.currentVersion ? 'v'+status.currentVersion : '读取中…')}</p><label class="quota-confirm"><input id="updates-automatic" type="checkbox" ${status.automatic?'checked':''}>启动时及每天检查更新</label><div class="actions"><button id="updates" ${busy()?'disabled':''}>${status.phase==='checking'?'检查中…':'检查更新'}</button><button id="update-view" ${status.phase==='available'?'':'hidden'}>查看更新</button></div><p id="update-result" role="status">${escape(status.message)}</p></div>`;
+    return `<div class="card update-settings"><h2>应用更新</h2><p id="update-current">当前版本 ${escape(status.currentVersion ? 'v'+status.currentVersion : '读取中…')}</p><label class="quota-confirm"><input id="updates-automatic" type="checkbox" ${status.automatic?'checked':''}>启动时及每天检查更新</label><div class="actions"><button id="updates" ${busy()?'disabled':''}>${status.phase==='checking'?'检查中…':'检查更新'}</button><button id="update-view" ${status.phase==='available'?'':'hidden'}>查看更新</button></div><div id="update-result" role="status">${status.phase==='error'?AieyesUI.errorHTML(status.message,'更新未完成'):escape(status.message)}</div></div>`;
   }
   function hasUpdate() {
     const parts=v=>String(v??'').replace(/^v/,'').split('.').map(Number),latest=parts(status.latestVersion),current=parts(status.currentVersion);
@@ -19,7 +19,7 @@
     const current = document.querySelector('#update-current');
     if (current) current.textContent = `当前版本 ${status.currentVersion?'v'+status.currentVersion:'读取中…'}`;
     const result = document.querySelector('#update-result');
-    if (result) { result.textContent = status.message; result.classList.toggle('error', status.phase === 'error'); }
+    if (result) { if(status.phase==='error')AieyesUI.showError(result,status.message,'更新未完成');else result.textContent = status.message; result.classList.toggle('error', status.phase === 'error'); }
     const check = document.querySelector('#updates');
     if (check) { check.disabled = busy(); check.textContent = status.phase === 'checking' ? '检查中…' : '检查更新'; }
     const view = document.querySelector('#update-view');
@@ -50,7 +50,7 @@
   function renderDialog() {
     dialog.querySelector('#update-versions').textContent = `当前版本 v${status.currentVersion} → 新版本 v${status.latestVersion ?? '—'}`;
     dialog.querySelector('#update-notes').textContent = status.notes || '此版本包含改进与修复。';
-    const message = dialog.querySelector('#update-message'); message.textContent = status.message; message.classList.toggle('error',status.phase === 'error');
+    const message = dialog.querySelector('#update-message'); if(status.phase==='error')AieyesUI.showError(message,status.message,'更新未完成');else message.textContent = status.message; message.classList.toggle('error',status.phase === 'error');
     const progress = dialog.querySelector('progress'); progress.hidden = !installing();
     if (status.total > 0) { progress.max = Math.max(status.total,status.downloaded); progress.value = status.downloaded; } else { progress.removeAttribute('value'); }
     dialog.querySelector('#update-bytes').textContent = status.phase === 'downloading' ? `${(status.downloaded/1048576).toFixed(1)} MB${status.total?' / '+(status.total/1048576).toFixed(1)+' MB':''}` : '';
@@ -126,7 +126,7 @@
       submitting=false;preparing=true;renderDialog();
       if(!await prepare()){if(dialog.open){status.message=cancelled?'已取消更新等待；后台刷新已恢复':status.message;renderDialog();}return;}
       let operations=await api('operations.prepareUpdate');
-      while(operations.protected.length&&!cancelled){status.message='正在完成账号或配置操作：'+operations.protected.join('、');renderDialog();await new Promise(resolve=>setTimeout(resolve,250));operations=await api('operations.status');}
+      while(operations.protected.length&&!cancelled){status.message='正在完成账户或配置操作：'+operations.protected.join('、');renderDialog();await new Promise(resolve=>setTimeout(resolve,250));operations=await api('operations.status');}
       if(cancelled)return;
       preparing=false;submitting=true;renderDialog();await run('updates_install');
     } catch(error) {status={...status,phase:'error',message:String(error.message??error)};renderDialog();}

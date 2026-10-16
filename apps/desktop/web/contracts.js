@@ -932,7 +932,7 @@
   },
   "subscriptions": {
     "zcode": {
-      "hint": "Z.ai / 智谱 Coding Plan。先在官网登录并复制所属地区 API Key。",
+      "hint": "从对应地区的 Z.ai / 智谱账户获取 Coding Plan API Key。",
       "modes": {
         "global": "Z.ai 国际版 API Key",
         "cn": "智谱中国版 API Key"
@@ -940,7 +940,7 @@
       "loginUrl": "https://zcode.z.ai/en/docs/configuration"
     },
     "qoder": {
-      "hint": "先在对应站点登录，复制用量请求的 Cookie。中国旧站点与 qoder.cn 新账户不互通。",
+      "hint": "复制对应站点的用量 Cookie。旧中国站与 qoder.cn 新账户不互通。",
       "modes": {
         "global": "qoder.com Cookie",
         "cn-legacy": "qoder.com.cn 旧站点 Cookie"
@@ -948,7 +948,7 @@
       "loginUrl": "https://qoder.com/account/usage"
     },
     "grok": {
-      "hint": "订阅：运行 grok login 后从 ~/.grok/auth.json 复制所选账户的 key。API 余额需 Management API Key 和 Team ID。",
+      "hint": "订阅：运行 grok login，从 ~/.grok/auth.json 复制账户 key。API 余额：填写 Management API Key 和 Team ID。",
       "modes": {
         "subscription": "Grok 订阅登录令牌",
         "api": "xAI API 余额"
@@ -956,14 +956,14 @@
       "loginUrl": "https://grok.com"
     },
     "cursor": {
-      "hint": "在 Cursor 用量页登录，复制请求 Cookie（包含 WorkosCursorSessionToken）。",
+      "hint": "从 Cursor 用量页复制含 WorkosCursorSessionToken 的请求 Cookie。",
       "modes": {
         "session": "Cursor 会话 Cookie"
       },
       "loginUrl": "https://cursor.com/dashboard"
     },
     "opencode": {
-      "hint": "Go 使用 API Key；Console 使用会话 Cookie 和 Workspace ID，可查询 Go 与 Zen 余额。外部模型订阅请连接对应服务商。",
+      "hint": "Go 使用 API Key，或 Console Cookie 与 Workspace ID 查询 Go / Zen 余额。外部订阅请连接对应服务商。",
       "modes": {
         "go": "Go API Key",
         "console": "Console Cookie / Workspace"
@@ -971,7 +971,7 @@
       "loginUrl": "https://opencode.ai/console"
     }
   },
-  "contractHash": "c3b2debc010c18f330a24b31be27688bd56d648ba67287be722bed48b2425db5",
+  "contractHash": "0628daf2bf4d492638273797f003d5385db2e16ec29a57ba02821bc4e21a2cce",
   "petFrameDurations": [
     [
       280,

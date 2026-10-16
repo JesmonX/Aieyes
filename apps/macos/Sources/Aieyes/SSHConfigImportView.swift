@@ -28,7 +28,7 @@ struct SSHConfigImportView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if let result {
                         Text(result.path).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled)
-                        Text("保留原 SSH 别名，密钥、跳板机等连接选项继续跟随 SSH 配置。地址为预览，未测试连接。").foregroundStyle(.secondary)
+                        Text("沿用 SSH 别名、密钥和跳板配置。导入后可测试连接。").foregroundStyle(.secondary)
                         TextField("搜索别名或地址", text: $search).textFieldStyle(.roundedBorder)
                         HStack {
                             Button("全选当前结果") { selected.formUnion(rows.filter { !existing.contains($0.alias.lowercased()) }.map(\.alias)) }
@@ -40,10 +40,10 @@ struct SSHConfigImportView: View {
                             }.toggleStyle(.checkbox).disabled(existing.contains(entry.alias.lowercased()))
                             Divider()
                         }
-                        if result.hosts.isEmpty { Text("未找到可导入的 SSH 别名，仍可手动添加主机。").foregroundStyle(.secondary) }
+                        if result.hosts.isEmpty { Text("未找到 SSH 别名，可手动添加服务器。").foregroundStyle(.secondary) }
                         ForEach(result.warnings, id: \.self) { Text($0).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled) }
                     } else if error == nil { ProgressView("正在读取 SSH 配置…") }
-                    if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled); if result == nil { Button("重试读取") { Task { await load() } } } }
+                    if let error { ErrorNotice(message: error); if result == nil { Button("重试读取") { Task { await load() } } } }
                 }.padding(.horizontal, 22).padding(.bottom, 16).background(OverlayScrollStyle())
             }.disabled(busy)
             Divider()

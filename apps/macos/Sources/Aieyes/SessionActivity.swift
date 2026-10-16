@@ -44,7 +44,7 @@ struct SessionSourceHealth: Decodable, Identifiable, Equatable {
 struct SessionHookStatus: Decodable {
     var sourceId: String, provider: String, machineId: String, configPath: String, state: String
     var error: String?
-    var label: String { ["installed":"已接入", "missing":"等待自动接入", "disabled":"已停用", "error":"接入失败"][state] ?? state }
+    var label: String { ["installed":"已接入", "missing":"等待监测安装", "disabled":"已停用", "error":"接入失败"][state] ?? state }
 }
 
 struct ActivityIndicator: View {

@@ -221,7 +221,7 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                         .and_then(|_| {
                             if let Some(reference) = &m.codex_profile_id {
                                 let (_, profile) =
-                                    reference.split_once(':').context("账号档案引用无效")?;
+                                    reference.split_once(':').context("账户档案引用无效")?;
                                 let loc = crate::codex_auth::local::Location {
                                     path: m.config_path.clone(),
                                     binary: m.binary.clone(),
@@ -237,7 +237,7 @@ pub fn run(root: &Path, manual: Option<&str>) -> Result<()> {
                                     !Path::new(&m.config_path)
                                         .join(".aieyes/state/home.json")
                                         .exists(),
-                                    "旧唤醒任务需绑定账号后重新部署"
+                                    "旧唤醒任务需绑定账户后重新部署"
                                 );
                                 invoke(&m, &m.args, &cwd, 120)
                             }
@@ -309,17 +309,17 @@ pub(crate) fn diagnostic(stage: &str, error: &anyhow::Error) -> (&'static str, &
         ("incompatible-cli", "CLI 接口不兼容；请升级 Codex")
     } else if text.contains("前置命令") {
         ("pre-command", "前置命令失败；请检查非交互 shell 环境")
-    } else if text.contains("账号已改变") || text.contains("身份") || text.contains("工作区")
+    } else if text.contains("账户已改变") || text.contains("身份") || text.contains("工作区")
     {
-        ("identity-changed", "账号身份已变化；请检查任务绑定")
+        ("identity-changed", "账户身份已变化；请检查任务绑定")
     } else if text.contains("认证")
         || text.contains("登录")
         || text.contains("凭据")
         || text.contains("续期")
     {
         ("authentication", "订阅认证不可用；请刷新登录状态后重试")
-    } else if text.contains("正在执行的账号操作") {
-        ("account-busy", "账号管理操作进行中；本次唤醒未执行")
+    } else if text.contains("正在执行的账户操作") {
+        ("account-busy", "账户管理操作进行中；本次唤醒未执行")
     } else if text.contains("无法启动")
         || error
             .downcast_ref::<std::io::Error>()

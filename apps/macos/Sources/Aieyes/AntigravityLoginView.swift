@@ -28,7 +28,7 @@ struct AntigravityLoginView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack { Text("Antigravity 登录").font(AppFont.title); Spacer(); Button("完成") { Task { if active { await call("cancel") }; dismiss() } }.disabled(sending) }
             Text(source.name).font(AppFont.section)
-            Text("复用此机器的现有登录，或完成浏览器授权。登录后显示邮箱与订阅，登录凭据由 agy 保存在原机器。").font(AppFont.secondary).foregroundStyle(.secondary)
+            Text("读取机器现有登录，或通过浏览器授权。凭据保存在登录机器。").font(AppFont.secondary).foregroundStyle(.secondary)
             HStack { if active { ProgressView().controlSize(.small) }; Text(status?.message ?? "准备检查…").textSelection(.enabled) }
             if let identity = status?.identity { Text(identity.summary).textSelection(.enabled).foregroundStyle(status?.current == false ? Palette.warn : Color.primary) }
             if let note = status?.metadataError { Text(note).font(AppFont.secondary).foregroundStyle(.secondary) }
@@ -38,7 +38,7 @@ struct AntigravityLoginView: View {
                 Button("提交授权码") { let value = code; code = ""; Task { await call("submitCode", extra: ["code":value]) } }.disabled(code.isEmpty || sending)
             }
             if status?.workspaceConfirmationRequired == true { Button("确认临时目录") { Task { await call("confirmWorkspace") } }.disabled(sending) }
-            if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
+            if let error { ErrorNotice(message: error) }
             HStack {
                 if status != nil { Button("验证登录") { Task { await call("verify") } }.disabled(sending || status?.phase == "verifying" || status?.phase == "checking") }
                 if !active || status == nil { Button("重新登录 / 检查") { Task { await call("start") } }.disabled(sending) }

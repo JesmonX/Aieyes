@@ -624,7 +624,7 @@ impl Store {
             let w = q.windows.iter().find(|w| window_id(w) == e.window_id);
             let config = source_config(&self.settings()?, &e.source_ids, &e.account_key);
             let failure = if q.error.is_some() {
-                Some("限额查询失败，采样已暂停；请确认后重新开始")
+                Some("额度查询失败，采样已暂停；请确认后重新开始")
             } else if config.as_ref().ok() != Some(&e.source_config) {
                 Some("数据源配置发生变化，采样已暂停")
             } else if let Some(w) = w {
@@ -852,7 +852,7 @@ impl Store {
         ensure!(eligible(q, w), "此额度池缺少可靠的模型映射，暂不支持估值");
         ensure!(
             q.error.is_none() && q.origin != "log" && (now() - q.updated_at).abs() <= 120,
-            "需要新的实时限额快照"
+            "请刷新订阅额度后重试"
         );
         let reset = w
             .resets_at
@@ -1122,7 +1122,7 @@ impl Store {
             .filter(|w| window_id(w) == e.weekly_window_id);
         let config = source_config(&self.settings()?, &e.source_ids, &e.account_key);
         let mut failure = if q.error.is_some() {
-            Some("限额查询失败，已保留有效片段")
+            Some("额度查询失败，已保留有效片段")
         } else if e.quota_plan != q.plan {
             Some("订阅方案发生变化，请确认后开始新一段")
         } else if config.as_ref().ok() != Some(&e.source_config) {
@@ -1302,15 +1302,15 @@ impl Engine {
             self.sync_estimate_sources(&e.source_ids)?;
             if e.status == "active" {
                 let (_, account) = e.account_key.split_once(':').context("账户格式错误")?;
-                self.progress("读取实时限额");
+                self.progress("读取实时额度");
                 let results =
                     self.read_quotas(&json!({"accountId":account,"accountKey":e.account_key,"samplingSourceIds":e.source_ids}))?;
                 let q = results
                     .iter()
                     .find(|q| format!("{}:{}", q.provider, q.account_id) == e.account_key)
-                    .context("未读取到账户限额")?;
+                    .context("未读取到账户额度")?;
                 if q.error.is_some() {
-                    anyhow::bail!("限额查询失败，已保留有效采样，请重试");
+                    anyhow::bail!("额度查询失败，已保留有效采样，请重试");
                 }
                 if self
                     .verify_sampling_identities(&e.source_ids, &e.account_key)
@@ -1370,13 +1370,13 @@ impl Engine {
         self.verify_sampling_identities(&ids, key)?;
         self.sync_estimate_sources(&ids)?;
         let (_, account) = key.split_once(':').context("账户格式错误")?;
-        self.progress("读取实时限额");
+        self.progress("读取实时额度");
         let results = self
             .read_quotas(&json!({"accountId":account,"accountKey":key,"samplingSourceIds":ids}))?;
         let q = results
             .iter()
             .find(|q| format!("{}:{}", q.provider, q.account_id) == key)
-            .context("未读取到账户限额")?;
+            .context("未读取到账户额度")?;
         self.verify_sampling_identities(&ids, key)?;
         self.progress("保存采样起点");
         Ok(serde_json::to_value(self.store.begin_estimate(

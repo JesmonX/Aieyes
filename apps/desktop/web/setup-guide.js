@@ -28,114 +28,127 @@
   const snapshot = () => readErrors.includes('dashboard') ? null : observations.dashboard ?? state.dashboard;
   const accountTarget = a => ({accountKey:accountKey(a)});
   const general = section => ({category:'general',section});
-  const row = (label,text,target,level = 'info') => ({label,text,target,level});
-  const stamp = value => value > 0 ? new Date(value * 1000).toLocaleString() : '时间未知';
+  const statusLabels = {configured:'已配置',pending:'待验证',missing:'待配置',paused:'已暂停',queryFailed:'查询失败',querySucceeded:'查询成功',collectionFailed:'采集异常',collected:'采集成功',unconfigured:'未配置',reconfirm:'待确认',custom:'单独设置',inherited:'沿用全局',archived:'已归档',selected:'已选择',excluded:'未选择',noTasks:'无任务',draft:'未部署',pendingRemoval:'待移除',pendingSync:'待同步',modified:'待部署',deployed:'已部署',stopped:'已停用',missingSource:'目录变化',priceMissing:'缺少价格',noPriceGaps:'未报缺价',sampled:'采样成功'};
+  const row = (label,text,target,level = 'info',status = 'configured',details = '',updatedAt = 0) => ({label,text,target,level,status,details,updatedAt});
+  const stamp = value => new Date(value * 1000).toLocaleString();
   const action = (label,target,id) => `<button type="button" ${id ? `data-guide-step="${e(id)}"` : ''} data-guide-target="${e(JSON.stringify(target))}">${e(label)}</button>`;
-  const rowsHTML = rows => `<ul class="setup-checks">${rows.map(r => `<li data-guide-level="${r.level}"><div><strong>${e(r.label)}</strong><span>${e(r.text)}</span></div>${r.target ? action('查看设置',r.target) : ''}</li>`).join('')}</ul>`;
+  const rowsHTML = rows => `<ul class="setup-checks">${rows.map(r => `<li data-guide-level="${r.level}" data-guide-state="${r.status}"><div><strong>${e(r.label)}</strong><div class="setup-check-status"><span class="setup-status-badge">${e(statusLabels[r.status])}</span><span>${e(r.text)}</span></div>${r.updatedAt > 0 ? `<time datetime="${new Date(r.updatedAt*1000).toISOString()}">上次数据：${e(stamp(r.updatedAt))}</time>` : ''}${r.details ? `<details class="setup-row-details"><summary>状态说明</summary><p>${e(r.details)}</p></details>` : ''}</div>${r.target ? action('查看设置',r.target) : ''}</li>`).join('')}</ul>`;
   function quotaRow(a) {
     const available = accountSources(a).filter(s => inScene(s) && AieyesUI.sourceEnabled(settings(),s));
     const q = snapshot()?.quotas?.find(q => q.provider === a.provider && q.accountId === a.id);
-    let text = '已配置，限额待验证', level = 'pending';
-    if (!a.quotaEnabled) { text = '尚未开启“显示并查询额度”'; level = 'warn'; }
-    else if (!available.length) { text = '待配置：关联账户并启用此场景的 Agent、机器和目录'; level = 'warn'; }
-    else if (q?.error) { text = '上次查询失败，请查看账户错误；旧数据不代表当前连接正常'; level = 'warn'; }
-    else if (['live','command'].includes(q?.origin) && q.updatedAt > 0 && available.some(s => s.id === q.sourceId)) { text = '上次查询成功 · ' + stamp(q.updatedAt); level = 'ok'; }
-    return row((providers[a.provider] ?? a.provider) + ' · ' + a.name,text,accountTarget(a),level);
+    const result = row((providers[a.provider] ?? a.provider) + ' · ' + a.name,'刷新账户额度以验证连接',accountTarget(a),'pending','pending');
+    if (!a.quotaEnabled) Object.assign(result,{text:'开启“显示并查询额度”',level:'warn',status:'paused'});
+    else if (!available.length) Object.assign(result,{text:'关联账户并启用对应机器的采集',level:'warn',status:'missing'});
+    else if (q?.error) Object.assign(result,{text:'查看账户错误后重试',level:'warn',status:'queryFailed',details:'仍显示上次数据时，请核对更新时间。',updatedAt:q.updatedAt});
+    else if (['live','command'].includes(q?.origin) && q.updatedAt > 0 && available.some(s => s.id === q.sourceId)) Object.assign(result,{text:'上次实时查询已完成',level:'ok',status:'querySucceeded',updatedAt:q.updatedAt});
+    return result;
   }
   function usageRows() {
     const rows = sources().filter(s => s.provider !== 'deepseek' && relevantSource(s)).map(s => {
       const status = snapshot()?.sources?.find(r => r.id === s.id)?.status;
       const enabled = AieyesUI.sourceEnabled(settings(),s);
-      return row((providers[s.provider] ?? s.provider) + ' · ' + machineName(s.hostId || 'local') + ' · ' + s.name,
-        !enabled ? '待配置：检查 Agent、机器选择、采集开关及目录绑定' : status?.error || status?.partial ? '采集存在异常，请检查目录和连接' : status?.updatedAt > 0 ? '上次采集成功 · ' + stamp(status.updatedAt) : '目录已配置，采集待验证',
-        {provider:s.provider,section:'machines'},!enabled || status?.error || status?.partial ? 'warn' : status?.updatedAt > 0 ? 'ok' : 'pending');
+      const result = row((providers[s.provider] ?? s.provider) + ' · ' + machineName(s.hostId || 'local') + ' · ' + s.name,'同步记录以验证日志采集',{provider:s.provider,section:'machines'},'pending','pending');
+      if (!enabled) Object.assign(result,{text:'检查机器、采集开关和目录绑定',level:'warn',status:'missing'});
+      else if (status?.error || status?.partial) Object.assign(result,{text:'检查日志目录和机器连接',level:'warn',status:'collectionFailed'});
+      else if (status?.updatedAt > 0) Object.assign(result,{text:'上次日志采集已完成',level:'ok',status:'collected',updatedAt:status.updatedAt});
+      return result;
     });
-    if (!rows.length) rows.push(row('用量采集','需要用量统计时，启用 Agent 并选择机器和日志目录；DeepSeek 余额无需日志目录',{section:'machines'},'pending'));
+    if (!rows.length) rows.push(row('用量采集','选择 Agent、机器和日志目录',{section:'machines'},'pending','missing'));
     const a = accounts();
-    return rows.concat(a.length ? a.map(quotaRow) : [row('账户与限额','待配置：按 Agent 添加账户并连接登录；支持的登录方式以账户页为准',{section:'accounts'},'pending')]);
+    return rows.concat(a.length ? a.map(quotaRow) : [row('账户与额度','添加账户并完成认证',{section:'accounts'},'pending','missing')]);
   }
   function networkRows() {
     const rows = [];
     if (scene() !== 'ssh') {
       const modes = {system:'跟随系统代理',direct:'直连',custom:'指定代理'};
-      rows.push(row('本机应用网络',(modes[settings().proxy?.mode] ?? '跟随系统代理') + ' · 到网络代理页测试出站连接',general('network')));
-      for (const s of sources().filter(s => !s.hostId && s.proxy && s.proxy.mode !== 'inherit')) rows.push(row((providers[s.provider] ?? s.provider) + ' · ' + s.name,'此本机来源覆盖应用代理，请在目录设置中核对',{provider:s.provider,section:'machines'}));
+      rows.push(row('本机应用网络',(modes[settings().proxy?.mode] ?? '跟随系统代理') + ' · 可测试出站连接',general('network')));
+      for (const s of sources().filter(s => !s.hostId && s.proxy && s.proxy.mode !== 'inherit')) rows.push(row((providers[s.provider] ?? s.provider) + ' · ' + s.name,'此目录使用独立代理设置',{provider:s.provider,section:'machines'},'info','custom'));
     }
     if (scene() !== 'local') {
-      if (!settings().hosts.length) rows.push(row('SSH 服务器','待配置：先添加服务器，再配置账户在目标机器上的网络',{category:'hosts'},'pending'));
+      if (!settings().hosts.length) rows.push(row('SSH 服务器','添加服务器后配置账户网络',{category:'hosts'},'pending','missing'));
       const remote = accounts().flatMap(a => [...new Set(accountSources(a).filter(s => s.hostId).map(s => s.hostId))].map(id => ({a,id})));
-      if (!remote.length) rows.push(row('服务器账户网络','添加或连接账户后，在该账户的对应机器设置前置命令',{section:'accounts'},'pending'));
+      if (!remote.length) rows.push(row('服务器账户网络','连接账户后配置对应机器',{section:'accounts'},'pending','missing'));
       for (const {a,id} of remote) {
-        const device = a.deviceSettings?.find(d => d.machineId === id);
-        rows.push(row(a.name + ' · ' + machineName(id),device?.preCommandResetRequired ? '前置命令需重新确认，请在账户设备设置中保存' : device?.preCommand?.trim() ? '前置命令已保存；联网效果需通过账户查询或运行结果确认' : '未设置前置命令；服务器可直连时无需填写，需要代理时在此配置',
-          {...accountTarget(a),machineId:id,section:'command'},device?.preCommandResetRequired ? 'warn' : 'info'));
+        const device = a.deviceSettings?.find(d => d.machineId === id),needsConfirm = device?.preCommandResetRequired,configured = Boolean(device?.preCommand?.trim());
+        rows.push(row(a.name + ' · ' + machineName(id),needsConfirm ? '重新确认并保存前置命令' : configured ? '刷新账户额度以检查连接' : '需要代理时设置前置命令',
+          {...accountTarget(a),machineId:id,section:'command'},needsConfirm ? 'warn' : 'info',needsConfirm ? 'reconfirm' : configured ? 'configured' : 'unconfigured','服务器可直连时无需填写；命令内容仅在账户设置中查看。'));
       }
     }
     return rows;
   }
   function refreshRows() {
-    return [row('全局自动刷新',`限额 ${settings().refreshSeconds} 秒 · 记录 ${settings().historyRefreshSeconds ?? Math.max(10,settings().refreshSeconds)} 秒`,general('refresh')),
-      ...(scene() !== 'local' ? [row('服务器监控间隔',`前台 ${settings().serverForegroundRefreshSeconds ?? 2} 秒 · 后台 ${settings().serverRefreshSeconds} 秒`,general('refresh'))] : []),
-      ...accounts().map(a => row(a.name,a.quotaRefreshSeconds != null ? `此账户每 ${a.quotaRefreshSeconds} 秒查询一次，覆盖全局设置` : `沿用全局限额间隔：${settings().refreshSeconds} 秒`,accountTarget(a)))];
+    return [row('全局自动刷新',`额度 ${settings().refreshSeconds} 秒 · 记录 ${settings().historyRefreshSeconds ?? Math.max(10,settings().refreshSeconds)} 秒`,general('refresh')),
+      ...(scene() !== 'local' ? [row('服务器监控',`前台 ${settings().serverForegroundRefreshSeconds ?? 2} 秒 · 后台 ${settings().serverRefreshSeconds} 秒`,general('refresh'))] : []),
+      ...accounts().map(a => row(a.name,`每 ${a.quotaRefreshSeconds ?? settings().refreshSeconds} 秒查询`,accountTarget(a),'info',a.quotaRefreshSeconds == null ? 'inherited' : 'custom'))];
   }
   function hostRows() {
-    if (!settings().hosts.length) return [row('SSH 连接','待配置：导入 SSH config 或手动添加服务器',{category:'hosts'},'pending')];
+    if (!settings().hosts.length) return [row('SSH 连接','导入 SSH 配置或添加服务器',{category:'hosts'},'pending','missing')];
     return settings().hosts.map(h => {
       const observed = state.hosts.find(r => r.id === h.id);
-      return row(h.name || h.target,`Agent 采集${h.enabled ? '已开启' : '已暂停'} · 资源监控${h.monitoringEnabled !== false ? '已开启' : '已暂停'} · ` + (observed?.error ? '上次监控连接失败' : observed?.sample ? '上次监控采样成功（不代表 Agent 联网正常）' : '连接待验证'),{category:'hosts',hostId:h.id},observed?.error ? 'warn' : 'info');
+      return row(h.name || h.target,`Agent 采集${h.enabled ? '已开启' : '已暂停'} · 资源监控${h.monitoringEnabled !== false ? '已开启' : '已暂停'}`,{category:'hosts',hostId:h.id},observed?.error ? 'warn' : 'info',observed?.error ? 'collectionFailed' : observed?.sample ? 'sampled' : 'pending','此状态来自资源监控；账户查询结果在账户页查看。');
     });
   }
   function wakeupRows() {
-    if (!observations.wakeups) return [row('任务状态',readErrors.includes('wakeups') ? '状态读取失败，请前往定时唤醒页查看并重试' : '任务状态待确认',{category:'wakeups'},'pending')];
+    if (!observations.wakeups) return [row('任务状态',readErrors.includes('wakeups') ? '读取失败，请前往任务页重试' : '前往任务页读取状态',{category:'wakeups'},'pending','reconfirm')];
     const records = observations.wakeups.filter(r => { const source = settings().sources.find(s => s.id === r.task.sourceId); return !source || inScene(source); });
-    if (!records.length) return [row('定时任务','尚无此场景的任务；需要时创建并部署',{category:'wakeups'},'info')];
+    if (!records.length) return [row('定时任务','按需创建并部署任务',{category:'wakeups'},'info','noTasks')];
     return records.map(r => {
-      const d = r.deployment;
-      let text = '已保存草稿，尚未部署', level = 'pending';
-      if (!settings().sources.some(s => s.id === r.task.sourceId)) { text = '任务引用的目录已变化，请到任务页检查'; level = 'warn'; }
-      else if (d?.state === 'pending-removal') { text = '部署待移除，请在任务页完成清理'; level = 'warn'; }
-      else if (d?.state === 'settings-pending') text = '部署待同步，请在任务页重试';
-      else if (d?.state === 'deployment-unconfirmed') text = '部署待确认，请检查任务状态';
-      else if (d?.changed) text = '草稿已修改，需要更新部署';
-      else if (d?.state === 'deployed') { text = d.enabled ? '已保存启用的部署，实际执行请查看运行记录' : '部署已停用'; level = 'info'; }
-      else if (d) text = '部署状态待确认，请查看任务页';
-      return row(r.task.name,text,{category:'wakeups'},level);
+      const d = r.deployment,result = row(r.task.name,'部署后才会自动运行',{category:'wakeups'},'pending','draft');
+      if (!settings().sources.some(s => s.id === r.task.sourceId)) Object.assign(result,{text:'检查任务引用的日志目录',level:'warn',status:'missingSource'});
+      else if (d?.state === 'pending-removal') Object.assign(result,{text:'完成远程部署清理',level:'warn',status:'pendingRemoval'});
+      else if (d?.state === 'settings-pending') Object.assign(result,{text:'重试同步账户配置',status:'pendingSync'});
+      else if (d?.state === 'deployment-unconfirmed') Object.assign(result,{text:'检查目标机器的部署状态',status:'reconfirm'});
+      else if (d?.changed) Object.assign(result,{text:'更新部署以应用草稿修改',status:'modified'});
+      else if (d?.state === 'deployed') Object.assign(result,{text:d.enabled ? '实际执行结果见运行记录' : '启用后恢复定时运行',level:'info',status:d.enabled ? 'deployed' : 'stopped'});
+      else if (d) Object.assign(result,{text:'前往任务页检查部署状态',status:'reconfirm'});
+      return result;
     });
   }
   function panelRows() {
     const selected = AieyesUI.panelAccounts(settings(),snapshot()?.quotaOrder ?? []);
-    const rows = accounts(true).map(a => row(a.name,a.archived ? '账户已归档，恢复后才能显示在面板' : !a.quotaEnabled ? '尚未开启“显示并查询额度”' : !snapshot()?.quotaOrder ? '面板选择待确认，请前往账户设置查看' : selected[a.provider]?.includes(accountKey(a)) ? '已选入面板' : '未选入面板，请调整账户选择',accountTarget(a),a.archived || !a.quotaEnabled ? 'warn' : 'info'));
-    return rows.length ? rows : [row('面板账户','尚无此场景的账户，请先添加账户',{section:'accounts'},'pending')];
+    const rows = accounts(true).map(a => {
+      const status = a.archived ? 'archived' : !a.quotaEnabled ? 'paused' : !snapshot()?.quotaOrder ? 'reconfirm' : selected[a.provider]?.includes(accountKey(a)) ? 'selected' : 'excluded';
+      return row(a.name,a.archived ? '恢复账户后可加入面板' : !a.quotaEnabled ? '开启“显示并查询额度”' : status === 'selected' ? '此账户将在面板显示' : '在账户设置中调整面板选择',accountTarget(a),a.archived || !a.quotaEnabled ? 'warn' : 'info',status);
+    });
+    return rows.length ? rows : [row('面板账户','添加账户后选择面板显示项',{section:'accounts'},'pending','missing')];
+  }
+  function priceRows() {
+    const count = snapshot()?.pricingGaps?.length ?? 0;
+    return [row('用量计价',!snapshot() ? '查看模型价格和用量分析' : count ? `补齐 ${count} 项模型价格` : '当前统计未发现缺价模型',{category:'prices'},count ? 'warn' : 'info',!snapshot() ? 'reconfirm' : count ? 'priceMissing' : 'noPriceGaps')];
+  }
+  function notificationRows() {
+    return [row('全局重置提醒',`提前重置${settings().quotaResetNotifications?.unexpected !== false ? '开启' : '关闭'} · 到期重置${settings().quotaResetNotifications?.natural ? '开启' : '关闭'}`,general('notifications'),'info','configured','发送测试通知，检查系统是否允许显示。'),
+      ...accounts().filter(a => a.quotaResetNotifications).map(a => row(a.name,'查看此账户的提醒规则',accountTarget(a),'info','custom'))];
   }
   const cards = [
-    {id:'usage',title:'我想查看 Agent 用量和限额',detail:'用量需要采集日志；限额需要连接账户并开启查询。',steps:['启用要使用的 Agent，选择本机或服务器，再核对日志目录及采集开关。','在该 Agent 下添加账户，使用已有登录、引导登录或填写 API Key / Cookie，并连接到对应机器。DeepSeek 余额通过本机 API Key 查询，无需日志目录。'],verify:'手动同步记录、刷新限额，分别检查采集状态、账户错误和更新时间。支持能力以对应 Agent 页面为准。',rows:usageRows,actions:[['机器与目录',{section:'machines'},'agents'],['账户与限额',{section:'accounts'},'accounts']]},
-    {id:'network',title:'国外 Agent 查询失败，或唤醒连不上网络？',detail:'本机检查应用代理；服务器在账户设备前置命令中配置代理。',steps:[],verify:'本机先在网络代理页测试出站连接，再刷新具体账户限额。服务器先确认 SSH 可连接，再查询该账户；已有唤醒任务可查看运行记录。出站测试和 SSH 成功都不能代表所有 Agent 可联网。',rows:networkRows,actions:[]},
-    {id:'refresh',title:'限额怎么很久才更新？',detail:'调整自动查询间隔；单次请求耗时长时，先检查网络和登录。',steps:['在“刷新与历史”调整全局限额间隔；账户的查询间隔会覆盖全局值，留空才沿用全局。','记录采集、限额查询和服务器监控有各自的间隔。缩短限额间隔不会加速正在进行的请求；查询慢或超时请检查网络、登录及目标机器执行环境。'],verify:'保存后查看账户实际采用的间隔；可以手动刷新一次，确认查询结果和更新时间。',rows:refreshRows,actions:[['调整全局刷新',general('refresh'),'refresh'],['检查网络',general('network')]]},
-    {id:'hosts',title:'我想采集服务器 Agent，或查看服务器资源',detail:'添加 SSH 主机；Agent 采集和资源监控可以分别开启。',steps:['导入 SSH config 或手动添加主机，确认身份验证和 SSH 连接可用。跳板连接沿用 SSH 配置中的 ProxyJump / ProxyCommand。','查看资源时开启资源监控；采集 Agent 时还需开启 Agent 采集，并在 Agent 的机器与目录中选择服务器。远端 Agent 联网另行配置账户前置命令。'],verify:'连接并读取设备，在服务器页检查资源数据；在 Agent 总览分别检查记录采集和限额查询。',rows:hostRows,actions:[['配置 SSH 主机',{category:'hosts'},'hosts'],['选择采集目录',{section:'machines'}]]},
-    {id:'wakeups',title:'我想每天自动唤醒订阅',detail:'确认账户、执行机器和网络，再保存任务并部署。',steps:['选择支持唤醒的订阅账户与执行机器，确认目标机器的 CLI 已登录且能联网；服务器代理使用该账户在此机器上的前置命令。','读取模型与执行能力，选择模型和每天时刻；按目标机器时区执行。保存草稿后仍需部署，修改草稿后需要更新部署。','退出 Aieyes 后已部署任务仍可运行，但不会唤醒休眠电脑，离线或错过时刻不补发。'],verify:'部署后检查启用状态与运行记录。需要测试时主动点击“立即运行”，这会实际调用模型并可能消耗额度。',rows:wakeupRows,actions:[['配置定时唤醒',{category:'wakeups'},'wakeups']]},
-    {id:'panel',title:'配置了账户，为什么面板没显示？',detail:'检查账户归档、额度显示开关及面板账户选择。',steps:['账户必须未归档，并开启“显示并查询额度”。在账户设置中调整面板选择。','自动模式显示每种 Agent 排序前五个账户；手动模式可以选择任意数量或留空，新增账户不会自动加入手动选择。'],verify:'打开面板确认账户是否出现；面板选中不代表该账户最近一次查询成功。',rows:panelRows,actions:[['调整面板账户',{section:'accounts'},'panel']]},
-    {id:'prices',title:'有用量却没有金额，或提示未计价？',detail:'先补齐模型价格和映射，需要时再了解额度估值与采样。',steps:['在模型价格中补齐有用量的模型价格；模型名称不同的情况配置映射，再同步价格或重新计价。','API 等价成本由日志用量和模型价格计算；订阅额度价值需要估值或采样，结果不是可兑换余额。'],verify:'在用量分析中检查未计价提示和金额。仅限额查询成功不能证明用量计价完整。',rows:() => [row('用量计价',!snapshot() ? '计价状态待确认，请前往模型价格和用量分析查看' : snapshot().pricingGaps?.length ? `当前统计存在 ${snapshot().pricingGaps.length} 项价格缺口` : '当前统计未报告价格缺口；请结合实际用量确认',{category:'prices'},snapshot()?.pricingGaps?.length ? 'warn' : 'info')],actions:[['模型价格与映射',{category:'prices'},'prices'],['了解估值与采样',{section:'valuation'}]]},
-    {id:'notifications',title:'我想在额度重置时收到提醒',detail:'配置提醒规则、账户覆盖项，并验证系统通知。',steps:['在通知设置中选择非预期重置、自然重置提醒；账户可单独覆盖全局规则。额度一直满额时不会提醒。','允许 Aieyes 发送系统通知，并检查勿扰模式。提醒依赖实时限额查询；退出应用或电脑休眠时暂停检测。'],verify:'在通知页发送测试通知确认系统可显示，再检查账户查询是否正常。',rows:() => [row('全局重置提醒',`非预期重置${settings().quotaResetNotifications?.unexpected !== false ? '开启' : '关闭'} · 自然重置${settings().quotaResetNotifications?.natural ? '开启' : '关闭'} · 系统权限待测试`,general('notifications')),...accounts().filter(a => a.quotaResetNotifications).map(a => row(a.name,'此账户设置了单独的提醒规则，请核对覆盖项',accountTarget(a)))],actions:[['通知规则与测试',general('notifications'),'notifications'],['账户提醒覆盖',{section:'accounts'}]]},
+    {"id":"usage","title":"查看用量与额度","detail":"采集日志统计用量，连接账户查询额度。","steps":["启用 Agent，选择机器和日志目录。","开启日志采集并添加账户。","登录或填写 API Key / Cookie。"],"help":"","actions":[["机器与目录",{"section":"machines"},"agents"],["账户与额度",{"section":"accounts"},"accounts"]],rows:usageRows},
+    {"id":"network","title":"排查网络","detail":"分别检查本机应用网络和服务器账户连接。","steps":[],"help":"","actions":[],rows:networkRows},
+    {"id":"refresh","title":"调整刷新频率","detail":"分别设置额度查询、日志同步和资源监控频率。","steps":["设置全局刷新间隔。","按需为账户设置独立查询间隔。"],"help":"账户间隔优先于全局设置。调整间隔不会加速当前请求；查询慢时请检查网络和登录状态。","actions":[["全局刷新设置",{"category":"general","section":"refresh"},"refresh"],["网络设置",{"category":"general","section":"network"}]],rows:refreshRows},
+    {"id":"hosts","title":"连接服务器","detail":"通过 SSH 采集日志或监控服务器资源。","steps":["导入 SSH 配置或添加服务器。","按需开启资源监控和 Agent 采集。","在 Agent 中选择服务器及日志目录。"],"help":"SSH 跳板连接沿用 ProxyJump / ProxyCommand。账户代理在对应机器的前置命令中设置。","actions":[["添加 SSH 服务器",{"category":"hosts"},"hosts"],["选择采集目录",{"section":"machines"}]],rows:hostRows},
+    {"id":"wakeups","title":"设置定时唤醒","detail":"按设定时间调用订阅模型。","steps":["选择订阅账户与运行机器。","读取可用模型，设置每日时刻。","保存草稿，再部署任务。"],"help":"修改草稿后需更新部署。执行时间、启用状态和运行记录见任务页。","actions":[["定时唤醒设置",{"category":"wakeups"},"wakeups"]],rows:wakeupRows},
+    {"id":"panel","title":"选择面板账户","detail":"选择要在本机面板展示的账户。","steps":["开启账户的额度显示与查询。","选择面板账户或使用自动模式。"],"help":"自动模式显示每类前 5 个账户。手动模式可留空，新增账户需手动加入。","actions":[["调整面板账户",{"section":"accounts"},"panel"]],rows:panelRows},
+    {"id":"prices","title":"补齐模型价格","detail":"通过日志用量和模型价格计算 API 等价成本。","steps":["补齐模型价格和名称映射。","同步价格后重新计价。"],"help":"额度估值见“估值与采样”，与实际余额分开显示。","actions":[["模型价格与映射",{"category":"prices"},"prices"],["估值与采样",{"section":"valuation"}]],rows:priceRows},
+    {"id":"notifications","title":"设置额度提醒","detail":"订阅额度提前或到期重置时提醒。","steps":["选择全局或单账户提醒规则。","发送测试通知并检查系统设置。"],"help":"提醒依赖实时额度查询。退出应用或电脑休眠时暂停检测。","actions":[["通知设置",{"category":"general","section":"notifications"},"notifications"],["账户提醒设置",{"section":"accounts"}]],rows:notificationRows},
   ];
   const more = [
-    ['多账户与切换','同一 Agent 可添加多个账户并连接不同机器；在账户页区分“已登录”和“正在使用”，按需切换。',{section:'accounts'}],
-    ['Codex API 连接','需要通过 API 使用 Codex 时，在 Codex 的 API 连接区域配置；与订阅账户分开管理。',{provider:'codex',section:'api'}],
-    ['桌宠与会话','配置桌宠资源、大小和会话展示；要看账户限额，请先选择面板账户。',general('desktop')],
+    ['多账户与切换','添加多个账户，管理各机器的登录与当前使用账户。',{section:'accounts'}],
+    ['Codex API 连接','在 Codex 中添加 API 连接，按需切换登录方式。',{provider:'codex',section:'api'}],
+    ['桌宠与会话','选择桌宠、调整大小和会话展示。',general('desktop')],
     ['外观','选择主题、强调色和图表配色。',general('appearance')],
     ['更新与关于','查看版本、检查更新及更新设置。',general('updates')],
   ];
   function networkHelp() {
-    return (scene() !== 'ssh' ? '<p><strong>本机：</strong>进入网络代理，选择系统代理、直连或指定代理。Agent 的本机目录可单独覆盖应用代理，需要一起核对。</p>' : '') + (scene() !== 'local' ? '<p><strong>服务器：</strong>进入“账户 → 对应机器 → 前置命令”，按远端实际网络填写以下一种方式。只有需要代理时才配置，服务器可直连时可以留空。</p><pre class="setup-command"><code>export http_proxy=http://PROXY_HOST:PORT\nexport https_proxy=http://PROXY_HOST:PORT</code></pre><p class="muted">或加载服务器上已有的代理脚本：</p><pre class="setup-command"><code>source /path/to/proxy</code></pre><p>代理地址必须在服务器上可达；服务器中的 <code>127.0.0.1</code> 指服务器自身。SSH 的 ProxyJump / ProxyCommand 只决定 SSH 如何连接，应用代理不会自动传给远端 Agent。前置命令用于此账户在此机器上的授权、切换、额度查询及定时唤醒。</p>' : '');
+    return (scene() !== 'ssh' ? `<p><strong>本机：</strong>检查应用代理及目录的独立代理。${action('网络设置',general('network'))}</p>` : '') + (scene() !== 'local' ? '<p><strong>服务器：</strong>在下方选择账户与机器，按需配置前置命令。</p><details class="setup-help" data-guide-help="network"><summary>服务器代理配置示例</summary><p>设置服务器可访问的代理地址：</p><pre class="setup-command"><code>export http_proxy=http://PROXY_HOST:PORT\nexport https_proxy=http://PROXY_HOST:PORT</code></pre><p>或加载已有代理脚本：</p><pre class="setup-command"><code>source /path/to/proxy</code></pre><p>127.0.0.1 指服务器自身。应用代理不会自动传给远端；ProxyJump / ProxyCommand 仅用于 SSH 连接。前置命令用于账户授权、切换、额度查询和定时唤醒。</p></details>' : '');
   }
   function render() {
     const previous = document.querySelector('.setup-guide') ? rememberView() : null;
     $('#title').textContent = '配置向导';
     const visible = cards.filter(c => c.id !== 'hosts' || scene() !== 'local');
-    $('#content').innerHTML = `<div class="setup-guide"><section class="card setup-intro"><h2>你想用 Aieyes 做什么？</h2><p class="muted">找到你的目标或问题，查看还需要哪些配置。状态来自已保存配置和上次观察结果，保存过设置不代表连接已验证。</p><div class="setup-toolbar"><label class="setup-scene">使用场景<select id="setup-scene">${[['local','仅本机'],['ssh','仅 SSH 服务器'],['mixed','本机与 SSH']].map(([v,t]) => option(v,t,scene())).join('')}</select></label><button type="button" data-guide-recheck ${loading ? 'disabled' : ''}>${loading ? '正在读取状态…' : '重新读取状态'}</button><button type="button" data-guide-finish>返回总览</button></div>${readErrors.length ? '<p class="setup-read-error" role="status">部分状态读取失败，相关项目待确认。可以重新读取，或前往对应页面查看。</p>' : ''}</section><div class="setup-goals">${visible.map(c => {
+    $('#content').innerHTML = `<div class="setup-guide"><section class="card setup-intro"><h2>你想用 Aieyes 做什么？</h2><p class="muted">选择目标完成配置，下方显示最近读取的状态。</p><div class="setup-toolbar"><label class="setup-scene">使用场景<select id="setup-scene">${[['local','仅本机'],['ssh','仅 SSH 服务器'],['mixed','本机与 SSH']].map(([v,t]) => option(v,t,scene())).join('')}</select></label><button type="button" data-guide-recheck ${loading ? 'disabled' : ''}>${loading ? '正在读取状态…' : '重新读取状态'}</button><button type="button" data-guide-finish>返回总览</button></div>${readErrors.length ? '<div class="setup-read-error" role="status">部分状态读取失败，请重试或打开对应设置。</div>' : ''}</section><div class="setup-goals">${visible.map(c => {
       const rows = c.rows(), warn = rows.filter(r => r.level === 'warn').length, pending = rows.filter(r => r.level === 'pending').length;
-      const summary = warn ? `${warn} 项配置或异常需检查` : pending ? `${pending} 项待配置或验证` : '查看当前配置与验证方法';
+      const summary = warn ? `${warn} 项需检查` : pending ? `${pending} 项待配置或验证` : '查看当前状态';
       const expanded = progress.expanded?.[c.id] === true;
-      return `<details class="card setup-step" data-guide-card="${c.id}" data-agent-detail="guide:${c.id}" ${expanded ? 'open' : ''}><summary><h3>${e(c.title)}</h3><p class="muted">${e(c.detail)}</p><small data-guide-level="${warn ? 'warn' : pending ? 'pending' : 'info'}">${e(summary)}</small></summary><div class="setup-answer">${c.id === 'network' ? networkHelp() : `<ol>${c.steps.map(text => `<li>${e(text)}</li>`).join('')}</ol>`}<h4>当前配置</h4>${rowsHTML(rows)}${c.id === 'usage' ? `<div class="setup-providers" aria-label="选择要接入的 Agent">${Object.keys(providers).map(provider => `<button type="button" data-guide-provider="${provider}">${providerMark(provider)}${e(providers[provider])}</button>`).join('')}</div>` : ''}<div class="actions">${c.actions.map(([label,target,id]) => action(label,target,id)).join('')}</div><p class="setup-verify"><strong>怎样确认生效：</strong>${e(c.verify)}</p></div></details>`;
+      return `<details class="card setup-step" data-guide-card="${c.id}" data-agent-detail="guide:${c.id}" ${expanded ? 'open' : ''}><summary><h3>${e(c.title)}</h3><p class="muted">${e(c.detail)}</p><small data-guide-level="${warn ? 'warn' : pending ? 'pending' : 'info'}">${e(summary)}</small></summary><div class="setup-answer">${c.id === 'network' ? networkHelp() : `<ol>${c.steps.map(text => `<li>${e(text)}</li>`).join('')}</ol>`}<h4>当前状态</h4>${rowsHTML(rows)}${c.id === 'usage' ? `<div class="setup-providers" aria-label="选择要接入的 Agent">${Object.keys(providers).map(provider => `<button type="button" data-guide-provider="${provider}">${providerMark(provider)}${e(providers[provider])}</button>`).join('')}</div>` : ''}<div class="actions">${c.actions.map(([label,target,id]) => action(label,target,id)).join('')}</div>${c.help ? `<details class="setup-help" data-guide-help="${c.id}"><summary>更多说明</summary><p>${e(c.help)}</p></details>` : ''}</div></details>`;
     }).join('')}</div><details class="card setup-more" data-guide-card="more" data-agent-detail="guide:more" ${progress.expanded?.more === true ? 'open' : ''}><summary><h3>更多功能</h3><p class="muted">多账户与切换、API 连接、桌宠与会话、外观和更新</p></summary>${more.map(([title,detail,target]) => `<div class="setup-more-item"><strong>${e(title)}</strong><p class="muted">${e(detail)}</p>${action('了解与设置',target)}</div>`).join('')}</details></div>`;
     window.AieyesSingleSelect?.mountAll($('#content'));
     if (previous) restoreView(previous);
@@ -158,7 +171,7 @@
     document.querySelector('#setup-return')?.remove();
     if (active && state.page === 'settings') {
       const bar = document.createElement('div'); bar.id = 'setup-return'; bar.className = 'setup-return';
-      bar.innerHTML = '<button type="button" data-guide-open>← 返回配置向导</button><span class="muted">保存后返回，查看配置和验证状态</span>';
+      bar.innerHTML = '<button type="button" data-guide-open>← 返回配置向导</button><span class="muted">保存后返回查看状态</span>';
       $('#content').before(bar);
     }
   }

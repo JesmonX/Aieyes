@@ -48,14 +48,14 @@ pub fn call(
         .split(|b| *b == b'\n')
         .rev()
         .find(|v| !v.is_empty())
-        .context("远端账号响应缺失")?;
-    let response: Value = serde_json::from_slice(line).context("远端账号响应格式无效")?;
-    ensure!(response["version"] == 1, "远端账号助手版本不兼容");
+        .context("远端账户响应缺失")?;
+    let response: Value = serde_json::from_slice(line).context("远端账户响应格式无效")?;
+    ensure!(response["version"] == 1, "远端账户助手版本不兼容");
     if let Some(error) = response["error"].as_str() {
         anyhow::bail!("{error}");
     }
     response
         .get("result")
         .cloned()
-        .context("远端账号响应缺少结果")
+        .context("远端账户响应缺少结果")
 }

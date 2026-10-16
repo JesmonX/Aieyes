@@ -21,9 +21,9 @@ def main():
             data = json.load(response)
         return {key: data[key] for key in ('five_hour', 'seven_day', 'seven_day_sonnet', 'seven_day_opus', 'seven_day_oauth_apps') if key in data}
     except urllib.error.HTTPError as error:
-        return {'error': '限额查询失败（HTTP %d）' % error.code}
+        return {'error': '额度查询失败（HTTP %d）' % error.code}
     except (OSError, ValueError):
-        return {'error': '远程限额连接失败，请检查前置命令中的代理设置'}
+        return {'error': '远程额度查询失败，请检查登录状态和网络'}
 
 
 if __name__ == '__main__':

@@ -789,7 +789,7 @@ impl Engine {
         let action = method.strip_prefix("codexApi.").context("API 操作无效")?;
         ensure!(
             !matches!(action, "default" | "command"),
-            "请通过 codexAuth.switch.prepare / commit 检查后切换账号或 API"
+            "请在账户设置中检查并确认切换"
         );
         let mutation = matches!(action, "save" | "deploy" | "remove" | "default");
         let _guard = mutation.then(|| lock_operations(&self.store)).transpose()?;

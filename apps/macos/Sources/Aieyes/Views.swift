@@ -161,7 +161,7 @@ struct RootView: View {
         VStack(alignment: .leading, spacing: compact ? 3 : 8) {
             Button { Task { if activePage == "servers" { await model.sampleHosts() } else { await model.scan() } } } label: {
                 HStack(spacing: 6) {
-                    Circle().fill(model.busy || model.quotaBusy || model.serverBusy ? Palette.accent : !model.actionFailures.isEmpty ? Palette.danger : (activePage == "servers" ? model.serverStatusText.contains("延迟") : model.statusText.contains("延迟") || model.dataTime == 0) ? Palette.warn : Palette.ok).frame(width: 7, height: 7)
+                    Circle().fill(model.busy || model.quotaBusy || model.serverBusy ? Palette.accent : !model.actionFailures.isEmpty ? Palette.danger : (activePage == "servers" ? model.hasStaleHosts : model.hasStaleUsage) ? Palette.warn : Palette.ok).frame(width: 7, height: 7)
                     Text(footerStatus).font(.system(size: compact ? DesignTokens.fontCaption : DesignTokens.fontSecondary)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.accessibilityLabel(footerStatus + (activePage == "servers" ? "，点击刷新服务器" : "，点击同步记录"))
@@ -262,7 +262,7 @@ struct RootView: View {
                 DisclosureGroup(filters.dateRange == nil ? "近 \(max(7, filters.days)) 天趋势与每日明细" : "所选日期趋势与每日明细", isExpanded: $trendExpanded) { UsageChart(days: recentDays, rows: recentRows, cost: false).frame(minHeight: 220); DailyUsage(days: recentDays, rows: recentRows, compact: true) }.font(AppFont.secondary)
                 Button { model.showDetailPage?("agent") } label: { Text("用量详情").frame(maxWidth: .infinity) }.buttonStyle(.bordered).accessibilityLabel("打开用量详情")
             } else {
-                Text("日期、来源、模型筛选作用于用量分析；今日视图的趋势仍为近 7 天，热力图为过去 365 天。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text("用量分析遵循当前筛选；今日总览的趋势为近 7 天，热力图为过去 365 天。").font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack { Text(filters.isToday ? "近 7 天趋势" : "使用趋势").font(AppFont.section); Spacer(); Picker("统计指标", selection: $costMode) { Text("Token").tag(false); Text("API 等价成本").tag(true) }.pickerStyle(.segmented).frame(width: 230) }
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 18) { trendSurface.frame(minWidth: 450); modelSurface.frame(minWidth: 350) }
@@ -278,8 +278,8 @@ struct RootView: View {
     private var usageEmptyState: some View {
         let onlyQuota = model.settings.sources.allSatisfy { $0.provider == "deepseek" }
         let failed = usageDashboard.sources.contains { $0.enabled && ($0.status?.error != nil || $0.status?.partial == true) }
-        return Surface(title: onlyQuota ? "此来源提供账户限额" : failed ? "记录同步失败" : hasActiveFilters ? "没有匹配的用量记录" : model.dataTime == 0 ? "尚未同步用量记录" : "此时间范围暂无用量") {
-            Text(onlyQuota ? "查看实时余额与限额；接入日志后即可分析用量。" : failed ? "请检查对应来源的错误后重试。" : "保留筛选与日期入口，可同步记录或扩大范围。").font(AppFont.secondary).foregroundStyle(.secondary)
+        return Surface(title: onlyQuota ? "此来源提供账户额度" : failed ? "记录同步失败" : hasActiveFilters ? "没有匹配的用量记录" : model.dataTime == 0 ? "尚未同步用量记录" : "此时间范围暂无用量") {
+            Text(onlyQuota ? "连接账户查看额度与余额；添加日志目录后分析用量。" : failed ? "请检查对应来源的错误后重试。" : "保留筛选与日期入口，可同步记录或扩大范围。").font(AppFont.secondary).foregroundStyle(.secondary)
             HStack { if onlyQuota { Button("添加日志来源") { model.openSettings(.init(provider: "codex", section: "machines")) } } else { Button("同步记录") { Task { await model.scan() } }; Button("扩大到最近一年") { filters.rangeChoice = "365"; if compact { model.showDetailPage?("agent") } }; if hasActiveFilters { Button("清除筛选") { filters.provider = "all"; filters.account = "all"; filters.source = "all"; filters.model = "all" } } } }
         }
     }
@@ -289,7 +289,7 @@ struct RootView: View {
     }
     private var connectionGuide: some View {
         Surface(title: "启用你的第一个 Agent") {
-            Text("接入日志查看用量，或连接账户查看限额与余额。").font(AppFont.secondary).foregroundStyle(.secondary)
+            Text("接入日志查看用量，或连接账户查看额度与余额。").font(AppFont.secondary).foregroundStyle(.secondary)
             ViewThatFits(in: .horizontal) {
                 HStack { connectionButtons }
                 VStack(alignment: .leading, spacing: 8) { connectionButtons }
@@ -298,7 +298,7 @@ struct RootView: View {
     }
     @ViewBuilder private var connectionButtons: some View {
         Button("Agent 接入", systemImage: "folder") { model.openSettings(.init(section: "machines")) }
-        Button("账户限额", systemImage: "person.crop.circle") { model.openSettings(.init(section: "accounts")) }
+        Button("账户额度", systemImage: "person.crop.circle") { model.openSettings(.init(section: "accounts")) }
         Button("SSH 主机", systemImage: "server.rack") { model.openSettings(.init(category: "servers", section: "add-host")) }
     }
     @ViewBuilder private var activeFilters: some View {
@@ -359,24 +359,24 @@ struct RootView: View {
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("实时账户限额").font(compact ? AppFont.section : AppFont.title)
+                Text("实时账户额度").font(compact ? AppFont.section : AppFont.title)
                 RefreshIndicator(model: model, key: "quotas")
                 Spacer()
                 Button { model.showQuotaOrder?() } label: { Image(systemName: "arrow.up.arrow.down") }.help("调整账户顺序").accessibilityLabel("调整账户顺序")
-                Button(model.quotaBusy ? "读取中…" : "刷新限额") { Task { await model.refreshQuotas() } }.font(AppFont.caption).disabled(model.quotaBusy)
+                Button(model.quotaBusy ? "读取中…" : "刷新额度") { Task { await model.refreshQuotas() } }.font(AppFont.caption).disabled(model.quotaBusy)
             }
             ForEach(quotaProviders, id: \.self) { provider in
                 PersistentSection(key: "quota.group." + scope + "." + provider, title: Format.provider(provider), detail: groupSummary(provider), tint: Palette.category(provider)) {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 14, alignment: .top), count: compact ? 1 : workspaceCardColumns), alignment: .leading, spacing: 10) {
                         ForEach(displayedQuotaAccounts.filter { $0.provider == provider }.sorted { (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max) }, id: \.key) { account in
                             if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
-                            else { Surface(tint: Palette.category(provider)) { Text(account.name).font(AppFont.section); Text(model.quotaBusy ? "正在读取账户限额…" : "等待首次限额查询").font(AppFont.secondary).foregroundStyle(.secondary) } }
+                            else { Surface(tint: Palette.category(provider)) { Text(account.name).font(AppFont.section); Text(model.quotaBusy ? "正在读取账户额度…" : "等待首次额度查询").font(AppFont.secondary).foregroundStyle(.secondary) } }
                         }
                     }
                 }
             }
             if displayedQuotaAccounts.isEmpty {
-                Surface { Text(compact ? "当前面板未显示账户，可在更多中选择。" : "接入账户后，这里将显示可用额度与余额。").font(AppFont.secondary).foregroundStyle(.secondary); Button("接入账户") { model.openSettings(.init(section: "accounts")) } }
+                Surface { Text(compact ? "当前面板未显示账户，可在更多中选择。" : "添加账户后查看额度与余额。").font(AppFont.secondary).foregroundStyle(.secondary); Button("接入账户") { model.openSettings(.init(section: "accounts")) } }
             }
             if let error = model.quotaError { Label(error, systemImage: "exclamationmark.triangle").font(AppFont.caption).foregroundStyle(Palette.warn).textSelection(.enabled) }
         }
@@ -459,7 +459,7 @@ struct StatCard: View {
                 if pricingIncomplete {
                     Button(action: onPricing) { Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.warn) }
                         .buttonStyle(.plain)
-                        .help("计价覆盖未达 100%，部分模型缺少价格。请设置模型价格以补齐成本。")
+                        .help("部分模型缺少价格，补齐后可计算完整成本。")
                         .accessibilityLabel("计价未完成，设置模型价格")
                 }
                 Spacer(); Image(systemName: icon).font(AppFont.secondary).foregroundStyle(accent) }
@@ -743,7 +743,7 @@ struct QuotaCard: View {
         if let email = quota.identity?.email, email != quota.name { text += "，" + email }
         if let plan = quota.plan { text += "，订阅 " + Format.subscription(plan) }
         if !expanded && quota.provider == "codex" { text += "，" + Format.creditBalance(quota.credits, estimate: creditEstimate) + "，Bank Reset " + (quota.bankReset.map { String($0.availableCount) } ?? "未知") + " 次可用" }
-        text += expanded ? "，折叠限额" : "，展开限额"
+        text += expanded ? "，折叠额度" : "，展开额度"
         return text
     }
     @ViewBuilder private var cardHeader: some View {
@@ -760,12 +760,12 @@ struct QuotaCard: View {
                 Spacer(minLength: 0)
                 if collapsible { Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).foregroundStyle(.secondary) }
             }.contentShape(Rectangle())
-            }.buttonStyle(.plain).help(collapsible ? (expanded ? "折叠限额" : "展开限额") : quota.name)
+            }.buttonStyle(.plain).help(collapsible ? (expanded ? "折叠额度" : "展开额度") : quota.name)
                 .accessibilityLabel(headerAccessibility)
             if expanded, let onSwitch {
                 FlowLayout(spacing: 8) {
                     Button(action: onSwitch) {
-                        Label("切换为此账号", systemImage: "arrow.left.arrow.right")
+                        Label("切换为此账户", systemImage: "arrow.left.arrow.right")
                             .font(AppFont.secondary.weight(.medium)).foregroundStyle(Palette.accent)
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: DesignTokens.radiusAccountSwitch))
@@ -809,7 +809,7 @@ struct QuotaCard: View {
                     }
                 }
                 }
-                if quota.error != nil { Label("限额更新失败 · 展开查看", systemImage: "exclamationmark.triangle").font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                if quota.error != nil { Label("额度更新失败 · 展开查看", systemImage: "exclamationmark.triangle").font(AppFont.secondary).foregroundStyle(Palette.warn) }
             }
             if expanded {
             balanceContent
@@ -848,10 +848,11 @@ struct QuotaCard: View {
                 }
             }
             if let error = quota.error {
-                Text(expanded ? error : "限额更新失败 · 展开查看").font(AppFont.secondary).foregroundStyle(Palette.warn).help(error)
+                if expanded { ErrorNotice(message: error, context: "额度查询失败") }
+                else { Text("额度更新失败 · 展开查看").font(AppFont.secondary).foregroundStyle(Palette.warn).help(UserFacingError(error).summary) }
             }
             if let onAnalysis { Button("查看分析", systemImage: "arrow.up.right", action: onAnalysis).font(AppFont.caption) }
-            if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.error == nil && quota.credits == nil { Text("暂无限额数据").font(AppFont.secondary).foregroundStyle(.secondary) }
+            if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.error == nil && quota.credits == nil { Text("暂无额度数据").font(AppFont.secondary).foregroundStyle(.secondary) }
             }
         }
     }
@@ -952,7 +953,7 @@ struct ServerCard: View, Equatable {
                         Text("负载 " + (sample.load.isEmpty ? "—" : sample.load.map { String(format: "%.2f", $0) }.joined(separator: " / "))).font(AppFont.secondary).foregroundStyle(.secondary)
                     }.padding(.top, 14)
                 } else if host.enabled { Text(result?.error == nil ? "等待首次采样" : "连接失败").font(AppFont.secondary).foregroundStyle(.secondary).padding(.top, 10) }
-                if let error = result?.error { Text(error).font(AppFont.secondary).foregroundStyle(Palette.warn).padding(.top, 6) }
+                if let error = result?.error { ErrorNotice(message: error).font(AppFont.secondary).foregroundStyle(Palette.warn).padding(.top, 6) }
             }
             HStack {
                 Text("采样 " + (result?.sample.map { Format.date($0.timestamp) } ?? "—") + (host.enabled ? "" : " · 已暂停，保留旧读数"))
@@ -1207,11 +1208,11 @@ struct RefreshIndicator: View {
                 if let time = model.refreshStates[key]?.succeededAt { Text("上次成功：" + time.formatted(date: .abbreviated, time: .shortened)).font(AppFont.secondary) }
                 else { Text(model.refreshStates[key]?.busy == true ? "正在刷新…" : "尚未刷新").font(AppFont.secondary) }
                 ForEach(failures) { failure in
-                    HStack { VStack(alignment: .leading) { Text(failure.name); Text(failure.reason).font(AppFont.secondary).textSelection(.enabled) }; Spacer(); Button("重试") { Task { await model.retry(failure) } } }
+                    HStack { VStack(alignment: .leading) { Text(failure.name); ErrorNotice(message: failure.reason).font(AppFont.secondary).textSelection(.enabled) }; Spacer(); Button("重试") { Task { await model.retry(failure) } } }
                 }
                 if key == "scan", model.dashboardPending || model.dashboardError != nil {
                     Text((model.dashboardPending ? "正在更新，仍显示上一结果：" : "更新失败，仍显示上一结果：") + model.appliedScope).font(AppFont.secondary)
-                    if let error = model.dashboardError { Text(error).font(AppFont.secondary).textSelection(.enabled); Button("重试查询") { Task { await model.reload() } } }
+                    if let error = model.dashboardError { ErrorNotice(message: error).font(AppFont.secondary).textSelection(.enabled); Button("重试查询") { Task { await model.reload() } } }
                 }
                 if key == "scan", let message = model.message { Text(message).font(AppFont.secondary).textSelection(.enabled) }
             }.padding(16).frame(width: 360)
@@ -1265,7 +1266,7 @@ private struct SessionStrip: View {
         } label: {
             HStack(spacing: 9) {
                 ActivityIndicator(phase: phase)
-                Text(summary).font(.system(size: DesignTokens.fontBody, weight: DesignTokens.weightMedium)).help("已启用的本机和 SSH Codex / Claude / AGY 会话")
+                Text(summary).font(.system(size: DesignTokens.fontBody, weight: DesignTokens.weightMedium)).help("已启用的本机和 SSH Codex / Claude Code / Antigravity 会话")
                 Spacer()
                 Text(counts).font(AppFont.caption).foregroundStyle(sessions.contains { $0.phase == .needsInput || $0.phase == .failed } ? Palette.warn : Color.secondary).lineLimit(2)
             }

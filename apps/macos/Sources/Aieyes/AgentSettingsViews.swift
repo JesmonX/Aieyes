@@ -88,13 +88,13 @@ private struct MachineSessionStatus: View {
     let collecting: Bool
     var open: () -> Void
     private var label: String {
-        if sources.isEmpty { return "会话未接入" }
+        if sources.isEmpty { return "会话监测未启用" }
         if !collecting { return "采集已暂停" }
         let rows = live.sources.filter { row in sources.contains { $0.id == row.sourceId } }
         if provider == "codex" { return rows.count == sources.count && rows.allSatisfy { $0.state == "healthy" } ? "日志接入" : "日志待确认" }
         if rows.contains(where: { $0.hooks == "error" }) { return "接入失败" }
-        if rows.contains(where: { $0.hooks == "disabled" }) { return "接入已停用" }
-        return rows.count == sources.count && rows.allSatisfy { $0.hooks == "installed" } ? "会话已接入" : "等待自动接入"
+        if rows.contains(where: { $0.hooks == "disabled" }) { return "实时监测已停用" }
+        return rows.count == sources.count && rows.allSatisfy { $0.hooks == "installed" } ? "会话监测已启用" : "等待监测安装"
     }
     var body: some View {
         if ["codex", "claude", "antigravity"].contains(provider) { Button(label, action: open).disabled(sources.isEmpty).font(AppFont.secondary) }
@@ -106,11 +106,11 @@ private struct MachineSessionHooksView: View {
     let provider: String, machine: String
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Text("会话状态接入 · " + model.machineName(machine)).font(AppFont.title); Spacer(); Button("完成") { dismiss() } }
+            HStack { Text("会话监测 · " + model.machineName(machine)).font(AppFont.title); Spacer(); Button("完成") { dismiss() } }
             if provider == "codex" {
-                Text("通过 Codex 会话日志读取状态，无需部署 Hook。").foregroundStyle(.secondary)
+                Text("从 Codex 日志读取会话状态。").foregroundStyle(.secondary)
             } else {
-                Text(machine == "local" ? "采集时自动接入观察 Hook；停用后继续读取日志。" : "通过 SSH 自动接入观察 Hook，需要远端 Python 3；停用后继续读取日志。").foregroundStyle(.secondary)
+                Text(machine == "local" ? "采集时自动监测会话；停用实时监测后仍读取日志。" : "通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。").foregroundStyle(.secondary)
                 ScrollView { LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && !$0.unbound }) { source in SessionHookControls(model: model, source: source) }
                 } }
@@ -147,7 +147,11 @@ struct AgentDirectoriesView: View {
     @State private var rebinding: AgentSource?
     @State private var error: String?
     @State private var busy = false
+    @State private var shellHost: Host?
+    @State private var shellBaseline: Settings?
+    @State private var commandAccount: AgentAccount?
     private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine } }
+    private var linkedAccounts: [AgentAccount] { model.settings.accounts.filter { a in a.archived != true && a.provider == provider && sources.contains { a.uses($0) } } }
     var body: some View {
         VStack {
             HStack { Text(Format.provider(provider) + " · " + model.machineName(machine)).font(AppFont.title); Spacer(); Button("完成") { dismiss() } }.padding()
@@ -166,11 +170,30 @@ struct AgentDirectoriesView: View {
                     var source = AgentSource(provider: provider, path: CoreContract.defaultPaths[provider] ?? "")
                     source.hostId = machine == "local" ? nil : machine; editing = source
                 }.disabled(machine != "local" && !model.settings.hosts.contains { $0.id == machine })
-                Text("只配置采集位置，不移动文件。远程 Shell 位于服务器设置，前置命令位于账户设置。").font(AppFont.secondary).foregroundStyle(.secondary)
-                if let error { Text(error).foregroundStyle(Palette.danger).textSelection(.enabled) }
+                Text("配置采集位置，原文件保留。").font(AppFont.secondary).foregroundStyle(.secondary)
+                if machine != "local", let host = model.settings.hosts.first(where: { $0.id == machine }) {
+                    Button("远程 Shell 设置") { shellBaseline = model.settings; shellHost = host }
+                    if linkedAccounts.count == 1, let account = linkedAccounts.first {
+                        Button("账户前置命令") { commandAccount = account }
+                    } else if !linkedAccounts.isEmpty {
+                        Menu("账户前置命令") { ForEach(linkedAccounts, id: \.key) { a in Button(a.name) { commandAccount = a } } }
+                    } else {
+                        Button("添加账户") { model.openSettings(.init(provider: provider, section: "accounts")); dismiss() }
+                    }
+                }
+                if let error { ErrorNotice(message: error) }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).disabled(busy)
         }.frame(width: 600, height: 480).aieyesAccent().interactiveDismissDisabled(busy)
         .updateOperation("Agent 目录配置", active: busy)
+        .sheet(item: $shellHost) { host in
+            HostEditor(host: host, model: model, initialSection: "shell") { value, password in
+                try await model.saveHostConfiguration(value, password: password, base: shellBaseline ?? model.settings)
+                shellHost = nil
+            }
+        }
+        .sheet(item: $commandAccount) { account in
+            AccountDevicesView(model: model, account: account, initialMachineID: machine, initialSection: "command")
+        }
         .sheet(item: $rebinding) { source in RebindSourceView(model: model, source: source) }
         .sheet(item: $editing) { source in
             SourceEditor(source: source, hosts: model.settings.hosts, appProxy: model.settings.proxy, testURLs: model.settings.proxyTestUrls) { item in
@@ -389,17 +412,17 @@ struct AccountDevicesView: View {
             Form {
                 Section {
                     Toggle("显示并查询额度", isOn: Binding(get: { account.quotaEnabled }, set: { value in account.quotaEnabled = value; save { $0.quotaEnabled = value } }))
-                    if let message = model.dashboard.quotas.first(where: { $0.id == account.key })?.error { Text("额度查询：" + message).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled) }
+                    if let message = model.dashboard.quotas.first(where: { $0.id == account.key })?.error { ErrorNotice(message: message, context: "额度查询失败") }
                     Picker("优先查询位置", selection: Binding(get: { account.quotaSourceId ?? "" }, set: { value in account.quotaSourceId = value.isEmpty ? nil : value; save { $0.quotaSourceId = value.isEmpty ? nil : value } })) {
                         Text("自动 · 优先本机").tag("")
                         ForEach(model.settings.sources.filter { current.uses($0) }) { source in Text(model.machineName(source.hostId ?? "local") + " · " + source.displayLocation + (model.settings.sourceEnabled(source) ? "" : " · 已暂停")).tag(source.id) }
                     }
                     if account.provider != "deepseek" {
-                        AccountResetNotificationPicker(title: "非预期重置提醒", value: account.quotaResetNotifications?.unexpected, inherited: model.settings.quotaResetNotifications?.unexpected ?? true) { value in
+                        AccountResetNotificationPicker(title: "提前重置提醒", value: account.quotaResetNotifications?.unexpected, inherited: model.settings.quotaResetNotifications?.unexpected ?? true) { value in
                             var preferences = account.quotaResetNotifications ?? QuotaResetNotificationSettings(); preferences.unexpected = value; account.quotaResetNotifications = preferences
                             save { next in var p = next.quotaResetNotifications ?? QuotaResetNotificationSettings(); p.unexpected = value; next.quotaResetNotifications = p }
                         }
-                        AccountResetNotificationPicker(title: "自然重置提醒", value: account.quotaResetNotifications?.natural, inherited: model.settings.quotaResetNotifications?.natural ?? false) { value in
+                        AccountResetNotificationPicker(title: "到期重置提醒", value: account.quotaResetNotifications?.natural, inherited: model.settings.quotaResetNotifications?.natural ?? false) { value in
                             var preferences = account.quotaResetNotifications ?? QuotaResetNotificationSettings(); preferences.natural = value; account.quotaResetNotifications = preferences
                             save { next in var p = next.quotaResetNotifications ?? QuotaResetNotificationSettings(); p.natural = value; next.quotaResetNotifications = p }
                         }
@@ -454,7 +477,7 @@ struct AccountDevicesView: View {
                         }
                     }
                 }
-                if let error { HStack { Text(error).foregroundStyle(Palette.danger).textSelection(.enabled); Button("重试保存") { saveEditedText(force: true) } } }
+                if let error { HStack { ErrorNotice(message: error); Button("重试保存") { saveEditedText(force: true) } } }
                 if let message = model.deploymentSyncMessage { HStack { Text(message); Button("重试同步") { model.synchronizeAccountDeployments() } } }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle())
             .task {
@@ -566,7 +589,7 @@ struct DeleteArchivedAccountView: View {
     @ViewBuilder private var deletionStatus: some View {
         if !tasks.isEmpty { Toggle("强制删除（设备已弃用或无法连接）", isOn: $force).disabled(busy) }
         if force { Text("无法保证远端任务停止。强制删除后将解除本地管理，不再自动重试；未清理设备和部署位置会保留供查看。").foregroundStyle(Palette.warn) }
-        if let error { Text(error).foregroundStyle(Palette.warn) }
+        if let error { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
         if busy { ProgressView("正在清理关联任务…") }
     }
     private var deletionControls: some View {
@@ -632,12 +655,12 @@ struct AccountConnectionView: View {
                     } else {
                         Section("已有登录的机器 · 可多选") {
                             ForEach(sources) { source in HStack { Toggle(source.displayLocation, isOn: Binding(get: { selection.contains(source.id) }, set: { if $0 { selection.insert(source.id) } else { selection.remove(source.id) } })); if provider == "antigravity" { Button("登录 / 检查") { agySource = source } } } }
-                            if sources.isEmpty { Text("没有可用位置。请启用 Agent、选择机器并开启目录采集；同一目录只能连接一个当前登录账户。").foregroundStyle(.secondary); Button("机器与采集设置") { model.openSettings(.init(provider: provider, section: "machines")); dismiss() } }
+                            if sources.isEmpty { Text("请启用 Agent、选择机器并配置采集目录。每个目录连接一个当前登录账户。").foregroundStyle(.secondary); Button("机器与采集设置") { model.openSettings(.init(provider: provider, section: "machines")); dismiss() } }
                         }
                     }
-                    if account == nil { Text("添加后可修改账号的显示名称。").foregroundStyle(.secondary) }
-                    if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
-                    Button(busy ? "保存中…" : account == nil ? "添加账号" : provider == "deepseek" ? "更新 API Key" : "保存连接") { Task { await save() } }.buttonStyle(.borderedProminent).disabled(busy)
+                    if account == nil { Text("添加后可修改账户的显示名称。").foregroundStyle(.secondary) }
+                    if let error { ErrorNotice(message: error) }
+                    Button(busy ? "保存中…" : account == nil ? "添加账户" : provider == "deepseek" ? "更新 API Key" : "保存连接") { Task { await save() } }.buttonStyle(.borderedProminent).disabled(busy)
                 }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).disabled(busy)
             }
         }.frame(width: DesignTokens.dialogAccountWidth, height: 620).interactiveDismissDisabled(busy)
@@ -700,10 +723,10 @@ private struct SessionHookControls: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(source.path).font(AppFont.secondary).textSelection(.enabled)
             HStack {
-                Toggle("自动接入", isOn: Binding(get: { status.map { $0.state != "disabled" } ?? false }, set: { enabled in Task { await perform(enabled ? "repair" : "remove") } })).toggleStyle(.switch).disabled(busy || status == nil)
+                Toggle("实时监测", isOn: Binding(get: { status.map { $0.state != "disabled" } ?? false }, set: { enabled in Task { await perform(enabled ? "repair" : "remove") } })).toggleStyle(.switch).disabled(busy || status == nil)
                 Text(status?.label ?? "正在读取…").foregroundStyle(.secondary)
                 Spacer()
-                Button("修复接入") { Task { await perform("repair") } }.disabled(busy)
+                Button("修复监测") { Task { await perform("repair") } }.disabled(busy)
             }
             if let message = failure ?? status?.error { HStack { Text(message).font(AppFont.secondary).foregroundStyle(Palette.danger); Button("重试") { Task { await perform("status") } } } }
         }.task(id: source.id + source.path) { await perform("status") }
@@ -725,7 +748,7 @@ private struct RebindSourceView: View {
                 Text("请选择机器").tag(""); Text("本机").tag("local")
                 ForEach(model.settings.hosts) { host in Text(host.name.isEmpty ? host.target : host.name).tag(host.id) }
             }
-            if let error { Text(error).foregroundStyle(Palette.danger) }
+            if let error { ErrorNotice(message: error).foregroundStyle(Palette.danger) }
             HStack { Spacer(); Button("取消") { dismiss() }; Button(busy ? "验证中…" : "绑定") { Task { await save() } }.disabled(machine.isEmpty) }.disabled(busy)
         }.padding(DesignTokens.dialogPadding).frame(width: 540).interactiveDismissDisabled(busy).aieyesAccent()
     }

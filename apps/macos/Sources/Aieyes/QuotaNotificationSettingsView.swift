@@ -11,15 +11,19 @@ struct QuotaNotificationSettingsView: View {
     }
     var body: some View {
         Section("订阅额度重置提醒") {
-            Toggle("非预期重置时提醒", isOn: binding(\.unexpected, fallback: true))
-            Toggle("自然重置时也提醒", isOn: binding(\.natural, fallback: false))
-            Text("账户可单独覆盖这些默认设置。额度一直满额时不提醒；仅在实时查询确认重置后通知。关闭窗口后仍会检测，退出应用或电脑休眠时暂停。").font(AppFont.secondary).foregroundStyle(.secondary)
+            Toggle("提前重置时提醒", isOn: binding(\.unexpected, fallback: true))
+            Toggle("到期重置时提醒", isOn: binding(\.natural, fallback: false))
+            Text("账户可单独设置提醒规则。退出应用或电脑休眠时暂停检测。").font(AppFont.secondary).foregroundStyle(.secondary)
+            DisclosureGroup("检测条件") {
+                Text("以实时查询确认的额度重置为准，按上次预计重置时间区分提前与到期。持续满额时不提醒；关闭窗口后仍会检测。").font(AppFont.secondary).foregroundStyle(.secondary)
+            }
         }
         Section("系统通知") {
             Text(service.permission).font(AppFont.secondary)
             Button("发送测试通知") { Task { await service.test() } }
-            if let error = service.error { Text(error).foregroundStyle(Palette.danger).textSelection(.enabled) }
-            Text("通知的显示与声音遵循系统通知和专注模式设置。").font(AppFont.secondary).foregroundStyle(.secondary)
+            if let message = service.testMessage { Text(message).font(AppFont.secondary).foregroundStyle(.secondary) }
+            if let error = service.error { ErrorNotice(message: error) }
+            Text("通知显示和声音由系统通知及专注模式设置控制。").font(AppFont.secondary).foregroundStyle(.secondary)
         }
         .task { await service.refreshPermission() }
     }

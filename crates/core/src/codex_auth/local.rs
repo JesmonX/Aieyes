@@ -73,7 +73,7 @@ fn read_authority(root: &Path, profile: &Profile) -> Result<Value> {
     let value = files::read(&authority(root, profile)?)?;
     ensure!(
         files::identity(&value)?.key == profile.identity.key,
-        "账号身份改变，已停止操作"
+        "账户身份改变，已停止操作"
     );
     Ok(value)
 }
@@ -247,7 +247,7 @@ fn renew(loc: &Location, root: &Path, p: &Profile) -> Result<Value> {
     if is_current {
         ensure!(
             processes::list(root)?.is_empty(),
-            "当前账号由运行中的 Codex 续期；暂时显示缓存额度"
+            "当前账户由运行中的 Codex 续期；暂时显示缓存额度"
         );
     }
     let auth = read_authority(root, p)?;
@@ -283,7 +283,7 @@ fn quota(loc: &Location, root: &Path, profile: &str) -> Result<Value> {
         let quota = rpc.quota(auth, &mut || read_authority(root, &p))?;
         ensure!(
             current(root) == active_before,
-            "日常账号已改变，已丢弃旧查询结果"
+            "日常账户已改变，已丢弃旧查询结果"
         );
         Ok(quota)
     };
@@ -317,7 +317,7 @@ fn quota(loc: &Location, root: &Path, profile: &str) -> Result<Value> {
                     ensure!(
                         current(root).as_deref() != Some(&p.identity.key)
                             || processes::list(root)?.is_empty(),
-                        "当前账号暂时显示缓存额度"
+                        "当前账户暂时显示缓存额度"
                     );
                     let _critical = crate::operations::critical()?;
                     let managed = layout(root, profile, "managed")?;
@@ -482,7 +482,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             recover(&root)?;
             let p = files::profile(
                 &root,
-                params["profileId"].as_str().context("请选择账号档案")?,
+                params["profileId"].as_str().context("请选择账户档案")?,
             )?;
             let auth = read_authority(&root, &p)?;
             let path = layout(&root, &p.id, "query")?;
@@ -496,7 +496,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
         "quota" => quota(
             loc,
             &root,
-            params["profileId"].as_str().context("请选择账号档案")?,
+            params["profileId"].as_str().context("请选择账户档案")?,
         ),
         "login.status" => {
             let op = params["operationId"].as_str().context("缺少操作标识")?;
@@ -540,7 +540,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 if journal.exists() {
                     ensure!(
                         files::read(&journal)?["profileId"] == p.id,
-                        "请先重新登录发生续期冲突的账号"
+                        "请先重新登录发生续期冲突的账户"
                     );
                 }
             } else {
@@ -548,7 +548,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             }
             let before = snapshot(&root);
             let name = params["name"].as_str().unwrap_or("").trim().to_string();
-            ensure!(name.chars().count() <= 100, "账号名称不能超过 100 字");
+            ensure!(name.chars().count() <= 100, "账户名称不能超过 100 字");
             let op = files::new_id();
             update_operation(
                 &root,
@@ -605,7 +605,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             if target["kind"] == "account" {
                 let p = files::profile(
                     &root,
-                    target["profileId"].as_str().context("请选择目标账号")?,
+                    target["profileId"].as_str().context("请选择目标账户")?,
                 )?;
                 policy(&root, &read_authority(&root, &p)?)?;
                 target["name"] = json!(p.name);
@@ -752,10 +752,10 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
         "profiles.remove" => {
             let _lock = files::lock(&root)?;
             recover(&root)?;
-            let p = files::profile(&root, params["profileId"].as_str().context("请选择账号")?)?;
+            let p = files::profile(&root, params["profileId"].as_str().context("请选择账户")?)?;
             ensure!(
                 current(&root).as_deref() != Some(&p.identity.key),
-                "不能移除日常使用中的账号，请先切换"
+                "不能移除日常使用中的账户，请先切换"
             );
             let path = files::profile_path(&root, &p.id)?;
             files::safe(&path)?;
@@ -767,7 +767,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             }
             Ok(json!({"removed":true}))
         }
-        _ => anyhow::bail!("未知账号操作"),
+        _ => anyhow::bail!("未知账户操作"),
     }
 }
 
@@ -814,7 +814,7 @@ pub fn with_credentials<T>(
     let is_current = current(&root).as_deref() == Some(&p.identity.key);
     ensure!(
         !is_current || processes::list(&root)?.is_empty(),
-        "日常 Codex 正在使用此账号，已跳过唤醒"
+        "日常 Codex 正在使用此账户，已跳过唤醒"
     );
     let auth = read_authority(&root, &p)?;
     let managed = layout(&root, profile_id, "managed")?;

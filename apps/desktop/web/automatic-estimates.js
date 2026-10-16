@@ -4,9 +4,9 @@ window.AieyesAutomatic=(()=>{
   const labels={collecting:'积累样本中',sampling:'自动采样中',waiting:'等待有效样本',waitingIdentity:'等待订阅登录',waitingManual:'等待手动采样结束',disabled:'已关闭'};
   const status=s=>state.dashboard?.sources?.find(row=>row.id===s.id)?.autoValuationStatus;
   const description=s=>{const row=status(s);return !AieyesUI.sourceEnabled(state.settings,s)?'采集已暂停':!s.autoValuation?.enabled?'已关闭':(labels[row?.state]??'等待首个实时快照')+(row?.note?' · '+row.note:'');};
-  const intro=provider=>provider==='codex'?'自动估值5h/7d限额和credits的价值':'自动估值5h/7d限额的价值';
+  const intro=provider=>provider==='codex'?'估算 5 小时 / 7 天额度及 credits 的 API 等价价值':'估算 5 小时 / 7 天额度的 API 等价价值';
   let saving=false;
-  function html(sources){return sources.filter(s=>s.provider!=='deepseek').map(s=>`<section class="sampling-row" data-auto-row="${escapeHTML(s.id)}"><div class="between"><h4>${escapeHTML(s.name)}</h4><input type="checkbox" role="switch" data-auto-save="${escapeHTML(s.id)}" aria-label="自动估值 · ${escapeHTML(s.name)}" ${s.autoValuation?.enabled?'checked':''} ${saving?'disabled':''}></div><small>${escapeHTML(s.path)}</small><p class="tiny muted" data-auto-status="${escapeHTML(s.id)}">${escapeHTML(description(s))}</p><p class="error" data-auto-error hidden></p></section>`).join('');}
+  function html(sources){return sources.filter(s=>s.provider!=='deepseek').map(s=>`<section class="sampling-row" data-auto-row="${escapeHTML(s.id)}"><div class="between"><h4>${escapeHTML(s.name)}</h4><input type="checkbox" role="switch" data-auto-save="${escapeHTML(s.id)}" aria-label="自动估值 · ${escapeHTML(s.name)}" ${s.autoValuation?.enabled?'checked':''} ${saving?'disabled':''}></div><small>${escapeHTML(s.path)}</small><p class="tiny muted" data-auto-status="${escapeHTML(s.id)}">${escapeHTML(description(s))}</p><div class="error" data-auto-error hidden></div></section>`).join('');}
   function summary(sources){const enabled=sources.filter(s=>s.autoValuation?.enabled),active=enabled.filter(s=>AieyesUI.sourceEnabled(state.settings,s));return !sources.length?'未配置目录':!sources.some(s=>AieyesUI.sourceEnabled(state.settings,s))?'已暂停':!enabled.length?'已关闭':!active.length?'已暂停':'已开启 '+active.length+'/'+sources.length;}
   function refresh(){
     document.querySelectorAll('[data-auto-status]').forEach(el=>{const s=state.settings?.sources?.find(s=>s.id===el.dataset.autoStatus);if(s)el.textContent=description(s);});
@@ -31,7 +31,7 @@ window.AieyesAutomatic=(()=>{
     try{
       const result=await api('autoEstimates.configure',{sourceId:source.id,enabled,confirmed:enabled,baseConfig:source.autoValuation??null});
       window.AieyesAgentSettings.accept(result.settings);markSaved();await loadDashboard();
-    }catch(cause){if(error){error.textContent=cause.message??String(cause);error.hidden=false;}else notify(String(cause),'error');}
+    }catch(cause){if(error){AieyesUI.showError(error,cause.message??String(cause),'估值设置失败');error.hidden=false;}else notify(String(cause),'error');}
     finally{saving=false;if(dialog)delete dialog.dataset.busy;refresh();}
   }
   function open(ids,returnProvider=document.querySelector('#quota-dialog')?.dataset.valuationProvider){
@@ -53,7 +53,7 @@ async function openProviderEstimates(provider) {
   const request=crypto.randomUUID();dialog.dataset.loadingRequest=request;
   let snapshot;
   try{snapshot=await api('dashboard.summary');}
-  catch(error){if(dialog.open&&dialog.dataset.loadingRequest===request){$('#quota-tool-error').textContent='读取失败：'+String(error);$('#quota-tool-error').hidden=false;const retry=document.createElement('button');retry.textContent='重试读取';retry.onclick=()=>openProviderEstimates(provider);dialog.querySelector('.quota-dialog-body').append(retry);}return;}
+  catch(error){if(dialog.open&&dialog.dataset.loadingRequest===request){AieyesUI.showError($('#quota-tool-error'),String(error),'估值记录读取失败');$('#quota-tool-error').hidden=false;const retry=document.createElement('button');retry.textContent='重试读取';retry.onclick=()=>openProviderEstimates(provider);dialog.querySelector('.quota-dialog-body').append(retry);}return;}
   if(!dialog.open||dialog.dataset.loadingRequest!==request)return;
   const sources=state.settings.sources.filter(s=>s.provider===provider),accounts=state.settings.accounts.filter(a=>a.provider===provider&&!a.archived);
   const records=[...(snapshot.quotaEstimates??[]).map(e=>({...e,kind:'quota'})),...(snapshot.creditEstimates??[]).map(e=>({...e,kind:'credits'}))].filter(e=>e.accountKey.startsWith(provider+':')).sort((a,b)=>(b.checkpointAt??b.startedAt)-(a.checkpointAt??a.startedAt));

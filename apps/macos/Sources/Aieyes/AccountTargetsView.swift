@@ -54,7 +54,7 @@ struct AccountTargetsView: View {
     private var account: AgentAccount? { model.settings.accounts.first { $0.key == accountKey && $0.archived != true } }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Text("切换为此账号 · " + (account?.name ?? "账号")).font(AppFont.title); Spacer(); Button("重新检查") { Task { await targets.load(model, accountKey: accountKey) } }.disabled(!targets.checking.isEmpty) }
+            HStack { Text("切换为此账户 · " + (account?.name ?? "账户")).font(AppFont.title); Spacer(); Button("重新检查") { Task { await targets.load(model, accountKey: accountKey) } }.disabled(!targets.checking.isEmpty) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(targets.errors, id: \.self) { Text($0).foregroundStyle(Palette.warn).textSelection(.enabled) }

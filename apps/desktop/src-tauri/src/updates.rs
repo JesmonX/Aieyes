@@ -154,7 +154,7 @@ fn version_message(current: &str, latest: &str) -> Result<Option<String>, String
         return Err("稳定更新源返回了预发布版本".into());
     }
     Ok(if latest == current {
-        Some(format!("当前已是最新版本 v{current}"))
+        Some(format!("已是最新版本 v{current}"))
     } else if latest < current {
         Some(format!("当前版本 v{current} 高于最新稳定版 v{latest}"))
     } else {
@@ -438,7 +438,7 @@ pub async fn updates_install(
         || aieyes_core::agy_auth::busy()
     {
         aieyes_core::operations::resume();
-        return Err("账号或配置操作尚未完成，请完成或取消后再更新".into());
+        return Err("账户或配置操作尚未完成，请完成或取消后再更新".into());
     }
     let prepared = (|| -> Result<_, String> {
         let service = app.state::<Updates>();
