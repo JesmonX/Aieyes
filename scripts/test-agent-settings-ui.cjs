@@ -20,13 +20,14 @@ readline.createInterface({input:core.stdout}).on('line',line=>{const r=JSON.pars
 core.on('exit',()=>{for(const p of pending.values())p.reject(new Error('Core exited: '+stderr));pending.clear();});
 function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++counter;pending.set(id,{resolve,reject});core.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});}
 const profile=id=>({id,name:id==='one'?'个人 Codex':'工作 Codex',current:id==='one',identity:{key:id,workspace:'workspace',email:id+'@example.test',plan:'plus'}});
-let authDone=false,authCancelled=false,unknown=false,failSave=false,loggedIn=true,authFailed=false;const calls=[],secrets=new Map();let secretId=0;
+let authDone=false,authCancelled=false,unknown=false,failSave=false,loggedIn=true,authFailed=false;const calls=[],secrets=new Map();let secretId=0,saveDelay=0;
 async function invoke(method,params){
   calls.push({method,params});
   // Keep the operating-system credential store outside this disposable UI test.
   if(method==='hosts.credentials.save'){const passwordRef='ssh-fixture-'+(++secretId);secrets.set(passwordRef,params.password);return {passwordRef};}
   if(method==='hosts.credentials.delete'){assert(secrets.delete(params.passwordRef));return {};}
   if(['settings.patch','sources.configure'].includes(method)&&failSave)throw new Error('模拟保存失败，输入已保留');
+  if(method==='settings.patch'&&saveDelay)await new Promise(resolve=>setTimeout(resolve,saveDelay));
   if(method==='accounts.status.refresh')return {accountKey:params.accountKey,sourceId:params.sourceId,machineId:params.sourceId==='codex-local'?'local':'server',current:loggedIn&&params.accountKey==='codex:a',credential:loggedIn&&['codex:a','codex:b'].includes(params.accountKey),checkedAt:Date.now()/1000};
   if(method==='accounts.deletion.preview'&&params.accountKey==='codex:old')return {tasks:[{id:'offline-task',name:'离线任务',machine:'弃用服务器',root:'~/fixture'}]};
   if(method==='accounts.delete'&&params.accountKey==='codex:old'&&!params.force)return {deleted:false,failedTasks:[{id:'offline-task',name:'离线任务',machine:'弃用服务器',error:'服务器不可达'}]};
@@ -116,12 +117,13 @@ function browserFixture(){
     await page.locator('#agent-section-machines > summary').click();
     await page.locator('[data-agent-machine="claude"][value="server"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').machineIds.length===2);
     // Server switches are independent, and hidden selections survive edits and reloads.
+    saveDelay=100; // Exercise saves that outlive Playwright's click completion.
     const showServers=()=>page.evaluate(()=>{state.settingsTab='hosts';render();});
     const showClaude=()=>page.evaluate(()=>{state.settingsTab='sources';state.settingsAgent='claude';render();});
     await showServers();
     assert.equal(await page.locator('[data-device-collection][role=switch]').count(),2);
     await page.locator('[data-device-collection="server"]').uncheck();
-    await page.waitForFunction(()=>!state.settings.hosts.find(h=>h.id==='server').enabled&&!state.settingsCommitting);
+    await page.waitForFunction(()=>!state.settings.hosts.find(h=>h.id==='server').enabled&&!state.settingsSaving&&!state.settingsCommitting);
     assert.equal(await page.evaluate(()=>monitoredHosts().find(h=>h.id==='server').enabled),true);
     await showClaude();assert.equal(await page.locator('[data-agent-machine][value="server"]').count(),1,'paused machines remain visible with a recovery action');assert(await page.locator('[data-agent-machine][value="server"]').isChecked());
     await page.locator('[data-agent-machine="claude"][value="local"]').uncheck();
@@ -129,7 +131,7 @@ function browserFixture(){
     assert.deepEqual((await rpc('settings.get')).agents.find(a=>a.provider==='claude').machineIds,['server']);
     await page.locator('[data-agent-machine="claude"][value="local"]').check();await page.waitForFunction(()=>!state.settingsSaving);
     await showServers();await page.locator('[data-device-collection="local"]').uncheck();
-    await page.waitForFunction(()=>state.settings.localDeviceEnabled===false&&!state.settingsCommitting);
+    await page.waitForFunction(()=>state.settings.localDeviceEnabled===false&&!state.settingsSaving&&!state.settingsCommitting);
     assert.equal(await page.evaluate(()=>monitoredHosts().find(h=>h.id==='local').enabled),true);
     await showClaude();assert.equal(await page.locator('[data-agent-machine]').count(),2);
     await page.getByText('暂无可采集机器，请在服务器设置开启 Agent 采集。',{exact:true}).waitFor();
@@ -138,15 +140,16 @@ function browserFixture(){
     assert.equal(await page.locator('[data-device-collection="server"]').isChecked(),false);
     for(const id of ['local','server']){
       await page.locator(`[data-device-collection="${id}"]`).check();
-      await page.waitForFunction(id=>!state.settingsCommitting&&(id==='local'?state.settings.localDeviceEnabled:state.settings.hosts.find(h=>h.id===id).enabled),id);
+      await page.waitForFunction(id=>!state.settingsSaving&&!state.settingsCommitting&&(id==='local'?state.settings.localDeviceEnabled:state.settings.hosts.find(h=>h.id===id).enabled),id);
       await page.locator(`[data-enable="${id}"]`).uncheck();
-      await page.waitForFunction(id=>!state.settingsCommitting&&!monitoredHosts().find(h=>h.id===id).enabled,id);
+      await page.waitForFunction(id=>!state.settingsSaving&&!state.settingsCommitting&&!monitoredHosts().find(h=>h.id===id).enabled,id);
       assert.equal(await page.locator(`[data-device-collection="${id}"]`).isChecked(),true);
-      await page.locator(`[data-enable="${id}"]`).check();await page.waitForFunction(()=>!state.settingsCommitting);
+      await page.locator(`[data-enable="${id}"]`).check();
+      await page.waitForFunction(id=>!state.settingsSaving&&!state.settingsCommitting&&monitoredHosts().find(h=>h.id===id).enabled,id);
     }
     failSave=true;await page.locator('[data-device-collection="server"]').click();
-    await page.waitForFunction(()=>!state.settingsCommitting&&!document.querySelector('[data-device-collection="server"]').disabled);
-    assert.equal(await page.locator('[data-device-collection="server"]').isChecked(),true);failSave=false;
+    await page.waitForFunction(()=>!state.settingsSaving&&!state.settingsCommitting&&!document.querySelector('[data-device-collection="server"]').disabled);
+    assert.equal(await page.locator('[data-device-collection="server"]').isChecked(),true);failSave=false;saveDelay=0;
     await showClaude();
     assert.equal(await page.locator('[data-agent-machine="claude"][value="server"]').isChecked(),true);
     assert.equal(await page.locator('[data-agent-machine="claude"][value="local"]').isChecked(),true);

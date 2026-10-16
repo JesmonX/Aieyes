@@ -91,7 +91,9 @@ function installFixture(data) {
         for(const tab of ['sources','accounts','hosts','prices','wakeups','general']) {
           await page.evaluate(tab=>{state.page='settings';state.settingsTab=tab;state.prices=__fixture.prices;render();},tab);
           await shot(`settings-${tab}`);
-          assert.equal(await page.locator('#settings-save-all').count(),0);assert.match(await page.locator('.settings-draft-label').innerText(),/即时保存|未保存输入|自动保存/);
+          assert.equal(await page.locator('#settings-save-all').count(),0);
+          assert.equal(await page.locator('.settings-draft-label').textContent(),'','idle settings have no persistent save instructions');
+          assert(await page.locator('#settings-save-bar').isHidden(),'idle save feedback stays hidden');
         }
         await page.evaluate(()=>{state.page='servers';render();});await shot('servers');
         await page.setViewportSize({width:640,height:440});await shot('minimum');
