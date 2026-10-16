@@ -24,7 +24,7 @@ function fixture(){
         throw new Error('离线，可重试');
       }
       if(params.sourceId==='remote')t.linked=true;
-      return {settings,issues:[]};
+      return {settings,issues:t.reconcileIssue&&params.sourceId==='local'?[{sourceId:'local',message:'未找到 Codex CLI <fixture>'}]:[]};
     }
     if(method==='wakeups.probe')return new Promise(resolve=>t.releaseProbe=()=>resolve({models:[{id:'STALE',efforts:['high']}],recommendedModel:'STALE',efforts:['high'],timezone:'UTC',message:'OLD'}));
     if(method==='wakeups.save')return {task:params.task};
@@ -72,6 +72,11 @@ function fixture(){
     await page.locator('#target-back').click();
     await page.evaluate(()=>targetsTest.releaseOffline());
     await page.locator('#target-refresh:not([disabled])').waitFor();
+    await page.evaluate(()=>targetsTest.reconcileIssue=true);
+    await page.locator('#target-refresh').click();
+    await page.locator('#target-refresh:not([disabled])').waitFor();
+    assert.match(await page.locator('#account-targets .error').allTextContents().then(v=>v.join('\n')),/本机：未找到 Codex CLI <fixture>/);
+    assert.match(await page.locator('#account-targets .error').allTextContents().then(v=>v.join('\n')),/离线服务器：离线，可重试/);
     await page.locator('#account-targets .list-row').filter({hasText:'本机'}).getByRole('button',{name:'登录',exact:true}).click();
     assert.deepEqual(await page.evaluate(()=>targetsTest.opened),['b','local','login']);
     await page.locator('#target-close').click();

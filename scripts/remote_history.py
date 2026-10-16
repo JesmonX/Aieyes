@@ -162,11 +162,8 @@ class _CodexHistory:
             paths = [folder] if os.path.isfile(folder) else walk(folder)
             for path in paths:
                 try:
-                    import re
-                    match = re.search(r'([0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})\.jsonl$', path)
-                    if match:
-                        self.paths.setdefault(match.group(1), path)
-                        continue
+                    # Imported filenames can carry an unrelated UUID suffix.
+                    # Resolve references using the actual session metadata.
                     with open(path, 'rb') as stream:
                         row = json.loads(stream.readline(1024 * 1024))
                     if row.get('type') == 'session_meta':

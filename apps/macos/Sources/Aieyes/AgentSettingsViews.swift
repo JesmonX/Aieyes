@@ -8,22 +8,16 @@ struct AgentsSettingsView: View {
     @ObservedObject var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ScrollViewReader { reader in
-                ScrollView(.horizontal) {
-                    HStack(spacing: 6) {
-                        ForEach(model.agentConfigurations) { agent in
-                            let selected = model.settingsAgent == agent.provider
-                            Button { model.settingsAgent = agent.provider } label: {
-                                Text(Format.provider(agent.provider)).font(AppFont.secondary)
-                                    .padding(.horizontal, 12).padding(.vertical, 8)
-                                    .foregroundStyle(selected ? Palette.category(agent.provider) : Color.secondary)
-                                    .background(selected ? Palette.category(agent.provider).opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
-                            }.buttonStyle(.plain).id(agent.provider).accessibilityAddTraits(selected ? .isSelected : [])
-                        }
-                    }
-                }.scrollIndicators(.hidden).frame(height: 38)
-                    .onAppear { reader.scrollTo(model.settingsAgent, anchor: .center) }
-                    .onChange(of: model.settingsAgent) { _, provider in reader.scrollTo(provider, anchor: .center) }
+            FlowLayout(spacing: 6) {
+                ForEach(model.agentConfigurations) { agent in
+                    let selected = model.settingsAgent == agent.provider
+                    Button { model.settingsAgent = agent.provider } label: {
+                        HStack(spacing: 6) { ProviderMark(provider: agent.provider, size: 20); Text(Format.provider(agent.provider)) }
+                            .font(AppFont.secondary).padding(.horizontal, 10).padding(.vertical, 7)
+                            .foregroundStyle(selected ? Palette.category(agent.provider) : Color.secondary)
+                            .background(selected ? Palette.category(agent.provider).opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
+                    }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+                }
             }
             AccountsSettingsView(model: model, provider: model.settingsAgent) { model.requestedAccountKey = $0.key }
                 .id(model.settingsAgent)
@@ -174,7 +168,7 @@ struct AgentDirectoriesView: View {
                 }.disabled(machine != "local" && !model.settings.hosts.contains { $0.id == machine })
                 Text("只配置采集位置，不移动文件。远程 Shell 位于服务器设置，前置命令位于账户设置。").font(AppFont.secondary).foregroundStyle(.secondary)
                 if let error { Text(error).foregroundStyle(Palette.danger).textSelection(.enabled) }
-            }.formStyle(.grouped).disabled(busy)
+            }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).disabled(busy)
         }.frame(width: 600, height: 480).aieyesAccent().interactiveDismissDisabled(busy)
         .updateOperation("Agent 目录配置", active: busy)
         .sheet(item: $rebinding) { source in RebindSourceView(model: model, source: source) }
@@ -250,7 +244,7 @@ struct AccountsSettingsView: View {
                     if provider != "deepseek" { Button("管理估值与采样") { showingValuation = true } }
                     else { Text("余额由 API 直接提供，无需额度估值。").font(AppFont.secondary).foregroundStyle(.secondary) }
                 }.id("valuation")
-            }.formStyle(.grouped)
+            }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle())
             .onAppear { if let section = model.settingsSection { UserDefaults.standard.set(true, forKey: sectionKey(section)); reader.scrollTo(section, anchor: .top) } }
             .onChange(of: model.settingsSection) { _, section in if let section { UserDefaults.standard.set(true, forKey: sectionKey(section)); reader.scrollTo(section, anchor: .top) } }
         }
@@ -368,9 +362,13 @@ struct AccountDevicesView: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var statusProjection: AccountStatusProjection
     @State var account: AgentAccount
-    init(model: AppModel, account: AgentAccount) {
+    let initialMachineID: String?
+    init(model: AppModel, account: AgentAccount, initialMachineID: String? = nil, initialSection: String? = nil) {
         self.model = model; _account = State(initialValue: account); statusProjection = model.accountStatusStore.projection(account.key)
+        self.initialMachineID = initialMachineID
+        _expandedCommands = State(initialValue: initialSection == "command" ? Set([initialMachineID].compactMap { $0 }) : [])
     }
+    @State private var expandedCommands: Set<String>
     @State private var commands: [String: String] = [:]
     @State private var busy = false
     @State private var error: String?
@@ -387,6 +385,7 @@ struct AccountDevicesView: View {
     var body: some View {
         VStack {
             HStack { Text(account.name).font(AppFont.title); Spacer(); Button("完成") { focusedField = nil; guard saveEditedText(force: error != nil) else { return }; Task { await saveTask?.value; if error == nil { dismiss() } } }.disabled(busy) }.padding(20)
+            ScrollViewReader { scroll in
             Form {
                 Section {
                     Toggle("显示并查询额度", isOn: Binding(get: { account.quotaEnabled }, set: { value in account.quotaEnabled = value; save { $0.quotaEnabled = value } }))
@@ -405,7 +404,7 @@ struct AccountDevicesView: View {
                             save { next in var p = next.quotaResetNotifications ?? QuotaResetNotificationSettings(); p.natural = value; next.quotaResetNotifications = p }
                         }
                     }
-                    TextField("查询间隔（秒）", text: $intervalText, prompt: Text("沿用全局 · \(model.settings.refreshSeconds) 秒")).focused($focusedField, equals: "interval")
+                    LabeledContent("查询间隔（秒）") { TextField("查询间隔（秒）", text: $intervalText, prompt: Text("沿用全局")).labelsHidden().frame(width: DesignTokens.fieldHintWidth).focused($focusedField, equals: "interval") }.help("留空沿用全局 · \(model.settings.refreshSeconds) 秒")
                     Text("留空沿用全局间隔；自定义范围 5–86400 秒。").font(AppFont.secondary).foregroundStyle(.secondary)
                     TextField("账户名称", text: $account.name).focused($focusedField, equals: "name")
                     Toggle("归档账户", isOn: Binding(get: { account.archived == true }, set: { value in account.archived = value; save { $0.archived = value } }))
@@ -441,7 +440,9 @@ struct AccountDevicesView: View {
                             if let time = status?.checkedAt { Text("检查于 " + Format.time(time)).font(AppFont.secondary).foregroundStyle(.secondary) }
                         }
                         if machine != "local" {
-                            DisclosureGroup("前置命令") {
+                            DisclosureGroup("前置命令", isExpanded: Binding(get: { expandedCommands.contains(machine) }, set: { expanded in
+                                if expanded { expandedCommands.insert(machine) } else { expandedCommands.remove(machine) }
+                            })) {
                                 TextEditor(text: Binding(get: { commands[machine] ?? inheritedCommand(machine) }, set: { commands[machine] = $0 })).font(.system(size: DesignTokens.fontEntry, design: .monospaced)).frame(height: 85).focused($focusedField, equals: machine)
                                 Text("用于此账户的授权、切换、额度查询及定时唤醒；不用于同步历史或监控。清空后不执行。").font(AppFont.secondary).foregroundStyle(.secondary)
                                 if current.deviceSettings?.first(where: { $0.machineId == machine })?.preCommandResetRequired == true {
@@ -449,13 +450,20 @@ struct AccountDevicesView: View {
                                     Button("保存此机器的前置命令") { commands[machine] = commands[machine] ?? ""; saveEditedText(force: true) }
                                 }
 
-                            }
+                            }.id("command:" + machine)
                         }
                     }
                 }
                 if let error { HStack { Text(error).foregroundStyle(Palette.danger).textSelection(.enabled); Button("重试保存") { saveEditedText(force: true) } } }
                 if let message = model.deploymentSyncMessage { HStack { Text(message); Button("重试同步") { model.synchronizeAccountDeployments() } } }
-            }.formStyle(.grouped)
+            }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle())
+            .task {
+                if let machine = initialMachineID, expandedCommands.contains(machine) {
+                    await Task.yield()
+                    scroll.scrollTo("command:" + machine, anchor: .top)
+                }
+            }
+            }
         }.frame(width: 680, height: 650).aieyesAccent().interactiveDismissDisabled(busy || error != nil || focusedField != nil)
         .updateDraftGuard("账户设置", snapshot: draftSnapshot(account) + intervalText + draftSnapshot(commands), dirty: account != current || !commands.isEmpty || intervalText != (current.quotaRefreshSeconds.map(String.init) ?? ""), saving: busy, save: { focusedField = nil; guard saveEditedText(force: true) else { return false }; await saveTask?.value; if error == nil { dismiss(); return true }; return false }, discard: { dismiss() })
         .onAppear { intervalText = account.quotaRefreshSeconds.map(String.init) ?? "" }
@@ -630,7 +638,7 @@ struct AccountConnectionView: View {
                     if account == nil { Text("添加后可修改账号的显示名称。").foregroundStyle(.secondary) }
                     if let error { Text(error).foregroundStyle(Palette.warn).textSelection(.enabled) }
                     Button(busy ? "保存中…" : account == nil ? "添加账号" : provider == "deepseek" ? "更新 API Key" : "保存连接") { Task { await save() } }.buttonStyle(.borderedProminent).disabled(busy)
-                }.formStyle(.grouped).disabled(busy)
+                }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).disabled(busy)
             }
         }.frame(width: DesignTokens.dialogAccountWidth, height: 620).interactiveDismissDisabled(busy)
         .updateDraftGuard("账户连接", snapshot: provider + draftSnapshot(selection.sorted()) + apiKey + subscriptionMode + workspaceID + String(useLocalLogin), dirty: !selection.isEmpty || !apiKey.isEmpty || useLocalLogin || !workspaceID.isEmpty, saving: busy, save: { await save(); return error == nil }, discard: { dismiss() })

@@ -783,6 +783,93 @@ fn shared_history_totals_survive_and_profile_quotas_stay_visible() {
     );
 }
 
+#[test]
+fn account_operations_use_initialization_for_version_and_app_server() {
+    let _processes = super::processes::isolated_switch_test();
+    let (_d, home) = root();
+    let account = auth("one", "team", "PRIVATE_REFRESH");
+    files::atomic(&home.join("auth.json"), &account).unwrap();
+    let script = home.join("mock-codex.py");
+    fs::write(
+        &script,
+        r#"#!/usr/bin/env python3
+import os,sys,json,pathlib
+assert os.environ.get('AIEYES_ACCOUNT_INIT') == 'ready'
+assert os.path.samefile(os.getcwd(), os.environ['CODEX_HOME'])
+if '--version' in sys.argv:
+ print('codex-cli 0.161.0');sys.exit(0)
+assert not pathlib.Path(os.environ['CODEX_HOME'],'auth.json').exists()
+for line in sys.stdin:
+ assert 'PRIVATE_REFRESH' not in line
+ v=json.loads(line)
+ if v.get('method') == 'initialized': continue
+ result={'account':{'type':'chatgpt'}} if v['method']=='account/read' else {'fixture':True}
+ print(json.dumps({'id':v['id'],'result':result}),flush=True)
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    let executable = {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        script
+    };
+    #[cfg(windows)]
+    let executable = {
+        let launcher = home.join("mock-codex.cmd");
+        fs::write(
+            &launcher,
+            "@echo off\r\npython \"%~dp0mock-codex.py\" %*\r\nexit /b %errorlevel%\r\n",
+        )
+        .unwrap();
+        launcher
+    };
+    let loc = local::Location {
+        path: home.to_string_lossy().into(),
+        binary: executable.to_string_lossy().into(),
+        proxy: ProxyConfig::default(),
+        pre_command: if cfg!(windows) {
+            "$env:AIEYES_ACCOUNT_INIT='ready'"
+        } else {
+            "export AIEYES_ACCOUNT_INIT=ready"
+        }
+        .into(),
+        shell: "/bin/sh".into(),
+    };
+    assert_eq!(
+        local::call(&loc, "inspect", &json!({})).unwrap()["version"],
+        "codex-cli 0.161.0"
+    );
+    let adopted = local::call(&loc, "adopt", &json!({})).unwrap();
+    let profile = adopted["profile"]["id"].as_str().unwrap();
+    assert_eq!(
+        local::call(&loc, "quota", &json!({"profileId":profile})).unwrap()["fixture"],
+        true
+    );
+    assert_eq!(
+        local::call(&loc, "model.list", &json!({"profileId":profile})).unwrap()["models"]["fixture"],
+        true
+    );
+    let prepared = local::call(&loc, "switch.prepare", &json!({"profileId":profile})).unwrap();
+    assert_eq!(
+        local::call(
+            &loc,
+            "switch.commit",
+            &json!({"operationId":prepared["operationId"]})
+        )
+        .unwrap()["status"],
+        "succeeded"
+    );
+    assert_eq!(files::read(&home.join("auth.json")).unwrap(), account);
+    assert!(
+        !home
+            .join(".aieyes/codex")
+            .join(profile)
+            .join("query/auth.json")
+            .exists()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn quota_uses_active_auth_in_memory_without_refresh_token_copy() {

@@ -511,6 +511,13 @@
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
+    "hosts.sshConfig.read": {
+      "lane": "hosts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
     "hosts.sample": {
       "lane": "hosts",
       "invalidates": [],
@@ -964,7 +971,7 @@
       "loginUrl": "https://opencode.ai/console"
     }
   },
-  "contractHash": "9e82c294fb33fc93a4ae6b9bdc70a812fc4c6c87e44f64dbc874290e54e99838",
+  "contractHash": "c3b2debc010c18f330a24b31be27688bd56d648ba67287be722bed48b2425db5",
   "petFrameDurations": [
     [
       280,

@@ -54,18 +54,18 @@ function fixture(){
   if(await card().locator('.quota-disclosure').evaluate(el=>el.open))await card().locator('.quota-disclosure summary').click();
   await page.evaluate(()=>loadDashboard());
   assert.equal(await card().locator('.quota-disclosure').evaluate(el=>el.open),false,'Single account preserves its collapsed summary after refresh');assert(!await card().locator('.credit-row').isVisible());
-  assert(await card().locator('.quota-credit-summary').isVisible());
-  const titleBox=await card().locator('.quota-title h3').boundingBox(),balanceBox=await card().locator('.quota-credit-summary').boundingBox();
-  assert(balanceBox.x>=titleBox.x+titleBox.width-1 && Math.abs((balanceBox.y+balanceBox.height/2)-(titleBox.y+titleBox.height/2))<3,'Collapsed credits stay to the right of the title on the same line');
-  assert.equal(await card().locator('.quota-credit-summary .credit-label').evaluate(el=>getComputedStyle(el).color),await page.evaluate(()=>{const probe=document.createElement('span');probe.style.color='var(--accent)';document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();return color;}));
+  assert(await card().locator('.quota-collapsed-summary').isVisible());
+  const titleBox=await card().locator('.quota-title h3').boundingBox(),balanceBox=await card().locator('.quota-collapsed-summary').boundingBox();
+  assert(balanceBox.y>=titleBox.y+titleBox.height-1,'Collapsed credits and Bank Reset use their own row below the account');
+  assert.equal(await card().locator('.quota-collapsed-summary .credit-label').evaluate(el=>getComputedStyle(el).color),await page.evaluate(()=>{const probe=document.createElement('span');probe.style.color='var(--accent)';document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();return color;}));
   assert.equal(await card().locator('.quota-title .provider-mark img').evaluate(img=>img.complete&&img.naturalWidth>0),true,'Provider icon is bundled and loads');
   assert.equal(await card().locator('.subscription-badge').textContent(),'Pro');
   const edgeCases=await page.evaluate(()=>{
     const holder=document.createElement('div');holder.style.width='414px';document.body.append(holder);
     const cases=[{hasCredits:true,unlimited:false,balance:'0'},{hasCredits:true,unlimited:true},{hasCredits:true,unlimited:false},{hasCredits:false,unlimited:false},{hasCredits:true,unlimited:false,balance:'123456789.125'}];
     try { return cases.map(credits=>{
-      holder.innerHTML=quotaCard({...state.dashboard.quotas[0],name:'非常长的订阅账户名称用于检查折叠标题和余额在同一行',credits});
-      const title=holder.querySelector('.quota-title'),label=holder.querySelector('.quota-credit-summary'),value=label.querySelector('strong'),a=title.getBoundingClientRect(),b=label.getBoundingClientRect();
+      holder.innerHTML=quotaCard({...state.dashboard.quotas[0],name:'非常长的订阅账户名称用于检查折叠标题和余额各自完整显示',credits});
+      const title=holder.querySelector('.quota-title'),label=holder.querySelector('.quota-collapsed-summary'),value=label.querySelector('strong'),a=title.getBoundingClientRect(),b=label.getBoundingClientRect();
       return {text:value.textContent,sameLine:b.top>=a.top&&b.bottom<=a.bottom,withinCard:b.right<=a.right};
     }); } finally {holder.remove();}
   });

@@ -129,7 +129,12 @@
   async function syncDeployments(){if(syncRunning)return;syncRunning=true;try{const r=await api('accounts.deployments.sync');syncMessage=r.failedTasks?.length?'配置已保存，部分唤醒部署待同步，可重试。':'';}catch(error){syncMessage='配置已保存，唤醒部署待同步：'+String(error);}finally{syncRunning=false;repaint();}}
   function backgroundRefresh(){clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>{void loadDashboard().catch(error=>notify('配置已保存，刷新失败：'+String(error),'error'));},300);void syncDeployments();}
 
-  const configurations = () => state.settings.agents ?? Object.keys(providers).map(provider=>({provider,enabled:state.settings.sources.some(s=>s.provider===provider&&s.enabled),machineIds:[...new Set(state.settings.sources.filter(s=>s.provider===provider&&s.enabled).map(s=>s.hostId||'local'))]}));
+  const configurations = () => {
+    const order=Object.keys(providers).filter(p=>p!=='custom');
+    const rows=state.settings.agents??Object.keys(providers).map(provider=>({provider,enabled:state.settings.sources.some(s=>s.provider===provider&&s.enabled),machineIds:[...new Set(state.settings.sources.filter(s=>s.provider===provider&&s.enabled).map(machineId))]}));
+    const rank=p=>p==='custom'?order.length+1:order.includes(p)?order.indexOf(p):order.length;
+    return [...rows].sort((a,b)=>rank(a.provider)-rank(b.provider));
+  };
   const machineName = s => s.hostId ? state.settings.hosts.find(h=>h.id===s.hostId)?.name || s.hostId : '本机';
   const profiles = a => [...new Set([a.quotaProfileId,...(a.connections??[]).map(c=>c.profileId)].filter(Boolean))];
   const linked = (a,s) => s.provider===a.provider&&(s.accountId===a.id||s.codexHomeId&&profiles(a).some(r=>r.startsWith(s.codexHomeId+':')));
@@ -207,7 +212,7 @@
       body+=section('machines','机器与目录',agent.machineIds.length+' 台机器',agent.provider==='deepseek'?'<p class="muted">通过本机直接查询账户余额，无需日志目录。</p>':agentsHTML());
       body+=section('valuation','估值与采样','自动估值与采样记录',agent.provider==='deepseek'?'<p class="muted">余额由 API 直接提供，无需额度估值。</p>':`<p class="muted">按来源管理自动估值，查看采样状态和已有记录。</p><button type="button" data-agent-estimates="${e(agent.provider)}">管理估值与采样</button>`);
     }
-    return `<div class="settings-layout"><nav class="settings-agent-selector" aria-label="选择 Agent">${configurations().map(a=>`<button type="button" data-settings-agent="${e(a.provider)}" ${a.provider===agent.provider?'class="active" aria-current="page"':''}>${e(providers[a.provider]??a.provider)}</button>`).join('')}</nav><div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
+    return `<div class="settings-layout"><nav class="settings-agent-selector" aria-label="选择 Agent">${configurations().map(a=>`<button type="button" data-settings-agent="${e(a.provider)}" ${a.provider===agent.provider?'class="active" aria-current="page"':''}>${providerMark(a.provider)}<span>${e(providers[a.provider]??a.provider)}</span></button>`).join('')}</nav><div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
   }
   function agentsHTML() {
     if(directorySelection){const {provider,machine}=directorySelection,unbound=machine!=='local'&&!state.settings.hosts.some(h=>h.id===machine);return `<button id="directories-back">返回 Agent 接入</button><section class="card"><h2>${e(providers[provider])} · ${e(deviceName(machine))}</h2>${machineSources(provider,machine).map(s=>`<div class="list-row"><code class="row-body">${e(s.path)}</code>${s.machineBinding==='unbound'?`<span class="muted">机器未绑定</span><button data-source-rebind="${e(s.id)}">重新绑定机器</button>`:`<button data-source-advanced="${e(s.id)}">编辑目录</button>`}<button class="danger" data-source-remove="${e(s.id)}">移除目录配置</button></div>`).join('')}${unbound?'':`<button data-source-add="${e(provider)}">添加目录</button>`}<p class="muted">只配置采集位置，不移动文件。远程 Shell 位于服务器设置，前置命令位于账户设置。</p></section>`;}

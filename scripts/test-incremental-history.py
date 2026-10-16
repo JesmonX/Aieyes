@@ -38,6 +38,28 @@ def record(number, model='fixture'):
 
 
 class IncrementalHistory(unittest.TestCase):
+    def test_renamed_parent_uses_metadata_and_recovers_existing_cursor(self):
+        parent_id = '01a12393-1534-7750-8dbc-21bebb00678e'
+        suffix_id = '01a13e39-8119-7f31-a38c-69d61a59ebfb'
+        for newline in ('\n', '\r\n'):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as root:
+                home = pathlib.Path(root)
+                def line(value): return (json.dumps(value, ensure_ascii=False) + newline).encode('utf-8')
+                parent = line(dict(type='session_meta', payload=dict(id=parent_id)))
+                parent += line(dict(type='response_item', payload=dict(text='PRIVATE_PARENT_TEXT 中文')))
+                parent += line(dict(type='event_msg', timestamp=1800000000, payload=dict(type='token_count', info=dict(total_token_usage=dict(input_tokens=900)))))
+                child = dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id=parent_id, end_byte_offset=len(parent))))
+                (home/'child.jsonl').write_bytes(line(child))
+                first = collect(home, 'codex')
+                self.assertTrue(first[-1]['partial'])
+                (home/f'rollout-2026-10-15T14-21-58-{parent_id}_{suffix_id}.jsonl').write_bytes(parent)
+                restored = collect(home, 'codex', cursors(first))
+                self.assertFalse(restored[-1]['partial'])
+                inherited = next(e['inheritedHistory'] for e in events(restored) if e.get('inheritedHistory'))
+                self.assertEqual(inherited['tokens']['input'], 900)
+                self.assertNotIn('PRIVATE_PARENT_TEXT', json.dumps(restored))
+                self.assertEqual(collect(home, 'codex', cursors(restored))[-1]['readBytes'], 0)
+
     def test_fork_resolves_archived_multilevel_parent_and_rechecks_changed_proof(self):
         for newline in ('\n', '\r\n'):
             with self.subTest(newline=newline), tempfile.TemporaryDirectory() as root:

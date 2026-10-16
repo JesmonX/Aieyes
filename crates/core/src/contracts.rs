@@ -89,6 +89,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "hosts.credentials.delete", lane: Lane::Hosts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "hosts.credentials.save", lane: Lane::Hosts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "hosts.discover", lane: Lane::Hosts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "hosts.sshConfig.read", lane: Lane::Hosts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "hosts.sample", lane: Lane::Hosts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: Some("hosts") },
     Method { name: "methods.manifest", lane: Lane::Main, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "network.status", lane: Lane::Network, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -174,7 +175,7 @@ pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
     &[120, 120, 120, 120, 120, 220],
     &[150, 150, 150, 150, 150, 280],
 ];
-pub const CONTRACT_HASH: &str = "9e82c294fb33fc93a4ae6b9bdc70a812fc4c6c87e44f64dbc874290e54e99838";
+pub const CONTRACT_HASH: &str = "c3b2debc010c18f330a24b31be27688bd56d648ba67287be722bed48b2425db5";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

@@ -13,12 +13,13 @@
     changed?.(targets, [], checkingSources);
     const sources = [...new Set(targets.filter(t => t.provider === 'codex').map(t => t.sourceId))];
     const issues = [];
+    const machineName = sourceId => targets.find(t=>t.sourceId===sourceId)?.machineName || sourceId;
     await Promise.all(sources.map(async sourceId => {
       try {
         const result = await api('codexAuth.reconcile', {sourceId, accountId:key?.replace(/^codex:/,'') || ''});
         window.AieyesAgentSettings.accept(await api('settings.get'));
-        issues.push(...result.issues.map(i => i.message));
-      } catch (error) { issues.push((targets.find(t=>t.sourceId===sourceId)?.machineName || sourceId) + '：' + String(error.message ?? error)); }
+        issues.push(...result.issues.map(i => machineName(i.sourceId || sourceId) + '：' + i.message));
+      } catch (error) { issues.push(machineName(sourceId) + '：' + String(error.message ?? error)); }
       targets = await api('accounts.targets', key ? {accountKey:key} : {});
       checkingSources.delete(sourceId);
       changed?.(targets, [...issues], new Set(checkingSources));

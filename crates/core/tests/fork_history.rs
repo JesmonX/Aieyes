@@ -151,6 +151,44 @@ fn fork_uses_bounded_parent_prefix_and_preserves_frozen_price() {
 }
 
 #[test]
+fn renamed_parent_uses_metadata_and_repairs_an_existing_missing_baseline() {
+    for newline in ["\n", "\r\n"] {
+        let temp = tempfile::tempdir().unwrap();
+        let stamp = now() - 100;
+        let parent_id = "01a12393-1534-7750-8dbc-21bebb00678e";
+        let suffix_id = "01a13e39-8119-7f31-a38c-69d61a59ebfb";
+        let parent = (meta(parent_id, stamp - 100, None)
+            + &line(json!({"type":"response_item","payload":{"text":"父历史 中文"}}))
+            + &count(stamp - 90, 900, 900))
+            .replace('\n', newline);
+        let child = (meta("child", stamp - 10, Some((parent_id, parent.len())))
+            + &count(stamp, 1000, 100)
+            + &count(stamp + 1, 1100, 100))
+            .replace('\n', newline);
+        std::fs::write(temp.path().join("child.jsonl"), child).unwrap();
+        let (store, settings, source) = setup(temp.path());
+        assert_eq!(
+            import::scan(&store, &settings, &source).unwrap()["missingHistoryBases"],
+            1
+        );
+        assert_eq!(usage_for(&store, "child"), 100);
+        std::fs::write(
+            temp.path().join(format!(
+                "rollout-2026-10-15T14-21-58-{parent_id}_{suffix_id}.jsonl"
+            )),
+            parent,
+        )
+        .unwrap();
+        let result = import::scan(&store, &settings, &source).unwrap();
+        assert!(result.get("missingHistoryBases").is_none());
+        assert_eq!(usage_for(&store, "child"), 200);
+        assert_eq!(usage_for(&store, parent_id), 900);
+        import::rescan(&store, &settings, &source).unwrap();
+        assert_eq!(usage_for(&store, "child"), 200);
+    }
+}
+
+#[test]
 fn missing_parent_excludes_only_uncertain_prefix_and_later_arrival_repairs_it() {
     let temp = tempfile::tempdir().unwrap();
     let stamp = now() - 100;

@@ -499,6 +499,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var settingsDirty: Bool { settingsDraft != settings || !mappingModel.isEmpty || !mappingID.isEmpty }
     @Published var requestedSourceProvider: String?
     @Published var requestedAccountKey: String?
+    var requestedAccountMachineID: String?
     @Published var requestedHostID: String?
     @Published var requestedDetailPage: String?
     @Published var detailPage = "agent"
@@ -625,6 +626,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         else if let provider = destination.provider { settingsAgent = provider }
         if settingsTab == "general", let section = destination.section { generalPage = section }
         settingsSection = destination.section
+        requestedAccountMachineID = destination.machineID
         requestedAccountKey = destination.accountKey
         requestedHostID = destination.hostID
         requestHostEditor = destination.section == "add-host"

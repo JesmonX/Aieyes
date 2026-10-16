@@ -7,6 +7,7 @@ struct WakeupsView: View {
     @State private var removal: WakeRecord?
     var body: some View {
         Form {
+            Text("可以以约0成本帮助您控制5h/7d限额的刷新时间").font(AppFont.section.weight(.semibold)).foregroundStyle(Palette.accent).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
             Section("定时唤醒") {
                 Text("部署到本机或 SSH Linux 服务器，使用目标机器已登录的订阅 CLI。按目标机器时区执行，错过时刻不补发；退出 Aieyes 后继续运行。").foregroundStyle(.secondary)
                 Text("离线或暂停采集时仍可保存已关联账户的任务草稿；部署与运行时检查目标机器。").font(AppFont.secondary).foregroundStyle(.secondary)
@@ -19,7 +20,7 @@ struct WakeupsView: View {
                 if store.records.isEmpty && !store.loading { Text("尚未配置定时任务").foregroundStyle(.secondary) }
             }
             ForEach(store.records) { record in Section { taskCard(record) } }
-        }.formStyle(.grouped).font(AppFont.body).disabled(model.installingUpdate).task { await store.load() }
+        }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).font(AppFont.body).disabled(model.installingUpdate).task { await store.load() }
         .updateOperation("定时唤醒任务", active: !store.operating.isEmpty)
         .sheet(item: $removal) { record in
             DangerConfirmation(title: record.deployment == nil ? "删除任务草稿？" : "移除自动任务？", explanation: record.deployment == nil ? "删除「" + record.task.name + "」的任务草稿。" : "将从目标机器移除「" + record.task.name + "」的定时部署，后续自动唤醒会停止。运行历史保留。", affected: [], confirmLabel: "确认移除", cancel: { removal = nil }, confirm: { removal = nil; store.perform(record.deployment == nil ? "delete" : "remove", record.id) })

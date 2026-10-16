@@ -5,6 +5,7 @@ import builtins
 import importlib.util
 import json
 import pathlib
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -22,6 +23,24 @@ def credential(user, refresh='initial'):
 
 
 class CoordinatorTests(unittest.TestCase):
+    def test_version_probe_distinguishes_failures_without_exposing_output(self):
+        for failure, message in [
+            (FileNotFoundError('PRIVATE'), '未找到 Codex CLI'),
+            (PermissionError('PRIVATE'), '执行权限'),
+            (subprocess.TimeoutExpired(['PRIVATE'], 5), '超时（5 秒）'),
+            (subprocess.CalledProcessError(7, ['PRIVATE'], output=b'PRIVATE'), '版本检查失败'),
+        ]:
+            with self.subTest(message=message), patch.object(a.subprocess, 'check_output', side_effect=failure):
+                with self.assertRaises(ValueError) as result:
+                    a.Rpc(self.loc, self.root)
+                self.assertIn(message, str(result.exception))
+                self.assertNotIn('PRIVATE', str(result.exception))
+                self.assertNotIn('接口不兼容', str(result.exception))
+        for output, expected in [(b'wrong launcher', '无法识别'), (b'codex-cli 0.98.0', '接口不兼容')]:
+            with patch.object(a.subprocess, 'check_output', return_value=output):
+                with self.assertRaisesRegex(ValueError, expected):
+                    a.Rpc(self.loc, self.root)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

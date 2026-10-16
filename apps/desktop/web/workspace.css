@@ -1,4 +1,80 @@
 /* Shared hierarchy, categorical color, and a single glass layer per window. */
+/* The viewport owns column count; collapsing navigation makes existing cards wider. */
+body:not(:has(#panel)) .quotas { grid-template-columns:repeat(var(--workspace-quota-columns,1),minmax(0,1fr)); }
+@media(min-width:974px) { body { --workspace-quota-columns:2; } }
+@media(min-width:1390px) { body { --workspace-quota-columns:3; } }
+@media(min-width:1800px) { body { --workspace-quota-columns:4; } }
+main,.settings-block { max-width:none; }
+.agent-selector { flex-wrap:wrap; overflow:visible; }
+.settings-agent-selector button { display:flex; align-items:center; gap:8px; text-align:left; }
+.settings-agent-selector .provider-mark { width:20px; height:20px; flex:0 0 20px; }
+.settings-agent-selector .provider-mark img { width:100%; height:100%; }
+.quota-heading-label,.quota-name,.quota-email { overflow:visible; white-space:normal; overflow-wrap:anywhere; }
+.quota-collapsed-summary { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:6px 16px; font-size:var(--font-secondary); margin-top:2px; flex:0 0 100%; font-variant-numeric:tabular-nums; }
+.quota-disclosure[open] .quota-collapsed-summary { display:none; }
+.quota-collapsed-summary > span:last-child { color:var(--muted); }
+#sidebar-toggle { display:grid; place-items:center; width:36px; height:34px; padding:6px; color:var(--ink); border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface-soft); }
+#sidebar-toggle:hover { background:var(--soft); color:var(--accent); }
+.sidebar-collapsed #sidebar-toggle { align-self:center; }
+.form-row[data-field-size=short] > :is(input,.win-select) { width:var(--field-short-width); max-width:100%; justify-self:start; }
+.form-row[data-field-size=medium] > input { width:min(var(--field-medium-width),100%); justify-self:start; }
+.form-row[data-field-size=choice] > :is(select,.win-select) { width:fit-content; min-width:min(160px,100%); max-width:100%; justify-self:start; }
+.form-row[data-field-size=choice] > .win-select > select { width:auto; max-width:100%; }
+.form-row[data-field-size=long] { min-width:0; }
+.form-row[data-field-size=long] > input { min-width:0; }
+.wakeup-benefit { padding:12px 14px; border-radius:var(--radius-control); background:var(--soft); border-left:3px solid var(--accent); color:var(--accent); font-weight:var(--weight-strong); }
+.setup-guide { display:grid; gap:14px; }
+.setup-guide .card { margin:0; }
+.setup-goals { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,350px),1fr)); gap:14px; align-items:start; }
+.setup-step,.setup-more { min-width:0; }
+.setup-step > summary,.setup-more > summary { cursor:pointer; position:relative; padding-right:22px; list-style:none; }
+.setup-step > summary::-webkit-details-marker,.setup-more > summary::-webkit-details-marker { display:none; }
+.setup-step > summary::after,.setup-more > summary::after { content:'⌄'; position:absolute; right:0; top:0; color:var(--muted); }
+.setup-step[open] > summary::after,.setup-more[open] > summary::after { transform:rotate(180deg); }
+.setup-step h3,.setup-more h3 { margin:0; font-size:var(--font-section); }
+.setup-step p,.setup-more p { margin:8px 0; }
+.setup-step small { display:block; color:var(--muted); }
+.setup-answer { margin-top:16px; border-top:1px solid var(--border); padding-top:12px; overflow-wrap:anywhere; }
+.setup-answer ol { padding-left:22px; }
+.setup-answer li + li { margin-top:10px; }
+.setup-answer h4 { margin:16px 0 8px; }
+.setup-answer .actions { flex-wrap:wrap; margin-top:14px; }
+.setup-checks { padding:0; margin:0; list-style:none; }
+.setup-checks > li { display:flex; align-items:start; flex-wrap:wrap; gap:8px 12px; padding:10px 0; border-bottom:1px solid var(--border); }
+.setup-checks > li > div { display:grid; gap:4px; flex:1 1 220px; min-width:0; }
+.setup-checks span { color:var(--muted); font-size:var(--font-secondary); }
+.setup-guide [data-guide-level=warn] { color:var(--warn); }
+.setup-checks [data-guide-level=warn] span { color:inherit; }
+.setup-checks [data-guide-level=ok] span { color:var(--muted); }
+.setup-command { white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; background:var(--soft); border-radius:var(--radius-control); user-select:text; }
+.setup-verify { padding-top:12px; color:var(--muted); }
+.setup-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+.setup-toolbar .setup-scene { margin:0 auto 0 0; }
+.setup-read-error { color:var(--warn); }
+.setup-more-item { padding-top:16px; margin-top:16px; border-top:1px solid var(--border); }
+.setup-providers { display:flex; flex-wrap:wrap; gap:8px; }
+.setup-providers .provider-mark { width:24px; height:24px; }
+.setup-scene { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px; }
+.setup-return { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding-bottom:12px; }
+#ssh-config-import { width:min(650px,calc(100vw - 32px)); max-height:calc(100dvh - 64px); padding:0; }
+#ssh-config-import[open] { display:flex; flex-direction:column; }
+.ssh-import-body { overflow:auto; min-height:0; padding:0 22px 16px; }
+.ssh-import-body > input { width:100%; margin:8px 0; }
+.ssh-import-row { display:flex; gap:10px; align-items:flex-start; padding:12px 4px; border-bottom:1px solid var(--border); }
+.ssh-import-row > span { min-width:0; display:grid; gap:4px; overflow-wrap:anywhere; }
+.ssh-import-row small { color:var(--muted); }
+.ssh-import-toolbar { margin-bottom:12px; }
+/* A fixed gutter and thumb geometry keep overflowing content from resizing. */
+html:not(:has(#panel)) { scrollbar-gutter:stable; }
+:is(.panel-body,#editor-fields,.ssh-import-body,.table-scroll,.prices-list,.win-select-menu,.multi-list) { scrollbar-gutter:stable; }
+* { scrollbar-color:transparent transparent; }
+*:hover,*:focus-within,[data-scrolling=true] { scrollbar-color:color-mix(in srgb,var(--ink) 24%,transparent) transparent; }
+::-webkit-scrollbar { width:8px; height:8px; }
+::-webkit-scrollbar-thumb { border-width:2px; background-color:transparent; }
+*:hover::-webkit-scrollbar-thumb,*:focus-within::-webkit-scrollbar-thumb,[data-scrolling=true]::-webkit-scrollbar-thumb { background-color:color-mix(in srgb,var(--ink) 24%,transparent); }
+/* Long reading content uses the page scroll. Bounded/virtualized selectors keep theirs. */
+.daily-table,#session-list,.pricing-gaps,#existing-mappings [data-mapping-rows] { max-height:none; overflow:visible; }
+.table-scroll { overflow-x:auto; }
 :root { --category:var(--accent); }
 [data-provider=codex] { --category:var(--category-codex); }
 [data-provider=claude] { --category:var(--category-claude); }
@@ -119,3 +195,13 @@ aside nav [data-page=settings] { margin-top:0; border-top:0; }
 .overview-usage #token-popover { z-index:10; }
 #token-popover { position:fixed; inset:auto; margin:0; overflow:auto; }
 .overview-usage #token-summary > svg { width:12px; height:12px; color:var(--muted); }
+
+/* Wrapping Agent tabs avoids an otherwise permanent horizontal scroller. */
+.agent-selector { flex-wrap:wrap; overflow:visible; }
+
+.quota-title,.panel-body .quota-title { flex-wrap:wrap; }
+.quota-card .quota-title h3 { flex:1; }
+
+.setup-scene > .win-select,.setup-scene > select { width:var(--field-choice-width); max-width:100%; }
+
+.form-row[data-field-size=protocol] > :is(select,.win-select) { width:120px; max-width:100%; justify-self:start; }

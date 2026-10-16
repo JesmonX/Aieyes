@@ -656,6 +656,14 @@
       "updateBehavior": "cancel"
     },
     {
+      "name": "hosts.sshConfig.read",
+      "lane": "hosts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
       "name": "hosts.sample",
       "lane": "hosts",
       "invalidates": [],

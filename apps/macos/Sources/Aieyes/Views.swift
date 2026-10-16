@@ -1,6 +1,11 @@
 import SwiftUI
 import Charts
 
+private struct WorkspaceCardColumns: EnvironmentKey { static let defaultValue = 2 }
+extension EnvironmentValues {
+    var workspaceCardColumns: Int { get { self[WorkspaceCardColumns.self] } set { self[WorkspaceCardColumns.self] = newValue } }
+}
+
 struct Surface<Content: View>: View {
     var title: String?
     var spacing: CGFloat = DesignTokens.spaceCardContent
@@ -47,6 +52,7 @@ struct NeutralCard: ViewModifier {
     }
 }
 struct RootView: View {
+    @Environment(\.workspaceCardColumns) private var workspaceCardColumns
     @ObservedObject var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -361,7 +367,7 @@ struct RootView: View {
             }
             ForEach(quotaProviders, id: \.self) { provider in
                 PersistentSection(key: "quota.group." + scope + "." + provider, title: Format.provider(provider), detail: groupSummary(provider), tint: Palette.category(provider)) {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: compact ? 380 : 310), spacing: 14, alignment: .top)], alignment: .leading, spacing: 10) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 14, alignment: .top), count: compact ? 1 : workspaceCardColumns), alignment: .leading, spacing: 10) {
                         ForEach(displayedQuotaAccounts.filter { $0.provider == provider }.sorted { (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max) }, id: \.key) { account in
                             if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
                             else { Surface(tint: Palette.category(provider)) { Text(account.name).font(AppFont.section); Text(model.quotaBusy ? "正在读取账户限额…" : "等待首次限额查询").font(AppFont.secondary).foregroundStyle(.secondary) } }
@@ -736,7 +742,7 @@ struct QuotaCard: View {
         var text = Format.provider(quota.provider) + "，" + quota.name
         if let email = quota.identity?.email, email != quota.name { text += "，" + email }
         if let plan = quota.plan { text += "，订阅 " + Format.subscription(plan) }
-        if !expanded && quota.provider == "codex" { text += "，" + Format.creditBalance(quota.credits, estimate: creditEstimate) }
+        if !expanded && quota.provider == "codex" { text += "，" + Format.creditBalance(quota.credits, estimate: creditEstimate) + "，Bank Reset " + (quota.bankReset.map { String($0.availableCount) } ?? "未知") + " 次可用" }
         text += expanded ? "，折叠限额" : "，展开限额"
         return text
     }
@@ -745,14 +751,13 @@ struct QuotaCard: View {
             HStack(spacing: 8) {
                 ProviderMark(provider: quota.provider)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(quota.name).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).lineLimit(1).help(quota.name)
+                    Text(quota.name).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled).help(quota.name)
                     if let email = quota.identity?.email, email != quota.name {
-                        Text(email).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(email)
+                        Text(email).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled).help(email)
                     }
                 }.frame(minWidth: 0, alignment: .leading)
                 if let plan = quota.plan, !Format.subscription(plan).isEmpty { SubscriptionBadge(plan: plan).frame(maxWidth: DesignTokens.quotaBadgeWidth) }
                 Spacer(minLength: 0)
-                if !expanded && quota.provider == "codex" { CreditBalanceLabel(balance: quota.credits, estimate: bestCredit, compact: true).layoutPriority(1) }
                 if collapsible { Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).foregroundStyle(.secondary) }
             }.contentShape(Rectangle())
             }.buttonStyle(.plain).help(collapsible ? (expanded ? "折叠限额" : "展开限额") : quota.name)
@@ -782,6 +787,12 @@ struct QuotaCard: View {
         Surface(spacing: compact ? 9 : 14, padding: compact ? 12 : 16, tint: Palette.category(quota.provider)) {
             cardHeader
             if !expanded {
+                if quota.provider == "codex" {
+                    FlowLayout(spacing: 12) {
+                        CreditBalanceLabel(balance: quota.credits, estimate: bestCredit, compact: true).fixedSize(horizontal: true, vertical: false)
+                        Text("Bank Reset \(quota.bankReset.map { String($0.availableCount) } ?? "—") 次可用").font(AppFont.secondary).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
                 balanceContent
                 if quota.provider == "antigravity" { agyWindows }
                 else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12, alignment: .leading)], alignment: .leading, spacing: 12) {
@@ -1159,7 +1170,11 @@ struct OverlayScrollStyle: NSViewRepresentable {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.configurationPending = false
-                guard let scroll = self.enclosingScrollView else { return }
+                func findScroll(_ view: NSView) -> NSScrollView? {
+                    if let scroll = view as? NSScrollView { return scroll }
+                    return view.subviews.lazy.compactMap(findScroll).first
+                }
+                guard let scroll = self.enclosingScrollView ?? self.superview.flatMap(findScroll) ?? self.superview?.superview.flatMap(findScroll) else { return }
                 if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
                 if !scroll.autohidesScrollers { scroll.autohidesScrollers = true }
                 if scroll.drawsBackground { scroll.drawsBackground = false }

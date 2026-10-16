@@ -2,10 +2,13 @@ import Foundation
 
 extension AppModel {
     var agentConfigurations: [AgentConfiguration] {
-        settings.agents ?? CoreContract.providers.map { provider in
+        let rows = settings.agents ?? CoreContract.providers.map { provider in
             let sources = settings.sources.filter { $0.provider == provider && $0.enabled }
             return AgentConfiguration(provider: provider, enabled: !sources.isEmpty, machineIds: Array(Set(sources.map { $0.hostId ?? "local" })).sorted())
         }
+        let order = CoreContract.providers.filter { $0 != "custom" }
+        func rank(_ provider: String) -> Int { provider == "custom" ? order.count + 1 : order.firstIndex(of: provider) ?? order.count }
+        return rows.sorted { rank($0.provider) < rank($1.provider) }
     }
     func acceptConfiguration(_ saved: Settings) {
         invalidateAccountStatuses()

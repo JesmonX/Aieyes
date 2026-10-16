@@ -22,6 +22,14 @@ html[data-platform=windows][data-theme=dark] {
 }
 html[data-platform=windows][data-material=opaque] { --win-overlay-fill:var(--solid); }
 
+/* Keep the translucent backdrop while flattening surface and control finishes. */
+html[data-platform=windows],html[data-platform=windows][data-theme=dark] {
+  --win-sheen:none; --win-control-sheen:none; --win-edge:transparent;
+  --control-shadow:none; --control-pressed-shadow:none;
+  --control-bottom-stroke:var(--control-stroke);
+  --win-card-shadow:none;
+}
+
 /* The original select still owns its intrinsic width, form value and validity.
    Its proxy occupies exactly the same rectangle, including at fractional DPI. */
 .win-select { display:inline-grid; position:relative; min-width:0; max-width:100%; vertical-align:middle; align-self:center; }
@@ -158,4 +166,12 @@ html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open
 @media (prefers-reduced-motion:reduce),(forced-colors:active) {
   html[data-platform=windows] *,html[data-platform=windows] *::before,html[data-platform=windows] *::after { animation:none !important; transition:none !important; }
   html[data-platform=windows] details::details-content { transition:none !important; }
+}
+
+@media not (forced-colors:active) {
+  html[data-platform=windows] :is(button.primary,.win-select-trigger[aria-expanded=true]) { box-shadow:none; }
+  html[data-platform=windows] :is(.card,.stat,.quota-card,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) { box-shadow:none; }
+  html[data-platform=windows] :is(.quota-card,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) { background:color-mix(in srgb,var(--category) 8%,var(--card-fill)); }
+  html[data-platform=windows] :is(nav button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true])::before { box-shadow:none; border:1px solid var(--border); }
+  html[data-platform=windows] button:enabled:hover,html[data-platform=windows] button:enabled:active { transform:none; }
 }

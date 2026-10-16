@@ -98,7 +98,12 @@
     "dialog-account-width": 640,
     "dialog-wakeup-width": 550,
     "dialog-hooks-width": 580,
-    "dialog-agy-width": 540
+    "dialog-agy-width": 540,
+    "field-short-width": 112,
+    "field-hint-width": 130,
+    "field-price-width": 140,
+    "field-medium-width": 320,
+    "field-choice-width": 220
   },
   "numbers": {
     "card-border-opacity": 0.3,

@@ -1,0 +1,178 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
+const {chromium}=require('../apps/desktop/node_modules/playwright');
+const {fixture}=require('./workspace-ui-fixture.cjs');
+const {serveFont}=require('./ui-test-helpers.cjs');
+(async()=>{
+  const root=path.resolve(__dirname,'../apps/desktop/web'),out=path.resolve(__dirname,'../.local/setup-guide');
+  fs.mkdirSync(out,{recursive:true});
+  const server=http.createServer((req,res)=>{
+    if(serveFont(req,res))return;
+    const file=path.join(root,path.basename(new URL(req.url,'http://local').pathname)||'index.html');
+    if(!fs.existsSync(file)){res.writeHead(404).end();return;}
+    res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html','.png':'image/png'})[path.extname(file)]||'text/plain');res.end(fs.readFileSync(file));
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const browser=await chromium.launch();
+  try{
+    const context=await browser.newContext({viewport:{width:1120,height:800},reducedMotion:'reduce'});
+    await context.addInitScript(fixture,{platform:'windows'});
+    await context.addInitScript(()=>{
+      for(const provider of ['zcode','qoder','grok','cursor','opencode'])navigationFixture.settings.agents.push({provider,enabled:false,machineIds:[]});
+      navigationFixture.quotas[0].bankReset={availableCount:2};
+      navigationFixture.quotas[0].name='long-account-name-that-must-remain-completely-readable@example.invalid';
+      const invoke=__TAURI__.core.invoke;
+      __TAURI__.core.invoke=async(command,args)=>args?.method==='hosts.sshConfig.read'?{path:'/fixture/.ssh/config',hosts:[{alias:'fixture.invalid',hostName:'existing'},{alias:'jump',hostName:'10.0.0.1',user:'alice',port:2200},{alias:'gpu',hostName:'10.0.0.2'}],warnings:['Match 条件未执行；连接使用原配置']}:invoke(command,args);
+    });
+    const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(String(error)));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);await page.evaluate(()=>AieyesApp.ready);
+    assert.equal(await page.evaluate(()=>state.page),'agent','configured installations are not interrupted');
+    const card=page.locator('[data-quota="codex:a0"]');
+    assert.match(await card.locator('.quota-collapsed-summary').innerText(),/余额.*100.*Bank Reset.*2/s);
+    assert(await card.locator('.quota-name').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'long account names wrap');
+    const before=await card.boundingBox(),columns=await page.locator('.quotas').first().evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length);
+    await page.locator('#sidebar-toggle').click();
+    assert.equal(await page.locator('.quotas').first().evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),columns);
+    assert((await card.boundingBox()).width>before.width+30,'sidebar space expands existing cards');
+    await card.locator('summary.quota-title').click();assert.equal(await card.locator('.quota-collapsed-summary').isVisible(),false);
+    await card.locator('summary.quota-title').click();
+    await page.locator('aside [data-guide-open]').click();await page.locator('#setup-scene').selectOption('mixed');
+    await page.locator('[data-guide-recheck]:not([disabled])').waitFor();
+    assert.equal(await page.locator('[data-guide-skip]').count(),0);
+    assert.equal(await page.locator('[data-guide-card]:not([data-guide-card=more])').count(),8);
+    await page.screenshot({path:path.join(out,'guide-light.png'),fullPage:true});
+    await page.locator('[data-guide-card=usage] > summary').click();
+    await page.locator('[data-guide-provider=cursor]').click();
+    assert.equal(await page.locator('[data-settings-agent]').last().getAttribute('data-settings-agent'),'custom');
+    assert.equal(await page.locator('[data-settings-agent=cursor]').getAttribute('aria-current'),'page');
+    assert.equal(await page.locator('[data-settings-agent] img').count(),9);
+    await page.locator('#setup-return [data-guide-open]').click();
+    await page.locator('[data-guide-card=network] > summary').click();
+    await page.locator('[data-guide-card=network] .setup-checks button').first().click();
+    assert.equal(await page.locator('#field-appPort').evaluate(el=>el.getBoundingClientRect().width),112);
+    await page.locator('#setup-return [data-guide-open]').click();await page.locator('[data-guide-card=hosts] > summary').click();await page.locator('[data-guide-step=hosts]').click();
+    await page.locator('#content [data-ssh-import]').click();
+    await page.locator('[data-import-all]').click();assert.equal(await page.locator('[data-import-index]:checked').count(),2);
+    assert(await page.locator('[data-import-index="0"]').isDisabled());
+    await page.evaluate(()=>navigationFixture.failSave=true);await page.locator('#ssh-import-save').click();
+    await page.waitForFunction(()=>document.querySelector('#ssh-import-error').textContent.includes('模拟保存失败'));
+    assert.equal(await page.locator('[data-import-index]:checked').count(),2,'failed saves preserve selection');
+    await page.evaluate(()=>navigationFixture.failSave=false);await page.locator('#ssh-import-save').click();
+    await page.waitForFunction(()=>navigationFixture.settings.hosts.length===3);
+    const imported=await page.evaluate(()=>navigationFixture.settings.hosts.filter(h=>['jump','gpu'].includes(h.target)));
+    assert.equal(imported.length,2);assert(imported.every(h=>!h.username&&!h.identityFile&&h.port===null),'SSH config remains authoritative');
+    await page.evaluate(()=>openSettings({category:'general',section:'appearance'}));
+    const flat=await page.locator('.primary').first().evaluate(el=>getComputedStyle(el).backgroundImage).catch(()=> 'none');assert.equal(flat,'none');
+    const geometry=await page.evaluate(()=>{
+      const host=document.createElement('div');host.className='panel-account-group';host.style='width:300px;height:100px';host.innerHTML='<input style="width:100%">';document.body.append(host);
+      const input=host.firstElementChild,a=input.getBoundingClientRect().width;host.append(document.createElement('div'));host.lastElementChild.style.height='200px';const b=input.getBoundingClientRect().width;host.remove();return Math.abs(a-b);
+    });assert(geometry<=1,'scroll overflow does not resize controls');
+    await page.evaluate(()=>AieyesSetup.open());await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.screenshot({path:path.join(out,'guide-dark.png'),fullPage:true});
+    assert.deepEqual(errors,[]);await context.close();
+    const fresh=await browser.newContext({viewport:{width:900,height:720},reducedMotion:'reduce'});
+    await fresh.addInitScript(fixture,{platform:'windows'});
+    await fresh.addInitScript(()=>{navigationFixture.settings.accounts=[];navigationFixture.settings.sources=[];navigationFixture.settings.hosts=[];navigationFixture.settings.proxy={mode:'system',url:''};});
+    const first=await fresh.newPage();await first.goto(`http://127.0.0.1:${server.address().port}`);await first.evaluate(()=>AieyesApp.ready);await first.waitForFunction(()=>state.page==='setup');
+    await first.locator('[data-guide-finish]').click();await first.reload();await first.evaluate(()=>AieyesApp.ready);assert.equal(await first.evaluate(()=>state.page),'agent','returning to overview suppresses automatic reopen');await fresh.close();
+    for(const platform of ['windows','linux']){
+      const matrix=await browser.newContext({viewport:{width:1120,height:800},reducedMotion:'reduce'});
+      await matrix.addInitScript(fixture,{platform});
+      await matrix.addInitScript(()=>{
+        const nav=navigationFixture,s=nav.settings;
+        localStorage.setItem('aieyes.setup.v1',JSON.stringify({seen:true,scene:'mixed',visited:['accounts','network'],skipped:['network','hosts']}));
+        s.accounts=s.accounts.slice(0,4);s.accounts[0].quotaRefreshSeconds=45;s.accounts[3].archived=true;
+        s.proxy={mode:'direct',url:''};
+        s.accounts[1].deviceSettings=[{machineId:'host',preCommand:'SENSITIVE_COMMAND_MUST_NOT_RENDER',preCommandResetRequired:true}];
+        for(let i=0;i<2;i++)s.sources.push({...s.sources[i],id:'remote-'+i,hostId:'host',name:'远程目录 '+i});
+        s.agents.find(a=>a.provider==='codex').machineIds=['local','host'];
+        nav.quotas[1].error='模拟网络超时';nav.quotas[2].origin='log';
+        const invoke=__TAURI__.core.invoke;
+        __TAURI__.core.invoke=async(command,args)=>{
+          if(args?.method==='dashboard.summary'&&nav.failGuideDashboard)throw Error('模拟只读状态失败');
+          if(args?.method==='wakeups.list'){
+            if(nav.failGuideTasks)throw Error('模拟任务读取失败');
+            return [{task:{id:'draft',name:'未部署测试任务',sourceId:'remote-0'},deployment:null},
+              {task:{id:'pending',name:'待同步测试任务',sourceId:'remote-0'},deployment:{state:'settings-pending',enabled:true}},
+              {task:{id:'changed',name:'已修改测试任务',sourceId:'remote-1'},deployment:{state:'active',enabled:true,changed:true}}];
+          }
+          return invoke(command,args);
+        };
+      });
+      const p=await matrix.newPage();p.on('pageerror',error=>errors.push(String(error)));
+      await p.goto(`http://127.0.0.1:${server.address().port}`);await p.evaluate(()=>AieyesApp.ready);
+      await p.evaluate(()=>AieyesSetup.open());
+      const goal=id=>p.locator(`[data-guide-card=${id}]`);
+      const expand=async id=>{if(!await goal(id).evaluate(el=>el.open))await goal(id).locator(':scope > summary').click();};
+      await expand('usage');
+      const quota=goal('usage').locator('.setup-checks li').filter({hasText:'Codex · Codex 账号'});
+      assert.match(await quota.filter({hasText:'账号 0'}).innerText(),/上次查询成功/);
+      assert.match(await quota.filter({hasText:'账号 1'}).innerText(),/上次查询失败/);
+      assert.match(await quota.filter({hasText:'账号 2'}).innerText(),/限额待验证/,'log-only data cannot prove a live quota query');
+      assert.equal(await p.locator('[data-guide-skip]').count(),0);
+      assert(!(await p.locator('.setup-guide').innerText()).includes('已跳过'),'legacy skips do not conceal missing configuration');
+      await expand('refresh');
+      assert.match(await goal('refresh').innerText(),/每 45 秒查询一次，覆盖全局设置/);
+      assert.match(await goal('refresh').innerText(),/沿用全局限额间隔：300 秒/);
+      assert.match(await goal('refresh').innerText(),/缩短限额间隔不会加速正在进行的请求/);
+      await expand('network');
+      assert.match(await goal('network').innerText(),/export http_proxy=.*export https_proxy=.*source \/path\/to\/proxy/s);
+      assert.match(await goal('network').innerText(),/127\.0\.0\.1.*服务器自身/);
+      assert(!(await goal('network').innerText()).includes('SENSITIVE_COMMAND_MUST_NOT_RENDER'));
+      assert.match(await goal('network').innerText(),/服务器可直连时无需填写/);
+      assert.match(await goal('network').innerText(),/前置命令需重新确认/);
+      await expand('wakeups');
+      assert.match(await goal('wakeups').innerText(),/已保存草稿，尚未部署/);
+      assert.match(await goal('wakeups').innerText(),/部署待同步/);
+      assert.match(await goal('wakeups').innerText(),/草稿已修改，需要更新部署/);
+      await expand('panel');
+      assert.match(await goal('panel').innerText(),/账户已归档/);
+      await goal('network').locator(':scope > summary').focus();await p.keyboard.press('Space');
+      assert.equal(await goal('network').evaluate(el=>el.open),false,'goal summaries support the keyboard');
+      await p.keyboard.press('Space');assert(await goal('network').evaluate(el=>el.open));
+      const forbidden=['wakeups.run','wakeups.deploy','network.test','codexAuth.login.start','settings.patch'];
+      assert.deepEqual(await p.evaluate(list=>navigationFixture.calls.filter(c=>list.includes(c.args?.method)),forbidden),[],'opening help never executes configuration or model calls');
+      await p.locator('#setup-scene').selectOption('ssh');
+      assert.equal(await goal('network').locator('.setup-checks li').filter({hasText:'本机应用网络'}).count(),0);
+      assert(!await quota.filter({hasText:'账号 0'}).innerText().then(t=>t.includes('上次查询成功')),'local quota observations do not verify a remote connection');
+      const device=goal('network').locator('.setup-checks li').filter({hasText:'Codex 账号 0 · 测试服务器'});
+      await device.getByRole('button',{name:'查看设置',exact:true}).scrollIntoViewIfNeeded();
+      const guideScroll=await p.evaluate(()=>scrollY);
+      await device.getByRole('button',{name:'查看设置',exact:true}).click();
+      const command=p.locator('[data-command-field=host]');
+      assert.equal(await command.evaluate(el=>el.closest('details').open),true,'deep link expands the requested device command');
+      assert.equal(await command.evaluate(el=>document.activeElement===el),true);
+      await command.fill('export https_proxy=http://fixture.invalid:8080');await command.blur();
+      await p.waitForFunction(()=>navigationFixture.settings.accounts[0].deviceSettings?.some(d=>d.machineId==='host'&&d.preCommand.includes('fixture.invalid')));
+      await p.locator('#setup-return [data-guide-open]').click();await p.locator('[data-guide-recheck]:not([disabled])').waitFor();
+      assert(await goal('network').evaluate(el=>el.open),'returning retains expanded goals');
+      assert(Math.abs(await p.evaluate(()=>scrollY)-guideScroll)<8,'returning retains the reading position');
+      assert.match(await goal('network').innerText(),/前置命令已保存；联网效果需通过账户查询或运行结果确认/);
+      await p.locator('#setup-scene').selectOption('local');
+      assert.equal(await goal('hosts').count(),0);assert.equal(await goal('network').locator('pre').count(),0);
+      assert.equal(await goal('network').locator('[data-guide-level=warn]').count(),0,'direct mode without a proxy is valid configuration');
+      await p.evaluate(()=>{navigationFixture.failGuideDashboard=true;navigationFixture.failGuideTasks=true;});
+      await p.locator('[data-guide-recheck]').click();await p.locator('[data-guide-recheck]:not([disabled])').waitFor();
+      assert.match(await p.locator('.setup-read-error').innerText(),/待确认/);
+      assert.match(await goal('usage').innerText(),/限额待验证/);assert(!(await goal('usage').innerText()).includes('上次查询成功'));
+      assert.match(await goal('wakeups').innerText(),/状态读取失败/);
+      await p.evaluate(()=>{navigationFixture.failGuideDashboard=false;navigationFixture.failGuideTasks=false;});
+      await p.locator('[data-guide-recheck]').click();await p.locator('[data-guide-recheck]:not([disabled])').waitFor();
+      assert.equal(await p.locator('.setup-read-error').count(),0);
+      // A save may finish after the user has already returned to help.
+      await p.evaluate(()=>{const saved=structuredClone(state.settings);saved.accounts[0].quotaRefreshSeconds=75;acceptSettings(saved);});
+      assert.match(await goal('refresh').innerText(),/每 75 秒查询一次/,'late saves immediately update the guide');
+      await p.locator('#setup-scene').selectOption('mixed');
+      // Capture a concise expanded answer, then all goals at the minimum window width.
+      for(const id of ['usage','refresh','wakeups','panel'])if(await goal(id).evaluate(el=>el.open))await goal(id).locator(':scope > summary').click();
+      await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(out,`guide-network-${platform}.png`),fullPage:true});
+      await p.setViewportSize({width:760,height:620});
+      await p.evaluate(()=>document.documentElement.dataset.theme='dark');
+      await p.evaluate(()=>scrollTo(0,0));
+      assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'minimum window has no horizontal overflow');
+      await p.screenshot({path:path.join(out,`guide-minimum-${platform}.png`),fullPage:true});
+      await matrix.close();
+    }
+    assert.deepEqual(errors,[]);
+    console.log('Goal guide Windows/Linux: per-account evidence, proxy/SSH scenes, device deep links, saved commands, refresh overrides, draft deployments, read failures/retry and minimum layout passed; SSH import and existing workspace regressions passed');
+  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
+})().catch(error=>{console.error(error);process.exit(1);});

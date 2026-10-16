@@ -21,14 +21,6 @@ pub struct Rpc {
     notifications: std::collections::VecDeque<Value>,
 }
 impl Rpc {
-    pub fn start(
-        binary: &str,
-        root: &std::path::Path,
-        proxy: &ProxyConfig,
-        managed: bool,
-    ) -> Result<Self> {
-        Self::start_with_pre_command(binary, root, proxy, managed, "", "")
-    }
     pub(super) fn start_with_pre_command(
         binary: &str,
         root: &std::path::Path,
@@ -45,11 +37,14 @@ impl Rpc {
                 pre_command,
                 shell,
             );
+            version.env("CODEX_HOME", root).current_dir(root);
             network::apply_env(&mut version, proxy);
             let value = process::run(version, vec![], Duration::from_secs(5))
-                .map_err(|_| anyhow::anyhow!("接口不兼容：无法确认 Codex CLI 版本"))?;
+                .map_err(|error| anyhow::anyhow!(version_check_error(&error)))?;
+            let supported = external_version_supported(&String::from_utf8_lossy(&value))
+                .context("无法识别 Codex CLI 版本输出，请检查“Codex 程序”是否指向正确的 CLI")?;
             ensure!(
-                external_version_supported(&String::from_utf8_lossy(&value)),
+                supported,
                 "接口不兼容：内存凭据查询需要 Codex 0.99.0 或更新版本"
             );
         }
@@ -341,14 +336,55 @@ impl Drop for Rpc {
     }
 }
 
-fn external_version_supported(version: &str) -> bool {
-    version
-        .split_whitespace()
-        .find_map(|part| {
-            let mut components = part.trim_start_matches('v').split('.');
-            let major = components.next()?.parse::<u64>().ok()?;
-            let minor = components.next()?.parse::<u64>().ok()?;
-            Some(major > 0 || minor >= 99)
-        })
-        .unwrap_or(false)
+fn version_check_error(error: &anyhow::Error) -> &'static str {
+    if let Some(io) = error.downcast_ref::<std::io::Error>() {
+        match io.kind() {
+            std::io::ErrorKind::NotFound => {
+                return "未找到 Codex CLI，请检查“Codex 程序”路径、PATH 和前置命令";
+            }
+            std::io::ErrorKind::PermissionDenied => return "无法执行 Codex CLI，请检查程序执行权限",
+            _ => {}
+        }
+    }
+    if error.to_string() == "查询超时" {
+        return "Codex CLI 版本检查超时（5 秒），请检查程序启动速度和前置命令";
+    }
+    // Do not include arbitrary launcher/pre-command stderr, which may contain secrets.
+    "Codex CLI 版本检查失败，请检查程序路径、运行环境和前置命令"
+}
+
+fn external_version_supported(version: &str) -> Option<bool> {
+    version.split_whitespace().find_map(|part| {
+        let mut components = part.trim_start_matches('v').split('.');
+        let major = components.next()?.parse::<u64>().ok()?;
+        let minor = components.next()?.parse::<u64>().ok()?;
+        Some(major > 0 || minor >= 99)
+    })
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn version_failures_are_distinct_and_do_not_expose_launcher_output() {
+        for (kind, expected) in [
+            (std::io::ErrorKind::NotFound, "未找到"),
+            (std::io::ErrorKind::PermissionDenied, "执行权限"),
+        ] {
+            let error =
+                anyhow::Error::new(std::io::Error::new(kind, "PRIVATE")).context("启动命令失败");
+            assert!(version_check_error(&error).contains(expected));
+            assert!(!version_check_error(&error).contains("PRIVATE"));
+        }
+        assert!(version_check_error(&anyhow::anyhow!("查询超时")).contains("超时"));
+        assert_eq!(
+            version_check_error(&anyhow::anyhow!("PRIVATE")),
+            "Codex CLI 版本检查失败，请检查程序路径、运行环境和前置命令"
+        );
+        assert_eq!(external_version_supported("codex-cli 0.98.0"), Some(false));
+        assert_eq!(external_version_supported("codex-cli 0.99.0"), Some(true));
+        assert_eq!(external_version_supported("codex-cli 1.0.0"), Some(true));
+        assert_eq!(external_version_supported("wrong launcher"), None);
+    }
 }

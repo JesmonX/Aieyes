@@ -2,6 +2,8 @@
 globalThis.uiIcon = (name) => {
   const paths = {switch:'M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4',credit:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M15 9a4 4 0 1 0 0 6',terminal:'M3 4h18v16H3ZM7 8l3 4-3 4M13 16h4',trend:'M3 3v18h18M6 15l5-5 4 3 6-8',chevron:'m6 9 6 6 6-6',right:'m9 6 6 6-6 6',plus:'M12 5v14M5 12h14',minus:'M5 12h14',x:'m6 6 12 12M18 6 6 18',grip:'M8 5h.01M16 5h.01M8 12h.01M16 12h.01M8 19h.01M16 19h.01',up:'m6 14 6-6 6 6',down:'m6 10 6 6 6-6',sort:'M8 4v16m-4-4 4 4 4-4M16 20V4m-4 4 4-4 4 4',refresh:'M20 11a8 8 0 1 0-2.34 5.66M20 5v6h-6',sources:'M3 7h18v13H3ZM7 7V3h10v4',hosts:'M3 3h18v7H3ZM3 14h18v7H3ZM7 6h.01M7 17h.01',prices:'M12 2v20m5-16H9a4 4 0 0 0 0 8h6a4 4 0 0 1 0 8H6',wakeups:'M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',general:'M3 7h18M3 17h18M8 4v6M16 14v6',attention:'M12 8v5m0 4h.01M12 3 2 21h20Z'};
   Object.assign(paths, {
+    sidebarOpen:'M3 4h18v16H3ZM9 4v16m4-12 4 4-4 4',
+    sidebarClose:'M3 4h18v16H3ZM9 4v16m8-12-4 4 4 4',
     pet:'M8 14c-1 2-3 2-3 4s2 3 4 2c2-1 4-1 6 0s4 0 4-2-2-2-3-4c-2-3-6-3-8 0M6 5c-3 0-3 5 0 5S9 5 6 5M11 3c-3 0-3 6 0 6s3-6 0-6M16 4c-3 0-3 5 0 5s3-5 0-5M20 8c-2 0-2 5 0 5s2-5 0-5',
     network:'M12 9v7M5 16h14M5 16v3m14-3v3M8 3h8v6H8ZM2 19h6v3H2Zm14 0h6v3h-6Z',
     sun:'M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5',

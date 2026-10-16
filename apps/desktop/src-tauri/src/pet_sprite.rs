@@ -332,9 +332,37 @@ unsafe fn render_label(
     {
         GdipScaleWorldTransform(graphics, scale * 3.0, scale * 3.0, MatrixOrderPrepend);
         GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
+        let text: Vec<u16> = label.encode_utf16().collect();
+        let mut format = null_mut();
+        GdipCreateStringFormat(0, 0, &mut format);
+        GdipSetStringFormatAlign(format, StringAlignmentCenter);
+        GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
+        let mut measured = RectF::default();
+        let layout = RectF {
+            X: 0.0,
+            Y: 0.0,
+            Width: 120.0,
+            Height: height as f32 / scale - 143.0,
+        };
+        let measured_ok = GdipMeasureString(
+            graphics,
+            PCWSTR(text.as_ptr()),
+            text.len() as i32,
+            font,
+            &layout,
+            format,
+            &mut measured,
+            null_mut(),
+            null_mut(),
+        ) == GDI_OK;
+        let w = if measured_ok {
+            (measured.Width.ceil() + 18.0).clamp(30.0, 138.0)
+        } else {
+            138.0
+        };
+        let (x, y, h) = ((144.0 - w) / 2.0, 145.0, height as f32 / scale - 147.0);
         let mut brush = null_mut();
         GdipCreateSolidFill(background, &mut brush);
-        let (x, y, w, h) = (3.0, 145.0, 138.0, height as f32 / scale - 147.0);
         let diameter = 20.0_f32.min(h);
         let mut path = null_mut();
         if GdipCreatePath(FillModeWinding, &mut path) == GDI_OK {
@@ -351,11 +379,6 @@ unsafe fn render_label(
             GdipDeletePath(path);
         }
         GdipDeleteBrush(brush.cast());
-        let text: Vec<u16> = label.encode_utf16().collect();
-        let mut format = null_mut();
-        GdipCreateStringFormat(0, 0, &mut format);
-        GdipSetStringFormatAlign(format, StringAlignmentCenter);
-        GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
         GdipSetTextRenderingHint(graphics, TextRenderingHintAntiAliasGridFit);
         GdipCreateSolidFill(foreground, &mut brush);
         GdipDrawString(
@@ -364,9 +387,9 @@ unsafe fn render_label(
             text.len() as i32,
             font,
             &RectF {
-                X: 3.0,
+                X: x + 9.0,
                 Y: 143.0,
-                Width: 138.0,
+                Width: w - 18.0,
                 Height: height as f32 / scale - 143.0,
             },
             format,
@@ -505,6 +528,29 @@ mod tests {
                         "等待1 · 工作2\n思考1",
                         0xeef6f6f8,
                         0xff243049,
+                    );
+                    let short =
+                        render_label(width, height, font.font, "空闲", 0xeef6f6f8, 0xff243049);
+                    let extent = |buffer: &[u8]| {
+                        let columns: Vec<_> = buffer
+                            .chunks_exact(4)
+                            .enumerate()
+                            .filter_map(|(index, p)| (p[3] > 0).then_some(index % width as usize))
+                            .collect();
+                        (
+                            *columns.iter().min().unwrap(),
+                            *columns.iter().max().unwrap(),
+                        )
+                    };
+                    let (left, right) = extent(&short);
+                    let (long_left, long_right) = extent(&pixels);
+                    assert!(
+                        right - left < long_right - long_left,
+                        "background follows label width"
+                    );
+                    assert!(
+                        (left as i32 + right as i32 - width + 1).abs() <= 2,
+                        "label remains centered at every DPI"
                     );
                     assert_eq!(pixels.len(), (width * height * 4) as usize);
                     assert_eq!(pixels[3], 0);

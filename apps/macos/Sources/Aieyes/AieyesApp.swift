@@ -48,6 +48,11 @@ import Combine
         AppUpdater.shared.start()
         model.showSettings = { [weak self] in self?.openSettings() }
         model.showDetailPage = { [weak self] page in self?.openDetail(page: page) }
+        model.$settingsLoaded.filter { $0 }.prefix(1).sink { [weak self] _ in
+            guard let self, !UserDefaults.standard.bool(forKey: "setup.seen.v1") else { return }
+            UserDefaults.standard.set(true, forKey: "setup.seen.v1")
+            if SetupGuide.needsSetup(self.model.settings) { self.openDetail(page: "setup") }
+        }.store(in: &cancellables)
         model.showEstimate = { [weak self] quota, credits, group in self?.openEstimate(quota, credits: credits, group: group) }
         model.showAccountSwitch = { [weak self] key in self?.openAccountSwitch(key) }
         model.showSampling = { [weak self] in self?.openSampling() }
@@ -400,6 +405,24 @@ import Combine
         view.cacheDisplay(in: view.bounds, to: bitmap)
         if let data = bitmap.representation(using: .png, properties: [:]) { try data.write(to: url) }
     }
+    private func captureSetupGuide(to root: URL) async throws {
+        let saved = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer { UserDefaults.standard.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
+        for dark in [false, true] {
+            let theme = dark ? "dark" : "light"
+            var preview = saved
+            preview["setup.scene.v1"] = "mixed"; preview["setup.expanded.v2"] = ""
+            UserDefaults.standard.setVolatileDomain(preview, forName: UserDefaults.argumentDomain)
+            try await capture(SetupGuideView(model: model, finish: {}), size: NSSize(width: 900, height: 800), dark: dark, to: root.appendingPathComponent("setup-guide-\(theme).png"))
+            preview["setup.expanded.v2"] = "network"
+            UserDefaults.standard.setVolatileDomain(preview, forName: UserDefaults.argumentDomain)
+            try await capture(SetupGuideView(model: model, finish: {}), size: NSSize(width: 900, height: 1200), dark: dark, to: root.appendingPathComponent("setup-network-\(theme).png"))
+            try await capture(SetupGuideView(model: model, finish: {}), size: NSSize(width: 546, height: 700), dark: dark, to: root.appendingPathComponent("setup-minimum-\(theme).png"))
+            if let source = model.settings.sources.first(where: { $0.hostId != nil }), let machine = source.hostId, let account = model.settings.accounts.first(where: { $0.uses(source) }) {
+                try await capture(AccountDevicesView(model: model, account: account, initialMachineID: machine, initialSection: "command"), size: NSSize(width: 680, height: 650), dark: dark, to: root.appendingPathComponent("setup-device-command-\(theme).png"))
+            }
+        }
+    }
     private func renderSnapshots(to directory: String) async {
         do {
             model.settings = try await model.engine.call("settings.get"); model.settingsDraft = model.settings; model.settingsLoaded = true
@@ -413,6 +436,10 @@ import Combine
             UserDefaults.standard.setVolatileDomain(NativePanelKey.snapshotOverrides(panelQuotaExpanded: model.quotaAccounts.count <= 1), forName: UserDefaults.argumentDomain)
             let root = URL(fileURLWithPath: directory)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            if ProcessInfo.processInfo.environment["AIEYES_UI_SETUP_ONLY"] == "1" {
+                try await captureSetupGuide(to: root)
+                model.stop(); NSApp.terminate(nil); return
+            }
             if ProcessInfo.processInfo.environment["AIEYES_UI_WORKSPACE_ONLY"] == "1" {
                 for dark in [false, true] {
                     for page in ["agent", "analysis", "servers", "settings"] {
@@ -517,6 +544,11 @@ import Combine
                         try await capture(DangerConfirmation(title: request.title, explanation: request.explanation, affected: request.affected, confirmLabel: "确认移除", cancel: {}, confirm: {}), size: NSSize(width: 510, height: 340), dark: dark, to: root.appendingPathComponent("confirm-\(kind)-\(dark ? "dark" : "light").png"))
                     }
                 }
+            }
+            try await captureSetupGuide(to: root)
+            for dark in [false, true] {
+                let preview = SSHConfigResult(path: "~/.ssh/config", hosts: [.init(alias: "gpu-lab", hostName: "10.0.0.1", user: "alice", port: 2200), .init(alias: "dev-server", hostName: "dev.example", user: nil, port: nil)], warnings: ["Match 条件未执行；预览地址仅供参考，连接仍使用原 SSH 配置"])
+                try await capture(SSHConfigImportView(model: model, preview: preview), size: NSSize(width: 650, height: 600), dark: dark, to: root.appendingPathComponent("ssh-import-\(dark ? "dark" : "light").png"))
             }
             model.settingsTab = "prices"
             try await capture(SettingsView(model: model), size: NSSize(width: 620, height: 440), dark: false, to: root.appendingPathComponent("settings-prices-small.png"))

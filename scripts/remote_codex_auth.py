@@ -534,10 +534,18 @@ class Rpc:
             try:
                 version = subprocess.check_output(cli_argv(loc, ['--version']), env=env, cwd=root, timeout=5, stderr=subprocess.DEVNULL).decode()
                 match = re.search(r'(\d+)\.(\d+)\.\d+', version)
-                if not match or (int(match[1]), int(match[2])) < (0, 99):
+                if not match:
+                    raise ValueError('无法识别 Codex CLI 版本输出，请检查“Codex 程序”是否指向正确的 CLI')
+                if (int(match[1]), int(match[2])) < (0, 99):
                     raise ValueError('接口不兼容：内存凭据查询需要 Codex 0.99.0 或更新版本')
+            except FileNotFoundError:
+                raise ValueError('未找到 Codex CLI，请检查“Codex 程序”路径、PATH 和前置命令') from None
+            except PermissionError:
+                raise ValueError('无法执行 Codex CLI，请检查程序执行权限') from None
+            except subprocess.TimeoutExpired:
+                raise ValueError('Codex CLI 版本检查超时（5 秒），请检查程序启动速度和前置命令') from None
             except (OSError, subprocess.SubprocessError):
-                raise ValueError('接口不兼容：无法确认 Codex CLI 版本') from None
+                raise ValueError('Codex CLI 版本检查失败，请检查程序路径、运行环境和前置命令') from None
         self.child = subprocess.Popen(cli_argv(loc, ['-c', 'cli_auth_credentials_store="%s"' % ('file' if managed else 'ephemeral'), 'app-server']), cwd=root, env=env,
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
         self.messages, self.notifications, self.next = queue.Queue(maxsize=64), [], 0

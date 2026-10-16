@@ -7,6 +7,8 @@ AIEYES_RENDER_BINARY=${AIEYES_RENDER_BINARY:-"$PROJECT_DIR/.build/swift/debug/Ai
 test -x "$AIEYES_RENDER_BINARY"
 export AIEYES_RENDER_ROOT=${AIEYES_RENDER_ROOT:-"$PROJECT_DIR/.local/ui-reform-2026-10-06/macos"}
 mkdir -p "$AIEYES_RENDER_ROOT/data"
+swiftc -parse-as-library -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/AdaptiveGroupedFormStyle.swift scripts/verify-native-form-layout.swift -o .build/verify-native-form-layout
+.build/verify-native-form-layout "$AIEYES_RENDER_ROOT/form-layout"
 for scenario in empty single multi long failure capacity; do
   AIEYES_CORE_PATH="$PROJECT_DIR/scripts/preview-quota-core.py" AIEYES_DATA_DIR="$AIEYES_RENDER_ROOT/data" AIEYES_UI_SCENARIO="$scenario" "$AIEYES_RENDER_BINARY" --render "$AIEYES_RENDER_ROOT/$scenario"
 done
@@ -25,7 +27,7 @@ for scenario in ['empty','single','multi','long','failure','capacity']:
     for theme in ['light','dark']:
         for symbol in ['circle.dotted','waveform','sparkles','gearshape.2','checkmark','pause.fill','questionmark']:
             assert (root/scenario/('menu-symbol-'+symbol+'-'+theme+'.png')).stat().st_size > 1000
-        for surface in ['server-panel-folded', 'server-panel-expanded', 'server-minimum-folded', 'server-minimum-expanded', 'dashboard','menubar','low-panel','minimum-detail','increased-contrast','settings-prices','settings-general','servers']:
+        for surface in ['setup-guide', 'setup-network', 'setup-minimum', 'server-panel-folded', 'server-panel-expanded', 'server-minimum-folded', 'server-minimum-expanded', 'dashboard','menubar','low-panel','minimum-detail','increased-contrast','settings-prices','settings-general','servers']:
             assert (root/scenario/(surface+'-'+theme+'.png')).stat().st_size > 1000
 print('Native six-state light/dark, settings, minimum size, reduced transparency and increased contrast screenshots passed')
 PY

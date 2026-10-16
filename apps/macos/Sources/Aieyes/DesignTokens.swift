@@ -99,6 +99,11 @@ enum DesignTokens {
     static let dialogWakeupWidth: CGFloat = 550
     static let dialogHooksWidth: CGFloat = 580
     static let dialogAgyWidth: CGFloat = 540
+    static let fieldShortWidth: CGFloat = 112
+    static let fieldHintWidth: CGFloat = 130
+    static let fieldPriceWidth: CGFloat = 140
+    static let fieldMediumWidth: CGFloat = 320
+    static let fieldChoiceWidth: CGFloat = 220
     static let cardBorderOpacity: Double = 0.3
     static let panelCardOpacity: Double = 0.46
     static let progressTrackOpacity: Double = 0.07

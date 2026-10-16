@@ -27,6 +27,16 @@ pub struct Location {
     pub shell: String,
 }
 impl Location {
+    fn rpc(&self, root: &Path, managed: bool) -> Result<Rpc> {
+        Rpc::start_with_pre_command(
+            &self.binary,
+            root,
+            &self.proxy,
+            managed,
+            &self.pre_command,
+            &self.shell,
+        )
+    }
     pub fn root(&self) -> Result<PathBuf> {
         let root = expand(&self.path);
         ensure!(root.is_dir(), "Codex 目录不存在");
@@ -126,8 +136,14 @@ fn inspect(loc: &Location, root: &Path, runtime: bool) -> Result<Value> {
             json!({"protocolVersion":1,"path":root,"storageMode":mode(root)?,"currentIdentity":active,"storedIdentity":stored,"selected":selected,"profiles":rows}),
         );
     }
-    let mut cmd = crate::process::cli_command(&crate::quota::resolve_codex(&loc.binary));
-    cmd.arg("--version");
+    let mut cmd = crate::process::cli_command_with_pre_command(
+        &crate::quota::resolve_codex(&loc.binary),
+        &["--version"],
+        &loc.pre_command,
+        &loc.shell,
+    );
+    cmd.env("CODEX_HOME", root).current_dir(root);
+    crate::network::apply_env(&mut cmd, &loc.proxy);
     let version = crate::process::run(cmd, vec![], Duration::from_secs(5))
         .ok()
         .map(|b| {
@@ -241,7 +257,7 @@ fn renew(loc: &Location, root: &Path, p: &Profile) -> Result<Value> {
         &json!({"profileId":p.id,"current":is_current,"revision":files::revision(&auth)}),
     )?;
     let result = (|| -> Result<()> {
-        let mut rpc = Rpc::start(&loc.binary, &managed, &loc.proxy, true)?;
+        let mut rpc = loc.rpc(&managed, true)?;
         rpc.call("account/read", json!({"refreshToken":true}), &mut |_| {
             Ok(None)
         })?;
@@ -261,7 +277,7 @@ fn quota(loc: &Location, root: &Path, profile: &str) -> Result<Value> {
     let auth = read_authority(root, &p)?;
     let query = layout(root, profile, "query")?;
     let attempt = |auth: &Value| -> Result<Value> {
-        let mut rpc = Rpc::start(&loc.binary, &query, &loc.proxy, false)?;
+        let mut rpc = loc.rpc(&query, false)?;
         rpc.login_external(auth)?;
         let quota = rpc.quota(auth, &mut || read_authority(root, &p))?;
         ensure!(
@@ -310,7 +326,7 @@ fn quota(loc: &Location, root: &Path, profile: &str) -> Result<Value> {
                         &json!({"profileId":p.id,"current":current(root).as_deref()==Some(&p.identity.key),"revision":files::revision(&fresh)}),
                     )?;
                     let result = (|| -> Result<Value> {
-                        let mut rpc = Rpc::start(&loc.binary, &managed, &loc.proxy, true)?;
+                        let mut rpc = loc.rpc(&managed, true)?;
                         rpc.call("account/rateLimits/read", Value::Null, &mut |_| Ok(None))
                     })();
                     recover(root)?;
@@ -335,7 +351,7 @@ fn login(
     let profile = files::new_id();
     let result = (|| -> Result<Value> {
         let managed = layout(&root, &profile, "managed")?;
-        let mut rpc = Rpc::start(&loc.binary, &managed, &loc.proxy, true)?;
+        let mut rpc = loc.rpc(&managed, true)?;
         let auth = rpc.call(
             "account/login/start",
             json!({"type":if device {"chatgptDeviceCode"} else {"chatgpt"}}),
@@ -391,12 +407,7 @@ fn login(
         let identity = files::identity(&auth)?;
         policy(&root, &auth)?;
         {
-            let mut verify = Rpc::start(
-                &loc.binary,
-                &layout(&root, &profile, "query")?,
-                &loc.proxy,
-                false,
-            )?;
+            let mut verify = loc.rpc(&layout(&root, &profile, "query")?, false)?;
             verify.login_external(&auth)?;
             verify.quota(&auth, &mut || Ok(auth.clone()))?;
         }
@@ -474,14 +485,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             )?;
             let auth = read_authority(&root, &p)?;
             let path = layout(&root, &p.id, "query")?;
-            let mut rpc = Rpc::start_with_pre_command(
-                &loc.binary,
-                &path,
-                &loc.proxy,
-                false,
-                &loc.pre_command,
-                &loc.shell,
-            )?;
+            let mut rpc = loc.rpc(&path, false)?;
             let mut info = rpc.login_external(&auth)?;
             info["models"] = rpc.call("model/list", json!({"includeHidden":false}), &mut |_| {
                 Ok(None)
@@ -573,7 +577,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 return Ok(json!({"profile":existing}));
             }
             let query = layout(&root, "verify", "query")?;
-            let mut rpc = Rpc::start(&loc.binary, &query, &loc.proxy, false)?;
+            let mut rpc = loc.rpc(&query, false)?;
             rpc.login_external(&auth)?;
             policy(&root, &auth)?;
             rpc.quota(&auth, &mut || Ok(auth.clone()))?;
@@ -662,7 +666,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 let auth = read_authority(&root, &p)?;
                 policy(&root, &auth)?;
                 let query = layout(&root, profile, "query")?;
-                let mut rpc = Rpc::start(&loc.binary, &query, &loc.proxy, false)?;
+                let mut rpc = loc.rpc(&query, false)?;
                 rpc.login_external(&auth)?;
                 rpc.quota(&auth, &mut || Ok(auth.clone()))?;
                 Some(auth)
@@ -788,14 +792,7 @@ pub fn wakeup(
         auth = renew(loc, &root, &profile)?;
     }
     let home = layout(&root, profile_id, "wake")?;
-    let mut rpc = Rpc::start_with_pre_command(
-        &loc.binary,
-        &home,
-        &loc.proxy,
-        false,
-        &loc.pre_command,
-        &loc.shell,
-    )?;
+    let mut rpc = loc.rpc(&home, false)?;
     rpc.login_external(&auth)?;
     rpc.wake_turn(&auth, manifest, cwd, &mut || {
         read_authority(&root, &profile)

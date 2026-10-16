@@ -11,10 +11,13 @@ struct MainWindowView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     @State private var visitedSettings = false
+    @State private var guideActive = false
+    @State private var workspaceWidth: CGFloat = 1120
     private let monitoring = [("agent", "Agent 总览", "square.grid.2x2"), ("analysis", "用量分析", "chart.xyaxis.line"), ("servers", "服务器", "server.rack")]
     private let configuration = [("integrations", "接入与账户", "person.crop.circle"), ("servers", "机器与采集", "desktopcomputer"), ("prices", "模型价格", "dollarsign.circle"), ("wakeups", "定时唤醒", "alarm")]
     private let preferences = [("appearance", "外观", "paintpalette"), ("desktop", "桌宠与会话", "pawprint"), ("network", "网络代理", "network"), ("refresh", "刷新与历史", "clock.arrow.circlepath"), ("notifications", "通知", "bell"), ("updates", "更新与关于", "info.circle")]
     private var title: String {
+        if model.detailPage == "setup" { return "配置向导" }
         if model.detailPage != "settings" { return monitoring.first { $0.0 == model.detailPage }?.1 ?? "Agent 总览" }
         return model.settingsTab == "general" ? preferences.first { $0.0 == model.generalPage }?.1 ?? "外观" : configuration.first { $0.0 == model.settingsTab }?.1 ?? "接入与账户"
     }
@@ -32,6 +35,7 @@ struct MainWindowView: View {
                             navigationButton(title, icon: icon, selected: model.detailPage == key) { select(key) }
                         }
                         groupLabel("配置")
+                        navigationButton("配置向导", icon: "checklist", selected: model.detailPage == "setup") { select("setup") }
                         ForEach(configuration, id: \.0) { key, title, icon in
                             navigationButton(title, icon: icon, selected: model.detailPage == "settings" && model.settingsTab == key) { model.openSettings(.init(category: key)); select("settings") }
                         }
@@ -48,7 +52,11 @@ struct MainWindowView: View {
             Divider().opacity(0.5)
             VStack(alignment: .leading, spacing: 0) {
                 Text(title).font(AppFont.title).padding(.horizontal, 22).padding(.vertical, 15)
+                if guideActive && model.detailPage == "settings" {
+                    HStack { Button("← 返回配置向导") { select("setup") }; Text("保存后返回，查看配置和验证状态").font(AppFont.secondary).foregroundStyle(.secondary); Spacer() }.padding(.horizontal, 22).padding(.bottom, 12)
+                }
                 ZStack {
+                    if model.detailPage == "setup" { SetupGuideView(model: model) { guideActive = false; select("agent") } }
                     ForEach(monitoring, id: \.0) { key, _, _ in
                         RootView(model: model, compact: false, page: key)
                             .opacity(model.detailPage == key ? 1 : 0)
@@ -66,6 +74,8 @@ struct MainWindowView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         }.frame(minWidth: 760, minHeight: 480).aieyesAccent()
+        .environment(\.workspaceCardColumns, workspaceWidth >= 1800 ? 4 : workspaceWidth >= 1390 ? 3 : workspaceWidth >= 974 ? 2 : 1)
+        .background { GeometryReader { geometry in Color.clear.onChange(of: geometry.size.width, initial: true) { _, width in workspaceWidth = width } } }
         .onAppear { select(model.requestedDetailPage ?? model.detailPage); model.requestedDetailPage = nil }
         .onChange(of: model.requestedDetailPage) { _, page in if let page { select(page); model.requestedDetailPage = nil } }
         .onChange(of: model.detailPage) { _, page in select(page) }
@@ -86,10 +96,11 @@ struct MainWindowView: View {
         }.buttonStyle(.plain).help(title).accessibilityLabel(title).accessibilityAddTraits(selected ? .isSelected : [])
     }
     private func select(_ value: String) {
-        let page = ["agent", "analysis", "servers", "settings"].contains(value) ? value : "agent"
+        let page = ["agent", "analysis", "servers", "settings", "setup"].contains(value) ? value : "agent"
         if model.detailPage != page { model.detailPage = page }
         if !CommandLine.arguments.contains("--render") { savedPage = page }
         if page == "settings" { visitedSettings = true }
+        if page == "setup" { guideActive = true; if !CommandLine.arguments.contains("--render") { UserDefaults.standard.set(true, forKey: "setup.seen.v1") } }
         model.settingsWindowVisible = page == "settings" && model.isWindowVisible("detail")
         model.setServerVisible(page == "servers", window: "detail")
         if page == "servers" { Task { await model.sampleHosts() } }

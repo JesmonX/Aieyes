@@ -2,9 +2,10 @@ import SwiftUI
 
 struct ProviderMark: View {
     var provider: String
+    var size: CGFloat = DesignTokens.providerMarkSize
     private static let images: [String: NSImage] = {
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("desktop/web")
-        return ["codex", "claude", "antigravity", "deepseek"].reduce(into: [:]) { result, key in
+        return CoreContract.providers.filter { $0 != "custom" }.reduce(into: [:]) { result, key in
             let name = "provider-" + key
             let url = Bundle.main.url(forResource: name, withExtension: "png") ?? source.appendingPathComponent(name + ".png")
             if let image = NSImage(contentsOf: url) { result[key] = image }
@@ -15,12 +16,13 @@ struct ProviderMark: View {
             if let image = Self.images[provider] {
                 Image(nsImage: image).resizable().renderingMode(provider == "codex" ? .template : .original).scaledToFit()
             } else { Image(systemName: "terminal").resizable().scaledToFit().foregroundStyle(.secondary) }
-        }.frame(width: DesignTokens.providerMarkSize, height: DesignTokens.providerMarkSize).help(Format.provider(provider)).accessibilityLabel(Format.provider(provider))
+        }.frame(width: size, height: size).help(Format.provider(provider)).accessibilityLabel(Format.provider(provider))
     }
 }
 struct ProviderIdentity: View {
     var provider: String
-    var body: some View { HStack(spacing: 5) { ProviderMark(provider: provider); Text(Format.provider(provider)) } }
+    var markSize: CGFloat = DesignTokens.providerMarkSize
+    var body: some View { HStack(spacing: 5) { ProviderMark(provider: provider, size: markSize); Text(Format.provider(provider)) } }
 }
 struct SubscriptionBadge: View {
     var plan: String

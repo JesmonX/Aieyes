@@ -84,16 +84,8 @@ impl Resolver {
     }
 
     fn index(&mut self, path: &Path) {
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-            return;
-        };
-        if let Some(id) = stem.get(stem.len().saturating_sub(36)..)
-            && id.len() == 36
-            && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
-        {
-            self.paths.entry(id.into()).or_insert_with(|| path.into());
-            return;
-        }
+        // Copied/imported rollouts may have an extra UUID suffix. Only the
+        // session metadata identifies the thread referenced by history_base.
         if let Ok(file) = File::open(path) {
             let mut reader = BufReader::new(file);
             let mut line = Vec::new();

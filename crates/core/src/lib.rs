@@ -37,6 +37,7 @@ pub mod session_hooks;
 pub mod sessions;
 pub mod settings;
 pub mod ssh;
+mod ssh_config;
 pub mod store;
 pub mod subscriptions;
 pub mod update_transport;
@@ -365,6 +366,7 @@ impl Engine {
                 options.open(&path)?.write_all(key.as_bytes())?;
                 Ok(json!({"path":path}))
             }
+            "hosts.sshConfig.read" => Ok(serde_json::to_value(ssh_config::read())?),
             "hosts.discover" => {
                 if params["hostId"] == "local" || params["host"]["id"] == "local" {
                     return Ok(self.local_metrics.sample(&Host::default().metrics));
