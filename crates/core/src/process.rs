@@ -338,7 +338,7 @@ mod executable_tests {
             // on the redirected, hidden-console pipe in Windows CI.
             std::fs::write(
                 directory.join("fixture-cli.py"),
-                "import os, sys\nprint(os.environ['AIEYES_CLI_INIT'])\nprint(sys.argv[1])\nprint(sys.stdin.buffer.readline().decode('utf-8').rstrip('\\r\\n'))\n",
+                "import os, sys, pathlib, time\ntrace=pathlib.Path(os.environ['AIEYES_CLI_TRACE'])\ndef mark(value):\n with trace.open('a') as log: log.write(str(time.time())+' '+value+'\\n')\nmark('python started')\nprint(os.environ['AIEYES_CLI_INIT'])\nprint(sys.argv[1])\nprint(sys.stdin.buffer.readline().decode('utf-8').rstrip('\\r\\n'))\nmark('stdin received; python exiting')\n",
             )
             .unwrap();
             std::fs::write(
@@ -349,12 +349,14 @@ mod executable_tests {
         }
 
         let initialization = if cfg!(windows) {
-            "Write-Output 'setup banner'; Write-Host 'host banner'; $env:AIEYES_CLI_INIT='ready'"
+            "[IO.File]::AppendAllText($env:AIEYES_CLI_TRACE, \"PowerShell initialization`n\"); Write-Output 'setup banner'; Write-Host 'host banner'; $env:AIEYES_CLI_INIT='ready'"
         } else {
             "printf 'setup banner\\n'; read ignored || true; export AIEYES_CLI_INIT=ready"
         };
         let path = format!("~/测试 tools/{name}");
+        let trace = directory.join("startup.trace");
         for pre_command in ["", initialization] {
+            let _ = std::fs::remove_file(&trace);
             let mut command = cli_command_with_pre_command(
                 &path,
                 &["argument with spaces"],
@@ -362,13 +364,17 @@ mod executable_tests {
                 "/bin/sh",
             );
             command.env("AIEYES_CLI_INIT", "direct");
+            command.env("AIEYES_CLI_TRACE", &trace);
             let output = run(
                 command,
                 b"protocol-input\n".to_vec(),
                 Duration::from_secs(20),
             )
             .unwrap_or_else(|error| {
-                panic!("CLI fixture initialization {pre_command:?}: {error:#}")
+                panic!(
+                    "CLI fixture initialization {pre_command:?}: {error:#}; trace: {}",
+                    std::fs::read_to_string(&trace).unwrap_or_else(|_| "not started".into())
+                )
             });
             assert_eq!(
                 String::from_utf8(output)
@@ -398,12 +404,16 @@ mod executable_tests {
             )
         };
         let output = run(
-            cli_command_with_pre_command(
-                "fixture-cli",
-                &["argument with spaces"],
-                &path_setup,
-                "/bin/sh",
-            ),
+            {
+                let mut command = cli_command_with_pre_command(
+                    "fixture-cli",
+                    &["argument with spaces"],
+                    &path_setup,
+                    "/bin/sh",
+                );
+                command.env("AIEYES_CLI_TRACE", &trace);
+                command
+            },
             b"protocol-input\n".to_vec(),
             Duration::from_secs(20),
         )
@@ -465,7 +475,10 @@ mod windows_tests {
         for directory in [dir.clone(), dir.canonicalize().unwrap()] {
             let binary = directory.join("codex");
             let mut cmd = cli_command(&binary.to_string_lossy());
-            assert_eq!(cmd.get_program(), script.as_os_str());
+            assert_eq!(
+                std::fs::canonicalize(cmd.get_program()).unwrap(),
+                script.canonicalize().unwrap()
+            );
             cmd.arg("hello world");
             assert_eq!(
                 String::from_utf8(run(cmd, vec![], Duration::from_secs(5)).unwrap())

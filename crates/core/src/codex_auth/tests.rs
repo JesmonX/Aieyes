@@ -794,6 +794,8 @@ fn account_operations_use_initialization_for_version_and_app_server() {
         &script,
         r#"#!/usr/bin/env python3
 import os,sys,json,pathlib
+with pathlib.Path(__file__).with_suffix('.trace').open('a') as trace:
+ trace.write(json.dumps({'args':sys.argv,'cwd':os.getcwd(),'home':os.environ.get('CODEX_HOME'),'initialized':os.environ.get('AIEYES_ACCOUNT_INIT')})+'\n')
 assert os.environ.get('AIEYES_ACCOUNT_INIT') == 'ready'
 assert os.path.samefile(os.getcwd(), os.environ['CODEX_HOME'])
 if '--version' in sys.argv:
@@ -838,7 +840,9 @@ for line in sys.stdin:
     };
     assert_eq!(
         local::call(&loc, "inspect", &json!({})).unwrap()["version"],
-        "codex-cli 0.161.0"
+        "codex-cli 0.161.0",
+        "CLI startup trace: {}",
+        fs::read_to_string(home.join("mock-codex.trace")).unwrap_or_else(|_| "not started".into())
     );
     let adopted = local::call(&loc, "adopt", &json!({})).unwrap();
     let profile = adopted["profile"]["id"].as_str().unwrap();
