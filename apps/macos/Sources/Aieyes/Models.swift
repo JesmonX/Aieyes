@@ -256,7 +256,18 @@ struct Quota: Codable, Equatable, Identifiable {
     var id: String { provider + ":" + accountId }
 }
 struct SyncIssue: Codable { var path: String?; var message: String; var code: String?; var step: Int? }
-struct SourceStatus: Codable { var partial: Bool?, issues: [SyncIssue]?; var updatedAt: Double?, files: Int?, readBytes: Int?, error: String? }
+func syncFailureReason(error: String?, partial: Bool?, issues: [SyncIssue]?) -> String? {
+    if let error { return error }
+    guard partial == true else { return nil }
+    let visible = (issues ?? []).filter { $0.code != "unknownModel" && $0.code != "missingHistoryBase" }
+    if !(issues ?? []).isEmpty && visible.isEmpty { return nil }
+    return visible.isEmpty ? "部分记录需要处理" : visible.map { ($0.path.map { $0 + " · " } ?? "") + $0.message }.joined(separator: "；")
+}
+struct SourceStatus: Codable {
+    var partial: Bool?, issues: [SyncIssue]?, forkHistoryIssues: [SyncIssue]?
+    var updatedAt: Double?, files: Int?, readBytes: Int?, error: String?
+    var failureReason: String? { syncFailureReason(error: error, partial: partial, issues: issues) }
+}
 struct AutomaticValuationStatus: Codable { var state: String?, note: String?, accountKey: String?, updatedAt: Double? }
 struct AutomaticValuationConfig: Codable, Equatable { var enabled: Bool, consentVersion: Int; var mode: String? }
 struct SourceSummary: Codable, Identifiable { var id: String, name: String, provider: String, enabled: Bool, status: SourceStatus?, accountIds: [String]?; var autoValuationStatus: AutomaticValuationStatus? }
@@ -429,6 +440,7 @@ struct Settings: Codable, Equatable {
     var deletedAccounts: [AgentAccount]?
     var historicalAccounts: [AgentAccount] { accounts + (deletedAccounts ?? []) }
     var historyShowDeletedAccounts: Bool?
+    var codexPreciseCounting: Bool?
     var filterAccounts: [AgentAccount] { accounts + (historyShowDeletedAccounts == true ? deletedAccounts ?? [] : []) }
     func accountFilterName(_ account: AgentAccount) -> String {
         account.name + (accounts.contains { $0.key == account.key } ? (account.archived == true ? "（已归档）" : "") : "（已删除）")

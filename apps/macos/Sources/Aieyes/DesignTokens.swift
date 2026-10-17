@@ -106,6 +106,14 @@ enum DesignTokens {
     static let fieldChoiceWidth: CGFloat = 220
     static let cardBorderOpacity: Double = 0.3
     static let panelCardOpacity: Double = 0.46
+    static let controlFillOpacity: Double = 0.3
+    static let fieldFillOpacity: Double = 0.36
+    static let controlTintOpacity: Double = 0.12
+    static let controlHoverOpacity: Double = 0.05
+    static let controlPressedOpacity: Double = 0.09
+    static let controlBorderOpacity: Double = 0.18
+    static let edgeHighlightOpacity: Double = 0.12
+    static let overlayFillOpacity: Double = 0.64
     static let progressTrackOpacity: Double = 0.07
     static let chartGridOpacity: Double = 0.06
     static let modelChartInnerRatio: Double = 0.72

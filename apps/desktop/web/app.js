@@ -72,8 +72,9 @@ function updateHeadingIndicators() { for(const el of document.querySelectorAll('
 function openRefreshStatus(key) {
   let pop=document.querySelector('#refresh-status-popover');if(!pop){pop=document.createElement('div');pop.id='refresh-status-popover';pop.setAttribute('popover','auto');pop.addEventListener('toggle',()=>{if(!pop.matches(':popover-open'))pop.replaceChildren();});document.body.append(pop);}
   pop.dataset.key=key;
-  const keys=key==='scan'?['scan','prices']:[key],rows=keys.flatMap(k=>(state.refreshState[k]?.failures??[]).map(r=>({...r,key:k})));
-  pop.innerHTML='<strong>'+escapeHTML(refreshLabels[key])+'</strong>'+(rows.length?rows.map((r,i)=>'<div class="error-row"><p>'+escapeHTML((r.name||r.id||r.accountId||'数据源')+' · '+r.error)+'</p><button data-status-retry="'+i+'">重试</button></div>').join(''):'<p>'+escapeHTML(state.refreshState[key]?.busy?'正在刷新…':state.refreshState[key]?.success?'上次成功：'+timeLabel(state.refreshState[key].success):'尚未刷新')+'</p>');
+  const keys=key==='scan'?['scan','prices']:[key],rows=keys.flatMap(k=>(state.refreshState[k]?.failures??[]).filter(r=>!r.dismissed).map(r=>({...r,key:k,failure:r})));
+  pop.innerHTML='<strong>'+escapeHTML(refreshLabels[key])+'</strong>'+(rows.length?rows.map((r,i)=>'<div class="error-row"><p>'+escapeHTML((r.name||r.id||r.accountId||'数据源')+' · '+r.error)+'</p><button data-status-retry="'+i+'">重试</button><button data-status-dismiss="'+i+'">关闭</button></div>').join(''):'<p>'+escapeHTML(state.refreshState[key]?.busy?'正在刷新…':keys.some(k=>state.refreshState[k]?.error)?'本次错误提示已关闭':state.refreshState[key]?.success?'上次成功：'+timeLabel(state.refreshState[key].success):'尚未刷新')+'</p>');
+  pop.querySelectorAll('[data-status-dismiss]').forEach(b=>b.onclick=()=>{rows[Number(b.dataset.statusDismiss)].failure.dismissed=true;openRefreshStatus(key);});
   pop.querySelectorAll('[data-status-retry]').forEach(b=>b.onclick=()=>{const r=rows[Number(b.dataset.statusRetry)];pop.hidePopover();({scan,rescan,quotas,prices:syncPrices,hosts:sample})[r.key](r.key==='quotas'?r.accountId:r.id);});pop.showPopover();if(key==='scan'){renderQueryStatus();const query=$('#query-status');pop.append(query);query.hidden=!state.dashboardPending&&!state.dashboardError;}
 }
 document.addEventListener('click',event=>{const button=event.target.closest('[data-refresh-status]');if(button)openRefreshStatus(button.dataset.refreshStatus);});
@@ -335,7 +336,7 @@ async function loadDashboardOnce(request) {
 }
 function batchError(rows,label) {
   if(!Array.isArray(rows))return null;
-  const failures=rows.filter(row=>row.error||row.partial).map(row=>({...row,error:row.error||(row.issues??[]).filter(i=>i.code!=='unknownModel').map(i=>(i.path?i.path+' · ':'')+(i.step!=null?'步骤 '+i.step+' · ':'')+i.message).join('；')||'部分记录需要处理'}));if(!failures.length)return null;
+  const failures=rows.map(row=>({...row,error:AieyesUI.syncFailure(row)})).filter(row=>row.error);if(!failures.length)return null;
   const partial=failures.length<rows.length;
   const error=new Error(`${label}${partial?'部分失败':'失败'}：${failures.map(row=>`${row.name||row.id||row.accountId||''}${row.name||row.id||row.accountId?' · ':''}${row.error}`).join('；')}`);
   error.partial=partial;error.failures=failures;return error;
@@ -510,6 +511,7 @@ function collectGeneralDraft(next,forms){
     const data=new FormData();for(const [key,value] of Object.entries(values))data.set(key,value);
     for(const [field,key] of [['unexpectedResetNotification','unexpected'],['naturalResetNotification','natural']])if(changed(field))next.quotaResetNotifications={unexpected:true,natural:false,...next.quotaResetNotifications,[key]:data.get(field)==='true'};
     if(changed('historyShowDeletedAccounts'))next.historyShowDeletedAccounts=data.get('historyShowDeletedAccounts')==='true';
+    if(changed('codexPreciseCounting'))next.codexPreciseCounting=data.get('codexPreciseCounting')==='true';
     for(const [field,key] of [['appearanceTheme','theme'],['appearanceAccent','accent'],['appearanceChartPalette','chartPalette'],['appearanceChartContrast','chartContrast']])if(changed(field))next.appearance={theme:'system',accent:'indigo',chartPalette:'classic',chartContrast:'high',...next.appearance,[key]:values[field]};
     if(Object.hasOwn(values,'appMode')&&Object.keys(values).some(key=>key.startsWith('app')&&changed(key)))next.proxy=proxyValue(data,'app');
     if(changed('proxyTestUrls'))next.proxyTestUrls=values.proxyTestUrls.split(',').map(v=>v.trim()).filter(Boolean);
@@ -973,7 +975,9 @@ function generalSettingsHTML(s,tab=state.generalTab) {
   if(tab==='network')fields=`<h2>网络代理</h2>${proxyFields('app',s.proxy)}${field('proxyTestUrls','测试地址（逗号分隔）',(s.proxyTestUrls??['https://api.github.com/rate_limit','https://openrouter.ai']).join(', '))}`;
   if(tab==='refresh'){
     fields=`<h2>刷新与历史</h2>${field('refreshSeconds','额度查询间隔（秒）',s.refreshSeconds,'','number')}${field('historyRefreshSeconds','日志同步间隔（秒）',s.historyRefreshSeconds??Math.max(10,s.refreshSeconds),'','number')}${field('serverForegroundRefreshSeconds','服务器前台间隔（秒）',s.serverForegroundRefreshSeconds??2,'','number')}${field('serverRefreshSeconds','服务器后台间隔（秒）',s.serverRefreshSeconds,'','number')}<h3>历史账户</h3><label><input id="field-historyShowDeletedAccounts" type="checkbox" name="historyShowDeletedAccounts" ${s.historyShowDeletedAccounts?'checked':''}>在筛选中显示已删除账户</label><p class="muted tiny">在筛选中显示有历史记录的已删除账户；其用量始终计入总统计。</p>`;
-    body=`<div class="card"><h2>历史记录 ${refreshIndicator('rescan')}</h2><p class="muted">重新读取已启用来源的完整日志，修正可确认的重复记录。已有历史和价格快照保留。</p><button type="button" id="history-rescan">全量重扫</button><p id="history-rescan-status" role="status" aria-live="polite" hidden></p></div>`;
+    fields+=`<h3>Codex 用量</h3><label><input id="field-codexPreciseCounting" type="checkbox" name="codexPreciseCounting" ${s.codexPreciseCounting?'checked':''}>精确计数</label><p class="muted tiny">开启后扣除 Codex fork 会话继承的父历史用量；关闭时允许重复计入。修改后在下次同步自动重算已有日志。</p>`;
+    const diagnostics=state.settings.codexPreciseCounting?(state.dashboard?.sources??[]).filter(source=>source.enabled&&(source.status?.forkHistoryIssues??[]).length).map(source=>'<details><summary>'+escapeHTML(source.name)+' · 父历史待确认</summary>'+source.status.forkHistoryIssues.map(issue=>'<p class="muted tiny">'+escapeHTML((issue.path?issue.path+' · ':'')+issue.message)+'</p>').join('')+'<p class="muted tiny">首段不确定累计暂不计入，后续有效增量继续统计；父历史恢复后自动补全。</p></details>').join(''):'';
+    body=`${diagnostics?'<div class="card"><h2>精确计数详情</h2>'+diagnostics+'</div>':''}<div class="card"><h2>历史记录 ${refreshIndicator('rescan')}</h2><p class="muted">重新读取已启用来源的完整日志，修正可确认的重复记录。已有历史和价格快照保留。</p><button type="button" id="history-rescan">全量重扫</button><p id="history-rescan-status" role="status" aria-live="polite" hidden></p></div>`;
   }
   if(tab==='notifications'){
     fields=`<h2>订阅额度重置提醒</h2><label><input type="checkbox" name="unexpectedResetNotification" ${(s.quotaResetNotifications?.unexpected??true)?'checked':''}>提前重置时提醒</label><label><input type="checkbox" name="naturalResetNotification" ${s.quotaResetNotifications?.natural?'checked':''}>到期重置时提醒</label><p class="muted tiny">账户可单独设置提醒规则。退出应用或电脑休眠时暂停检测。</p><details class="advanced"><summary>检测条件</summary><p>以实时查询确认的额度重置为准，按上次预计重置时间区分提前与到期。持续满额时不提醒；关闭窗口后仍会检测。</p></details>`;

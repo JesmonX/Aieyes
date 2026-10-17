@@ -50,6 +50,12 @@ db.execute('INSERT INTO event_sources VALUES(?,?)',(event['id'],'fixture'));db.c
     assert.equal(await page.evaluate(()=>state.dashboard.summary.total),200);
     assert.equal(calls.filter(call=>call.method==='sources.rescan').length,0);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='refresh';render();});
+    assert.equal(await page.locator('#field-codexPreciseCounting').isChecked(),false);
+    await page.locator('#field-codexPreciseCounting').check();
+    await page.waitForFunction(()=>state.settings.codexPreciseCounting===true&&!state.settingsCommitting);
+    assert.equal((await rpc('settings.get')).codexPreciseCounting,true);
+    await page.locator('#field-codexPreciseCounting').uncheck();
+    await page.waitForFunction(()=>state.settings.codexPreciseCounting===false&&!state.settingsCommitting);
     await page.locator('#history-rescan').click();await page.locator('#cancel-editor').click();
     assert.equal(calls.filter(call=>call.method==='sources.rescan').length,0,'Cancelling must not replay history');
     holdRescan=true;await page.locator('#history-rescan').click();await page.getByRole('button',{name:'开始重扫',exact:true}).click();
@@ -70,8 +76,29 @@ db.execute('INSERT INTO event_sources VALUES(?,?)',(event['id'],'fixture'));db.c
     await page.waitForFunction(()=>state.rescanFailed&&!state.rescanning&&!state.busy);
     assert.match(await page.locator('#history-rescan-status').textContent(),/测试历史/);
     assert.equal((await rpc('dashboard')).summary.total,100,'Missing logs must preserve stored history');
+    fs.mkdirSync(path.join(root,'codex'));const forkDir=fs.realpathSync(path.join(root,'codex'));
+    const stamp=Math.floor(Date.now()/1000)-10;
+    fs.writeFileSync(path.join(forkDir,'child.jsonl'),[
+      {type:'session_meta',timestamp:stamp-1,payload:{id:'child',history_base:{thread_id:'missing-parent',end_byte_offset:999999}}},
+      {type:'event_msg',timestamp:stamp,payload:{type:'token_count',info:{total_token_usage:{input_tokens:1000},last_token_usage:{input_tokens:100}}}}
+    ].map(JSON.stringify).join('\n')+'\n');
+    const beforeFork=await rpc('settings.get'),forkSettings=structuredClone(beforeFork);
+    forkSettings.sources=[{id:'fork',name:'Fork 测试',provider:'codex',accountId:'',path:forkDir,enabled:true}];
+    const codexAgent=forkSettings.agents.find(agent=>agent.provider==='codex');codexAgent.enabled=true;codexAgent.machineIds=['local'];
+    await rpc('settings.patch',{base:beforeFork,settings:forkSettings});
+    await page.reload();await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
+    await page.evaluate(async()=>{await scan();state.page='settings';state.settingsTab='general';state.generalTab='refresh';render();});
+    assert.equal((await rpc('dashboard')).summary.total,1100,'Default mode includes inherited cumulative usage alongside retained historical data');
+    assert.equal(await page.evaluate(()=>state.refreshState.scan.error),null,JSON.stringify(await page.evaluate(()=>state.refreshState.scan.failures)));
+    await page.locator('#field-codexPreciseCounting').check();await page.waitForFunction(()=>state.settings.codexPreciseCounting===true&&!state.settingsCommitting);
+    await page.evaluate(async()=>{await scan();render();});
+    assert.equal((await rpc('dashboard')).summary.total,100,'Precise mode skips the unresolved fork prefix and retains unrelated history');
+    await page.getByRole('heading',{name:'精确计数详情',exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>state.refreshState.scan.error),null,'Fork diagnostics do not create sync failures');
+    await page.evaluate(()=>{state.page='agent';render();});
+    assert.equal(await page.getByText('父历史待确认',{exact:false}).count(),0,'Fork diagnostics stay inside settings');
     assert.deepEqual(errors,[]);
-    console.log('Manual full rescan: no startup replay, cancel, busy guard, real historical deduplication, frozen price, repeated replay and missing-log feedback passed');
+    console.log('Manual full rescan and precise counting: autosave, real fork mode replay, settings-only diagnostics, frozen price, repeated replay and missing-log feedback passed');
   } finally {
     releaseRescan?.();if(browser)await browser.close();if(server)await new Promise(resolve=>server.close(resolve));
     core.stdin.end();if(core.exitCode===null)await new Promise(resolve=>core.once('exit',resolve));fs.rmSync(root,{recursive:true,force:true});

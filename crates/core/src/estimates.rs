@@ -814,7 +814,7 @@ impl Store {
         }
         e.calculation_note = if unknown_billing {
             e.calculation_status = "unknownBilling".into();
-            "存在未归属、缺失父历史或不完整请求，本区间不参与估值；已保留有效值"
+            "存在未归属或不完整请求，本区间不参与估值；已保留有效值"
         } else if unmapped_group {
             e.calculation_status = "unmappedGroup".into();
             "存在无法归属额度组的模型，请补全模型映射后重新计算"

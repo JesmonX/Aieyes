@@ -14,3 +14,5 @@ assert objects
 subprocess.run(['swiftc', '-parse-as-library', '-module-cache-path', '.build/swift-module-cache', '-I', str(debug/'Modules'), '-F', str(framework), '-framework', 'Sparkle', '-Xlinker', '-rpath', '-Xlinker', str(framework), 'scripts/verify-native-theme.swift', *map(str, objects), '-o', '.build/verify-native-theme'], check=True)
 PY
 .build/verify-native-theme "$PROJECT_DIR/.local/theme-sync/native"
+swiftc -parse-as-library -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/Palette.swift scripts/verify-native-controls.swift -o .build/verify-native-controls
+.build/verify-native-controls "$PROJECT_DIR/.local/theme-sync/controls"

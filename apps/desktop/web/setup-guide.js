@@ -49,7 +49,7 @@
       const enabled = AieyesUI.sourceEnabled(settings(),s);
       const result = row((providers[s.provider] ?? s.provider) + ' · ' + machineName(s.hostId || 'local') + ' · ' + s.name,'同步记录以验证日志采集',{provider:s.provider,section:'machines'},'pending','pending');
       if (!enabled) Object.assign(result,{text:'检查机器、采集开关和目录绑定',level:'warn',status:'missing'});
-      else if (status?.error || status?.partial) Object.assign(result,{text:'检查日志目录和机器连接',level:'warn',status:'collectionFailed'});
+      else if (AieyesUI.syncFailure(status)) Object.assign(result,{text:'检查日志目录和机器连接',level:'warn',status:'collectionFailed'});
       else if (status?.updatedAt > 0) Object.assign(result,{text:'上次日志采集已完成',level:'ok',status:'collected',updatedAt:status.updatedAt});
       return result;
     });

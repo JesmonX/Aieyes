@@ -145,7 +145,7 @@ struct CodexAccountsView: View {
                         UserDefaults.standard.set(accountID,forKey:"codexLogin.account"); UserDefaults.standard.set(sourceID,forKey:"codexLogin.source"); UserDefaults.standard.set(result.operationId,forKey:"codexLogin.operation")
                         operation = result; loginSheet = false
                     }
-                }.buttonStyle(.borderedProminent) }.disabled(busy)
+                }.buttonStyle(.aieyesPrimary) }.disabled(busy)
             }.padding(DesignTokens.dialogPadding).frame(width:450).interactiveDismissDisabled(busy)
         }
         .sheet(item:$removeProfile) { profile in
@@ -194,7 +194,7 @@ struct CodexAccountsView: View {
                 Button("重新检查") { if let target = switchTarget { perform { await prepareSwitch(target) } } }
                 Spacer()
                 Button((prepared?.processes ?? []).isEmpty ? "确认切换" : "关闭并切换") { perform { await commitSwitch() } }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.aieyesPrimary)
                     .disabled(prepared == nil || (prepared?.processes ?? []).contains { !$0.canClose })
             }.disabled(busy)
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogApiWidth).interactiveDismissDisabled(busy).aieyesAccent()

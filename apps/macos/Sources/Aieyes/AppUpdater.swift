@@ -257,7 +257,7 @@ struct UpdateWindowView: View {
                 if updater.phase == "installing" { Button("重试重启") { updater.retryRestart() } }
                 else if !updater.busy {
                     Button("稍后") { updater.later() }.keyboardShortcut(.cancelAction)
-                    if updater.phase == "available" { Button("更新并重启") { updater.install() }.buttonStyle(.borderedProminent) }
+                    if updater.phase == "available" { Button("更新并重启") { updater.install() }.buttonStyle(.aieyesPrimary) }
                     else { Button("重新检查") { updater.check() } }
                 }
             }

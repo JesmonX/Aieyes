@@ -34,6 +34,11 @@ pub(crate) fn current_settings(
             && current.machine_binding == source.machine_binding,
         "来源配置已改变，同步已停止"
     );
+    anyhow::ensure!(
+        source.provider != "codex"
+            || settings.codex_precise_counting == expected.codex_precise_counting,
+        "计数设置已改变，下次同步将按新设置重新计数"
+    );
     if let Some(id) = &source.host_id {
         let old = expected
             .hosts
@@ -148,8 +153,10 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     }
     let prices = store.prices()?;
     let files = paths(source)?;
-    let mut history = if source.provider == "codex" {
+    if source.provider == "codex" {
         store.prepare_history_corrections()?;
+    }
+    let mut history = if source.provider == "codex" && settings.codex_precise_counting {
         Some(crate::codex_history::Resolver::new(source, &files))
     } else {
         None
@@ -158,6 +165,7 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     let mut malformed = 0;
     let mut read_bytes = 0;
     let mut missing_history = 0;
+    let mut history_issues = Vec::new();
     for path in &files {
         let (n, b, m, missing) = scan_file(
             store,
@@ -171,6 +179,13 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         count += n;
         read_bytes += b;
         missing_history += missing;
+        if missing > 0
+            && history_issues.len() < 128
+            && let Some((_, _, state)) = store.cursor(&source.id, &path.to_string_lossy())?
+            && let Some(h) = state.inherited_history
+        {
+            history_issues.push(json!({"code":"missingHistoryBase","path":path.file_name().unwrap_or_default().to_string_lossy(),"message":h.issue}));
+        }
         malformed += m;
     }
     let mut result = json!({"updatedAt":now(),"newEvents":count,"files":files.len(),"readBytes":read_bytes,"malformedLines":malformed});
@@ -179,12 +194,8 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         result["issues"] = json!([{"code":"invalidRecord","message":format!("{malformed} 行记录格式无效，已保留其他可读取的历史。") }]);
     }
     if missing_history > 0 {
-        result["partial"] = json!(true);
         result["missingHistoryBases"] = json!(missing_history);
-        if !result["issues"].is_array() {
-            result["issues"] = json!([]);
-        }
-        result["issues"].as_array_mut().unwrap().push(json!({"code":"missingHistoryBase","message":format!("{missing_history} 个会话缺少可验证的父历史，首段累计暂不计入；父记录恢复后自动补全。") }));
+        result["forkHistoryIssues"] = json!(history_issues);
     }
     let tx = store.write_transaction()?;
     current_settings(store, settings, source)?;
@@ -216,20 +227,25 @@ fn scan_file(
     } else {
         store.cursor(&source.id, &key)?
     };
-    let parent_changed = cursor
-        .as_ref()
-        .and_then(|(_, _, state)| state.inherited_history.as_ref())
-        .is_some_and(|old| {
-            history.as_deref_mut().is_some_and(|r| {
-                let fresh = r.refresh(old);
-                fresh.proof != old.proof || fresh.tokens != old.tokens
-            })
-        });
+    let parent_changed = settings.codex_precise_counting
+        && cursor
+            .as_ref()
+            .and_then(|(_, _, state)| state.inherited_history.as_ref())
+            .is_some_and(|old| {
+                history.as_deref_mut().is_some_and(|r| {
+                    let fresh = r.refresh(old);
+                    fresh.proof != old.proof
+                        || fresh.tokens != old.tokens
+                        || fresh.issue != old.issue
+                })
+            });
     let (offset, mut state) = match cursor {
         Some((s, o, p))
             if s == signature
                 && o <= len
                 && (source.provider != "codex" || p.parser_version == usage::PARSER_VERSION)
+                && (source.provider != "codex"
+                    || p.codex_precise_counting == Some(settings.codex_precise_counting))
                 && !parent_changed =>
         {
             (o, p)
@@ -238,6 +254,7 @@ fn scan_file(
             0,
             ParseState {
                 session_id: format!("{}:{}", source.id, hash(&key)),
+                codex_precise_counting: Some(settings.codex_precise_counting),
                 ..Default::default()
             },
         ),
@@ -248,10 +265,11 @@ fn scan_file(
             0,
             0,
             u64::from(
-                state
-                    .inherited_history
-                    .as_ref()
-                    .is_some_and(|h| h.tokens.is_none()),
+                settings.codex_precise_counting
+                    && state
+                        .inherited_history
+                        .as_ref()
+                        .is_some_and(|h| h.tokens.is_none()),
             ),
         ));
     }
@@ -335,10 +353,11 @@ fn scan_file(
         pos - offset,
         malformed,
         u64::from(
-            state
-                .inherited_history
-                .as_ref()
-                .is_some_and(|h| h.tokens.is_none()),
+            settings.codex_precise_counting
+                && state
+                    .inherited_history
+                    .as_ref()
+                    .is_some_and(|h| h.tokens.is_none()),
         ),
     ))
 }

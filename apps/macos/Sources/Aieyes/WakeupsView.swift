@@ -14,7 +14,7 @@ struct WakeupsView: View {
                     Text("保存草稿后需部署，修改后需更新部署。退出 Aieyes 后任务继续运行；本机 macOS / Windows 需保持用户登录。休眠、离线或错过时刻不补发。模型请求可能消耗额度。").font(AppFont.secondary).foregroundStyle(.secondary)
                 }
                 HStack {
-                    Button("新建任务") { editing = WakeTask() }.buttonStyle(.borderedProminent)
+                    Button("新建任务") { editing = WakeTask() }.buttonStyle(.aieyesPrimary)
                     Button("刷新列表") { Task { await store.load() } }.disabled(store.loading)
                     if store.loading { ProgressView().controlSize(.small) }
                 }
@@ -45,7 +45,7 @@ struct WakeupsView: View {
             if let d = r.deployment { Text(d.target + " · " + (store.statuses[r.id]?.timezone ?? d.timezone) + (d.changed ? " · 草稿待部署" : "")).font(AppFont.secondary).foregroundStyle(.secondary) }
             HStack {
                 Button("编辑") { editing = r.task }
-                Button(r.deployment == nil ? "部署" : needsDeploy ? "重新部署" : r.deployment?.changed == true ? "更新部署" : "查看运行结果") { store.perform(needsDeploy || r.deployment?.changed == true ? "deploy" : "status", r.id) }.buttonStyle(.borderedProminent)
+                Button(r.deployment == nil ? "部署" : needsDeploy ? "重新部署" : r.deployment?.changed == true ? "更新部署" : "查看运行结果") { store.perform(needsDeploy || r.deployment?.changed == true ? "deploy" : "status", r.id) }.buttonStyle(.aieyesPrimary)
                 Menu("更多操作") {
                     if let d = r.deployment, !needsDeploy {
                         Button(d.enabled ? "停用" : "启用") { store.perform(d.enabled ? "disable" : "enable", r.id) }
@@ -131,10 +131,10 @@ struct WakeEditor: View {
                     Text("提示词").font(AppFont.section)
                     TextEditor(text: $task.prompt).frame(height: 80).overlay(RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.2)))
                     Text("模型请求可能消耗订阅额度，实际消耗取决于模型和提示词。").font(AppFont.secondary).foregroundStyle(.secondary)
-                }.textFieldStyle(.roundedBorder)
+                }.textFieldStyle(.aieyes)
             }.frame(maxHeight: 490)
             if let error { ErrorNotice(message: error) }
-            HStack { if busy { ProgressView().controlSize(.small) }; Spacer(); Button("取消") { if initialDraft != draftSnapshot(task) { confirmDiscard = true } else { dismiss() } }.keyboardShortcut(.cancelAction); Button("保存草稿") { submit() }.buttonStyle(.borderedProminent).disabled(task.sourceId.isEmpty || task.model.isEmpty) }
+            HStack { if busy { ProgressView().controlSize(.small) }; Spacer(); Button("取消") { if initialDraft != draftSnapshot(task) { confirmDiscard = true } else { dismiss() } }.keyboardShortcut(.cancelAction); Button("保存草稿") { submit() }.buttonStyle(.aieyesPrimary).disabled(task.sourceId.isEmpty || task.model.isEmpty) }
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogWakeupWidth).font(AppFont.body).disabled(busy).onAppear { if task.sourceId.isEmpty { task.sourceId = sources.first?.id ?? "" }; initialDraft = draftSnapshot(task) }
         .interactiveDismissDisabled(busy || initialDraft != draftSnapshot(task))
         .discardDraftConfirmation($confirmDiscard) { dismiss() }

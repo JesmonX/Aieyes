@@ -660,7 +660,7 @@ struct AccountConnectionView: View {
                     }
                     if account == nil { Text("添加后可修改账户的显示名称。").foregroundStyle(.secondary) }
                     if let error { ErrorNotice(message: error) }
-                    Button(busy ? "保存中…" : account == nil ? "添加账户" : provider == "deepseek" ? "更新 API Key" : "保存连接") { Task { await save() } }.buttonStyle(.borderedProminent).disabled(busy)
+                    Button(busy ? "保存中…" : account == nil ? "添加账户" : provider == "deepseek" ? "更新 API Key" : "保存连接") { Task { await save() } }.buttonStyle(.aieyesPrimary).disabled(busy)
                 }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).disabled(busy)
             }
         }.frame(width: DesignTokens.dialogAccountWidth, height: 620).interactiveDismissDisabled(busy)

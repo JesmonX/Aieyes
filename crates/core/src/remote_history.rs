@@ -8,10 +8,11 @@ pub(crate) fn setup(db: &rusqlite::Connection) -> Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS remote_cursors(source_id TEXT NOT NULL,path TEXT NOT NULL,configuration TEXT NOT NULL,cursor TEXT NOT NULL,state TEXT NOT NULL,PRIMARY KEY(source_id,path));")?;
     Ok(())
 }
-fn configuration(source: &Source, host: &Host) -> String {
+fn configuration(source: &Source, host: &Host, precise: bool) -> String {
     hash(
         &serde_json::to_string(&(
             usage::PARSER_VERSION,
+            source.provider == "codex" && precise,
             &source.provider,
             &source.path,
             &source.account_id,
@@ -46,7 +47,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         .iter()
         .find(|h| Some(&h.id) == source.host_id.as_ref() && h.enabled)
         .context("主机不存在或已暂停")?;
-    let config = configuration(source, host);
+    let config = configuration(source, host, settings.codex_precise_counting);
     store.db.execute(
         "DELETE FROM remote_cursors WHERE source_id=?1 AND configuration<>?2",
         params![source.id, config],
@@ -80,7 +81,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         .map(|raw| serde_json::from_str(&raw))
         .transpose()?
         .unwrap_or(Value::Null);
-    let request = json!({"protocol":2,"path":source.path,"provider":source.provider,"cursors":cursors,"routeCursor":route_cursor});
+    let request = json!({"protocol":2,"path":source.path,"provider":source.provider,"cursors":cursors,"routeCursor":route_cursor,"codexPreciseCounting":settings.codex_precise_counting});
     let prices = store.prices()?;
     if source.provider == "codex" {
         store.prepare_history_corrections()?;
@@ -118,7 +119,8 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
                     .find(|h| h.id == host.id && h.enabled)
                     .context("主机配置已改变")?;
                 ensure!(
-                    configuration(current_source, current_host) == config,
+                    configuration(current_source, current_host, current.codex_precise_counting)
+                        == config,
                     "来源配置已改变，同步已停止"
                 );
                 let routes: Vec<crate::codex_routes::Route> =
@@ -173,12 +175,16 @@ fn apply_batch(
         .transpose()?
         .unwrap_or_else(|| ParseState {
             session_id: format!("{}:{}", source.id, path),
+            codex_precise_counting: Some(settings.codex_precise_counting),
             ..Default::default()
         });
     let mut count = 0;
     for row in frame["events"].as_array().context("远程批次缺少事件")? {
         let parsed = usage::parse(source, &mut state, row);
-        if state.first_inherited_count && row["inheritedHistory"].is_object() {
+        if settings.codex_precise_counting
+            && state.first_inherited_count
+            && row["inheritedHistory"].is_object()
+        {
             crate::codex_history::seed(
                 &mut state,
                 serde_json::from_value(row["inheritedHistory"].clone())?,
@@ -300,9 +306,10 @@ mod tests {
             ..Default::default()
         };
         let host = Host::default();
-        let before = configuration(&source, &host);
+        let before = configuration(&source, &host, false);
+        assert_ne!(before, configuration(&source, &host, true));
         source.host_id = Some("second".into());
-        assert_ne!(before, configuration(&source, &host));
+        assert_ne!(before, configuration(&source, &host, false));
     }
 
     #[test]
@@ -345,5 +352,40 @@ mod tests {
             serde_json::from_str::<Value>(&cursor).unwrap()["offset"],
             200
         );
+    }
+
+    #[test]
+    fn remote_fork_replay_uses_saved_mode_and_rejects_stale_batches() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let source = Source {
+            id: "fork".into(),
+            provider: "codex".into(),
+            path: "/fixture".into(),
+            ..Default::default()
+        };
+        let mut settings = Settings {
+            sources: vec![source.clone()],
+            ..Default::default()
+        };
+        let stamp = now();
+        let frame = json!({"path":"/fixture/child.jsonl","reset":true,"cursor":{"offset":100},"events":[
+            {"type":"session_meta","payload":{"id":"child","history_base":{"thread_id":"parent","end_byte_offset":100}},"inheritedHistory":{"parentThread":"parent","endByteOffset":100,"tokens":{"input":900},"proof":"fixture"}},
+            {"type":"event_msg","timestamp":stamp,"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000},"last_token_usage":{"input_tokens":100}}}}
+        ]});
+        for (precise, expected) in [(false, 1000), (true, 100), (false, 1000), (true, 100)] {
+            let previous = settings.clone();
+            settings.codex_precise_counting = precise;
+            store.save_settings(&settings).unwrap();
+            if previous.codex_precise_counting != precise {
+                assert!(apply_batch(&store, &previous, &source, "mode", &[], &frame).is_err());
+            }
+            apply_batch(&store, &settings, &source, "mode", &[], &frame).unwrap();
+            apply_batch(&store, &settings, &source, "mode", &[], &frame).unwrap();
+            assert_eq!(
+                store.dashboard(&Filter::default()).unwrap().summary.total,
+                expected
+            );
+        }
     }
 }

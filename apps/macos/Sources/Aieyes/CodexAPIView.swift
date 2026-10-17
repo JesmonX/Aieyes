@@ -140,7 +140,7 @@ struct CodexAPIEditor: View {
             }.formStyle(.grouped).disabled(busy)
             HStack {
                 Spacer(); Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
-                Button(busy ? "保存中…" : "保存") { Task { _ = await save() } }.buttonStyle(.borderedProminent).disabled(busy || !sources.contains(where: { $0.id == draft.sourceId }))
+                Button(busy ? "保存中…" : "保存") { Task { _ = await save() } }.buttonStyle(.aieyesPrimary).disabled(busy || !sources.contains(where: { $0.id == draft.sourceId }))
             }.padding()
         }.frame(width: DesignTokens.dialogApiWidth, height: 385).aieyesAccent().interactiveDismissDisabled(busy)
             .onDisappear { apiKey = "" }
@@ -197,7 +197,7 @@ private struct CodexConnectionSwitchSheet: View {
                 Button("重新检查") { Task { await prepare() } }.disabled(!available)
                 Spacer()
                 Button(processes.isEmpty ? "确认切换" : "关闭并切换") { Task { await commit() } }
-                    .buttonStyle(.borderedProminent).disabled(!available || prepared == nil || processes.contains { !$0.canClose })
+                    .buttonStyle(.aieyesPrimary).disabled(!available || prepared == nil || processes.contains { !$0.canClose })
             }.disabled(busy)
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogApiWidth).aieyesAccent().interactiveDismissDisabled(busy)
             .task { await prepare() }

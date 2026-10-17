@@ -237,7 +237,7 @@ struct PetLibraryView: View {
     private var height: CGFloat { min(260, max(100, CGFloat(model.petLibrary.count) * 96)) }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            TextField("桌宠资源", text: $input, prompt: Text("粘贴资源链接、npx 命令或 npm 包名"), axis: .vertical).labelsHidden().textFieldStyle(.roundedBorder).lineLimit(2...4)
+            TextField("桌宠资源", text: $input, prompt: Text("粘贴资源链接、npx 命令或 npm 包名"), axis: .vertical).labelsHidden().textFieldStyle(.aieyes).lineLimit(2...4)
             HStack {
                 Button(model.petImportBusy ? "导入中…" : "导入") { let value = input; Task { await model.importPet(input: value); if model.petImportError == nil && input == value { input = "" } } }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.petImportBusy || model.petSelectionBusy != nil)
                 Button("选择本地文件…") {

@@ -328,7 +328,9 @@ def _incremental(request):
     root = os.path.abspath(os.path.expanduser(request['path']))
     provider = request['provider']
     cursors = request.get('cursors', {})
-    history = _CodexHistory(root) if provider == 'codex' else None
+    precise = bool(request.get('codexPreciseCounting', False))
+    history = _CodexHistory(root) if provider == 'codex' and precise else None
+    fork_issues = []
     issues, failed, invalid_records, read_bytes, file_count = [], 0, 0, 0, 0
 
     def emit(kind, **fields):
@@ -339,6 +341,10 @@ def _incremental(request):
 
     def issue(path, error, code='fileRead'):
         nonlocal invalid_records
+        if code == 'missingHistoryBase':
+            if len(fork_issues) < 128:
+                fork_issues.append(dict(path=os.path.basename(path), code=code, message=str(error)[:400]))
+            return
         if code == 'invalidRecord': invalid_records += 1
         if len(issues) < 128:
             issues.append(dict(path=os.path.basename(path), code=code, message=str(error)[:400]))
@@ -357,10 +363,12 @@ def _incremental(request):
     def jsonl(path):
         nonlocal read_bytes
         old = cursors.get(path, {})
+        if provider == 'codex' and old.get('codexPreciseCounting') != precise:
+            old = {}
         inherited = old.get('inheritedHistory')
         if inherited and history:
             refreshed = history.resolve(dict(thread_id=inherited['parentThread'], end_byte_offset=inherited['endByteOffset']))
-            if (refreshed.get('tokens'), refreshed.get('proof')) != (inherited.get('tokens'), inherited.get('proof')):
+            if (refreshed.get('tokens'), refreshed.get('proof'), refreshed.get('issue')) != (inherited.get('tokens'), inherited.get('proof'), inherited.get('issue')):
                 old = {}
                 inherited = refreshed
         if old and inherited and inherited.get('tokens') is None:
@@ -388,6 +396,8 @@ def _incremental(request):
                 cursor = dict(identity=identity, prefixBytes=prefix_size, prefix=prefix,
                               offset=offset, size=size, mtimeNs=metadata.st_mtime_ns,
                               anchor=digest(stream, max(0, offset - 128), min(offset, 128)))
+                if provider == 'codex':
+                    cursor['codexPreciseCounting'] = precise
                 if inherited:
                     cursor['inheritedHistory'] = inherited
                 emit('batch', path=path, reset=reset, events=events, cursor=cursor)
@@ -510,6 +520,7 @@ def _incremental(request):
         if provider == 'codex':
             _native_routes(root, request.get('routeCursor') or {}, emit)
         emit('done', files=file_count, readBytes=read_bytes, issues=issues,
+             forkHistoryIssues=fork_issues,
              partial=any(row['code'] != 'unknownModel' for row in issues),
              failedFiles=failed, invalidRecords=invalid_records)
     except Exception as error:

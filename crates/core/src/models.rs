@@ -323,6 +323,7 @@ pub struct Settings {
     pub configuration_issues: Vec<String>,
     pub deleted_accounts: Vec<Account>,
     pub history_show_deleted_accounts: bool,
+    pub codex_precise_counting: bool,
     pub agents: Vec<AgentConfiguration>,
     pub account_aliases: std::collections::BTreeMap<String, String>,
     pub appearance: Appearance,
@@ -349,6 +350,7 @@ impl Default for Settings {
             configuration_issues: vec![],
             deleted_accounts: vec![],
             history_show_deleted_accounts: false,
+            codex_precise_counting: false,
             agents: vec![],
             appearance: Appearance::default(),
             account_aliases: Default::default(),
@@ -617,6 +619,8 @@ impl Settings {
 pub struct ParseState {
     pub turn_id: String,
     pub parser_version: u32,
+    // Absent in legacy cursors, which must be replayed once with the saved mode.
+    pub codex_precise_counting: Option<bool>,
     pub task_started_at: Option<i64>,
     pub session_id: String,
     pub model: String,

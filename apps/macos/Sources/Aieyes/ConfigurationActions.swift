@@ -129,6 +129,7 @@ extension AppModel {
                 next.proxyTestUrls = settingsDraft.proxyTestUrls; next.menuMetric = settingsDraft.menuMetric
                 next.quotaResetNotifications = settingsDraft.quotaResetNotifications
                 next.historyShowDeletedAccounts = settingsDraft.historyShowDeletedAccounts
+                next.codexPreciseCounting = settingsDraft.codexPreciseCounting
                 next.historyRefreshSeconds = settingsDraft.historyRefreshSeconds
                 next.serverForegroundRefreshSeconds = settingsDraft.serverForegroundRefreshSeconds
                 next.localMonitor = settingsDraft.localMonitor

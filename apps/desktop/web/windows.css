@@ -3,31 +3,37 @@
 html[data-platform=windows] {
   --win-spring:cubic-bezier(.22,1.35,.36,1);
   --win-settle:cubic-bezier(.2,.8,.2,1);
-  --win-edge:rgba(255,255,255,.76);
-  --win-sheen:linear-gradient(155deg,rgba(255,255,255,.38),rgba(255,255,255,.04) 58%,transparent);
-  --win-control-sheen:linear-gradient(180deg,rgba(255,255,255,.3),rgba(255,255,255,0));
+  --win-edge:rgb(255 255 255 / var(--edge-highlight-opacity));
+  --window-edge:var(--win-edge); --highlight:var(--win-edge);
+  --win-sheen:none;
+  --win-control-sheen:none;
   --win-card-shadow:0 2px 4px rgba(24,32,55,.025),0 8px 20px -16px rgba(24,32,55,.24);
-  --win-overlay-fill:rgba(250,250,252,.94);
+  --win-overlay-fill:var(--solid);
   --win-overlay-shadow:0 4px 12px rgba(24,32,55,.08),0 20px 48px -16px rgba(24,32,55,.26);
-  --win-selected:color-mix(in srgb,var(--accent) 9%,var(--control-fill));
+  --win-selected:var(--control-tint);
 }
 html[data-platform=windows][data-theme=dark] {
-  --win-edge:rgba(255,255,255,.13);
-  --win-sheen:linear-gradient(155deg,rgba(255,255,255,.055),rgba(255,255,255,.008) 58%,transparent);
-  --win-control-sheen:linear-gradient(180deg,rgba(255,255,255,.065),rgba(255,255,255,0));
+  --win-edge:rgba(255,255,255,.04);
+  --window-edge:var(--win-edge); --highlight:var(--win-edge);
+  --win-sheen:none;
+  --win-control-sheen:none;
   --win-card-shadow:0 2px 4px rgba(0,0,0,.12),0 10px 24px -16px rgba(0,0,0,.4);
-  --win-overlay-fill:rgba(43,44,50,.97);
+  --win-overlay-fill:var(--solid);
   --win-overlay-shadow:0 4px 12px rgba(0,0,0,.24),0 20px 48px -16px rgba(0,0,0,.6);
-  --win-selected:color-mix(in srgb,var(--accent) 12%,var(--control-fill));
+  --win-selected:var(--control-tint);
 }
 html[data-platform=windows][data-material=opaque] { --win-overlay-fill:var(--solid); }
 
-/* Keep the translucent backdrop while flattening surface and control finishes. */
-html[data-platform=windows],html[data-platform=windows][data-theme=dark] {
-  --win-sheen:none; --win-control-sheen:none; --win-edge:transparent;
-  --control-shadow:none; --control-pressed-shadow:none;
-  --control-bottom-stroke:var(--control-stroke);
-  --win-card-shadow:none;
+/* White edge highlights are independent of fill alpha and depth shadows.
+   Only windows with a confirmed native material expose translucent overlays. */
+html[data-platform=windows]:is([data-material=acrylic],[data-material=blur]) {
+  --win-overlay-fill:rgb(250 250 252 / var(--overlay-fill-opacity));
+}
+html[data-platform=windows][data-theme=dark]:is([data-material=acrylic],[data-material=blur]) {
+  --win-overlay-fill:rgb(43 44 50 / var(--overlay-fill-opacity));
+}
+@media (prefers-reduced-transparency:reduce),(forced-colors:active) {
+  html[data-platform=windows]:is([data-theme=light],[data-theme=dark]):is([data-material=acrylic],[data-material=blur]) { --win-overlay-fill:var(--solid); }
 }
 
 /* The original select still owns its intrinsic width, form value and validity.
@@ -74,7 +80,8 @@ html[data-platform=windows],html[data-platform=windows][data-theme=dark] {
   html[data-platform=windows] .settings-block .card .card { background-image:none; box-shadow:none; }
   html[data-platform=windows] :is(aside,.panel-head,.panel-foot) { background-image:linear-gradient(150deg,var(--surface-soft),transparent 75%); }
   html[data-platform=windows] button { background-image:var(--win-control-sheen); }
-  html[data-platform=windows] button.primary { box-shadow:inset 0 1px 0 rgba(255,255,255,.24),0 2px 4px color-mix(in srgb,var(--accent) 18%,transparent); }
+  html[data-platform=windows] button.primary { box-shadow:var(--control-shadow); }
+  html[data-platform=windows] button.primary:disabled { box-shadow:none; }
   html[data-platform=windows] button.danger { border-color:color-mix(in srgb,var(--danger) 30%,var(--control-stroke)); }
   html[data-platform=windows] :is(input:not([type=checkbox]):not([type=range]),textarea):focus-visible {
     box-shadow:inset 0 -1px 0 var(--accent),0 0 0 3px color-mix(in srgb,var(--accent) 10%,transparent);
@@ -168,10 +175,22 @@ html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open
   html[data-platform=windows] details::details-content { transition:none !important; }
 }
 
+/* Category tint changes hue without increasing the card's alpha. */
 @media not (forced-colors:active) {
-  html[data-platform=windows] :is(button.primary,.win-select-trigger[aria-expanded=true]) { box-shadow:none; }
-  html[data-platform=windows] :is(.card,.stat,.quota-card,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) { box-shadow:none; }
-  html[data-platform=windows] :is(.quota-card,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) { background:color-mix(in srgb,var(--category) 8%,var(--card-fill)); }
-  html[data-platform=windows] :is(nav button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true])::before { box-shadow:none; border:1px solid var(--border); }
+  html[data-platform=windows] :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
+    background:color-mix(in srgb,var(--category) 8%,var(--card-fill));
+    box-shadow:inset 0 1px 0 var(--win-edge),var(--win-card-shadow);
+  }
+  html[data-platform=windows]:is([data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
+    background:rgb(from color-mix(in srgb,var(--category) 8%,var(--window-base)) r g b / .35);
+  }
+  /* Resource groups already sit inside a card; add tint, not a second pane. */
+  html[data-platform=windows] .card :is(.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
+    background:color-mix(in srgb,var(--category) 8%,transparent); box-shadow:none;
+  }
   html[data-platform=windows] button:enabled:hover,html[data-platform=windows] button:enabled:active { transform:none; }
+}
+@media (prefers-reduced-transparency:reduce) {
+  html[data-platform=windows]:is([data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) { background:var(--solid); }
+  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
 }

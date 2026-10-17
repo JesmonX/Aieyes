@@ -141,7 +141,7 @@ enum ClientError: LocalizedError { case message(String); var errorDescription: S
 struct Acknowledgement: Decodable { var partial: Bool?, issues: [SyncIssue]?; var id: String?, name: String?, error: String? }
 struct QuotaSchedule: Decodable { var nextDueAt: Double? }
 struct RefreshStatus { var busy = false; var succeededAt: Date?; var error: String? }
-struct ActionFailure: Identifiable { var action: String; var itemID: String? = nil; var name: String, reason: String; var id: String { action + ":" + (itemID ?? name) } }
+struct ActionFailure: Identifiable { var action: String; var itemID: String? = nil; var name: String, reason: String; var dismissed = false; var id: String { action + ":" + (itemID ?? name) } }
 struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: String, explanation: String, affected: [String]; var id: String { kind + ":" + itemID } }
 
 /// Local catalogue reads must not queue behind scans or remote quota requests.
@@ -769,7 +769,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         let delayed = delayedUsageCount
         let failed = usageSources.contains { source in
             let status = dashboard.sources.first { $0.id == source.id }?.status
-            return status?.error != nil || status?.partial == true
+            return status?.failureReason != nil
         }
         let prefix = dataTime > 0 ? "记录同步于 " + Format.time(dataTime) : usageSources.isEmpty ? "未接入用量来源" : "记录尚未全部同步"
         return prefix + " · " + (busy ? "同步中…" : failed || !actionFailures.isEmpty ? "部分失败" : delayed > 0 ? "\(delayed) 个来源有延迟" : usageSources.isEmpty ? "等待接入" : "记录已同步")
@@ -810,6 +810,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         default: await reload()
         }
     }
+    func dismissFailure(_ failure: ActionFailure) {
+        guard let index = actionFailures.firstIndex(where: { $0.id == failure.id }) else { return }
+        actionFailures[index].dismissed = true
+        if message == failure.reason { message = nil }
+    }
     func scan(sourceID: String? = nil) async {
         await collectHistory(sourceID: sourceID, full: false)
     }
@@ -825,8 +830,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         do {
             let rows: [Acknowledgement] = try await engine.call(full ? "sources.rescan" : "sources.scan", params: sourceID.map { ["sourceId": $0] } ?? [:])
             let failures = rows.compactMap { row -> ActionFailure? in
-                let errors = row.issues?.filter { $0.code != "unknownModel" } ?? []
-                guard let error = row.error ?? (row.partial == true ? errors.isEmpty ? "部分记录需要处理" : errors.map { ($0.path.map { $0 + " · " } ?? "") + $0.message }.joined(separator: "；") : nil) else { return nil }
+                guard let error = syncFailureReason(error: row.error, partial: row.partial, issues: row.issues) else { return nil }
                 return ActionFailure(action: key, itemID: row.id, name: row.name ?? settings.sources.first { $0.id == row.id }?.name ?? "数据源", reason: error)
             }
             let loaded = await reload()
@@ -992,7 +996,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let params = try JSONSerialization.jsonObject(with: data) as! [String: Any]
             let baseline = try JSONSerialization.jsonObject(with: JSONEncoder().encode(base))
             let saved: Settings = try await engine.call("settings.patch", params: ["base": baseline, "settings": params])
-            let historyConfigurationChanged = settings.historyShowDeletedAccounts != saved.historyShowDeletedAccounts || settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.modelMappings != saved.modelMappings
+            let historyConfigurationChanged = settings.codexPreciseCounting != saved.codexPreciseCounting || settings.historyShowDeletedAccounts != saved.historyShowDeletedAccounts || settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.modelMappings != saved.modelMappings
             let quotaConfigurationChanged = settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.proxy != saved.proxy
             if settings.proxy != saved.proxy || settings.proxyTestUrls != saved.proxyTestUrls { networkRevision += 1; networkTest = nil; lastNetworkAttempt = .distantPast }
             mergeConfiguration(saved, submitted: draft, draftAtSubmission: draftAtSubmission)

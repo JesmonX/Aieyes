@@ -108,12 +108,137 @@ enum Palette {
     }
 }
 
-/// Observe accent changes in every window, including independently hosted sheets.
+/// Observe accent changes and share control finishes across windows and sheets.
 private struct AieyesAccent: ViewModifier {
     @AppStorage("appearance.accent") private var name = "indigo"
     func body(content: Content) -> some View {
         content.tint(Palette.accent(named: name)).accentColor(Palette.accent(named: name))
+            .buttonStyle(.aieyes)
+            .textFieldStyle(.aieyes)
     }
+}
+
+/// Keep native Button/TextField semantics; only their painted surfaces change.
+private struct AieyesControlSurface: ViewModifier {
+    var tint: Color? = nil
+    var field = false
+    var hovered = false
+    var pressed = false
+    var editing = false
+    @Environment(\.isFocused) private var focused
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var opaque: Bool { reduceTransparency || contrast == .increased }
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.radiusControl)
+        content.background {
+            shape.fill(Color(nsColor: .controlBackgroundColor).opacity(opaque ? 1 : field ? DesignTokens.fieldFillOpacity : DesignTokens.controlFillOpacity))
+            if let tint { shape.fill(tint.opacity(DesignTokens.controlTintOpacity)) }
+            if hovered || pressed { shape.fill(Color.primary.opacity(pressed ? DesignTokens.controlPressedOpacity : DesignTokens.controlHoverOpacity)) }
+        }
+        .overlay {
+            shape.strokeBorder(focused || editing ? Palette.accent : (tint ?? Color.primary).opacity(contrast == .increased ? 1 : DesignTokens.controlBorderOpacity), lineWidth: focused || editing || contrast == .increased ? 2 : DesignTokens.borderWidth)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+struct AieyesButtonStyle: ButtonStyle {
+    var emphasized = false
+    func makeBody(configuration: Configuration) -> some View {
+        AieyesButtonBody(configuration: configuration, emphasized: emphasized)
+    }
+}
+
+private struct AieyesButtonBody: View {
+    let configuration: ButtonStyle.Configuration
+    let emphasized: Bool
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered = false
+    private var tint: Color? { configuration.role == .destructive ? Palette.danger : emphasized ? Palette.accent : nil }
+    var body: some View {
+        configuration.label
+            .font(.system(size: DesignTokens.fontSecondary))
+            .foregroundStyle(configuration.role == .destructive ? Palette.danger : Color.primary)
+            .padding(.horizontal, DesignTokens.controlPaddingX).padding(.vertical, 2)
+            .frame(minHeight: DesignTokens.controlHeight)
+            .modifier(AieyesControlSurface(tint: tint, hovered: enabled && hovered, pressed: enabled && configuration.isPressed))
+            .contentShape(RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
+            .opacity(enabled ? 1 : 0.45)
+            .onHover { hovered = $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: hovered || configuration.isPressed)
+    }
+}
+
+struct AieyesTextFieldStyle: TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View {
+        AieyesStyledField(content: configuration)
+    }
+}
+
+private struct AieyesStyledField<Content: View>: View {
+    let content: Content
+    @State private var editing = false
+    var body: some View {
+        content.textFieldStyle(.plain)
+            .padding(.horizontal, DesignTokens.controlPaddingX).padding(.vertical, 3)
+            .frame(minHeight: DesignTokens.inputHeight)
+            .modifier(AieyesControlSurface(field: true, editing: editing))
+            .background(FieldFocusObserver { editing = $0 })
+    }
+}
+
+/// Observe the native field editor without adding a second FocusState binding,
+/// which would override editors' existing programmatic focus and validation.
+private struct FieldFocusObserver: NSViewRepresentable {
+    var changed: (Bool) -> Void
+    func makeNSView(context: Context) -> FieldFocusView { FieldFocusView(changed: changed) }
+    func updateNSView(_ view: FieldFocusView, context: Context) { view.changed = changed; view.scheduleUpdate() }
+}
+
+private final class FieldFocusView: NSView {
+    var changed: (Bool) -> Void
+    private var focused = false
+    private var updatePending = false
+    private var observers: [NSObjectProtocol] = []
+    init(changed: @escaping (Bool) -> Void) {
+        self.changed = changed
+        super.init(frame: .zero)
+        for name in [NSControl.textDidBeginEditingNotification, NSControl.textDidEndEditingNotification, NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.scheduleUpdate() }
+            })
+        }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); scheduleUpdate() }
+    func scheduleUpdate() {
+        guard !updatePending else { return }
+        updatePending = true
+        DispatchQueue.main.async { [weak self] in self?.updatePending = false; self?.updateFocus() }
+    }
+    private func updateFocus() {
+        let editor = window?.firstResponder as? NSTextView
+        let field = (editor?.delegate as? NSTextField) ?? (window?.firstResponder as? NSTextField)
+        var active = false
+        if let field, let window, window.isKeyWindow, field.window === window {
+            let point = convert(NSPoint(x: bounds.midX, y: bounds.midY), to: nil)
+            active = field.convert(field.bounds, to: nil).contains(point)
+        }
+        if active != focused { focused = active; changed(active) }
+    }
+    deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
+}
+
+extension ButtonStyle where Self == AieyesButtonStyle {
+    static var aieyes: AieyesButtonStyle { AieyesButtonStyle() }
+    static var aieyesPrimary: AieyesButtonStyle { AieyesButtonStyle(emphasized: true) }
+}
+extension TextFieldStyle where Self == AieyesTextFieldStyle {
+    static var aieyes: AieyesTextFieldStyle { AieyesTextFieldStyle() }
 }
 extension View {
     func aieyesAccent() -> some View { modifier(AieyesAccent()) }

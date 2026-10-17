@@ -71,10 +71,10 @@
   /* Web control finishes and the opaque fallback for panel-like settings cards. */
   --settings-card-opaque: #f1f2f4;
   --settings-card-fill: var(--settings-card-opaque);
-  --control-fill: rgba(255,255,255,.78);
-  --field-fill: rgba(255,255,255,.84);
-  --control-stroke: rgba(64,72,92,.22);
-  --control-bottom-stroke: rgba(64,72,92,.3);
+  --control-fill: rgb(255 255 255 / var(--control-fill-opacity));
+  --field-fill: rgb(255 255 255 / var(--field-fill-opacity));
+  --control-stroke: color-mix(in srgb,var(--ink) calc(var(--control-border-opacity) * 100%),transparent);
+  --control-bottom-stroke: var(--control-stroke);
   --control-shadow: inset 0 1px 0 var(--highlight), 0 1px 2px rgba(22,36,72,.06);
   --control-pressed-shadow: inset 0 1px 2px rgba(22,36,72,.08);
   --checkbox-stroke: rgba(37,37,40,.58);
@@ -102,10 +102,9 @@
   --pet-bg: #29292e;
   --pet-ink: #efeff2;
   --settings-card-opaque: #303238;
-  --control-fill: rgba(76,78,86,.78);
-  --field-fill: rgba(40,42,48,.86);
-  --control-stroke: rgba(220,224,240,.19);
-  --control-bottom-stroke: rgba(0,0,0,.32);
+  --control-fill: rgb(58 58 64 / var(--control-fill-opacity));
+  --field-fill: rgb(58 58 64 / var(--field-fill-opacity));
+  --control-bottom-stroke: var(--control-stroke);
   --control-shadow: inset 0 1px 0 var(--highlight), 0 1px 2px rgba(0,0,0,.18);
   --control-pressed-shadow: inset 0 1px 2px rgba(0,0,0,.2);
   --checkbox-stroke: rgba(239,239,242,.58);
@@ -219,6 +218,14 @@
   --field-choice-width: 220px;
   --card-border-opacity: 0.3;
   --panel-card-opacity: 0.46;
+  --control-fill-opacity: 0.3;
+  --field-fill-opacity: 0.36;
+  --control-tint-opacity: 0.12;
+  --control-hover-opacity: 0.05;
+  --control-pressed-opacity: 0.09;
+  --control-border-opacity: 0.18;
+  --edge-highlight-opacity: 0.12;
+  --overlay-fill-opacity: 0.64;
   --progress-track-opacity: 0.07;
   --chart-grid-opacity: 0.06;
   --model-chart-inner-ratio: 0.72;
@@ -300,6 +307,19 @@
 :root[data-accent=purple]:where([data-theme=dark]) { --accent:var(--accent-purple); --accent-deep:#b792ed; }
 :root { --soft:color-mix(in srgb,var(--accent) 10%,transparent); --count-badge:var(--soft); }
 
+/* A control's state changes its tint, rather than replacing glass with a solid tile. */
+:root,:root[data-theme=dark] {
+  --control-hover:color-mix(in srgb,var(--ink) calc(var(--control-hover-opacity) * 100%),var(--control-fill));
+  --control-pressed:color-mix(in srgb,var(--ink) calc(var(--control-pressed-opacity) * 100%),var(--control-fill));
+  --control-tint:color-mix(in srgb,var(--accent) calc(var(--control-tint-opacity) * 100%),transparent);
+  --control-tint-hover:color-mix(in srgb,var(--accent) 17%,transparent);
+  --control-tint-pressed:color-mix(in srgb,var(--accent) 22%,transparent);
+  --control-selected:var(--control-tint);
+  --segment-selected:var(--control-tint);
+  --control-mark:var(--accent-deep);
+}
+:root[data-theme=dark] { --control-mark:var(--accent); }
+
 /* Windows content follows macOS logical geometry; navigation occupies its own column. */
 :root { --card-fill:var(--panel); }
 :root:not([data-surface=panel]) { --card-fill:var(--detail-card); --window-base:var(--detail-window); }
@@ -314,13 +334,13 @@
   --settings-card-fill:var(--panel);
   --window-tint:rgba(250,250,250,.18);
   --panel:rgba(255,255,255,.35); --surface-soft:rgba(255,255,255,.18);
-  --surface-strong:rgba(244,244,247,.88); --control-selected:rgba(255,255,255,.92);
+  --surface-strong:rgba(244,244,247,.64);
   --muted:#52525b; --faint:#52525b;
 }
 :root[data-platform=windows]:where([data-theme=dark]):where([data-material=acrylic],[data-material=blur]) {
   --window-tint:rgba(32,32,36,.28);
   --panel:rgba(58,58,64,.35); --surface-soft:rgba(72,72,80,.18);
-  --surface-strong:rgba(55,55,62,.94); --control-selected:rgba(98,98,107,.92);
+  --surface-strong:rgba(55,55,62,.64);
   --muted:#c5c5cf; --faint:#bcbcc6;
 }
 :root[data-platform=windows]:where([data-surface=panel]):where([data-material=acrylic],[data-material=blur]) { --window-tint:rgba(250,250,250,.12); }

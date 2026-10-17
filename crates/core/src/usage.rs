@@ -2,7 +2,7 @@ use crate::contracts::{FIVE_HOUR_MINUTES, WEEK_MINUTES};
 use crate::models::*;
 use serde_json::Value;
 
-pub const PARSER_VERSION: u32 = 5;
+pub const PARSER_VERSION: u32 = 6;
 
 fn count(v: &Value, name: &str) -> u64 {
     v.get(name).and_then(Value::as_u64).unwrap_or(0)
@@ -92,6 +92,7 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                 *state = ParseState {
                     session_id: id.into(),
                     parser_version: PARSER_VERSION,
+                    codex_precise_counting: state.codex_precise_counting,
                     ..Default::default()
                 };
             }
@@ -110,7 +111,11 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                     end_byte_offset: payload["history_base"]["end_byte_offset"]
                         .as_u64()
                         .unwrap_or(0),
-                    issue: "父会话历史尚未解析".into(),
+                    issue: if state.codex_precise_counting.unwrap_or(false) {
+                        "父会话历史尚未解析".into()
+                    } else {
+                        String::new()
+                    },
                     ..Default::default()
                 });
                 state.first_inherited_count = true;
@@ -137,7 +142,10 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             let mut interval_start = (state.last_timestamp > 0)
                 .then_some(state.last_timestamp)
                 .or(state.session_started_at);
-            let (tokens, attribution) = if inherited.as_ref().is_some_and(|h| h.tokens.is_none()) {
+            let precise = state.codex_precise_counting.unwrap_or(false);
+            let (tokens, attribution) = if inherited.is_some() && !precise {
+                (cumulative.clone(), "session-summary")
+            } else if inherited.as_ref().is_some_and(|h| h.tokens.is_none()) {
                 // Keep a recoverable, zero-valued tombstone instead of charging an
                 // inherited counter whose parent has not arrived yet.
                 (Tokens::default(), "unresolved-inheritance")
@@ -219,7 +227,7 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                 parsed.interval_evidence = "task-request-v2".into();
             }
             if let Some(history) = inherited {
-                if history.tokens.is_some() {
+                if precise && history.tokens.is_some() {
                     parsed.attribution = "inherited-counter".into();
                 }
                 state.counter_correction = Some(crate::codex_history::CounterCorrection {

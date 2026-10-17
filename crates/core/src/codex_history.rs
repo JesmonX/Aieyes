@@ -29,6 +29,45 @@ pub struct CounterCorrection {
     pub history: InheritedHistory,
 }
 
+/// Fork diagnostics belong to counting settings, including statuses saved by older builds.
+pub fn sync_status(mut status: Value, precise: bool) -> Value {
+    let Some(object) = status.as_object_mut() else {
+        return status;
+    };
+    if let Some(Value::Array(issues)) = object.get_mut("issues") {
+        let forks: Vec<_> = issues
+            .iter()
+            .filter(|i| i["code"] == "missingHistoryBase")
+            .cloned()
+            .collect();
+        issues.retain(|i| i["code"] != "missingHistoryBase");
+        let remaining = issues.iter().any(|i| i["code"] != "unknownModel");
+        if !forks.is_empty() {
+            if !remaining
+                && !object.get("error").is_some_and(Value::is_string)
+                && [
+                    "failedFiles",
+                    "invalidRecords",
+                    "malformedLines",
+                    "malformedRecords",
+                ]
+                .iter()
+                .all(|key| object.get(*key).and_then(Value::as_u64).unwrap_or(0) == 0)
+            {
+                object.insert("partial".into(), Value::Bool(false));
+            }
+            object
+                .entry("forkHistoryIssues")
+                .or_insert(Value::Array(forks));
+        }
+    }
+    if !precise {
+        object.remove("forkHistoryIssues");
+        object.remove("missingHistoryBases");
+    }
+    status
+}
+
 pub struct Resolver {
     paths: HashMap<String, PathBuf>,
     cache: HashMap<(String, u64), InheritedHistory>,

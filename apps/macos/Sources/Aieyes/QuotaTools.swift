@@ -173,7 +173,7 @@ struct QuotaOrderView: View {
             if let error { ErrorNotice(message: error) }
             HStack { Spacer(); Button("取消") { close() }.keyboardShortcut(.cancelAction); Button(saving ? "保存中…" : "保存顺序") {
                 Task { await saveOrder() }
-            }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }.disabled(saving)
+            }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction) }.disabled(saving)
         }.aieyesAccent().font(AppFont.body).padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogSelectionWidth).onAppear { keys = model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key); initialKeys = keys }
         .updateDraftGuard("账户顺序", snapshot: draftSnapshot(keys), dirty: keys != initialKeys, saving: saving, save: { await saveOrder() }, discard: close)
     }
@@ -220,7 +220,7 @@ struct PanelAccountsView: View {
                     if model.quotaAccounts.isEmpty { Text("尚无可显示额度的账户").foregroundStyle(.secondary) }
                 }.padding(4)
             }
-            HStack { Spacer(); Button("取消", action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button("保存面板选择") { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.borderedProminent) }
+            HStack { Spacer(); Button("取消", action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button("保存面板选择") { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.aieyesPrimary) }
         }.padding(DesignTokens.dialogPadding).font(AppFont.body).frame(width: DesignTokens.dialogSelectionWidth, height: 480).aieyesAccent()
             .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); for (provider, choice) in PanelAccountPreference.decode(stored).providers where choice.mode == "custom" { selected[provider] = choice.keys }; initialDraft = snapshot; cancelFocused = true }
             .updateDraftGuard("面板显示账户", snapshot: snapshot, dirty: !initialDraft.isEmpty && initialDraft != snapshot, saving: false, save: { stored = draft; onClose(); return true }, discard: onClose)
@@ -265,7 +265,7 @@ struct QuotaEstimateView: View {
                             confirmation
                             Button("确认并开始新一段") { perform("restart", ["id": current.id, "confirmed": confirmed]) }.disabled(!confirmed || busy)
                         }
-                        Button(current.status == "pending" ? "结束并保留有效段" : "结束并保存本段结果") { perform("stop", ["id": current.id]) }.buttonStyle(.borderedProminent).disabled(busy)
+                        Button(current.status == "pending" ? "结束并保留有效段" : "结束并保存本段结果") { perform("stop", ["id": current.id]) }.buttonStyle(.aieyesPrimary).disabled(busy)
                     } else if sources.contains(where: { $0.autoValuation?.enabled == true }) {
                         Text("自动估值正在等待有效样本。关闭来源的自动估值后可开始手动采样。").foregroundStyle(.secondary)
                     } else if eligible && !sources.isEmpty {
@@ -281,7 +281,7 @@ struct QuotaEstimateView: View {
                             Text("共享目录仅统计本次采样时段。切换账户前请结束采样，切换后重新开始。").font(AppFont.secondary).foregroundStyle(.secondary)
                         }
                         Text(credits ? "开始后请新建会话。有可确认的 credits 消耗且价格完整时显示估值；充值或订阅额度恢复后请重新采样。" : "开始后请新建会话。有可确认的额度消耗且价格完整时显示估值；跨采样边界的累计用量不计入。").font(AppFont.secondary).foregroundStyle(.secondary)
-                        Button("开始采样") { perform("start", ["accountKey": quota.id, "windowId": credits ? "credits" : window, "sourceIds": Array(selected), "confirmed": confirmed]) }.buttonStyle(.borderedProminent).disabled(!confirmed || selected.isEmpty || (!credits && window.isEmpty) || busy)
+                        Button("开始采样") { perform("start", ["accountKey": quota.id, "windowId": credits ? "credits" : window, "sourceIds": Array(selected), "confirmed": confirmed]) }.buttonStyle(.aieyesPrimary).disabled(!confirmed || selected.isEmpty || (!credits && window.isEmpty) || busy)
                     } else {
                         Text(sources.isEmpty ? "需要可采集 Token 的关联数据源，请检查数据目录和账户关联。" : credits ? "需要明确且有限的 credits 余额；请刷新账户额度。" : "此额度池缺少可靠的模型映射，暂不支持估值。").foregroundStyle(.secondary)
                     }

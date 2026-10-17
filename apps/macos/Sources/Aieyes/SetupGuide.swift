@@ -133,7 +133,7 @@ struct SetupGuideChecks {
                 let enabled = settings.sourceEnabled(source)
                 var check = SetupGuide.Check(label: Format.provider(source.provider) + " · " + machineName(source.hostId ?? "local") + " · " + source.name, text: "同步记录以验证日志采集", destination: .init(provider: source.provider, section: "machines"), level: "pending", status: .pending)
                 if !enabled { check.text = "检查机器、采集开关和目录绑定"; check.level = "warn"; check.status = .missing }
-                else if status?.error != nil || status?.partial == true { check.text = "检查日志目录和机器连接"; check.level = "warn"; check.status = .collectionFailed }
+                else if status?.failureReason != nil { check.text = "检查日志目录和机器连接"; check.level = "warn"; check.status = .collectionFailed }
                 else if let time = status?.updatedAt, time > 0 { check.text = "上次日志采集已完成"; check.level = "ok"; check.status = .collected; check.updatedAt = time }
                 return check
             }

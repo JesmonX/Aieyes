@@ -47,7 +47,7 @@ struct MultiSelectPicker: View {
         .accessibilityLabel("\(title)，\(summary)")
         .popover(isPresented: $presented, arrowEdge: .bottom) {
             VStack(spacing: 10) {
-                TextField("搜索", text: $query).textFieldStyle(.roundedBorder)
+                TextField("搜索", text: $query).textFieldStyle(.aieyes)
                     .accessibilityLabel("搜索\(title)").focused($searchFocused).onSubmit { }
                 HStack(spacing: 12) {
                     Button(term.isEmpty ? "全选" : "全选结果") { apply(.all) }

@@ -1,5 +1,12 @@
 /* Shared UI semantics. Query timestamps deliberately never imply a successful sync. */
 window.AieyesUI = {
+  syncFailure(status) {
+    if(status?.error)return status.error;
+    if(!status?.partial)return null;
+    const issues=status.issues??[],visible=issues.filter(i=>!['unknownModel','missingHistoryBase'].includes(i.code));
+    if(issues.length&&!visible.length)return null;
+    return visible.map(i=>(i.path?i.path+' · ':'')+(i.step!=null?'步骤 '+i.step+' · ':'')+i.message).join('；')||'部分记录需要处理';
+  },
   errorPresentation(message, context = '操作未完成') {
     const original = String(message ?? '').trim();
     let text = original;
@@ -151,7 +158,7 @@ window.AieyesUI = {
       // The oldest source is the only defensible timestamp for the entire record set.
       timestamp: stamps.length && stamps.every(Boolean) ? Math.min(...stamps) : 0,
       delayed: statuses.filter(s => !s?.updatedAt || now - s.updatedAt > Math.max(60, (settings.historyRefreshSeconds ?? settings.refreshSeconds) * 2)).length,
-      failed: statuses.filter(s => s?.error || s?.partial).length
+      failed: statuses.filter(s => this.syncFailure(s)).length
     };
   },
   resetDisplayTime(stamp, now = Date.now() / 1000) {

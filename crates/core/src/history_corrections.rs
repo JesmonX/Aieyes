@@ -45,7 +45,10 @@ impl Store {
                 continue;
             }
             let mut repaired = original.clone();
-            repaired.id = format!("{}-fork-v5", original.id);
+            let revision: String =
+                self.db
+                    .query_row("SELECT lower(hex(randomblob(8)))", [], |r| r.get(0))?;
+            repaired.id = format!("{}-fork-v6-{revision}", original.id);
             repaired.original_estimate_id = Some(original.id.clone());
             repaired.repaired_at = Some(now());
             repaired.calculation_version = 3;

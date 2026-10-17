@@ -25,6 +25,7 @@ fn setup(path: &Path) -> (Store, Settings, Source) {
         ..Default::default()
     };
     let settings = Settings {
+        codex_precise_counting: true,
         sources: vec![source.clone()],
         ..Default::default()
     };
@@ -256,6 +257,7 @@ fn historical_estimate_is_repaired_with_original_prices_and_audit_after_parent_a
     copy.id = "copy".into();
     let settings = Settings {
         sources: vec![source.clone(), copy.clone()],
+        codex_precise_counting: true,
         accounts: vec![Account {
             id: "account".into(),
             name: "Fixture".into(),
@@ -320,7 +322,10 @@ fn historical_estimate_is_repaired_with_original_prices_and_audit_after_parent_a
         .unwrap();
     import::scan(&store, &settings, &source).unwrap();
     let invalid = store
-        .estimate_for(&format!("{}-fork-v5", original.id), false)
+        .estimates()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.original_estimate_id.as_deref() == Some(&original.id))
         .unwrap();
     assert!(!invalid.has_value());
     assert_eq!(invalid.calculation_status, "unknownBilling");
@@ -328,7 +333,10 @@ fn historical_estimate_is_repaired_with_original_prices_and_audit_after_parent_a
     std::fs::write(temp.path().join("parent.jsonl"), parent).unwrap();
     import::scan(&store, &settings, &source).unwrap();
     let repaired = store
-        .estimate_for(&format!("{}-fork-v5", invalid.id), false)
+        .estimates()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.original_estimate_id.as_deref() == Some(&invalid.id))
         .unwrap();
     assert_eq!(repaired.quota().unwrap().weekly_value, Some(5.0));
     assert_eq!(repaired.prices, original.prices);
@@ -359,6 +367,32 @@ fn historical_estimate_is_repaired_with_original_prices_and_audit_after_parent_a
     import::rescan(&store, &settings, &source).unwrap();
     assert_eq!(store.estimates().unwrap().len(), 3);
     assert_eq!(usage_for(&store, "child"), 100);
+    let mut cumulative = settings.clone();
+    cumulative.codex_precise_counting = false;
+    store.save_settings(&cumulative).unwrap();
+    import::scan(&store, &cumulative, &source).unwrap();
+    assert_eq!(usage_for(&store, "child"), 1000);
+    let records = store.estimates().unwrap();
+    assert_eq!(records.len(), 4);
+    let approximate = records
+        .iter()
+        .find(|e| e.original_estimate_id.as_deref() == Some(&repaired.id))
+        .unwrap();
+    assert!(
+        !approximate.has_value(),
+        "An inherited cumulative summary cannot prove subscription billing"
+    );
+    store.save_settings(&settings).unwrap();
+    import::scan(&store, &settings, &source).unwrap();
+    let records = store.estimates().unwrap();
+    assert_eq!(records.len(), 5);
+    let precise = records
+        .iter()
+        .find(|e| e.original_estimate_id.as_deref() == Some(&approximate.id))
+        .unwrap();
+    assert_eq!(precise.quota().unwrap().weekly_value, Some(5.0));
+    import::scan(&store, &settings, &source).unwrap();
+    assert_eq!(store.estimates().unwrap().len(), 5);
 }
 
 #[test]
@@ -413,4 +447,136 @@ fn cyclic_parents_never_charge_the_first_cumulative_counter() {
     let (store, settings, source) = setup(temp.path());
     import::scan(&store, &settings, &source).unwrap();
     assert_eq!(usage_for(&store, "child"), 100);
+}
+
+#[test]
+fn counting_mode_defaults_off_and_replays_both_directions_with_frozen_prices() {
+    assert!(
+        !serde_json::from_value::<Settings>(json!({}))
+            .unwrap()
+            .codex_precise_counting
+    );
+    let temp = tempfile::tempdir().unwrap();
+    let stamp = now() - 100;
+    let parent = meta("parent", stamp - 100, None) + &count(stamp - 90, 900, 900);
+    let child = meta("child", stamp - 10, Some(("parent", parent.len())))
+        + &count(stamp, 1000, 100)
+        + &count(stamp + 1, 1100, 100);
+    std::fs::write(temp.path().join("child.jsonl"), child).unwrap();
+    let (store, mut settings, source) = setup(temp.path());
+    settings.codex_precise_counting = false;
+    store.save_settings(&settings).unwrap();
+    store
+        .save_prices(&[ModelPrice {
+            id: "unknown".into(),
+            input: Some(0.01),
+            ..Default::default()
+        }])
+        .unwrap();
+    let result = import::scan(&store, &settings, &source).unwrap();
+    assert_ne!(result["partial"], true);
+    assert!(result.get("missingHistoryBases").is_none());
+    assert_eq!(usage_for(&store, "child"), 1100);
+    assert_eq!(
+        store.dashboard(&Filter::default()).unwrap().summary.cost,
+        11.0
+    );
+    store
+        .save_prices(&[ModelPrice {
+            id: "unknown".into(),
+            input: Some(9.0),
+            ..Default::default()
+        }])
+        .unwrap();
+    let mut first = true;
+    for (precise, expected) in [(true, 100), (false, 1100), (true, 100), (false, 1100)] {
+        let old = settings.clone();
+        settings.codex_precise_counting = precise;
+        store.save_settings(&settings).unwrap();
+        assert!(import::scan(&store, &old, &source).is_err());
+        let result = import::scan(&store, &settings, &source).unwrap();
+        assert_eq!(usage_for(&store, "child"), expected);
+        assert_eq!(result["forkHistoryIssues"].is_array(), precise);
+        assert_ne!(result["partial"], true);
+        if first {
+            assert!(
+                result["forkHistoryIssues"][0]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("尚未找到")
+            );
+            first = false;
+        }
+        import::scan(&store, &settings, &source).unwrap();
+        assert_eq!(usage_for(&store, "child"), expected);
+    }
+    std::fs::write(temp.path().join("parent.jsonl"), parent).unwrap();
+    settings.codex_precise_counting = true;
+    store.save_settings(&settings).unwrap();
+    import::scan(&store, &settings, &source).unwrap();
+    assert_eq!(usage_for(&store, "child"), 200);
+    // Simulate upgrading a cursor from the previous build and a settings file without the option.
+    store
+        .db
+        .execute(
+            "UPDATE files SET state=json_remove(state,'$.codexPreciseCounting')",
+            [],
+        )
+        .unwrap();
+    store
+        .db
+        .execute(
+            "UPDATE kv SET value=json_remove(value,'$.codexPreciseCounting') WHERE key='settings'",
+            [],
+        )
+        .unwrap();
+    let upgraded = store.settings().unwrap();
+    assert!(!upgraded.codex_precise_counting);
+    import::scan(&store, &upgraded, &source).unwrap();
+    assert_eq!(usage_for(&store, "child"), 1100);
+    let child_cost: f64 = store
+        .db
+        .query_row(
+            "SELECT SUM(cost) FROM events WHERE json_extract(payload,'$.sessionId')='child'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(child_cost, 11.0);
+    assert_eq!(
+        store
+            .db
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE json_extract(payload,'$.sessionId')='child'",
+                [],
+                |r| r.get::<_, u64>(0)
+            )
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn cached_fork_warnings_are_settings_diagnostics_but_real_failures_remain_visible() {
+    use aieyes_core::codex_history::sync_status;
+    let fork = json!({"code":"missingHistoryBase","message":"父历史缺失"});
+    let old = json!({"partial":true,"issues":[fork],"updatedAt":42});
+    let precise = sync_status(old.clone(), true);
+    assert_eq!(precise["partial"], false);
+    assert_eq!(precise["forkHistoryIssues"][0], fork);
+    let normal = sync_status(old, false);
+    assert_eq!(normal["partial"], false);
+    assert!(normal.get("forkHistoryIssues").is_none());
+    let mixed = sync_status(
+        json!({"partial":true,"issues":[fork,{"code":"fileRead","message":"无法读取"}]}),
+        true,
+    );
+    assert_eq!(mixed["partial"], true);
+    assert_eq!(mixed["issues"].as_array().unwrap().len(), 1);
+    let failed = sync_status(
+        json!({"partial":true,"error":"连接失败","issues":[fork]}),
+        false,
+    );
+    assert_eq!(failed["partial"], true);
+    assert_eq!(failed["error"], "连接失败");
 }

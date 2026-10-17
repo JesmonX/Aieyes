@@ -799,6 +799,10 @@ impl Store {
             next.attribution = corrected.attribution;
             next.interval_start = corrected.interval_start;
             next.interval_evidence = corrected.interval_evidence;
+            // An inherited cumulative summary is not proof of one request's billing route.
+            if next.attribution == "session-summary" {
+                next.billing = corrected.billing;
+            }
             if next.attribution == "unresolved-inheritance" {
                 next.billing = BillingEvidence::default();
             }
@@ -1140,7 +1144,12 @@ impl Store {
                 if !account_ids.contains(&source.account_id) {
                     account_ids.push(source.account_id.clone());
                 }
-                d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":settings.source_enabled(source),"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status.and_then(|s|serde_json::from_str::<Value>(&s).ok()),"autoValuation":source.auto_valuation,"autoValuationStatus":self.automatic_status(&source.id)?}));
+                let status = status
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                    .map(|value| {
+                        crate::codex_history::sync_status(value, settings.codex_precise_counting)
+                    });
+                d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":settings.source_enabled(source),"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status,"autoValuation":source.auto_valuation,"autoValuationStatus":self.automatic_status(&source.id)?}));
             }
         }
         d.price_updated_at =

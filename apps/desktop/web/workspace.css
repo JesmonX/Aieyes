@@ -111,7 +111,7 @@ aside nav button [data-ui-icon] { display:flex; width:20px; flex:0 0 20px; }
 .quota-card::before { content:""; position:absolute; top:18px; bottom:18px; left:0; width:3px; border-radius:3px; background:var(--category); opacity:.7; pointer-events:none; }
 .agent-selector { display:flex; gap:4px; overflow:auto; padding:3px; margin:0 0 12px; border:1px solid var(--border); border-radius:12px; background:var(--surface-soft); scrollbar-width:thin; }
 .agent-selector button { flex:0 0 auto; padding:6px 12px; background:transparent; border:0; box-shadow:none; white-space:nowrap; }
-.agent-selector button[aria-pressed=true] { color:var(--category); background:color-mix(in srgb,var(--category) 15%,var(--card-fill)); box-shadow:var(--shadow-xs); }
+.agent-selector button[aria-pressed=true] { color:var(--category); background:color-mix(in srgb,var(--category) 12%,transparent); box-shadow:var(--shadow-xs); }
 .overview-filters { align-items:center; justify-content:space-between; gap:8px; margin-bottom:14px; }
 .analysis-link { margin-left:auto; color:var(--accent); display:flex; align-items:center; gap:4px; }
 .quota-group { margin-bottom:16px; }

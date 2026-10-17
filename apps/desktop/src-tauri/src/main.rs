@@ -157,7 +157,7 @@ fn refresh_feedback(
         return Some(serde_json::json!({"key":key,"busy":false,"noAttempt":true}));
     }
     let failures: Vec<Value> = match result {
-        Ok(rows) => rows.as_array().into_iter().flatten().filter(|row| row["error"].is_string() || row["partial"] == true).map(|row| {
+        Ok(rows) => rows.as_array().into_iter().flatten().map(|row| aieyes_core::codex_history::sync_status(row.clone(), false)).filter(|row| row["error"].is_string() || row["partial"] == true).map(|row| {
             let error = row["error"].as_str().map(str::to_owned).unwrap_or_else(|| row["issues"].as_array().into_iter().flatten().filter(|issue| issue["code"] != "unknownModel").filter_map(|issue| {
                 let message = issue["message"].as_str()?;
                 let location = issue["path"].as_str().unwrap_or_default();
@@ -488,6 +488,9 @@ mod tests {
         let warning = refresh_feedback("sources.scan", &Ok(json!([{"id":"agy","partial":false,"issues":[{"path":"session.db","step":2,"code":"unknownModel","message":"模型身份未知"}]}])), None).unwrap();
         assert!(warning["failures"].as_array().unwrap().is_empty());
         assert!(warning["success"].is_number());
+        let fork = refresh_feedback("sources.scan", &Ok(json!([{"id":"codex","partial":true,"issues":[{"code":"missingHistoryBase","message":"父历史缺失"}]}])), None).unwrap();
+        assert!(fork["failures"].as_array().unwrap().is_empty());
+        assert!(fork["success"].is_number());
         let partial = refresh_feedback("sources.scan", &Ok(json!([{"id":"agy","partial":true,"issues":[{"path":"session.db","step":3,"code":"invalidRecord","message":"记录损坏"}]}])), None).unwrap();
         assert_eq!(
             partial["failures"][0]["error"],

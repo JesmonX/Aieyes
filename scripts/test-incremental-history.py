@@ -13,11 +13,11 @@ from unittest.mock import patch
 SCRIPT = pathlib.Path(__file__).with_name('remote_history.py')
 
 
-def collect(path, provider='custom', cursors=None, route_cursor=None):
+def collect(path, provider='custom', cursors=None, route_cursor=None, precise=True):
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         try:
-            runpy.run_path(str(SCRIPT), init_globals={'REQUEST': dict(path=str(path), provider=provider, protocol=2, cursors=cursors or {}, routeCursor=route_cursor or {})})
+            runpy.run_path(str(SCRIPT), init_globals={'REQUEST': dict(path=str(path), provider=provider, protocol=2, cursors=cursors or {}, routeCursor=route_cursor or {}, codexPreciseCounting=precise)})
         except SystemExit as error:
             assert error.code == 0
     lines = output.getvalue().splitlines()
@@ -38,6 +38,26 @@ def record(number, model='fixture'):
 
 
 class IncrementalHistory(unittest.TestCase):
+    def test_disabled_precision_skips_parent_resolution_and_mode_change_replays(self):
+        with tempfile.TemporaryDirectory() as root:
+            home = pathlib.Path(root)
+            child = dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id='missing', end_byte_offset=999999)))
+            (home/'child.jsonl').write_text(json.dumps(child)+'\n'+json.dumps(dict(type='event_msg', timestamp=1800000000, payload=dict(type='token_count', info=dict(total_token_usage=dict(input_tokens=1000)))))+'\n')
+            first = collect(home, 'codex', precise=False)
+            self.assertFalse(first[-1]['partial'])
+            self.assertEqual(first[-1]['forkHistoryIssues'], [])
+            self.assertNotIn('inheritedHistory', events(first)[0])
+            self.assertEqual(collect(home, 'codex', cursors(first), precise=False)[-1]['readBytes'], 0)
+            exact = collect(home, 'codex', cursors(first), precise=True)
+            self.assertTrue(next(f for f in exact if f['kind'] == 'batch')['reset'])
+            self.assertFalse(exact[-1]['partial'])
+            self.assertEqual(exact[-1]['forkHistoryIssues'][0]['code'], 'missingHistoryBase')
+            self.assertEqual(exact[-1]['issues'], [])
+            normal = collect(home, 'codex', cursors(exact), precise=False)
+            self.assertTrue(next(f for f in normal if f['kind'] == 'batch')['reset'])
+            self.assertNotIn('inheritedHistory', events(normal)[0])
+            self.assertEqual(normal[-1]['forkHistoryIssues'], [])
+
     def test_renamed_parent_uses_metadata_and_recovers_existing_cursor(self):
         parent_id = '01a12393-1534-7750-8dbc-21bebb00678e'
         suffix_id = '01a13e39-8119-7f31-a38c-69d61a59ebfb'
@@ -51,7 +71,8 @@ class IncrementalHistory(unittest.TestCase):
                 child = dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id=parent_id, end_byte_offset=len(parent))))
                 (home/'child.jsonl').write_bytes(line(child))
                 first = collect(home, 'codex')
-                self.assertTrue(first[-1]['partial'])
+                self.assertFalse(first[-1]['partial'])
+                self.assertTrue(first[-1]['forkHistoryIssues'])
                 (home/f'rollout-2026-10-15T14-21-58-{parent_id}_{suffix_id}.jsonl').write_bytes(parent)
                 restored = collect(home, 'codex', cursors(first))
                 self.assertFalse(restored[-1]['partial'])
@@ -95,7 +116,8 @@ class IncrementalHistory(unittest.TestCase):
                 parent=(json.dumps(dict(type='session_meta',payload=dict(id='parent')))+newline).encode('utf-8')
                 child=dict(type='session_meta',payload=dict(id='child',history_base=dict(thread_id='parent',end_byte_offset=len(parent))))
                 (home/'child.jsonl').write_bytes((json.dumps(child)+newline).encode('utf-8'))
-                first=collect(home,'codex');self.assertTrue(first[-1]['partial'])
+                first=collect(home,'codex');self.assertFalse(first[-1]['partial'])
+                self.assertEqual(first[-1]['forkHistoryIssues'][0]['code'],'missingHistoryBase')
                 (home/'parent.jsonl').write_bytes(parent)
                 restored=collect(home,'codex',cursors(first))
                 self.assertFalse(restored[-1]['partial'])

@@ -238,7 +238,7 @@ struct SettingsView: View {
                 }.padding(6)
             }.id("model-mapping")
             HStack {
-                TextField("搜索模型", text: $catalog.query).textFieldStyle(.roundedBorder)
+                TextField("搜索模型", text: $catalog.query).textFieldStyle(.aieyes)
                 Button("同步 OpenRouter") { Task { await model.syncPrices() } }.disabled(model.busy || model.quotaBusy)
                 Button("添加价格") { priceEditor = ModelPrice() }
             }
@@ -258,7 +258,7 @@ struct SettingsView: View {
             if !catalog.loading && catalog.error == nil && catalog.filtered.isEmpty {
                 Text(catalog.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步模型价格" : "无匹配模型").foregroundStyle(.secondary).frame(maxWidth: .infinity).padding()
             }
-        }.padding(16) }.textFieldStyle(.roundedBorder) }
+        }.padding(16) }.textFieldStyle(.aieyes) }
     }
     private var general: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -303,6 +303,18 @@ struct SettingsView: View {
                 LabeledContent("服务器后台间隔（秒）") { TextField("服务器后台间隔（秒）", value: $model.settingsDraft.serverRefreshSeconds, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "background") }
             }
             Section("历史记录") {
+                Toggle("精确计数", isOn: Binding(get: { model.settingsDraft.codexPreciseCounting == true }, set: { model.settingsDraft.codexPreciseCounting = $0 }))
+                Text("开启后扣除 Codex fork 会话继承的父历史用量；关闭时允许重复计入。修改后在下次同步自动重算已有日志。").font(AppFont.secondary).foregroundStyle(.secondary)
+                if model.settings.codexPreciseCounting == true {
+                    ForEach(model.dashboard.sources.filter { $0.enabled && !($0.status?.forkHistoryIssues ?? []).isEmpty }) { source in
+                        DisclosureGroup(source.name + " · 父历史待确认") {
+                            ForEach(Array((source.status?.forkHistoryIssues ?? []).enumerated()), id: \.offset) { _, issue in
+                                Text((issue.path.map { $0 + " · " } ?? "") + issue.message).font(AppFont.secondary).textSelection(.enabled)
+                            }
+                            Text("首段不确定累计暂不计入，后续有效增量继续统计；父历史恢复后自动补全。").font(AppFont.secondary).foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 Toggle("在筛选中显示已删除账户", isOn: Binding(get: { model.settingsDraft.historyShowDeletedAccounts == true }, set: { model.settingsDraft.historyShowDeletedAccounts = $0 }))
                 Text("在筛选中显示有历史记录的已删除账户；其用量始终计入总统计。").font(AppFont.secondary).foregroundStyle(.secondary)
                 Text("重新读取已启用来源的完整日志，修正可确认的重复记录。已有历史和价格快照保留。").font(AppFont.secondary).foregroundStyle(.secondary)
@@ -320,7 +332,7 @@ struct SettingsView: View {
                 ProxyFields(proxy: $model.settingsDraft.proxy, testURLs: model.settingsDraft.proxyTestUrls)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("测试地址（逗号分隔）")
-                    TextField("测试地址（逗号分隔）", text: Binding(get: { (model.settingsDraft.proxyTestUrls ?? ["https://api.github.com/rate_limit", "https://openrouter.ai"]).joined(separator: ", ") }, set: { model.settingsDraft.proxyTestUrls = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }), axis: .vertical).labelsHidden().textFieldStyle(.roundedBorder).lineLimit(2...4)
+                    TextField("测试地址（逗号分隔）", text: Binding(get: { (model.settingsDraft.proxyTestUrls ?? ["https://api.github.com/rate_limit", "https://openrouter.ai"]).joined(separator: ", ") }, set: { model.settingsDraft.proxyTestUrls = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }), axis: .vertical).labelsHidden().textFieldStyle(.aieyes).lineLimit(2...4)
                 }
             }
             }
@@ -511,10 +523,10 @@ struct SourceEditor: View {
                 }
                 }
                 if let error { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
-            }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.roundedBorder).disabled(saving)
+            }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.aieyes).disabled(saving)
             HStack {
                 Button("取消") { cancel() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text("保存后立即生效").font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
-                Button(saving ? "处理中…" : "保存") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving)
+                Button(saving ? "处理中…" : "保存") { Task { await save() } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(saving)
             }.padding(20)
         }.font(AppFont.body).frame(width: DesignTokens.dialogSourceWidth, height: EditorLayout.height(660))
         .interactiveDismissDisabled(saving || initialDraft != draftValue)
@@ -637,9 +649,9 @@ struct HostEditor: View {
                     if host.id != "local" { TextField("远程 Shell", text: $host.shell).focused($shellFocused) }
                     TextField("设备表达式", text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/")).help("留空使用推荐设备；文件系统默认隐藏虚拟挂载。全选可显示全部")
                 }
-            }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.roundedBorder)
+            }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.aieyes)
             if let saveError { ErrorNotice(message: saveError) }
-            HStack { Button("取消") { cancel() }.keyboardShortcut(.cancelAction); Spacer(); Text("保存后立即生效").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(saving ? "保存中…" : "保存") { Task { saving = true; saveError = nil; defer { saving = false }; host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; do { try await onSave(host, password) } catch { saveError = error.localizedDescription } } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty || saving) }.padding(20)
+            HStack { Button("取消") { cancel() }.keyboardShortcut(.cancelAction); Spacer(); Text("保存后立即生效").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(saving ? "保存中…" : "保存") { Task { saving = true; saveError = nil; defer { saving = false }; host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; do { try await onSave(host, password) } catch { saveError = error.localizedDescription } } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty || saving) }.padding(20)
         }.font(AppFont.body).frame(width: DesignTokens.dialogHostWidth, height: EditorLayout.height(650)).onChange(of: connectionIdentity) { _, _ in discoveryRequest = UUID(); discovered = [:]; discoveryInfo = nil; discoveryError = "连接配置已更改，请重新读取设备" }
         .updateDraftGuard(host.id == "local" ? "本机监测" : "SSH 主机", snapshot: draftValue, dirty: !initialDraft.isEmpty && initialDraft != draftValue, saving: saving || discovering, save: {
             saving = true; defer { saving = false }; saveError = nil
@@ -680,11 +692,11 @@ struct PriceEditor: View {
                 LabeledContent("缓存读取") { TextField("缓存读取", text: $cacheRead, prompt: Text("待定价")).labelsHidden().frame(width: DesignTokens.fieldPriceWidth) }; LabeledContent("缓存写入") { TextField("缓存写入", text: $cacheWrite, prompt: Text("待定价")).labelsHidden().frame(width: DesignTokens.fieldPriceWidth) }
                 if !valid { Text("价格须为大于或等于 0 的数字；留空表示待定价。").foregroundStyle(Palette.warn) }
                 if let error { ErrorNotice(message: error).accessibilityLabel("保存失败，" + error) }
-            }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.roundedBorder).disabled(saving)
+            }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.aieyes).disabled(saving)
             HStack {
                 Button("取消") { cancel() }.keyboardShortcut(.cancelAction).disabled(saving)
                 Spacer()
-                Button(saving ? "保存中…" : "保存价格") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(saving || !valid || price.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button(saving ? "保存中…" : "保存价格") { Task { await save() } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(saving || !valid || price.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding(20)
         }.font(AppFont.body).frame(width: DesignTokens.dialogPriceWidth, height: EditorLayout.height(470)).interactiveDismissDisabled(saving || initialDraft != draftValue)
             .updateDraftGuard("模型价格", snapshot: draftValue, dirty: !initialDraft.isEmpty && initialDraft != draftValue, saving: saving, save: { guard valid, !price.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { error = "请填写模型 ID 和有效的非负价格"; return false }; await save(); return error == nil }, discard: { dismiss() })

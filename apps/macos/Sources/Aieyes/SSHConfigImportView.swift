@@ -29,7 +29,7 @@ struct SSHConfigImportView: View {
                     if let result {
                         Text(result.path).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled)
                         Text("沿用 SSH 别名、密钥和跳板配置。导入后可测试连接。").foregroundStyle(.secondary)
-                        TextField("搜索别名或地址", text: $search).textFieldStyle(.roundedBorder)
+                        TextField("搜索别名或地址", text: $search).textFieldStyle(.aieyes)
                         HStack {
                             Button("全选当前结果") { selected.formUnion(rows.filter { !existing.contains($0.alias.lowercased()) }.map(\.alias)) }
                             Button("清空选择") { selected.removeAll() }
@@ -47,7 +47,7 @@ struct SSHConfigImportView: View {
                 }.padding(.horizontal, 22).padding(.bottom, 16).background(OverlayScrollStyle())
             }.disabled(busy)
             Divider()
-            HStack { Text("已选 \(selected.count) 台").foregroundStyle(.secondary); Spacer(); Button(busy ? "导入中…" : "导入所选服务器") { Task { await save() } }.buttonStyle(.borderedProminent).disabled(selected.isEmpty || busy) }.padding(20)
+            HStack { Text("已选 \(selected.count) 台").foregroundStyle(.secondary); Spacer(); Button(busy ? "导入中…" : "导入所选服务器") { Task { await save() } }.buttonStyle(.aieyesPrimary).disabled(selected.isEmpty || busy) }.padding(20)
         }.font(AppFont.body).frame(width: 650, height: EditorLayout.height(600)).interactiveDismissDisabled(busy).task { if let preview { result = preview } else { await load() } }
     }
     private func load() async {

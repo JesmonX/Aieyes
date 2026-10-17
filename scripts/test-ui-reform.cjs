@@ -55,6 +55,12 @@ function fixture(){
    await page.evaluate(()=>{reform.waitScan=true;window.pendingScan=scan();});assert.match(await page.locator('#activity').textContent(),/同步记录中/);await page.locator(trigger).click();assert.equal(await page.locator(menu+' [data-refresh=scan]').isDisabled(),true);await page.keyboard.press('Escape');
    await page.evaluate(async()=>{reform.waitScan=false;reform.releaseScan();await window.pendingScan;});assert.equal(await page.locator('#activity').textContent(),initial,'Success uses the dashboard timestamp, not completion time');
    await page.evaluate(async()=>{reform.failures=[{id:'s1',error:'来源一失败'},{id:'s2',error:'来源二失败'}];await scan();});await page.locator('[data-refresh-status=scan]').click();assert.equal(await page.locator('.error-row').count(),2);assert.match(await page.locator('#activity').textContent(),/部分失败/);
+   await page.locator('[data-status-dismiss]').first().click();assert.equal(await page.locator('.error-row').count(),1);
+   await page.evaluate(()=>renderFailures());assert.equal(await page.locator('.error-row').count(),1,'Rendering the same result must not resurrect a dismissed error');
+   assert.equal(await page.evaluate(()=>state.refreshState.scan.failures.length),2,'Dismissal preserves the actual failed result');
+   await page.evaluate(async()=>{await scan();});assert.equal(await page.locator('.error-row').count(),2,'A new failed sync may show the same error again');
+   assert.equal(await page.evaluate(()=>batchError([{partial:true,issues:[{code:'missingHistoryBase',message:'父历史缺失'}]}],'同步记录')),null);
+   assert.match(await page.evaluate(()=>batchError([{partial:true,issues:[{code:'missingHistoryBase',message:'父历史缺失'},{code:'fileRead',message:'无法读取'}]}],'同步记录').message),/无法读取/);
    await page.evaluate(()=>{reform.failures=[{id:'s2',error:'来源二失败'}];});await page.locator('[data-status-retry]').first().click();await page.waitForFunction(()=>!state.busy);await page.locator('[data-refresh-status=scan]').click();assert.equal(await page.locator('.error-row').count(),1);assert.equal(await page.evaluate(()=>reform.calls.filter(c=>c.method==='sources.scan').at(-1).params.sourceId),'s1');
    await page.evaluate(async()=>{reform.failures=[];await scan();});assert.equal(await page.locator('.error-row').count(),0);
    // Shared RPC feedback must survive a filtered dashboard invalidation and retries.

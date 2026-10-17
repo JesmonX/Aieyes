@@ -61,7 +61,48 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           assert.equal(alpha(surfaces.sidebar),0,'settings navigation shares the window backdrop');
           assert.equal(alpha(surfaces.card)<1,material!=='opaque','settings cards follow the material of their own window');
           if(material!=='opaque')assert.deepEqual(surfaces.card.match(/[\d.]+/g).map(Number),surfaces.panel.match(/[\d.]+/g).map(Number),'settings and floating cards share a surface');
+          // Inspect painted control colors, including modern color()/relative RGB.
+          // Alpha < 1 alone allowed the previous .94/.97 overlays to pass.
+          const finishes=await page.evaluate(()=>{
+            const probe=document.createElement('div');
+            probe.innerHTML='<button type="button">取消</button><button type="button" class="primary">保存</button><input type="text" value="搜索"><input type="checkbox" checked><input type="checkbox" role="switch" checked>';
+            document.body.append(probe);
+            const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
+            const ctx=canvas.getContext('2d');
+            const opacity=color=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=color;ctx.fillRect(0,0,1,1);return ctx.getImageData(0,0,1,1).data[3]/255;};
+            const result={controls:[...probe.children].map(el=>opacity(getComputedStyle(el).backgroundColor)),
+              edge:opacity(getComputedStyle(document.documentElement).getPropertyValue('--window-edge'))};
+            probe.remove();return result;
+          });
+          for(const opacity of finishes.controls)assert(opacity>0.05&&opacity<0.5,'ordinary, primary, field and selected controls use soft fills');
+          if(platform==='windows') {
+            assert(finishes.edge<=0.15,'white window edges remain subtle independently of surface opacity');
+            await page.locator('[data-general-section=appearance] .win-select-trigger').first().click();
+            const menu=page.locator('.win-select-menu:popover-open');
+            const finish=await menu.evaluate(el=>({fill:getComputedStyle(el).backgroundColor,blur:getComputedStyle(el).backdropFilter}));
+            if(material!=='opaque') {
+              assert(alpha(finish.fill)>=0.45&&alpha(finish.fill)<=0.75,'menus visibly transmit their backdrop while retaining a readable tint');
+              assert.notEqual(finish.blur,'none','transparent menus retain their blur');
+            } else assert.equal(alpha(finish.fill),1,'material fallback gives menus an opaque backing');
+            await capture(`menu-${theme}-${material}`);
+            await page.keyboard.press('Escape');
+          }
           await capture(`appearance-${theme}-${material}`);
+          if(platform==='windows'&&material!=='opaque') {
+            const resourceAlpha=await page.evaluate(()=>{
+              state.page='servers';render();
+              const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
+              const ctx=canvas.getContext('2d');
+              return [...document.querySelectorAll('.card .resource-block,.card .server-gpu,.card .server-filesystems,.card .server-network-rates')].map(el=>{
+                ctx.clearRect(0,0,1,1);ctx.fillStyle=getComputedStyle(el).backgroundColor;ctx.fillRect(0,0,1,1);
+                return ctx.getImageData(0,0,1,1).data[3]/255;
+              });
+            });
+            assert(resourceAlpha.length,'server fixture contains nested resource groups');
+            for(const opacity of resourceAlpha)assert(opacity>0&&opacity<0.2,'nested resource groups add tint without stacking another card backing');
+            await capture(`servers-${theme}-${material}`);
+            await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='appearance';render();});
+          }
           if(material!=='opaque')continue;
           await page.setViewportSize({width:640,height:440});
           const minimum=await page.locator('[data-general-section=appearance] .form-row').evaluateAll(rows=>rows.map(row=>({
@@ -153,6 +194,13 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
       await page.evaluate(()=>{state.settingsTab='general';state.generalTab='appearance';renderSettings(false);__setDesktopMaterials('acrylic','opaque');});
       await session.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-transparency',value:'reduce'}]});
       assert.equal(alpha(await page.locator('#general-form').evaluate(el=>getComputedStyle(el).backgroundColor)),1,'reduced transparency makes settings cards opaque');
+      if(platform==='windows') {
+        await page.locator('[data-general-section=appearance] .win-select-trigger').first().click();
+        const reduced=await page.locator('.win-select-menu:popover-open').evaluate(el=>({fill:getComputedStyle(el).backgroundColor,blur:getComputedStyle(el).backdropFilter}));
+        assert.equal(alpha(reduced.fill),1,'reduced transparency makes dark and light overlays opaque');
+        assert.equal(reduced.blur,'none','reduced transparency disables overlay blur');
+        await page.keyboard.press('Escape');
+      }
       await session.send('Emulation.setEmulatedMedia',{features:[]});
       assert.deepEqual(errors,[]);
     } finally {await context.close();}

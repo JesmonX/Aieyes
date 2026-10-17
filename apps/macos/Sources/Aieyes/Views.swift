@@ -260,7 +260,7 @@ struct RootView: View {
         if hasUsageData {
             if compact {
                 DisclosureGroup(filters.dateRange == nil ? "近 \(max(7, filters.days)) 天趋势与每日明细" : "所选日期趋势与每日明细", isExpanded: $trendExpanded) { UsageChart(days: recentDays, rows: recentRows, cost: false).frame(minHeight: 220); DailyUsage(days: recentDays, rows: recentRows, compact: true) }.font(AppFont.secondary)
-                Button { model.showDetailPage?("agent") } label: { Text("用量详情").frame(maxWidth: .infinity) }.buttonStyle(.bordered).accessibilityLabel("打开用量详情")
+                Button { model.showDetailPage?("agent") } label: { Text("用量详情").frame(maxWidth: .infinity) }.buttonStyle(.aieyes).accessibilityLabel("打开用量详情")
             } else {
                 Text("用量分析遵循当前筛选；今日总览的趋势为近 7 天，热力图为过去 365 天。").font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack { Text(filters.isToday ? "近 7 天趋势" : "使用趋势").font(AppFont.section); Spacer(); Picker("统计指标", selection: $costMode) { Text("Token").tag(false); Text("API 等价成本").tag(true) }.pickerStyle(.segmented).frame(width: 230) }
@@ -277,7 +277,7 @@ struct RootView: View {
     private var modelSurface: some View { Surface(title: "所选范围 · 模型分布") { ModelChart(models: usageDashboard.models, cost: costMode).frame(minHeight: DesignTokens.chartSurfaceHeight) } }
     private var usageEmptyState: some View {
         let onlyQuota = model.settings.sources.allSatisfy { $0.provider == "deepseek" }
-        let failed = usageDashboard.sources.contains { $0.enabled && ($0.status?.error != nil || $0.status?.partial == true) }
+        let failed = usageDashboard.sources.contains { $0.enabled && $0.status?.failureReason != nil }
         return Surface(title: onlyQuota ? "此来源提供账户额度" : failed ? "记录同步失败" : hasActiveFilters ? "没有匹配的用量记录" : model.dataTime == 0 ? "尚未同步用量记录" : "此时间范围暂无用量") {
             Text(onlyQuota ? "连接账户查看额度与余额；添加日志目录后分析用量。" : failed ? "请检查对应来源的错误后重试。" : "保留筛选与日期入口，可同步记录或扩大范围。").font(AppFont.secondary).foregroundStyle(.secondary)
             HStack { if onlyQuota { Button("添加日志来源") { model.openSettings(.init(provider: "codex", section: "machines")) } } else { Button("同步记录") { Task { await model.scan() } }; Button("扩大到最近一年") { filters.rangeChoice = "365"; if compact { model.showDetailPage?("agent") } }; if hasActiveFilters { Button("清除筛选") { filters.provider = "all"; filters.account = "all"; filters.source = "all"; filters.model = "all" } } } }
@@ -473,7 +473,7 @@ struct StatCard: View {
 struct EmptyCard: View {
     var icon: String, title: String, subtitle: String, action: () -> Void
     var body: some View {
-        VStack(spacing: 12) { Image(systemName: icon).font(.system(size: 32, weight: .light)).foregroundStyle(Palette.accent); if !subtitle.isEmpty { Text(subtitle).font(AppFont.body).foregroundStyle(.secondary) }; Button(title, action: action).buttonStyle(.borderedProminent) }
+        VStack(spacing: 12) { Image(systemName: icon).font(.system(size: 32, weight: .light)).foregroundStyle(Palette.accent); if !subtitle.isEmpty { Text(subtitle).font(AppFont.body).foregroundStyle(.secondary) }; Button(title, action: action).buttonStyle(.aieyesPrimary) }
             .frame(maxWidth: .infinity).padding(.vertical, 36)
     }
 }
@@ -1190,8 +1190,8 @@ struct RefreshIndicator: View {
     @ObservedObject var model: AppModel
     let key: String
     @State private var showing = false
-    private var failures: [ActionFailure] { model.actionFailures.filter { $0.action == key || (key == "scan" && $0.action == "prices") } }
-    private var hasError: Bool { !failures.isEmpty || (key == "scan" && model.dashboardError != nil) }
+    private var failures: [ActionFailure] { model.actionFailures.filter { !$0.dismissed && ($0.action == key || (key == "scan" && $0.action == "prices")) } }
+    private var hasError: Bool { model.actionFailures.contains { $0.action == key || (key == "scan" && $0.action == "prices") } || (key == "scan" && model.dashboardError != nil) }
     private var statusLabel: String {
         model.refreshLabel(key) + "状态 · " + (model.refreshStates[key]?.busy == true ? "进行中" : hasError ? "部分失败" : model.refreshStates[key]?.succeededAt != nil ? "已更新" : "尚未刷新") + "；点击查看详情"
     }
@@ -1206,15 +1206,16 @@ struct RefreshIndicator: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text(model.refreshLabel(key) + "状态").font(AppFont.section)
                 if let time = model.refreshStates[key]?.succeededAt { Text("上次成功：" + time.formatted(date: .abbreviated, time: .shortened)).font(AppFont.secondary) }
+                else if failures.isEmpty && hasError { Text("本次错误提示已关闭").font(AppFont.secondary) }
                 else { Text(model.refreshStates[key]?.busy == true ? "正在刷新…" : "尚未刷新").font(AppFont.secondary) }
                 ForEach(failures) { failure in
-                    HStack { VStack(alignment: .leading) { Text(failure.name); ErrorNotice(message: failure.reason).font(AppFont.secondary).textSelection(.enabled) }; Spacer(); Button("重试") { Task { await model.retry(failure) } } }
+                    HStack { VStack(alignment: .leading) { Text(failure.name); ErrorNotice(message: failure.reason).font(AppFont.secondary).textSelection(.enabled) }; Spacer(); Button("重试") { Task { await model.retry(failure) } }; Button("关闭") { model.dismissFailure(failure) } }
                 }
                 if key == "scan", model.dashboardPending || model.dashboardError != nil {
                     Text((model.dashboardPending ? "正在更新，仍显示上一结果：" : "更新失败，仍显示上一结果：") + model.appliedScope).font(AppFont.secondary)
                     if let error = model.dashboardError { ErrorNotice(message: error).font(AppFont.secondary).textSelection(.enabled); Button("重试查询") { Task { await model.reload() } } }
                 }
-                if key == "scan", let message = model.message { Text(message).font(AppFont.secondary).textSelection(.enabled) }
+                if key == "scan", let message = model.message, !model.actionFailures.contains(where: { $0.dismissed && $0.reason == message }) { Text(message).font(AppFont.secondary).textSelection(.enabled) }
             }.padding(16).frame(width: 360)
         }
     }
