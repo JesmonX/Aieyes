@@ -263,57 +263,125 @@ struct QuotaEstimateView: View {
     private var records: [QuotaEstimate] { (credits ? (fullCreditRecords ?? model.dashboard.creditEstimates ?? []) : (fullQuotaRecords ?? model.dashboard.quotaEstimates ?? [])).filter { $0.accountKey == quota.id } }
     private var current: QuotaEstimate? { records.first { $0.status != "completed" } }
     private var eligible: Bool { if credits { return quota.credits?.balance != nil && quota.credits?.unlimited == false }; return windows.contains { initialGroup == nil || $0.estimateGroup == initialGroup } }
+    private var title: String {
+        credits ? "credit 价值" : (visibility.periods + " 额度价值").trimmingCharacters(in: .whitespaces)
+    }
+    private var historyRevision: String {
+        let rows = (model.dashboard.quotaEstimates ?? []) + (model.dashboard.creditEstimates ?? [])
+        return rows.filter { $0.accountKey == quota.id }
+            .map { $0.recordKey + ":" + $0.status + ":" + String($0.checkpointAt) }
+            .joined(separator: "|")
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack { VStack(alignment: .leading, spacing: 4) { Text(credits ? "credit 价值" : (visibility.periods + " 额度价值").trimmingCharacters(in: .whitespaces)).font(AppFont.title); Text(quota.name).foregroundStyle(.secondary) }; Spacer(); Button("关闭") { close() }.keyboardShortcut(.cancelAction) }
-            if quota.provider == "codex" { Picker("采样口径", selection: $credits) { Text("额度价值").tag(false); Text("credit 价值").tag(true) }.pickerStyle(.segmented).disabled(busy) }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(credits ? "按 credits 消耗与样本成本估算 API 等价价值，金额不可兑换。" : "按样本成本与额度消耗比例估算 API 等价价值，金额不可兑换。" + visibility.help).foregroundStyle(.secondary)
-                    AutomaticValuationControls(model: model, sources: sources)
-                    if let current {
-                        if let group = current.groupId, let initialGroup, group != initialGroup { Text("此账户正在采样其他模型组，请先结束当前采样。").foregroundStyle(.secondary) }
-                        result(current)
-                        if current.status == "pending" {
-                            Text(current.reason).foregroundStyle(Palette.warn)
-                            confirmation
-                            Button("确认并开始新一段") { perform("restart", ["id": current.id, "confirmed": confirmed]) }.disabled(!confirmed || busy)
-                        }
-                        Button(current.status == "pending" ? "结束并保留有效段" : "结束并保存本段结果") { perform("stop", ["id": current.id]) }.buttonStyle(.aieyesPrimary).disabled(busy)
-                    } else if sources.contains(where: { $0.autoValuation?.enabled == true }) {
-                        Text("自动估值正在等待有效样本。关闭来源的自动估值后可开始手动采样。").foregroundStyle(.secondary)
-                    } else if eligible && !sources.isEmpty {
-                        if !credits { Picker("主要额度池", selection: $window) {
-                            ForEach(windows) { Text($0.name).tag($0.id) }
-                        } }
-                        Text("纳入的用量来源").font(AppFont.section)
-                        ForEach(sources) { source in
-                            Toggle(source.name, isOn: Binding(get: { selected.contains(source.id) }, set: { if $0 { selected.insert(source.id) } else { selected.remove(source.id) } })).disabled(busy)
-                        }
-                        confirmation
-                        if sources.contains(where: { $0.codexHomeId != nil }) {
-                            Text("共享目录仅统计本次采样时段。切换账户前请结束采样，切换后重新开始。").font(AppFont.secondary).foregroundStyle(.secondary)
-                        }
-                        Text(credits ? "开始后请新建会话。有可确认的 credits 消耗且价格完整时显示估值；充值或订阅额度恢复后请重新采样。" : "开始后请新建会话。有可确认的额度消耗且价格完整时显示估值；跨采样边界的累计用量不计入。").font(AppFont.secondary).foregroundStyle(.secondary)
-                        Button("开始采样") { perform("start", ["accountKey": quota.id, "windowId": credits ? "credits" : window, "sourceIds": Array(selected), "confirmed": confirmed]) }.buttonStyle(.aieyesPrimary).disabled(!confirmed || selected.isEmpty || (!credits && window.isEmpty) || busy)
-                    } else {
-                        Text(sources.isEmpty ? "需要可采集 Token 的关联数据源，请检查数据目录和账户关联。" : credits ? "需要明确且有限的 credits 余额；请刷新账户额度。" : "此额度池缺少可靠的模型映射，暂不支持估值。").foregroundStyle(.secondary)
-                    }
-                    if busy { TimelineView(.periodic(from: .now, by: 1)) { context in
-                        HStack { ProgressView().controlSize(.small); Text((model.estimateStages[quota.id] ?? "准备同步") + " · " + String(Int(context.date.timeIntervalSince(model.estimateStartedAt[quota.id] ?? context.date))) + " 秒") }.font(AppFont.secondary)
-                    } }
-                    if let error { ErrorNotice(message: error) }
-                    if let historyError { HStack { ErrorNotice(message: historyError); Button("重试") { Task { await loadHistory() } } } }
-                    if records.contains(where: { $0.status == "completed" }) {
-                        Divider(); Text("采样历史").font(AppFont.section)
-                        ForEach(records.filter { $0.status == "completed" && (initialGroup == nil || $0.groupId == nil || $0.groupId == initialGroup) }) { result($0) }
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }.frame(maxHeight: 480)
-        }.aieyesAccent().font(AppFont.body).disabled(model.installingUpdate).padding(DesignTokens.dialogPadding).frame(minWidth: DesignTokens.dialogEstimateMinWidth, idealWidth: DesignTokens.dialogEstimateWidth)
-        .task(id: ((model.dashboard.quotaEstimates ?? []) + (model.dashboard.creditEstimates ?? [])).filter { $0.accountKey == quota.id }.map { $0.recordKey + ":" + $0.status + ":" + String($0.checkpointAt) }.joined(separator: "|")) { await loadHistory() }
+            header
+            if quota.provider == "codex" {
+                Picker("采样口径", selection: $credits) {
+                    Text("额度价值").tag(false)
+                    Text("credit 价值").tag(true)
+                }.pickerStyle(.segmented).disabled(busy)
+            }
+            ScrollView { content }.frame(maxHeight: 480)
+        }
+        .aieyesAccent().font(AppFont.body).disabled(model.installingUpdate)
+        .padding(DesignTokens.dialogPadding)
+        .frame(minWidth: DesignTokens.dialogEstimateMinWidth, idealWidth: DesignTokens.dialogEstimateWidth)
+        .task(id: historyRevision) { await loadHistory() }
         .onChange(of: credits) { _, _ in confirmed = false }
-        .onAppear { selected = Set(sources.map(\.id)); window = windows.first { ($0.groupId ?? $0.groupName) == initialGroup }?.id ?? windows.first?.id ?? "" }
+        .onAppear {
+            selected = Set(sources.map(\.id))
+            window = windows.first { ($0.groupId ?? $0.groupName) == initialGroup }?.id ?? windows.first?.id ?? ""
+        }
+    }
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(AppFont.title)
+                Text(quota.name).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("关闭") { close() }.keyboardShortcut(.cancelAction)
+        }
+    }
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(credits ? "按 credits 消耗与样本成本估算 API 等价价值，金额不可兑换。" : "按样本成本与额度消耗比例估算 API 等价价值，金额不可兑换。" + visibility.help).foregroundStyle(.secondary)
+            AutomaticValuationControls(model: model, sources: sources)
+            sampling
+            if busy { progress }
+            if let error { ErrorNotice(message: error) }
+            if let historyError {
+                HStack {
+                    ErrorNotice(message: historyError)
+                    Button("重试") { Task { await loadHistory() } }
+                }
+            }
+            history
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    @ViewBuilder private var sampling: some View {
+        if let current {
+            activeSampling(current)
+        } else if sources.contains(where: { $0.autoValuation?.enabled == true }) {
+            Text("自动估值正在等待有效样本。关闭来源的自动估值后可开始手动采样。").foregroundStyle(.secondary)
+        } else if eligible && !sources.isEmpty {
+            newSampling
+        } else {
+            Text(sources.isEmpty ? "需要可采集 Token 的关联数据源，请检查数据目录和账户关联。" : credits ? "需要明确且有限的 credits 余额；请刷新账户额度。" : "此额度池缺少可靠的模型映射，暂不支持估值。").foregroundStyle(.secondary)
+        }
+    }
+    @ViewBuilder private func activeSampling(_ current: QuotaEstimate) -> some View {
+        if let group = current.groupId, let initialGroup, group != initialGroup {
+            Text("此账户正在采样其他模型组，请先结束当前采样。").foregroundStyle(.secondary)
+        }
+        result(current)
+        if current.status == "pending" {
+            Text(current.reason).foregroundStyle(Palette.warn)
+            confirmation
+            Button("确认并开始新一段") {
+                perform("restart", ["id": current.id, "confirmed": confirmed])
+            }.disabled(!confirmed || busy)
+        }
+        Button(current.status == "pending" ? "结束并保留有效段" : "结束并保存本段结果") {
+            perform("stop", ["id": current.id])
+        }.buttonStyle(.aieyesPrimary).disabled(busy)
+    }
+    @ViewBuilder private var newSampling: some View {
+        if !credits {
+            Picker("主要额度池", selection: $window) {
+                ForEach(windows) { Text($0.name).tag($0.id) }
+            }
+        }
+        Text("纳入的用量来源").font(AppFont.section)
+        ForEach(sources) { source in
+            Toggle(source.name, isOn: Binding(get: { selected.contains(source.id) }, set: {
+                if $0 { selected.insert(source.id) } else { selected.remove(source.id) }
+            })).disabled(busy)
+        }
+        confirmation
+        if sources.contains(where: { $0.codexHomeId != nil }) {
+            Text("共享目录仅统计本次采样时段。切换账户前请结束采样，切换后重新开始。").font(AppFont.secondary).foregroundStyle(.secondary)
+        }
+        Text(credits ? "开始后请新建会话。有可确认的 credits 消耗且价格完整时显示估值；充值或订阅额度恢复后请重新采样。" : "开始后请新建会话。有可确认的额度消耗且价格完整时显示估值；跨采样边界的累计用量不计入。").font(AppFont.secondary).foregroundStyle(.secondary)
+        Button("开始采样") {
+            perform("start", ["accountKey": quota.id, "windowId": credits ? "credits" : window, "sourceIds": Array(selected), "confirmed": confirmed])
+        }.buttonStyle(.aieyesPrimary).disabled(!confirmed || selected.isEmpty || (!credits && window.isEmpty) || busy)
+    }
+    private var progress: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let elapsed = Int(context.date.timeIntervalSince(model.estimateStartedAt[quota.id] ?? context.date))
+            HStack {
+                ProgressView().controlSize(.small)
+                Text((model.estimateStages[quota.id] ?? "准备同步") + " · " + String(elapsed) + " 秒")
+            }.font(AppFont.secondary)
+        }
+    }
+    @ViewBuilder private var history: some View {
+        if records.contains(where: { $0.status == "completed" }) {
+            Divider()
+            Text("采样历史").font(AppFont.section)
+            ForEach(records.filter { $0.status == "completed" && (initialGroup == nil || $0.groupId == nil || $0.groupId == initialGroup) }) { result($0) }
+        }
     }
     private func loadHistory() async {
         do {

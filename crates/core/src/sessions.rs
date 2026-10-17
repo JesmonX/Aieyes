@@ -333,6 +333,11 @@ fn seconds(time: SystemTime) -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+fn local_session_path(path: &Path) -> PathBuf {
+    // WalkDir and watcher backends may disagree on Windows' verbatim prefix or
+    // symlink/relative components. Use one identity for discovery and events.
+    dunce::canonicalize(path).unwrap_or_else(|_| dunce::simplified(path).to_owned())
+}
 fn normalized_source(s: &Source) -> Source {
     let mut s = s.clone();
     if s.path.trim().is_empty() {
@@ -520,7 +525,8 @@ impl Reader {
                         if event.need_rescan() {
                             lost = true;
                         }
-                        for mut path in event.paths {
+                        for path in event.paths {
+                            let mut path = local_session_path(&path);
                             if path.is_dir() {
                                 lost = true;
                                 continue;
@@ -532,8 +538,7 @@ impl Reader {
                                     PathBuf::from(path.to_string_lossy().trim_end_matches("-wal"));
                             }
                             let event_root = session_hooks::event_root(source);
-                            let hook = path
-                                .starts_with(fs::canonicalize(&event_root).unwrap_or(event_root));
+                            let hook = path.starts_with(local_session_path(&event_root));
                             let extension = if !hook && source.provider == "antigravity" {
                                 "db"
                             } else {
@@ -570,7 +575,7 @@ impl Reader {
                 || now.saturating_sub(d.at) >= if d.watch.active() { 60 } else { 5 }
         }) {
             let root = expand(&source.path);
-            let root = fs::canonicalize(&root).unwrap_or(root);
+            let root = local_session_path(&root);
             let mut paths = Vec::new();
             let mut error = None;
             if !root.exists() {
@@ -585,7 +590,7 @@ impl Reader {
             if matches!(source.provider.as_str(), "claude" | "antigravity") {
                 let events = session_hooks::event_root(source);
                 if events.is_dir() {
-                    roots.push((events, true));
+                    roots.push((local_session_path(&events), true));
                 }
             }
             // Reconciliation reuses the watcher; a failed backend retries on the five-second fallback.
@@ -1281,6 +1286,59 @@ mod adapter_tests {
         fs::rename(replacement, &path).unwrap();
         reader.collect_local(&source, at + 11);
         assert_eq!(reader.database_reads, 3);
+    }
+    #[test]
+    fn watcher_path_aliases_share_one_database_cache_entry() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicU8},
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("conversations");
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("a.db");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("PRAGMA journal_mode=WAL;CREATE TABLE trajectory_meta(cascade_id TEXT);INSERT INTO trajectory_meta VALUES('a');CREATE TABLE steps(idx INTEGER,step_type INTEGER,status INTEGER);INSERT INTO steps VALUES(0,14,3);").unwrap();
+        let source = source(temp.path(), "antigravity");
+        let mut reader = Reader::default();
+        let at = seconds(SystemTime::now());
+        assert_eq!(reader.collect_local(&source, at).files.len(), 1);
+
+        // Inject the alternate representations reported by watcher backends,
+        // independently of whether the native watcher has registered yet.
+        let (events, changes) = mpsc::channel();
+        let (stop, _stopped) = mpsc::channel();
+        reader.discovery.values_mut().next().unwrap().watch = DirectoryWatch {
+            state: Arc::new(AtomicU8::new(1)),
+            stop,
+            changes,
+            overflow: Arc::new(AtomicBool::new(false)),
+        };
+        db.execute("INSERT INTO steps VALUES(1,21,9)", []).unwrap();
+        events
+            .send(Ok(notify::Event::new(notify::EventKind::Modify(
+                notify::event::ModifyKind::Any,
+            ))
+            .add_path(dir.join("..").join("conversations/a.db"))
+            .add_path(fs::canonicalize(&path).unwrap())
+            .add_path(dunce::simplified(&path).to_owned())))
+            .unwrap();
+        let batch = reader.collect_local(&source, at + 1);
+        assert_eq!(
+            batch.files.len(),
+            1,
+            "Path aliases must not duplicate sessions"
+        );
+        assert_eq!(
+            reader.database_reads, 2,
+            "Read the changed database only once"
+        );
+        assert!(batch.files[0].steps.is_some());
+        assert_eq!(reader.collect_local(&source, at + 2).files.len(), 1);
+        assert_eq!(
+            reader.database_reads, 2,
+            "Retain the normalized cache identity"
+        );
     }
     #[test]
     fn failed_database_refresh_keeps_last_successful_activity_with_degraded_health() {

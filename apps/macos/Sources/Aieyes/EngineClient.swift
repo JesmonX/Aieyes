@@ -1066,7 +1066,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             }
             let success = await save(next, base: base, refreshDashboard: refreshDashboard)
             if success && includeMappings && mappingModel == enteredMapping.0 && mappingID == enteredMapping.1 { mappingModel = ""; mappingID = "" }
-            settingsMessage = success ? "已保存配置 · " + Format.time(Date().timeIntervalSince1970) : message ?? "保存失败"
+            settingsMessage = success ? "已保存配置 · " + Format.time(Date().timeIntervalSince1970) : configurationSaveError ?? message ?? "保存失败"
             return success
         } catch { settingsMessage = error.localizedDescription; return false }
     }

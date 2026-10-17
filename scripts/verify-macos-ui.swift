@@ -167,7 +167,7 @@ for line in sys.stdin:
         deadline=time.monotonic()+10
         while os.path.exists(root+'/hold-account-status') and not os.path.exists(root+'/release-account-status') and time.monotonic()<deadline: time.sleep(.01)
         response['result']=json.load(open(root+'/account-status.json')) if os.path.exists(root+'/account-status.json') else []
-    elif method=='runtime.revisions': response['result']={'settings':1,'usage':1} if os.path.exists(root+'/enable-revisions') else {}
+    elif method=='runtime.revisions': response['result']={'usage':1} if os.path.exists(root+'/enable-revisions') else {}
     elif method=='accounts.status.refresh': response['error']=dict(message='不应再次检查已确认的登录')
     elif method=='accounts.deployments.sync':
         if os.path.exists(root+'/hold-deployment-sync'):
@@ -213,7 +213,7 @@ for line in sys.stdin:
         setenv("AIEYES_UI_FIXTURE", root.path, 1)
         setenv("AIEYES_DATA_DIR", root.path, 1)
         let model = AppModel(autostart: false)
-        defer { model.engine.stop(); model.metricsEngine.stop(); model.networkEngine.stop() }
+        defer { model.stop() }
         await model.bootstrap()
         precondition(model.settings == settings && model.settingsDraft == settings && !model.settingsDirty)
         var settingsOpens = 0
@@ -617,14 +617,17 @@ for line in sys.stdin:
         print("Workspace filter migration, independent scopes, analysis context and removal reconciliation passed")
         print("Deleted account history is hidden by default, filters use the historical account identity, and hiding resets a stale selection")
         // Calendar changes invalidate relative-date snapshots even without new usage revisions.
-        try await Task.sleep(for:.milliseconds(300))
+        // Earlier models have background revision readers. Stop them before
+        // counting requests, and expose only usage so this case does not also
+        // initiate an unrelated settings refresh from the shared fixture.
+        model.stop(); agyModel.stop(); workspace.stop()
         try Data().write(to:root.appendingPathComponent("enable-revisions"))
         let calendarCache = AppModel(autostart:false)
         var calendarDate = Date(timeIntervalSince1970:1767225600)
         calendarCache.dashboardCacheNow = { calendarDate }
         let firstReads = try calls("dashboard")
         await calendarCache.reload()
-        let loadedReads = try calls("dashboard");precondition(loadedReads == firstReads+1)
+        let loadedReads = try calls("dashboard");precondition(loadedReads == firstReads+1,"Initial snapshot reads: \(loadedReads-firstReads), expected 1")
         await calendarCache.reload()
         let reusedReads = try calls("dashboard");precondition(reusedReads == loadedReads,"Identical revisions and day reuse the full snapshot")
         calendarDate = calendarDate.addingTimeInterval(86400)

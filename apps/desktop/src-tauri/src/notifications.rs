@@ -155,14 +155,14 @@ pub fn start(app: &tauri::AppHandle, root: &Path) {
                 }
                 if let Some(engine) = engine.as_mut() {
                     if !polling {
-                        if let Ok(revisions) = aieyes_core::runtime::revisions(&engine.store.db) {
-                            if revisions != published {
-                                if revisions["settings"] != published["settings"] {
-                                    account_check = 0;
-                                }
-                                published = revisions.clone();
-                                let _ = app.emit("runtime:changed", json!({"revisions":revisions}));
+                        if let Ok(revisions) = aieyes_core::runtime::revisions(&engine.store.db)
+                            && revisions != published
+                        {
+                            if revisions["settings"] != published["settings"] {
+                                account_check = 0;
                             }
+                            published = revisions.clone();
+                            let _ = app.emit("runtime:changed", json!({"revisions":revisions}));
                         }
                         if (now() < account_check || now() - account_check >= 300)
                             && aieyes_core::operations::status()["preparing"] != true
