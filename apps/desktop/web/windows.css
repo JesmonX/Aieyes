@@ -22,6 +22,13 @@ html[data-platform=windows][data-theme=dark] {
   --win-overlay-shadow:0 4px 12px rgba(0,0,0,.24),0 20px 48px -16px rgba(0,0,0,.6);
   --win-selected:var(--control-tint);
 }
+/* Match the dark theme's raised surfaces with clean, light fills. Geometry and
+   categorical gradients are shared; only the light palette changes here. */
+html[data-platform=windows][data-theme=light] {
+  --detail-window:#f4f5f7;
+  --detail-card:#ffffff;
+  --win-card-shadow:0 1px 3px rgba(24,32,55,.025),0 6px 18px -14px rgba(24,32,55,.18);
+}
 html[data-platform=windows][data-material=opaque] { --win-overlay-fill:var(--solid); }
 
 /* White edge highlights are independent of fill alpha and depth shadows.
@@ -93,13 +100,13 @@ html[data-platform=windows][data-theme=dark]:is([data-material=acrylic],[data-ma
     background:var(--win-selected); box-shadow:inset 0 1px 0 var(--win-edge),inset 0 0 0 1px color-mix(in srgb,var(--accent) 16%,var(--border)),var(--shadow-xs);
   }
   html[data-platform=windows] :is(.heading-refresh,.estimate-entry,#token-summary,#sidebar-toggle,.panel-actions > button,#panel-refresh,.window-controls button) { background-image:none; }
-  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,.hint) {
+  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) {
     background-color:var(--win-overlay-fill); background-image:var(--win-sheen);
     border-color:var(--border); box-shadow:inset 0 1px 0 var(--win-edge),var(--win-overlay-shadow);
     backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
   }
   html[data-platform=windows] :is(.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body) button { background-image:none; }
-  html[data-platform=windows][data-material=opaque] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
+  html[data-platform=windows][data-material=opaque] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
   html[data-platform=windows] #token-popover .card { background:transparent; box-shadow:none; }
   html[data-platform=windows] #editor-backdrop,html[data-platform=windows] dialog::backdrop { background:rgb(12 18 32 / 20%); backdrop-filter:blur(3px); }
   html[data-platform=windows] .win-select-trigger[aria-expanded=true] { border-color:var(--accent); box-shadow:inset 0 1px 0 var(--win-edge),0 0 0 2px var(--soft); }
@@ -114,12 +121,12 @@ html[data-platform=windows] dialog {
 }
 html[data-platform=windows] dialog[open] { opacity:1; transform:none; transition:opacity .18s ease,transform .3s var(--win-spring),display .3s allow-discrete,overlay .3s allow-discrete; }
 html[data-platform=windows] dialog:not([open]) { pointer-events:none; }
-html[data-platform=windows] :is(.win-select-menu,.multi-panel,.panel-menu,.refresh-menu,#refresh-status-popover) {
+html[data-platform=windows] :is(.win-select-menu,.multi-panel,.panel-menu,.refresh-menu,#refresh-status-popover,#quota-failures-popover) {
   animation:none !important; opacity:0; transform:translateY(var(--win-menu-offset,4px)) scale(.97);
   transform-origin:var(--win-menu-origin,top center);
   transition:opacity .12s ease,transform .12s ease,display .12s allow-discrete,overlay .12s allow-discrete;
 }
-html[data-platform=windows] :is(.win-select-menu,.multi-panel,#refresh-status-popover):popover-open,
+html[data-platform=windows] :is(.win-select-menu,.multi-panel,#refresh-status-popover,#quota-failures-popover):popover-open,
 html[data-platform=windows] :is(.panel-menu,.refresh-menu):not([hidden]) {
   opacity:1; transform:none;
   transition:opacity .14s ease,transform .24s var(--win-spring),display .24s allow-discrete,overlay .24s allow-discrete;
@@ -127,7 +134,7 @@ html[data-platform=windows] :is(.panel-menu,.refresh-menu):not([hidden]) {
 html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open) { pointer-events:none; }
 @starting-style {
   html[data-platform=windows] dialog[open] { opacity:0; transform:translateY(8px) scale(.97); }
-  html[data-platform=windows] :is(.win-select-menu,.multi-panel,#refresh-status-popover):popover-open,
+  html[data-platform=windows] :is(.win-select-menu,.multi-panel,#refresh-status-popover,#quota-failures-popover):popover-open,
   html[data-platform=windows] :is(.panel-menu,.refresh-menu):not([hidden]) { opacity:0; transform:translateY(var(--win-menu-offset,4px)) scale(.97); }
 }
 
@@ -167,7 +174,7 @@ html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open
 
 @media (prefers-reduced-transparency:reduce) {
   html[data-platform=windows] { --win-overlay-fill:var(--solid); --win-sheen:none; --win-control-sheen:none; }
-  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,.hint,#editor-backdrop) { backdrop-filter:none; -webkit-backdrop-filter:none; }
+  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint,#editor-backdrop) { backdrop-filter:none; -webkit-backdrop-filter:none; }
   html[data-platform=windows] dialog::backdrop { backdrop-filter:none; }
 }
 @media (prefers-reduced-motion:reduce),(forced-colors:active) {
@@ -192,5 +199,5 @@ html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open
 }
 @media (prefers-reduced-transparency:reduce) {
   html[data-platform=windows]:is([data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) { background:var(--solid); }
-  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
+  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
 }

@@ -196,10 +196,9 @@ struct RootView: View {
             Spacer(minLength: 0)
             Button("查看分析", systemImage: "arrow.up.right") { model.openAnalysis(from: scope) }.font(AppFont.caption)
         }
-        activeFilters
         sessionStrip
         Surface(spacing: 6, padding: 12) {
-            HStack { Text(filters.rangeTitle + "用量").font(AppFont.caption).foregroundStyle(.secondary); RefreshIndicator(model: model, key: "scan"); Spacer(); if usageDashboard.summary.pricedTokens < usageDashboard.summary.total { Button("计价未完成") { model.openPricing() }.font(AppFont.caption) } }
+            HStack { Text("今日用量").font(AppFont.caption).foregroundStyle(.secondary); RefreshIndicator(model: model, key: "scan"); Spacer(); if usageDashboard.summary.pricedTokens < usageDashboard.summary.total { PricingWarning { model.openPricing() } } }
             HStack { FloatingTokenCard(total: usageDashboard.summary.total, tokens: usageDashboard.summary.tokens, inline: true); Spacer(); Text("API 等价成本 ").foregroundStyle(.secondary) + Text(usageDashboard.summary.total == 0 || usageDashboard.summary.pricedTokens > 0 ? Format.money(usageDashboard.summary.cost) : "—").bold() }.font(AppFont.secondary).monospacedDigit()
         }
         quotaSection
@@ -303,10 +302,9 @@ struct RootView: View {
     }
     @ViewBuilder private var activeFilters: some View {
         if hasActiveFilters {
-            if compact { DisclosureGroup("已筛选 \(filterCount) 项") { filterChips } } else { filterChips }
+            filterChips
         }
     }
-    private var filterCount: Int { [filters.provider != "all", filters.account != "all", !filters.isToday, filters.source != "all", filters.model != "all"].filter { $0 }.count }
     private var filterChips: some View {
             FlowLayout {
                 if filters.provider != "all" { filterChip("Agent：" + Format.provider(filters.provider)) { filters.provider = "all" } }
@@ -366,7 +364,9 @@ struct RootView: View {
                 Button(model.quotaBusy ? "读取中…" : "刷新额度") { Task { await model.refreshQuotas() } }.font(AppFont.caption).disabled(model.quotaBusy)
             }
             ForEach(quotaProviders, id: \.self) { provider in
-                PersistentSection(key: "quota.group." + scope + "." + provider, title: Format.provider(provider), detail: groupSummary(provider), tint: Palette.category(provider)) {
+                QuotaGroupSection(key: "quota.group." + scope + "." + provider, model: model, provider: provider,
+                    accountCount: displayedQuotaAccounts.filter { $0.provider == provider }.count,
+                    quotas: displayedQuotas.filter { quota in quota.provider == provider && displayedQuotaAccounts.contains { $0.key == quota.id } }) {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 14, alignment: .top), count: compact ? 1 : workspaceCardColumns), alignment: .leading, spacing: 10) {
                         ForEach(displayedQuotaAccounts.filter { $0.provider == provider }.sorted { (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max) }, id: \.key) { account in
                             if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
@@ -380,11 +380,6 @@ struct RootView: View {
             }
             if let error = model.quotaError { Label(error, systemImage: "exclamationmark.triangle").font(AppFont.caption).foregroundStyle(Palette.warn).textSelection(.enabled) }
         }
-    }
-    private func groupSummary(_ provider: String) -> String {
-        let rows = displayedQuotas.filter { $0.provider == provider }
-        let attention = rows.filter { $0.error != nil || $0.isAvailable == false || $0.windows.contains { $0.usedPercent >= 70 } }.count
-        return "\(displayedQuotaAccounts.filter { $0.provider == provider }.count) 个账户" + (attention > 0 ? " · ⚠ \(attention) 项需留意" : "")
     }
     private var filteredHosts: [Host] {
         model.settings.monitoredHosts.filter { host in
@@ -457,10 +452,7 @@ struct StatCard: View {
             HStack(spacing: 6) {
                 Text(title).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)).foregroundStyle(.secondary)
                 if pricingIncomplete {
-                    Button(action: onPricing) { Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.warn) }
-                        .buttonStyle(.plain)
-                        .help("部分模型缺少价格，补齐后可计算完整成本。")
-                        .accessibilityLabel("计价未完成，设置模型价格")
+                    PricingWarning(action: onPricing)
                 }
                 Spacer(); Image(systemName: icon).font(AppFont.secondary).foregroundStyle(accent) }
             Text(value).contentTransition(.numericText()).font(.system(size: DesignTokens.fontNumber, weight: DesignTokens.weightStrong, design: .default)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.9)
@@ -502,7 +494,7 @@ struct UsageChart: View {
             .frame(height: DesignTokens.chartHeight).focusable().focusEffectDisabled().onKeyPress(.leftArrow) { move(-1); return .handled }.onKeyPress(.rightArrow) { move(1); return .handled }
             .accessibilityLabel("每日用量，左右方向键选择日期，下方提供精确读数")
             Group { if let day = days.first(where: { $0.key == selected }) {
-                Text(day.key + " · " + (cost ? String(format: "%.6f USD", day.cost) : Format.compact(day.total) + " Token")).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
+                Text(day.key + " · " + (cost ? String(format: "%.2f USD", day.cost) : Format.compact(day.total) + " Token")).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
             }
             }.frame(height: DesignTokens.chartReadingHeight, alignment: .leading)
             DisclosureGroup("模型图例 · 点击显示或隐藏") {
@@ -646,6 +638,88 @@ struct Heatmap: View {
         }.sheet(isPresented: $showDay) { if days.indices.contains(selected) { let day = days[selected]; VStack(alignment: .leading, spacing: 14) { Text(day.key).font(AppFont.title); Text(label(day)).textSelection(.enabled); CacheSummaryCard(tokens: day.tokens); Button("关闭") { showDay = false }.keyboardShortcut(.cancelAction) }.padding(DesignTokens.dialogPadding).frame(width: 520) } }
     }
     private func move(_ offset: Int) { selected = min(max(0, days.count - 1), max(0, selected + offset)) }
+}
+
+private struct QuotaGroupSection<Content: View>: View {
+    @ObservedObject var model: AppModel
+    let provider: String
+    let accountCount: Int
+    let quotas: [Quota]
+    let content: Content
+    @AppStorage private var expanded: Bool
+    @State private var showingFailures = false
+    @State private var openingSettings = false
+    @FocusState private var headerFocused: Bool
+    @FocusState private var failureButtonFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var failures: [Quota] { quotas.filter { $0.queryFailure != nil } }
+
+    init(key: String, model: AppModel, provider: String, accountCount: Int, quotas: [Quota], @ViewBuilder content: () -> Content) {
+        self.model = model; self.provider = provider; self.accountCount = accountCount; self.quotas = quotas; self.content = content()
+        _expanded = AppStorage(wrappedValue: true, key)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 7) {
+                Button { expanded.toggle() } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right").font(AppFont.caption)
+                        Circle().fill(Palette.category(provider)).frame(width: 7, height: 7)
+                        Text(Format.provider(provider)).font(AppFont.secondary.weight(.medium))
+                        Spacer(minLength: 0)
+                        Text("\(accountCount) 个账户").font(AppFont.caption).foregroundStyle(.secondary)
+                    }.contentShape(Rectangle())
+                }.buttonStyle(.plain).focused($headerFocused)
+                    .accessibilityLabel(Format.provider(provider) + "，\(accountCount) 个账户，" + (expanded ? "折叠" : "展开"))
+                if !failures.isEmpty || showingFailures {
+                    Button { openingSettings = false; showingFailures.toggle() } label: {
+                        Label("\(failures.count) 个账户查询失败", systemImage: "exclamationmark.triangle").font(AppFont.caption).foregroundStyle(Palette.warn)
+                    }.buttonStyle(.plain).focused($failureButtonFocused).help("查看失败原因与重试")
+                        .opacity(failures.isEmpty ? 0 : 1).disabled(failures.isEmpty).accessibilityHidden(failures.isEmpty)
+                        .popover(isPresented: $showingFailures) { failureList }
+                }
+            }
+            if expanded { content.padding(.top, 8) }
+        }
+        .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.9), value: expanded)
+        .onChange(of: showingFailures) { _, showing in
+            if !showing && !openingSettings {
+                if failures.isEmpty { headerFocused = true } else { failureButtonFocused = true }
+            }
+        }
+    }
+    private var failureList: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(Format.provider(provider) + " · 额度查询失败").font(AppFont.section)
+                Spacer()
+                Button("关闭") { showingFailures = false }.keyboardShortcut(.cancelAction)
+            }
+            if failures.isEmpty { Text("当前没有查询失败的账户").font(AppFont.secondary) }
+            else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        ForEach(failures) { quota in
+                            VStack(alignment: .leading, spacing: 8) {
+                                let reason = UserFacingError(quota.queryFailure ?? "", context: "额度查询失败")
+                                Text(quota.name).font(AppFont.section).textSelection(.enabled)
+                                Text(reason.details ?? reason.summary).font(AppFont.secondary).textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                                HStack {
+                                    Button(model.quotaBusy ? "查询中…" : "重试查询") { Task { await model.refreshQuotas(accountID: quota.accountId) } }.disabled(model.quotaBusy)
+                                    Button("账户设置") {
+                                        openingSettings = true
+                                        showingFailures = false
+                                        model.openSettings(.init(provider: provider, accountKey: quota.id, section: "accounts"))
+                                    }
+                                }
+                            }.id(quota.id)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(maxHeight: 300)
+            }
+        }.padding(16).frame(width: 350)
+    }
 }
 
 private struct AccountObservedQuota: View {

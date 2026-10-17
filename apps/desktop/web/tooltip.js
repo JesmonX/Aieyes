@@ -5,7 +5,7 @@
 (() => {
   if (globalThis.AieyesHint) return;
   const DELAY = 520, EDGE = 10, GAP = 9, MIN_ROOM = 26;
-  let bubble = null, current = null, pending = null, timer = 0, text = '', description = null;
+  let bubble = null, current = null, pending = null, timer = 0, hideTimer = 0, text = '', description = null;
 
   const prefersReduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
@@ -34,6 +34,7 @@
     node().style.top = `${Math.round(Math.max(EDGE, top))}px`;
   }
   function hide() {
+    clearTimeout(hideTimer);
     clearTimeout(timer); timer = 0; pending = null;
     if (current) {
       if(description===null)current.removeAttribute('aria-describedby');else current.setAttribute('aria-describedby',description);
@@ -42,10 +43,11 @@
     if (bubble && !bubble.hidden) {
       bubble.dataset.show = 'false';
       const el = bubble;
-      setTimeout(() => { if (el.dataset.show === 'false') el.hidden = true; }, prefersReduced() ? 0 : 160);
+      hideTimer = setTimeout(() => { if (el.dataset.show === 'false') el.hidden = true; }, prefersReduced() ? 0 : 160);
     }
   }
   function show(el) {
+    clearTimeout(hideTimer);
     if (!el.isConnected) { hide(); return; }
     text = el.getAttribute('title') || el.dataset.hint;
     if (!text || !text.trim()) { hide(); return; }

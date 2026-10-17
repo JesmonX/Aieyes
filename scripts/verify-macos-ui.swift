@@ -74,18 +74,34 @@ import Foundation
         let savedPreference = preferences.string(forKey: "panel.accounts.v2")
         PanelAccountPreference.migrateAntigravity(aliases, defaults: preferences)
         precondition(preferences.string(forKey: "panel.accounts.v2") == savedPreference)
-        let legacyFilters = DashboardFilterPreference(provider: "codex", source: "old-source", account: "codex:old", model: "old-model", days: 30)
+        let legacyFilters = DashboardFilterPreference(provider: "codex", source: "old-source", account: "codex:old", model: "old-model", days: 30, dateRange: DashboardDateRange(kind: "custom", start: "2026-09-01", end: "2026-09-30"))
+        let todayFilters = DashboardFilterPreference(provider: "codex", account: "codex:old")
         legacyFilters.save(defaults: preferences)
-        for scope in ["panel", "overview", "analysis"] { precondition(DashboardFilterPreference.read(scope: scope, defaults: preferences) == legacyFilters) }
+        for scope in ["panel", "overview"] { precondition(DashboardFilterPreference.read(scope: scope, defaults: preferences) == todayFilters) }
+        precondition(DashboardFilterPreference.read(scope: "analysis", defaults: preferences) == legacyFilters)
         let panelFilters = DashboardFilterPreference(provider: "claude", days: 1)
         panelFilters.save(scope: "panel", defaults: preferences)
         precondition(DashboardFilterPreference.read(scope: "panel", defaults: preferences) == panelFilters)
-        precondition(DashboardFilterPreference.read(scope: "overview", defaults: preferences) == legacyFilters)
+        precondition(DashboardFilterPreference.read(scope: "overview", defaults: preferences) == todayFilters)
         precondition(DashboardFilterPreference.read(scope: "analysis", defaults: preferences) == legacyFilters)
         precondition(DashboardFilterPreference.read(defaults: preferences) == legacyFilters, "Migration preserves legacy preferences")
+        legacyFilters.save(scope: "overview", defaults: preferences)
+        let savedTodayFilters = try JSONDecoder().decode(DashboardFilterPreference.self, from: preferences.data(forKey: "dashboard.filters.v2.overview")!)
+        precondition(savedTodayFilters == todayFilters, "Overview persistence drops hidden historical date, source and model restrictions")
         precondition(Format.subscription("ultra") == "Ultra")
         let legacyQuota = try JSONDecoder().decode(Quota.self, from: Data(#"{"sourceId":"s","accountId":"a","provider":"antigravity","name":"Custom","updatedAt":1,"origin":"live","windows":[]}"#.utf8))
         precondition(legacyQuota.identity == nil && legacyQuota.metadataError == nil)
+        var queryQuota = legacyQuota
+        queryQuota.isAvailable = false
+        queryQuota.windows = [QuotaWindow(name: "5h", usedPercent: 100, windowMinutes: 300, resetsAt: nil)]
+        precondition(queryQuota.queryFailure == nil, "An exhausted quota or balance is usage state, not a query failure")
+        queryQuota.error = " \n "
+        precondition(queryQuota.queryFailure == nil, "An empty error does not create a failure badge")
+        queryQuota.error = " 连接超时\n请重试 "
+        precondition(queryQuota.queryFailure == "连接超时\n请重试")
+        queryQuota.error = nil
+        queryQuota.metadataError = "订阅待更新"
+        precondition(queryQuota.queryFailure == nil, "Metadata notes do not create a quota query failure")
         let identified = try JSONDecoder().decode(AccountDeviceStatus.self, from: Data(#"{"accountKey":"antigravity:a","sourceId":"s","machineId":"local","authenticated":true,"identityConfirmed":true,"current":true,"credential":true,"identity":{"key":"google:fixture","email":"account@example.test","subscription":"Google AI Pro","stale":false}}"#.utf8))
         precondition(identified.identitySummary == "正在使用 account@example.test · Google AI Pro")
         var mismatch = identified; mismatch.current = false
@@ -592,10 +608,10 @@ for line in sys.stdin:
         workspace.openAnalysis(from: "panel")
         precondition(destination == "analysis" && workspace.analysisFilters.account == "deepseek:fixture" && workspace.analysisFilters.provider == "deepseek")
         precondition(workspace.analysisFilters.days == 30 && workspace.analysisFilters.dateRange == originalAnalysis.dateRange, "An explicit analysis jump carries identity and preserves analysis dates")
-        precondition(workspace.overviewFilters.provider == "claude" && workspace.overviewFilters.days == 7)
+        precondition(workspace.overviewFilters.provider == "claude" && workspace.overviewFilters.days == 1)
         workspace.mergeConfiguration(Settings())
         precondition(workspace.panelFilters.account == "all" && workspace.analysisFilters.account == "all", "Removed accounts are reconciled in every scope")
-        precondition(workspace.overviewFilters.days == 7 && workspace.analysisFilters.dateRange == originalAnalysis.dateRange)
+        precondition(workspace.overviewFilters.days == 1 && workspace.analysisFilters.dateRange == originalAnalysis.dateRange)
         print("Workspace filter migration, independent scopes, analysis context and removal reconciliation passed")
         print("Deleted account history is hidden by default, filters use the historical account identity, and hiding resets a stale selection")
         print("Antigravity login accepts committed identity immediately, rejects older status reads, retains identity after quota failure, and preserves drafts")

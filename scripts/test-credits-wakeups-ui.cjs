@@ -86,7 +86,7 @@ function fixture(){
    await page.evaluate(()=>{state.days=30;state.cost=true;render();});
    await page.locator('#content .quota-disclosure summary').click();
    await page.reload();await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
-   assert.equal(await page.evaluate(()=>state.days),30);assert.equal(await page.evaluate(()=>state.cost),true);
+   assert.equal(await page.evaluate(()=>state.days),1,'Panel reconstruction always uses today, including old range preferences');assert.equal(await page.evaluate(()=>state.cost),true);
    assert.equal(await page.locator('.quota-disclosure').evaluate(el=>el.open),false,'Panel reconstruction restores the collapsed summary');
    assert.equal(await page.evaluate(()=>testFeature.calls.some(c=>c.method==='creditEstimates.start')),false,'Recreating the panel does not start another sample');
   }

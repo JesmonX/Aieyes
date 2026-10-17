@@ -1,6 +1,7 @@
 /* Accessible equivalents and interaction for the usage charts. */
 const hiddenTrendModels=new Set();
 function exactUsage(day){return `${day.total.toLocaleString()} Token · ${day.cost.toFixed(6)} USD · 读取命中率 ${pct(cacheRate(day.tokens))}`;}
+function trendUsage(day){return `${compact(day.total)} Token · ${day.cost.toFixed(2)} USD · 读取命中率 ${pct(cacheRate(day.tokens))}`;}
 // Annular sectors keep the native chart's gap and small corner radius at every DPI.
 function modelRingSVG(slices,total) {
   const style=getComputedStyle(document.documentElement),metric=name=>Number.parseFloat(style.getPropertyValue('--'+name));

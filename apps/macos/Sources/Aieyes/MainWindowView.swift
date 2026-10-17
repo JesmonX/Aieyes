@@ -25,8 +25,8 @@ struct MainWindowView: View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    if !collapsed { BrandMark().frame(width: 30, height: 30); Text("Aieyes").font(AppFont.title); Spacer() }
-                    Button { withAnimation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.88)) { collapsed.toggle() } } label: { Image(systemName: "sidebar.left") }.buttonStyle(.plain).help(collapsed ? "展开导航" : "收起导航").accessibilityLabel("收起或展开导航")
+                    Button { withAnimation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.88)) { collapsed.toggle() } } label: { BrandMark().frame(width: 30, height: 30).frame(width: 34, height: 34).contentShape(Rectangle()) }.buttonStyle(.plain).help(collapsed ? "展开导航" : "收起导航").accessibilityLabel(collapsed ? "展开导航" : "收起导航").accessibilityValue(collapsed ? "已收起" : "已展开")
+                    if !collapsed { Text("Aieyes").font(AppFont.title); Spacer() }
                 }.padding(.horizontal, 12).padding(.top, 18)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
@@ -53,7 +53,7 @@ struct MainWindowView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(title).font(AppFont.title).padding(.horizontal, 22).padding(.vertical, 15)
                 if guideActive && model.detailPage == "settings" {
-                    HStack { Button("← 返回配置向导") { select("setup") }; Text("保存后返回查看状态").font(AppFont.secondary).foregroundStyle(.secondary); Spacer() }.padding(.horizontal, 22).padding(.bottom, 12)
+                    HStack { Button("配置向导") { select("setup") }; Spacer() }.padding(.horizontal, 22).padding(.bottom, 12)
                 }
                 ZStack {
                     if model.detailPage == "setup" { SetupGuideView(model: model) { guideActive = false; select("agent") } }

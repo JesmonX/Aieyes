@@ -38,7 +38,10 @@ function fixture({platform, failStatus = false}) {
         nav.settings = merge(params.base, params.settings, nav.settings); return copy(nav.settings);
       }
       if (method === 'credentials.save') return {path: '/fixture/updated-key'};
-      if (method === 'quotas.refresh') return copy(quotas);
+      if (method === 'quotas.refresh') {
+        if (nav.holdQuotaRefresh) {nav.holdQuotaRefresh = false; await new Promise(resolve => nav.releaseQuotaRefresh = resolve);}
+        return copy(params?.accountId ? quotas.filter(q => q.accountId === params.accountId) : quotas);
+      }
       if (method === 'quotaEstimates.stop') {nav.records.find(r => r.id === params.id).status = 'completed'; return {};}
       if (method === 'hosts.sample') return [{id: 'host', sample: {timestamp: Date.now()/1000, cpu: [{id: 'cpu', utilization: 12}], errors: {}}}];
       if (method === 'accounts.status.refresh') return {accountKey: params.accountKey, sourceId: params.sourceId, machineId: 'local', current: params.accountKey.endsWith(':a0'), credential: true, checkedAt: stamp};

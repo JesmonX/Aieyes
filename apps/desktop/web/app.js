@@ -33,7 +33,7 @@ const date = n => n ? new Date(n * 1000).toLocaleString('zh-CN', {month:'2-digit
 const providers = window.AieyesContract.providers;
 function providerMark(provider) {
   const key=provider,known=Object.hasOwn(providers,key)&&key!=='custom',name=escapeHTML(providers[provider]??provider);
-  return `<span class="provider-mark" data-provider="${escapeHTML(provider)}" title="${name}" aria-label="${name}">${known?`<img src="provider-${key}.png" alt="" width="36" height="36">`:uiIcon('terminal')}</span>`;
+  return `<span class="provider-mark${known?'':' provider-fallback'}" data-provider="${escapeHTML(provider)}" title="${name}" aria-label="${name}">${known?`<img src="provider-${key}.png" alt="" width="36" height="36">`:uiIcon('terminal')}</span>`;
 }
 function providerIdentity(provider) { return `<span class="provider-identity">${providerMark(provider)}<span>${escapeHTML(providers[provider]??provider)}</span></span>`; }
 function subscriptionBadge(plan) { const label=AieyesUI.subscription(plan);return label?`<span class="subscription-badge" title="${escapeHTML(plan)}" aria-label="订阅 ${escapeHTML(label)}">${escapeHTML(label)}</span>`:''; }
@@ -180,7 +180,7 @@ function endRefresh(key,error,itemId=null){const r=state.refreshState[key];r.bus
 const timeLabel = stamp => new Date(stamp).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
 let pendingRender=false;
 function interactionOpen() {
-  return Boolean(window.AieyesSingleSelect?.isOpen()||window.AieyesSelect?.isOpen?.()||($('#token-popover')&&!$('#token-popover').hidden)||$('#editor')?.open||$('#quota-dialog')?.open||$('#panel-more')?.open||($('#panel-menu')&&!$('#panel-menu').hidden)||($('#refresh-menu')&&!$('#refresh-menu').hidden)||$('.machine-menu[open]'));
+  return Boolean($('#quota-failures-popover')?.matches(':popover-open')||window.AieyesSingleSelect?.isOpen()||window.AieyesSelect?.isOpen?.()||($('#token-popover')&&!$('#token-popover').hidden)||$('#editor')?.open||$('#quota-dialog')?.open||$('#panel-more')?.open||($('#panel-menu')&&!$('#panel-menu').hidden)||($('#refresh-menu')&&!$('#refresh-menu').hidden)||$('.machine-menu[open]'));
 }
 function flushRender() {
   if(pendingRender&&!interactionOpen()){pendingRender=false;render();}
@@ -198,7 +198,7 @@ window.addEventListener('storage',event=>{
 function focusSelector(element) {
   if(!element||element===document.body)return null;
   if(element.id)return '#'+CSS.escape(element.id);
-  const attributes=['data-overview-agent','data-view-analysis','data-switch-account','data-general-page','data-refresh-status','data-account-settings','data-heat-day','data-trend-model','data-day-toggle','data-credit-estimate','data-manage-sampling','data-estimate','data-page','data-settings-tab','data-edit','data-remove','data-price','data-account-edit','data-account-options','data-device-command','data-account-login','data-device-manage','data-account-delete','data-account-connect','data-account-restore','data-source-advanced','data-agent-advanced','data-enable','data-gap-map','data-gap-price','data-host-status'];
+  const attributes=['data-quota-failures','data-quota-failure-retry','data-quota-failure-settings','data-overview-agent','data-view-analysis','data-switch-account','data-general-page','data-refresh-status','data-account-settings','data-heat-day','data-trend-model','data-day-toggle','data-credit-estimate','data-manage-sampling','data-estimate','data-page','data-settings-tab','data-edit','data-remove','data-price','data-account-edit','data-account-options','data-device-command','data-account-login','data-device-manage','data-account-delete','data-account-connect','data-account-restore','data-source-advanced','data-agent-advanced','data-enable','data-gap-map','data-gap-price','data-host-status'];
   for(const attribute of attributes)if(element.hasAttribute(attribute))return `[${attribute}="${CSS.escape(element.getAttribute(attribute))}"]`;
   if(element.tagName==='SUMMARY')for(const attribute of ['data-agent-detail','data-metric','data-persist-disclosure'])if(element.parentElement.hasAttribute(attribute))return `[${attribute}="${CSS.escape(element.parentElement.getAttribute(attribute))}"] > summary`;
   return null;
@@ -246,14 +246,85 @@ function bindRememberedDisclosures(){
     el.addEventListener('toggle',()=>{if(el.isConnected)try{localStorage.setItem('aieyes.disclosure.v3.'+(PANEL?'panel.':'detail.')+el.dataset.persistDisclosure,String(el.open));}catch(_){}});
   }
 }
-function quotaNeedsAttention(q){return !!q&&(!!q.error||q.isAvailable===false||(q.windows??[]).some(w=>Number.isFinite(w.usedPercent)&&w.usedPercent>=70));}
-function updateQuotaGroupAttention(){
+function quotaNeedsAttention(q){return typeof q?.error==='string'&&q.error.trim().length>0;}
+function quotaGroupFailures(provider){
+  const group=document.querySelector('.quota-group[data-provider="'+CSS.escape(provider)+'"]');
+  const visible=new Set([...(group?.querySelectorAll('[data-quota]')??[])].map(node=>node.dataset.quota));
+  const accounts=new Set((state.settings?.accounts??[]).filter(a=>a.quotaEnabled&&!a.archived).map(a=>a.provider+':'+a.id));
   const quotas=new Map((state.dashboard?.quotas??[]).map(q=>[q.provider+':'+q.accountId,q]));
-  for(const group of document.querySelectorAll('.quota-group')){
-    const count=[...group.querySelectorAll('[data-quota]')].filter(node=>quotaNeedsAttention(quotas.get(node.dataset.quota))).length;
-    const badge=group.querySelector('.group-attention');if(!badge)continue;
-    badge.hidden=!count;badge.querySelector('[data-quota-attention]').textContent=count+' 项需留意';
+  return [...visible].filter(key=>accounts.has(key)).map(key=>quotas.get(key)).filter(quotaNeedsAttention);
+}
+function quotaFailureFocus(provider){
+  const button=document.querySelector('[data-quota-failures="'+CSS.escape(provider)+'"]');
+  (button&&!button.hidden?button:document.querySelector('[data-persist-disclosure="quota-group:'+CSS.escape(provider)+'"] > summary'))?.focus({preventScroll:true});
+}
+function closeQuotaFailures(){
+  const pop=$('#quota-failures-popover');if(!pop?.matches(':popover-open'))return;
+  const provider=pop.dataset.provider;pop.hidePopover();flushRender();quotaFailureFocus(provider);
+}
+function positionQuotaFailures(){
+  const pop=$('#quota-failures-popover');if(!pop?.matches(':popover-open'))return;
+  const body=$('.panel-body')?.getBoundingClientRect(),top=body?.top??0,bottom=body?.bottom??innerHeight;
+  const anchor=document.querySelector('[data-quota-failures="'+CSS.escape(pop.dataset.provider)+'"]')?.getBoundingClientRect();
+  pop.style.maxHeight=Math.max(80,bottom-top-16)+'px';
+  pop.style.left=Math.max(8,Math.min(innerWidth-pop.offsetWidth-8,anchor?.left??8))+'px';
+  const below=(anchor?.bottom??top)+6,above=(anchor?.top??bottom)-pop.offsetHeight-6;
+  pop.style.top=Math.max(top+8,Math.min(bottom-pop.offsetHeight-8,below+pop.offsetHeight<=bottom-8?below:above))+'px';
+}
+function updateQuotaFailurePopover(){
+  const pop=$('#quota-failures-popover');if(!pop?.matches(':popover-open'))return;
+  const rows=quotaGroupFailures(pop.dataset.provider),list=pop.querySelector('[data-quota-failure-list]'),scroll=pop.scrollTop;
+  const keys=new Set(rows.map(q=>q.provider+':'+q.accountId));
+  for(const row of list.querySelectorAll('[data-quota-failure-row]'))if(!keys.has(row.dataset.quotaFailureRow)){
+    if(row.contains(document.activeElement))pop.querySelector('[data-quota-failure-close]').focus({preventScroll:true});row.remove();
   }
+  for(const q of rows){
+    const key=q.provider+':'+q.accountId;
+    let row=[...list.children].find(el=>el.dataset.quotaFailureRow===key);
+    if(!row){
+      row=document.createElement('section');row.className='quota-failure-row';row.dataset.quotaFailureRow=key;
+      row.innerHTML='<strong></strong><div class="quota-failure-reason"></div><div class="actions"><button type="button" data-quota-failure-retry="'+escapeHTML(key)+'">重试查询</button><button type="button" data-quota-failure-settings="'+escapeHTML(key)+'">账户设置</button></div>';
+      row.querySelector('[data-quota-failure-retry]').onclick=()=>{void quotas(q.accountId);};
+      row.querySelector('[data-quota-failure-settings]').onclick=()=>{closeQuotaFailures();void openSettings({provider:q.provider,accountKey:key,section:'accounts'});};
+      list.append(row);
+    }
+    row.querySelector('strong').textContent=q.name;
+    const reason=AieyesUI.errorPresentation(q.error,'额度查询失败'),reasonNode=row.querySelector('.quota-failure-reason'),text=reason.details||reason.summary;
+    if(reasonNode.textContent!==text)reasonNode.textContent=text;
+    const retry=row.querySelector('[data-quota-failure-retry]');retry.disabled=quotaCollectionBlocked();retry.textContent=retry.disabled?'查询中…':'重试查询';
+  }
+  pop.querySelector('[data-quota-failure-empty]').hidden=rows.length>0;
+  pop.scrollTop=scroll;positionQuotaFailures();
+}
+function openQuotaFailures(provider){
+  let pop=$('#quota-failures-popover');
+  if(pop?.matches(':popover-open')&&pop.dataset.provider===provider){closeQuotaFailures();return;}
+  if(!pop){
+    pop=document.createElement('div');pop.id='quota-failures-popover';pop.setAttribute('popover','auto');pop.setAttribute('role','dialog');pop.setAttribute('aria-labelledby','quota-failures-title');
+    pop.innerHTML='<div class="dialog-head"><strong id="quota-failures-title"></strong><button type="button" data-quota-failure-close aria-label="关闭查询失败列表">'+uiIcon('x')+'</button></div><div data-quota-failure-list></div><p data-quota-failure-empty role="status" hidden>当前没有查询失败的账户</p>';
+    pop.querySelector('[data-quota-failure-close]').onclick=closeQuotaFailures;
+    pop.addEventListener('toggle',()=>{for(const button of document.querySelectorAll('[data-quota-failures]'))button.setAttribute('aria-expanded',String(pop.matches(':popover-open')&&button.dataset.quotaFailures===pop.dataset.provider));if(!pop.matches(':popover-open'))flushRender();});
+    document.body.append(pop);
+  }
+  pop.dataset.provider=provider;pop.querySelector('#quota-failures-title').textContent=(providers[provider]??provider)+' · 额度查询失败';
+  pop.showPopover();updateQuotaFailurePopover();pop.querySelector('[data-quota-failure-close]').focus({preventScroll:true});
+}
+document.addEventListener('click',event=>{const button=event.target.closest('[data-quota-failures]');if(button){event.preventDefault();openQuotaFailures(button.dataset.quotaFailures);}});
+document.addEventListener('keydown',event=>{
+  const button=event.target.closest('[data-quota-failures]');
+  if(button&&(event.key==='Enter'||event.key===' ')){event.preventDefault();event.stopImmediatePropagation();if(!event.repeat)openQuotaFailures(button.dataset.quotaFailures);return;}
+  if(event.key==='Escape'&&$('#quota-failures-popover')?.matches(':popover-open')){event.preventDefault();event.stopImmediatePropagation();closeQuotaFailures();}
+},true);
+window.addEventListener('resize',positionQuotaFailures);
+document.addEventListener('scroll',positionQuotaFailures,true);
+function updateQuotaGroupAttention(){
+  for(const group of document.querySelectorAll('.quota-group')){
+    const count=quotaGroupFailures(group.dataset.provider).length;
+    const badge=group.querySelector('.group-attention');if(!badge)continue;
+    badge.hidden=!count;badge.querySelector('[data-quota-attention]').textContent=count+' 个账户查询失败';
+    if(!count&&document.activeElement===badge)quotaFailureFocus(group.dataset.provider);
+  }
+  updateQuotaFailurePopover();
 }
 function quotaSection(d) {
   const selected=PANEL?AieyesUI.panelAccounts(state.settings,d.quotaOrder??[]):null;
@@ -265,7 +336,7 @@ function quotaSection(d) {
   return `<div class="section-head quota-heading"><h2>实时账户额度 ${refreshIndicator('quotas')} <span class="count">${accounts.length}</span></h2><div class="section-actions"><button id="order-quotas" title="调整账户顺序" aria-label="调整账户顺序">${uiIcon('sort')}</button><button id="read-quotas" ${state.quotaBusy||state.refreshState.quotas?.busy?'disabled':''}>${state.quotaBusy?'读取中…':'刷新额度'}</button></div></div>`+groups.map(provider=>{
     const rows=accounts.filter(a=>a.provider===provider),quotas=rows.map(a=>(d.quotas??[]).find(q=>q.provider===provider&&q.accountId===a.id));
     const attention=quotas.filter(quotaNeedsAttention).length;
-    return `<details class="quota-group" data-provider="${escapeHTML(provider)}" data-persist-disclosure="quota-group:${provider}" ${disclosureOpen('quota-group:'+provider)?'open':''}><summary class="quota-group-heading"><span class="category-dot"></span><strong>${escapeHTML(providers[provider])}</strong><span class="muted">${rows.length} 个账户</span><span class="group-attention" ${attention?'':'hidden'}>${uiIcon('warning')}<span data-quota-attention>${attention} 项需留意</span></span></summary><div class="quotas">${rows.map((a,i)=>quotas[i]?quotaCard(quotas[i],accounts.length):`<div class="card quota-placeholder" data-provider="${escapeHTML(provider)}" data-quota-placeholder="${escapeHTML(provider+':'+a.id)}"><h3>${providerMark(provider)} ${escapeHTML(a.name)}</h3><p class="muted" role="status">${state.quotaBusy?'正在读取账户额度…':state.quotaError?'读取失败，可重试刷新额度':'尚未读取额度，可点击刷新额度'}</p></div>`).join('')}</div></details>`;
+    return `<details class="quota-group" data-provider="${escapeHTML(provider)}" data-persist-disclosure="quota-group:${provider}" ${disclosureOpen('quota-group:'+provider)?'open':''}><summary class="quota-group-heading"><span class="category-dot"></span><strong>${escapeHTML(providers[provider])}</strong><span class="muted">${rows.length} 个账户</span><button type="button" class="group-attention" data-quota-failures="${escapeHTML(provider)}" aria-haspopup="dialog" aria-expanded="false" aria-controls="quota-failures-popover" title="查看失败原因与重试" ${attention?'':'hidden'}>${uiIcon('warning')}<span data-quota-attention>${attention} 个账户查询失败</span></button></summary><div class="quotas">${rows.map((a,i)=>quotas[i]?quotaCard(quotas[i],accounts.length):`<div class="card quota-placeholder" data-provider="${escapeHTML(provider)}" data-quota-placeholder="${escapeHTML(provider+':'+a.id)}"><h3>${providerMark(provider)} ${escapeHTML(a.name)}</h3><p class="muted" role="status">${state.quotaBusy?'正在读取账户额度…':state.quotaError?'读取失败，可重试刷新额度':'尚未读取额度，可点击刷新额度'}</p></div>`).join('')}</div></details>`;
   }).join('');
 }
 async function job(label, fn, refreshKey=null, refreshItem=null) {
@@ -287,7 +358,7 @@ async function job(label, fn, refreshKey=null, refreshItem=null) {
 const filterKeys=['provider','accountKey','sourceId','model','days','dateRange'];
 const filterSnapshot=()=>structuredClone(Object.fromEntries(filterKeys.map(k=>[k,state[k]])));
 function appliedScope(){const f=state.appliedFilters??filterSnapshot();return [rangeLabel(f),providers[f.provider]??'全部 Agent',historicalAccounts().find(a=>a.provider+':'+a.id===f.accountKey)?.name??(f.accountKey==='none'?'未关联账户':'全部账户'),state.settings.sources.find(s=>s.id===f.sourceId)?.name??'全部来源',f.model||'全部模型'].join(' · ');}
-async function changeFilters(values={}){Object.assign(state,values);try{viewPreferences.save(dashboardScope(),state);savePanelView();await loadDashboard({debounce:true});}catch(_){} }
+async function changeFilters(values={}){Object.assign(state,values);Object.assign(state,AieyesViewState.normalize(state,dashboardScope()));try{viewPreferences.save(dashboardScope(),state);savePanelView();await loadDashboard({debounce:true});}catch(_){} }
 function renderQueryStatus(){
   let el=$('#query-status');if(!el){el=document.createElement('div');el.id='query-status';el.setAttribute('role','status');document.body.append(el);}
   el.hidden=(!state.dashboardPending&&!state.dashboardError)||!el.closest('#refresh-status-popover')?.matches(':popover-open');updateHeadingIndicators();
@@ -318,7 +389,7 @@ function finishDashboard(error,request) {
 }
 async function loadDashboardOnce(request) {
   void window.AieyesAgentSettings?.ensureStatuses('codex');
-  migrateProviderState();savePanelView();
+  migrateProviderState();Object.assign(state,AieyesViewState.normalize(state,dashboardScope()));savePanelView();
   if(state.accountKey && state.accountKey!=='none' && !filterAccounts().some(a=>a.provider+':'+a.id===state.accountKey))state.accountKey='';
   if(state.sourceId && !state.settings.sources.some(s=>s.id===state.sourceId))state.sourceId='';
   const account=historicalAccounts().find(a=>a.provider+':'+a.id===state.accountKey);
@@ -331,7 +402,7 @@ async function loadDashboardOnce(request) {
   if (['agent','analysis'].includes(state.page)) {
     if(interactionOpen())pendingRender=true;else render();
   }
-  refreshQuotaDialog();
+  updateQuotaGroupAttention();refreshQuotaDialog();
   }catch(error){if(request===state.dashboardRequest){state.dashboardPending=false;state.dashboardError=error.message??String(error);if(['agent','analysis'].includes(state.page))renderQueryStatus();}throw error;}
 }
 function batchError(rows,label) {
@@ -373,9 +444,9 @@ function hasQuotaSources() {
 }
 async function quotas(accountId,dueOnly=false) {
   if(quotaCollectionBlocked())return;
-  state.quotaBusy=true;if(!dueOnly)state.quotaError='';if(!dueOnly&&state.page==='agent')render();
+  state.quotaBusy=true;if(!dueOnly)state.quotaError='';if(!dueOnly&&state.page==='agent'){if(interactionOpen())pendingRender=true;else render();}updateQuotaGroupAttention();
   try { await job('读取额度',async()=>{try{const rows=await api('quotas.refresh',{...(typeof accountId==='string'?{accountId}:{}),dueOnly});applyQuotaSamples(rows);if(dueOnly&&!rows.length)return false;if(rows.some(q=>q.identity&&state.settings.accounts.some(a=>a.id===q.accountId&&a.provider===q.provider&&a.identityKey!==q.identity.key)))await window.AieyesAgentSettings?.syncIdentitySettings();await loadDashboard();const error=batchError(rows,'读取额度');if(error)throw error;}catch(error){state.quotaError=error.failures?'部分账户读取失败，请逐项重试。':error.message??String(error);throw error;}finally{state.lastQuota=Date.now();}},'quotas',typeof accountId==='string'?accountId:null); }
-  finally {state.quotaBusy=false;scheduleRefreshes();if(!dueOnly&&state.page==='agent')render();}
+  finally {state.quotaBusy=false;scheduleRefreshes();if(!dueOnly&&state.page==='agent'){if(interactionOpen())pendingRender=true;else render();}updateQuotaGroupAttention();}
 }
 async function syncPrices(){await job('同步价格',async()=>{await api('prices.sync');state.prices=await api('prices.list');await loadDashboard();if(state.page==='settings')renderSettings();notify('价格已更新');},'prices');}
 function applyQuotaSamples(rows){
@@ -697,7 +768,7 @@ function renderOverview() {
   const view=rememberView(),s=d.summary;
   const visibleProviders=Object.entries(providers).filter(([key])=>key===state.provider||state.settings.accounts.some(a=>a.provider===key&&!a.archived)||state.settings.sources.some(s=>s.provider===key));
   const agentTabs=`<div class="agent-selector" role="group" aria-label="选择 Agent"><button data-overview-agent="" aria-pressed="${!state.provider}">总览</button>${visibleProviders.map(([key,label])=>`<button data-overview-agent="${key}" data-provider="${key}" aria-pressed="${key===state.provider}">${escapeHTML(label)}</button>`).join('')}</div>`;
-  $('#content').innerHTML=`${state.settings.sources.length||state.settings.accounts.length?'':onboarding()}${agentTabs}<div class="filters overview-filters"><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${filterAccounts().filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,accountFilterName(a),state.accountKey)).join('')}</select><button id="open-detail" class="analysis-link">查看分析 ${uiIcon('right')}</button></div><div class="overview-usage card"><div class="between"><span class="muted">${rangeLabel()}用量 ${refreshIndicator('scan')}</span><span>${s.total>0&&s.pricedTokens<s.total?'<button id="repair-pricing" class="pricing-alert" title="计价未完成，设置模型价格">计价未完成</button>':''}</span></div><div class="usage-inline">${tokenSummary(s,true)}<span>API 等价成本 <strong>${s.pricedTokens||!s.total?money(s.cost):'—'}</strong></span></div></div>${quotaSection(d)}${samplingBanner(d)}`;
+  $('#content').innerHTML=`${state.settings.sources.length||state.settings.accounts.length?'':onboarding()}${agentTabs}<div class="filters overview-filters"><select id="account" aria-label="账户">${option('','全部账户',state.accountKey)}${option('none','未关联账户',state.accountKey)}${filterAccounts().filter(a=>!state.provider||a.provider===state.provider).map(a=>option(a.provider+':'+a.id,accountFilterName(a),state.accountKey)).join('')}</select><button id="open-detail" class="analysis-link">查看分析 ${uiIcon('right')}</button></div><div class="overview-usage card"><div class="between"><span class="muted">今日用量 ${refreshIndicator('scan')}</span><span>${s.total>0&&s.pricedTokens<s.total?'<button type="button" id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="计价未完成：部分模型缺少价格，点击设置模型价格">!</button>':''}</span></div><div class="usage-inline">${tokenSummary(s,true)}<span>API 等价成本 <strong>${s.pricedTokens||!s.total?money(s.cost):'—'}</strong></span></div></div>${quotaSection(d)}${samplingBanner(d)}`;
   document.querySelectorAll('[data-overview-agent]').forEach(button=>button.onclick=()=>changeFilters({provider:button.dataset.overviewAgent,accountKey:'',sourceId:'',model:''}));
   $('#account').onchange=e=>changeFilters({accountKey:e.target.value,sourceId:''});
   $('#open-detail').onclick=()=>openAnalysis();
@@ -793,7 +864,7 @@ function drawTrend() {
   if(Number.isInteger(state.trendDayIndex)&&days[state.trendDayIndex]){const x=left+(state.trendDayIndex+.5)*space;ctx.save();ctx.strokeStyle=style.getPropertyValue('--accent');ctx.lineWidth=1;ctx.setLineDash([3]);ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,height-bottom);ctx.stroke();ctx.restore();}
   canvas.tabIndex=0;
   let selected=Math.min(state.trendDayIndex??0,Math.max(0,days.length-1));
-  const describe=i=>{const day=days[i];if(!day)return;const changed=state.trendDayIndex!==i;state.trendDayIndex=i;const label=day.key+' · '+exactUsage(day);canvas.removeAttribute('title');let reading=$('#trend-reading');if(!reading){reading=document.createElement('p');reading.id='trend-reading';reading.className='muted tiny';reading.setAttribute('aria-live','polite');canvas.after(reading);}reading.textContent=label;canvas.setAttribute('aria-label',label+'；左右键选择日期，回车查看精确值');if(changed)drawTrend();};
+  const describe=i=>{const day=days[i];if(!day)return;const changed=state.trendDayIndex!==i;state.trendDayIndex=i;const label=day.key+' · '+trendUsage(day);canvas.removeAttribute('title');let reading=$('#trend-reading');if(!reading){reading=document.createElement('p');reading.id='trend-reading';reading.className='muted tiny';reading.setAttribute('aria-live','polite');canvas.after(reading);}reading.textContent=label;canvas.setAttribute('aria-label',label+'；左右键选择日期，回车查看精确值');if(changed)drawTrend();};
   canvas.onmousemove=e=>{const i=Math.floor((e.offsetX-left)/space);if(days[i])describe(i);};
   canvas.onfocus=()=>describe(selected);
   canvas.onkeydown=e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();selected=e.key==='Home'?0:e.key==='End'?days.length-1:Math.max(0,Math.min(days.length-1,(state.trendDayIndex??selected)+(e.key==='ArrowLeft'?-1:1)));describe(selected);}else if(e.key==='Enter'&&days[state.trendDayIndex??selected])showUsageDay(days[state.trendDayIndex??selected]);};
@@ -1281,8 +1352,8 @@ function editPrice(existing){const price=structuredClone(existing??{id:'',name:'
   $('#editor').dataset.kind='price';
 }
 if(!PANEL){
-  const aside=document.querySelector('aside'),toggle=document.createElement('button');toggle.id='sidebar-toggle';toggle.title='收起或展开导航';toggle.setAttribute('aria-label','收起或展开导航');toggle.innerHTML=uiIcon('menu');aside?.prepend(toggle);
-  const update=()=>{const saved=localStorage.getItem('sidebar.collapsed'),collapsed=saved==null?innerWidth<(document.documentElement.dataset.platform==='windows'?974:1000):saved==='true';document.body.classList.toggle('sidebar-collapsed',collapsed);toggle.setAttribute('aria-expanded',String(!collapsed));toggle.innerHTML=uiIcon(collapsed?'sidebarOpen':'sidebarClose');toggle.title=collapsed?'展开导航':'收起导航';toggle.setAttribute('aria-label',toggle.title);};toggle.onclick=()=>{localStorage.setItem('sidebar.collapsed',String(!document.body.classList.contains('sidebar-collapsed')));if(window.AieyesMotion)AieyesMotion.sidebar(update);else update();};addEventListener('resize',update);update();
+  const toggle=$('#sidebar-toggle');
+  const update=()=>{const saved=localStorage.getItem('sidebar.collapsed'),collapsed=saved==null?innerWidth<(document.documentElement.dataset.platform==='windows'?974:1000):saved==='true';document.body.classList.toggle('sidebar-collapsed',collapsed);toggle.setAttribute('aria-expanded',String(!collapsed));toggle.title=collapsed?'展开导航':'收起导航';toggle.setAttribute('aria-label',toggle.title);};toggle.onclick=()=>{localStorage.setItem('sidebar.collapsed',String(!document.body.classList.contains('sidebar-collapsed')));if(window.AieyesMotion)AieyesMotion.sidebar(update);else update();};addEventListener('resize',update);update();
 }
 document.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>{
   if(button.dataset.page==='settings'){void openSettings();return;}
@@ -1525,7 +1596,7 @@ function bindQuotaTools(){
   document.querySelectorAll('[data-switch-account]').forEach(b=>b.onclick=()=>window.AieyesAccountTargets.open(b.dataset.switchAccount));
   renderQueryStatus();
   $('#content > .active-filters')?.remove();$('#content > .panel-filter-summary')?.remove();
-  if(hasActiveFilters()) {
+  if(state.page==='analysis'&&hasActiveFilters()) {
     const filters=document.createElement('div');filters.className='active-filters';
     for(const [key,label] of [['provider',providers[state.provider]],['accountKey',state.accountKey==='none'?'未关联账户':historicalAccounts().find(a=>a.provider+':'+a.id===state.accountKey)?.name??state.accountKey],['sourceId',state.settings.sources.find(s=>s.id===state.sourceId)?.name??state.sourceId],['model',state.model]]) {
       if(!state[key])continue;

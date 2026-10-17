@@ -542,9 +542,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         analysisFilters.save(scope: "analysis")
     }
     var analysisFilters: DashboardFilterPreference { DashboardFilterPreference(provider: provider, source: selectedSource, account: selectedAccount, model: selectedModel, days: range, dateRange: dateRange) }
-    func filters(for scope: String) -> DashboardFilterPreference { scope == "panel" ? panelFilters : scope == "overview" ? overviewFilters : analysisFilters }
+    func filters(for scope: String) -> DashboardFilterPreference { (scope == "panel" ? panelFilters : scope == "overview" ? overviewFilters : analysisFilters).normalized(for: scope) }
     func updateFilters(_ value: DashboardFilterPreference, scope: String, resetDependents: Bool = true) {
-        var next = value
+        var next = value.normalized(for: scope)
         let previous = filters(for: scope)
         if resetDependents && previous.provider != next.provider { next.account = "all"; next.source = "all"; next.model = "all" }
         else if resetDependents && previous.account != next.account { next.source = "all" }
@@ -703,7 +703,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private func reloadOnce(request: Int) async -> Bool {
         dashboardPending = true; dashboardError = nil
         let scope = [rangeTitle, provider == "all" ? "全部 Agent" : Format.provider(provider), settings.historicalAccounts.first { $0.key == selectedAccount }.map { settings.accountFilterName($0) } ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
-        let analysis = analysisFilters, panelFilter = panelFilters, overviewFilter = overviewFilters
+        let analysis = analysisFilters, panelFilter = filters(for: "panel"), overviewFilter = filters(for: "overview")
         let params = analysis.parameters(settings: settings)
         let unfilteredSelected = analysis == DashboardFilterPreference()
         let allModelsSelected = selectedModel == "all"

@@ -114,9 +114,14 @@ struct DashboardFilterPreference: Codable, Equatable {
         if !CoreContract.providers.contains(value.provider) && value.provider != "all" { value.provider = "all" }
         if let range = value.dateRange, !["all", "custom"].contains(range.kind) { value.dateRange = nil }
         if ![1, 7, 30, 90, 365].contains(value.days) { value.days = 1 }
+        return value.normalized(for: scope)
+    }
+    func normalized(for scope: String?) -> Self {
+        var value = self
+        if scope == "overview" || scope == "panel" { value.days = 1; value.dateRange = nil; value.source = "all"; value.model = "all" }
         return value
     }
-    func save(scope: String? = nil, defaults: UserDefaults = .standard) { defaults.set(try? JSONEncoder().encode(self), forKey: scope.map { "dashboard.filters.v2." + $0 } ?? NativePanelKey.filters.rawValue) }
+    func save(scope: String? = nil, defaults: UserDefaults = .standard) { defaults.set(try? JSONEncoder().encode(normalized(for: scope)), forKey: scope.map { "dashboard.filters.v2." + $0 } ?? NativePanelKey.filters.rawValue) }
     var isToday: Bool { dateRange == nil && days == 1 }
     var rangeTitle: String { dateRange.map { $0.kind == "all" ? "所有" : ($0.start ?? "") + " 至 " + ($0.end ?? "") } ?? (days == 1 ? "今日" : "最近 \(days) 天") }
     var rangeChoice: String {
@@ -254,6 +259,10 @@ struct Quota: Codable, Equatable, Identifiable {
     var balances: [Balance]?, isAvailable: Bool?
     var windows: [QuotaWindow], bankReset: BankReset?, bankUpdatedAt: Double?, plan: String?, error: String?
     var id: String { provider + ":" + accountId }
+    var queryFailure: String? {
+        guard let reason = error?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty else { return nil }
+        return reason
+    }
 }
 struct SyncIssue: Codable { var path: String?; var message: String; var code: String?; var step: Int? }
 func syncFailureReason(error: String?, partial: Bool?, issues: [SyncIssue]?) -> String? {

@@ -37,6 +37,7 @@ const fixture=require('./fixtures/browser-ui.cjs');
      window.__TAURI__.core.invoke=invoke;window.setTimeout=originalSet;window.clearTimeout=originalClear;
    }
  });assert.deepEqual(resumes,{afterQuota:true,afterSave:true});
+ await page.evaluate(()=>AieyesApp.navigatePage('analysis'));
  // Only the latest of a burst of filter changes is issued.
  const burst=await page.evaluate(async()=>{
    const before=engineCalls.filter(c=>c.method==='dashboard').length;

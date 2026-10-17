@@ -7,7 +7,7 @@ struct WakeupsView: View {
     @State private var removal: WakeRecord?
     var body: some View {
         Form {
-            Text("按设定时间调用订阅模型。").font(AppFont.section.weight(.semibold)).foregroundStyle(Palette.accent).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            Text("按设定时间调用订阅模型。可用于帮助规划 5h 重置时间。").font(AppFont.section.weight(.semibold)).foregroundStyle(Palette.accent).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
             Section("定时唤醒") {
                 Text("使用本机或 SSH Linux 服务器的订阅登录，按目标机器时区运行。").foregroundStyle(.secondary)
                 DisclosureGroup("执行规则") {

@@ -90,7 +90,17 @@ function fixture(){
    assert.equal(await page.evaluate(()=>state.hosts.length),2,'Targeted host samples retain the other configured hosts');
    await page.evaluate(()=>{state.settings.hosts=state.settings.hosts.filter(h=>h.id!=='h2');});
    await page.keyboard.press('Escape');
-   await page.evaluate(async()=>{state.model='missing';await loadDashboard();});assert.equal(await page.locator('.stat').count(),0);if(panel)await page.locator('.panel-filter-summary > summary').click();assert.equal(await page.getByRole('button',{name:'清除全部',exact:true}).count(),1);await page.getByRole('button',{name:'清除全部',exact:true}).click();await page.waitForFunction(()=>state.dashboard.summary.total>0);
+   if(panel){
+    await page.evaluate(async()=>{state.model='missing';await loadDashboard();});
+    assert.equal(await page.evaluate(()=>state.model),'','Legacy model filters do not constrain the today panel');
+    assert.equal(await page.locator('.panel-filter-summary,.active-filters').count(),0);
+    assert(await page.evaluate(()=>state.dashboard.summary.total>0));
+   }else{
+    await page.evaluate(()=>AieyesApp.navigatePage('analysis'));
+    await page.evaluate(()=>changeFilters({model:'missing'}));assert.equal(await page.locator('.stat').count(),0);
+    assert.equal(await page.getByRole('button',{name:'清除全部',exact:true}).count(),1);await page.getByRole('button',{name:'清除全部',exact:true}).click();await page.waitForFunction(()=>state.dashboard.summary.total>0);
+    await page.evaluate(()=>AieyesApp.navigatePage('agent'));
+   }
    if(panel){
     assert.equal(await page.locator('#trend').count(),0,'Trend charts live on the analysis page');
     assert.equal(await page.locator('.quota-disclosure').first().evaluate(el=>el.open),false);

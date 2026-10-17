@@ -1,10 +1,15 @@
 {
-  "retrieved": "2026-10-16",
+  "retrieved": "2026-10-17",
   "sources": {
-    "zcode": "https://zcode.z.ai/favicon-192x192.png?v=20260707-transparent",
+    "zcode": "https://zcode.z.ai/en",
     "qoder": "https://img.alicdn.com/imgextra/i4/O1CN01QkSxiCocd3D0prc8_!!6000000008124-2-tps-412-412.png",
-    "grok": "https://grok.com/images/android-chrome-192x192.png",
-    "cursor": "https://cursor.com/marketing-static/icon-192x192-light.png",
+    "grok": "https://grok.com",
+    "cursor": "https://ptht05hbb1ssoooe.public.blob.vercel-storage.com/assets/brand/cursor-brand-assets.zip",
     "opencode": "https://opencode.ai/favicon-96x96-v3.png"
+  },
+  "standaloneMarks": {
+    "zcode": "Navigation logo SVG, viewBox 0 0 256 218",
+    "grok": "Navigation logo SVG, both path#mark elements",
+    "cursor": "General Logos/Cube/SVG/CUBE_2D_LIGHT.svg"
   }
 }

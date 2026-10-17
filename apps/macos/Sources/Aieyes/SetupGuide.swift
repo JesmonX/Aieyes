@@ -68,7 +68,7 @@ enum SetupGuide {
         .init(id: "hosts", title: "连接服务器", detail: "通过 SSH 采集日志或监控服务器资源。",
               steps: ["导入 SSH 配置或添加服务器。", "按需开启资源监控和 Agent 采集。", "在 Agent 中选择服务器及日志目录。"], help: "SSH 跳板连接沿用 ProxyJump / ProxyCommand。账户代理在对应机器的前置命令中设置。",
               actions: [.init(title: "添加 SSH 服务器", destination: .init(category: "hosts")), .init(title: "选择采集目录", destination: .init(section: "machines"))]),
-        .init(id: "wakeups", title: "设置定时唤醒", detail: "按设定时间调用订阅模型。",
+        .init(id: "wakeups", title: "设置定时唤醒", detail: "按设定时间调用订阅模型。可用于帮助规划 5h 重置时间。",
               steps: ["选择订阅账户与运行机器。", "读取可用模型，设置每日时刻。", "保存草稿，再部署任务。"], help: "修改草稿后需更新部署。执行时间、启用状态和运行记录见任务页。",
               actions: [.init(title: "定时唤醒设置", destination: .init(category: "wakeups"))]),
         .init(id: "panel", title: "选择面板账户", detail: "选择要在本机面板展示的账户。",
