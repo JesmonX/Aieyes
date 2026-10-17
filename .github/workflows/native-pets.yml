@@ -1,0 +1,26 @@
+name: Native pet graphics tests
+on:
+  workflow_dispatch:
+  push:
+    paths: ['apps/macos/Sources/Aieyes/**', 'crates/core/src/pets.rs', 'crates/core/Cargo.toml', 'Cargo.*', 'scripts/verify-pets.swift', 'scripts/test-native-pets.sh', '.github/workflows/native-pets.yml']
+  pull_request:
+    paths: ['apps/macos/Sources/Aieyes/**', 'crates/core/src/pets.rs', 'crates/core/Cargo.toml', 'Cargo.*', 'scripts/verify-pets.swift', 'scripts/test-native-pets.sh', '.github/workflows/native-pets.yml']
+permissions:
+  contents: read
+jobs:
+  pets:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CLANG_MODULE_CACHE_PATH: ${{ github.workspace }}/.build/clang-cache
+      SWIFTPM_MODULECACHE_OVERRIDE: ${{ github.workspace }}/.build/swift-module-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Pet timing, native animation and graphics capability regression
+        run: sh scripts/test-native-pets.sh

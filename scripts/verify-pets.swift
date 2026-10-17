@@ -11,6 +11,24 @@ import Darwin
             && diagnostic.contains("+[MTLLoader sliceIDForDevice:")
             && diagnostic.contains("Target device architecture is nil")
     }
+    @MainActor static func pump(_ duration: TimeInterval = 0.2) {
+        let until = Date().addingTimeInterval(duration)
+        while Date() < until {
+            if let event = NSApp.nextEvent(matching: .any, until: Date().addingTimeInterval(0.01), inMode: .default, dequeue: true) { NSApp.sendEvent(event) }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+        }
+    }
+    @MainActor static func waitUntil(_ message: String, condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition() && Date() < deadline { pump(0.05) }
+        precondition(condition(), message)
+    }
+    @MainActor static func show(_ window: NSWindow) {
+        window.orderFrontRegardless()
+        waitUntil("Animation test window did not become visible", condition: {
+            window.isVisible && window.occlusionState.contains(.visible)
+        })
+    }
     @MainActor static func main() throws {
         if CommandLine.arguments.contains("--window-tests") {
             _ = NSApplication.shared
@@ -69,13 +87,6 @@ import Darwin
         precondition(!PetPreviewVisibility.isVisible(CGRect(x: 204, y: 520, width: 352, height: 92), viewport: libraryViewport.offsetBy(dx: 0, dy: 420), enclosing: settingsViewport), "The entire library scrolled outside Settings must stop")
         _ = NSApplication.shared
         NSApp.finishLaunching()
-        func pump() {
-            let until = Date().addingTimeInterval(0.2)
-            while Date() < until {
-                if let event = NSApp.nextEvent(matching:.any,until:Date().addingTimeInterval(0.01),inMode:.default,dequeue:true) { NSApp.sendEvent(event) }
-                RunLoop.main.run(until:Date().addingTimeInterval(0.005))
-            }
-        }
         let context = CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         let images = (0..<8).map { frame -> CGImage in context.setFillColor(CGColor(gray: Double(frame)/8, alpha: 1)); context.fill(CGRect(x:0,y:0,width:8,height:8)); return context.makeImage()! }
         for durations in CoreContract.petFrameDurations {
@@ -90,8 +101,8 @@ import Darwin
         checkpoint("Pet frame timing and Core Animation keyframe configuration passed")
         let animationWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:144,height:168), styleMask: [.titled], backing: .buffered, defer: false)
         animationWindow.isReleasedWhenClosed = false; animationWindow.level = .statusBar
-        let sprite = PetLayerImage(); animationWindow.contentView = sprite; animationWindow.orderFront(nil)
-        pump()
+        let sprite = PetLayerImage(); animationWindow.contentView = sprite
+        show(animationWindow)
         var clockState = PetState.idle
         func configure() { sprite.configure(images: images, state: clockState, identity: clockState.animationIdentity, playing: true, reduced: false) }
         configure(); let starts = sprite.animationStarts
@@ -102,8 +113,7 @@ import Darwin
         sprite.configure(images: images, state: clockState, identity: clockState.animationIdentity, playing: true, reduced: true)
         precondition(sprite.layer?.animation(forKey:"pet.frames") == nil, "Reduced motion retains the first frame")
         configure(); animationWindow.orderOut(nil)
-        pump()
-        precondition(sprite.layer?.animation(forKey:"pet.frames") == nil, "Hidden windows stop animation")
+        waitUntil("Hidden windows stop animation", condition: { sprite.layer?.animation(forKey: "pet.frames") == nil })
         animationWindow.close()
         checkpoint("Pet keyframe reuse, reduced motion and hidden-window pause passed")
         if CommandLine.arguments.contains("--without-metal-device") {
@@ -139,20 +149,13 @@ import Darwin
     }
     @MainActor static func verifyWindow() throws {
         let canRenderSymbolEffects = MTLCreateSystemDefaultDevice() != nil
-        func pump() {
-            let until = Date().addingTimeInterval(0.2)
-            while Date() < until {
-                if let event = NSApp.nextEvent(matching: .any, until: Date().addingTimeInterval(0.01), inMode: .default, dequeue: true) { NSApp.sendEvent(event) }
-                RunLoop.main.run(until: Date().addingTimeInterval(0.005))
-            }
-        }
         // Keep both symbol effects and SwiftUI rendering in the graphics child:
         // driver shader compilation may complete after a view is closed.
         if canRenderSymbolEffects {
             let menuWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:22,height:22), styleMask: [.borderless], backing: .buffered, defer: false)
             menuWindow.isReleasedWhenClosed = false; menuWindow.level = .statusBar
-            let menuImage = MenuActivityImage(); menuWindow.contentView = menuImage; menuWindow.orderFront(nil)
-            pump()
+            let menuImage = MenuActivityImage(); menuWindow.contentView = menuImage
+            show(menuWindow)
             menuImage.configure(phase:.working,playing:true);let pulses = menuImage.animationStarts
             precondition(pulses > 0)
             for _ in 0..<30 { menuImage.configure(phase:.working,playing:true) }
