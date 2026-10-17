@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 @main struct VerifyWakeups {
     @MainActor static func main() async throws {
@@ -26,6 +27,7 @@ for line in sys.stdin:
         held('list')
         response['result'] = rows
     elif method == 'wakeups.status':
+        (root / ('pid-' + params['id'])).write_text(str(os.getpid()))
         if params['id'] == 'slow': held('status')
         if (root / ('fail-status-' + params['id'])).exists():
             response['error'] = {'message': params['id'] + ' status failed'}
@@ -111,6 +113,16 @@ for line in sys.stdin:
         try mark("release-list")
         await refresh.value
         precondition(store.records.first { $0.id == "fast" }?.task.name == edited.name, "An older list response must not replace a newly saved task")
+        let slowPID = Int32(try String(contentsOf:root.appendingPathComponent("pid-slow"),encoding:.utf8))!
+        precondition(kill(slowPID,0)==0)
+        let retained = store.records.filter { $0.id != "slow" }
+        let serialized = try JSONSerialization.jsonObject(with:Data(contentsOf:root.appendingPathComponent("records.json"))) as! [[String:Any]]
+        let removed = serialized.filter { ($0["task"] as? [String:Any])?["id"] as? String != "slow" }
+        try JSONSerialization.data(withJSONObject:removed).write(to:root.appendingPathComponent("records.json"))
+        await store.load(refreshStatuses:false)
+        precondition(store.records.map(\.id) == retained.map(\.id))
+        try await waitUntil { kill(slowPID,0) != 0 }
+        print("Removed wakeup task releases its dedicated core process")
         print("Native wakeups: independent status and edits, per-operation error recovery, and stale-list protection passed")
     }
 }

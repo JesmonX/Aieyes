@@ -28,6 +28,11 @@ async function invoke(method,params){
   if(method==='hosts.credentials.delete'){assert(secrets.delete(params.passwordRef));return {};}
   if(['settings.patch','sources.configure'].includes(method)&&failSave)throw new Error('模拟保存失败，输入已保留');
   if(method==='settings.patch'&&saveDelay)await new Promise(resolve=>setTimeout(resolve,saveDelay));
+  if(method==='accounts.status.refreshBatch'||method==='accounts.status.get'){
+    const settings=await rpc('settings.get'),rows=[];
+    for(const a of settings.accounts.filter(a=>!a.archived&&(!params.accountKeys||params.accountKeys.includes(a.provider+':'+a.id))))for(const source of settings.sources.filter(s=>s.provider===a.provider&&s.enabled&&(!params.sourceIds||params.sourceIds.includes(s.id))))rows.push(await invoke('accounts.status.refresh',{accountKey:a.provider+':'+a.id,sourceId:source.id}));
+    return rows;
+  }
   if(method==='accounts.status.refresh')return {accountKey:params.accountKey,sourceId:params.sourceId,machineId:params.sourceId==='codex-local'?'local':'server',current:loggedIn&&params.accountKey==='codex:a',credential:loggedIn&&['codex:a','codex:b'].includes(params.accountKey),checkedAt:Date.now()/1000};
   if(method==='accounts.deletion.preview'&&params.accountKey==='codex:old')return {tasks:[{id:'offline-task',name:'离线任务',machine:'弃用服务器',root:'~/fixture'}]};
   if(method==='accounts.delete'&&params.accountKey==='codex:old'&&!params.force)return {deleted:false,failedTasks:[{id:'offline-task',name:'离线任务',machine:'弃用服务器',error:'服务器不可达'}]};

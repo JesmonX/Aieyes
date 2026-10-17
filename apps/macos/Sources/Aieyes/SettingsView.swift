@@ -7,7 +7,8 @@ private struct HostEditorRequest: Identifiable {
 }
 
 struct SettingsView: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
+    @Environment(\.surfaceActive) private var parentActive
     @ObservedObject private var catalog: PriceCatalog
     private var draft: Settings {
         get { model.settingsDraft }
@@ -32,7 +33,7 @@ struct SettingsView: View {
     @FocusState private var mappingFocused: Bool
     @FocusState private var generalField: String?
     @MainActor init(model: AppModel) {
-        self.model = model
+        _model = SurfaceModel(wrappedValue: model)
         self.catalog = model.priceCatalog
     }
     var body: some View {
@@ -74,7 +75,7 @@ struct SettingsView: View {
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16).disabled(model.repricing || !model.settingsLoaded)
         }
         .font(AppFont.body).disabled(model.installingUpdate)
-        .environment(\.surfaceActive, model.settingsWindowVisible || CommandLine.arguments.contains("--render"))
+        .environment(\.surfaceActive, parentActive || CommandLine.arguments.contains("--render"))
         .alert("全量重扫历史记录", isPresented: $confirmRescan) {
             Button("取消", role: .cancel) { }
             Button("开始重扫") { Task { await model.rescan() } }
@@ -362,7 +363,7 @@ struct SettingsSidebar: View {
 }
 
 private struct ExistingMappingRow: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let name: String
     @State private var editing = false
     @State private var from = ""

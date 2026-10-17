@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Combine
 import UserNotifications
@@ -24,6 +25,9 @@ private struct QuotaResetEvent: Decodable {
     private let engine = EngineClient(configurationOnly: true)
     private let since = Int(Date().timeIntervalSince1970)
     private var task: Task<Void, Never>?
+    private var draining = false
+    private var configurationRevision: Int?
+    private var observers: [NSObjectProtocol] = []
     private var asked = false
     private var stopped = false
     private var center: UNUserNotificationCenter? {
@@ -37,16 +41,22 @@ private struct QuotaResetEvent: Decodable {
     func start() {
         guard task == nil, !stopped, let center else { return }
         center.delegate = self
+        observers.append(NotificationCenter.default.addObserver(forName: EngineClient.runtimeChanged, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in await self?.drain() } })
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in await self?.refreshPermission() } })
         task = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, !self.stopped else { return }
-                await self.poll()
+                await self.drain()
                 do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
             }
         }
     }
-    private func poll() async {
+    func drain() async {
+        guard !draining, !stopped, task != nil else { return }; draining = true
+        defer { draining = false }
         do {
+            let revision: [String: Int] = (try? await engine.call("runtime.revisions")) ?? [:]
+            if configurationRevision == nil || configurationRevision != revision["settings"] {
             let settings: Settings = try await engine.call("settings.get")
             let enabled = settings.accounts.contains { a in
                 a.quotaEnabled && a.archived != true && a.provider != "deepseek"
@@ -56,6 +66,8 @@ private struct QuotaResetEvent: Decodable {
             }
             if enabled && !asked { asked = true; await authorize() }
             else { await refreshPermission() }
+            configurationRevision = revision["settings"] ?? 0
+            }
             let events: [QuotaResetEvent] = try await engine.call("quotaResetNotifications.take", params: ["since":since])
             for event in events {
                 guard !Task.isCancelled, !stopped else { return }
@@ -98,7 +110,7 @@ private struct QuotaResetEvent: Decodable {
         await deliver(id: UUID().uuidString, title: "Aieyes 测试通知", body: "收到此通知表示系统通知可正常显示。")
         if error == nil { testMessage = "测试通知已提交，请检查系统显示。" }
     }
-    func stop() { stopped = true; task?.cancel(); task = nil; engine.stop() }
+    func stop() { for observer in observers { NotificationCenter.default.removeObserver(observer) }; observers.removeAll(); stopped = true; task?.cancel(); task = nil; engine.stop() }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .list, .sound])

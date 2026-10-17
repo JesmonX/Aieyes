@@ -57,9 +57,9 @@
   };
   function ensureStatuses(provider=null) {
     if(statusLoading||statusError||(provider?statusLoaded:statusFullLoaded))return;
-    return refreshStatuses(true,provider);
+    return refreshStatuses(false,provider);
   }
-  async function refreshStatuses(refresh=true,provider=null){
+  async function refreshStatuses(refresh=true,provider=null,dueOnly=false){
     if(provider&&!state.settings.accounts.some(a=>a.provider===provider)){statusLoaded=true;return;}
     if(statusLoading)return;
     const previousError=statusError;statusLoading=true;statusError='';
@@ -68,14 +68,25 @@
       const loaded=await api('accounts.status.get');if(revision===statusRevision)statusRows=Array.isArray(loaded)?loaded:[];
       cleanupRows=await api('accounts.cleanup.list');if(!Array.isArray(cleanupRows))cleanupRows=[];
       statusLoaded=true;repaint();
-      if(refresh)for(const a of state.settings.accounts.filter(a=>!a.archived&&(!provider||a.provider===provider)))for(const s of state.settings.sources.filter(s=>s.provider===a.provider&&AieyesUI.sourceEnabled(state.settings,s)&&machines(a.provider).includes(machineId(s))).sort((a,b)=>Number(Boolean(a.hostId))-Number(Boolean(b.hostId)))){
+      if(refresh){
+        try {
+          if(!state.revisionEvents)throw new Error('Unexpected call: accounts.status.refreshBatch');
+          const keys=state.settings.accounts.filter(a=>!a.archived&&(!provider||a.provider===provider)).map(accountKey);
+          const rows=await api('accounts.status.refreshBatch',{accountKeys:keys,dueOnly});
+          if(revision===statusRevision)for(const row of rows){statusRows=statusRows.filter(r=>!(r.accountKey===row.accountKey&&r.sourceId===row.sourceId));statusRows.push(row);}
+          repaint();
+        } catch(error) {
+          if(!/Unexpected call|未知.*方法|不存在.*方法/i.test(String(error)))throw error;
+          for(const a of state.settings.accounts.filter(a=>!a.archived&&(!provider||a.provider===provider)))for(const s of state.settings.sources.filter(s=>s.provider===a.provider&&AieyesUI.sourceEnabled(state.settings,s)&&machines(a.provider).includes(machineId(s))).sort((a,b)=>Number(Boolean(a.hostId))-Number(Boolean(b.hostId)))){
         if(revision!==statusRevision)return;
         try{const row=await api('accounts.status.refresh',{accountKey:accountKey(a),sourceId:s.id});if(revision===statusRevision){statusRows=statusRows.filter(r=>!(r.accountKey===row.accountKey&&r.sourceId===row.sourceId));statusRows.push(row);repaint();}}catch{/* Settings changed while this device was being checked. */}
+      }
+        }
       }
       if(refresh&&!provider&&revision===statusRevision)statusFullLoaded=true;
       if(previousError&&document.querySelector('#message')?.dataset.source==='account-status')notify('');
     }catch(error){statusError='设备状态读取失败：'+String(error);notify(statusError,'error','account-status');}
-    finally{await syncIdentitySettings();statusLoading=false;repaint();if(statusRefreshAgain){statusRefreshAgain=false;void refreshStatuses(true,state.page==='settings'&&state.settingsTab==='integrations'?null:'codex');}}
+    finally{await syncIdentitySettings();statusLoading=false;repaint();if(statusRefreshAgain){statusRefreshAgain=false;void refreshStatuses(true,null,true);}}
   }
   async function syncIdentitySettings(reportFailure=false) {
     if(!state.settings.accounts.length||pendingSaves||state.settingsSaving)return;
@@ -110,11 +121,10 @@
         const requested=sourceStatusRequests.get(sourceId), rows=[];
         let succeeded=true;
         if(!state.settings.sources.some(s=>s.id===sourceId&&s.provider==='codex'&&s.enabled))return false;
-        for(const a of state.settings.accounts.filter(a=>a.provider==='codex')){
-          try{
-            const row=await api('accounts.status.refresh',{accountKey:accountKey(a),sourceId});
-            rows.push(row);if(row.error)succeeded=false;
-          }catch{succeeded=false;}
+        if(state.revisionEvents){
+          try{rows.push(...await api('accounts.status.refreshBatch',{sourceIds:[sourceId],accountKeys:state.settings.accounts.filter(a=>a.provider==='codex').map(accountKey)}));if(rows.some(r=>r.error))succeeded=false;}catch{succeeded=false;}
+        }else for(const a of state.settings.accounts.filter(a=>a.provider==='codex')){
+          try{const row=await api('accounts.status.refresh',{accountKey:accountKey(a),sourceId});rows.push(row);if(row.error)succeeded=false;}catch{succeeded=false;}
         }
         if(requested!==sourceStatusRequests.get(sourceId))continue;
         for(const row of rows){
@@ -138,8 +148,17 @@
   const machineName = s => s.hostId ? state.settings.hosts.find(h=>h.id===s.hostId)?.name || s.hostId : '本机';
   const profiles = a => [...new Set([a.quotaProfileId,...(a.connections??[]).map(c=>c.profileId)].filter(Boolean))];
   const linked = (a,s) => s.provider===a.provider&&(s.accountId===a.id||s.codexHomeId&&profiles(a).some(r=>r.startsWith(s.codexHomeId+':')));
+  function deviceConfig(settings){
+    const pick=(row,keys)=>Object.fromEntries(keys.map(key=>[key,row[key]]));
+    return configKey({accounts:settings.accounts.map(a=>pick(a,['provider','id','identityKey','quotaProfileId','connections','deviceSettings'])),sources:settings.sources.map(s=>pick(s,['id','provider','accountId','path','hostId','enabled','machineBinding','codexHomeId','codexBinary','agyBinary','quotaPreCommand','subscription','proxy'])),hosts:settings.hosts.map(h=>pick(h,['id','target','port','username','identityFile','authMode','passwordRef','shell','preCommand','enabled'])),agents:settings.agents,localDeviceEnabled:settings.localDeviceEnabled,proxy:settings.sources.some(s=>s.provider!=='codex')?settings.proxy:null});
+  }
   function accept(saved,submittedForms=null) {
+    const quotaKey=value=>configKey([value.accounts,value.sources,value.hosts,value.proxy,value.refreshSeconds,value.agents,value.localDeviceEnabled]);
+    if(quotaKey(state.settings)!==quotaKey(saved))state.lastQuota=0;
+    const changed=deviceConfig(state.settings)!==deviceConfig(saved);
+    if(!changed){acceptSettings(saved,submittedForms);window.AieyesTheme?.apply(saved.appearance);return;}
     statusRevision++;if(statusLoading)statusRefreshAgain=true;for(const id of sourceStatusRequests.keys())sourceStatusRequests.set(id,statusRevision);statusLoaded=false;statusFullLoaded=false;statusError='';acceptSettings(saved,submittedForms);state.lastQuota=0;
+    if(state.revisionEvents)void refreshStatuses(true,null,true);
     window.AieyesTheme?.apply(saved.appearance);
   }
   async function commit(next, base=state.settings) {

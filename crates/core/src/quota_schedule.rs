@@ -25,13 +25,43 @@ fn due(last: Option<i64>, now: i64, seconds: i64) -> bool {
 #[derive(Default)]
 pub struct Poller {
     confirmed: std::collections::HashSet<(String, i64)>,
+    cached_revision: Option<(i64, i64)>,
+    next_wake: Option<i64>,
+    last_clock: i64,
+    #[cfg(test)]
+    scans: usize,
+}
+pub struct WaitPlan {
+    pub query: Option<Value>,
+    pub next_wake: Option<i64>,
 }
 impl Poller {
     pub fn next(&mut self, engine: &Engine) -> Result<Option<Value>> {
-        let settings = engine.store.settings()?;
+        Ok(self.wait_plan(engine)?.query)
+    }
+    pub fn wait_plan(&mut self, engine: &Engine) -> Result<WaitPlan> {
         let now = crate::models::now();
+        let revision: (i64, i64) = engine.store.db.query_row("SELECT CAST((SELECT value FROM kv WHERE key='runtime.revision:settings') AS INTEGER),CAST((SELECT value FROM kv WHERE key='runtime.revision:quotas') AS INTEGER)", [], |r| Ok((r.get(0)?,r.get(1)?)))?;
+        if self.cached_revision == Some(revision)
+            && now >= self.last_clock
+            && self.next_wake.is_none_or(|next| next > now)
+        {
+            self.last_clock = now;
+            return Ok(WaitPlan {
+                query: None,
+                next_wake: self.next_wake,
+            });
+        }
+        self.cached_revision = Some(revision);
+        self.last_clock = now;
+        #[cfg(test)]
+        {
+            self.scans += 1;
+        }
+        let settings = engine.store.settings()?;
         let mut active = std::collections::HashSet::new();
         let mut expired = None;
+        let mut next_reset = None;
         let mut query = engine.store.db.prepare("SELECT payload FROM quotas")?;
         for raw in query.query_map([], |r| r.get::<_, String>(0))? {
             let quota: QuotaSnapshot = serde_json::from_str(&raw?)?;
@@ -54,19 +84,28 @@ impl Poller {
                         expired = Some(id.clone());
                     }
                     active.insert(id);
+                    if reset > now {
+                        next_reset = Some(next_reset.map_or(reset, |old: i64| old.min(reset)));
+                    }
                 }
             }
         }
         self.confirmed.retain(|id| active.contains(id));
         if let Some((key, reset)) = expired {
             self.confirmed.insert((key.clone(), reset));
-            return Ok(Some(json!({"accountKey":key})));
+            self.next_wake = Some(now + 1);
+            return Ok(WaitPlan {
+                query: Some(json!({"accountKey":key})),
+                next_wake: self.next_wake,
+            });
         }
         let schedule = engine.quota_schedule()?;
-        Ok(schedule["nextDueAt"]
-            .as_i64()
-            .filter(|t| *t <= now)
-            .map(|_| json!({"dueOnly":true})))
+        let next = schedule["nextDueAt"].as_i64();
+        self.next_wake = next.into_iter().chain(next_reset).min();
+        Ok(WaitPlan {
+            query: next.filter(|t| *t <= now).map(|_| json!({"dueOnly":true})),
+            next_wake: self.next_wake,
+        })
     }
 }
 impl Engine {
@@ -256,6 +295,61 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::file_lock::FileLock;
+    #[test]
+    fn waits_until_deadline_and_observes_external_configuration_and_clock_reversal() {
+        use crate::models::{Settings, Source};
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open(dir.path()).unwrap();
+        engine
+            .store
+            .save_settings(&Settings {
+                accounts: vec![Account {
+                    id: "a".into(),
+                    name: "Fixture".into(),
+                    provider: "custom".into(),
+                    quota_enabled: true,
+                    ..Default::default()
+                }],
+                sources: vec![Source {
+                    id: "s".into(),
+                    provider: "custom".into(),
+                    account_id: "a".into(),
+                    path: dir.path().to_string_lossy().into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        engine
+            .store
+            .db
+            .execute(
+                "INSERT INTO kv VALUES('quota-attempt:custom:a',?1)",
+                [crate::models::now().to_string()],
+            )
+            .unwrap();
+        let mut poller = Poller::default();
+        let first = poller.wait_plan(&engine).unwrap();
+        assert!(first.query.is_none());
+        assert!(first.next_wake.unwrap() > crate::models::now());
+        for _ in 0..20 {
+            assert!(poller.wait_plan(&engine).unwrap().query.is_none());
+        }
+        assert_eq!(poller.scans, 1);
+        let writer = rusqlite::Connection::open(dir.path().join("aieyes.sqlite")).unwrap();
+        writer
+            .execute(
+                "UPDATE kv SET value='0' WHERE key='quota-attempt:custom:a'",
+                [],
+            )
+            .unwrap();
+        assert!(poller.wait_plan(&engine).unwrap().query.is_some());
+        assert_eq!(poller.scans, 2);
+        poller.last_clock = crate::models::now() + 100;
+        poller.next_wake = Some(crate::models::now() + 1000);
+        assert!(poller.wait_plan(&engine).unwrap().query.is_some());
+        assert_eq!(poller.scans, 3);
+    }
     #[test]
     fn failed_queries_obey_independent_intervals_and_manual_refresh_bypasses_due() {
         use crate::models::*;

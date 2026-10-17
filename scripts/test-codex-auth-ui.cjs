@@ -11,7 +11,7 @@ function fixture(){
   if(method==='hello')return {version:'test'};if(method==='settings.get')return structuredClone(settings);
   if(method==='dashboard')return {generatedAt:Date.now()/1000,summary:{tokens:{input:0,output:0,cacheRead:0,cacheWrite:0},total:0,cost:0,pricedTokens:0,events:0},quotas:[],quotaOrder:[],modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:[],pricingGaps:[]};
   if(['sources.scan','prices.list','quotas.refresh','wakeups.list'].includes(method))return [];
-  if(method==='accounts.status.get')return [];
+  if(method==='accounts.status.get')return settings.accounts.map(a=>({accountKey:a.provider+':'+a.id,sourceId:'s',machineId:'local',current:authTest.loggedIn&&authTest.active===a.identityKey,credential:authTest.loggedIn}));
   if(method==='accounts.status.refresh'){
     const row={accountKey:params.accountKey,sourceId:params.sourceId,machineId:'local',current:authTest.loggedIn&&authTest.active===(params.accountKey==='codex:a'?'one':'two'),credential:authTest.loggedIn};
     if(authTest.pauseNextStatus){authTest.pauseNextStatus=false;return new Promise(resolve=>{authTest.releaseStatus=()=>resolve(row);});}

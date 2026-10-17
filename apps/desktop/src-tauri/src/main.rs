@@ -182,6 +182,7 @@ fn refresh_feedback(
 #[tauri::command]
 async fn engine_call(
     method: String,
+    operation_id: Option<String>,
     params: Value,
     state: tauri::State<'_, Shared>,
     app: tauri::AppHandle,
@@ -202,7 +203,9 @@ async fn engine_call(
     let changed = method.clone();
     let network_broadcast =
         method == "network.test" && params.get("proxy").is_none() && params.get("urls").is_none();
-    let operation_id = params["operationId"].clone();
+    let operation_id = operation_id
+        .map(Value::String)
+        .unwrap_or_else(|| params["operationId"].clone());
     let sampling = matches!(
         method.as_str(),
         "quotaEstimates.start"
@@ -225,6 +228,7 @@ async fn engine_call(
         );
     }
     let finished_operation_id = operation_id.clone();
+    let invalidation_id = operation_id.clone();
     let refresh_item = ["sourceId", "accountId", "hostId"]
         .iter()
         .find_map(|key| params[*key].as_str())
@@ -253,11 +257,17 @@ async fn engine_call(
         };
         let mut engine = engine.lock().map_err(|_| "核心连接已断开".to_string())?;
         let progress_app = guarded_app.clone();
-        engine
+        let invalidation_id_for_core = operation_id.clone();
+        let result = engine
             .call_with_progress(
                 &method,
                 params,
                 Box::new(move |mut progress| {
+                    if progress["kind"] == "runtime.changed" {
+                        progress["operationId"] = operation_id.clone();
+                        let _ = progress_app.emit("runtime:changed", progress);
+                        return;
+                    }
                     if progress["kind"] == "quotas.refresh" {
                         let _ = progress_app.emit(
                             "desktop:quotas",
@@ -276,7 +286,12 @@ async fn engine_call(
                     let _ = progress_app.emit("operations:progress", progress);
                 }),
             )
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        if let Some(mut change) = engine.take_runtime_change() {
+            change["operationId"] = invalidation_id_for_core;
+            let _ = guarded_app.emit("runtime:changed", change);
+        }
+        result
     })
     .await
     .map_err(|e| e.to_string())
@@ -292,7 +307,17 @@ async fn engine_call(
     }
     // Keep both webviews current without starting a second poller or broadcasting
     // settings that may contain credentials, proxy URLs, or shell commands.
-    for (event, payload) in update_events(&changed, &result) {
+    let invalidations = update_events(&changed, &result);
+    if invalidations
+        .iter()
+        .any(|(event, _)| matches!(*event, "desktop:settings" | "desktop:data-changed"))
+    {
+        let _ = app.emit(
+            "desktop:invalidate",
+            serde_json::json!({"method":changed,"operationId":invalidation_id}),
+        );
+    }
+    for (event, payload) in invalidations {
         let _ = app.emit(event, payload);
     }
     if network_broadcast && let Ok(snapshot) = &result {

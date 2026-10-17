@@ -10,8 +10,15 @@ extension AppModel {
         func rank(_ provider: String) -> Int { provider == "custom" ? order.count + 1 : order.firstIndex(of: provider) ?? order.count }
         return rows.sorted { rank($0.provider) < rank($1.provider) }
     }
+    func accountStatusConfiguration(_ value: Settings) -> Data {
+        let object = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(value))) as? [String: Any] ?? [:]
+        func pick(_ rows: Any?, _ keys: [String]) -> [[String: Any]] { (rows as? [[String: Any]] ?? []).map { row in row.filter { keys.contains($0.key) } } }
+        let sources = pick(object["sources"], ["id","provider","accountId","path","hostId","enabled","machineBinding","codexHomeId","codexBinary","agyBinary","quotaPreCommand","subscription","proxy"])
+        let next: [String: Any] = ["accounts":pick(object["accounts"], ["id","provider","identityKey","quotaProfileId","connections","deviceSettings"]), "sources":sources, "hosts":pick(object["hosts"], ["id","target","port","username","identityFile","authMode","passwordRef","shell","preCommand","enabled"]), "agents":object["agents"] ?? [], "localDeviceEnabled":value.localDeviceEnabled ?? true, "proxy": sources.contains { ($0["provider"] as? String) != "codex" } ? (object["proxy"] ?? [:]) : [:]]
+        return (try? JSONSerialization.data(withJSONObject: next, options: .sortedKeys)) ?? Data()
+    }
     func acceptConfiguration(_ saved: Settings) {
-        invalidateAccountStatuses()
+        if accountStatusConfiguration(settings) != accountStatusConfiguration(saved) { invalidateAccountStatuses() }
         mergeConfiguration(saved)
         scheduleConfigurationRefresh()
     }
@@ -26,10 +33,10 @@ extension AppModel {
         settingsRefreshTask = Task {
             do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
             guard !Task.isCancelled, !installingUpdate else { return }
-            Task { await loadAccountStatuses(refresh: true, provider: "codex") }
+            Task { await loadAccountStatuses(refresh: true, dueOnly: true) }
             await reload()
             guard !Task.isCancelled, !installingUpdate else { return }
-            await refreshQuotas()
+            await refreshQuotas(dueOnly: true)
         }
         synchronizeAccountDeployments()
     }
@@ -59,13 +66,10 @@ extension AppModel {
                 let requested = accountSourceStatusRequests[sourceID]
                 var rows: [AccountDeviceStatus] = [], succeeded = true
                 guard settings.sources.contains(where: { $0.id == sourceID && $0.provider == "codex" && settings.sourceEnabled($0) }) else { return false }
-                for account in settings.accounts.filter({ $0.provider == "codex" }) {
-                    do {
-                        let row: AccountDeviceStatus = try await reader.call("accounts.status.refresh", params: ["accountKey":account.key,"sourceId":sourceID])
-                        rows.append(row)
-                        if row.error != nil { succeeded = false }
-                    } catch { succeeded = false }
-                }
+                do {
+                    rows = try await reader.call("accounts.status.refreshBatch", params: ["sourceIds":[sourceID], "accountKeys":settings.accounts.filter { $0.provider == "codex" }.map(\.key)])
+                    succeeded = rows.allSatisfy { $0.error == nil }
+                } catch { succeeded = false }
                 if requested != accountSourceStatusRequests[sourceID] { continue }
                 for row in rows where settings.accounts.contains(where: { $0.key == row.accountKey }) {
                     accountStatusStore.upsert(row)

@@ -2,11 +2,13 @@ import Foundation
 
 struct UpdateOperations: Decodable { var preparing: Bool; var protected: [String]; var active: Int }
 final class EngineClient: @unchecked Sendable {
+    static let runtimeChanged = Notification.Name("AieyesRuntimeChanged")
     private struct Pending {
         var complete: (Result<Data, Error>) -> Void
         var progress: (@Sendable (String) -> Void)?
         var sample: (@Sendable (HostResult) -> Void)?
         var quota: (@Sendable (Quota) -> Void)?
+        var account: (@Sendable (AccountDeviceStatus) -> Void)?
     }
     private static let registryLock = NSLock()
     private static let clients = NSHashTable<EngineClient>.weakObjects()
@@ -65,12 +67,19 @@ final class EngineClient: @unchecked Sendable {
     }
     private func receive(_ line: Data) {
         guard let response = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { return }
+        if response["method"] as? String == "runtime.changed", let value = response["params"] as? [String: Any] {
+            NotificationCenter.default.post(name: Self.runtimeChanged, object: nil, userInfo: value); return
+        }
+        if response["method"] as? String == "operations.progress", let value = response["params"] as? [String: Any], value["kind"] as? String == "runtime.changed" {
+            NotificationCenter.default.post(name: Self.runtimeChanged, object: nil, userInfo: value); return
+        }
         lifecycle.lock()
         if response["method"] as? String == "operations.progress", let value = response["params"] as? [String: Any] {
             let request = (value["requestId"] as? Int).flatMap { pending[$0] } ?? pending.values.first
             lifecycle.unlock()
             if value["kind"] as? String == "hosts.sample", let row = value["row"], let data = try? JSONSerialization.data(withJSONObject: row), let sample = try? JSONDecoder().decode(HostResult.self, from: data) { request?.sample?(sample) }
             else if value["kind"] as? String == "quotas.refresh", let row = value["row"], let data = try? JSONSerialization.data(withJSONObject: row), let sample = try? JSONDecoder().decode(Quota.self, from: data) { request?.quota?(sample) }
+            else if value["kind"] as? String == "accounts.status.refresh", let row = value["row"], let data = try? JSONSerialization.data(withJSONObject: row), let sample = try? JSONDecoder().decode(AccountDeviceStatus.self, from: data) { request?.account?(sample) }
             else if let stage = value["stage"] as? String { request?.progress?(stage) }
             return
         }
@@ -88,7 +97,7 @@ final class EngineClient: @unchecked Sendable {
         let requests = Array(pending.values); pending.removeAll(); lifecycle.unlock()
         for request in requests { request.complete(.failure(ClientError.message("核心连接已断开"))) }
     }
-    private func send<T: Decodable>(_ method: String, params: [String: Any], onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil, onQuotaSample: (@Sendable (Quota) -> Void)? = nil) async throws -> T {
+    private func send<T: Decodable>(_ method: String, params: [String: Any], onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil, onQuotaSample: (@Sendable (Quota) -> Void)? = nil, onAccountSample: (@Sendable (AccountDeviceStatus) -> Void)? = nil) async throws -> T {
         let payload = try JSONSerialization.data(withJSONObject: params)
         let data: Data = try await withCheckedThrowingContinuation { continuation in
             queue.async {
@@ -99,7 +108,7 @@ final class EngineClient: @unchecked Sendable {
                     try self.startLocked(); self.nextID += 1; let id = self.nextID; requestID = id
                     let parameters = try JSONSerialization.jsonObject(with: payload)
                     let request = try JSONSerialization.data(withJSONObject: ["jsonrpc":"2.0", "id":id, "method":method, "params":parameters])
-                    self.pending[id] = Pending(complete: { continuation.resume(with: $0) }, progress: onProgress, sample: onHostSample, quota: onQuotaSample)
+                    self.pending[id] = Pending(complete: { continuation.resume(with: $0) }, progress: onProgress, sample: onHostSample, quota: onQuotaSample, account: onAccountSample)
                     try self.input?.write(contentsOf: request + Data([10])); self.lifecycle.unlock()
                 } catch {
                     if let id = requestID { self.pending.removeValue(forKey: id) }
@@ -109,11 +118,11 @@ final class EngineClient: @unchecked Sendable {
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
-    func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self, onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil, onQuotaSample: (@Sendable (Quota) -> Void)? = nil) async throws -> T {
+    func call<T: Decodable>(_ method: String, params: [String: Any] = [:], as type: T.Type = T.self, onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil, onQuotaSample: (@Sendable (Quota) -> Void)? = nil, onAccountSample: (@Sendable (AccountDeviceStatus) -> Void)? = nil) async throws -> T {
         if CoreContract.methodLanes[method] == "quotas", let quotas { return try await quotas.call(method, params: params, as: type, onProgress: onProgress, onQuotaSample: onQuotaSample) }
         if CoreContract.methodLanes[method] == "dashboard", let queries { return try await queries.call(method, params: params, as: type, onProgress: onProgress) }
         if CoreContract.configurationMethods.contains(method), let configuration { return try await configuration.call(method, params: params, as: type, onProgress: onProgress) }
-        return try await send(method, params: params, onProgress: onProgress, onHostSample: onHostSample, onQuotaSample: onQuotaSample)
+        return try await send(method, params: params, onProgress: onProgress, onHostSample: onHostSample, onQuotaSample: onQuotaSample, onAccountSample: onAccountSample)
     }
     static func coordinateUpdate(_ method: String) async -> [String] {
         if method == "operations.prepareUpdate" { setPreparing(true) }
@@ -244,7 +253,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             struct Saved: Decodable { var settings: Settings }
             let baseline: Any = try source.autoValuation.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()
             let result: Saved = try await engine.call("autoEstimates.configure", params: ["sourceId":source.id,"enabled":enabled,"confirmed":confirmed,"baseConfig":baseline])
-            acceptConfiguration(result.settings); await reload()
+            acceptConfiguration(result.settings); automaticTask?.cancel(); startAutomatic(); await reload()
         } catch { automaticError = error.localizedDescription }
     }
     private func startAutomatic() {
@@ -252,8 +261,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             while !Task.isCancelled {
                 guard let self, !self.stopped else { return }
                 if self.settingsLoaded && !self.installingUpdate {
-                    struct Changed: Decodable { var changed: Bool }
-                    if let value: Changed = try? await self.automaticEngine.call("autoEstimates.tick"), value.changed { await self.reload() }
+                    struct Changed: Decodable { var changed: Bool; var enabled: Bool? }
+                    if let value: Changed = try? await self.automaticEngine.call("autoEstimates.tick") { if value.changed { await self.reload() }; if value.enabled == false { do { try await Task.sleep(for: .seconds(55)) } catch { return } } }
                 }
                 do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
             }
@@ -289,14 +298,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         for id in accountSourceStatusRequests.keys { accountSourceStatusRequests[id] = accountStatusRevision }
         if accountStatusBusy { accountStatusNeedsRefresh = true }
     }
-    func loadAccountStatuses(refresh: Bool = false, provider: String? = nil) async {
+    func loadAccountStatuses(refresh: Bool = false, provider: String? = nil, dueOnly: Bool = false) async {
         guard !accountStatusBusy else { return }
         accountStatusBusy = true
         defer {
             accountStatusBusy = false
             if accountStatusNeedsRefresh {
                 accountStatusNeedsRefresh = false
-                Task { await loadAccountStatuses(refresh: true, provider: provider) }
+                Task { await loadAccountStatuses(refresh: true, dueOnly: true) }
             }
         }
         let revision = accountStatusRevision
@@ -308,15 +317,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         guard refresh else { return }
         let accounts = settings.accounts.filter { $0.archived != true && (provider == nil || $0.provider == provider) }
         guard !accounts.isEmpty else { return }
-        for account in accounts {
-            for source in settings.sources.filter({ $0.provider == account.provider && settings.sourceEnabled($0) }).sorted(by: { ($0.hostId == nil ? 0 : 1) < ($1.hostId == nil ? 0 : 1) }) {
-                if Task.isCancelled || installingUpdate || revision != accountStatusRevision { return }
-                do {
-                    let row: AccountDeviceStatus = try await accountEngine.call("accounts.status.refresh", params: ["accountKey":account.key,"sourceId":source.id])
-                    if revision == accountStatusRevision { accountStatusStore.upsert(row) }
-                } catch { /* The per-device result is retained; a concurrent settings edit invalidates it. */ }
-            }
-        }
+        do {
+            let rows: [AccountDeviceStatus] = try await accountEngine.call("accounts.status.refreshBatch", params: ["accountKeys": accounts.map(\.key), "dueOnly": dueOnly], onAccountSample: { [weak self] row in Task { @MainActor in guard let self, self.accountStatusRevision == revision else { return }; self.accountStatusStore.upsert(row) } })
+            if revision == accountStatusRevision { for row in rows { accountStatusStore.upsert(row) } }
+        } catch { if !dueOnly { settingsMessage = "设备状态检查失败：" + error.localizedDescription } }
         await refreshIdentitySettings()
     }
     func refreshIdentitySettings(reportFailure: Bool = false) async {
@@ -361,14 +365,102 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         } catch { if revision == networkRevision { message = error.localizedDescription } }
     }
 
+    private let summaryEngine = EngineClient(configurationOnly: true)
+    private var runtimeObserver: NSObjectProtocol?
+    private var runtimeTask: Task<Void, Never>?
+    private var runtimeRefresh: Task<Void, Never>?
+    private var runtimeRevisions: [String: Int] = [:]
+    private var pendingRuntimeDomains = Set<String>()
+    private var completedDashboardRevision: [String: Int] = [:]
+    private var scopeCache: [String: Dashboard] = [:]
+    private var scopeCacheRevision: [String: Int] = [:]
+    var dashboardCacheNow: () -> Date = Date.init
+    private var dashboardRevisions: [String: Int] {
+        var values = runtimeRevisions.filter { ["settings","usage","quotas","estimates","prices","sources"].contains($0.key) }
+        values["calendarDay"] = Int(Calendar.current.startOfDay(for: dashboardCacheNow()).timeIntervalSince1970)
+        values["timeZone"] = TimeZone.current.identifier.hashValue
+        return values
+    }
+    private var selectionLoaded = false
+    private var lastAccountCheck = Date.distantPast
+    private func startRuntimeMonitoring() {
+        runtimeObserver = NotificationCenter.default.addObserver(forName: EngineClient.runtimeChanged, object: nil, queue: .main) { [weak self] note in
+            let revisions = note.userInfo?["revisions"] as? [String: Int] ?? [:]
+            Task { @MainActor in self?.acceptRuntimeRevisions(revisions) }
+        }
+        runtimeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, !self.stopped else { return }
+                if let revisions: [String: Int] = try? await self.summaryEngine.call("runtime.revisions") { self.acceptRuntimeRevisions(revisions) }
+                if !self.pendingRuntimeDomains.isEmpty || self.completedDashboardRevision != self.dashboardRevisions { self.scheduleRuntimeRefresh() }
+                if !self.selectionLoaded { await self.loadSelectedPet() }
+                if Date() < self.lastAccountCheck || Date().timeIntervalSince(self.lastAccountCheck) >= 300 {
+                    self.lastAccountCheck = Date()
+                    Task { await self.loadAccountStatuses(refresh: true, dueOnly: true) }
+                }
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            }
+        }
+    }
+    private func acceptRuntimeRevisions(_ values: [String: Int]) {
+        // Replies from independent lanes can arrive out of order. Counters only advance.
+        let changed = Set(values.keys.filter { values[$0, default: 0] > runtimeRevisions[$0, default: -1] })
+        guard !changed.isEmpty else { return }
+        for key in changed { runtimeRevisions[key] = values[key] }
+        pendingRuntimeDomains.formUnion(changed)
+        if !changed.isDisjoint(with: ["settings","usage","quotas","estimates","prices","sources"]) { scopeCache.removeAll() }
+        scheduleRuntimeRefresh()
+    }
+    private func scheduleRuntimeRefresh() {
+        guard runtimeRefresh == nil else { return }
+        runtimeRefresh = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+            guard let self else { return }
+            defer { self.runtimeRefresh = nil }
+            guard !self.stopped, !self.installingUpdate else { return }
+            let changed = self.pendingRuntimeDomains
+            self.pendingRuntimeDomains.removeAll()
+            if changed.contains("pets") { await self.loadSelectedPet() }
+            if changed.contains("settings") {
+                if self.settingsSaving { self.pendingRuntimeDomains.insert("settings") }
+                else {
+                    let before = self.settings
+                    if let saved: Settings = try? await self.summaryEngine.call("settings.get"), self.settings == before {
+                        let automaticBefore = before.sources.map { $0.autoValuation?.enabled == true }
+                        let deviceChanged = self.accountStatusConfiguration(before) != self.accountStatusConfiguration(saved)
+                        self.mergeConfiguration(saved)
+                        if deviceChanged { self.invalidateAccountStatuses(); Task { await self.loadAccountStatuses(refresh: true, dueOnly: true) } }
+                        self.invalidateQuotaSchedule()
+                        if automaticBefore != saved.sources.map({ $0.autoValuation?.enabled == true }) { self.automaticTask?.cancel(); self.startAutomatic() }
+                    } else { self.pendingRuntimeDomains.insert("settings") }
+                }
+            }
+            if changed.contains("accounts") { await self.loadAccountStatuses() }
+            if changed.contains("notifications") { await self.resetNotifications.drain() }
+            if !self.busy, !self.quotaBusy, self.estimateBusy.isEmpty, self.completedDashboardRevision != self.dashboardRevisions { await self.reload() }
+        }
+    }
+    private func loadSelectedPet() async {
+        let revision = petSelectionRevision
+        do {
+            let selection: PetSelection = try await petEngine.call("pets.current")
+            guard !stopped, revision == petSelectionRevision, !petImportBusy, petSelectionBusy == nil else { return }
+            if let error = selection.error {
+                if petImportError != error { petImportError = error }
+                if importedPet != nil { selectionLoaded = true; return }
+            }
+            if let pet = selection.pet { if importedPet != pet { importedPet = pet }; selectionLoaded = true }
+        } catch { /* Keep the last decoded resource and retry on the lightweight observer. */ }
+    }
     private let sessionEngine = EngineClient(configurationOnly: true)
     private var sessionTask: Task<Void, Never>?
     let live = LiveSessionState()
+    lazy var menuStatus = MenuStatusStore(model: self)
     var sessions: [LiveSession] { get { live.sessions } set { if live.sessions != newValue { live.sessions = newValue } } }
     var sessionSources: [SessionSourceHealth] { get { live.sources } set { if live.sources != newValue { live.sources = newValue } } }
     var sessionsUnavailable: Bool { get { live.unavailable } set { if live.unavailable != newValue { live.unavailable = newValue } } }
     var petState: PetState { get { live.pet } set { if live.pet != newValue { live.pet = newValue } } }
-    @Published var importedPet: ImportedPet?
+    @Published var importedPet: ImportedPet? { didSet { if live.asset != importedPet { live.asset = importedPet } } }
     @Published var petImportError: String?
     @Published var petImportBusy = false
     @Published var petLibrary: [ImportedPet] = []
@@ -463,18 +555,14 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let result: SessionSnapshot = try await sessionEngine.call("sessions.list")
             guard !stopped, !installingUpdate, !Task.isCancelled else { return }
             sessions = result.sessions; sessionSources = result.sources ?? []; sessionsUnavailable = result.unavailable; petState = result.pet ?? .unknown; coreSessionSummary = result.summary
-            let selectionRevision = petSelectionRevision
-            let selection: PetSelection = try await sessionEngine.call("pets.current")
-            guard !stopped, !installingUpdate, !Task.isCancelled else { return }
-            if selectionRevision == petSelectionRevision, !petImportBusy, petSelectionBusy == nil, importedPet != selection.pet { importedPet = selection.pet }
-            if let error = selection.error, petImportError == nil { petImportError = error }
+
         } catch {
             guard !stopped, !installingUpdate, !Task.isCancelled else { return }
             sessionsUnavailable = true; petState = .unknown; coreSessionSummary = nil
         }
     }
     @Published var dashboard = Dashboard()
-    @Published private(set) var menuDashboard = Dashboard()
+    @Published private(set) var menuDashboard = Dashboard() { didSet { scheduleRefreshes() } }
     @Published private(set) var panelDashboard = Dashboard()
     @Published private(set) var overviewDashboard = Dashboard()
     @Published var panelFilters = DashboardFilterPreference()
@@ -503,7 +591,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var requestedAccountMachineID: String?
     @Published var requestedHostID: String?
     @Published var requestedDetailPage: String?
-    @Published var detailPage = "agent"
+    @Published var detailPage = "agent" { didSet { if detailPage != oldValue { requestDashboardReload() } } }
     var showDetailPage: ((String) -> Void)?
     @Published var requestHostEditor = false
     @Published var hosts: [HostResult] = []
@@ -580,7 +668,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var message: String?
     @Published var activity = ""
     @Published var isPinned = false
-    @Published var installingUpdate = false { didSet { scheduleRefreshes() } }
+    @Published var installingUpdate = false { didSet { live.suspended = installingUpdate; scheduleRefreshes() } }
     @Published private(set) var estimateBusy = Set<String>() { didSet { scheduleRefreshes() } }
     @Published var estimateStages: [String: String] = [:]
     @Published var estimateStartedAt: [String: Date] = [:]
@@ -599,7 +687,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var panelVisible: Bool { !visibleWindows.isEmpty }
     func setWindowVisible(_ visible: Bool, window: String) {
         guard visibleWindows.contains(window) != visible else { return }
-        if visible { visibleWindows.insert(window) } else { visibleWindows.remove(window) }; scheduleRefreshes()
+        if visible { visibleWindows.insert(window); requestDashboardReload() } else { visibleWindows.remove(window) }; scheduleRefreshes()
     }
     private var visibleServerWindows = Set<String>()
     var serverTabVisible: Bool { !visibleServerWindows.intersection(visibleWindows).isEmpty }
@@ -639,7 +727,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func openEstimate(accountKey: String, credits: Bool = false, group: String? = nil) async {
         do {
             // Use an unfiltered read so changing the usage filter cannot hide sampling controls.
-            let snapshot: Dashboard = try await engine.call("dashboard.summary")
+            let snapshot: Dashboard = try await engine.call("dashboard.summary", params: ["estimateHistory":"display"])
             let account = settings.historicalAccounts.first { $0.key == accountKey }
             let parts = accountKey.split(separator: ":", maxSplits: 1).map(String.init)
             let quota = snapshot.quotas.first(where: { $0.id == accountKey }) ?? Quota(sourceId: "", accountId: account?.id ?? parts.last ?? accountKey, provider: account?.provider ?? parts.first ?? "custom", name: account?.name ?? accountKey, updatedAt: 0, origin: "", windows: [], bankReset: nil, bankUpdatedAt: nil, plan: nil, error: nil)
@@ -667,9 +755,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             settings = try await engine.call("settings.get"); PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:]); settingsDraft = settings; settingsLoaded = true
             resetNotifications.start()
             startSessionMonitoring()
+            startRuntimeMonitoring()
             synchronizeAccountDeployments()
             reconcileDashboardFilters()
-            Task { await loadAccountStatuses(refresh: true, provider: "codex") }
+            Task { await loadAccountStatuses(refresh: true, dueOnly: true) }
             await reload(); await scan(); await refreshQuotas()
         }
         catch { message = error.localizedDescription }
@@ -702,27 +791,49 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     private func reloadOnce(request: Int) async -> Bool {
         dashboardPending = true; dashboardError = nil
-        let scope = [rangeTitle, provider == "all" ? "全部 Agent" : Format.provider(provider), settings.historicalAccounts.first { $0.key == selectedAccount }.map { settings.accountFilterName($0) } ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
-        let analysis = analysisFilters, panelFilter = filters(for: "panel"), overviewFilter = filters(for: "overview")
-        let params = analysis.parameters(settings: settings)
-        let unfilteredSelected = analysis == DashboardFilterPreference()
-        let allModelsSelected = selectedModel == "all"
+        if let current: [String: Int] = try? await summaryEngine.call("runtime.revisions") { acceptRuntimeRevisions(current) }
+        let revision = dashboardRevisions
+        if scopeCacheRevision != revision { scopeCache.removeAll(); scopeCacheRevision = revision }
+        let summary = Task { @MainActor [weak self] in
+            guard let self else { return false }
+            do {
+                let menu: Dashboard = try await self.summaryEngine.call("dashboard.summary", params: ["estimateHistory":"display"])
+                guard request == self.dashboardRequest else { return true }
+                self.menuDashboard = menu
+                self.dashboard.quotaEstimates = menu.quotaEstimates; self.dashboard.creditEstimates = menu.creditEstimates
+                return true
+            } catch { if request == self.dashboardRequest { self.dashboardError = "菜单摘要读取失败：" + error.localizedDescription }; return false }
+        }
+        let allSurfaces = !schedulingEnabled
+        var requested: [(String, DashboardFilterPreference)] = []
+        if allSurfaces || isWindowVisible("detail") && detailPage == "analysis" { requested.append(("analysis", analysisFilters)) }
+        if allSurfaces || isWindowVisible("panel") { requested.append(("panel", filters(for: "panel"))) }
+        if allSurfaces || isWindowVisible("detail") && detailPage == "agent" { requested.append(("overview", filters(for: "overview"))) }
+        var results: [String: Dashboard] = [:]
+        var queried: [String: Dashboard] = [:]
         do {
-            let next: Dashboard = try await engine.call("dashboard", params: params)
+            for (surface, filter) in requested {
+                var params = filter.parameters(settings: settings); params["estimateHistory"] = "display"
+                let key = String(data: try JSONSerialization.data(withJSONObject: params, options: .sortedKeys), encoding: .utf8)!
+                let next: Dashboard
+                if let shared = queried[key] { next = shared }
+                else if !runtimeRevisions.isEmpty, let cached = scopeCache[key] { next = cached }
+                else { next = try await engine.call("dashboard", params: params); if scopeCache.count >= 4 { scopeCache.removeAll() }; if revision == dashboardRevisions, let encoded = try? JSONEncoder().encode(next), encoded.count <= 2 * 1024 * 1024 { scopeCache[key] = next } }
+                guard request == dashboardRequest else { _ = await summary.value; return true }
+                queried[key] = next; results[surface] = next
+            }
+            let summaryLoaded = await summary.value
             guard request == dashboardRequest else { return true }
-            let panel: Dashboard = panelFilter == analysis ? next : try await engine.call("dashboard", params: panelFilter.parameters(settings: settings))
-            guard request == dashboardRequest else { return true }
-            let overview: Dashboard = overviewFilter == analysis ? next : overviewFilter == panelFilter ? panel : try await engine.call("dashboard", params: overviewFilter.parameters(settings: settings))
-            guard request == dashboardRequest else { return true }
-            let unfiltered: Dashboard = unfilteredSelected ? next : try await engine.call("dashboard.summary")
-            guard request == dashboardRequest else { return true }
-            // Publish all surfaces together so a failed secondary query cannot mix filter scopes.
-            Palette.registerModels([next, panel, overview, unfiltered].flatMap { ($0.modelOptions ?? []) + $0.models.map(\.key) + $0.dayModels.map(\.model) })
-            dashboard = next; panelDashboard = panel; overviewDashboard = overview; menuDashboard = unfiltered
-            appliedScope = scope; dashboardPending = false
-            let names = next.dayModels.map(\.model)
-            fallbackModelOptions = Array(Set(allModelsSelected ? names : fallbackModelOptions + names)).sorted()
-            return true
+            for (surface, value) in results {
+                switch surface { case "panel": panelDashboard = value; case "overview": overviewDashboard = value; default: dashboard = value }
+            }
+            if let value = results["analysis"] {
+                appliedScope = [rangeTitle, provider == "all" ? "全部 Agent" : Format.provider(provider), settings.historicalAccounts.first { $0.key == selectedAccount }.map { settings.accountFilterName($0) } ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
+                let names = value.dayModels.map(\.model)
+                fallbackModelOptions = Array(Set(selectedModel == "all" ? names : fallbackModelOptions + names)).sorted()
+            }
+            Palette.registerModels(Array(results.values).flatMap { ($0.modelOptions ?? []) + $0.models.map(\.key) + $0.dayModels.map(\.model) })
+            completedDashboardRevision = revision; dashboardPending = false; return summaryLoaded
         } catch { if request == dashboardRequest { dashboardPending = false; dashboardError = error.localizedDescription }; return false }
     }
     func saveQuotaOrder(_ keys: [String]) async throws {
@@ -1000,10 +1111,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let quotaConfigurationChanged = settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.proxy != saved.proxy
             if settings.proxy != saved.proxy || settings.proxyTestUrls != saved.proxyTestUrls { networkRevision += 1; networkTest = nil; lastNetworkAttempt = .distantPast }
             mergeConfiguration(saved, submitted: draft, draftAtSubmission: draftAtSubmission)
-            if quotaConfigurationChanged {
-                quotaNextAttempt = nil
+            if quotaConfigurationChanged { quotaNextAttempt = nil }
+            if accountStatusConfiguration(base) != accountStatusConfiguration(saved) {
                 invalidateAccountStatuses()
-                Task { await loadAccountStatuses(refresh: true, provider: "codex") }
+                Task { await loadAccountStatuses(refresh: true, dueOnly: true) }
             }
             if message == configurationSaveError { message = nil }
             configurationSaveError = nil
@@ -1070,7 +1181,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private var historyBlocked: Bool { busy || !estimateBusy.isEmpty }
     private var metricsDeadline: Date { lastMetrics.addingTimeInterval(Double(serverTabVisible ? settings.foregroundInterval : settings.serverRefreshSeconds)) }
     private var pendingResets: [(Quota, Double, String)] {
-        dashboard.quotas.flatMap { quota in quota.windows.compactMap { window in
+        menuDashboard.quotas.flatMap { quota in quota.windows.compactMap { window in
             guard let reset = window.resetsAt else { return nil }
             let key = quota.id + ":" + String(reset)
             return resetConfirmations.contains(key) ? nil : (quota, reset, key)
@@ -1121,6 +1232,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func stop() {
         stopped = true; schedulingEnabled = false; timer?.invalidate(); timer = nil
         sessionTask?.cancel(); sessionTask = nil
+        runtimeTask?.cancel(); runtimeRefresh?.cancel(); summaryEngine.stop()
+        if let runtimeObserver { NotificationCenter.default.removeObserver(runtimeObserver) }
         automaticTask?.cancel(); automaticEngine.stop(); resetNotifications.stop()
         filterRefresh?.cancel(); reloadTask?.cancel(); quotaScheduleTask?.cancel()
         deploymentSyncTask?.cancel(); settingsRefreshTask?.cancel(); generalSaveTask?.cancel(); petLibraryTask?.cancel()

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AutomaticValuationControls: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     var sources: [AgentSource]
     private var eligible: [AgentSource] { sources.filter { $0.provider != "deepseek" } }
     var body: some View {
@@ -16,7 +16,7 @@ struct AutomaticValuationControls: View {
     }
 }
 private struct AutomaticValuationSourceControls: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let source: AgentSource
     @State private var confirming = false
     private var enabled: Bool { source.autoValuation?.enabled == true }
@@ -41,7 +41,7 @@ private struct AutomaticValuationSourceControls: View {
 }
 
 struct SamplingManagementView: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -73,9 +73,14 @@ struct SamplingManagementView: View {
     }
 }
 
+@MainActor private final class EstimateHistoryReader: ObservableObject {
+    let engine = EngineClient(configurationOnly: true)
+    deinit { engine.stop() }
+}
 struct AgentValuationView: View {
+    @StateObject private var historyReader = EstimateHistoryReader()
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let provider: String
     @State private var snapshot: Dashboard?
     @State private var error: String?
@@ -140,13 +145,18 @@ struct AgentValuationView: View {
     }
     private func load() async {
         loading = true; error = nil; defer { loading = false }
-        do { snapshot = try await model.engine.call("dashboard.summary") }
+        do {
+            var value: Dashboard = try await model.engine.call("dashboard.summary", params: ["estimateHistory":"display"])
+            async let quotaRows: [QuotaEstimate] = historyReader.engine.call("quotaEstimates.list", params: ["provider":provider])
+            async let creditRows: [QuotaEstimate] = historyReader.engine.call("creditEstimates.list", params: ["provider":provider])
+            let rows = try await (quotaRows, creditRows); value.quotaEstimates = rows.0; value.creditEstimates = rows.1; snapshot = value
+        }
         catch { self.error = error.localizedDescription }
     }
 }
 
 struct QuotaOrderView: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -189,7 +199,7 @@ struct QuotaOrderView: View {
 }
 
 struct PanelAccountsView: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     var onClose: () -> Void
     @AppStorage(NativePanelKey.accounts.rawValue) private var stored = "{}"
     @State private var selected: [String: [String]] = [:]
@@ -228,10 +238,14 @@ struct PanelAccountsView: View {
 }
 
 struct QuotaEstimateView: View {
-    @ObservedObject var model: AppModel
+    @StateObject private var historyReader = EstimateHistoryReader()
+    @SurfaceModel var model: AppModel
     let quota: Quota
     var onClose: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
+    @State private var fullQuotaRecords: [QuotaEstimate]?
+    @State private var fullCreditRecords: [QuotaEstimate]?
+    @State private var historyError: String?
     @State private var selected = Set<String>()
     @State private var window = ""
     @State private var confirmed = false
@@ -246,7 +260,7 @@ struct QuotaEstimateView: View {
     private var currentQuota: Quota { model.dashboard.quotas.first { $0.id == quota.id && $0.updatedAt >= quota.updatedAt } ?? quota }
     private var windows: [QuotaWindow] { EstimatePresentation.windows(currentQuota) }
     private var visibility: EstimatePresentation.Visibility { EstimatePresentation.visibility(currentQuota, records: records, group: initialGroup) }
-    private var records: [QuotaEstimate] { (credits ? (model.dashboard.creditEstimates ?? []) : (model.dashboard.quotaEstimates ?? [])).filter { $0.accountKey == quota.id } }
+    private var records: [QuotaEstimate] { (credits ? (fullCreditRecords ?? model.dashboard.creditEstimates ?? []) : (fullQuotaRecords ?? model.dashboard.quotaEstimates ?? [])).filter { $0.accountKey == quota.id } }
     private var current: QuotaEstimate? { records.first { $0.status != "completed" } }
     private var eligible: Bool { if credits { return quota.credits?.balance != nil && quota.credits?.unlimited == false }; return windows.contains { initialGroup == nil || $0.estimateGroup == initialGroup } }
     var body: some View {
@@ -289,6 +303,7 @@ struct QuotaEstimateView: View {
                         HStack { ProgressView().controlSize(.small); Text((model.estimateStages[quota.id] ?? "准备同步") + " · " + String(Int(context.date.timeIntervalSince(model.estimateStartedAt[quota.id] ?? context.date))) + " 秒") }.font(AppFont.secondary)
                     } }
                     if let error { ErrorNotice(message: error) }
+                    if let historyError { HStack { ErrorNotice(message: historyError); Button("重试") { Task { await loadHistory() } } } }
                     if records.contains(where: { $0.status == "completed" }) {
                         Divider(); Text("采样历史").font(AppFont.section)
                         ForEach(records.filter { $0.status == "completed" && (initialGroup == nil || $0.groupId == nil || $0.groupId == initialGroup) }) { result($0) }
@@ -296,8 +311,17 @@ struct QuotaEstimateView: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 480)
         }.aieyesAccent().font(AppFont.body).disabled(model.installingUpdate).padding(DesignTokens.dialogPadding).frame(minWidth: DesignTokens.dialogEstimateMinWidth, idealWidth: DesignTokens.dialogEstimateWidth)
+        .task(id: ((model.dashboard.quotaEstimates ?? []) + (model.dashboard.creditEstimates ?? [])).filter { $0.accountKey == quota.id }.map { $0.recordKey + ":" + $0.status + ":" + String($0.checkpointAt) }.joined(separator: "|")) { await loadHistory() }
         .onChange(of: credits) { _, _ in confirmed = false }
         .onAppear { selected = Set(sources.map(\.id)); window = windows.first { ($0.groupId ?? $0.groupName) == initialGroup }?.id ?? windows.first?.id ?? "" }
+    }
+    private func loadHistory() async {
+        do {
+            async let quotaRows: [QuotaEstimate] = historyReader.engine.call("quotaEstimates.list", params: ["accountKey":quota.id])
+            async let creditRows: [QuotaEstimate] = historyReader.engine.call("creditEstimates.list", params: ["accountKey":quota.id])
+            let values = try await (quotaRows, creditRows)
+            guard !Task.isCancelled else { return }; fullQuotaRecords = values.0; fullCreditRecords = values.1; historyError = nil
+        } catch { historyError = "历史读取失败：" + error.localizedDescription }
     }
     private var confirmation: some View {
         Toggle(credits ? "我确认本段仅消耗 credits，所有设备用量均已纳入；不混用包含额度、API 或中转。" : "我确认采样期间只使用目标订阅，所有设备的用量均已纳入所选来源；不混用 API / 中转。", isOn: $confirmed).fixedSize(horizontal: false, vertical: true)

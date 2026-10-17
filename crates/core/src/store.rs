@@ -10,6 +10,8 @@ pub struct Store {
     pub root: PathBuf,
     pub db: Connection,
     pub(crate) usage_memory: std::cell::RefCell<crate::usage_cache::Memory>,
+    pub(crate) estimate_display: std::cell::RefCell<Option<(i64, Vec<crate::estimates::Estimate>)>>,
+    settings_memory: std::cell::RefCell<Option<(i64, u64, Settings)>>,
     #[cfg(test)]
     pub(crate) billing_memory: std::cell::RefCell<crate::codex_api::usage::BillingCache>,
 }
@@ -18,6 +20,7 @@ pub struct Store {
 pub(crate) struct WriteTransaction<'a> {
     transaction: rusqlite::Transaction<'a>,
     _critical: crate::operations::Critical,
+    signal: std::sync::Arc<crate::runtime::Signal>,
 }
 impl std::ops::Deref for WriteTransaction<'_> {
     type Target = Connection;
@@ -27,7 +30,9 @@ impl std::ops::Deref for WriteTransaction<'_> {
 }
 impl WriteTransaction<'_> {
     pub fn commit(self) -> rusqlite::Result<()> {
-        self.transaction.commit()
+        self.transaction.commit()?;
+        self.signal.wake();
+        Ok(())
     }
 }
 impl Store {
@@ -63,10 +68,13 @@ impl Store {
         crate::codex_api::usage::setup(&db)?;
         crate::history_corrections::setup(&db)?;
         crate::codex_routes::setup(&db)?;
+        crate::runtime::setup(&db)?;
         let store = Self {
             root: root.to_path_buf(),
             db,
             usage_memory: Default::default(),
+            estimate_display: Default::default(),
+            settings_memory: Default::default(),
             #[cfg(test)]
             billing_memory: Default::default(),
         };
@@ -91,6 +99,7 @@ impl Store {
                     return Ok(WriteTransaction {
                         transaction,
                         _critical: crate::operations::critical()?,
+                        signal: crate::runtime::signal(&self.root),
                     });
                 }
                 Err(rusqlite::Error::SqliteFailure(e, _))
@@ -106,6 +115,23 @@ impl Store {
         }
     }
     pub fn settings(&self) -> Result<Settings> {
+        let version: i64 = self.db.query_row("PRAGMA data_version", [], |r| r.get(0))?;
+        let changes = self.db.total_changes();
+        if self.db.is_autocommit()
+            && let Some((known, written, settings)) = self.settings_memory.borrow().as_ref()
+            && *known == version
+            && *written == changes
+        {
+            return Ok(settings.clone());
+        }
+        let settings = self.read_settings()?;
+        if self.db.is_autocommit() {
+            *self.settings_memory.borrow_mut() =
+                Some((version, self.db.total_changes(), settings.clone()));
+        }
+        Ok(settings)
+    }
+    fn read_settings(&self) -> Result<Settings> {
         let raw: Option<String> = self
             .db
             .query_row("SELECT value FROM kv WHERE key='settings'", [], |r| {
@@ -1098,7 +1124,11 @@ impl Store {
             d.quotas.push(quota);
         }
         d.quota_order = self.quota_order()?;
-        let samples = self.estimates()?;
+        let samples = if f.estimate_history.as_deref() == Some("display") {
+            self.display_estimates()?
+        } else {
+            self.estimates()?
+        };
         d.credit_estimates = samples
             .iter()
             .filter(|e| matches!(e, crate::estimates::Estimate::Credit(_)))

@@ -51,9 +51,11 @@ struct NeutralCard: ViewModifier {
         .overlay(RoundedRectangle(cornerRadius: Palette.radiusCard).strokeBorder(Palette.cardBorder.opacity(previewAccessible || contrast == .increased ? 1 : DesignTokens.cardBorderOpacity), lineWidth: previewAccessible || contrast == .increased ? 2 : DesignTokens.borderWidth))
     }
 }
-struct RootView: View {
+struct RootView: View, Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.model === rhs.model && lhs.compact == rhs.compact && lhs.page == rhs.page && lhs.nativePanelBackground == rhs.nativePanelBackground }
     @Environment(\.workspaceCardColumns) private var workspaceCardColumns
-    @ObservedObject var model: AppModel
+    let model: AppModel
+    @StateObject private var observation: SurfaceObservation
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -77,7 +79,8 @@ struct RootView: View {
     @AppStorage(NativePanelKey.accounts.rawValue) private var panelAccounts = "{}"
     private var usageDashboard: Dashboard { compact ? model.panelDashboard : activePage == "analysis" ? model.dashboard : model.overviewDashboard }
     init(model: AppModel, compact: Bool = true, page: String = "agent", nativePanelBackground: Bool = false) {
-        self.model = model; self.compact = compact; self.page = page; self.nativePanelBackground = nativePanelBackground
+        self.model = model; self.compact = compact; self.page = page;
+        _observation = StateObject(wrappedValue: SurfaceObservation(model: model, compact: compact, page: page)); self.nativePanelBackground = nativePanelBackground
         self.snapshotPage = CommandLine.arguments.contains("--render") ? page : nil
         _tab = AppStorage(wrappedValue: page, NativePanelKey.scoped(.panelPage, .detailPage, compact: compact))
         _serverFilter = AppStorage(wrappedValue: "all", NativePanelKey.scoped(.panelServerFilter, .detailServerFilter, compact: compact))
@@ -268,7 +271,7 @@ struct RootView: View {
                     VStack(spacing: 18) { trendSurface; modelSurface }
                 }
                 Surface(title: "每日明细 · 可选择与复制精确数值") { DailyUsage(days: usageDashboard.trendDays, rows: usageDashboard.dayModels, compact: false, cost: costMode) }
-                Surface(title: filters.dateRange == nil ? "过去 365 天" : "所选日期用量") { if filters.dateRange == nil { Heatmap(days: usageDashboard.heatmap, cost: costMode) } else { YearlyHeatmaps(days: usageDashboard.heatmap, cost: costMode) } }
+                Surface(title: filters.dateRange == nil ? "过去 365 天" : "所选日期用量") { if filters.dateRange == nil { Heatmap(days: usageDashboard.heatmap, cost: costMode).equatable() } else { YearlyHeatmaps(days: usageDashboard.heatmap, cost: costMode) } }
             }
         }
     }
@@ -404,7 +407,7 @@ struct RootView: View {
 }
 
 struct ThemeToggleButton: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
     private var dark: Bool { colorScheme == .dark }
     private var label: String { dark ? "切换到浅色模式" : "切换到深色模式" }
@@ -559,7 +562,7 @@ private struct YearHeatmap: View {
     let year: String, days: [Aggregate], cost: Bool
     @State private var expanded: Bool
     init(year: String, days: [Aggregate], cost: Bool, initiallyExpanded: Bool) { self.year = year; self.days = days; self.cost = cost; _expanded = State(initialValue: initiallyExpanded) }
-    var body: some View { DisclosureGroup(year, isExpanded: $expanded) { if expanded { Heatmap(days: days, cost: cost) } } }
+    var body: some View { DisclosureGroup(year, isExpanded: $expanded) { if expanded { Heatmap(days: days, cost: cost).equatable() } } }
 }
 
 struct ModelChart: View {
@@ -590,17 +593,37 @@ struct ModelChart: View {
     }
 }
 
-struct Heatmap: View {
+@MainActor private final class HeatmapLayout {
+    let days: [Aggregate], cost: Bool, leading: Int, maximum: Double, labels: [String: String]
+    private static let cache: NSCache<NSString, HeatmapLayout> = { let value = NSCache<NSString, HeatmapLayout>(); value.totalCostLimit = 4 * 1024 * 1024; value.countLimit = 12; return value }()
+    static func get(days: [Aggregate], cost: Bool) -> HeatmapLayout {
+        var hash = Hasher(); hash.combine(cost); hash.combine(TimeZone.current.identifier); hash.combine(Locale.current.identifier)
+        for day in days { hash.combine(day.key); hash.combine(day.total); hash.combine(day.cost); hash.combine(day.tokens.input); hash.combine(day.tokens.output); hash.combine(day.tokens.cacheRead); hash.combine(day.tokens.cacheWrite) }
+        let key = String(hash.finalize()) as NSString
+        if let known = cache.object(forKey: key), known.days == days && known.cost == cost { return known }
+        let value = HeatmapLayout(days: days, cost: cost)
+        cache.setObject(value, forKey: key, cost: max(1, days.count * 256)); return value
+    }
+    private init(days: [Aggregate], cost: Bool) {
+        self.days = days; self.cost = cost
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let parts = days.first?.key.split(separator: "-").compactMap { Int($0) } ?? []
+        let date = parts.count == 3 ? calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12)) : nil
+        leading = date.map { (Calendar.current.component(.weekday, from: $0) + 5) % 7 } ?? 0
+        maximum = max(1, days.map { cost ? $0.cost : $0.total }.max() ?? 1)
+        labels = Dictionary(days.map { ($0.key, $0.key + " · " + (cost ? String(format: "%.6f USD", $0.cost) : Format.compact($0.total) + " Token")) }, uniquingKeysWith: { _, new in new })
+    }
+}
+struct Heatmap: View, Equatable {
     var days: [Aggregate], cost: Bool
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.days == rhs.days && lhs.cost == rhs.cost }
     @State private var selected = 0
     @State private var showDay = false
-    private var leading: Int {
-        guard let first = days.first, let date = ISO8601DateFormatter().date(from: first.key + "T12:00:00Z") else { return 0 }
-        return (Calendar.current.component(.weekday, from: date) + 5) % 7
-    }
-    private var maximum: Double { max(1, days.map { cost ? $0.cost : $0.total }.max() ?? 1) }
-    private func label(_ day: Aggregate) -> String { day.key + " · " + (cost ? String(format: "%.6f USD", day.cost) : Format.compact(day.total) + " Token") }
+    private var layout: HeatmapLayout { HeatmapLayout.get(days: days, cost: cost) }
+    private func label(_ day: Aggregate) -> String { layout.labels[day.key] ?? day.key }
     var body: some View {
+        let cached = layout
+        let leading = cached.leading, maximum = cached.maximum
         VStack(alignment: .leading, spacing: 10) {
             GeometryReader { proxy in
                 let columns = max(1, (days.count + leading + 6) / 7), step = (proxy.size.width - 22) / CGFloat(columns), size = max(DesignTokens.heatCellMin, min(DesignTokens.heatCellMax, step - DesignTokens.heatCellGap))
@@ -615,7 +638,7 @@ struct Heatmap: View {
                                     let day = days[index], value = cost ? day.cost : day.total
                                     RoundedRectangle(cornerRadius: DesignTokens.heatCellRadius).fill(value == 0 ? Color.primary.opacity(DesignTokens.heatEmptyOpacity) : Palette.accent.opacity(0.25 + 0.75 * sqrt(value / maximum))).frame(width: size, height: size)
                                         .overlay { if selected == index { RoundedRectangle(cornerRadius: DesignTokens.heatCellRadius).strokeBorder(Color.primary, lineWidth: 1.5) } }
-                                        .help(label(day)).accessibilityLabel(label(day)).onTapGesture { selected = index; showDay = true }
+                                        .help(cached.labels[day.key] ?? day.key).accessibilityLabel(cached.labels[day.key] ?? day.key).onTapGesture { selected = index; showDay = true }
                                 } else { Color.clear.frame(width: size, height: size) }
                             }
                         }.frame(width: step - 3) }
@@ -641,7 +664,7 @@ struct Heatmap: View {
 }
 
 private struct QuotaGroupSection<Content: View>: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let provider: String
     let accountCount: Int
     let quotas: [Quota]
@@ -655,7 +678,7 @@ private struct QuotaGroupSection<Content: View>: View {
     private var failures: [Quota] { quotas.filter { $0.queryFailure != nil } }
 
     init(key: String, model: AppModel, provider: String, accountCount: Int, quotas: [Quota], @ViewBuilder content: () -> Content) {
-        self.model = model; self.provider = provider; self.accountCount = accountCount; self.quotas = quotas; self.content = content()
+        _model = SurfaceModel(wrappedValue: model); self.provider = provider; self.accountCount = accountCount; self.quotas = quotas; self.content = content()
         _expanded = AppStorage(wrappedValue: true, key)
     }
     var body: some View {
@@ -723,13 +746,13 @@ private struct QuotaGroupSection<Content: View>: View {
 }
 
 private struct AccountObservedQuota: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     @ObservedObject var status: AccountStatusProjection
     let quota: Quota
     var compact = false
     var defaultExpanded = false
     init(model: AppModel, quota: Quota, compact: Bool = false, defaultExpanded: Bool = false) {
-        self.model = model; self.quota = quota; self.compact = compact; self.defaultExpanded = defaultExpanded
+        _model = SurfaceModel(wrappedValue: model); self.quota = quota; self.compact = compact; self.defaultExpanded = defaultExpanded
         status = model.accountStatusStore.projection(quota.id)
     }
     var body: some View {
@@ -1261,7 +1284,7 @@ struct OverlayScrollStyle: NSViewRepresentable {
 }
 
 struct RefreshIndicator: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let key: String
     @State private var showing = false
     private var failures: [ActionFailure] { model.actionFailures.filter { !$0.dismissed && ($0.action == key || (key == "scan" && $0.action == "prices")) } }
@@ -1296,7 +1319,7 @@ struct RefreshIndicator: View {
 }
 
 private struct SessionStrip: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     @ObservedObject var live: LiveSessionState
     @Binding var expanded: Bool
     var compact: Bool

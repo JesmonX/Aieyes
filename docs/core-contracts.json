@@ -240,6 +240,14 @@
       "updateBehavior": "cancel"
     },
     {
+      "name": "accounts.status.refreshBatch",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
       "name": "accounts.targets",
       "lane": "configuration",
       "invalidates": [],
@@ -656,19 +664,19 @@
       "updateBehavior": "cancel"
     },
     {
-      "name": "hosts.sshConfig.read",
-      "lane": "hosts",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "cancel"
-    },
-    {
       "name": "hosts.sample",
       "lane": "hosts",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": "hosts",
+      "updateBehavior": "cancel"
+    },
+    {
+      "name": "hosts.sshConfig.read",
+      "lane": "hosts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
       "updateBehavior": "cancel"
     },
     {
@@ -890,6 +898,14 @@
       "updateBehavior": "cancel"
     },
     {
+      "name": "runtime.revisions",
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
       "name": "sessions.hooks.remove",
       "lane": "configuration",
       "invalidates": [],
@@ -1005,6 +1021,25 @@
       "updateBehavior": "cancel"
     },
     {
+      "name": "subscriptions.connect",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "subscriptions.openLogin",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
       "name": "wakeups.delete",
       "lane": "wakeups",
       "invalidates": [
@@ -1105,25 +1140,6 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
-    },
-    {
-      "name": "subscriptions.connect",
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "finish"
-    },
-    {
-      "name": "subscriptions.openLogin",
-      "lane": "accounts",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "finish"
     }
   ],
   "petFrameDurations": [

@@ -216,19 +216,32 @@ def read_file(path, provider, hook, cursor):
         alive = (not start or p[2]==start) if p else (None if pathlib.Path('/proc/%d' % pid).exists() else False)
     return dict(key=str(path), identity=identity, signature=str(stat.st_mtime_ns), size=size, modified=modified, offset=offset+complete, reset=reset, events=rows, hook=hook,alive=alive)
 
-def read_db(path):
+def database_fingerprint(path):
+    def stamp(p):
+        try:
+            stat=p.stat()
+            return (stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns)
+        except FileNotFoundError:return None
+    return 'db:'+hashlib.sha256(repr((stamp(path),stamp(pathlib.Path(str(path)+'-wal')))).encode()).hexdigest()
+
+def read_db(path,cursor=None):
     import sqlite3
     from contextlib import closing
     stat=path.stat(); wal=pathlib.Path(str(path)+'-wal')
+    signature=database_fingerprint(path)
     modified=int(max(stat.st_mtime, wal.stat().st_mtime if wal.exists() else 0))
+    metadata=dict(key=str(path),identity=str(stat.st_ino),signature=signature,size=0,offset=0,modified=modified,events=[],hook=False,database=True)
+    if cursor and cursor.get('signature')==signature:
+        return dict(metadata,reset=False,steps=None)
     uri=path.resolve().as_uri()+'?mode=ro'
     with closing(sqlite3.connect(uri,uri=True,timeout=.1)) as db:
         db.execute('PRAGMA query_only=ON')
         session=db.execute('SELECT cascade_id FROM trajectory_meta LIMIT 1').fetchone()[0]
         steps=db.execute('SELECT idx,step_type,status FROM steps ORDER BY idx DESC LIMIT 2048').fetchall()[::-1]
-    return dict(key=str(path),identity=str(stat.st_ino),size=0,offset=0,modified=modified,reset=True,events=[],hook=False,session=session,steps=steps)
+    if signature!=database_fingerprint(path):raise RuntimeError('Session database changed during read; retry')
+    return dict(metadata,reset=True,session=session,steps=steps)
 
-def collect(source,cursors):
+def collect(source,cursors,database_cache=False):
     path=pathlib.Path(os.path.expanduser(source.get('path') or '~/.gemini/antigravity-cli'))
     provider=source['provider']; result=dict(sourceId=source['id'],files=[],error=None)
     try:
@@ -246,8 +259,12 @@ def collect(source,cursors):
                 if time.time()-stamp < 86400: files.append((stamp,f,hook))
         if len(files)>256: result['error']='Too many recent sessions; showing the most recent 256'
         for _,f,hook in sorted(files,reverse=True)[:256]:
-            try: result['files'].append(read_db(f) if not hook and provider=='antigravity' else read_file(f,provider,hook,cursors.get(str(f),{})))
-            except Exception as error: result['error']=str(error)
+            try: result['files'].append(read_db(f,cursors.get(str(f),{}) if database_cache else None) if not hook and provider=='antigravity' else read_file(f,provider,hook,cursors.get(str(f),{})))
+            except Exception as error:
+                result['error']=str(error)
+                cursor=cursors.get(str(f),{})
+                if database_cache and not hook and provider=='antigravity' and cursor.get('signature','').startswith('db:'):
+                    result['files'].append(dict(key=str(f),identity=cursor.get('identity',''),signature=cursor['signature'],size=0,offset=0,modified=cursor.get('modified',0),reset=False,events=[],database=True,steps=None))
     except Exception as error: result['error']=str(error)
     return result
 
@@ -259,7 +276,7 @@ def main(request):
         key=(s['provider'],str(target(s)[0]))
         if key in seen: continue
         seen.add(key); hooks.append(manage(s,'ensure' if action=='collect' else action))
-    polls=[collect(s,request.get('cursors',{})) for s in sources] if action=='collect' else []
+    polls=[collect(s,request.get('cursors',{}),request.get('databaseCache') is True) for s in sources] if action=='collect' else []
     return dict(hooks=hooks,polls=polls,now=int(time.time()))
 
 if __name__ == '__main__':

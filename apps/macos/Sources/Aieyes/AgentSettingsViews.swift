@@ -5,7 +5,7 @@ struct AgentDirectorySelection: Identifiable {
     var id: String { provider + ":" + machine }
 }
 struct AgentsSettingsView: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             FlowLayout(spacing: 6) {
@@ -26,7 +26,7 @@ struct AgentsSettingsView: View {
 }
 
 struct AgentMachinesSection: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let agent: AgentConfiguration
     @State private var directories: AgentDirectorySelection?
     @State private var hooks: AgentDirectorySelection?
@@ -102,7 +102,7 @@ private struct MachineSessionStatus: View {
 }
 private struct MachineSessionHooksView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let provider: String, machine: String
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -121,7 +121,7 @@ private struct MachineSessionHooksView: View {
 
 struct AgentAutomaticValuationView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let provider: String, machine: String
     private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine } }
     var body: some View {
@@ -140,7 +140,7 @@ struct AgentAutomaticValuationView: View {
 
 struct AgentDirectoriesView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let provider: String, machine: String
     @State private var editing: AgentSource?
     @State private var removing: AgentSource?
@@ -217,7 +217,7 @@ struct AgentDirectoriesView: View {
 }
 
 struct AccountsSettingsView: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     var provider: String? = nil
     var editAccount: (AgentAccount) -> Void
     @State private var showingValuation = false
@@ -272,11 +272,11 @@ struct AccountsSettingsView: View {
             .onChange(of: model.settingsSection) { _, section in if let section { UserDefaults.standard.set(true, forKey: sectionKey(section)); reader.scrollTo(section, anchor: .top) } }
         }
         .sheet(isPresented: $showingValuation) { if let provider { AgentValuationView(model: model, provider: provider) } }
-        .task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? []; await model.loadAccountStatuses(refresh: true) }
-        .sheet(item: $adding, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { agent in AccountConnectionView(model: model, initialProvider: agent.provider) }
+        .task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? []; await model.loadAccountStatuses() }
+        .sheet(item: $adding, onDismiss: { Task { await model.loadAccountStatuses(refresh: true, dueOnly: true) } }) { agent in AccountConnectionView(model: model, initialProvider: agent.provider) }
         .sheet(item: $selectedAccount) { account in AccountDevicesView(model: model, account: account) }
         .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
-        .sheet(item: $sourceToManage, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { source in AccountConnectionView(model: model, initialSourceID: source.id, intent: authIntent) }
+        .sheet(item: $sourceToManage, onDismiss: { Task { await model.loadAccountStatuses(refresh: true, dueOnly: true) } }) { source in AccountConnectionView(model: model, initialSourceID: source.id, intent: authIntent) }
         .sheet(item: $deleting, onDismiss: { Task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? [] } }) { account in DeleteArchivedAccountView(model: model, account: account) }
     }
     private func sectionKey(_ section: String) -> String { "settings.section." + (provider ?? "all") + "." + section }
@@ -363,11 +363,11 @@ struct AccountsSettingsView: View {
 }
 
 private struct AccountStatusSummary: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     @ObservedObject var status: AccountStatusProjection
     let account: AgentAccount
     init(model: AppModel, account: AgentAccount) {
-        self.model = model; self.account = account; status = model.accountStatusStore.projection(account.key)
+        _model = SurfaceModel(wrappedValue: model); self.account = account; status = model.accountStatusStore.projection(account.key)
     }
     var body: some View {
         VStack(alignment: .leading) {
@@ -382,12 +382,12 @@ private struct AccountStatusSummary: View {
 
 struct AccountDevicesView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     @ObservedObject private var statusProjection: AccountStatusProjection
     @State var account: AgentAccount
     let initialMachineID: String?
     init(model: AppModel, account: AgentAccount, initialMachineID: String? = nil, initialSection: String? = nil) {
-        self.model = model; _account = State(initialValue: account); statusProjection = model.accountStatusStore.projection(account.key)
+        _model = SurfaceModel(wrappedValue: model); _account = State(initialValue: account); statusProjection = model.accountStatusStore.projection(account.key)
         self.initialMachineID = initialMachineID
         _expandedCommands = State(initialValue: initialSection == "command" ? Set([initialMachineID].compactMap { $0 }) : [])
     }
@@ -493,8 +493,8 @@ struct AccountDevicesView: View {
         .onChange(of: current.name) { old, value in if focusedField != "name" && account.name == old { account.name = value } }
         .onChange(of: focusedField) { old, _ in if old != nil { saveEditedText() } }
         .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
-        .sheet(isPresented: $showingConnection, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { AccountConnectionView(model: model, account: current) }
-        .sheet(item: $loginSource, onDismiss: { Task { await model.loadAccountStatuses(refresh: true) } }) { source in AccountConnectionView(model: model, account: current, initialSourceID: source.id, intent: authIntent) }
+        .sheet(isPresented: $showingConnection, onDismiss: { Task { await model.loadAccountStatuses(refresh: true, dueOnly: true) } }) { AccountConnectionView(model: model, account: current) }
+        .sheet(item: $loginSource, onDismiss: { Task { await model.loadAccountStatuses(refresh: true, dueOnly: true) } }) { source in AccountConnectionView(model: model, account: current, initialSourceID: source.id, intent: authIntent) }
     }
     private func openLogin(_ source: AgentSource, intent: String) {
         focusedField = nil
@@ -554,7 +554,7 @@ struct AccountDevicesView: View {
 
 struct DeleteArchivedAccountView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let account: AgentAccount
     @State private var tasks: [AccountCleanupTask] = []
     @State private var failed: [AccountCleanupTask] = []
@@ -619,7 +619,7 @@ struct DeleteArchivedAccountView: View {
 struct AccountConnectionView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var agySource: AgentSource?
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     var account: AgentAccount?
     var initialProvider: String? = nil
     var initialSourceID: String? = nil
@@ -708,7 +708,7 @@ struct AccountConnectionView: View {
 }
 
 private struct SessionHookControls: View {
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let source: AgentSource
     @State private var status: SessionHookStatus?
     @State private var busy = false
@@ -734,7 +734,7 @@ private struct SessionHookControls: View {
 }
 private struct RebindSourceView: View {
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: AppModel
+    @SurfaceModel var model: AppModel
     let source: AgentSource
     @State private var machine = ""
     @State private var busy = false

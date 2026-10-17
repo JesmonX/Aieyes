@@ -58,6 +58,7 @@ fn model_choices_preserve_siblings_and_honor_other_filters() {
     let d = db
         .dashboard(&Filter {
             date_range: None,
+            estimate_history: None,
             provider: Some("custom".into()),
             account_id: Some("account".into()),
             source_id: Some("a".into()),

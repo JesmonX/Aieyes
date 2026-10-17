@@ -38,26 +38,52 @@ import AppKit
         precondition(PetPreviewVisibility.isVisible(CGRect(x: 204, y: 112, width: 352, height: 92), viewport: libraryViewport, enclosing: settingsViewport))
         precondition(!PetPreviewVisibility.isVisible(CGRect(x: 204, y: 364, width: 352, height: 92), viewport: libraryViewport, enclosing: settingsViewport), "Rows beyond the library viewport must stop")
         precondition(!PetPreviewVisibility.isVisible(CGRect(x: 204, y: 520, width: 352, height: 92), viewport: libraryViewport.offsetBy(dx: 0, dy: 420), enclosing: settingsViewport), "The entire library scrolled outside Settings must stop")
-        let clock = PetAnimationClock()
-        var clockState = PetState.idle
-        clockState.key = "cadence"
-        clock.configure(clockState, playing: true, reduced: false)
-        let began = ProcessInfo.processInfo.systemUptime
-        var visited = Set<Int>()
-        while ProcessInfo.processInfo.systemUptime - began < 1.3 {
-            clockState.activeCount = Int.random(in: 0...4)
-            clock.configure(clockState, playing: true, reduced: false)
-            RunLoop.main.run(until: Date().addingTimeInterval(0.025))
-            visited.insert(clock.frame)
-        }
-        precondition(visited == Set(0..<6), "Frequent count updates must not restart the animation")
-        clockState.key = "a-new-turn"
-        clock.configure(clockState, playing: true, reduced: false)
-        precondition(clock.frame == 0, "A new turn starts its own animation")
-        clock.configure(clockState, playing: true, reduced: true)
-        precondition(clock.frame == 0)
-        clock.stop()
         _ = NSApplication.shared
+        NSApp.finishLaunching()
+        func pump() {
+            let until = Date().addingTimeInterval(0.2)
+            while Date() < until {
+                if let event = NSApp.nextEvent(matching:.any,until:Date().addingTimeInterval(0.01),inMode:.default,dequeue:true) { NSApp.sendEvent(event) }
+                RunLoop.main.run(until:Date().addingTimeInterval(0.005))
+            }
+        }
+        let context = CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let images = (0..<8).map { frame -> CGImage in context.setFillColor(CGColor(gray: Double(frame)/8, alpha: 1)); context.fill(CGRect(x:0,y:0,width:8,height:8)); return context.makeImage()! }
+        for durations in CoreContract.petFrameDurations {
+            let animation = PetLayerImage.keyframes(images: images, durations: durations)!
+            precondition(animation.calculationMode == .discrete && animation.values?.count == durations.count+1)
+            precondition(animation.duration == Double(durations.reduce(0,+))/1000 && animation.repeatCount == .infinity)
+            var point = [Float](repeating:0,count:2)
+            for index in [1,2] { animation.timingFunction!.getControlPoint(at:index,values:&point);precondition(abs(point[0]-point[1])<1e-6,"Global timing must remain linear so frame durations are exact") }
+            var cumulative = 0
+            for (index, duration) in durations.enumerated() { cumulative += duration; precondition(abs(animation.keyTimes![index+1].doubleValue - Double(cumulative)/Double(durations.reduce(0,+))) < 1e-12) }
+        }
+        let animationWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:144,height:168), styleMask: [.titled], backing: .buffered, defer: false)
+        animationWindow.isReleasedWhenClosed = false; animationWindow.level = .statusBar
+        let sprite = PetLayerImage(); animationWindow.contentView = sprite; animationWindow.orderFront(nil)
+        pump()
+        var clockState = PetState.idle
+        func configure() { sprite.configure(images: images, state: clockState, identity: clockState.animationIdentity, playing: true, reduced: false) }
+        configure(); let starts = sprite.animationStarts
+        precondition(starts > 0)
+        for count in 0..<30 { clockState.activeCount = count; configure() }
+        precondition(sprite.animationStarts == starts, "Unrelated state updates must not restart keyframes")
+        clockState.key = "a-new-turn"; configure(); precondition(sprite.animationStarts == starts+1)
+        sprite.configure(images: images, state: clockState, identity: clockState.animationIdentity, playing: true, reduced: true)
+        precondition(sprite.layer?.animation(forKey:"pet.frames") == nil, "Reduced motion retains the first frame")
+        configure(); animationWindow.orderOut(nil)
+        pump()
+        precondition(sprite.layer?.animation(forKey:"pet.frames") == nil, "Hidden windows stop animation")
+        animationWindow.close()
+        let menuWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:22,height:22), styleMask: [.borderless], backing: .buffered, defer: false)
+        menuWindow.isReleasedWhenClosed = false; menuWindow.level = .statusBar
+        let menuImage = MenuActivityImage(); menuWindow.contentView = menuImage; menuWindow.orderFront(nil)
+        pump()
+        menuImage.configure(phase:.working,playing:true);let pulses = menuImage.animationStarts
+        precondition(pulses > 0)
+        for _ in 0..<30 { menuImage.configure(phase:.working,playing:true) }
+        precondition(menuImage.animationStarts == pulses, "Stable menu snapshots must not restart the system pulse")
+        menuImage.configure(phase:.working,playing:false); menuWindow.close()
         let defaults = UserDefaults.standard
         let savedEnabled = defaults.object(forKey: "aieyes.pet.enabled")
         let savedPosition = defaults.object(forKey: "aieyes.pet.position")

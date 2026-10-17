@@ -526,6 +526,62 @@ impl Store {
     pub fn estimates(&self) -> Result<Vec<Estimate>> {
         self.read_estimates(false)
     }
+    /// A bounded set sufficient for the existing cards, including historical value fallbacks.
+    pub(crate) fn display_estimates(&self) -> Result<Vec<Estimate>> {
+        let revision: i64 = self.db.query_row(
+            "SELECT CAST(value AS INTEGER) FROM kv WHERE key='runtime.revision:estimates'",
+            [],
+            |r| r.get(0),
+        )?;
+        let committed =
+            self.db.transaction_state(None::<&str>)? != rusqlite::TransactionState::Write;
+        if committed
+            && let Some((known, rows)) = self.estimate_display.borrow().as_ref()
+            && *known == revision
+        {
+            return Ok(rows.clone());
+        }
+        let mut query = self.db.prepare_cached("SELECT e.kind,json_remove(e.payload,'$.prices','$.automaticSegments','$.segments') FROM estimates e WHERE NOT EXISTS(SELECT 1 FROM estimates replacement WHERE replacement.kind=e.kind AND CAST(json_extract(replacement.payload,'$.originalEstimateId') AS TEXT)=e.id) ORDER BY e.account_key,e.kind,json_extract(e.payload,'$.startedAt') DESC,COALESCE(json_extract(e.payload,'$.repairedAt'),0) DESC")?;
+        let mut rows = query.query([])?;
+        let mut selected = Vec::new();
+        let mut fields = std::collections::HashSet::new();
+        while let Some(row) = rows.next()? {
+            let kind: String = row.get(0)?;
+            let raw: String = row.get(1)?;
+            let e = decode_estimate(&kind, &raw)?;
+            let group = e.quota().and_then(|q| q.group_id.as_deref()).unwrap_or("");
+            let scope = format!("{}:{kind}:{group}", e.account_key);
+            let mut needed = fields.insert(format!("{scope}:latest")) || e.status != "completed";
+            for (field, value) in match &e {
+                Estimate::Quota(q) => vec![
+                    ("five", q.five_hour_value),
+                    ("week", q.weekly_value),
+                    ("ratio", q.weekly_ratio_value),
+                ],
+                Estimate::Credit(c) => vec![("credits", c.value_per1000)],
+            } {
+                if e.status != "pending"
+                    && value.is_some_and(f64::is_finite)
+                    && fields.insert(format!("{scope}:{field}"))
+                {
+                    needed = true;
+                }
+            }
+            if needed {
+                selected.push(e);
+            }
+        }
+        selected.sort_by(|a, b| {
+            b.started_at
+                .cmp(&a.started_at)
+                .then(b.repaired_at.cmp(&a.repaired_at))
+        });
+        // Don't retain pathological imported data or unbounded active records in memory.
+        if committed && serde_json::to_vec(&selected)?.len() <= 4 * 1024 * 1024 {
+            *self.estimate_display.borrow_mut() = Some((revision, selected.clone()));
+        }
+        Ok(selected)
+    }
     pub(crate) fn active_estimates(&self) -> Result<Vec<Estimate>> {
         self.read_estimates(true)
     }
@@ -1240,13 +1296,17 @@ impl Engine {
         let credits = method.starts_with("creditEstimates.");
         let action = method.split_once('.').map(|(_, a)| a).unwrap_or("");
         if action == "list" {
-            return Ok(serde_json::to_value(
-                self.store
-                    .estimates()?
-                    .into_iter()
-                    .filter(|e| matches!(e, Estimate::Credit(_)) == credits)
-                    .collect::<Vec<_>>(),
-            )?);
+            let kind = if credits { "credits" } else { "quota" };
+            let mut query = self.store.db.prepare("SELECT payload FROM estimates WHERE kind=?1 AND (?2 IS NULL OR account_key=?2) AND (?3 IS NULL OR substr(account_key,1,length(?3)+1)=?3||':') ORDER BY json_extract(payload,'$.startedAt') DESC,COALESCE(json_extract(payload,'$.repairedAt'),0) DESC")?;
+            let rows = query.query_map(
+                rusqlite::params![kind, p["accountKey"].as_str(), p["provider"].as_str()],
+                |r| r.get::<_, String>(0),
+            )?;
+            let mut values = Vec::new();
+            for row in rows {
+                values.push(decode_estimate(kind, &row?)?);
+            }
+            return Ok(serde_json::to_value(values)?);
         }
         let id = p["id"].as_str().unwrap_or("");
         if !id.is_empty() {

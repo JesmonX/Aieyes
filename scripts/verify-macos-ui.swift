@@ -167,6 +167,7 @@ for line in sys.stdin:
         deadline=time.monotonic()+10
         while os.path.exists(root+'/hold-account-status') and not os.path.exists(root+'/release-account-status') and time.monotonic()<deadline: time.sleep(.01)
         response['result']=json.load(open(root+'/account-status.json')) if os.path.exists(root+'/account-status.json') else []
+    elif method=='runtime.revisions': response['result']={'settings':1,'usage':1} if os.path.exists(root+'/enable-revisions') else {}
     elif method=='accounts.status.refresh': response['error']=dict(message='不应再次检查已确认的登录')
     elif method=='accounts.deployments.sync':
         if os.path.exists(root+'/hold-deployment-sync'):
@@ -333,7 +334,8 @@ for line in sys.stdin:
         let dashboardReadsBeforeReload = try calls("dashboard")
         await model.reload()
         let dashboardReadsAfterReload = try calls("dashboard")
-        precondition(dashboardReadsAfterReload == dashboardReadsBeforeReload + 1, "The unfiltered one-day dashboard must be reused for menu data")
+        precondition(dashboardReadsAfterReload == dashboardReadsBeforeReload + 1, "Identical visible scopes reuse one full dashboard query")
+        let menuReads = try calls("dashboard.summary"); precondition(menuReads > 0, "Menu summaries use an independent lightweight request")
         let queriesBeforeEnabling = try calls("quotas.refresh")
         model.settings.accounts[0].quotaEnabled = false
         model.settingsDraft = model.settings
@@ -614,6 +616,22 @@ for line in sys.stdin:
         precondition(workspace.overviewFilters.days == 1 && workspace.analysisFilters.dateRange == originalAnalysis.dateRange)
         print("Workspace filter migration, independent scopes, analysis context and removal reconciliation passed")
         print("Deleted account history is hidden by default, filters use the historical account identity, and hiding resets a stale selection")
+        // Calendar changes invalidate relative-date snapshots even without new usage revisions.
+        try await Task.sleep(for:.milliseconds(300))
+        try Data().write(to:root.appendingPathComponent("enable-revisions"))
+        let calendarCache = AppModel(autostart:false)
+        var calendarDate = Date(timeIntervalSince1970:1767225600)
+        calendarCache.dashboardCacheNow = { calendarDate }
+        let firstReads = try calls("dashboard")
+        await calendarCache.reload()
+        let loadedReads = try calls("dashboard");precondition(loadedReads == firstReads+1)
+        await calendarCache.reload()
+        let reusedReads = try calls("dashboard");precondition(reusedReads == loadedReads,"Identical revisions and day reuse the full snapshot")
+        calendarDate = calendarDate.addingTimeInterval(86400)
+        await calendarCache.reload()
+        let nextDayReads = try calls("dashboard");precondition(nextDayReads == reusedReads+1,"Midnight must invalidate cached relative ranges")
+        calendarCache.stop();try FileManager.default.removeItem(at:root.appendingPathComponent("enable-revisions"))
+        print("Relative dashboard caches refresh on calendar-day changes without data writes")
         print("Antigravity login accepts committed identity immediately, rejects older status reads, retains identity after quota failure, and preserves drafts")
         print("Theme quick toggle saves globally, preserves unrelated drafts and retains theme after failure")
         print("Atomic filtered/today snapshots and mapping save/reprice failure recovery passed")

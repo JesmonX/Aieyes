@@ -42,6 +42,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "accounts.deployments.sync", lane: Lane::Accounts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.status.get", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.status.refresh", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "accounts.status.refreshBatch", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.targets", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "agents.set", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "agyAuth.cancel", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -89,8 +90,8 @@ pub const METHODS: &[Method] = &[
     Method { name: "hosts.credentials.delete", lane: Lane::Hosts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "hosts.credentials.save", lane: Lane::Hosts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "hosts.discover", lane: Lane::Hosts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "hosts.sshConfig.read", lane: Lane::Hosts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "hosts.sample", lane: Lane::Hosts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: Some("hosts") },
+    Method { name: "hosts.sshConfig.read", lane: Lane::Hosts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "methods.manifest", lane: Lane::Main, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "network.status", lane: Lane::Network, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "network.test", lane: Lane::Network, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -116,6 +117,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "quotas.order.set", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "quotas.refresh", lane: Lane::Quotas, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: Some("quotas") },
     Method { name: "quotas.schedule", lane: Lane::Dashboard, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "runtime.revisions", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sessions.hooks.remove", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sessions.hooks.repair", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sessions.hooks.status", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -128,6 +130,8 @@ pub const METHODS: &[Method] = &[
     Method { name: "sources.remove", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sources.rescan", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: true, refresh_key: Some("rescan") },
     Method { name: "sources.scan", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: Some("scan") },
+    Method { name: "subscriptions.connect", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "subscriptions.openLogin", lane: Lane::Accounts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "wakeups.delete", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.deploy", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.disable", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
@@ -139,8 +143,6 @@ pub const METHODS: &[Method] = &[
     Method { name: "wakeups.run", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.save", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.status", lane: Lane::Wakeups, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "subscriptions.connect", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
-    Method { name: "subscriptions.openLogin", lane: Lane::Accounts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
 ];
 #[rustfmt::skip]
 pub const PROVIDERS: &[Provider] = &[
@@ -175,7 +177,7 @@ pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
     &[120, 120, 120, 120, 120, 220],
     &[150, 150, 150, 150, 150, 280],
 ];
-pub const CONTRACT_HASH: &str = "0628daf2bf4d492638273797f003d5385db2e16ec29a57ba02821bc4e21a2cce";
+pub const CONTRACT_HASH: &str = "09027b8f8b81e770b7121ef5d9d1e2aff2b906fe2e1813e75184e4053e13f9ac";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

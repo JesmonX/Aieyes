@@ -136,9 +136,15 @@ function openAnalysis(accountKey=state.accountKey,provider=state.provider){
 function openDetail() {
   return window.__TAURI__.core.invoke('desktop_detail',{view:{page:state.page==='servers'?'servers':'agent'}}).catch(e=>notify(String(e),'error'));
 }
+const ownedOperations = new Map(), runtimeVersions = {}, querySnapshots = new Map();
+let localDataEpoch = 0, lastDashboardVersion = '';
+const dashboardVersion = () => JSON.stringify([localDataEpoch,...['settings','usage','quotas','estimates','prices','sources'].map(key=>runtimeVersions[key]??0),new Date().toDateString(),Intl.DateTimeFormat().resolvedOptions().timeZone]);
 async function api(method, params = {}) {
-  try { const result = await window.__TAURI__.core.invoke('engine_call', {method,params}); return AieyesUI.canonicalPayload(result, result?.accountAliases ?? state.settings?.accountAliases ?? {}); }
-  finally { if(method==='quotas.refresh'||window.AieyesContract.methods[method]?.invalidates.includes('settings'))invalidateQuotaSchedule(); }
+  const mutation = window.AieyesContract.methods[method]?.invalidates.length || ['pets.select','pets.import'].includes(method);
+  const operationId = mutation ? params.operationId || crypto.randomUUID() : null;
+  if(operationId){ownedOperations.set(operationId,Date.now());if(ownedOperations.size>256)ownedOperations.delete(ownedOperations.keys().next().value);}
+  try { const result = await window.__TAURI__.core.invoke('engine_call', {method,params,...(operationId?{operationId}:{})}); return AieyesUI.canonicalPayload(result, result?.accountAliases ?? state.settings?.accountAliases ?? {}); }
+  finally { if(mutation){localDataEpoch++;querySnapshots.clear();} if(method==='quotas.refresh'||window.AieyesContract.methods[method]?.invalidates.includes('settings'))invalidateQuotaSchedule(); }
 }
 let notificationTimer;
 function notify(message, kind = 'info', source = '') {
@@ -368,6 +374,7 @@ function renderQueryStatus(){
 }
 let dashboardWork=false,dashboardQueued=false,dashboardReadyAt=0,dashboardTimer, dashboardWaiters=[];
 function loadDashboard({debounce=false}={}) {
+  if(state.revisionEvents && (document.hidden || PANEL&&!state.panelOpen)){state.dashboardDirty=true;return Promise.resolve();}
   ++state.dashboardRequest;dashboardQueued=true;dashboardReadyAt=Date.now()+(debounce?120:0);
   state.dashboardPending=true;state.dashboardError='';if(['agent','analysis'].includes(state.page))renderQueryStatus();
   const result=new Promise((resolve,reject)=>dashboardWaiters.push({resolve,reject}));
@@ -395,7 +402,12 @@ async function loadDashboardOnce(request) {
   const account=historicalAccounts().find(a=>a.provider+':'+a.id===state.accountKey);
   const requested=filterSnapshot(),requestedScope=dashboardScope();state.dashboardPending=true;state.dashboardError='';if(['agent','analysis'].includes(state.page))renderQueryStatus();
   try {
-  const dashboard = await api('dashboard',{provider:account?.provider || state.provider || null,accountId:state.accountKey==='none'?'':account?.id ?? null,sourceId:state.sourceId || null,model:state.model || null,days:state.days,dateRange:state.dateRange});
+  const params={estimateHistory:'display',provider:account?.provider || state.provider || null,accountId:state.accountKey==='none'?'':account?.id ?? null,sourceId:state.sourceId || null,model:state.model || null,days:state.days,dateRange:state.dateRange};
+  const version=dashboardVersion(),key=JSON.stringify([version,params]);
+  const cacheable=state.revisionEvents&&Object.keys(runtimeVersions).length>0;
+  const dashboard = cacheable&&querySnapshots.has(key)?querySnapshots.get(key):await api('dashboard',params);
+  if(cacheable&&version===dashboardVersion()&&JSON.stringify(dashboard).length<=2*1024*1024){if(querySnapshots.size>=4)querySnapshots.clear();querySnapshots.set(key,dashboard);}
+  lastDashboardVersion=version;
   if(request!==state.dashboardRequest)return;
   for(const name of [...new Set([...(dashboard.modelOptions??[]),...(dashboard.models??[]).map(m=>m.key),...(dashboard.dayModels??[]).map(r=>r.model)])].sort())for(const preset of window.AieyesChartPalettes)color(name,preset.id);
   dashboardCache.set(requestedScope,dashboard);appliedFilterCache.set(requestedScope,requested);state.dashboard=dashboard;state.appliedFilters=requested;state.dashboardPending=false;state.dashboardError='';updateActivity();
@@ -1426,7 +1438,7 @@ function refreshExternalData(settings=false,method='') {
   externalRefresh=(async()=>{
     while(externalPending){
       externalPending=false;const readSettings=externalSettings,checkQuotas=externalQuotaCheck,checkScan=externalScanCheck;externalSettings=false;externalQuotaCheck=false;externalScanCheck=false;
-      if(readSettings||!state.settings){const saved=await api('settings.get');syncSharedAppearance(saved.appearance);acceptSettings(saved);window.AieyesTheme?.apply(saved.appearance);}migrateProviderState();
+      if(readSettings||!state.settings){const saved=await api('settings.get');syncSharedAppearance(saved.appearance);if(window.AieyesAgentSettings)window.AieyesAgentSettings.accept(saved);else acceptSettings(saved);window.AieyesTheme?.apply(saved.appearance);}migrateProviderState();
       await loadDashboard();
       if(readSettings&&PANEL&&state.page!=='agent')render();
       const scannedSources=(state.dashboard?.sources??[]).filter(source=>state.settings.sources.some(row=>row.id===source.id&&row.provider!=='deepseek'&&AieyesUI.sourceEnabled(state.settings,row))).map(source=>({id:source.id,error:source.status?.error,partial:source.status?.partial,issues:source.status?.issues}));
@@ -1458,13 +1470,35 @@ async function listenForSharedState() {
   });
   await events.listen('desktop:status',({payload})=>{
     state.sessionSnapshot=payload;window.AieyesAgentSettings?.updateSession(payload);
-    state.panelOpen=Boolean(payload.panelOpen);state.panelPage=payload.panelPage??state.panelPage;scheduleRefreshes();
+    const opened=!state.panelOpen&&payload.panelOpen;state.panelOpen=Boolean(payload.panelOpen);state.panelPage=payload.panelPage??state.panelPage;scheduleRefreshes();if(opened&&state.dashboardDirty){state.dashboardDirty=false;void refreshExternalData(true);}
   });
-  await events.listen('desktop:settings',()=>{invalidateQuotaSchedule();window.AieyesNetwork?.invalidate();if(PANEL)return refreshExternalData(true);});
+  const revisions=runtimeVersions,seenOperations=new Set();
+  let sharedRefreshTimer,sharedSettings=false;
+  const queueSharedRefresh=(settings,method='')=>{sharedSettings ||= settings;clearTimeout(sharedRefreshTimer);sharedRefreshTimer=setTimeout(()=>{if(state.busy||state.quotaBusy||state.estimateBusy||state.settingsSaving||state.settingsCommitting||state.refreshState.quotas?.busy){queueSharedRefresh(sharedSettings,method);return;}const readSettings=sharedSettings;sharedSettings=false;if(readSettings||lastDashboardVersion!==dashboardVersion())void refreshExternalData(readSettings,method);},120);};
+  const rememberOperation=id=>{if(id){seenOperations.add(id);if(seenOperations.size>256)seenOperations.delete(seenOperations.values().next().value);}};
+  await events.listen('desktop:invalidate',({payload})=>{
+    if(!state.revisionEvents||ownedOperations.has(payload.operationId)||seenOperations.has(payload.operationId))return;
+    rememberOperation(payload.operationId);
+    if(document.hidden||PANEL&&!state.panelOpen){state.dashboardDirty=true;return;}
+    queueSharedRefresh(window.AieyesContract.methods[payload.method]?.invalidates.includes('settings'),payload.method);
+  });
+  await events.listen('runtime:changed',({payload})=>{
+    if(!state.revisionEvents||!payload.revisions)return;
+    const changed=Object.keys(payload.revisions).filter(key=>payload.revisions[key]>(revisions[key]??-1));
+    for(const key of changed)revisions[key]=payload.revisions[key];
+    if(!changed.length)return;
+    if(changed.some(key=>['settings','usage','quotas','estimates','prices','sources'].includes(key)))querySnapshots.clear();
+    if(ownedOperations.has(payload.operationId)||seenOperations.has(payload.operationId)||!state.settings)return;
+    rememberOperation(payload.operationId);
+    if(changed.includes('accounts'))void window.AieyesAgentSettings?.refreshStatuses(false);
+    if(document.hidden||PANEL&&!state.panelOpen){state.dashboardDirty=true;return;}
+    if(changed.some(key=>['settings','usage','quotas','estimates','prices','sources'].includes(key)))queueSharedRefresh(changed.includes('settings'));
+  });
+  await events.listen('desktop:settings',()=>{if(state.revisionEvents)return;invalidateQuotaSchedule();window.AieyesNetwork?.invalidate();if(PANEL)return refreshExternalData(true);});
   await events.listen('desktop:quotas',({payload})=>applyQuotaSamples(payload));
   await events.listen('desktop:hosts',({payload})=>{applyHostSamples(payload);});
   await events.listen('desktop:hosts-error',({payload})=>{applyHostFailure(payload,state.hostRefreshItem);});
-  await events.listen('desktop:data-changed',({payload})=>{invalidateQuotaSchedule();
+  await events.listen('desktop:data-changed',({payload})=>{if(state.revisionEvents)return;invalidateQuotaSchedule();
     if(PANEL&&window.AieyesContract.methods[payload]?.invalidates.includes('settings'))return; // desktop:settings owns this invalidation.
     if(PANEL||(!state.busy&&!state.settingsSaving&&!state.settingsCommitting&&!editorSaving))return refreshExternalData(window.AieyesContract.methods[payload]?.invalidates.includes('settings'),payload);
   });
@@ -1478,9 +1512,10 @@ async function boot(){
   try{
     if(!window.__TAURI__)throw new Error('通过 Aieyes 桌面应用打开');
     await listenForSharedState();
-    const info=await api('hello'),version=$('#app-version');if(version)version.textContent=info.version;
+    const info=await api('hello');state.revisionEvents=Boolean(info.runtimeInvalidations);const version=$('#app-version');if(version)version.textContent=info.version;
     if(info.contractHash&&info.contractHash!==window.AieyesContract.contractHash)throw new Error('应用资源与核心版本不一致，请重新安装同一版本');
-    state.settings=await api('settings.get');migrateProviderState();await loadDashboard();
+    if(PANEL&&state.revisionEvents){const shell=await window.__TAURI__.core.invoke('desktop_info');state.panelOpen=Boolean(shell.panelOpen);state.panelPage=shell.panelPage??state.panelPage;}
+    state.settings=await api('settings.get');migrateProviderState();void window.AieyesAgentSettings?.refreshStatuses(true,null,true);await loadDashboard();
     if(!PANEL)window.AieyesSetup?.maybeStart();
     if(PANEL){
       // Restoring before bundled fonts settle lets scroll anchoring shift the saved position.
@@ -1529,7 +1564,7 @@ function runScheduledRefreshes() {
   if(!collectionBlocked()&&Date.now()>=state.lastScan+(state.settings.historyRefreshSeconds??Math.max(10,state.settings.refreshSeconds))*1000)void scan();
   scheduleRefreshes();
 }
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)invalidateQuotaSchedule();else scheduleRefreshes();});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){invalidateQuotaSchedule();if(state.dashboardDirty){state.dashboardDirty=false;void refreshExternalData(true);}}else scheduleRefreshes();});
 window.addEventListener('focus',invalidateQuotaSchedule);
 document.addEventListener('close',scheduleRefreshes,true);
 window.addEventListener('beforeunload',()=>{rememberPage();viewPreferences.save(dashboardScope(),state);refreshStopped=true;clearTimeout(refreshTimer);clearTimeout(dashboardTimer);});
@@ -1661,6 +1696,7 @@ async function openQuotaEstimate(key,kind="weekly",group="",snapshot=state.dashb
   }
   const unavailable=!q;
   if(!q){const account=historicalAccounts().find(a=>a.provider+':'+a.id===key);q={provider:account?.provider??key.split(':')[0],accountId:account?.id??key.slice(key.indexOf(':')+1),name:account?.name??key,windows:[]};}
+  if(state.revisionEvents){try{const rows=await api(credits?'creditEstimates.list':'quotaEstimates.list',{accountKey:key});snapshot={...snapshot,[credits?'creditEstimates':'quotaEstimates']:rows};}catch(error){notify(String(error),'error');return;}}
   const records=(snapshot[credits?'creditEstimates':'quotaEstimates']??[]).filter(e=>e.accountKey===key),current=records.find(e=>e.status!=='completed');
   const windows=AieyesUI.estimateWindows(q),eligible=credits?(q.provider==='codex'&&q.credits?.balance!=null&&!q.credits.unlimited):windows.some(w=>!group||(w.groupId||w.groupName)===group);
   const history=records.filter(e=>e.status==='completed'&&(!group||!e.groupId||e.groupId===group));

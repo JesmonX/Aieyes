@@ -787,6 +787,10 @@ impl Engine {
         Ok(())
     }
     pub(crate) fn tick_automatic(&mut self) -> Result<Value> {
+        let settings = self.store.settings()?;
+        if !settings.sources.iter().any(enabled) {
+            return Ok(json!({"changed":false,"enabled":false}));
+        }
         let root = Path::new(self.store.db.path().context("数据目录不存在")?)
             .parent()
             .context("数据目录不存在")?;
@@ -797,7 +801,9 @@ impl Engine {
             .open(root.join("automatic-valuation.lock"))?;
         let _lock = match crate::file_lock::FileLock::try_exclusive(file) {
             Ok(v) => v,
-            Err(std::fs::TryLockError::WouldBlock) => return Ok(json!({"changed":false})),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Ok(json!({"changed":false,"enabled":true}));
+            }
             Err(e) => return Err(e.into()),
         };
         let settings = self.store.settings()?;
@@ -951,42 +957,86 @@ impl Engine {
             }
             changed = true;
         }
-        Ok(json!({"changed":changed}))
+        Ok(json!({"changed":changed,"enabled":true}))
     }
 }
 
 /// One worker per application; the on-disk lock also coordinates multiple engine processes.
 pub struct Background {
     stopped: Arc<AtomicBool>,
+    signal: Arc<crate::runtime::Signal>,
 }
 impl Background {
     pub fn start(root: &Path, on_change: impl Fn() + Send + 'static) -> Self {
         let stopped = Arc::new(AtomicBool::new(false));
         let stop = stopped.clone();
         let root = root.to_owned();
+        let signal = crate::runtime::signal(&root);
+        let wake = signal.clone();
         std::thread::spawn(move || {
+            let mut engine = None;
             while !stop.load(Ordering::Acquire) {
-                if let Ok(_scope) = crate::operations::enter("autoEstimates.tick")
-                    && let Ok(mut engine) = Engine::open(&root)
-                    && let Ok(value) = engine.tick_automatic()
-                    && value["changed"] == true
-                {
-                    on_change();
+                if engine.is_none() {
+                    engine = Engine::open(&root).ok();
                 }
-                for _ in 0..5 {
-                    if stop.load(Ordering::Acquire) {
+                let mut interval = 5;
+                if let Ok(_scope) = crate::operations::enter("autoEstimates.tick")
+                    && let Some(current) = engine.as_mut()
+                {
+                    match current.tick_automatic() {
+                        Ok(value) => {
+                            if value["changed"] == true {
+                                on_change();
+                            }
+                            if value["enabled"] == false {
+                                interval = 60;
+                            }
+                        }
+                        Err(_) => engine = None,
+                    }
+                }
+                let revision = engine.as_ref().and_then(|e| {
+                    e.store
+                        .db
+                        .query_row(
+                            "SELECT value FROM kv WHERE key='runtime.revision:settings'",
+                            [],
+                            |r| r.get::<_, String>(0),
+                        )
+                        .ok()
+                });
+                let until = std::time::Instant::now() + Duration::from_secs(interval);
+                while !stop.load(Ordering::Acquire) && std::time::Instant::now() < until {
+                    let generation = wake.generation();
+                    wake.wait(
+                        generation,
+                        until
+                            .saturating_duration_since(std::time::Instant::now())
+                            .min(Duration::from_secs(5)),
+                    );
+                    let next = engine.as_ref().and_then(|e| {
+                        e.store
+                            .db
+                            .query_row(
+                                "SELECT value FROM kv WHERE key='runtime.revision:settings'",
+                                [],
+                                |r| r.get::<_, String>(0),
+                            )
+                            .ok()
+                    });
+                    if revision != next {
                         break;
                     }
-                    std::thread::sleep(Duration::from_secs(1));
                 }
             }
         });
-        Self { stopped }
+        Self { stopped, signal }
     }
 }
 impl Drop for Background {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
+        self.signal.wake();
     }
 }
 

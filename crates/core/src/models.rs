@@ -796,6 +796,7 @@ pub enum DateRange {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Filter {
+    pub estimate_history: Option<String>,
     pub provider: Option<String>,
     pub source_id: Option<String>,
     pub account_id: Option<String>,

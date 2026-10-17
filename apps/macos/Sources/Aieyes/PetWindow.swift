@@ -18,50 +18,102 @@ struct PetScaleControl: View {
     }
 }
 
-@MainActor private enum PetSprites {
-    private final class Frames { let images: [CGImage]; init(_ images: [CGImage]) { self.images = images } }
-    private static let cache: NSCache<NSString, Frames> = { let cache = NSCache<NSString, Frames>(); cache.totalCostLimit = 48 * 1024 * 1024; cache.countLimit = 36; return cache }()
-    static func frames(for asset: ImportedPet?, row: Int) -> [CGImage] {
-        guard let asset, row >= 0, row < asset.rows else { return [] }
-        let key = (asset.spritePath + ":" + String(row)) as NSString
-        if let cached = cache.object(forKey: key) { return cached.images }
-        guard let image = NSImage(contentsOfFile: asset.spritePath),
-              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-              cg.width == asset.cellWidth * 8, cg.height == asset.cellHeight * asset.rows else { return [] }
-        let frames = (0..<8).compactMap {
-            cg.cropping(to: CGRect(x: $0 * asset.cellWidth, y: row * asset.cellHeight, width: asset.cellWidth, height: asset.cellHeight))
+private enum PetSprites {
+    private final class Atlas {
+        let image: CGImage, frames: [[CGImage]]
+        init(_ image: CGImage, asset: ImportedPet) {
+            self.image = image
+            frames = (0..<asset.rows).map { row in (0..<8).compactMap { image.cropping(to: CGRect(x: $0 * asset.cellWidth, y: row * asset.cellHeight, width: asset.cellWidth, height: asset.cellHeight)) } }
         }
-        cache.setObject(Frames(frames), forKey: key, cost: cg.bytesPerRow * cg.height)
-        return frames
+    }
+    private static func key(_ asset: ImportedPet) -> NSString { (asset.spritePath + ":" + asset.contentHash) as NSString }
+    static func cached(_ asset: ImportedPet, row: Int) -> [CGImage]? {
+        guard let value = cache.object(forKey: key(asset)), value.frames.indices.contains(row) else { return nil }; return value.frames[row]
+    }
+    private static let cache: NSCache<NSString, Atlas> = { let cache = NSCache<NSString, Atlas>(); cache.totalCostLimit = 48 * 1024 * 1024; cache.countLimit = 8; return cache }()
+    static let queue = DispatchQueue(label: "app.aieyes.pet.decode", qos: .utility)
+    static func frames(for asset: ImportedPet, row: Int) -> [CGImage] {
+        guard row >= 0, row < asset.rows else { return [] }
+        let key = key(asset)
+        let cg: CGImage
+        if let known = cache.object(forKey: key) { cg = known.image }
+        else {
+            guard let image = NSImage(contentsOfFile: asset.spritePath), let decoded = image.cgImage(forProposedRect: nil, context: nil, hints: nil), decoded.width == asset.cellWidth * 8, decoded.height == asset.cellHeight * asset.rows else { return [] }
+            cg = decoded; cache.setObject(Atlas(cg, asset: asset), forKey: key, cost: cg.bytesPerRow * cg.height)
+        }
+        return cached(asset, row: row) ?? (0..<8).compactMap { cg.cropping(to: CGRect(x: $0 * asset.cellWidth, y: row * asset.cellHeight, width: asset.cellWidth, height: asset.cellHeight)) }
     }
 }
-// The timer checks a monotonic timeline; only actual frame changes publish to SwiftUI.
-@MainActor final class PetAnimationClock: ObservableObject {
-    @Published private(set) var frame = 0
+@MainActor private final class PetFrameStore: ObservableObject {
+    @Published private(set) var images: [CGImage] = []
+    private var requested = ""
+    func load(_ asset: ImportedPet?, row: Int) {
+        let key = (asset?.contentHash ?? "") + ":" + String(row) + ":" + (asset?.spritePath ?? "")
+        guard key != requested else { return }; requested = key
+        guard let asset else { images = []; return }
+        if let known = PetSprites.cached(asset, row: row) { images = known; return }
+        PetSprites.queue.async { [weak self] in
+            let next = PetSprites.frames(for: asset, row: row)
+            DispatchQueue.main.async { [weak self] in guard let self, self.requested == key else { return }; if !next.isEmpty { self.images = next } }
+        }
+    }
+}
+// Discrete contents keyframes retain the original sprite pixels and exact variable durations.
+final class PetLayerImage: NSView {
+    private var images: [CGImage] = []
+    private var identity = "", imageIDs: [ObjectIdentifier] = []
     private var state = PetState.idle
-    private var start = ProcessInfo.processInfo.systemUptime
-    private var reduced = false
-    private var timer: Timer?
-    func configure(_ state: PetState, playing: Bool, reduced: Bool) {
-        if self.state.animationIdentity != state.animationIdentity { start = ProcessInfo.processInfo.systemUptime }
-        self.state = state; self.reduced = reduced
-        tick()
-        if playing && !reduced {
-            guard timer == nil else { return }
-            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.tick() }
-            }
-            timer.tolerance = 0.002
-            self.timer = timer
-            RunLoop.main.add(timer, forMode: .common)
-        } else { stop() }
+    private var requested = false, reduced = false
+    private var epoch = CACurrentMediaTime()
+    private var visibility: AnyCancellable?
+    private(set) var animationStarts = 0
+    override init(frame: NSRect) {
+        super.init(frame: frame); wantsLayer = true
+        layer?.contentsGravity = .resize; layer?.magnificationFilter = .linear; layer?.minificationFilter = .trilinear
     }
-    private func tick() {
-        let next = state.frame(elapsed: ProcessInfo.processInfo.systemUptime - start, reduced: reduced)
-        if next != frame { frame = next }
+    convenience init() { self.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow(); visibility = nil
+        if let window { visibility = NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: window).sink { [weak self] _ in self?.sync() } }
+        sync()
     }
-    func stop() { timer?.invalidate(); timer = nil }
-    deinit { timer?.invalidate() }
+    func configure(images: [CGImage], state: PetState, identity: String, playing: Bool, reduced: Bool) {
+        let ids = images.map(ObjectIdentifier.init)
+        if self.identity != identity || imageIDs != ids {
+            self.identity = identity; imageIDs = ids; self.images = images
+            epoch = CACurrentMediaTime(); layer?.removeAnimation(forKey: "pet.frames")
+            CATransaction.begin(); CATransaction.setDisableActions(true); layer?.contents = images.first; CATransaction.commit()
+        }
+        self.state = state; requested = playing; self.reduced = reduced; sync()
+    }
+    static func keyframes(images: [CGImage], durations: [Int]) -> CAKeyframeAnimation? {
+        guard !durations.isEmpty, images.count >= durations.count else { return nil }
+        let total = Double(durations.reduce(0,+))
+        guard total > 0 else { return nil }
+        let animation = CAKeyframeAnimation(keyPath: "contents")
+        animation.values = Array(images.prefix(durations.count)) + [images[0]]
+        var cumulative = 0.0
+        animation.keyTimes = [0] + durations.map { cumulative += Double($0); return NSNumber(value: cumulative / total) }
+        animation.duration = total / 1000; animation.calculationMode = .discrete
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+        animation.repeatCount = .infinity; animation.isRemovedOnCompletion = false
+        return animation
+    }
+    private func sync() {
+        let visible = window?.isVisible == true && window?.occlusionState.contains(.visible) == true
+        guard requested, !reduced, visible, let layer, let animation = Self.keyframes(images: images, durations: state.durations) else { stop(); return }
+        guard layer.animation(forKey: "pet.frames") == nil else { return }
+        animation.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) - (CACurrentMediaTime()-epoch).truncatingRemainder(dividingBy: animation.duration)
+        layer.add(animation, forKey: "pet.frames"); animationStarts += 1
+    }
+    func stop() { layer?.removeAnimation(forKey: "pet.frames") }
+}
+private struct PetLayerSprite: NSViewRepresentable {
+    let images: [CGImage], state: PetState, identity: String, playing: Bool, reduced: Bool
+    func makeNSView(context: Context) -> PetLayerImage { PetLayerImage() }
+    func updateNSView(_ view: PetLayerImage, context: Context) { view.configure(images: images, state: state, identity: identity, playing: playing, reduced: reduced) }
+    static func dismantleNSView(_ view: PetLayerImage, coordinator: ()) { view.stop() }
 }
 private struct PetSpriteView: View {
     let state: PetState
@@ -69,25 +121,21 @@ private struct PetSpriteView: View {
     let scale: Double
     let enabled: Bool
     @Environment(\.accessibilityReduceMotion) private var reduced
-    @StateObject private var clock = PetAnimationClock()
-    private func configure() { clock.configure(state, playing: enabled, reduced: reduced) }
+    @StateObject private var frames = PetFrameStore()
+    private func configure() { frames.load(asset, row: state.row) }
     var body: some View {
-        let frames = enabled ? PetSprites.frames(for: asset, row: state.row) : []
-        let index = clock.frame - state.row * 8
         Group {
-            if frames.indices.contains(index) {
-                Image(decorative: frames[index], scale: 1).resizable().interpolation(.high)
-            } else { Text("请导入桌宠").font(.system(size: 13 * scale)) }
+            if !frames.images.isEmpty {
+                PetLayerSprite(images: frames.images, state: state, identity: (asset?.contentHash ?? "") + ":" + state.animationIdentity, playing: enabled, reduced: reduced)
+            } else if asset == nil { Text("请导入桌宠").font(.system(size: 13 * scale)) } else { Color.clear }
         }.frame(width: 132 * scale, height: 143 * scale)
             .onAppear { configure() }
-            .onChange(of: state) { _, _ in configure() }
-            .onChange(of: enabled) { _, _ in configure() }
-            .onChange(of: reduced) { _, _ in configure() }
-            .onDisappear { clock.stop() }
+            .onChange(of: state.row) { _, _ in configure() }
+            .onChange(of: asset) { _, _ in configure() }
     }
 }
 private struct PetView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
     @ObservedObject var live: LiveSessionState
     init(model: AppModel) { self.model = model; live = model.live }
     @AppStorage("aieyes.pet.enabled") private var enabled = true
@@ -96,7 +144,7 @@ private struct PetView: View {
         let state = live.pet
         let scale = PetAppearance.scale(savedScale)
         VStack(spacing: 0) {
-            PetSpriteView(state: state, asset: model.importedPet, scale: scale, enabled: enabled)
+            PetSpriteView(state: state, asset: live.asset, scale: scale, enabled: enabled && live.petVisible && !live.suspended)
             Text(state.label).font(.system(size: 12 * scale, weight: .medium))
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 9 * scale).padding(.vertical, 3 * scale)
@@ -155,10 +203,12 @@ private final class PetHost: NSHostingView<PetView> {
 }
 @MainActor final class PetWindowController {
     private let panel: NSPanel
+    private weak var model: AppModel?
     var window: NSWindow { panel }
     private var subscriptions = Set<AnyCancellable>()
     private var stateHeight: CGFloat = 168
     init(model: AppModel, open: @escaping (NSView, Bool) -> Void) {
+        self.model = model
         UserDefaults.standard.register(defaults: ["aieyes.pet.enabled": true, "aieyes.pet.scale": 1.0])
         panel = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 144,height: 168), styleMask: [.borderless,.nonactivatingPanel], backing: .buffered, defer: false)
         panel.title="Aieyes 宠物"; panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
@@ -174,6 +224,9 @@ private final class PetHost: NSHostingView<PetView> {
             self.stateHeight = state.height
             self.resize()
         }.store(in: &subscriptions)
+        NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: panel).sink { [weak self, weak model] _ in
+            if let self { model?.live.petVisible = self.panel.isVisible && self.panel.occlusionState.contains(.visible) }
+        }.store(in: &subscriptions)
         Self.clamp(panel); sync()
         NotificationCenter.default.publisher(for:UserDefaults.didChangeNotification).sink { [weak self] _ in self?.sync() }.store(in:&subscriptions)
         NotificationCenter.default.publisher(for:NSApplication.didChangeScreenParametersNotification).sink { [weak self] _ in if let self { Self.clamp(self.panel) } }.store(in:&subscriptions)
@@ -188,7 +241,7 @@ private final class PetHost: NSHostingView<PetView> {
         panel.setFrame(frame, display: true)
         Self.clamp(panel)
     }
-    private func sync() { resize(); if UserDefaults.standard.bool(forKey:"aieyes.pet.enabled") { panel.orderFrontRegardless() } else { panel.orderOut(nil) } }
+    private func sync() { resize(); if UserDefaults.standard.bool(forKey:"aieyes.pet.enabled") { panel.orderFrontRegardless() } else { panel.orderOut(nil) }; model?.live.petVisible = panel.isVisible && panel.occlusionState.contains(.visible) }
     static func clamp(_ window: NSWindow, snap: Bool = false, preferredPoint: NSPoint? = nil) {
         window.setFrameOrigin(PetWindowGeometry.origin(frame: window.frame, areas: NSScreen.screens.map(\.visibleFrame), snap: snap, preferredPoint: preferredPoint))
     }

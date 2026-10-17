@@ -292,6 +292,14 @@ impl Store {
     }
     /// At most once: consume before handing to an OS, including denied/failed deliveries.
     pub fn take_reset_notifications(&self, since: i64) -> Result<Vec<ResetEvent>> {
+        let pending: bool = self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM quota_reset_notifications)",
+            [],
+            |r| r.get(0),
+        )?;
+        if !pending {
+            return Ok(Vec::new());
+        }
         let tx = self.write_transaction()?;
         let settings = self.settings()?;
         let mut events = Vec::new();

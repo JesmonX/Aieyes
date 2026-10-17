@@ -2,6 +2,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
 const fixture=require('./fixtures/browser-ui.cjs');
+require('node:child_process').execFileSync(process.env.PYTHON||(process.platform==='win32'?'python':'python3'),[path.join(__dirname,'test-estimate-display.py')],{cwd:path.resolve(__dirname,'..'),stdio:'inherit'});
 (async()=>{
  const root=path.resolve(__dirname,'../apps/desktop/web');
  const server=http.createServer((req,res)=>{if(require('./ui-test-helpers.cjs').serveFont(req,res))return;const file=path.join(root,path.basename(new URL(req.url,'http://test').pathname)||'index.html');try{res.setHeader('content-type',({'.js':'text/javascript','.html':'text/html','.css':'text/css'})[path.extname(file)]||'application/octet-stream');res.end(fs.readFileSync(file));}catch{res.writeHead(404);res.end();}});
@@ -110,6 +111,66 @@ const fixture=require('./fixtures/browser-ui.cjs');
    finally{renderSettings=original;window.__TAURI__.core.invoke=invoke;}
  });assert.equal(status.rebuilds,0);assert(status.retained);assert(status.queries>0);
  assert(status.focus);assert.equal(status.draft,'尚未保存的名称');assert.deepEqual(status.selection,[2,4]);
+ // Modern protocol: operation/revision deduplication and settings-specific invalidation.
+ const modern=await browser.newPage({viewport:{width:1120,height:800}});modern.on('pageerror',e=>errors.push(String(e)));await modern.addInitScript(fixture);
+ await modern.addInitScript(()=>{
+   const invoke=window.__TAURI__.core.invoke;
+   window.modernCalls=[];window.modernRevisions={settings:1,usage:1,quotas:1,estimates:1,prices:1,sources:1,accounts:1,pets:1,notifications:1};
+   window.__TAURI__.core.invoke=async(command,args)=>{
+     if(command!=='engine_call')return invoke(command,args);
+     window.modernCalls.push(structuredClone(args));
+     if(args.method==='hello')return {runtimeInvalidations:true};
+     if(args.method==='runtime.revisions')return structuredClone(window.modernRevisions);
+     if(args.method==='accounts.status.refreshBatch')return [];
+     if(args.method==='accounts.deployments.sync')return {failedTasks:[]};
+     if(args.method==='quotas.refresh'){
+       window.modernRevisions.quotas++;
+       const revisions=structuredClone(window.modernRevisions);
+       // A cross-process observer can publish first, before the operation's own event.
+       window.__listeners['runtime:changed']?.({payload:{revisions}});
+       await new Promise(r=>setTimeout(r,30));
+       window.__listeners['runtime:changed']?.({payload:{revisions,operationId:args.operationId}});
+       window.__listeners['desktop:invalidate']?.({payload:{method:args.method,operationId:args.operationId}});
+       window.__listeners['desktop:data-changed']?.({payload:args.method});
+       return [];
+     }
+     return invoke(command,args);
+   };
+ });
+ await modern.goto(`http://127.0.0.1:${server.address().port}`);await modern.evaluate(()=>AieyesApp.ready);
+ await modern.evaluate(async()=>{refreshStopped=true;clearTimeout(refreshTimer);__listeners['runtime:changed']({payload:{revisions:modernRevisions}});await new Promise(r=>setTimeout(r,350));});
+ const invalidations=await modern.evaluate(async()=>{
+   const pause=()=>new Promise(r=>setTimeout(r,350)),queries=()=>modernCalls.filter(c=>c.method==='dashboard').length;
+   let before=queries();await api('quotas.refresh');await loadDashboard();await pause();const own=queries()-before;
+   before=queries();const revisions={...modernRevisions,usage:++modernRevisions.usage};
+   __listeners['runtime:changed']({payload:{revisions,operationId:'external'}});
+   __listeners['desktop:invalidate']({payload:{method:'sources.scan',operationId:'external'}});
+   await pause();const external=queries()-before;
+   __listeners['runtime:changed']({payload:{revisions}});await pause();const duplicate=queries()-before-external;
+   before=queries();await loadDashboard();const unchanged=queries()-before;
+   return {own,external,duplicate,unchanged};
+ });assert.deepEqual(invalidations,{own:1,external:1,duplicate:0,unchanged:0});
+ const settingsChecks=await modern.evaluate(async()=>{
+   while(AieyesAgentSettings.statusBusy)await new Promise(r=>setTimeout(r,5));
+   let saved=structuredClone(state.settings);saved.accounts=[{id:'a',name:'Fixture',provider:'codex',quotaEnabled:false}];saved.sources=[{id:'s',name:'Fixture',provider:'codex',path:'/fixture/one',enabled:true}];saved.hosts=[];
+   window.fixtureSettings=structuredClone(saved);AieyesAgentSettings.accept(saved);await new Promise(r=>setTimeout(r,50));while(AieyesAgentSettings.statusBusy)await new Promise(r=>setTimeout(r,5));
+   let before=modernCalls.filter(c=>c.method==='accounts.status.refreshBatch').length;
+   saved=structuredClone(state.settings);saved.appearance={theme:'dark',accent:'teal'};saved.modelMappings={fixture:'fixture/model'};AieyesAgentSettings.accept(saved);
+   await new Promise(r=>setTimeout(r,50));const unrelated=modernCalls.filter(c=>c.method==='accounts.status.refreshBatch').length-before;
+   before=modernCalls.filter(c=>c.method==='accounts.status.refreshBatch').length;
+   saved=structuredClone(state.settings);saved.sources[0].path='/fixture/two';window.fixtureSettings=structuredClone(saved);AieyesAgentSettings.accept(saved);await new Promise(r=>setTimeout(r,50));while(AieyesAgentSettings.statusBusy)await new Promise(r=>setTimeout(r,5));
+   const changed=modernCalls.filter(c=>c.method==='accounts.status.refreshBatch').slice(before);
+   await AieyesAgentSettings.refreshStatuses(true);const explicit=modernCalls.filter(c=>c.method==='accounts.status.refreshBatch').at(-1);
+   return {unrelated,changed:changed.map(c=>c.params),explicit:explicit.params};
+ });assert.equal(settingsChecks.unrelated,0);assert.equal(settingsChecks.changed.length,1);assert.equal(settingsChecks.changed[0].dueOnly,true);assert.equal(settingsChecks.explicit.dueOnly,false);
+ const timezone=await modern.context().newCDPSession(modern);
+ await timezone.send('Emulation.setTimezoneOverride',{timezoneId:'UTC'});await modern.evaluate(()=>loadDashboard());
+ const timezoneBefore=await modern.evaluate(()=>({queries:modernCalls.filter(c=>c.method==='dashboard').length,date:new Date().toDateString()}));
+ await timezone.send('Emulation.setTimezoneOverride',{timezoneId:'Africa/Abidjan'});await modern.evaluate(()=>loadDashboard());
+ const timezoneAfter=await modern.evaluate(()=>({queries:modernCalls.filter(c=>c.method==='dashboard').length,date:new Date().toDateString()}));
+ assert.equal(timezoneBefore.date,timezoneAfter.date);assert.equal(timezoneAfter.queries,timezoneBefore.queries+1,'Timezone identity invalidates even on the same local day');
+ await modern.close();
+ console.log('Modern revisions: own quota 1 query, external operation 1 query, duplicates/cache hits 0; unrelated settings 0 device checks, changed contexts due-only, manual refresh forced');
  console.log('Catalog P95:',catalog.p95.toFixed(1)+' ms','mounted rows:',catalog.rows,'status requests:',status.queries,'full settings rebuilds:',status.rebuilds);
  assert.deepEqual(errors,[]);console.log('Scheduler resume after quota/save, latest-only dashboard queries, version deduplication, retained DOM, lazy 30×256 device rendering, scrolling and expansion persistence passed');
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

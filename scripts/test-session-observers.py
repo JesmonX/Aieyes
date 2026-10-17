@@ -62,6 +62,30 @@ class ObserverTests(unittest.TestCase):
                 self.assertEqual(row['steps'],[(0,14,3),(1,138,9)]);self.assertNotIn('SECRET',json.dumps(row))
                 with self.assertRaises(sqlite3.ProgrammingError):reader.execute('SELECT 1')
             finally:db.close()
+    def test_database_cache_skips_sqlite_and_invalidates_wal_and_replacements(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=pathlib.Path(temp)/'s.db';db=sqlite3.connect(path)
+            db.executescript("PRAGMA journal_mode=WAL;CREATE TABLE trajectory_meta(cascade_id TEXT);INSERT INTO trajectory_meta VALUES('s');CREATE TABLE steps(idx INTEGER,step_type INTEGER,status INTEGER);INSERT INTO steps VALUES(0,14,3);");db.commit()
+            first=m.read_db(path)
+            with patch.object(sqlite3,'connect',side_effect=AssertionError('Unchanged database reopened')):
+                cached=m.read_db(path,first)
+            self.assertIsNone(cached['steps']);self.assertTrue(cached['database']);self.assertFalse(cached['reset'])
+            db.execute('UPDATE steps SET status=9');db.commit();changed=m.read_db(path,cached)
+            self.assertEqual(changed['steps'][0][2],9);self.assertNotEqual(changed['signature'],cached['signature'])
+            db.close();replacement=pathlib.Path(temp)/'new.db';db=sqlite3.connect(replacement)
+            db.executescript("CREATE TABLE trajectory_meta(cascade_id TEXT);INSERT INTO trajectory_meta VALUES('replacement');CREATE TABLE steps(idx INTEGER,step_type INTEGER,status INTEGER);");db.commit();db.close();os.replace(replacement,path)
+            self.assertEqual(m.read_db(path,changed)['session'],'replacement')
+            # Old callers omit the capability and still receive complete steps each time.
+            source=dict(id='s',provider='antigravity',path=temp)
+            result=m.collect(source,{str(path):m.read_db(path)})
+            self.assertIsNotNone(result['files'][0]['steps'])
+    def test_failed_cached_database_read_preserves_a_degraded_placeholder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=pathlib.Path(temp)/'s.db';path.write_bytes(b'invalid sqlite')
+            cursor=dict(signature='db:previous',identity='old',modified=int(m.time.time()))
+            result=m.collect(dict(id='s',provider='antigravity',path=temp),{str(path):cursor},True)
+            self.assertTrue(result['error']);self.assertEqual(len(result['files']),1)
+            self.assertIsNone(result['files'][0]['steps']);self.assertFalse(result['files'][0]['reset'])
     def test_invalid_database_closes_reader(self):
         with tempfile.TemporaryDirectory() as temp:
             p=pathlib.Path(temp)/'invalid.db';sqlite3.connect(p).close()

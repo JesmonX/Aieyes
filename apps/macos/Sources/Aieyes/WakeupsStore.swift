@@ -41,6 +41,13 @@ struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: Str
         if let reader = taskEngines[id] { return reader }
         let reader = EngineClient(configurationOnly: true); taskEngines[id] = reader; return reader
     }
+    private func pruneReaders() {
+        let ids = Set(records.map(\.id))
+        for id in Array(taskEngines.keys) where !ids.contains(id) && !operating.contains(id) {
+            followTasks.removeValue(forKey: id)?.cancel(); statusTasks.removeValue(forKey: id)?.cancel()
+            taskEngines.removeValue(forKey: id)?.stop(); taskRevisions.removeValue(forKey: id)
+        }
+    }
     func load(refreshStatuses: Bool = true) async {
         listRevision += 1
         refreshAfterLoad = refreshAfterLoad || refreshStatuses
@@ -53,7 +60,7 @@ struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: Str
                 do {
                     let next: [WakeRecord] = try await listEngine.call("wakeups.list")
                     guard revision == listRevision else { continue }
-                    records = next; listError = nil
+                    records = next; listError = nil; pruneReaders()
                     let ids = Set(records.map(\.id))
                     statuses = statuses.filter { ids.contains($0.key) }
                     statusErrors = statusErrors.filter { ids.contains($0.key) }
@@ -102,7 +109,7 @@ struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: Str
     func save(_ task: WakeTask) async throws {
         let id = task.id.isEmpty ? "new" : task.id
         guard operating.insert(id).inserted else { throw ClientError.message("此任务正在操作，请稍候重试") }
-        defer { operating.remove(id) }
+        defer { operating.remove(id); pruneReaders() }
         let record: WakeRecord = try await reader(id).call("wakeups.save", params: ["task": task.parameters])
         listRevision += 1; taskRevisions[record.id, default: 0] += 1
         if let index = records.firstIndex(where: { $0.id == record.id }) { records[index] = record }
@@ -113,7 +120,7 @@ struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: Str
         guard operating.insert(id).inserted else { return }
         notices[id] = nil
         Task { @MainActor in
-            defer { operating.remove(id) }
+            defer { operating.remove(id); pruneReaders() }
             if action == "status" { await readStatus(id); return }
             do {
                 let _: Acknowledgement = try await reader(id).call("wakeups." + action, params: ["id": id])

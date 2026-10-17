@@ -63,20 +63,41 @@ pub(crate) fn codex_switched(store: &Store, source: &Source, operation: &Value) 
 }
 fn fingerprint(settings: &Settings, account: &Account, source: &Source) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    let mut source = source.clone();
-    if source.host_id.is_some() {
-        source.proxy = None;
-    }
+    let host = source
+        .host_id
+        .as_ref()
+        .and_then(|id| settings.hosts.iter().find(|h| &h.id == id));
+    let connection = host.map(|h| {
+        json!([
+            h.id,
+            h.target,
+            h.port,
+            h.username,
+            h.identity_file,
+            h.auth_mode,
+            h.password_ref,
+            h.shell,
+            h.pre_command,
+            h.enabled
+        ])
+    });
     json!([
-        source,
-        source.host_id.is_none().then_some(&settings.proxy),
+        source.id,
+        source.provider,
+        source.account_id,
+        source.path,
+        source.host_id,
+        source.machine_binding,
+        source.codex_home_id,
+        source.codex_binary,
+        source.agy_binary,
+        source.subscription,
+        (source.provider != "codex").then_some(&source.proxy),
+        (source.provider != "codex" && source.host_id.is_none()).then_some(&settings.proxy),
         account.identity_key,
         account.profile_refs(),
-        pre_command(settings, Some(account), &source),
-        source
-            .host_id
-            .as_ref()
-            .and_then(|id| settings.hosts.iter().find(|h| &h.id == id))
+        pre_command(settings, Some(account), source),
+        connection
     ])
     .to_string()
     .hash(&mut hash);
@@ -298,6 +319,199 @@ fn public_task(record: &crate::wakeups::Record) -> Value {
         "root":record.deployment.as_ref().map(|d| &d.root)})
 }
 impl Engine {
+    fn status_observation_key(
+        &self,
+        settings: &Settings,
+        account: &Account,
+        source: &Source,
+    ) -> Result<String> {
+        Ok(crate::models::hash(
+            &json!([
+                source.provider,
+                source.path,
+                source.codex_binary,
+                pre_command(settings, Some(account), source),
+                source.proxy,
+                settings.proxy,
+                source
+                    .host_id
+                    .as_ref()
+                    .and_then(|id| settings.hosts.iter().find(|h| &h.id == id)),
+                status_revision(&self.store, source)?
+            ])
+            .to_string(),
+        ))
+    }
+    pub(crate) fn refresh_account_status_batch(&mut self, params: &Value) -> Result<Value> {
+        use std::{
+            collections::{BTreeMap, VecDeque},
+            sync::{Mutex, mpsc},
+        };
+        let settings = self.store.settings()?;
+        let mut groups = BTreeMap::<String, Vec<(String, String)>>::new();
+        for source in settings.sources.iter().filter(|s| {
+            settings.source_enabled(s)
+                && params["sourceIds"]
+                    .as_array()
+                    .is_none_or(|ids| ids.iter().any(|id| id == &s.id))
+        }) {
+            for account in settings.accounts.iter().filter(|a| {
+                !a.archived
+                    && a.provider == source.provider
+                    && params["accountKeys"]
+                        .as_array()
+                        .is_none_or(|keys| keys.iter().any(|k| k == &key(a)))
+            }) {
+                if params["dueOnly"] == true
+                    && let Some(cached) = get(&self.store, &cache_key(account, source))?
+                    && cached["fingerprint"] == fingerprint(&settings, account, source)
+                    && cached["authRevision"] == status_revision(&self.store, source)?
+                    && let Some(at) = cached["attemptedAt"]
+                        .as_i64()
+                        .or_else(|| cached["checkedAt"].as_i64())
+                    && now() >= at
+                    && now() - at
+                        < account
+                            .quota_refresh_seconds
+                            .unwrap_or(settings.refresh_seconds)
+                            .max(300) as i64
+                {
+                    continue;
+                }
+                groups
+                    .entry(self.status_observation_key(&settings, account, source)?)
+                    .or_default()
+                    .push((key(account), source.id.clone()));
+            }
+        }
+        let jobs = Mutex::new(VecDeque::from_iter(groups));
+        let count = jobs.lock().unwrap().len().min(3);
+        let root = self.store.root.clone();
+        let context = crate::operations::context();
+        let (tx, rx) = mpsc::channel();
+        let mut all = Vec::new();
+        let mut errors = Vec::new();
+        #[cfg(test)]
+        let reads = &self.status_observation_reads;
+        std::thread::scope(|scope| {
+            for _ in 0..count {
+                let (jobs, tx, root, context) = (&jobs, tx.clone(), &root, context.clone());
+                scope.spawn(move || {
+                    let _operation = crate::operations::inherit(context);
+                    let mut worker = match Engine::open(root) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let _ = tx.send(Err(e.to_string()));
+                            return;
+                        }
+                    };
+                    worker.status_observations = Some(Default::default());
+                    #[cfg(test)]
+                    {
+                        worker.status_observation_reads = reads.clone();
+                    }
+                    loop {
+                        let job = { jobs.lock().unwrap().pop_front() };
+                        let Some((observation, pairs)) = job else {
+                            break;
+                        };
+                        if crate::operations::check().is_err() {
+                            break;
+                        }
+                        let path = root.join(format!("account-observation-{observation}.lock"));
+                        let started = std::time::Instant::now();
+                        let lock = loop {
+                            match crate::quota_queries::try_lock(&path) {
+                                Ok(Some(lock)) => break Some(lock),
+                                Ok(None) if params["dueOnly"] == true => break None,
+                                Ok(None) => {
+                                    if crate::operations::check().is_err()
+                                        || started.elapsed().as_secs() >= 120
+                                    {
+                                        let _ =
+                                            tx.send(Err("设备状态检查仍在进行，请稍后重试".into()));
+                                        break None;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(50));
+                                }
+                                Err(error) => {
+                                    let _ = tx.send(Err(error.to_string()));
+                                    break None;
+                                }
+                            }
+                        };
+                        let Some(lock) = lock else {
+                            continue;
+                        };
+                        for (account, source) in pairs {
+                            // Recheck due state after the cross-process observation lock.
+                            if params["dueOnly"] == true {
+                                let fresh = worker.store.settings().ok();
+                                if let Some(s) = fresh.as_ref()
+                                    && let Some(a) = s.accounts.iter().find(|a| key(a) == account)
+                                    && let Some(src) = s.sources.iter().find(|s| s.id == source)
+                                    && let Ok(Some(row)) = get(&worker.store, &cache_key(a, src))
+                                    && row["fingerprint"] == fingerprint(s, a, src)
+                                    && row["authRevision"]
+                                        == status_revision(&worker.store, src)
+                                            .unwrap_or(Value::Null)
+                                    && let Some(at) = row["attemptedAt"]
+                                        .as_i64()
+                                        .or_else(|| row["checkedAt"].as_i64())
+                                    && now() >= at
+                                    && now() - at
+                                        < a.quota_refresh_seconds
+                                            .unwrap_or(s.refresh_seconds)
+                                            .max(300)
+                                            as i64
+                                {
+                                    continue;
+                                }
+                            }
+                            let result = worker
+                                .account_call(
+                                    "accounts.status.refresh",
+                                    json!({"accountKey":account,"sourceId":source}),
+                                )
+                                .map_err(|e| e.to_string());
+                            if tx.send(result).is_err() {
+                                return;
+                            }
+                        }
+                        drop(lock);
+                        worker
+                            .status_observations
+                            .as_ref()
+                            .unwrap()
+                            .borrow_mut()
+                            .clear();
+                    }
+                });
+            }
+            drop(tx);
+            for result in rx {
+                match result {
+                    Ok(row) => {
+                        if let Some(progress) = &mut self.progress {
+                            progress(json!({"kind":"accounts.status.refresh","row":row}));
+                        }
+                        all.push(row);
+                    }
+                    Err(error) => {
+                        errors.push(error);
+                    }
+                }
+            }
+        });
+        crate::operations::check()?;
+        if all.is_empty() && !errors.is_empty() {
+            anyhow::bail!(
+                "设备状态检查未完成：{}",
+                errors.into_iter().take(3).collect::<Vec<_>>().join("；")
+            );
+        }
+        Ok(json!(all))
+    }
     pub(crate) fn account_call(&mut self, method: &str, params: Value) -> Result<Value> {
         if method == "accounts.cleanup.list" {
             let mut stmt = self
@@ -496,12 +710,33 @@ impl Engine {
             return crate::agy_auth::inspect(source, settings);
         }
         if source.provider == "codex" {
-            let info = crate::codex_auth::backend(
-                source,
-                settings,
-                "status",
-                &json!({"accountId":account.id}),
-            )?;
+            let observation = self.status_observation_key(settings, account, source)?;
+            let cached = self
+                .status_observations
+                .as_ref()
+                .and_then(|cache| cache.borrow().get(&observation).cloned());
+            let info = if let Some(value) = cached {
+                value
+            } else {
+                #[cfg(test)]
+                if let Some(reads) = &self.status_observation_reads {
+                    reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                let value = crate::codex_auth::backend(
+                    source,
+                    settings,
+                    "status",
+                    &json!({"accountId":account.id}),
+                )
+                .unwrap_or_else(|e| json!({"_statusError":format!("{e:#}")}));
+                if let Some(cache) = &self.status_observations {
+                    cache.borrow_mut().insert(observation, value.clone());
+                }
+                value
+            };
+            if let Some(error) = info["_statusError"].as_str() {
+                anyhow::bail!("{error}");
+            }
             if info["storageMode"] != "file" {
                 return Ok(
                     json!({"current":null,"credential":null,"checkedAt":now(),"note":"认证存储不支持状态识别"}),
@@ -1093,6 +1328,95 @@ mod tests {
         settings.sources.push(next);
         settings.migrate();
         assert_eq!(settings.accounts[0].device_settings.len(), 1);
+    }
+    #[test]
+    fn batch_projects_one_context_keeps_identity_and_only_rechecks_due_or_changed_devices() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let (dir, mut e) = fixture();
+        let canonical = std::fs::canonicalize(dir.path()).unwrap();
+        let mut settings = e.store.settings().unwrap();
+        settings.accounts=(0..10).map(|i| {
+            let token=URL_SAFE_NO_PAD.encode(json!({"https://api.openai.com/auth":{"chatgpt_user_id":format!("user{i}"),"chatgpt_account_id":"workspace"}}).to_string());
+            let auth=json!({"auth_mode":"chatgpt","tokens":{"access_token":format!("head.{token}.tail"),"refresh_token":"FIXTURE","account_id":"workspace"}});
+            crate::codex_auth::files::save_profile(&canonical,&format!("p{i}"),"Fixture",&auth).unwrap();
+            if i==0 { crate::codex_auth::files::atomic(&canonical.join("auth.json"),&auth).unwrap(); }
+            Account{id:format!("a{i}"),name:format!("Account {i}"),identity_key:Some(crate::codex_auth::files::identity(&auth).unwrap().key),quota_profile_id:Some(format!("home0:p{i}")),quota_refresh_seconds:Some(if i==0 {900}else{60}),..Default::default()}
+        }).collect();
+        settings.sources = (0..30)
+            .map(|i| Source {
+                id: format!("s{i}"),
+                path: canonical.to_string_lossy().into(),
+                codex_home_id: Some(format!("home{i}")),
+                ..Default::default()
+            })
+            .collect();
+        e.store.save_auth_settings(&settings).unwrap();
+        let reads = Arc::new(AtomicUsize::new(0));
+        e.status_observation_reads = Some(reads.clone());
+        let rows = e.refresh_account_status_batch(&json!({})).unwrap();
+        assert_eq!(rows.as_array().unwrap().len(), 300);
+        assert_eq!(reads.swap(0, Ordering::Relaxed), 1);
+        assert_eq!(
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .filter(|r| r["current"] == true)
+                .count(),
+            30
+        );
+        assert!(
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["credential"] == true)
+        );
+        assert!(!rows.to_string().contains("FIXTURE"));
+        assert_eq!(
+            e.refresh_account_status_batch(&json!({"dueOnly":true}))
+                .unwrap(),
+            json!([])
+        );
+        settings.menu_metric = "cost".into();
+        e.store.save_settings(&settings).unwrap();
+        assert_eq!(
+            e.refresh_account_status_batch(&json!({"dueOnly":true}))
+                .unwrap(),
+            json!([])
+        );
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
+        e.store.db.execute("UPDATE kv SET value=json_set(value,'$.attemptedAt',?1) WHERE key LIKE 'account-status:%'",[now()-500]).unwrap();
+        let due = e
+            .refresh_account_status_batch(&json!({"dueOnly":true}))
+            .unwrap();
+        assert_eq!(due.as_array().unwrap().len(), 270);
+        assert_eq!(reads.swap(0, Ordering::Relaxed), 1);
+        settings.sources[1].quota_pre_command = "export CHANGED_CONTEXT=1".into();
+        e.store.save_settings(&settings).unwrap();
+        let changed = e
+            .refresh_account_status_batch(&json!({"dueOnly":true}))
+            .unwrap();
+        assert_eq!(changed.as_array().unwrap().len(), 10);
+        assert_eq!(reads.swap(0, Ordering::Relaxed), 1);
+        let a = &settings.accounts[0];
+        let one = e
+            .status_observation_key(&settings, a, &settings.sources[0])
+            .unwrap();
+        let mut alternate = a.clone();
+        alternate.device_settings.push(AccountDeviceSettings {
+            machine_id: "local".into(),
+            pre_command: "export DIFFERENT_CONTEXT=1".into(),
+            ..Default::default()
+        });
+        assert_ne!(
+            one,
+            e.status_observation_key(&settings, &alternate, &settings.sources[0])
+                .unwrap(),
+            "Different precommands must never share an observation"
+        );
     }
     #[test]
     fn lightweight_status_distinguishes_current_from_stored_and_invalidates_old_config() {

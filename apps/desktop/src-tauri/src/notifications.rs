@@ -115,8 +115,13 @@ pub fn notifications_info(app: tauri::AppHandle) -> Value {
 }
 #[tauri::command]
 pub fn notifications_test(app: tauri::AppHandle) -> Result<(), String> {
-    let result = request(&app)
-        .and_then(|_| send(&app, "Aieyes 测试通知", "收到此通知表示系统通知可正常显示。"));
+    let result = request(&app).and_then(|_| {
+        send(
+            &app,
+            "Aieyes 测试通知",
+            "收到此通知表示系统通知可正常显示。",
+        )
+    });
     *app.state::<Notifications>().error.lock().unwrap() = result.as_ref().err().cloned();
     let _ = app.emit("desktop:notifications", ());
     result
@@ -135,39 +140,88 @@ pub fn start(app: &tauri::AppHandle, root: &Path) {
         let root = root.to_owned();
         let stop = stop.clone();
         std::thread::spawn(move || {
+            let signal = aieyes_core::runtime::signal(&root);
             let mut engine = None;
             let mut poller = Poller::default();
             let mut asked = false;
+            let mut published = Value::Null;
+            let mut account_check = 0;
+            let account_check_busy = Arc::new(AtomicBool::new(false));
             while !stop.load(Ordering::Acquire) {
+                let generation = signal.generation();
+                let mut wait = Duration::from_secs(5);
                 if engine.is_none() {
                     engine = Engine::open(&root).ok();
                 }
                 if let Some(engine) = engine.as_mut() {
-                    if polling && aieyes_core::operations::status()["preparing"] != true {
-                        if let Ok(Some(params)) = poller.next(engine) {
-                            let handle = app.clone();
-                            let result = engine
-                                .call_with_progress(
-                                    "quotas.refresh",
-                                    params,
-                                    Box::new(move |p| {
-                                        if p["kind"] == "quotas.refresh" {
-                                            let _ = handle
-                                                .emit("desktop:quotas", json!([p["row"].clone()]));
-                                        }
-                                    }),
-                                )
-                                .map_err(|e| e.to_string());
-                            if let Some(feedback) =
-                                super::refresh_feedback("quotas.refresh", &result, None)
-                            {
-                                let _ = app.emit("desktop:refresh-status", feedback);
+                    if !polling {
+                        if let Ok(revisions) = aieyes_core::runtime::revisions(&engine.store.db) {
+                            if revisions != published {
+                                if revisions["settings"] != published["settings"] {
+                                    account_check = 0;
+                                }
+                                published = revisions.clone();
+                                let _ = app.emit("runtime:changed", json!({"revisions":revisions}));
                             }
-                            if result
-                                .as_ref()
-                                .is_ok_and(|r| r.as_array().is_some_and(|r| !r.is_empty()))
-                            {
-                                let _ = app.emit("desktop:data-changed", "quotas.refresh");
+                        }
+                        if (now() < account_check || now() - account_check >= 300)
+                            && aieyes_core::operations::status()["preparing"] != true
+                            && !account_check_busy.swap(true, Ordering::AcqRel)
+                        {
+                            account_check = now();
+                            // Device reads have their own lane; never delay notification delivery.
+                            let root = root.clone();
+                            let app = app.clone();
+                            let busy = account_check_busy.clone();
+                            let stopped = stop.clone();
+                            std::thread::spawn(move || {
+                                if !stopped.load(Ordering::Acquire)
+                                    && let Ok(mut reader) = Engine::open(&root)
+                                {
+                                    let _ = reader.call(
+                                        "accounts.status.refreshBatch",
+                                        json!({"dueOnly":true}),
+                                    );
+                                    if !stopped.load(Ordering::Acquire) {
+                                        let _ = app.emit("runtime:changed", json!({"revisions":aieyes_core::runtime::revisions(&reader.store.db).unwrap_or_default()}));
+                                    }
+                                }
+                                busy.store(false, Ordering::Release);
+                            });
+                        }
+                    }
+                    if polling && aieyes_core::operations::status()["preparing"] != true {
+                        if let Ok(plan) = poller.wait_plan(engine) {
+                            if let Some(next) = plan.next_wake {
+                                wait = Duration::from_secs((next - now()).clamp(1, 5) as u64);
+                            }
+                            if let Some(params) = plan.query {
+                                let handle = app.clone();
+                                let result = engine
+                                    .call_with_progress(
+                                        "quotas.refresh",
+                                        params,
+                                        Box::new(move |p| {
+                                            if p["kind"] == "quotas.refresh" {
+                                                let _ = handle.emit(
+                                                    "desktop:quotas",
+                                                    json!([p["row"].clone()]),
+                                                );
+                                            }
+                                        }),
+                                    )
+                                    .map_err(|e| e.to_string());
+                                if let Some(feedback) =
+                                    super::refresh_feedback("quotas.refresh", &result, None)
+                                {
+                                    let _ = app.emit("desktop:refresh-status", feedback);
+                                }
+                                if result
+                                    .as_ref()
+                                    .is_ok_and(|r| r.as_array().is_some_and(|r| !r.is_empty()))
+                                {
+                                    let _ = app.emit("desktop:data-changed", "quotas.refresh");
+                                }
                             }
                         }
                     } else if !polling {
@@ -200,11 +254,8 @@ pub fn start(app: &tauri::AppHandle, root: &Path) {
                         }
                     }
                 }
-                for _ in 0..if polling { 1 } else { 5 } {
-                    if stop.load(Ordering::Acquire) {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_secs(1));
+                if !stop.load(Ordering::Acquire) {
+                    signal.wait(generation, wait);
                 }
             }
         });

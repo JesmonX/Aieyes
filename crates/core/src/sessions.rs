@@ -218,7 +218,7 @@ impl Snapshot {
         self.unavailable |= self.sources.iter().any(|s| s.state != "healthy");
     }
 }
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Clone)]
 #[serde(default, rename_all = "camelCase")]
 struct FileBatch {
     key: String,
@@ -233,6 +233,7 @@ struct FileBatch {
     session: String,
     steps: Option<Vec<(i64, i64, i64)>>,
     alive: Option<bool>,
+    database: bool,
 }
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -250,16 +251,82 @@ struct Cursor {
     modified: u64,
     activity: Activity,
 }
+// FSEvents registration/teardown can wait for its run loop. Keep both off the session lane.
+struct DirectoryWatch {
+    state: std::sync::Arc<std::sync::atomic::AtomicU8>, // 0 starting, 1 active, 2 failed
+    stop: mpsc::Sender<()>,
+    changes: mpsc::Receiver<notify::Result<notify::Event>>,
+    overflow: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl DirectoryWatch {
+    fn new(path: PathBuf) -> Self {
+        use notify::Watcher;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicU8, Ordering},
+        };
+        let (tx, changes) = mpsc::sync_channel(256);
+        let (stop, stopped) = mpsc::channel();
+        let state = Arc::new(AtomicU8::new(0));
+        let active = state.clone();
+        let overflow = Arc::new(AtomicBool::new(false));
+        let dropped = overflow.clone();
+        let registered = overflow.clone();
+        std::thread::spawn(move || {
+            let watcher = if local_event_filesystem(&path) {
+                notify::recommended_watcher(move |event| {
+                    if tx.try_send(event).is_err() {
+                        dropped.store(true, Ordering::Release);
+                    }
+                })
+                .ok()
+            } else {
+                None
+            };
+            if let Some(mut watcher) = watcher
+                && watcher
+                    .watch(&path, notify::RecursiveMode::Recursive)
+                    .is_ok()
+            {
+                active.store(1, Ordering::Release);
+                registered.store(true, Ordering::Release);
+                let _ = stopped.recv();
+            } else {
+                active.store(2, Ordering::Release);
+            }
+        });
+        Self {
+            state,
+            stop,
+            changes,
+            overflow,
+        }
+    }
+    fn active(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::Acquire) == 1
+    }
+}
+impl Drop for DirectoryWatch {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+    }
+}
 struct Discovery {
     at: u64,
+    real_at: Instant,
     paths: Vec<(PathBuf, bool)>,
     error: Option<String>,
+    watch: DirectoryWatch,
 }
 #[derive(Default)]
 struct Reader {
     cursors: HashMap<String, Cursor>,
     discovery: HashMap<String, Discovery>,
     hooks: HashMap<String, (Instant, session_hooks::HookStatus)>,
+    databases: HashMap<PathBuf, (String, FileBatch)>,
+    #[cfg(test)]
+    database_reads: usize,
+    processes: HashMap<(u32, u64), bool>,
 }
 fn seconds(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
@@ -305,7 +372,7 @@ impl Reader {
                     .to_string_lossy()
                     .into_owned();
             }
-            let database = f.steps.is_some();
+            let database = f.database || f.steps.is_some();
             if let Some(steps) = f.steps {
                 let (phase, turn) = session_events::agy_steps(&steps);
                 cursor.activity.phase = phase;
@@ -329,10 +396,14 @@ impl Reader {
             };
             let elapsed = remote_now.saturating_sub(f.modified);
             let alive = if source.host_id.is_none() && cursor.activity.pid > 0 {
-                Some(process_alive(
-                    cursor.activity.pid,
-                    cursor.activity.process_start,
-                ))
+                Some(
+                    *self
+                        .processes
+                        .entry((cursor.activity.pid, cursor.activity.process_start))
+                        .or_insert_with(|| {
+                            process_alive(cursor.activity.pid, cursor.activity.process_start)
+                        }),
+                )
             } else {
                 f.alive
             };
@@ -395,6 +466,12 @@ impl Reader {
         out
     }
     fn local(&mut self, sources: &[Source], now: u64) -> Snapshot {
+        self.processes.clear();
+        let keys: HashSet<_> = sources
+            .iter()
+            .map(|s| format!("{}:{}", s.provider, s.path))
+            .collect();
+        self.discovery.retain(|key, _| keys.contains(key));
         let mut out = Snapshot::default();
         for source in sources {
             let hook = if matches!(source.provider.as_str(), "claude" | "antigravity") {
@@ -418,16 +495,82 @@ impl Reader {
             out.sessions.extend(snapshot.sessions);
             out.sources.extend(snapshot.sources);
         }
+        let retained: HashSet<_> = self
+            .discovery
+            .values()
+            .flat_map(|d| d.paths.iter().map(|(p, _)| p.clone()))
+            .collect();
+        self.databases.retain(|path, _| retained.contains(path));
+        self.cursors
+            .retain(|path, _| retained.contains(Path::new(path)));
         out
     }
     fn collect_local(&mut self, source: &Source, now: u64) -> SourceBatch {
+        use std::sync::atomic::Ordering;
         let key = format!("{}:{}", source.provider, source.path);
-        if self
-            .discovery
-            .get(&key)
-            .is_none_or(|d| now.saturating_sub(d.at) >= 5)
-        {
+        let mut lost = false;
+        if let Some(discovery) = self.discovery.get_mut(&key) {
+            lost = discovery.watch.overflow.swap(false, Ordering::AcqRel);
+            while let Ok(event) = discovery.watch.changes.try_recv() {
+                match event {
+                    Ok(event) => {
+                        if matches!(event.kind, notify::EventKind::Access(_)) {
+                            continue;
+                        }
+                        if event.need_rescan() {
+                            lost = true;
+                        }
+                        for mut path in event.paths {
+                            if path.is_dir() {
+                                lost = true;
+                                continue;
+                            }
+                            if source.provider == "antigravity"
+                                && path.to_string_lossy().ends_with("-wal")
+                            {
+                                path =
+                                    PathBuf::from(path.to_string_lossy().trim_end_matches("-wal"));
+                            }
+                            let event_root = session_hooks::event_root(source);
+                            let hook = path
+                                .starts_with(fs::canonicalize(&event_root).unwrap_or(event_root));
+                            let extension = if !hook && source.provider == "antigravity" {
+                                "db"
+                            } else {
+                                "jsonl"
+                            };
+                            if path.extension().is_none_or(|e| e != extension)
+                                || !hook && path.components().any(|c| c.as_os_str() == ".aieyes")
+                            {
+                                continue;
+                            }
+                            discovery.paths.retain(|(p, _)| p != &path);
+                            if path.is_file() && now.saturating_sub(modified(&path)) < 86400 {
+                                discovery.paths.push((path, hook));
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        lost = true;
+                        discovery.watch.state.store(2, Ordering::Release);
+                    }
+                }
+            }
+            discovery
+                .paths
+                .retain(|(p, _)| now.saturating_sub(modified(p)) < 86400);
+            discovery
+                .paths
+                .sort_by_key(|(p, _)| std::cmp::Reverse(modified(p)));
+            discovery.paths.truncate(256);
+        }
+        if self.discovery.get(&key).is_none_or(|d| {
+            lost || now < d.at
+                || now.saturating_sub(d.at) > d.real_at.elapsed().as_secs() + 2
+                || now.saturating_sub(d.at) >= if d.watch.active() { 60 } else { 5 }
+        }) {
             let root = expand(&source.path);
+            let root = fs::canonicalize(&root).unwrap_or(root);
             let mut paths = Vec::new();
             let mut error = None;
             if !root.exists() {
@@ -445,6 +588,13 @@ impl Reader {
                     roots.push((events, true));
                 }
             }
+            // Reconciliation reuses the watcher; a failed backend retries on the five-second fallback.
+            let watch = self
+                .discovery
+                .remove(&key)
+                .map(|d| d.watch)
+                .filter(|w| w.state.load(Ordering::Acquire) != 2)
+                .unwrap_or_else(|| DirectoryWatch::new(expand(&source.path)));
             for (root, hook) in roots {
                 for entry in walkdir::WalkDir::new(root)
                     .max_depth(12)
@@ -484,8 +634,10 @@ impl Reader {
                 key.clone(),
                 Discovery {
                     at: now,
+                    real_at: Instant::now(),
                     paths,
                     error,
+                    watch,
                 },
             );
         }
@@ -498,14 +650,46 @@ impl Reader {
         for (path, hook) in paths {
             let name = path.to_string_lossy().into_owned();
             let result = if !hook && source.provider == "antigravity" {
-                read_db(path)
+                let before = database_fingerprint(path);
+                if let Some((known, cached)) = self
+                    .databases
+                    .get(path)
+                    .filter(|(known, _)| *known == before)
+                {
+                    let _ = known;
+                    Ok(cached.clone())
+                } else {
+                    #[cfg(test)]
+                    {
+                        self.database_reads += 1;
+                    }
+                    read_db(path).and_then(|row| {
+                        anyhow::ensure!(
+                            before == database_fingerprint(path),
+                            "会话数据库读取期间发生变化，将重试"
+                        );
+                        let mut cached = row.clone();
+                        cached.steps = None;
+                        cached.reset = false;
+                        self.databases.insert(path.clone(), (before, cached));
+                        Ok(row)
+                    })
+                }
             } else {
                 read_file(path, &source.provider, *hook, self.cursors.get(&name))
                     .map_err(anyhow::Error::from)
             };
             match result {
                 Ok(f) => batch.files.push(f),
-                Err(e) => batch.error = Some(e.to_string()),
+                Err(e) => {
+                    if !hook
+                        && source.provider == "antigravity"
+                        && let Some((_, cached)) = self.databases.get(path)
+                    {
+                        batch.files.push(cached.clone());
+                    }
+                    batch.error = Some(e.to_string());
+                }
             }
         }
         batch
@@ -650,8 +834,77 @@ fn read_db(path: &Path) -> anyhow::Result<FileBatch> {
         session,
         steps: Some(steps),
         reset: true,
+        database: true,
         ..Default::default()
     })
+}
+fn database_fingerprint(path: &Path) -> String {
+    [
+        path.to_owned(),
+        PathBuf::from(format!("{}-wal", path.display())),
+    ]
+    .iter()
+    .map(|p| {
+        fs::metadata(p)
+            .map(|m| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    format!(
+                        "{}:{:?}:{}:{}:{}:{}",
+                        m.len(),
+                        m.modified(),
+                        m.dev(),
+                        m.ino(),
+                        m.ctime(),
+                        m.ctime_nsec()
+                    )
+                }
+                #[cfg(not(unix))]
+                {
+                    format!("{}:{:?}:{:?}", m.len(), m.modified(), m.created())
+                }
+            })
+            .unwrap_or_default()
+    })
+    .collect::<Vec<_>>()
+    .join("|")
+}
+fn local_event_filesystem(path: &Path) -> bool {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        let mut info = std::mem::MaybeUninit::<libc::statfs>::uninit();
+        // statfs initializes the output on success; the path CString outlives this call.
+        if unsafe { libc::statfs(path.as_ptr(), info.as_mut_ptr()) } != 0 {
+            return false;
+        }
+        let info = unsafe { info.assume_init() };
+        #[cfg(target_os = "macos")]
+        {
+            let kind = unsafe { std::ffi::CStr::from_ptr(info.f_fstypename.as_ptr()) }.to_bytes();
+            matches!(kind, b"apfs" | b"hfs" | b"msdos" | b"exfat" | b"tmpfs")
+        }
+        #[cfg(target_os = "linux")]
+        {
+            matches!(
+                info.f_type as u64,
+                0xef53 | 0x9123683e | 0x1021994 | 0x58465342 | 0x794c7630
+            )
+        }
+    }
+    #[cfg(windows)]
+    {
+        !path.to_string_lossy().starts_with("\\\\")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = path;
+        false
+    }
 }
 struct RemoteWorker {
     key: String,
@@ -781,14 +1034,16 @@ impl SessionMonitor {
                 worker.pending = Some(rx);
                 std::thread::spawn(move || {
                     let result=(||->anyhow::Result<Snapshot>{
-                        let value=crate::ssh::session_request(&host,json!({"action":"collect","sources":sources.iter().map(wire_source).collect::<Vec<_>>(),"cursors":reader.manifest()}))?;
+                        let value=crate::ssh::session_request(&host,json!({"action":"collect","databaseCache":true,"sources":sources.iter().map(wire_source).collect::<Vec<_>>(),"cursors":reader.manifest()}))?;
                         let remote_now=value["now"].as_u64().unwrap_or(now);let observed=seconds(SystemTime::now());
                         let mut snapshot=Snapshot::default();let polls:Vec<SourceBatch>=serde_json::from_value(value["polls"].clone())?;
+                        let complete=polls.len()==sources.len() && polls.iter().all(|p|p.error.is_none());
+                        let retained:HashSet<_>=polls.iter().flat_map(|p|p.files.iter().map(|f|f.key.clone())).collect();
                         for batch in polls {if let Some(source)=sources.iter().find(|s|s.id==batch.source_id) {
                             let hook=value["hooks"].as_array().and_then(|rows|rows.iter().find(|v|v["sourceId"]==source.id)).and_then(|v|v["state"].as_str()).map(String::from);
                             let state=reader.consume(source,batch,observed,remote_now,&host.name,hook);
                             snapshot.sessions.extend(state.sessions);snapshot.sources.extend(state.sources);
-                        }}snapshot.finish();Ok(snapshot)
+                        }}if complete { reader.cursors.retain(|key,_|retained.contains(key)); }snapshot.finish();Ok(snapshot)
                     })().map_err(|e|format!("{e:#}"));
                     let _ = tx.send((reader, result));
                 });
@@ -989,6 +1244,138 @@ mod adapter_tests {
     fn hooks_only(root: &Path) {
         fs::create_dir_all(root.join(".aieyes/session-events")).unwrap();
         fs::write(root.join(".aieyes/session-hooks-disabled"), b"disabled").unwrap();
+    }
+    #[test]
+    fn unchanged_database_is_not_reopened_and_wal_and_replacement_invalidate() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("conversations");
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("a.db");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("PRAGMA journal_mode=WAL;CREATE TABLE trajectory_meta(cascade_id TEXT);INSERT INTO trajectory_meta VALUES('a');CREATE TABLE steps(idx INTEGER,step_type INTEGER,status INTEGER,step_payload TEXT);INSERT INTO steps VALUES(0,14,3,'');").unwrap();
+        let source = source(temp.path(), "antigravity");
+        let mut reader = Reader::default();
+        let at = seconds(SystemTime::now());
+        assert_eq!(reader.collect_local(&source, at).files.len(), 1);
+        assert_eq!(reader.database_reads, 1);
+        for offset in 0..10 {
+            assert_eq!(reader.collect_local(&source, at + offset).files.len(), 1);
+        }
+        assert_eq!(
+            reader.database_reads, 1,
+            "No-change rounds must not reopen the database"
+        );
+        db.execute("INSERT INTO steps VALUES(1,21,9,'')", [])
+            .unwrap();
+        assert!(
+            reader.collect_local(&source, at + 10).files[0]
+                .steps
+                .is_some()
+        );
+        assert_eq!(reader.database_reads, 2);
+        drop(db);
+        let replacement = dir.join("new.db");
+        let db = rusqlite::Connection::open(&replacement).unwrap();
+        db.execute_batch("CREATE TABLE trajectory_meta(cascade_id TEXT);INSERT INTO trajectory_meta VALUES('b');CREATE TABLE steps(idx INTEGER,step_type INTEGER,status INTEGER,step_payload TEXT);").unwrap();
+        drop(db);
+        fs::rename(replacement, &path).unwrap();
+        reader.collect_local(&source, at + 11);
+        assert_eq!(reader.database_reads, 3);
+    }
+    #[test]
+    fn failed_database_refresh_keeps_last_successful_activity_with_degraded_health() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("conversations");
+        fs::create_dir(&dir).unwrap();
+        hooks_only(temp.path());
+        let path = dir.join("a.db");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE trajectory_meta(cascade_id TEXT);INSERT INTO trajectory_meta VALUES('a');CREATE TABLE steps(idx INTEGER,step_type INTEGER,status INTEGER);INSERT INTO steps VALUES(0,14,3);").unwrap();
+        drop(db);
+        let source = source(temp.path(), "antigravity");
+        let mut reader = Reader::default();
+        let at = seconds(SystemTime::now());
+        let first = reader.local(std::slice::from_ref(&source), at);
+        assert_eq!(first.sessions.len(), 1);
+        fs::write(path, b"invalid sqlite").unwrap();
+        let next = reader.local(&[source], at + 1);
+        assert_eq!(next.sessions.len(), 1);
+        assert_eq!(next.sessions[0].id, first.sessions[0].id);
+        assert!(next.sources[0].error.is_some());
+    }
+    #[test]
+    fn watcher_events_and_overflow_reconcile_new_files_without_blocking_the_lane() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = source(temp.path(), "codex");
+        let mut reader = Reader::default();
+        let at = seconds(SystemTime::now());
+        let start = Instant::now();
+        reader.collect_local(&source, at);
+        assert!(start.elapsed() < Duration::from_millis(500));
+        fs::write(temp.path().join("new.jsonl"), b"{}\n").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            if !reader
+                .collect_local(&source, at + start.elapsed().as_secs())
+                .files
+                .is_empty()
+            {
+                break;
+            }
+            if reader
+                .discovery
+                .values()
+                .next()
+                .unwrap()
+                .watch
+                .state
+                .load(std::sync::atomic::Ordering::Acquire)
+                == 2
+            {
+                assert_eq!(
+                    reader.collect_local(&source, at + 5).files.len(),
+                    1,
+                    "Unsupported backends retain five-second reconciliation"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "New paths not reconciled: state={} local={} candidates={:?} error={:?}",
+                reader
+                    .discovery
+                    .values()
+                    .next()
+                    .unwrap()
+                    .watch
+                    .state
+                    .load(std::sync::atomic::Ordering::Acquire),
+                local_event_filesystem(temp.path()),
+                reader.discovery.values().next().unwrap().paths,
+                reader.discovery.values().next().unwrap().error
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        fs::write(temp.path().join("overflow.jsonl"), b"{}\n").unwrap();
+        reader
+            .discovery
+            .values()
+            .next()
+            .unwrap()
+            .watch
+            .overflow
+            .store(true, std::sync::atomic::Ordering::Release);
+        assert_eq!(reader.collect_local(&source, at).files.len(), 2);
+        reader
+            .discovery
+            .values()
+            .next()
+            .unwrap()
+            .watch
+            .state
+            .store(2, std::sync::atomic::Ordering::Release);
+        fs::write(temp.path().join("fallback.jsonl"), b"{}\n").unwrap();
+        assert_eq!(reader.collect_local(&source, at + 5).files.len(), 3);
     }
     #[test]
     fn three_providers_and_wal_waits_are_normalized_without_content() {

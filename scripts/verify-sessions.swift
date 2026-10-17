@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @main struct VerifySessions {
     static func event(_ type: String) -> String { "{\"type\":\"event_msg\",\"payload\":{\"type\":\"\(type)\"}}\n" }
@@ -44,9 +45,35 @@ import Foundation
         precondition(partial.sources?.filter { $0.state != "healthy" }.count == 1)
         print("Native session decoding and real-core lifecycle, completion, disabled and per-source failure RPC checks passed")
         engine.stop()
+        try await verifySurfaceProjections()
         try await verifyIndependentPolling(root.appendingPathComponent("polling"))
     }
 
+    @MainActor static func verifySurfaceProjections() async throws {
+        let model = AppModel(autostart:false); defer { model.stop() }
+        model.detailPage = "analysis"; model.setWindowVisible(true,window:"detail")
+        try await Task.sleep(for:.milliseconds(150))
+        let navigation = WindowNavigationStore(model:model)
+        let surface = SurfaceObservation(model:model,compact:false,page:"analysis")
+        var navigationChanges = 0, surfaceChanges = 0
+        let nav = navigation.objectWillChange.sink { navigationChanges += 1 }
+        let page = surface.objectWillChange.sink { surfaceChanges += 1 }
+        model.message = "unrelated metric publication"
+        try await Task.sleep(for:.milliseconds(50))
+        precondition(navigationChanges == 0 && surfaceChanges > 0)
+        model.setWindowVisible(false,window:"detail")
+        try await Task.sleep(for:.milliseconds(50))
+        let hidden = surfaceChanges
+        precondition(navigationChanges > 0 && hidden > 1,"Hiding must publish once so child timelines stop")
+        for i in 0..<10 { model.message = "hidden metric \(i)" }
+        try await Task.sleep(for:.milliseconds(50))
+        precondition(surfaceChanges == hidden,"Hidden surfaces defer unrelated publications")
+        model.setWindowVisible(true,window:"detail")
+        try await Task.sleep(for:.milliseconds(50))
+        precondition(surfaceChanges > hidden,"Showing publishes the latest retained state")
+        nav.cancel();page.cancel()
+        print("Navigation projections, hidden-page transition, deferred updates and show-time resumption passed")
+    }
     @MainActor static func verifyIndependentPolling(_ root: URL) async throws {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var settings = Settings()
@@ -119,6 +146,7 @@ for line in sys.stdin:
 
         try block("dashboard")
         let model = AppModel()
+        model.detailPage = "analysis"; model.setWindowVisible(true, window: "detail")
         defer { model.stop() }
         try await waitFor("Initial history query did not start") { exists("started") }
         try await waitFor("Live state waited for the initial history query") { model.petState.behavior == "running" }

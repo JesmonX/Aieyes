@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 
 // Only lifecycle metadata is retained; prompts and tool arguments are never displayed.
 enum SessionPhase: String {
@@ -61,22 +62,153 @@ struct ActivityIndicator: View {
             .accessibilityLabel(phase?.rawValue ?? "无活跃会话")
     }
 }
+// AppKit exposes the same system pulse effect without SwiftUI's per-frame body updates.
+struct MenuActivityIndicator: NSViewRepresentable {
+    var phase: SessionPhase?
+    var enabled = true
+    @Environment(\.accessibilityReduceMotion) private var reduced
+    @Environment(\.surfaceActive) private var active
+    func makeNSView(context: Context) -> MenuActivityImage { MenuActivityImage() }
+    func updateNSView(_ view: MenuActivityImage, context: Context) { view.configure(phase: phase, playing: enabled && active && !reduced) }
+    static func dismantleNSView(_ view: MenuActivityImage, coordinator: ()) { view.stop() }
+}
+final class MenuActivityImage: NSView {
+    private let icon = NSImageView()
+    private var phase: SessionPhase?
+    private var initialized = false, requested = false, playing = false
+    private var visibility: AnyCancellable?
+    private(set) var animationStarts = 0
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true; layer?.cornerRadius = 11
+        icon.imageScaling = .scaleNone; icon.symbolConfiguration = .init(pointSize: 14, weight: .semibold)
+        addSubview(icon)
+    }
+    convenience init() { self.init(frame: NSRect(x: 0, y: 0, width: 22, height: 22)) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func layout() { super.layout(); icon.frame = bounds }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow(); visibility = nil
+        if let window { visibility = NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: window).sink { [weak self] _ in self?.sync() } }
+        sync()
+    }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); colors() }
+    func configure(phase: SessionPhase?, playing: Bool) {
+        if !initialized || self.phase != phase {
+            self.phase = phase; initialized = true
+            icon.image = NSImage(systemSymbolName: phase?.symbol ?? "circle.dotted", accessibilityDescription: phase?.rawValue ?? "无活跃会话")
+            colors()
+        }
+        requested = playing && phase?.active == true; sync()
+        setAccessibilityElement(true); setAccessibilityRole(.image); setAccessibilityLabel(phase?.rawValue ?? "无活跃会话")
+    }
+    private func colors() {
+        let color = NSColor(phase?.color ?? .secondary)
+        icon.contentTintColor = color; layer?.backgroundColor = color.withAlphaComponent(0.12).cgColor
+    }
+    private func sync() {
+        let next = requested && window?.isVisible == true && window?.occlusionState.contains(.visible) == true
+        guard next != playing else { return }; playing = next
+        if next { icon.addSymbolEffect(.pulse, options: .repeating); animationStarts += 1 }
+        else { icon.removeAllSymbolEffects(animated: false) }
+    }
+    func stop() { requested = false; sync() }
+}
+struct MenuStatusSnapshot: Equatable {
+    var phase: SessionPhase?, count = 0, text = "", sampling = "", samplingCount = 0, attention = false, animationEnabled = true
+}
+@MainActor final class MenuStatusStore: ObservableObject {
+    @Published private(set) var snapshot = MenuStatusSnapshot()
+    private var subscriptions = Set<AnyCancellable>()
+    private var pending = false
+    private func refresh(_ model: AppModel) {
+        let value = MenuStatusSnapshot(phase: model.sessionPhase, count: model.activeSessions.count, text: model.menuText, sampling: model.samplingSummary, samplingCount: model.runningEstimates.count, attention: model.samplingNeedsAttention, animationEnabled: !model.installingUpdate)
+        if snapshot != value { snapshot = value }
+    }
+    private func schedule(_ model: AppModel) {
+        guard !pending else { return }; pending = true
+        DispatchQueue.main.async { [weak self, weak model] in
+            guard let self, let model else { return }; self.pending = false; self.refresh(model)
+        }
+    }
+    init(model: AppModel) {
+        model.objectWillChange.sink { [weak self, weak model] _ in if let model { self?.schedule(model) } }.store(in: &subscriptions)
+        model.live.objectWillChange.sink { [weak self, weak model] _ in if let model { self?.schedule(model) } }.store(in: &subscriptions)
+        refresh(model)
+    }
+}
+// Retained controls keep their local state, while hidden surfaces defer model publications.
+@MainActor private final class ActiveModelObservation: ObservableObject {
+    var active = true
+    private var subscription: AnyCancellable?
+    init(_ model: AppModel) {
+        subscription = model.objectWillChange.sink { [weak self] _ in
+            guard let self, self.active else { return }; self.objectWillChange.send()
+        }
+    }
+}
+@MainActor @propertyWrapper struct SurfaceModel: DynamicProperty {
+    let wrappedValue: AppModel
+    @StateObject private var observation: ActiveModelObservation
+    @Environment(\.surfaceActive) private var active
+    init(wrappedValue: AppModel) { self.wrappedValue = wrappedValue; _observation = StateObject(wrappedValue: ActiveModelObservation(wrappedValue)) }
+    nonisolated mutating func update() { MainActor.assumeIsolated { observation.active = active } }
+    var projectedValue: ObservedObject<AppModel>.Wrapper { ObservedObject(wrappedValue: wrappedValue).projectedValue }
+
+}
+struct WindowNavigationSnapshot: Equatable {
+    var page: String, category: String, section: String, requested: String?, windows: Set<String>
+}
+@MainActor final class WindowNavigationStore: ObservableObject {
+    @Published private(set) var snapshot: WindowNavigationSnapshot
+    private var subscription: AnyCancellable?
+    private var pending = false
+    private static func value(_ model: AppModel) -> WindowNavigationSnapshot {
+        WindowNavigationSnapshot(page: model.detailPage, category: model.settingsTab, section: model.generalPage, requested: model.requestedDetailPage, windows: model.visibleWindows)
+    }
+    init(model: AppModel) {
+        snapshot = Self.value(model)
+        subscription = model.objectWillChange.sink { [weak self, weak model] _ in
+            guard let self, !self.pending else { return }; self.pending = true
+            DispatchQueue.main.async { [weak self, weak model] in
+                guard let self, let model else { return }; self.pending = false
+                let next = Self.value(model); if self.snapshot != next { self.snapshot = next }
+            }
+        }
+    }
+}
+// Retain pages and their state, but do not invalidate hidden surfaces on every model publication.
+@MainActor final class SurfaceObservation: ObservableObject {
+    private var subscription: AnyCancellable?
+    private var pending = false
+    init(model: AppModel, compact: Bool, page: String) {
+        var wasActive = model.isWindowVisible(compact ? "panel" : "detail") && (compact || model.detailPage == page)
+        subscription = model.objectWillChange.sink { [weak self, weak model] _ in
+            guard let self, !self.pending else { return }; self.pending = true
+            DispatchQueue.main.async { [weak self, weak model] in
+                guard let self, let model else { return }; self.pending = false
+                let active = model.isWindowVisible(compact ? "panel" : "detail") && (compact || model.detailPage == page)
+                let transitioned = wasActive != active; wasActive = active
+                if active || transitioned { self.objectWillChange.send() }
+            }
+        }
+    }
+}
 struct MenuActivityLabel: View {
-    @ObservedObject var model: AppModel
-    @ObservedObject var live: LiveSessionState
-    init(model: AppModel) { self.model = model; live = model.live }
+    @ObservedObject private var status: MenuStatusStore
+    init(model: AppModel) { status = model.menuStatus }
     @AppStorage(NativePanelKey.showCount.rawValue) private var showCount = false
     var body: some View {
+        let value = status.snapshot
         HStack(spacing: 5) {
             BrandMark(template: true).frame(width: 22, height: 22)
-            ActivityIndicator(phase: model.sessionPhase)
-            if showCount && model.activeSessions.count > 0 { Text("\(model.activeSessions.count)").monospacedDigit().padding(.horizontal, 5).background(.quaternary, in: Capsule()).accessibilityLabel("\(model.activeSessions.count) 个活跃会话") }
-            if !model.menuText.isEmpty { Text(model.menuText).monospacedDigit() }
-            if !model.runningEstimates.isEmpty {
-                Image(systemName: model.samplingNeedsAttention ? "pause.circle.fill" : "record.circle")
-                    .foregroundStyle(model.samplingNeedsAttention ? Palette.warn : Palette.ok)
-                    .accessibilityLabel(model.samplingSummary)
-                if model.runningEstimates.count > 1 { Text("\(model.runningEstimates.count)").monospacedDigit() }
+            MenuActivityIndicator(phase: value.phase, enabled: value.animationEnabled).frame(width: 22, height: 22)
+            if showCount && value.count > 0 { Text("\(value.count)").monospacedDigit().padding(.horizontal, 5).background(.quaternary, in: Capsule()).accessibilityLabel("\(value.count) 个活跃会话") }
+            if !value.text.isEmpty { Text(value.text).monospacedDigit() }
+            if value.samplingCount > 0 {
+                Image(systemName: value.attention ? "pause.circle.fill" : "record.circle")
+                    .foregroundStyle(value.attention ? Palette.warn : Palette.ok).accessibilityLabel(value.sampling)
+                if value.samplingCount > 1 { Text("\(value.samplingCount)").monospacedDigit() }
             }
         }.font(.system(size: 14, weight: .medium)).padding(.horizontal, 5)
     }
@@ -157,6 +289,9 @@ struct PetLibrary: Decodable { var pets: [ImportedPet]; var selectedLibraryId: S
     @Published var sessions: [LiveSession] = []
     @Published var sources: [SessionSourceHealth] = []
     @Published var unavailable = false
+    @Published var petVisible = true
+    @Published var suspended = false
+    @Published var asset: ImportedPet?
     @Published var pet = PetState.idle
     @Published var summary: String?
 }

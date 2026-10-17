@@ -451,6 +451,8 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     std::thread::spawn(move || {
         let mut monitor = SessionMonitor::default();
         let mut tick = 0u32;
+        let mut pet_revision = None;
+        let mut pet_asset = Value::Null;
         loop {
             let snapshot = match store.settings() {
                 Ok(settings) => monitor.read(&settings, std::time::SystemTime::now()),
@@ -459,7 +461,33 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                     ..Snapshot::default()
                 },
             };
-            let pet_asset = aieyes_core::pet_import::current(&store, false).unwrap_or(Value::Null);
+            let current = store
+                .db
+                .query_row(
+                    "SELECT value FROM kv WHERE key='runtime.revision:pets'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok();
+            if current != pet_revision || pet_asset.is_null() {
+                let mut next =
+                    aieyes_core::pet_import::current(&store, false).unwrap_or(Value::Null);
+                if next["error"].is_string() && !pet_asset["pet"].is_null() {
+                    next["pet"] = pet_asset["pet"].clone();
+                }
+                if !next["pet"].is_null() || pet_asset.is_null() {
+                    pet_asset = next;
+                }
+                pet_revision = store
+                    .db
+                    .query_row(
+                        "SELECT value FROM kv WHERE key='runtime.revision:pets'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok();
+            }
+            let pet_asset = pet_asset.clone();
             let supported = if tick.is_multiple_of(15) {
                 Some(tray_supported())
             } else {
@@ -849,13 +877,30 @@ fn create_tray(app: &AppHandle, desktop: &Desktop) -> tauri::Result<()> {
     Ok(())
 }
 
+fn semantic(snapshot: &Snapshot) -> Value {
+    let mut value = serde_json::to_value(snapshot).unwrap_or(Value::Null);
+    if let Some(rows) = value["sources"].as_array_mut() {
+        for row in rows {
+            row.as_object_mut().map(|object| object.remove("checkedAt"));
+        }
+    }
+    value
+}
+
 fn update(app: &AppHandle, snapshot: Snapshot, pet_asset: Value, supported: Option<bool>) {
     let desktop = app.state::<Desktop>();
     let mut new_tray = false;
+    let previous_tray = desktop.tray_available.load(Ordering::Relaxed);
     if let Some(supported) = supported {
         new_tray = supported && app.tray_by_id(TRAY_ID).is_none();
         let available = supported && create_tray(app, &desktop).is_ok();
         desktop.tray_available.store(available, Ordering::Relaxed);
+    }
+    let unchanged = desktop.state.lock().is_ok_and(|state| {
+        state.pet_asset == pet_asset && semantic(&state.snapshot) == semantic(&snapshot)
+    });
+    if unchanged && !new_tray && previous_tray == desktop.tray_available.load(Ordering::Relaxed) {
+        return;
     }
     let summary = snapshot.summary();
     let (text_changed, phase_changed) = desktop
@@ -1733,6 +1778,25 @@ fn icon(phase: Option<Phase>, dark: bool) -> tauri::image::Image<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn identical_status_ignores_check_timestamps_but_keeps_health_and_session_changes() {
+        use aieyes_core::sessions::SourceHealth;
+        let mut first = Snapshot::default();
+        first.sources.push(SourceHealth {
+            source_id: "s".into(),
+            state: "healthy".into(),
+            checked_at: 1,
+            ..Default::default()
+        });
+        let mut next = first.clone();
+        next.sources[0].checked_at = 2;
+        assert_eq!(semantic(&first), semantic(&next));
+        next.sources[0].state = "degraded".into();
+        assert_ne!(semantic(&first), semantic(&next));
+        next = first.clone();
+        next.sources[0].hooks = Some("installed".into());
+        assert_ne!(semantic(&first), semantic(&next));
+    }
     #[test]
     fn detail_context_preserves_destination_and_optional_filters() {
         assert_eq!(

@@ -17,6 +17,9 @@
 | [test-streaming-core.py](../scripts/test-streaming-core.py) | `python3 scripts/test-streaming-core.py`，真实核心与临时 SSH 流式夹具；测试中需要本机进程及监听权限 |
 | [test-update-transport.py](../scripts/test-update-transport.py) | `python3 scripts/test-update-transport.py`，真实核心子进程和本机录制代理，不访问公网 |
 | [benchmark-performance.py](../scripts/benchmark-performance.py) | `python3 scripts/benchmark-performance.py --soak-seconds 3600`，默认使用 release 核心及临时合成库；可用 `--binary` 和 `--output` 指定路径 |
+| [test-runtime-performance.sh](../scripts/test-runtime-performance.sh) | `sh scripts/test-runtime-performance.sh .local/runtime-performance 2400 600`，菜单/桌宠真实图层动画、隐藏页面与物理内存长测；只使用隔离数据 |
+| [benchmark-runtime-hotpaths.py](../scripts/benchmark-runtime-hotpaths.py) | `python3 scripts/benchmark-runtime-hotpaths.py --before <旧核心>`，合成采样历史与未变化会话读取对照 |
+| [test-estimate-display.py](../scripts/test-estimate-display.py) | `python3 scripts/test-estimate-display.py`，调用真实核心并比较 Web/Swift 完整历史与展示投影；已纳入性能 UI 套件 |
 | [benchmark-remote-history.py](../scripts/benchmark-remote-history.py) | `python3 scripts/benchmark-remote-history.py`，全量与增量采集性能对照 |
 | [verify-update-transfer.swift](../scripts/verify-update-transfer.swift) | 可选真实联网读取、下载和签名校验；需要包含 Sparkle 更新源、公钥的临时 plist，见 [传输说明](macos-performance-and-update-transport.md)；不安装更新 |
 | [test-ui-native-render.sh](../scripts/test-ui-native-render.sh) | `sh scripts/test-ui-native-render.sh`，合成场景原生截图矩阵；可用 `AIEYES_RENDER_BINARY`、`AIEYES_RENDER_ROOT` 指定构建与输出 |

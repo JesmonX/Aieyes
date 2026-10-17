@@ -3,7 +3,11 @@ import AppKit
 
 /// A single retained workspace; changing pages does not tear down editors or scroll views.
 struct MainWindowView: View {
-    @ObservedObject var model: AppModel
+    let model: AppModel
+    @StateObject private var navigation: WindowNavigationStore
+    @MainActor init(model: AppModel) {
+        self.model = model; _navigation = StateObject(wrappedValue: WindowNavigationStore(model: model))
+    }
     @AppStorage("main.sidebarCollapsed") private var collapsed = false
     @AppStorage(NativePanelKey.detailPage.rawValue) private var savedPage = "agent"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -58,7 +62,7 @@ struct MainWindowView: View {
                 ZStack {
                     if model.detailPage == "setup" { SetupGuideView(model: model) { guideActive = false; select("agent") } }
                     ForEach(monitoring, id: \.0) { key, _, _ in
-                        RootView(model: model, compact: false, page: key)
+                        RootView(model: model, compact: false, page: key).equatable()
                             .opacity(model.detailPage == key ? 1 : 0)
                             .allowsHitTesting(model.detailPage == key)
                             .disabled(model.detailPage != key)
@@ -66,6 +70,7 @@ struct MainWindowView: View {
                     }
                     if visitedSettings || model.detailPage == "settings" {
                         SettingsView(model: model)
+                            .environment(\.surfaceActive, model.detailPage == "settings" && model.isWindowVisible("detail"))
                             .opacity(model.detailPage == "settings" ? 1 : 0)
                             .allowsHitTesting(model.detailPage == "settings")
                             .disabled(model.detailPage != "settings")

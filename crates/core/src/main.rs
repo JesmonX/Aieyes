@@ -150,13 +150,23 @@ fn run() -> anyhow::Result<()> {
                     Some(method) => {
                         let operation = v["params"]["operationId"].clone();
                         let request_id = id.clone();
-                        match engine.call_with_progress(method, v.get("params").cloned().unwrap_or(json!({})), Box::new(move |mut progress| {
+                        let result = engine.call_with_progress(method, v.get("params").cloned().unwrap_or(json!({})), Box::new(move |mut progress| {
                             progress["operationId"] = operation.clone();
                             progress["requestId"] = request_id.clone();
                             let mut stdout = io::stdout().lock();
                             let _ = serde_json::to_writer(&mut stdout, &json!({"jsonrpc":"2.0","method":"operations.progress","params":progress}));
                             let _ = stdout.write_all(b"\n"); let _ = stdout.flush();
-                        })) {
+                        }));
+                        if let Some(params) = engine.take_runtime_change() {
+                            let mut stdout = io::stdout().lock();
+                            let _ = serde_json::to_writer(
+                                &mut stdout,
+                                &json!({"jsonrpc":"2.0","method":"runtime.changed","params":params}),
+                            );
+                            let _ = stdout.write_all(b"\n");
+                            let _ = stdout.flush();
+                        }
+                        match result {
                             Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
                             Err(e) => {
                                 json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":e.to_string()}})

@@ -142,6 +142,13 @@
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
+    "accounts.status.refreshBatch": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
     "accounts.targets": {
       "lane": "configuration",
       "invalidates": [],
@@ -511,18 +518,18 @@
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
-    "hosts.sshConfig.read": {
-      "lane": "hosts",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "cancel"
-    },
     "hosts.sample": {
       "lane": "hosts",
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": "hosts",
+      "updateBehavior": "cancel"
+    },
+    "hosts.sshConfig.read": {
+      "lane": "hosts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
       "updateBehavior": "cancel"
     },
     "methods.manifest": {
@@ -718,6 +725,13 @@
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
+    "runtime.revisions": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
     "sessions.hooks.remove": {
       "lane": "configuration",
       "invalidates": [],
@@ -821,6 +835,23 @@
       "refreshKey": "scan",
       "updateBehavior": "cancel"
     },
+    "subscriptions.connect": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "subscriptions.openLogin": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
     "wakeups.delete": {
       "lane": "wakeups",
       "invalidates": [
@@ -911,23 +942,6 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
-    },
-    "subscriptions.connect": {
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "finish"
-    },
-    "subscriptions.openLogin": {
-      "lane": "accounts",
-      "invalidates": [],
-      "invalidateOnFailure": false,
-      "refreshKey": null,
-      "updateBehavior": "finish"
     }
   },
   "subscriptions": {
@@ -971,7 +985,7 @@
       "loginUrl": "https://opencode.ai/console"
     }
   },
-  "contractHash": "0628daf2bf4d492638273797f003d5385db2e16ec29a57ba02821bc4e21a2cce",
+  "contractHash": "09027b8f8b81e770b7121ef5d9d1e2aff2b906fe2e1813e75184e4053e13f9ac",
   "petFrameDurations": [
     [
       280,

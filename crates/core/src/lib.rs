@@ -32,6 +32,7 @@ pub mod quota_notifications;
 mod quota_queries;
 pub mod quota_schedule;
 mod remote_history;
+pub mod runtime;
 pub mod session_events;
 pub mod session_hooks;
 pub mod sessions;
@@ -59,6 +60,10 @@ pub struct Engine {
     sessions: sessions::SessionMonitor,
     progress: Option<Box<dyn FnMut(Value) + Send>>,
     network_cache: HashMap<String, network::NetworkTest>,
+    status_observations: Option<std::cell::RefCell<HashMap<String, Value>>>,
+    runtime_change: Option<Value>,
+    #[cfg(test)]
+    status_observation_reads: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 }
 impl Engine {
     pub fn open(root: &Path) -> Result<Self> {
@@ -78,6 +83,10 @@ impl Engine {
             sessions: sessions::SessionMonitor::default(),
             progress: None,
             network_cache: HashMap::new(),
+            status_observations: None,
+            runtime_change: None,
+            #[cfg(test)]
+            status_observation_reads: None,
         })
     }
     pub fn call_with_progress(
@@ -87,9 +96,23 @@ impl Engine {
         progress: Box<dyn FnMut(Value) + Send>,
     ) -> Result<Value> {
         self.progress = Some(progress);
+        self.runtime_change = None;
+        let changes = self.store.db.total_changes();
+        let operation = params["operationId"].clone();
         let result = self.call(method, params);
+        if (self.store.db.total_changes() != changes
+            || contracts::method(method).is_some_and(|m| !m.invalidates.is_empty())
+            || method == "accounts.status.refreshBatch")
+            && let Ok(revisions) = runtime::revisions(&self.store.db)
+        {
+            self.runtime_change = Some(json!({"revisions":revisions,"operationId":operation}));
+            runtime::signal(&self.store.root).wake();
+        }
         self.progress = None;
         result
+    }
+    pub fn take_runtime_change(&mut self) -> Option<Value> {
+        self.runtime_change.take()
     }
     pub(crate) fn progress(&mut self, stage: &str) {
         if let Some(callback) = &mut self.progress {
@@ -189,6 +212,12 @@ impl Engine {
             "operations.prepareUpdate" => return Ok(operations::prepare()),
             "operations.resume" => return Ok(operations::resume()),
             "operations.status" => return Ok(operations::status()),
+            "runtime.revisions" => return runtime::revisions(&self.store.db),
+            "quotaResetNotifications.take" => {
+                return Ok(serde_json::to_value(self.store.take_reset_notifications(
+                    params["since"].as_i64().context("缺少通知会话起始时间")?,
+                )?)?);
+            }
             _ => {}
         }
         let _operation = operations::enter(method)?;
@@ -219,6 +248,7 @@ impl Engine {
             "autoEstimates.configure" => self.configure_automatic(params),
             "autoEstimates.tick" => self.tick_automatic(),
             "accounts.targets" => self.account_targets(&params),
+            "accounts.status.refreshBatch" => self.refresh_account_status_batch(&params),
             "subscriptions.openLogin" => subscriptions::open_login(&params),
             "subscriptions.connect" => self.connect_subscription(params),
             "accounts.create"
@@ -277,7 +307,7 @@ impl Engine {
                 pet_import::current(&self.store, false)
             }
             "hello" => Ok(
-                json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"contractHash":contracts::CONTRACT_HASH}),
+                json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"runtimeInvalidations":true,"contractHash":contracts::CONTRACT_HASH}),
             ),
             "hosts.credentials.save" => Ok(
                 json!({"passwordRef": credentials::save(params["password"].as_str().context("请输入服务器密码")?)?}),
