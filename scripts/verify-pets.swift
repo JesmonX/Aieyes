@@ -1,10 +1,22 @@
 import Foundation
 import AppKit
 import Metal
+import Darwin
 @main struct VerifyPets {
+    static func checkpoint(_ message: String) {
+        FileHandle.standardOutput.write(Data((message + "\n").utf8))
+    }
+    static func unsupportedRenderer(virtualIntelCI: Bool, requireGraphics: Bool, signal: Int32?, diagnostic: String) -> Bool {
+        virtualIntelCI && !requireGraphics && signal == SIGABRT
+            && diagnostic.contains("+[MTLLoader sliceIDForDevice:")
+            && diagnostic.contains("Target device architecture is nil")
+    }
     @MainActor static func main() throws {
-        func checkpoint(_ message: String) {
-            FileHandle.standardOutput.write(Data((message + "\n").utf8))
+        if CommandLine.arguments.contains("--window-tests") {
+            _ = NSApplication.shared
+            NSApp.finishLaunching()
+            try verifyWindow()
+            return
         }
         let metalDevice = MTLCreateSystemDefaultDevice()
         let canRenderSymbolEffects = metalDevice != nil && !CommandLine.arguments.contains("--without-metal-device")
@@ -12,6 +24,13 @@ import Metal
             precondition(canRenderSymbolEffects, "The graphics acceptance run requires a Metal device")
         }
         checkpoint("Pet graphics environment: Metal device = \(metalDevice?.name ?? "none")")
+        let driverAbort = "+[MTLLoader sliceIDForDevice:legacyDriverVersion:airntDriverVersion:]: Target device architecture is nil"
+        precondition(unsupportedRenderer(virtualIntelCI: true, requireGraphics: false, signal: SIGABRT, diagnostic: driverAbort))
+        precondition(!unsupportedRenderer(virtualIntelCI: false, requireGraphics: false, signal: SIGABRT, diagnostic: driverAbort))
+        precondition(!unsupportedRenderer(virtualIntelCI: true, requireGraphics: true, signal: SIGABRT, diagnostic: driverAbort))
+        precondition(!unsupportedRenderer(virtualIntelCI: true, requireGraphics: false, signal: SIGILL, diagnostic: driverAbort))
+        precondition(!unsupportedRenderer(virtualIntelCI: true, requireGraphics: false, signal: SIGABRT, diagnostic: "Precondition failed"))
+        precondition(!unsupportedRenderer(virtualIntelCI: true, requireGraphics: false, signal: nil, diagnostic: driverAbort))
         let idleCadence = [1, 279, 281, 391, 501, 641, 781, 1101].map { PetState.idle.frame(elapsed: Double($0) / 1000, reduced: false) }
         precondition(idleCadence == [0,0,1,2,3,4,5,0])
         precondition(PetState.unknown.frameMs == PetState.idle.frameMs)
@@ -87,9 +106,8 @@ import Metal
         precondition(sprite.layer?.animation(forKey:"pet.frames") == nil, "Hidden windows stop animation")
         animationWindow.close()
         checkpoint("Pet keyframe reuse, reduced motion and hidden-window pause passed")
-        // AppKit symbol effects compile Metal shaders. Headless Intel CI has no
-        // default GPU; attempting the live effect aborts inside MTLLoader.
-        // Keep all pet/lifecycle tests running, and exercise this effect on GPU hosts.
+        // Symbol effects need a Metal device. A non-nil device alone does not
+        // guarantee SwiftUI rendering support; the window test below probes that separately.
         if canRenderSymbolEffects {
             let menuWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:22,height:22), styleMask: [.borderless], backing: .buffered, defer: false)
             menuWindow.isReleasedWhenClosed = false; menuWindow.level = .statusBar
@@ -104,6 +122,38 @@ import Metal
         } else {
             checkpoint("SKIP live menu symbol effect: no usable Metal device; pet and lifecycle checks continue")
         }
+        if CommandLine.arguments.contains("--without-metal-device") {
+            checkpoint("SKIP SwiftUI window/screenshot integration: forced no-GPU fixture; timing, geometry and layer lifecycle checks passed")
+            return
+        }
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("aieyes-pet-window-" + UUID().uuidString + ".log")
+        _ = FileManager.default.createFile(atPath: log.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: log) }
+        let output = try FileHandle(forWritingTo: log)
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        child.arguments = ["--window-tests"]
+        child.standardOutput = output; child.standardError = output
+        try child.run(); child.waitUntilExit(); try output.close()
+        let diagnostic = try String(contentsOf: log, encoding: .utf8)
+        FileHandle.standardOutput.write(Data(diagnostic.utf8))
+        guard child.terminationStatus != 0 else { return }
+        #if arch(x86_64)
+        let virtualIntelCI = ProcessInfo.processInfo.environment["CI"] == "true"
+            && (metalDevice == nil || metalDevice!.name.localizedCaseInsensitiveContains("paravirtual"))
+        #else
+        let virtualIntelCI = false
+        #endif
+        guard unsupportedRenderer(virtualIntelCI: virtualIntelCI,
+            requireGraphics: CommandLine.arguments.contains("--require-metal-device"),
+            signal: child.terminationReason == .uncaughtSignal ? child.terminationStatus : nil,
+            diagnostic: diagnostic) else {
+            throw NSError(domain: "Aieyes.PetWindowTests", code: Int(child.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: "Pet window integration failed; see child process diagnostics above"])
+        }
+        checkpoint("SKIP SwiftUI window/screenshot integration: Intel CI virtual GPU cannot load the required Metal architecture; timing, geometry, layer lifecycle and menu pulse checks passed")
+    }
+    @MainActor static func verifyWindow() throws {
         let defaults = UserDefaults.standard
         let savedEnabled = defaults.object(forKey: "aieyes.pet.enabled")
         let savedPosition = defaults.object(forKey: "aieyes.pet.position")
@@ -127,6 +177,7 @@ import Metal
         try process.run(); let data = output.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
         model.importedPet = try JSONDecoder().decode(PetSelection.self, from: data).pet
         precondition(model.importedPet != nil)
+        checkpoint("Starting production SwiftUI pet window integration")
         let controller = PetWindowController(model: model) { _, toggles in precondition(!toggles); opens += 1 }
         withExtendedLifetime(controller) {
             guard let panel = NSApplication.shared.windows.first(where: { $0.title == "Aieyes 宠物" }) else { fatalError("missing pet panel") }
