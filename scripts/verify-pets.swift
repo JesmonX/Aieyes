@@ -106,24 +106,8 @@ import Darwin
         precondition(sprite.layer?.animation(forKey:"pet.frames") == nil, "Hidden windows stop animation")
         animationWindow.close()
         checkpoint("Pet keyframe reuse, reduced motion and hidden-window pause passed")
-        // Symbol effects need a Metal device. A non-nil device alone does not
-        // guarantee SwiftUI rendering support; the window test below probes that separately.
-        if canRenderSymbolEffects {
-            let menuWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:22,height:22), styleMask: [.borderless], backing: .buffered, defer: false)
-            menuWindow.isReleasedWhenClosed = false; menuWindow.level = .statusBar
-            let menuImage = MenuActivityImage(); menuWindow.contentView = menuImage; menuWindow.orderFront(nil)
-            pump()
-            menuImage.configure(phase:.working,playing:true);let pulses = menuImage.animationStarts
-            precondition(pulses > 0)
-            for _ in 0..<30 { menuImage.configure(phase:.working,playing:true) }
-            precondition(menuImage.animationStarts == pulses, "Stable menu snapshots must not restart the system pulse")
-            menuImage.configure(phase:.working,playing:false); menuWindow.close()
-            checkpoint("Menu system pulse start, reuse and stop passed")
-        } else {
-            checkpoint("SKIP live menu symbol effect: no usable Metal device; pet and lifecycle checks continue")
-        }
         if CommandLine.arguments.contains("--without-metal-device") {
-            checkpoint("SKIP SwiftUI window/screenshot integration: forced no-GPU fixture; timing, geometry and layer lifecycle checks passed")
+            checkpoint("SKIP Metal/SwiftUI graphics integration: forced no-GPU fixture; timing, geometry and layer lifecycle checks passed")
             return
         }
         let log = FileManager.default.temporaryDirectory.appendingPathComponent("aieyes-pet-window-" + UUID().uuidString + ".log")
@@ -151,9 +135,33 @@ import Darwin
             throw NSError(domain: "Aieyes.PetWindowTests", code: Int(child.terminationStatus),
                 userInfo: [NSLocalizedDescriptionKey: "Pet window integration failed; see child process diagnostics above"])
         }
-        checkpoint("SKIP SwiftUI window/screenshot integration: Intel CI virtual GPU cannot load the required Metal architecture; timing, geometry, layer lifecycle and menu pulse checks passed")
+        checkpoint("SKIP Metal/SwiftUI graphics integration: Intel CI virtual GPU cannot load the required Metal architecture; timing, geometry and Core Animation layer lifecycle checks passed")
     }
     @MainActor static func verifyWindow() throws {
+        let canRenderSymbolEffects = MTLCreateSystemDefaultDevice() != nil
+        func pump() {
+            let until = Date().addingTimeInterval(0.2)
+            while Date() < until {
+                if let event = NSApp.nextEvent(matching: .any, until: Date().addingTimeInterval(0.01), inMode: .default, dequeue: true) { NSApp.sendEvent(event) }
+                RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+            }
+        }
+        // Keep both symbol effects and SwiftUI rendering in the graphics child:
+        // driver shader compilation may complete after a view is closed.
+        if canRenderSymbolEffects {
+            let menuWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:22,height:22), styleMask: [.borderless], backing: .buffered, defer: false)
+            menuWindow.isReleasedWhenClosed = false; menuWindow.level = .statusBar
+            let menuImage = MenuActivityImage(); menuWindow.contentView = menuImage; menuWindow.orderFront(nil)
+            pump()
+            menuImage.configure(phase:.working,playing:true);let pulses = menuImage.animationStarts
+            precondition(pulses > 0)
+            for _ in 0..<30 { menuImage.configure(phase:.working,playing:true) }
+            precondition(menuImage.animationStarts == pulses, "Stable menu snapshots must not restart the system pulse")
+            menuImage.configure(phase:.working,playing:false); menuWindow.close()
+            checkpoint("Menu system pulse start, reuse and stop passed")
+        } else {
+            checkpoint("SKIP live menu symbol effect: no usable Metal device; SwiftUI window capability probe continues")
+        }
         let defaults = UserDefaults.standard
         let savedEnabled = defaults.object(forKey: "aieyes.pet.enabled")
         let savedPosition = defaults.object(forKey: "aieyes.pet.position")
