@@ -1,7 +1,17 @@
 import Foundation
 import AppKit
+import Metal
 @main struct VerifyPets {
     @MainActor static func main() throws {
+        func checkpoint(_ message: String) {
+            FileHandle.standardOutput.write(Data((message + "\n").utf8))
+        }
+        let metalDevice = MTLCreateSystemDefaultDevice()
+        let canRenderSymbolEffects = metalDevice != nil && !CommandLine.arguments.contains("--without-metal-device")
+        if CommandLine.arguments.contains("--require-metal-device") {
+            precondition(canRenderSymbolEffects, "The graphics acceptance run requires a Metal device")
+        }
+        checkpoint("Pet graphics environment: Metal device = \(metalDevice?.name ?? "none")")
         let idleCadence = [1, 279, 281, 391, 501, 641, 781, 1101].map { PetState.idle.frame(elapsed: Double($0) / 1000, reduced: false) }
         precondition(idleCadence == [0,0,1,2,3,4,5,0])
         precondition(PetState.unknown.frameMs == PetState.idle.frameMs)
@@ -58,6 +68,7 @@ import AppKit
             var cumulative = 0
             for (index, duration) in durations.enumerated() { cumulative += duration; precondition(abs(animation.keyTimes![index+1].doubleValue - Double(cumulative)/Double(durations.reduce(0,+))) < 1e-12) }
         }
+        checkpoint("Pet frame timing and Core Animation keyframe configuration passed")
         let animationWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:144,height:168), styleMask: [.titled], backing: .buffered, defer: false)
         animationWindow.isReleasedWhenClosed = false; animationWindow.level = .statusBar
         let sprite = PetLayerImage(); animationWindow.contentView = sprite; animationWindow.orderFront(nil)
@@ -75,15 +86,24 @@ import AppKit
         pump()
         precondition(sprite.layer?.animation(forKey:"pet.frames") == nil, "Hidden windows stop animation")
         animationWindow.close()
-        let menuWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:22,height:22), styleMask: [.borderless], backing: .buffered, defer: false)
-        menuWindow.isReleasedWhenClosed = false; menuWindow.level = .statusBar
-        let menuImage = MenuActivityImage(); menuWindow.contentView = menuImage; menuWindow.orderFront(nil)
-        pump()
-        menuImage.configure(phase:.working,playing:true);let pulses = menuImage.animationStarts
-        precondition(pulses > 0)
-        for _ in 0..<30 { menuImage.configure(phase:.working,playing:true) }
-        precondition(menuImage.animationStarts == pulses, "Stable menu snapshots must not restart the system pulse")
-        menuImage.configure(phase:.working,playing:false); menuWindow.close()
+        checkpoint("Pet keyframe reuse, reduced motion and hidden-window pause passed")
+        // AppKit symbol effects compile Metal shaders. Headless Intel CI has no
+        // default GPU; attempting the live effect aborts inside MTLLoader.
+        // Keep all pet/lifecycle tests running, and exercise this effect on GPU hosts.
+        if canRenderSymbolEffects {
+            let menuWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:22,height:22), styleMask: [.borderless], backing: .buffered, defer: false)
+            menuWindow.isReleasedWhenClosed = false; menuWindow.level = .statusBar
+            let menuImage = MenuActivityImage(); menuWindow.contentView = menuImage; menuWindow.orderFront(nil)
+            pump()
+            menuImage.configure(phase:.working,playing:true);let pulses = menuImage.animationStarts
+            precondition(pulses > 0)
+            for _ in 0..<30 { menuImage.configure(phase:.working,playing:true) }
+            precondition(menuImage.animationStarts == pulses, "Stable menu snapshots must not restart the system pulse")
+            menuImage.configure(phase:.working,playing:false); menuWindow.close()
+            checkpoint("Menu system pulse start, reuse and stop passed")
+        } else {
+            checkpoint("SKIP live menu symbol effect: no usable Metal device; pet and lifecycle checks continue")
+        }
         let defaults = UserDefaults.standard
         let savedEnabled = defaults.object(forKey: "aieyes.pet.enabled")
         let savedPosition = defaults.object(forKey: "aieyes.pet.position")
@@ -144,6 +164,7 @@ import AppKit
             defaults.set(true, forKey: "aieyes.pet.enabled")
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
             RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+            checkpoint("Pet window visibility, actions and scaled geometry passed; capturing sprite previews")
             let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath + "/.local/pets/native")
             try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             for scale in [0.5, 1.0, 1.25, 1.5, 2.0] {

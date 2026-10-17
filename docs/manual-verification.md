@@ -28,4 +28,6 @@ Tauri 宿主测试先运行 `node scripts/prepare-wakeup.cjs --debug`，再运�
 
 测试输出放在 `.local/`；历史快照与过期安装包放在 `.local/archive/YYYY-MM-DD/`。这些文件不代表当前源码或可发布产物。
 
+`verify-pets` 根据 `MTLCreateSystemDefaultDevice()` 检查图形能力。没有 Metal 设备的 CI 仅跳过需要 GPU 的菜单 symbol effect，仍运行桌宠关键帧、窗口生命周期、缩放与截图检查，并在日志明确标注。真实图形验收运行 `.build/verify-pets --require-metal-device`，缺少设备会失败；可用 `.build/verify-pets --without-metal-device` 验证无 GPU 分支。Intel 与 Apple Silicon 均纳入原生 CI。
+
 跨语言契约维护：编辑 [core-contracts.json](core-contracts.json)，运行 `python3 scripts/sync-core-contracts.py`（需要 rustfmt）；`--check` 检查生成文件，已纳入 CI。可用 `target/debug/aieyes-core --call methods.manifest` 查看核心通道、失效事件和刷新键。
