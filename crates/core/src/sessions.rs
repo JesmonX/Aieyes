@@ -314,6 +314,7 @@ impl Drop for DirectoryWatch {
 struct Discovery {
     at: u64,
     real_at: Instant,
+    roots: Vec<(PathBuf, bool)>,
     paths: Vec<(PathBuf, bool)>,
     error: Option<String>,
     watch: DirectoryWatch,
@@ -537,8 +538,18 @@ impl Reader {
                                 path =
                                     PathBuf::from(path.to_string_lossy().trim_end_matches("-wal"));
                             }
-                            let event_root = session_hooks::event_root(source);
-                            let hook = path.starts_with(local_session_path(&event_root));
+                            // Use the same roots as discovery: root-level AGY summary
+                            // databases are not conversations. Hooks take precedence
+                            // when discovery falls back to scanning the provider home.
+                            let Some((_, hook)) = discovery
+                                .roots
+                                .iter()
+                                .rev()
+                                .find(|(root, _)| path.starts_with(root))
+                            else {
+                                continue;
+                            };
+                            let hook = *hook;
                             let extension = if !hook && source.provider == "antigravity" {
                                 "db"
                             } else {
@@ -586,7 +597,8 @@ impl Reader {
                 "claude" => "projects",
                 _ => "conversations",
             });
-            let mut roots = vec![(if nested.is_dir() { nested } else { root }, false)];
+            let scan_root = if nested.is_dir() { nested } else { root };
+            let mut roots = vec![(local_session_path(&scan_root), false)];
             if matches!(source.provider.as_str(), "claude" | "antigravity") {
                 let events = session_hooks::event_root(source);
                 if events.is_dir() {
@@ -600,7 +612,8 @@ impl Reader {
                 .map(|d| d.watch)
                 .filter(|w| w.state.load(Ordering::Acquire) != 2)
                 .unwrap_or_else(|| DirectoryWatch::new(expand(&source.path)));
-            for (root, hook) in roots {
+            for (root, hook) in &roots {
+                let hook = *hook;
                 for entry in walkdir::WalkDir::new(root)
                     .max_depth(12)
                     .into_iter()
@@ -640,6 +653,7 @@ impl Reader {
                 Discovery {
                     at: now,
                     real_at: Instant::now(),
+                    roots,
                     paths,
                     error,
                     watch,
@@ -1339,6 +1353,68 @@ mod adapter_tests {
             reader.database_reads, 2,
             "Retain the normalized cache identity"
         );
+    }
+    #[test]
+    fn watcher_ignores_agy_summary_database_and_keeps_sessions_and_hooks() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicU8},
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("conversations");
+        fs::create_dir(&dir).unwrap();
+        hooks_only(temp.path());
+        let path = dir.join("a.db");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE trajectory_meta(cascade_id TEXT);INSERT INTO trajectory_meta VALUES('a');CREATE TABLE steps(idx INTEGER,step_type INTEGER,status INTEGER);INSERT INTO steps VALUES(0,14,3);").unwrap();
+        drop(db);
+        let summary = temp.path().join("conversation_summaries.db");
+        let db = rusqlite::Connection::open(&summary).unwrap();
+        db.execute_batch("PRAGMA journal_mode=WAL;CREATE TABLE conversation_summaries(id TEXT);")
+            .unwrap();
+        let source = source(temp.path(), "antigravity");
+        let mut reader = Reader::default();
+        let at = seconds(SystemTime::now());
+        let initial = reader.collect_local(&source, at);
+        assert!(initial.error.is_none());
+        assert_eq!(initial.files.len(), 1);
+
+        // Inject file notifications so the regression runs on every watcher backend.
+        let (events, changes) = mpsc::channel();
+        let (stop, _stopped) = mpsc::channel();
+        reader.discovery.values_mut().next().unwrap().watch = DirectoryWatch {
+            state: Arc::new(AtomicU8::new(1)),
+            stop,
+            changes,
+            overflow: Arc::new(AtomicBool::new(false)),
+        };
+        let new_session = dir.join("b.db");
+        fs::copy(&path, &new_session).unwrap();
+        let new_db = rusqlite::Connection::open(&new_session).unwrap();
+        new_db
+            .execute_batch("PRAGMA journal_mode=WAL;INSERT INTO steps VALUES(1,21,9);")
+            .unwrap();
+        let hook = session_hooks::event_root(&source).join("event.jsonl");
+        fs::write(&hook, b"{}\n").unwrap();
+        db.execute("INSERT INTO conversation_summaries VALUES('updated')", [])
+            .unwrap();
+        events
+            .send(Ok(notify::Event::new(notify::EventKind::Modify(
+                notify::event::ModifyKind::Any,
+            ))
+            .add_path(summary.clone())
+            .add_path(PathBuf::from(format!("{}-wal", summary.display())))
+            .add_path(PathBuf::from(format!("{}-wal", new_session.display())))
+            .add_path(hook)))
+            .unwrap();
+        let batch = reader.collect_local(&source, at + 1);
+        assert!(batch.error.is_none(), "{:?}", batch.error);
+        assert_eq!(batch.files.len(), 3);
+        assert_eq!(reader.database_reads, 2, "Only read conversation databases");
+        assert!(batch.files.iter().any(|file| file.hook));
+        assert!(batch.files.iter().any(|file| {
+            Path::new(&file.key) == local_session_path(&new_session) && file.database
+        }));
     }
     #[test]
     fn failed_database_refresh_keeps_last_successful_activity_with_degraded_health() {
