@@ -6,12 +6,19 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+struct DeletedAccountsCache {
+    revisions: (i64, i64),
+    accounts: Vec<Account>,
+}
+
 pub struct Store {
     pub root: PathBuf,
     pub db: Connection,
     pub(crate) usage_memory: std::cell::RefCell<crate::usage_cache::Memory>,
     pub(crate) estimate_display: std::cell::RefCell<Option<(i64, Vec<crate::estimates::Estimate>)>>,
-    settings_memory: std::cell::RefCell<Option<(i64, u64, Settings)>>,
+    settings_memory: std::cell::RefCell<Option<(i64, Settings)>>,
+    deleted_accounts_memory: std::cell::RefCell<Option<DeletedAccountsCache>>,
+    prices_memory: std::cell::RefCell<Option<(i64, std::sync::Arc<Vec<ModelPrice>>)>>,
     #[cfg(test)]
     pub(crate) billing_memory: std::cell::RefCell<crate::codex_api::usage::BillingCache>,
 }
@@ -77,6 +84,8 @@ impl Store {
             usage_memory: Default::default(),
             estimate_display: Default::default(),
             settings_memory: Default::default(),
+            deleted_accounts_memory: Default::default(),
+            prices_memory: Default::default(),
             #[cfg(test)]
             billing_memory: Default::default(),
         };
@@ -117,19 +126,73 @@ impl Store {
         }
     }
     pub fn settings(&self) -> Result<Settings> {
-        let version: i64 = self.db.query_row("PRAGMA data_version", [], |r| r.get(0))?;
-        let changes = self.db.total_changes();
-        if self.db.is_autocommit()
-            && let Some((known, written, settings)) = self.settings_memory.borrow().as_ref()
-            && *known == version
-            && *written == changes
-        {
-            return Ok(settings.clone());
-        }
-        let settings = self.read_settings()?;
-        if self.db.is_autocommit() {
-            *self.settings_memory.borrow_mut() =
-                Some((version, self.db.total_changes(), settings.clone()));
+        // Keep the configuration and its revision in one snapshot. An external
+        // commit between those reads must not label old settings as current.
+        let transaction = if self.db.is_autocommit() {
+            Some(self.db.unchecked_transaction()?)
+        } else {
+            None
+        };
+        // Read the revision in the caller's SQLite snapshot. Never publish values
+        // from a write transaction: a rollback can reuse the same revision later.
+        let committed =
+            self.db.transaction_state(None::<&str>)? != rusqlite::TransactionState::Write;
+        let revision = crate::runtime::revision(&self.db, "settings")?;
+        let cached = self
+            .settings_memory
+            .borrow()
+            .as_ref()
+            .filter(|(known, _)| committed && *known == revision)
+            .map(|(_, settings)| settings.clone());
+        let mut settings = if let Some(settings) = cached {
+            settings
+        } else {
+            let mut settings = self.read_settings()?;
+            settings.deleted_accounts.clear();
+            if self.db.transaction_state(None::<&str>)? != rusqlite::TransactionState::Write {
+                *self.settings_memory.borrow_mut() = Some((revision, settings.clone()));
+            }
+            settings
+        };
+        // Deleted accounts are a usage-dependent projection, not configuration.
+        let committed =
+            self.db.transaction_state(None::<&str>)? != rusqlite::TransactionState::Write;
+        let version = (
+            crate::runtime::revision(&self.db, "settings")?,
+            crate::runtime::revision(&self.db, "usage")?,
+        );
+        let cached = self
+            .deleted_accounts_memory
+            .borrow()
+            .as_ref()
+            .filter(|cached| committed && cached.revisions == version)
+            .map(|cached| cached.accounts.clone());
+        settings.deleted_accounts = if let Some(accounts) = cached {
+            accounts
+        } else {
+            let mut query = self.db.prepare_cached("SELECT value FROM kv WHERE key LIKE 'deleted-account:%' AND EXISTS(SELECT 1 FROM events WHERE provider=json_extract(kv.value,'$.provider') AND account_id=json_extract(kv.value,'$.id')) ORDER BY json_extract(value,'$.deletedAt'),key")?;
+            let values = query
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let accounts = values
+                .iter()
+                .map(|raw| {
+                    let mut account: Account = serde_json::from_str(raw)?;
+                    account.archived = true;
+                    account.quota_enabled = false;
+                    Ok(account)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if committed {
+                *self.deleted_accounts_memory.borrow_mut() = Some(DeletedAccountsCache {
+                    revisions: version,
+                    accounts: accounts.clone(),
+                });
+            }
+            accounts
+        };
+        if let Some(transaction) = transaction {
+            transaction.commit()?;
         }
         Ok(settings)
     }
@@ -144,21 +207,6 @@ impl Store {
             Some(s) => {
                 let mut settings: Settings = serde_json::from_str(&s)?;
                 crate::providers::normalize_settings(&mut settings);
-                let mut stmt = self
-                    .db
-                    .prepare("SELECT value FROM kv WHERE key LIKE 'deleted-account:%' AND EXISTS(SELECT 1 FROM events WHERE provider=json_extract(kv.value,'$.provider') AND account_id=json_extract(kv.value,'$.id')) ORDER BY json_extract(value,'$.deletedAt'),key")?;
-                let values = stmt
-                    .query_map([], |r| r.get::<_, String>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                settings.deleted_accounts = values
-                    .iter()
-                    .map(|raw| {
-                        let mut account: Account = serde_json::from_str(raw)?;
-                        account.archived = true;
-                        account.quota_enabled = false;
-                        Ok(account)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
                 Ok(settings)
             }
             None => {
@@ -626,11 +674,33 @@ impl Store {
         Ok(())
     }
     pub fn prices(&self) -> Result<Vec<ModelPrice>> {
-        let mut query=self.db.prepare("SELECT payload FROM price_history WHERE id IN (SELECT MAX(id) FROM price_history GROUP BY model_id)")?;
+        Ok(self.cached_prices()?.as_ref().clone())
+    }
+    pub(crate) fn cached_prices(&self) -> Result<std::sync::Arc<Vec<ModelPrice>>> {
+        let revision = crate::runtime::revision(&self.db, "prices")?;
+        let committed =
+            self.db.transaction_state(None::<&str>)? != rusqlite::TransactionState::Write;
+        if let Some((_, prices)) = self
+            .prices_memory
+            .borrow()
+            .as_ref()
+            .filter(|(known, _)| committed && *known == revision)
+        {
+            return Ok(prices.clone());
+        }
+        let mut query = self.db.prepare_cached("SELECT payload FROM price_history WHERE id IN (SELECT MAX(id) FROM price_history GROUP BY model_id)")?;
         let raw = query
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        raw.iter().map(|s| Ok(serde_json::from_str(s)?)).collect()
+        let prices = std::sync::Arc::new(
+            raw.iter()
+                .map(|s| Ok(serde_json::from_str(s)?))
+                .collect::<Result<Vec<_>>>()?,
+        );
+        if committed && raw.iter().map(String::len).sum::<usize>() <= 4 * 1024 * 1024 {
+            *self.prices_memory.borrow_mut() = Some((revision, prices.clone()));
+        }
+        Ok(prices)
     }
     pub fn save_prices(&self, prices: &[ModelPrice]) -> Result<()> {
         let tx = self.write_transaction()?;
@@ -1105,12 +1175,58 @@ impl Store {
         };
         let settings = self.settings()?;
         let (mut d, pending) = crate::usage_cache::read(self, f, summary)?;
+        self.fill_dashboard_status(&mut d, f, &settings, !summary)?;
+        if summary {
+            d.days.clear();
+            d.heatmap.clear();
+            d.trend_days.clear();
+            d.day_models.clear();
+            d.models.clear();
+            d.model_options.clear();
+            d.pricing_gaps.clear();
+        }
+        if let Some(transaction) = transaction {
+            transaction.commit()?;
+        }
+        let _ = crate::usage_cache::persist(self, pending);
+        Ok(d)
+    }
+    pub fn dashboard_status(&self, f: &Filter) -> Result<Value> {
+        self.settings()?;
+        let transaction = if self.db.is_autocommit() {
+            Some(self.db.unchecked_transaction()?)
+        } else {
+            None
+        };
+        let mut filter = f.clone();
+        filter.estimate_history = Some("display".into());
+        let mut dashboard = Dashboard {
+            generated_at: now(),
+            ..Default::default()
+        };
+        self.fill_dashboard_status(&mut dashboard, &filter, &self.settings()?, true)?;
+        if let Some(transaction) = transaction {
+            transaction.commit()?;
+        }
+        Ok(
+            json!({"generatedAt":dashboard.generated_at,"quotas":dashboard.quotas,"quotaOrder":dashboard.quota_order,
+            "quotaEstimates":dashboard.quota_estimates,"creditEstimates":dashboard.credit_estimates,
+            "sources":dashboard.sources,"priceUpdatedAt":dashboard.price_updated_at}),
+        )
+    }
+    fn fill_dashboard_status(
+        &self,
+        d: &mut Dashboard,
+        f: &Filter,
+        settings: &Settings,
+        include_sources: bool,
+    ) -> Result<()> {
         for account in settings
             .accounts
             .iter()
             .filter(|a| a.quota_enabled && !a.archived)
         {
-            if f.provider.as_ref().is_some_and(|p| p != &account.provider)
+            if !f.includes_provider(&account.provider)
                 || f.account_id.as_ref().is_some_and(|id| id != &account.id)
             {
                 continue;
@@ -1188,7 +1304,7 @@ impl Store {
                     .then(a.name.cmp(&b.name))
             })
         });
-        if !summary {
+        if include_sources {
             for source in &settings.sources {
                 let status: Option<String> = self
                     .db
@@ -1223,20 +1339,7 @@ impl Store {
                 .query_row("SELECT MAX(fetched_at) FROM price_history", [], |r| {
                     r.get(0)
                 })?;
-        if summary {
-            d.days.clear();
-            d.heatmap.clear();
-            d.trend_days.clear();
-            d.day_models.clear();
-            d.models.clear();
-            d.model_options.clear();
-            d.pricing_gaps.clear();
-        }
-        if let Some(transaction) = transaction {
-            transaction.commit()?;
-        }
-        let _ = crate::usage_cache::persist(self, pending);
-        Ok(d)
+        Ok(())
     }
     #[cfg(test)]
     pub(crate) fn dashboard_usage_reference(&self, f: &Filter) -> Result<Dashboard> {
@@ -1263,7 +1366,7 @@ impl Store {
                 .map(|s| &s.id)
                 .collect::<Vec<_>>(),
         )?;
-        let mut query=self.db.prepare("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<=?2 AND (?3 IS NULL OR provider=?3) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7))))) AND (?5 IS NULL OR model=?5) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
+        let mut query=self.db.prepare("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<=?2 AND (?3 IS NULL OR provider=?3 OR provider=?8) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7))))) AND (?5 IS NULL OR model=?5) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
         let mut rows = query.query(params![
             from,
             until,
@@ -1271,7 +1374,8 @@ impl Store {
             f.account_id,
             f.model,
             f.source_id,
-            shared
+            shared,
+            f.provider_alias()
         ])?;
         let mut d = Dashboard {
             generated_at: now(),
@@ -1284,7 +1388,7 @@ impl Store {
             .unwrap_or(from);
         let mut options = self.db.prepare(
             "SELECT payload FROM events e WHERE stamp>=?1 AND stamp<=?2
-             AND (?3 IS NULL OR provider=?3) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))))
+             AND (?3 IS NULL OR provider=?3 OR provider=?7) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))))
              AND (?5 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?5))
              ORDER BY model",
         )?;
@@ -1296,7 +1400,8 @@ impl Store {
                     f.provider,
                     f.account_id,
                     f.source_id,
-                    shared
+                    shared,
+                    f.provider_alias()
                 ],
                 |row| row.get::<_, String>(0),
             )?

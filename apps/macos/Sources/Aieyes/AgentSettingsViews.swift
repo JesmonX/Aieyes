@@ -59,12 +59,14 @@ struct AgentMachinesSection: View {
         return HStack(spacing: 10) {
             Toggle(name + (available || unbound ? "" : " · 采集已暂停"), isOn: Binding(get: { !unbound && agent.machineIds.contains(id) }, set: { selected in
                 var ids = agent.machineIds.filter { $0 != id }; if selected { ids.append(id) }
-                Task { await model.configureAgent(agent.provider, machines: ids) }
+                Task { await model.configureAgent(agent.provider, enabled: true, machines: ids) }
             })).toggleStyle(.checkbox).disabled(!agent.enabled || unbound || !available).lineLimit(2).help(name)
             Spacer(minLength: 4)
             Button("目录 \(sources.count)") { directories = .init(provider: agent.provider, machine: id) }
             if !unbound { MachineSessionStatus(live: model.live, provider: agent.provider, sources: sources.filter { $0.subscription == nil }, collecting: sources.contains { $0.subscription == nil && model.settings.sourceEnabled($0) }) { hooks = .init(provider: agent.provider, machine: id) } }
-            Text(unbound || !available || !agent.enabled || !agent.machineIds.contains(id) || !sources.contains(where: { model.settings.sourceEnabled($0) }) ? "估值暂停" : enabled == 0 ? "估值已关闭" : "估值 \(enabled)/\(sources.count)").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize()
+            if model.settings.supports(agent.provider, "valuation") {
+                Text(unbound || !available || !agent.enabled || !agent.machineIds.contains(id) || !sources.contains(where: { model.settings.sourceEnabled($0) }) ? "估值暂停" : enabled == 0 ? "估值已关闭" : "估值 \(enabled)/\(sources.count)").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize()
+            }
             if !unbound {
                 Menu {
                     ForEach(sources.filter { model.settings.sourceEnabled($0) }) { source in
@@ -241,10 +243,10 @@ struct AccountsSettingsView: View {
     @State private var agySource: AgentSource?
     private var visibleAgents: [AgentConfiguration] {
         model.agentConfigurations.filter { config in
-            provider.map { config.provider == $0 } ?? (config.enabled || model.settings.accounts.contains { $0.provider == config.provider && $0.archived != true })
+            provider.map { CoreContract.sameAgent(config.provider, $0) } ?? (config.enabled || model.settings.accounts.contains { CoreContract.sameAgent($0.provider, config.provider) && $0.archived != true })
         }
     }
-    private var archivedAccounts: [AgentAccount] { model.settings.accounts.filter { $0.archived == true && (provider == nil || $0.provider == provider) } }
+    private var archivedAccounts: [AgentAccount] { model.settings.accounts.filter { $0.archived == true && (provider == nil || CoreContract.sameAgent($0.provider, provider!)) } }
     var body: some View {
         ScrollViewReader { reader in
             Form {
@@ -254,37 +256,34 @@ struct AccountsSettingsView: View {
                             Label { Text(Format.provider(provider)).font(AppFont.section) } icon: { ProviderMark(provider: provider) }.fixedSize()
                             Spacer()
                             Text("启用").fixedSize()
-                            Toggle("启用 " + Format.provider(provider), isOn: Binding(get: { agent.enabled }, set: { value in Task { await model.configureAgent(provider, enabled: value, machines: value && agent.machineIds.isEmpty ? ["local"] : nil) } })).labelsHidden().toggleStyle(.switch).fixedSize()
+                            Toggle("启用 " + Format.provider(provider), isOn: Binding(get: { agent.enabled }, set: { value in Task { await model.configureAgent(provider, enabled: value, machines: value && agent.machineIds.isEmpty ? ["local"] : nil, group: true) } })).labelsHidden().toggleStyle(.switch).fixedSize()
                         }
-                        if provider == "deepseek" { Text("添加 API Key，通过本机查询账户余额。").font(AppFont.secondary).foregroundStyle(.secondary) }
+                        if provider == "deepseek" { Text("通过 API Key 查询账户余额，在机器与目录中配置 DeepSeek CLI 的采集。").font(AppFont.secondary).foregroundStyle(.secondary) }
                     }
                 }
-                PersistentSection(key: sectionKey("accounts"), title: "账户", detail: "\(model.settings.accounts.filter { $0.archived != true && (provider == nil || $0.provider == provider) }.count) 个账户", tint: Palette.category(provider ?? "custom")) {
+                PersistentSection(key: sectionKey("accounts"), title: "账户", detail: "\(model.settings.accounts.filter { $0.archived != true && (provider == nil || CoreContract.sameAgent($0.provider, provider!)) }.count) 个账户", tint: Palette.category(provider ?? "custom")) {
                     if let message = model.deploymentSyncMessage { HStack { Text(message); Button("重试同步") { model.synchronizeAccountDeployments() } } }
                     ForEach(visibleAgents) { agent in agentSection(agent) }
                     archivedSection
                     cleanupSection
                 }.id("accounts").background(ScrollMemory(key: "settings.agent." + (provider ?? "all")))
-                PersistentSection(key: sectionKey("api"), title: "API 连接", initiallyExpanded: false) {
-                    if provider == nil || provider == "codex" { CodexAPISettingsSection(model: model) }
-                    else if let provider, ["opencode", "codebuddy", "kimi", "deepseek-harness", "claude", "zcode", "grok", "qoder", "pi", "omp"].contains(provider) { NativeAPISettingsSection(model: model, provider: provider) }
-                    else if let provider, let guidance = CoreContract.apiGuidance[provider] {
-                        Text(guidance["hint"] ?? "").font(AppFont.secondary).foregroundStyle(.secondary)
-                        if let text = guidance["url"], let url = URL(string: text) { Link(guidance["label"] ?? "CLI API 配置说明", destination: url) }
-                        if let text = guidance["configurationUrl"], let url = URL(string: text) { Link("CLI 配置说明", destination: url) }
-                        if let text = guidance["sdkUrl"], let url = URL(string: text) { Link("SDK 本地模型说明", destination: url) }
-                    }
-                    else { Text("原生模型 API 配置尚未接入此表单；订阅限额凭据请在账户设置中管理。").font(AppFont.secondary).foregroundStyle(.secondary) }
-                }.id("api")
-                PersistentSection(key: sectionKey("machines"), title: "机器与目录", detail: "配置采集位置", initiallyExpanded: false) {
-                    if let provider, let agent = visibleAgents.first(where: { $0.provider == provider }), provider != "deepseek" { AgentMachinesSection(model: model, agent: agent) }
-                    else { Text("通过本机直接查询余额，无需日志目录。").font(AppFont.secondary).foregroundStyle(.secondary) }
-                }.id("machines")
-                PersistentSection(key: sectionKey("valuation"), title: "估值与采样", initiallyExpanded: false) {
-                    Text("按来源管理自动估值，查看采样状态和已有记录。").font(AppFont.secondary).foregroundStyle(.secondary)
-                    if provider != "deepseek" { Button("管理估值与采样") { showingValuation = true } }
-                    else { Text("余额由 API 直接提供，无需额度估值。").font(AppFont.secondary).foregroundStyle(.secondary) }
-                }.id("valuation")
+                if let apiProvider = CoreContract.featureProvider(provider ?? "codex", "api") {
+                    PersistentSection(key: sectionKey("api"), title: "API 连接", initiallyExpanded: false) {
+                        if apiProvider == "codex" { CodexAPISettingsSection(model: model) }
+                        else { NativeAPISettingsSection(model: model, provider: apiProvider) }
+                    }.id("api")
+                }
+                if let provider, let agent = model.machineConfiguration(provider) {
+                    PersistentSection(key: sectionKey("machines"), title: "机器与目录", detail: "配置采集位置", initiallyExpanded: false) {
+                        AgentMachinesSection(model: model, agent: agent)
+                    }.id("machines")
+                }
+                if let provider, model.settings.agentSupports(provider, "valuation") {
+                    PersistentSection(key: sectionKey("valuation"), title: "估值与采样", initiallyExpanded: false) {
+                        Text("按来源管理自动估值，查看采样状态和已有记录。").font(AppFont.secondary).foregroundStyle(.secondary)
+                        Button("管理估值与采样") { showingValuation = true }
+                    }.id("valuation")
+                }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle())
             .onAppear { if let section = model.settingsSection { UserDefaults.standard.set(true, forKey: sectionKey(section)); reader.scrollTo(section, anchor: .top) } }
             .onChange(of: model.settingsSection) { _, section in if let section { UserDefaults.standard.set(true, forKey: sectionKey(section)); reader.scrollTo(section, anchor: .top) } }
@@ -299,7 +298,7 @@ struct AccountsSettingsView: View {
     }
     private func sectionKey(_ section: String) -> String { "settings.section." + (provider ?? "all") + "." + section }
     private func agentSection(_ agent: AgentConfiguration) -> some View {
-        let accounts = model.settings.accounts.filter { $0.provider == agent.provider && $0.archived != true }
+        let accounts = model.settings.accounts.filter { CoreContract.sameAgent($0.provider, agent.provider) && $0.archived != true }
         return Section {
             HStack {
                 Label { Text(Format.provider(agent.provider)).font(AppFont.section) } icon: { ProviderMark(provider: agent.provider) }
@@ -429,13 +428,14 @@ struct AccountDevicesView: View {
             ScrollViewReader { scroll in
             Form {
                 Section {
+                    if model.settings.supports(account.provider, "quota") {
                     Toggle("显示并查询额度", isOn: Binding(get: { account.quotaEnabled }, set: { value in account.quotaEnabled = value; save { $0.quotaEnabled = value } }))
                     if let message = model.dashboard.quotas.first(where: { $0.id == account.key })?.error { ErrorNotice(message: message, context: "额度查询失败") }
                     Picker("优先查询位置", selection: Binding(get: { account.quotaSourceId ?? "" }, set: { value in account.quotaSourceId = value.isEmpty ? nil : value; save { $0.quotaSourceId = value.isEmpty ? nil : value } })) {
                         Text("自动 · 优先本机").tag("")
                         ForEach(model.settings.sources.filter { current.uses($0) }) { source in Text(model.machineName(source.hostId ?? "local") + " · " + source.displayLocation + (model.settings.sourceEnabled(source) ? "" : " · 已暂停")).tag(source.id) }
                     }
-                    if account.provider != "deepseek" {
+                    if model.settings.supports(account.provider, "quotaReset") && !(account.provider == "grok" && model.settings.sources.contains { current.uses($0) && $0.subscription?.mode == "api" }) {
                         AccountResetNotificationPicker(title: "提前重置提醒", value: account.quotaResetNotifications?.unexpected, inherited: model.settings.quotaResetNotifications?.unexpected ?? true) { value in
                             var preferences = account.quotaResetNotifications ?? QuotaResetNotificationSettings(); preferences.unexpected = value; account.quotaResetNotifications = preferences
                             save { next in var p = next.quotaResetNotifications ?? QuotaResetNotificationSettings(); p.unexpected = value; next.quotaResetNotifications = p }
@@ -447,12 +447,15 @@ struct AccountDevicesView: View {
                     }
                     LabeledContent("查询间隔（秒）") { TextField("查询间隔（秒）", text: $intervalText, prompt: Text("沿用全局")).labelsHidden().frame(width: DesignTokens.fieldHintWidth).focused($focusedField, equals: "interval") }.help("留空沿用全局 · \(model.settings.refreshSeconds) 秒")
                     Text("留空沿用全局间隔；自定义范围 5–86400 秒。").font(AppFont.secondary).foregroundStyle(.secondary)
+                    }
                     TextField("账户名称", text: $account.name).focused($focusedField, equals: "name")
                     Toggle("归档账户", isOn: Binding(get: { account.archived == true }, set: { value in account.archived = value; save { $0.archived = value } }))
+                    if model.settings.supports(account.provider, "quota") {
                     Toggle("在面板显示", isOn: panelBinding).disabled(!current.quotaEnabled)
                     Text("面板已选择 \(panelSelectionCount) 个账户；手动选择不限数量。").font(AppFont.secondary).foregroundStyle(.secondary)
                     if !PanelAccountPreference.automatic(panelPreference, provider: account.provider) {
                         Button("恢复自动选择") { var pref = PanelAccountPreference.decode(panelPreference); pref.providers[account.provider] = .init(); panelPreference = String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8) ?? "{}" }
+                    }
                     }
                     if account.provider != "codex" {
                         Button(account.provider == "deepseek" ? "更新 API Key" : CoreContract.subscriptionModes[account.provider] != nil ? "更新额度凭据" : "连接机器") {
@@ -652,6 +655,9 @@ struct AccountConnectionView: View {
     @State private var preparedKey: (key: String, path: String)?
     @State private var busy = false
     @State private var error: String?
+    private var usesSubscription: Bool { CoreContract.subscriptionModes[provider] != nil && !(provider == "deepseek" && account != nil && model.settings.sources.contains { account!.uses($0) && $0.subscription == nil }) }
+    private var supportsLocalLogin: Bool { (provider == "grok" && subscriptionMode == "subscription") || (provider == "opencode" && subscriptionMode == "go") }
+    private var needsWorkspace: Bool { (provider == "grok" && subscriptionMode == "api") || (provider == "opencode" && subscriptionMode == "console") }
     private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && model.settings.sourceEnabled($0) && ($0.accountId.isEmpty || $0.accountId == (account?.id ?? "")) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -660,20 +666,20 @@ struct AccountConnectionView: View {
             if provider == "codex" { CodexAccountsView(model: model, targetAccountID: account?.id, initialSourceID: initialSourceID, intent: intent, onBusyChanged: { busy = $0 }) }
             else {
                 Form {
-                    if let modes = CoreContract.subscriptionModes[provider] {
+                    if usesSubscription, let modes = CoreContract.subscriptionModes[provider] {
                         Text(CoreContract.subscriptionHints[provider] ?? "").foregroundStyle(.secondary)
                         if !(provider == "qoder" && subscriptionMode == "cli") {
                             Button("打开官方登录 / 用量页") { Task { do { let _: [String: Bool] = try await model.engine.call("subscriptions.openLogin", params: ["provider": provider, "mode": subscriptionMode]) } catch { self.error = error.localizedDescription } } }
                         }
-                        Picker("服务 / 地区", selection: $subscriptionMode) { ForEach(modes.keys.sorted(), id: \.self) { key in Text(modes[key] ?? key).tag(key) } }
+                        if modes.count > 1 { Picker("服务 / 地区", selection: $subscriptionMode) { ForEach(modes.keys.sorted(), id: \.self) { key in Text(modes[key] ?? key).tag(key) } } }
                         if provider == "qoder" && subscriptionMode == "cli" {
                             TextField("CLI 配置目录（留空跟随客户端）", text: $nativeConfigDir)
                             Text("读取 CLI 当前登录并绑定账户身份，无需填写密钥。CLI 切换账号后请切回原账户或另建账户。").foregroundStyle(.secondary)
                         } else {
-                            TextField("Workspace / Team ID（仅 Console 或 xAI API）", text: $workspaceID)
-                            SecureField("API Key / 登录令牌 / Cookie", text: $apiKey)
+                            if needsWorkspace { TextField(provider == "grok" ? "Team ID" : "Workspace ID", text: $workspaceID) }
+                            if !supportsLocalLogin || !useLocalLogin { SecureField("API Key / 登录令牌 / Cookie", text: $apiKey) }
                         }
-                        if provider == "grok" || provider == "opencode" { Toggle("读取本机已登录凭据（仅 Grok 订阅 / OpenCode Go）", isOn: $useLocalLogin) }
+                        if supportsLocalLogin { Toggle("读取本机已登录凭据", isOn: $useLocalLogin) }
                         if !(provider == "qoder" && subscriptionMode == "cli") { Text("验证成功后保存到系统凭据库；不会切换客户端账户。").foregroundStyle(.secondary) }
                     } else if provider == "deepseek" {
                         SecureField("API Key", text: $apiKey)
@@ -696,7 +702,7 @@ struct AccountConnectionView: View {
         .onChange(of: provider) { _, _ in
             selection = []; error = nil
             let existing = model.settings.sources.first { $0.provider == provider && $0.accountId == account?.id && $0.subscription != nil }?.subscription
-            subscriptionMode = existing?.mode ?? (provider == "qoder" ? "cli" : CoreContract.subscriptionModes[provider]?["global"] != nil ? "global" : provider == "grok" ? "subscription" : provider == "opencode" ? "go" : "session")
+            subscriptionMode = existing?.mode ?? (provider == "qoder" ? "cli" : CoreContract.subscriptionModes[provider]?["global"] != nil ? "global" : provider == "grok" ? "subscription" : provider == "opencode" ? "go" : CoreContract.subscriptionModes[provider]?.keys.sorted().first ?? "")
             workspaceID = existing?.workspaceId ?? ""
             nativeConfigDir = existing?.nativeConfigDir ?? ""
         }
@@ -706,9 +712,9 @@ struct AccountConnectionView: View {
         do {
             let target = account?.id ?? ""
             let name = account?.name ?? Format.provider(provider) + " 账户"
-            if CoreContract.subscriptionModes[provider] != nil {
+            if usesSubscription {
                 struct Result: Decodable { var settings: Settings }
-                let result: Result = try await model.engine.call("subscriptions.connect", params: ["provider": provider, "accountId": target, "name": name, "secret": apiKey, "useLocalLogin": useLocalLogin, "subscription": ["mode": subscriptionMode, "workspaceId": workspaceID, "nativeConfigDir": nativeConfigDir]])
+                let result: Result = try await model.engine.call("subscriptions.connect", params: ["provider": provider, "accountId": target, "name": name, "secret": apiKey, "useLocalLogin": supportsLocalLogin && useLocalLogin, "subscription": ["mode": subscriptionMode, "workspaceId": needsWorkspace ? workspaceID : "", "nativeConfigDir": provider == "qoder" && subscriptionMode == "cli" ? nativeConfigDir : ""]])
                 model.acceptConfiguration(result.settings)
             } else if provider == "deepseek" {
                 guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ClientError.message("请输入 API Key") }

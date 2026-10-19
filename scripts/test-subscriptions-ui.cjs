@@ -27,7 +27,7 @@ async function invoke(method,params){
 function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async listen(){return()=>{};}},window:{getCurrentWindow:()=>({async isMaximized(){return false;},async onResized(){return()=>{};}})},core:{async invoke(command,args){if(command==='desktop_info')return {page:'agent',platform:'windows',mode:'floating',effectiveMode:'floating',sessions:[],panelOpen:true};if(command==='engine_call')return window.testRPC(args.method,args.params??{});return {};}}};}
 (async()=>{
   const settings=await rpc('settings.get');settings.sources=[];settings.accounts=[];
-  const providers=['zcode','qoder','grok','cursor','opencode','kimi','deepseek-harness'];
+  const providers=['zcode','qoder','grok','cursor','opencode','kimi','deepseek'];
   for(const p of providers){const a=settings.agents.find(a=>a.provider===p);a.enabled=true;a.machineIds=['local'];}
   await rpc('settings.save',settings);
   const web=path.join(project,'apps/desktop/web');
@@ -48,6 +48,17 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
         assert.equal(await page.locator('#field-nativeConfigDir').isVisible(),false);
       }
       assert.equal(await page.locator('#field-secret').getAttribute('type'),'password');
+      assert.equal(await page.locator('#field-workspaceId').isVisible(),false,provider+' has no workspace in its default mode');
+      if(['cursor','deepseek'].includes(provider))assert.equal(await page.locator('#field-mode').isVisible(),false,'a single supported mode needs no picker');
+      if(['grok','opencode'].includes(provider)){
+        const base=provider==='grok'?'subscription':'go',other=provider==='grok'?'api':'console';
+        await page.locator('#field-mode').selectOption(other);
+        assert.equal(await page.locator('#field-workspaceId').isVisible(),true);
+        assert.equal(await page.locator('[name=useLocalLogin]').isVisible(),false);
+        await page.locator('#field-mode').selectOption(base);
+        assert.equal(await page.locator('#field-workspaceId').isVisible(),false);
+        assert.equal(await page.locator('[name=useLocalLogin]').isVisible(),true);
+      }
       const previews=path.join(project,'.local/subscriptions');fs.mkdirSync(previews,{recursive:true});await page.screenshot({animations:'disabled',path:path.join(previews,provider+'.png')});
       await page.locator('#subscription-login').click();
       for(let attempt=0;attempt<250&&!calls.some(c=>c.method==='subscriptions.openLogin'&&c.params.provider===provider);attempt++)await new Promise(r=>setTimeout(r,20));

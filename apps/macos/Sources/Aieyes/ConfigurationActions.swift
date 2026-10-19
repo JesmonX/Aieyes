@@ -1,7 +1,7 @@
 import Foundation
 
 extension AppModel {
-    var agentConfigurations: [AgentConfiguration] {
+    var rawAgentConfigurations: [AgentConfiguration] {
         let rows = settings.agents ?? CoreContract.providers.map { provider in
             let sources = settings.sources.filter { $0.provider == provider && $0.enabled }
             return AgentConfiguration(provider: provider, enabled: !sources.isEmpty, machineIds: Array(Set(sources.map { $0.hostId ?? "local" })).sorted())
@@ -9,6 +9,26 @@ extension AppModel {
         let order = CoreContract.providers.filter { $0 != "custom" }
         func rank(_ provider: String) -> Int { provider == "custom" ? order.count + 1 : order.firstIndex(of: provider) ?? order.count }
         return rows.sorted { rank($0.provider) < rank($1.provider) }
+    }
+    var agentConfigurations: [AgentConfiguration] {
+        var groups: [AgentConfiguration] = []
+        for row in rawAgentConfigurations {
+            let provider = CoreContract.agentProvider(row.provider)
+            if !groups.contains(where: { $0.provider == provider }) {
+                groups.append(AgentConfiguration(provider: provider, enabled: false, machineIds: []))
+            }
+            let index = groups.firstIndex { $0.provider == provider }!
+            groups[index].enabled = groups[index].enabled || row.enabled
+            if CoreContract.supports(row.provider, "machines") {
+                groups[index].machineIds = Array(Set(groups[index].machineIds + row.machineIds)).sorted()
+            }
+        }
+        return groups
+    }
+    func machineConfiguration(_ provider: String) -> AgentConfiguration? {
+        guard let key = CoreContract.featureProvider(provider, "machines"), var config = rawAgentConfigurations.first(where: { $0.provider == key }) else { return nil }
+        config.enabled = agentConfigurations.first { CoreContract.sameAgent($0.provider, provider) }?.enabled ?? config.enabled
+        return config
     }
     func accountStatusConfiguration(_ value: Settings) -> Data {
         let object = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(value))) as? [String: Any] ?? [:]
@@ -82,7 +102,7 @@ extension AppModel {
         return await work.value
     }
     func accountMachineIDs(_ provider: String, includePaused: Bool = false) -> [String] {
-        let config = agentConfigurations.first { $0.provider == provider }
+        let config = rawAgentConfigurations.first { $0.provider == provider }
         let active = (config?.enabled == true ? config?.machineIds ?? [] : []).filter { id in
             settings.sources.contains { $0.provider == provider && ($0.hostId ?? "local") == id && settings.sourceEnabled($0) }
         }
@@ -104,12 +124,12 @@ extension AppModel {
         return AccountDeviceCounts(accountKey: key, machines: accountMachineIDs(provider), rows: accountStatuses)
     }
     func accountCounts(_ account: AgentAccount) -> String { accountDeviceCounts(account.key).summary }
-    func configureAgent(_ provider: String, enabled: Bool? = nil, machines: [String]? = nil) async {
+    func configureAgent(_ provider: String, enabled: Bool? = nil, machines: [String]? = nil, group: Bool = false) async {
         guard !settingsSaving else { return }
         settingsSaving = true; settingsMessage = nil
         defer { settingsSaving = false }
         do {
-            var params: [String: Any] = ["provider": provider]
+            var params: [String: Any] = ["provider": provider, "group": group]
             if let enabled { params["enabled"] = enabled }
             if let machines { params["machineIds"] = machines }
             let saved: Settings = try await engine.call("agents.set", params: params)

@@ -25,7 +25,14 @@ pub fn native_cli(provider: &str, config: &SubscriptionConfig) -> bool {
 pub fn supported(provider: &str) -> bool {
     matches!(
         provider,
-        "zcode" | "qoder" | "grok" | "cursor" | "opencode" | "kimi" | "deepseek-harness"
+        "zcode"
+            | "qoder"
+            | "grok"
+            | "cursor"
+            | "opencode"
+            | "kimi"
+            | "deepseek"
+            | "deepseek-harness"
     )
 }
 
@@ -37,7 +44,7 @@ pub fn login_url(provider: &str, mode: &str) -> Result<&'static str> {
         ("qoder", "cli") => Ok("https://docs.qoder.com/cli/using-cli"),
         ("qoder", "cn-legacy") => Ok("https://qoder.com.cn/account/usage"),
         ("kimi", "cn" | "global") => Ok("https://www.kimi.com/code/console"),
-        ("deepseek-harness", "api") => Ok("https://platform.deepseek.com/usage"),
+        ("deepseek" | "deepseek-harness", "api") => Ok("https://platform.deepseek.com/usage"),
         ("cursor", "session") => Ok("https://cursor.com/dashboard"),
         ("grok", "subscription") => Ok("https://grok.com"),
         ("grok", "api") => Ok("https://console.x.ai"),
@@ -150,7 +157,7 @@ pub fn endpoint(provider: &str, config: &SubscriptionConfig) -> Result<String> {
         ("cursor", "session") => "https://cursor.com/api/usage-summary",
         ("kimi", "cn") => "https://api.kimi.com/coding/v1/usages",
         ("kimi", "global") => "https://api.kimi.ai/coding/v1/usages",
-        ("deepseek-harness", "api") => "https://api.deepseek.com/user/balance",
+        ("deepseek" | "deepseek-harness", "api") => "https://api.deepseek.com/user/balance",
         ("grok", "subscription") => "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
         ("grok", "api") => {
             scope(&config.workspace_id)?;
@@ -192,10 +199,14 @@ fn request(
         !secret.is_empty() && secret.len() <= 32768 && !secret.contains(['\r', '\n', '\0']),
         "登录凭据格式无效"
     );
-    let client = network::client_builder(source.proxy.as_ref().unwrap_or(&settings.proxy))?
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("无法创建订阅查询连接")?;
+    let client = network::client_with_policy(
+        source.proxy.as_ref().unwrap_or(&settings.proxy),
+        network::ClientPolicy {
+            redirects: 0,
+            ..Default::default()
+        },
+    )
+    .context("无法创建订阅查询连接")?;
     let mut request = client.get(url).header("Accept", "application/json");
     if matches!(source.provider.as_str(), "qoder" | "cursor") || config.mode == "console" {
         let cookie = secret.strip_prefix("Cookie:").unwrap_or(secret).trim();
@@ -383,7 +394,7 @@ pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<
         ..Default::default()
     };
     match source.provider.as_str() {
-        "deepseek-harness" => {
+        "deepseek" | "deepseek-harness" => {
             // This is the selected DeepSeek backend's API wallet, not a
             // Harness subscription or a quota inferred from local Tokens.
             let mut backend = source.clone();
@@ -653,10 +664,12 @@ impl Engine {
         let provider = params["provider"].as_str().context("请选择 Agent")?;
         ensure!(
             supported(provider)
-                && base
-                    .agents
-                    .iter()
-                    .any(|a| a.provider == provider && a.enabled),
+                && base.agents.iter().any(|a| {
+                    a.enabled
+                        && crate::contracts::provider(&a.provider)
+                            .zip(crate::contracts::provider(provider))
+                            .is_some_and(|(a, b)| a.agent_id == b.agent_id)
+                }),
             "请先启用此 Agent"
         );
         let mut config: SubscriptionConfig =
@@ -760,10 +773,11 @@ impl Engine {
                 account.identity_key = snapshot.identity.as_ref().map(|i| i.key.clone());
             }
         }
-        if let Some(agent) = next.agents.iter_mut().find(|a| a.provider == provider)
-            && !agent.machine_ids.iter().any(|id| id == "local")
-        {
-            agent.machine_ids.push("local".into());
+        if let Some(agent) = next.agents.iter_mut().find(|a| a.provider == provider) {
+            agent.enabled = true;
+            if !agent.machine_ids.iter().any(|id| id == "local") {
+                agent.machine_ids.push("local".into());
+            }
         }
         next.sources.retain(|s| s.id != source.id);
         next.sources.push(source);
@@ -834,6 +848,45 @@ mod tests {
         update["accountId"] = result["accountId"].clone();
         assert!(engine.connect_subscription_using(update, |source,_,config,_,_| parse(source,config,&json!({"userId":"other-user","userQuota":{"total":10,"used":0,"remaining":10,"unit":"credits"}}))).is_err());
         assert_eq!(json!(engine.store.settings().unwrap()), json!(before));
+    }
+
+    #[test]
+    fn new_deepseek_wallet_uses_canonical_provider_with_legacy_agent_enabled() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(root.path()).unwrap();
+        let mut settings = engine.store.settings().unwrap();
+        settings
+            .agents
+            .iter_mut()
+            .find(|a| a.provider == "deepseek-harness")
+            .unwrap()
+            .enabled = true;
+        engine.store.save_settings(&settings).unwrap();
+        let result = engine.connect_subscription_using(
+            json!({"provider":"deepseek","secret":"wallet-test-secret","subscription":{"mode":"api"}}),
+            |source, _, config, _, url| {
+                assert_eq!(url, "https://api.deepseek.com/user/balance");
+                parse(source, config, &json!({"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"1.00","granted_balance":"0.00","topped_up_balance":"1.00"}]}))
+            },
+        ).unwrap();
+        assert!(!result.to_string().contains("wallet-test-secret"));
+        let saved = engine.store.settings().unwrap();
+        let source = saved
+            .sources
+            .iter()
+            .find(|s| s.provider == "deepseek")
+            .unwrap();
+        assert!(source.path.is_empty());
+        assert!(source.subscription.is_some());
+        assert!(saved.source_enabled(source));
+        assert_eq!(
+            saved
+                .accounts
+                .iter()
+                .filter(|a| a.provider == "deepseek")
+                .count(),
+            1
+        );
     }
 
     #[test]

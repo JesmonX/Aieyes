@@ -48,6 +48,7 @@ pub struct Provider {
     pub requires_path: bool,
     pub wakeup: bool,
     pub discover_local: bool,
+    pub agent_id: &'static str,
 }
 '''
 rust += '#[rustfmt::skip]\npub const METHODS: &[Method] = &[\n'
@@ -58,6 +59,7 @@ rust += '];\n#[rustfmt::skip]\npub const PROVIDERS: &[Provider] = &[\n'
 for p in providers:
     fields = ', '.join(f'{k}: {q(p[v])}' for k, v in [('id','id'),('name','name'),('default_path','defaultPath'),('binary','binary')])
     fields += ', ' + ', '.join(f'{k}: {str(p[v]).lower()}' for k, v in [('requires_path','requiresPath'),('wakeup','wakeup'),('discover_local','discoverLocal')])
+    fields += f', agent_id: {q(p.get("agent", p["id"]))}'
     rust += f'    Provider {{ {fields} }},\n'
 rust += '];\n'
 for name, values in [('PROVIDER_IDS',[p['id'] for p in providers]),('EXCLUDED_FS_TYPES',table['filesystems']['excludedTypes']),('EXCLUDED_FS_PATHS',table['filesystems']['excludedPaths'])]:
@@ -78,6 +80,10 @@ rust = subprocess.run(['rustfmt','--edition','2024'], input=rust, encoding='utf-
 web = dict(providers={p['id']:p['name'] for p in providers}, wakeupProviders=[p['id'] for p in providers if p['wakeup']], defaultPaths={p['id']:p['defaultPath'] for p in providers}, binaries={p['id']:p['binary'] for p in providers}, windows=table['windows'], filesystems=table['filesystems'], methods={m['name']:{k:v for k,v in m.items() if k!='name'} for m in methods})
 web['subscriptions'] = {p['id']: p['subscription'] for p in providers if 'subscription' in p}
 web['apiGuidance'] = {p['id']: p['apiGuidance'] for p in providers if 'apiGuidance' in p}
+web['agentAliases'] = {p['id']: p['agent'] for p in providers if 'agent' in p}
+web['agentProviders'] = [p['id'] for p in providers if 'agent' not in p]
+web['providerCapabilities'] = {p['id']: p.get('capabilities', []) for p in providers}
+web['providerIcons'] = {p['id']: p['icon'] for p in providers if 'icon' in p}
 web['contractHash'] = contract_hash
 web['petFrameDurations'] = pet_frames
 js = header + '(typeof window === "undefined" ? globalThis : window).AieyesContract = ' + json.dumps(web, ensure_ascii=False, indent=2) + ';\n'
@@ -86,6 +92,17 @@ swift = begin + '\n' + header + 'enum CoreContract {\n'
 swift += f'    static let contractHash = {q(contract_hash)}\n'
 swift += f'    static let providers = {array([p["id"] for p in providers])}\n'
 swift += f'    static let wakeupProviders = {array([p["id"] for p in providers if p["wakeup"]])}\n'
+swift += f'    static let agentProviders = {array(web["agentProviders"])}\n'
+swift += '    static let agentAliases: [String: String] = [' + ', '.join(f'{q(k)}: {q(v)}' for k, v in web['agentAliases'].items()) + ']\n'
+swift += '    static let providerCapabilities: [String: Set<String>] = [' + ', '.join(f'{q(k)}: {array(v)}' for k, v in web['providerCapabilities'].items()) + ']\n'
+swift += '    static let providerIcons: [String: String] = [' + ', '.join(f'{q(k)}: {q(v["asset"])}' for k, v in web['providerIcons'].items()) + ']\n'
+swift += '    static let providerDarkIcons: [String: String] = [' + ', '.join(f'{q(k)}: {q(v["darkAsset"])}' for k, v in web['providerIcons'].items() if 'darkAsset' in v) + ']\n'
+swift += f'    static let monochromeIcons: Set<String> = {array([k for k, v in web["providerIcons"].items() if v.get("monochrome")])}\n'
+swift += '''    static func agentProvider(_ provider: String) -> String { agentAliases[provider] ?? provider }
+    static func sameAgent(_ lhs: String, _ rhs: String) -> Bool { agentProvider(lhs) == agentProvider(rhs) }
+    static func supports(_ provider: String, _ feature: String) -> Bool { providerCapabilities[provider]?.contains(feature) == true }
+    static func featureProvider(_ provider: String, _ feature: String) -> String? { providers.first { sameAgent($0, provider) && supports($0, feature) } }
+'''
 for name, key in [('providerNames','name'),('defaultPaths','defaultPath'),('binaries','binary')]:
     swift += f'    static let {name}: [String: String] = [' + ', '.join(f'{q(p["id"])}: {q(p[key])}' for p in providers) + ']\n'
 for name, key in [('subscriptionHints', 'hint'), ('subscriptionLoginURLs', 'loginUrl')]:

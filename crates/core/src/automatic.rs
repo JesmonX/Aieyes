@@ -330,7 +330,7 @@ impl Store {
         } else {
             None
         };
-        for mut e in self.estimates()?.into_iter().filter(|e| {
+        for mut e in self.working_estimates(None)?.into_iter().filter(|e| {
             e.sampling_mode == "automatic"
                 && e.status != "completed"
                 && e.source_ids.iter().any(|id| ids.contains(id))
@@ -406,7 +406,7 @@ impl Store {
             "采样过程中登录或来源设置变化"
         );
         let mut baseline: Baseline = self.auto_get(&baseline_key(&key))?;
-        if self.estimates()?.iter().any(|e| {
+        if self.working_estimates(None)?.iter().any(|e| {
             e.sampling_mode != "automatic"
                 && e.status != "completed"
                 && e.source_ids.iter().any(|id| ids.contains(id))
@@ -552,7 +552,7 @@ impl Store {
                     continue;
                 }
                 let win = record_window.map(window_id).unwrap_or("credits");
-                let existing = self.estimates()?.into_iter().find(|e| {
+                let existing = self.working_estimates(Some(&key))?.into_iter().find(|e| {
                     e.sampling_mode == "automatic"
                         && e.status == "active"
                         && e.account_key == key
@@ -697,7 +697,7 @@ impl Engine {
         // Keep its original checkpoint and status; the automatic worker waits for it.
         let manuals = self
             .store
-            .estimates()?
+            .working_estimates(None)?
             .into_iter()
             .filter(|e| {
                 e.sampling_mode != "automatic"
@@ -875,7 +875,7 @@ impl Engine {
             if (0..30).contains(&(now() - attempted)) && observed.is_none() {
                 continue;
             }
-            if self.store.estimates()?.iter().any(|e| {
+            if self.store.working_estimates(None)?.iter().any(|e| {
                 e.sampling_mode != "automatic"
                     && e.status != "completed"
                     && e.source_ids.iter().any(|id| ids.contains(id))

@@ -256,6 +256,12 @@ async fn engine_call(
             None => Arc::new(Mutex::new(Engine::open(&root).map_err(|e| e.to_string())?)),
         };
         let mut engine = engine.lock().map_err(|_| "核心连接已断开".to_string())?;
+        if method.starts_with("hosts.monitor.") {
+            let host_app = guarded_app.clone();
+            engine.set_host_event_sink(move |snapshot| {
+                let _ = host_app.emit("hosts:changed", snapshot);
+            });
+        }
         let progress_app = guarded_app.clone();
         let invalidation_id_for_core = operation_id.clone();
         let result = engine

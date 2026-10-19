@@ -16,6 +16,7 @@ pub mod estimates;
 pub mod file_lock;
 mod harness_history;
 mod history_corrections;
+mod host_monitor;
 mod host_sampling;
 pub mod import;
 pub mod metrics;
@@ -66,6 +67,7 @@ pub struct Engine {
     host_generation: u64,
     host_session: String,
     local_metrics: monitoring::LocalSampler,
+    host_monitor: host_monitor::HostMonitor,
     sessions: sessions::SessionMonitor,
     progress: Option<Box<dyn FnMut(Value) + Send>>,
     network_cache: HashMap<String, network::NetworkTest>,
@@ -89,6 +91,7 @@ impl Engine {
                     .as_nanos()
             ),
             local_metrics: monitoring::LocalSampler::default(),
+            host_monitor: host_monitor::HostMonitor::default(),
             sessions: sessions::SessionMonitor::default(),
             progress: None,
             network_cache: HashMap::new(),
@@ -97,6 +100,9 @@ impl Engine {
             #[cfg(test)]
             status_observation_reads: None,
         })
+    }
+    pub fn set_host_event_sink(&mut self, sink: impl Fn(Value) + Send + Sync + 'static) {
+        self.host_monitor.set_sink(std::sync::Arc::new(sink));
     }
     pub fn call_with_progress(
         &mut self,
@@ -317,7 +323,7 @@ impl Engine {
                 pet_import::current(&self.store, false)
             }
             "hello" => Ok(
-                json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"runtimeInvalidations":true,"contractHash":contracts::CONTRACT_HASH}),
+                json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"runtimeInvalidations":true,"hostMonitoring":true,"dashboardStatus":true,"contractHash":contracts::CONTRACT_HASH}),
             ),
             "hosts.credentials.save" => Ok(
                 json!({"passwordRef": credentials::save(params["password"].as_str().context("请输入服务器密码")?)?}),
@@ -338,8 +344,13 @@ impl Engine {
                     .map(|v| serde_json::from_value(v.clone()))
                     .transpose()?
                     .unwrap_or(settings.proxy_test_urls);
-                let key =
-                    serde_json::to_string(&(&proxy.mode, network::effective_proxy(&proxy), &urls))?;
+                // Refresh before deriving the cache identity so a forced probe
+                // does not mistake its own proxy refresh for a settings change.
+                let effective_proxy = network::effective_proxy_with_refresh(
+                    &proxy,
+                    method == "network.test" && params["force"] == true,
+                );
+                let key = serde_json::to_string(&(&proxy.mode, effective_proxy, &urls))?;
                 if method == "network.status" {
                     return Ok(serde_json::to_value(self.network_cache.get(&key))?);
                 }
@@ -440,6 +451,9 @@ impl Engine {
                 self.store.save_settings(&s)?;
                 Ok(json!({"saved":true}))
             }
+            "dashboard.status" => self
+                .store
+                .dashboard_status(&serde_json::from_value(params)?),
             "dashboard" | "dashboard.summary" => {
                 let filter = serde_json::from_value::<Filter>(params)?;
                 Ok((if method == "dashboard.summary" {
@@ -612,6 +626,32 @@ impl Engine {
             }
             "prices.recalculate" => {
                 Ok(json!({"repriced":self.store.reprice(&self.store.settings()?,false)?}))
+            }
+            "hosts.monitor.configure" => {
+                let settings = self.store.settings()?;
+                let seconds = params["intervalSeconds"]
+                    .as_f64()
+                    .unwrap_or(settings.server_refresh_seconds as f64);
+                anyhow::ensure!(
+                    seconds.is_finite() && (1.0..=86400.0).contains(&seconds),
+                    "服务器刷新间隔范围为 1–86400 秒"
+                );
+                Ok(self.host_monitor.configure(
+                    settings.monitored_hosts(),
+                    std::time::Duration::from_secs_f64(seconds),
+                    params["paused"].as_bool().unwrap_or(false),
+                ))
+            }
+            "hosts.monitor.refresh" => {
+                if !self.host_monitor.configured() {
+                    let settings = self.store.settings()?;
+                    self.host_monitor.configure(
+                        settings.monitored_hosts(),
+                        std::time::Duration::from_secs(settings.server_refresh_seconds),
+                        false,
+                    );
+                }
+                self.host_monitor.refresh(params["hostId"].as_str())
             }
             "hosts.sample" => self.sample_hosts(params),
             _ => anyhow::bail!("未知方法：{method}"),

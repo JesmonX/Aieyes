@@ -88,6 +88,15 @@ fn run() -> anyhow::Result<()> {
         );
         return Ok(());
     }
+    engine.set_host_event_sink(|state| {
+        let mut out = io::stdout().lock();
+        let _ = serde_json::to_writer(
+            &mut out,
+            &json!({"jsonrpc":"2.0","method":"hosts.changed","params":state}),
+        );
+        let _ = out.write_all(b"\n");
+        let _ = out.flush();
+    });
     // Read controls independently of the worker. A blocked SSH/SQLite operation must
     // not prevent cancellation or status polling during update preparation.
     let (requests, incoming) = std::sync::mpsc::channel();

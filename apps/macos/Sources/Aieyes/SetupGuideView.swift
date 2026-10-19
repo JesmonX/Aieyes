@@ -85,7 +85,7 @@ struct SetupGuideView: View {
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in checkRow(row) }
                     if goal.id == "usage" {
                         FlowLayout(spacing: 8) {
-                            ForEach(CoreContract.providers, id: \.self) { provider in
+                            ForEach(CoreContract.agentProviders, id: \.self) { provider in
                                 Button { model.openSettings(.init(provider: provider, section: "accounts")) } label: { ProviderIdentity(provider: provider, markSize: 20) }
                             }
                         }

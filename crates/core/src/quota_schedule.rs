@@ -178,7 +178,7 @@ impl Engine {
         }
         let mut ids: Vec<_> = self
             .store
-            .estimates()?
+            .working_estimates(Some(key))?
             .iter()
             .filter(|e| {
                 e.status == "active" && e.account_key == key && e.sampling_mode != "automatic"

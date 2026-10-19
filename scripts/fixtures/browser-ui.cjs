@@ -47,6 +47,7 @@ module.exports = () => {
         case 'quotas.refresh':window.fixtureQuotaAttempt=Date.now()/1000;if(window.quotaFails)throw new Error('限额连接失败');return [];
         case 'sources.scan':return {};
         case 'dashboard':return {summary:window.fixtureUsage??usage,quotas:[],models:[{...usage,key:'Claude Sonnet'}],trendDays:trend,dayModels:trend.map(row=>({day:row.key,model:'Claude Sonnet',usage:row})),heatmap:history,sources:window.fixtureSources??[],pricingGaps:[]};
+        case 'dashboard.status':return {quotas:[],quotaOrder:[],quotaEstimates:[],creditEstimates:[],sources:window.fixtureSources??[],priceUpdatedAt:null};
         case 'hosts.sample':return window.fixtureHosts??[];
         case 'prices.list':return window.fixturePrices??[{id:'anthropic/claude-sonnet',name:'Claude Sonnet',input:0.000003,output:0.000015},{id:'openai/gpt-test',name:'GPT Test',input:0.000001,output:0.000002}];
         case 'prices.save':window.fixturePrices=args.params.prices;return {};

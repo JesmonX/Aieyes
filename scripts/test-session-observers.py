@@ -5,6 +5,83 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('sessions',ROOT/'scripts/session_remote.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);m.SCRIPT=(ROOT/'scripts/session_remote.py').read_text()
 class ObserverTests(unittest.TestCase):
+    def tearDown(self):
+        for discovery in m._DISCOVERY.values(): discovery.watch.close()
+        m._DISCOVERY.clear()
+
+    def test_confirmed_eof_does_not_open_and_partial_line_is_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=pathlib.Path(directory)/'session.jsonl'
+            path.write_text(json.dumps(dict(type='event_msg',payload=dict(type='task_started')))+'\n')
+            first=m.read_file(path,'codex',False,{})
+            with patch.object(pathlib.Path,'open',side_effect=AssertionError('unchanged file opened')):
+                cached=m.read_file(path,'codex',False,first)
+            self.assertEqual(cached['events'],[]);self.assertEqual(cached['offset'],first['offset'])
+            with path.open('a') as stream:stream.write(json.dumps(dict(type='event_msg',payload=dict(type='task_complete'))))
+            half=m.read_file(path,'codex',False,cached)
+            self.assertEqual(half['events'],[]);self.assertLess(half['offset'],half['size'])
+            with path.open('a') as stream:stream.write('\n')
+            complete=m.read_file(path,'codex',False,half)
+            self.assertEqual(complete['events'][0]['kind'],'complete')
+
+    def test_discovery_caches_old_files_and_falls_back_when_watching_is_unavailable(self):
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory)/'sessions';root.mkdir()
+            for index in range(1000):
+                path=root/('%04d.jsonl'%index);path.write_text('{}\n')
+                if index<990:os.utime(path,(time.time()-172800,)*2)
+            source=dict(id='s',provider='codex',path=directory)
+            with patch.object(m.FileWatch,'LIMIT',32):
+                cold=m.collect(source,{})
+            self.assertEqual(len(cold['files']),10)
+            cursors={row['key']:row for row in cold['files']}
+            calls=[];stat=pathlib.Path.stat
+            def tracked(path,*args,**kwargs):calls.append(path);return stat(path,*args,**kwargs)
+            with patch.object(pathlib.Path,'stat',tracked),patch.object(pathlib.Path,'open',side_effect=AssertionError('unchanged file opened')):
+                warm=m.collect(source,cursors)
+            self.assertEqual(len(warm['files']),10);self.assertLess(len(calls),25)
+            discovery=next(iter(m._DISCOVERY.values()));discovery.watch.close()
+            added=root/'new.jsonl';added.write_text('{}\n')
+            with patch.object(m.time,'monotonic',return_value=discovery.scanned+5.1):
+                fallback=m.collect(source,cursors)
+            self.assertEqual(len(fallback['files']),11)
+
+    def test_watched_append_new_file_and_rotation_refresh_cached_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory)/'sessions';root.mkdir();path=root/'one.jsonl';path.write_text('{}\n')
+            source=dict(id='s',provider='codex',path=directory)
+            m.collect(source,{})
+            discovery=next(iter(m._DISCOVERY.values()))
+            if not discovery.watch.active:self.skipTest('native watcher unavailable; fallback covered separately')
+            added=root/'two.jsonl';added.write_text('{}\n')
+            paths={row['key'] for row in m.collect(source,{})['files']};self.assertIn(str(added),paths)
+            path.rename(root/'renamed.jsonl');path.write_text('{}\n')
+            paths={row['key'] for row in m.collect(source,{})['files']}
+            self.assertEqual(paths,{str(path),str(added),str(root/'renamed.jsonl')})
+
+    def test_retained_protocol_uses_one_process_and_exits_on_eof(self):
+        import select
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory)/'sessions';root.mkdir();path=root/'one.jsonl'
+            path.write_text(json.dumps(dict(type='event_msg',payload=dict(type='task_started')))+'\n')
+            loader="import json,pathlib,sys;s=pathlib.Path(sys.argv[1]).read_text();n={'__name__':'aieyes_observer','SCRIPT':s};exec(compile(s,'observer','exec'),n);n['serve'](json.loads(sys.stdin.readline()))"
+            child=subprocess.Popen([sys.executable,'-u','-c',loader,str(ROOT/'scripts/session_remote.py')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            request=dict(action='collect',sources=[dict(id='s',provider='codex',path=directory)],cursors={})
+            try:
+                for index in range(3):
+                    child.stdin.write(json.dumps(request)+'\n');child.stdin.flush()
+                    self.assertTrue(select.select([child.stdout],[],[],5)[0],'observer response timed out')
+                    response=json.loads(child.stdout.readline());self.assertEqual(response['aieyesSession'],1)
+                    files=response['result']['polls'][0]['files'];self.assertEqual(len(files),1)
+                    self.assertEqual(len(files[0]['events']),1 if index==0 else 0)
+                    request['cursors']={row['key']:row for row in files}
+                    self.assertIsNone(child.poll())
+                child.stdin.close();child.wait(timeout=3);self.assertEqual(child.returncode,0)
+            finally:
+                if child.poll() is None:child.kill();child.wait()
+                child.stdout.close();child.stderr.close()
+
     def test_pi_and_omp_lifecycle_projection_and_mutable_title_header(self):
         import time
         for provider in ('pi','omp'):

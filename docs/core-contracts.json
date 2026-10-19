@@ -7,7 +7,19 @@
       "binary": "codex",
       "requiresPath": true,
       "wakeup": true,
-      "discoverLocal": true
+      "discoverLocal": true,
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines",
+        "quota",
+        "quotaReset",
+        "valuation"
+      ],
+      "icon": {
+        "asset": "codex",
+        "monochrome": true
+      }
     },
     {
       "id": "claude",
@@ -16,7 +28,19 @@
       "binary": "claude",
       "requiresPath": true,
       "wakeup": true,
-      "discoverLocal": true
+      "discoverLocal": true,
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines",
+        "quota",
+        "quotaReset",
+        "valuation"
+      ],
+      "icon": {
+        "asset": "claude",
+        "monochrome": false
+      }
     },
     {
       "id": "antigravity",
@@ -30,7 +54,18 @@
       "binary": "agy",
       "requiresPath": false,
       "wakeup": true,
-      "discoverLocal": true
+      "discoverLocal": true,
+      "capabilities": [
+        "accounts",
+        "machines",
+        "quota",
+        "quotaReset",
+        "valuation"
+      ],
+      "icon": {
+        "asset": "antigravity",
+        "monochrome": false
+      }
     },
     {
       "id": "deepseek",
@@ -39,7 +74,22 @@
       "binary": "",
       "requiresPath": false,
       "wakeup": false,
-      "discoverLocal": false
+      "discoverLocal": false,
+      "capabilities": [
+        "accounts",
+        "quota"
+      ],
+      "icon": {
+        "asset": "deepseek",
+        "monochrome": false
+      },
+      "subscription": {
+        "hint": "输入 DeepSeek 官方 API Key 查询账户余额。第三方模型的额度请在对应服务商管理。",
+        "modes": {
+          "api": "DeepSeek 官方 API 余额"
+        },
+        "loginUrl": "https://platform.deepseek.com/usage"
+      }
     },
     {
       "id": "zcode",
@@ -56,6 +106,18 @@
           "cn": "智谱中国版 API Key"
         },
         "loginUrl": "https://zcode.z.ai/en/docs/configuration"
+      },
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines",
+        "quota",
+        "quotaReset",
+        "valuation"
+      ],
+      "icon": {
+        "asset": "zcode",
+        "monochrome": true
       }
     },
     {
@@ -74,6 +136,17 @@
           "cn-legacy": "qoder.com.cn 旧站点 Cookie"
         },
         "loginUrl": "https://qoder.com/account/usage"
+      },
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines",
+        "quota",
+        "quotaReset"
+      ],
+      "icon": {
+        "asset": "qoder",
+        "monochrome": true
       }
     },
     {
@@ -91,6 +164,17 @@
           "api": "xAI API 余额"
         },
         "loginUrl": "https://grok.com"
+      },
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines",
+        "quota",
+        "quotaReset"
+      ],
+      "icon": {
+        "asset": "grok",
+        "monochrome": true
       }
     },
     {
@@ -113,6 +197,16 @@
           "session": "Cursor 会话 Cookie"
         },
         "loginUrl": "https://cursor.com/dashboard"
+      },
+      "capabilities": [
+        "accounts",
+        "machines",
+        "quota",
+        "quotaReset"
+      ],
+      "icon": {
+        "asset": "cursor",
+        "monochrome": true
       }
     },
     {
@@ -130,6 +224,19 @@
           "console": "Console Cookie / Workspace"
         },
         "loginUrl": "https://opencode.ai/console"
+      },
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines",
+        "quota",
+        "quotaReset",
+        "valuation"
+      ],
+      "icon": {
+        "asset": "opencode",
+        "monochrome": false,
+        "darkAsset": "opencode-dark"
       }
     },
     {
@@ -147,11 +254,24 @@
           "global": "Kimi Code 国际版 API Key / 访问令牌"
         },
         "loginUrl": "https://www.kimi.com/code/console"
+      },
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines",
+        "quota",
+        "quotaReset",
+        "valuation"
+      ],
+      "icon": {
+        "asset": "kimi",
+        "monochrome": false,
+        "darkAsset": "kimi-dark"
       }
     },
     {
       "id": "deepseek-harness",
-      "name": "DeepSeek Harness",
+      "name": "DeepSeek",
       "defaultPath": "~/.dsh",
       "binary": "dsh",
       "requiresPath": true,
@@ -163,6 +283,17 @@
           "api": "DeepSeek 官方 API 余额"
         },
         "loginUrl": "https://platform.deepseek.com/usage"
+      },
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines",
+        "quota"
+      ],
+      "agent": "deepseek",
+      "icon": {
+        "asset": "deepseek",
+        "monochrome": false
       }
     },
     {
@@ -172,7 +303,16 @@
       "binary": "codebuddy",
       "requiresPath": true,
       "wakeup": false,
-      "discoverLocal": true
+      "discoverLocal": true,
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines"
+      ],
+      "icon": {
+        "asset": "codebuddy",
+        "monochrome": false
+      }
     },
     {
       "id": "pi",
@@ -186,6 +326,15 @@
         "url": "https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md",
         "hint": "配置 Pi 原生 API 模型。Pi 不提供统一订阅余额；额度由所选模型服务商提供。",
         "label": "Pi 模型与额度"
+      },
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines"
+      ],
+      "icon": {
+        "asset": "pi",
+        "monochrome": false
       }
     },
     {
@@ -200,6 +349,16 @@
         "url": "https://github.com/can1357/oh-my-pi/blob/main/docs/models.md",
         "hint": "配置 Oh My Pi 原生 API 模型。额度属于所选模型服务商，不能由本地 Token 或预估费用推算余额。",
         "label": "Oh My Pi 模型与额度"
+      },
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines"
+      ],
+      "icon": {
+        "asset": "omp",
+        "monochrome": false,
+        "darkAsset": "omp-dark"
       }
     },
     {
@@ -209,7 +368,11 @@
       "binary": "",
       "requiresPath": true,
       "wakeup": false,
-      "discoverLocal": false
+      "discoverLocal": false,
+      "capabilities": [
+        "accounts",
+        "machines"
+      ]
     }
   ],
   "windows": {
@@ -1246,6 +1409,30 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    {
+      "name": "dashboard.status",
+      "lane": "dashboard",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
+      "name": "hosts.monitor.configure",
+      "lane": "hosts",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    {
+      "name": "hosts.monitor.refresh",
+      "lane": "hosts",
+      "updateBehavior": "cancel",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
     }
   ],
   "petFrameDurations": [

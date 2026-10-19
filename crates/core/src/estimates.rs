@@ -356,6 +356,30 @@ fn shared_sources(settings: &Settings, ids: &[String]) -> Vec<String> {
         .collect()
 }
 
+// Expression indexes keep hot readers from decoding completed sample payloads.
+const DISPLAY_GROUP: &str =
+    "CASE WHEN kind='quota' THEN COALESCE(json_extract(payload,'$.groupId'),'') ELSE '' END";
+const DISPLAY_ORDER: &str = "json_extract(payload,'$.startedAt') DESC,COALESCE(json_extract(payload,'$.repairedAt'),0) DESC";
+const DISPLAY_FIELDS: [&str; 4] = [
+    "fiveHourValue",
+    "weeklyValue",
+    "weeklyRatioValue",
+    "valuePer1000",
+];
+fn display_value_condition(field: &str) -> String {
+    format!(
+        "status!='pending' AND json_type(payload,'$.{field}') IN ('integer','real') AND abs(json_extract(payload,'$.{field}'))<=1.7976931348623157e308"
+    )
+}
+pub(crate) fn setup_display_indexes(db: &rusqlite::Connection) -> Result<()> {
+    db.execute_batch(&format!("CREATE INDEX IF NOT EXISTS estimates_display_group ON estimates(account_key,kind,({DISPLAY_GROUP}),{DISPLAY_ORDER});
+        CREATE INDEX IF NOT EXISTS estimates_working ON estimates(account_key,kind,status) WHERE status!='completed';"))?;
+    for field in DISPLAY_FIELDS {
+        db.execute_batch(&format!("CREATE INDEX IF NOT EXISTS estimates_display_{field} ON estimates(account_key,kind,({DISPLAY_GROUP}),{DISPLAY_ORDER}) WHERE {};", display_value_condition(field)))?;
+    }
+    Ok(())
+}
+
 impl Store {
     pub(crate) fn recalculate_history_values(&self, e: &mut Estimate) -> Result<()> {
         // A prior invalidation may have found no usable rows. Preserve the
@@ -541,36 +565,47 @@ impl Store {
         {
             return Ok(rows.clone());
         }
-        let mut query = self.db.prepare_cached("SELECT e.kind,json_remove(e.payload,'$.prices','$.automaticSegments','$.segments') FROM estimates e WHERE NOT EXISTS(SELECT 1 FROM estimates replacement WHERE replacement.kind=e.kind AND CAST(json_extract(replacement.payload,'$.originalEstimateId') AS TEXT)=e.id) ORDER BY e.account_key,e.kind,json_extract(e.payload,'$.startedAt') DESC,COALESCE(json_extract(e.payload,'$.repairedAt'),0) DESC")?;
-        let mut rows = query.query([])?;
-        let mut selected = Vec::new();
-        let mut fields = std::collections::HashSet::new();
-        while let Some(row) = rows.next()? {
-            let kind: String = row.get(0)?;
-            let raw: String = row.get(1)?;
-            let e = decode_estimate(&kind, &raw)?;
-            let group = e.quota().and_then(|q| q.group_id.as_deref()).unwrap_or("");
-            let scope = format!("{}:{kind}:{group}", e.account_key);
-            let mut needed = fields.insert(format!("{scope}:latest")) || e.status != "completed";
-            for (field, value) in match &e {
-                Estimate::Quota(q) => vec![
-                    ("five", q.five_hour_value),
-                    ("week", q.weekly_value),
-                    ("ratio", q.weekly_ratio_value),
-                ],
-                Estimate::Credit(c) => vec![("credits", c.value_per1000)],
-            } {
-                if e.status != "pending"
-                    && value.is_some_and(f64::is_finite)
-                    && fields.insert(format!("{scope}:{field}"))
-                {
-                    needed = true;
-                }
-            }
-            if needed {
-                selected.push(e);
-            }
+        // Enumerate scopes from the covering expression index, then seek only
+        // the newest canonical record and each card's last finite value.
+        let canonical = "NOT EXISTS(SELECT 1 FROM estimates replacement WHERE replacement.kind=head.kind AND CAST(json_extract(replacement.payload,'$.originalEstimateId') AS TEXT)=head.id)";
+        let head_group = DISPLAY_GROUP
+            .replace("kind", "head.kind")
+            .replace("payload", "head.payload");
+        let head_order = DISPLAY_ORDER.replace("payload", "head.payload");
+        let head = |condition: &str| {
+            format!(
+                "SELECT scope.kind,(SELECT head.id FROM estimates head WHERE head.account_key=scope.account_key AND head.kind=scope.kind AND ({head_group})=scope.group_id AND {canonical} {condition} ORDER BY {head_order} LIMIT 1) AS id FROM scopes scope"
+            )
+        };
+        let mut picks = vec![head("")];
+        for field in DISPLAY_FIELDS {
+            let kind = if field == "valuePer1000" {
+                "credits"
+            } else {
+                "quota"
+            };
+            picks.push(head(&format!(
+                "AND head.kind='{kind}' AND {}",
+                display_value_condition(field)
+                    .replace("status", "head.status")
+                    .replace("payload", "head.payload")
+            )));
         }
+        picks.push(format!("SELECT head.kind,head.id FROM estimates head WHERE head.status!='completed' AND {canonical}"));
+        let sql = format!(
+            "WITH scopes AS MATERIALIZED (SELECT DISTINCT account_key,kind,({DISPLAY_GROUP}) AS group_id FROM estimates INDEXED BY estimates_display_group), picked AS ({}) SELECT e.kind,json_remove(e.payload,'$.prices','$.automaticSegments','$.segments') FROM picked JOIN estimates e ON e.kind=picked.kind AND e.id=picked.id",
+            picks.join(" UNION ")
+        );
+        let mut query = self.db.prepare_cached(&sql)?;
+        let raw = query
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut selected = raw
+            .iter()
+            .map(|(kind, raw)| decode_estimate(kind, raw))
+            .collect::<Result<Vec<_>>>()?;
         selected.sort_by(|a, b| {
             b.started_at
                 .cmp(&a.started_at)
@@ -584,6 +619,17 @@ impl Store {
     }
     pub(crate) fn active_estimates(&self) -> Result<Vec<Estimate>> {
         self.read_estimates(true)
+    }
+    pub(crate) fn working_estimates(&self, account: Option<&str>) -> Result<Vec<Estimate>> {
+        let mut query = self.db.prepare_cached("SELECT kind,payload FROM estimates WHERE status!='completed' AND (?1 IS NULL OR account_key=?1) ORDER BY json_extract(payload,'$.startedAt') DESC")?;
+        let rows = query
+            .query_map([account], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.iter()
+            .map(|(kind, raw)| decode_estimate(kind, raw))
+            .collect()
     }
     fn read_estimates(&self, active_only: bool) -> Result<Vec<Estimate>> {
         let sql = if active_only {
@@ -934,9 +980,12 @@ impl Store {
             self.save_estimate(&old)?;
         }
         ensure!(
-            !self.estimates()?.iter().any(|e| e.account_key == key
-                && e.status != "completed"
-                && matches!(e, Estimate::Quota(_))),
+            !self
+                .working_estimates(Some(&key))?
+                .iter()
+                .any(|e| e.account_key == key
+                    && e.status != "completed"
+                    && matches!(e, Estimate::Quota(_))),
             "该账户已有采样，请先结束"
         );
         let stamp = std::time::SystemTime::now()
@@ -1524,7 +1573,7 @@ impl Store {
         }
         ensure!(
             !self
-                .estimates()?
+                .working_estimates(Some(&key))?
                 .iter()
                 .any(|e| matches!(e, Estimate::Credit(_))
                     && e.account_key == key

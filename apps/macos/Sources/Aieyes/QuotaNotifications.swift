@@ -26,6 +26,9 @@ private struct QuotaResetEvent: Decodable {
     private let since = Int(Date().timeIntervalSince1970)
     private var task: Task<Void, Never>?
     private var draining = false
+    private var started = false
+    private var latestRevisions: [String: Int] = [:]
+    private var notificationRevision: Int?
     private var configurationRevision: Int?
     private var observers: [NSObjectProtocol] = []
     private var asked = false
@@ -39,45 +42,55 @@ private struct QuotaResetEvent: Decodable {
         return UNUserNotificationCenter.current()
     }
     func start() {
-        guard task == nil, !stopped, let center else { return }
-        center.delegate = self
-        observers.append(NotificationCenter.default.addObserver(forName: EngineClient.runtimeChanged, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in await self?.drain() } })
+        guard !started, !stopped, let center else { return }
+        started = true; center.delegate = self
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in await self?.refreshPermission() } })
-        task = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self, !self.stopped else { return }
-                await self.drain()
-                do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
-            }
-        }
+        task = Task { [weak self] in await self?.drain(); self?.task = nil }
+    }
+    // AppModel owns the five-second cross-process revision fallback. Reuse its
+    // snapshot instead of polling a second core and draining on unrelated writes.
+    func observe(_ revisions: [String: Int]) {
+        for (key, value) in revisions where value > latestRevisions[key, default: -1] { latestRevisions[key] = value }
+        guard started, !stopped, task == nil,
+              configurationRevision != latestRevisions["settings", default: 0] || notificationRevision != latestRevisions["notifications", default: 0] else { return }
+        task = Task { [weak self] in await self?.drain(); self?.task = nil }
     }
     func drain() async {
-        guard !draining, !stopped, task != nil else { return }; draining = true
+        guard !draining, !stopped, started else { return }; draining = true
         defer { draining = false }
         do {
-            let revision: [String: Int] = (try? await engine.call("runtime.revisions")) ?? [:]
-            if configurationRevision == nil || configurationRevision != revision["settings"] {
-            let settings: Settings = try await engine.call("settings.get")
-            let enabled = settings.accounts.contains { a in
-                a.quotaEnabled && a.archived != true && a.provider != "deepseek"
-                && settings.sources.contains { settings.sourceEnabled($0) && a.uses($0) }
-                && ((a.quotaResetNotifications?.unexpected ?? settings.quotaResetNotifications?.unexpected ?? true)
-                    || (a.quotaResetNotifications?.natural ?? settings.quotaResetNotifications?.natural ?? false))
+            if latestRevisions.isEmpty {
+                let values: [String: Int] = try await engine.call("runtime.revisions")
+                for (key, value) in values where value > latestRevisions[key, default: -1] { latestRevisions[key] = value }
             }
-            if enabled && !asked { asked = true; await authorize() }
-            else { await refreshPermission() }
-            configurationRevision = revision["settings"] ?? 0
-            }
-            let events: [QuotaResetEvent] = try await engine.call("quotaResetNotifications.take", params: ["since":since])
-            for event in events {
-                guard !Task.isCancelled, !stopped else { return }
-                await deliver(id: event.id, title: event.title, body: event.body)
-            }
+            repeat {
+                let revision = latestRevisions
+                if configurationRevision == nil || configurationRevision != revision["settings"] {
+                    let settings: Settings = try await engine.call("settings.get")
+                    let enabled = settings.accounts.contains { a in
+                        a.quotaEnabled && a.archived != true && settings.supports(a.provider, "quotaReset")
+                        && settings.sources.contains { settings.sourceEnabled($0) && a.uses($0) }
+                        && ((a.quotaResetNotifications?.unexpected ?? settings.quotaResetNotifications?.unexpected ?? true)
+                            || (a.quotaResetNotifications?.natural ?? settings.quotaResetNotifications?.natural ?? false))
+                    }
+                    if enabled && !asked { asked = true; await authorize() }
+                    else { await refreshPermission() }
+                    configurationRevision = revision["settings"] ?? 0
+                    }
+                if notificationRevision == nil || notificationRevision != revision["notifications"] {
+                    let events: [QuotaResetEvent] = try await engine.call("quotaResetNotifications.take", params: ["since":since])
+                    notificationRevision = revision["notifications"] ?? 0
+                    for event in events {
+                        guard !Task.isCancelled, !stopped else { return }
+                        await deliver(id: event.id, title: event.title, body: event.body)
+                    }
+                }
+            } while !stopped && !Task.isCancelled && (configurationRevision != latestRevisions["settings", default: 0] || notificationRevision != latestRevisions["notifications", default: 0])
         } catch { if !Task.isCancelled && !stopped { self.error = error.localizedDescription } }
     }
     func refreshPermission() async {
         // Snapshot and model-test instances never contact the user's notification center.
-        guard task != nil, !stopped, let center else { return }
+        guard started, !stopped, let center else { return }
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {
         case .authorized, .provisional: permission = "系统通知已授权"

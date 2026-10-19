@@ -3,7 +3,7 @@ import SwiftUI
 struct AutomaticValuationControls: View {
     @SurfaceModel var model: AppModel
     var sources: [AgentSource]
-    private var eligible: [AgentSource] { sources.filter { $0.provider != "deepseek" } }
+    private var eligible: [AgentSource] { sources.filter { model.settings.supports($0.provider, "valuation") } }
     var body: some View {
         if !eligible.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
@@ -208,21 +208,25 @@ struct PanelAccountsView: View {
     private var draft: String { PanelAccountPreference.encode(selected, automatic: automatic) }
     private var snapshot: String { draftSnapshot(selected) + draftSnapshot(automatic.sorted()) }
     @FocusState private var cancelFocused: Bool
+    private func members(_ provider: String) -> [String] { Array(Set(model.quotaAccounts.map(\.provider))).filter { CoreContract.sameAgent($0, provider) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("面板显示账户").font(AppFont.title)
             Text("自动显示每类前 5 个账户；手动选择可留空、不限数量。仅影响本机面板。").font(AppFont.secondary).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    ForEach(Array(Set(model.quotaAccounts.map(\.provider))).sorted(), id: \.self) { provider in
+                    ForEach(Array(Set(model.quotaAccounts.map { CoreContract.agentProvider($0.provider) })).sorted(), id: \.self) { provider in
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack { ProviderIdentity(provider: provider); Text("· \(selected[provider]?.count ?? 0) 个"); Spacer(); Button(automatic.contains(provider) ? "自动选择" : "恢复自动选择") { automatic.insert(provider); selected[provider] = PanelAccountPreference.selections("{}", accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[provider] }.font(AppFont.secondary) }.font(AppFont.section)
-                            ForEach(model.quotaAccounts.filter { $0.provider == provider }, id: \.key) { account in
-                                Toggle(account.name, isOn: Binding(get: { selected[provider]?.contains(account.key) == true }, set: { enabled in
-                                    automatic.remove(provider)
-                                    var keys = selected[provider] ?? []
+                            HStack { ProviderIdentity(provider: provider); Text("· \(members(provider).reduce(0) { $0 + (selected[$1]?.count ?? 0) }) 个"); Spacer(); Button(members(provider).allSatisfy { automatic.contains($0) } ? "自动选择" : "恢复自动选择") {
+                                let defaults = PanelAccountPreference.selections("{}", accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])
+                                for member in members(provider) { automatic.insert(member); selected[member] = defaults[member] }
+                            }.font(AppFont.secondary) }.font(AppFont.section)
+                            ForEach(model.quotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }, id: \.key) { account in
+                                Toggle(account.name, isOn: Binding(get: { selected[account.provider]?.contains(account.key) == true }, set: { enabled in
+                                    for member in members(provider) { automatic.remove(member) }
+                                    var keys = selected[account.provider] ?? []
                                     if enabled && !keys.contains(account.key) { keys.append(account.key) } else if !enabled { keys.removeAll { $0 == account.key } }
-                                    selected[provider] = keys
+                                    selected[account.provider] = keys
                                 }))
                             }
                         }

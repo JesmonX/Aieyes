@@ -144,6 +144,64 @@ pub fn session_request(host: &Host, request: serde_json::Value) -> Result<serde_
         .ok_or_else(|| anyhow::anyhow!("远程会话查询无响应"))?;
     Ok(serde_json::from_slice(line)?)
 }
+#[derive(Default)]
+pub(crate) struct SessionObserver {
+    child: Option<process::LineProcess>,
+    retry_after: Option<std::time::Instant>,
+}
+impl SessionObserver {
+    pub(crate) fn collect(
+        &mut self,
+        host: &Host,
+        request: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        if self
+            .retry_after
+            .is_none_or(|at| std::time::Instant::now() >= at)
+        {
+            match self.exchange(host, &request) {
+                Ok(value) => return Ok(value),
+                Err(_) => {
+                    self.child.take();
+                    self.retry_after = Some(std::time::Instant::now() + Duration::from_secs(60));
+                    crate::operations::check()?;
+                }
+            }
+        }
+        // Shells/backends without a working retained stream keep the existing
+        // bounded collector, and periodically retry the observer.
+        session_request(host, request)
+    }
+    fn exchange(&mut self, host: &Host, request: &serde_json::Value) -> Result<serde_json::Value> {
+        let payload = if self.child.is_none() {
+            let loader = "import json,sys;p=json.loads(sys.stdin.readline());n={'__name__':'aieyes_observer','SCRIPT':p['script'],'HARNESS_SCRIPT':p['harnessScript'],'NATIVE_DATABASE_SCRIPT':p['nativeDatabaseScript']};exec(compile(p['script'],'<aieyes-sessions>','exec'),n);n['serve'](p['request'])";
+            self.child = Some(process::LineProcess::spawn(command(
+                host,
+                &format!("exec python3 -u -c {}", quote(loader)),
+            )?)?);
+            serde_json::json!({"script":crate::session_hooks::REMOTE,"harnessScript":HARNESS_SCRIPT,"nativeDatabaseScript":NATIVE_DATABASE_SCRIPT,"request":request})
+        } else {
+            request.clone()
+        };
+        let child = self.child.as_ref().unwrap();
+        child.send(serde_json::to_vec(&payload)?)?;
+        let started = std::time::Instant::now();
+        for _ in 0..32 {
+            let line = child.read(Duration::from_secs(12).saturating_sub(started.elapsed()))?;
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&line)
+                && value["aieyesSession"] == 1
+            {
+                anyhow::ensure!(
+                    value["error"].is_null(),
+                    "{}",
+                    value["error"].as_str().unwrap_or("会话观察失败")
+                );
+                return Ok(value["result"].clone());
+            }
+        }
+        anyhow::bail!("会话观察协议无响应")
+    }
+}
 pub fn account_python(host: &Host, script: &str, args: &[String]) -> Result<serde_json::Value> {
     python_inner(host, script, args, true)
 }

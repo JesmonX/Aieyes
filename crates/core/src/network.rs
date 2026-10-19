@@ -1,6 +1,6 @@
 use crate::models::ProxyConfig;
 #[cfg(target_os = "macos")]
-use crate::process;
+mod system_proxy;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{process::Command, time::Duration};
@@ -101,47 +101,132 @@ pub fn test(proxy: &ProxyConfig, urls: &[String]) -> Result<NetworkTest> {
 }
 
 pub fn effective_proxy(proxy: &ProxyConfig) -> ProxyConfig {
-    if proxy.mode != "system" {
-        return proxy.clone();
-    }
+    effective_proxy_with_refresh(proxy, false)
+}
+
+pub(crate) fn effective_proxy_with_refresh(proxy: &ProxyConfig, force: bool) -> ProxyConfig {
     #[cfg(target_os = "macos")]
-    {
-        let mut cmd = Command::new("/usr/sbin/scutil");
-        cmd.arg("--proxy");
-        if let Ok(raw) = process::run(cmd, vec![], Duration::from_secs(2)) {
-            let text = String::from_utf8_lossy(&raw);
-            let mut fields = std::collections::HashMap::new();
-            for line in text.lines() {
-                if let Some((key, value)) = line.trim().split_once(" : ") {
-                    fields.insert(key, value);
-                }
-            }
-            for (name, scheme) in [("HTTPS", "http"), ("HTTP", "http"), ("SOCKS", "socks5h")] {
-                if fields.get(format!("{name}Enable").as_str()) == Some(&"1")
-                    && let (Some(host), Some(port)) = (
-                        fields.get(format!("{name}Proxy").as_str()),
-                        fields.get(format!("{name}Port").as_str()),
-                    )
-                {
-                    return ProxyConfig {
-                        mode: "custom".into(),
-                        url: format!("{scheme}://{host}:{port}"),
-                    };
-                }
-            }
-        }
+    if proxy.mode == "system" {
+        return system_proxy::get(force);
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = force;
     proxy.clone()
 }
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct ClientPolicy {
+    pub redirects: usize,
+    pub connect_timeout: Duration,
+    pub timeout: Duration,
+    pub https_only: bool,
+    pub extra_proxy: Option<String>,
+}
+impl Default for ClientPolicy {
+    fn default() -> Self {
+        Self {
+            redirects: 10,
+            connect_timeout: Duration::from_secs(10),
+            timeout: Duration::from_secs(25),
+            https_only: false,
+            extra_proxy: None,
+        }
+    }
+}
+#[derive(PartialEq, Eq)]
+struct ClientKey {
+    mode: String,
+    url: String,
+    environment: Vec<Option<std::ffi::OsString>>,
+    policy: ClientPolicy,
+}
+const PROXY_ENVIRONMENT: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+];
 pub fn client(proxy: &ProxyConfig) -> Result<reqwest::blocking::Client> {
-    Ok(client_builder(proxy)?.build()?)
+    client_with_policy(proxy, ClientPolicy::default())
+}
+pub(crate) fn client_with_policy(
+    proxy: &ProxyConfig,
+    policy: ClientPolicy,
+) -> Result<reqwest::blocking::Client> {
+    use std::{
+        collections::VecDeque,
+        sync::{Mutex, OnceLock},
+    };
+    static CLIENTS: OnceLock<Mutex<VecDeque<(ClientKey, reqwest::blocking::Client)>>> =
+        OnceLock::new();
+    let proxy = effective_proxy(proxy);
+    let key = ClientKey {
+        mode: proxy.mode.clone(),
+        url: proxy.url.clone(),
+        environment: if proxy.mode == "system" {
+            PROXY_ENVIRONMENT.iter().map(std::env::var_os).collect()
+        } else {
+            Vec::new()
+        },
+        policy,
+    };
+    let cache = CLIENTS.get_or_init(Default::default);
+    {
+        let mut clients = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(index) = clients.iter().position(|(known, _)| known == &key) {
+            let entry = clients.remove(index).unwrap();
+            let client = entry.1.clone();
+            clients.push_back(entry);
+            return Ok(client);
+        }
+    }
+    // TLS initialization and the last Client drop can start/join runtime
+    // threads. Neither should block unrelated requests on the cache mutex.
+    let mut builder = effective_builder(&proxy)?
+        .connect_timeout(key.policy.connect_timeout)
+        .timeout(key.policy.timeout)
+        .https_only(key.policy.https_only)
+        .redirect(if key.policy.redirects == 0 {
+            reqwest::redirect::Policy::none()
+        } else {
+            reqwest::redirect::Policy::limited(key.policy.redirects)
+        });
+    if let Some(extra) = &key.policy.extra_proxy {
+        builder = builder.proxy(reqwest::Proxy::all(extra)?);
+    }
+    let client = builder.build()?;
+    let mut clients = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(index) = clients.iter().position(|(known, _)| known == &key) {
+        let entry = clients.remove(index).unwrap();
+        let existing = entry.1.clone();
+        clients.push_back(entry);
+        drop(clients);
+        return Ok(existing);
+    }
+    let evicted = if clients.len() >= 16 {
+        clients.pop_front()
+    } else {
+        None
+    };
+    clients.push_back((key, client.clone()));
+    drop(clients);
+    drop(evicted);
+    Ok(client)
 }
 
 pub(crate) fn client_builder(proxy: &ProxyConfig) -> Result<reqwest::blocking::ClientBuilder> {
-    let proxy = effective_proxy(proxy);
+    effective_builder(&effective_proxy(proxy))
+}
+fn effective_builder(proxy: &ProxyConfig) -> Result<reqwest::blocking::ClientBuilder> {
     let mut builder = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(25))
+        .pool_max_idle_per_host(4)
+        .pool_idle_timeout(Duration::from_secs(90))
         .user_agent("Aieyes/0.1.0");
     match proxy.mode.as_str() {
         "direct" => builder = builder.no_proxy(),
@@ -183,5 +268,118 @@ pub fn apply_env(command: &mut Command, proxy: &ProxyConfig) {
             command.env(key, &proxy.url);
         }
         command.env("NO_PROXY", "localhost,127.0.0.1,::1");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cached_clients_reuse_connections_and_isolate_headers_and_redirect_policy() {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+            sync::{Arc, Mutex},
+            time::Instant,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/fixture", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let output = records.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut workers = Vec::new();
+            while Instant::now() < deadline && output.lock().unwrap().len() < 3 {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let connection = workers.len();
+                        let output = output.clone();
+                        workers.push(std::thread::spawn(move || {
+                            stream.set_nonblocking(false).unwrap();
+                            stream
+                                .set_read_timeout(Some(Duration::from_secs(2)))
+                                .unwrap();
+                            let mut reader = BufReader::new(stream);
+                            loop {
+                                let mut authorization = String::new();
+                                let mut line = String::new();
+                                if reader.read_line(&mut line).ok().is_none_or(|n| n == 0) {
+                                    break;
+                                }
+                                loop {
+                                    line.clear();
+                                    if reader.read_line(&mut line).ok().is_none_or(|n| n == 0) {
+                                        return;
+                                    }
+                                    if line == "\r\n" {
+                                        break;
+                                    }
+                                    if line.to_ascii_lowercase().starts_with("authorization:") {
+                                        authorization = line.trim().into();
+                                    }
+                                }
+                                output.lock().unwrap().push((connection, authorization));
+                                if reader
+                                    .get_mut()
+                                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                        }));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            }
+            for worker in workers {
+                worker.join().unwrap();
+            }
+        });
+        let proxy = ProxyConfig {
+            mode: "direct".into(),
+            url: String::new(),
+        };
+        let first = client(&proxy).unwrap();
+        let second = client(&proxy).unwrap();
+        for (client, token) in [(first, "synthetic-a"), (second, "synthetic-b")] {
+            assert_eq!(
+                client
+                    .get(&url)
+                    .header("Authorization", token)
+                    .send()
+                    .unwrap()
+                    .text()
+                    .unwrap(),
+                "ok"
+            );
+            // Let Hyper return the fully consumed response to its idle pool.
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        client_with_policy(
+            &proxy,
+            ClientPolicy {
+                redirects: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .get(&url)
+        .send()
+        .unwrap()
+        .text()
+        .unwrap();
+        server.join().unwrap();
+        let rows = records.lock().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].0, rows[1].0);
+        assert_ne!(rows[1].0, rows[2].0);
+        assert!(rows[0].1.ends_with("synthetic-a"));
+        assert!(rows[1].1.ends_with("synthetic-b"));
+        assert!(rows[2].1.is_empty());
     }
 }

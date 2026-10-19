@@ -344,7 +344,7 @@ struct Discovery {
     at: u64,
     real_at: Instant,
     roots: Vec<(PathBuf, bool)>,
-    paths: Vec<(PathBuf, bool)>,
+    paths: Vec<(PathBuf, bool, u64)>,
     error: Option<String>,
     watch: DirectoryWatch,
 }
@@ -571,7 +571,7 @@ impl Reader {
         retained.extend(
             self.discovery
                 .values()
-                .flat_map(|d| d.paths.iter().map(|(p, _)| p.clone())),
+                .flat_map(|d| d.paths.iter().map(|(p, _, _)| p.clone())),
         );
         self.databases.retain(|path, _| retained.contains(path));
         self.native_databases
@@ -736,9 +736,10 @@ impl Reader {
                             {
                                 continue;
                             }
-                            discovery.paths.retain(|(p, _)| p != &path);
-                            if path.is_file() && now.saturating_sub(modified(&path)) < 86400 {
-                                discovery.paths.push((path, hook));
+                            discovery.paths.retain(|(p, _, _)| p != &path);
+                            let stamp = modified(&path);
+                            if path.is_file() && now.saturating_sub(stamp) < 86400 {
+                                discovery.paths.push((path, hook, stamp));
                             }
                         }
                     }
@@ -750,10 +751,10 @@ impl Reader {
             }
             discovery
                 .paths
-                .retain(|(p, _)| now.saturating_sub(modified(p)) < 86400);
+                .retain(|(_, _, stamp)| now.saturating_sub(*stamp) < 86400);
             discovery
                 .paths
-                .sort_by_key(|(p, _)| std::cmp::Reverse(modified(p)));
+                .sort_by_key(|(_, _, stamp)| std::cmp::Reverse(*stamp));
             discovery.paths.truncate(256);
         }
         if self.discovery.get(&key).is_none_or(|d| {
@@ -799,8 +800,11 @@ impl Reader {
                         Ok(files) => paths.extend(
                             files
                                 .into_iter()
-                                .filter(|p| now.saturating_sub(modified(p)) < 86400)
-                                .map(|p| (p, false)),
+                                .map(|p| {
+                                    let stamp = modified(&p);
+                                    (p, false, stamp)
+                                })
+                                .filter(|(_, _, stamp)| now.saturating_sub(*stamp) < 86400),
                         ),
                         Err(e) => error = Some(e.to_string()),
                     }
@@ -830,11 +834,11 @@ impl Reader {
                     }
                     let modified = modified(entry.path());
                     if now.saturating_sub(modified) < 86400 {
-                        paths.push((entry.path().to_owned(), hook));
+                        paths.push((entry.path().to_owned(), hook, modified));
                     }
                 }
             }
-            paths.sort_by_key(|(p, _)| std::cmp::Reverse(modified(p)));
+            paths.sort_by_key(|(_, _, stamp)| std::cmp::Reverse(*stamp));
             paths.dedup();
             if paths.len() > 256 {
                 paths.truncate(256);
@@ -858,7 +862,7 @@ impl Reader {
             error: error.clone(),
             files: Vec::new(),
         };
-        for (path, hook) in paths {
+        for (path, hook, _) in paths {
             let name = path.to_string_lossy().into_owned();
             let result = if !hook
                 && matches!(source.provider.as_str(), "antigravity" | "deepseek-harness")
@@ -1087,6 +1091,22 @@ fn read_file(
             || c.offset > meta.len()
             || (c.size == meta.len() && c.signature != signature)
     });
+    if !reset
+        && cursor.is_some_and(|c| {
+            c.offset == meta.len() && c.size == meta.len() && c.signature == signature
+        })
+    {
+        return Ok(FileBatch {
+            key: path.to_string_lossy().into_owned(),
+            identity,
+            signature,
+            size: meta.len(),
+            offset: meta.len(),
+            modified,
+            hook,
+            ..Default::default()
+        });
+    }
     let mut offset = if reset {
         meta.len().saturating_sub(262144)
     } else {
@@ -1096,6 +1116,8 @@ fn read_file(
     file.seek(SeekFrom::Start(offset))?;
     let mut data = Vec::new();
     (&mut file).take(524288).read_to_end(&mut data)?;
+    #[cfg(test)]
+    let mut read_bytes = data.len() as u64;
     if reset && offset > 0 {
         let skip = data
             .iter()
@@ -1110,6 +1132,10 @@ fn read_file(
         file.seek(SeekFrom::Start(0))?;
         let mut first = Vec::new();
         (&mut file).take(65536).read_to_end(&mut first)?;
+        #[cfg(test)]
+        {
+            read_bytes += first.len() as u64;
+        }
         for line in first.split(|b| *b == b'\n').take(2) {
             if let Ok(v) = serde_json::from_slice::<Value>(line) {
                 let rows = if provider == "codex" {
@@ -1165,6 +1191,8 @@ fn read_file(
         reset,
         events,
         hook,
+        #[cfg(test)]
+        read_bytes,
         ..Default::default()
     })
 }
@@ -1265,8 +1293,10 @@ fn local_event_filesystem(path: &Path) -> bool {
 }
 struct RemoteWorker {
     key: String,
-    reader: Option<Reader>,
-    pending: Option<mpsc::Receiver<(Reader, Result<Snapshot, String>)>>,
+    pending: bool,
+    requests: Option<mpsc::SyncSender<u64>>,
+    completions: Option<mpsc::Receiver<Result<Snapshot, String>>>,
+    context: Option<crate::operations::Context>,
     last: Option<Instant>,
     snapshot: Snapshot,
 }
@@ -1274,12 +1304,133 @@ impl RemoteWorker {
     fn new(key: String) -> Self {
         Self {
             key,
-            reader: Some(Reader::default()),
-            pending: None,
+            pending: false,
+            requests: None,
+            completions: None,
+            context: None,
             last: None,
             snapshot: Snapshot::default(),
         }
     }
+    fn request(
+        &mut self,
+        host: &crate::models::Host,
+        sources: &[Source],
+        now: u64,
+    ) -> anyhow::Result<()> {
+        if self.requests.is_none() {
+            // Retained observers have their own cancellable lifetime, including
+            // idle periods; they must not inherit a completed sessions.list RPC.
+            let _detached = crate::operations::inherit(None);
+            let _scope = crate::operations::enter("sessions.list")?;
+            let context = crate::operations::context().unwrap();
+            self.context = Some(context.clone());
+            let (requests, input) = mpsc::sync_channel(1);
+            let (output, completions) = mpsc::channel();
+            let host = host.clone();
+            let sources = sources.to_vec();
+            std::thread::spawn(move || {
+                let _scope = crate::operations::inherit(Some(context));
+                let mut reader = Reader::default();
+                let mut observer = crate::ssh::SessionObserver::default();
+                loop {
+                    if crate::operations::check().is_err() {
+                        break;
+                    }
+                    match input.recv_timeout(Duration::from_millis(100)) {
+                        Ok(now) => {
+                            let result =
+                                collect_remote(&mut reader, &mut observer, &host, &sources, now)
+                                    .map_err(|e| format!("{e:#}"));
+                            if output.send(result).is_err() {
+                                break;
+                            }
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            });
+            self.requests = Some(requests);
+            self.completions = Some(completions);
+        }
+        self.requests.as_ref().unwrap().try_send(now)?;
+        self.pending = true;
+        Ok(())
+    }
+    fn accept(&mut self, result: Result<Snapshot, String>, sources: &[Source], id: &str, now: u64) {
+        self.pending = false;
+        self.last = Some(Instant::now());
+        match result {
+            Ok(snapshot) => self.snapshot = snapshot,
+            Err(error) => {
+                for session in &mut self.snapshot.sessions {
+                    if session.phase.active() {
+                        session.phase = Phase::Unknown;
+                    }
+                }
+                self.snapshot.sources = sources
+                    .iter()
+                    .map(|s| SourceHealth {
+                        source_id: s.id.clone(),
+                        provider: s.provider.clone(),
+                        machine_id: id.into(),
+                        state: "degraded".into(),
+                        error: Some(error.clone()),
+                        checked_at: now,
+                        ..Default::default()
+                    })
+                    .collect();
+                self.snapshot.unavailable = true;
+            }
+        }
+    }
+}
+impl Drop for RemoteWorker {
+    fn drop(&mut self) {
+        if let Some(context) = &self.context {
+            context.cancel();
+        }
+        // The worker owns/reaps the SSH process so dropping a source never
+        // blocks the session lane on network or process teardown.
+        self.requests.take();
+        self.completions.take();
+    }
+}
+fn collect_remote(
+    reader: &mut Reader,
+    observer: &mut crate::ssh::SessionObserver,
+    host: &crate::models::Host,
+    sources: &[Source],
+    now: u64,
+) -> anyhow::Result<Snapshot> {
+    let value = observer.collect(host, json!({"action":"collect","databaseCache":true,"sources":sources.iter().map(wire_source).collect::<Vec<_>>(),"cursors":reader.manifest()}))?;
+    let remote_now = value["now"].as_u64().unwrap_or(now);
+    let observed = seconds(SystemTime::now());
+    let mut snapshot = Snapshot::default();
+    let polls: Vec<SourceBatch> = serde_json::from_value(value["polls"].clone())?;
+    let complete = polls.len() == sources.len() && polls.iter().all(|p| p.error.is_none());
+    let retained: HashSet<_> = polls
+        .iter()
+        .flat_map(|p| p.files.iter().map(|f| f.key.clone()))
+        .collect();
+    for batch in polls {
+        if let Some(source) = sources.iter().find(|s| s.id == batch.source_id) {
+            let hook = value["hooks"]
+                .as_array()
+                .and_then(|rows| rows.iter().find(|v| v["sourceId"] == source.id))
+                .and_then(|v| v["state"].as_str())
+                .map(String::from);
+            let state = reader.consume(source, batch, observed, remote_now, &host.name, hook);
+            snapshot.sessions.extend(state.sessions);
+            snapshot.sources.extend(state.sources);
+        }
+    }
+    if complete {
+        reader.cursors.retain(|key, _| retained.contains(key));
+    }
+    snapshot.finish();
+    Ok(snapshot)
 }
 #[derive(Default)]
 pub struct SessionMonitor {
@@ -1359,67 +1510,29 @@ impl SessionMonitor {
             if worker.key != key {
                 *worker = RemoteWorker::new(key);
             }
-            let completed = worker.pending.as_ref().and_then(|rx| match rx.try_recv() {
-                Ok(result) => Some(result),
-                Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => Some((
-                    Reader::default(),
-                    Err("远程会话采集任务已退出，将自动重试".into()),
-                )),
-            });
-            if let Some((reader, result)) = completed {
-                worker.pending = None;
-                worker.reader = Some(reader);
-                worker.last = Some(Instant::now());
-                match result {
-                    Ok(s) => worker.snapshot = s,
-                    Err(error) => {
-                        for s in &mut worker.snapshot.sessions {
-                            if s.phase.active() {
-                                s.phase = Phase::Unknown;
-                            }
-                        }
-                        worker.snapshot.sources = sources
-                            .iter()
-                            .map(|s| SourceHealth {
-                                source_id: s.id.clone(),
-                                provider: s.provider.clone(),
-                                machine_id: id.clone(),
-                                state: "degraded".into(),
-                                error: Some(error.clone()),
-                                checked_at: now,
-                                ..Default::default()
-                            })
-                            .collect();
-                        worker.snapshot.unavailable = true;
-                    }
+            let completed = worker.completions.as_ref().map(|rx| rx.try_recv());
+            match completed {
+                Some(Ok(result)) => worker.accept(result, &sources, &id, now),
+                Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                    worker.requests = None;
+                    worker.completions = None;
+                    worker.context = None;
+                    worker.accept(
+                        Err("远程会话采集任务已退出，将自动重试".into()),
+                        &sources,
+                        &id,
+                        now,
+                    );
                 }
+                _ => {}
             }
-            if worker.pending.is_none()
+            if !worker.pending
                 && worker
                     .last
                     .is_none_or(|t| t.elapsed() >= Duration::from_secs(5))
+                && let Err(error) = worker.request(host, &sources, now)
             {
-                let mut reader = worker.reader.take().unwrap_or_default();
-                let sources = sources.clone();
-                let host = host.clone();
-                let (tx, rx) = mpsc::channel();
-                worker.pending = Some(rx);
-                std::thread::spawn(move || {
-                    let result=(||->anyhow::Result<Snapshot>{
-                        let value=crate::ssh::session_request(&host,json!({"action":"collect","databaseCache":true,"sources":sources.iter().map(wire_source).collect::<Vec<_>>(),"cursors":reader.manifest()}))?;
-                        let remote_now=value["now"].as_u64().unwrap_or(now);let observed=seconds(SystemTime::now());
-                        let mut snapshot=Snapshot::default();let polls:Vec<SourceBatch>=serde_json::from_value(value["polls"].clone())?;
-                        let complete=polls.len()==sources.len() && polls.iter().all(|p|p.error.is_none());
-                        let retained:HashSet<_>=polls.iter().flat_map(|p|p.files.iter().map(|f|f.key.clone())).collect();
-                        for batch in polls {if let Some(source)=sources.iter().find(|s|s.id==batch.source_id) {
-                            let hook=value["hooks"].as_array().and_then(|rows|rows.iter().find(|v|v["sourceId"]==source.id)).and_then(|v|v["state"].as_str()).map(String::from);
-                            let state=reader.consume(source,batch,observed,remote_now,&host.name,hook);
-                            snapshot.sessions.extend(state.sessions);snapshot.sources.extend(state.sources);
-                        }}if complete { reader.cursors.retain(|key,_|retained.contains(key)); }snapshot.finish();Ok(snapshot)
-                    })().map_err(|e|format!("{e:#}"));
-                    let _ = tx.send((reader, result));
-                });
+                worker.accept(Err(error.to_string()), &sources, &id, now);
             }
             if worker.snapshot.sources.is_empty() {
                 snapshot
@@ -1475,6 +1588,75 @@ mod tests {
             "{}\n",
             json!({"type":kind,"payload":{"type":event,"text":"private prompt"}})
         )
+    }
+    #[test]
+    fn unchanged_eof_skips_reads_but_partial_appends_and_rotation_are_observed() {
+        use std::io::Write;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("session.jsonl");
+        let cursor = |b: &FileBatch| Cursor {
+            identity: b.identity.clone(),
+            signature: b.signature.clone(),
+            size: b.size,
+            offset: b.offset,
+            ..Default::default()
+        };
+        fs::write(&path, row("event_msg", "task_started")).unwrap();
+        let first = read_file(&path, "codex", false, None).unwrap();
+        assert!(first.read_bytes > 0);
+        let cached = cursor(&first);
+        let unchanged = read_file(&path, "codex", false, Some(&cached)).unwrap();
+        assert_eq!(unchanged.read_bytes, 0);
+        assert_eq!(unchanged.offset, first.size);
+        let partial = row("event_msg", "task_complete");
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(partial.trim_end().as_bytes())
+            .unwrap();
+        let half = read_file(&path, "codex", false, Some(&cached)).unwrap();
+        assert!(half.events.is_empty());
+        assert_eq!(half.offset, first.offset);
+        let repeated = read_file(&path, "codex", false, Some(&cursor(&half))).unwrap();
+        assert!(
+            repeated.read_bytes > 0,
+            "Unfinished lines must remain readable"
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"\n")
+            .unwrap();
+        let completed = read_file(&path, "codex", false, Some(&cursor(&half))).unwrap();
+        assert_eq!(completed.events.len(), 1);
+        assert_eq!(completed.offset, completed.size);
+        fs::write(&path, row("event_msg", "task_started")).unwrap();
+        assert!(
+            read_file(&path, "codex", false, Some(&cursor(&completed)))
+                .unwrap()
+                .reset
+        );
+        fs::rename(&path, temp.path().join("old.jsonl")).unwrap();
+        fs::write(&path, row("event_msg", "task_started")).unwrap();
+        assert!(
+            read_file(&path, "codex", false, Some(&cursor(&completed)))
+                .unwrap()
+                .reset
+        );
+        let initial = read_file(&path, "codex", false, None).unwrap();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(row("event_msg", "task_started").repeat(12000).as_bytes())
+            .unwrap();
+        let bounded = read_file(&path, "codex", false, Some(&cursor(&initial))).unwrap();
+        assert!(bounded.offset < bounded.size);
+        let remainder = read_file(&path, "codex", false, Some(&cursor(&bounded))).unwrap();
+        assert!(remainder.read_bytes > 0);
+        assert!(remainder.offset > bounded.offset);
     }
     #[test]
     fn pet_input_wait_survives_unrelated_parallel_tool_output() {
@@ -2260,20 +2442,18 @@ mod adapter_tests {
             ));
             let mut worker = RemoteWorker::new(key);
             let (tx, rx) = mpsc::channel();
-            worker.pending = Some(rx);
+            worker.completions = Some(rx);
+            worker.pending = true;
             if id == "ready" {
-                tx.send((
-                    Reader::default(),
-                    Ok(Snapshot {
-                        sessions: vec![LiveSession {
-                            id: "remote-session".into(),
-                            phase: Phase::Tool,
-                            updated_at: seconds(SystemTime::now()),
-                            ..Default::default()
-                        }],
+                tx.send(Ok(Snapshot {
+                    sessions: vec![LiveSession {
+                        id: "remote-session".into(),
+                        phase: Phase::Tool,
+                        updated_at: seconds(SystemTime::now()),
                         ..Default::default()
-                    }),
-                ))
+                    }],
+                    ..Default::default()
+                }))
                 .unwrap();
             }
             senders.push(tx);
@@ -2386,7 +2566,8 @@ mod adapter_tests {
         let (tx, rx) = mpsc::channel();
         drop(tx);
         let mut worker = RemoteWorker::new(key);
-        worker.pending = Some(rx);
+        worker.completions = Some(rx);
+        worker.pending = true;
         let mut monitor = SessionMonitor::default();
         monitor.remote.insert("ssh".into(), worker);
         let failed = monitor.read(&settings, SystemTime::now());
@@ -2400,22 +2581,20 @@ mod adapter_tests {
                 .contains("自动重试")
         );
         let worker = monitor.remote.get_mut("ssh").unwrap();
-        assert!(worker.pending.is_none());
-        assert!(worker.reader.is_some());
+        assert!(!worker.pending);
+        assert!(worker.requests.is_none());
         let (tx, rx) = mpsc::channel();
-        tx.send((
-            Reader::default(),
-            Ok(Snapshot {
-                sources: vec![SourceHealth {
-                    source_id: "remote".into(),
-                    state: "healthy".into(),
-                    ..Default::default()
-                }],
+        tx.send(Ok(Snapshot {
+            sources: vec![SourceHealth {
+                source_id: "remote".into(),
+                state: "healthy".into(),
                 ..Default::default()
-            }),
-        ))
+            }],
+            ..Default::default()
+        }))
         .unwrap();
-        worker.pending = Some(rx);
+        worker.completions = Some(rx);
+        worker.pending = true;
         assert!(!monitor.read(&settings, SystemTime::now()).unavailable);
     }
 }

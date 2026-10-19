@@ -76,19 +76,24 @@ fn client(
     proxy: &ProxyConfig,
     env: &BTreeMap<String, String>,
 ) -> Result<reqwest::blocking::Client> {
-    let mut builder = crate::network::client_builder(proxy)?
-        .connect_timeout(Duration::from_secs(20))
-        .timeout(Duration::from_secs(1800))
-        .redirect(reqwest::redirect::Policy::none());
-    if !matches!(proxy.mode.as_str(), "custom" | "direct") {
-        for name in ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
-            if let Some(url) = env.get(name) {
-                builder = builder.proxy(reqwest::Proxy::all(url)?);
-                break;
-            }
-        }
-    }
-    Ok(builder.build()?)
+    let extra_proxy = if !matches!(proxy.mode.as_str(), "custom" | "direct") {
+        ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
+            .iter()
+            .find_map(|name| env.get(*name))
+            .cloned()
+    } else {
+        None
+    };
+    crate::network::client_with_policy(
+        proxy,
+        crate::network::ClientPolicy {
+            redirects: 0,
+            connect_timeout: Duration::from_secs(20),
+            timeout: Duration::from_secs(1800),
+            extra_proxy,
+            ..Default::default()
+        },
+    )
 }
 fn validate(c: &Connection) -> Result<()> {
     identifier(&c.id)?;

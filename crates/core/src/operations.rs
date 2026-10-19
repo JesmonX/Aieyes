@@ -27,6 +27,20 @@ fn registry() -> &'static Mutex<Registry> {
 }
 #[derive(Clone)]
 pub struct Context(Arc<Task>);
+impl Context {
+    pub(crate) fn cancel(&self) {
+        self.0.cancel.store(true, Ordering::Release);
+    }
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.0.cancel.load(Ordering::Acquire)
+    }
+}
+pub(crate) fn is_preparing() -> bool {
+    registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .preparing
+}
 pub struct Scope {
     previous: Option<Context>,
 }

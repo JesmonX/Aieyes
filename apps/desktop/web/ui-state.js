@@ -36,6 +36,28 @@ window.AieyesUI = {
     return text.slice(0,head).join('')+'…'+text.slice(-(limit-head-1)).join('');
   },
   canonicalProvider(provider) { return provider === 'agy' ? 'antigravity' : provider; },
+  agentProvider(provider) { return window.AieyesContract.agentAliases?.[provider] ?? this.canonicalProvider(provider); },
+  sameAgent(left, right) { return this.agentProvider(left) === this.agentProvider(right); },
+  supports(provider, feature, settings) {
+    if (window.AieyesContract.providerCapabilities?.[provider]?.includes(feature)) return true;
+    return ['quota', 'quotaReset', 'valuation'].includes(feature) && (settings?.sources ?? []).some(source => source.provider === provider && source.quotaCommand?.trim());
+  },
+  featureProvider(provider, feature) {
+    return Object.keys(window.AieyesContract.providers).find(key => this.sameAgent(key, provider) && this.supports(key, feature));
+  },
+  agentSupports(provider, feature, settings) {
+    return Object.keys(window.AieyesContract.providers).some(key => this.sameAgent(key, provider) && this.supports(key, feature, settings));
+  },
+  agentConfigurations(rows) {
+    const groups = new Map();
+    for (const row of rows) {
+      const provider = this.agentProvider(row.provider), group = groups.get(provider) ?? {provider, enabled:false, machineIds:[]};
+      group.enabled ||= row.enabled;
+      if (this.supports(row.provider, 'machines')) group.machineIds = [...new Set([...group.machineIds, ...row.machineIds])];
+      groups.set(provider, group);
+    }
+    return [...groups.values()];
+  },
   canonicalAccountKey(key, aliases = {}) { return aliases[key] ?? (key?.startsWith('agy:') ? 'antigravity:' + key.slice(4) : key); },
   canonicalPayload(value, aliases = value?.accountAliases ?? {}) {
     if (Array.isArray(value)) return value.map(row => this.canonicalPayload(row, aliases));
@@ -88,7 +110,8 @@ window.AieyesUI = {
     for(const provider of new Set([...eligible.map(a=>a.provider),...Object.keys(preference.providers)])) {
       const keys=sorted.filter(a=>a.provider===provider).map(a=>a.provider+':'+a.id), choice=preference.providers[provider];
       const saved=Array.isArray(choice?.keys)?choice.keys:[];
-      const values=choice?.mode==='custom'?saved.filter(k=>keys.includes(k)):keys.slice(0,5);
+      const automatic=sorted.filter(a=>this.sameAgent(a.provider,provider)&&preference.providers[a.provider]?.mode!=='custom').slice(0,5).filter(a=>a.provider===provider).map(a=>a.provider+':'+a.id);
+      const values=choice?.mode==='custom'?saved.filter(k=>keys.includes(k)):automatic;
       selected[provider]=[...new Set(values)];
     }
     return selected;

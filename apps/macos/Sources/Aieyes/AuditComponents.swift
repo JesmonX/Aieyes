@@ -40,9 +40,10 @@ struct PricingWarning: View {
 struct ProviderMark: View {
     var provider: String
     var size: CGFloat = DesignTokens.providerMarkSize
+    @Environment(\.colorScheme) private var colorScheme
     private static let images: [String: NSImage] = {
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("desktop/web")
-        return CoreContract.providers.filter { $0 != "custom" }.reduce(into: [:]) { result, key in
+        return Set(Array(CoreContract.providerIcons.values) + Array(CoreContract.providerDarkIcons.values)).reduce(into: [:]) { result, key in
             let name = "provider-" + key
             let url = Bundle.main.url(forResource: name, withExtension: "png") ?? source.appendingPathComponent(name + ".png")
             if let image = NSImage(contentsOf: url) { result[key] = image }
@@ -50,8 +51,8 @@ struct ProviderMark: View {
     }()
     var body: some View {
         Group {
-            if let image = Self.images[provider == "deepseek-harness" ? "deepseek" : provider] {
-                Image(nsImage: image).resizable().renderingMode(["codex", "cursor", "grok", "zcode"].contains(provider) ? .template : .original).scaledToFit()
+            if let asset = (colorScheme == .dark ? CoreContract.providerDarkIcons[provider] : nil) ?? CoreContract.providerIcons[provider], let image = Self.images[asset] {
+                Image(nsImage: image).resizable().renderingMode(CoreContract.monochromeIcons.contains(provider) ? .template : .original).scaledToFit()
             } else { Image(systemName: "terminal").resizable().scaledToFit().frame(width: size * 2 / 3, height: size * 2 / 3).foregroundStyle(.secondary) }
         }.frame(width: size, height: size).help(Format.provider(provider)).accessibilityLabel(Format.provider(provider))
     }

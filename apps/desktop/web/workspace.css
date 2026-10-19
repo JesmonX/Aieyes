@@ -87,7 +87,7 @@ html:not(:has(#panel)) { scrollbar-gutter:stable; }
 [data-provider=codex] { --category:var(--category-codex); }
 [data-provider=claude] { --category:var(--category-claude); }
 [data-provider=antigravity] { --category:var(--category-antigravity); }
-[data-provider=deepseek] { --category:var(--category-deepseek); }
+[data-provider=deepseek], [data-provider=deepseek-harness] { --category:var(--category-deepseek); }
 [data-resource=cpu] { --category:var(--category-cpu); }
 [data-resource=memory] { --category:var(--category-memory); }
 [data-resource=gpu] { --category:var(--category-gpu); }

@@ -43,10 +43,12 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     assert.equal(await page.locator('[data-guide-card]:not([data-guide-card=more])').count(),8);
     await page.screenshot({path:path.join(out,'guide-light.png'),fullPage:true});
     await page.locator('[data-guide-card=usage] > summary').click();
+    assert.equal(await page.locator('[data-guide-provider=deepseek]').count(),1);
+    assert.equal(await page.locator('[data-guide-provider="deepseek-harness"]').count(),0);
     await page.locator('[data-guide-provider=cursor]').click();
     assert.equal(await page.locator('[data-settings-agent]').last().getAttribute('data-settings-agent'),'custom');
     assert.equal(await page.locator('[data-settings-agent=cursor]').getAttribute('aria-current'),'page');
-    assert.equal(await page.locator('[data-settings-agent] img').count(),9);
+    assert.equal(await page.locator('[data-settings-agent] .provider-mark:has(img)').count(),9);
     await page.locator('#setup-return [data-guide-open]').click();
     await page.locator('[data-guide-card=network] > summary').click();
     await page.locator('[data-guide-card=network] .setup-checks button').first().click();
@@ -166,8 +168,9 @@ const {serveFont}=require('./ui-test-helpers.cjs');
       await p.evaluate(()=>{navigationFixture.failGuideDashboard=false;navigationFixture.failGuideTasks=false;});
       await p.locator('[data-guide-recheck]').click();await p.locator('[data-guide-recheck]:not([disabled])').waitFor();
       assert.equal(await p.locator('.setup-read-error').count(),0);
-      // A save may finish after the user has already returned to help.
-      await p.evaluate(()=>{const saved=structuredClone(state.settings);saved.accounts[0].quotaRefreshSeconds=75;acceptSettings(saved);});
+      // A save may finish after the user has already returned to help. Keep the
+      // simulated backend committed too: a queued refresh reads this value.
+      await p.evaluate(()=>{const saved=structuredClone(state.settings);saved.accounts[0].quotaRefreshSeconds=75;navigationFixture.settings=structuredClone(saved);acceptSettings(saved);});
       assert.match(await goal('refresh').innerText(),/每 75 秒查询/,'late saves immediately update the guide');
       // Directory shortcuts retain the selected machine and require an explicit account choice.
       const directories=async()=>{

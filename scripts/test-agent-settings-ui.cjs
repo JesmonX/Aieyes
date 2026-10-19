@@ -117,7 +117,7 @@ function browserFixture(){
     const mergedHost=(await rpc('settings.get')).hosts.find(h=>h.id==='server');
     assert.equal(mergedHost.name,'外部窗口更新');assert.equal(mergedHost.port,2222);assert.equal((await rpc('settings.get')).refreshSeconds,120);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='sources';render();});
-    assert.equal(await page.locator('[data-settings-agent]').count(),await page.evaluate(()=>Object.keys(AieyesContract.providers).length));assert.equal(await page.locator('[data-agent-enable]').count(),1);
+    assert.equal(await page.locator('[data-settings-agent]').count(),await page.evaluate(()=>AieyesContract.agentProviders.length));assert.equal(await page.locator('[data-agent-enable]').count(),1);
     assert.equal(await page.locator('#settings-save-all').count(),0);
     await page.locator('[data-settings-agent=claude]').click();await page.locator('[data-agent-enable="claude"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').enabled);
     await page.locator('#agent-section-machines > summary').click();
@@ -244,21 +244,26 @@ function browserFixture(){
     await page.locator('#editor-form button[type=submit]').click();await page.locator('#editor-error:visible').waitFor();
     assert.equal(await page.locator('#field-to').inputValue(),'provider/draft');assert.equal((await rpc('settings.get')).modelMappings['fixture-new'],'provider/external');
     await page.locator('#cancel-editor').click();await page.locator('#editor-confirm-discard').click();
-    // Antigravity CLI and SDK use different native API protocols.
-    await page.evaluate(()=>{state.page='settings';state.settingsTab='integrations';AieyesAgentSettings.navigate({provider:'antigravity'});render();});
-    if(!await page.locator('#agent-section-api').evaluate(el=>el.open))await page.locator('#agent-section-api > summary').click();
-    await page.getByText(/agy 自定义端点使用 Gemini 协议/).waitFor();
-    assert.equal(await page.locator('#agent-section-api [data-native-api]').count(),0);
-    assert.equal(await page.locator('#agent-section-api a').first().getAttribute('href'),'https://www.antigravity.google/docs/install?tab=cli');
-    assert.equal(await page.locator('#agent-section-api a').last().getAttribute('href'),'https://www.antigravity.google/docs/sdk/local-models');
-    await page.evaluate(()=>notify(''));await page.locator('#agent-section-api').scrollIntoViewIfNeeded();await page.screenshot({animations:'disabled',path:path.join(out,'antigravity-api-guidance.png')});
+    // Unsupported forms are absent, including guidance-only API placeholders.
+    for(const provider of ['antigravity','cursor','custom']){
+      await page.evaluate(provider=>{state.page='settings';state.settingsTab='integrations';AieyesAgentSettings.navigate({provider});render();},provider);
+      assert.equal(await page.locator('#agent-section-api').count(),0,provider);
+    }
+    for(const provider of ['deepseek','qoder','grok','cursor','codebuddy','pi','omp']){
+      await page.evaluate(provider=>{AieyesAgentSettings.navigate({provider});render();},provider);
+      assert.equal(await page.locator('#agent-section-valuation').count(),0,provider);
+    }
+    await page.evaluate(()=>{AieyesAgentSettings.navigate({provider:'deepseek-harness'});render();});
+    assert.equal(await page.locator('[data-settings-agent="deepseek"]').count(),1);
+    assert.equal(await page.locator('[data-settings-agent="deepseek-harness"]').count(),0);
+    assert.equal(await page.locator('[data-agent-section]').getAttribute('data-agent-section'),'deepseek');
+    assert.equal(await page.locator('#agent-section-api').count(),1);
+    assert.equal(await page.locator('#agent-section-machines').count(),1);
+    await page.locator('[data-agent-enable="deepseek"]').check();
+    await page.waitForFunction(()=>!state.settingsSaving&&state.settings.agents.filter(a=>a.provider.startsWith('deepseek')).every(a=>a.enabled));
+    await page.locator('[data-agent-enable="deepseek"]').uncheck();
+    await page.waitForFunction(()=>!state.settingsSaving&&state.settings.agents.filter(a=>a.provider.startsWith('deepseek')).every(a=>!a.enabled));
     await page.evaluate(()=>{AieyesAgentSettings.navigate({provider:'cursor'});render();});
-    if(!await page.locator('#agent-section-api').evaluate(el=>el.open))await page.locator('#agent-section-api > summary').click();
-    await page.getByText(/Cursor CLI 的 CURSOR_API_KEY/).waitFor();
-    assert.equal(await page.locator('#agent-section-api [data-native-api]').count(),0);
-    assert.equal(await page.locator('#agent-section-api a').count(),2);
-    assert.equal(await page.locator('#agent-section-api a').first().getAttribute('href'),'https://cursor.com/docs/cli/reference/authentication');
-    assert.equal(await page.locator('#agent-section-api a').last().getAttribute('href'),'https://cursor.com/docs/cli/reference/configuration');
     // Native Cursor observers use flat hooks.json entries and keep user hooks.
     const cursorHome=path.join(root,'.cursor');fs.mkdirSync(cursorHome);fs.writeFileSync(path.join(cursorHome,'hooks.json'),JSON.stringify({version:1,hooks:{preToolUse:[{command:'other-guard'}]}}));
     const cursorSettings=await rpc('settings.get');cursorSettings.sources.push({id:'cursor-quota-ui',provider:'cursor',name:'Cursor quota',path:'',enabled:true,subscription:{mode:'session',credentialRef:'fixture-credential'}});const cursorAgent=cursorSettings.agents.find(a=>a.provider==='cursor');cursorAgent.enabled=true;cursorAgent.machineIds=['local'];await rpc('settings.save',cursorSettings);

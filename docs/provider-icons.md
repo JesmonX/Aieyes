@@ -1,17 +1,23 @@
 # Agent identity icons
 
-Icons are bundled in `apps/desktop/web/provider-*.png` and copied into the macOS app resources by `scripts/build-macos.sh`. No runtime network requests are needed. The icon container is 36 × 36 points/pixels. Prefer official transparent standalone marks when available; retain existing assets when an appropriate standalone version cannot be confirmed. The originals retain their proportions; PNG conversion and size reduction are only for local display. Monochrome Codex, Cursor, Grok and ZCode marks follow the light/dark foreground color.
+Icons are bundled as transparent 144 × 144 PNGs in `apps/desktop/web/provider-*.png` and copied into macOS resources by `scripts/build-macos.sh`. No runtime downloads are needed. Provider assets, theme variants and agent aliases are declared in `docs/core-contracts.json` and generated for Web and Swift.
 
-| Provider | Official source |
+The shared container is 36 × 36 points/pixels, with smaller containers in selectors. Each mark is cropped to its visible artwork, preserves its proportions, and receives its own transparent padding. Optical size is adjusted for stroke density and shape rather than equalizing image dimensions or bounding boxes. The reviewed longer-side fractions are recorded in `provider-icon-sources.json`; both clients display the same padded assets.
+
+| Agent | Official artwork |
 | --- | --- |
-| Codex (OpenAI monochrome Blossom) | https://cdn.openai.com/brand/OpenAI-Logos-2025.zip — `PNGs/OpenAI-black-monoblossom.png` |
-| Claude Code (Claude mark) | https://assets.claude.com/95a868946ac8a31e5ff832e2899f294aa368b836.png |
-| Antigravity / agy | https://antigravity.google/assets/image/brand/antigravity-icon__full-color.png |
-| DeepSeek | https://api-docs.deepseek.com/img/favicon.svg |
-| Cursor (2D standalone cube) | https://cursor.com/brand — official ZIP, `General Logos/Cube/SVG/CUBE_2D_LIGHT.svg` |
-| Grok (standalone mark) | https://grok.com — the two `path#mark` elements in the home navigation logo |
-| ZCode (standalone mark) | https://zcode.z.ai/en — navigation logo SVG, `viewBox="0 0 256 218"` |
+| Codex | [OpenAI monochrome Blossom](https://cdn.openai.com/brand/OpenAI-Logos-2025.zip), `PNGs/OpenAI-black-monoblossom.png` |
+| Claude Code | [Claude mark](https://assets.claude.com/95a868946ac8a31e5ff832e2899f294aa368b836.png) |
+| Antigravity / agy | [Antigravity icon](https://antigravity.google/assets/image/brand/antigravity-icon__full-color.png) |
+| DeepSeek | [DeepSeek mark](https://api-docs.deepseek.com/img/favicon.svg), shared by the balance and Harness adapters |
+| Cursor | [Official brand assets](https://cursor.com/brand), `General Logos/Cube/SVG/CUBE_2D_LIGHT.svg` |
+| Grok | [Navigation mark](https://grok.com), both `path#mark` elements |
+| ZCode | [Navigation mark](https://zcode.z.ai/en), `viewBox="0 0 256 218"` |
+| Qoder | [Official SVG](https://img.alicdn.com/imgextra/i4/O1CN018ikLCF1sGya2c3YY4_!!6000000005740-55-tps-206-206.svg), separate rounded tile removed |
+| OpenCode | [Official light/dark standalone marks](https://github.com/anomalyco/opencode/tree/dev/packages/console/app/src/asset/brand), without the favicon tile |
+| Kimi Code | [Official homepage](https://kimi.com) CSS `--sidebar-logo`, K and blue accent isolated from the tile |
+| CodeBuddy | [Official SVG](https://codebuddy-1328495429.cos.accelerate.myqcloud.com/web/ide/logo.svg), foreground robot and eyes in brand violet; background and clipping removed |
+| Pi | [Official multicolor mark](https://pi.dev/logo-auto.svg) |
+| Oh My Pi | [Official connector mark](https://github.com/can1357/oh-my-pi/blob/main/assets/icon.svg), light/dark foreground variants |
 
-Cursor, Grok and ZCode were checked on 2026-10-17 and rendered with transparent padding into 144 px PNGs. Qoder's official standalone SVG still contains a rounded tile; OpenCode's official brand asset is a rectangular mark. Their existing icons are retained. Sources for those retained assets remain in `provider-icon-sources.json`.
-
-Marks belong to their respective owners and identify the configured providers. agy retains its own visible name while sharing the Antigravity mark. Custom and unknown providers use a terminal symbol at two thirds of the surrounding icon container size.
+Codex, Cursor, Grok, ZCode and Qoder follow the light/dark foreground color. Kimi, OpenCode and Oh My Pi have separate light/dark PNGs to preserve their colored accents or tonal detail. Claude, Antigravity, DeepSeek, CodeBuddy and Pi retain their brand colors. Custom or unknown providers use the shared terminal fallback. Marks belong to their respective owners.

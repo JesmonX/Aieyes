@@ -19,7 +19,8 @@ pub(crate) struct Memory {
 struct Entry {
     version: String,
     until: i64,
-    payload: String,
+    payload: std::sync::Arc<str>,
+    data: Option<std::sync::Arc<Day>>,
     touched: u64,
     disk_touch: i64,
 }
@@ -35,9 +36,9 @@ impl Memory {
     }
     fn put(&mut self, key: String, mut entry: Entry) {
         if let Some(old) = self.entries.remove(&key) {
-            self.bytes -= key.len() + old.payload.len() + old.version.len()
+            self.bytes -= key.len() + old.payload.len() * 4 + old.version.len()
         }
-        let size = key.len() + entry.payload.len() + entry.version.len();
+        let size = key.len() + entry.payload.len() * 4 + entry.version.len();
         if size > MEMORY_LIMIT {
             return;
         }
@@ -51,7 +52,7 @@ impl Memory {
                 break;
             };
             let entry = self.entries.remove(&old).unwrap();
-            self.bytes -= old.len() + entry.payload.len() + entry.version.len();
+            self.bytes -= old.len() + entry.payload.len() * 4 + entry.version.len();
         }
         self.clock += 1;
         entry.touched = self.clock;
@@ -229,7 +230,7 @@ pub(crate) fn date_bounds(store: &Store, f: &Filter, summary: bool) -> Result<Da
                     .map(|s| &s.id)
                     .collect::<Vec<_>>(),
             )?;
-            let first: Option<i64> = store.db.query_row("SELECT MIN(stamp) FROM events e WHERE stamp<=?1 AND (?2 IS NULL OR provider=?2) AND (?3 IS NULL OR (?3='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?3 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6))))) AND (?4 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?4)) AND (?5 IS NULL OR model=?5)", params![now(), f.provider, f.account_id, f.source_id, f.model, shared], |r| r.get(0))?;
+            let first: Option<i64> = store.db.query_row("SELECT MIN(stamp) FROM events e WHERE stamp<=?1 AND (?2 IS NULL OR provider=?2 OR provider=?7) AND (?3 IS NULL OR (?3='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?3 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6))))) AND (?4 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?4)) AND (?5 IS NULL OR model=?5)", params![now(), f.provider, f.account_id, f.source_id, f.model, shared, f.provider_alias()], |r| r.get(0))?;
             (
                 first
                     .and_then(|stamp| Local.timestamp_opt(stamp, 0).single())
@@ -277,6 +278,7 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
     let earliest = start.min(heat_start);
     let last = boundary(last_day + Duration::days(1));
     let settings = store.settings()?;
+    let cacheable = store.db.transaction_state(None::<&str>)? != rusqlite::TransactionState::Write;
     let mut shared: Vec<_> = settings
         .sources
         .iter()
@@ -286,14 +288,14 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
     shared.sort();
     let shared_json = serde_json::to_string(&shared)?;
     let scope = hash(&serde_json::to_string(&(
-        "usage-v3-native-credit-mirrors",
+        "usage-v4-agent-groups",
         &f.provider,
         &f.account_id,
         &f.source_id,
         &shared,
     ))?);
     let revisions = versions(&store.db, boundary(earliest), last)?;
-    let prices = store.prices()?;
+    let prices = store.cached_prices()?;
     let mut d = Dashboard {
         generated_at: now,
         ..Default::default()
@@ -316,15 +318,27 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
         }
         let key = format!("{scope}:{from}:{end}");
         let rev = version(&revisions, from, end);
-        let memory = store.usage_memory.borrow_mut().get(&key, &rev, now);
-        let cached = if memory.is_some() {
+        let memory = if cacheable {
+            store.usage_memory.borrow_mut().get(&key, &rev, now)
+        } else {
+            None
+        };
+        let cached = if !cacheable {
+            None
+        } else if memory.is_some() {
             memory
         } else {
-            store.db.query_row("SELECT payload,valid_until,accessed FROM usage_day_cache WHERE cache_key=?1 AND version=?2 AND valid_until>?3",params![key,rev,now],|r|Ok(Entry {payload:r.get(0)?,until:r.get(1)?,disk_touch:r.get(2)?,version:rev.clone(),touched:0})).optional()?
+            store.db.query_row("SELECT payload,valid_until,accessed FROM usage_day_cache WHERE cache_key=?1 AND version=?2 AND valid_until>?3",params![key,rev,now],|r|Ok(Entry {payload:r.get::<_,String>(0)?.into(),data:None,until:r.get(1)?,disk_touch:r.get(2)?,version:rev.clone(),touched:0})).optional()?
         };
-        let (data, payload, until, disk_touch) = if let Some(entry) = cached
-            .as_ref()
-            .filter(|e| serde_json::from_str::<Day>(&e.payload).is_ok())
+        let decoded = cached.as_ref().and_then(|e| {
+            e.data.clone().or_else(|| {
+                serde_json::from_str::<Day>(&e.payload)
+                    .ok()
+                    .map(std::sync::Arc::new)
+            })
+        });
+        let (data, payload, until, disk_touch) = if let Some((entry, data)) =
+            cached.as_ref().zip(decoded)
         {
             let touch = now.saturating_sub(entry.disk_touch) >= 60;
             if touch {
@@ -338,14 +352,14 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
                 });
             }
             (
-                serde_json::from_str::<Day>(&entry.payload)?,
+                data,
                 entry.payload.clone(),
                 entry.until,
                 if touch { now } else { entry.disk_touch },
             )
         } else {
             let mut data = Day::new();
-            let mut query=store.db.prepare_cached("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<?2 AND stamp<=?3 AND (?4 IS NULL OR provider=?4) AND (?5 IS NULL OR (?5='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7)))) OR (account_id=?5 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7))))) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
+            let mut query=store.db.prepare_cached("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<?2 AND stamp<=?3 AND (?4 IS NULL OR provider=?4 OR provider=?8) AND (?5 IS NULL OR (?5='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7)))) OR (account_id=?5 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7))))) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
             let mut rows = query.query(params![
                 from,
                 end,
@@ -353,7 +367,8 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
                 f.provider,
                 f.account_id,
                 f.source_id,
-                shared_json
+                shared_json,
+                f.provider_alias()
             ])?;
             while let Some(row) = rows.next()? {
                 let mut e: UsageEvent = serde_json::from_str(&row.get::<_, String>(0)?)?;
@@ -397,23 +412,31 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
                 until,
                 payload: Some(payload.clone()),
             });
-            (data, payload, until, now)
-        };
-        store.usage_memory.borrow_mut().put(
-            key,
-            Entry {
-                version: rev,
+            (
+                std::sync::Arc::new(data),
+                std::sync::Arc::<str>::from(payload),
                 until,
-                payload,
-                touched: 0,
-                disk_touch,
-            },
-        );
-        for (model, entry) in data {
+                now,
+            )
+        };
+        if cacheable {
+            store.usage_memory.borrow_mut().put(
+                key,
+                Entry {
+                    version: rev,
+                    until,
+                    payload,
+                    touched: 0,
+                    disk_touch,
+                    data: Some(data.clone()),
+                },
+            );
+        }
+        for (model, entry) in data.iter() {
             if date >= trend_start {
                 options.insert(model.clone());
             }
-            if f.model.as_ref().is_some_and(|m| m != &model) {
+            if f.model.as_ref().is_some_and(|m| m != model) {
                 continue;
             }
             let a = &entry.usage;
@@ -435,7 +458,7 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
                 if entry.unpriced > 0 {
                     let gap = gaps.entry(model.clone()).or_insert_with(|| PricingGap {
                         model: model.clone(),
-                        price_id: pricing::find_price(&model, &prices, &settings.model_mappings)
+                        price_id: pricing::find_price(model, &prices, &settings.model_mappings)
                             .map(|p| p.id.clone()),
                         ..Default::default()
                     });
@@ -470,6 +493,9 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
     d.models.sort_by_key(|a| std::cmp::Reverse(a.total));
     d.model_options = options.into_iter().collect();
     d.pricing_gaps = gaps.into_values().collect();
+    if !cacheable {
+        pending.clear();
+    }
     Ok((d, pending))
 }
 
@@ -556,6 +582,39 @@ mod tests {
     }
     fn event(source: &Source, id: &str, stamp: i64) -> UsageEvent {
         usage::parse(source,&mut ParseState::default(),&json!({"id":id,"sessionId":"session","model":"fixture","timestamp":stamp,"tokens":{"input":100,"output":20}})).unwrap()
+    }
+    #[test]
+    fn typed_days_survive_rollback_and_a_reused_revision() {
+        let (_root, store, settings) = fixture();
+        store
+            .put_event(
+                &event(&settings.sources[0], "rollback", now()),
+                &[],
+                &settings,
+            )
+            .unwrap();
+        let filter = Filter {
+            days: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(store.dashboard(&filter).unwrap().summary.total, 120);
+        store
+            .db
+            .execute_batch(
+                "BEGIN; UPDATE events SET payload=json_set(payload,'$.tokens.input',500);",
+            )
+            .unwrap();
+        assert_eq!(store.dashboard(&filter).unwrap().summary.total, 520);
+        store.db.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(store.dashboard(&filter).unwrap().summary.total, 120);
+        store
+            .db
+            .execute(
+                "UPDATE events SET payload=json_set(payload,'$.tokens.input',600)",
+                [],
+            )
+            .unwrap();
+        assert_eq!(store.dashboard(&filter).unwrap().summary.total, 620);
     }
     fn projection(d: Dashboard) -> Value {
         json!({"summary":d.summary,"days":d.days,"trend":d.trend_days,"heat":d.heatmap,"models":d.models,"options":d.model_options,"dayModels":d.day_models,"gaps":d.pricing_gaps})
@@ -908,7 +967,8 @@ mod tests {
                 Entry {
                     version: "v".into(),
                     until: i64::MAX,
-                    payload: "x".repeat(1024 * 1024),
+                    payload: "x".repeat(1024 * 1024).into(),
+                    data: None,
                     touched: 0,
                     disk_touch: now(),
                 },

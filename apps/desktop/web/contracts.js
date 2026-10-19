@@ -11,7 +11,7 @@
     "cursor": "Cursor",
     "opencode": "OpenCode",
     "kimi": "Kimi Code",
-    "deepseek-harness": "DeepSeek Harness",
+    "deepseek-harness": "DeepSeek",
     "codebuddy": "CodeBuddy",
     "pi": "Pi",
     "omp": "Oh My Pi",
@@ -978,9 +978,37 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "cancel"
+    },
+    "dashboard.status": {
+      "lane": "dashboard",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    "hosts.monitor.configure": {
+      "lane": "hosts",
+      "updateBehavior": "observe",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
+    },
+    "hosts.monitor.refresh": {
+      "lane": "hosts",
+      "updateBehavior": "cancel",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null
     }
   },
   "subscriptions": {
+    "deepseek": {
+      "hint": "输入 DeepSeek 官方 API Key 查询账户余额。第三方模型的额度请在对应服务商管理。",
+      "modes": {
+        "api": "DeepSeek 官方 API 余额"
+      },
+      "loginUrl": "https://platform.deepseek.com/usage"
+    },
     "zcode": {
       "hint": "从对应地区的 Z.ai / 智谱账户获取 Coding Plan API Key。",
       "modes": {
@@ -1060,7 +1088,185 @@
       "label": "Oh My Pi 模型与额度"
     }
   },
-  "contractHash": "e9e81113601ab8ba9b2906e86cc984cc79ee84b628ccd4ad5330147399de525d",
+  "agentAliases": {
+    "deepseek-harness": "deepseek"
+  },
+  "agentProviders": [
+    "codex",
+    "claude",
+    "antigravity",
+    "deepseek",
+    "zcode",
+    "qoder",
+    "grok",
+    "cursor",
+    "opencode",
+    "kimi",
+    "codebuddy",
+    "pi",
+    "omp",
+    "custom"
+  ],
+  "providerCapabilities": {
+    "codex": [
+      "accounts",
+      "api",
+      "machines",
+      "quota",
+      "quotaReset",
+      "valuation"
+    ],
+    "claude": [
+      "accounts",
+      "api",
+      "machines",
+      "quota",
+      "quotaReset",
+      "valuation"
+    ],
+    "antigravity": [
+      "accounts",
+      "machines",
+      "quota",
+      "quotaReset",
+      "valuation"
+    ],
+    "deepseek": [
+      "accounts",
+      "quota"
+    ],
+    "zcode": [
+      "accounts",
+      "api",
+      "machines",
+      "quota",
+      "quotaReset",
+      "valuation"
+    ],
+    "qoder": [
+      "accounts",
+      "api",
+      "machines",
+      "quota",
+      "quotaReset"
+    ],
+    "grok": [
+      "accounts",
+      "api",
+      "machines",
+      "quota",
+      "quotaReset"
+    ],
+    "cursor": [
+      "accounts",
+      "machines",
+      "quota",
+      "quotaReset"
+    ],
+    "opencode": [
+      "accounts",
+      "api",
+      "machines",
+      "quota",
+      "quotaReset",
+      "valuation"
+    ],
+    "kimi": [
+      "accounts",
+      "api",
+      "machines",
+      "quota",
+      "quotaReset",
+      "valuation"
+    ],
+    "deepseek-harness": [
+      "accounts",
+      "api",
+      "machines",
+      "quota"
+    ],
+    "codebuddy": [
+      "accounts",
+      "api",
+      "machines"
+    ],
+    "pi": [
+      "accounts",
+      "api",
+      "machines"
+    ],
+    "omp": [
+      "accounts",
+      "api",
+      "machines"
+    ],
+    "custom": [
+      "accounts",
+      "machines"
+    ]
+  },
+  "providerIcons": {
+    "codex": {
+      "asset": "codex",
+      "monochrome": true
+    },
+    "claude": {
+      "asset": "claude",
+      "monochrome": false
+    },
+    "antigravity": {
+      "asset": "antigravity",
+      "monochrome": false
+    },
+    "deepseek": {
+      "asset": "deepseek",
+      "monochrome": false
+    },
+    "zcode": {
+      "asset": "zcode",
+      "monochrome": true
+    },
+    "qoder": {
+      "asset": "qoder",
+      "monochrome": true
+    },
+    "grok": {
+      "asset": "grok",
+      "monochrome": true
+    },
+    "cursor": {
+      "asset": "cursor",
+      "monochrome": true
+    },
+    "opencode": {
+      "asset": "opencode",
+      "monochrome": false,
+      "darkAsset": "opencode-dark"
+    },
+    "kimi": {
+      "asset": "kimi",
+      "monochrome": false,
+      "darkAsset": "kimi-dark"
+    },
+    "deepseek-harness": {
+      "asset": "deepseek",
+      "monochrome": false
+    },
+    "codebuddy": {
+      "asset": "codebuddy",
+      "monochrome": false
+    },
+    "pi": {
+      "asset": "pi",
+      "monochrome": false
+    },
+    "omp": {
+      "asset": "omp",
+      "monochrome": false,
+      "darkAsset": "omp-dark"
+    }
+  },
+  "contractHash": "f026bb373cdcddc2d63820fde646eb8d8c852c969e2478a10eb5daed38f413cd",
   "petFrameDurations": [
     [
       280,

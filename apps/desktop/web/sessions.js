@@ -8,7 +8,7 @@
   globalThis.renderLiveSessions = info => {
     latest=info;
     const rank={needsInput:0,failed:1,unknown:2,working:3,thinking:4,tool:5,complete:6,interrupted:7,idle:8};
-    info={...info,sessions:(info.sessions??[]).filter(s=>!state.provider||s.provider===state.provider).sort((a,b)=>(rank[a.phase]??2)-(rank[b.phase]??2)||b.updatedAt-a.updatedAt)};
+    info={...info,sessions:(info.sessions??[]).filter(s=>!state.provider||AieyesUI.sameAgent(s.provider,state.provider)).sort((a,b)=>(rank[a.phase]??2)-(rank[b.phase]??2)||b.updatedAt-a.updatedAt)};
     const container=document.querySelector('#live-sessions');
 
     const summary = document.querySelector('#session-summary');
@@ -16,7 +16,7 @@
     const warning = document.querySelector('#session-warning');
     if (!summary || !list || !warning) return;
     const active=info.sessions.filter(s=>s.phase!=='idle');
-    const failures=(info.sources||[]).filter(s=>s.state!=='healthy'&&(!state.provider||s.provider===state.provider));
+    const failures=(info.sources||[]).filter(s=>s.state!=='healthy'&&(!state.provider||AieyesUI.sameAgent(s.provider,state.provider)));
     summary.textContent=active.length?active.length+' 个会话':info.unavailable?'会话状态待确认':'暂无活跃会话';
     let counts=container.querySelector('.session-counts');if(!counts){counts=document.createElement('span');counts.className='session-counts';container.querySelector('summary > .muted')?.remove();container.querySelector('summary').append(counts);}
     counts.innerHTML=Object.entries(phases).filter(([key])=>active.some(s=>s.phase===key)).map(([key,[,label]])=>`<span data-attention="${['needsInput','failed'].includes(key)}">${label} ${active.filter(s=>s.phase===key).length}</span>`).join('');

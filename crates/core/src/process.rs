@@ -176,6 +176,145 @@ pub fn run_lines(
         }
     })
 }
+/// A retained, bounded NDJSON child. Pipe I/O stays off the caller; timeout,
+/// cancellation and Drop close all pipes, kill the process group and reap it.
+pub(crate) struct LineProcess {
+    child: std::process::Child,
+    _registration: ChildRegistration,
+    input: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
+    output: Option<std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+impl LineProcess {
+    pub(crate) fn spawn(mut cmd: Command) -> Result<Self> {
+        use std::io::BufRead;
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        prepare(&mut cmd);
+        let mut child = cmd.spawn().context("启动会话观察进程失败")?;
+        let registration = track_child(&mut child)?;
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let (input, requests) = std::sync::mpsc::sync_channel::<Vec<u8>>(1);
+        let (responses, output) = std::sync::mpsc::sync_channel(1);
+        let writer = std::thread::spawn(move || {
+            while let Ok(mut bytes) = requests.recv() {
+                bytes.push(b'\n');
+                if stdin.write_all(&bytes).and_then(|_| stdin.flush()).is_err() {
+                    break;
+                }
+            }
+        });
+        let reader = std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stdout);
+            loop {
+                let mut line = Vec::new();
+                let result = reader
+                    .by_ref()
+                    .take(64 * 1024 * 1024 + 1)
+                    .read_until(b'\n', &mut line);
+                let result = match result {
+                    Ok(0) => break,
+                    Ok(_) if line.len() <= 64 * 1024 * 1024 && line.last() == Some(&b'\n') => {
+                        Ok(line)
+                    }
+                    Ok(_) => Err(std::io::Error::other("会话观察响应过大或不完整")),
+                    Err(error) => Err(error),
+                };
+                let failed = result.is_err();
+                if responses.send(result).is_err() || failed {
+                    break;
+                }
+            }
+        });
+        let errors = std::thread::spawn(move || {
+            let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+        });
+        Ok(Self {
+            child,
+            _registration: registration,
+            input: Some(input),
+            output: Some(output),
+            threads: vec![writer, reader, errors],
+        })
+    }
+    pub(crate) fn send(&self, bytes: Vec<u8>) -> Result<()> {
+        crate::operations::check()?;
+        anyhow::ensure!(bytes.len() <= 64 * 1024 * 1024, "会话观察请求过大");
+        self.input
+            .as_ref()
+            .unwrap()
+            .try_send(bytes)
+            .context("会话观察连接不可用")
+    }
+    pub(crate) fn read(&self, timeout: Duration) -> Result<Vec<u8>> {
+        let start = Instant::now();
+        loop {
+            crate::operations::check()?;
+            let remaining = timeout.saturating_sub(start.elapsed());
+            anyhow::ensure!(!remaining.is_zero(), "会话观察查询超时");
+            match self
+                .output
+                .as_ref()
+                .unwrap()
+                .recv_timeout(remaining.min(Duration::from_millis(100)))
+            {
+                Ok(line) => return Ok(line?),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    anyhow::bail!("会话观察连接已关闭")
+                }
+            }
+        }
+    }
+}
+impl Drop for LineProcess {
+    fn drop(&mut self) {
+        self.input.take();
+        self.output.take();
+        kill(&mut self.child);
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod retained_line_tests {
+    use super::*;
+    #[test]
+    fn retained_transport_reuses_process_and_reaps_after_timeout() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "while IFS= read -r line; do printf '%s\\n' \"$line\"; done",
+        ]);
+        let child = LineProcess::spawn(command).unwrap();
+        let pid = child.child.id();
+        for data in [b"first".to_vec(), b"second".to_vec()] {
+            child.send(data.clone()).unwrap();
+            assert_eq!(
+                child.read(Duration::from_secs(2)).unwrap(),
+                [data, b"\n".to_vec()].concat()
+            );
+            assert_eq!(child.child.id(), pid);
+        }
+        drop(child);
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        let child = LineProcess::spawn(command).unwrap();
+        let pid = child.child.id();
+        let start = Instant::now();
+        assert!(child.read(Duration::from_millis(30)).is_err());
+        drop(child);
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+    }
+}
+
 /// Every background child must avoid opening a console window on Windows.
 pub fn prepare(cmd: &mut Command) {
     #[cfg(unix)]

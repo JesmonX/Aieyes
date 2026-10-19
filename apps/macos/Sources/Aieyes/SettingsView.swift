@@ -170,7 +170,7 @@ struct SettingsView: View {
                 serverRow((model.settings.localMonitor ?? LocalMonitor()).host, narrow: geometry.size.width < 650)
                 ForEach(model.settings.hosts) { host in serverRow(host, narrow: geometry.size.width < 650) }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle())
-            HStack { Button("从 SSH 配置导入") { importSSH = true }; Button("添加 SSH 主机", systemImage: "plus") { editHost(Host()) }; Spacer(); Button("测试采样") { Task { await model.sampleHosts() } }.disabled(model.serverBusy) }.padding(.horizontal, 8)
+            HStack { Button("从 SSH 配置导入") { importSSH = true }; Button("添加 SSH 主机", systemImage: "plus") { editHost(Host()) }; Spacer(); Button("测试采样") { Task { await model.sampleHosts() } }.disabled(model.hostRefreshBusy()) }.padding(.horizontal, 8)
         }.padding(.vertical, 12) }
     }
     private func serverRow(_ host: Host, narrow: Bool) -> some View {

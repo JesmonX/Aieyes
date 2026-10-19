@@ -127,6 +127,25 @@ fn wait_started(root: &Path, count: usize) {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[test]
+fn scheduled_queries_do_not_decode_completed_sampling_history() {
+    let (_root, mut engine) = fixture(1, false);
+    // Valid JSON with an invalid typed history field detects accidental full
+    // history reads without making this a timing-sensitive performance test.
+    engine.store.db.execute(
+        "INSERT INTO estimates VALUES('quota','historical','custom:a0','completed',?1)",
+        [json!({"id":"historical","accountKey":"custom:a0","status":"completed","prices":"history-only"}).to_string()],
+    ).unwrap();
+    assert!(engine.store.estimates().is_err());
+    let rows = engine
+        .call("quotas.refresh", json!({"accountKey":"custom:a0"}))
+        .unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+    assert!(rows[0]["error"].is_null(), "{rows}");
+    assert_eq!(rows[0]["windows"][0]["usedPercent"], 20.0);
+}
+
 #[test]
 #[ignore = "subprocess fixture, invoked by quota coordination tests"]
 fn process_worker() {

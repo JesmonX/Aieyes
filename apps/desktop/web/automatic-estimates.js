@@ -6,7 +6,7 @@ window.AieyesAutomatic=(()=>{
   const description=s=>{const row=status(s);return !AieyesUI.sourceEnabled(state.settings,s)?'采集已暂停':!s.autoValuation?.enabled?'已关闭':(labels[row?.state]??'等待首个实时快照')+(row?.note?' · '+row.note:'');};
   const intro=provider=>provider==='codex'?'估算 5 小时 / 7 天额度及 credits 的 API 等价价值':'估算 5 小时 / 7 天额度的 API 等价价值';
   let saving=false;
-  function html(sources){return sources.filter(s=>s.provider!=='deepseek').map(s=>`<section class="sampling-row" data-auto-row="${escapeHTML(s.id)}"><div class="between"><h4>${escapeHTML(s.name)}</h4><input type="checkbox" role="switch" data-auto-save="${escapeHTML(s.id)}" aria-label="自动估值 · ${escapeHTML(s.name)}" ${s.autoValuation?.enabled?'checked':''} ${saving?'disabled':''}></div><small>${escapeHTML(s.path)}</small><p class="tiny muted" data-auto-status="${escapeHTML(s.id)}">${escapeHTML(description(s))}</p><div class="error" data-auto-error hidden></div></section>`).join('');}
+  function html(sources){return sources.filter(s=>AieyesUI.supports(s.provider,'valuation',state.settings)).map(s=>`<section class="sampling-row" data-auto-row="${escapeHTML(s.id)}"><div class="between"><h4>${escapeHTML(s.name)}</h4><input type="checkbox" role="switch" data-auto-save="${escapeHTML(s.id)}" aria-label="自动估值 · ${escapeHTML(s.name)}" ${s.autoValuation?.enabled?'checked':''} ${saving?'disabled':''}></div><small>${escapeHTML(s.path)}</small><p class="tiny muted" data-auto-status="${escapeHTML(s.id)}">${escapeHTML(description(s))}</p><div class="error" data-auto-error hidden></div></section>`).join('');}
   function summary(sources){const enabled=sources.filter(s=>s.autoValuation?.enabled),active=enabled.filter(s=>AieyesUI.sourceEnabled(state.settings,s));return !sources.length?'未配置目录':!sources.some(s=>AieyesUI.sourceEnabled(state.settings,s))?'已暂停':!enabled.length?'已关闭':!active.length?'已暂停':'已开启 '+active.length+'/'+sources.length;}
   function refresh(){
     document.querySelectorAll('[data-auto-status]').forEach(el=>{const s=state.settings?.sources?.find(s=>s.id===el.dataset.autoStatus);if(s)el.textContent=description(s);});
@@ -35,7 +35,7 @@ window.AieyesAutomatic=(()=>{
     finally{saving=false;if(dialog)delete dialog.dataset.busy;refresh();}
   }
   function open(ids,returnProvider=document.querySelector('#quota-dialog')?.dataset.valuationProvider){
-    const sources=state.settings.sources.filter(s=>ids.includes(s.id)&&s.provider!=='deepseek');
+    const sources=state.settings.sources.filter(s=>ids.includes(s.id)&&AieyesUI.supports(s.provider,'valuation',state.settings));
     const dialog=quotaDialog('数据源自动估值','<p class="muted">'+intro(sources.some(s=>s.provider==='codex')?'codex':'')+'</p>'+html(sources),'automatic');
     dialog.dataset.autoSources=JSON.stringify(ids);
     if(returnProvider){dialog.dataset.valuationProvider=returnProvider;const back=document.createElement('button');back.type='button';back.textContent='返回估值与采样';back.onclick=()=>openProviderEstimates(returnProvider);dialog.querySelector('.quota-dialog-body').prepend(back);}

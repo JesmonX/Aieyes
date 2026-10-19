@@ -85,7 +85,7 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
             q.metadata_error = observation.metadata_error;
             Ok(q)
         }
-        "deepseek" => deepseek(source, settings),
+        "deepseek" if source.subscription.is_none() => deepseek(source, settings),
         p if crate::subscriptions::supported(p) => crate::subscriptions::read(source, settings),
         "codex" => {
             let v = codex(source, settings)?;

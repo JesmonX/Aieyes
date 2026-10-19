@@ -11,7 +11,7 @@
   const machineId = s => s.hostId||'local';
   const deviceName = id => id==='local'?'本机':state.settings.hosts.find(h=>h.id===id)?.name||state.settings.hosts.find(h=>h.id===id)?.target||'已移除设备';
   function machines(provider, paused=false) {
-    const config=configurations().find(a=>a.provider===provider);
+    const config=rawConfigurations().find(a=>a.provider===provider);
     const active=(config?.enabled?config.machineIds:[]).filter(id=>id==='local'?state.settings.localDeviceEnabled!==false:state.settings.hosts.some(h=>h.id===id&&h.enabled));
     return [...new Set(paused?[...active,...state.settings.sources.filter(s=>s.provider===provider).map(machineId)]:active)].sort((a,b)=>a==='local'?-1:b==='local'?1:a.localeCompare(b));
   }
@@ -139,12 +139,13 @@
   async function syncDeployments(){if(syncRunning)return;syncRunning=true;try{const r=await api('accounts.deployments.sync');syncMessage=r.failedTasks?.length?'配置已保存，部分唤醒部署待同步，可重试。':'';}catch(error){syncMessage='配置已保存，唤醒部署待同步：'+String(error);}finally{syncRunning=false;repaint();}}
   function backgroundRefresh(){clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>{void loadDashboard().catch(error=>notify('配置已保存，刷新失败：'+String(error),'error'));},300);void syncDeployments();}
 
-  const configurations = () => {
+  const rawConfigurations = () => {
     const order=Object.keys(providers).filter(p=>p!=='custom');
     const rows=state.settings.agents??Object.keys(providers).map(provider=>({provider,enabled:state.settings.sources.some(s=>s.provider===provider&&s.enabled),machineIds:[...new Set(state.settings.sources.filter(s=>s.provider===provider&&s.enabled).map(machineId))]}));
     const rank=p=>p==='custom'?order.length+1:order.includes(p)?order.indexOf(p):order.length;
     return [...rows].sort((a,b)=>rank(a.provider)-rank(b.provider));
   };
+  const configurations = () => AieyesUI.agentConfigurations(rawConfigurations());
   const machineName = s => s.hostId ? state.settings.hosts.find(h=>h.id===s.hostId)?.name || s.hostId : '本机';
   const profiles = a => [...new Set([a.quotaProfileId,...(a.connections??[]).map(c=>c.profileId)].filter(Boolean))];
   const linked = (a,s) => s.provider===a.provider&&(s.accountId===a.id||s.codexHomeId&&profiles(a).some(r=>r.startsWith(s.codexHomeId+':')));
@@ -176,6 +177,7 @@
   const machineSources=(provider,machine)=>state.settings.sources.filter(s=>s.provider===provider&&machineId(s)===machine);
   const hookSources=(provider,machine)=>machineSources(provider,machine).filter(s=>!s.subscription);
   function automaticMachineHTML(provider,machine) {
+    if(!AieyesUI.supports(provider,'valuation',state.settings))return '';
     return `<span class="tiny muted" data-auto-machine-status="${e(machine)}" data-auto-provider="${e(provider)}">估值 ${e(window.AieyesAutomatic.summary(machineSources(provider,machine)))}</span>`;
   }
   let sessionSnapshot={sources:[]};const hookOverrides=new Map();
@@ -212,12 +214,13 @@
   async function setDeviceEnabled(id,enabled){const next=structuredClone(state.settings);if(id==='local')next.localDeviceEnabled=enabled;else next.hosts.find(h=>h.id===id).enabled=enabled;await commit(next);renderSettings(false);}
   function navigate(target={}) {
     const account=state.settings.accounts.find(a=>accountKey(a)===target.accountKey);
-    state.settingsAgent=account?.provider??target.provider??state.settingsAgent;
+    state.settingsAgent=AieyesUI.agentProvider(account?.provider??target.provider??state.settingsAgent);
     if(!configurations().some(a=>a.provider===state.settingsAgent))state.settingsAgent='codex';
     detailKey=account?accountKey(account):'';showCodex=false;directorySelection=null;
     try{localStorage.setItem('aieyes.settings.agent',state.settingsAgent);}catch(_){}
   }
   function integrationsHTML() {
+    state.settingsAgent=AieyesUI.agentProvider(state.settingsAgent);
     const agent=configurations().find(a=>a.provider===state.settingsAgent)??configurations()[0];
     if(!agent)return '<p>暂无 Agent 配置</p>';
     state.settingsAgent=agent.provider;
@@ -226,15 +229,17 @@
     else if(showCodex||state.settings.accounts.some(a=>accountKey(a)===detailKey))body=accountsHTML();
     else {
       const section=(key,title,detail,content,opened=false)=>`<details class="card settings-disclosure" id="agent-section-${key}" data-agent-detail="settings:${agent.provider}:${key}" data-persist-disclosure="settings:${agent.provider}:${key}" ${disclosureOpen('settings:'+agent.provider+':'+key,opened)?'open':''}><summary><strong>${title}</strong><small>${e(detail)}</small></summary><div class="settings-section-body">${content}</div></details>`;
-      body=`<section class="card agent-integration-header" data-provider="${e(agent.provider)}"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving?'disabled':''} ${agent.enabled?'checked':''}>启用</label></div>${agent.provider==='deepseek'?'<p class="muted">添加 API Key，通过本机查询账户余额。</p>':''}</section>`;
+      body=`<section class="card agent-integration-header" data-provider="${e(agent.provider)}"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving?'disabled':''} ${agent.enabled?'checked':''}>启用</label></div>${agent.provider==='deepseek'?'<p class="muted">通过 API Key 查询账户余额，在机器与目录中配置 DeepSeek CLI 的采集。</p>':''}</section>`;
       if(['pi','omp'].includes(agent.provider))body+='<p class="muted">额度由当前模型服务商提供；本地 Token 和预估费用不代表可用余额。</p>';
-      body+=section('accounts','账户',state.settings.accounts.filter(a=>a.provider===agent.provider&&!a.archived).length+' 个账户',accountsHTML(false),true);
-      const nativeApiSources=state.settings.sources.filter(s=>s.provider===agent.provider&&!s.hostId&&!s.subscription&&s.machineBinding!=='unbound');
-      const nativeApi=['opencode','codebuddy','kimi','deepseek-harness','claude','zcode','grok','qoder','pi','omp'].includes(agent.provider),protocol=agent.provider==='claude'?'Anthropic Messages':'Chat Completions';
-      const guidance=window.AieyesContract.apiGuidance?.[agent.provider],apiFallback=guidance?`<p class="muted">${e(guidance.hint)}</p><a href="${e(guidance.url)}" target="_blank" rel="noreferrer">${e(guidance.label||'CLI API 配置说明')}</a>${guidance.configurationUrl?` · <a href="${e(guidance.configurationUrl)}" target="_blank" rel="noreferrer">CLI 配置说明</a>`:''}${guidance.sdkUrl?` · <a href="${e(guidance.sdkUrl)}" target="_blank" rel="noreferrer">SDK 本地模型说明</a>`:''}`:'<p class="muted">原生模型 API 配置尚未接入此表单；订阅限额凭据请在账户设置中管理。</p>';
-      body+=section('api','API 连接',agent.provider==='codex'?(state.settings.codexApis??[]).length+' 个连接':nativeApi?'自定义模型':'连接方式',agent.provider==='codex'?(window.AieyesCodexAPI?.html()??''):nativeApi?`<p class="muted">验证 ${protocol} 端点后，保存到本机 ${e(providers[agent.provider])} 配置并设为默认模型。已有配置会备份，Key 保存在原生配置文件中。</p>`+nativeApiSources.map(s=>`<button type="button" data-native-api="${e(s.id)}">${e(s.name)} · 配置 API</button>`).join('')+(!nativeApiSources.length?'<p class="muted">先在机器与目录中添加本机数据目录。</p>':''):apiFallback);
-      body+=section('machines','机器与目录',agent.machineIds.length+' 台机器',agent.provider==='deepseek'?'<p class="muted">通过本机直接查询账户余额，无需日志目录。</p>':agentsHTML());
-      body+=section('valuation','估值与采样','自动估值与采样记录',agent.provider==='deepseek'?'<p class="muted">余额由 API 直接提供，无需额度估值。</p>':`<p class="muted">按来源管理自动估值，查看采样状态和已有记录。</p><button type="button" data-agent-estimates="${e(agent.provider)}">管理估值与采样</button>`);
+      body+=section('accounts','账户',state.settings.accounts.filter(a=>AieyesUI.sameAgent(a.provider,agent.provider)&&!a.archived).length+' 个账户',accountsHTML(false),true);
+      const apiProvider=AieyesUI.featureProvider(agent.provider,'api');
+      if(apiProvider){
+        const nativeApiSources=state.settings.sources.filter(s=>s.provider===apiProvider&&!s.hostId&&!s.subscription&&s.machineBinding!=='unbound');
+        const protocol=apiProvider==='claude'?'Anthropic Messages':'Chat Completions';
+        body+=section('api','API 连接',apiProvider==='codex'?(state.settings.codexApis??[]).length+' 个连接':'自定义模型',apiProvider==='codex'?(window.AieyesCodexAPI?.html()??''):`<p class="muted">验证 ${protocol} 端点后，保存到本机 ${e(providers[apiProvider])} 配置并设为默认模型。已有配置会备份，Key 保存在原生配置文件中。</p>`+nativeApiSources.map(s=>`<button type="button" data-native-api="${e(s.id)}">${e(s.name)} · 配置 API</button>`).join('')+(!nativeApiSources.length?'<p class="muted">先在机器与目录中添加本机数据目录。</p>':''));
+      }
+      if(AieyesUI.agentSupports(agent.provider,'machines',state.settings))body+=section('machines','机器与目录',agent.machineIds.length+' 台机器',agentsHTML());
+      if(AieyesUI.agentSupports(agent.provider,'valuation',state.settings))body+=section('valuation','估值与采样','自动估值与采样记录',`<p class="muted">按来源管理自动估值，查看采样状态和已有记录。</p><button type="button" data-agent-estimates="${e(agent.provider)}">管理估值与采样</button>`);
     }
     return `<div class="settings-layout"><nav class="settings-agent-selector" aria-label="选择 Agent">${configurations().map(a=>`<button type="button" data-settings-agent="${e(a.provider)}" ${a.provider===agent.provider?'class="active" aria-current="page"':''}>${providerMark(a.provider)}<span>${e(providers[a.provider]??a.provider)}</span></button>`).join('')}</nav><div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
   }
@@ -246,7 +251,8 @@
   }
   function agentsHTML() {
     if(directorySelection){const {provider,machine}=directorySelection,unbound=machine!=='local'&&!state.settings.hosts.some(h=>h.id===machine);return `<button id="directories-back">返回 Agent 接入</button><section class="card"><h2>${e(providers[provider])} · ${e(deviceName(machine))}</h2>${machineSources(provider,machine).map(s=>`<div class="list-row"><code class="row-body">${e(s.path)}</code>${s.machineBinding==='unbound'?`<span class="muted">机器未绑定</span><button data-source-rebind="${e(s.id)}">重新绑定机器</button>`:`<button data-source-advanced="${e(s.id)}">编辑目录</button>`}<button class="danger" data-source-remove="${e(s.id)}">移除目录配置</button></div>`).join('')}${unbound?'':`<button data-source-add="${e(provider)}">添加目录</button>`}<p class="muted">配置采集位置，原文件保留。</p>${directoryLinks(provider,machine)}</section>`;}
-    return configurations().filter(a=>a.provider===state.settingsAgent&&a.provider!=='deepseek').map(a=>{
+    return rawConfigurations().filter(a=>a.provider===AieyesUI.featureProvider(state.settingsAgent,'machines')).map(raw=>{
+      const a={...raw,enabled:configurations().find(group=>AieyesUI.sameAgent(group.provider,raw.provider))?.enabled??raw.enabled};
       const unbound=[...new Set(state.settings.sources.filter(s=>s.provider===a.provider&&s.machineBinding==='unbound').map(s=>s.hostId))].filter(id=>!state.settings.hosts.some(h=>h.id===id)).map(id=>({id,name:state.settings.sources.find(s=>s.hostId===id)?.lastMachineName??id,unbound:true,enabled:false}));
       const hosts=[{id:'local',name:'本机',enabled:state.settings.localDeviceEnabled!==false},...state.settings.hosts,...unbound];
       return `<section class="card agent-setup" id="agent-machines"><h2>机器与目录</h2><fieldset class="agent-machines"><legend>所在机器 · 可多选</legend>${hosts.map(h=>{
@@ -262,9 +268,9 @@
     if(detail)return detailsHTML(detail);
     const row=a=>`<div class="list-row"><div class="row-body"><strong>${e(a.name)}</strong><small data-account-summary="${e(accountKey(a))}">${e(counts(a))}</small><small data-account-identity="${e(accountKey(a))}" class="account-identity">${e(identityText(statusRows.find(r=>r.accountKey===accountKey(a)&&r.current===true&&r.identity)))}</small></div><button data-account-edit="${e(accountKey(a))}">设置</button></div>`;
     const groups=configurations().filter(config=>config.provider===state.settingsAgent);
-    return syncHTML()+groups.map(config=>`<section class="card account-agent-group" id="agent-accounts"><div class="between"><h2>账户</h2><button data-account-add="${e(config.provider)}" class="primary" ${config.enabled?'':'disabled'}>添加账户</button></div>${state.settings.accounts.filter(a=>a.provider===config.provider&&!a.archived).map(row).join('')||'<p class="muted">尚未添加账户</p>'}</section>`).join('')+
+    return syncHTML()+groups.map(config=>`<section class="card account-agent-group" id="agent-accounts"><div class="between"><h2>账户</h2><button data-account-add="${e(config.provider)}" class="primary" ${config.enabled?'':'disabled'}>添加账户</button></div>${state.settings.accounts.filter(a=>AieyesUI.sameAgent(a.provider,config.provider)&&!a.archived).map(row).join('')||'<p class="muted">尚未添加账户</p>'}</section>`).join('')+
     (includeAPI&&state.settingsAgent==='codex'?(window.AieyesCodexAPI?.html()??''):'')+
-    (state.settings.accounts.some(a=>a.archived&&a.provider===state.settingsAgent)?`<details class="card" data-agent-detail="archived-accounts"><summary>已归档账户</summary>${state.settings.accounts.filter(a=>a.archived&&a.provider===state.settingsAgent).map(a=>`<div class="list-row"><span class="row-body">${e(providers[a.provider])} · ${e(a.name)}</span><button data-account-restore="${e(accountKey(a))}">恢复</button><button class="danger" data-account-delete="${e(accountKey(a))}">删除账户</button></div>`).join('')}</details>`:'')+
+    (state.settings.accounts.some(a=>a.archived&&AieyesUI.sameAgent(a.provider,state.settingsAgent))?`<details class="card" data-agent-detail="archived-accounts"><summary>已归档账户</summary>${state.settings.accounts.filter(a=>a.archived&&AieyesUI.sameAgent(a.provider,state.settingsAgent)).map(a=>`<div class="list-row"><span class="row-body">${e(providers[a.provider])} · ${e(a.name)}</span><button data-account-restore="${e(accountKey(a))}">恢复</button><button class="danger" data-account-delete="${e(accountKey(a))}">删除账户</button></div>`).join('')}</details>`:'')+
     (cleanupRows.length?`<details class="card" data-agent-detail="abandoned-tasks"><summary>已解除管理的远端任务（可能仍在运行）</summary>${cleanupRows.map(r=>`<h3>${e(r.name)}</h3>${r.tasks.map(t=>`<p>${e(t.name)} · ${e(t.machine)} · <code>${e(t.root)}</code></p>`).join('')}`).join('')}</details>`:'');
   }
   function syncContent(){return (statusError?`<div class="error" id="account-status-error" role="alert">${e(statusError)} <button data-account-retry-status>重试读取</button></div>`:'')+(syncMessage?`<div class="error">${e(syncMessage)} <button data-deployment-sync>重试同步</button></div>`:'');}
@@ -290,7 +296,8 @@
     });return saveQueue;
   }
   function resetPreferencesHTML(a){
-    if(a.provider==='deepseek')return '';
+    if(!AieyesUI.supports(a.provider,'quotaReset',state.settings))return '';
+    if(state.settings.sources.some(s=>linked(a,s)&&s.subscription?.mode==='api')&&a.provider==='grok')return '';
     return [['unexpected','提前重置提醒',true],['natural','到期重置提醒',false]].map(([kind,label,fallback])=>{
       const current=a.quotaResetNotifications?.[kind],selected=draftValue(a,'quotaResetNotifications.'+kind,current==null?'inherit':current?'on':'off');
       const inherited=state.settings.quotaResetNotifications?.[kind]??fallback;
@@ -313,7 +320,8 @@
   }
   function detailsHTML(a){
     const selected=AieyesUI.panelAccounts(state.settings,state.dashboard?.quotaOrder??[]),isSelected=selected[a.provider]?.includes(accountKey(a));
-    return `<div class="between"><button id="account-detail-back">返回账户</button><button id="account-status-refresh" ${statusLoading?'disabled':''}>${statusLoading?'检查中…':'刷新设备状态'}</button></div><section class="card account-config"><h2>${providerMark(a.provider)} ${e(a.name)}</h2><p data-account-summary="${e(accountKey(a))}">${e(counts(a))}</p>${state.dashboard?.quotas?.find(q=>q.provider===a.provider&&q.accountId===a.id)?.error?`<div class="error">${AieyesUI.errorHTML(state.dashboard.quotas.find(q=>q.provider===a.provider&&q.accountId===a.id).error,'额度查询失败')}</div>`:''}<label>优先查询位置<select data-account-priority="${e(accountKey(a))}">${option('','自动 · 优先本机',draftValue(a,'quotaSourceId',a.quotaSourceId)||'')}${state.settings.sources.filter(s=>linked(a,s)).map(s=>option(s.id,deviceName(machineId(s))+' · '+s.name+(s.enabled?'':' · 已暂停'),draftValue(a,'quotaSourceId',a.quotaSourceId)||'')).join('')}</select></label><div class="actions"><label><input type="checkbox" data-account-quota="${e(accountKey(a))}" ${draftValue(a,'quotaEnabled',a.quotaEnabled)?'checked':''}>显示并查询额度</label><label><input type="checkbox" data-account-panel="${e(accountKey(a))}" ${isSelected?'checked':''} ${!a.quotaEnabled?'disabled':''}>在面板显示</label><button data-account-panel-manage>调整面板选择</button>${a.provider!=='codex'?`<button data-account-connect="${e(accountKey(a))}">${a.provider==='deepseek'?'更新 API Key':window.AieyesContract.subscriptions[a.provider]?'更新额度凭据':'连接机器'}</button>`:''}</div><p class="tiny muted" role="status">面板已选择 ${selected[a.provider]?.length??0} 个账户；手动选择不限数量，自动模式显示每类前五个。</p>${resetPreferencesHTML(a)}<label>查询间隔（秒）<input id="account-interval" data-account-field="quotaRefreshSeconds" data-account="${e(accountKey(a))}" type="number" min="5" max="86400" value="${e(draftValue(a,'quotaRefreshSeconds',a.quotaRefreshSeconds??''))}" placeholder="沿用全局 · ${state.settings.refreshSeconds} 秒"></label><label>账户名称<input id="account-name" data-account-field="name" data-account="${e(accountKey(a))}" value="${e(draftValue(a,'name',a.name))}"></label><label><input type="checkbox" data-account-archive="${e(accountKey(a))}" ${draftValue(a,'archived',a.archived)?'checked':''}>归档账户</label><p class="muted tiny">${pendingSaves?'正在保存…':''}</p><div data-account-save-errors="${e(accountKey(a))}">${[...accountErrors].filter(([key])=>key.startsWith(accountKey(a)+':')).map(([key,message])=>`<div class="error">${AieyesUI.errorHTML(message,'保存失败，输入已保留')} <button data-account-retry="${e(key)}">重试保存</button></div>`).join('')}</div>${syncHTML()}</section>`+
+    const hasQuota=AieyesUI.supports(a.provider,'quota',state.settings);
+    return `<div class="between"><button id="account-detail-back">返回账户</button><button id="account-status-refresh" ${statusLoading?'disabled':''}>${statusLoading?'检查中…':'刷新设备状态'}</button></div><section class="card account-config"><h2>${providerMark(a.provider)} ${e(a.name)}</h2><p data-account-summary="${e(accountKey(a))}">${e(counts(a))}</p>${hasQuota&&state.dashboard?.quotas?.find(q=>q.provider===a.provider&&q.accountId===a.id)?.error?`<div class="error">${AieyesUI.errorHTML(state.dashboard.quotas.find(q=>q.provider===a.provider&&q.accountId===a.id).error,'额度查询失败')}</div>`:''}${hasQuota?`<label>优先查询位置<select data-account-priority="${e(accountKey(a))}">${option('','自动 · 优先本机',draftValue(a,'quotaSourceId',a.quotaSourceId)||'')}${state.settings.sources.filter(s=>linked(a,s)).map(s=>option(s.id,deviceName(machineId(s))+' · '+s.name+(s.enabled?'':' · 已暂停'),draftValue(a,'quotaSourceId',a.quotaSourceId)||'')).join('')}</select></label>`:''}<div class="actions">${hasQuota?`<label><input type="checkbox" data-account-quota="${e(accountKey(a))}" ${draftValue(a,'quotaEnabled',a.quotaEnabled)?'checked':''}>显示并查询额度</label><label><input type="checkbox" data-account-panel="${e(accountKey(a))}" ${isSelected?'checked':''} ${!a.quotaEnabled?'disabled':''}>在面板显示</label><button data-account-panel-manage>调整面板选择</button>`:''}${a.provider!=='codex'?`<button data-account-connect="${e(accountKey(a))}">${a.provider==='deepseek'?'更新 API Key':window.AieyesContract.subscriptions[a.provider]?'更新额度凭据':'连接机器'}</button>`:''}</div>${hasQuota?`<p class="tiny muted" role="status">面板已选择 ${selected[a.provider]?.length??0} 个账户；手动选择不限数量，自动模式显示每类前五个。</p>${resetPreferencesHTML(a)}<label>查询间隔（秒）<input id="account-interval" data-account-field="quotaRefreshSeconds" data-account="${e(accountKey(a))}" type="number" min="5" max="86400" value="${e(draftValue(a,'quotaRefreshSeconds',a.quotaRefreshSeconds??''))}" placeholder="沿用全局 · ${state.settings.refreshSeconds} 秒"></label>`:''}<label>账户名称<input id="account-name" data-account-field="name" data-account="${e(accountKey(a))}" value="${e(draftValue(a,'name',a.name))}"></label><label><input type="checkbox" data-account-archive="${e(accountKey(a))}" ${draftValue(a,'archived',a.archived)?'checked':''}>归档账户</label><p class="muted tiny">${pendingSaves?'正在保存…':''}</p><div data-account-save-errors="${e(accountKey(a))}">${[...accountErrors].filter(([key])=>key.startsWith(accountKey(a)+':')).map(([key,message])=>`<div class="error">${AieyesUI.errorHTML(message,'保存失败，输入已保留')} <button data-account-retry="${e(key)}">重试保存</button></div>`).join('')}</div>${syncHTML()}</section>`+
     machines(a.provider,true).map(id=>{
       const sources=state.settings.sources.filter(s=>s.provider===a.provider&&machineId(s)===id),active=machines(a.provider).includes(id),rows=statuses(a,id);
       const resetRequired=a.deviceSettings?.some(d=>d.machineId===id&&d.preCommandResetRequired);
@@ -347,7 +355,7 @@
     $('#field-hostId').disabled=true;if(!item.hostId)bindProxy('source');bindPathSelection(true);
   }
   function removeDirectory(source){showEditor('移除目录配置','<p>仅解除此目录的采集和账户连接；文件、登录凭证和历史记录保留。</p><code>'+e(source.path)+'</code>',async()=>{accept(await api('sources.remove',{sourceId:source.id,baseSource:source}));markSaved();backgroundRefresh();renderSettings(false);},'confirmation');$('#editor-form button[type=submit]').textContent='移除配置';}
-  function editAccount(account){state.settingsAgent=account.provider;detailKey=accountKey(account);showCodex=false;renderSettings(false);}
+  function editAccount(account){state.settingsAgent=AieyesUI.agentProvider(account.provider);detailKey=accountKey(account);showCodex=false;renderSettings(false);}
   function subscriptionAccount(account, provider) {
     const spec=window.AieyesContract.subscriptions[provider];
     const existing=state.settings.sources.find(s=>s.provider===provider&&s.accountId===account?.id&&s.subscription);
@@ -366,19 +374,29 @@
       });
     $('#editor').dataset.kind='account';
     const modeChanged=()=>{
-      const native=provider==='qoder'&&$('#field-mode').value==='cli';
-      for(const id of ['secret','workspaceId']) { const input=$('#field-'+id);input.disabled=native;input.closest('.form-row').hidden=native; }
-      if(provider==='qoder') { const input=$('#field-nativeConfigDir');input.disabled=!native;input.closest('.form-row').hidden=!native; }
+      const mode=$('#field-mode').value,native=provider==='qoder'&&mode==='cli';
+      const localLogin=(provider==='grok'&&mode==='subscription')||(provider==='opencode'&&mode==='go');
+      const localToggle=$('#editor-form [name=useLocalLogin]');
+      if(localToggle){localToggle.disabled=!localLogin;localToggle.closest('label').hidden=!localLogin;}
+      const visibility={secret:!native&&!(localLogin&&localToggle?.checked),workspaceId:(provider==='grok'&&mode==='api')||(provider==='opencode'&&mode==='console'),nativeConfigDir:native,mode:Object.keys(spec.modes).length>1};
+      for(const [id,visible] of Object.entries(visibility)){
+        const input=$('#field-'+id);if(!input)continue;
+        input.closest('.form-row').hidden=!visible;
+        if(id!=='mode')input.disabled=!visible;
+      }
       $('#subscription-login').hidden=native;
       $('#subscription-storage-note').textContent=native?'读取 CLI 当前登录并绑定账户身份，无需填写密钥。CLI 切换账号后请切回原账户或另建账户；查询失败不创建账户。':'验证成功后保存到系统凭据库。不会切换客户端账户；登录失败不创建账户。';
     };
-    $('#field-mode').onchange=modeChanged;modeChanged();
+    $('#field-mode').onchange=modeChanged;
+    const localToggle=$('#editor-form [name=useLocalLogin]');if(localToggle)localToggle.onchange=modeChanged;
+    modeChanged();
     $('#subscription-login').onclick=()=>run(()=>api('subscriptions.openLogin',{provider,mode:$('#field-mode').value}));
   }
   function addAccount(account, selectedProvider) {
     const enabled=configurations().filter(a=>a.enabled), initial=account?.provider||selectedProvider||state.settingsAgent||enabled[0]?.provider;
     if(!initial)return;
-    if(window.AieyesContract.subscriptions[initial]){subscriptionAccount(account,initial);return;}
+    const legacyBalance=account&&initial==='deepseek'&&state.settings.sources.some(s=>linked(account,s)&&!s.subscription);
+    if(window.AieyesContract.subscriptions[initial]&&!legacyBalance){subscriptionAccount(account,initial);return;}
     if(initial==='codex'){detailKey=account?accountKey(account):'';showCodex=true;window.AieyesCodexAuth.open(account?.id||'');renderSettings(false);return;}
     let secret=null, secretSourceId=crypto.randomUUID();
     showEditor(providers[initial]+' · '+(account?(initial==='deepseek'?'更新 API Key':'连接机器'):'添加账户'),`<input id="field-provider" type="hidden" name="provider" value="${e(initial)}">`+'<div id="account-connection-fields"></div>',async f=>{
@@ -451,8 +469,8 @@
     bindSettingsSidebar('data-settings-agent',provider=>{navigate({provider});renderSettings();});
     document.querySelectorAll('[data-agent-estimates]').forEach(button=>button.onclick=()=>openProviderEstimates(button.dataset.agentEstimates));
     document.querySelectorAll('[data-agent-enable],[data-agent-machine]').forEach(input=>input.onchange=()=>run(async()=>{
-      const provider=input.dataset.agentEnable||input.dataset.agentMachine,a=configurations().find(a=>a.provider===provider);
-      const params=input.dataset.agentEnable?{provider,enabled:input.checked,...(input.checked&&!a.machineIds.length?{machineIds:['local']}:{})}:{provider,machineIds:input.checked?[...new Set([...a.machineIds,input.value])]:a.machineIds.filter(id=>id!==input.value)};
+      const provider=input.dataset.agentEnable||input.dataset.agentMachine,a=(input.dataset.agentEnable?configurations():rawConfigurations()).find(a=>a.provider===provider);
+      const params=input.dataset.agentEnable?{provider,group:true,enabled:input.checked,...(input.checked&&!a.machineIds.length?{machineIds:['local']}:{})}:{provider,enabled:true,machineIds:input.checked?[...new Set([...a.machineIds,input.value])]:a.machineIds.filter(id=>id!==input.value)};
       state.settingsSaving=true;document.querySelectorAll('[data-agent-enable],[data-agent-machine]').forEach(i=>i.disabled=true);
       try{accept(await api('agents.set',params));markSaved();backgroundRefresh();}finally{state.settingsSaving=false;scheduleRefreshes();}
     }));

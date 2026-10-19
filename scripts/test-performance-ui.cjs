@@ -141,15 +141,60 @@ require('node:child_process').execFileSync(process.env.PYTHON||(process.platform
  await modern.evaluate(async()=>{refreshStopped=true;clearTimeout(refreshTimer);__listeners['runtime:changed']({payload:{revisions:modernRevisions}});await new Promise(r=>setTimeout(r,350));});
  const invalidations=await modern.evaluate(async()=>{
    const pause=()=>new Promise(r=>setTimeout(r,350)),queries=()=>modernCalls.filter(c=>c.method==='dashboard').length;
-   let before=queries();await api('quotas.refresh');await loadDashboard();await pause();const own=queries()-before;
+   let before=queries(),statusBefore=modernCalls.filter(c=>c.method==='dashboard.status').length;await api('quotas.refresh');await loadDashboard();await pause();const own=queries()-before,ownStatus=modernCalls.filter(c=>c.method==='dashboard.status').length-statusBefore;
    before=queries();const revisions={...modernRevisions,usage:++modernRevisions.usage};
    __listeners['runtime:changed']({payload:{revisions,operationId:'external'}});
    __listeners['desktop:invalidate']({payload:{method:'sources.scan',operationId:'external'}});
    await pause();const external=queries()-before;
    __listeners['runtime:changed']({payload:{revisions}});await pause();const duplicate=queries()-before-external;
    before=queries();await loadDashboard();const unchanged=queries()-before;
-   return {own,external,duplicate,unchanged};
- });assert.deepEqual(invalidations,{own:1,external:1,duplicate:0,unchanged:0});
+   return {own,ownStatus,external,duplicate,unchanged};
+ });assert.deepEqual(invalidations,{own:0,ownStatus:1,external:1,duplicate:0,unchanged:0});
+ const quotaOnly=await modern.evaluate(async()=>{
+   const before=modernCalls.length;
+   for(let i=0;i<5;i++){
+     modernRevisions.quotas++;
+     __listeners['runtime:changed']({payload:{revisions:{...modernRevisions}}});
+     await new Promise(r=>setTimeout(r,300));
+   }
+   const calls=modernCalls.slice(before);
+   return {full:calls.filter(c=>c.method==='dashboard').length,status:calls.filter(c=>c.method==='dashboard.status').length};
+ });assert.deepEqual(quotaOnly,{full:0,status:5});
+ const busyRefresh=await modern.evaluate(async()=>{
+   const set=window.setTimeout;let retries=0;
+   window.setTimeout=(fn,ms,...args)=>{if(ms===120)retries++;return set(fn,ms,...args);};
+   const before=modernCalls.length;
+   try{
+     state.busy=true;modernRevisions.quotas++;
+     __listeners['runtime:changed']({payload:{revisions:{...modernRevisions}}});
+     await new Promise(r=>set(r,700));
+     const whileBusy=modernCalls.slice(before).filter(c=>c.method.startsWith('dashboard')).length;
+     state.busy=false;updateActivity();await new Promise(r=>set(r,350));
+     return {retries,whileBusy,status:modernCalls.slice(before).filter(c=>c.method==='dashboard.status').length};
+   }finally{state.busy=false;window.setTimeout=set;}
+ });assert.deepEqual(busyRefresh,{retries:1,whileBusy:0,status:1});
+ const hostMonitor=await modern.evaluate(async()=>{
+   const saved=structuredClone(state.settings),invoke=window.__TAURI__.core.invoke;
+   let configurations=0,refreshes=0,version=10;
+   const rows=[{id:'fast',sampleSession:'monitor',sampleVersion:1,sample:{timestamp:Date.now()/1000}},{id:'slow'}];
+   const snapshot=busy=>({rows,inFlight:busy,pending:[],sampleSession:'monitor',version:version++});
+   try{
+     state.settings={...saved,hosts:['fast','slow'].map(id=>({id,name:id,enabled:true,metrics:[]})),localMonitor:{enabled:false}};
+     window.__TAURI__.core.invoke=async(command,args)=>{
+       if(command==='engine_call'&&args.method==='hosts.monitor.configure'){configurations++;return snapshot(['slow']);}
+       if(command==='engine_call'&&args.method==='hosts.monitor.refresh'){refreshes++;return snapshot(['slow','fast']);}
+       return invoke(command,args);
+     };
+     state.hostMonitoring=true;state.lastScan=Date.now();refreshStopped=false;hostMonitorConfiguration='';
+     await configureHostMonitor();
+     for(let i=0;i<20;i++)updateActivity();
+     await sample('fast');const fastBusy=hostRefreshBusy('fast');
+     const complete=snapshot(['slow']);complete.rows=[{...rows[0],sampleVersion:2,sample:{timestamp:Date.now()/1000,cpu:[]}},rows[1]];
+     __listeners['hosts:changed']({payload:complete});
+     __listeners['hosts:changed']({payload:{...complete,version:complete.version-1,rows:[{...rows[0],sampleVersion:99}]}});
+     return {configurations,refreshes,fastBusy,fastAvailable:!hostRefreshBusy('fast'),slowBusy:hostRefreshBusy('slow'),version:state.hosts.find(h=>h.id==='fast').sampleVersion};
+   }finally{refreshStopped=true;clearTimeout(refreshTimer);state.hostMonitoring=false;state.serverBusy=false;state.settings=saved;state.refreshState.hosts={};window.__TAURI__.core.invoke=invoke;}
+ });assert.deepEqual(hostMonitor,{configurations:1,refreshes:1,fastBusy:true,fastAvailable:true,slowBusy:true,version:2});
  const settingsChecks=await modern.evaluate(async()=>{
    while(AieyesAgentSettings.statusBusy)await new Promise(r=>setTimeout(r,5));
    let saved=structuredClone(state.settings);saved.accounts=[{id:'a',name:'Fixture',provider:'codex',quotaEnabled:false}];saved.sources=[{id:'s',name:'Fixture',provider:'codex',path:'/fixture/one',enabled:true}];saved.hosts=[];
@@ -170,7 +215,7 @@ require('node:child_process').execFileSync(process.env.PYTHON||(process.platform
  const timezoneAfter=await modern.evaluate(()=>({queries:modernCalls.filter(c=>c.method==='dashboard').length,date:new Date().toDateString()}));
  assert.equal(timezoneBefore.date,timezoneAfter.date);assert.equal(timezoneAfter.queries,timezoneBefore.queries+1,'Timezone identity invalidates even on the same local day');
  await modern.close();
- console.log('Modern revisions: own quota 1 query, external operation 1 query, duplicates/cache hits 0; unrelated settings 0 device checks, changed contexts due-only, manual refresh forced');
+ console.log('Modern revisions: quota-only 0 usage reads; busy refresh 1 debounce and 1 completion flush; host configuration coalesces and per-host refresh stays available; unchanged/cache hits 0 reads');
  console.log('Catalog P95:',catalog.p95.toFixed(1)+' ms','mounted rows:',catalog.rows,'status requests:',status.queries,'full settings rebuilds:',status.rebuilds);
  assert.deepEqual(errors,[]);console.log('Scheduler resume after quota/save, latest-only dashboard queries, version deduplication, retained DOM, lazy 30×256 device rendering, scrolling and expansion persistence passed');
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

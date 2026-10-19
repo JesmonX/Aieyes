@@ -59,7 +59,7 @@ enum Palette {
         case "codex": return adaptive(DesignTokens.categoryCodexLight, DesignTokens.categoryCodexDark)
         case "claude": return adaptive(DesignTokens.categoryClaudeLight, DesignTokens.categoryClaudeDark)
         case "antigravity": return adaptive(DesignTokens.categoryAntigravityLight, DesignTokens.categoryAntigravityDark)
-        case "deepseek": return adaptive(DesignTokens.categoryDeepseekLight, DesignTokens.categoryDeepseekDark)
+        case "deepseek", "deepseek-harness": return adaptive(DesignTokens.categoryDeepseekLight, DesignTokens.categoryDeepseekDark)
         case "cpu": return adaptive(DesignTokens.categoryCpuLight, DesignTokens.categoryCpuDark)
         case "memory": return adaptive(DesignTokens.categoryMemoryLight, DesignTokens.categoryMemoryDark)
         case "gpu": return adaptive(DesignTokens.categoryGpuLight, DesignTokens.categoryGpuDark)

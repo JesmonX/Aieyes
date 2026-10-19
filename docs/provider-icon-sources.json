@@ -1,15 +1,44 @@
 {
-  "retrieved": "2026-10-17",
+  "retrieved": "2026-10-19",
   "sources": {
     "zcode": "https://zcode.z.ai/en",
-    "qoder": "https://img.alicdn.com/imgextra/i4/O1CN01QkSxiCocd3D0prc8_!!6000000008124-2-tps-412-412.png",
+    "qoder": "https://img.alicdn.com/imgextra/i4/O1CN018ikLCF1sGya2c3YY4_!!6000000005740-55-tps-206-206.svg",
     "grok": "https://grok.com",
     "cursor": "https://ptht05hbb1ssoooe.public.blob.vercel-storage.com/assets/brand/cursor-brand-assets.zip",
-    "opencode": "https://opencode.ai/favicon-96x96-v3.png"
+    "opencode": "https://github.com/anomalyco/opencode/tree/dev/packages/console/app/src/asset/brand",
+    "codex": "https://cdn.openai.com/brand/OpenAI-Logos-2025.zip",
+    "claude": "https://assets.claude.com/95a868946ac8a31e5ff832e2899f294aa368b836.png",
+    "antigravity": "https://antigravity.google/assets/image/brand/antigravity-icon__full-color.png",
+    "deepseek": "https://api-docs.deepseek.com/img/favicon.svg",
+    "kimi": "https://kimi.com",
+    "codebuddy": "https://codebuddy-1328495429.cos.accelerate.myqcloud.com/web/ide/logo.svg",
+    "pi": "https://pi.dev/logo-auto.svg",
+    "omp": "https://github.com/can1357/oh-my-pi/blob/main/assets/icon.svg"
   },
   "standaloneMarks": {
     "zcode": "Navigation logo SVG, viewBox 0 0 256 218",
     "grok": "Navigation logo SVG, both path#mark elements",
-    "cursor": "General Logos/Cube/SVG/CUBE_2D_LIGHT.svg"
+    "cursor": "General Logos/Cube/SVG/CUBE_2D_LIGHT.svg",
+    "qoder": "Official SVG foreground, with its separate rounded background rectangle removed",
+    "opencode": "opencode-logo-light.svg and opencode-logo-dark.svg; transparent rectangular mark, without the favicon tile",
+    "kimi": "Official homepage CSS --sidebar-logo PNG; isolate the K and blue accent from the black tile, with light/dark foreground variants",
+    "codebuddy": "Official SVG robot outline and eye shapes; remove the tile, decorative background circles and clipping, render the intact mark in brand violet",
+    "pi": "Official multicolor standalone mark",
+    "omp": "Official pi/connector mark; dark text variant for light surfaces, original white/orange for dark surfaces"
+  },
+  "opticalLongSide": {
+    "codex": 0.84,
+    "claude": 0.88,
+    "antigravity": 0.86,
+    "deepseek": 0.9,
+    "cursor": 0.75,
+    "grok": 0.94,
+    "zcode": 0.79,
+    "qoder": 0.8,
+    "codebuddy": 0.86,
+    "opencode": 0.72,
+    "pi": 0.85,
+    "omp": 0.91,
+    "kimi": 0.84
   }
 }

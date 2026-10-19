@@ -358,70 +358,92 @@ impl Engine {
     pub(crate) fn configure_agent(&mut self, params: Value) -> Result<Value> {
         let base = self.store.settings()?;
         let mut next = base.clone();
-        let provider = params["provider"].as_str().context("请选择 Agent")?;
-        let mut retained = false;
-        next.agents.retain(|a| {
-            if a.provider != provider {
-                true
-            } else if retained {
-                false
-            } else {
-                retained = true;
-                true
+        let selected = params["provider"].as_str().context("请选择 Agent")?;
+        let grouped = params["group"] == true;
+        let definition = crate::contracts::provider(selected).context("不支持的 Agent")?;
+        let providers: Vec<&str> = if grouped {
+            crate::contracts::PROVIDERS
+                .iter()
+                .filter(|row| row.agent_id == definition.agent_id)
+                .map(|row| row.id)
+                .collect()
+        } else {
+            vec![selected]
+        };
+        // Apply a visible agent's switches in one settings transaction. The two
+        // DeepSeek adapters keep their source/account IDs and credential formats.
+        for provider in providers {
+            let mut retained = false;
+            next.agents.retain(|a| {
+                if a.provider != provider {
+                    true
+                } else if retained {
+                    false
+                } else {
+                    retained = true;
+                    true
+                }
+            });
+            let agent = next
+                .agents
+                .iter_mut()
+                .find(|a| a.provider == provider)
+                .context("不支持的 Agent")?;
+            if let Some(enabled) = params["enabled"].as_bool() {
+                agent.enabled = enabled;
             }
-        });
-        let agent = next
-            .agents
-            .iter_mut()
-            .find(|a| a.provider == provider)
-            .context("不支持的 Agent")?;
-        if let Some(enabled) = params["enabled"].as_bool() {
-            agent.enabled = enabled;
-        }
-        if let Some(ids) = params.get("machineIds") {
-            agent.machine_ids = serde_json::from_value(ids.clone())?;
-        }
-        for id in &agent.machine_ids {
-            ensure!(
-                id == "local" || next.hosts.iter().any(|h| &h.id == id),
-                "机器已删除，请重新选择"
-            );
-            ensure!(
-                provider != "deepseek" || id == "local",
-                "DeepSeek 余额使用本机 API Key 查询"
-            );
-        }
-        agent.machine_ids.sort();
-        agent.machine_ids.dedup();
-        for machine in &agent.machine_ids {
-            if !next.sources.iter().any(|s| {
-                s.provider == provider && s.host_id.as_deref().unwrap_or("local") == machine
-            }) {
-                next.sources.push(Source {
-                    id: format!("agent-{}", crate::codex_auth::files::new_id()),
-                    name: format!(
-                        "{} · {}",
-                        crate::providers::display_name(provider),
-                        if machine == "local" {
-                            "本机"
-                        } else {
-                            &next.hosts.iter().find(|h| &h.id == machine).unwrap().name
-                        }
-                    ),
-                    provider: provider.into(),
-                    path: crate::provider_paths::default_path(provider, machine != "local")?,
-                    host_id: (machine != "local").then(|| machine.clone()),
-                    ..Default::default()
-                });
+            if let Some(ids) = params.get("machineIds") {
+                agent.machine_ids = if grouped && provider == "deepseek" {
+                    vec!["local".into()]
+                } else {
+                    serde_json::from_value(ids.clone())?
+                };
             }
-        }
-        for source in next.sources.iter_mut().filter(|s| s.provider == provider) {
-            source.enabled = source.machine_binding == MachineBinding::Bound
-                && agent.enabled
-                && agent
-                    .machine_ids
-                    .iter()
-                    .any(|id| id == source.host_id.as_deref().unwrap_or("local"));
+            if grouped && params["enabled"] == true && agent.machine_ids.is_empty() {
+                agent.machine_ids.push("local".into());
+            }
+            for id in &agent.machine_ids {
+                ensure!(
+                    id == "local" || next.hosts.iter().any(|h| &h.id == id),
+                    "机器已删除，请重新选择"
+                );
+                ensure!(
+                    provider != "deepseek" || id == "local",
+                    "DeepSeek 余额使用本机 API Key 查询"
+                );
+            }
+            agent.machine_ids.sort();
+            agent.machine_ids.dedup();
+            for machine in agent.machine_ids.iter().filter(|_| provider != "deepseek") {
+                if !next.sources.iter().any(|s| {
+                    s.provider == provider && s.host_id.as_deref().unwrap_or("local") == machine
+                }) {
+                    next.sources.push(Source {
+                        id: format!("agent-{}", crate::codex_auth::files::new_id()),
+                        name: format!(
+                            "{} · {}",
+                            crate::providers::display_name(provider),
+                            if machine == "local" {
+                                "本机"
+                            } else {
+                                &next.hosts.iter().find(|h| &h.id == machine).unwrap().name
+                            }
+                        ),
+                        provider: provider.into(),
+                        path: crate::provider_paths::default_path(provider, machine != "local")?,
+                        host_id: (machine != "local").then(|| machine.clone()),
+                        ..Default::default()
+                    });
+                }
+            }
+            for source in next.sources.iter_mut().filter(|s| s.provider == provider) {
+                source.enabled = source.machine_binding == MachineBinding::Bound
+                    && agent.enabled
+                    && agent
+                        .machine_ids
+                        .iter()
+                        .any(|id| id == source.host_id.as_deref().unwrap_or("local"));
+            }
         }
         Ok(serde_json::to_value(self.store.patch_settings(
             &serde_json::to_value(base)?,

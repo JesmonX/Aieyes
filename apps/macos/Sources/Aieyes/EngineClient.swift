@@ -3,6 +3,7 @@ import Foundation
 struct UpdateOperations: Decodable { var preparing: Bool; var protected: [String]; var active: Int }
 final class EngineClient: @unchecked Sendable {
     static let runtimeChanged = Notification.Name("AieyesRuntimeChanged")
+    static let hostsChanged = Notification.Name("AieyesHostsChanged")
     private struct Pending {
         var complete: (Result<Data, Error>) -> Void
         var progress: (@Sendable (String) -> Void)?
@@ -53,20 +54,28 @@ final class EngineClient: @unchecked Sendable {
         let output = stdout.fileHandleForReading
         DispatchQueue(label: "app.aieyes.engine.read", qos: .utility).async { [weak self] in
             var buffer = Data()
-            while true {
+            // This dispatch work item lives for the lifetime of the connection.
+            // Foundation's file/JSON temporaries must drain before the next read,
+            // rather than waiting for the work item (and core process) to exit.
+            while autoreleasepool(invoking: { () -> Bool in
                 let data = output.availableData
-                if data.isEmpty { break }
+                guard !data.isEmpty else { return false }
                 buffer.append(data)
                 while let end = buffer.firstIndex(of: 10) {
                     let line = Data(buffer[..<end]); buffer.removeSubrange(...end)
                     self?.receive(line)
                 }
-            }
+                return true
+            }) {}
             self?.disconnected(p)
         }
     }
     private func receive(_ line: Data) {
         guard let response = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { return }
+        if response["method"] as? String == "hosts.changed", let value = response["params"],
+           let data = try? JSONSerialization.data(withJSONObject: value), let state = try? JSONDecoder().decode(HostMonitorState.self, from: data) {
+            NotificationCenter.default.post(name: Self.hostsChanged, object: self, userInfo: ["state":state]); return
+        }
         if response["method"] as? String == "runtime.changed", let value = response["params"] as? [String: Any] {
             NotificationCenter.default.post(name: Self.runtimeChanged, object: nil, userInfo: value); return
         }
@@ -374,6 +383,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private var completedDashboardRevision: [String: Int] = [:]
     private var scopeCache: [String: Dashboard] = [:]
     private var scopeCacheRevision: [String: Int] = [:]
+    private var scopeStatusRevisions: [String: [String: Int]] = [:]
+    private var menuCache: (usage: [String: Int], status: [String: Int], value: Dashboard)?
+    private var usageRevisions: [String: Int] { dashboardRevisions.filter { ["settings", "usage", "prices", "calendarDay", "timeZone"].contains($0.key) } }
     var dashboardCacheNow: () -> Date = Date.init
     private var dashboardRevisions: [String: Int] {
         var values = runtimeRevisions.filter { ["settings","usage","quotas","estimates","prices","sources"].contains($0.key) }
@@ -403,12 +415,13 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         }
     }
     private func acceptRuntimeRevisions(_ values: [String: Int]) {
+        resetNotifications.observe(values)
         // Replies from independent lanes can arrive out of order. Counters only advance.
         let changed = Set(values.keys.filter { values[$0, default: 0] > runtimeRevisions[$0, default: -1] })
         guard !changed.isEmpty else { return }
         for key in changed { runtimeRevisions[key] = values[key] }
         pendingRuntimeDomains.formUnion(changed)
-        if !changed.isDisjoint(with: ["settings","usage","quotas","estimates","prices","sources"]) { scopeCache.removeAll() }
+        if !changed.isDisjoint(with: ["settings","usage","prices"]) { scopeCache.removeAll(); scopeStatusRevisions.removeAll() }
         scheduleRuntimeRefresh()
     }
     private func scheduleRuntimeRefresh() {
@@ -697,7 +710,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var quotaBusy = false { didSet { scheduleRefreshes() } }
     @Published var quotaError: String?
     @Published var quotaNextAttempt: Date?
-    var quotaAccounts: [AgentAccount] { settings.accounts.filter { $0.quotaEnabled && $0.archived != true } }
+    var quotaAccounts: [AgentAccount] { settings.accounts.filter { $0.quotaEnabled && $0.archived != true && settings.supports($0.provider, "quota") } }
     var hasQuotaAccounts: Bool { !quotaAccounts.isEmpty }
     private var timer: Timer?
     private var lastScan = Date.distantPast
@@ -711,8 +724,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var showPanelAccounts: (() -> Void)?
     func openSettings(_ destination: SettingsDestination = .init()) {
         settingsTab = destination.normalizedCategory
-        if let account = settings.accounts.first(where: { $0.key == destination.accountKey }) { settingsAgent = account.provider }
-        else if let provider = destination.provider { settingsAgent = provider }
+        if let account = settings.accounts.first(where: { $0.key == destination.accountKey }) { settingsAgent = CoreContract.agentProvider(account.provider) }
+        else if let provider = destination.provider { settingsAgent = CoreContract.agentProvider(provider) }
         if settingsTab == "general", let section = destination.section { generalPage = section }
         settingsSection = destination.section
         requestedAccountMachineID = destination.machineID
@@ -749,9 +762,16 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     func bootstrap() async {
         do {
-            struct CoreInfo: Decodable { var contractHash: String? }
+            struct CoreInfo: Decodable { var contractHash: String?; var hostMonitoring: Bool? }
             let info: CoreInfo = try await engine.call("hello")
             if let hash = info.contractHash, hash != CoreContract.contractHash { throw ClientError.message("应用资源与核心版本不一致，请重新安装同一版本") }
+            hostMonitoringSupported = info.hostMonitoring == true
+            if hostMonitoringSupported {
+                hostMonitorObserver = NotificationCenter.default.addObserver(forName: EngineClient.hostsChanged, object: metricsEngine, queue: .main) { [weak self] note in
+                    guard let snapshot = note.userInfo?["state"] as? HostMonitorState else { return }
+                    Task { @MainActor in self?.acceptHostMonitor(snapshot) }
+                }
+            }
             settings = try await engine.call("settings.get"); PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:]); settingsDraft = settings; settingsLoaded = true
             resetNotifications.start()
             startSessionMonitoring()
@@ -792,12 +812,26 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private func reloadOnce(request: Int) async -> Bool {
         dashboardPending = true; dashboardError = nil
         if let current: [String: Int] = try? await summaryEngine.call("runtime.revisions") { acceptRuntimeRevisions(current) }
-        let revision = dashboardRevisions
-        if scopeCacheRevision != revision { scopeCache.removeAll(); scopeCacheRevision = revision }
+        let revision = dashboardRevisions, usage = usageRevisions
+        if scopeCacheRevision != usage { scopeCache.removeAll(); scopeStatusRevisions.removeAll(); scopeCacheRevision = usage }
+        var statusRequests: [String: Task<DashboardStatus, Error>] = [:]
+        func status(_ params: [String: Any]) async throws -> DashboardStatus {
+            let scope = params.filter { ["provider", "accountId", "sourceId"].contains($0.key) }
+            let key = String(data: try JSONSerialization.data(withJSONObject: scope, options: .sortedKeys), encoding: .utf8)!
+            if let request = statusRequests[key] { return try await request.value }
+            let request = Task { @MainActor in try await self.summaryEngine.call("dashboard.status", params: scope, as: DashboardStatus.self) }
+            statusRequests[key] = request
+            return try await request.value
+        }
         let summary = Task { @MainActor [weak self] in
             guard let self else { return false }
             do {
-                let menu: Dashboard = try await self.summaryEngine.call("dashboard.summary", params: ["estimateHistory":"display"])
+                var menu: Dashboard
+                if !self.runtimeRevisions.isEmpty, let cached = self.menuCache, cached.usage == usage {
+                    menu = cached.value
+                    if cached.status != revision { menu.applyStatus(try await status([:])) }
+                } else { menu = try await self.summaryEngine.call("dashboard.summary", params: ["estimateHistory":"display"]) }
+                if revision == self.dashboardRevisions { self.menuCache = (usage, revision, menu) }
                 guard request == self.dashboardRequest else { return true }
                 self.menuDashboard = menu
                 self.dashboard.quotaEstimates = menu.quotaEstimates; self.dashboard.creditEstimates = menu.creditEstimates
@@ -815,10 +849,16 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             for (surface, filter) in requested {
                 var params = filter.parameters(settings: settings); params["estimateHistory"] = "display"
                 let key = String(data: try JSONSerialization.data(withJSONObject: params, options: .sortedKeys), encoding: .utf8)!
-                let next: Dashboard
+                var next: Dashboard
                 if let shared = queried[key] { next = shared }
-                else if !runtimeRevisions.isEmpty, let cached = scopeCache[key] { next = cached }
-                else { next = try await engine.call("dashboard", params: params); if scopeCache.count >= 4 { scopeCache.removeAll() }; if revision == dashboardRevisions, let encoded = try? JSONEncoder().encode(next), encoded.count <= 2 * 1024 * 1024 { scopeCache[key] = next } }
+                else if !runtimeRevisions.isEmpty, let cached = scopeCache[key] {
+                    next = cached
+                    if scopeStatusRevisions[key] != revision { next.applyStatus(try await status(params)) }
+                } else { next = try await engine.call("dashboard", params: params) }
+                if revision == dashboardRevisions, let encoded = try? JSONEncoder().encode(next), encoded.count <= 2 * 1024 * 1024 {
+                    if scopeCache.count >= 4 && scopeCache[key] == nil { scopeCache.removeAll(); scopeStatusRevisions.removeAll() }
+                    scopeCache[key] = next; scopeStatusRevisions[key] = revision
+                }
                 guard request == dashboardRequest else { _ = await summary.value; return true }
                 queried[key] = next; results[surface] = next
             }
@@ -1019,7 +1059,59 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         let ordered = settings.monitoredHosts.compactMap { next[$0.id] }
         if hosts != ordered { hosts = ordered }
     }
+    private var hostMonitoringSupported = false
+    private var hostMonitorObserver: NSObjectProtocol?
+    private var hostMonitorTask: Task<Void, Never>?
+    private var hostMonitorConfiguration = ""
+    private var hostMonitorRetryAt = Date.distantPast
+    private var hostMonitorVersion: (String, UInt64)?
+    @Published private var hostMonitorBusy = Set<String>()
+    @Published private var hostMonitorRequestBusy = false
+    func hostRefreshBusy(_ id: String? = nil) -> Bool {
+        guard hostMonitoringSupported else { return serverBusy }
+        return id.map { hostMonitorBusy.contains($0) } ?? hostMonitorRequestBusy
+    }
+    private func acceptHostMonitor(_ snapshot: HostMonitorState) {
+        guard !stopped else { return }
+        if let known = hostMonitorVersion, known.0 == snapshot.sampleSession, known.1 >= snapshot.version { return }
+        hostMonitorVersion = (snapshot.sampleSession, snapshot.version)
+        acceptHostSamples(snapshot.rows)
+        let busy = Set(snapshot.inFlight + snapshot.pending)
+        if hostMonitorBusy != busy { hostMonitorBusy = busy }
+        if serverBusy != !busy.isEmpty { serverBusy = !busy.isEmpty }
+        if busy.isEmpty {
+            finishRefresh("hosts", failures: snapshot.rows.compactMap { row in row.error.map { ActionFailure(action: "hosts", itemID: row.id, name: row.name, reason: $0) } })
+        } else if refreshStates["hosts"]?.busy != true { beginRefresh("hosts") }
+    }
+    private func configureHostMonitor() {
+        guard hostMonitoringSupported, settingsLoaded, !stopped, hostMonitorTask == nil, Date() >= hostMonitorRetryAt else { return }
+        let interval = serverTabVisible ? settings.foregroundInterval : settings.serverRefreshSeconds
+        let paused = installingUpdate
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let key = (try? String(data: encoder.encode(settings.monitoredHosts), encoding: .utf8)) ?? ""
+        let configuration = key + ":\(interval):\(paused)"
+        guard configuration != hostMonitorConfiguration else { return }
+        hostMonitorTask = Task { @MainActor in
+            defer { hostMonitorTask = nil; scheduleRefreshes() }
+            do {
+                let snapshot: HostMonitorState = try await metricsEngine.call("hosts.monitor.configure", params: ["intervalSeconds":interval,"paused":paused])
+                hostMonitorConfiguration = configuration; hostMonitorRetryAt = .distantPast
+                acceptHostMonitor(snapshot)
+            } catch { hostMonitorRetryAt = Date().addingTimeInterval(5); message = error.localizedDescription }
+        }
+    }
     func sampleHosts(hostID: String? = nil) async {
+        if hostMonitoringSupported {
+            guard !installingUpdate, !hostMonitorRequestBusy else { return }
+            hostMonitorRequestBusy = true; defer { hostMonitorRequestBusy = false }
+            hostMonitorRetryAt = .distantPast; configureHostMonitor()
+            if let task = hostMonitorTask { await task.value }
+            do {
+                let snapshot: HostMonitorState = try await metricsEngine.call("hosts.monitor.refresh", params: hostID.map { ["hostId":$0] } ?? [:])
+                acceptHostMonitor(snapshot)
+            } catch { finishRefresh("hosts", failures: [ActionFailure(action: "hosts", itemID: hostID, name: "服务器", reason: error.localizedDescription)]) }
+            return
+        }
         guard !installingUpdate, !serverBusy, settings.monitoredHosts.contains(where: \.enabled) else { return }; serverBusy = true; beginRefresh("hosts")
         defer { lastMetrics = Date(); serverBusy = false }
         do {
@@ -1188,6 +1280,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         } }
     }
     private func scheduleRefreshes() {
+        configureHostMonitor()
         timer?.invalidate(); timer = nil
         guard schedulingEnabled, settingsLoaded, !stopped, !installingUpdate, !settingsSaving, !repricing else { return }
         let now = Date()
@@ -1197,7 +1290,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         if !quotaScheduleKnown { readQuotaSchedule() }
         var deadlines: [Date] = []
         if panelVisible, !networkBusy { deadlines.append(lastNetworkAttempt.addingTimeInterval(300)) }
-        if !serverBusy, settings.monitoredHosts.contains(where: \.enabled) { deadlines.append(metricsDeadline) }
+        if !hostMonitoringSupported, !serverBusy, settings.monitoredHosts.contains(where: \.enabled) { deadlines.append(metricsDeadline) }
+        if hostMonitoringSupported, hostMonitorRetryAt > now { deadlines.append(hostMonitorRetryAt) }
         if !historyBlocked {
             deadlines.append(lastScan.addingTimeInterval(Double(settings.historyInterval)))
         }
@@ -1219,7 +1313,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         defer { scheduleRefreshes() }
         let now = Date()
         if panelVisible, !networkBusy, now.timeIntervalSince(lastNetworkAttempt) >= 300 { Task { await testNetwork(force: false) } }
-        if !serverBusy, settings.monitoredHosts.contains(where: \.enabled), now >= metricsDeadline { Task { await sampleHosts() } }
+        if !hostMonitoringSupported, !serverBusy, settings.monitoredHosts.contains(where: \.enabled), now >= metricsDeadline { Task { await sampleHosts() } }
         if !historyBlocked, now.timeIntervalSince(lastScan) >= Double(settings.historyInterval) { Task { await scan() } }
         guard !quotaBusy else { return }
         if let (quota, _, key) = pendingResets.first(where: { $0.1 <= now.timeIntervalSince1970 }) {
@@ -1231,6 +1325,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     }
     func stop() {
         stopped = true; schedulingEnabled = false; timer?.invalidate(); timer = nil
+        hostMonitorTask?.cancel(); hostMonitorTask = nil
+        if let hostMonitorObserver { NotificationCenter.default.removeObserver(hostMonitorObserver) }
         sessionTask?.cancel(); sessionTask = nil
         runtimeTask?.cancel(); runtimeRefresh?.cancel(); summaryEngine.stop()
         if let runtimeObserver { NotificationCenter.default.removeObserver(runtimeObserver) }

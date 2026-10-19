@@ -304,24 +304,25 @@ def read_file(path, provider, hook, cursor):
     identity = str(stat.st_ino)
     reset = cursor.get('identity') != identity or size < cursor.get('offset',0) or (size == cursor.get('size') and str(stat.st_mtime_ns) != cursor.get('signature'))
     offset = max(0,size-262144) if reset else cursor.get('offset',0)
-    with path.open('rb') as f:
-        f.seek(offset); data = f.read(524288)
-        rows = []
-        if reset and offset:
-            prefix, sep, data = data.partition(b'\n'); offset += len(prefix) + len(sep)
-        if reset:
-            f.seek(0)
-            for _ in range(2 if provider=='omp' else 1):
-                try: rows.extend(e for e in metadata(json.loads(f.readline(65536)), provider, hook) if e.get('kind') == 'identity' and e.get('session'))
-                except (ValueError, TypeError): pass
-        complete = data.rfind(b'\n') + 1
-        for line in data[:complete].splitlines():
-            try:
-                value=json.loads(line)
-                if provider=='kimi' and value.get('type')=='forked':rows=[]
-                rows.extend(metadata(value,provider,hook))
-            except (ValueError,TypeError,AttributeError): pass
-        if not complete and len(data) == 524288: complete=len(data)
+    rows = []; complete = 0
+    if reset or offset != size or cursor.get('signature') != str(stat.st_mtime_ns):
+        with path.open('rb') as f:
+            f.seek(offset); data = f.read(524288)
+            if reset and offset:
+                prefix, sep, data = data.partition(b'\n'); offset += len(prefix) + len(sep)
+            if reset:
+                f.seek(0)
+                for _ in range(2 if provider=='omp' else 1):
+                    try: rows.extend(e for e in metadata(json.loads(f.readline(65536)), provider, hook) if e.get('kind') == 'identity' and e.get('session'))
+                    except (ValueError, TypeError): pass
+            complete = data.rfind(b'\n') + 1
+            for line in data[:complete].splitlines():
+                try:
+                    value=json.loads(line)
+                    if provider=='kimi' and value.get('type')=='forked':rows=[]
+                    rows.extend(metadata(value,provider,hook))
+                except (ValueError,TypeError,AttributeError): pass
+            if not complete and len(data) == 524288: complete=len(data)
     pid = cursor.get('pid',0); start = cursor.get('processStart',0)
     for row in rows:
         if row.get('pid'): pid=row['pid']; start=row.get('processStart',0)
@@ -356,6 +357,150 @@ def read_db(path,cursor=None):
     if signature!=database_fingerprint(path):raise RuntimeError('Session database changed during read; retry')
     return dict(metadata,reset=True,session=session,steps=steps)
 
+class FileWatch:
+    """Bounded directory/file notifications; unavailable backends use reconciliation."""
+    LIMIT = 8192
+
+    def __init__(self):
+        self.fd = None; self.queue = None; self.paths = {}; self.registered = set()
+        try:
+            if sys.platform.startswith('linux'):
+                import ctypes
+                self.libc = ctypes.CDLL(None, use_errno=True)
+                self.fd = self.libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+                if self.fd < 0: raise OSError('inotify unavailable')
+            else:
+                import select
+                self.queue = select.kqueue()
+        except (OSError, AttributeError): self.close()
+
+    @property
+    def active(self):
+        return self.fd is not None or self.queue is not None
+
+    def add(self, path, directory):
+        if not self.active or path in self.registered or self.fd is not None and not directory: return
+        if len(self.paths) >= self.LIMIT: self.close(); return
+        try:
+            if self.fd is not None:
+                # MODIFY, ATTRIB, CLOSE_WRITE, moves, create/delete and self changes.
+                token = self.libc.inotify_add_watch(self.fd, os.fsencode(path), 0x00000fce)
+                if token < 0: raise OSError('inotify watch unavailable')
+            else:
+                import select
+                token = os.open(path, os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_EVTONLY', 0))
+                try:
+                    event = select.kevent(token, filter=select.KQ_FILTER_VNODE,
+                        flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                        fflags=select.KQ_NOTE_WRITE | select.KQ_NOTE_EXTEND | select.KQ_NOTE_ATTRIB | select.KQ_NOTE_DELETE | select.KQ_NOTE_RENAME | select.KQ_NOTE_REVOKE)
+                    self.queue.control([event], 0, 0)
+                except Exception: os.close(token); raise
+            self.paths[token] = (path, directory); self.registered.add(path)
+        except OSError: self.close()
+
+    def changes(self):
+        dirty = set(); lost = False
+        try:
+            if self.fd is not None:
+                import struct
+                while True:
+                    try: data = os.read(self.fd, 65536)
+                    except BlockingIOError: break
+                    if not data: break
+                    offset = 0
+                    while offset + 16 <= len(data):
+                        token, mask, _, length = struct.unpack_from('iIII', data, offset)
+                        name = os.fsdecode(data[offset+16:offset+16+length].split(b'\0', 1)[0]); offset += 16 + length
+                        if mask & (0x4000 | 0x8000) or token not in self.paths: lost = True; continue
+                        root, _ = self.paths[token]
+                        if mask & 0x40000000 or not name: lost = True
+                        else: dirty.add(root / name)
+            elif self.queue is not None:
+                import select
+                while True:
+                    events = self.queue.control([], 256, 0)
+                    for event in events:
+                        path, directory = self.paths[event.ident]
+                        if directory or event.fflags & (select.KQ_NOTE_DELETE | select.KQ_NOTE_RENAME | select.KQ_NOTE_REVOKE): lost = True
+                        else: dirty.add(path)
+                    if len(events) < 256: break
+        except (OSError, KeyError): self.close(); lost = True
+        return dirty, lost
+
+    def close(self):
+        if self.fd is not None and self.fd >= 0: os.close(self.fd)
+        if self.queue is not None:
+            self.queue.close()
+            for token in self.paths: os.close(token)
+        self.fd = None; self.queue = None; self.paths.clear(); self.registered.clear()
+
+
+class SessionDiscovery:
+    def __init__(self, provider, roots):
+        self.provider = provider; self.roots = roots; self.files = {}; self.watch = FileWatch()
+        self.scanned = 0; self.wall = 0; self.overflow = False
+
+    def candidate(self, path, hook):
+        if path.suffix != ('.db' if self.provider == 'antigravity' and not hook else '.jsonl'): return False
+        if not hook and '.aieyes' in path.parts: return False
+        return not ((self.provider == 'kimi' and not hook and path.name != 'wire.jsonl') or
+                    (self.provider == 'grok' and not hook and path.name != 'events.jsonl'))
+
+    def update(self, path, hook, now):
+        self.files.pop(path, None)
+        if not self.candidate(path, hook) or path.is_symlink(): return
+        try:
+            stamp = path.stat().st_mtime
+            if not hook and self.provider == 'antigravity':
+                try: stamp = max(stamp, pathlib.Path(str(path)+'-wal').stat().st_mtime)
+                except FileNotFoundError: pass
+            self.watch.add(path, False)
+            if now - stamp < 86400: self.files[path] = (stamp, hook)
+        except FileNotFoundError: pass
+
+    def scan(self, now):
+        self.watch.close(); self.watch = FileWatch(); self.files.clear(); self.overflow = False
+        for root, hook in self.roots:
+            if not root.exists(): continue
+            if root.is_file(): self.update(root, hook, now); continue
+            pending = [root]
+            while pending:
+                directory = pending.pop(); self.watch.add(directory, True)
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        if entry.is_symlink() or not hook and entry.name == '.aieyes': continue
+                        path = pathlib.Path(entry.path)
+                        if entry.is_dir(follow_symlinks=False): pending.append(path)
+                        elif entry.is_file(follow_symlinks=False): self.update(path, hook, now)
+                if len(self.files) > 4096:
+                    self.overflow = True
+                    self.files = dict(sorted(self.files.items(), key=lambda item: item[1][0], reverse=True)[:257])
+        if self.overflow: self.watch.close()
+        self.scanned = time.monotonic(); self.wall = now
+
+    def recent(self):
+        now = time.time(); dirty, lost = self.watch.changes()
+        if lost or not self.scanned or now < self.wall or time.monotonic()-self.scanned >= (60 if self.watch.active else 5):
+            self.scan(now)
+        else:
+            for path in dirty:
+                if self.provider == 'antigravity' and str(path).endswith('-wal'): path = pathlib.Path(str(path)[:-4])
+                for root, hook in reversed(self.roots):
+                    if path == root or root in path.parents:
+                        self.update(path, hook, now); break
+        self.files = {path: value for path, value in self.files.items() if now-value[0] < 86400}
+        return sorted(((stamp, path, hook) for path, (stamp, hook) in self.files.items()), reverse=True)
+
+
+_DISCOVERY = {}
+def recent_files(provider, roots):
+    key = (provider, tuple((str(path), hook) for path, hook in roots))
+    if key not in _DISCOVERY:
+        if len(_DISCOVERY) >= 16: _DISCOVERY.pop(next(iter(_DISCOVERY))).watch.close()
+        _DISCOVERY[key] = SessionDiscovery(provider, roots)
+    return _DISCOVERY[key].recent()
+
+
 def collect_native(source,cursors,database_cache=False,harness_deadline=None):
     path=pathlib.Path(os.path.expanduser(source.get('path') or '~/.gemini/antigravity-cli'))
     provider=source['provider']; result=dict(sourceId=source['id'],files=[],error=None)
@@ -375,7 +520,8 @@ def collect_native(source,cursors,database_cache=False,harness_deadline=None):
             if harness_deadline is None:harness_deadline=time.monotonic()+8
             if not path.exists():raise FileNotFoundError('Harness data directory does not exist')
             files=harness()['paths'](path)
-            recent=sorted((f for f in files if time.time()-f.stat().st_mtime<86400),key=lambda f:f.stat().st_mtime,reverse=True)
+            stamps=((f.stat().st_mtime,f) for f in files)
+            recent=[f for _,f in sorted((row for row in stamps if time.time()-row[0]<86400),reverse=True)]
             if len(recent)>256:result['error']='Too many recent sessions; showing the most recent 256'
             for file in recent[:256]:
                 cursor=cursors.get(str(file),{})
@@ -394,16 +540,7 @@ def collect_native(source,cursors,database_cache=False,harness_deadline=None):
         roots=[] if provider=='cursor' else [(path / ('sessions' if provider in ('codex','kimi','grok','pi','omp') else 'projects' if provider in ('claude','codebuddy','qoder') else 'conversations'),False)]
         if roots and not roots[0][0].is_dir(): roots=[(path,False)]
         if provider in ('claude','antigravity','cursor'): roots.append((target(source)[0]/'.aieyes/session-events',True))
-        files=[]
-        for root,hook in roots:
-            if not root.exists(): continue
-            candidates=[root] if root.is_file() else root.rglob('*.jsonl' if hook or provider!='antigravity' else '*.db')
-            for f in candidates:
-                if provider=='kimi' and f.name!='wire.jsonl':continue
-                if provider=='grok' and f.name!='events.jsonl':continue
-                if f.is_symlink() or (not hook and '.aieyes' in f.parts): continue
-                stamp=max(f.stat().st_mtime, pathlib.Path(str(f)+'-wal').stat().st_mtime if pathlib.Path(str(f)+'-wal').exists() else 0)
-                if time.time()-stamp < 86400: files.append((stamp,f,hook))
+        files=recent_files(provider,roots)
         if len(files)>256: result['error']='Too many recent sessions; showing the most recent 256'
         for _,f,hook in sorted(files,reverse=True)[:256]:
             try: result['files'].append(read_db(f,cursors.get(str(f),{}) if database_cache else None) if not hook and provider=='antigravity' else read_file(f,provider,hook,cursors.get(str(f),{})))
@@ -420,7 +557,7 @@ def collect(source,cursors,database_cache=False,harness_deadline=None):
     if source['provider']=='zcode':
         root=target(source)[0]/'.aieyes/session-events'
         if root.is_dir():
-            paths=sorted((p for p in root.glob('*.jsonl') if p.is_file() and time.time()-p.stat().st_mtime<86400),key=lambda p:p.stat().st_mtime,reverse=True)
+            paths=[p for _,p,_ in recent_files('zcode',[(root,True)])]
             if len(paths)>256:result['error']='Too many recent ZCode state files; showing latest 256'
             for path in paths[:256]:
                 try:result['files'].append(read_file(path,'zcode',True,cursors.get(str(path),{})))
@@ -438,6 +575,20 @@ def main(request):
     deadline=time.monotonic()+8
     polls=[collect(s,request.get('cursors',{}),request.get('databaseCache') is True,harness_deadline=deadline) for s in sources] if action=='collect' else []
     return dict(hooks=hooks,polls=polls,now=int(time.time()))
+
+def serve(request):
+    try:
+        while True:
+            try: response=dict(aieyesSession=1,result=main(request))
+            except Exception as error: response=dict(aieyesSession=1,error=str(error))
+            print(json.dumps(response,ensure_ascii=False),flush=True)
+            line=sys.stdin.readline(64*1024*1024+1)
+            if not line or len(line)>64*1024*1024: break
+            request=json.loads(line)
+    finally:
+        for discovery in _DISCOVERY.values(): discovery.watch.close()
+        _DISCOVERY.clear()
+
 
 if __name__ == '__main__':
     if MARKER in sys.argv:

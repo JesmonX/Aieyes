@@ -938,6 +938,28 @@ pub struct Filter {
     pub date_range: Option<DateRange>,
 }
 
+impl Filter {
+    pub(crate) fn provider_alias(&self) -> Option<&str> {
+        // Account keys remain adapter-specific, including when legacy accounts
+        // happen to share an ID. Only the agent-wide view combines adapters.
+        if self.account_id.as_ref().is_some_and(|id| !id.is_empty()) {
+            return None;
+        }
+        let selected = crate::contracts::provider(self.provider.as_deref()?)?;
+        crate::contracts::PROVIDERS
+            .iter()
+            .find(|row| row.id != selected.id && row.agent_id == selected.agent_id)
+            .map(|row| row.id)
+    }
+
+    pub(crate) fn includes_provider(&self, provider: &str) -> bool {
+        self.provider
+            .as_ref()
+            .is_none_or(|selected| selected == provider)
+            || self.provider_alias() == Some(provider)
+    }
+}
+
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }

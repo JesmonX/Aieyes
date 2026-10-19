@@ -85,6 +85,13 @@ pub fn frame(state: &PetState, elapsed_ms: u64, reduced: bool) -> u32 {
     if reduced {
         return u32::from(state.row) * 8;
     }
+    u32::from(state.row) * 8 + frame_timing(state, elapsed_ms).0
+}
+/// Time to the next actual atlas frame; static/reduced states need no timer.
+pub fn next_frame_delay(state: &PetState, elapsed_ms: u64, reduced: bool) -> Option<u64> {
+    (!reduced && state.frames > 1).then(|| frame_timing(state, elapsed_ms).1)
+}
+fn frame_timing(state: &PetState, elapsed_ms: u64) -> (u32, u64) {
     let durations = if state.frame_durations_ms.is_empty() {
         PET_FRAME_DURATIONS
             .get(state.row as usize)
@@ -93,7 +100,7 @@ pub fn frame(state: &PetState, elapsed_ms: u64, reduced: bool) -> u32 {
     } else {
         state.frame_durations_ms.as_slice()
     };
-    let index = if !durations.is_empty()
+    if !durations.is_empty()
         && durations.len() == usize::from(state.frames)
         && durations.iter().all(|duration| *duration > 0)
         && let Some(cycle) = durations
@@ -101,26 +108,51 @@ pub fn frame(state: &PetState, elapsed_ms: u64, reduced: bool) -> u32 {
             .try_fold(0u64, |sum, d| sum.checked_add(*d))
     {
         let mut remainder = elapsed_ms % cycle;
-        durations
-            .iter()
-            .position(|duration| {
-                if remainder < *duration {
-                    true
-                } else {
-                    remainder -= *duration;
-                    false
-                }
-            })
-            .unwrap_or(0) as u32
-    } else {
-        (elapsed_ms / state.frame_ms.max(1) % u64::from(state.frames.max(1))) as u32
-    };
-    u32::from(state.row) * 8 + index
+        for (index, duration) in durations.iter().enumerate() {
+            if remainder < *duration {
+                return (index as u32, duration - remainder);
+            }
+            remainder -= duration;
+        }
+    }
+    let duration = state.frame_ms.max(1);
+    (
+        (elapsed_ms / duration % u64::from(state.frames.max(1))) as u32,
+        duration - elapsed_ms % duration,
+    )
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sessions::LiveSession;
+    #[test]
+    fn timers_land_on_frame_boundaries_and_stop_for_static_states() {
+        let mut state = project(&Snapshot::default());
+        for durations in [
+            vec![280, 110, 110, 140, 140, 320],
+            vec![0; 6],
+            vec![u64::MAX; 6],
+            vec![7, 11],
+        ] {
+            state.frame_durations_ms = durations;
+            for elapsed in 0..2200 {
+                let delay = next_frame_delay(&state, elapsed, false).unwrap();
+                assert!(delay > 0);
+                assert_eq!(
+                    frame(&state, elapsed, false),
+                    frame(&state, elapsed + delay - 1, false)
+                );
+                assert_ne!(
+                    frame(&state, elapsed, false),
+                    frame(&state, elapsed + delay, false)
+                );
+            }
+        }
+        assert_eq!(next_frame_delay(&state, 20, true), None);
+        state.frames = 1;
+        assert_eq!(next_frame_delay(&state, 20, false), None);
+    }
     #[test]
     fn attention_priority_and_unknown_are_not_working() {
         let mut snapshot = Snapshot {

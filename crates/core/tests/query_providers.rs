@@ -11,6 +11,114 @@ fn query_source(provider: &str) -> Source {
 }
 
 #[test]
+fn deepseek_group_combines_usage_and_balances_without_merging_account_ids() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(temp.path()).unwrap();
+    let sources = vec![
+        Source {
+            id: "wallet".into(),
+            path: temp.path().join("key").display().to_string(),
+            ..query_source("deepseek")
+        },
+        Source {
+            id: "harness".into(),
+            path: temp.path().join("dsh").display().to_string(),
+            ..query_source("deepseek-harness")
+        },
+    ];
+    let accounts = sources
+        .iter()
+        .map(|s| Account {
+            id: s.account_id.clone(),
+            provider: s.provider.clone(),
+            name: s.id.clone(),
+            ..Default::default()
+        })
+        .collect();
+    engine
+        .store
+        .save_settings(&Settings {
+            version: 2,
+            sources: sources.clone(),
+            accounts,
+            ..Default::default()
+        })
+        .unwrap();
+    let saved = engine.store.settings().unwrap();
+    for source in &sources {
+        engine
+            .store
+            .quota(&QuotaSnapshot {
+                source_id: source.id.clone(),
+                provider: source.provider.clone(),
+                account_id: source.account_id.clone(),
+                updated_at: now(),
+                origin: "live".into(),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let event: UsageEvent = serde_json::from_value(json!({"id":"deepseek-usage","provider":"deepseek-harness","accountId":"personal","sourceId":"harness","sessionId":"session","timestamp":now(),"model":"deepseek-test","tokens":{"input":123},"attribution":"import"})).unwrap();
+    engine.store.put_event(&event, &[], &saved).unwrap();
+    let filter = Filter {
+        provider: Some("deepseek".into()),
+        date_range: Some(DateRange::All),
+        ..Default::default()
+    };
+    for dashboard in [
+        engine.store.dashboard(&filter).unwrap(),
+        engine.store.dashboard_summary(&filter).unwrap(),
+    ] {
+        assert_eq!(dashboard.summary.total, 123);
+        assert_eq!(dashboard.quotas.len(), 2);
+    }
+    for (provider, total) in [("deepseek", 0), ("deepseek-harness", 123)] {
+        let dashboard = engine
+            .store
+            .dashboard(&Filter {
+                provider: Some(provider.into()),
+                account_id: Some("personal".into()),
+                ..filter.clone()
+            })
+            .unwrap();
+        assert_eq!(dashboard.summary.total, total);
+        assert_eq!(dashboard.quotas.len(), 1);
+        assert_eq!(dashboard.quotas[0].provider, provider);
+    }
+    for enabled in [false, true] {
+        engine
+            .call(
+                "agents.set",
+                json!({"provider":"deepseek","group":true,"enabled":enabled}),
+            )
+            .unwrap();
+        let current = engine.store.settings().unwrap();
+        assert_eq!(json!(current.accounts), json!(saved.accounts));
+        assert_eq!(current.sources.len(), saved.sources.len());
+        for original in &saved.sources {
+            let source = current
+                .sources
+                .iter()
+                .find(|s| s.id == original.id)
+                .unwrap();
+            assert_eq!(source.path, original.path);
+            assert_eq!(source.account_id, original.account_id);
+            assert_eq!(source.enabled, enabled);
+        }
+        assert!(
+            current
+                .agents
+                .iter()
+                .filter(|a| a.provider.starts_with("deepseek"))
+                .all(|a| a.enabled == enabled)
+        );
+    }
+    let before = engine.store.settings().unwrap();
+    assert!(engine.call("agents.set", json!({"provider":"deepseek","group":true,"enabled":false,"machineIds":["deleted-machine"]})).is_err());
+    assert_eq!(json!(engine.store.settings().unwrap()), json!(before));
+}
+
+#[test]
 fn agy_groups_have_independent_windows_and_reset_times() {
     let payload = json!({"status":"SUCCESS","command":{"name":"usage","data":{"groups":[
         {"name":"Gemini Models","buckets":[{"window":"weekly","remaining_fraction":0.75,"reset_time":"2026-10-08T03:05:12Z"},{"window":"5h","remaining_fraction":0.0}]},

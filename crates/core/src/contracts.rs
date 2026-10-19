@@ -31,6 +31,7 @@ pub struct Provider {
     pub requires_path: bool,
     pub wakeup: bool,
     pub discover_local: bool,
+    pub agent_id: &'static str,
 }
 #[rustfmt::skip]
 pub const METHODS: &[Method] = &[
@@ -146,24 +147,27 @@ pub const METHODS: &[Method] = &[
     Method { name: "wakeups.run", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.save", lane: Lane::Wakeups, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "wakeups.status", lane: Lane::Wakeups, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "dashboard.status", lane: Lane::Dashboard, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "hosts.monitor.configure", lane: Lane::Hosts, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "hosts.monitor.refresh", lane: Lane::Hosts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
 ];
 #[rustfmt::skip]
 pub const PROVIDERS: &[Provider] = &[
-    Provider { id: "codex", name: "Codex", default_path: "~/.codex", binary: "codex", requires_path: true, wakeup: true, discover_local: true },
-    Provider { id: "claude", name: "Claude Code", default_path: "~/.claude", binary: "claude", requires_path: true, wakeup: true, discover_local: true },
-    Provider { id: "antigravity", name: "Antigravity", default_path: "~/.gemini/antigravity-cli", binary: "agy", requires_path: false, wakeup: true, discover_local: true },
-    Provider { id: "deepseek", name: "DeepSeek", default_path: "", binary: "", requires_path: false, wakeup: false, discover_local: false },
-    Provider { id: "zcode", name: "ZCode", default_path: "~/.zcode", binary: "zcode", requires_path: false, wakeup: false, discover_local: true },
-    Provider { id: "qoder", name: "Qoder", default_path: "~/.qoder", binary: "qodercli", requires_path: false, wakeup: false, discover_local: true },
-    Provider { id: "grok", name: "Grok", default_path: "~/.grok", binary: "grok", requires_path: false, wakeup: false, discover_local: true },
-    Provider { id: "cursor", name: "Cursor", default_path: "~/.cursor", binary: "agent", requires_path: false, wakeup: false, discover_local: true },
-    Provider { id: "opencode", name: "OpenCode", default_path: "~/.local/share/opencode", binary: "", requires_path: false, wakeup: false, discover_local: true },
-    Provider { id: "kimi", name: "Kimi Code", default_path: "~/.kimi-code", binary: "kimi", requires_path: false, wakeup: false, discover_local: true },
-    Provider { id: "deepseek-harness", name: "DeepSeek Harness", default_path: "~/.dsh", binary: "dsh", requires_path: true, wakeup: false, discover_local: true },
-    Provider { id: "codebuddy", name: "CodeBuddy", default_path: "~/.codebuddy", binary: "codebuddy", requires_path: true, wakeup: false, discover_local: true },
-    Provider { id: "pi", name: "Pi", default_path: "~/.pi/agent", binary: "pi", requires_path: true, wakeup: false, discover_local: true },
-    Provider { id: "omp", name: "Oh My Pi", default_path: "~/.omp/agent", binary: "omp", requires_path: true, wakeup: false, discover_local: true },
-    Provider { id: "custom", name: "自定义", default_path: "~/.aieyes", binary: "", requires_path: true, wakeup: false, discover_local: false },
+    Provider { id: "codex", name: "Codex", default_path: "~/.codex", binary: "codex", requires_path: true, wakeup: true, discover_local: true, agent_id: "codex" },
+    Provider { id: "claude", name: "Claude Code", default_path: "~/.claude", binary: "claude", requires_path: true, wakeup: true, discover_local: true, agent_id: "claude" },
+    Provider { id: "antigravity", name: "Antigravity", default_path: "~/.gemini/antigravity-cli", binary: "agy", requires_path: false, wakeup: true, discover_local: true, agent_id: "antigravity" },
+    Provider { id: "deepseek", name: "DeepSeek", default_path: "", binary: "", requires_path: false, wakeup: false, discover_local: false, agent_id: "deepseek" },
+    Provider { id: "zcode", name: "ZCode", default_path: "~/.zcode", binary: "zcode", requires_path: false, wakeup: false, discover_local: true, agent_id: "zcode" },
+    Provider { id: "qoder", name: "Qoder", default_path: "~/.qoder", binary: "qodercli", requires_path: false, wakeup: false, discover_local: true, agent_id: "qoder" },
+    Provider { id: "grok", name: "Grok", default_path: "~/.grok", binary: "grok", requires_path: false, wakeup: false, discover_local: true, agent_id: "grok" },
+    Provider { id: "cursor", name: "Cursor", default_path: "~/.cursor", binary: "agent", requires_path: false, wakeup: false, discover_local: true, agent_id: "cursor" },
+    Provider { id: "opencode", name: "OpenCode", default_path: "~/.local/share/opencode", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "opencode" },
+    Provider { id: "kimi", name: "Kimi Code", default_path: "~/.kimi-code", binary: "kimi", requires_path: false, wakeup: false, discover_local: true, agent_id: "kimi" },
+    Provider { id: "deepseek-harness", name: "DeepSeek", default_path: "~/.dsh", binary: "dsh", requires_path: true, wakeup: false, discover_local: true, agent_id: "deepseek" },
+    Provider { id: "codebuddy", name: "CodeBuddy", default_path: "~/.codebuddy", binary: "codebuddy", requires_path: true, wakeup: false, discover_local: true, agent_id: "codebuddy" },
+    Provider { id: "pi", name: "Pi", default_path: "~/.pi/agent", binary: "pi", requires_path: true, wakeup: false, discover_local: true, agent_id: "pi" },
+    Provider { id: "omp", name: "Oh My Pi", default_path: "~/.omp/agent", binary: "omp", requires_path: true, wakeup: false, discover_local: true, agent_id: "omp" },
+    Provider { id: "custom", name: "自定义", default_path: "~/.aieyes", binary: "", requires_path: true, wakeup: false, discover_local: false, agent_id: "custom" },
 ];
 #[rustfmt::skip]
 pub const PROVIDER_IDS: &[&str] = &["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "kimi", "deepseek-harness", "codebuddy", "pi", "omp", "custom"];
@@ -185,7 +189,7 @@ pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
     &[120, 120, 120, 120, 120, 220],
     &[150, 150, 150, 150, 150, 280],
 ];
-pub const CONTRACT_HASH: &str = "e9e81113601ab8ba9b2906e86cc984cc79ee84b628ccd4ad5330147399de525d";
+pub const CONTRACT_HASH: &str = "f026bb373cdcddc2d63820fde646eb8d8c852c969e2478a10eb5daed38f413cd";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

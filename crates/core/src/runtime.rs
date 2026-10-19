@@ -91,10 +91,35 @@ pub(crate) fn setup(db: &Connection) -> Result<()> {
             db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS runtime_{domain}_{table}_{action} AFTER {action} ON {table} WHEN ({condition}){unchanged} BEGIN UPDATE kv SET value=CAST(value AS INTEGER)+1 WHERE key='runtime.revision:{domain}'; END;"))?;
         }
     }
+    // Separate trigger so databases with the previous quota trigger also migrate.
+    for (action, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
+        let changed = if action == "UPDATE" {
+            " AND OLD.value IS NOT NEW.value"
+        } else {
+            ""
+        };
+        db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS runtime_quota_order_{action} AFTER {action} ON kv WHEN {row}.key='quotaOrder'{changed} BEGIN UPDATE kv SET value=CAST(value AS INTEGER)+1 WHERE key='runtime.revision:quotas'; END;"))?;
+    }
+    crate::estimates::setup_display_indexes(db)?;
     // Reuse existing event revision triggers instead of adding another write per imported event.
     db.execute_batch("CREATE INDEX IF NOT EXISTS estimates_display_order ON estimates(account_key,kind,json_extract(payload,'$.startedAt') DESC,COALESCE(json_extract(payload,'$.repairedAt'),0) DESC);
         CREATE INDEX IF NOT EXISTS estimates_replaces_text ON estimates(kind,CAST(json_extract(payload,'$.originalEstimateId') AS TEXT));")?;
     Ok(())
+}
+pub(crate) fn revision(db: &Connection, domain: &str) -> Result<i64> {
+    Ok(if domain == "usage" {
+        db.query_row(
+            "SELECT COALESCE(SUM(revision),0) FROM usage_day_revision",
+            [],
+            |r| r.get(0),
+        )?
+    } else {
+        db.query_row(
+            "SELECT CAST(value AS INTEGER) FROM kv WHERE key=?1",
+            [format!("runtime.revision:{domain}")],
+            |r| r.get(0),
+        )?
+    })
 }
 pub fn revisions(db: &Connection) -> Result<Value> {
     let mut result = serde_json::Map::new();
@@ -115,6 +140,126 @@ pub fn revisions(db: &Connection) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn status_matches_dashboard_without_reading_usage_payloads() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut engine = crate::Engine::open(temp.path()).unwrap();
+        engine
+            .store
+            .save_settings(&crate::models::Settings::default())
+            .unwrap();
+        let full = engine
+            .call("dashboard", json!({"estimateHistory":"display"}))
+            .unwrap();
+        let status = engine.call("dashboard.status", json!({})).unwrap();
+        for key in [
+            "quotas",
+            "quotaOrder",
+            "quotaEstimates",
+            "creditEstimates",
+            "sources",
+            "priceUpdatedAt",
+        ] {
+            assert_eq!(status[key], full[key], "{key}");
+        }
+        engine
+            .store
+            .db
+            .execute(
+                "INSERT INTO events VALUES('broken','custom','a','fixture',?1,'{}',0,0,NULL)",
+                [crate::models::now()],
+            )
+            .unwrap();
+        assert!(
+            engine.call("dashboard", json!({})).is_err(),
+            "The fixture must fail when usage is decoded"
+        );
+        assert!(engine.call("dashboard.status", json!({})).is_ok());
+        let before = revisions(&engine.store.db).unwrap();
+        engine
+            .store
+            .db
+            .execute("INSERT INTO kv VALUES('quotaOrder','[\"codex:a\"]')", [])
+            .unwrap();
+        let after = revisions(&engine.store.db).unwrap();
+        assert_eq!(before["usage"], after["usage"]);
+        assert!(after["quotas"].as_i64() > before["quotas"].as_i64());
+    }
+    #[test]
+    fn prices_share_typed_values_and_never_cache_uncommitted_changes() {
+        use crate::models::ModelPrice;
+        let temp = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::open(temp.path()).unwrap();
+        store
+            .save_prices(&[ModelPrice {
+                id: "fixture".into(),
+                input: Some(1.0),
+                ..Default::default()
+            }])
+            .unwrap();
+        let first = store.cached_prices().unwrap();
+        assert!(Arc::ptr_eq(&first, &store.cached_prices().unwrap()));
+        store
+            .db
+            .execute_batch("BEGIN; UPDATE price_history SET payload=json_set(payload,'$.input',2);")
+            .unwrap();
+        assert_eq!(store.cached_prices().unwrap()[0].input, Some(2.0));
+        store.db.execute_batch("ROLLBACK;").unwrap();
+        assert!(Arc::ptr_eq(&first, &store.cached_prices().unwrap()));
+        let other = Connection::open(temp.path().join("aieyes.sqlite")).unwrap();
+        other
+            .execute(
+                "UPDATE price_history SET payload=json_set(payload,'$.input',3)",
+                [],
+            )
+            .unwrap();
+        let changed = store.cached_prices().unwrap();
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert_eq!(changed[0].input, Some(3.0));
+        store
+            .db
+            .execute("INSERT INTO source_status VALUES('s','{}')", [])
+            .unwrap();
+        assert!(Arc::ptr_eq(&changed, &store.cached_prices().unwrap()));
+    }
+    #[test]
+    fn cached_deleted_accounts_follow_usage_membership() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::open(temp.path()).unwrap();
+        store
+            .save_settings(&crate::models::Settings::default())
+            .unwrap();
+        let account = crate::models::Account {
+            id: "old".into(),
+            provider: "custom".into(),
+            ..Default::default()
+        };
+        store
+            .db
+            .execute(
+                "INSERT INTO kv VALUES('deleted-account:custom:old',?1)",
+                [serde_json::to_string(&account).unwrap()],
+            )
+            .unwrap();
+        assert!(store.settings().unwrap().deleted_accounts.is_empty());
+        let other = Connection::open(temp.path().join("aieyes.sqlite")).unwrap();
+        other
+            .execute(
+                "INSERT INTO events VALUES('e','custom','old','m',?1,'{}',0,0,NULL)",
+                [crate::models::now()],
+            )
+            .unwrap();
+        assert_eq!(store.settings().unwrap().deleted_accounts.len(), 1);
+        store
+            .db
+            .execute_batch("BEGIN; DELETE FROM events;")
+            .unwrap();
+        assert!(store.settings().unwrap().deleted_accounts.is_empty());
+        store.db.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(store.settings().unwrap().deleted_accounts.len(), 1);
+        other.execute("DELETE FROM events", []).unwrap();
+        assert!(store.settings().unwrap().deleted_accounts.is_empty());
+    }
     #[test]
     fn counters_are_transactional_and_unchanged_reads_do_not_write() {
         let temp = tempfile::tempdir().unwrap();

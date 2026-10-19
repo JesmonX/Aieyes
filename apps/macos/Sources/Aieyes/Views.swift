@@ -150,7 +150,7 @@ struct RootView: View, Equatable {
                 Button(model.refreshLabel("scan")) { Task { await model.scan() } }.disabled(model.busy)
                 Button(model.refreshLabel("quotas")) { Task { await model.refreshQuotas() } }.disabled(model.quotaBusy)
                 Button(model.refreshLabel("prices")) { Task { await model.syncPrices() } }.disabled(model.busy || model.quotaBusy)
-                Button(model.refreshLabel("hosts")) { Task { await model.sampleHosts() } }.disabled(model.serverBusy)
+                Button(model.refreshLabel("hosts")) { Task { await model.sampleHosts() } }.disabled(model.hostRefreshBusy())
             } label: {
                 Image(systemName: "arrow.clockwise").font(AppFont.secondary)
             }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: DesignTokens.panelHeadIconSize, height: DesignTokens.panelHeadIconSize).help("刷新").accessibilityLabel("刷新选项")
@@ -194,7 +194,7 @@ struct RootView: View, Equatable {
         HStack {
             Picker("账户", selection: filterBinding(\.account)) {
                 Text("全部账户").tag("all"); Text("未关联账户").tag("none")
-                ForEach(model.settings.filterAccounts.filter { filters.provider == "all" || $0.provider == filters.provider }, id: \.key) { Text(model.settings.accountFilterName($0)).tag($0.key) }
+                ForEach(model.settings.filterAccounts.filter { filters.provider == "all" || CoreContract.sameAgent($0.provider, filters.provider) }, id: \.key) { Text(model.settings.accountFilterName($0)).tag($0.key) }
             }.labelsHidden().frame(maxWidth: 240, alignment: .leading)
             Spacer(minLength: 0)
             Button("查看分析", systemImage: "arrow.up.right") { model.openAnalysis(from: scope) }.font(AppFont.caption)
@@ -210,7 +210,7 @@ struct RootView: View, Equatable {
     }
     @ViewBuilder private var agentButtons: some View {
         agentButton("all", title: "总览")
-        ForEach(CoreContract.providers.filter { provider in provider == filters.provider || model.settings.accounts.contains { $0.provider == provider && $0.archived != true } || model.settings.sources.contains { $0.provider == provider } }, id: \.self) { provider in agentButton(provider, title: Format.provider(provider)) }
+        ForEach(CoreContract.agentProviders.filter { provider in provider == filters.provider || model.settings.accounts.contains { CoreContract.sameAgent($0.provider, provider) && $0.archived != true } || model.settings.sources.contains { CoreContract.sameAgent($0.provider, provider) } }, id: \.self) { provider in agentButton(provider, title: Format.provider(provider)) }
     }
     private func agentButton(_ provider: String, title: String) -> some View {
         Button { filters.provider = provider } label: { Text(title).font(AppFont.secondary).padding(.horizontal, 10).padding(.vertical, 7).foregroundStyle(filters.provider == provider ? Palette.category(provider) : Color.secondary).background(filters.provider == provider ? Palette.category(provider).opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 8)) }.buttonStyle(.plain).accessibilityAddTraits(filters.provider == provider ? .isSelected : [])
@@ -220,11 +220,11 @@ struct RootView: View, Equatable {
         HStack(spacing: 8) {
             Picker("Agent", selection: filterBinding(\.provider)) {
                 Text("全部 Agent").tag("all")
-                ForEach(CoreContract.providers, id: \.self) { Text(Format.provider($0)).tag($0) }
+                ForEach(CoreContract.agentProviders, id: \.self) { Text(Format.provider($0)).tag($0) }
             }.labelsHidden()
             Picker("账户", selection: filterBinding(\.account)) {
                 Text("全部账户").tag("all"); Text("未关联账户").tag("none")
-                ForEach(model.settings.filterAccounts.filter { filters.provider == "all" || $0.provider == filters.provider }, id: \.key) { Text(model.settings.accountFilterName($0)).tag($0.key) }
+                ForEach(model.settings.filterAccounts.filter { filters.provider == "all" || CoreContract.sameAgent($0.provider, filters.provider) }, id: \.key) { Text(model.settings.accountFilterName($0)).tag($0.key) }
             }.labelsHidden()
             if !compact {
                 Picker("数据源", selection: filterBinding(\.source)) {
@@ -332,7 +332,7 @@ struct RootView: View, Equatable {
     private var selectableSources: [AgentSource] {
         let account = model.settings.historicalAccounts.first { $0.key == filters.account }
         return model.settings.sources.filter { source in
-            guard filters.provider == "all" || source.provider == filters.provider else { return false }
+            guard filters.provider == "all" || CoreContract.sameAgent(source.provider, filters.provider) else { return false }
             if filters.account == "all" { return true }
             let ids = usageDashboard.sources.first { $0.id == source.id }?.accountIds ?? [source.accountId]
             if filters.account == "none" { return ids.contains("") }
@@ -347,16 +347,16 @@ struct RootView: View, Equatable {
     private var displayedQuotaAccounts: [AgentAccount] {
         let selections = PanelAccountPreference.selections(panelAccounts, accounts: model.settings.accounts, order: usageDashboard.quotaOrder ?? [])
         return model.quotaAccounts.filter { account in
-            (filters.provider == "all" || filters.provider == account.provider) && (filters.account == "all" || filters.account == account.key) && (!compact || selections[account.provider]?.contains(account.key) == true)
+            (filters.provider == "all" || CoreContract.sameAgent(filters.provider, account.provider)) && (filters.account == "all" || filters.account == account.key) && (!compact || selections[account.provider]?.contains(account.key) == true)
         }
     }
     private var displayedQuotas: [Quota] { usageDashboard.quotas.filter { quota in !compact || displayedQuotaAccounts.contains { $0.key == quota.id } } }
     private var quotaProviders: [String] {
         let order = usageDashboard.quotaOrder ?? []
-        return CoreContract.providers.filter { provider in displayedQuotaAccounts.contains { $0.provider == provider } }.sorted { left, right in
-            let leftRank = order.firstIndex { $0.hasPrefix(left + ":") } ?? Int.max
-            let rightRank = order.firstIndex { $0.hasPrefix(right + ":") } ?? Int.max
-            return leftRank == rightRank ? (CoreContract.providers.firstIndex(of: left) ?? 0) < (CoreContract.providers.firstIndex(of: right) ?? 0) : leftRank < rightRank
+        return CoreContract.agentProviders.filter { provider in displayedQuotaAccounts.contains { CoreContract.sameAgent($0.provider, provider) } }.sorted { left, right in
+            let leftRank = order.firstIndex { CoreContract.sameAgent(String($0.split(separator: ":", maxSplits: 1).first ?? ""), left) } ?? Int.max
+            let rightRank = order.firstIndex { CoreContract.sameAgent(String($0.split(separator: ":", maxSplits: 1).first ?? ""), right) } ?? Int.max
+            return leftRank == rightRank ? (CoreContract.agentProviders.firstIndex(of: left) ?? 0) < (CoreContract.agentProviders.firstIndex(of: right) ?? 0) : leftRank < rightRank
         }
     }
     private var quotaSection: some View {
@@ -370,10 +370,10 @@ struct RootView: View, Equatable {
             }
             ForEach(quotaProviders, id: \.self) { provider in
                 QuotaGroupSection(key: "quota.group." + scope + "." + provider, model: model, provider: provider,
-                    accountCount: displayedQuotaAccounts.filter { $0.provider == provider }.count,
-                    quotas: displayedQuotas.filter { quota in quota.provider == provider && displayedQuotaAccounts.contains { $0.key == quota.id } }) {
+                    accountCount: displayedQuotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }.count,
+                    quotas: displayedQuotas.filter { quota in CoreContract.sameAgent(quota.provider, provider) && displayedQuotaAccounts.contains { $0.key == quota.id } }) {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 14, alignment: .top), count: compact ? 1 : workspaceCardColumns), alignment: .leading, spacing: 10) {
-                        ForEach(displayedQuotaAccounts.filter { $0.provider == provider }.sorted { (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max) }, id: \.key) { account in
+                        ForEach(displayedQuotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }.sorted { (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max) }, id: \.key) { account in
                             if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
                             else { Surface(tint: Palette.category(provider)) { Text(account.name).font(AppFont.section); Text(model.quotaBusy ? "正在读取账户额度…" : "等待首次额度查询").font(AppFont.secondary).foregroundStyle(.secondary) } }
                         }
@@ -1342,8 +1342,8 @@ private struct SessionStrip: View {
     @Binding var expanded: Bool
     var compact: Bool
     var provider = "all"
-    private var sessions: [LiveSession] { model.sessions.filter { (provider == "all" || $0.provider == provider) && $0.phase != .idle }.sorted { rank($0.phase) < rank($1.phase) } }
-    private var failures: [SessionSourceHealth] { model.sessionSources.filter { $0.state != "healthy" && (provider == "all" || $0.provider == provider) } }
+    private var sessions: [LiveSession] { model.sessions.filter { (provider == "all" || CoreContract.sameAgent($0.provider, provider)) && $0.phase != .idle }.sorted { rank($0.phase) < rank($1.phase) } }
+    private var failures: [SessionSourceHealth] { model.sessionSources.filter { $0.state != "healthy" && (provider == "all" || CoreContract.sameAgent($0.provider, provider)) } }
     private func rank(_ phase: SessionPhase) -> Int { phase == .needsInput ? 0 : phase == .failed ? 1 : phase == .unknown ? 2 : 3 }
     private var counts: String {
         let phases: [SessionPhase] = [.needsInput, .failed, .working, .thinking, .tool, .unknown, .complete, .interrupted]

@@ -343,11 +343,14 @@ fn verify(
     proxy: &ProxyConfig,
     options: &Value,
 ) -> Result<()> {
-    let client = network::client_builder(proxy)?
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(60))
-        .build()?;
+    let client = network::client_with_policy(
+        proxy,
+        network::ClientPolicy {
+            redirects: 0,
+            timeout: Duration::from_secs(60),
+            ..Default::default()
+        },
+    )?;
     let mut body = json!({"model":model,"messages":[{"role":"user","content":"Reply exactly AIEYES_API_OK."}],"max_tokens":if matches!(agent,"claude"|"codebuddy"){256}else{64},"stream":false});
     let effort = if matches!(agent, "pi" | "omp") && options["effort"] == "disabled" {
         String::new()

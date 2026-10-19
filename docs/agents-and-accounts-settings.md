@@ -59,3 +59,11 @@ Agent 采集关闭的机器从 Agent 接入的「机器与目录」隐藏；目�
 - 交互强调色统一使用主题变量，余额跟随强调色；成功、警告和错误使用统一语义色，图表分类色保持独立。
 
 Antigravity 的“登录 / 检查”会显示当前邮箱和订阅。首次识别可为默认账户补全邮箱名称，手动名称保留；再次检查发现身份不一致时会提示实际邮箱并停止将该设备额度归入原账号。订阅暂不可用时显示未知或带待更新标记的上次订阅，额度仍可刷新。此功能不创建多账户凭据档案，也不自动合并账户。
+
+## Agent 展示与可用配置
+
+DeepSeek 余额查询与 DeepSeek Harness 共用一个 DeepSeek 入口，账户、总览、分析、会话与面板分组统一展示。余额账户和 Harness 日志目录仍使用各自原有来源与账户键；合并不改写凭据或历史归属，同名账户 ID 不会串号。新余额账户使用 `deepseek` 的官方 API 余额连接；旧 API Key 文件及 `deepseek-harness` 账户仍可管理。Agent 总开关一次保存两个适配器，机器与目录只控制 Harness 采集。
+
+设置项由 `docs/core-contracts.json` 的能力表统一生成到两端。未接入原生 API 表单的 Agent 隐藏 API 分组；没有可估值订阅窗口的 Agent 隐藏估值与采样；没有统一额度接口的 Agent 隐藏账户额度与重置配置。显式配置额度查询命令时保留对应自定义能力。隐藏选项不删除已有配置。
+
+订阅表单仅在 Grok API 模式显示 Team ID、OpenCode Console 模式显示 Workspace ID；读取本机登录仅在 Grok 订阅 / OpenCode Go 模式出现。只有一种连接模式时隐藏模式选择器。图标来源及视觉大小约定见 [Agent identity icons](provider-icons.md)。

@@ -331,7 +331,7 @@ impl Engine {
                     serde_json::from_value(params["samplingSourceIds"].clone()).unwrap_or_default();
                 sampling_ids.extend(
                     self.store
-                        .estimates()?
+                        .working_estimates(Some(&key))?
                         .iter()
                         .filter(|e| {
                             e.account_key == key
