@@ -61,18 +61,29 @@ class ObserverTests(unittest.TestCase):
             self.assertEqual(paths,{str(path),str(added),str(root/'renamed.jsonl')})
 
     def test_retained_protocol_uses_one_process_and_exits_on_eof(self):
-        import select
+        import queue
+        import threading
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory)/'sessions';root.mkdir();path=root/'one.jsonl'
             path.write_text(json.dumps(dict(type='event_msg',payload=dict(type='task_started')))+'\n')
             loader="import json,pathlib,sys;s=pathlib.Path(sys.argv[1]).read_text();n={'__name__':'aieyes_observer','SCRIPT':s};exec(compile(s,'observer','exec'),n);n['serve'](json.loads(sys.stdin.readline()))"
             child=subprocess.Popen([sys.executable,'-u','-c',loader,str(ROOT/'scripts/session_remote.py')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            responses=queue.Queue()
+            def read_responses():
+                # Windows select() supports sockets only, so read the pipe on
+                # a thread and keep the response timeout on the test thread.
+                for line in child.stdout:responses.put(line)
+                responses.put('')
+            reader=threading.Thread(target=read_responses,daemon=True)
+            reader.start()
             request=dict(action='collect',sources=[dict(id='s',provider='codex',path=directory)],cursors={})
             try:
                 for index in range(3):
                     child.stdin.write(json.dumps(request)+'\n');child.stdin.flush()
-                    self.assertTrue(select.select([child.stdout],[],[],5)[0],'observer response timed out')
-                    response=json.loads(child.stdout.readline());self.assertEqual(response['aieyesSession'],1)
+                    try:line=responses.get(timeout=5)
+                    except queue.Empty:self.fail('observer response timed out')
+                    self.assertTrue(line,'observer exited before responding')
+                    response=json.loads(line);self.assertEqual(response['aieyesSession'],1)
                     files=response['result']['polls'][0]['files'];self.assertEqual(len(files),1)
                     self.assertEqual(len(files[0]['events']),1 if index==0 else 0)
                     request['cursors']={row['key']:row for row in files}
@@ -80,7 +91,8 @@ class ObserverTests(unittest.TestCase):
                 child.stdin.close();child.wait(timeout=3);self.assertEqual(child.returncode,0)
             finally:
                 if child.poll() is None:child.kill();child.wait()
-                child.stdout.close();child.stderr.close()
+                reader.join(timeout=3)
+                child.stdin.close();child.stdout.close();child.stderr.close()
 
     def test_pi_and_omp_lifecycle_projection_and_mutable_title_header(self):
         import time
