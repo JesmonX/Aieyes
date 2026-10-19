@@ -9,13 +9,35 @@ import time
 MARKER = '--aieyes-session-hook'
 CLAUDE = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop', 'Stop', 'StopFailure', 'SessionEnd', 'Elicitation', 'ElicitationResult']
 AGY = ['SessionStart', 'PreInvocation', 'PostToolUse', 'PostInvocation', 'Stop']
-EVENT_KEYS = {'kind', 'session', 'turn', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification'}
+ZCODE = ['SessionStart','UserPromptSubmit','PreToolUse','PermissionRequest','PostToolUse','PostToolUseFailure','Stop']
+CURSOR = ['sessionStart','beforeSubmitPrompt','preToolUse','postToolUse','postToolUseFailure','afterAgentThought','stop','sessionEnd']
+def hook_names(provider):
+    return CLAUDE if provider=='claude' else CURSOR if provider=='cursor' else ZCODE if provider=='zcode' else AGY
+EVENT_KEYS = {'kind', 'session', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification'}
 
 def text(value):
     return value[:256] if isinstance(value, str) else ''
 
+def harness():
+    if '_HARNESS' not in globals():
+        source=globals().get('HARNESS_SCRIPT')
+        if source is None:source=pathlib.Path(__file__).with_name('harness_remote.py').read_text()
+        scope={};exec(compile(source,'<aieyes-harness>','exec'),scope);globals()['_HARNESS']=scope
+    return globals()['_HARNESS']
+
+def native_database():
+    if '_NATIVE_DATABASE' not in globals():
+        source=globals().get('NATIVE_DATABASE_SCRIPT')
+        if source is None:source=pathlib.Path(__file__).with_name('native_database_remote.py').read_text()
+        scope={};exec(compile(source,'<aieyes-native-database>','exec'),scope);globals()['_NATIVE_DATABASE']=scope
+    return globals()['_NATIVE_DATABASE']
+
 def target(source):
-    path = pathlib.Path(os.path.expanduser(source.get('path') or ('~/.gemini/antigravity-cli' if source['provider'] == 'antigravity' else '~/.claude')))
+    path = pathlib.Path(os.path.expanduser(source.get('path') or ('~/.gemini/antigravity-cli' if source['provider'] == 'antigravity' else '~/.cursor' if source['provider']=='cursor' else '~/.zcode' if source['provider']=='zcode' else '~/.claude')))
+    if source['provider']=='zcode':
+        home=path if path.name=='cli' else path.parent.parent if path.suffix=='.sqlite' and path.parent.name=='db' else path/'cli'
+        return home,home/'config.json',True
+    if source['provider']=='cursor':return path,path/'hooks.json',True
     if source['provider'] == 'antigravity' and path.name in ('antigravity-cli', 'antigravity'):
         home = path.parent / 'config'
         return home, home / 'hooks.json', False
@@ -33,7 +55,7 @@ def atomic(path, data):
         if os.path.exists(name): os.unlink(name)
 
 def owned(value):
-    return isinstance(value, dict) and MARKER in value.get('command', '')
+    return isinstance(value, dict) and (MARKER in value.get('command', '') or any(isinstance(v,str) and MARKER in v for v in (value.get('args') if isinstance(value.get('args'),list) else [])))
 
 def manage(source, action):
     import fcntl
@@ -46,13 +68,17 @@ def manage(source, action):
             result['state'] = 'disabled'; return result
         old = json.loads(config.read_text()) if config.exists() else {}
         if not isinstance(old, dict): raise ValueError('Hook config must be an object')
+        if source['provider']=='cursor' and (type(old.get('version',1)) is not int or old.get('version',1)!=1):raise ValueError('Unsupported Cursor Hooks version; original config preserved')
+        if source['provider']=='cursor' and home.name.lower()!='.cursor':raise ValueError('Cursor Hooks require the actual user or project .cursor directory; CURSOR_CONFIG_DIR does not relocate user hooks')
         if old.get('disableAllHooks') is True and action != 'remove':
             result['state'] = 'disabled'; return result
         if action == 'status':
             hooks = old.get('hooks', {}) if nested else old
-            events = hooks.get('aieyes', {}) if source['provider']=='antigravity' else hooks
+            if source['provider']=='zcode' and hooks.get('enabled') is not True:
+                result['state']='disabled' if hooks.get('enabled') is False else 'missing';return result
+            events = hooks.get('events', {}) if source['provider']=='zcode' else hooks.get('aieyes', {}) if source['provider']=='antigravity' else hooks
             if events.get('enabled') is False: result['state']='disabled'; return result
-            for event in (CLAUDE if source['provider']=='claude' else AGY):
+            for event in hook_names(source['provider']):
                 own = [r for r in events.get(event,[]) if owned(r) or (isinstance(r,dict) and any(owned(h) for h in r.get('hooks',[])))]
                 if not own: result['state']='missing'; return result
                 if any(r.get('enabled') is False or any(h.get('enabled') is False for h in r.get('hooks',[]) if owned(h)) for r in own): result['state']='disabled'; return result
@@ -66,15 +92,24 @@ def manage(source, action):
             if config.is_symlink(): raise ValueError('Symlinked hook configuration was left unchanged')
             old = json.loads(config.read_text()) if config.exists() else {}
             data = json.loads(json.dumps(old))
+            if source['provider']=='cursor':
+                if type(data.get('version',1)) is not int or data.get('version',1)!=1:raise ValueError('Unsupported Cursor Hooks version; original config preserved')
+                if action!='remove':data['version']=1
             hooks = data.setdefault('hooks', {}) if nested else data
             if not isinstance(hooks, dict): raise ValueError('Invalid hooks object')
-            if source['provider'] == 'antigravity':
+            if source['provider']=='zcode':
+                if hooks.get('enabled') is False and action not in ('repair','remove'):
+                    result['state']='disabled';return result
+                if action!='remove':hooks['enabled']=True
+                events=hooks.setdefault('events',{})
+                if not isinstance(events,dict):raise ValueError('Invalid ZCode hook events')
+            elif source['provider'] == 'antigravity':
                 events = hooks.setdefault('aieyes', {})
                 if events.get('enabled') is False and action not in ('repair', 'remove'):
                     result['state'] = 'disabled'; return result
                 if action == 'repair': events.pop('enabled', None)
             else: events = hooks
-            for event in (CLAUDE if source['provider'] == 'claude' else AGY):
+            for event in hook_names(source['provider']):
                 rows = events.get(event, [])
                 if not isinstance(rows, list): raise ValueError('Invalid hook event array')
                 kept = []
@@ -93,7 +128,10 @@ def manage(source, action):
                 if action != 'remove':
                     command = ' '.join(shlex.quote(s) for s in [sys.executable, str(root / 'observe.py'), MARKER, source['provider'], event, str(home)])
                     handler = dict(type='command', command=command, timeout=2)
-                    kept.append(handler if source['provider'] == 'antigravity' and event != 'PostToolUse' else dict(matcher='*', hooks=[handler]))
+                    if source['provider']=='zcode':
+                        handler=dict(type='process',command=sys.executable,args=[str(root/'observe.py'),MARKER,'zcode',event,str(home)],timeoutMs=2000)
+                        kept.append(dict(hooks=[handler]))
+                    else:kept.append(handler if source['provider']=='cursor' or source['provider'] == 'antigravity' and event != 'PostToolUse' else dict(matcher='*', hooks=[handler]))
                 if kept or event in events: events[event] = kept
             if action != 'remove':
                 script = globals().get('SCRIPT')
@@ -119,6 +157,7 @@ def process_info(pid):
     except (OSError, ValueError, StopIteration): return None
 
 def ancestor(provider):
+    if provider in ('cursor','zcode'):return 0,0
     pid = os.getppid()
     for _ in range(8):
         p = process_info(pid)
@@ -141,12 +180,20 @@ def observe(provider, kind, home):
         data = inbox.get(timeout=.5)
         if len(data) > 1024*1024: return
         v = json.loads(data)
-        session = text(v.get('session_id') or v.get('conversationId'))
+        session = text((v.get('conversation_id') or v.get('session_id')) if provider=='cursor' else v.get('session_id') or v.get('conversationId'))
         if not session: return
         row = dict(kind=kind, at=at, session=session, turn=text(v.get('turn_id') or v.get('turnId')), call=text(v.get('tool_use_id') or v.get('agent_id') or v.get('elicitation_id')), tool=text((v.get('toolCall') or {}).get('name') if provider == 'antigravity' else v.get('tool_name')), notification=text(v.get('notification_type')))
         if isinstance(v.get('fullyIdle'), bool): row['fullyIdle'] = v['fullyIdle']
         row['failed'] = kind == 'StopFailure' or (kind == 'Stop' and (v.get('terminationReason') == 'error' or bool(v.get('error'))))
         row['interrupted'] = any(s in str(v.get('terminationReason', '')) for s in ['cancel', 'interrupt'])
+        if provider=='cursor':
+            terminal=lambda status: {'completed':'complete','error':'failed','aborted':'interrupted','window_close':'interrupted','user_close':'interrupted'}.get(status,'unknown')
+            event={'sessionStart':'SessionStart','beforeSubmitPrompt':'start','preToolUse':'PreToolUse','postToolUse':'PostToolUse','postToolUseFailure':'PostToolUseFailure','afterAgentThought':'thinking'}.get(kind,'unknown')
+            if kind in ('stop','sessionEnd'):event=terminal(v.get('status' if kind=='stop' else 'reason'))
+            row.update(kind=event,session=text(v.get('conversation_id') or v.get('session_id')),turn=text(v.get('generation_id')),call=text(v.get('tool_use_id') or v.get('tool_call_id')),tool='ask_question' if v.get('tool_name')=='AskQuestion' else text(v.get('tool_name')),failed=False,interrupted=False)
+            row.pop('fullyIdle',None);row['notification']=''
+            session=row['session']
+            if not session:return
         row['pid'], row['processStart'] = ancestor(provider)
         root = pathlib.Path(home) / '.aieyes'
         if (root / 'session-hooks-disabled').exists(): return
@@ -167,6 +214,9 @@ def milliseconds(value):
 
 def metadata(v, provider, hook):
     if hook: return [{k: value for k, value in v.items() if k in EVENT_KEYS}]
+    if provider in ('pi','omp'):return pi_metadata(v)
+    if provider in ('kimi','codebuddy','deepseek-harness','grok'):
+        return native_metadata(v,provider)
     at = milliseconds(v.get('timestamp'))
     if provider == 'codex':
         p = v.get('payload') or {}; key = (v.get('type'), p.get('type'))
@@ -181,12 +231,73 @@ def metadata(v, provider, hook):
         if not results and not v.get('isMeta'): rows.append(dict(base,kind='start',turn=text(v.get('uuid'))))
         for part in results: rows.append(dict(base,kind='output',call=text(part.get('tool_use_id'))))
     elif v.get('type') == 'assistant':
+        if v.get('isApiErrorMessage') is True: return [dict(base,kind='failed')]
         for part in content:
             if not isinstance(part,dict): continue
             kind = {'thinking':'thinking','tool_use':'tool'}.get(part.get('type'))
             if kind: rows.append(dict(base,kind=kind,tool=text(part.get('name')),call=text(part.get('id'))))
         if message.get('stop_reason') == 'end_turn': rows.append(dict(base,kind='complete'))
     return rows
+
+def pi_metadata(v):
+    base=dict(at=milliseconds(v.get('timestamp')),record=text(v.get('id')),parent=text(v.get('parentId')))
+    if v.get('type')=='session':return [dict(base,kind='identity',session=text(v.get('id')))]
+    data=v.get('data') or {}
+    if v.get('type')=='custom' and v.get('customType')=='tool_execution_start':
+        return [dict(base,kind='tool',call=text(data.get('toolCallId')),tool=text(data.get('toolName')))]
+    if v.get('type')=='custom' and v.get('customType')=='session_exit':
+        kind='failed' if data.get('kind')=='fatal' else 'complete' if data.get('kind')=='normal' and not data.get('pendingToolCalls') else 'interrupted'
+        return [dict(base,kind=kind)]
+    if v.get('type')!='message':return [dict(base,kind='identity')]
+    message=v.get('message') or {};role=message.get('role')
+    if role=='user':return [dict(base,kind='start',turn=base['record'])]
+    if role=='toolResult':return [dict(base,kind='output',call=text(message.get('toolCallId')),tool=text(message.get('toolName')))]
+    if role!='assistant':return [dict(base,kind='identity')]
+    rows=[dict(base,kind='tool',call=text(p.get('id')),tool=text(p.get('name'))) for p in message.get('content',[]) if isinstance(p,dict) and p.get('type')=='toolCall']
+    reason=message.get('stopReason')
+    if reason!='toolUse':rows.append(dict(base,kind={'stop':'complete','length':'failed','error':'failed','aborted':'interrupted'}.get(reason,'unknown')))
+    return rows
+
+def native_metadata(v, provider):
+    kind=None; row={}
+    if provider=='kimi':
+        row=dict(at=v.get('time',0),turn=str(v['turnId']) if 'turnId' in v else '')
+        kind={'turn.prompt':'start','llm.request':'thinking'}.get(v.get('type'))
+        if v.get('type')=='turn.ended':
+            kind={'completed':'complete','cancelled':'interrupted','failed':'failed','blocked':'PermissionRequest'}.get(v.get('reason'))
+        if v.get('type')=='context.append_loop_event':
+            event=v.get('event') or {}
+            kind={'tool.call':'tool','tool.result':'output'}.get(event.get('type'))
+            row.update(call=text(event.get('toolCallId')),tool=text(event.get('name')))
+        if isinstance(v.get('message'),dict):
+            row['at']=int(v.get('timestamp',0)*1000)
+            kind={'TurnBegin':'start','StepBegin':'thinking','ToolCall':'tool','ToolResult':'output','TurnEnd':'complete','TurnInterrupted':'interrupted'}.get(v['message'].get('type'))
+    elif provider=='grok':
+        row=dict(at=milliseconds(v.get('ts')),session=text(v.get('session_id')),turn=str(v['turn_number']) if 'turn_number' in v else '')
+        kind={'turn_started':'start'}.get(v.get('type'))
+        if v.get('type')=='phase_changed' and v.get('phase')=='waiting_for_model':kind='thinking'
+        if v.get('type')=='turn_ended':kind={'completed':'complete','cancelled':'interrupted','interrupted':'interrupted','failed':'failed','error':'failed'}.get(v.get('outcome'))
+    elif provider=='codebuddy':
+        p=v.get('providerData') or {}
+        row=dict(at=v.get('timestamp',0),session=text(v.get('sessionId')),turn=text(p.get('conversationRequestId')),record=text(v.get('id')),parent=text(v.get('parentId')))
+        kind={'reasoning':'thinking','function_call':'tool','function_call_output':'output','function_call_result':'output'}.get(v.get('type'))
+        if v.get('type')=='message':
+            if v.get('role')=='user':
+                kind='start'
+                if not row['turn']:row['turn']=row['record']
+            elif v.get('role')=='assistant' and v.get('status')=='completed':kind='complete'
+        row.update(call=text(v.get('callId') or v.get('call_id')),tool=text(v.get('name')))
+        if not kind and row['record']:kind='identity'
+    else:
+        data=v.get('data') or {}
+        row=dict(at=v.get('time',0),turn=str(data['turn']) if 'turn' in data else '')
+        kind={'session':'identity','turn/start':'start','step/start':'thinking','tool/call':'tool','tool/result':'output'}.get(v.get('type'))
+        if v.get('type')=='session':row['session']=text(v.get('id'))
+        if v.get('type')=='turn/end':
+            kind={'completed':'complete','aborted':'interrupted','interrupted':'interrupted','error':'failed','max-tokens':'failed','blocked':'PermissionRequest'}.get((data.get('reason') or {}).get('kind'))
+        row.update(call=text(data.get('callId')),tool=text(data.get('name')))
+    if kind: row['kind']=kind; return [row]
+    return []
 
 def read_file(path, provider, hook, cursor):
     stat = path.stat(); size = stat.st_size; modified = int(stat.st_mtime)
@@ -200,11 +311,15 @@ def read_file(path, provider, hook, cursor):
             prefix, sep, data = data.partition(b'\n'); offset += len(prefix) + len(sep)
         if reset:
             f.seek(0)
-            try: rows.extend(e for e in metadata(json.loads(f.readline(65536)), provider, hook) if e.get('kind') == 'identity')
-            except (ValueError, TypeError): pass
+            for _ in range(2 if provider=='omp' else 1):
+                try: rows.extend(e for e in metadata(json.loads(f.readline(65536)), provider, hook) if e.get('kind') == 'identity' and e.get('session'))
+                except (ValueError, TypeError): pass
         complete = data.rfind(b'\n') + 1
         for line in data[:complete].splitlines():
-            try: rows.extend(metadata(json.loads(line),provider,hook))
+            try:
+                value=json.loads(line)
+                if provider=='kimi' and value.get('type')=='forked':rows=[]
+                rows.extend(metadata(value,provider,hook))
             except (ValueError,TypeError,AttributeError): pass
         if not complete and len(data) == 524288: complete=len(data)
     pid = cursor.get('pid',0); start = cursor.get('processStart',0)
@@ -241,19 +356,51 @@ def read_db(path,cursor=None):
     if signature!=database_fingerprint(path):raise RuntimeError('Session database changed during read; retry')
     return dict(metadata,reset=True,session=session,steps=steps)
 
-def collect(source,cursors,database_cache=False):
+def collect_native(source,cursors,database_cache=False,harness_deadline=None):
     path=pathlib.Path(os.path.expanduser(source.get('path') or '~/.gemini/antigravity-cli'))
     provider=source['provider']; result=dict(sourceId=source['id'],files=[],error=None)
     try:
+        if provider in ('opencode','zcode'):
+            database=(path if path.is_file() else path/'opencode.db') if provider=='opencode' else next((p for p in ([path] if path.is_file() else [path/'cli/db/db.sqlite',path/'db/db.sqlite']) if p.is_file()),None)
+            if database is None or not database.is_file():raise FileNotFoundError('Native session database not found')
+            cursor=cursors.get(str(database),{}) if database_cache else {}
+            try:
+                result['files'],result['scannedRecords']=native_database()['sessions'](database,provider,cursor,int(time.time()))
+            except Exception as error:
+                result['error']=str(error)
+                if cursor.get('continuation'):
+                    result['files']=native_database()['cached_sessions'](database,cursor,int(time.time()))
+            return result
+        if provider=='deepseek-harness':
+            if harness_deadline is None:harness_deadline=time.monotonic()+8
+            if not path.exists():raise FileNotFoundError('Harness data directory does not exist')
+            files=harness()['paths'](path)
+            recent=sorted((f for f in files if time.time()-f.stat().st_mtime<86400),key=lambda f:f.stat().st_mtime,reverse=True)
+            if len(recent)>256:result['error']='Too many recent sessions; showing the most recent 256'
+            for file in recent[:256]:
+                cursor=cursors.get(str(file),{})
+                try:
+                    remaining=harness_deadline-time.monotonic()
+                    # Cached files do not start Node; unfinished first reads
+                    # resume on the next poll instead of timing out all sources.
+                    if remaining<=0:raise RuntimeError('Harness state scan budget reached; remaining sessions will retry next poll')
+                    result['files'].append(harness()['session'](file,cursor,timeout=remaining))
+                except Exception as error:
+                    result['error']=str(error)
+                    if cursor.get('signature','').startswith('dsh:'):
+                        result['files'].append(dict(key=str(file),identity=cursor.get('identity',''),signature=cursor['signature'],size=cursor.get('size',0),offset=cursor.get('offset',0),modified=cursor.get('modified',0),reset=False,events=[],hook=False,continuation=cursor.get('continuation')))
+            return result
         if not path.exists(): raise FileNotFoundError('Agent data directory does not exist')
-        roots=[(path / ('sessions' if provider=='codex' else 'projects' if provider=='claude' else 'conversations'),False)]
-        if not roots[0][0].is_dir(): roots=[(path,False)]
-        if provider in ('claude','antigravity'): roots.append((target(source)[0]/'.aieyes/session-events',True))
+        roots=[] if provider=='cursor' else [(path / ('sessions' if provider in ('codex','kimi','grok','pi','omp') else 'projects' if provider in ('claude','codebuddy','qoder') else 'conversations'),False)]
+        if roots and not roots[0][0].is_dir(): roots=[(path,False)]
+        if provider in ('claude','antigravity','cursor'): roots.append((target(source)[0]/'.aieyes/session-events',True))
         files=[]
         for root,hook in roots:
             if not root.exists(): continue
             candidates=[root] if root.is_file() else root.rglob('*.jsonl' if hook or provider!='antigravity' else '*.db')
             for f in candidates:
+                if provider=='kimi' and f.name!='wire.jsonl':continue
+                if provider=='grok' and f.name!='events.jsonl':continue
                 if f.is_symlink() or (not hook and '.aieyes' in f.parts): continue
                 stamp=max(f.stat().st_mtime, pathlib.Path(str(f)+'-wal').stat().st_mtime if pathlib.Path(str(f)+'-wal').exists() else 0)
                 if time.time()-stamp < 86400: files.append((stamp,f,hook))
@@ -268,15 +415,28 @@ def collect(source,cursors,database_cache=False):
     except Exception as error: result['error']=str(error)
     return result
 
+def collect(source,cursors,database_cache=False,harness_deadline=None):
+    result=collect_native(source,cursors,database_cache,harness_deadline)
+    if source['provider']=='zcode':
+        root=target(source)[0]/'.aieyes/session-events'
+        if root.is_dir():
+            paths=sorted((p for p in root.glob('*.jsonl') if p.is_file() and time.time()-p.stat().st_mtime<86400),key=lambda p:p.stat().st_mtime,reverse=True)
+            if len(paths)>256:result['error']='Too many recent ZCode state files; showing latest 256'
+            for path in paths[:256]:
+                try:result['files'].append(read_file(path,'zcode',True,cursors.get(str(path),{})))
+                except Exception as error:result['error']=str(error)
+    return result
+
 def main(request):
     action=request.get('action','collect'); sources=request.get('sources',[])
     hooks=[]; seen=set()
     for s in sources:
-        if s['provider'] not in ('claude','antigravity'): continue
+        if s['provider'] not in ('claude','antigravity','cursor','zcode'): continue
         key=(s['provider'],str(target(s)[0]))
         if key in seen: continue
         seen.add(key); hooks.append(manage(s,'ensure' if action=='collect' else action))
-    polls=[collect(s,request.get('cursors',{}),request.get('databaseCache') is True) for s in sources] if action=='collect' else []
+    deadline=time.monotonic()+8
+    polls=[collect(s,request.get('cursors',{}),request.get('databaseCache') is True,harness_deadline=deadline) for s in sources] if action=='collect' else []
     return dict(hooks=hooks,polls=polls,now=int(time.time()))
 
 if __name__ == '__main__':

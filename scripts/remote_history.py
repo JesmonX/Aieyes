@@ -3,6 +3,32 @@ import json
 import os
 import sys
 
+def _harness():
+    if '_HARNESS' not in globals():
+        from pathlib import Path
+        source=globals().get('HARNESS_SCRIPT')
+        if source is None:source=Path(__file__).with_name('harness_remote.py').read_text()
+        scope={};exec(compile(source,'<aieyes-harness>','exec'),scope);globals()['_HARNESS']=scope
+    return globals()['_HARNESS']
+
+def _native_database():
+    if '_NATIVE_DATABASE' not in globals():
+        from pathlib import Path
+        source=globals().get('NATIVE_DATABASE_SCRIPT')
+        if source is None:source=Path(__file__).with_name('native_database_remote.py').read_text()
+        scope={};exec(compile(source,'<aieyes-native-database>','exec'),scope);globals()['_NATIVE_DATABASE']=scope
+    return globals()['_NATIVE_DATABASE']
+
+def _opencode_database(root):
+    if os.path.isfile(root) and not root.endswith('.db'):return None
+    path=root if os.path.isfile(root) else os.path.join(root,'opencode.db')
+    if not os.path.isfile(path):raise FileNotFoundError('OpenCode native history database not found')
+    return path
+
+def _zcode_database(root):
+    candidates=[root] if os.path.isfile(root) else [os.path.join(root,'cli/db/db.sqlite'),os.path.join(root,'db/db.sqlite')]
+    return next((p for p in candidates if p.endswith('.sqlite') and os.path.isfile(p)),None)
+
 # Matches the narrow statistical protobuf projection in core/antigravity.rs.
 def _agy_varint(data, pos):
     result = 0
@@ -236,6 +262,11 @@ class _CodexHistory:
 
 
 def _project(value, provider):
+    if provider in ('kimi','codebuddy','grok','qoder','pi','omp') and isinstance(value.get('tokens'),dict):
+        event={k:value.get(k) for k in ('id','sessionId','timestamp','model','tokens','billing','intervalStart','intervalEvidence')}
+        if provider in ('qoder','codebuddy') and isinstance(value.get('nativeCredits'),dict):
+            event['nativeCredits']={k:value['nativeCredits'].get(k) for k in ('credits','originalCredits','billable')}
+        return event
     event = None
     if provider == "codex":
         payload = value.get("payload") or {}
@@ -253,11 +284,51 @@ def _project(value, provider):
         elif kind == "event_msg" and payload.get("type") == "token_count":
             event = {"type": kind, "timestamp": value.get("timestamp"), "payload": {
                 "type": "token_count", "info": payload.get("info"), "rate_limits": payload.get("rate_limits")}}
-    elif provider == "claude":
+    elif provider in ('pi','omp'):
+        kind=value.get('type')
+        if kind=='session':event={k:value[k] for k in ('type','id','timestamp','version') if k in value}
+        elif kind in ('message','usage','model_usage','compaction','branch_summary'):
+            data=value.get('message') if kind=='message' else value
+            if isinstance(data,dict) and (kind!='message' or data.get('role') in ('user','assistant')):
+                event={k:value[k] for k in ('type','id','timestamp','parentId') if k in value}
+                fields={k:data[k] for k in ('role','model','provider','timestamp') if k in data}
+                if isinstance(data.get('usage'),dict):fields['usage']={k:data['usage'][k] for k in ('input','output','cacheRead','cacheWrite','reasoning','totalTokens') if k in data['usage']}
+                if kind=='message':event['message']=fields
+                else:event.update(fields)
+    elif provider == "kimi":
+        if value.get('type') in ('metadata','llm.request','turn.prompt','usage.record'):
+            event={k:value[k] for k in ('type','model','provider','time','turnId') if k in value}
+            if value.get('type')=='usage.record':
+                event['usage']={k:(value.get('usage') or {}).get(k) for k in ('inputOther','output','inputCacheRead','inputCacheCreation')}
+        elif (value.get('message') or {}).get('type')=='StatusUpdate':
+            payload=value['message'].get('payload') or {}
+            event=dict(timestamp=value.get('timestamp'),message=dict(type='StatusUpdate',payload=dict(message_id=payload.get('message_id'),token_usage={k:(payload.get('token_usage') or {}).get(k) for k in ('input_other','output','input_cache_read','input_cache_creation')})))
+    elif provider == "codebuddy":
+        if value.get('type')=='message' and value.get('role')=='user' and isinstance(value.get('sessionId'),str):
+            event=dict(type='identity',sessionId=value['sessionId'])
+        elif value.get('type') in ('function_call','model-usage','credit-usage') or value.get('type')=='message' and value.get('role')=='assistant':
+            p=value.get('providerData') or {}; u=p.get('rawUsage') or {}
+            event={k:value.get(k) for k in ('type','role','id','status','sessionId','timestamp')}
+            raw={k:u[k] for k in ('prompt_tokens','completion_tokens','input_tokens','output_tokens','credit') if k in u}
+            for detail,key in [('prompt_tokens_details','cached_tokens'),('completion_tokens_details','reasoning_tokens'),('input_tokens_details','cached_tokens'),('output_tokens_details','reasoning_tokens')]:
+                if isinstance(u.get(detail),dict):raw[detail]={key:u[detail].get(key)}
+            event['providerData']=dict(model=p.get('model'),messageId=p.get('messageId'),conversationRequestId=p.get('conversationRequestId'),rawUsage=raw)
+            event['providerData'].update({k:p[k] for k in ('requestId','requestModelId','credit','source','stageId') if k in p})
+    elif provider == "grok":
+        p=value.get('params') or {}; update=p.get('update') or {}; meta=p.get('_meta') or {}
+        if value.get('method')=='_x.ai/session/update' and update.get('sessionUpdate')=='turn_completed':
+            models=(update.get('usage') or {}).get('modelUsage') or {}
+            usage={model:{k:counts.get(k) for k in ('inputTokens','outputTokens','cachedReadTokens','cacheCreationTokens','reasoningTokens','totalTokens')} for model,counts in models.items() if isinstance(counts,dict)}
+            event=dict(method=value['method'],params=dict(sessionId=p.get('sessionId'),update=dict(sessionUpdate='turn_completed',prompt_id=update.get('prompt_id'),usage=dict(modelUsage=usage)),_meta={k:meta.get(k) for k in ('eventId','agentTimestampMs')}))
+    elif provider in ("claude","qoder"):
         message = value.get("message") or {}
         if value.get("type") == "assistant" and message.get("usage"):
             event = {k: value.get(k) for k in ("type", "timestamp", "sessionId", "requestId", "uuid", "isApiErrorMessage")}
-            event["message"] = {k: message.get(k) for k in ("id", "model", "usage")}
+            usage=message.get('usage') or {}
+            keys=['input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens']
+            if provider=='qoder':keys+=['credits','original_credits','billable']
+            event["message"] = {k: message.get(k) for k in ("id", "model")}
+            event["message"]['usage']={k:usage[k] for k in keys if k in usage}
     elif "tokens" in value:
         event = {k: value.get(k) for k in ("id", "sessionId", "timestamp", "model", "tokens", "billing", "intervalStart", "intervalEvidence")}
     return event
@@ -323,15 +394,30 @@ def _native_routes(root, cursor, emit):
         db.close()
 
 
+def _cursor_private_history(root):
+    if os.path.isfile(root):return os.path.splitext(root)[1] in ('.db','.vscdb')
+    for name in ('chats','acp-sessions'):
+        base=os.path.join(root,name)
+        for directory,dirs,files in os.walk(base,followlinks=False):
+            if 'store.db' in files and not os.path.islink(os.path.join(directory,'store.db')):return True
+            dirs[:]=[] if len(os.path.relpath(directory,base).split(os.sep))>=2 else [d for d in dirs if not os.path.islink(os.path.join(directory,d))]
+    base=os.path.join(root,'projects')
+    for directory,dirs,files in os.walk(base,followlinks=False):
+        if 'agent-transcripts' in dirs:return True
+        dirs[:]=[] if len(os.path.relpath(directory,base).split(os.sep))>=2 else [d for d in dirs if not os.path.islink(os.path.join(directory,d))]
+    return False
+
 def _incremental(request):
     import hashlib
     root = os.path.abspath(os.path.expanduser(request['path']))
     provider = request['provider']
+    cursor_native=provider=='cursor' and (os.path.basename(root)=='.cursor' or _cursor_private_history(root))
+    grok_native = provider=='grok' and os.path.isdir(os.path.join(root,'sessions'))
     cursors = request.get('cursors', {})
     precise = bool(request.get('codexPreciseCounting', False))
     history = _CodexHistory(root) if provider == 'codex' and precise else None
     fork_issues = []
-    issues, failed, invalid_records, read_bytes, file_count = [], 0, 0, 0, 0
+    issues, failed, invalid_records, read_bytes, file_count, scanned_records = [], 0, 0, 0, 0, 0
 
     def emit(kind, **fields):
         line = json.dumps(dict(protocol=2, kind=kind, **fields), separators=(',', ':'))
@@ -378,22 +464,38 @@ def _incremental(request):
             size = metadata.st_size
             identity = [metadata.st_dev, metadata.st_ino]
             offset = int(old.get('offset', 0))
-            prefix_size = int(old.get('prefixBytes', min(size, 128)))
+            prefix_start=0
+            title_digest=None
+            if provider=='omp':
+                stream.seek(0);slot=stream.read(256)
+                try:
+                    if len(slot)==256 and slot.endswith(b'\n') and json.loads(slot).get('type')=='title':
+                        prefix_start=256;title_digest=hashlib.sha256(slot).hexdigest()
+                except (ValueError,UnicodeError):pass
+            prefix_size = int(old.get('prefixBytes', min(size-prefix_start, 128)))
             valid = (old.get('identity') == identity and 0 <= offset <= size
-                     and 0 <= prefix_size <= min(size, 128)
-                     and old.get('prefix') == digest(stream, 0, prefix_size)
+                     and 0 <= prefix_size <= min(size-prefix_start, 128) and old.get('prefixStart',0)==prefix_start
+                     and old.get('prefix') == digest(stream, prefix_start, prefix_size)
                      and old.get('anchor') == digest(stream, max(0, offset - 128), min(offset, 128))
-                     and not (size == old.get('size') and metadata.st_mtime_ns != old.get('mtimeNs')))
+                     and not (size == old.get('size') and metadata.st_mtime_ns != old.get('mtimeNs')
+                              and not (title_digest and old.get('titleDigest') and title_digest!=old['titleDigest'])))
             if not valid:
-                offset, prefix_size = 0, min(size, 128)
-            prefix_size = min(size, 128)
-            prefix = digest(stream, 0, prefix_size)
+                offset, prefix_size = 0, min(size-prefix_start, 128)
+                if provider=='kimi':
+                    stream.seek(0)
+                    for line in stream:
+                        if len(line)>16*1024*1024:raise ValueError('Kimi 单条记录过大')
+                        try:
+                            if json.loads(line).get('type')=='forked':offset=stream.tell()
+                        except (ValueError,UnicodeDecodeError):pass
+            prefix_size = min(size-prefix_start, 128)
+            prefix = digest(stream, prefix_start, prefix_size)
             reset, events, bytes_in_batch = not valid, [], 0
             last_commit = offset
 
             def flush():
                 nonlocal reset, events, bytes_in_batch, last_commit
-                cursor = dict(identity=identity, prefixBytes=prefix_size, prefix=prefix,
+                cursor = dict(identity=identity, prefixStart=prefix_start, titleDigest=title_digest, prefixBytes=prefix_size, prefix=prefix,
                               offset=offset, size=size, mtimeNs=metadata.st_mtime_ns,
                               anchor=digest(stream, max(0, offset - 128), min(offset, 128)))
                 if provider == 'codex':
@@ -448,11 +550,43 @@ def _incremental(request):
         if not os.path.exists(root):
             raise FileNotFoundError('数据目录不存在')
         native = root if os.path.basename(root) == 'conversations' else os.path.join(root, 'conversations')
-        if provider in ('antigravity', 'agy') and os.path.isdir(native):
-            for name in sorted(os.listdir(native)):
-                path = os.path.join(native, name)
-                if not name.endswith('.db') or os.path.islink(path) or not os.path.isfile(path):
-                    continue
+        zcode_db = _zcode_database(root) if provider=='zcode' else None
+        opencode_db = _opencode_database(root) if provider=='opencode' else None
+        harness_paths=_harness()['paths'](root) if provider=='deepseek-harness' else []
+        if harness_paths:
+            for path in harness_paths:
+                path=str(path);file_count+=1
+                signature=_harness()['fingerprint'](path)
+                if cursors.get(path,{}).get('harness')==signature:continue
+                try:
+                    # project() validates the entire frame stream before yielding.
+                    checkpoint={}
+                    rows=_harness()['project'](path,'history',timeout=35,cursor=cursors.get(path,{}),checkpoint=checkpoint)
+                    batch=[];amount=0;header=None;seeded=False
+                    for event in rows:
+                        encoded=len(json.dumps(event).encode())
+                        if amount+encoded>768*1024:
+                            emit('batch',path=path,reset=True,events=batch,cursor=None)
+                            batch=[dict(header,isSeeded=seeded)];amount=len(json.dumps(batch[0]).encode())
+                        if event.get('type')=='session':header=event;seeded=event.get('isSeeded') is True
+                        elif event.get('type')=='session/end-seed':seeded=False
+                        batch.append(event);amount+=encoded
+                    read_bytes+=checkpoint.pop('readBytes');checkpoint.pop('reset')
+                    emit('batch',path=path,reset=True,events=batch,cursor=checkpoint)
+                except Exception as error:
+                    failed+=1;issue(path,error)
+        elif zcode_db or opencode_db:
+            path=zcode_db or opencode_db;file_count+=1
+            if os.path.islink(path):raise ValueError('Select the actual native database rather than a symbolic link')
+            try:
+                stats=_native_database()['history'](path,provider,cursors.get(path,{}),emit)
+                read_bytes+=stats['readBytes'];scanned_records+=stats['scannedRecords']
+            except Exception as error:
+                failed+=1;issue(path,error)
+        elif provider in ('antigravity', 'agy') and os.path.isdir(native):
+            paths=[os.path.join(native,name) for name in sorted(os.listdir(native)) if name.endswith('.db')]
+            for path in paths:
+                if os.path.islink(path) or not os.path.isfile(path):continue
                 file_count += 1
                 signature = [stat(path), stat(path + '-wal')]
                 if cursors.get(path, {}).get('database') == signature:
@@ -491,13 +625,15 @@ def _incremental(request):
             roots = [root]
             if provider == 'codex' and os.path.isdir(root) and any(os.path.exists(os.path.join(root, p)) for p in ('sessions', 'archived_sessions', 'auth.json', 'config.toml', '.aieyes')) and os.path.basename(root) not in ('sessions', 'archived_sessions'):
                 roots = [os.path.join(root, p) for p in ('sessions', 'archived_sessions')]
-            elif provider == 'claude' and os.path.isdir(os.path.join(root, 'projects')):
+            elif provider in ('claude','codebuddy','qoder') and os.path.isdir(os.path.join(root, 'projects')):
                 roots = [os.path.join(root, 'projects')]
+            elif provider in ('kimi','grok','pi','omp') and os.path.isdir(os.path.join(root,'sessions')):
+                roots = [os.path.join(root,'sessions')]
             for folder in roots:
                 if folder != root and not os.path.exists(folder):
                     continue
                 if os.path.isfile(folder):
-                    paths = iter([folder])
+                    paths = iter([] if provider=='cursor' and _cursor_private_history(folder) else [folder])
                 else:
                     def walk_error(error):
                         nonlocal failed
@@ -505,9 +641,9 @@ def _incremental(request):
                         issue(folder, error)
                     def walk():
                         for directory, directories, names in os.walk(folder, followlinks=False, onerror=walk_error):
-                            directories[:] = sorted(n for n in directories if n != '.aieyes')
+                            directories[:] = sorted(n for n in directories if n != '.aieyes' and not (cursor_native and directory==folder and n in ('chats','acp-sessions','projects')))
                             for name in sorted(names):
-                                if name.endswith('.jsonl'):
+                                if name.endswith('.jsonl') and (provider!='kimi' or name=='wire.jsonl') and (not grok_native or name=='updates.jsonl'):
                                     yield os.path.join(directory, name)
                     paths = walk()
                 for path in paths:
@@ -519,7 +655,9 @@ def _incremental(request):
                         issue(path, error)
         if provider == 'codex':
             _native_routes(root, request.get('routeCursor') or {}, emit)
-        emit('done', files=file_count, readBytes=read_bytes, issues=issues,
+        if provider=='cursor' and _cursor_private_history(root):
+            issue(root,'Cursor 私有会话库的请求 Token 暂未接入；仅导入标准 JSONL，上下文占用不计入累计用量。','unsupportedNativeHistory')
+        emit('done', files=file_count, readBytes=read_bytes, scannedRecords=scanned_records, issues=issues,
              forkHistoryIssues=fork_issues,
              partial=any(row['code'] != 'unknownModel' for row in issues),
              failedFiles=failed, invalidRecords=invalid_records)

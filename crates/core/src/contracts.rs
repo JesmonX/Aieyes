@@ -44,6 +44,8 @@ pub const METHODS: &[Method] = &[
     Method { name: "accounts.status.refresh", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.status.refreshBatch", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.targets", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "agentApi.inspect", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "agentApi.save", lane: Lane::Main, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "agents.set", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "agyAuth.cancel", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "agyAuth.confirmWorkspace", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -125,6 +127,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "settings.get", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "settings.patch", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "settings.save", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "sources.defaultPath", lane: Lane::Configuration, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sources.configure", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sources.rebind", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "sources.remove", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
@@ -150,15 +153,20 @@ pub const PROVIDERS: &[Provider] = &[
     Provider { id: "claude", name: "Claude Code", default_path: "~/.claude", binary: "claude", requires_path: true, wakeup: true, discover_local: true },
     Provider { id: "antigravity", name: "Antigravity", default_path: "~/.gemini/antigravity-cli", binary: "agy", requires_path: false, wakeup: true, discover_local: true },
     Provider { id: "deepseek", name: "DeepSeek", default_path: "", binary: "", requires_path: false, wakeup: false, discover_local: false },
-    Provider { id: "zcode", name: "ZCode", default_path: "~/.aieyes/imports/zcode", binary: "", requires_path: false, wakeup: false, discover_local: false },
-    Provider { id: "qoder", name: "Qoder", default_path: "~/.aieyes/imports/qoder", binary: "", requires_path: false, wakeup: false, discover_local: false },
-    Provider { id: "grok", name: "Grok", default_path: "~/.aieyes/imports/grok", binary: "", requires_path: false, wakeup: false, discover_local: false },
-    Provider { id: "cursor", name: "Cursor", default_path: "~/.aieyes/imports/cursor", binary: "", requires_path: false, wakeup: false, discover_local: false },
+    Provider { id: "zcode", name: "ZCode", default_path: "~/.zcode", binary: "zcode", requires_path: false, wakeup: false, discover_local: true },
+    Provider { id: "qoder", name: "Qoder", default_path: "~/.qoder", binary: "qodercli", requires_path: false, wakeup: false, discover_local: true },
+    Provider { id: "grok", name: "Grok", default_path: "~/.grok", binary: "grok", requires_path: false, wakeup: false, discover_local: true },
+    Provider { id: "cursor", name: "Cursor", default_path: "~/.cursor", binary: "agent", requires_path: false, wakeup: false, discover_local: true },
     Provider { id: "opencode", name: "OpenCode", default_path: "~/.local/share/opencode", binary: "", requires_path: false, wakeup: false, discover_local: true },
+    Provider { id: "kimi", name: "Kimi Code", default_path: "~/.kimi-code", binary: "kimi", requires_path: false, wakeup: false, discover_local: true },
+    Provider { id: "deepseek-harness", name: "DeepSeek Harness", default_path: "~/.dsh", binary: "dsh", requires_path: true, wakeup: false, discover_local: true },
+    Provider { id: "codebuddy", name: "CodeBuddy", default_path: "~/.codebuddy", binary: "codebuddy", requires_path: true, wakeup: false, discover_local: true },
+    Provider { id: "pi", name: "Pi", default_path: "~/.pi/agent", binary: "pi", requires_path: true, wakeup: false, discover_local: true },
+    Provider { id: "omp", name: "Oh My Pi", default_path: "~/.omp/agent", binary: "omp", requires_path: true, wakeup: false, discover_local: true },
     Provider { id: "custom", name: "自定义", default_path: "~/.aieyes", binary: "", requires_path: true, wakeup: false, discover_local: false },
 ];
 #[rustfmt::skip]
-pub const PROVIDER_IDS: &[&str] = &["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "custom"];
+pub const PROVIDER_IDS: &[&str] = &["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "kimi", "deepseek-harness", "codebuddy", "pi", "omp", "custom"];
 #[rustfmt::skip]
 pub const EXCLUDED_FS_TYPES: &[&str] = &["tmpfs", "devtmpfs", "squashfs", "overlay", "proc", "procfs", "sysfs", "devfs", "autofs", "cgroup", "cgroup2"];
 #[rustfmt::skip]
@@ -177,7 +185,7 @@ pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
     &[120, 120, 120, 120, 120, 220],
     &[150, 150, 150, 150, 150, 280],
 ];
-pub const CONTRACT_HASH: &str = "09027b8f8b81e770b7121ef5d9d1e2aff2b906fe2e1813e75184e4053e13f9ac";
+pub const CONTRACT_HASH: &str = "e9e81113601ab8ba9b2906e86cc984cc79ee84b628ccd4ad5330147399de525d";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

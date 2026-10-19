@@ -40,7 +40,9 @@ impl Poller {
         Ok(self.wait_plan(engine)?.query)
     }
     pub fn wait_plan(&mut self, engine: &Engine) -> Result<WaitPlan> {
-        let now = crate::models::now();
+        self.wait_plan_at(engine, crate::models::now())
+    }
+    fn wait_plan_at(&mut self, engine: &Engine, now: i64) -> Result<WaitPlan> {
         let revision: (i64, i64) = engine.store.db.query_row("SELECT CAST((SELECT value FROM kv WHERE key='runtime.revision:settings') AS INTEGER),CAST((SELECT value FROM kv WHERE key='runtime.revision:quotas') AS INTEGER)", [], |r| Ok((r.get(0)?,r.get(1)?)))?;
         if self.cached_revision == Some(revision)
             && now >= self.last_clock
@@ -99,7 +101,7 @@ impl Poller {
                 next_wake: self.next_wake,
             });
         }
-        let schedule = engine.quota_schedule()?;
+        let schedule = engine.quota_schedule_at(now)?;
         let next = schedule["nextDueAt"].as_i64();
         self.next_wake = next.into_iter().chain(next_reset).min();
         Ok(WaitPlan {
@@ -110,8 +112,10 @@ impl Poller {
 }
 impl Engine {
     pub(crate) fn quota_schedule(&self) -> Result<Value> {
+        self.quota_schedule_at(crate::models::now())
+    }
+    fn quota_schedule_at(&self, now: i64) -> Result<Value> {
         let settings = self.store.settings()?;
-        let now = crate::models::now();
         let mut accounts = vec![];
         for account in settings
             .accounts
@@ -295,6 +299,46 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::file_lock::FileLock;
+    #[test]
+    fn poller_and_schedule_share_the_same_evaluation_time() {
+        use crate::models::{Settings, Source};
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open(dir.path()).unwrap();
+        engine
+            .store
+            .save_settings(&Settings {
+                accounts: vec![Account {
+                    id: "a".into(),
+                    name: "Quota fixture".into(),
+                    provider: "custom".into(),
+                    quota_enabled: true,
+                    quota_refresh_seconds: Some(300),
+                    ..Default::default()
+                }],
+                sources: vec![Source {
+                    id: "s".into(),
+                    provider: "custom".into(),
+                    account_id: "a".into(),
+                    path: dir.path().to_string_lossy().into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        engine
+            .store
+            .db
+            .execute("INSERT INTO kv VALUES('quota-attempt:custom:a','1000')", [])
+            .unwrap();
+        let mut poller = Poller::default();
+        let before = poller.wait_plan_at(&engine, 1299).unwrap();
+        assert!(before.query.is_none());
+        assert_eq!(before.next_wake, Some(1300));
+        let due = poller.wait_plan_at(&engine, 1300).unwrap();
+        assert_eq!(due.query, Some(json!({"dueOnly":true})));
+        assert_eq!(due.next_wake, Some(1300));
+        assert_eq!(engine.quota_schedule_at(1300).unwrap()["generatedAt"], 1300);
+    }
     #[test]
     fn waits_until_deadline_and_observes_external_configuration_and_clock_reversal() {
         use crate::models::{Settings, Source};

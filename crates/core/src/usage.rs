@@ -3,6 +3,22 @@ use crate::models::*;
 use serde_json::Value;
 
 pub const PARSER_VERSION: u32 = 6;
+pub fn parser_version(provider: &str) -> u32 {
+    if provider == "codebuddy" {
+        return 9;
+    }
+    if provider == "qoder" {
+        return 8;
+    }
+    if provider == "deepseek-harness" {
+        return 8;
+    }
+    if matches!(provider, "kimi" | "grok" | "pi" | "omp") {
+        7
+    } else {
+        PARSER_VERSION
+    }
+}
 
 fn count(v: &Value, name: &str) -> u64 {
     v.get(name).and_then(Value::as_u64).unwrap_or(0)
@@ -48,6 +64,7 @@ fn event(
             category: "unknown".into(),
             evidence: state.model_provider.clone(),
         },
+        native_credits: None,
         interval_start: None,
         interval_evidence: String::new(),
     }
@@ -64,11 +81,17 @@ pub fn event_id(provider: &str, source_id: &str, account_id: &str, identity: &st
 }
 
 pub fn parse(source: &Source, state: &mut ParseState, v: &Value) -> Option<UsageEvent> {
-    state.parser_version = PARSER_VERSION;
+    state.parser_version = parser_version(&source.provider);
     state.counter_correction = None;
     match source.provider.as_str() {
         "codex" => parse_codex(source, state, v),
-        "claude" => parse_claude(source, state, v),
+        "qoder" | "pi" | "omp" if v["tokens"].is_object() => parse_normalized(source, state, v),
+        "claude" | "qoder" => parse_claude(source, state, v),
+        "pi" | "omp" => crate::pi_history::parse(source, state, v),
+        "kimi" | "codebuddy" => crate::native_agents::parse(source, state, v),
+        "deepseek-harness" if v["type"].is_string() => {
+            crate::native_agents::parse_dsh(source, state, v)
+        }
         _ => parse_normalized(source, state, v),
     }
 }
@@ -265,7 +288,20 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         cache_write: count(u, "cache_creation_input_tokens"),
         reasoning: 0,
     };
-    if tokens.total() == 0 {
+    let native_credits = if source.provider == "qoder" {
+        u["credits"].as_f64().and_then(|credits| {
+            let value = NativeCredits {
+                credits,
+                original_credits: u["original_credits"].as_f64(),
+                billable: u["billable"].as_bool(),
+                ..Default::default()
+            };
+            value.valid().then_some(value)
+        })
+    } else {
+        None
+    };
+    if tokens.total() == 0 && native_credits.is_none() {
         return None;
     }
     let id = msg["id"].as_str().or(v["uuid"].as_str())?;
@@ -275,7 +311,7 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         v["requestId"].as_str().unwrap_or(""),
         id
     );
-    Some(event(
+    let mut parsed = event(
         source,
         state,
         stamp,
@@ -283,10 +319,16 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         tokens,
         identity,
         "event",
-    ))
+    );
+    parsed.native_credits = native_credits;
+    Some(parsed)
 }
 
-fn parse_normalized(source: &Source, state: &mut ParseState, v: &Value) -> Option<UsageEvent> {
+pub(crate) fn parse_normalized(
+    source: &Source,
+    state: &mut ParseState,
+    v: &Value,
+) -> Option<UsageEvent> {
     let tokens: Tokens = serde_json::from_value(v.get("tokens")?.clone()).ok()?;
     let stamp = timestamp(&v["timestamp"])?;
     let id = v["id"].as_str()?;
@@ -303,6 +345,16 @@ fn parse_normalized(source: &Source, state: &mut ParseState, v: &Value) -> Optio
     );
     parsed.interval_start = timestamp(&v["intervalStart"]);
     parsed.interval_evidence = v["intervalEvidence"].as_str().unwrap_or("").into();
+    if matches!(source.provider.as_str(), "qoder" | "codebuddy") {
+        parsed.native_credits = serde_json::from_value::<NativeCredits>(v["nativeCredits"].clone())
+            .ok()
+            .filter(NativeCredits::valid);
+        if let Some(c) = &mut parsed.native_credits {
+            c.aliases.clear();
+            c.mirror_of = None;
+            c.mirrored_by = None;
+        }
+    }
     if let Some(category @ ("api" | "subscription")) = v["billing"]["category"].as_str() {
         parsed.billing = BillingEvidence {
             category: category.into(),

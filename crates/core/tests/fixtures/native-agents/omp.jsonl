@@ -1,0 +1,7 @@
+{"type":"title","title":"PRIVATE_TITLE"}                                                                                                                                                                                                                       
+{"type":"session","version":3,"id":"01a150e8-b3a1-736f-9d5b-6c9344aac60e","timestamp":"2026-10-18T21:26:30.049Z"}
+{"type":"model_change","id":"daca68f7","parentId":null,"timestamp":"2026-10-18T21:26:30.132Z","model":"aieyes-managed/Qwen3.8-27B","resolvedModelIsFallback":false}
+{"type":"thinking_level_change","id":"815b0019","parentId":"daca68f7","timestamp":"2026-10-18T21:26:30.132Z","thinkingLevel":"low","configured":null}
+{"type":"message","id":"be9ed7ed","parentId":"815b0019","timestamp":"2026-10-18T21:26:30.306Z","message":{"role":"user","timestamp":1792358790213,"content":"PRIVATE_PROMPT"}}
+{"type":"message","id":"a4f97a86","parentId":"b4bdb75b","timestamp":"2026-10-18T21:26:30.723Z","message":{"role":"assistant","api":"openai-completions","provider":"aieyes-managed","model":"Qwen3.8-27B","usage":{"input":261,"output":32,"cacheRead":0,"cacheWrite":0,"totalTokens":293,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":1792358790311,"content":"PRIVATE_PROMPT"}}
+{"type":"custom","customType":"session_exit","data":{"reason":"dispose","kind":"normal","recordedAt":"2026-10-18T21:26:30.737Z"},"id":"38d09c1e","parentId":"a4f97a86","timestamp":"2026-10-18T21:26:30.737Z"}

@@ -518,7 +518,7 @@ struct SourceEditor: View {
                 DisclosureGroup(source.hostId == nil ? "高级连接选项 · CLI / 代理" : "高级连接选项 · CLI") {
                 if source.provider == "antigravity" { TextField("agy 程序", text: Binding(get: { source.agyBinary ?? "agy" }, set: { source.agyBinary = $0 })) }
                 if source.provider == "codex" { TextField("Codex 程序", text: $source.codexBinary) }
-                if source.provider == "custom" || CoreContract.subscriptionModes[source.provider] != nil { TextField("额度查询命令", text: $source.quotaCommand) }
+                if ["custom", "kimi", "deepseek-harness", "codebuddy"].contains(source.provider) || CoreContract.subscriptionModes[source.provider] != nil { TextField("额度查询命令", text: $source.quotaCommand) }
                 if source.hostId == nil {
                     ProxyFields(proxy: Binding(get: { source.proxy ?? ProxySettings(mode: "inherit") }, set: { source.proxy = $0.mode == "inherit" ? nil : $0 }), inherit: true, inheritedProxy: appProxy, testURLs: testURLs)
                 }

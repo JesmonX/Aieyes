@@ -54,6 +54,8 @@ pub struct UsageEvent {
     pub attribution: String,
     #[serde(default)]
     pub billing: BillingEvidence,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_credits: Option<NativeCredits>,
     #[serde(default)]
     pub interval_start: Option<i64>,
     #[serde(default)]
@@ -65,6 +67,59 @@ pub struct UsageEvent {
 pub struct BillingEvidence {
     pub category: String,
     pub evidence: String,
+}
+
+/// Native request counters, independent of token prices and account balance.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeCredits {
+    pub credits: f64,
+    pub original_credits: Option<f64>,
+    pub billable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirrored_by: Option<String>,
+}
+impl NativeCredits {
+    pub fn valid(&self) -> bool {
+        self.credits.is_finite()
+            && self.credits >= 0.0
+            && self
+                .original_credits
+                .is_none_or(|n| n.is_finite() && n >= 0.0)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NativeCreditsTotal {
+    pub credits: f64,
+    pub original_credits: f64,
+    pub original_credits_requests: u64,
+    pub billable: f64,
+    pub billable_requests: u64,
+    pub non_billable: f64,
+    pub non_billable_requests: u64,
+    pub unknown_billability: f64,
+    pub unknown_billability_requests: u64,
+    pub requests: u64,
+}
+impl NativeCreditsTotal {
+    pub fn add(&mut self, other: &Self) {
+        self.credits += other.credits;
+        self.original_credits += other.original_credits;
+        self.original_credits_requests += other.original_credits_requests;
+        self.billable += other.billable;
+        self.billable_requests += other.billable_requests;
+        self.non_billable += other.non_billable;
+        self.non_billable_requests += other.non_billable_requests;
+        self.unknown_billability += other.unknown_billability;
+        self.unknown_billability_requests += other.unknown_billability_requests;
+        self.requests += other.requests;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -631,8 +686,35 @@ pub struct ParseState {
     pub session_started_at: Option<i64>,
     pub inherited_history: Option<crate::codex_history::InheritedHistory>,
     pub first_inherited_count: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness_checkpoint: Option<HarnessCheckpoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_checkpoint: Option<DatabaseCheckpoint>,
     #[serde(skip)]
     pub counter_correction: Option<crate::codex_history::CounterCorrection>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HarnessCheckpoint {
+    pub fingerprint: String,
+    pub identity: String,
+    pub anchor: String,
+    pub size: u64,
+    pub version: u64,
+    pub seed: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DatabaseCheckpoint {
+    pub fingerprint: String,
+    pub identity: String,
+    pub table: String,
+    pub anchor: String,
+    pub pending_after: i64,
+    pub pending_fingerprint: String,
+    pub malformed: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -654,6 +736,19 @@ pub struct Balance {
     pub total: String,
     pub granted: String,
     pub topped_up: String,
+}
+
+/// Monetary wallet observations in major currency units, kept as exact decimal
+/// strings. This is separate from subscription windows and native request Credits.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ExtraUsageWallet {
+    pub currency: String,
+    pub total: String,
+    pub balance: Option<String>,
+    pub monthly_limit_enabled: Option<bool>,
+    pub monthly_limit: Option<String>,
+    pub monthly_used: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -692,6 +787,8 @@ pub struct QuotaSnapshot {
     pub origin: String,
     pub windows: Vec<QuotaWindow>,
     pub balances: Vec<Balance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_usage: Option<ExtraUsageWallet>,
     pub is_available: Option<bool>,
     pub bank_reset: Option<Value>,
     pub bank_updated_at: Option<i64>,
@@ -720,6 +817,42 @@ pub struct Aggregate {
     pub cost: f64,
     pub priced_tokens: u64,
     pub events: u64,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub native_credits: std::collections::BTreeMap<String, NativeCreditsTotal>,
+}
+impl Aggregate {
+    pub fn add_native_credits(&mut self, event: &UsageEvent) {
+        if let Some(c) = event
+            .native_credits
+            .as_ref()
+            .filter(|c| c.valid() && c.mirrored_by.is_none())
+        {
+            let row = self
+                .native_credits
+                .entry(event.provider.clone())
+                .or_default();
+            row.credits += c.credits;
+            row.requests += 1;
+            if let Some(original) = c.original_credits {
+                row.original_credits += original;
+                row.original_credits_requests += 1;
+            }
+            match c.billable {
+                Some(true) => {
+                    row.billable += c.credits;
+                    row.billable_requests += 1;
+                }
+                Some(false) => {
+                    row.non_billable += c.credits;
+                    row.non_billable_requests += 1;
+                }
+                None => {
+                    row.unknown_billability += c.credits;
+                    row.unknown_billability_requests += 1;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

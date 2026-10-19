@@ -20,6 +20,41 @@ pub fn database(path: &str) -> Option<PathBuf> {
     (file.is_file() && file.extension().is_some_and(|e| e == "db")).then_some(file)
 }
 
+fn table_exists(db: &Connection, table: &str) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+        [table],
+        |r| r.get(0),
+    )?)
+}
+
+/// 1.19 creates the v2 table before the v1 runtime migrates. An empty future
+/// table must not shadow live v1 history. Once v2 has records it owns history;
+/// reading both generations would count migrated requests twice.
+pub(crate) fn schema(db: &Connection) -> Result<(&'static str, bool)> {
+    let v1 = table_exists(db, "message")?;
+    let v2 = table_exists(db, "session_message")?;
+    ensure!(
+        v1 || v2,
+        "不支持此 OpenCode 数据库版本；可使用标准 JSONL 导出"
+    );
+    let active_v2 = v2
+        && (!v1
+            || db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM session_message LIMIT 1)",
+                [],
+                |r| r.get::<_, bool>(0),
+            )?);
+    Ok((
+        if active_v2 {
+            "session_message"
+        } else {
+            "message"
+        },
+        active_v2,
+    ))
+}
+
 pub fn event(source: &Source, id: &str, session: &str, data: &Value) -> Result<UsageEvent> {
     let tokens = &data["tokens"];
     let count = |v: &Value| v.as_u64().context("OpenCode Token 字段缺失、溢出或为负值");
@@ -56,89 +91,120 @@ pub fn event(source: &Source, id: &str, session: &str, data: &Value) -> Result<U
 }
 
 pub fn scan(store: &Store, settings: &Settings, source: &Source, path: &Path) -> Result<Value> {
-    ensure!(
-        source.host_id.is_none(),
-        "OpenCode 原生 SQLite 采集目前仅支持本机"
-    );
+    scan_mode(store, settings, source, path, false)
+}
+pub(crate) fn rescan(
+    store: &Store,
+    settings: &Settings,
+    source: &Source,
+    path: &Path,
+) -> Result<Value> {
+    scan_mode(store, settings, source, path, true)
+}
+fn scan_mode(
+    store: &Store,
+    settings: &Settings,
+    source: &Source,
+    path: &Path,
+    full: bool,
+) -> Result<Value> {
+    crate::native_db::scan(
+        store,
+        settings,
+        source,
+        path,
+        full,
+        |db| {
+            let (table, v2) = schema(db)?;
+            let (role, model, provider) = if v2 {
+                ("type", "$.model.id", "$.model.providerID")
+            } else {
+                ("json_extract(data,'$.role')", "$.modelID", "$.providerID")
+            };
+            Ok(crate::native_db::Projection {
+                table,
+                columns: format!(
+                    "CASE WHEN json_valid(data) THEN json_object('session',session_id,'role',{role},'tokens',json_extract(data,'$.tokens'),'completed',json_extract(data,'$.time.completed'),'model',json_extract(data,'{model}'),'provider',json_extract(data,'{provider}')) ELSE '{{}}' END"
+                ),
+            })
+        },
+        record,
+    )
+}
+
+pub(crate) fn record(source: &Source, id: &str, data: &Value) -> Result<crate::native_db::Record> {
+    use crate::native_db::Record;
+    let role = data["role"].as_str().context("OpenCode 消息类型无效")?;
+    if role != "assistant" {
+        return Ok(Record::Skip);
+    }
+    if !data["completed"].is_i64() || !data["tokens"].is_object() {
+        return Ok(Record::Pending);
+    }
+    Ok(Record::Event(Box::new(event(
+        source,
+        id,
+        data["session"].as_str().context("OpenCode 会话标识缺失")?,
+        data,
+    )?)))
+}
+
+/// Read metadata only. Message completion by itself can also end a tool-call
+/// step, so only an explicit final finish reason means the turn completed.
+pub fn sessions(path: &Path) -> Result<Vec<(String, String, String, u64)>> {
     let db = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .context("无法只读打开 OpenCode 数据库")?;
-    db.busy_timeout(std::time::Duration::from_secs(2))?;
-    db.execute_batch("BEGIN")?;
-    let exists = |table: &str| -> Result<bool> {
-        Ok(db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
-            [table],
-            |r| r.get(0),
-        )?)
-    };
-    let v2 = exists("session_message")?;
-    ensure!(
-        v2 || exists("message")?,
-        "不支持此 OpenCode 数据库版本；可使用标准 JSONL 导出"
-    );
-    // Prefer v2 as a whole: migrated v1 rows must never be counted twice.
-    let (table, role, model, provider) = if v2 {
-        (
-            "session_message",
-            "type='assistant'",
-            "$.model.id",
-            "$.model.providerID",
-        )
+    )?;
+    db.busy_timeout(std::time::Duration::from_millis(500))?;
+    db.execute_batch("PRAGMA query_only=ON; BEGIN")?;
+    let (table, v2) = schema(&db)?;
+    let role = if v2 {
+        "type"
     } else {
-        (
-            "message",
-            "json_extract(data,'$.role')='assistant'",
-            "$.modelID",
-            "$.providerID",
-        )
+        "json_extract(data,'$.role')"
     };
     let sql = format!(
-        "SELECT id,session_id,json_object('tokens',json_extract(data,'$.tokens'),'completed',json_extract(data,'$.time.completed'),'model',json_extract(data,'{model}'),'provider',json_extract(data,'{provider}')) FROM {table} WHERE id>?1 AND json_valid(data) AND {role} AND json_type(data,'$.time.completed')='integer' AND json_type(data,'$.tokens')='object' ORDER BY id LIMIT 256"
+        "WITH recent AS (SELECT id,session_id,time_updated,data,{role} AS role,ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY time_created DESC,id DESC) AS position FROM {table} WHERE time_updated>?1 AND json_valid(data)) SELECT session_id,id,time_updated,json_object('role',role,'completed',json_extract(data,'$.time.completed'),'finish',json_extract(data,'$.finish'),'error',json_extract(data,'$.error.name')) FROM recent WHERE position=1 ORDER BY time_updated DESC LIMIT 256"
     );
-    let prices = store.prices()?;
-    let mut after = String::new();
-    let mut inserted = 0;
-    let mut malformed = 0;
-    let mut scanned = 0;
-    loop {
-        crate::operations::check()?;
-        let rows = db
-            .prepare(&sql)?
-            .query_map([&after], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        if rows.is_empty() {
-            break;
-        }
-        let tx = store.write_transaction()?;
-        crate::import::current_settings(store, settings, source)?;
-        for (id, session, raw) in rows {
-            scanned += 1;
-            after = id.clone();
-            let data: Value = serde_json::from_str(&raw)?;
-            match event(source, &id, &session, &data) {
-                Ok(event) => {
-                    if store.put_event(&event, &prices, settings)? {
-                        inserted += 1;
-                    }
+    let rows = db
+        .prepare(&sql)?
+        .query_map([(now() - 86400) * 1000], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, u64>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let has_parts = !v2 && table_exists(&db, "part")?;
+    let mut out = Vec::new();
+    for (session, message, updated, raw) in rows {
+        let data: Value = serde_json::from_str(&raw)?;
+        let mut kind = match data["error"].as_str() {
+            Some("MessageAbortedError" | "AbortedError") => "interrupted",
+            Some(_) => "failed",
+            None if data["role"] == "user" => "start",
+            None if data["completed"].as_u64().is_some()
+                && matches!(data["finish"].as_str(), Some("stop" | "end_turn")) =>
+            {
+                "complete"
+            }
+            None if data["completed"].as_u64().is_some() && data["finish"] == "length" => "failed",
+            _ => "thinking",
+        };
+        if has_parts && !matches!(kind, "complete" | "failed" | "interrupted") {
+            let mut q=db.prepare("SELECT json_extract(data,'$.tool') FROM part WHERE message_id=?1 AND json_valid(data) AND json_extract(data,'$.type')='tool' AND json_extract(data,'$.state.status') IN ('pending','running') LIMIT 64")?;
+            for tool in q.query_map([&message], |r| r.get::<_, Option<String>>(0))? {
+                if tool?.as_deref() == Some("question") {
+                    kind = "PermissionRequest";
+                    break;
                 }
-                Err(_) => malformed += 1,
+                kind = "tool";
             }
         }
-        tx.commit()?;
+        out.push((session, message, kind.into(), updated));
     }
-    let result = json!({"updatedAt":now(),"newEvents":inserted,"files":1,"scannedRecords":scanned,"partial":malformed>0,"malformedRecords":malformed,"issues":if malformed>0 { vec![json!({"code":"invalidRecord","message":"部分 OpenCode 统计格式不支持，已跳过；未保存对话正文。"})] } else { vec![] }});
-    let tx = store.write_transaction()?;
-    crate::import::current_settings(store, settings, source)?;
-    store.source_status(&source.id, &result)?;
-    tx.commit()?;
-    Ok(result)
+    Ok(out)
 }

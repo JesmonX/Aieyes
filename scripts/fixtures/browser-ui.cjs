@@ -30,6 +30,7 @@ module.exports = () => {
       switch(args.method){
         case 'hello':return {version:'0.1.1'};
         case 'settings.get':return structuredClone(window.fixtureSettings);
+        case 'sources.defaultPath':return {path:window.AieyesContract.defaultPaths[args.params.provider]??''};
         case 'accounts.status.get':case 'accounts.cleanup.list':return [];
         case 'sources.configure': {
           const next=structuredClone(window.fixtureSettings),item=args.params.source,i=next.sources.findIndex(s=>s.id===item.id);if(i<0)next.sources.push(item);else next.sources[i]=item;

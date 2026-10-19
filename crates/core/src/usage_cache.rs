@@ -188,6 +188,12 @@ fn merge(to: &mut Aggregate, from: &Aggregate) {
     to.cost += from.cost;
     to.priced_tokens += from.priced_tokens;
     to.events += from.events;
+    for (provider, credits) in &from.native_credits {
+        to.native_credits
+            .entry(provider.clone())
+            .or_default()
+            .add(credits);
+    }
 }
 
 pub(crate) struct DateBounds {
@@ -280,7 +286,7 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
     shared.sort();
     let shared_json = serde_json::to_string(&shared)?;
     let scope = hash(&serde_json::to_string(&(
-        "usage-v1",
+        "usage-v3-native-credit-mirrors",
         &f.provider,
         &f.account_id,
         &f.source_id,
@@ -350,14 +356,15 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
                 shared_json
             ])?;
             while let Some(row) = rows.next()? {
-                let e: UsageEvent = serde_json::from_str(&row.get::<_, String>(0)?)?;
-                if e.tokens.total() == 0 {
+                let mut e: UsageEvent = serde_json::from_str(&row.get::<_, String>(0)?)?;
+                if !crate::native_credits::prepare_view(store, &mut e, f.source_id.as_deref())? {
                     continue;
                 }
                 let cost: f64 = row.get(1)?;
                 let covered: u64 = row.get(2)?;
                 let entry = data.entry(e.model.clone()).or_default();
                 let a = &mut entry.usage;
+                a.add_native_credits(&e);
                 a.key = e.model;
                 a.tokens.add(&e.tokens);
                 a.total = a.tokens.total();
@@ -565,6 +572,81 @@ mod tests {
             "second read must use cache, not fallback"
         );
     }
+    #[test]
+    fn native_credits_preserve_units_zero_tokens_filters_and_cache_parity() {
+        let (_root, store, mut settings) = fixture();
+        for source in &mut settings.sources {
+            source.provider = "qoder".into();
+        }
+        store.save_settings(&settings).unwrap();
+        for (id, credits, billable) in [
+            ("one", 0.25, Some(true)),
+            ("two", 0.125, Some(false)),
+            ("three", 0.0625, None),
+        ] {
+            for source in &settings.sources {
+                let event = usage::parse(source, &mut ParseState::default(), &json!({"type":"assistant","sessionId":"session","timestamp":now()-10,"message":{"id":id,"model":"qfmodel","usage":{"input_tokens":0,"output_tokens":0,"credits":credits,"original_credits":if id=="one" {Some(0.5)} else {None},"billable":billable}}})).unwrap();
+                store.put_event(&event, &[], &settings).unwrap();
+                let mut partial = event.clone();
+                let metadata = partial.native_credits.as_mut().unwrap();
+                metadata.original_credits = None;
+                metadata.billable = None;
+                store.put_event(&partial, &[], &settings).unwrap();
+                let mut copy = event;
+                copy.native_credits = None;
+                store.put_event(&copy, &[], &settings).unwrap();
+            }
+        }
+        for source in [None, Some("a"), Some("b")] {
+            let filter = Filter {
+                provider: Some("qoder".into()),
+                source_id: source.map(String::from),
+                ..Default::default()
+            };
+            parity(&store, &filter);
+            let d = store.dashboard(&filter).unwrap();
+            assert_eq!(d.summary.events, 3);
+            assert_eq!(d.summary.total, 0);
+            assert_eq!(d.summary.cost, 0.0);
+            assert!(d.pricing_gaps.is_empty());
+            let row = &d.summary.native_credits["qoder"];
+            assert_eq!(
+                (
+                    row.credits,
+                    row.billable,
+                    row.non_billable,
+                    row.unknown_billability,
+                    row.requests
+                ),
+                (0.4375, 0.25, 0.125, 0.0625, 3)
+            );
+            assert_eq!(d.models[0].native_credits["qoder"].credits, row.credits);
+            assert_eq!(
+                (
+                    row.billable_requests,
+                    row.non_billable_requests,
+                    row.unknown_billability_requests
+                ),
+                (1, 1, 1)
+            );
+            assert_eq!(
+                (row.original_credits_requests, row.original_credits),
+                (1, 0.5)
+            );
+            assert_eq!(
+                d.day_models.last().unwrap().usage.native_credits["qoder"].credits,
+                row.credits
+            );
+        }
+        let other = store
+            .dashboard(&Filter {
+                provider: Some("claude".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(other.summary.native_credits.is_empty());
+    }
+
     #[test]
     fn explicit_ranges_include_both_endpoints_leap_days_and_follow_filters() {
         let (_root, store, settings) = fixture();

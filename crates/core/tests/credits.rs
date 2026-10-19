@@ -46,6 +46,7 @@ fn setup() -> (tempfile::TempDir, Store, QuotaSnapshot) {
 }
 fn event(store: &Store, q: &QuotaSnapshot, model: &str, category: &str, id: &str) {
     let event = UsageEvent {
+        native_credits: None,
         turn_id: String::new(),
         id: id.into(),
         import_identity: None,

@@ -1,0 +1,2 @@
+# Oh My Pi reserves a fixed 256-byte title slot with significant space padding.
+crates/core/tests/fixtures/native-agents/omp.jsonl text eol=lf whitespace=-blank-at-eol

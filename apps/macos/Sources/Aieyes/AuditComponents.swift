@@ -1,5 +1,27 @@
 import SwiftUI
 
+struct NativeCreditsView: View {
+    let usage: Aggregate
+    var models: [Aggregate] = []
+    var compact = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(usage.nativeCreditText).font(AppFont.secondary).fontWeight(.medium).textSelection(.enabled)
+            if !compact {
+                ForEach((usage.nativeCredits ?? [:]).keys.sorted(), id: \.self) { provider in
+                    if let row = usage.nativeCredits?[provider] { Text(Format.provider(provider) + "：" + row.detail).font(AppFont.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                }
+            }
+            Text("来自原生计量记录；不代表已扣费金额或账户剩余额度。" + (usage.total == 0 ? "原生记录没有可用的 Token 统计，API 等价成本暂不可计算。" : "")).font(AppFont.caption).foregroundStyle(.secondary)
+            if !compact && models.contains(where: \.hasNativeCredits) {
+                DisclosureGroup("按模型查看 Credits") {
+                    ForEach(models.filter(\.hasNativeCredits)) { row in Text(row.key + " · " + row.nativeCreditText).font(AppFont.secondary).textSelection(.enabled) }
+                }.font(AppFont.secondary)
+            }
+        }
+    }
+}
+
 struct PricingWarning: View {
     var action: () -> Void
     @FocusState private var focused: Bool
@@ -28,7 +50,7 @@ struct ProviderMark: View {
     }()
     var body: some View {
         Group {
-            if let image = Self.images[provider] {
+            if let image = Self.images[provider == "deepseek-harness" ? "deepseek" : provider] {
                 Image(nsImage: image).resizable().renderingMode(["codex", "cursor", "grok", "zcode"].contains(provider) ? .template : .original).scaledToFit()
             } else { Image(systemName: "terminal").resizable().scaledToFit().frame(width: size * 2 / 3, height: size * 2 / 3).foregroundStyle(.secondary) }
         }.frame(width: size, height: size).help(Format.provider(provider)).accessibilityLabel(Format.provider(provider))

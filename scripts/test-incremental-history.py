@@ -33,11 +33,144 @@ def events(frames):
     return [e for f in frames if f['kind'] == 'batch' for e in f['events']]
 
 
+def native_rows(frames):
+    return [row for frame in frames for row in frame.get('nativeRows', [])]
+
+
+class PiHistoryTests(unittest.TestCase):
+    def test_pi_family_projection_has_only_metering_and_appends_are_incremental(self):
+        for provider in ('pi','omp'):
+            with self.subTest(provider=provider),tempfile.TemporaryDirectory() as directory:
+                path=pathlib.Path(directory)/'session.jsonl'
+                fixture=SCRIPT.parents[1]/'crates/core/tests/fixtures/native-agents'/f'{provider}.jsonl'
+                path.write_bytes(fixture.read_bytes())
+                first=collect(path,provider);saved=cursors(first)
+                self.assertNotIn('PRIVATE_',json.dumps(first))
+                self.assertEqual(len([e for e in events(first) if e.get('message',{}).get('role')=='assistant']),1)
+                repeat=collect(path,provider,saved)
+                self.assertEqual(events(repeat),[])
+                self.assertEqual(repeat[-1]['readBytes'],0)
+                if provider=='omp':
+                    path.write_text(path.read_text().replace('PRIVATE_TITLE','CHANGED_TITLE',1))
+                    title=collect(path,provider,saved)
+                    self.assertEqual(events(title),[])
+                    self.assertEqual(title[-1]['readBytes'],0)
+                    saved.update(cursors(title))
+                row=dict(type='message',id='new-request',timestamp='2026-10-18T22:00:00Z',message=dict(role='assistant',model='auxiliary',usage=dict(input=10,output=2,cacheRead=3,cacheWrite=1),content='PRIVATE_OUTPUT'))
+                with path.open('a') as stream:stream.write(json.dumps(row)+'\n')
+                appended=collect(path,provider,saved)
+                self.assertEqual(len(events(appended)),1)
+                self.assertEqual(events(appended)[0]['message']['usage']['input'],10)
+                self.assertNotIn('PRIVATE_',json.dumps(appended))
+
+
 def record(number, model='fixture'):
     return json.dumps(dict(id=str(number), sessionId='s', model=model, timestamp=1800000000, tokens=dict(input=number))) + '\n'
 
 
 class IncrementalHistory(unittest.TestCase):
+    def test_codebuddy_credit_and_usage_sidecars_keep_identifiers_without_private_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=pathlib.Path(directory)/'session.jsonl'
+            rows=[dict(type='message',role='user',sessionId='s',content='PRIVATE_PROMPT'),dict(type='model-usage',id='row',sessionId='s',timestamp=1800000000000,providerData=dict(messageId='m',conversationRequestId='turn',model='fixture',rawUsage=dict(input_tokens=100,output_tokens=20,credit=.5),extra='PRIVATE_USAGE')),dict(type='credit-usage',id='stage-row',sessionId='s',timestamp=1800000000000,providerData=dict(conversationRequestId='turn',source='team_member',stageId='team:row',credit=.5,extra='PRIVATE_STAGE'))]
+            path.write_text(''.join(json.dumps(row)+'\n' for row in rows));first=collect(path,'codebuddy');data=events(first)
+            self.assertNotIn('PRIVATE',json.dumps(first));self.assertEqual(data[0],dict(type='identity',sessionId='s'));self.assertEqual(data[1]['providerData']['rawUsage']['credit'],.5);self.assertEqual(data[2]['providerData']['stageId'],'team:row');self.assertEqual(events(collect(path,'codebuddy',cursors(first))),[])
+
+    def test_cursor_private_store_warns_without_reading_native_transcripts_or_context_tokens(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory);db=root/'chats/workspace/session/store.db';db.parent.mkdir(parents=True);db.write_bytes(b'PRIVATE_DATABASE')
+            transcript=root/'projects/p/agent-transcripts/t.jsonl';transcript.parent.mkdir(parents=True);transcript.write_text(record(999))
+            export=root/'imports/usage.jsonl';export.parent.mkdir();export.write_text(record(20))
+            first=collect(root,'cursor');self.assertTrue(first[-1]['partial']);self.assertEqual(first[-1]['issues'][0]['code'],'unsupportedNativeHistory');self.assertEqual([e['tokens']['input'] for e in events(first)],[20]);self.assertNotIn('PRIVATE',json.dumps(first))
+            self.assertEqual(db.read_bytes(),b'PRIVATE_DATABASE');self.assertEqual(events(collect(root,'cursor',cursors(first))),[])
+            self.assertFalse(collect(export,'cursor')[-1]['partial'])
+            direct=collect(db,'cursor');self.assertTrue(direct[-1]['partial']);self.assertEqual(events(direct),[])
+            standard=root/'standard/projects/usage.jsonl';standard.parent.mkdir(parents=True);standard.write_text(record(30))
+            normal=collect(root/'standard','cursor');self.assertFalse(normal[-1]['partial']);self.assertEqual(events(normal)[0]['tokens']['input'],30)
+
+    def test_qoder_request_credits_are_projected_without_body_or_extra_usage_fields(self):
+        fixture=SCRIPT.parents[1]/'crates/core/tests/fixtures/native-agents/qoder.jsonl'
+        row=json.loads(fixture.read_text().splitlines()[-1])
+        row['message']['content']='PRIVATE_RESPONSE'
+        row['message']['usage']['extra']='PRIVATE_USAGE'
+        with tempfile.TemporaryDirectory() as directory:
+            path=pathlib.Path(directory)/'session.jsonl';path.write_text(json.dumps(row)+'\n')
+            frames=collect(path,'qoder');projected=events(frames)[0]
+            self.assertNotIn('PRIVATE_',json.dumps(frames))
+            self.assertEqual(projected['message']['usage']['credits'],row['message']['usage']['credits'])
+            self.assertIs(projected['message']['usage']['billable'],False)
+            self.assertEqual(projected['message']['usage']['input_tokens'],0)
+            self.assertEqual(events(collect(path,'qoder',cursors(frames))),[])
+            normalized=dict(id='export',sessionId='s',timestamp=1800000000,model='qfmodel',tokens={},nativeCredits=dict(credits=.5,originalCredits=1,billable=False,extra='PRIVATE_EXPORT'))
+            path.write_text(json.dumps(normalized)+'\n')
+            export=collect(path,'qoder')
+            self.assertNotIn('PRIVATE_',json.dumps(export))
+            self.assertEqual(events(export)[0]['nativeCredits'],dict(credits=.5,originalCredits=1,billable=False))
+
+    def test_opencode_real_messages_ignore_empty_future_table_and_private_parts(self):
+        fixture=SCRIPT.parents[1]/'crates/core/tests/fixtures/native-agents/opencode-messages.json'
+        for v2 in (False,True):
+            with self.subTest(v2=v2),tempfile.TemporaryDirectory() as directory:
+                root=pathlib.Path(directory);path=root/'opencode.db'
+                with sqlite3.connect(path) as db:
+                    db.executescript('CREATE TABLE message(id TEXT,session_id TEXT,data TEXT);CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT,data TEXT);CREATE TABLE part(data TEXT);INSERT INTO part VALUES(\'PRIVATE_TOOL_RESULT\');')
+                    for row in json.loads(fixture.read_text()):
+                        data=row['data'];data['content']='PRIVATE_PROMPT';data['apiKey']='PRIVATE_KEY'
+                        db.execute('INSERT INTO message VALUES(?,?,?)',(row['id'],row['session'],json.dumps(data)))
+                        if v2:
+                            data['model']=dict(id=data['modelID'],providerID=data['providerID'])
+                            db.execute('INSERT INTO session_message VALUES(?,?,?,?)',(row['id'],row['session'],'assistant',json.dumps(data)))
+                before=path.read_bytes();first=collect(root,'opencode')
+                self.assertFalse(first[-1]['partial']);self.assertEqual(len(native_rows(first)),3)
+                self.assertEqual(sum(e['data']['tokens']['input'] for e in native_rows(first)),8315)
+                self.assertNotIn('PRIVATE_',json.dumps(first));self.assertEqual(before,path.read_bytes())
+                self.assertEqual(collect(root,'opencode',cursors(first))[-1]['readBytes'],0)
+
+    def test_native_clients_project_statistics_without_prompts_or_headers(self):
+        fixtures=SCRIPT.parents[1]/'crates/core/tests/fixtures/native-agents'
+        for provider,name,relative in [('kimi','kimi.jsonl','sessions/s/agents/main/wire.jsonl'),('codebuddy','codebuddy.jsonl','projects/p/s.jsonl'),('grok','grok-updates.jsonl','sessions/p/s/updates.jsonl')]:
+            with self.subTest(provider=provider),tempfile.TemporaryDirectory() as directory:
+                root=pathlib.Path(directory);path=root/relative;path.parent.mkdir(parents=True)
+                rows=[json.loads(line) for line in (fixtures/name).read_text().splitlines()]
+                for row in rows:
+                    row['content']='PRIVATE_PROMPT';row['headers']={'Authorization':'PRIVATE_SECRET'}
+                path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+                first=collect(root,provider)
+                self.assertEqual(first[-1]['kind'],'done')
+                self.assertTrue(events(first))
+                self.assertNotIn('PRIVATE_',json.dumps(first))
+                second=collect(root,provider,cursors(first))
+                self.assertEqual(events(second),[])
+
+    def test_kimi_remote_fork_skips_inherited_request_counters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=pathlib.Path(directory)/'wire.jsonl'
+            usage=dict(type='usage.record',model='fixture',time=1792296701000,usage=dict(inputOther=10,output=3,inputCacheRead=0,inputCacheCreation=0))
+            path.write_text(json.dumps(usage)+'\n'+json.dumps(dict(type='forked'))+'\n'+json.dumps(usage)+'\n')
+            first=collect(path,'kimi')
+            self.assertEqual(len(events(first)),1)
+            self.assertEqual(events(collect(path,'kimi',cursors(first))),[])
+
+    def test_zcode_native_sqlite_projection_is_readonly_and_incremental(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory);path=root/'cli/db/db.sqlite';path.parent.mkdir(parents=True)
+            with sqlite3.connect(path) as db:
+                db.execute('CREATE TABLE model_usage(id TEXT,session_id TEXT,model_id TEXT,completed_at INTEGER,input_tokens INTEGER,output_tokens INTEGER,cache_read_input_tokens INTEGER,cache_creation_input_tokens INTEGER,reasoning_tokens INTEGER,provider_total_tokens INTEGER,computed_total_tokens INTEGER,status TEXT,raw_usage_json TEXT)')
+                db.execute("INSERT INTO model_usage VALUES('request','session','qwen',1792297739892,100,25,60,10,5,125,125,'completed','PRIVATE_RESPONSE')")
+            before=path.read_bytes();first=collect(root,'zcode')
+            # Classification uses the same core parser as local SQLite reads.
+            row=native_rows(first)[0]['data']
+            self.assertEqual((row['input'],row['output'],row['read'],row['write'],row['reasoning'],row['providerTotal']),(100,25,60,10,5,125))
+            self.assertNotIn('PRIVATE_RESPONSE',json.dumps(first))
+            self.assertEqual(path.read_bytes(),before)
+            self.assertEqual(native_rows(collect(root,'zcode',cursors(first))),[])
+
+    def test_native_adapters_keep_standard_jsonl_exports_compatible(self):
+        for provider in ['qoder','grok','kimi','codebuddy','pi','omp','opencode','zcode','deepseek-harness']:
+            with self.subTest(provider=provider),tempfile.TemporaryDirectory() as directory:
+                path=pathlib.Path(directory)/'export.jsonl';path.write_text(record(10))
+                self.assertEqual(events(collect(path,provider))[0]['tokens']['input'],10)
+
     def test_disabled_precision_skips_parent_resolution_and_mode_change_replays(self):
         with tempfile.TemporaryDirectory() as root:
             home = pathlib.Path(root)

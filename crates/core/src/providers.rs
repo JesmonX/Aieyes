@@ -433,6 +433,9 @@ impl Store {
                     tx.execute("INSERT INTO events SELECT ?1,provider,account_id,model,stamp,?2,cost,priced_tokens,price FROM events WHERE id=?3",
                     params![event.id, serde_json::to_string(&event)?, old_id])?;
                 }
+                if event.provider == "codebuddy" {
+                    crate::native_credits::rekey(self, &old_id, &event.id)?;
+                }
                 tx.execute("INSERT OR IGNORE INTO event_sources SELECT ?1,source_id FROM event_sources WHERE event_id=?2", params![event.id, old_id])?;
                 tx.execute("DELETE FROM event_sources WHERE event_id=?1", [&old_id])?;
                 tx.execute("DELETE FROM events WHERE id=?1", [&old_id])?;

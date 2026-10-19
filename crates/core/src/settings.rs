@@ -409,9 +409,7 @@ impl Engine {
                         }
                     ),
                     provider: provider.into(),
-                    path: crate::contracts::provider(provider)
-                        .map_or("", |p| p.default_path)
-                        .into(),
+                    path: crate::provider_paths::default_path(provider, machine != "local")?,
                     host_id: (machine != "local").then(|| machine.clone()),
                     ..Default::default()
                 });

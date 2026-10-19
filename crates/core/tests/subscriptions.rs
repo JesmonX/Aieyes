@@ -22,6 +22,305 @@ fn parse(provider: &str, mode: &str, data: Value) -> anyhow::Result<QuotaSnapsho
     )
 }
 
+fn kimi_wallet_body() -> Value {
+    json!({"usages":{"limit_5h":{"used_ratio":0.25}},"boosterWallet":{
+        "balance":{"type":"BOOSTER","amount":"1234000000","amountLeft":"1000000000"},
+        "monthlyChargeLimitEnabled":true,"monthlyChargeLimit":{"priceInCents":"1500","currency":"USD"},
+        "monthlyUsed":{"priceInCents":123,"currency":"USD"}},"ignored":"PRIVATE_RESPONSE"})
+}
+
+#[test]
+fn kimi_wallet_uses_exact_money_units_separately_from_subscription_windows() {
+    for mode in ["cn", "global"] {
+        let q = parse("kimi", mode, kimi_wallet_body()).unwrap();
+        let wallet = q.extra_usage.as_ref().unwrap();
+        assert_eq!(wallet.currency, "USD");
+        assert_eq!(wallet.total, "12.34");
+        assert_eq!(wallet.balance.as_deref(), Some("10.00"));
+        assert_eq!(wallet.monthly_limit_enabled, Some(true));
+        assert_eq!(wallet.monthly_limit.as_deref(), Some("15.00"));
+        assert_eq!(wallet.monthly_used.as_deref(), Some("1.23"));
+        assert_eq!(q.windows.len(), 1);
+        assert_eq!(q.windows[0].used_percent, 25.);
+        assert!(q.balances.is_empty() && q.credits.is_none() && q.is_available.is_none());
+        assert!(q.metadata_error.is_none());
+        assert!(!serde_json::to_string(&q).unwrap().contains("PRIVATE"));
+    }
+}
+
+#[test]
+fn kimi_wallet_preserves_zero_debt_and_subcent_amounts_without_float_rounding() {
+    for (raw, expected) in [
+        (json!(0), "0.00"),
+        (json!(1), "0.00000001"),
+        (json!(1.0), "0.00000001"),
+        (json!(-1), "-0.00000001"),
+        (json!("9007199254740993"), "90071992.54740993"),
+    ] {
+        let mut body = kimi_wallet_body();
+        body["usages"] = json!({});
+        body["boosterWallet"]["balance"]["amountLeft"] = raw;
+        body["boosterWallet"]["monthlyChargeLimit"]["priceInCents"] = json!(0);
+        body["boosterWallet"]["monthlyUsed"]["priceInCents"] = json!(0);
+        let q = parse("kimi", "cn", body).unwrap();
+        let wallet = q.extra_usage.unwrap();
+        assert_eq!(wallet.balance.as_deref(), Some(expected));
+        assert_eq!(wallet.monthly_limit.as_deref(), Some("0.00"));
+        assert_eq!(wallet.monthly_used.as_deref(), Some("0.00"));
+        assert!(q.windows.is_empty() && q.is_available.is_none());
+    }
+}
+
+#[test]
+fn kimi_wallet_missing_or_invalid_metadata_never_becomes_a_zero_balance() {
+    let mut body = kimi_wallet_body();
+    body["boosterWallet"]["balance"]
+        .as_object_mut()
+        .unwrap()
+        .remove("amountLeft");
+    body["boosterWallet"]
+        .as_object_mut()
+        .unwrap()
+        .remove("monthlyChargeLimitEnabled");
+    body["boosterWallet"]
+        .as_object_mut()
+        .unwrap()
+        .remove("monthlyUsed");
+    let q = parse("kimi", "cn", body).unwrap();
+    let wallet = q.extra_usage.unwrap();
+    assert!(
+        wallet.balance.is_none()
+            && wallet.monthly_limit_enabled.is_none()
+            && wallet.monthly_used.is_none()
+    );
+    assert!(q.metadata_error.is_some());
+    assert_eq!(q.windows.len(), 1);
+    for invalid in [
+        json!({}),
+        json!({"balance":{"type":"OTHER","amount":100}}),
+        json!({"balance":{"type":"BOOSTER","amount":"NaN"}}),
+        json!({"balance":{"type":"BOOSTER","amount":-1}}),
+    ] {
+        let mut body = kimi_wallet_body();
+        body["boosterWallet"] = invalid;
+        let q = parse("kimi", "cn", body).unwrap();
+        assert!(q.extra_usage.is_none());
+        assert!(q.metadata_error.is_some());
+        assert_eq!(q.windows.len(), 1);
+    }
+    for invalid in [
+        json!("NaN"),
+        json!("1e8"),
+        json!(1.5),
+        json!(9_007_199_254_740_992.0),
+        json!({"private":"PRIVATE"}),
+    ] {
+        let mut body = kimi_wallet_body();
+        body["boosterWallet"]["balance"]["amountLeft"] = invalid;
+        let q = parse("kimi", "cn", body).unwrap();
+        assert!(q.extra_usage.unwrap().balance.is_none());
+        assert!(q.metadata_error.is_some());
+    }
+    let mut body = kimi_wallet_body();
+    body["boosterWallet"]["monthlyUsed"]["currency"] = json!("CNY");
+    let q = parse("kimi", "cn", body).unwrap();
+    assert!(q.extra_usage.is_none() && q.metadata_error.is_some());
+    assert_eq!(q.windows.len(), 1);
+    let mut body = kimi_wallet_body();
+    body["usages"] = json!({"limit_5h":{"used_ratio":"invalid"}});
+    let q = parse("kimi", "cn", body).unwrap();
+    assert!(q.windows.is_empty() && q.extra_usage.is_some() && q.metadata_error.is_some());
+}
+
+#[test]
+fn kimi_wallet_absence_and_inactive_zero_funding_remain_absent() {
+    for wallet in [
+        Value::Null,
+        json!({"balance":{"type":"BOOSTER","amount":0,"amountLeft":0}}),
+    ] {
+        let mut body = kimi_wallet_body();
+        body["boosterWallet"] = wallet;
+        let q = parse("kimi", "cn", body).unwrap();
+        assert!(q.extra_usage.is_none() && q.metadata_error.is_none());
+    }
+    for currency in ["CNY", "EUR", "JPY", "usd"] {
+        let mut body = kimi_wallet_body();
+        body["boosterWallet"]["monthlyChargeLimitEnabled"] = json!(false);
+        body["boosterWallet"]["monthlyChargeLimit"]["currency"] = json!(currency);
+        body["boosterWallet"]["monthlyUsed"]["currency"] = json!(currency);
+        let q = parse("kimi", "cn", body).unwrap();
+        assert_eq!(
+            q.extra_usage.as_ref().unwrap().monthly_limit_enabled,
+            Some(false)
+        );
+        assert_eq!(
+            q.extra_usage.unwrap().currency,
+            currency.to_ascii_uppercase()
+        );
+    }
+}
+
+#[test]
+fn kimi_wallet_only_snapshots_survive_cache_dashboard_and_failed_refresh() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = aieyes_core::store::Store::open(temp.path()).unwrap();
+    let settings = Settings {
+        accounts: vec![Account {
+            id: "account".into(),
+            provider: "kimi".into(),
+            name: "Kimi wallet".into(),
+            quota_enabled: true,
+            ..Default::default()
+        }],
+        sources: vec![Source {
+            id: "source".into(),
+            account_id: "account".into(),
+            provider: "kimi".into(),
+            enabled: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    store.save_settings(&settings).unwrap();
+    let mut body = kimi_wallet_body();
+    body["usages"] = json!({});
+    let q = parse("kimi", "cn", body).unwrap();
+    store.quota(&q).unwrap();
+    let first = store.dashboard(&Filter::default()).unwrap();
+    assert_eq!(first.quotas.len(), 1);
+    assert_eq!(first.quotas[0].extra_usage, q.extra_usage);
+    store
+        .quota(&QuotaSnapshot {
+            provider: "kimi".into(),
+            account_id: "account".into(),
+            source_id: "source".into(),
+            error: Some("query failed".into()),
+            updated_at: q.updated_at + 1,
+            ..Default::default()
+        })
+        .unwrap();
+    let failed = store.dashboard(&Filter::default()).unwrap();
+    assert_eq!(failed.quotas[0].extra_usage, q.extra_usage);
+    assert_eq!(failed.quotas[0].updated_at, q.updated_at);
+    assert_eq!(failed.quotas[0].error.as_deref(), Some("query failed"));
+    let mut legacy = serde_json::to_value(&q).unwrap();
+    legacy.as_object_mut().unwrap().remove("extraUsage");
+    assert!(
+        serde_json::from_value::<QuotaSnapshot>(legacy)
+            .unwrap()
+            .extra_usage
+            .is_none()
+    );
+}
+
+#[test]
+fn qoder_native_zero_account_quota_does_not_report_unused_capacity_or_session_credits() {
+    let v = json!({"userId":"fixture-user", "userType":"personal_standard", "isQuotaExceeded":true,
+        "userQuota":{"total":0,"used":0,"remaining":0,"percentage":0,"unit":"credits"},
+        "session":{"total_credits":999}});
+    let q = parse("qoder", "cli", v.clone()).unwrap();
+    assert_eq!(q.windows.len(), 1);
+    assert_eq!(q.windows[0].used_percent, 100.);
+    assert!(q.windows[0].name.contains("剩余 0"));
+    assert_eq!(q.is_available, Some(false));
+    assert!(!q.identity.as_ref().unwrap().key.contains("fixture-user"));
+    assert!(q.balances.is_empty());
+    let multiple = json!({"userId":"fixture-user", "userType":"pro", "userQuota":{"total":100,"used":25,"remaining":75,"unit":"credits"},"addOnQuota":{"total":20,"used":5,"remaining":15,"unit":"credits"},"orgResourcePackage":{"cap":500,"used":300,"remaining":200,"unit":"credits","available":false}});
+    let q = parse("qoder", "cli", multiple).unwrap();
+    assert_eq!(q.windows.len(), 3);
+    assert_eq!(q.windows[0].used_percent, 25.);
+    assert_eq!(q.windows[2].used_percent, 60.);
+    assert_eq!(q.is_available, Some(true));
+    for body in [
+        json!({"session":{"total_credits":0}}),
+        json!({"userId":"fixture-user"}),
+        json!({"userId":"fixture-user","userQuota":{"total":10,"used":0,"unit":"credits"}}),
+        json!({"userId":"fixture-user","userQuota":{"total":10,"used":0,"remaining":10,"unit":"tokens"}}),
+    ] {
+        assert!(parse("qoder", "cli", body).is_err());
+    }
+}
+
+#[test]
+fn harness_official_backend_balance_preserves_decimal_strings_and_provider_identity() {
+    let body = json!({"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00000001","granted_balance":"10.00000001","topped_up_balance":"100.00"}]});
+    let q = parse("deepseek-harness", "api", body.clone()).unwrap();
+    assert_eq!(q.provider, "deepseek-harness");
+    assert_eq!(q.account_id, "account");
+    assert_eq!(q.is_available, Some(true));
+    assert!(q.windows.is_empty());
+    assert_eq!(q.balances[0].total, "110.00000001");
+    assert_eq!(q.balances[0].granted, "10.00000001");
+    let mut invalid = body.clone();
+    invalid["balance_infos"][0]["total_balance"] = json!("NaN");
+    assert!(parse("deepseek-harness", "api", invalid).is_err());
+    let mut empty = body.clone();
+    empty["balance_infos"] = json!([]);
+    assert!(parse("deepseek-harness", "api", empty).is_err());
+    let mut unavailable = body;
+    unavailable["is_available"] = json!(false);
+    assert_eq!(
+        parse("deepseek-harness", "api", unavailable)
+            .unwrap()
+            .is_available,
+        Some(false)
+    );
+    assert!(parse("deepseek-harness", "self-hosted", json!({"remaining":100})).is_err());
+}
+
+#[test]
+fn kimi_subscription_ratios_and_reset_times_remain_separate_from_local_tokens() {
+    let q = parse(
+        "kimi",
+        "cn",
+        json!({"goods_version":2,"usages":{
+            "limit_5h":{"used_ratio":0.3,"reset_time":"2026-10-18T18:00:00Z"},
+            "limit_7d":{"used_ratio":"0","reset_time":"2026-10-25T00:00:00Z"},
+            "limit_month_total":{"used_ratio":0.4},
+            "limit_month_code":{"used_ratio":0.25}
+        }}),
+    )
+    .unwrap();
+    assert_eq!(q.windows.len(), 4);
+    assert_eq!(q.windows[0].used_percent, 30.);
+    assert_eq!(q.windows[1].used_percent, 0.);
+    assert_eq!(q.windows[2].used_percent, 40.);
+    assert_eq!(q.windows[3].used_percent, 25.);
+    assert_eq!(
+        q.windows[0].resets_at,
+        timestamp(&json!("2026-10-18T18:00:00Z"))
+    );
+    assert!(q.windows[2].window_minutes.is_none());
+    assert!(q.balances.is_empty());
+    assert!(q.plan.is_none());
+    for invalid in [
+        json!({}),
+        json!({"usages":{}}),
+        json!({"usages":{"limit_5h":{"used_ratio":-1}}}),
+        json!({"usages":{"limit_5h":{"used_ratio":"NaN"}}}),
+    ] {
+        assert!(parse("kimi", "cn", invalid).is_err());
+    }
+    let config = SubscriptionConfig {
+        mode: "global".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        subscriptions::endpoint("kimi", &config).unwrap(),
+        "https://api.kimi.ai/coding/v1/usages"
+    );
+    assert!(
+        subscriptions::endpoint(
+            "kimi",
+            &SubscriptionConfig {
+                mode: "custom".into(),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+}
+
 #[test]
 fn zai_credit_windows_preserve_units_resets_and_observed_zero() {
     let q = parse("zcode", "global", json!({"success":true,"data":{"planName":"Pro","limits":[

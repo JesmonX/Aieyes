@@ -11,7 +11,7 @@ pub(crate) fn setup(db: &rusqlite::Connection) -> Result<()> {
 fn configuration(source: &Source, host: &Host, precise: bool) -> String {
     hash(
         &serde_json::to_string(&(
-            usage::PARSER_VERSION,
+            usage::parser_version(&source.provider),
             source.provider == "codex" && precise,
             &source.provider,
             &source.path,
@@ -52,7 +52,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         "DELETE FROM remote_cursors WHERE source_id=?1 AND configuration<>?2",
         params![source.id, config],
     )?;
-    let cursors = if full {
+    let mut cursors = if full {
         serde_json::Map::new()
     } else {
         let mut q = store.db.prepare(
@@ -70,6 +70,21 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         drop(q);
         cursors
     };
+    if matches!(source.provider.as_str(), "opencode" | "zcode") {
+        for (path, cursor) in &mut cursors {
+            let pending = |after: i64| -> Result<Vec<i64>> {
+                Ok(store.db.prepare("SELECT row_id FROM native_pending WHERE source_id=?1 AND path=?2 AND row_id>?3 ORDER BY row_id LIMIT 257")?
+                    .query_map(params![source.id,path,after],|r|r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            };
+            let mut rows = pending(cursor["pendingAfter"].as_i64().unwrap_or(0))?;
+            if rows.is_empty() {
+                rows = pending(0)?;
+            }
+            cursor["pendingMore"] = json!(rows.len() > 256);
+            rows.truncate(256);
+            cursor["pending"] = json!(rows);
+        }
+    }
     let route_key = format!("remote-route-cursor:{}:{config}", source.id);
     let route_cursor: Option<String> = store
         .db
@@ -145,6 +160,25 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
     result.as_object_mut().unwrap().remove("protocol");
     result["newEvents"] = json!(count);
     result["updatedAt"] = json!(now());
+    if matches!(source.provider.as_str(), "opencode" | "zcode") {
+        let states = store
+            .db
+            .prepare("SELECT state FROM remote_cursors WHERE source_id=?1 AND configuration=?2")?
+            .query_map(params![source.id, config], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut malformed = 0;
+        for raw in states {
+            let state: ParseState = serde_json::from_str(&raw)?;
+            malformed += state.database_checkpoint.map_or(0, |c| c.malformed);
+        }
+        result["malformedRecords"] = json!(malformed);
+        if malformed > 0 {
+            result["partial"] = json!(true);
+            if let Some(issues) = result["issues"].as_array_mut() {
+                issues.push(json!({"code":"invalidRecord","message":"部分原生统计格式无效，将在记录变化后重试；已保留其他计量。"}));
+            }
+        }
+    }
     let tx = store.write_transaction()?;
     crate::import::current_settings(&store, settings, source)?;
     store.source_status(&source.id, &result)?;
@@ -174,12 +208,99 @@ fn apply_batch(
         .map(|s| serde_json::from_str::<ParseState>(&s))
         .transpose()?
         .unwrap_or_else(|| ParseState {
-            session_id: format!("{}:{}", source.id, path),
+            session_id: if source.provider == "kimi" {
+                crate::native_agents::session_id(Path::new(path))
+            } else {
+                format!("{}:{}", source.id, path)
+            },
             codex_precise_counting: Some(settings.codex_precise_counting),
             ..Default::default()
         });
     let mut count = 0;
+    if let Some(rows) = frame["nativeRows"].as_array() {
+        ensure!(
+            matches!(source.provider.as_str(), "opencode" | "zcode"),
+            "原生统计来源类型不一致"
+        );
+        ensure!(rows.len() <= 256, "原生统计批次过大");
+        let mut checkpoint = state.database_checkpoint.take().unwrap_or_default();
+        if frame["nativeReset"] == true {
+            store.db.execute(
+                "DELETE FROM native_pending WHERE source_id=?1 AND path=?2",
+                params![source.id, path],
+            )?;
+            checkpoint.malformed = 0;
+        }
+        if let Some(gone) = frame["gone"].as_array() {
+            ensure!(gone.len() <= 256, "原生统计重试批次过大");
+            for rowid in gone {
+                let rowid = rowid.as_i64().context("原生统计行号无效")?;
+                let invalid: Option<bool> = store.db.query_row("DELETE FROM native_pending WHERE source_id=?1 AND path=?2 AND row_id=?3 RETURNING invalid",params![source.id,path,rowid],|r|r.get(0)).optional()?;
+                checkpoint.malformed = checkpoint
+                    .malformed
+                    .saturating_sub(u64::from(invalid == Some(true)));
+            }
+        }
+        for row in rows {
+            let rowid = row["rowid"]
+                .as_i64()
+                .filter(|n| *n > 0)
+                .context("原生统计行号无效")?;
+            let record = if row["data"]["invalidMetadata"] == true {
+                Err(anyhow::anyhow!("原生统计元数据无效"))
+            } else if source.provider == "opencode" {
+                crate::opencode::record(source, row["id"].as_str().unwrap_or(""), &row["data"])
+            } else {
+                crate::zcode::record(source, row["id"].as_str().unwrap_or(""), &row["data"])
+            };
+            let invalid = record.is_err();
+            let pending = invalid || matches!(record, Ok(crate::native_db::Record::Pending));
+            if let Ok(crate::native_db::Record::Event(event)) = record
+                && store.put_event(&event, prices, settings)?
+            {
+                count += 1;
+            }
+            let was_invalid: Option<bool> = store.db.query_row("SELECT invalid FROM native_pending WHERE source_id=?1 AND path=?2 AND row_id=?3",params![source.id,path,rowid],|r|r.get(0)).optional()?;
+            checkpoint.malformed = checkpoint
+                .malformed
+                .saturating_sub(u64::from(was_invalid == Some(true)))
+                + u64::from(invalid);
+            if pending {
+                store.db.execute("INSERT INTO native_pending(source_id,path,row_id,invalid) VALUES(?1,?2,?3,?4) ON CONFLICT(source_id,path,row_id) DO UPDATE SET invalid=excluded.invalid",params![source.id,path,rowid,invalid])?;
+            } else {
+                store.db.execute(
+                    "DELETE FROM native_pending WHERE source_id=?1 AND path=?2 AND row_id=?3",
+                    params![source.id, path, rowid],
+                )?;
+            }
+        }
+        state.database_checkpoint = Some(checkpoint);
+    }
     for row in frame["events"].as_array().context("远程批次缺少事件")? {
+        if source.provider == "deepseek-harness" {
+            crate::harness_history::prepare(store, source, row)?;
+        }
+        if source.provider == "opencode" && row["opencode"].is_object() {
+            let row = &row["opencode"];
+            let event = crate::opencode::event(
+                source,
+                row["id"].as_str().context("OpenCode 请求标识缺失")?,
+                row["session"].as_str().context("OpenCode 会话标识缺失")?,
+                &row["data"],
+            )?;
+            if store.put_event(&event, prices, settings)? {
+                count += 1;
+            }
+            continue;
+        }
+        if source.provider == "grok" && row.get("method").is_some() {
+            for event in crate::native_agents::grok_events(source, row) {
+                if store.put_event(&event, prices, settings)? {
+                    count += 1;
+                }
+            }
+            continue;
+        }
         let parsed = usage::parse(source, &mut state, row);
         if settings.codex_precise_counting
             && state.first_inherited_count
@@ -194,7 +315,13 @@ fn apply_batch(
             store.put_counter_correction(&correction, prices, settings)?
                 && correction.event.tokens.total() > 0
         } else if let Some(event) = parsed {
-            store.put_event(&event, prices, settings)?
+            if source.provider == "deepseek-harness" {
+                crate::harness_history::put(store, &event, row, prices, settings)?
+            } else if matches!(source.provider.as_str(), "pi" | "omp") {
+                crate::pi_history::put(store, &event, &state, prices, settings)?
+            } else {
+                store.put_event(&event, prices, settings)?
+            }
         } else {
             false
         };
@@ -224,6 +351,173 @@ fn apply_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_batches_retry_invalid_and_pending_rows_without_changing_frozen_attribution() {
+        for provider in ["opencode", "zcode"] {
+            let root = tempfile::tempdir().unwrap();
+            let store = Store::open(root.path()).unwrap();
+            let source = Source {
+                id: "native".into(),
+                provider: provider.into(),
+                path: "/fixture".into(),
+                ..Default::default()
+            };
+            store
+                .save_settings(&Settings {
+                    sources: vec![source.clone()],
+                    ..Default::default()
+                })
+                .unwrap();
+            let settings = store.settings().unwrap();
+            let prices = vec![ModelPrice {
+                id: "fixture".into(),
+                input: Some(1.0),
+                output: Some(2.0),
+                cache_read: Some(0.5),
+                ..Default::default()
+            }];
+            let native = |rowid: i64, complete: bool, invalid: bool| {
+                let input = if invalid { -1 } else { 10 };
+                let data = if provider == "opencode" {
+                    json!({"session":"session","role":"assistant","model":"fixture","provider":"backend","completed":if complete { json!(1792296856613_u64) } else { Value::Null },"tokens":{"input":input,"output":2,"reasoning":1,"cache":{"read":3,"write":0}}})
+                } else {
+                    json!({"id":format!("r{rowid}"),"session":"session","turn":"turn","status":if complete { "completed" } else { "running" },"model":"fixture","completed":if complete { 1792296856613_u64 } else { 0 },"input":input,"output":3,"read":3,"write":0,"reasoning":1,"providerTotal":16,"computedTotal":16})
+                };
+                json!({"rowid":rowid,"id":format!("r{rowid}"),"data":data})
+            };
+            let first = json!({"path":"native.db","nativeReset":true,"nativeRows":[native(1,true,false),native(2,false,false),native(3,true,true)],"events":[],"cursor":{"offset":3}});
+            assert_eq!(
+                apply_batch(&store, &settings, &source, "config", &prices, &first).unwrap(),
+                1
+            );
+            assert_eq!(
+                store
+                    .db
+                    .query_row("SELECT count(*) FROM native_pending", [], |r| r
+                        .get::<_, u64>(0))
+                    .unwrap(),
+                2
+            );
+            let frozen = store
+                .db
+                .query_row("SELECT cost FROM events", [], |r| r.get::<_, f64>(0))
+                .unwrap();
+            assert!(frozen > 0.0);
+            let state = || {
+                let raw: String = store
+                    .db
+                    .query_row("SELECT state FROM remote_cursors", [], |r| r.get(0))
+                    .unwrap();
+                serde_json::from_str::<ParseState>(&raw)
+                    .unwrap()
+                    .database_checkpoint
+                    .unwrap()
+                    .malformed
+            };
+            assert_eq!(state(), 1);
+            let second = json!({"path":"native.db","nativeRows":[native(2,true,false)],"gone":[3],"events":[],"cursor":{"offset":3}});
+            assert_eq!(
+                apply_batch(&store, &settings, &source, "config", &prices, &second).unwrap(),
+                1
+            );
+            assert_eq!(state(), 0);
+            assert_eq!(
+                store
+                    .db
+                    .query_row("SELECT count(*) FROM native_pending", [], |r| r
+                        .get::<_, u64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                apply_batch(&store, &settings, &source, "config", &prices, &second).unwrap(),
+                0
+            );
+            let mut changed = settings.clone();
+            changed.sources[0].account_id = "new-account".into();
+            changed.accounts.push(Account {
+                id: "new-account".into(),
+                name: "Test account".into(),
+                provider: provider.into(),
+                ..Default::default()
+            });
+            store.save_settings(&changed).unwrap();
+            let changed = store.settings().unwrap();
+            let new_source = &changed.sources[0];
+            let replay = json!({"path":"native.db","nativeRows":[native(1,true,false)],"events":[],"cursor":{"offset":3}});
+            let new_prices = [ModelPrice {
+                id: "fixture".into(),
+                input: Some(100.0),
+                output: Some(200.0),
+                ..Default::default()
+            }];
+            assert_eq!(
+                apply_batch(&store, &changed, new_source, "config", &new_prices, &replay).unwrap(),
+                0
+            );
+            let totals: (u64, f64, u64) = store
+                .db
+                .query_row(
+                    "SELECT count(*),sum(cost),sum(account_id='') FROM events",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(totals, (2, frozen * 2.0, 2));
+            let mut moved = changed.clone();
+            moved.sources[0].path = "/another".into();
+            store.save_settings(&moved).unwrap();
+            assert!(apply_batch(&store, &changed, new_source, "config", &prices, &replay).is_err());
+        }
+    }
+    #[test]
+    fn harness_projected_batches_keep_native_identity_seed_boundary_and_replay_safety() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let source = Source {
+            id: "harness".into(),
+            provider: "deepseek-harness".into(),
+            path: "/fixture".into(),
+            ..Default::default()
+        };
+        store
+            .save_settings(&Settings {
+                sources: vec![source.clone()],
+                ..Default::default()
+            })
+            .unwrap();
+        let settings = store.settings().unwrap();
+        let prices = store.prices().unwrap();
+        let usage = |seq: u64, input: u64| json!({"type":"assistant/message","seq":seq,"time":1792296856613_u64,"data":{"turn":2,"message":{"source":{"model":"fixture"}},"usage":{"inputTokens":input,"outputTokens":2}}});
+        let first = json!({"kind":"batch","path":"session.v4.jsonl.zstd","reset":true,"events":[{"type":"session","version":4,"id":"native-session","isSeeded":true},usage(1,999),{"type":"session/end-seed"},usage(10,11)],"cursor":null});
+        let second = json!({"kind":"batch","path":"session.v4.jsonl.zstd","reset":true,"events":[{"type":"session","version":4,"id":"native-session","isSeeded":false},usage(11,22)],"cursor":{"harness":"fingerprint"}});
+        assert_eq!(
+            apply_batch(&store, &settings, &source, "config", &prices, &first).unwrap(),
+            1
+        );
+        assert_eq!(
+            apply_batch(&store, &settings, &source, "config", &prices, &second).unwrap(),
+            1
+        );
+        assert_eq!(
+            apply_batch(&store, &settings, &source, "config", &prices, &second).unwrap(),
+            0
+        );
+        let mut query = store.db.prepare("SELECT payload FROM events").unwrap();
+        let rows = query
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| serde_json::from_str::<Value>(&r.unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r["sessionId"] == "native-session"));
+        assert_eq!(
+            rows.iter()
+                .map(|r| r["tokens"]["input"].as_u64().unwrap())
+                .sum::<u64>(),
+            33
+        );
+    }
     #[test]
     fn two_sources_commit_batches_while_configuration_and_quota_are_written() {
         let root = tempfile::tempdir().unwrap();

@@ -16,6 +16,11 @@ pub fn default_name(provider: &str) -> String {
         "grok" => "Grok 账户",
         "cursor" => "Cursor 账户",
         "opencode" => "OpenCode 账户",
+        "kimi" => "Kimi Code 账户",
+        "deepseek-harness" => "DeepSeek Harness 账户",
+        "codebuddy" => "CodeBuddy 账户",
+        "pi" => "Pi 账户",
+        "omp" => "Oh My Pi 账户",
         _ => "自定义 Agent 账户",
     }
     .into()
@@ -777,6 +782,15 @@ impl Engine {
         }
         if source.subscription.is_some() && account.uses_source(source) {
             let quota = crate::subscriptions::read(source, settings)?;
+            if source
+                .subscription
+                .as_ref()
+                .is_some_and(|c| crate::subscriptions::native_cli(&source.provider, c))
+            {
+                return Ok(
+                    json!({"current":true,"credential":true,"authenticated":true,"identityConfirmed":true,"identity":quota.identity,"checkedAt":now(),"note":"已确认 Qoder CLI 当前登录账户","plan":quota.plan}),
+                );
+            }
             return Ok(
                 json!({"current":null,"credential":true,"authenticated":true,"identityConfirmed":false,"checkedAt":now(),"note":"已验证查询凭据；客户端当前账户待确认","plan":quota.plan}),
             );

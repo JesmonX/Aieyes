@@ -76,8 +76,15 @@ pub fn paths(source: &Source) -> Result<Vec<PathBuf>> {
     let root = expand(&source.path);
     anyhow::ensure!(root.exists(), "数据目录不存在");
     if root.is_file() {
+        if source.provider == "cursor" && cursor_private_history(&root) {
+            return Ok(Vec::new());
+        }
         return Ok(vec![root]);
     }
+    let grok_native = source.provider == "grok" && root.join("sessions").is_dir();
+    let cursor_native = source.provider == "cursor"
+        && (root.file_name().is_some_and(|name| name == ".cursor")
+            || cursor_private_history(&root));
     let roots = match source.provider.as_str() {
         "codex"
             if (source.codex_home_id.is_some()
@@ -101,7 +108,12 @@ pub fn paths(source: &Source) -> Result<Vec<PathBuf>> {
                 .filter(|p| p.exists())
                 .collect()
         }
-        "claude" if root.join("projects").exists() => vec![root.join("projects")],
+        "claude" | "codebuddy" | "qoder" if root.join("projects").exists() => {
+            vec![root.join("projects")]
+        }
+        "kimi" | "grok" | "pi" | "omp" if root.join("sessions").exists() => {
+            vec![root.join("sessions")]
+        }
         _ => vec![root],
     };
     let mut files = Vec::new();
@@ -109,10 +121,21 @@ pub fn paths(source: &Source) -> Result<Vec<PathBuf>> {
         for entry in walkdir::WalkDir::new(dir)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| e.file_name() != ".aieyes")
+            .filter_entry(|e| {
+                e.file_name() != ".aieyes"
+                    && (!cursor_native
+                        || e.depth() != 1
+                        || !["chats", "acp-sessions", "projects"]
+                            .iter()
+                            .any(|name| e.file_name() == *name))
+            })
         {
             let e = entry.context("读取数据目录失败")?;
-            if e.file_type().is_file() && e.path().extension().is_some_and(|s| s == "jsonl") {
+            if e.file_type().is_file()
+                && e.path().extension().is_some_and(|s| s == "jsonl")
+                && (source.provider != "kimi" || e.file_name() == "wire.jsonl")
+                && (!grok_native || e.file_name() == "updates.jsonl")
+            {
                 files.push(e.path().to_path_buf());
             }
         }
@@ -146,10 +169,26 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
             crate::antigravity::scan(store, settings, source)
         };
     }
+    if source.provider == "zcode"
+        && let Some(path) = crate::zcode::database(&source.path)
+    {
+        return if full {
+            crate::zcode::rescan(store, settings, source, &path)
+        } else {
+            crate::zcode::scan(store, settings, source, &path)
+        };
+    }
     if source.provider == "opencode"
         && let Some(path) = crate::opencode::database(&source.path)
     {
-        return crate::opencode::scan(store, settings, source, &path);
+        return if full {
+            crate::opencode::rescan(store, settings, source, &path)
+        } else {
+            crate::opencode::scan(store, settings, source, &path)
+        };
+    }
+    if source.provider == "deepseek-harness" {
+        return crate::native_agents::scan_dsh(store, settings, source, full);
     }
     let prices = store.prices()?;
     let files = paths(source)?;
@@ -197,12 +236,47 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         result["missingHistoryBases"] = json!(missing_history);
         result["forkHistoryIssues"] = json!(history_issues);
     }
+    if source.provider == "cursor" && cursor_private_history(&expand(&source.path)) {
+        result["partial"] = json!(true);
+        let issues = result
+            .as_object_mut()
+            .unwrap()
+            .entry("issues")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .unwrap();
+        issues.push(json!({"code":"unsupportedNativeHistory","message":"Cursor 私有会话库的请求 Token 暂未接入；仅导入标准 JSONL，上下文占用不计入累计用量。"}));
+    }
     let tx = store.write_transaction()?;
     current_settings(store, settings, source)?;
     store.source_status(&source.id, &result)?;
     tx.commit()?;
     store.repair_history_estimates()?;
     Ok(result)
+}
+
+fn cursor_private_history(root: &Path) -> bool {
+    if root.is_file() {
+        return root
+            .extension()
+            .is_some_and(|ext| ext == "db" || ext == "vscdb");
+    }
+    let cli = [root.join("chats"), root.join("acp-sessions")]
+        .into_iter()
+        .any(|dir| {
+            walkdir::WalkDir::new(dir)
+                .follow_links(false)
+                .max_depth(3)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .any(|e| e.file_type().is_file() && e.file_name() == "store.db")
+        });
+    cli || walkdir::WalkDir::new(root.join("projects"))
+        .follow_links(false)
+        .max_depth(3)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .any(|e| e.file_type().is_dir() && e.file_name() == "agent-transcripts")
 }
 
 fn scan_file(
@@ -218,9 +292,13 @@ fn scan_file(
     let len = file.metadata()?.len();
     let mut reader = BufReader::new(file);
     // A fixed prefix is stable as a file grows. Tiny files are rescanned on the next pass.
-    let mut prefix = vec![0u8; len.min(128) as usize];
-    reader.read_exact(&mut prefix)?;
-    let signature = hash(&String::from_utf8_lossy(&prefix));
+    let signature = if source.provider == "omp" {
+        crate::pi_history::signature(&mut reader, len)?
+    } else {
+        let mut prefix = vec![0u8; len.min(128) as usize];
+        reader.read_exact(&mut prefix)?;
+        hash(&String::from_utf8_lossy(&prefix))
+    };
     let key = path.to_string_lossy();
     let cursor = if full {
         None
@@ -243,7 +321,7 @@ fn scan_file(
         Some((s, o, p))
             if s == signature
                 && o <= len
-                && (source.provider != "codex" || p.parser_version == usage::PARSER_VERSION)
+                && p.parser_version == usage::parser_version(&source.provider)
                 && (source.provider != "codex"
                     || p.codex_precise_counting == Some(settings.codex_precise_counting))
                 && !parent_changed =>
@@ -251,9 +329,18 @@ fn scan_file(
             (o, p)
         }
         _ => (
-            0,
+            if source.provider == "kimi" {
+                crate::native_agents::kimi_fork_offset(path)?
+            } else {
+                0
+            },
             ParseState {
-                session_id: format!("{}:{}", source.id, hash(&key)),
+                session_id: if source.provider == "kimi" {
+                    crate::native_agents::session_id(path)
+                } else {
+                    format!("{}:{}", source.id, hash(&key))
+                },
+                parser_version: usage::parser_version(&source.provider),
                 codex_precise_counting: Some(settings.codex_precise_counting),
                 ..Default::default()
             },
@@ -309,6 +396,14 @@ fn scan_file(
         for line in rows {
             match serde_json::from_slice::<Value>(&line) {
                 Ok(v) => {
+                    if source.provider == "grok" && v.get("method").is_some() {
+                        for event in crate::native_agents::grok_events(source, &v) {
+                            if store.put_event(&event, prices, settings)? {
+                                inserted += 1;
+                            }
+                        }
+                        continue;
+                    }
                     let baseline = history.as_deref_mut().and_then(|r| r.metadata(&v));
                     let parsed = usage::parse(source, &mut state, &v);
                     if state.first_inherited_count
@@ -320,7 +415,11 @@ fn scan_file(
                         store.put_counter_correction(&correction, prices, settings)?
                             && correction.event.tokens.total() > 0
                     } else if let Some(e) = parsed {
-                        store.put_event(&e, prices, settings)?
+                        if matches!(source.provider.as_str(), "pi" | "omp") {
+                            crate::pi_history::put(store, &e, &state, prices, settings)?
+                        } else {
+                            store.put_event(&e, prices, settings)?
+                        }
                     } else {
                         false
                     };

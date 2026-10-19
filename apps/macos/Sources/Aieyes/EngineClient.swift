@@ -539,7 +539,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var sessionSummary: String {
         if let summary = coreSessionSummary { return summary }
         if sessionsUnavailable { return "会话状态不可用" }
-        if !settings.sources.contains(where: { settings.sourceEnabled($0) && ["codex", "claude", "antigravity"].contains($0.provider) }) { return "未接入会话状态" }
+        if !settings.sources.contains(where: { settings.sourceEnabled($0) && ["codex", "claude", "antigravity", "kimi", "codebuddy", "deepseek-harness", "grok", "zcode", "qoder", "opencode"].contains($0.provider) }) { return "未接入会话状态" }
         return activeSessions.isEmpty ? "无活跃会话" : "\(activeSessions.count) 个活跃会话"
     }
     func manageSessionHooks(sourceID: String, action: String) async throws -> [SessionHookStatus] {

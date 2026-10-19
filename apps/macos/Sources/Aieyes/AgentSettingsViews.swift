@@ -63,7 +63,7 @@ struct AgentMachinesSection: View {
             })).toggleStyle(.checkbox).disabled(!agent.enabled || unbound || !available).lineLimit(2).help(name)
             Spacer(minLength: 4)
             Button("目录 \(sources.count)") { directories = .init(provider: agent.provider, machine: id) }
-            if !unbound { MachineSessionStatus(live: model.live, provider: agent.provider, sources: sources, collecting: sources.contains { model.settings.sourceEnabled($0) }) { hooks = .init(provider: agent.provider, machine: id) } }
+            if !unbound { MachineSessionStatus(live: model.live, provider: agent.provider, sources: sources.filter { $0.subscription == nil }, collecting: sources.contains { $0.subscription == nil && model.settings.sourceEnabled($0) }) { hooks = .init(provider: agent.provider, machine: id) } }
             Text(unbound || !available || !agent.enabled || !agent.machineIds.contains(id) || !sources.contains(where: { model.settings.sourceEnabled($0) }) ? "估值暂停" : enabled == 0 ? "估值已关闭" : "估值 \(enabled)/\(sources.count)").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize()
             if !unbound {
                 Menu {
@@ -91,13 +91,13 @@ private struct MachineSessionStatus: View {
         if sources.isEmpty { return "会话监测未启用" }
         if !collecting { return "采集已暂停" }
         let rows = live.sources.filter { row in sources.contains { $0.id == row.sourceId } }
-        if provider == "codex" { return rows.count == sources.count && rows.allSatisfy { $0.state == "healthy" } ? "日志接入" : "日志待确认" }
+        if ["codex", "kimi", "codebuddy", "deepseek-harness", "grok", "qoder", "opencode", "pi", "omp"].contains(provider) { return rows.count == sources.count && rows.allSatisfy { $0.state == "healthy" } ? "日志接入" : "日志待确认" }
         if rows.contains(where: { $0.hooks == "error" }) { return "接入失败" }
         if rows.contains(where: { $0.hooks == "disabled" }) { return "实时监测已停用" }
         return rows.count == sources.count && rows.allSatisfy { $0.hooks == "installed" } ? "会话监测已启用" : "等待监测安装"
     }
     var body: some View {
-        if ["codex", "claude", "antigravity"].contains(provider) { Button(label, action: open).disabled(sources.isEmpty).font(AppFont.secondary) }
+        if ["codex", "claude", "antigravity", "cursor", "kimi", "codebuddy", "deepseek-harness", "grok", "zcode", "qoder", "opencode", "pi", "omp"].contains(provider) { Button(label, action: open).disabled(sources.isEmpty).font(AppFont.secondary) }
     }
 }
 private struct MachineSessionHooksView: View {
@@ -107,12 +107,12 @@ private struct MachineSessionHooksView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack { Text("会话监测 · " + model.machineName(machine)).font(AppFont.title); Spacer(); Button("完成") { dismiss() } }
-            if provider == "codex" {
-                Text("从 Codex 日志读取会话状态。").foregroundStyle(.secondary)
+            if ["codex", "kimi", "codebuddy", "deepseek-harness", "grok", "qoder", "opencode", "pi", "omp"].contains(provider) {
+                Text("从 Agent 原生记录读取会话状态。").foregroundStyle(.secondary)
             } else {
-                Text(machine == "local" ? "采集时自动监测会话；停用实时监测后仍读取日志。" : "通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。").foregroundStyle(.secondary)
+                Text(provider == "zcode" ? "实时状态由 ZCode 原生监测提供；停用后仅显示已结算的状态。SSH 监测需要远端 Python 3。" : provider == "cursor" ? "从用户或项目的 .cursor/hooks.json 接收状态；停用后不再接收新状态。原生会话库的 Token 暂未接入，SSH 监测需要远端 Python 3。" : machine == "local" ? "采集时自动监测会话；停用实时监测后仍读取日志。" : "通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。").foregroundStyle(.secondary)
                 ScrollView { LazyVStack(alignment: .leading, spacing: 16) {
-                    ForEach(model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && !$0.unbound }) { source in SessionHookControls(model: model, source: source) }
+                    ForEach(model.settings.sources.filter { $0.provider == provider && $0.subscription == nil && ($0.hostId ?? "local") == machine && !$0.unbound }) { source in SessionHookControls(model: model, source: source) }
                 } }
             }
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogHooksWidth, height: provider == "codex" ? 180 : 400).aieyesAccent()
@@ -143,6 +143,7 @@ struct AgentDirectoriesView: View {
     @SurfaceModel var model: AppModel
     let provider: String, machine: String
     @State private var editing: AgentSource?
+    @State private var newDirectoryError: String?
     @State private var removing: AgentSource?
     @State private var rebinding: AgentSource?
     @State private var error: String?
@@ -161,14 +162,23 @@ struct AgentDirectoriesView: View {
                         Text(source.path).textSelection(.enabled)
                         HStack {
                             if source.unbound { Text("机器未绑定").foregroundStyle(Palette.warn); Button("重新绑定机器") { rebinding = source } }
-                            else { Button("编辑目录") { editing = source } }
+                            else { Button("编辑目录") { newDirectoryError = nil; editing = source } }
                             Button("移除目录配置", role: .destructive) { removing = source }
                         }
                     }
                 }
                 Button("添加目录") {
-                    var source = AgentSource(provider: provider, path: CoreContract.defaultPaths[provider] ?? "")
-                    source.hostId = machine == "local" ? nil : machine; editing = source
+                    Task {
+                        busy = true; error = nil; newDirectoryError = nil; defer { busy = false }
+                        var source = AgentSource(provider: provider, path: "")
+                        source.hostId = machine == "local" ? nil : machine
+                        do {
+                            struct DefaultPath: Decodable { var path: String }
+                            let result: DefaultPath = try await model.engine.call("sources.defaultPath", params: ["provider": provider, "hostId": source.hostId ?? ""])
+                            source.path = result.path
+                        } catch { newDirectoryError = error.localizedDescription }
+                        editing = source
+                    }
                 }.disabled(machine != "local" && !model.settings.hosts.contains { $0.id == machine })
                 Text("配置采集位置，原文件保留。").font(AppFont.secondary).foregroundStyle(.secondary)
                 if machine != "local", let host = model.settings.hosts.first(where: { $0.id == machine }) {
@@ -197,12 +207,13 @@ struct AgentDirectoriesView: View {
         .sheet(item: $rebinding) { source in RebindSourceView(model: model, source: source) }
         .sheet(item: $editing) { source in
             SourceEditor(source: source, hosts: model.settings.hosts, appProxy: model.settings.proxy, testURLs: model.settings.proxyTestUrls) { item in
+                if newDirectoryError != nil && item.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw ClientError.message("请选择实际的原生数据目录后保存") }
                 var params: [String: Any] = ["source": try JSONSerialization.jsonObject(with: JSONEncoder().encode(item))]
                 if sources.contains(where: { $0.id == source.id }) { params["baseSource"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(source)) }
                 let saved: Settings = try await model.engine.call("sources.configure", params: params)
                 model.acceptConfiguration(saved); editing = nil
                 Task { await model.reload() }
-            }
+            }.safeAreaInset(edge: .top) { if let newDirectoryError { ErrorNotice(message: newDirectoryError).padding() } }
         }
         .sheet(item: $removing) { source in
             DangerConfirmation(title: "移除目录配置？", explanation: "仅解除此目录的采集和账户连接；文件、登录凭证及历史记录保留。", affected: [source.path], confirmLabel: "移除配置", cancel: { removing = nil }, confirm: {
@@ -256,7 +267,14 @@ struct AccountsSettingsView: View {
                 }.id("accounts").background(ScrollMemory(key: "settings.agent." + (provider ?? "all")))
                 PersistentSection(key: sectionKey("api"), title: "API 连接", initiallyExpanded: false) {
                     if provider == nil || provider == "codex" { CodexAPISettingsSection(model: model) }
-                    else { Text("此 Agent 的连接凭证在账户设置中管理。").font(AppFont.secondary).foregroundStyle(.secondary) }
+                    else if let provider, ["opencode", "codebuddy", "kimi", "deepseek-harness", "claude", "zcode", "grok", "qoder", "pi", "omp"].contains(provider) { NativeAPISettingsSection(model: model, provider: provider) }
+                    else if let provider, let guidance = CoreContract.apiGuidance[provider] {
+                        Text(guidance["hint"] ?? "").font(AppFont.secondary).foregroundStyle(.secondary)
+                        if let text = guidance["url"], let url = URL(string: text) { Link(guidance["label"] ?? "CLI API 配置说明", destination: url) }
+                        if let text = guidance["configurationUrl"], let url = URL(string: text) { Link("CLI 配置说明", destination: url) }
+                        if let text = guidance["sdkUrl"], let url = URL(string: text) { Link("SDK 本地模型说明", destination: url) }
+                    }
+                    else { Text("原生模型 API 配置尚未接入此表单；订阅限额凭据请在账户设置中管理。").font(AppFont.secondary).foregroundStyle(.secondary) }
                 }.id("api")
                 PersistentSection(key: sectionKey("machines"), title: "机器与目录", detail: "配置采集位置", initiallyExpanded: false) {
                     if let provider, let agent = visibleAgents.first(where: { $0.provider == provider }), provider != "deepseek" { AgentMachinesSection(model: model, agent: agent) }
@@ -437,7 +455,7 @@ struct AccountDevicesView: View {
                         Button("恢复自动选择") { var pref = PanelAccountPreference.decode(panelPreference); pref.providers[account.provider] = .init(); panelPreference = String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8) ?? "{}" }
                     }
                     if account.provider != "codex" {
-                        Button(account.provider == "deepseek" ? "更新 API Key" : "连接机器") {
+                        Button(account.provider == "deepseek" ? "更新 API Key" : CoreContract.subscriptionModes[account.provider] != nil ? "更新额度凭据" : "连接机器") {
                             focusedField = nil
                             guard saveEditedText(force: error != nil) else { return }
                             Task { await saveTask?.value; if error == nil { showingConnection = true } }
@@ -629,6 +647,7 @@ struct AccountConnectionView: View {
     @State private var apiKey = ""
     @State private var useLocalLogin = false
     @State private var subscriptionMode = ""
+    @State private var nativeConfigDir = ""
     @State private var workspaceID = ""
     @State private var preparedKey: (key: String, path: String)?
     @State private var busy = false
@@ -636,19 +655,26 @@ struct AccountConnectionView: View {
     private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && model.settings.sourceEnabled($0) && ($0.accountId.isEmpty || $0.accountId == (account?.id ?? "")) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text(intent == "switch" ? "切换账户" : account == nil ? "添加账户" : provider == "deepseek" ? "更新 API Key" : "连接机器").font(AppFont.title); Spacer(); Button("完成") { dismiss() }.disabled(busy) }.padding(.horizontal, 20).padding(.top, 20)
+            HStack { Text(intent == "switch" ? "切换账户" : account == nil ? "添加账户" : provider == "deepseek" ? "更新 API Key" : CoreContract.subscriptionModes[provider] != nil ? "更新额度凭据" : "连接机器").font(AppFont.title); Spacer(); Button("完成") { dismiss() }.disabled(busy) }.padding(.horizontal, 20).padding(.top, 20)
             Text(Format.provider(provider)).font(AppFont.section).padding(.horizontal, 20)
             if provider == "codex" { CodexAccountsView(model: model, targetAccountID: account?.id, initialSourceID: initialSourceID, intent: intent, onBusyChanged: { busy = $0 }) }
             else {
                 Form {
                     if let modes = CoreContract.subscriptionModes[provider] {
                         Text(CoreContract.subscriptionHints[provider] ?? "").foregroundStyle(.secondary)
-                        Button("打开官方登录 / 用量页") { Task { do { let _: [String: Bool] = try await model.engine.call("subscriptions.openLogin", params: ["provider": provider, "mode": subscriptionMode]) } catch { self.error = error.localizedDescription } } }
-                        Picker("订阅 / 地区", selection: $subscriptionMode) { ForEach(modes.keys.sorted(), id: \.self) { key in Text(modes[key] ?? key).tag(key) } }
-                        TextField("Workspace / Team ID（仅 Console 或 xAI API）", text: $workspaceID)
-                        SecureField("API Key / 登录令牌 / Cookie", text: $apiKey)
+                        if !(provider == "qoder" && subscriptionMode == "cli") {
+                            Button("打开官方登录 / 用量页") { Task { do { let _: [String: Bool] = try await model.engine.call("subscriptions.openLogin", params: ["provider": provider, "mode": subscriptionMode]) } catch { self.error = error.localizedDescription } } }
+                        }
+                        Picker("服务 / 地区", selection: $subscriptionMode) { ForEach(modes.keys.sorted(), id: \.self) { key in Text(modes[key] ?? key).tag(key) } }
+                        if provider == "qoder" && subscriptionMode == "cli" {
+                            TextField("CLI 配置目录（留空跟随客户端）", text: $nativeConfigDir)
+                            Text("读取 CLI 当前登录并绑定账户身份，无需填写密钥。CLI 切换账号后请切回原账户或另建账户。").foregroundStyle(.secondary)
+                        } else {
+                            TextField("Workspace / Team ID（仅 Console 或 xAI API）", text: $workspaceID)
+                            SecureField("API Key / 登录令牌 / Cookie", text: $apiKey)
+                        }
                         if provider == "grok" || provider == "opencode" { Toggle("读取本机已登录凭据（仅 Grok 订阅 / OpenCode Go）", isOn: $useLocalLogin) }
-                        Text("验证成功后保存到系统凭据库；不会切换客户端账户。").foregroundStyle(.secondary)
+                        if !(provider == "qoder" && subscriptionMode == "cli") { Text("验证成功后保存到系统凭据库；不会切换客户端账户。").foregroundStyle(.secondary) }
                     } else if provider == "deepseek" {
                         SecureField("API Key", text: $apiKey)
                         Text("Key 保存在本机，只用于查询账户余额。").foregroundStyle(.secondary)
@@ -660,18 +686,19 @@ struct AccountConnectionView: View {
                     }
                     if account == nil { Text("添加后可修改账户的显示名称。").foregroundStyle(.secondary) }
                     if let error { ErrorNotice(message: error) }
-                    Button(busy ? "保存中…" : account == nil ? "添加账户" : provider == "deepseek" ? "更新 API Key" : "保存连接") { Task { await save() } }.buttonStyle(.aieyesPrimary).disabled(busy)
+                    Button(busy ? "保存中…" : account == nil ? "添加账户" : provider == "deepseek" ? "更新 API Key" : CoreContract.subscriptionModes[provider] != nil ? "保存额度凭据" : "保存连接") { Task { await save() } }.buttonStyle(.aieyesPrimary).disabled(busy)
                 }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).disabled(busy)
             }
         }.frame(width: DesignTokens.dialogAccountWidth, height: 620).interactiveDismissDisabled(busy)
-        .updateDraftGuard("账户连接", snapshot: provider + draftSnapshot(selection.sorted()) + apiKey + subscriptionMode + workspaceID + String(useLocalLogin), dirty: !selection.isEmpty || !apiKey.isEmpty || useLocalLogin || !workspaceID.isEmpty, saving: busy, save: { await save(); return error == nil }, discard: { dismiss() })
+        .updateDraftGuard("账户连接", snapshot: provider + draftSnapshot(selection.sorted()) + apiKey + subscriptionMode + workspaceID + nativeConfigDir + String(useLocalLogin), dirty: !selection.isEmpty || !apiKey.isEmpty || useLocalLogin || !workspaceID.isEmpty || !nativeConfigDir.isEmpty, saving: busy, save: { await save(); return error == nil }, discard: { dismiss() })
         .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
         .onAppear { provider = account?.provider ?? initialProvider ?? (initialSourceID != nil ? "codex" : model.agentConfigurations.first(where: { $0.enabled })?.provider ?? "") }
         .onChange(of: provider) { _, _ in
             selection = []; error = nil
             let existing = model.settings.sources.first { $0.provider == provider && $0.accountId == account?.id && $0.subscription != nil }?.subscription
-            subscriptionMode = existing?.mode ?? (CoreContract.subscriptionModes[provider]?["global"] != nil ? "global" : provider == "grok" ? "subscription" : provider == "opencode" ? "go" : "session")
+            subscriptionMode = existing?.mode ?? (provider == "qoder" ? "cli" : CoreContract.subscriptionModes[provider]?["global"] != nil ? "global" : provider == "grok" ? "subscription" : provider == "opencode" ? "go" : "session")
             workspaceID = existing?.workspaceId ?? ""
+            nativeConfigDir = existing?.nativeConfigDir ?? ""
         }
     }
     private func save() async {
@@ -681,7 +708,7 @@ struct AccountConnectionView: View {
             let name = account?.name ?? Format.provider(provider) + " 账户"
             if CoreContract.subscriptionModes[provider] != nil {
                 struct Result: Decodable { var settings: Settings }
-                let result: Result = try await model.engine.call("subscriptions.connect", params: ["provider": provider, "accountId": target, "name": name, "secret": apiKey, "useLocalLogin": useLocalLogin, "subscription": ["mode": subscriptionMode, "workspaceId": workspaceID]])
+                let result: Result = try await model.engine.call("subscriptions.connect", params: ["provider": provider, "accountId": target, "name": name, "secret": apiKey, "useLocalLogin": useLocalLogin, "subscription": ["mode": subscriptionMode, "workspaceId": workspaceID, "nativeConfigDir": nativeConfigDir]])
                 model.acceptConfiguration(result.settings)
             } else if provider == "deepseek" {
                 guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ClientError.message("请输入 API Key") }

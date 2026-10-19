@@ -2,6 +2,25 @@ import Foundation
 
 @main struct VerifyModels {
     static func main() throws {
+        let quotaJSON = #"{"sourceId":"kimi","accountId":"wallet","provider":"kimi","name":"Kimi","updatedAt":1,"origin":"live","windows":[],"extraUsage":{"currency":"USD","total":"90071992.54740993","balance":"0.00000001","monthlyLimitEnabled":true,"monthlyLimit":"0.00","monthlyUsed":"0.00"}}"#
+        let walletQuota = try JSONDecoder().decode(Quota.self, from: Data(quotaJSON.utf8))
+        precondition(walletQuota.extraUsage?.amount(walletQuota.extraUsage?.balance) == "USD 0.00000001")
+        precondition(walletQuota.extraUsage?.total == "90071992.54740993")
+        precondition(walletQuota.extraUsage?.monthlyLimitLabel == "月度上限 USD 0.00")
+        var oldQuota = try JSONSerialization.jsonObject(with: Data(quotaJSON.utf8)) as! [String: Any]
+        oldQuota.removeValue(forKey: "extraUsage")
+        let legacyQuota = try JSONDecoder().decode(Quota.self, from: JSONSerialization.data(withJSONObject: oldQuota))
+        precondition(legacyQuota.extraUsage == nil)
+        let missingWallet = try JSONDecoder().decode(ExtraUsageWallet.self, from: Data(#"{"currency":"USD","total":"12.34"}"#.utf8))
+        precondition(missingWallet.amount(missingWallet.balance) == "未提供" && missingWallet.monthlyLimitLabel == "月度上限状态未提供")
+        let creditUsage = try JSONDecoder().decode(Aggregate.self, from: Data(#"{"key":"qfmodel","tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"total":0,"cost":0,"pricedTokens":0,"nativeCredits":{"qoder":{"credits":0.25,"originalCredits":0.5,"originalCreditsRequests":1,"billable":0,"billableRequests":0,"nonBillable":0.25,"nonBillableRequests":1,"unknownBillability":0,"unknownBillabilityRequests":0,"requests":1}}}"#.utf8))
+        precondition(creditUsage.hasNativeCredits && !creditUsage.costAvailable)
+        precondition(creditUsage.nativeCreditText.contains("0.25 Credits") && creditUsage.nativeCredits?["qoder"]?.detail.contains("标记不计费") == true)
+        let codebuddyUsage = try JSONDecoder().decode(Aggregate.self, from: Data(#"{"key":"fixture","tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"total":0,"cost":0,"pricedTokens":0,"nativeCredits":{"codebuddy":{"credits":0.25,"billable":0,"nonBillable":0,"unknownBillability":0.25,"requests":1}}}"#.utf8))
+        precondition(codebuddyUsage.hasNativeCredits && !codebuddyUsage.costAvailable)
+        precondition(codebuddyUsage.nativeCreditText.contains("1 条计量"))
+        let legacyUsage = try JSONDecoder().decode(Aggregate.self, from: Data(#"{"key":"legacy","tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"total":0,"cost":0,"pricedTokens":0}"#.utf8))
+        precondition(!legacyUsage.hasNativeCredits && legacyUsage.costAvailable)
         let knownError = UserFacingError("请先连接订阅账户与运行机器")
         precondition(knownError.summary == "请先连接订阅账户与运行机器" && knownError.details == nil)
         let jsonCookie = UserFacingError(#"{"cookie":"session=private-json-cookie; other=private-json-secondary"}"#)

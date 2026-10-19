@@ -1,0 +1,6 @@
+{"type": "session", "version": 4, "id": "session-c255da4f-71bd-4bba-811c-5efa24c06a0b", "createdAt": 1792296855078, "isSeeded": false, "delegationDepth": 0}
+{"type": "turn/start", "seq": 4, "time": 1792296855092, "data": {"turn": 1}}
+{"type": "step/start", "seq": 6, "time": 1792296855158, "data": {"turn": 1, "step": 1}}
+{"type": "assistant/message", "seq": 14, "time": 1792296856613, "data": {"turn": 1, "step": 1, "message": {"role": "assistant", "source": {"kind": "model", "provider": "aieyes-test", "model": "Qwen3.8-27B"}}, "usage": {"inputTokens": 5621, "outputTokens": 108, "totalTokens": 5729}}, "surfaceOp": "append"}
+{"type": "step/end", "seq": 15, "time": 1792296856614, "data": {"turn": 1, "step": 1}}
+{"type": "turn/end", "seq": 16, "time": 1792296856615, "data": {"turn": 1, "reason": {"kind": "completed"}}}

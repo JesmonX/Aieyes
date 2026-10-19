@@ -202,8 +202,9 @@ struct RootView: View, Equatable {
         sessionStrip
         Surface(spacing: 6, padding: 12) {
             HStack { Text("今日用量").font(AppFont.caption).foregroundStyle(.secondary); RefreshIndicator(model: model, key: "scan"); Spacer(); if usageDashboard.summary.pricedTokens < usageDashboard.summary.total { PricingWarning { model.openPricing() } } }
-            HStack { FloatingTokenCard(total: usageDashboard.summary.total, tokens: usageDashboard.summary.tokens, inline: true); Spacer(); Text("API 等价成本 ").foregroundStyle(.secondary) + Text(usageDashboard.summary.total == 0 || usageDashboard.summary.pricedTokens > 0 ? Format.money(usageDashboard.summary.cost) : "—").bold() }.font(AppFont.secondary).monospacedDigit()
+            HStack { FloatingTokenCard(total: usageDashboard.summary.total, tokens: usageDashboard.summary.tokens, inline: true); Spacer(); Text("API 等价成本 ").foregroundStyle(.secondary) + Text(usageDashboard.summary.costAvailable ? Format.money(usageDashboard.summary.cost) : "—").bold() }.font(AppFont.secondary).monospacedDigit()
         }
+        if usageDashboard.summary.hasNativeCredits { NativeCreditsView(usage: usageDashboard.summary, compact: true) }
         quotaSection
         if !model.runningEstimates.isEmpty { Button(model.samplingSummary + " · 管理采样") { model.showSampling?() }.font(AppFont.caption) }
     }
@@ -252,9 +253,10 @@ struct RootView: View, Equatable {
         if hasUsageData {
             HStack(spacing: 10) {
                 if compact { FloatingTokenCard(total: usageDashboard.summary.total, tokens: usageDashboard.summary.tokens) } else { StatCard(title: "总 Token", value: Format.compact(usageDashboard.summary.total), detail: "", icon: "sparkle", accent: Palette.accent) }
-                StatCard(title: "API 等价成本", value: usageDashboard.summary.total == 0 || usageDashboard.summary.pricedTokens > 0 ? Format.money(usageDashboard.summary.cost) : "—", detail: "", icon: "dollarsign.circle", accent: Palette.accent, pricingIncomplete: usageDashboard.summary.total > usageDashboard.summary.pricedTokens, onPricing: { model.openPricing() })
+                StatCard(title: "API 等价成本", value: usageDashboard.summary.costAvailable ? Format.money(usageDashboard.summary.cost) : "—", detail: "", icon: "dollarsign.circle", accent: Palette.accent, pricingIncomplete: usageDashboard.summary.total > usageDashboard.summary.pricedTokens, onPricing: { model.openPricing() })
             }
             if !compact { CacheSummaryCard(tokens: usageDashboard.summary.tokens) }
+            if usageDashboard.summary.hasNativeCredits { Surface { NativeCreditsView(usage: usageDashboard.summary, models: usageDashboard.models, compact: compact) } }
         } else if !model.settings.sources.isEmpty { usageEmptyState }
         if !model.runningEstimates.isEmpty {
             Button { model.showSampling?() } label: { HStack { Text(model.samplingSummary); Spacer(); Text("管理采样"); Image(systemName: "chevron.right") }.font(AppFont.secondary) }.buttonStyle(.plain).foregroundStyle(model.samplingNeedsAttention ? Palette.warn : Palette.accent)
@@ -287,7 +289,7 @@ struct RootView: View, Equatable {
     }
     private var hasActiveFilters: Bool { filters.provider != "all" || filters.account != "all" || filters.source != "all" || filters.model != "all" || !filters.isToday }
     private var hasUsageData: Bool {
-        usageDashboard.summary.total > 0 || usageDashboard.trendDays.contains { $0.total > 0 } || usageDashboard.heatmap.contains { $0.total > 0 }
+        usageDashboard.summary.total > 0 || usageDashboard.summary.hasNativeCredits || usageDashboard.trendDays.contains { $0.total > 0 || $0.hasNativeCredits } || usageDashboard.heatmap.contains { $0.total > 0 || $0.hasNativeCredits }
     }
     private var connectionGuide: some View {
         Surface(title: "启用你的第一个 Agent") {
@@ -523,14 +525,15 @@ struct DailyUsage: View {
 private struct DailyUsageDay: View {
     let day: Aggregate, rows: [DayModel], cost: Bool
     @State private var expanded = false
-    private func exact(_ usage: Aggregate) -> String { String(format: "%.0f Token · %.6f USD", usage.total, usage.cost) + " · 读取命中率 " + Format.percent(usage.tokens.cacheRate.map { $0 * 100 }) }
-    private func display(_ usage: Aggregate) -> String { Format.compact(usage.total) + " Token · " + String(format: "%.6f USD", usage.cost) + " · 读取命中率 " + Format.percent(usage.tokens.cacheRate.map { $0 * 100 }) }
+    private func exact(_ usage: Aggregate) -> String { String(format: "%.0f Token", usage.total) + " · " + (usage.costAvailable ? String(format: "%.6f USD", usage.cost) : "API 等价成本 —") + (usage.hasNativeCredits ? " · " + usage.nativeCreditText : "") + " · 读取命中率 " + Format.percent(usage.tokens.cacheRate.map { $0 * 100 }) }
+    private func display(_ usage: Aggregate) -> String { Format.compact(usage.total) + " Token · " + (usage.costAvailable ? String(format: "%.6f USD", usage.cost) : "API 等价成本 —") + " · 读取命中率 " + Format.percent(usage.tokens.cacheRate.map { $0 * 100 }) }
     private func modelRow(_ row: DayModel, day: String) -> some View {
         let value = exact(row.usage)
         let label = day + " · " + row.model + " · " + value
         return VStack(alignment: .leading, spacing: 4) {
             Text(row.model).fontWeight(.medium).textSelection(.enabled)
             Text(display(row.usage)).help(value).monospacedDigit().textSelection(.enabled)
+            if row.usage.hasNativeCredits { Text(row.usage.nativeCreditText).textSelection(.enabled) }
         }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
             .accessibilityElement(children: .combine).accessibilityLabel(label)
             .contextMenu { Button("复制模型与精确数值") {
@@ -543,7 +546,8 @@ private struct DailyUsageDay: View {
             if expanded {
                 Text(display(day)).help(exact(day)).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
                 ForEach(rows) { row in modelRow(row, day: day.key) }
-                if day.total == 0 { Text("当日用量为零").font(AppFont.secondary).foregroundStyle(.secondary) }
+                if day.hasNativeCredits { Text(day.nativeCreditText).font(AppFont.secondary).textSelection(.enabled) }
+                if day.total == 0 && !day.hasNativeCredits { Text("当日用量为零").font(AppFont.secondary).foregroundStyle(.secondary) }
             }
         } label: { HStack { Text(day.key); Spacer(); Text(cost ? Format.money(day.cost) + " USD" : Format.compact(day.total) + " Token").monospacedDigit() }.font(AppFont.secondary) }
     }
@@ -799,6 +803,20 @@ struct QuotaCard: View {
         fullCard
     }
     @ViewBuilder private var balanceContent: some View {
+        if let wallet = quota.extraUsage {
+            VStack(alignment: .leading, spacing: 8) {
+                ViewThatFits(in: .horizontal) {
+                    HStack { Text("额外用量余额").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(); Spacer(); Text(wallet.amount(wallet.balance)).font(AppFont.section).monospacedDigit().fixedSize() }
+                    VStack(alignment: .leading, spacing: 4) { Text("额外用量余额").font(AppFont.secondary).foregroundStyle(.secondary); Text(wallet.amount(wallet.balance)).font(AppFont.section).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
+                }
+                if expanded {
+                    Text("钱包总额 " + wallet.amount(wallet.total)).font(AppFont.secondary).foregroundStyle(.secondary)
+                    Text("本月扣费 " + wallet.amount(wallet.monthlyUsed)).font(AppFont.secondary).foregroundStyle(.secondary)
+                    Text(wallet.monthlyLimitLabel).font(AppFont.secondary).foregroundStyle(.secondary)
+                    Text("钱包与订阅额度分别计算").font(AppFont.secondary).foregroundStyle(.secondary)
+                }
+            }
+        }
         if let balances = quota.balances { ForEach(balances) { balance in
             VStack(alignment: .leading, spacing: 8) {
                 HStack { Text("可用余额").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Text(balance.currency + " " + balance.total).font(AppFont.section).monospacedDigit() }
@@ -949,7 +967,7 @@ struct QuotaCard: View {
                 else { Text("额度更新失败 · 展开查看").font(AppFont.secondary).foregroundStyle(Palette.warn).help(UserFacingError(error).summary) }
             }
             if let onAnalysis { Button("查看分析", systemImage: "arrow.up.right", action: onAnalysis).font(AppFont.caption) }
-            if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.error == nil && quota.credits == nil { Text("暂无额度数据").font(AppFont.secondary).foregroundStyle(.secondary) }
+            if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.extraUsage == nil && quota.error == nil && quota.credits == nil { Text("暂无额度数据").font(AppFont.secondary).foregroundStyle(.secondary) }
             }
         }
     }

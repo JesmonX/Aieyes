@@ -41,6 +41,36 @@ const AGY: &[&str] = &[
     "PostInvocation",
     "Stop",
 ];
+const CURSOR: &[&str] = &[
+    "sessionStart",
+    "beforeSubmitPrompt",
+    "preToolUse",
+    "postToolUse",
+    "postToolUseFailure",
+    "afterAgentThought",
+    "stop",
+    "sessionEnd",
+];
+const ZCODE: &[&str] = &[
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "Stop",
+];
+pub fn supported(provider: &str) -> bool {
+    matches!(provider, "claude" | "antigravity" | "cursor" | "zcode")
+}
+fn names(provider: &str) -> &'static [&'static str] {
+    match provider {
+        "claude" => CLAUDE,
+        "cursor" => CURSOR,
+        "zcode" => ZCODE,
+        _ => AGY,
+    }
+}
 
 #[derive(Clone)]
 pub struct Target {
@@ -61,7 +91,28 @@ pub fn target(source: &Source) -> Target {
     } else {
         expand(raw)
     };
-    if source.provider == "antigravity"
+    if source.provider == "zcode" {
+        let home = if path.file_name().is_some_and(|n| n == "cli") {
+            path
+        } else if path.extension().is_some_and(|n| n == "sqlite")
+            && path
+                .parent()
+                .is_some_and(|p| p.file_name().is_some_and(|n| n == "db"))
+        {
+            path.parent()
+                .unwrap()
+                .parent()
+                .unwrap_or(&path)
+                .to_path_buf()
+        } else {
+            path.join("cli")
+        };
+        Target {
+            config: home.join("config.json"),
+            home,
+            nested: true,
+        }
+    } else if source.provider == "antigravity"
         && path
             .file_name()
             .is_some_and(|n| n == "antigravity-cli" || n == "antigravity")
@@ -71,6 +122,12 @@ pub fn target(source: &Source) -> Target {
             config: home.join("hooks.json"),
             home,
             nested: false,
+        }
+    } else if source.provider == "cursor" {
+        Target {
+            config: path.join("hooks.json"),
+            home: path,
+            nested: true,
         }
     } else {
         Target {
@@ -116,13 +173,26 @@ fn owned(value: &Value) -> bool {
     value["command"]
         .as_str()
         .is_some_and(|c| c.contains(MARKER))
+        || value["args"].as_array().is_some_and(|args| {
+            args.iter()
+                .any(|v| v.as_str().is_some_and(|s| s.contains(MARKER)))
+        })
 }
 fn configured_state(config: &Value, provider: &str, nested: bool) -> &'static str {
     if config["disableAllHooks"] == true {
         return "disabled";
     }
     let hooks = if nested { &config["hooks"] } else { config };
-    let events = if provider == "antigravity" {
+    if provider == "zcode" && hooks["enabled"] != true {
+        return if hooks["enabled"] == false {
+            "disabled"
+        } else {
+            "missing"
+        };
+    }
+    let events = if provider == "zcode" {
+        &hooks["events"]
+    } else if provider == "antigravity" {
         &hooks["aieyes"]
     } else {
         hooks
@@ -130,8 +200,7 @@ fn configured_state(config: &Value, provider: &str, nested: bool) -> &'static st
     if events["enabled"] == false {
         return "disabled";
     }
-    let names = if provider == "claude" { CLAUDE } else { AGY };
-    for event in names {
+    for event in names(provider) {
         let Some(rows) = events[*event].as_array() else {
             return "missing";
         };
@@ -174,6 +243,15 @@ pub fn merge(
     force: bool,
 ) -> Result<bool> {
     ensure!(config.is_object(), "Hook 配置必须是 JSON 对象");
+    if provider == "cursor" {
+        ensure!(
+            config.get("version").is_none_or(|v| v == 1),
+            "不支持此 Cursor Hooks 配置版本，原配置已保留"
+        );
+        if !remove {
+            config["version"] = json!(1);
+        }
+    }
     if !force && !remove && config["disableAllHooks"] == true {
         return Ok(false);
     }
@@ -186,7 +264,21 @@ pub fn merge(
         config
     };
     ensure!(hooks.is_object(), "hooks 配置格式无效，原配置已保留");
-    let events = if provider == "antigravity" {
+    let events = if provider == "zcode" {
+        if !force && !remove && hooks["enabled"] == false {
+            return Ok(false);
+        }
+        if !remove {
+            hooks["enabled"] = json!(true);
+        }
+        if hooks.get("events").is_none() {
+            if remove {
+                return Ok(true);
+            }
+            hooks["events"] = json!({});
+        }
+        hooks.get_mut("events").unwrap()
+    } else if provider == "antigravity" {
         if !force && !remove && hooks.get("aieyes").is_some_and(disabled) {
             return Ok(false);
         }
@@ -224,7 +316,7 @@ pub fn merge(
             if owned(row) {
                 return false;
             }
-            if let Some(children) = row["hooks"].as_array_mut() {
+            if let Some(children) = row.get_mut("hooks").and_then(Value::as_array_mut) {
                 let had = children.iter().any(owned);
                 children.retain(|h| !owned(h));
                 return !had || !children.is_empty();
@@ -233,7 +325,14 @@ pub fn merge(
         });
         if !remove {
             let handler = json!({"type":"command","command":command,"timeout":2});
-            if provider == "antigravity" && event != "PostToolUse" {
+            if provider == "zcode" {
+                let handler = if cfg!(windows) {
+                    json!({"type":"process","command":"cmd.exe","args":["/d","/s","/c",command],"timeoutMs":2000})
+                } else {
+                    json!({"type":"process","command":"/bin/sh","args":["-c",command],"timeoutMs":2000})
+                };
+                rows.push(json!({"hooks":[handler]}));
+            } else if provider == "cursor" || provider == "antigravity" && event != "PostToolUse" {
                 rows.push(handler);
             } else {
                 rows.push(json!({"matcher":"*","hooks":[handler]}));
@@ -313,16 +412,29 @@ pub fn local(source: &Source, action: &str) -> HookStatus {
         error: None,
     };
     let result = (|| -> Result<String> {
-        ensure!(
-            matches!(source.provider.as_str(), "claude" | "antigravity"),
-            "此 Agent 不需要 hooks"
-        );
+        ensure!(supported(&source.provider), "此 Agent 不需要 hooks");
         let state_dir = t.home.join(".aieyes");
         let disabled_path = state_dir.join("session-hooks-disabled");
         if disabled_path.exists() && action != "repair" && action != "remove" {
             return Ok("disabled".into());
         }
         let original = read_config(&t.config)?;
+        if source.provider == "cursor" {
+            ensure!(
+                original.get("version").is_none_or(|v| v == 1),
+                "不支持此 Cursor Hooks 配置版本，原配置已保留"
+            );
+            ensure!(
+                t.home.is_dir(),
+                "Cursor 会话监测需要选择用户或项目的 .cursor 配置目录"
+            );
+            ensure!(
+                t.home
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(".cursor")),
+                "Cursor Hooks 不跟随 CURSOR_CONFIG_DIR，请选择实际的用户或项目 .cursor 目录"
+            );
+        }
         if action == "status" {
             return Ok(configured_state(&original, &source.provider, t.nested).into());
         }
@@ -353,12 +465,7 @@ pub fn local(source: &Source, action: &str) -> HookStatus {
             metadata.len(),
             std::env::consts::EXE_SUFFIX
         ));
-        let names = if source.provider == "claude" {
-            CLAUDE
-        } else {
-            AGY
-        };
-        let commands = names
+        let commands = names(&source.provider)
             .iter()
             .map(|event| {
                 Ok((
@@ -411,7 +518,8 @@ pub fn call(settings: &Settings, method: &str, params: &Value) -> Result<Value> 
     let mut seen = std::collections::HashSet::new();
     let mut rows = Vec::new();
     for source in settings.sources.iter().filter(|s| {
-        matches!(s.provider.as_str(), "claude" | "antigravity")
+        s.subscription.is_none()
+            && supported(&s.provider)
             && params["sourceId"].as_str().is_none_or(|id| s.id == id)
     }) {
         if !seen.insert(key(source)) {
@@ -447,6 +555,10 @@ pub fn call(settings: &Settings, method: &str, params: &Value) -> Result<Value> 
     Ok(Value::Array(rows))
 }
 fn ancestry(provider: &str) -> (u32, u64) {
+    // Cursor and ZCode commonly run as Node; do not attribute an arbitrary Node ancestor.
+    if matches!(provider, "cursor" | "zcode") {
+        return (0, 0);
+    }
     let mut system = sysinfo::System::new();
     let mut pid = sysinfo::Pid::from_u32(std::process::id());
     for _ in 0..8 {
@@ -539,6 +651,54 @@ pub fn run_if_requested() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn zcode_process_observers_use_native_events_and_preserve_disabled_or_foreign_hooks() {
+        let foreign = json!({"hooks":[{"type":"process","command":"other","args":["keep"]}]});
+        let mut config =
+            json!({"mcp":{"keep":true},"hooks":{"events":{"PreToolUse":[foreign.clone()]}}});
+        let commands: Vec<_> = ZCODE
+            .iter()
+            .map(|e| (e.to_string(), format!("helper {MARKER} zcode {e}")))
+            .collect();
+        merge(&mut config, "zcode", true, &commands, false, false).unwrap();
+        assert_eq!(configured_state(&config, "zcode", true), "installed");
+        let installed = config.clone();
+        merge(&mut config, "zcode", true, &commands, false, false).unwrap();
+        assert_eq!(config, installed);
+        let handler = &config["hooks"]["events"]["Stop"][0]["hooks"][0];
+        assert_eq!(handler["type"], "process");
+        assert!(owned(handler));
+        assert!(
+            config["hooks"]["events"]["Stop"][0]
+                .get("matcher")
+                .is_none()
+        );
+        config["hooks"]["enabled"] = json!(false);
+        let disabled = config.clone();
+        assert!(!merge(&mut config, "zcode", true, &commands, false, false).unwrap());
+        assert_eq!(config, disabled);
+        merge(&mut config, "zcode", true, &commands, true, false).unwrap();
+        assert_eq!(config["hooks"]["events"]["PreToolUse"], json!([foreign]));
+        assert_eq!(config["mcp"]["keep"], true);
+        assert_eq!(config["hooks"]["enabled"], false);
+        assert!(!config.to_string().contains(MARKER));
+        merge(&mut config, "zcode", true, &commands, false, true).unwrap();
+        assert_eq!(configured_state(&config, "zcode", true), "installed");
+    }
+
+    #[test]
+    fn zcode_root_cli_and_native_database_select_the_same_hook_config() {
+        let root = std::env::temp_dir().join("aieyes-zcode-paths");
+        let expected = root.join("cli/config.json");
+        for path in [&root, &root.join("cli"), &root.join("cli/db/db.sqlite")] {
+            let source = Source {
+                provider: "zcode".into(),
+                path: path.to_string_lossy().into_owned(),
+                ..Default::default()
+            };
+            assert_eq!(target(&source).config, expected);
+        }
+    }
     #[test]
     fn owned_hooks_are_idempotent_preserve_config_and_remove_cleanly() {
         let mut cfg = json!({"env":{"KEEP":"yes"},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"other"}]}]}});

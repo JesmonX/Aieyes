@@ -732,6 +732,7 @@ fn shared_history_totals_survive_and_profile_quotas_stay_visible() {
     };
     store.save_settings(&settings).unwrap();
     let event = UsageEvent {
+        native_credits: None,
         turn_id: String::new(),
         id: "event".into(),
         source_id: "source".into(),

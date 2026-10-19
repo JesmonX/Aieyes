@@ -14,7 +14,8 @@ c.execute("CREATE TABLE events(id TEXT PRIMARY KEY,provider TEXT NOT NULL,accoun
 e=json.loads(sys.argv[3])
 c.execute("INSERT INTO events VALUES(?,?,?,?,?,?,0,0,NULL)",(e['id'],e['provider'],e['accountId'],e['model'],e['timestamp'],sys.argv[3]))
 c.commit()`,path.join(root,'aieyes.sqlite'),JSON.stringify(fixture),JSON.stringify(historyEvent)]);
-const core=spawn(path.join(project,'target/debug/aieyes-core'),['--data-dir',root],{stdio:['pipe','pipe','pipe']});
+const claudeRoot=path.join(root,'claude-profile');fs.mkdirSync(claudeRoot);
+const core=spawn(path.join(project,'target/debug/aieyes-core'),['--data-dir',root],{stdio:['pipe','pipe','pipe'],env:{...process.env,CLAUDE_CONFIG_DIR:claudeRoot}});
 let counter=0;const pending=new Map();let stderr='';core.stderr.on('data',b=>stderr+=b);
 readline.createInterface({input:core.stdout}).on('line',line=>{const r=JSON.parse(line),p=pending.get(r.id);if(!p)return;pending.delete(r.id);if(r.error)p.reject(new Error(r.error.message));else p.resolve(r.result);});
 core.on('exit',()=>{for(const p of pending.values())p.reject(new Error('Core exited: '+stderr));pending.clear();});
@@ -164,7 +165,7 @@ function browserFixture(){
     await page.locator('#field-codexBinary').fill('codex-fixture');failSave=true;await page.locator('#editor-form button[type=submit]').click();await page.getByText('模拟保存失败，输入已保留',{exact:true}).waitFor();assert.equal(await page.locator('#field-codexBinary').inputValue(),'codex-fixture');failSave=false;
     await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.getElementById('editor').open);assert.equal((await rpc('settings.get')).sources[0].codexBinary,'codex-fixture');
     await page.locator('#directories-back').click();await page.locator('[data-settings-agent=claude]').click();await page.locator('[data-machine-directories="claude"][data-machine="local"]').click();
-    await page.locator('[data-source-add]').click();await page.locator('#field-path').fill('~/fixture-secondary');await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.getElementById('editor').open);
+    await page.locator('[data-source-add]').click();await page.locator('#field-path').waitFor();assert.equal(await page.locator('#field-path').inputValue(),claudeRoot);await page.locator('#field-path').fill('~/fixture-secondary');await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.getElementById('editor').open);
     assert.equal(await page.locator('[data-source-remove]').count(),2);const extra=(await rpc('settings.get')).sources.find(s=>s.path==='~/fixture-secondary');
     await page.locator('[data-source-remove="'+extra.id+'"]').click();await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.getElementById('editor').open);assert.equal(await page.locator('[data-source-remove]').count(),1);
     await page.locator('[data-settings-tab="integrations"]').click();await page.locator('[data-settings-agent=codex]').click();assert.equal(await page.locator('[data-account-edit]').count(),2);
@@ -243,6 +244,52 @@ function browserFixture(){
     await page.locator('#editor-form button[type=submit]').click();await page.locator('#editor-error:visible').waitFor();
     assert.equal(await page.locator('#field-to').inputValue(),'provider/draft');assert.equal((await rpc('settings.get')).modelMappings['fixture-new'],'provider/external');
     await page.locator('#cancel-editor').click();await page.locator('#editor-confirm-discard').click();
+    // Antigravity CLI and SDK use different native API protocols.
+    await page.evaluate(()=>{state.page='settings';state.settingsTab='integrations';AieyesAgentSettings.navigate({provider:'antigravity'});render();});
+    if(!await page.locator('#agent-section-api').evaluate(el=>el.open))await page.locator('#agent-section-api > summary').click();
+    await page.getByText(/agy 自定义端点使用 Gemini 协议/).waitFor();
+    assert.equal(await page.locator('#agent-section-api [data-native-api]').count(),0);
+    assert.equal(await page.locator('#agent-section-api a').first().getAttribute('href'),'https://www.antigravity.google/docs/install?tab=cli');
+    assert.equal(await page.locator('#agent-section-api a').last().getAttribute('href'),'https://www.antigravity.google/docs/sdk/local-models');
+    await page.evaluate(()=>notify(''));await page.locator('#agent-section-api').scrollIntoViewIfNeeded();await page.screenshot({animations:'disabled',path:path.join(out,'antigravity-api-guidance.png')});
+    await page.evaluate(()=>{AieyesAgentSettings.navigate({provider:'cursor'});render();});
+    if(!await page.locator('#agent-section-api').evaluate(el=>el.open))await page.locator('#agent-section-api > summary').click();
+    await page.getByText(/Cursor CLI 的 CURSOR_API_KEY/).waitFor();
+    assert.equal(await page.locator('#agent-section-api [data-native-api]').count(),0);
+    assert.equal(await page.locator('#agent-section-api a').count(),2);
+    assert.equal(await page.locator('#agent-section-api a').first().getAttribute('href'),'https://cursor.com/docs/cli/reference/authentication');
+    assert.equal(await page.locator('#agent-section-api a').last().getAttribute('href'),'https://cursor.com/docs/cli/reference/configuration');
+    // Native Cursor observers use flat hooks.json entries and keep user hooks.
+    const cursorHome=path.join(root,'.cursor');fs.mkdirSync(cursorHome);fs.writeFileSync(path.join(cursorHome,'hooks.json'),JSON.stringify({version:1,hooks:{preToolUse:[{command:'other-guard'}]}}));
+    const cursorSettings=await rpc('settings.get');cursorSettings.sources.push({id:'cursor-quota-ui',provider:'cursor',name:'Cursor quota',path:'',enabled:true,subscription:{mode:'session',credentialRef:'fixture-credential'}});const cursorAgent=cursorSettings.agents.find(a=>a.provider==='cursor');cursorAgent.enabled=true;cursorAgent.machineIds=['local'];await rpc('settings.save',cursorSettings);
+    await page.evaluate(async()=>{state.settings=await window.testRPC('settings.get');render();});
+    assert.equal(await page.locator('[data-machine-hooks="cursor"][data-machine="local"]').isDisabled(),true);
+    cursorSettings.sources.push({id:'cursor-ui',provider:'cursor',name:'Cursor UI',path:cursorHome,enabled:true});await rpc('settings.save',cursorSettings);
+    await page.evaluate(async()=>{state.settings=await window.testRPC('settings.get');render();});
+    if(!await page.locator('#agent-section-machines').evaluate(el=>el.open))await page.locator('#agent-section-machines > summary').click();
+    await page.locator('[data-machine-hooks="cursor"][data-machine="local"]').click();
+    await page.getByText(/从用户或项目的 .cursor\/hooks.json 接收状态/).waitFor();
+    assert.equal(await page.locator('#session-hooks [data-hook-row]').count(),1);
+    await page.locator('#session-hooks [data-hook-repair]').click();await page.locator('#session-hooks [data-hook-label]').getByText('已安装',{exact:true}).waitFor();
+    const installedCursor=JSON.parse(fs.readFileSync(path.join(cursorHome,'hooks.json')));assert.equal(installedCursor.hooks.preToolUse[0].command,'other-guard');assert.equal(typeof installedCursor.hooks.preToolUse[1].command,'string');assert.equal(installedCursor.hooks.preToolUse[1].hooks,undefined);
+    await page.locator('#session-hooks [data-hook-toggle]').click();await page.locator('#session-hooks [data-hook-label]').getByText('已停用',{exact:true}).waitFor();assert.equal(await page.locator('#session-hooks [data-hook-toggle]').isChecked(),false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(cursorHome,'hooks.json'))).hooks.preToolUse.length,1);
+    await page.locator('#session-hooks [data-hook-toggle]').click();await page.locator('#session-hooks [data-hook-label]').getByText('已安装',{exact:true}).waitFor();assert.equal(await page.locator('#session-hooks [data-hook-toggle]').isChecked(),true);
+    await page.screenshot({animations:'disabled',path:path.join(out,'cursor-session-hooks.png')});await page.locator('#session-hooks [data-close]').click();
+    const zcodeHome=path.join(root,'.zcode');fs.mkdirSync(path.join(zcodeHome,'cli'),{recursive:true});
+    const zcodeConfig=path.join(zcodeHome,'cli/config.json'),foreignZcode={hooks:[{type:'process',command:'other-observer',args:['keep']}]};
+    fs.writeFileSync(zcodeConfig,JSON.stringify({mcp:{keep:true},hooks:{events:{PreToolUse:[foreignZcode]}}}));
+    const zcodeSettings=await rpc('settings.get');zcodeSettings.sources.push({id:'zcode-ui',provider:'zcode',name:'ZCode UI',path:zcodeHome,enabled:true});
+    const zcodeAgent=zcodeSettings.agents.find(a=>a.provider==='zcode');zcodeAgent.enabled=true;zcodeAgent.machineIds=['local'];await rpc('settings.save',zcodeSettings);
+    await page.evaluate(async()=>{state.settings=await api('settings.get');AieyesAgentSettings.navigate({provider:'zcode'});render();});
+    if(!await page.locator('#agent-section-machines').evaluate(el=>el.open))await page.locator('#agent-section-machines > summary').click();
+    await page.locator('[data-machine-hooks="zcode"][data-machine="local"]').click();await page.getByText(/实时状态由 ZCode 原生监测提供/).waitFor();
+    await page.locator('#session-hooks [data-hook-repair]').click();await page.locator('#session-hooks [data-hook-label]').getByText('已安装',{exact:true}).waitFor();
+    let installedZcode=JSON.parse(fs.readFileSync(zcodeConfig));assert.equal(installedZcode.hooks.enabled,true);assert.deepEqual(installedZcode.hooks.events.PreToolUse[0],foreignZcode);assert.equal(installedZcode.hooks.events.Stop[0].hooks[0].type,'process');assert.equal(installedZcode.hooks.events.Stop[0].matcher,undefined);
+    await page.locator('#session-hooks [data-hook-toggle]').click();await page.locator('#session-hooks [data-hook-label]').getByText('已停用',{exact:true}).waitFor();assert.equal(await page.locator('#session-hooks [data-hook-toggle]').isChecked(),false);
+    installedZcode=JSON.parse(fs.readFileSync(zcodeConfig));assert.deepEqual(installedZcode.hooks.events.PreToolUse,[foreignZcode]);assert.equal(installedZcode.mcp.keep,true);
+    await page.locator('#session-hooks [data-hook-toggle]').click();await page.locator('#session-hooks [data-hook-label]').getByText('已安装',{exact:true}).waitFor();
+    await page.screenshot({animations:'disabled',path:path.join(out,'zcode-session-hooks.png')});await page.locator('#session-hooks [data-close]').click();
     // Two normal accounts coexist in the compact floating panel renderer.
     const panel=await browser.newPage({viewport:{width:450,height:900}});await panel.exposeFunction('testRPC',invoke);await panel.addInitScript(browserFixture);panel.on('pageerror',e=>errors.push(String(e)));await panel.goto(`http://127.0.0.1:${server.address().port}/floating.html`);await panel.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);assert(await panel.getByText('个人 Codex',{exact:true}).count());assert(await panel.getByText('工作 Codex',{exact:true}).count());await panel.screenshot({path:path.join(out,'panel.png'),fullPage:true});
     for(const theme of ['light','dark'])for(const accent of ['indigo','blue','teal','purple']){

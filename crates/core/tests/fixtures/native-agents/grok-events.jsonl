@@ -1,0 +1,8 @@
+{"ts":"2026-10-18T04:22:20.792Z","type":"turn_started","session_id":"01a14d3f-0d65-7663-93ba-51421144edcc","turn_number":0,"model_id":"Qwen3.8-27B","yolo_mode":false,"conversation_message_count":3,"session_relationship":"primary","schema_version":"1.0"}
+{"ts":"2026-10-18T04:22:20.860Z","type":"loop_started","loop_index":0}
+{"ts":"2026-10-18T04:22:20.867Z","type":"phase_changed","phase":"waiting_for_model"}
+{"ts":"2026-10-18T04:22:22.053Z","type":"first_token"}
+{"ts":"2026-10-18T04:22:22.053Z","type":"phase_changed","phase":"streaming_text"}
+{"ts":"2026-10-18T04:22:22.073Z","type":"phase_changed","phase":"streaming_text"}
+{"ts":"2026-10-18T04:22:22.094Z","type":"phase_changed","phase":"streaming_text"}
+{"ts":"2026-10-18T04:22:22.152Z","type":"turn_ended","outcome":"completed"}

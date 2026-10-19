@@ -5,6 +5,8 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::Read;
+mod kimi;
+mod qoder;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
@@ -12,10 +14,19 @@ pub struct SubscriptionConfig {
     pub mode: String,
     pub credential_ref: String,
     pub workspace_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub native_config_dir: String,
+}
+
+pub fn native_cli(provider: &str, config: &SubscriptionConfig) -> bool {
+    provider == "qoder" && config.mode == "cli"
 }
 
 pub fn supported(provider: &str) -> bool {
-    matches!(provider, "zcode" | "qoder" | "grok" | "cursor" | "opencode")
+    matches!(
+        provider,
+        "zcode" | "qoder" | "grok" | "cursor" | "opencode" | "kimi" | "deepseek-harness"
+    )
 }
 
 pub fn login_url(provider: &str, mode: &str) -> Result<&'static str> {
@@ -23,7 +34,10 @@ pub fn login_url(provider: &str, mode: &str) -> Result<&'static str> {
         ("zcode", "global") => Ok("https://z.ai/manage-apikey/coding-plan/personal/my-plan"),
         ("zcode", "cn") => Ok("https://bigmodel.cn/coding-plan/personal/usage"),
         ("qoder", "global") => Ok("https://qoder.com/account/usage"),
+        ("qoder", "cli") => Ok("https://docs.qoder.com/cli/using-cli"),
         ("qoder", "cn-legacy") => Ok("https://qoder.com.cn/account/usage"),
+        ("kimi", "cn" | "global") => Ok("https://www.kimi.com/code/console"),
+        ("deepseek-harness", "api") => Ok("https://platform.deepseek.com/usage"),
         ("cursor", "session") => Ok("https://cursor.com/dashboard"),
         ("grok", "subscription") => Ok("https://grok.com"),
         ("grok", "api") => Ok("https://console.x.ai"),
@@ -134,6 +148,9 @@ pub fn endpoint(provider: &str, config: &SubscriptionConfig) -> Result<String> {
         ("qoder", "global") => "https://qoder.com/api/v2/me/usages/big_model_credits",
         ("qoder", "cn-legacy") => "https://qoder.com.cn/api/v2/me/usages/big_model_credits",
         ("cursor", "session") => "https://cursor.com/api/usage-summary",
+        ("kimi", "cn") => "https://api.kimi.com/coding/v1/usages",
+        ("kimi", "global") => "https://api.kimi.ai/coding/v1/usages",
+        ("deepseek-harness", "api") => "https://api.deepseek.com/user/balance",
         ("grok", "subscription") => "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
         ("grok", "api") => {
             scope(&config.workspace_id)?;
@@ -237,6 +254,15 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
         .subscription
         .as_ref()
         .context("请在账户中连接订阅登录")?;
+    if native_cli(&source.provider, config) {
+        let snapshot = fetch(source, settings, config, "", "")?;
+        let account = settings
+            .accounts
+            .iter()
+            .find(|a| a.provider == source.provider && a.id == source.account_id);
+        qoder::check_identity(&snapshot, account, true)?;
+        return Ok(snapshot);
+    }
     let url = endpoint(&source.provider, config)?;
     let secret = credentials::read(&config.credential_ref)
         .context("无法读取订阅凭据，请解锁系统凭据库或重新连接")?;
@@ -250,6 +276,9 @@ fn fetch(
     secret: &str,
     url: &str,
 ) -> Result<QuotaSnapshot> {
+    if native_cli(&source.provider, config) {
+        return qoder::read(source, settings, config);
+    }
     let body = request(source, settings, config, secret, url)?;
     let mut snapshot = parse(source, config, &body)?;
     if source.provider == "opencode" && config.mode == "console" {
@@ -341,7 +370,9 @@ fn zen_balance(v: &Value) -> Result<Balance> {
 }
 
 pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<QuotaSnapshot> {
-    endpoint(&source.provider, config)?;
+    if !native_cli(&source.provider, config) {
+        endpoint(&source.provider, config)?;
+    }
     let mut q = QuotaSnapshot {
         source_id: source.id.clone(),
         account_id: source.account_id.clone(),
@@ -352,6 +383,25 @@ pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<
         ..Default::default()
     };
     match source.provider.as_str() {
+        "deepseek-harness" => {
+            // This is the selected DeepSeek backend's API wallet, not a
+            // Harness subscription or a quota inferred from local Tokens.
+            let mut backend = source.clone();
+            backend.provider = "deepseek".into();
+            let mut snapshot = crate::quota::normalize(&backend, v, "live")?;
+            ensure!(
+                snapshot
+                    .balances
+                    .iter()
+                    .all(|b| matches!(b.currency.as_str(), "CNY" | "USD")),
+                "余额币种不支持"
+            );
+            snapshot.provider = source.provider.clone();
+            return Ok(snapshot);
+        }
+        "kimi" => {
+            kimi::apply(&mut q, v)?;
+        }
         "zcode" => {
             ensure!(
                 v["success"] != false
@@ -415,6 +465,10 @@ pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<
             }
         }
         "qoder" => {
+            if native_cli(&source.provider, config) {
+                qoder::apply(&mut q, v)?;
+                return Ok(q);
+            }
             let mut used = 0.;
             let mut total = 0.;
             for key in ["totalQuota", "sharedQuota"] {
@@ -576,6 +630,7 @@ pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<
     ensure!(
         !q.windows.is_empty()
             || !q.balances.is_empty()
+            || q.extra_usage.is_some()
             || source.provider == "opencode"
                 && config.mode == "console"
                 && (v.is_null() || v["access"].is_null()),
@@ -607,21 +662,30 @@ impl Engine {
         let mut config: SubscriptionConfig =
             serde_json::from_value(params["subscription"].clone())?;
         config.credential_ref.clear(); // Never accept another account's secret reference over RPC.
-        let url = endpoint(provider, &config)?;
-        let imported = if params["useLocalLogin"] == true {
+        let native = native_cli(provider, &config);
+        let url = if native {
+            String::new()
+        } else {
+            endpoint(provider, &config)?
+        };
+        let imported = if !native && params["useLocalLogin"] == true {
             Some(import_local(provider, &config.mode)?)
         } else {
             None
         };
-        let secret = imported
-            .as_deref()
-            .or_else(|| {
-                params["secret"]
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-            })
-            .context("请输入登录令牌、API Key 或 Cookie")?;
+        let secret = if native {
+            ""
+        } else {
+            imported
+                .as_deref()
+                .or_else(|| {
+                    params["secret"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                })
+                .context("请输入登录令牌、API Key 或 Cookie")?
+        };
         let requested_id = params["accountId"].as_str().unwrap_or("");
         ensure!(
             requested_id.is_empty()
@@ -659,7 +723,18 @@ impl Engine {
         source.enabled = true;
         source.name = name.clone();
         let snapshot = fetcher(&source, &base, &config, secret, &url)?; // Fail before persisting any account.
-        config.credential_ref = credentials::save(secret).context("无法保存订阅凭据")?;
+        if native {
+            qoder::check_identity(
+                &snapshot,
+                base.accounts
+                    .iter()
+                    .find(|a| a.provider == provider && a.id == id),
+                false,
+            )?;
+        } else {
+            config.native_config_dir.clear();
+            config.credential_ref = credentials::save(secret).context("无法保存订阅凭据")?;
+        }
         let new_ref = config.credential_ref.clone();
         source.subscription = Some(config);
         let mut next = base.clone();
@@ -668,6 +743,11 @@ impl Engine {
                 id: id.clone(),
                 provider: provider.into(),
                 name,
+                identity_key: if native {
+                    snapshot.identity.as_ref().map(|i| i.key.clone())
+                } else {
+                    None
+                },
                 ..Default::default()
             });
         } else if let Some(account) = next
@@ -676,6 +756,9 @@ impl Engine {
             .find(|a| a.provider == provider && a.id == id)
         {
             account.name = name;
+            if native && account.identity_key.is_none() {
+                account.identity_key = snapshot.identity.as_ref().map(|i| i.key.clone());
+            }
         }
         if let Some(agent) = next.agents.iter_mut().find(|a| a.provider == provider)
             && !agent.machine_ids.iter().any(|id| id == "local")
@@ -685,7 +768,7 @@ impl Engine {
         next.sources.retain(|s| s.id != source.id);
         next.sources.push(source);
         let saved = self.store.patch_settings(&json!(base), &json!(next), false);
-        if saved.is_err() {
+        if saved.is_err() && !new_ref.is_empty() {
             let _ = credentials::delete(&new_ref);
         }
         let saved = saved?;
@@ -697,6 +780,96 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qoder_native_connection_binds_identity_without_a_secret_and_rejects_account_switch() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(root.path()).unwrap();
+        engine
+            .call(
+                "agents.set",
+                json!({"provider":"qoder","enabled":true,"machineIds":[]}),
+            )
+            .unwrap();
+        let params = json!({"provider":"qoder","secret":"MUST_NOT_BE_SAVED","subscription":{"mode":"cli","credentialRef":"MUST_NOT_BE_REUSED","nativeConfigDir":"/native/config"}});
+        fn quota(
+            source: &Source,
+            _: &Settings,
+            config: &SubscriptionConfig,
+            secret: &str,
+            url: &str,
+        ) -> Result<QuotaSnapshot> {
+            assert!(secret.is_empty() && url.is_empty() && config.credential_ref.is_empty());
+            parse(
+                source,
+                config,
+                &json!({"userId":"fixture-user","userQuota":{"total":0,"used":0,"remaining":0,"unit":"credits"}}),
+            )
+        }
+        let result = engine
+            .connect_subscription_using(params.clone(), quota)
+            .unwrap();
+        let before = engine.store.settings().unwrap();
+        assert!(!json!(before).to_string().contains("MUST_NOT"));
+        let source = before
+            .sources
+            .iter()
+            .find(|s| s.subscription.is_some())
+            .unwrap();
+        let account = before
+            .accounts
+            .iter()
+            .find(|a| a.id == result["accountId"])
+            .unwrap();
+        let config = source.subscription.as_ref().unwrap();
+        assert_eq!(config.native_config_dir, "/native/config");
+        assert!(config.credential_ref.is_empty() && source.path.is_empty());
+        let snapshot = quota(source, &before, config, "", "").unwrap();
+        qoder::check_identity(&snapshot, Some(account), true).unwrap();
+        assert!(qoder::check_identity(&snapshot, None, true).is_err());
+        let mut changed = snapshot.clone();
+        changed.identity.as_mut().unwrap().key = "qoder:other".into();
+        assert!(qoder::check_identity(&changed, Some(account), true).is_err());
+        let mut update = params;
+        update["accountId"] = result["accountId"].clone();
+        assert!(engine.connect_subscription_using(update, |source,_,config,_,_| parse(source,config,&json!({"userId":"other-user","userQuota":{"total":10,"used":0,"remaining":10,"unit":"credits"}}))).is_err());
+        assert_eq!(json!(engine.store.settings().unwrap()), json!(before));
+    }
+
+    #[test]
+    fn harness_balance_account_has_no_history_path_and_native_sources_still_require_one() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(root.path()).unwrap();
+        let mut settings = engine.store.settings().unwrap();
+        let agent = settings
+            .agents
+            .iter_mut()
+            .find(|a| a.provider == "deepseek-harness")
+            .unwrap();
+        agent.enabled = true;
+        agent.machine_ids = vec!["local".into()];
+        engine.store.save_settings(&settings).unwrap();
+        let result=engine.connect_subscription_using(json!({"provider":"deepseek-harness","secret":"private-balance-fixture","subscription":{"mode":"api"}}),|source,_,config,_,url|{
+            assert_eq!(url,"https://api.deepseek.com/user/balance");parse(source,config,&json!({"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"10.00","granted_balance":"0.00","topped_up_balance":"10.00"}]}))
+        }).unwrap();
+        assert!(!result.to_string().contains("private-balance-fixture"));
+        let saved = engine.store.settings().unwrap();
+        let source = saved
+            .sources
+            .iter()
+            .find(|s| s.provider == "deepseek-harness")
+            .unwrap();
+        assert!(source.path.is_empty());
+        assert!(source.subscription.is_some());
+        let mut invalid = saved;
+        invalid
+            .sources
+            .iter_mut()
+            .find(|s| s.provider == "deepseek-harness")
+            .unwrap()
+            .subscription = None;
+        assert!(engine.store.save_settings(&invalid).is_err());
+    }
     use std::{
         io::{BufRead, BufReader, Write},
         net::TcpListener,

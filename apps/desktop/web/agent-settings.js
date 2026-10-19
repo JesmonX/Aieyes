@@ -174,6 +174,7 @@
     finally { if(state.page==='settings')renderSettings(false); }
   }
   const machineSources=(provider,machine)=>state.settings.sources.filter(s=>s.provider===provider&&machineId(s)===machine);
+  const hookSources=(provider,machine)=>machineSources(provider,machine).filter(s=>!s.subscription);
   function automaticMachineHTML(provider,machine) {
     return `<span class="tiny muted" data-auto-machine-status="${e(machine)}" data-auto-provider="${e(provider)}">估值 ${e(window.AieyesAutomatic.summary(machineSources(provider,machine)))}</span>`;
   }
@@ -181,18 +182,18 @@
   const hookLabels={installed:'已安装',missing:'等待监测安装',disabled:'已停用',error:'安装失败'};
   function hookState(source){const override=hookOverrides.get(source.id);if(override&&override.until>Date.now())return override.state;return sessionSnapshot.sources?.find(row=>row.sourceId===source.id)?.hooks??'missing';}
   function hookLabel(provider,machine){
-    const sources=machineSources(provider,machine);if(!sources.length)return '会话监测未启用';
+    const sources=hookSources(provider,machine);if(!sources.length)return '会话监测未启用';
     const active=sources.filter(s=>AieyesUI.sourceEnabled(state.settings,s));if(!active.length)return '采集已暂停';
-    if(provider==='codex')return active.every(s=>sessionSnapshot.sources?.some(row=>row.sourceId===s.id&&row.state==='healthy'))?'日志接入':'日志待确认';
+    if(['codex','kimi','codebuddy','deepseek-harness','grok','qoder','opencode','pi','omp'].includes(provider))return active.every(s=>sessionSnapshot.sources?.some(row=>row.sourceId===s.id&&row.state==='healthy'))?'日志接入':'日志待确认';
     const values=active.map(hookState);return values.includes('error')?'接入失败':values.includes('disabled')?'实时监测已停用':values.every(v=>v==='installed')?'会话监测已启用':'等待监测安装';
   }
-  function hooksHTML(provider,machine){return ['codex','claude','antigravity'].includes(provider)?`<button type="button" class="tiny" data-machine-hooks="${e(provider)}" data-machine="${e(machine)}" ${machineSources(provider,machine).length?'':'disabled'}>${e(hookLabel(provider,machine))}</button>`:'';}
+  function hooksHTML(provider,machine){return ['codex','claude','antigravity','cursor','kimi','codebuddy','deepseek-harness','grok','zcode','qoder','opencode','pi','omp'].includes(provider)?`<button type="button" class="tiny" data-machine-hooks="${e(provider)}" data-machine="${e(machine)}" ${hookSources(provider,machine).length?'':'disabled'}>${e(hookLabel(provider,machine))}</button>`:'';}
   function paintHooks(){document.querySelectorAll('[data-machine-hooks]').forEach(el=>updateText(el,hookLabel(el.dataset.machineHooks,el.dataset.machine)));}
   function updateSession(value){sessionSnapshot=value??{sources:[]};paintHooks();}
   function openHooks(provider,machine){
-    const sources=machineSources(provider,machine).filter((s,i,a)=>s.machineBinding!=='unbound'&&a.findIndex(v=>v.path===s.path)===i),dialog=document.createElement('dialog');
+    const sources=hookSources(provider,machine).filter((s,i,a)=>s.machineBinding!=='unbound'&&a.findIndex(v=>v.path===s.path)===i),dialog=document.createElement('dialog');
     dialog.id='session-hooks';dialog.setAttribute('aria-label','会话监测');
-    dialog.innerHTML=`<div class="between"><h2>会话监测 · ${e(deviceName(machine))}</h2><button data-close>完成</button></div><p class="muted">${provider==='codex'?'从 Codex 日志读取会话状态。':machine==='local'?'采集时自动监测会话；停用实时监测后仍读取日志。':'通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。'}</p>`+sources.map(source=>`<section class="sampling-row" data-hook-row="${e(source.id)}"><code>${e(source.path)}</code>${provider==='codex'?'':`<div class="between"><label><input type="checkbox" role="switch" data-hook-toggle ${hookState(source)==='disabled'?'':'checked'}>实时监测</label><span data-hook-label>${e(hookLabels[hookState(source)]??'等待监测安装')}</span><button data-hook-repair>修复监测</button></div>`}<div class="error" hidden></div></section>`).join('');
+    dialog.innerHTML=`<div class="between"><h2>会话监测 · ${e(deviceName(machine))}</h2><button data-close>完成</button></div><p class="muted">${['codex','kimi','codebuddy','deepseek-harness','grok','qoder','opencode','pi','omp'].includes(provider)?'从 '+e(providers[provider])+' 原生记录读取会话状态。':provider==='zcode'?'实时状态由 ZCode 原生监测提供；停用后仅显示已结算的状态。SSH 监测需要远端 Python 3。':provider==='cursor'?'从用户或项目的 .cursor/hooks.json 接收状态；停用后不再接收新状态。原生会话库的 Token 暂未接入，SSH 监测需要远端 Python 3。':machine==='local'?'采集时自动监测会话；停用实时监测后仍读取日志。':'通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。'}</p>`+sources.map(source=>`<section class="sampling-row" data-hook-row="${e(source.id)}"><code>${e(source.path)}</code>${['codex','kimi','codebuddy','deepseek-harness','grok','qoder','opencode','pi','omp'].includes(provider)?'':`<div class="between"><label><input type="checkbox" role="switch" data-hook-toggle ${hookState(source)==='disabled'?'':'checked'}>实时监测</label><span data-hook-label>${e(hookLabels[hookState(source)]??'等待监测安装')}</span><button data-hook-repair>修复监测</button></div>`}<div class="error" hidden></div></section>`).join('');
     document.body.append(dialog);dialog.showModal();dialog.querySelector('[data-close]').onclick=()=>dialog.close();dialog.onclose=()=>window.AieyesMotion?AieyesMotion.removeAfterExit(dialog):dialog.remove();
     let busy=false;dialog.oncancel=event=>{if(busy)event.preventDefault();};
     async function act(row,action){
@@ -226,8 +227,12 @@
     else {
       const section=(key,title,detail,content,opened=false)=>`<details class="card settings-disclosure" id="agent-section-${key}" data-agent-detail="settings:${agent.provider}:${key}" data-persist-disclosure="settings:${agent.provider}:${key}" ${disclosureOpen('settings:'+agent.provider+':'+key,opened)?'open':''}><summary><strong>${title}</strong><small>${e(detail)}</small></summary><div class="settings-section-body">${content}</div></details>`;
       body=`<section class="card agent-integration-header" data-provider="${e(agent.provider)}"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving?'disabled':''} ${agent.enabled?'checked':''}>启用</label></div>${agent.provider==='deepseek'?'<p class="muted">添加 API Key，通过本机查询账户余额。</p>':''}</section>`;
+      if(['pi','omp'].includes(agent.provider))body+='<p class="muted">额度由当前模型服务商提供；本地 Token 和预估费用不代表可用余额。</p>';
       body+=section('accounts','账户',state.settings.accounts.filter(a=>a.provider===agent.provider&&!a.archived).length+' 个账户',accountsHTML(false),true);
-      body+=section('api','API 连接',agent.provider==='codex'?(state.settings.codexApis??[]).length+' 个连接':'由账户管理',agent.provider==='codex'?(window.AieyesCodexAPI?.html()??''):'<p class="muted">此 Agent 的连接凭证在账户设置中管理。</p>');
+      const nativeApiSources=state.settings.sources.filter(s=>s.provider===agent.provider&&!s.hostId&&!s.subscription&&s.machineBinding!=='unbound');
+      const nativeApi=['opencode','codebuddy','kimi','deepseek-harness','claude','zcode','grok','qoder','pi','omp'].includes(agent.provider),protocol=agent.provider==='claude'?'Anthropic Messages':'Chat Completions';
+      const guidance=window.AieyesContract.apiGuidance?.[agent.provider],apiFallback=guidance?`<p class="muted">${e(guidance.hint)}</p><a href="${e(guidance.url)}" target="_blank" rel="noreferrer">${e(guidance.label||'CLI API 配置说明')}</a>${guidance.configurationUrl?` · <a href="${e(guidance.configurationUrl)}" target="_blank" rel="noreferrer">CLI 配置说明</a>`:''}${guidance.sdkUrl?` · <a href="${e(guidance.sdkUrl)}" target="_blank" rel="noreferrer">SDK 本地模型说明</a>`:''}`:'<p class="muted">原生模型 API 配置尚未接入此表单；订阅限额凭据请在账户设置中管理。</p>';
+      body+=section('api','API 连接',agent.provider==='codex'?(state.settings.codexApis??[]).length+' 个连接':nativeApi?'自定义模型':'连接方式',agent.provider==='codex'?(window.AieyesCodexAPI?.html()??''):nativeApi?`<p class="muted">验证 ${protocol} 端点后，保存到本机 ${e(providers[agent.provider])} 配置并设为默认模型。已有配置会备份，Key 保存在原生配置文件中。</p>`+nativeApiSources.map(s=>`<button type="button" data-native-api="${e(s.id)}">${e(s.name)} · 配置 API</button>`).join('')+(!nativeApiSources.length?'<p class="muted">先在机器与目录中添加本机数据目录。</p>':''):apiFallback);
       body+=section('machines','机器与目录',agent.machineIds.length+' 台机器',agent.provider==='deepseek'?'<p class="muted">通过本机直接查询账户余额，无需日志目录。</p>':agentsHTML());
       body+=section('valuation','估值与采样','自动估值与采样记录',agent.provider==='deepseek'?'<p class="muted">余额由 API 直接提供，无需额度估值。</p>':`<p class="muted">按来源管理自动估值，查看采样状态和已有记录。</p><button type="button" data-agent-estimates="${e(agent.provider)}">管理估值与采样</button>`);
     }
@@ -308,7 +313,7 @@
   }
   function detailsHTML(a){
     const selected=AieyesUI.panelAccounts(state.settings,state.dashboard?.quotaOrder??[]),isSelected=selected[a.provider]?.includes(accountKey(a));
-    return `<div class="between"><button id="account-detail-back">返回账户</button><button id="account-status-refresh" ${statusLoading?'disabled':''}>${statusLoading?'检查中…':'刷新设备状态'}</button></div><section class="card account-config"><h2>${providerMark(a.provider)} ${e(a.name)}</h2><p data-account-summary="${e(accountKey(a))}">${e(counts(a))}</p>${state.dashboard?.quotas?.find(q=>q.provider===a.provider&&q.accountId===a.id)?.error?`<div class="error">${AieyesUI.errorHTML(state.dashboard.quotas.find(q=>q.provider===a.provider&&q.accountId===a.id).error,'额度查询失败')}</div>`:''}<label>优先查询位置<select data-account-priority="${e(accountKey(a))}">${option('','自动 · 优先本机',draftValue(a,'quotaSourceId',a.quotaSourceId)||'')}${state.settings.sources.filter(s=>linked(a,s)).map(s=>option(s.id,deviceName(machineId(s))+' · '+s.name+(s.enabled?'':' · 已暂停'),draftValue(a,'quotaSourceId',a.quotaSourceId)||'')).join('')}</select></label><div class="actions"><label><input type="checkbox" data-account-quota="${e(accountKey(a))}" ${draftValue(a,'quotaEnabled',a.quotaEnabled)?'checked':''}>显示并查询额度</label><label><input type="checkbox" data-account-panel="${e(accountKey(a))}" ${isSelected?'checked':''} ${!a.quotaEnabled?'disabled':''}>在面板显示</label><button data-account-panel-manage>调整面板选择</button>${a.provider!=='codex'?`<button data-account-connect="${e(accountKey(a))}">${a.provider==='deepseek'?'更新 API Key':window.AieyesContract.subscriptions[a.provider]?'更新订阅登录':'连接机器'}</button>`:''}</div><p class="tiny muted" role="status">面板已选择 ${selected[a.provider]?.length??0} 个账户；手动选择不限数量，自动模式显示每类前五个。</p>${resetPreferencesHTML(a)}<label>查询间隔（秒）<input id="account-interval" data-account-field="quotaRefreshSeconds" data-account="${e(accountKey(a))}" type="number" min="5" max="86400" value="${e(draftValue(a,'quotaRefreshSeconds',a.quotaRefreshSeconds??''))}" placeholder="沿用全局 · ${state.settings.refreshSeconds} 秒"></label><label>账户名称<input id="account-name" data-account-field="name" data-account="${e(accountKey(a))}" value="${e(draftValue(a,'name',a.name))}"></label><label><input type="checkbox" data-account-archive="${e(accountKey(a))}" ${draftValue(a,'archived',a.archived)?'checked':''}>归档账户</label><p class="muted tiny">${pendingSaves?'正在保存…':''}</p><div data-account-save-errors="${e(accountKey(a))}">${[...accountErrors].filter(([key])=>key.startsWith(accountKey(a)+':')).map(([key,message])=>`<div class="error">${AieyesUI.errorHTML(message,'保存失败，输入已保留')} <button data-account-retry="${e(key)}">重试保存</button></div>`).join('')}</div>${syncHTML()}</section>`+
+    return `<div class="between"><button id="account-detail-back">返回账户</button><button id="account-status-refresh" ${statusLoading?'disabled':''}>${statusLoading?'检查中…':'刷新设备状态'}</button></div><section class="card account-config"><h2>${providerMark(a.provider)} ${e(a.name)}</h2><p data-account-summary="${e(accountKey(a))}">${e(counts(a))}</p>${state.dashboard?.quotas?.find(q=>q.provider===a.provider&&q.accountId===a.id)?.error?`<div class="error">${AieyesUI.errorHTML(state.dashboard.quotas.find(q=>q.provider===a.provider&&q.accountId===a.id).error,'额度查询失败')}</div>`:''}<label>优先查询位置<select data-account-priority="${e(accountKey(a))}">${option('','自动 · 优先本机',draftValue(a,'quotaSourceId',a.quotaSourceId)||'')}${state.settings.sources.filter(s=>linked(a,s)).map(s=>option(s.id,deviceName(machineId(s))+' · '+s.name+(s.enabled?'':' · 已暂停'),draftValue(a,'quotaSourceId',a.quotaSourceId)||'')).join('')}</select></label><div class="actions"><label><input type="checkbox" data-account-quota="${e(accountKey(a))}" ${draftValue(a,'quotaEnabled',a.quotaEnabled)?'checked':''}>显示并查询额度</label><label><input type="checkbox" data-account-panel="${e(accountKey(a))}" ${isSelected?'checked':''} ${!a.quotaEnabled?'disabled':''}>在面板显示</label><button data-account-panel-manage>调整面板选择</button>${a.provider!=='codex'?`<button data-account-connect="${e(accountKey(a))}">${a.provider==='deepseek'?'更新 API Key':window.AieyesContract.subscriptions[a.provider]?'更新额度凭据':'连接机器'}</button>`:''}</div><p class="tiny muted" role="status">面板已选择 ${selected[a.provider]?.length??0} 个账户；手动选择不限数量，自动模式显示每类前五个。</p>${resetPreferencesHTML(a)}<label>查询间隔（秒）<input id="account-interval" data-account-field="quotaRefreshSeconds" data-account="${e(accountKey(a))}" type="number" min="5" max="86400" value="${e(draftValue(a,'quotaRefreshSeconds',a.quotaRefreshSeconds??''))}" placeholder="沿用全局 · ${state.settings.refreshSeconds} 秒"></label><label>账户名称<input id="account-name" data-account-field="name" data-account="${e(accountKey(a))}" value="${e(draftValue(a,'name',a.name))}"></label><label><input type="checkbox" data-account-archive="${e(accountKey(a))}" ${draftValue(a,'archived',a.archived)?'checked':''}>归档账户</label><p class="muted tiny">${pendingSaves?'正在保存…':''}</p><div data-account-save-errors="${e(accountKey(a))}">${[...accountErrors].filter(([key])=>key.startsWith(accountKey(a)+':')).map(([key,message])=>`<div class="error">${AieyesUI.errorHTML(message,'保存失败，输入已保留')} <button data-account-retry="${e(key)}">重试保存</button></div>`).join('')}</div>${syncHTML()}</section>`+
     machines(a.provider,true).map(id=>{
       const sources=state.settings.sources.filter(s=>s.provider===a.provider&&machineId(s)===id),active=machines(a.provider).includes(id),rows=statuses(a,id);
       const resetRequired=a.deviceSettings?.some(d=>d.machineId===id&&d.preCommandResetRequired);
@@ -324,14 +329,21 @@
       accept(result.settings);cleanupRows=await api('accounts.cleanup.list');if(!Array.isArray(cleanupRows))cleanupRows=[];repaint();backgroundRefresh();
     },'confirmation');$('#editor-form button[type=submit]').textContent='确认删除';
   }
-  function advanced(existing, provider) {
+  async function advanced(existing, provider) {
     const base=structuredClone(state.settings), item=structuredClone(existing??{id:crypto.randomUUID(),provider,name:providers[provider],accountId:'',path:window.AieyesContract.defaultPaths[provider]||'',hostId:directorySelection?.machine==='local'?null:directorySelection?.machine??null,enabled:true,codexBinary:window.AieyesContract.binaries.codex,agyBinary:window.AieyesContract.binaries.antigravity,quotaCommand:'',quotaPreCommand:'',proxy:null});
-    showEditor(providers[item.provider]+' · 目录设置',select('hostId','机器',[['','本机'],...base.hosts.map(h=>[h.id,h.name||h.target])],item.hostId||'')+(item.subscription?'<input type="hidden" name="path" value=""><p class="muted">此来源只查询订阅；历史请在机器与采集中添加独立目录。</p>':field('path',item.provider==='deepseek'?'API Key 文件':'数据目录',item.path))+(item.codexHomeId?'<p class="muted">更换目录会解除旧账户连接，保留原文件和凭据。之后请读取新目录的登录。</p>':'')+(item.provider==='codex'?field('codexBinary','Codex 程序',item.codexBinary):'')+(item.provider==='antigravity'?field('agyBinary','agy 程序',item.agyBinary):'')+(item.provider==='custom'||window.AieyesContract.subscriptions[item.provider]?textarea('quotaCommand','额度查询命令',item.quotaCommand||''):'')+(item.hostId?'<p class="muted tiny">远程账户的前置命令在账户设置中配置，同机目录共享。</p>':proxyFields('source',item.proxy,true)),async f=>{
+    let defaultError='';
+    if(!existing){
+      try{item.path=(await api('sources.defaultPath',{provider:item.provider,hostId:item.hostId})).path;}
+      catch(error){item.path='';defaultError=error.message??String(error);}
+    }
+    showEditor(providers[item.provider]+' · 目录设置',select('hostId','机器',[['','本机'],...base.hosts.map(h=>[h.id,h.name||h.target])],item.hostId||'')+(item.subscription?'<input type="hidden" name="path" value=""><p class="muted">此来源只查询订阅；历史请在机器与采集中添加独立目录。</p>':field('path',item.provider==='deepseek'?'API Key 文件':'数据目录',item.path))+(item.codexHomeId?'<p class="muted">更换目录会解除旧账户连接，保留原文件和凭据。之后请读取新目录的登录。</p>':'')+(item.provider==='codex'?field('codexBinary','Codex 程序',item.codexBinary):'')+(item.provider==='antigravity'?field('agyBinary','agy 程序',item.agyBinary):'')+(['custom','kimi','deepseek-harness','codebuddy'].includes(item.provider)||window.AieyesContract.subscriptions[item.provider]?textarea('quotaCommand','额度查询命令',item.quotaCommand||''):'')+(item.hostId?'<p class="muted tiny">远程账户的前置命令在账户设置中配置，同机目录共享。</p>':proxyFields('source',item.proxy,true)),async f=>{
+      if(defaultError&&!item.subscription&&!f.get('path').trim())throw new Error('请选择实际的原生数据目录后保存');
       item.path=f.get('path').trim();if(!['antigravity','deepseek'].includes(item.provider)&&!window.AieyesContract.subscriptions[item.provider]&&!item.path)throw new Error('请输入数据目录');
       for(const key of ['codexBinary','agyBinary','quotaCommand'])if(f.has(key))item[key]=f.get(key);
       item.proxy=item.hostId?null:proxyValue(f,'source');
       accept(await api('sources.configure',{source:item,...(existing?{baseSource:existing}:{})}));markSaved();backgroundRefresh();renderSettings(false);
     });
+    if(defaultError){$('#editor-error').textContent=defaultError;$('#editor-error').hidden=false;}
     $('#field-hostId').disabled=true;if(!item.hostId)bindProxy('source');bindPathSelection(true);
   }
   function removeDirectory(source){showEditor('移除目录配置','<p>仅解除此目录的采集和账户连接；文件、登录凭证和历史记录保留。</p><code>'+e(source.path)+'</code>',async()=>{accept(await api('sources.remove',{sourceId:source.id,baseSource:source}));markSaved();backgroundRefresh();renderSettings(false);},'confirmation');$('#editor-form button[type=submit]').textContent='移除配置';}
@@ -343,15 +355,24 @@
     showEditor(providers[provider]+' · 连接订阅',
       '<p class="muted">'+e(spec.hint)+'</p><button type="button" id="subscription-login">打开官方登录 / 用量页</button>'+
       field('name','账户名称',account?.name||providers[provider]+' 账户')+
-      select('mode','订阅 / 地区',Object.entries(spec.modes),config.mode||Object.keys(spec.modes)[0])+
+      select('mode','服务 / 地区',Object.entries(spec.modes),config.mode||Object.keys(spec.modes)[0])+
       field('workspaceId','Workspace / Team ID（仅 Console 或 xAI API）',config.workspaceId||'')+
+      (provider==='qoder'?field('nativeConfigDir','CLI 配置目录',config.nativeConfigDir||'','留空跟随 CLI 默认目录'):'')+
       field('secret','API Key / 登录令牌 / Cookie','','','password')+
       (['grok','opencode'].includes(provider)?'<label><input type="checkbox" name="useLocalLogin">读取本机已登录凭据（仅 Grok 订阅 / OpenCode Go）</label>':'')+
-      '<p class="muted tiny">验证成功后保存到系统凭据库。不会切换客户端账户；登录失败不创建账户。</p>',async f=>{
-        const result=await api('subscriptions.connect',{provider,accountId:account?.id||'',name:f.get('name'),secret:f.get('secret'),useLocalLogin:f.has('useLocalLogin'),subscription:{mode:f.get('mode'),workspaceId:f.get('workspaceId').trim()}});
+      '<p class="muted tiny" id="subscription-storage-note"></p>',async f=>{
+        const result=await api('subscriptions.connect',{provider,accountId:account?.id||'',name:f.get('name'),secret:f.get('secret'),useLocalLogin:f.has('useLocalLogin'),subscription:{mode:f.get('mode'),workspaceId:(f.get('workspaceId')||'').trim(),nativeConfigDir:(f.get('nativeConfigDir')||'').trim()}});
         accept(result.settings);markSaved();backgroundRefresh();renderSettings(false);
       });
     $('#editor').dataset.kind='account';
+    const modeChanged=()=>{
+      const native=provider==='qoder'&&$('#field-mode').value==='cli';
+      for(const id of ['secret','workspaceId']) { const input=$('#field-'+id);input.disabled=native;input.closest('.form-row').hidden=native; }
+      if(provider==='qoder') { const input=$('#field-nativeConfigDir');input.disabled=!native;input.closest('.form-row').hidden=!native; }
+      $('#subscription-login').hidden=native;
+      $('#subscription-storage-note').textContent=native?'读取 CLI 当前登录并绑定账户身份，无需填写密钥。CLI 切换账号后请切回原账户或另建账户；查询失败不创建账户。':'验证成功后保存到系统凭据库。不会切换客户端账户；登录失败不创建账户。';
+    };
+    $('#field-mode').onchange=modeChanged;modeChanged();
     $('#subscription-login').onclick=()=>run(()=>api('subscriptions.openLogin',{provider,mode:$('#field-mode').value}));
   }
   function addAccount(account, selectedProvider) {
@@ -385,7 +406,39 @@
       $('#editor-form button[type=submit]').textContent=account?(provider==='deepseek'?'更新 API Key':'保存连接'):'添加账户';
     };draw();
   }
+  async function nativeApiEditor(sourceId) {
+    try {
+      const provider=state.settings.sources.find(s=>s.id===sourceId)?.provider,name=providers[provider]??'Agent';
+      let loaded,initialError='';
+      try{loaded=await api('agentApi.inspect',{sourceId});}
+      catch(error){initialError=error.message??String(error);loaded=await api('agentApi.inspect',{sourceId,locationOnly:true});}
+      const capacity=['kimi','deepseek-harness','zcode','grok','qoder','pi','omp'].includes(provider),output=['deepseek-harness','zcode','grok','qoder','pi','omp'].includes(provider),reasoning=['claude','zcode','codebuddy','pi','omp'].includes(provider);
+      showEditor(name+' · API 连接',(provider==='qoder'?'<p class="muted">此配置目录需先完成 qodercli login；保存通过原生 CLI 的自定义模型管理接口。</p>':'')+field('configPath',name+' 配置文件',loaded.configPath)+'<button type="button" id="native-api-read">读取此配置</button><p id="native-api-read-status" role="status"></p>'+field('baseUrl',provider==='claude'?'API 根地址（不含 /v1）':'Base URL（含 /v1）',loaded.baseUrl)+field('model','模型 ID',loaded.model)+(capacity?field('contextWindow','模型上下文窗口（Token）',loaded.contextWindow??'','例如 261000','number'):'')+(output?field('maxOutputTokens','最大输出 Token',loaded.maxOutputTokens??'','例如 2048','number'):'')+(provider==='claude'?select('authMode','认证方式',[['api-key','API Key · X-Api-Key'],['auth-token','Bearer Token']],loaded.authMode||'api-key'):'')+(reasoning?select('effort','推理强度',[['codebuddy','pi','omp'].includes(provider)?['disabled','不发送推理强度']:['',provider==='zcode'?'服务端默认':'客户端默认'],...(provider==='codebuddy'?[['minimal','minimal']]:[]),['low','low'],['medium','medium'],['high','high'],['xhigh','xhigh'],['max','max']],loaded.effort||(['codebuddy','pi','omp'].includes(provider)?'low':'')):'')+(provider==='codebuddy'?'<p class="muted">新连接默认使用 low；模型不支持推理参数时，选择“不发送推理强度”。</p>':'')+field('apiKey',provider==='claude'?'API Key / Token（留空保留）':'API Key（留空保留已保存 Key）','','','password')+`<label><input type="checkbox" name="noKey" ${loaded.noKey?'checked':''}>服务无需 Key</label><p class="muted">验证成功后保存并设为 ${e(name)} 默认模型。配置路径应与客户端实际使用的文件一致；客户端启动参数或环境变量可能覆盖文件设置。</p>`,async f=>{
+        if(f.get('configPath')!==loaded.configPath)throw new Error('配置路径已改变，请先读取此配置');
+        if(!loaded.revision)throw new Error('请先读取有效配置后保存');
+        await api('agentApi.save',{sourceId,configPath:loaded.configPath,revision:loaded.revision,nativeRevision:loaded.nativeRevision,baseUrl:f.get('baseUrl'),model:f.get('model'),apiKey:f.get('apiKey'),noKey:f.get('noKey')==='on',...(capacity?{contextWindow:Number(f.get('contextWindow'))}:{}),...(output?{maxOutputTokens:Number(f.get('maxOutputTokens'))}:{}),...(reasoning?{effort:f.get('effort')}:{}),...(provider==='claude'?{authMode:f.get('authMode')}:{})});
+        notify('API 已验证并保存，可重新打开 '+name+' 使用。');
+      });
+      $('#editor-form button[type=submit]').textContent='验证并保存';
+      $('#native-api-read-status').textContent=initialError;
+      $('#native-api-read').onclick=async()=>{
+        const button=$('#native-api-read');button.disabled=true;
+        try {
+          loaded=await api('agentApi.inspect',{sourceId,configPath:$('#field-configPath').value});
+          for(const key of ['configPath','baseUrl','model'])$('#field-'+key).value=loaded[key]??'';
+          if($('#field-contextWindow'))$('#field-contextWindow').value=loaded.contextWindow??'';
+          if($('#field-maxOutputTokens'))$('#field-maxOutputTokens').value=loaded.maxOutputTokens??'';
+          if($('#field-effort'))$('#field-effort').value=loaded.effort||(['codebuddy','pi','omp'].includes(provider)?'low':'');
+          if($('#field-authMode'))$('#field-authMode').value=loaded.authMode??'api-key';
+          $('#field-apiKey').value='';$('#editor-form [name=noKey]').checked=loaded.noKey;
+          $('#native-api-read-status').textContent=loaded.hasApiKey?'已读取，Key 已保存':'已读取';
+        }catch(error){$('#native-api-read-status').textContent=error.message??String(error);}
+        finally{button.disabled=false;}
+      };
+    }catch(error){run(()=>Promise.reject(error));}
+  }
   function bind() {
+    document.querySelectorAll('[data-native-api]').forEach(button=>button.onclick=()=>nativeApiEditor(button.dataset.nativeApi));
     bindMachineMenus();
     bindStatusActions();
     paintHooks();

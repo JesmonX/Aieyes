@@ -43,6 +43,7 @@ impl Store {
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
         CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,provider TEXT NOT NULL,account_id TEXT NOT NULL,model TEXT NOT NULL,stamp INTEGER NOT NULL,payload TEXT NOT NULL,cost REAL NOT NULL,priced_tokens INTEGER NOT NULL,price TEXT);
+        CREATE TABLE IF NOT EXISTS native_pending(source_id TEXT NOT NULL,path TEXT NOT NULL,row_id INTEGER NOT NULL,invalid INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(source_id,path,row_id));
         CREATE INDEX IF NOT EXISTS events_stamp ON events(stamp);
         CREATE INDEX IF NOT EXISTS events_model ON events(model);
         CREATE INDEX IF NOT EXISTS events_account ON events(provider,account_id);
@@ -63,6 +64,7 @@ impl Store {
         CREATE TABLE IF NOT EXISTS capacity_samples(account_key TEXT NOT NULL,stamp INTEGER NOT NULL,five REAL NOT NULL,week REAL NOT NULL,PRIMARY KEY(account_key,stamp));
         ")?;
         crate::usage_cache::setup(&db)?;
+        crate::native_credits::setup(&db)?;
         crate::quota_notifications::setup(&db)?;
         crate::remote_history::setup(&db)?;
         crate::codex_api::usage::setup(&db)?;
@@ -166,7 +168,10 @@ impl Store {
                     .filter(|p| p.discover_local)
                 {
                     let provider = entry.id;
-                    let root = home().join(entry.default_path.trim_start_matches("~/"));
+                    let Ok(path) = crate::provider_paths::default_path(provider, false) else {
+                        continue;
+                    };
+                    let root = expand(&path);
                     if root.is_dir() {
                         settings.sources.push(Source {
                             id: format!("local-{provider}"),
@@ -358,6 +363,10 @@ impl Store {
             );
             anyhow::ensure!(
                 !crate::providers::requires_path(&source.provider)
+                    || source.subscription.as_ref().is_some_and(|config| {
+                        crate::subscriptions::native_cli(&source.provider, config)
+                            || crate::subscriptions::endpoint(&source.provider, config).is_ok()
+                    })
                     || !source.path.trim().is_empty(),
                 "请输入数据目录"
             );
@@ -512,6 +521,10 @@ impl Store {
                         tx.execute("DELETE FROM event_sources WHERE source_id=?1", [&source.id])?;
                         tx.execute("DELETE FROM events WHERE NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=events.id)", [])?;
                         tx.execute("DELETE FROM files WHERE source_id=?1", [&source.id])?;
+                        tx.execute(
+                            "DELETE FROM native_pending WHERE source_id=?1",
+                            [&source.id],
+                        )?;
                         tx.execute("DELETE FROM source_status WHERE source_id=?1", [&source.id])?;
                     } else {
                         if old.account_id != source.account_id {
@@ -528,6 +541,10 @@ impl Store {
                         {
                             tx.execute("DELETE FROM files WHERE source_id=?1", [&source.id])?;
                             tx.execute(
+                                "DELETE FROM native_pending WHERE source_id=?1",
+                                [&source.id],
+                            )?;
+                            tx.execute(
                                 "DELETE FROM remote_cursors WHERE source_id=?1",
                                 [&source.id],
                             )?;
@@ -543,6 +560,7 @@ impl Store {
             }
         }
         tx.execute("DELETE FROM remote_cursors WHERE source_id NOT IN (SELECT json_extract(value,'$.id') FROM json_each(?1))", [serde_json::to_string(&s.sources)?])?;
+        tx.execute("DELETE FROM native_pending WHERE source_id NOT IN (SELECT json_extract(value,'$.id') FROM json_each(?1))", [serde_json::to_string(&s.sources)?])?;
         tx.execute("INSERT INTO kv VALUES('settings',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[serde_json::to_string(s)?])?;
         if !changed_models.is_empty() {
             self.reprice_in_transaction(s, true, Some(&changed_models))?;
@@ -783,7 +801,22 @@ impl Store {
             .and_then(|p| serde_json::from_str(p).ok());
         if let Some((old, _)) = &old {
             let prior: UsageEvent = serde_json::from_str(old)?;
+            match (&mut next.native_credits, prior.native_credits) {
+                (Some(next), Some(prior)) => {
+                    next.original_credits = next.original_credits.or(prior.original_credits);
+                    next.billable = next.billable.or(prior.billable);
+                    next.aliases.extend(prior.aliases);
+                    next.aliases.sort();
+                    next.aliases.dedup();
+                    next.mirror_of = next.mirror_of.take().or(prior.mirror_of);
+                }
+                (next @ None, prior) => *next = prior,
+                _ => {}
+            }
             next.import_identity = next.import_identity.or(prior.import_identity);
+            if next.provider == "codebuddy" && next.model == "unknown" && prior.model != "unknown" {
+                next.model = prior.model.clone();
+            }
             if crate::providers::antigravity(&next.provider)
                 && crate::antigravity::unknown_model(&next.model)
                 && !crate::antigravity::unknown_model(&prior.model)
@@ -833,6 +866,7 @@ impl Store {
                 next.billing = BillingEvidence::default();
             }
         }
+        crate::native_credits::resolve(self, &mut next)?;
         let price = frozen
             .as_ref()
             .or_else(|| pricing::find_price(&next.model, prices, &settings.model_mappings));
@@ -843,6 +877,7 @@ impl Store {
             "INSERT OR IGNORE INTO event_sources VALUES(?1,?2)",
             params![next.id, observed_source],
         )?;
+        crate::native_credits::persisted(self, &next)?;
         if let Some(identity) = &next.import_identity
             && next.id
                 != crate::usage::event_id(
@@ -952,6 +987,7 @@ impl Store {
             || (q.error.is_none()
                 && q.windows.is_empty()
                 && q.balances.is_empty()
+                && q.extra_usage.is_none()
                 && q.bank_reset.is_none())
         {
             return Ok(());
@@ -1247,12 +1283,12 @@ impl Store {
             .map(|v| v.timestamp())
             .unwrap_or(from);
         let mut options = self.db.prepare(
-            "SELECT DISTINCT model FROM events e WHERE stamp>=?1 AND stamp<=?2
+            "SELECT payload FROM events e WHERE stamp>=?1 AND stamp<=?2
              AND (?3 IS NULL OR provider=?3) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))))
              AND (?5 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?5))
              ORDER BY model",
         )?;
-        d.model_options = options
+        let option_rows = options
             .query_map(
                 params![
                     options_from,
@@ -1262,9 +1298,17 @@ impl Store {
                     f.source_id,
                     shared
                 ],
-                |row| row.get(0),
+                |row| row.get::<_, String>(0),
             )?
-            .collect::<rusqlite::Result<Vec<String>>>()?;
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut choices = std::collections::BTreeSet::new();
+        for raw in option_rows {
+            let mut event: UsageEvent = serde_json::from_str(&raw)?;
+            if crate::native_credits::prepare_view(self, &mut event, f.source_id.as_deref())? {
+                choices.insert(event.model);
+            }
+        }
+        d.model_options = choices.into_iter().collect();
         let mut days = BTreeMap::<String, Aggregate>::new();
         let mut heat = BTreeMap::<String, Aggregate>::new();
         let mut models = BTreeMap::<String, Aggregate>::new();
@@ -1274,8 +1318,8 @@ impl Store {
         let settings = self.settings()?;
         let prices = self.prices()?;
         while let Some(row) = rows.next()? {
-            let e: UsageEvent = serde_json::from_str(&row.get::<_, String>(0)?)?;
-            if e.tokens.total() == 0 {
+            let mut e: UsageEvent = serde_json::from_str(&row.get::<_, String>(0)?)?;
+            if !crate::native_credits::prepare_view(self, &mut e, f.source_id.as_deref())? {
                 continue;
             }
             let cost: f64 = row.get(1)?;
@@ -1396,6 +1440,7 @@ impl Store {
 }
 #[cfg(test)]
 fn add_aggregate(a: &mut Aggregate, e: &UsageEvent, cost: f64, n: u64) {
+    a.add_native_credits(e);
     a.tokens.add(&e.tokens);
     a.total = a.tokens.total();
     a.cost += cost;

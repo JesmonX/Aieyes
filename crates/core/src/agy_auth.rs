@@ -335,6 +335,25 @@ fn authorization_url(text: &str) -> Option<String> {
         })
         .next()
 }
+fn auth_directory(root: &std::path::Path, nonce: &str) -> Result<std::path::PathBuf> {
+    for attempt in 0..32 {
+        let path = root.join(format!("aieyes-agy-auth-{nonce}-{attempt}"));
+        let builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        let builder = {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
+            builder.mode(0o700);
+            builder
+        };
+        match builder.create(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error).context("无法创建 agy 授权临时目录"),
+        }
+    }
+    anyhow::bail!("无法分配独立的 agy 授权临时目录")
+}
 fn launch(session: Arc<Mutex<Session>>, source: Source, settings: Settings) {
     if let Ok(observation) = inspect(&source, &settings) {
         authenticated(&session, observation);
@@ -344,18 +363,16 @@ fn launch(session: Arc<Mutex<Session>>, source: Source, settings: Settings) {
         return;
     }
     let result = (|| -> Result<()> {
-        let dir = std::env::temp_dir().join(format!(
-            "aieyes-agy-auth-{}",
-            crate::codex_auth::files::new_id()
-        ));
-        std::fs::create_dir(&dir)?;
+        let dir = auth_directory(&std::env::temp_dir(), &crate::codex_auth::files::new_id())?;
         let outcome = (|| -> Result<()> {
-            let pair = portable_pty::native_pty_system().openpty(PtySize {
-                rows: 40,
-                cols: 200,
-                pixel_width: 0,
-                pixel_height: 0,
-            })?;
+            let pair = portable_pty::native_pty_system()
+                .openpty(PtySize {
+                    rows: 40,
+                    cols: 200,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .context("无法创建 agy 授权伪终端")?;
             let mut builder = command(&source, &settings)?;
             builder.cwd(&dir);
             let mut child = pair
@@ -594,6 +611,26 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn authorization_directory_collisions_preserve_existing_files() {
+        let root = tempfile::tempdir().unwrap();
+        let old = super::auth_directory(root.path(), "same-clock").unwrap();
+        std::fs::write(old.join("keep"), "existing").unwrap();
+        let next = super::auth_directory(root.path(), "same-clock").unwrap();
+        assert_ne!(old, next);
+        assert_eq!(
+            std::fs::read_to_string(old.join("keep")).unwrap(),
+            "existing"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(next).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+    }
     use super::*;
     #[test]
     fn failed_confirmation_write_keeps_the_prompt_and_cancel_clears_it() {

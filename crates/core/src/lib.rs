@@ -1,5 +1,6 @@
 mod account_targets;
 pub mod accounts;
+pub mod agent_api;
 pub mod agy_auth;
 mod agy_identity;
 pub mod antigravity;
@@ -13,19 +14,26 @@ pub mod contracts;
 pub mod credentials;
 pub mod estimates;
 pub mod file_lock;
+mod harness_history;
 mod history_corrections;
 mod host_sampling;
 pub mod import;
 pub mod metrics;
 pub mod models;
 pub mod monitoring;
+pub mod native_agents;
+mod native_credits;
+mod native_db;
+mod native_sessions;
 pub mod network;
 pub mod opencode;
 pub mod operations;
 pub mod pet_import;
 pub mod pets;
+mod pi_history;
 pub mod pricing;
 pub mod process;
+mod provider_paths;
 pub mod providers;
 pub mod quota;
 pub mod quota_notifications;
@@ -45,6 +53,7 @@ pub mod update_transport;
 pub mod usage;
 mod usage_cache;
 pub mod wakeups;
+pub mod zcode;
 
 use anyhow::{Context, Result};
 use models::*;
@@ -260,6 +269,7 @@ impl Engine {
             | "accounts.deployments.sync" => self.account_call(method, params),
             name if name.starts_with("agyAuth.") => self.agy_auth_call(name, params),
             name if name.starts_with("codexApi.") => self.codex_api_call(name, params),
+            name if name.starts_with("agentApi.") => self.agent_api_call(name, params),
             name if name.starts_with("codexAuth.") => self.codex_auth_call(name, params),
             name if name.starts_with("wakeups.") => self.wakeup_call(name, params),
             name if name.starts_with("quotaEstimates.") || name.starts_with("creditEstimates.") => {
@@ -414,6 +424,11 @@ impl Engine {
                 false,
             )?)?),
             "agents.set" => self.configure_agent(params),
+            "sources.defaultPath" => {
+                let provider = params["provider"].as_str().context("请选择 Agent")?;
+                let remote = params["hostId"].as_str().is_some_and(|id| !id.is_empty());
+                Ok(json!({"path":provider_paths::default_path(provider,remote)?}))
+            }
             "sources.configure" => self.configure_source(params, false),
             "sources.rebind" => self.rebind_source(params),
             "sources.remove" => self.configure_source(params, true),

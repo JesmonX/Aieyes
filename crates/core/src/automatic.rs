@@ -1113,6 +1113,7 @@ mod tests {
         e.store
             .put_event(
                 &UsageEvent {
+                    native_credits: None,
                     turn_id: String::new(),
                     id: id.into(),
                     source_id: source.id.clone(),

@@ -10,6 +10,11 @@
     "grok": "Grok",
     "cursor": "Cursor",
     "opencode": "OpenCode",
+    "kimi": "Kimi Code",
+    "deepseek-harness": "DeepSeek Harness",
+    "codebuddy": "CodeBuddy",
+    "pi": "Pi",
+    "omp": "Oh My Pi",
     "custom": "自定义"
   },
   "wakeupProviders": [
@@ -22,11 +27,16 @@
     "claude": "~/.claude",
     "antigravity": "~/.gemini/antigravity-cli",
     "deepseek": "",
-    "zcode": "~/.aieyes/imports/zcode",
-    "qoder": "~/.aieyes/imports/qoder",
-    "grok": "~/.aieyes/imports/grok",
-    "cursor": "~/.aieyes/imports/cursor",
+    "zcode": "~/.zcode",
+    "qoder": "~/.qoder",
+    "grok": "~/.grok",
+    "cursor": "~/.cursor",
     "opencode": "~/.local/share/opencode",
+    "kimi": "~/.kimi-code",
+    "deepseek-harness": "~/.dsh",
+    "codebuddy": "~/.codebuddy",
+    "pi": "~/.pi/agent",
+    "omp": "~/.omp/agent",
     "custom": "~/.aieyes"
   },
   "binaries": {
@@ -34,11 +44,16 @@
     "claude": "claude",
     "antigravity": "agy",
     "deepseek": "",
-    "zcode": "",
-    "qoder": "",
-    "grok": "",
-    "cursor": "",
+    "zcode": "zcode",
+    "qoder": "qodercli",
+    "grok": "grok",
+    "cursor": "agent",
     "opencode": "",
+    "kimi": "kimi",
+    "deepseek-harness": "dsh",
+    "codebuddy": "codebuddy",
+    "pi": "pi",
+    "omp": "omp",
     "custom": ""
   },
   "windows": {
@@ -155,6 +170,20 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "observe"
+    },
+    "agentApi.inspect": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    "agentApi.save": {
+      "lane": "main",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
     },
     "agents.set": {
       "lane": "configuration",
@@ -787,6 +816,13 @@
       "refreshKey": null,
       "updateBehavior": "finish"
     },
+    "sources.defaultPath": {
+      "lane": "configuration",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
     "sources.configure": {
       "lane": "configuration",
       "invalidates": [
@@ -954,8 +990,9 @@
       "loginUrl": "https://zcode.z.ai/en/docs/configuration"
     },
     "qoder": {
-      "hint": "复制对应站点的用量 Cookie。旧中国站与 qoder.cn 新账户不互通。",
+      "hint": "CLI 登录直接查询当前账户 Credits，无需复制令牌；请先运行 qodercli login。也可使用对应站点 Cookie，旧中国站与 qoder.cn 新账户不互通。",
       "modes": {
+        "cli": "本机 Qoder CLI 登录",
         "global": "qoder.com Cookie",
         "cn-legacy": "qoder.com.cn 旧站点 Cookie"
       },
@@ -983,9 +1020,47 @@
         "console": "Console Cookie / Workspace"
       },
       "loginUrl": "https://opencode.ai/console"
+    },
+    "kimi": {
+      "hint": "使用 Kimi Code 订阅的 API Key 或有效访问令牌；Moonshot 开放平台 Key 与自建模型不提供此订阅限额。请选择凭据对应地区。",
+      "modes": {
+        "cn": "Kimi Code 中国版 API Key / 访问令牌",
+        "global": "Kimi Code 国际版 API Key / 访问令牌"
+      },
+      "loginUrl": "https://www.kimi.com/code/console"
+    },
+    "deepseek-harness": {
+      "hint": "仅用于 Harness 的 DeepSeek 官方 API 后端：输入该后端的 API Key 查询余额。自建及其他第三方模型不共用此余额。",
+      "modes": {
+        "api": "DeepSeek 官方 API 余额"
+      },
+      "loginUrl": "https://platform.deepseek.com/usage"
     }
   },
-  "contractHash": "09027b8f8b81e770b7121ef5d9d1e2aff2b906fe2e1813e75184e4053e13f9ac",
+  "apiGuidance": {
+    "antigravity": {
+      "hint": "agy 自定义端点使用 Gemini 协议：在 CLI settings.json 设置 modelProvider=gemini，并在启动环境提供 GEMINI_API_KEY 和 GOOGLE_GEMINI_BASE_URL。OpenAI 兼容服务可通过官方 Python SDK 的 LocalOpenAIAgentConfig 使用。",
+      "url": "https://www.antigravity.google/docs/install?tab=cli",
+      "sdkUrl": "https://www.antigravity.google/docs/sdk/local-models"
+    },
+    "cursor": {
+      "hint": "Cursor CLI 的 CURSOR_API_KEY 使用 Cursor 账户生成的用户 API Key。--endpoint / CURSOR_API_ENDPOINT 指向兼容 Cursor 服务协议的端点，包含账户密钥交换；普通 OpenAI 兼容模型地址无法直接替代。模型请通过 /model 选择。",
+      "label": "CLI 登录与 API Key 说明",
+      "url": "https://cursor.com/docs/cli/reference/authentication",
+      "configurationUrl": "https://cursor.com/docs/cli/reference/configuration"
+    },
+    "pi": {
+      "url": "https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md",
+      "hint": "配置 Pi 原生 API 模型。Pi 不提供统一订阅余额；额度由所选模型服务商提供。",
+      "label": "Pi 模型与额度"
+    },
+    "omp": {
+      "url": "https://github.com/can1357/oh-my-pi/blob/main/docs/models.md",
+      "hint": "配置 Oh My Pi 原生 API 模型。额度属于所选模型服务商，不能由本地 Token 或预估费用推算余额。",
+      "label": "Oh My Pi 模型与额度"
+    }
+  },
+  "contractHash": "e9e81113601ab8ba9b2906e86cc984cc79ee84b628ccd4ad5330147399de525d",
   "petFrameDurations": [
     [
       280,

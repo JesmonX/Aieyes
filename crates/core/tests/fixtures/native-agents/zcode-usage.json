@@ -1,0 +1,14 @@
+{
+  "id": "usage_model_main_turn_msg_mvdbspkz_cf2aeb82-931e-403c-b716-82277a3e48c8_0",
+  "session": "sess_d01c3c8d-48dc-4ca1-8369-e211b4cef250",
+  "turn": "turn_30e0cf92-af96-4442-b1fc-5a7e9bbda8ac",
+  "model": "Qwen3.8-27B",
+  "completed": 1792297739892,
+  "input": 15162,
+  "output": 48,
+  "read": 0,
+  "write": 0,
+  "reasoning": 0,
+  "providerTotal": 15210,
+  "computedTotal": 15210
+}

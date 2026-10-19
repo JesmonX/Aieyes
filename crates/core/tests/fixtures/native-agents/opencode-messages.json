@@ -1,0 +1,74 @@
+[
+  {
+    "id": "msg_14d584bbd001vmN36or2PtuVIq",
+    "session": "ses_eb2a7b76effedktCKw2ZHQCug1",
+    "data": {
+      "role": "assistant",
+      "modelID": "Qwen3.8-27B",
+      "providerID": "aieyes-test",
+      "tokens": {
+        "total": 2745,
+        "input": 2707,
+        "output": 38,
+        "reasoning": 0,
+        "cache": {
+          "write": 0,
+          "read": 0
+        }
+      },
+      "time": {
+        "created": 1792298994621,
+        "completed": 1792298996770
+      },
+      "finish": "stop"
+    }
+  },
+  {
+    "id": "msg_14d596256001AKFtwocDzBMmSR",
+    "session": "ses_eb2a6a195ffe4sDx0JhuVzt4rT",
+    "data": {
+      "role": "assistant",
+      "modelID": "Qwen3.8-27B",
+      "providerID": "aieyes-test",
+      "tokens": {
+        "total": 2808,
+        "input": 2719,
+        "output": 89,
+        "reasoning": 0,
+        "cache": {
+          "write": 0,
+          "read": 0
+        }
+      },
+      "time": {
+        "created": 1792299065942,
+        "completed": 1792299068319
+      },
+      "finish": "tool-calls"
+    }
+  },
+  {
+    "id": "msg_14d596ba3001A1InHUZDM5r4mD",
+    "session": "ses_eb2a6a195ffe4sDx0JhuVzt4rT",
+    "data": {
+      "role": "assistant",
+      "modelID": "Qwen3.8-27B",
+      "providerID": "aieyes-test",
+      "tokens": {
+        "total": 2924,
+        "input": 2889,
+        "output": 35,
+        "reasoning": 0,
+        "cache": {
+          "write": 0,
+          "read": 0
+        }
+      },
+      "time": {
+        "created": 1792299068323,
+        "completed": 1792299069141
+      },
+      "finish": "stop"
+    }
+  }
+]

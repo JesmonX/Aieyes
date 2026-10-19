@@ -140,6 +140,9 @@ canvas { display:block; width:100%; height:var(--chart-height); }
 .daily[open] > summary::before, .metric-section[open] > summary::before, #live-sessions[open] > summary::before { transform: rotate(90deg); }
 .daily h2 { margin: 0; }
 .daily-table { margin-top: 17px; max-height: 420px; overflow: auto; }
+.daily-table th small { display:block; font-weight:400; white-space:normal; }
+.native-credits { margin-top:10px; overflow-wrap:anywhere; }
+.native-credits p { margin:6px 0; }
 
  .day > summary, .day-model { display: grid; grid-template-columns: minmax(130px, 1fr) 90px 105px 110px; align-items: center; gap: 12px; padding: 11px 6px; font-size: var(--font-secondary); }
 

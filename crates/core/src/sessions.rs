@@ -89,6 +89,8 @@ pub struct LiveSession {
     pub evidence: String,
     #[serde(skip)]
     pub background: bool,
+    #[serde(skip)]
+    pub event_at: u64,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -172,6 +174,29 @@ impl Snapshot {
             unique
                 .entry(s.id.clone())
                 .and_modify(|old| {
+                    if s.provider == "zcode" {
+                        // Stop hooks can request another model step. Only the
+                        // settled turn record confirms that this turn ended.
+                        let old_settled = old.evidence == "database" && old.phase.terminal();
+                        let new_settled = s.evidence == "database" && s.phase.terminal();
+                        if !s.turn_id.is_empty() && s.turn_id == old.turn_id {
+                            if old_settled && !new_settled {
+                                return;
+                            }
+                            if new_settled && !old_settled {
+                                *old = s.clone();
+                                return;
+                            }
+                        }
+                        // A new turn and the previous settlement may share the
+                        // same second; retain their native millisecond ordering.
+                        if s.event_at > 0 && old.event_at > 0 && s.event_at != old.event_at {
+                            if s.event_at > old.event_at {
+                                *old = s.clone();
+                            }
+                            return;
+                        }
+                    }
                     let old_hook = old.evidence == "hook" && old.phase != Phase::Unknown;
                     let new_hook = s.evidence == "hook" && s.phase != Phase::Unknown;
                     // A parallel tool return does not answer an outstanding DB permission request.
@@ -234,6 +259,9 @@ struct FileBatch {
     steps: Option<Vec<(i64, i64, i64)>>,
     alive: Option<bool>,
     database: bool,
+    continuation: Value,
+    #[cfg(test)]
+    read_bytes: u64,
 }
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -250,6 +278,7 @@ struct Cursor {
     offset: u64,
     modified: u64,
     activity: Activity,
+    continuation: Value,
 }
 // FSEvents registration/teardown can wait for its run loop. Keep both off the session lane.
 struct DirectoryWatch {
@@ -325,6 +354,15 @@ struct Reader {
     discovery: HashMap<String, Discovery>,
     hooks: HashMap<String, (Instant, session_hooks::HookStatus)>,
     databases: HashMap<PathBuf, (String, FileBatch)>,
+    native_databases: HashMap<
+        String,
+        (
+            PathBuf,
+            String,
+            Vec<FileBatch>,
+            crate::native_sessions::State,
+        ),
+    >,
     #[cfg(test)]
     database_reads: usize,
     processes: HashMap<(u32, u64), bool>,
@@ -354,7 +392,7 @@ fn wire_source(s: &Source) -> Value {
 }
 impl Reader {
     fn manifest(&self) -> Value {
-        Value::Object(self.cursors.iter().map(|(p,c)|(p.clone(),json!({"identity":c.identity,"signature":c.signature,"size":c.size,"offset":c.offset,"modified":c.modified,"pid":c.activity.pid,"processStart":c.activity.process_start}))).collect())
+        Value::Object(self.cursors.iter().map(|(p,c)|(p.clone(),json!({"identity":c.identity,"signature":c.signature,"size":c.size,"offset":c.offset,"modified":c.modified,"pid":c.activity.pid,"processStart":c.activity.process_start,"continuation":c.continuation}))).collect())
     }
     fn consume(
         &mut self,
@@ -367,16 +405,23 @@ impl Reader {
     ) -> Snapshot {
         let mut out = Snapshot::default();
         for f in batch.files {
+            if source.provider == "zcode" && f.hook && hook_state.as_deref() != Some("installed") {
+                continue;
+            }
             let cursor = self.cursors.entry(f.key.clone()).or_default();
             if f.reset {
                 cursor.activity = Activity::default();
             }
             if cursor.activity.session.is_empty() {
-                cursor.activity.session = Path::new(&f.key)
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
+                cursor.activity.session = if matches!(source.provider.as_str(), "kimi" | "grok") {
+                    crate::native_agents::session_id(Path::new(&f.key))
+                } else {
+                    Path::new(&f.key)
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                };
             }
             let database = f.database || f.steps.is_some();
             if let Some(steps) = f.steps {
@@ -386,6 +431,9 @@ impl Reader {
                 cursor.activity.session = f.session;
             } else {
                 for mut event in f.events {
+                    if source.provider == "zcode" && f.hook && event.kind == "Stop" {
+                        event.kind = "PostInvocation".into();
+                    }
                     if event.at == 0 {
                         event.at = f.modified * 1000;
                     }
@@ -397,6 +445,7 @@ impl Reader {
             cursor.modified = f.modified;
             cursor.identity = f.identity;
             cursor.signature = f.signature;
+            cursor.continuation = f.continuation;
             let Some(mut phase) = cursor.activity.phase else {
                 continue;
             };
@@ -449,12 +498,23 @@ impl Reader {
                 }
                 .into(),
                 background: cursor.activity.background_active(),
+                event_at: cursor.activity.at,
             });
         }
         let error = batch.error.or_else(|| {
+            if source.provider == "cursor" {
+                return (hook_state.as_deref()!=Some("installed")).then(|| "Cursor 实时监测未启用或配置不可用；原生私有会话库不能替代状态事件，请在接入与账户中启用或修复监测".into());
+            }
             (hook_state.as_deref() == Some("error"))
                 .then(|| "实时会话监测未就绪，暂从日志读取；可在接入与账户中修复监测".into())
         });
+        if source.provider == "cursor" && error.is_some() {
+            for session in &mut out.sessions {
+                if session.phase.active() {
+                    session.phase = Phase::Unknown;
+                }
+            }
+        }
         out.sources.push(SourceHealth {
             source_id: source.id.clone(),
             provider: source.provider.clone(),
@@ -475,12 +535,18 @@ impl Reader {
         self.processes.clear();
         let keys: HashSet<_> = sources
             .iter()
-            .map(|s| format!("{}:{}", s.provider, s.path))
+            .flat_map(|s| {
+                [
+                    format!("{}:{}:false", s.provider, s.path),
+                    format!("{}:{}:true", s.provider, s.path),
+                ]
+            })
             .collect();
         self.discovery.retain(|key, _| keys.contains(key));
         let mut out = Snapshot::default();
+        let mut retained = HashSet::new();
         for source in sources {
-            let hook = if matches!(source.provider.as_str(), "claude" | "antigravity") {
+            let hook = if session_hooks::supported(&source.provider) {
                 let key = session_hooks::key(source);
                 if self
                     .hooks
@@ -497,23 +563,133 @@ impl Reader {
                 None
             };
             let batch = self.collect_local(source, now);
+            retained.extend(batch.files.iter().map(|f| PathBuf::from(&f.key)));
             let snapshot = self.consume(source, batch, now, now, "本机", hook);
             out.sessions.extend(snapshot.sessions);
             out.sources.extend(snapshot.sources);
         }
-        let retained: HashSet<_> = self
-            .discovery
-            .values()
-            .flat_map(|d| d.paths.iter().map(|(p, _)| p.clone()))
-            .collect();
+        retained.extend(
+            self.discovery
+                .values()
+                .flat_map(|d| d.paths.iter().map(|(p, _)| p.clone())),
+        );
         self.databases.retain(|path, _| retained.contains(path));
+        self.native_databases
+            .retain(|id, _| sources.iter().any(|s| s.id == *id));
         self.cursors
             .retain(|path, _| retained.contains(Path::new(path)));
         out
     }
     fn collect_local(&mut self, source: &Source, now: u64) -> SourceBatch {
+        if matches!(source.provider.as_str(), "zcode" | "opencode")
+            && let Some(path) = if source.provider == "zcode" {
+                crate::zcode::database(&source.path)
+            } else {
+                crate::opencode::database(&source.path)
+            }
+        {
+            let before = database_fingerprint(&path);
+            let cached = self
+                .native_databases
+                .get(&source.id)
+                .filter(|(p, f, _, _)| *p == path && *f == before);
+            let mut batch = if let Some((_, _, files, _)) = cached {
+                SourceBatch {
+                    source_id: source.id.clone(),
+                    files: files.clone(),
+                    ..Default::default()
+                }
+            } else {
+                #[cfg(test)]
+                {
+                    self.database_reads += 1;
+                }
+                let prior = self
+                    .native_databases
+                    .get(&source.id)
+                    .filter(|(p, _, _, _)| *p == path)
+                    .map(|(_, _, _, state)| state.clone())
+                    .unwrap_or_default();
+                match crate::native_sessions::refresh(&source.provider, &path, prior, now) {
+                    Ok((state, rows)) => {
+                        let files: Vec<_> = rows
+                            .into_iter()
+                            .map(|(session, turn, kind, at)| FileBatch {
+                                key: format!("{}#{session}", path.display()),
+                                modified: at / 1000,
+                                reset: true,
+                                database: true,
+                                events: vec![
+                                    Event {
+                                        kind: "start".into(),
+                                        session: session.clone(),
+                                        turn: turn.clone(),
+                                        at,
+                                        ..Default::default()
+                                    },
+                                    Event {
+                                        kind,
+                                        session,
+                                        turn,
+                                        at,
+                                        ..Default::default()
+                                    },
+                                ],
+                                ..Default::default()
+                            })
+                            .collect();
+                        let mut cached = files.clone();
+                        for file in &mut cached {
+                            file.reset = false;
+                            file.events.clear();
+                        }
+                        self.native_databases.insert(
+                            source.id.clone(),
+                            (
+                                path.clone(),
+                                if before == database_fingerprint(&path) {
+                                    before
+                                } else {
+                                    String::new()
+                                },
+                                cached,
+                                state,
+                            ),
+                        );
+                        SourceBatch {
+                            source_id: source.id.clone(),
+                            files,
+                            ..Default::default()
+                        }
+                    }
+                    Err(error) => SourceBatch {
+                        source_id: source.id.clone(),
+                        error: Some(error.to_string()),
+                        files: self
+                            .native_databases
+                            .get(&source.id)
+                            .map(|(_, _, files, _)| files.clone())
+                            .unwrap_or_default(),
+                    },
+                }
+            };
+            batch
+                .files
+                .retain(|f| now.saturating_sub(f.modified) < 86400);
+            if source.provider == "zcode" {
+                let hooks = self.collect_logs_local(source, now, true);
+                batch.files.extend(hooks.files);
+                if hooks.error.is_some() {
+                    batch.error = hooks.error;
+                }
+            }
+            return batch;
+        }
+        self.collect_logs_local(source, now, false)
+    }
+    fn collect_logs_local(&mut self, source: &Source, now: u64, only_hooks: bool) -> SourceBatch {
         use std::sync::atomic::Ordering;
-        let key = format!("{}:{}", source.provider, source.path);
+        let key = format!("{}:{}:{only_hooks}", source.provider, source.path);
         let mut lost = false;
         if let Some(discovery) = self.discovery.get_mut(&key) {
             lost = discovery.watch.overflow.swap(false, Ordering::AcqRel);
@@ -555,7 +731,7 @@ impl Reader {
                             } else {
                                 "jsonl"
                             };
-                            if path.extension().is_none_or(|e| e != extension)
+                            if !native_log_path(&path, &source.provider, hook, extension)
                                 || !hook && path.components().any(|c| c.as_os_str() == ".aieyes")
                             {
                                 continue;
@@ -593,13 +769,17 @@ impl Reader {
                 error = Some("Agent 数据目录不存在".into());
             }
             let nested = root.join(match source.provider.as_str() {
-                "codex" => "sessions",
-                "claude" => "projects",
+                "codex" | "kimi" | "deepseek-harness" | "grok" | "pi" | "omp" => "sessions",
+                "claude" | "codebuddy" | "qoder" => "projects",
                 _ => "conversations",
             });
             let scan_root = if nested.is_dir() { nested } else { root };
-            let mut roots = vec![(local_session_path(&scan_root), false)];
-            if matches!(source.provider.as_str(), "claude" | "antigravity") {
+            let mut roots = if only_hooks || source.provider == "cursor" {
+                Vec::new()
+            } else {
+                vec![(local_session_path(&scan_root), false)]
+            };
+            if session_hooks::supported(&source.provider) {
                 let events = session_hooks::event_root(source);
                 if events.is_dir() {
                     roots.push((local_session_path(&events), true));
@@ -614,6 +794,18 @@ impl Reader {
                 .unwrap_or_else(|| DirectoryWatch::new(expand(&source.path)));
             for (root, hook) in &roots {
                 let hook = *hook;
+                if !hook && source.provider == "deepseek-harness" {
+                    match crate::harness_history::paths(root) {
+                        Ok(files) => paths.extend(
+                            files
+                                .into_iter()
+                                .filter(|p| now.saturating_sub(modified(p)) < 86400)
+                                .map(|p| (p, false)),
+                        ),
+                        Err(e) => error = Some(e.to_string()),
+                    }
+                    continue;
+                }
                 for entry in walkdir::WalkDir::new(root)
                     .max_depth(12)
                     .into_iter()
@@ -632,7 +824,7 @@ impl Reader {
                         "jsonl"
                     };
                     if !entry.file_type().is_file()
-                        || entry.path().extension().is_none_or(|e| e != extension)
+                        || !native_log_path(entry.path(), &source.provider, hook, extension)
                     {
                         continue;
                     }
@@ -668,7 +860,9 @@ impl Reader {
         };
         for (path, hook) in paths {
             let name = path.to_string_lossy().into_owned();
-            let result = if !hook && source.provider == "antigravity" {
+            let result = if !hook
+                && matches!(source.provider.as_str(), "antigravity" | "deepseek-harness")
+            {
                 let before = database_fingerprint(path);
                 if let Some((known, cached)) = self
                     .databases
@@ -682,7 +876,12 @@ impl Reader {
                     {
                         self.database_reads += 1;
                     }
-                    read_db(path).and_then(|row| {
+                    let read = if source.provider == "deepseek-harness" {
+                        read_dsh_session(path, self.cursors.get(&name))
+                    } else {
+                        read_db(path)
+                    };
+                    read.and_then(|row| {
                         anyhow::ensure!(
                             before == database_fingerprint(path),
                             "会话数据库读取期间发生变化，将重试"
@@ -690,6 +889,7 @@ impl Reader {
                         let mut cached = row.clone();
                         cached.steps = None;
                         cached.reset = false;
+                        cached.events.clear();
                         self.databases.insert(path.clone(), (before, cached));
                         Ok(row)
                     })
@@ -702,7 +902,7 @@ impl Reader {
                 Ok(f) => batch.files.push(f),
                 Err(e) => {
                     if !hook
-                        && source.provider == "antigravity"
+                        && matches!(source.provider.as_str(), "antigravity" | "deepseek-harness")
                         && let Some((_, cached)) = self.databases.get(path)
                     {
                         batch.files.push(cached.clone());
@@ -713,6 +913,131 @@ impl Reader {
         }
         batch
     }
+}
+fn native_log_path(path: &Path, provider: &str, hook: bool, extension: &str) -> bool {
+    if !hook && provider == "zcode" {
+        return false;
+    }
+    if !hook && provider == "grok" {
+        return path.file_name().is_some_and(|n| n == "events.jsonl");
+    }
+    if !hook && provider == "kimi" {
+        return path.file_name().is_some_and(|n| n == "wire.jsonl");
+    }
+    if !hook && provider == "deepseek-harness" {
+        return crate::native_agents::is_dsh_log(path);
+    }
+    path.extension().is_some_and(|e| e == extension)
+}
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct HarnessSessionCursor {
+    prefix: String,
+    offset: u64,
+    checkpoint: crate::models::HarnessCheckpoint,
+    inherited: bool,
+}
+
+fn read_dsh_session(path: &Path, previous: Option<&Cursor>) -> anyhow::Result<FileBatch> {
+    use crate::native_agents::{read_dsh_from, region_digest};
+    use std::io::{Read, Seek, SeekFrom};
+    let mut state: HarnessSessionCursor = previous
+        .and_then(|c| serde_json::from_value(c.continuation.clone()).ok())
+        .unwrap_or_default();
+    let mut file = fs::File::open(path)?;
+    let meta = file.metadata()?;
+    let size = meta.len();
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        format!("{}:{}", meta.dev(), meta.ino())
+    };
+    #[cfg(not(unix))]
+    let identity = format!("{:?}", meta.created());
+    let prefix = region_digest(&mut file, 0, size.min(128))?;
+    let resume = state.offset > 0
+        && state.offset <= size
+        && state.prefix == prefix
+        && state.checkpoint.identity == identity
+        && size > state.checkpoint.size
+        && region_digest(
+            &mut file,
+            state.offset.saturating_sub(128),
+            state.offset.min(128),
+        )? == state.checkpoint.anchor;
+    if !resume {
+        state = HarnessSessionCursor::default();
+    }
+    let offset = state.offset;
+    let fingerprint = database_fingerprint(path);
+    file.seek(SeekFrom::Start(offset))?;
+    let mut events = std::collections::VecDeque::new();
+    let mut header = None;
+    let (version, seed, plain_bytes) = read_dsh_from(
+        path,
+        file.take(size - offset),
+        offset,
+        state.checkpoint.version,
+        state.checkpoint.seed,
+        |row| {
+            if row["type"] == "session" {
+                header = session_events::native("deepseek-harness", &row);
+                state.inherited = row["isSeeded"] == true;
+                return Ok(());
+            }
+            if row["type"] == "session/end-seed" {
+                state.inherited = false;
+            }
+            if !state.inherited
+                && let Some(event) = session_events::native("deepseek-harness", &row)
+            {
+                if events.len() >= 2048 {
+                    events.pop_front();
+                }
+                events.push_back(event);
+            }
+            Ok(())
+        },
+    )?;
+    anyhow::ensure!(
+        fingerprint == database_fingerprint(path),
+        "Harness 会话读取期间发生变化，将重试"
+    );
+    if let Some(header) = header {
+        events.push_front(header);
+    }
+    state.offset = if path.extension().is_some_and(|e| e == "zstd") {
+        size
+    } else {
+        offset + plain_bytes
+    };
+    state.prefix = prefix;
+    state.checkpoint = crate::models::HarnessCheckpoint {
+        fingerprint: fingerprint.clone(),
+        identity: identity.clone(),
+        anchor: region_digest(
+            &mut fs::File::open(path)?,
+            state.offset.saturating_sub(128),
+            state.offset.min(128),
+        )?,
+        size,
+        version,
+        seed,
+    };
+    Ok(FileBatch {
+        key: path.to_string_lossy().into_owned(),
+        identity,
+        signature: fingerprint,
+        size,
+        offset: state.offset,
+        modified: modified(path),
+        reset: !resume,
+        events: events.into(),
+        continuation: serde_json::to_value(state)?,
+        #[cfg(test)]
+        read_bytes: size - offset,
+        ..Default::default()
+    })
 }
 fn process_alive(pid: u32, start: u64) -> bool {
     let mut system = sysinfo::System::new();
@@ -781,16 +1106,22 @@ fn read_file(
         data.drain(..skip);
     }
     let mut events = Vec::new();
-    if reset && provider == "codex" {
+    if reset && matches!(provider, "codex" | "pi" | "omp") {
         file.seek(SeekFrom::Start(0))?;
         let mut first = Vec::new();
         (&mut file).take(65536).read_to_end(&mut first)?;
-        if let Some(line) = first.split(|b| *b == b'\n').next()
-            && let Ok(v) = serde_json::from_slice::<Value>(line)
-            && let Some(e) = session_events::codex(&v)
-            && e.kind == "identity"
-        {
-            events.push(e);
+        for line in first.split(|b| *b == b'\n').take(2) {
+            if let Ok(v) = serde_json::from_slice::<Value>(line) {
+                let rows = if provider == "codex" {
+                    session_events::codex(&v).into_iter().collect()
+                } else {
+                    session_events::pi(&v)
+                };
+                events.extend(
+                    rows.into_iter()
+                        .filter(|e| e.kind == "identity" && !e.session.is_empty()),
+                );
+            }
         }
     }
     let complete = data
@@ -806,6 +1137,13 @@ fn read_file(
             if let Ok(e) = serde_json::from_value(value) {
                 events.push(e);
             }
+        } else if matches!(provider, "kimi" | "codebuddy" | "grok") {
+            if provider == "kimi" && value["type"] == "forked" {
+                events.clear();
+            }
+            events.extend(session_events::native(provider, &value));
+        } else if matches!(provider, "pi" | "omp") {
+            events.extend(session_events::pi(&value));
         } else if provider == "codex" {
             events.extend(session_events::codex(&value));
         } else {
@@ -857,7 +1195,7 @@ fn read_db(path: &Path) -> anyhow::Result<FileBatch> {
         ..Default::default()
     })
 }
-fn database_fingerprint(path: &Path) -> String {
+pub(crate) fn database_fingerprint(path: &Path) -> String {
     [
         path.to_owned(),
         PathBuf::from(format!("{}-wal", path.display())),
@@ -956,8 +1294,24 @@ impl SessionMonitor {
             .sources
             .iter()
             .filter(|s| {
-                settings.source_enabled(s)
-                    && matches!(s.provider.as_str(), "codex" | "claude" | "antigravity")
+                s.subscription.is_none()
+                    && settings.source_enabled(s)
+                    && matches!(
+                        s.provider.as_str(),
+                        "codex"
+                            | "claude"
+                            | "antigravity"
+                            | "kimi"
+                            | "codebuddy"
+                            | "deepseek-harness"
+                            | "grok"
+                            | "zcode"
+                            | "opencode"
+                            | "qoder"
+                            | "pi"
+                            | "omp"
+                            | "cursor"
+                    )
             })
             .map(normalized_source)
             .filter(|s| {
@@ -1251,6 +1605,180 @@ mod tests {
 mod adapter_tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn harness_session_state_resumes_at_validated_eof_and_retries_torn_frames() {
+        for compressed in [false, true] {
+            for count in [10, 3000] {
+                let temp = tempfile::tempdir().unwrap();
+                let path = temp.path().join(if compressed {
+                    "session.v4.jsonl.zstd"
+                } else {
+                    "session.v4.jsonl"
+                });
+                let now = seconds(SystemTime::now());
+                let mut content =
+                    json!({"type":"session","version":4,"id":"native-session","isSeeded":true})
+                        .to_string()
+                        + "\n";
+                for index in 0..count {
+                    content += &format!(
+                        "{}\n",
+                        json!({"type":"turn/end","time":now*1000,"seq":index,"data":{"turn":index,"reason":{"kind":"completed"}},"content":format!("PRIVATE-{index}")})
+                    );
+                }
+                let encode = |raw: &str| {
+                    if compressed {
+                        zstd::stream::encode_all(raw.as_bytes(), 1).unwrap()
+                    } else {
+                        raw.as_bytes().to_vec()
+                    }
+                };
+                let initial = encode(&content);
+                fs::write(&path, &initial).unwrap();
+                let first = read_dsh_session(&path, None).unwrap();
+                assert_eq!(first.read_bytes, initial.len() as u64);
+                assert_eq!(
+                    first.events.len(),
+                    1,
+                    "Inherited turns must not change live state"
+                );
+                let prior = Cursor {
+                    continuation: first.continuation,
+                    ..Default::default()
+                };
+                let added = encode(&format!(
+                    "{{\"type\":\"session/end-seed\"}}\n{}\n",
+                    json!({"type":"turn/start","time":now*1000,"data":{"turn":count}})
+                ));
+                if compressed {
+                    fs::OpenOptions::new()
+                        .append(true)
+                        .open(&path)
+                        .unwrap()
+                        .write_all(&added[..added.len() - 1])
+                        .unwrap();
+                    assert!(read_dsh_session(&path, Some(&prior)).is_err());
+                    fs::OpenOptions::new()
+                        .append(true)
+                        .open(&path)
+                        .unwrap()
+                        .write_all(&added[added.len() - 1..])
+                        .unwrap();
+                } else {
+                    fs::OpenOptions::new()
+                        .append(true)
+                        .open(&path)
+                        .unwrap()
+                        .write_all(&added)
+                        .unwrap();
+                }
+                let next = read_dsh_session(&path, Some(&prior)).unwrap();
+                assert!(!next.reset);
+                assert_eq!(
+                    next.read_bytes,
+                    added.len() as u64,
+                    "Prior history size {count} must not affect appended state reads"
+                );
+                assert_eq!(next.events.len(), 1);
+                assert_eq!(next.events[0].kind, "start");
+                assert!(!next.continuation.to_string().contains("PRIVATE"));
+            }
+        }
+    }
+    #[test]
+    fn zcode_live_hooks_resume_until_settlement_and_respect_disabled_monitoring() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = source(temp.path(), "zcode");
+        let path = temp.path().join("cli/db/db.sqlite");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE turn_usage(session_id TEXT,turn_id TEXT,status TEXT,started_at INTEGER,completed_at INTEGER);CREATE TABLE model_usage(session_id TEXT,turn_id TEXT,status TEXT);CREATE TABLE tool_usage(session_id TEXT,turn_id TEXT,status TEXT);").unwrap();
+        let root = session_hooks::event_root(&source);
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("session.jsonl");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let append = |kind: &str, turn: &str, offset: u64| {
+            writeln!(
+                fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&file)
+                    .unwrap(),
+                "{}",
+                json!({"kind":kind,"session":"s","turn":turn,"at":now*1000+offset})
+            )
+            .unwrap();
+        };
+        append("UserPromptSubmit", "t", 0);
+        let mut reader = Reader::default();
+        let key = session_hooks::key(&source);
+        reader.hooks.insert(
+            key.clone(),
+            (
+                Instant::now(),
+                session_hooks::HookStatus {
+                    source_id: source.id.clone(),
+                    provider: "zcode".into(),
+                    machine_id: "local".into(),
+                    config_path: String::new(),
+                    state: "installed".into(),
+                    error: None,
+                },
+            ),
+        );
+        let poll = |reader: &mut Reader| {
+            let mut snapshot = reader.local(std::slice::from_ref(&source), now);
+            snapshot.finish();
+            assert!(!snapshot.unavailable);
+            snapshot
+        };
+        assert_eq!(poll(&mut reader).phase(), Some(Phase::Working));
+        assert!(
+            reader
+                .cursors
+                .contains_key(local_session_path(&file).to_str().unwrap())
+        );
+        assert_eq!(reader.database_reads, 1);
+        assert!(
+            reader.collect_local(&source, now).files[0]
+                .events
+                .is_empty(),
+            "An unchanged hook file must retain its incremental cursor"
+        );
+        assert_eq!(
+            reader.database_reads, 1,
+            "Unchanged native statistics must not be queried again"
+        );
+        append("Stop", "t", 1);
+        assert_eq!(poll(&mut reader).phase(), Some(Phase::Working));
+        append("PreToolUse", "t", 2);
+        assert_eq!(poll(&mut reader).phase(), Some(Phase::Tool));
+        db.execute(
+            "INSERT INTO turn_usage VALUES('s','t','completed',?1,?2)",
+            [now * 1000, now * 1000 + 3],
+        )
+        .unwrap();
+        assert_eq!(poll(&mut reader).phase(), Some(Phase::Complete));
+        // The old failure and a new prompt share a second. The older turn
+        // must not win solely because failures have a higher UI priority.
+        db.execute("UPDATE turn_usage SET status='error'", [])
+            .unwrap();
+        append("UserPromptSubmit", "next", 4);
+        assert_eq!(poll(&mut reader).phase(), Some(Phase::Working));
+        reader.hooks.get_mut(&key).unwrap().1.state = "disabled".into();
+        assert_eq!(poll(&mut reader).phase(), Some(Phase::Failed));
+        reader.hooks.get_mut(&key).unwrap().1.state = "installed".into();
+        assert_eq!(poll(&mut reader).phase(), Some(Phase::Working));
+        db.execute(
+            "UPDATE turn_usage SET turn_id='next',status='future-status',completed_at=?1",
+            [now * 1000 + 5],
+        )
+        .unwrap();
+        assert_eq!(poll(&mut reader).phase(), Some(Phase::Unknown));
+    }
     fn source(root: &Path, provider: &str) -> Source {
         Source {
             id: provider.into(),

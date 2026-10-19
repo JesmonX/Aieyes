@@ -1,0 +1,5 @@
+{"type": "metadata", "protocol_version": "1.5", "created_at": 1792296697880}
+{"type": "turn.prompt", "agentId": "main", "turnId": 0, "time": 1792296697967}
+{"type": "llm.request", "agentId": "main", "provider": "openai", "model": "Qwen3.8-27B", "modelAlias": "qwen-test", "time": 1792296698075}
+{"type": "usage.record", "agentId": "main", "model": "qwen-test", "usage": {"inputOther": 20342, "output": 48, "inputCacheRead": 0, "inputCacheCreation": 0}, "usageScope": "turn", "time": 1792296700552}
+{"type": "turn.ended", "agentId": "main", "turnId": 0, "reason": "completed", "time": 1792296700571}

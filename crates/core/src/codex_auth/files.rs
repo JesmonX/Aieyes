@@ -100,6 +100,9 @@ pub fn revision(value: &Value) -> String {
     hash(&value.to_string())
 }
 pub fn atomic(path: &Path, value: &Value) -> Result<()> {
+    atomic_bytes(path, &serde_json::to_vec(value)?)
+}
+pub(crate) fn atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     safe(path)?;
     // Do not chmod CODEX_HOME itself: only the Aieyes-owned staging directory.
     let parent = path.parent().context("管理路径无效")?;
@@ -115,7 +118,7 @@ pub fn atomic(path: &Path, value: &Value) -> Result<()> {
         let mut f = options.open(&temp)?;
         #[cfg(windows)]
         restrict_acl(&temp, false)?;
-        f.write_all(serde_json::to_string(value)?.as_bytes())?;
+        f.write_all(bytes)?;
         f.sync_all()?;
         #[cfg(not(windows))]
         fs::rename(&temp, path)?;

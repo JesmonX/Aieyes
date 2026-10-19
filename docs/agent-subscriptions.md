@@ -1,4 +1,6 @@
-# ZCode、Qoder、Grok、Cursor、OpenCode 接入
+# ZCode、Qoder、Grok、Cursor、OpenCode、Kimi Code、Harness 接入
+
+2026-10-19 原生客户端安装、目录、真实模型调用、Kimi 额度与额外用量钱包、Harness 官方 API 余额、Qoder CLI Credits 及剩余验收项见[原生 Agent 验证记录](native-agent-verification.md)。下文套餐研究保留 2026-10-15 核实口径。
 
 核实日期：2026-10-15。价格用于说明计费边界，不作为运行时额度分母；账户返回的额度、周期和套餐名称优先。
 
@@ -28,6 +30,8 @@
 4. Grok API 余额需 **Management API Key** 和 Team ID，不是推理 API Key；OpenCode Console 需 Cookie 和 Workspace ID。
 5. 验证成功才创建账户；失败保留表单供重试。后续在账户详情更新订阅登录。凭据存在系统凭据库，配置只包含不透明引用；导出配置到另一台机器后需重新登录。
 
+Qoder 也可选择“本机 Qoder CLI 登录”（默认选项），无需填写 Cookie。先在原生 CLI 运行 `qodercli login`；自定义 `--config-dir` 时填写同一个配置目录。留空时跟随 Aieyes 进程继承的 `QODER_CONFIG_DIR`，未设置则使用 `~/.qoder`。Aieyes 发送无模型提示的 SDK 控制请求，独立显示套餐、加购和组织共享 Credits，并绑定服务端账户身份的哈希；客户端切换账户后拒绝更新原账户的额度。本模式不复制令牌到凭据库。0 / 0 Credits 显示无可用容量，缺失或仅有会话 Credits 时显示查询不可用。协议见 [Qoder 官方额度文档](https://docs.qoder.com/cli/sdk/cost-usage)。
+
 本机登录导入是一次快照，客户端后续切换账户不会让监测对象跟着变。Grok 多个 OIDC 登录存在时拒绝猜测，要求显式输入所需令牌。令牌到期需要重新登录/连接；不刷新或改写其他客户端的凭据。凭据验证有效不代表已确认客户端当前账户身份。
 
 ## 实现及接口边界
@@ -48,18 +52,32 @@ HTTP 仅访问代码中的固定 HTTPS 端点，禁用重定向，不跨区域�
 
 新 X Subscription 如返回尚未识别的 Cursor 协议，会显示不可用，应从 Grok 登录查询共享池或查看官方页面；当前没有跨 Agent 身份合并或共享池自动去重。Grok 缺少 `creditUsagePercent` 时不把 on-demand 消费上限当订阅额度。Qoder 新 `qoder.cn` API、企业组织切换、旧 Cursor 请求计数套餐尚未实现；可配置标准限额命令。
 
+## Kimi 额外用量钱包
+
+中国 / 国际额度查询同时读取官方 `boosterWallet`，依据[官方 CLI 协议源码](https://github.com/MoonshotAI/kimi-code/blob/main/packages/oauth/src/managed-usage.ts)。钱包 `balance.amount` / `amountLeft` 是每分 1,000,000 个定点单位；月度 `priceInCents` 是普通分。Aieyes 将两种单位分别转换为主要货币单位的精确十进制字符串，显示钱包总额、可用余额、本月扣费和月度上限。零余额保留，未提供的余额 / 上限状态显示未提供，不推断为 0 或已关闭。
+
+钱包独立于订阅窗口百分比、会话 Token 和请求 Credits；余额为 0、月度上限为 0 不代表订阅额度不可用。不设置或修改服务端扣费上限。无效钱包不丢弃有效订阅窗口；有效钱包也可在没有订阅窗口时保存和展示。整次刷新失败时保留带失败提示的上次结果。未知类型、金额格式或矛盾币种不转换为可用余额。
+
+`node scripts/test-kimi-wallet-ui.cjs` 使用协议样本快照、真实核心缓存 / dashboard 和两种 Web 窗口验证展示；Rust 回归另外核对原始协议、单位、精度及缓存，Swift 回归核对旧 / 新快照解码。这些测试和原生截图使用独立测试账户，真实 Kimi 付费账户的联网钱包查询尚缺对应凭据，不能用自建模型的 Token 代替。
+
 ## 历史数据
 
 五种 Agent 均可使用 [标准 JSONL](adapters.md) 导入 Token；在机器/采集设置指定导出目录。订阅来源本身不扫描历史，也不把 Cookie/Key 文件当日志。
 
-OpenCode 额外支持本机 `opencode.db`：v1 `message` 和 v2 `session_message`。只取已完成 assistant 的模型、时间、Token 和稳定 ID，排除正文、未完成消息；v2 表存在时只读取 v2，防止迁移重复。OpenCode reasoning 独立于 output，转为 Aieyes 的 output 包含 reasoning 口径；输入、缓存读取和缓存写入互斥。重复扫描幂等。当前按 256 条分页重读已完成统计，后续可增加基于 WAL 的增量游标。自定义 XDG 目录需在采集设置指定。
+Qoder 原生 assistant 的 `usage.credits` 作为独立请求计量读取，保留折扣前值和 `billable` 标记；即使 Token 为 0 也保留该请求。总览、按模型和每日明细分别显示原生 Credits，区分可计费、不计费及状态未提供，并标明折扣前数值的覆盖请求数。Credits 不折算成 Token 或 API 等价成本，也不用于推算账户余额；只有 Credits 的记录不会显示虚假的零成本。Result 的累计 Credits 不重复相加。字段口径见 [Qoder 官方说明](https://docs.qoder.com/cli/sdk/cost-usage)。
 
-原生 SQLite 读取仅支持本机。SSH 可导出标准 JSONL，凭据不复制到 SSH。历史默认属于设备来源，不能由本机日志推断整个账户的剩余额度。ZCode/Qoder/Cursor/Grok 的私有会话库未声明为已支持。
+OpenCode 额外支持本机 `opencode.db`：v1 `message` 和 v2 `session_message`。只取已完成 assistant 的模型、时间、Token 和稳定 ID，排除正文、未完成消息；v2 有真实数据时优先读取 v2，预建空表不会遮住仍在使用的 v1 记录。OpenCode reasoning 独立于 output，转为 Aieyes 的 output 包含 reasoning 口径；输入、缓存读取和缓存写入互斥。重复扫描幂等。本机与 SSH 使用 rowid 增量游标，每轮额外检查最多 256 条未完成请求，无变化时不读取旧行；已结算记录的人工修改通过显式 rescan 重放。新增来源遵循 `XDG_DATA_HOME/opencode`，已有来源保留明确路径。
+
+Pi / Oh My Pi 已接入原生日志、生命周期与本机 API 配置保存，分别使用 `~/.pi/agent`、`~/.omp/agent`（支持原生环境目录和 OMP Profile）。分叉与旧会话升级保持请求身份，缓存与推理 Token 按原生口径处理。二者没有统一客户端额度，额度属于实际模型服务商；本地用量和预估费用不代表余额。真实调用、SSH 与性能结果见[原生 Agent 验收记录](native-agent-verification.md)。
+
+OpenCode / ZCode 的 SSH SQLite 统计通过只读元数据投影读取；其他来源也可导出标准 JSONL，凭据不复制到 SSH。历史默认属于设备来源，不能由本机日志推断整个账户的剩余额度。Cursor 私有会话库未声明为已支持。新增原生路径与 SSH 实测边界见[验证记录](native-agent-verification.md)。
+
+Cursor 新来源默认指向 `~/.cursor`，可在用户或项目的 `.cursor/hooks.json` 安装、停用或修复只读状态观察器。该路径用于生命周期事件，CLI 的 `CURSOR_CONFIG_DIR` 不迁移用户 Hooks；私有数据库中的上下文 Token 不计入请求用量。发现私有库时明确提示 Token 读取尚未接入；标准 JSONL 可放在 `~/.cursor/imports`，也可继续选择原有导出文件或目录。用户没有 Cursor 账号，已明确排除登录及依赖账号的真实事件触发验收。
 
 参考：[OpenCode v2 SQL](https://github.com/anomalyco/opencode/blob/dev/packages/core/src/session/sql.ts)、[消息协议](https://github.com/anomalyco/opencode/blob/dev/packages/schema/src/session-message.ts)、[Token 口径](https://github.com/anomalyco/opencode/blob/dev/packages/schema/src/token-usage.ts)。
 
 ## 验证
 
-`cargo test --workspace --locked` 覆盖解析、缺失字段、比例单位、地区隔离、登录过期/多账户歧义、HTTP 重定向/错误脱敏、只读 SQLite、重复导入与失败建账。`node scripts/test-subscriptions-ui.cjs` 使用真实核心配置和模拟服务凭据，验证五种表单、官网打开、失败重试、取消和成功保存。该浏览器测试已纳入现有 Windows/Linux CI，现有 Core/macOS CI 检查三平台 Rust 和 Swift 编译。
+`cargo test --workspace --locked` 覆盖解析、缺失字段、比例单位、地区隔离、登录过期/多账户歧义、HTTP 重定向/错误脱敏、只读 SQLite、重复导入与失败建账。`node scripts/test-subscriptions-ui.cjs` 使用真实核心配置和模拟服务凭据，验证七种表单（含 Kimi Code 与 Harness）、官网打开、失败重试、取消和成功保存。该浏览器测试已纳入现有 Windows/Linux CI，现有 Core/macOS CI 检查三平台 Rust 和 Swift 编译。
 
-当前环境没有这五类服务的付费测试凭据；不声称已完成真实账户联网验收。接口变动需要脱敏样例和真实账户回归，不能仅凭合成测试宣称兼容全部套餐。
+Qoder 本机现有登录已完成真实额度和身份查询（套餐余额为 0 Credits）；其余付费接口的验收边界见[验证记录](native-agent-verification.md)。接口变动需要脱敏样例和真实账户回归，不能仅凭合成测试宣称兼容全部套餐。
