@@ -51,7 +51,7 @@ class PiHistoryTests(unittest.TestCase):
                 self.assertEqual(events(repeat),[])
                 self.assertEqual(repeat[-1]['readBytes'],0)
                 if provider=='omp':
-                    path.write_text(path.read_text().replace('PRIVATE_TITLE','CHANGED_TITLE',1))
+                    path.write_bytes(path.read_bytes().replace(b'PRIVATE_TITLE',b'CHANGED_TITLE',1))
                     title=collect(path,provider,saved)
                     self.assertEqual(events(title),[])
                     self.assertEqual(title[-1]['readBytes'],0)
@@ -112,7 +112,7 @@ class IncrementalHistory(unittest.TestCase):
         for v2 in (False,True):
             with self.subTest(v2=v2),tempfile.TemporaryDirectory() as directory:
                 root=pathlib.Path(directory);path=root/'opencode.db'
-                with sqlite3.connect(path) as db:
+                with contextlib.closing(sqlite3.connect(path)) as db, db:
                     db.executescript('CREATE TABLE message(id TEXT,session_id TEXT,data TEXT);CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT,data TEXT);CREATE TABLE part(data TEXT);INSERT INTO part VALUES(\'PRIVATE_TOOL_RESULT\');')
                     for row in json.loads(fixture.read_text()):
                         data=row['data'];data['content']='PRIVATE_PROMPT';data['apiKey']='PRIVATE_KEY'
@@ -154,7 +154,7 @@ class IncrementalHistory(unittest.TestCase):
     def test_zcode_native_sqlite_projection_is_readonly_and_incremental(self):
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory);path=root/'cli/db/db.sqlite';path.parent.mkdir(parents=True)
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 db.execute('CREATE TABLE model_usage(id TEXT,session_id TEXT,model_id TEXT,completed_at INTEGER,input_tokens INTEGER,output_tokens INTEGER,cache_read_input_tokens INTEGER,cache_creation_input_tokens INTEGER,reasoning_tokens INTEGER,provider_total_tokens INTEGER,computed_total_tokens INTEGER,status TEXT,raw_usage_json TEXT)')
                 db.execute("INSERT INTO model_usage VALUES('request','session','qwen',1792297739892,100,25,60,10,5,125,125,'completed','PRIVATE_RESPONSE')")
             before=path.read_bytes();first=collect(root,'zcode')

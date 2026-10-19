@@ -114,6 +114,12 @@ fn mixed_estimates_exclude_api_and_do_not_accept_unknown_intervals() {
 fn ledger_cursor_imports_late_completion_and_summary_deduplicates_responses() {
     let (_temporary, store, settings, root) = fixture();
     let stamp = now();
+    // The pending request may start on the previous day; this test covers the
+    // complete ledger rather than the dashboard's default "today" range.
+    let filter = Filter {
+        date_range: Some(crate::models::DateRange::All),
+        ..Default::default()
+    };
     let mut pending = request("slow", stamp - 900, "pending");
     pending["usage"] = Value::Null;
     gateway::save(&root, &pending).unwrap();
@@ -130,7 +136,7 @@ fn ledger_cursor_imports_late_completion_and_summary_deduplicates_responses() {
             .unwrap(),
         "completed"
     );
-    let summary = store.billing_summary(&Filter::default()).unwrap();
+    let summary = store.billing_summary(&filter).unwrap();
     assert_eq!(summary["apiTokens"], 120);
     assert_eq!(summary["incompleteRequests"], 0);
     assert!((summary["apiCost"].as_f64().unwrap() - 0.00262).abs() < 1e-9);
@@ -147,7 +153,7 @@ fn ledger_cursor_imports_late_completion_and_summary_deduplicates_responses() {
     gateway::save(&root, &missing).unwrap();
     usage::sync(&store, &settings, &settings.sources[0]).unwrap();
     assert_eq!(
-        store.billing_summary(&Filter::default()).unwrap()["incompleteRequests"],
+        store.billing_summary(&filter).unwrap()["incompleteRequests"],
         1,
         "ledger changes invalidate the dashboard cache"
     );

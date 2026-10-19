@@ -1,3 +1,4 @@
+import contextlib
 import importlib.util,json,os,pathlib,sqlite3,subprocess,sys,tempfile,unittest
 from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1]
@@ -12,7 +13,7 @@ class ObserverTests(unittest.TestCase):
                 stamp='2026-10-18T22:00:00Z'
                 rows=[dict(type='session',id='native-session',timestamp=stamp),dict(type='message',id='prompt',timestamp=stamp,message=dict(role='user',content='PRIVATE_PROMPT'))]
                 title=(json.dumps(dict(type='title',title='PRIVATE_TITLE')).ljust(255)+'\n') if provider=='omp' else ''
-                path.write_text(title+''.join(json.dumps(r)+'\n' for r in rows))
+                path.write_bytes((title+''.join(json.dumps(r)+'\n' for r in rows)).encode())
                 first=m.read_file(path,provider,False,{})
                 self.assertTrue(any(e.get('session')=='native-session' for e in first['events']))
                 self.assertEqual(first['events'][-1]['kind'],'start')
@@ -41,7 +42,7 @@ class ObserverTests(unittest.TestCase):
             result=subprocess.run([handler['command'],*handler['args']],input=json.dumps(dict(session_id='native',turn_id='turn',prompt='PRIVATE_PROMPT',tool_input=dict(secret='PRIVATE_KEY'))),capture_output=True,text=True,timeout=5)
             self.assertEqual(result.returncode,0);self.assertEqual(result.stdout,'')
             dbpath=cli/'db/db.sqlite';dbpath.parent.mkdir()
-            with sqlite3.connect(dbpath) as db:db.executescript('CREATE TABLE turn_usage(session_id TEXT,turn_id TEXT,status TEXT,started_at INTEGER,completed_at INTEGER);CREATE TABLE model_usage(session_id TEXT,turn_id TEXT,status TEXT);CREATE TABLE tool_usage(session_id TEXT,turn_id TEXT,status TEXT);')
+            with contextlib.closing(sqlite3.connect(dbpath)) as db, db:db.executescript('CREATE TABLE turn_usage(session_id TEXT,turn_id TEXT,status TEXT,started_at INTEGER,completed_at INTEGER);CREATE TABLE model_usage(session_id TEXT,turn_id TEXT,status TEXT);CREATE TABLE tool_usage(session_id TEXT,turn_id TEXT,status TEXT);')
             poll=m.collect(source,{})
             self.assertIsNone(poll['error']);self.assertEqual([f for f in poll['files'] if f['events']][0]['events'][-1]['kind'],'UserPromptSubmit');self.assertNotIn('PRIVATE',json.dumps(poll))
             data['hooks']['enabled']=False;config.write_text(json.dumps(data));before=config.read_bytes()
@@ -91,7 +92,7 @@ class ObserverTests(unittest.TestCase):
         import time
         with tempfile.TemporaryDirectory() as directory:
             path=pathlib.Path(directory)/'opencode.db';stamp=int(time.time()*1000)
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 db.executescript('CREATE TABLE message(id TEXT,session_id TEXT,time_created INTEGER,time_updated INTEGER,data TEXT);CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT,time_created INTEGER,time_updated INTEGER,data TEXT);CREATE TABLE part(message_id TEXT,data TEXT);')
                 data=dict(role='assistant',finish='tool-calls',time=dict(completed=stamp),content='PRIVATE_PROMPT')
                 db.execute('INSERT INTO message VALUES(?,?,?,?,?)',('m','s',stamp,stamp,json.dumps(data)))
@@ -100,7 +101,7 @@ class ObserverTests(unittest.TestCase):
             first=m.collect(source,{})
             self.assertIsNone(first['error']);self.assertEqual(first['files'][0]['events'][-1]['kind'],'PermissionRequest')
             self.assertNotIn('PRIVATE_',json.dumps(first))
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 data['finish']='stop';db.execute('UPDATE message SET data=?',(json.dumps(data),))
             self.assertEqual(m.collect(source,{})['files'][0]['events'][-1]['kind'],'complete')
 
@@ -108,7 +109,7 @@ class ObserverTests(unittest.TestCase):
         import time
         with tempfile.TemporaryDirectory() as directory:
             path=pathlib.Path(directory)/'cli/db/db.sqlite';path.parent.mkdir(parents=True)
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 db.executescript('CREATE TABLE turn_usage(session_id TEXT,turn_id TEXT,status TEXT,started_at INTEGER,completed_at INTEGER);CREATE TABLE model_usage(session_id TEXT,turn_id TEXT,status TEXT);CREATE TABLE tool_usage(session_id TEXT,turn_id TEXT,status TEXT);CREATE TABLE message(content TEXT);INSERT INTO message VALUES(\'PRIVATE_RESPONSE\');')
                 db.execute("INSERT INTO turn_usage VALUES('s','t','running',?,NULL)",(int(time.time()*1000),))
                 db.execute("INSERT INTO model_usage VALUES('s','t','running')")
@@ -118,10 +119,10 @@ class ObserverTests(unittest.TestCase):
             # tool/model transitions come from the native process observer.
             self.assertIsNone(first['error']);self.assertEqual(first['files'][0]['events'][-1]['kind'],'start')
             self.assertNotIn('PRIVATE_RESPONSE',json.dumps(first))
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 db.execute("UPDATE turn_usage SET status='completed',completed_at=?",(int(time.time()*1000),))
             self.assertEqual(m.collect(source,{})['files'][0]['events'][-1]['kind'],'complete')
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 db.execute("UPDATE turn_usage SET status='future-status'")
             self.assertEqual(m.collect(source,{})['files'][0]['events'][-1]['kind'],'unknown')
 

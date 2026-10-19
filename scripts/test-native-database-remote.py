@@ -1,4 +1,5 @@
 """Actual SQLite reads against disposable native schemas; no SSH or credentials."""
+import contextlib
 import importlib.util
 import json
 import pathlib
@@ -15,7 +16,7 @@ spec.loader.exec_module(m)
 
 
 def create(path, provider):
-    with sqlite3.connect(path) as db:
+    with contextlib.closing(sqlite3.connect(path)) as db, db:
         if provider == 'opencode':
             db.executescript('CREATE TABLE message(id TEXT,session_id TEXT,time_created INTEGER,time_updated INTEGER,data TEXT);CREATE TABLE part(message_id TEXT,data TEXT);CREATE INDEX part_message ON part(message_id);')
         else:
@@ -85,7 +86,7 @@ class NativeDatabaseTests(unittest.TestCase):
                 with self.subTest(provider=provider, count=count), tempfile.TemporaryDirectory() as directory:
                     path = pathlib.Path(directory) / 'native.db'
                     create(path, provider)
-                    with sqlite3.connect(path) as db:
+                    with contextlib.closing(sqlite3.connect(path)) as db, db:
                         for number in range(count):
                             add(db, provider, number, complete=number != 0)
                     before = path.read_bytes()
@@ -95,7 +96,7 @@ class NativeDatabaseTests(unittest.TestCase):
                     self.assertNotIn('PRIVATE_', json.dumps(queue.frames))
                     with patch.object(m, 'connect', side_effect=AssertionError('unchanged file opened SQLite')):
                         self.assertEqual(queue.scan(path, provider), dict(readBytes=0, scannedRecords=0))
-                    with sqlite3.connect(path) as db:
+                    with contextlib.closing(sqlite3.connect(path)) as db, db:
                         settle(db, provider, 0)
                         add(db, provider, count)
                     self.assertEqual(queue.scan(path, provider)['scannedRecords'], 2)
@@ -107,12 +108,12 @@ class NativeDatabaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / 'native.db'
             create(path, 'opencode')
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 for number in range(700):
                     add(db, 'opencode', number, complete=False)
             queue = Queue()
             queue.scan(path, 'opencode')
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 settle(db, 'opencode', 693)
                 db.execute("DELETE FROM message WHERE id='10'")
             for _ in range(3):
@@ -126,7 +127,7 @@ class NativeDatabaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / 'native.db'
             create(path, 'opencode')
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 for number in range(700):
                     add(db, 'opencode', number)
             queue = Queue()
@@ -144,20 +145,20 @@ class NativeDatabaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / 'native.db'
             create(path, 'opencode')
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 add(db, 'opencode', 0)
                 db.execute('CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT,time_created INTEGER,time_updated INTEGER,data TEXT)')
             queue = Queue()
             queue.scan(path, 'opencode')
             self.assertEqual(queue.cursor['table'], 'message')
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 db.execute("INSERT INTO session_message SELECT id,session_id,'assistant',time_created,time_updated,json_set(data,'$.model',json_object('id','fixture','providerID','provider')) FROM message")
             queue.scan(path, 'opencode')
             self.assertEqual(queue.cursor['table'], 'session_message')
             self.assertTrue(queue.frames[0]['nativeReset'])
             replacement = path.with_name('replacement.db')
             create(replacement, 'opencode')
-            with sqlite3.connect(replacement) as db:
+            with contextlib.closing(sqlite3.connect(replacement)) as db, db:
                 add(db, 'opencode', 1)
             replacement.replace(path)
             queue.scan(path, 'opencode')
@@ -171,7 +172,7 @@ class NativeDatabaseTests(unittest.TestCase):
                     path = pathlib.Path(directory) / 'native.db'
                     create(path, provider)
                     now = int(time.time())
-                    with sqlite3.connect(path) as db:
+                    with contextlib.closing(sqlite3.connect(path)) as db, db:
                         for number in range(count):
                             add(db, provider, number, complete=number != count - 1, stamp=now * 1000 - count + number)
                     files, scanned = m.sessions(path, provider, {}, now)
@@ -183,13 +184,13 @@ class NativeDatabaseTests(unittest.TestCase):
                         cached, scanned = m.sessions(path, provider, cursor, now)
                         self.assertEqual(scanned, 0)
                         self.assertFalse(cached[0]['reset'])
-                    with sqlite3.connect(path) as db:
+                    with contextlib.closing(sqlite3.connect(path)) as db, db:
                         settle(db, provider, count - 1)
                         add(db, provider, count, complete=False)
                     files, scanned = m.sessions(path, provider, cursor, now)
                     self.assertEqual(scanned, 2)
                     self.assertEqual(files[0]['events'][-1]['turn'], str(count))
-                    with sqlite3.connect(path) as db:
+                    with contextlib.closing(sqlite3.connect(path)) as db, db:
                         settle(db, provider, count)
                     files, scanned = m.sessions(path, provider, files[-1], now)
                     self.assertEqual(scanned, 1)
@@ -199,13 +200,13 @@ class NativeDatabaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / 'native.db'
             create(path, 'opencode')
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 for number in range(700):
                     add(db, 'opencode', number, session=str(number))
             now = int(time.time())
             files, _ = m.sessions(path, 'opencode', {}, now)
             self.assertEqual(len(files[-1]['continuation']['rows']), 256)
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 add(db, 'opencode', 700, session='new')
             files, scanned = m.sessions(path, 'opencode', files[-1], now)
             self.assertEqual(scanned, 257)
