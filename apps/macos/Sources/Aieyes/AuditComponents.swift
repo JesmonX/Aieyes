@@ -130,7 +130,14 @@ struct EstimateEntry: View {
     }
     private var help: String {
         let rolling = latest?.samplingMode == "rolling" ? (latest?.calculationNote ?? "") + "\n" : ""
-        return rolling + entries.map { $0.label + " ≈ " + Format.money($0.value) + " USD · " + ($0.historical ? "历史采样 · " : "") + Format.date($0.record.checkpointAt) }.joined(separator: "\n") + (credits ? "" : "\n" + EstimatePresentation.visibility(quota, records: records, group: group).help)
+        let lines: [String] = entries.map { entry in
+            let amount = Format.money(entry.value)
+            let historical = entry.historical ? "历史采样 · " : ""
+            let date = Format.date(entry.record.checkpointAt)
+            return "\(entry.label) ≈ \(amount) USD · \(historical)\(date)"
+        }
+        let visibility = credits ? "" : "\n" + EstimatePresentation.visibility(quota, records: records, group: group).help
+        return rolling + lines.joined(separator: "\n") + visibility
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
