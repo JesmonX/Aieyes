@@ -173,6 +173,8 @@ function fixture() {
     await panel.emulateMedia({colorScheme:'dark'});await panel.screenshot({animations:'disabled',path:path.join(previews,'floating-panel-fixed-dark.png')});await panel.emulateMedia({colorScheme:'light'});
     assert.equal(await panel.locator('body').getAttribute('data-view'),'panel','Changing theme preserves the current panel state');
     await panel.evaluate(async()=>{review.empty=false;await loadDashboard();});assert.equal(await panel.locator('#trend').count(),0);
+    assert.equal(await panel.locator('[data-overview-agent=codex]').count(),0,'A disabled Agent stays hidden even when historical data exists');
+    await panel.evaluate(async()=>{review.settings.sources[0].enabled=true;await reviewEmit('desktop:settings',null);});
     await panel.locator('[data-overview-agent=codex]').focus();await panel.evaluate(()=>loadDashboard());
     assert.equal(await panel.locator('[data-overview-agent=codex]').evaluate(el=>el===document.activeElement),true,'Background refresh preserves the Agent selector focus');
     assert.equal(await panel.evaluate(()=>state.days),1,'Glance starts at today');
