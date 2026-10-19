@@ -27,6 +27,8 @@ public static class PanelProbe {
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h,uint message,IntPtr w,IntPtr l);
   [DllImport("user32.dll")] public static extern bool GetMenuItemRect(IntPtr owner,IntPtr menu,uint item,out Rect rect);
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetMenuString(IntPtr menu,uint item,StringBuilder text,int size,uint flags);
+  [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr menu);
+  [DllImport("user32.dll")] public static extern uint GetMenuState(IntPtr menu,uint item,uint flags);
   [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
   [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr desktop);
   [DllImport("user32.dll")] public static extern bool SwitchDesktop(IntPtr desktop);
@@ -103,6 +105,22 @@ function Choose-MenuItem([uint32]$Index,[string]$Expected) {
     Assert-That ([PanelProbe]::GetMenuItemRect([IntPtr]::Zero,$menu,$Index,[ref]$rect)) "locate native menu item: $Expected"
     Click-At (($rect.Left+$rect.Right)/2) (($rect.Top+$rect.Bottom)/2)
     Wait-For { [PanelProbe]::FindMenu($app.Id) -eq [IntPtr]::Zero } 'menu selection completes'
+    Pump 200
+}
+function Verify-PetMenu {
+    Open-PetMenu
+    $popup=[PanelProbe]::FindMenu($app.Id)
+    $menu=[PanelProbe]::SendMessage($popup,0x1e1,[IntPtr]::Zero,[IntPtr]::Zero)
+    $expected=@('打开面板','设置…','桌宠设置','','检查更新','隐藏桌宠')
+    Assert-That ([PanelProbe]::GetMenuItemCount($menu) -eq $expected.Count) 'native menu matches macOS entry count'
+    for($index=0;$index -lt $expected.Count;$index++) {
+        $label=New-Object Text.StringBuilder 256
+        $null=[PanelProbe]::GetMenuString($menu,$index,$label,256,0x400)
+        Assert-That ($label.ToString() -eq $expected[$index]) "native menu entry ${index}: $($expected[$index])"
+    }
+    $script:canHidePet=([PanelProbe]::GetMenuState($menu,5,0x400) -band 3) -eq 0
+    Click-At 25 200
+    Wait-For { [PanelProbe]::FindMenu($app.Id) -eq [IntPtr]::Zero } 'outside click cancels menu'
     Pump 200
 }
 function Panel-Visible { $script:panel=[PanelProbe]::Find($app.Id,'Aieyes 面板',$false);return $script:panel -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:panel) }
@@ -207,25 +225,32 @@ try {
     for($i=0;$i -lt 12;$i++) {Pet-Click;Wait-For {Panel-Visible} 'repeat open';Pet-Click;Wait-For {-not (Panel-Visible)} 'repeat close'}
     Assert-That (-not (Panel-Visible)) 'repeated pet toggles end fully hidden'
     Pet-Click;Wait-For {Panel-Visible} 'open before menu'
-    Open-PetMenu;Click-At 25 200;Wait-For { [PanelProbe]::FindMenu($app.Id) -eq [IntPtr]::Zero } 'outside click cancels menu';Pump 200
+    Verify-PetMenu
     Assert-That (Panel-Visible) 'canceling pet menu preserves open panel'
-    # Select the second item: pin; then prove outside clicks no longer dismiss.
-    Choose-MenuItem 1 '固定面板'
-    Click-At 25 200;Assert-That (Panel-Visible) 'pinned panel survives outside click'
-    Choose-MenuItem 1 '取消固定面板'
-    Click-At 25 200;Wait-For {-not (Panel-Visible)} 'unpin restores outside dismissal'
-    Pet-Click;Wait-For {Panel-Visible} 'open before renderer rebuild'
-    $oldPanel=$script:panel
-    Choose-MenuItem 2 '重建面板（用于界面无响应）'
-    Wait-For {(Panel-Visible) -and $script:panel -ne $oldPanel} 'rebuild creates a new visible panel'
-    Pet-Click;Wait-For {-not (Panel-Visible)} 'rebuilt panel closes'
+    Pet-Click;Wait-For {-not (Panel-Visible)} 'close before menu open action'
+    Choose-MenuItem 0 '打开面板'
+    Wait-For {Panel-Visible} 'native menu opens panel'
+    Pet-Click;Wait-For {-not (Panel-Visible)} 'menu-opened panel closes'
+    foreach($entry in @(@(1,'设置…'),@(2,'桌宠设置'))) {
+        Choose-MenuItem ([uint32]$entry[0]) ([string]$entry[1])
+        Wait-For { $script:main=[PanelProbe]::Find($app.Id,'Aieyes',$false);$script:main -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:main) } 'menu settings opens main window'
+        $null=[PanelProbe]::SendMessage($script:main,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
+        Wait-For { -not [PanelProbe]::IsWindowVisible($script:main) } 'closing settings retains background app'
+    }
     if($VerifyMaterials) {
         Pet-Click;Wait-For {Panel-Visible} 'open for native material check'
         Verify-Backdrop $script:panel 'floating'
         Pet-Click;Wait-For {-not (Panel-Visible)} 'close after native material check'
-        Choose-MenuItem 3 '打开主窗口'
+        Choose-MenuItem 1 '设置…'
         Wait-For { $script:main=[PanelProbe]::Find($app.Id,'Aieyes',$false);$script:main -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:main) } 'main window appears'
         Verify-Backdrop $script:main 'main'
+    }
+    if($script:canHidePet) {
+        Choose-MenuItem 5 '隐藏桌宠'
+        Wait-For { -not [PanelProbe]::IsWindowVisible($script:pet) } 'native menu hides pet when tray is available'
+        Assert-That (-not (Panel-Visible)) 'hiding pet also closes its panel'
+    } else {
+        Assert-That ([PanelProbe]::IsWindowVisible($script:pet)) 'sole pet entry remains visible when hiding is disabled'
     }
     $result.status='passed'
 } catch {
