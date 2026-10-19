@@ -824,7 +824,8 @@ body:not([data-platform=windows]) .font-notice { display:none; }
 .pet-scale-control output { min-width:3.5em; text-align:right; font-variant-numeric:tabular-nums; }
 
 /* Count-aware grids share the same sizing rule as the native summaries. */
-.balanced-grid { display:grid; grid-template-columns:repeat(var(--balanced-columns,1),minmax(0,1fr)); gap:10px 16px; }
+/* auto-fit also shrinks safely before the observer refreshes its column cap. */
+.balanced-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,max(290px,calc((100% - (var(--balanced-columns,1) - 1)*16px)/var(--balanced-columns,1)))),1fr)); gap:10px 16px; }
 .balanced-grid[data-single-last=true] > :last-child { grid-column:1 / -1; }
 .quota-windows:has(> .quota-window:only-child) { grid-template-columns:minmax(0,1fr) !important; }
 @container (max-width:311px) {

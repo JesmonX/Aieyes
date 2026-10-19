@@ -48,6 +48,17 @@ function fixture(){
    assert.match(await summary.locator('[data-filesystem="/"]').textContent(),/25\/100 GiB.*25%/);
    assert.match(await summary.locator('[data-host-uptime]').textContent(),/1 天 1 小时 1 分/);
    assert.match(await summary.locator('[data-network-total="eth0"]').textContent(),/3.0 GiB.*1.0 GiB/);
+   // A viewport can shrink before the observer updates its column preference.
+   await page.setViewportSize({width:panel?360:640,height:800});
+   const staleOverflow=await summary.evaluate(el=>{
+     const grids=[...el.querySelectorAll('.balanced-grid')];
+     const previous=grids.map(grid=>grid.style.getPropertyValue('--balanced-columns'));
+     grids.forEach(grid=>grid.style.setProperty('--balanced-columns',4));
+     const overflow=[...el.querySelectorAll('.server-gpu,.server-resource-strip')].some(child=>child.scrollWidth>child.clientWidth+1);
+     grids.forEach((grid,index)=>previous[index]?grid.style.setProperty('--balanced-columns',previous[index]):grid.style.removeProperty('--balanced-columns'));
+     return overflow;
+   });
+   assert.equal(staleOverflow,false,'CSS keeps resources readable before the resize observer catches up');
    for(const theme of ['light','dark']){
     await page.emulateMedia({colorScheme:theme});
     for(const width of panel?[450,420,360]:[1380,1120,640]){
