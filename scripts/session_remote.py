@@ -21,14 +21,14 @@ def text(value):
 def harness():
     if '_HARNESS' not in globals():
         source=globals().get('HARNESS_SCRIPT')
-        if source is None:source=pathlib.Path(__file__).with_name('harness_remote.py').read_text()
+        if source is None:source=pathlib.Path(__file__).with_name('harness_remote.py').read_text(encoding='utf-8')
         scope={};exec(compile(source,'<aieyes-harness>','exec'),scope);globals()['_HARNESS']=scope
     return globals()['_HARNESS']
 
 def native_database():
     if '_NATIVE_DATABASE' not in globals():
         source=globals().get('NATIVE_DATABASE_SCRIPT')
-        if source is None:source=pathlib.Path(__file__).with_name('native_database_remote.py').read_text()
+        if source is None:source=pathlib.Path(__file__).with_name('native_database_remote.py').read_text(encoding='utf-8')
         scope={};exec(compile(source,'<aieyes-native-database>','exec'),scope);globals()['_NATIVE_DATABASE']=scope
     return globals()['_NATIVE_DATABASE']
 

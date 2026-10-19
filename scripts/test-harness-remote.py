@@ -26,8 +26,8 @@ def collect(path,cursors=None):
     output=io.StringIO()
     with contextlib.redirect_stdout(output):
         # Match the actual SSH loader: helper is bundled, no local __file__.
-        scope=dict(__name__='__main__',REQUEST=request,HARNESS_SCRIPT=(ROOT/'scripts/harness_remote.py').read_text())
-        try:exec(compile((ROOT/'scripts/remote_history.py').read_text(),'<wire-history>','exec'),scope)
+        scope=dict(__name__='__main__',REQUEST=request,HARNESS_SCRIPT=(ROOT/'scripts/harness_remote.py').read_text(encoding='utf-8'))
+        try:exec(compile((ROOT/'scripts/remote_history.py').read_text(encoding='utf-8'),'<wire-history>','exec'),scope)
         except SystemExit as error:assert error.code==0
     return [json.loads(line) for line in output.getvalue().splitlines()]
 

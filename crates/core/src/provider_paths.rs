@@ -209,14 +209,20 @@ mod tests {
             if cfg!(any(target_os = "linux", target_os = "macos")) {
                 data.join("omp/profiles/work")
             } else {
-                home.join(".other-omp/profiles/work/agent")
+                home.join(".other-omp")
+                    .join("profiles")
+                    .join("work")
+                    .join("agent")
             }
             .to_str()
             .unwrap()
         );
         assert_eq!(
             omp_root(false, |k| variables.get(k).cloned(), home).unwrap(),
-            home.join(".other-omp/profiles/work/agent")
+            home.join(".other-omp")
+                .join("profiles")
+                .join("work")
+                .join("agent")
                 .to_str()
                 .unwrap()
         );

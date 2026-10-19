@@ -7,7 +7,7 @@ const provider=process.env.AIEYES_API_UI_PROVIDER||'opencode';
 const piFamily=['pi','omp'].includes(provider);
 const authMode=process.env.AIEYES_API_UI_AUTH_MODE||'api-key';
 const project=path.resolve(__dirname,'..'),root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'aieyes-native-api-')));
-const testEnv={...process.env,PI_CODING_AGENT_DIR:path.join(root,provider),XDG_CONFIG_HOME:path.join(root,'config'),CODEBUDDY_CONFIG_DIR:path.join(root,'codebuddy'),KIMI_CODE_HOME:path.join(root,'kimi'),GROK_HOME:path.join(root,'grok'),DSH_HOME:path.join(root,'dsh'),CLAUDE_CONFIG_DIR:path.join(root,'claude'),ZCODE_PERSONAL_PROVIDER_CONFIG_FILE:path.join(root,'zcode/provider_config.json'),QODER_CONFIG_DIR:path.join(root,'qoder')};
+const testEnv={...process.env,HOME:root,USERPROFILE:root,PATH:path.join(project,'apps/desktop/node_modules/.bin')+path.delimiter+process.env.PATH,PI_CODING_AGENT_DIR:path.join(root,provider),XDG_CONFIG_HOME:path.join(root,'config'),CODEBUDDY_CONFIG_DIR:path.join(root,'codebuddy'),KIMI_CODE_HOME:path.join(root,'kimi'),GROK_HOME:path.join(root,'grok'),DSH_HOME:path.join(root,'dsh'),CLAUDE_CONFIG_DIR:path.join(root,'claude'),ZCODE_PERSONAL_PROVIDER_CONFIG_FILE:path.join(root,'zcode/provider_config.json'),QODER_CONFIG_DIR:path.join(root,'qoder')};
 if(provider==='qoder'){
   // Mock only the installed CLI's documented BYOK control API. The model HTTP
   // validation and Aieyes persistence remain real; no user login is read.
@@ -16,7 +16,7 @@ if(provider==='qoder'){
   if(process.platform==='win32')fs.writeFileSync(path.join(bin,'qodercli.cmd'),'@"'+process.execPath+'" "'+script+'" %*\r\n');
   else {fs.writeFileSync(path.join(bin,'qodercli'),'#!/bin/sh\nexec '+"'"+process.execPath.replaceAll("'","'\\''")+"' '"+script.replaceAll("'","'\\''")+"' \"$@\"\n");fs.chmodSync(path.join(bin,'qodercli'),0o700);}
   testEnv.HOME=root;testEnv.USERPROFILE=root;
-  testEnv.PATH=bin+path.delimiter+process.env.PATH;
+  testEnv.PATH=bin+path.delimiter+testEnv.PATH;
 }
 const core=spawn(path.join(project,'target/debug/aieyes-core'),['--data-dir',path.join(root,'data')],{stdio:['pipe','pipe','pipe'],env:testEnv});
 const pending=new Map();let seq=0,stderr='',fail=true,requests=0,changeNative=false,expectedEffort='low';
@@ -56,7 +56,7 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
     await page.evaluate(provider=>{state.page='settings';state.settingsTab='integrations';AieyesAgentSettings.navigate({provider});render();},provider);
     await page.waitForFunction(()=>[...document.querySelectorAll('.provider-mark img')].every(img=>img.complete&&img.naturalWidth>0));
     await page.locator('#agent-section-api > summary').click();await page.locator('[data-native-api="open"]').click();
-    if(harness){await page.locator('#field-configPath').fill(config);await page.locator('#native-api-read').click();await page.waitForFunction(()=>!document.querySelector('#native-api-read').disabled);await page.getByText('已读取',{exact:true}).waitFor();}
+    if(harness){await page.locator('#field-configPath').fill(config);await page.locator('#native-api-read').click();await page.waitForFunction(()=>!document.querySelector('#native-api-read').disabled);assert.equal(await page.locator('#native-api-read-status').textContent(),'已读取');}
     await page.locator('#field-baseUrl').fill(`http://127.0.0.1:${server.address().port}`+(provider==='claude'?'':'/v1'));await page.locator('#field-model').fill('fixture-model');await page.locator('#field-apiKey').fill('private-test-key');
     if(['kimi','grok','qoder'].includes(provider)||harness||provider==='zcode'||piFamily)await page.locator('#field-contextWindow').fill('261000');
     if(harness||['zcode','grok','qoder','pi','omp'].includes(provider))await page.locator('#field-maxOutputTokens').fill('2048');
