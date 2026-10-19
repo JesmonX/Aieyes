@@ -75,7 +75,7 @@ import Combine
         popover.contentViewController = PanelContainer(model: model)
         appearanceController?.updatePanel()
         popover.contentSize = NSSize(width: 450, height: 720)
-        petWindow = PetWindowController(model: model, open: { [weak self] anchor, toggle in
+        petWindow = PetWindowController(model: model, checkUpdates: { AppUpdater.shared.check() }, open: { [weak self] anchor, toggle in
             guard let self else { return }
             if self.popover.isShown { if toggle { self.popover.performClose(nil) }; return }
             NSApp.activate(ignoringOtherApps: true)
@@ -119,11 +119,21 @@ import Combine
         if NSApp.currentEvent?.type == .rightMouseUp {
             popover.performClose(nil)
             let menu = NSMenu()
-            menu.addItem(withTitle: "打开详情", action: #selector(detailAction), keyEquivalent: "").target = self
-            menu.addItem(withTitle: "设置…", action: #selector(settingsAction), keyEquivalent: ",").target = self
-            if !model.runningEstimates.isEmpty { menu.addItem(withTitle: "管理采样…", action: #selector(samplingAction), keyEquivalent: "").target = self }
-            menu.addItem(.separator())
-            menu.addItem(withTitle: "退出 Aieyes", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+            menu.autoenablesItems = false
+            let visible = UserDefaults.standard.object(forKey: "aieyes.pet.enabled") as? Bool ?? true
+            for (title, action) in NativeContextMenu.entries(pet: false, visible: visible, sampling: !model.runningEstimates.isEmpty) {
+                if action == "separator" { menu.addItem(.separator()); continue }
+                let selector: Selector = switch action {
+                case "open": #selector(detailAction)
+                case "settings": #selector(settingsAction)
+                case "sampling": #selector(samplingAction)
+                case "check-updates": #selector(updateAction)
+                case "hide": #selector(togglePetAction)
+                default: #selector(quitAction)
+                }
+                let item = menu.addItem(withTitle: title, action: selector, keyEquivalent: action == "settings" ? "," : action == "quit" ? "q" : "")
+                item.target = self
+            }
             statusItem.menu = menu; button.performClick(nil); statusItem.menu = nil; return
         }
         if popover.isShown { popover.performClose(nil) }
@@ -156,6 +166,12 @@ import Combine
     }
     @objc private func detailAction() { openDetail() }
     @objc private func settingsAction() { model.openSettings() }
+    @objc private func updateAction() { AppUpdater.shared.check() }
+    @objc private func togglePetAction() {
+        let visible = UserDefaults.standard.object(forKey: "aieyes.pet.enabled") as? Bool ?? true
+        UserDefaults.standard.set(!visible, forKey: "aieyes.pet.enabled")
+    }
+    @objc private func quitAction() { NSApp.terminate(nil) }
     @objc private func samplingAction() { openSampling() }
     @objc private func wake() { model.resumeAfterWake() }
     private func scheduleTitleUpdate() {
@@ -436,6 +452,23 @@ import Combine
             UserDefaults.standard.setVolatileDomain(NativePanelKey.snapshotOverrides(panelQuotaExpanded: model.quotaAccounts.count <= 1), forName: UserDefaults.argumentDomain)
             let root = URL(fileURLWithPath: directory)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            if ProcessInfo.processInfo.environment["AIEYES_UI_LAYOUT_ONLY"] == "1" {
+                for dark in [false, true] {
+                    let theme = dark ? "dark" : "light"
+                    if let quota = model.dashboard.quotas.first {
+                        for width in [360, 414, 620, 1000] {
+                            try await capture(QuotaCard(quota: quota, compact: true, collapsible: true, defaultExpanded: false), size: NSSize(width: width, height: 230), dark: dark, to: root.appendingPathComponent("quota-summary-\(width)-\(theme).png"))
+                        }
+                    }
+                    if let host = model.settings.hosts.first {
+                        for width in [360, 620, 1000] {
+                            try await capture(ServerCard(host: host, result: model.hosts.first { $0.id == host.id }, compact: false), size: NSSize(width: width, height: 720), dark: dark, to: root.appendingPathComponent("server-four-gpu-\(width)-\(theme).png"))
+                        }
+                    }
+                    try await capture(RootView(model: model), size: NSSize(width: 450, height: 720), dark: dark, to: root.appendingPathComponent("overview-panel-\(theme).png"))
+                }
+                model.stop(); NSApp.terminate(nil); return
+            }
             if ProcessInfo.processInfo.environment["AIEYES_UI_SETUP_ONLY"] == "1" {
                 try await captureSetupGuide(to: root)
                 model.stop(); NSApp.terminate(nil); return

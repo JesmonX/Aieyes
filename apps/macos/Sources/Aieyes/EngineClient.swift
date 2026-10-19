@@ -670,6 +670,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         for scope in ["panel", "overview", "analysis"] {
             var next = filters(for: scope)
             next.reconcile(settings: settings)
+            if scope != "analysis", next.provider != "all", !overviewAgentProviders.contains(next.provider) {
+                next.provider = "all"; next.account = "all"; next.source = "all"; next.model = "all"
+            }
             updateFilters(next, scope: scope, resetDependents: false)
         }
     }
@@ -745,6 +748,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let parts = accountKey.split(separator: ":", maxSplits: 1).map(String.init)
             let quota = snapshot.quotas.first(where: { $0.id == accountKey }) ?? Quota(sourceId: "", accountId: account?.id ?? parts.last ?? accountKey, provider: account?.provider ?? parts.first ?? "custom", name: account?.name ?? accountKey, updatedAt: 0, origin: "", windows: [], bankReset: nil, bankUpdatedAt: nil, plan: nil, error: nil)
             dashboard.quotaEstimates = snapshot.quotaEstimates; dashboard.creditEstimates = snapshot.creditEstimates
+            dashboard.automaticEstimateSummaries = snapshot.automaticEstimateSummaries
             estimateErrors[accountKey] = nil
             showEstimate?(quota, credits, group)
         } catch { estimateErrors[accountKey] = error.localizedDescription }
@@ -835,6 +839,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 guard request == self.dashboardRequest else { return true }
                 self.menuDashboard = menu
                 self.dashboard.quotaEstimates = menu.quotaEstimates; self.dashboard.creditEstimates = menu.creditEstimates
+                self.dashboard.automaticEstimateSummaries = menu.automaticEstimateSummaries
                 return true
             } catch { if request == self.dashboardRequest { self.dashboardError = "菜单摘要读取失败：" + error.localizedDescription }; return false }
         }

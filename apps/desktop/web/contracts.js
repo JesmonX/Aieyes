@@ -270,6 +270,15 @@
       "refreshKey": null,
       "updateBehavior": "cancel"
     },
+    "autoEstimates.rebuild": {
+      "lane": "main",
+      "invalidates": [
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
     "codexApi.list": {
       "lane": "accounts",
       "invalidates": [],
@@ -1266,7 +1275,7 @@
       "darkAsset": "omp-dark"
     }
   },
-  "contractHash": "f026bb373cdcddc2d63820fde646eb8d8c852c969e2478a10eb5daed38f413cd",
+  "contractHash": "3d07938f0656bfabc574e6e34acf24c13d324cb960ab1fe564e89c32296a25cd",
   "petFrameDurations": [
     [
       280,

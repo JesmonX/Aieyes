@@ -9,6 +9,7 @@ function fixture(){
     {id:'0',name:'NVIDIA RTX 4090',utilization:0,memoryUsedMiB:0,memoryTotalMiB:24576,temperature:35,powerWatts:20},
     {id:'1',name:'NVIDIA A100 80GB PCIe',utilization:87,memoryUsedMiB:61440,memoryTotalMiB:81920,temperature:68,powerWatts:270},
     {id:'2',name:'缺失读数的显卡',utilization:null,memoryUsedMiB:null,memoryTotalMiB:0},
+    {id:'3',name:'NVIDIA RTX 4090',utilization:30,memoryUsedMiB:4096,memoryTotalMiB:24576},
   ],filesystems:[{id:'/',used:25*GiB,total:100*GiB,available:75*GiB,type:'ext4'},{id:'/data',used:0,total:GiB,available:GiB},{id:'/missing',used:null,total:0}],network:[{id:'eth0',rxBytes:3*GiB,txBytes:GiB,rxBytesPerSecond:1024,txBytesPerSecond:2048},{id:'ib0',rxBytes:9*GiB,txBytes:0}]};
   window.serverFixture={host,sample,settings:{accounts:[],sources:[],hosts:[host],proxy:{mode:'system',url:''},modelMappings:{},refreshSeconds:300,serverRefreshSeconds:10}};
   const summary={tokens:{input:0,output:0,cacheRead:0,cacheWrite:0},total:0,cost:0,pricedTokens:0,events:0};
@@ -42,18 +43,28 @@ function fixture(){
    assert.equal(await summary.locator('.resource-block:visible').count(),2);
    assert.match(await summary.locator('[data-gpu="0"]').textContent(),/NVIDIA RTX 4090.*0\/24 GiB/);
    assert.match(await summary.locator('[data-gpu="1"]').textContent(),/NVIDIA A100 80GB PCIe.*60\/80 GiB/);
-   assert.equal(await summary.locator('[data-gpu] .server-resource-strip').count(),6);
+   assert.equal(await summary.locator('[data-gpu] .server-resource-strip').count(),8);
    assert.equal(await summary.locator('[data-filesystem] .resource-bar').count(),3);
    assert.match(await summary.locator('[data-filesystem="/"]').textContent(),/25\/100 GiB.*25%/);
    assert.match(await summary.locator('[data-host-uptime]').textContent(),/1 天 1 小时 1 分/);
    assert.match(await summary.locator('[data-network-total="eth0"]').textContent(),/3.0 GiB.*1.0 GiB/);
    for(const theme of ['light','dark']){
     await page.emulateMedia({colorScheme:theme});
-    for(const width of panel?[450,420,360]:[1120,640]){
+    for(const width of panel?[450,420,360]:[1380,1120,640]){
      await page.setViewportSize({width,height:800});
      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
      const overflow=await summary.evaluate(el=>[...el.querySelectorAll('.server-gpu,.resource-gauge,.server-network-total,.server-resource-strip')].filter(child=>child.scrollWidth>child.clientWidth+1).map(child=>child.className));
      assert.deepEqual(overflow,[],`${surface} ${width} ${theme} has overflowing resources`);
+     await page.waitForFunction(()=>{
+       const grid=document.querySelector('.server-gpu-list');
+       return grid&&grid.style.getPropertyValue('--balanced-columns');
+     });
+     if(await summary.locator('.server-gpu-list').evaluate(e=>e.clientWidth>=600)){
+       await page.waitForFunction(()=>getComputedStyle(document.querySelector('.server-gpu-list')).gridTemplateColumns.split(' ').length===2);
+       const bounds=await summary.locator('[data-gpu]').evaluateAll(rows=>rows.map(e=>({x:e.getBoundingClientRect().x,y:e.getBoundingClientRect().y})));
+       assert.equal(bounds[0].y,bounds[1].y);assert.equal(bounds[2].y,bounds[3].y);assert(bounds[2].y>bounds[0].y,'Four GPUs use 2x2');
+     }
+
      await page.screenshot({path:path.join(out,`${surface}-${width}-${theme}.png`),fullPage:true});
     }
    }

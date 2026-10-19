@@ -15,6 +15,7 @@ pub struct Store {
     pub root: PathBuf,
     pub db: Connection,
     pub(crate) usage_memory: std::cell::RefCell<crate::usage_cache::Memory>,
+    pub(crate) automatic_summary_memory: std::cell::RefCell<crate::rolling_estimates::Memory>,
     pub(crate) estimate_display: std::cell::RefCell<Option<(i64, Vec<crate::estimates::Estimate>)>>,
     settings_memory: std::cell::RefCell<Option<(i64, Settings)>>,
     deleted_accounts_memory: std::cell::RefCell<Option<DeletedAccountsCache>>,
@@ -54,6 +55,7 @@ impl Store {
         CREATE INDEX IF NOT EXISTS events_stamp ON events(stamp);
         CREATE INDEX IF NOT EXISTS events_model ON events(model);
         CREATE INDEX IF NOT EXISTS events_account ON events(provider,account_id);
+        CREATE INDEX IF NOT EXISTS events_account_stamp ON events(provider,account_id,stamp);
         CREATE TABLE IF NOT EXISTS event_sources(event_id TEXT NOT NULL REFERENCES events(id),source_id TEXT NOT NULL,PRIMARY KEY(event_id,source_id));
         CREATE INDEX IF NOT EXISTS event_sources_source ON event_sources(source_id,event_id);
         CREATE TABLE IF NOT EXISTS source_identities(source_id TEXT NOT NULL,provider TEXT NOT NULL,account_id TEXT NOT NULL,PRIMARY KEY(source_id,provider,account_id));
@@ -78,11 +80,13 @@ impl Store {
         crate::history_corrections::setup(&db)?;
         crate::codex_routes::setup(&db)?;
         crate::runtime::setup(&db)?;
+        crate::rolling_estimates::setup(&db)?;
         let store = Self {
             root: root.to_path_buf(),
             db,
             usage_memory: Default::default(),
             estimate_display: Default::default(),
+            automatic_summary_memory: Default::default(),
             settings_memory: Default::default(),
             deleted_accounts_memory: Default::default(),
             prices_memory: Default::default(),
@@ -1166,8 +1170,9 @@ impl Store {
         self.dashboard_mode(f, true)
     }
     fn dashboard_mode(&self, f: &Filter, summary: bool) -> Result<Dashboard> {
-        // Initialize discovery before opening a read snapshot (settings() may save on first use).
+        // Initialize discovery and derived samples before opening a read snapshot.
         self.settings()?;
+        self.project_automatic_samples()?;
         let transaction = if self.db.is_autocommit() {
             Some(self.db.unchecked_transaction()?)
         } else {
@@ -1193,6 +1198,7 @@ impl Store {
     }
     pub fn dashboard_status(&self, f: &Filter) -> Result<Value> {
         self.settings()?;
+        self.project_automatic_samples()?;
         let transaction = if self.db.is_autocommit() {
             Some(self.db.unchecked_transaction()?)
         } else {
@@ -1210,7 +1216,7 @@ impl Store {
         }
         Ok(
             json!({"generatedAt":dashboard.generated_at,"quotas":dashboard.quotas,"quotaOrder":dashboard.quota_order,
-            "quotaEstimates":dashboard.quota_estimates,"creditEstimates":dashboard.credit_estimates,
+            "quotaEstimates":dashboard.quota_estimates,"creditEstimates":dashboard.credit_estimates,"automaticEstimateSummaries":dashboard.automatic_estimate_summaries,
             "sources":dashboard.sources,"priceUpdatedAt":dashboard.price_updated_at}),
         )
     }
@@ -1275,6 +1281,27 @@ impl Store {
             }
             d.quotas.push(quota);
         }
+        d.automatic_estimate_summaries = self
+            .automatic_estimate_summaries(now())?
+            .into_iter()
+            .filter(|s| {
+                d.quotas.iter().any(|q| {
+                    let plan = q
+                        .plan
+                        .as_deref()
+                        .map(str::trim)
+                        .map(str::to_ascii_lowercase);
+                    s.estimate.account_key == format!("{}:{}", q.provider, q.account_id)
+                        && plan.as_deref()
+                            == s.estimate
+                                .quota()
+                                .and_then(|v| v.quota_plan.as_deref())
+                                .or_else(|| {
+                                    s.estimate.credit().and_then(|v| v.quota_plan.as_deref())
+                                })
+                })
+            })
+            .collect();
         d.quota_order = self.quota_order()?;
         let samples = if f.estimate_history.as_deref() == Some("display") {
             self.display_estimates()?

@@ -58,6 +58,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "agyAuth.verify", lane: Lane::Accounts, update_behavior: "complete", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "autoEstimates.configure", lane: Lane::Configuration, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "autoEstimates.tick", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "autoEstimates.rebuild", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexApi.list", lane: Lane::Accounts, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexApi.probe", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "codexApi.remove", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: true, refresh_key: None },
@@ -189,7 +190,7 @@ pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
     &[120, 120, 120, 120, 120, 220],
     &[150, 150, 150, 150, 150, 280],
 ];
-pub const CONTRACT_HASH: &str = "f026bb373cdcddc2d63820fde646eb8d8c852c969e2478a10eb5daed38f413cd";
+pub const CONTRACT_HASH: &str = "3d07938f0656bfabc574e6e34acf24c13d324cb960ab1fe564e89c32296a25cd";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

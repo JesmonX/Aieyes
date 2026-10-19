@@ -613,6 +613,16 @@
       "updateBehavior": "cancel"
     },
     {
+      "name": "autoEstimates.rebuild",
+      "lane": "main",
+      "invalidates": [
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
       "name": "codexApi.list",
       "lane": "accounts",
       "invalidates": [],

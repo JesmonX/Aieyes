@@ -58,6 +58,15 @@ window.AieyesUI = {
     }
     return [...groups.values()];
   },
+  overviewAgentProviders(settings) {
+    const rows = this.agentConfigurations(settings?.agents ?? []);
+    return window.AieyesContract.agentProviders.filter(provider => rows.some(a=>a.provider===provider&&a.enabled) ||
+      (!settings?.agents && ((settings?.sources??[]).some(s=>this.sameAgent(s.provider,provider)&&s.enabled) || (settings?.accounts??[]).some(a=>this.sameAgent(a.provider,provider)&&!a.archived))));
+  },
+  balancedColumns(width, count, minimum = 290, gap = 10) {
+    const fit = Math.max(1, Math.min(count, Math.floor((width+gap)/(minimum+gap))));
+    return Math.max(1, Math.ceil(count / Math.ceil(Math.max(1,count)/fit)));
+  },
   canonicalAccountKey(key, aliases = {}) { return aliases[key] ?? (key?.startsWith('agy:') ? 'antigravity:' + key.slice(4) : key); },
   canonicalPayload(value, aliases = value?.accountAliases ?? {}) {
     if (Array.isArray(value)) return value.map(row => this.canonicalPayload(row, aliases));
@@ -118,7 +127,7 @@ window.AieyesUI = {
   },
   canonicalEstimates(records = []) {
     const replaced = new Set(records.map(e=>e.originalEstimateId).filter(Boolean));
-    return records.filter(e=>!replaced.has(e.id)).sort((a,b)=>b.startedAt-a.startedAt || (b.repairedAt||0)-(a.repairedAt||0));
+    return records.filter(e=>!replaced.has(e.id)).sort((a,b)=>(b.samplingMode==='rolling')-(a.samplingMode==='rolling') || b.startedAt-a.startedAt || (b.repairedAt||0)-(a.repairedAt||0));
   },
   estimateIssue(record) {
     if (record.status==='pending') return record.reason || '待确认';
@@ -139,13 +148,15 @@ window.AieyesUI = {
   },
   estimateHelp(quota, records = [], group = '') {
     const visible=this.estimateVisibility(quota,records,group);
+    if(this.canonicalEstimates(records)[0]?.samplingMode==='rolling')return '滚动估值：汇总最近 90 天的有效片段，权重每 7 天减半，按额度消耗量加权。'+(visible.five?'5h 按对应额度片段计算。':'')+(visible.direct?'7d 按对应周额度片段计算。':'')+(visible.ratio?'7d 容量推算为滚动 5h 价值乘近期容量倍率。':'')+'金额为 API 等价价值，不可兑换。';
     if(visible.ratio&&visible.direct)return '7d 左值：5h 等价值 × 近期容量倍率；右值：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。';
     if(visible.ratio)return '7d：5h 等价值 × 近期容量倍率；这些金额为 API 等价价值。';
     if(visible.direct)return '7d：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。';
     return '按采样时段的 API 等价成本与对应额度消耗比例计算。';
   },
   estimateEntries(records = [], credits = false, quota = null, group = '') {
-    const all=this.canonicalEstimates(records);
+    const canonical=this.canonicalEstimates(records), rolling=canonical.filter(e=>e.samplingMode==='rolling');
+    const all=rolling.length?rolling:canonical;
     const visible=this.estimateVisibility(quota,records,group);
     return (credits ? [['valuePer1000','1000 credits']] : [
       ...(visible.five?[['fiveHourValue','5h']]:[]),

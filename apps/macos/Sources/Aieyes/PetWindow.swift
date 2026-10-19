@@ -181,15 +181,24 @@ private final class PetHost: NSHostingView<PetView> {
         if dragged { PetWindowController.clamp(window, snap: true, preferredPoint: NSEvent.mouseLocation); UserDefaults.standard.set(NSStringFromPoint(window.frame.origin), forKey: "aieyes.pet.position") }
         else { open?(self, true) }
     }
+    var update: (() -> Void)?
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
         // NSHostingView validates SwiftUI commands and disables our custom selectors.
         menu.autoenablesItems = false
-        let open = NSMenuItem(title: "打开面板", action: #selector(openPanel), keyEquivalent: ""); open.target=self; menu.addItem(open)
-        open.isEnabled = self.open != nil
-        let settings = NSMenuItem(title: "设置", action: #selector(openSettings), keyEquivalent: ""); settings.target = self; menu.addItem(settings)
-        let petSettings = NSMenuItem(title: "桌宠设置", action: #selector(openPetSettings), keyEquivalent: ""); petSettings.target = self; menu.addItem(petSettings)
-        let hide = NSMenuItem(title: "隐藏宠物（可在设置中恢复）", action: #selector(hidePet), keyEquivalent: ""); hide.target=self; menu.addItem(hide)
+        for (title, action) in NativeContextMenu.entries(pet: true, visible: true) {
+            if action == "separator" { menu.addItem(.separator()); continue }
+            let selector: Selector = switch action {
+            case "open-panel": #selector(openPanel)
+            case "settings": #selector(openSettings)
+            case "pet-settings": #selector(openPetSettings)
+            case "check-updates": #selector(checkUpdates)
+            default: #selector(hidePet)
+            }
+            let item = menu.addItem(withTitle: title, action: selector, keyEquivalent: "")
+            item.target = self
+            if action == "open-panel" { item.isEnabled = open != nil }
+        }
         return menu
     }
     override func rightMouseDown(with event: NSEvent) {
@@ -199,6 +208,7 @@ private final class PetHost: NSHostingView<PetView> {
     @objc private func openPanel() { open?(self, false) }
     @objc private func openSettings() { settings?() }
     @objc private func openPetSettings() { petSettings?() }
+    @objc private func checkUpdates() { update?() }
     @objc private func hidePet() { UserDefaults.standard.set(false, forKey: "aieyes.pet.enabled") }
 }
 @MainActor final class PetWindowController {
@@ -207,13 +217,14 @@ private final class PetHost: NSHostingView<PetView> {
     var window: NSWindow { panel }
     private var subscriptions = Set<AnyCancellable>()
     private var stateHeight: CGFloat = 168
-    init(model: AppModel, open: @escaping (NSView, Bool) -> Void) {
+    init(model: AppModel, checkUpdates: @escaping () -> Void = {}, open: @escaping (NSView, Bool) -> Void) {
         self.model = model
         UserDefaults.standard.register(defaults: ["aieyes.pet.enabled": true, "aieyes.pet.scale": 1.0])
         panel = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 144,height: 168), styleMask: [.borderless,.nonactivatingPanel], backing: .buffered, defer: false)
         panel.title="Aieyes 宠物"; panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
         panel.level = .floating; panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.hidesOnDeactivate=false
         let host=PetHost(rootView: PetView(model:model)); host.sizingOptions=[]; host.open=open; panel.contentView=host
+        host.update = checkUpdates
         host.settings = { [weak model] in model?.openSettings() }
         host.petSettings = { [weak model] in model?.openSettings(.init(category: "general", section: "desktop")) }
         host.setAccessibilityRole(.button); host.setAccessibilityLabel("Aieyes 宠物，单击打开面板")

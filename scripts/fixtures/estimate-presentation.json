@@ -325,6 +325,77 @@
         "weeklyValue"
       ],
       "summary": "7d ≈ $100.00"
+    },
+    {
+      "name": "Rolling periods never borrow manual values",
+      "quota": {
+        "provider": "codex",
+        "plan": "pro",
+        "windows": [
+          {
+            "id": "five",
+            "name": "5h",
+            "windowMinutes": 300,
+            "usedPercent": 0
+          },
+          {
+            "id": "week",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0
+          }
+        ]
+      },
+      "records": [
+        {
+          "id": "manual",
+          "startedAt": 10
+        },
+        {
+          "id": "rolling",
+          "samplingMode": "rolling",
+          "status": "active",
+          "startedAt": 1,
+          "fiveHourValue": null,
+          "weeklyRatioValue": null,
+          "weeklyValue": 25
+        }
+      ],
+      "fields": [
+        "weeklyValue"
+      ],
+      "summary": "5h ≈ —  7d ≈ —/$25.00"
+    },
+    {
+      "name": "Weekly rolling help describes only the available window",
+      "quota": {
+        "provider": "codex",
+        "plan": "pro",
+        "windows": [
+          {
+            "id": "week",
+            "name": "7d",
+            "windowMinutes": 10080,
+            "usedPercent": 0
+          }
+        ]
+      },
+      "records": [
+        {
+          "id": "rolling",
+          "samplingMode": "rolling",
+          "status": "active",
+          "startedAt": 1,
+          "fiveHourValue": null,
+          "weeklyRatioValue": null,
+          "weeklyValue": 25,
+          "valuationMode": "weekly"
+        }
+      ],
+      "fields": [
+        "weeklyValue"
+      ],
+      "summary": "7d ≈ $25.00"
     }
   ]
 }

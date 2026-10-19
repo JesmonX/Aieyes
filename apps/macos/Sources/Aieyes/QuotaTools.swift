@@ -320,6 +320,7 @@ struct QuotaEstimateView: View {
                     Button("重试") { Task { await loadHistory() } }
                 }
             }
+            ForEach((model.dashboard.automaticEstimateSummaries ?? []).filter { $0.accountKey == quota.id && ($0.kind == "credits") == credits && (initialGroup == nil || $0.groupId == initialGroup) }) { estimate in result(estimate) }
             history
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -412,7 +413,7 @@ struct QuotaEstimateView: View {
     }
     private func resultHeader(_ e: QuotaEstimate) -> some View {
         HStack {
-            Text(e.samplingMode == "automatic" ? (e.status == "completed" ? "自动估值 · 已封存" : "自动估值 · 持续更新") : e.status == "active" ? ((e.fiveHourValue ?? e.weeklyValue ?? e.valuePer1000) == nil ? "正在积累样本" : "可输出估值 · 采样继续") : e.statusLabel).foregroundStyle(e.status == "pending" ? Palette.warn : Palette.accent)
+            Text(e.samplingMode == "rolling" ? (e.status == "completed" ? "滚动估值 · 历史" : "滚动估值 · 持续更新") : e.samplingMode == "automatic" ? (e.status == "completed" ? "自动估值 · 已封存" : "自动估值 · 持续更新") : e.status == "active" ? ((e.fiveHourValue ?? e.weeklyValue ?? e.valuePer1000) == nil ? "正在积累样本" : "可输出估值 · 采样继续") : e.statusLabel).foregroundStyle(e.status == "pending" ? Palette.warn : Palette.accent)
             Spacer()
             Text(resultValue(e)).font(AppFont.section).monospacedDigit()
         }

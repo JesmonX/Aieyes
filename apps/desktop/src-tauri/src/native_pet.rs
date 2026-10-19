@@ -483,34 +483,17 @@ unsafe fn native_menu(hwnd: HWND, surface: &Surface) {
     let Ok(menu) = CreatePopupMenu() else { return };
     let info = surface.info.borrow().clone();
     let open = info["panelOpen"].as_bool().unwrap_or(false);
-    let pinned = info["panelPinned"].as_bool().unwrap_or(false);
-    let rows = [
-        (if open { "收起面板" } else { "打开面板" }, "toggle-panel"),
-        (
-            if pinned {
-                "取消固定面板"
-            } else {
-                "固定面板"
-            },
-            "toggle-pin",
-        ),
-        ("重建面板（用于界面无响应）", "refresh-floating"),
-        ("打开主窗口", "open"),
-        ("设置", "settings"),
-        ("桌宠设置", "pet-settings"),
-        ("重置位置", "reset-position"),
-        ("暂时隐藏", "hide-ball"),
-        ("退出 Aieyes", "quit"),
-    ];
-    for (i, (label, action)) in rows.iter().enumerate() {
-        if *action == "open" || *action == "quit" {
+    let rows = crate::context_menu::entries(true, true, info["trayAvailable"] == true, false);
+    for (i, row) in rows.iter().enumerate() {
+        if row.action == "separator" {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+            continue;
         }
-        let label: Vec<u16> = label.encode_utf16().chain(Some(0)).collect();
-        let flags = if *action == "hide-ball" && !info["trayAvailable"].as_bool().unwrap_or(false) {
-            MF_STRING | MF_GRAYED
-        } else {
+        let label: Vec<u16> = row.label.encode_utf16().chain(Some(0)).collect();
+        let flags = if row.enabled {
             MF_STRING
+        } else {
+            MF_STRING | MF_GRAYED
         };
         let _ = AppendMenuW(menu, flags, i + 1, PCWSTR(label.as_ptr()));
     }
@@ -534,12 +517,9 @@ unsafe fn native_menu(hwnd: HWND, surface: &Surface) {
     let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
     crate::desktop::native_interaction(&surface.app, false);
     if selected > 0
-        && let Some((_, action)) = rows.get(selected as usize - 1)
+        && let Some(row) = rows.get(selected as usize - 1)
     {
-        dispatch(surface, action);
-        if open && *action == "toggle-pin" {
-            dispatch(surface, "focus-panel");
-        }
+        dispatch(surface, row.action);
     } else if open {
         dispatch(surface, "focus-panel");
     }

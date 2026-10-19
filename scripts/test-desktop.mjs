@@ -426,3 +426,27 @@ test('each surface uses its own material and follows accessibility fallback stat
   const legacy=harness('floating.js',{material:'mica'});await flush();
   assert.equal(legacy.document.documentElement.dataset.material,'opaque','legacy main material never enables panel transparency');
 });
+
+
+test('overview hides disabled Agents while retaining historical configuration', () => {
+  const window = {AieyesContract:{agentProviders:['codex','zcode'],agentAliases:{},providerCapabilities:{}}};
+  vm.runInNewContext(readFileSync(new URL('../apps/desktop/web/ui-state.js', import.meta.url),'utf8'),{window});
+  const settings={agents:[{provider:'codex',enabled:true,machineIds:['local']},{provider:'zcode',enabled:false,machineIds:['local']}],sources:[{provider:'zcode',enabled:false}],accounts:[{provider:'zcode',id:'old'}]};
+  assert.deepEqual([...window.AieyesUI.overviewAgentProviders(settings)],['codex']);
+  assert.equal(settings.accounts.length,1);
+  for(const n of [1,2,3,4,6,8])assert(window.AieyesUI.balancedColumns(900,n)<=n);
+  assert.equal(window.AieyesUI.balancedColumns(900,4),2);
+  assert.equal(window.AieyesUI.balancedColumns(420,4),1);
+});
+
+
+test('rolling values never fill missing periods with unrelated manual estimates', () => {
+  const window = {};
+  vm.runInNewContext(read('contracts.js'),{window});
+  vm.runInNewContext(read('ui-state.js'),{window});
+  const manual={id:'manual',status:'completed',startedAt:10,fiveHourValue:999,weeklyValue:100,weeklyRatioValue:500};
+  const rolling={id:'rolling',samplingMode:'rolling',status:'active',startedAt:1,weeklyValue:25};
+  const quota={provider:'codex',plan:'pro',windows:[{windowMinutes:300},{windowMinutes:10080}]};
+  const entries=[...window.AieyesUI.estimateEntries([manual,rolling],false,quota)];
+  assert.equal(entries.length,1);assert.equal(entries[0].field,'weeklyValue');assert.equal(entries[0].value,25);
+});

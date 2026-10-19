@@ -46,6 +46,7 @@
     showScale(value);scalePending=value;clearTimeout(scaleTimer);scaleTimer=setTimeout(saveScale,75);
   }
   async function navigate(page) {
+    if(page==='sampling'){await window.AieyesApp.ready;await loadDashboard();openSampling();return;}
     if(page.startsWith('settings-target:')){try{await window.AieyesApp.openSettings(JSON.parse(page.slice(16)));}catch(error){notify(String(error),'error');}return;}
     if(page.startsWith("edit-account:")){await window.AieyesApp.ready;await window.AieyesApp.openSettings({accountKey:page.slice(13)});return;}
     if (page === 'add-source' || page === 'add-host' || page === 'add-quota') {

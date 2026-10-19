@@ -891,6 +891,7 @@ pub struct Dashboard {
     pub quota_order: Vec<String>,
     pub quota_estimates: Vec<crate::estimates::Estimate>,
     pub credit_estimates: Vec<crate::estimates::Estimate>,
+    pub automatic_estimate_summaries: Vec<crate::rolling_estimates::Summary>,
     pub sources: Vec<Value>,
     #[serde(skip_serializing)]
     pub price_updated_at: Option<i64>,

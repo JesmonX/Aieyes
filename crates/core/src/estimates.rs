@@ -53,6 +53,7 @@ pub struct QuotaEstimate {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CreditEstimate {
+    pub quota_plan: Option<String>,
     #[serde(flatten)]
     pub common: EstimateCommon,
     pub baseline_balance: Option<String>,

@@ -822,3 +822,11 @@ body:not([data-platform=windows]) .font-notice { display:none; }
 .daily-table { max-height:420px; overflow:auto; }
 .pet-scale-control input[type=range] { flex:1; min-width:80px; max-width:280px; padding:0; }
 .pet-scale-control output { min-width:3.5em; text-align:right; font-variant-numeric:tabular-nums; }
+
+/* Count-aware grids share the same sizing rule as the native summaries. */
+.balanced-grid { display:grid; grid-template-columns:repeat(var(--balanced-columns,1),minmax(0,1fr)); gap:10px 16px; }
+.balanced-grid[data-single-last=true] > :last-child { grid-column:1 / -1; }
+.quota-windows:has(> .quota-window:only-child) { grid-template-columns:minmax(0,1fr) !important; }
+@container (max-width:311px) {
+  .quota-disclosure:not([open]) + .quota-content .quota-windows { grid-template-columns:minmax(0,1fr); }
+}

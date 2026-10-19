@@ -1,6 +1,44 @@
 import SwiftUI
 import Charts
 
+/// Fill the available width without reserving empty adaptive columns.
+struct BalancedGridLayout: Layout {
+    var minimumWidth: CGFloat
+    var spacing: CGFloat = 10
+    var maximumColumns: Int = .max
+    private func columns(_ width: CGFloat, _ count: Int) -> Int {
+        let fit = max(1, min(count, maximumColumns, Int((width + spacing) / (minimumWidth + spacing))))
+        return max(1, Int(ceil(Double(count) / ceil(Double(max(1, count)) / Double(fit)))))
+    }
+    private func rows(_ width: CGFloat, _ subviews: Subviews) -> [[Int]] {
+        let count = columns(width, subviews.count)
+        return stride(from: 0, to: subviews.count, by: count).map { Array($0..<min($0 + count, subviews.count)) }
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? minimumWidth
+        let columns = columns(width, subviews.count)
+        let heights = rows(width, subviews).map { row in
+            let cell = row.count == 1 ? width : (width - CGFloat(columns - 1) * spacing) / CGFloat(columns)
+            return row.map { subviews[$0].sizeThatFits(.init(width: cell, height: nil)).height }.max() ?? 0
+        }
+        return CGSize(width: width, height: heights.reduce(0, +) + CGFloat(max(0, heights.count - 1)) * spacing)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let columns = columns(bounds.width, subviews.count)
+        var y = bounds.minY
+        for row in rows(bounds.width, subviews) {
+            let cell = row.count == 1 ? bounds.width : (bounds.width - CGFloat(columns - 1) * spacing) / CGFloat(columns)
+            var height: CGFloat = 0
+            for (column, index) in row.enumerated() {
+                let size = subviews[index].sizeThatFits(.init(width: cell, height: nil))
+                subviews[index].place(at: CGPoint(x: bounds.minX + CGFloat(column) * (cell + spacing), y: y), anchor: .topLeading, proposal: .init(width: cell, height: size.height))
+                height = max(height, size.height)
+            }
+            y += height + spacing
+        }
+    }
+}
+
 private struct WorkspaceCardColumns: EnvironmentKey { static let defaultValue = 2 }
 extension EnvironmentValues {
     var workspaceCardColumns: Int { get { self[WorkspaceCardColumns.self] } set { self[WorkspaceCardColumns.self] = newValue } }
@@ -210,7 +248,7 @@ struct RootView: View, Equatable {
     }
     @ViewBuilder private var agentButtons: some View {
         agentButton("all", title: "总览")
-        ForEach(CoreContract.agentProviders.filter { provider in provider == filters.provider || model.settings.accounts.contains { CoreContract.sameAgent($0.provider, provider) && $0.archived != true } || model.settings.sources.contains { CoreContract.sameAgent($0.provider, provider) } }, id: \.self) { provider in agentButton(provider, title: Format.provider(provider)) }
+        ForEach(model.overviewAgentProviders, id: \.self) { provider in agentButton(provider, title: Format.provider(provider)) }
     }
     private func agentButton(_ provider: String, title: String) -> some View {
         Button { filters.provider = provider } label: { Text(title).font(AppFont.secondary).padding(.horizontal, 10).padding(.vertical, 7).foregroundStyle(filters.provider == provider ? Palette.category(provider) : Color.secondary).background(filters.provider == provider ? Palette.category(provider).opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 8)) }.buttonStyle(.plain).accessibilityAddTraits(filters.provider == provider ? .isSelected : [])
@@ -372,7 +410,7 @@ struct RootView: View, Equatable {
                 QuotaGroupSection(key: "quota.group." + scope + "." + provider, model: model, provider: provider,
                     accountCount: displayedQuotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }.count,
                     quotas: displayedQuotas.filter { quota in CoreContract.sameAgent(quota.provider, provider) && displayedQuotaAccounts.contains { $0.key == quota.id } }) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 14, alignment: .top), count: compact ? 1 : workspaceCardColumns), alignment: .leading, spacing: 10) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 14, alignment: .top), count: compact ? 1 : min(workspaceCardColumns, max(1, displayedQuotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }.count))), alignment: .leading, spacing: 10) {
                         ForEach(displayedQuotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }.sorted { (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max) }, id: \.key) { account in
                             if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
                             else { Surface(tint: Palette.category(provider)) { Text(account.name).font(AppFont.section); Text(model.quotaBusy ? "正在读取账户额度…" : "等待首次额度查询").font(AppFont.secondary).foregroundStyle(.secondary) } }
@@ -767,8 +805,8 @@ private struct AccountObservedQuota: View {
             onEstimate: { group in model.showEstimate?(quota, false, group) },
             onCredits: { model.showEstimate?(quota, true, nil) },
             creditEstimate: model.dashboard.creditEstimates?.first { $0.accountKey == quota.id },
-            quotaHistory: (model.dashboard.quotaEstimates ?? []).filter { $0.accountKey == quota.id },
-            creditHistory: (model.dashboard.creditEstimates ?? []).filter { $0.accountKey == quota.id },
+            quotaHistory: model.dashboard.presentationEstimates(account: quota.id),
+            creditHistory: model.dashboard.presentationEstimates(account: quota.id, credits: true),
             onAnalysis: { model.openAnalysis(from: compact ? "panel" : "overview", account: quota.id, provider: quota.provider) })
     }
 }
@@ -910,7 +948,7 @@ struct QuotaCard: View {
                 }
                 balanceContent
                 if quota.provider == "antigravity" { agyWindows }
-                else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12, alignment: .leading)], alignment: .leading, spacing: 12) {
+                else { BalancedGridLayout(minimumWidth: 150, spacing: 12, maximumColumns: 2) {
                     ForEach(quota.provider == "antigravity" ? quota.windows : Array(quota.windows.prefix(2))) { window in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -1124,7 +1162,7 @@ struct ServerResourceSummary: View {
             }
             if host.metrics.contains("gpu") {
                 let gpus = host.selectedDevices("gpu", sample?.gpu)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 290), alignment: .leading)], alignment: .leading, spacing: 10) {
+                BalancedGridLayout(minimumWidth: 290, spacing: 10) {
                     ForEach(gpus) { gpu in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -1147,14 +1185,14 @@ struct ServerResourceSummary: View {
                 let filesystems = host.selectedDevices("filesystems", sample?.filesystems)
                 if !filesystems.isEmpty { VStack(alignment: .leading, spacing: 6) {
                     Text("文件系统").font(AppFont.secondary).foregroundStyle(.secondary)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 290), alignment: .leading)], spacing: 9) {
+                    BalancedGridLayout(minimumWidth: 290, spacing: 9) {
                         ForEach(filesystems) { fs in ResourceStrip(title: fs.id, percent: Format.capacityPercent(fs.used, fs.total), detail: Format.capacityPair(fs.used, fs.total), tint: Palette.category("storage")) }
                     }
                 }.padding(10).background(Palette.category("storage").opacity(0.12), in: RoundedRectangle(cornerRadius: 12)) }
             }
             if host.metrics.contains("network") {
                 let networks = host.selectedDevices("network", sample?.network)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 290), alignment: .leading)], spacing: 9) {
+                BalancedGridLayout(minimumWidth: 290, spacing: 9) {
                     ForEach(networks) { net in
                         HStack { Text(net.id).lineLimit(1); Spacer(); Text("↓ " + Format.speed(net.rxBytesPerSecond) + " · ↑ " + Format.speed(net.txBytesPerSecond)).monospacedDigit() }.font(AppFont.caption).padding(10).background(Palette.category("network").opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
                     }

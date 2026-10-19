@@ -129,7 +129,8 @@ struct EstimateEntry: View {
         return EstimatePresentation.summary(records, quota: quota, group: group)
     }
     private var help: String {
-        entries.map { $0.label + " ≈ " + Format.money($0.value) + " USD · " + ($0.historical ? "历史采样 · " : "") + Format.date($0.record.checkpointAt) }.joined(separator: "\n") + (credits ? "" : "\n" + EstimatePresentation.visibility(quota, records: records, group: group).help)
+        let rolling = latest?.samplingMode == "rolling" ? (latest?.calculationNote ?? "") + "\n" : ""
+        return rolling + entries.map { $0.label + " ≈ " + Format.money($0.value) + " USD · " + ($0.historical ? "历史采样 · " : "") + Format.date($0.record.checkpointAt) }.joined(separator: "\n") + (credits ? "" : "\n" + EstimatePresentation.visibility(quota, records: records, group: group).help)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -141,6 +142,7 @@ struct EstimateEntry: View {
                     Image(systemName: "chevron.right")
                 }.font(.system(size: DesignTokens.fontEntry)).frame(minHeight: 30).contentShape(Rectangle())
             }.buttonStyle(.plain).foregroundStyle(Palette.accent).help(help).accessibilityLabel(label + "，" + help)
+            if latest?.samplingMode == "rolling" { Text("滚动估值 · " + String(latest?.sampleCount ?? 0) + " 个有效片段").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).help(help) }
             if entries.contains(where: { $0.record.originalEstimateId != nil }) { Text("已修正").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary) }
             if entries.contains(where: \.historical) { Text("历史采样").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).help(help) }
             if let latest, !latest.hasValue || latest.status == "pending" {

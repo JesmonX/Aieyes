@@ -14,7 +14,7 @@ use std::{
 };
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
 
@@ -123,9 +123,9 @@ struct Materials {
 pub struct Desktop {
     path: PathBuf,
     state: Mutex<ShellState>,
-    menu: Menu<tauri::Wry>,
-    status_item: MenuItem<tauri::Wry>,
-    hide_item: MenuItem<tauri::Wry>,
+    menu: Mutex<Menu<tauri::Wry>>,
+    menu_state: Mutex<Option<(bool, bool, bool)>>,
+    sampling: AtomicBool,
     tray_available: AtomicBool,
     materials: Mutex<Materials>,
 }
@@ -359,41 +359,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         .ok()
         .and_then(|s| serde_json::from_slice(&s).ok())
         .unwrap_or_default();
-    let status_item = MenuItem::with_id(app, "status", "正在读取会话状态…", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "打开 Aieyes", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
-    let pet_settings = MenuItem::with_id(app, "pet-settings", "桌宠设置", true, None::<&str>)?;
-    let tray = MenuItem::with_id(app, "tray", "仅系统状态栏 / 托盘", true, None::<&str>)?;
-    let pet = MenuItem::with_id(app, "pet", "使用桌面宠物", true, None::<&str>)?;
-    let reset = MenuItem::with_id(app, "reset-position", "重置桌宠位置", true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, HIDE_MENU_ID, "暂时隐藏桌宠", false, None::<&str>)?;
-    let refresh = MenuItem::with_id(
-        app,
-        "refresh-floating",
-        "重建面板（用于界面无响应）",
-        true,
-        None::<&str>,
-    )?;
-    let toggle = MenuItem::with_id(app, "toggle-panel", "打开／收起面板", true, None::<&str>)?;
-    let pin = MenuItem::with_id(app, "toggle-pin", "固定／取消固定面板", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Aieyes", true, None::<&str>)?;
-    let menu = Menu::with_items(
-        app,
-        &[
-            &status_item,
-            &toggle,
-            &pin,
-            &refresh,
-            &open,
-            &settings,
-            &pet_settings,
-            &tray,
-            &pet,
-            &reset,
-            &hide,
-            &quit,
-        ],
-    )?;
+    let menu = build_context_menu(app.handle(), false, false, false, false)?;
     app.manage(Desktop {
         path,
         state: Mutex::new(ShellState {
@@ -414,9 +380,9 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             panel_generation: 0,
             recovery: String::new(),
         }),
-        menu,
-        status_item,
-        hide_item: hide,
+        menu: Mutex::new(menu),
+        menu_state: Mutex::new(None),
+        sampling: AtomicBool::new(false),
         tray_available: AtomicBool::new(false),
         materials: Mutex::new(Materials::default()),
     });
@@ -493,9 +459,23 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             } else {
                 None
             };
+            let sampling = store
+                .db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM estimates WHERE status IN ('active','pending'))",
+                    [],
+                    |r| r.get::<_, bool>(0),
+                )
+                .unwrap_or(false);
             let app = handle.clone();
             if handle
-                .run_on_main_thread(move || update(&app, snapshot, pet_asset, supported))
+                .run_on_main_thread(move || {
+                    app.state::<Desktop>()
+                        .sampling
+                        .store(sampling, Ordering::Relaxed);
+                    update(&app, snapshot, pet_asset, supported);
+                    refresh_menu(&app);
+                })
                 .is_err()
             {
                 break;
@@ -856,10 +836,15 @@ fn create_tray(app: &AppHandle, desktop: &Desktop) -> tauri::Result<()> {
     if app.tray_by_id(TRAY_ID).is_some() {
         return Ok(());
     }
+    let menu = desktop
+        .menu
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon(None, false))
         .tooltip("Aieyes")
-        .menu(&desktop.menu)
+        .menu(&menu)
         // Linux uses the native menu; tray click events are not emitted there.
         .show_menu_on_left_click(true)
         .on_tray_icon_event(|tray, event| {
@@ -913,7 +898,6 @@ fn update(app: &AppHandle, snapshot: Snapshot, pet_asset: Value, supported: Opti
             )
         })
         .unwrap_or((true, true));
-    let _ = desktop.status_item.set_text(format!("Aieyes · {summary}"));
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         if text_changed || new_tray {
             let _ = tray.set_tooltip(Some(format!("Aieyes · {summary}")));
@@ -1291,20 +1275,46 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
             }
             restore_position(app).map_err(|e| e.to_string())
         }
-        "menu" => app
-            .get_webview_window("floating")
-            .ok_or("桌宠不可用")?
-            .popup_menu(&app.state::<Desktop>().menu)
-            .map_err(|e| e.to_string()),
-        "snap" => snap_ball(app),
-        HIDE_MENU_ID => {
-            let hidden = app
+        "menu" => {
+            let info = desktop_info(app.clone())?;
+            let visible = info["petEnabled"] == true && info["hidden"] != true;
+            let menu = build_context_menu(app, true, visible, info["trayAvailable"] == true, false)
+                .map_err(|e| e.to_string())?;
+            app.get_webview_window("floating")
+                .ok_or("桌宠不可用")?
+                .popup_menu(&menu)
+                .map_err(|e| e.to_string())
+        }
+        "open-panel" => set_panel(app, true),
+        "sampling" => show_main(app, "sampling"),
+        "check-updates" => {
+            let page = app
                 .state::<Desktop>()
                 .state
                 .lock()
                 .map_err(|_| "显示状态不可用")?
-                .hidden;
-            set_hidden(app, !hidden)
+                .page
+                .clone();
+            show_main(app, &page)?;
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let result = crate::updates::updates_panel_check(app.clone()).await;
+                let _ = app.emit("updates:open", ());
+                if let Err(error) = result {
+                    let _ = app.emit("desktop:error", error);
+                }
+            });
+            Ok(())
+        }
+        "snap" => snap_ball(app),
+        HIDE_MENU_ID => {
+            let info = desktop_info(app.clone())?;
+            if info["petEnabled"] == true && info["hidden"] != true {
+                set_hidden(app, true)
+            } else {
+                set_hidden(app, false)?;
+                desktop_mode(app.clone(), Mode::Pet).map(|_| ())
+            }
         }
         "hide-ball" => set_hidden(app, true),
         "show-ball" => set_hidden(app, false),
@@ -1419,25 +1429,55 @@ fn restore_web_position(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+fn build_context_menu(
+    app: &AppHandle,
+    pet: bool,
+    visible: bool,
+    can_hide: bool,
+    sampling: bool,
+) -> tauri::Result<Menu<tauri::Wry>> {
+    let menu = Menu::new(app)?;
+    for row in crate::context_menu::entries(pet, visible, can_hide, sampling) {
+        if row.action == "separator" {
+            menu.append(&PredefinedMenuItem::separator(app)?)?;
+        } else {
+            menu.append(&MenuItem::with_id(
+                app,
+                row.action,
+                row.label,
+                row.enabled,
+                None::<&str>,
+            )?)?;
+        }
+    }
+    Ok(menu)
+}
 fn refresh_menu(app: &AppHandle) {
     let Some(desktop) = app.try_state::<Desktop>() else {
         return;
     };
-    if let Ok(state) = desktop.state.lock() {
-        let text = if state.hidden {
-            "恢复显示桌宠"
-        } else {
-            "暂时隐藏桌宠"
-        };
-        let _ = desktop.hide_item.set_text(text);
-        let enabled = state.hidden
-            || can_hide(
-                state.floating,
-                desktop.tray_available.load(Ordering::Relaxed),
-            );
-        let _ = desktop.hide_item.set_enabled(enabled);
+    let state = desktop.state.lock().unwrap_or_else(|e| e.into_inner());
+    let visible = state.floating && !state.hidden;
+    let can_hide = can_hide(
+        state.floating,
+        desktop.tray_available.load(Ordering::Relaxed),
+    );
+    let sampling = desktop.sampling.load(Ordering::Relaxed);
+    drop(state);
+    let signature = (visible, can_hide, sampling);
+    let mut previous = desktop.menu_state.lock().unwrap_or_else(|e| e.into_inner());
+    if *previous == Some(signature) {
+        return;
+    }
+    if let Ok(menu) = build_context_menu(app, false, visible, can_hide, sampling) {
+        if let Some(tray) = app.tray_by_id(TRAY_ID) {
+            let _ = tray.set_menu(Some(menu.clone()));
+        }
+        *desktop.menu.lock().unwrap_or_else(|e| e.into_inner()) = menu;
+        *previous = Some(signature);
     }
 }
+
 fn emit_shell(app: &AppHandle) {
     if let Ok(info) = desktop_info(app.clone()) {
         let _ = app.emit("desktop:panel", info.clone());

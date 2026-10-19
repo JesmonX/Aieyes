@@ -41,6 +41,7 @@ pub mod quota_notifications;
 mod quota_queries;
 pub mod quota_schedule;
 mod remote_history;
+pub mod rolling_estimates;
 pub mod runtime;
 pub mod session_events;
 pub mod session_hooks;
@@ -262,6 +263,10 @@ impl Engine {
             }
             "autoEstimates.configure" => self.configure_automatic(params),
             "autoEstimates.tick" => self.tick_automatic(),
+            "autoEstimates.rebuild" => self.store.rebuild_automatic_history(
+                params["accountKey"].as_str(),
+                params["dryRun"].as_bool().unwrap_or(false),
+            ),
             "accounts.targets" => self.account_targets(&params),
             "accounts.status.refreshBatch" => self.refresh_account_status_batch(&params),
             "subscriptions.openLogin" => subscriptions::open_login(&params),

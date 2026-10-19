@@ -25,6 +25,12 @@ extension AppModel {
         }
         return groups
     }
+    var overviewAgentProviders: [String] {
+        CoreContract.agentProviders.filter { provider in
+            agentConfigurations.contains { CoreContract.sameAgent($0.provider, provider) && $0.enabled }
+            || (settings.agents == nil && settings.accounts.contains { CoreContract.sameAgent($0.provider, provider) && $0.archived != true })
+        }
+    }
     func machineConfiguration(_ provider: String) -> AgentConfiguration? {
         guard let key = CoreContract.featureProvider(provider, "machines"), var config = rawAgentConfigurations.first(where: { $0.provider == key }) else { return nil }
         config.enabled = agentConfigurations.first { CoreContract.sameAgent($0.provider, provider) }?.enabled ?? config.enabled

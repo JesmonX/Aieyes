@@ -30,6 +30,9 @@ import Darwin
         })
     }
     @MainActor static func main() throws {
+        precondition(NativeContextMenu.entries(pet: true, visible: true).map { $0.1 } == ["open-panel", "settings", "pet-settings", "separator", "check-updates", "hide"])
+        precondition(NativeContextMenu.entries(pet: false, visible: false, sampling: true).map { $0.0 } == ["打开详情", "设置…", "管理采样…", "", "检查更新", "显示桌宠", "", "退出 Aieyes"])
+
         if CommandLine.arguments.contains("--window-tests") {
             _ = NSApplication.shared
             NSApp.finishLaunching()
@@ -189,7 +192,8 @@ import Darwin
         model.importedPet = try JSONDecoder().decode(PetSelection.self, from: data).pet
         precondition(model.importedPet != nil)
         checkpoint("Starting production SwiftUI pet window integration")
-        let controller = PetWindowController(model: model) { _, toggles in precondition(!toggles); opens += 1 }
+        var updateChecks = 0
+        let controller = PetWindowController(model: model, checkUpdates: { updateChecks += 1 }) { _, toggles in precondition(!toggles); opens += 1 }
         withExtendedLifetime(controller) {
             guard let panel = NSApplication.shared.windows.first(where: { $0.title == "Aieyes 宠物" }) else { fatalError("missing pet panel") }
             precondition(!panel.isVisible && !panel.canBecomeKey && !panel.isOpaque)
@@ -202,14 +206,16 @@ import Darwin
             let event = NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 30, y: 30), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
             let menu = panel.contentView!.menu(for: event)!
             menu.update()
-            precondition(!menu.autoenablesItems && menu.items.map(\.title) == ["打开面板", "设置", "桌宠设置", "隐藏宠物（可在设置中恢复）"] && menu.items.allSatisfy(\.isEnabled))
+            precondition(!menu.autoenablesItems && menu.items.map(\.title) == ["打开面板", "设置…", "桌宠设置", "", "检查更新", "隐藏桌宠"] && menu.items.filter { !$0.isSeparatorItem }.allSatisfy(\.isEnabled))
             menu.performActionForItem(at: 0); menu.performActionForItem(at: 0)
             precondition(opens == 3, "The context menu always requests opening, never toggling")
             menu.performActionForItem(at: 1)
             precondition(model.settingsTab == "integrations")
             menu.performActionForItem(at: 2)
             precondition(model.settingsTab == "general" && model.generalPage == "desktop")
-            menu.performActionForItem(at: 3)
+            menu.performActionForItem(at: 4)
+            precondition(updateChecks == 1, "The native context menu invokes the update callback")
+            menu.performActionForItem(at: 5)
             precondition(!defaults.bool(forKey: "aieyes.pet.enabled"))
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
             precondition(!panel.isVisible)

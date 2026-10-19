@@ -20,7 +20,7 @@ use std::{
 };
 
 pub const CONSENT_VERSION: u32 = 1;
-const BASELINE_VERSION: u32 = 3;
+const BASELINE_VERSION: u32 = 4;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoValuationConfig {
@@ -132,6 +132,17 @@ fn interval_kind(a: &QuotaSnapshot, b: &QuotaSnapshot) -> Option<&'static str> {
                 .map(|new| (old, new))
         })
         .collect::<Option<Vec<_>>>()?;
+    // Antigravity windows have independent cycles. Idle pools move their reset
+    // timestamps on every response and must not veto a different, active pool.
+    if crate::providers::antigravity(&b.provider) {
+        return Some(
+            if pairs.iter().any(|(a, b)| b.used_percent > a.used_percent) {
+                "quota"
+            } else {
+                "idle"
+            },
+        );
+    }
     if pairs.iter().any(|(old, new)| {
         !same_cycle(old.resets_at, new.resets_at, b.updated_at)
             || old.resets_at.is_none_or(|t| t <= b.updated_at)
@@ -282,6 +293,106 @@ pub(crate) fn recalculate(e: &mut Estimate) {
 }
 
 impl Store {
+    /// Bounded, resumable replay of stored evidence. Never query credentials or
+    /// remote machines, nor rewrite the imported events or live baseline.
+    pub fn rebuild_automatic_history(&self, account: Option<&str>, dry_run: bool) -> Result<Value> {
+        let tx = self.write_transaction()?;
+        let settings = self.settings()?;
+        let batch_started = std::time::Instant::now();
+        let mut reports = Vec::new();
+        let mut changed = false;
+        for a in settings.accounts.iter().filter(|a| {
+            crate::providers::antigravity(&a.provider) && a.quota_enabled && !a.archived
+        }) {
+            let key = crate::accounts::key(a);
+            if account.is_some_and(|v| v != key) {
+                continue;
+            }
+            let mut ids: Vec<_> = settings
+                .sources
+                .iter()
+                .filter(|s| {
+                    s.provider == a.provider
+                        && s.account_id == a.id
+                        && enabled(s)
+                        && settings.source_enabled(s)
+                })
+                .map(|s| s.id.clone())
+                .collect();
+            ids.sort();
+            if ids.is_empty() {
+                continue;
+            }
+            let config = self.automatic_fingerprint(&settings, &ids, &key)?;
+            let scope = hash(&serde_json::to_string(&(
+                crate::estimates::source_config(&settings, &ids, &key)?,
+                &settings.model_mappings,
+            ))?);
+            let marker = format!("automatic-history.v4:{key}:{scope}");
+            let mut report: Value = self.auto_get(&marker)?;
+            if report["complete"] == true {
+                reports.push(report);
+                continue;
+            }
+            if report.is_null() {
+                let last: i64 = self.db.query_row(
+                    "SELECT COALESCE(MAX(id),0) FROM quota_history WHERE account_key=?1",
+                    [&key],
+                    |r| r.get(0),
+                )?;
+                report = json!({"accountKey":key,"cursor":0,"lastId":last,"since":now()-90*86400,"observations":0,"restoredIntervals":0,"skippedReasons":{},"complete":false});
+                self.auto_put(
+                    &format!("automatic-replay-baseline:{key}"),
+                    &Baseline::default(),
+                )?;
+            }
+            let mut query = self.db.prepare("SELECT id,payload FROM quota_history WHERE account_key=?1 AND stamp>=?2 AND id>?3 AND id<=?4 ORDER BY id LIMIT 512")?;
+            let rows = query
+                .query_map(
+                    rusqlite::params![
+                        key,
+                        report["since"].as_i64(),
+                        report["cursor"].as_i64(),
+                        report["lastId"].as_i64()
+                    ],
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, raw) in &rows {
+                crate::operations::check()?;
+                let q: QuotaSnapshot = serde_json::from_str(raw)?;
+                let (accepted, reason) =
+                    self.advance_automatic_mode(&q, &ids, &config, true, Some(&settings))?;
+                changed |= accepted;
+                report["cursor"] = json!(id);
+                report["observations"] = json!(report["observations"].as_u64().unwrap_or(0) + 1);
+                if accepted {
+                    report["restoredIntervals"] =
+                        json!(report["restoredIntervals"].as_u64().unwrap_or(0) + 1);
+                } else {
+                    let count = report["skippedReasons"][&reason].as_u64().unwrap_or(0);
+                    report["skippedReasons"][reason] = json!(count + 1);
+                }
+                if batch_started.elapsed() >= Duration::from_millis(250) {
+                    break;
+                }
+            }
+            report["complete"] = json!(
+                rows.is_empty()
+                    || report["cursor"] == report["lastId"]
+                    || (rows.len() < 512
+                        && rows.last().is_some_and(|(id, _)| report["cursor"] == *id))
+            );
+            self.auto_put(&marker, &report)?;
+            reports.push(report);
+        }
+        if !dry_run {
+            tx.commit()?;
+        }
+        Ok(
+            json!({"dryRun":dry_run,"changed":changed,"complete":reports.iter().all(|r| r["complete"] == true),"reports":reports}),
+        )
+    }
     fn auto_get<T: for<'de> Deserialize<'de> + Default>(&self, key: &str) -> Result<T> {
         let raw: Option<String> = self
             .db
@@ -390,8 +501,29 @@ impl Store {
         ids: &[String],
         config: &str,
     ) -> Result<()> {
-        let tx = self.write_transaction()?;
-        let settings = self.settings()?;
+        self.advance_automatic_mode(snapshot, ids, config, false, None)
+            .map(|_| ())
+    }
+    fn advance_automatic_mode(
+        &self,
+        snapshot: &QuotaSnapshot,
+        ids: &[String],
+        config: &str,
+        replay: bool,
+        replay_settings: Option<&Settings>,
+    ) -> Result<(bool, String)> {
+        let tx = self
+            .db
+            .is_autocommit()
+            .then(|| self.write_transaction())
+            .transpose()?;
+        let owned_settings;
+        let settings = if let Some(s) = replay_settings {
+            s
+        } else {
+            owned_settings = self.settings()?;
+            &owned_settings
+        };
         ensure!(
             !ids.is_empty()
                 && ids.iter().all(|id| settings
@@ -402,25 +534,40 @@ impl Store {
         );
         let key = format!("{}:{}", snapshot.provider, snapshot.account_id);
         ensure!(
-            self.automatic_fingerprint(&settings, ids, &key)? == config,
+            replay || self.automatic_fingerprint(settings, ids, &key)? == config,
             "采样过程中登录或来源设置变化"
         );
-        let mut baseline: Baseline = self.auto_get(&baseline_key(&key))?;
-        if self.working_estimates(None)?.iter().any(|e| {
-            e.sampling_mode != "automatic"
-                && e.status != "completed"
-                && e.source_ids.iter().any(|id| ids.contains(id))
-        }) {
-            self.auto_put(&baseline_key(&key), &Baseline::default())?;
+        let storage_key = if replay {
+            format!("automatic-replay-baseline:{key}")
+        } else {
+            baseline_key(&key)
+        };
+        let mut baseline: Baseline = self.auto_get(&storage_key)?;
+        if !replay
+            && self.working_estimates(None)?.iter().any(|e| {
+                e.sampling_mode != "automatic"
+                    && e.status != "completed"
+                    && e.source_ids.iter().any(|id| ids.contains(id))
+            })
+        {
+            self.auto_put(&storage_key, &Baseline::default())?;
             self.automatic_status_set(ids, "waitingManual", "等待手动采样结束", &key)?;
-            tx.commit()?;
-            return Ok(());
+            if let Some(tx) = tx {
+                tx.commit()?;
+            }
+            return Ok((false, "已建立或重建采样基线".into()));
         }
         if !valid(snapshot) {
-            self.invalidate_automatic_sources(ids)?;
-            self.automatic_status_set(ids, "waiting", "等待实时订阅额度数据", &key)?;
-            tx.commit()?;
-            return Ok(());
+            if !replay {
+                self.invalidate_automatic_sources(ids)?;
+            }
+            if !replay {
+                self.automatic_status_set(ids, "waiting", "等待实时订阅额度数据", &key)?;
+            }
+            if let Some(tx) = tx {
+                tx.commit()?;
+            }
+            return Ok((false, "已建立或重建采样基线".into()));
         }
         let previous = baseline.quota.clone().filter(|q| {
             baseline.version == BASELINE_VERSION
@@ -430,9 +577,11 @@ impl Store {
                 && q.provider == snapshot.provider
         });
         let Some(old) = previous else {
-            self.invalidate_automatic_sources(ids)?;
+            if !replay {
+                self.invalidate_automatic_sources(ids)?;
+            }
             self.auto_put(
-                &baseline_key(&key),
+                &storage_key,
                 &Baseline {
                     version: BASELINE_VERSION,
                     quota: Some(snapshot.clone()),
@@ -441,20 +590,27 @@ impl Store {
                     pending: BTreeMap::new(),
                 },
             )?;
-            self.automatic_status_set(ids, "collecting", "已建立基线，等待首个可靠样本", &key)?;
-            tx.commit()?;
-            return Ok(());
+            if !replay {
+                self.automatic_status_set(ids, "collecting", "已建立基线，等待首个可靠样本", &key)?;
+            }
+            if let Some(tx) = tx {
+                tx.commit()?;
+            }
+            return Ok((false, "已建立或重建采样基线".into()));
         };
         if snapshot.updated_at <= old.updated_at {
-            tx.commit()?;
-            return Ok(());
+            if let Some(tx) = tx {
+                tx.commit()?;
+            }
+            return Ok((false, "已建立或重建采样基线".into()));
         }
         let q = anchored(&old, snapshot);
-        if old.plan != q.plan {
+        if old.plan != q.plan && !replay {
             self.invalidate_automatic_sources(ids)?;
         }
         let kind = interval_kind(&old, &q);
         let mut accepted = false;
+        let mut waiting_reason = "暂无对应额度消耗；等待下一个有效区间".to_owned();
         if let Some(kind) = kind {
             let windows: Vec<_> = q
                 .windows
@@ -501,6 +657,31 @@ impl Store {
                     .get(&pool)
                     .cloned()
                     .unwrap_or_else(|| old.clone());
+                if crate::providers::antigravity(&q.provider)
+                    && let Some(w) = window
+                {
+                    let comparable = from
+                        .windows
+                        .iter()
+                        .find(|v| window_id(v) == window_id(w))
+                        .is_some_and(|old| {
+                            w.used_percent >= old.used_percent
+                                && same_cycle(old.resets_at, w.resets_at, q.updated_at)
+                        });
+                    if !comparable {
+                        baseline.pending.insert(pool, q.clone());
+                        if w.used_percent > 0.0
+                            || from
+                                .windows
+                                .iter()
+                                .find(|v| window_id(v) == window_id(w))
+                                .is_some_and(|v| v.used_percent > 0.0)
+                        {
+                            waiting_reason = "部分额度窗口已重置或回退，已为该窗口重建基线".into();
+                        }
+                        continue;
+                    }
+                }
                 let consumed = if let Some(w) = window {
                     from.windows
                         .iter()
@@ -513,6 +694,12 @@ impl Store {
                         .map(|(a, b)| (a - b) as f64 / 1e18)
                         .unwrap_or(0.0)
                 };
+                if consumed == 0.0 && crate::providers::antigravity(&q.provider) {
+                    // Counter lag is validated over the full interval when it
+                    // eventually advances; idle polls need no usage scan.
+                    baseline.pending.entry(pool).or_insert(from);
+                    continue;
+                }
                 let group = window
                     .filter(|_| crate::providers::antigravity(&q.provider))
                     .map(crate::antigravity::window_group);
@@ -549,15 +736,29 @@ impl Store {
                     || !reliable
                     || crate::estimates::finite_value(sample.cost, consumed, 1000.0).is_none()
                 {
+                    if consumed > 0.0 {
+                        waiting_reason = sample.calculation_note.clone();
+                    }
                     continue;
                 }
                 let win = record_window.map(window_id).unwrap_or("credits");
-                let existing = self.working_estimates(Some(&key))?.into_iter().find(|e| {
-                    e.sampling_mode == "automatic"
-                        && e.status == "active"
-                        && e.account_key == key
-                        && e.window_id == win
-                });
+                let replay_id = format!(
+                    "auto-replay-v4-{}-{}-{}-{}",
+                    hash(&key),
+                    hash(win),
+                    from.updated_at,
+                    q.updated_at
+                );
+                let existing = if replay {
+                    self.estimate_for(&replay_id, kind == "credits").ok()
+                } else {
+                    self.working_estimates(Some(&key))?.into_iter().find(|e| {
+                        e.sampling_mode == "automatic"
+                            && e.status == "active"
+                            && e.account_key == key
+                            && e.window_id == win
+                    })
+                };
                 let mut record = if let Some(e) = existing {
                     e
                 } else {
@@ -569,12 +770,16 @@ impl Store {
                             .duration_since(std::time::UNIX_EPOCH)?
                             .as_nanos()
                     );
-                    common.status = "active".into();
+                    if replay {
+                        common.id = replay_id;
+                        common.ended_at = Some(q.updated_at);
+                    }
+                    common.status = if replay { "completed" } else { "active" }.into();
                     common.window_id = win.into();
                     common.window_name = record_window
                         .map(|w| w.name.clone())
                         .unwrap_or("Credits".into());
-                    common.source_config = crate::estimates::source_config(&settings, ids, &key)?;
+                    common.source_config = crate::estimates::source_config(settings, ids, &key)?;
                     common.source_names = ids
                         .iter()
                         .filter_map(|id| {
@@ -606,11 +811,21 @@ impl Store {
                         })
                     } else {
                         Estimate::Credit(CreditEstimate {
+                            quota_plan: q.plan.clone(),
                             common,
                             ..Default::default()
                         })
                     }
                 };
+                if replay
+                    && record.automatic_segments.iter().any(|s| {
+                        s.started_at == from.updated_at
+                            && s.ended_at == q.updated_at
+                            && (s.pool == "weekly") == weekly
+                    })
+                {
+                    continue;
+                }
                 record.automatic_segments.push(AutoSegment {
                     pool: if weekly { "weekly" } else { "primary" }.into(),
                     prices: sample.prices.clone(),
@@ -641,21 +856,26 @@ impl Store {
         } else {
             // Mixed consumption, top-ups, reset, plan changes and data gaps break all pending pairs.
             baseline.pending.clear();
+            waiting_reason = "额度周期变化、混合消耗或采样间隔超过五分钟；已重建基线".into();
         }
         baseline.quota = Some(q);
-        self.auto_put(&baseline_key(&key), &baseline)?;
-        self.automatic_status_set(
-            ids,
-            if accepted { "sampling" } else { "waiting" },
-            if accepted {
-                "已更新可靠样本；小样本也会立即显示"
-            } else {
-                "等待可确认归属且价格完整的样本；已保留有效估值"
-            },
-            &key,
-        )?;
-        tx.commit()?;
-        Ok(())
+        self.auto_put(&storage_key, &baseline)?;
+        if !replay {
+            self.automatic_status_set(
+                ids,
+                if accepted { "sampling" } else { "waiting" },
+                if accepted {
+                    "已更新可靠样本；小样本也会立即显示"
+                } else {
+                    &waiting_reason
+                },
+                &key,
+            )?;
+        }
+        if let Some(tx) = tx {
+            tx.commit()?;
+        }
+        Ok((accepted, waiting_reason))
     }
 }
 
@@ -808,7 +1028,8 @@ impl Engine {
         };
         let settings = self.store.settings()?;
         let mut groups = BTreeMap::<String, Vec<String>>::new();
-        let mut changed = false;
+        let replay = self.store.rebuild_automatic_history(None, false)?;
+        let mut changed = replay["changed"] == true;
         for s in settings.sources.iter().filter(|s| enabled(s)) {
             if !settings.source_enabled(s) {
                 self.store
@@ -957,7 +1178,7 @@ impl Engine {
             }
             changed = true;
         }
-        Ok(json!({"changed":changed,"enabled":true}))
+        Ok(json!({"changed":changed,"enabled":true,"replaying":replay["complete"] != true}))
     }
 }
 
@@ -985,6 +1206,9 @@ impl Background {
                 {
                     match current.tick_automatic() {
                         Ok(value) => {
+                            if value["replaying"] == true {
+                                interval = 1;
+                            }
                             if value["changed"] == true {
                                 on_change();
                             }
@@ -1831,5 +2055,142 @@ mod tests {
         let value = all[0].credit().unwrap();
         assert_eq!(value.consumed_credits, 0.1);
         assert_eq!(value.value_per1000, Some(10000.0));
+    }
+    fn agy_fixture() -> (tempfile::TempDir, Engine, QuotaSnapshot) {
+        let (root, e, mut q) = setup(false);
+        let mut settings = e.store.settings().unwrap();
+        settings.sources[0].provider = "antigravity".into();
+        settings.accounts[0].provider = "antigravity".into();
+        settings.sources[0].codex_home_id = None;
+        settings.agents.clear();
+        e.store.save_settings(&settings).unwrap();
+        e.store
+            .save_prices(&[ModelPrice {
+                id: "gemini-3.8-flash-n".into(),
+                input: Some(0.01),
+                ..Default::default()
+            }])
+            .unwrap();
+        q.provider = "antigravity".into();
+        q.plan = Some("Google AI Pro".into());
+        q.credits = None;
+        q.windows = [
+            ("gemini", 300, 10.0),
+            ("gemini", 10080, 1.0),
+            ("claude-gpt", 300, 0.0),
+            ("claude-gpt", 10080, 0.0),
+        ]
+        .into_iter()
+        .map(|(g, m, u)| QuotaWindow {
+            id: format!("{g}:{m}"),
+            group_id: g.into(),
+            group_name: g.into(),
+            name: format!("{g} {m}"),
+            used_percent: u,
+            window_minutes: Some(m),
+            resets_at: Some(now() + m * 60),
+        })
+        .collect();
+        (root, e, q)
+    }
+    fn agy_event(e: &Engine, q: &QuotaSnapshot, id: &str) {
+        let settings = e.store.settings().unwrap();
+        let event=crate::usage::parse(&settings.sources[0],&mut ParseState::default(),&json!({"id":id,"timestamp":q.updated_at+5,"intervalStart":q.updated_at,"intervalEvidence":"antigravity-step-v1","model":"gemini-3.8-flash-n","tokens":{"input":1000}})).unwrap();
+        e.store
+            .put_event(&event, &e.store.prices().unwrap(), &settings)
+            .unwrap();
+    }
+    fn agy_step(q: &mut QuotaSnapshot) {
+        q.updated_at += 30;
+        q.windows[0].used_percent += 1.0;
+        q.windows[1].used_percent += 0.2;
+        for w in &mut q.windows[2..] {
+            w.resets_at = w.resets_at.map(|t| t + 30);
+        }
+    }
+    #[test]
+    fn agy_idle_group_and_independent_five_hour_reset_do_not_veto_weekly_samples() {
+        let (_root, e, mut q) = agy_fixture();
+        observe(&e, &q);
+        agy_event(&e, &q, "first");
+        agy_step(&mut q);
+        observe(&e, &q);
+        let records = e.store.estimates().unwrap();
+        assert_eq!(records.len(), 1);
+        let record = records[0].quota().unwrap();
+        assert_eq!(record.five_hour_value, Some(1000.0));
+        assert!((record.weekly_value.unwrap() - 5000.0).abs() < 1e-7);
+        agy_event(&e, &q, "after-five-reset");
+        agy_step(&mut q);
+        q.windows[0].used_percent = 0.0;
+        q.windows[0].resets_at = Some(now() + 30000);
+        observe(&e, &q);
+        let records = e.store.estimates().unwrap();
+        assert_eq!(
+            records[0].automatic_segments.len(),
+            3,
+            "weekly sample survives the independent five-hour reset"
+        );
+        assert_eq!(records[0].cost, 10.0);
+        assert!(
+            e.store.automatic_status("s").unwrap()["note"]
+                .as_str()
+                .unwrap()
+                .contains("可靠样本")
+        );
+    }
+    #[test]
+    fn agy_history_replay_is_dry_runnable_resumable_and_does_not_change_live_baseline() {
+        let (_root, e, mut q) = agy_fixture();
+        e.store.quota(&q).unwrap();
+        observe(&e, &q);
+        let live: String = e
+            .store
+            .db
+            .query_row(
+                "SELECT value FROM kv WHERE key='automatic-baseline:antigravity:a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        agy_event(&e, &q, "history");
+        agy_step(&mut q);
+        e.store.quota(&q).unwrap();
+        let preview = e
+            .store
+            .rebuild_automatic_history(Some("antigravity:a"), true)
+            .unwrap();
+        assert_eq!(preview["reports"][0]["restoredIntervals"], 1);
+        assert!(e.store.estimates().unwrap().is_empty());
+        let result = e
+            .store
+            .rebuild_automatic_history(Some("antigravity:a"), false)
+            .unwrap();
+        assert_eq!(result["complete"], true);
+        let count = e.store.estimates().unwrap().len();
+        assert!(count > 0);
+        assert_eq!(
+            e.store.rebuild_automatic_history(None, false).unwrap()["changed"],
+            false
+        );
+        assert_eq!(e.store.estimates().unwrap().len(), count);
+        assert_eq!(
+            e.store
+                .db
+                .query_row(
+                    "SELECT value FROM kv WHERE key='automatic-baseline:antigravity:a'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            live
+        );
+        assert!(
+            e.store
+                .estimates()
+                .unwrap()
+                .iter()
+                .all(|e| e.status == "completed")
+        );
     }
 }

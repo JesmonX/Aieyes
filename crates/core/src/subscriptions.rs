@@ -893,6 +893,8 @@ mod tests {
     fn harness_balance_account_has_no_history_path_and_native_sources_still_require_one() {
         let root = tempfile::tempdir().unwrap();
         let mut engine = Engine::open(root.path()).unwrap();
+        // This scenario starts with no native history source, regardless of the host's installed clients.
+        engine.store.save_settings(&Settings::default()).unwrap();
         let mut settings = engine.store.settings().unwrap();
         let agent = settings
             .agents
