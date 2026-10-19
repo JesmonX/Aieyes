@@ -116,7 +116,10 @@ fn new_local_sources_follow_environment_but_explicit_sources_and_ssh_do_not_move
         .iter_mut()
         .find(|s| s["provider"] == "kimi")
         .unwrap();
-    assert_eq!(source["path"], root.join("native/kimi").to_str().unwrap());
+    assert_eq!(
+        source["path"],
+        root.join("native").join("kimi").to_str().unwrap()
+    );
     let explicit = root.join("explicit-history");
     source["path"] = json!(explicit);
     settings["hosts"] =
