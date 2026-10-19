@@ -1073,6 +1073,11 @@ fn read_file(
     hook: bool,
     cursor: Option<&Cursor>,
 ) -> std::io::Result<FileBatch> {
+    #[cfg(windows)]
+    let mut file = File::open(path)?;
+    #[cfg(windows)]
+    let meta = file.metadata()?;
+    #[cfg(not(windows))]
     let meta = fs::metadata(path)?;
     let modified = seconds(meta.modified()?);
     let signature = meta
@@ -1086,7 +1091,24 @@ fn read_file(
         use std::os::unix::fs::MetadataExt;
         meta.ino().to_string()
     };
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let identity = {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        };
+        // NTFS can preserve creation time when a same-name file is replaced.
+        // Query the opened file's actual ID so its old source cannot survive.
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        format!(
+            "{}:{}:{}",
+            info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
+        )
+    };
+    #[cfg(not(any(unix, windows)))]
     let identity = meta
         .created()
         .ok()
@@ -1119,6 +1141,7 @@ fn read_file(
     } else {
         cursor.unwrap().offset
     };
+    #[cfg(not(windows))]
     let mut file = File::open(path)?;
     file.seek(SeekFrom::Start(offset))?;
     let mut data = Vec::new();
