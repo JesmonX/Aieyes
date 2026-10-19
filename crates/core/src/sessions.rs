@@ -446,6 +446,13 @@ impl Reader {
             cursor.identity = f.identity;
             cursor.signature = f.signature;
             cursor.continuation = f.continuation;
+            // Creation source is independent of the tools called in a normal
+            // conversation. Unknown sources fail closed, including subagents.
+            if source.provider == "codex"
+                && !matches!(cursor.activity.session_source.as_str(), "cli" | "vscode")
+            {
+                continue;
+            }
             let Some(mut phase) = cursor.activity.phase else {
                 continue;
             };
@@ -1143,10 +1150,9 @@ fn read_file(
                 } else {
                     session_events::pi(&v)
                 };
-                events.extend(
-                    rows.into_iter()
-                        .filter(|e| e.kind == "identity" && !e.session.is_empty()),
-                );
+                events.extend(rows.into_iter().filter(|e| {
+                    e.kind == "identity" && (!e.session.is_empty() || !e.session_source.is_empty())
+                }));
             }
         }
     }
@@ -1583,6 +1589,9 @@ mod tests {
     use super::*;
     use crate::models::{AgentConfiguration, Source};
     use serde_json::json;
+    fn codex_metadata(source: &str) -> String {
+        json!({"type":"session_meta","payload":{"id":"fixture","source":source}}).to_string() + "\n"
+    }
     fn row(kind: &str, event: &str) -> String {
         format!(
             "{}\n",
@@ -1696,7 +1705,11 @@ mod tests {
     fn source_scope_expiry_deduplication_and_unavailability() {
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("session.jsonl");
-        fs::write(&file, row("event_msg", "task_started")).unwrap();
+        fs::write(
+            &file,
+            codex_metadata("cli") + &row("event_msg", "task_started"),
+        )
+        .unwrap();
         let now = fs::metadata(&file).unwrap().modified().unwrap();
         let source = Source {
             id: "one".into(),
@@ -1763,7 +1776,11 @@ mod tests {
     fn completed_sessions_expire_even_when_cached() {
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("session.jsonl");
-        fs::write(&file, row("event_msg", "task_complete")).unwrap();
+        fs::write(
+            &file,
+            codex_metadata("cli") + &row("event_msg", "task_complete"),
+        )
+        .unwrap();
         let now = fs::metadata(&file).unwrap().modified().unwrap();
         let settings = Settings {
             sources: vec![Source {
@@ -2231,7 +2248,7 @@ mod adapter_tests {
         hooks_only(&claude);
         hooks_only(&agy);
         fs::create_dir(agy.join("conversations")).unwrap();
-        fs::write(codex.join("s.jsonl"),b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"text\":\"SECRET\"}}\n").unwrap();
+        fs::write(codex.join("s.jsonl"),"{\"type\":\"session_meta\",\"payload\":{\"id\":\"s\",\"source\":\"cli\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"text\":\"SECRET\"}}\n").unwrap();
         let at = seconds(SystemTime::now()) * 1000;
         let events = [
             session_events::hook(
@@ -2299,7 +2316,7 @@ mod adapter_tests {
     fn incremental_tail_retains_parallel_wait_and_handles_replacement() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("s.jsonl");
-        fs::write(&path,format!("{}\n",json!({"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"ask"}}))).unwrap();
+        fs::write(&path,"{\"type\":\"session_meta\",\"payload\":{\"id\":\"s\",\"source\":\"cli\"}}\n".to_owned()+&format!("{}\n",json!({"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"ask"}}))).unwrap();
         let settings = Settings {
             sources: vec![source(temp.path(), "codex")],
             ..Default::default()
@@ -2329,7 +2346,7 @@ mod adapter_tests {
         drop(f);
         fs::write(
             &path,
-            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n",
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s\",\"source\":\"cli\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\"}}\n",
         )
         .unwrap();
         assert_eq!(
@@ -2412,7 +2429,7 @@ mod adapter_tests {
         let temp = tempfile::tempdir().unwrap();
         fs::write(
             temp.path().join("s.jsonl"),
-            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n",
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s\",\"source\":\"cli\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n",
         )
         .unwrap();
         let mut settings = Settings {
@@ -2596,5 +2613,190 @@ mod adapter_tests {
         worker.completions = Some(rx);
         worker.pending = true;
         assert!(!monitor.read(&settings, SystemTime::now()).unavailable);
+    }
+}
+
+#[cfg(test)]
+mod codex_source_tests {
+    use super::*;
+    use std::io::Write;
+    fn header(source: Value) -> String {
+        json!({"type":"session_meta","payload":{"id":"session","source":source}}).to_string() + "\n"
+    }
+    fn poll(reader: &mut Reader, source: &Source, path: &Path) -> Snapshot {
+        let key = path.to_string_lossy();
+        let batch = read_file(path, "codex", false, reader.cursors.get(key.as_ref())).unwrap();
+        let now = seconds(SystemTime::now());
+        reader.consume(
+            source,
+            SourceBatch {
+                files: vec![batch],
+                ..Default::default()
+            },
+            now,
+            now,
+            "Fixture",
+            None,
+        )
+    }
+    #[test]
+    fn creation_sources_filter_lists_counts_summaries_and_pet_but_keep_normal_exec_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let cases: Vec<Value> = serde_json::from_str(include_str!(
+            "../../../scripts/fixtures/codex-session-sources.json"
+        ))
+        .unwrap();
+        let mut visible = 0;
+        for (index, case) in cases.iter().enumerate() {
+            let mut metadata = case["metadata"].clone();
+            metadata["id"] = case["name"].clone();
+            let mut log = json!({"type":"session_meta","payload":metadata}).to_string() + "\n";
+            log +=
+                &(json!({"type":"event_msg","payload":{"type":"task_started"}}).to_string() + "\n");
+            let allowed = case["visible"] == true;
+            let event = if allowed {
+                visible += 1;
+                json!({"type":"response_item","payload":{"type":"function_call","name":"functions.exec_command","call_id":"normal-command","arguments":"PRIVATE_COMMAND"}})
+            } else if index % 3 == 0 {
+                json!({"type":"event_msg","payload":{"type":"error"}})
+            } else if index % 3 == 1 {
+                json!({"type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"ask"}})
+            } else {
+                json!({"type":"event_msg","payload":{"type":"task_started"}})
+            };
+            log += &(event.to_string() + "\n");
+            fs::write(root.path().join(format!("{index}.jsonl")), log).unwrap();
+        }
+        let source = Source {
+            id: "s".into(),
+            path: root.path().to_string_lossy().into(),
+            ..Default::default()
+        };
+        let snapshot = SessionMonitor::default().read(
+            &Settings {
+                sources: vec![source],
+                ..Default::default()
+            },
+            SystemTime::now(),
+        );
+        assert_eq!(snapshot.sessions.len(), visible);
+        assert_eq!(snapshot.active_count(), visible);
+        assert_eq!(snapshot.phase(), Some(Phase::Tool));
+        assert_eq!(snapshot.phase_counts().len(), 1);
+        assert_eq!(crate::pets::project(&snapshot).behavior, "working");
+        assert!(!snapshot.summary().contains("等待"));
+        assert!(!snapshot.summary().contains("失败"));
+        let wire = serde_json::to_string(&snapshot).unwrap();
+        assert!(!wire.contains("PRIVATE_"));
+        assert!(
+            !wire.contains("sessionSource"),
+            "Creation metadata stays internal"
+        );
+    }
+    #[test]
+    fn first_large_log_incremental_events_and_replacements_retain_only_confirmed_creation_source() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let body = json!({"type":"event_msg","payload":{"type":"task_started"}}).to_string() + "\n";
+        let padding = json!({"type":"ignored","text":"PRIVATE_".repeat(50000)}).to_string() + "\n";
+        fs::write(&path, header(json!("vscode")) + &padding + &body).unwrap();
+        let source = Source {
+            id: "s".into(),
+            path: path.to_string_lossy().into(),
+            ..Default::default()
+        };
+        let mut reader = Reader::default();
+        assert_eq!(poll(&mut reader, &source, &path).active_count(), 1);
+        assert_eq!(
+            reader.cursors[path.to_string_lossy().as_ref()]
+                .activity
+                .session_source,
+            "vscode"
+        );
+        let mut stream = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(stream,"{}",json!({"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"normal"}})).unwrap();
+        drop(stream);
+        assert_eq!(poll(&mut reader, &source, &path).phase(), Some(Phase::Tool));
+        assert_eq!(
+            poll(&mut reader, &source, &path).phase(),
+            Some(Phase::Tool),
+            "Unchanged files retain classification"
+        );
+        fs::rename(&path, root.path().join("old.jsonl")).unwrap();
+        fs::write(&path, header(json!("exec")) + &body).unwrap();
+        assert!(poll(&mut reader, &source, &path).sessions.is_empty());
+        fs::rename(&path, root.path().join("exec.jsonl")).unwrap();
+        fs::write(&path, &body).unwrap();
+        assert!(
+            poll(&mut reader, &source, &path).sessions.is_empty(),
+            "A missing header cannot inherit the old source"
+        );
+        fs::rename(&path, root.path().join("missing.jsonl")).unwrap();
+        fs::write(&path, header(json!("cli")) + &body).unwrap();
+        assert_eq!(poll(&mut reader, &source, &path).active_count(), 1);
+    }
+    #[test]
+    fn ssh_metadata_and_local_projection_apply_the_same_source_rules() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let cases: Vec<Value> = serde_json::from_str(include_str!(
+            "../../../scripts/fixtures/codex-session-sources.json"
+        ))
+        .unwrap();
+        let collector =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/session_remote.py");
+        let script = "import json,pathlib,runpy,sys;m=runpy.run_path(sys.argv[1]);print(json.dumps(m['read_file'](pathlib.Path(sys.argv[2]),'codex',False,{})))";
+        for case in cases {
+            let mut meta = case["metadata"].clone();
+            meta["id"] = json!("session");
+            let log=json!({"type":"session_meta","payload":meta}).to_string()+"\n"+&json!({"type":"event_msg","payload":{"type":"task_started","text":"PRIVATE_PROMPT"}}).to_string()+"\n";
+            fs::write(&path, log).unwrap();
+            let local = read_file(&path, "codex", false, None).unwrap();
+            let output =
+                std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+                    .args(["-c", script])
+                    .arg(&collector)
+                    .arg(&path)
+                    .output()
+                    .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("PRIVATE_"));
+            let remote: FileBatch = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                serde_json::to_value(&local.events).unwrap(),
+                serde_json::to_value(&remote.events).unwrap(),
+                "{}",
+                case["name"]
+            );
+            let now = seconds(SystemTime::now());
+            for (batch, host) in [(local, None), (remote, Some("ssh".into()))] {
+                let source = Source {
+                    id: "s".into(),
+                    host_id: host,
+                    ..Default::default()
+                };
+                let snap = Reader::default().consume(
+                    &source,
+                    SourceBatch {
+                        files: vec![batch],
+                        ..Default::default()
+                    },
+                    now,
+                    now,
+                    "Fixture",
+                    None,
+                );
+                assert_eq!(
+                    !snap.sessions.is_empty(),
+                    case["visible"] == true,
+                    "{}",
+                    case["name"]
+                );
+            }
+        }
     }
 }

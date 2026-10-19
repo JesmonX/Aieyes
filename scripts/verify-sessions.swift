@@ -5,7 +5,7 @@ import Combine
     static func event(_ type: String) -> String { "{\"type\":\"event_msg\",\"payload\":{\"type\":\"\(type)\"}}\n" }
     static func item(_ type: String) -> String { "{\"type\":\"response_item\",\"payload\":{\"type\":\"\(type)\"}}\n" }
     static func main() async throws {
-        let start = event("task_started")
+        let start = "{\"type\":\"session_meta\",\"payload\":{\"id\":\"fixture\",\"source\":\"cli\"}}\n" + event("task_started")
         let snapshot = try JSONDecoder().decode(SessionSnapshot.self, from: Data(#"{"sessions":[{"id":"s","source":"Codex","phase":"tool","updatedAt":1791640000}],"unavailable":false}"#.utf8))
         precondition(snapshot.sessions[0].phase == .tool)
         precondition(snapshot.sessions[0].updatedAt.timeIntervalSince1970 == 1791640000)

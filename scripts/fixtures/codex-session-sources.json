@@ -1,0 +1,13 @@
+[
+  {"name":"cli","metadata":{"source":"cli","originator":"codex_cli_rs"},"source":"cli","visible":true},
+  {"name":"vscode","metadata":{"source":"vscode","originator":"codex_vscode"},"source":"vscode","visible":true},
+  {"name":"chatgpt-app","metadata":{"source":"vscode","originator":"ChatGPT"},"source":"vscode","visible":true},
+  {"name":"cli-originator-does-not-classify","metadata":{"source":"cli","originator":"codex_exec"},"source":"cli","visible":true},
+  {"name":"exec","metadata":{"source":"exec","originator":"codex_vscode"},"source":"exec","visible":false},
+  {"name":"subagent","metadata":{"source":{"subagent":{"thread_spawn":{"parent_thread_id":"PRIVATE_PARENT","depth":1}}}},"source":"","visible":false},
+  {"name":"subagent-string","metadata":{"source":"subagent"},"source":"subagent","visible":false},
+  {"name":"unknown","metadata":{"source":"future-source"},"source":"future-source","visible":false},
+  {"name":"missing","metadata":{"originator":"codex_vscode"},"source":"","visible":false},
+  {"name":"null","metadata":{"source":null},"source":"","visible":false},
+  {"name":"uppercase","metadata":{"source":"CLI"},"source":"CLI","visible":false}
+]

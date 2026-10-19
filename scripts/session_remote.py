@@ -13,7 +13,7 @@ ZCODE = ['SessionStart','UserPromptSubmit','PreToolUse','PermissionRequest','Pos
 CURSOR = ['sessionStart','beforeSubmitPrompt','preToolUse','postToolUse','postToolUseFailure','afterAgentThought','stop','sessionEnd']
 def hook_names(provider):
     return CLAUDE if provider=='claude' else CURSOR if provider=='cursor' else ZCODE if provider=='zcode' else AGY
-EVENT_KEYS = {'kind', 'session', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification'}
+EVENT_KEYS = {'kind', 'session', 'sessionSource', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification'}
 
 def text(value):
     return value[:256] if isinstance(value, str) else ''
@@ -222,7 +222,10 @@ def metadata(v, provider, hook):
         p = v.get('payload') or {}; key = (v.get('type'), p.get('type'))
         kinds = {('event_msg','task_started'):'start',('event_msg','task_complete'):'complete',('event_msg','turn_aborted'):'interrupted',('event_msg','error'):'failed',('response_item','reasoning'):'thinking',('response_item','function_call'):'tool',('response_item','custom_tool_call'):'tool',('response_item','function_call_output'):'output',('response_item','custom_tool_call_output'):'output'}
         kind = 'identity' if v.get('type') == 'session_meta' else kinds.get(key)
-        return [dict(kind=kind,at=at,session=text(p.get('id')) if kind=='identity' else '',turn=text(p.get('turn_id')),call=text(p.get('call_id')),tool=text(p.get('name')))] if kind else []
+        if not kind:return []
+        row=dict(kind=kind,at=at,session=text(p.get('id')) if kind=='identity' else '',turn=text(p.get('turn_id')),call=text(p.get('call_id')),tool=text(p.get('name')))
+        if kind=='identity':row['sessionSource']=text(p.get('source'))
+        return [row]
     rows = []; message = v.get('message') or {}; content = message.get('content')
     content = content if isinstance(content,list) else []
     base = dict(at=at,session=text(v.get('sessionId')))
@@ -312,8 +315,8 @@ def read_file(path, provider, hook, cursor):
                 prefix, sep, data = data.partition(b'\n'); offset += len(prefix) + len(sep)
             if reset:
                 f.seek(0)
-                for _ in range(2 if provider=='omp' else 1):
-                    try: rows.extend(e for e in metadata(json.loads(f.readline(65536)), provider, hook) if e.get('kind') == 'identity' and e.get('session'))
+                for _ in range(2 if provider in ('codex','pi','omp') else 1):
+                    try: rows.extend(e for e in metadata(json.loads(f.readline(65536)), provider, hook) if e.get('kind') == 'identity' and (e.get('session') or e.get('sessionSource')))
                     except (ValueError, TypeError): pass
             complete = data.rfind(b'\n') + 1
             for line in data[:complete].splitlines():

@@ -9,6 +9,42 @@ class ObserverTests(unittest.TestCase):
         for discovery in m._DISCOVERY.values(): discovery.watch.close()
         m._DISCOVERY.clear()
 
+    def test_codex_creation_source_projection_uses_exact_metadata_and_keeps_exec_tools(self):
+        cases=json.loads((ROOT/'scripts/fixtures/codex-session-sources.json').read_text())
+        for case in cases:
+            with self.subTest(case=case['name']):
+                event=m.metadata(dict(type='session_meta',payload=case['metadata']),'codex',False)[0]
+                self.assertEqual(event['sessionSource'],case['source'])
+                self.assertEqual(event['kind'],'identity')
+                self.assertNotIn('PRIVATE_',json.dumps(event))
+                self.assertTrue(set(event)<=m.EVENT_KEYS)
+        event=m.metadata(dict(type='response_item',payload=dict(type='function_call',name='functions.exec_command',call_id='c',arguments='PRIVATE_COMMAND')),'codex',False)[0]
+        self.assertEqual(event['kind'],'tool');self.assertEqual(event['tool'],'functions.exec_command')
+        self.assertNotIn('sessionSource',event);self.assertNotIn('PRIVATE_',json.dumps(event))
+
+    def test_codex_large_log_header_incremental_cache_and_replacement(self):
+        def header(source):return json.dumps(dict(type='session_meta',payload=dict(id='session',source=source)))+'\n'
+        body=json.dumps(dict(type='event_msg',payload=dict(type='task_started')))+'\n'
+        with tempfile.TemporaryDirectory() as directory:
+            path=pathlib.Path(directory)/'session.jsonl'
+            path.write_text(header('vscode')+json.dumps(dict(type='ignored',text='PRIVATE_'*50000))+'\n'+body)
+            first=m.read_file(path,'codex',False,{})
+            self.assertTrue(first['reset']);self.assertEqual(first['events'][0]['sessionSource'],'vscode')
+            self.assertEqual(first['events'][-1]['kind'],'start');self.assertNotIn('PRIVATE_',json.dumps(first))
+            with path.open('a') as stream:stream.write(json.dumps(dict(type='response_item',payload=dict(type='function_call',name='exec_command',call_id='normal')))+'\n')
+            second=m.read_file(path,'codex',False,first)
+            self.assertFalse(second['reset']);self.assertEqual(second['events'][0]['kind'],'tool')
+            self.assertEqual(m.read_file(path,'codex',False,second)['events'],[])
+            previous=second
+            for index,source in enumerate(('exec',None,'cli')):
+                path.rename(path.with_name('old%d.jsonl'%index))
+                path.write_text((header(source) if source else '')+body)
+                current=m.read_file(path,'codex',False,previous)
+                self.assertTrue(current['reset'])
+                sources=[e.get('sessionSource') for e in current['events'] if e['kind']=='identity']
+                self.assertEqual(sources,[source,source] if source else [])
+                previous=current
+
     def test_confirmed_eof_does_not_open_and_partial_line_is_retried(self):
         with tempfile.TemporaryDirectory() as directory:
             path=pathlib.Path(directory)/'session.jsonl'

@@ -9,6 +9,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 pub struct Event {
     pub kind: String,
     pub session: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub session_source: String,
     pub turn: String,
     pub record: String,
     pub parent: String,
@@ -109,6 +111,11 @@ pub fn codex(row: &Value) -> Option<Event> {
         kind: kind.into(),
         session: if kind == "identity" {
             field(p, &["id"])
+        } else {
+            String::new()
+        },
+        session_source: if kind == "identity" {
+            field(p, &["source"])
         } else {
             String::new()
         },
@@ -423,6 +430,7 @@ pub fn claude(row: &Value) -> Vec<Event> {
 pub struct Activity {
     pub phase: Option<Phase>,
     pub session: String,
+    pub session_source: String,
     pub turn: String,
     pub at: u64,
     pub pid: u32,
@@ -465,6 +473,7 @@ impl Activity {
             self.session = e.session.clone();
         }
         if e.kind == "identity" {
+            self.session_source = e.session_source;
             return;
         }
         if e.at > 0 && e.at < self.turn_started {
