@@ -1,72 +1,7 @@
 //! Alpha-composited native pet: no WebView dependency and no activation on click.
 use super::*;
+pub(super) use crate::pet_frames::Sprite;
 use windows::core::BOOL;
-pub(super) struct Sprite {
-    frames: Vec<Vec<u8>>,
-    cell_width: u32,
-    cell_height: u32,
-}
-impl Sprite {
-    pub fn empty() -> Self {
-        Self {
-            frames: Vec::new(),
-            cell_width: 0,
-            cell_height: 0,
-        }
-    }
-    pub fn load(asset: &Value) -> Option<Self> {
-        let file = std::fs::File::open(asset["spritePath"].as_str()?).ok()?;
-        let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
-        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-        let mut reader = decoder.read_info().ok()?;
-        let (width, height) = (reader.info().width, reader.info().height);
-        let (cell_width, cell_height) = (
-            asset["cellWidth"].as_u64()? as u32,
-            asset["cellHeight"].as_u64()? as u32,
-        );
-        if u64::from(width) * u64::from(height) > 16_000_000
-            || width != cell_width * 8
-            || height != cell_height * asset["rows"].as_u64()? as u32
-        {
-            return None;
-        }
-        let mut pixels = vec![0; reader.output_buffer_size()?];
-        let info = reader.next_frame(&mut pixels).ok()?;
-        if info.color_type != png::ColorType::Rgba {
-            return None;
-        }
-        pixels.truncate(info.buffer_size());
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            pixel.swap(0, 2);
-            // GDI+ and UpdateLayeredWindow both receive premultiplied BGRA.
-            // Invisible white/black RGB must not tint interpolated outline pixels.
-            let alpha = u16::from(pixel[3]);
-            for channel in &mut pixel[..3] {
-                *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
-            }
-        }
-        // Isolate cells before resampling; the next animation frame is not an edge pixel.
-        let frames = (0..8 * height / cell_height)
-            .map(|index| {
-                let mut frame = vec![0; (cell_width * cell_height * 4) as usize];
-                for y in 0..cell_height {
-                    let src = ((index / 8 * cell_height + y) * width + index % 8 * cell_width)
-                        as usize
-                        * 4;
-                    let dst = (y * cell_width * 4) as usize;
-                    frame[dst..dst + (cell_width * 4) as usize]
-                        .copy_from_slice(&pixels[src..src + (cell_width * 4) as usize]);
-                }
-                frame
-            })
-            .collect();
-        Some(Self {
-            frames,
-            cell_width,
-            cell_height,
-        })
-    }
-}
 pub(super) unsafe fn reduced_motion() -> bool {
     let mut enabled = BOOL(1);
     let _ = SystemParametersInfoW(

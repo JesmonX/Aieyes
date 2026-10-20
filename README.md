@@ -4,7 +4,7 @@
 
 ## 下载安装包
 
-从 [GitHub Releases](https://github.com/JesmonX/Aieyes/releases) 下载正式版本：macOS 提供 Intel x64、Apple Silicon arm64 两个 DMG（macOS 14+），Windows 提供 x64 NSIS EXE，Linux 提供 x64 DEB 和 AppImage。发布页的 `SHA256SUMS` 包含全部安装包校验值。
+从 [GitHub Releases](https://github.com/JesmonX/Aieyes/releases) 下载正式版本：macOS 提供 Intel x64、Apple Silicon arm64 两个 DMG（macOS 14+），Windows 提供 x64 NSIS EXE，Linux 提供 x64 DEB、Fedora RPM 和 AppImage。发布页的 `SHA256SUMS` 包含全部安装包校验值。
 
 [Release 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/release.yml) 在推送 `v主版本.次版本.修订版本` 标签后构建，所有平台测试和打包成功后自动发布。默认 macOS 使用 ad-hoc 签名，Windows 暂未证书签名；发布前需要配置应用内更新签名密钥，详见 [发布说明](docs/releases.md)。首次运行新工作流前，仍可从 [Desktop 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/desktop.yml) 下载保留 14 天的开发构建。
 
@@ -42,9 +42,9 @@ open dist/Aieyes.app
 | Codex API | 本机及 SSH 设备接入 Responses API，确认后切换 API／订阅账号并共用对话历史；沿用 Codex 模型与网络设置，按实际请求路由区分自动估值用量 |
 | 远程历史、前置命令 | 限额查询可单独配置代理前置命令；远端只回传统计字段 |
 | 代理 | 本机 HTTP/HTTPS/SOCKS5、本机来源覆盖、连接测试与延迟；远程环境统一使用账户前置命令；PAC 和代理认证界面尚未实现 |
-| 应用内更新 | 显示当前版本，支持手动及每日检查、签名校验、一键安装重启；Linux 支持 AppImage 与 DEB |
+| 应用内更新 | 显示当前版本，支持手动及每日检查、签名校验、一键安装重启；Linux 支持 AppImage、DEB 与 RPM |
 | 桌宠与会话状态 | 文件、链接、npx／npm 素材导入，保留桌宠库与 idle 预览；支持 v1 8×9 和 v2 8×11 PNG/WebP 图集，默认月薪喵。三端共享逐帧时间，本机及 SSH 会话联动，详见[桌宠说明](docs/pets.md) |
-| Windows/Linux | 桌宠单击展开与 macOS 菜单栏一致的面板，悬停查看提示，支持贴边、隐藏和动态托盘；界面为半透明圆润风格（见 [Windows 界面刷新](docs/windows-ui-refresh.md)）；提供 Windows NSIS、Linux deb/AppImage，真实桌面交互和安装卸载仍需按平台验收 |
+| Windows/Linux | 桌宠单击展开与 macOS 菜单栏一致的面板，悬停查看提示，支持贴边、隐藏和动态托盘；界面为半透明圆润风格（见 [Windows 界面刷新](docs/windows-ui-refresh.md)）；提供 Windows NSIS、Linux DEB/RPM/AppImage，真实桌面交互和安装卸载仍需按平台验收 |
 
 服务器通过 CPU、内存圆环和 GPU／文件系统细进度条展示实时资源，尚未保存长期采样历史。Token 历史保存在 SQLite 中。
 

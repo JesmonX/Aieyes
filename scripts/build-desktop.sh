@@ -18,7 +18,7 @@ else
     exit 1
   fi
   case "$(uname -s)" in
-    Linux) "$@" build --ci --bundles deb,appimage -- --locked ;;
+    Linux) "$@" build --ci --bundles deb,rpm,appimage -- --locked ;;
     *) echo 'Use scripts/build-desktop.ps1 for Windows.' >&2; exit 2 ;;
   esac
   echo "$PROJECT_DIR/apps/desktop/src-tauri/target/release/bundle"

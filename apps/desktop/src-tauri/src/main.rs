@@ -1,13 +1,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod context_menu;
 mod desktop;
+#[cfg(target_os = "linux")]
+mod linux_tray;
 #[cfg(target_os = "windows")]
 mod material;
 #[cfg(target_os = "windows")]
 mod native_pet;
+#[cfg(target_os = "linux")]
+#[path = "linux_pet.rs"]
+mod native_pet;
 mod notifications;
 #[cfg(target_os = "windows")]
 mod passive_window;
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+mod pet_frames;
 mod phase_colors;
 mod updates;
 
@@ -24,6 +31,8 @@ async fn select_local_path(
     initial: String,
 ) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        let _interaction = desktop::DialogInteraction::new(&app);
         let initial = aieyes_core::store::expand(&initial);
         let folder = if initial.is_dir() {
             initial.as_path()
@@ -346,6 +355,8 @@ fn main() {
     if aieyes_core::session_hooks::run_if_requested() {
         return;
     }
+    #[cfg(target_os = "linux")]
+    native_pet::configure_backend();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -421,7 +432,7 @@ fn main() {
             }
             aieyes_core::process::terminate_query_children();
             desktop::save(app);
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             if let Some(pet_window) = app.try_state::<native_pet::NativePet>() {
                 pet_window.stop();
             }

@@ -114,17 +114,27 @@ fn target() -> Result<String, String> {
             return Ok("linux-x86_64-appimage".into());
         }
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let owned = std::process::Command::new("dpkg-query")
+        if let Ok(owned) = std::process::Command::new("dpkg-query")
             .arg("-S")
-            .arg(exe)
+            .arg(&exe)
             .output()
-            .map_err(|_| "无法识别当前安装格式")?;
-        if owned.status.success()
+            && owned.status.success()
             && String::from_utf8_lossy(&owned.stdout)
                 .lines()
                 .any(|line| line.starts_with("aieyes:") || line.starts_with("aieyes-desktop:"))
         {
             return Ok("linux-x86_64-deb".into());
+        }
+        if let Ok(owned) = std::process::Command::new("rpm")
+            .args(["-qf", "--queryformat", "%{NAME}\\n", "--"])
+            .arg(&exe)
+            .output()
+            && owned.status.success()
+            && String::from_utf8_lossy(&owned.stdout)
+                .lines()
+                .any(|line| matches!(line.trim(), "aieyes" | "aieyes-desktop"))
+        {
+            return Ok("linux-x86_64-rpm".into());
         }
     }
     Err("当前不是受支持的已安装应用，请安装正式安装包后更新".into())
@@ -134,6 +144,7 @@ fn valid_download(url: &tauri::Url, version: &str, target: &str) -> bool {
         "windows-x86_64-nsis" => "windows-x64.exe",
         "linux-x86_64-appimage" => "linux-x64.AppImage",
         "linux-x86_64-deb" => "linux-x64.deb",
+        "linux-x86_64-rpm" => "linux-x64.rpm",
         _ => return false,
     };
     url.scheme() == "https"
@@ -469,8 +480,8 @@ pub async fn updates_install(
     });
     let result = tauri::async_runtime::spawn_blocking(move || {
         #[cfg(target_os = "linux")]
-        if target.ends_with("-deb") {
-            return install_deb(&bytes);
+        if target.ends_with("-deb") || target.ends_with("-rpm") {
+            return install_system_package(&bytes, target.ends_with("-rpm"));
         }
         let _ = target;
         update.install(bytes).map_err(|e| e.to_string())
@@ -500,20 +511,26 @@ pub async fn updates_install(
 }
 
 #[cfg(target_os = "linux")]
-fn install_deb(bytes: &[u8]) -> Result<(), String> {
+fn install_system_package(bytes: &[u8], rpm: bool) -> Result<(), String> {
     use std::{io::Write, os::unix::fs::PermissionsExt, process::Command};
     let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
     // apt's unprivileged _apt worker must be able to read this verified public installer.
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755))
         .map_err(|e| e.to_string())?;
-    let path = directory.path().join("Aieyes.deb");
+    let path = directory
+        .path()
+        .join(if rpm { "Aieyes.rpm" } else { "Aieyes.deb" });
     let mut file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
     file.write_all(bytes).map_err(|e| e.to_string())?;
     drop(file);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
         .map_err(|e| e.to_string())?;
+    let args = system_install_arguments(rpm);
+    if !std::path::Path::new(args[0]).is_file() {
+        return Err(format!("系统包管理器 {} 不可用，请手动安装更新包", args[0]));
+    }
     let output = Command::new("/usr/bin/pkexec")
-        .args(["/usr/bin/apt-get", "install", "--yes", "--no-remove", "--"])
+        .args(args)
         .arg(&path)
         .output()
         .map_err(|_| "系统授权组件 pkexec 不可用，请安装 polkit 后重试")?;
@@ -529,9 +546,36 @@ fn install_deb(bytes: &[u8]) -> Result<(), String> {
         )),
     }
 }
+
+#[cfg(any(target_os = "linux", test))]
+fn system_install_arguments(rpm: bool) -> &'static [&'static str] {
+    if rpm {
+        &["/usr/bin/dnf", "install", "--assumeyes", "--"]
+    } else {
+        &["/usr/bin/apt-get", "install", "--yes", "--no-remove", "--"]
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rpm_updates_use_a_verified_repository_asset_and_the_system_package_manager() {
+        let url =
+            "https://github.com/JesmonX/Aieyes/releases/download/v1.2.3/Aieyes-1.2.3-linux-x64.rpm"
+                .parse()
+                .unwrap();
+        assert!(valid_download(&url, "1.2.3", "linux-x86_64-rpm"));
+        assert!(!valid_download(&url, "1.2.3", "linux-x86_64-deb"));
+        assert!(!valid_download(&url, "1.2.4", "linux-x86_64-rpm"));
+        assert_eq!(
+            system_install_arguments(true),
+            ["/usr/bin/dnf", "install", "--assumeyes", "--"]
+        );
+        assert_eq!(
+            system_install_arguments(false),
+            ["/usr/bin/apt-get", "install", "--yes", "--no-remove", "--"]
+        );
+    }
     #[test]
     fn plugin_configuration_requires_a_key_field_and_signed_versions() {
         let config: serde_json::Value =

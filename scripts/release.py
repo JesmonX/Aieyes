@@ -20,7 +20,7 @@ PACKAGES = {
     ("macos", "x64"): ("dmg",),
     ("macos", "arm64"): ("dmg",),
     ("windows", "x64"): ("exe",),
-    ("linux", "x64"): ("deb", "AppImage"),
+    ("linux", "x64"): ("deb", "rpm", "AppImage"),
 }
 
 
@@ -88,7 +88,7 @@ def asset_names(release_version):
 
 def update_manifest(directory, release_version):
     platforms = {}
-    for target, suffix in [('windows-x86_64-nsis', 'windows-x64.exe'), ('linux-x86_64-appimage', 'linux-x64.AppImage'), ('linux-x86_64-deb', 'linux-x64.deb')]:
+    for target, suffix in [('windows-x86_64-nsis', 'windows-x64.exe'), ('linux-x86_64-appimage', 'linux-x64.AppImage'), ('linux-x86_64-deb', 'linux-x64.deb'), ('linux-x86_64-rpm', 'linux-x64.rpm')]:
         name = f'Aieyes-{release_version}-{suffix}'
         signature = (directory / (name + '.sig')).read_text(encoding="utf-8").strip()
         decoded = base64.b64decode(signature, validate=True).decode('utf-8')
@@ -106,7 +106,7 @@ def validate_updates(directory, release_version):
     manifest = json.loads((directory / 'latest.json').read_text(encoding="utf-8"))
     if manifest['version'] != release_version:
         raise ValueError('Updater manifest version mismatch')
-    targets = {'windows-x86_64-nsis': 'windows-x64.exe', 'linux-x86_64-appimage': 'linux-x64.AppImage', 'linux-x86_64-deb': 'linux-x64.deb'}
+    targets = {'windows-x86_64-nsis': 'windows-x64.exe', 'linux-x86_64-appimage': 'linux-x64.AppImage', 'linux-x86_64-deb': 'linux-x64.deb', 'linux-x86_64-rpm': 'linux-x64.rpm'}
     if set(manifest['platforms']) != set(targets):
         raise ValueError('Updater platform set is incomplete')
     for target, suffix in targets.items():
@@ -142,6 +142,7 @@ def collect(platform, arch, release_version, destination, root=ROOT):
         "exe": "apps/desktop/src-tauri/target/release/bundle/nsis/*.exe",
         "deb": "apps/desktop/src-tauri/target/release/bundle/deb/*.deb",
         "AppImage": "apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage",
+        "rpm": "apps/desktop/src-tauri/target/release/bundle/rpm/*.rpm",
     }
     for ext in PACKAGES[(platform, arch)]:
         files = list(root.glob(patterns[ext]))

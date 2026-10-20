@@ -12,34 +12,38 @@ use std::{
     },
     time::Duration,
 };
+#[cfg(not(target_os = "linux"))]
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+#[cfg(not(target_os = "linux"))]
+use tauri::tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
 
+#[cfg(not(target_os = "linux"))]
 const TRAY_ID: &str = "aieyes-status";
 const HIDE_MENU_ID: &str = "hide";
 /// Transparent pet surface in logical pixels on every platform.
-const BALL_SIZE: f64 = 144.0;
 const BALL_HEIGHT: f64 = 168.0;
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn entry_size(app: &AppHandle) -> (f64, f64) {
     app.try_state::<Desktop>()
         .and_then(|desktop| {
             desktop.state.lock().ok().map(|state| {
                 let scale = aieyes_core::pets::normalized_scale(state.preferences.pet_scale);
                 (
-                    BALL_SIZE * scale,
+                    144.0 * scale,
                     aieyes_core::pets::height(&aieyes_core::pets::project(&state.snapshot)) * scale,
                 )
             })
         })
-        .unwrap_or((BALL_SIZE, BALL_HEIGHT))
+        .unwrap_or((144.0, BALL_HEIGHT))
 }
 /// Panel size in logical pixels; height is clamped to the monitor work area.
 const PANEL_WIDTH: f64 = 450.0;
 const PANEL_HEIGHT: f64 = 720.0;
 /// Distance to a work-area edge that makes a dragged ball snap, in logical pixels.
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 const SNAP_DISTANCE: f64 = 48.0;
 /// Gap between the ball and the opened panel, in logical pixels.
 const PANEL_GAP: f64 = 8.0;
@@ -92,6 +96,7 @@ struct ShellState {
     dirty: bool,
     native_interacting: bool,
     panel_generation: u64,
+    panel_epoch: u64,
     recovery: String,
 }
 #[cfg(not(target_os = "windows"))]
@@ -99,6 +104,71 @@ impl ShellState {
     fn can_dismiss_panel(&self) -> bool {
         self.panel && !self.pin && !self.native_interacting
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn panel_generation(app: &AppHandle) -> (u64, u64) {
+    app.state::<Desktop>()
+        .state
+        .lock()
+        .map(|s| (s.panel_generation, s.panel_epoch))
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn escape_pressed(app: &AppHandle) {
+    if app
+        .state::<Desktop>()
+        .state
+        .lock()
+        .is_ok_and(|state| state.panel && !state.native_interacting)
+    {
+        let _ = request_native_panel(app, PanelRequest::Dismiss);
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn outside_click(app: &AppHandle, x: i32, y: i32, generation: (u64, u64)) {
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "Linux outside click: x={x} y={y} generation={generation:?} current={:?}",
+        panel_generation(app)
+    );
+    if generation != panel_generation(app) {
+        return;
+    }
+    if !app
+        .state::<Desktop>()
+        .state
+        .lock()
+        .is_ok_and(|s| s.panel && !s.native_interacting)
+    {
+        return;
+    }
+    let inside = |left: i32, top: i32, width: u32, height: u32| {
+        x >= left
+            && y >= top
+            && i64::from(x) < i64::from(left) + i64::from(width)
+            && i64::from(y) < i64::from(top) + i64::from(height)
+    };
+    if let Some(pet) = app.try_state::<crate::native_pet::NativePet>()
+        && let Ok((left, top, width, height, _)) = pet.geometry()
+        && inside(left, top, width, height)
+    {
+        return;
+    }
+    if let Some(panel) = app.get_webview_window("floating")
+        && let (Ok(position), Ok(size)) = (panel.outer_position(), panel.outer_size())
+        && inside(position.x, position.y, size.width, size.height)
+    {
+        return;
+    }
+    // Even a pinned panel must stop trying to acquire focus after the user
+    // deliberately clicks elsewhere.
+    if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+        state.panel_epoch = state.panel_epoch.wrapping_add(1);
+    }
+    let _ = request_native_panel(app, PanelRequest::Dismiss);
 }
 struct WindowMaterial {
     kind: &'static str,
@@ -123,11 +193,19 @@ struct Materials {
 pub struct Desktop {
     path: PathBuf,
     state: Mutex<ShellState>,
+    #[cfg(not(target_os = "linux"))]
     menu: Mutex<Menu<tauri::Wry>>,
     menu_state: Mutex<Option<(bool, bool, bool)>>,
     sampling: AtomicBool,
     tray_available: AtomicBool,
     materials: Mutex<Materials>,
+    #[cfg(target_os = "linux")]
+    _tray: Mutex<Option<crate::linux_tray::LinuxTrayHandle>>,
+    // Tauri removes a tray icon when its last handle is dropped. Keep the
+    // original handle for the lifetime of the app; the resource table clone is
+    // not sufficient on the AppIndicator backend.
+    #[cfg(not(target_os = "linux"))]
+    _tray: Mutex<Option<TrayIcon<tauri::Wry>>>,
 }
 
 // Never hide the only usable entry point when tray support is absent.
@@ -140,6 +218,7 @@ fn can_hide(floating: bool, tray_available: bool) -> bool {
     floating && tray_available
 }
 
+#[cfg(any(not(any(target_os = "windows", target_os = "linux")), test))]
 fn snap_rect(
     position: Position,
     area: (i32, i32, u32, u32),
@@ -359,6 +438,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         .ok()
         .and_then(|s| serde_json::from_slice(&s).ok())
         .unwrap_or_default();
+    #[cfg(not(target_os = "linux"))]
     let menu = build_context_menu(app.handle(), false, false, false, false)?;
     app.manage(Desktop {
         path,
@@ -378,16 +458,19 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             dirty: false,
             native_interacting: false,
             panel_generation: 0,
+            panel_epoch: 0,
             recovery: String::new(),
         }),
+        #[cfg(not(target_os = "linux"))]
         menu: Mutex::new(menu),
         menu_state: Mutex::new(None),
         sampling: AtomicBool::new(false),
         tray_available: AtomicBool::new(false),
         materials: Mutex::new(Materials::default()),
+        _tray: Mutex::new(None),
     });
     create_floating(app.handle(), 0)?;
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         let position = app
             .state::<Desktop>()
@@ -536,8 +619,12 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
         WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("floating.html".into()))
             .title("Aieyes 面板")
             .inner_size(
-                if cfg!(windows) { PANEL_WIDTH } else { 144.0 },
-                if cfg!(windows) {
+                if cfg!(any(windows, target_os = "linux")) {
+                    PANEL_WIDTH
+                } else {
+                    144.0
+                },
+                if cfg!(any(windows, target_os = "linux")) {
                     PANEL_HEIGHT
                 } else {
                     BALL_HEIGHT
@@ -548,7 +635,7 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
             .shadow(cfg!(windows))
             .always_on_top(true)
             .skip_taskbar(true)
-            .focused(false)
+            .focused(cfg!(target_os = "linux"))
             .visible(false)
             .zoom_hotkeys_enabled(false)
             .initialization_script(format!("window.AIEYES_SHELL_GENERATION = {generation};"))
@@ -561,6 +648,18 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
     let builder = builder.transparent(true);
     let window = builder.build()?;
     configure_webview(&window);
+    #[cfg(target_os = "linux")]
+    if let Ok(native) = window.gtk_window() {
+        use gtk::prelude::*;
+        let app = window.app_handle().clone();
+        native.connect_key_press_event(move |_, event| {
+            if event.keyval() == gtk::gdk::keys::constants::Escape {
+                let _ = request_native_panel(&app, PanelRequest::Dismiss);
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+    }
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
         // Recreating the renderer may call this from a worker; configure on its UI thread.
@@ -588,13 +687,28 @@ fn configure_webview(_window: &tauri::WebviewWindow) {
     });
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) fn native_interaction(app: &AppHandle, active: bool) {
     if let Ok(mut state) = app.state::<Desktop>().state.lock() {
         state.native_interacting = active;
     }
 }
-#[cfg(target_os = "windows")]
+#[cfg(target_os = "linux")]
+pub(crate) struct DialogInteraction(AppHandle);
+#[cfg(target_os = "linux")]
+impl DialogInteraction {
+    pub fn new(app: &AppHandle) -> Self {
+        native_interaction(app, true);
+        Self(app.clone())
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for DialogInteraction {
+    fn drop(&mut self) {
+        native_interaction(&self.0, false);
+    }
+}
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) fn pet_moved(app: &AppHandle, x: i32, y: i32) {
     let open = if let Ok(mut state) = app.state::<Desktop>().state.lock() {
         state.preferences.position = Some(Position { x, y });
@@ -617,7 +731,7 @@ pub(crate) fn pet_moved(app: &AppHandle, x: i32, y: i32) {
         });
     }
 }
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 #[derive(Clone, Copy)]
 enum PanelRequest {
     Set(bool),
@@ -625,7 +739,7 @@ enum PanelRequest {
     Dismiss,
     Restore(u64),
 }
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 impl PanelRequest {
     fn resolve(self, open: bool, pinned: bool, interacting: bool, generation: u64) -> Option<bool> {
         match self {
@@ -636,11 +750,11 @@ impl PanelRequest {
         }
     }
 }
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn set_native_panel(app: &AppHandle, open: bool) -> Result<(), String> {
     request_native_panel(app, PanelRequest::Set(open))
 }
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn request_native_panel(app: &AppHandle, request: PanelRequest) -> Result<(), String> {
     let app = app.clone();
     let (send, receive) = std::sync::mpsc::sync_channel(1);
@@ -670,8 +784,19 @@ fn request_native_panel(app: &AppHandle, request: PanelRequest) -> Result<(), St
         .map_err(|e| e.to_string())?;
     receive.recv().map_err(|e| e.to_string())?
 }
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    let was_open = app
+        .state::<Desktop>()
+        .state
+        .lock()
+        .map_err(|_| "显示状态不可用")?
+        .panel;
+    #[cfg(target_os = "linux")]
+    if cfg!(debug_assertions) && std::env::var_os("AIEYES_LINUX_TRACE").is_some() {
+        eprintln!("Linux panel: {was_open} -> {open}");
+    }
     let Some(window) = app.get_webview_window("floating") else {
         let desktop = app.state::<Desktop>();
         let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
@@ -722,16 +847,67 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
             .set_size(PhysicalSize::new(width, height))
             .map_err(|e| e.to_string())?;
     }
-    let handle = window.hwnd().map_err(|e| e.to_string())?.0 as usize;
-    crate::passive_window::set_visible(windows::Win32::Foundation::HWND(handle as *mut _), open)?;
-    if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
-        pet_window.watch_panel(open.then_some(handle));
+    #[cfg(target_os = "windows")]
+    {
+        let handle = window.hwnd().map_err(|e| e.to_string())?.0 as usize;
+        crate::passive_window::set_visible(
+            windows::Win32::Foundation::HWND(handle as *mut _),
+            open,
+        )?;
+        if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
+            pet_window.watch_panel(open.then_some(handle));
+        }
     }
-    app.state::<Desktop>()
-        .state
-        .lock()
-        .map_err(|_| "显示状态不可用")?
-        .panel = open;
+    {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        if state.panel != open {
+            state.panel_epoch = state.panel_epoch.wrapping_add(1);
+        }
+        state.panel = open;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if open {
+            use gtk::prelude::*;
+            let native = window.gtk_window().map_err(|e| e.to_string())?;
+            native.set_accept_focus(true);
+            window.show().map_err(|e| e.to_string())?;
+            if !was_open {
+                // Use the activating click's timestamp; CurrentTime can be
+                // rejected by focus-stealing prevention on X11 window managers.
+                crate::native_pet::focus_panel(&native);
+                window
+                    .with_webview(|view| view.inner().grab_focus())
+                    .map_err(|e| e.to_string())?;
+                let activation = panel_generation(app);
+                let handle = app.clone();
+                // A prior unmap's WM focus restoration can arrive after the
+                // activating click. Retry once after that transaction settles.
+                gtk::glib::timeout_add_local_once(Duration::from_millis(80), move || {
+                    if activation != panel_generation(&handle) {
+                        return;
+                    }
+                    if !handle
+                        .state::<Desktop>()
+                        .state
+                        .lock()
+                        .is_ok_and(|s| s.panel && !s.native_interacting)
+                    {
+                        return;
+                    }
+                    if let Some(window) = handle.get_webview_window("floating") {
+                        if let Ok(native) = window.gtk_window() {
+                            crate::native_pet::focus_panel(&native);
+                        }
+                        let _ = window.with_webview(|view| view.inner().grab_focus());
+                    }
+                });
+            }
+        } else {
+            window.hide().map_err(|e| e.to_string())?;
+        }
+    }
     emit_shell(app);
     Ok(())
 }
@@ -750,7 +926,7 @@ fn refresh_floating(app: &AppHandle) -> Result<(), String> {
         (state.panel_generation, state.panel)
     };
     emit_shell(app);
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
         pet_window.watch_panel(None);
     }
@@ -768,11 +944,11 @@ fn refresh_floating(app: &AppHandle) -> Result<(), String> {
                 std::thread::sleep(Duration::from_millis(20));
             }
             create_floating(&app, generation).map_err(|e| e.to_string())?;
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             {
                 request_native_panel(&app, PanelRequest::Restore(generation))?;
             }
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             {
                 app.state::<Desktop>()
                     .state
@@ -832,34 +1008,120 @@ pub fn desktop_panel_ready(app: AppHandle, generation: u64) -> Result<(), String
     Ok(())
 }
 
-fn create_tray(app: &AppHandle, desktop: &Desktop) -> tauri::Result<()> {
-    if app.tray_by_id(TRAY_ID).is_some() {
-        return Ok(());
+fn tray_present(app: &AppHandle) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        app.try_state::<Desktop>()
+            .and_then(|desktop| desktop._tray.lock().ok().map(|tray| tray.is_some()))
+            .unwrap_or(false)
     }
-    let menu = desktop
-        .menu
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
-    TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon(None, false))
-        .tooltip("Aieyes")
-        .menu(&menu)
-        // Linux uses the native menu; tray click events are not emitted there.
-        .show_menu_on_left_click(true)
-        .on_tray_icon_event(|tray, event| {
-            if matches!(
-                event,
-                TrayIconEvent::DoubleClick {
-                    button: MouseButton::Left,
-                    ..
+    #[cfg(not(target_os = "linux"))]
+    {
+        app.tray_by_id(TRAY_ID).is_some()
+    }
+}
+
+fn tray_set_visible(app: &AppHandle, visible: bool) {
+    #[cfg(target_os = "linux")]
+    {
+        let desktop = app.state::<Desktop>();
+        if let Ok(tray) = desktop._tray.lock()
+            && let Some(tray) = &*tray
+        {
+            tray.set_visible(visible);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if let Some(tray) = app.tray_by_id(TRAY_ID) {
+            let _ = tray.set_visible(visible);
+        }
+    }
+}
+
+fn tray_set_summary(app: &AppHandle, summary: String) {
+    #[cfg(target_os = "linux")]
+    {
+        let desktop = app.state::<Desktop>();
+        if let Ok(tray) = desktop._tray.lock()
+            && let Some(tray) = &*tray
+        {
+            tray.set_summary(summary);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if let Some(tray) = app.tray_by_id(TRAY_ID) {
+            let _ = tray.set_tooltip(Some(format!("Aieyes · {summary}")));
+            let _ = tray.set_title(Some(&summary));
+        }
+    }
+}
+
+fn tray_set_icon(app: &AppHandle, phase: Option<Phase>, dark: bool) {
+    #[cfg(target_os = "linux")]
+    {
+        let desktop = app.state::<Desktop>();
+        if let Ok(tray) = desktop._tray.lock()
+            && let Some(tray) = &*tray
+        {
+            tray.set_icon(phase, dark);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if let Some(tray) = app.tray_by_id(TRAY_ID) {
+            let _ = tray.set_icon(Some(icon(phase, dark)));
+        }
+    }
+}
+
+fn create_tray(app: &AppHandle, desktop: &Desktop) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        if desktop
+            ._tray
+            .lock()
+            .map(|tray| tray.is_some())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        let tray = crate::linux_tray::start(app)?;
+        *desktop._tray.lock().unwrap_or_else(|e| e.into_inner()) = Some(tray);
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if app.tray_by_id(TRAY_ID).is_some() {
+            return Ok(());
+        }
+        let menu = desktop
+            .menu
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let tray = TrayIconBuilder::with_id(TRAY_ID)
+            .icon(icon(None, false))
+            .tooltip("Aieyes")
+            .menu(&menu)
+            .show_menu_on_left_click(true)
+            .on_tray_icon_event(|tray, event| {
+                if matches!(
+                    event,
+                    TrayIconEvent::DoubleClick {
+                        button: MouseButton::Left,
+                        ..
+                    }
+                ) {
+                    let _ = show_main(tray.app_handle(), "agent");
                 }
-            ) {
-                let _ = show_main(tray.app_handle(), "agent");
-            }
-        })
-        .build(app)?;
-    Ok(())
+            })
+            .build(app)
+            .map_err(|error| error.to_string())?;
+        *desktop._tray.lock().unwrap_or_else(|e| e.into_inner()) = Some(tray);
+        Ok(())
+    }
 }
 
 fn semantic(snapshot: &Snapshot) -> Value {
@@ -877,9 +1139,21 @@ fn update(app: &AppHandle, snapshot: Snapshot, pet_asset: Value, supported: Opti
     let mut new_tray = false;
     let previous_tray = desktop.tray_available.load(Ordering::Relaxed);
     if let Some(supported) = supported {
-        new_tray = supported && app.tray_by_id(TRAY_ID).is_none();
-        let available = supported && create_tray(app, &desktop).is_ok();
+        new_tray = supported && !tray_present(app);
+        let tray_result = supported.then(|| create_tray(app, &desktop));
+        let created = matches!(tray_result, Some(Ok(())));
+        let available = supported && created;
         desktop.tray_available.store(available, Ordering::Relaxed);
+        #[cfg(debug_assertions)]
+        {
+            if let Some(Err(error)) = &tray_result {
+                eprintln!("Linux tray creation failed: {error}");
+            }
+            eprintln!(
+                "Linux tray: supported={supported} created={created} available={available} present={}",
+                tray_present(app)
+            );
+        }
     }
     let unchanged = desktop.state.lock().is_ok_and(|state| {
         state.pet_asset == pet_asset && semantic(&state.snapshot) == semantic(&snapshot)
@@ -898,27 +1172,25 @@ fn update(app: &AppHandle, snapshot: Snapshot, pet_asset: Value, supported: Opti
             )
         })
         .unwrap_or((true, true));
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        if text_changed || new_tray {
-            let _ = tray.set_tooltip(Some(format!("Aieyes · {summary}")));
-            let _ = tray.set_title(Some(&summary));
-        }
-        if phase_changed || new_tray {
-            let _ = tray.set_icon(Some(icon(
-                snapshot.phase(),
-                app.get_webview_window("main")
-                    .and_then(|w| w.theme().ok())
-                    .is_some_and(|t| t == tauri::Theme::Dark),
-            )));
-        }
+    if text_changed || new_tray {
+        tray_set_summary(app, summary.clone());
     }
-    #[cfg(not(target_os = "windows"))]
+    if phase_changed || new_tray {
+        tray_set_icon(
+            app,
+            snapshot.phase(),
+            app.get_webview_window("main")
+                .and_then(|w| w.theme().ok())
+                .is_some_and(|t| t == tauri::Theme::Dark),
+        );
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let previous_size = entry_size(app);
     if let Ok(mut state) = desktop.state.lock() {
         state.snapshot = snapshot;
         state.pet_asset = pet_asset;
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     if previous_size != entry_size(app)
         && desktop
             .state
@@ -935,7 +1207,7 @@ fn update(app: &AppHandle, snapshot: Snapshot, pet_asset: Value, supported: Opti
         let _ = app.emit("desktop:error", error);
     }
     if let Ok(info) = desktop_info(app.clone()) {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
             pet_window.status(info.clone());
         }
@@ -967,11 +1239,11 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
     if changed && (!floating || hidden) {
         set_panel(app, false)?;
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     if changed && let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
         pet_window.visible(floating && !hidden);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     if changed && let Some(window) = app.get_webview_window("floating") {
         let result = if floating && !hidden {
             // Some Wayland compositors refuse absolute placement; the window must still open.
@@ -986,9 +1258,10 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
         }
     }
     // Keep a secondary tray entry on Windows, and always keep one while the ball is hidden.
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_visible(available && (!floating || cfg!(windows) || hidden));
-    }
+    tray_set_visible(
+        app,
+        available && (!floating || cfg!(any(windows, target_os = "linux")) || hidden),
+    );
     refresh_menu(app);
     Ok(())
 }
@@ -1036,7 +1309,7 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sources": state.snapshot.sources, "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
-        "showCount": state.preferences.show_count, "panelPage": state.panel_page, "nativePet": cfg!(windows),
+        "showCount": state.preferences.show_count, "panelPage": state.panel_page, "nativePet": cfg!(any(windows, target_os = "linux")),
         "recovery": state.recovery,
         "accent": state.accent,
     }))
@@ -1054,7 +1327,7 @@ pub fn desktop_mode(app: AppHandle, mode: Mode) -> Result<Value, String> {
         }
     }
     apply_mode(&app)?;
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     if let Some(window) = app.get_webview_window("floating") {
         let panel = app.state::<Desktop>().state.lock().is_ok_and(|s| s.panel);
         if !panel {
@@ -1066,7 +1339,7 @@ pub fn desktop_mode(app: AppHandle, mode: Mode) -> Result<Value, String> {
         }
     }
     let info = desktop_info(app.clone())?;
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
         pet_window.status(info.clone());
     }
@@ -1090,7 +1363,7 @@ pub fn desktop_pet_scale(app: AppHandle, scale: f64) -> Result<Value, String> {
             return Err(format!("缩放偏好保存失败：{error}"));
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     if let Some(window) = app.get_webview_window("floating") {
         let panel = app.state::<Desktop>().state.lock().is_ok_and(|s| s.panel);
         if !panel {
@@ -1195,9 +1468,9 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         }
         "focus-panel" => set_panel(app, true),
         "dismiss-panel" => {
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             return request_native_panel(app, PanelRequest::Dismiss);
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             {
                 let close = app
                     .state::<Desktop>()
@@ -1213,9 +1486,9 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         }
         "refresh-floating" => refresh_floating(app),
         "toggle-panel" => {
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             return request_native_panel(app, PanelRequest::Toggle);
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             {
                 let open = app
                     .state::<Desktop>()
@@ -1238,7 +1511,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
                 }
             }
             let info = desktop_info(app.clone())?;
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
                 pet_window.status(info.clone());
             }
@@ -1276,14 +1549,25 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
             restore_position(app).map_err(|e| e.to_string())
         }
         "menu" => {
-            let info = desktop_info(app.clone())?;
-            let visible = info["petEnabled"] == true && info["hidden"] != true;
-            let menu = build_context_menu(app, true, visible, info["trayAvailable"] == true, false)
-                .map_err(|e| e.to_string())?;
-            app.get_webview_window("floating")
-                .ok_or("桌宠不可用")?
-                .popup_menu(&menu)
-                .map_err(|e| e.to_string())
+            #[cfg(target_os = "linux")]
+            {
+                let owner = app.clone();
+                app.run_on_main_thread(move || crate::native_pet::popup_menu(&owner, None))
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let info = desktop_info(app.clone())?;
+                let visible = info["petEnabled"] == true && info["hidden"] != true;
+                let menu =
+                    build_context_menu(app, true, visible, info["trayAvailable"] == true, false)
+                        .map_err(|e| e.to_string())?;
+                app.get_webview_window("floating")
+                    .ok_or("桌宠不可用")?
+                    .popup_menu(&menu)
+                    .map_err(|e| e.to_string())
+            }
         }
         "open-panel" => set_panel(app, true),
         "sampling" => show_main(app, "sampling"),
@@ -1348,6 +1632,7 @@ fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(not(any(target_os = "windows", target_os = "linux")), test))]
 fn clamp_rect(
     pos: Position,
     x: i32,
@@ -1366,7 +1651,7 @@ fn clamp_rect(
     }
 }
 fn restore_position(app: &AppHandle) -> tauri::Result<()> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
             let position = app
@@ -1379,10 +1664,10 @@ fn restore_position(app: &AppHandle) -> tauri::Result<()> {
         }
         Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     restore_web_position(app)
 }
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn restore_web_position(app: &AppHandle) -> tauri::Result<()> {
     let Some(window) = app.get_webview_window("floating") else {
         return Ok(());
@@ -1429,6 +1714,7 @@ fn restore_web_position(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(not(target_os = "linux"))]
 fn build_context_menu(
     app: &AppHandle,
     pet: bool,
@@ -1437,6 +1723,16 @@ fn build_context_menu(
     sampling: bool,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
+    #[cfg(target_os = "linux")]
+    if !pet {
+        menu.append(&MenuItem::with_id(
+            app,
+            "open-panel",
+            "打开面板",
+            true,
+            None::<&str>,
+        )?)?;
+    }
     for row in crate::context_menu::entries(pet, visible, can_hide, sampling) {
         if row.action == "separator" {
             menu.append(&PredefinedMenuItem::separator(app)?)?;
@@ -1469,6 +1765,16 @@ fn refresh_menu(app: &AppHandle) {
     if *previous == Some(signature) {
         return;
     }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(tray) = desktop._tray.lock()
+            && let Some(tray) = &*tray
+        {
+            tray.set_menu(visible, can_hide, sampling);
+        }
+        *previous = Some(signature);
+    }
+    #[cfg(not(target_os = "linux"))]
     if let Ok(menu) = build_context_menu(app, false, visible, can_hide, sampling) {
         if let Some(tray) = app.tray_by_id(TRAY_ID) {
             let _ = tray.set_menu(Some(menu.clone()));
@@ -1481,7 +1787,7 @@ fn refresh_menu(app: &AppHandle) {
 fn emit_shell(app: &AppHandle) {
     if let Ok(info) = desktop_info(app.clone()) {
         let _ = app.emit("desktop:panel", info.clone());
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
             pet_window.status(info.clone());
         }
@@ -1490,14 +1796,14 @@ fn emit_shell(app: &AppHandle) {
 }
 /// Expand the floating window into the compact panel, or collapse it back to the ball.
 fn set_panel(app: &AppHandle, open: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         set_native_panel(app, open)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     set_web_panel(app, open)
 }
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn set_web_panel(app: &AppHandle, open: bool) -> Result<(), String> {
     let desktop = app.state::<Desktop>();
     {
@@ -1588,12 +1894,25 @@ fn set_hidden(app: &AppHandle, hidden: bool) -> Result<(), String> {
 }
 /// Snap the ball flush to a nearby work-area edge after a drag.
 fn snap_ball(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(pet) = app.try_state::<crate::native_pet::NativePet>() {
+            pet.snap();
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     position_ball(app, true)
 }
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn clamp_ball(app: &AppHandle) -> Result<(), String> {
     position_ball(app, false)
 }
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn position_ball(app: &AppHandle, snap: bool) -> Result<(), String> {
     let window = app.get_webview_window("floating").ok_or("桌宠不可用")?;
     if app
@@ -1662,15 +1981,13 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             #[cfg(target_os = "windows")]
             refresh_materials(window.app_handle());
             let app = window.app_handle();
-            if let Some(tray) = app.tray_by_id(TRAY_ID) {
-                let phase = app
-                    .state::<Desktop>()
-                    .state
-                    .lock()
-                    .ok()
-                    .and_then(|state| state.snapshot.phase());
-                let _ = tray.set_icon(Some(icon(phase, *theme == tauri::Theme::Dark)));
-            }
+            let phase = app
+                .state::<Desktop>()
+                .state
+                .lock()
+                .ok()
+                .and_then(|state| state.snapshot.phase());
+            tray_set_icon(app, phase, *theme == tauri::Theme::Dark);
             emit_shell(window.app_handle());
         }
         #[cfg(target_os = "windows")]
@@ -1692,7 +2009,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                         .map(|s| s.visible)
                         .unwrap_or(true)
                     {
-                        #[cfg(target_os = "windows")]
+                        #[cfg(any(target_os = "windows", target_os = "linux"))]
                         {
                             if let Some(pet_window) =
                                 app.try_state::<crate::native_pet::NativePet>()
@@ -1701,7 +2018,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                             }
                             true
                         }
-                        #[cfg(not(target_os = "windows"))]
+                        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
                         {
                             _ball.show().is_ok()
                         }
@@ -1722,7 +2039,7 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             if let Some(desktop) = window.app_handle().try_state::<Desktop>()
                 && let Ok(mut state) = desktop.state.lock()
                 // Panel placement must never overwrite the ball's saved position.
-                && !cfg!(windows) && !state.panel
+                && !cfg!(any(windows, target_os = "linux")) && !state.panel
             {
                 state.preferences.position = Some(Position { x: pos.x, y: pos.y });
                 state.dirty = true;
@@ -1730,31 +2047,33 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         }
         #[cfg(not(target_os = "windows"))]
         tauri::WindowEvent::Focused(false) if window.label() == "floating" => {
+            #[cfg(debug_assertions)]
+            eprintln!("Linux panel lost focus");
             let app = window.app_handle().clone();
-            // Let an owned menu/dialog activation settle before dismissing the Web pet_window.
+            let generation = panel_generation(&app);
             std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(80));
-                if app
-                    .get_webview_window("floating")
-                    .is_some_and(|w| w.is_focused().unwrap_or(false))
-                {
-                    return;
-                }
-                let close = app
-                    .try_state::<Desktop>()
-                    .and_then(|desktop| {
-                        desktop
-                            .state
-                            .lock()
-                            .ok()
-                            .map(|state| state.can_dismiss_panel())
-                    })
-                    .unwrap_or(false);
-                if close {
-                    let _ = set_panel(&app, false);
-                }
+                std::thread::sleep(Duration::from_millis(100));
+                let owner = app.clone();
+                let _ = owner.run_on_main_thread(move || {
+                    if generation != panel_generation(&app)
+                        || app
+                            .get_webview_window("floating")
+                            .is_some_and(|w| w.is_focused().unwrap_or(false))
+                    {
+                        return;
+                    }
+                    let close = app
+                        .state::<Desktop>()
+                        .state
+                        .lock()
+                        .is_ok_and(|s| s.can_dismiss_panel());
+                    if close {
+                        let _ = set_panel(&app, false);
+                    }
+                });
             });
         }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         tauri::WindowEvent::ScaleFactorChanged { .. } if window.label() == "floating" => {
             let app = window.app_handle();
             let panel = app
@@ -1780,7 +2099,7 @@ pub fn save(app: &AppHandle) {
         state.dirty = false;
     }
 }
-fn icon(phase: Option<Phase>, dark: bool) -> tauri::image::Image<'static> {
+pub(crate) fn icon(phase: Option<Phase>, dark: bool) -> tauri::image::Image<'static> {
     let key = match phase {
         Some(Phase::Working) => "working",
         Some(Phase::Thinking) => "thinking",

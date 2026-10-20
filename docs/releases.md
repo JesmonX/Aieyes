@@ -1,6 +1,6 @@
 # 发布与应用内更新
 
-Release 工作流对稳定版本标签构建 macOS Intel / Apple Silicon、Windows x64、Linux x64。保留五个安装包：两个 DMG、NSIS EXE、DEB 和 AppImage；另发布三个 Tauri 包签名、两个已签名的 Sparkle appcast、`latest.json` 和 `SHA256SUMS`。
+Release 工作流对稳定版本标签构建 macOS Intel / Apple Silicon、Windows x64、Linux x64。保留六个安装包：两个 DMG、NSIS EXE、DEB、Fedora RPM 和 AppImage；另发布四个 Tauri 包签名、两个已签名的 Sparkle appcast、`latest.json` 和 `SHA256SUMS`。
 
 ## 版本准备
 
@@ -50,7 +50,7 @@ Sparkle 工具会打印公钥，Tauri 公钥在 `.pub` 文件中。私钥填写�
 - 新版弹窗显示当前/目标版本和说明。点击“更新并重启”后下载、验证并安装；失败显示原因，不虚报成功。
 - 默认启动时及每 24 小时检查，可关闭。选择“稍后”后同一版本 24 小时不自动重复提示；后台发现新版，等用户回到应用再展示。
 - macOS 使用 Sparkle 的签名 appcast 和 EdDSA 包签名；安装器保留用户数据。更新清单和安装包通过本地传输桥复用已保存的应用代理（系统、直连或自定义）；Sparkle 继续负责验签和安装。详见 [macOS 更新传输与性能验证](macos-performance-and-update-transport.md)。
-- Windows 使用用户级 NSIS 更新；Linux AppImage 原位更新。DEB 验签后通过系统 `pkexec` 授权调用 apt 安装；取消授权即停止，不收集密码。无 polkit、无 apt 或包管理器忙时显示失败，修复系统条件后重试。
+- Windows 使用用户级 NSIS 更新；Linux AppImage 原位更新。DEB/RPM 验签后通过系统 `pkexec` 授权调用 apt/DNF 安装；取消授权即停止，不收集密码。无 polkit、缺少对应包管理器或包管理器忙时显示失败，修复系统条件后重试。
 - Windows/Linux 更新请求沿用应用代理设置；更新下载独立于业务引擎。安装前等待正在进行的数据操作结束，并保护未保存的设置。
 
 ## 构建、签名与发布
@@ -93,4 +93,4 @@ python3 scripts/test-update-signatures.py
 
 测试不会访问发布私钥；覆盖包内容篡改、公钥错误、版本号不匹配，以及 Sparkle appcast 篡改。浏览器更新测试包含新版/同版/本地较新版、未保存设置、进度、签名失败及自动检查设置。
 
-发布前仍应在干净机器上用两个测试版本验证 macOS 双架构、Windows NSIS、Linux AppImage/DEB 的实际升级与重启，检查配置、凭据和采样记录保留，并覆盖拒绝授权、只读目录与包管理器占用。签名公证分支须在配置真实 Developer ID 后实机验证。
+发布前仍应在干净机器上用两个测试版本验证 macOS 双架构、Windows NSIS、Linux AppImage/DEB/RPM 的实际升级与重启，检查配置、凭据和采样记录保留，并覆盖拒绝授权、只读目录与包管理器占用。签名公证分支须在配置真实 Developer ID 后实机验证。

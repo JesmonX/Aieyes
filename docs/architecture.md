@@ -8,7 +8,7 @@ macOS：SwiftUI + AppKit，原生状态栏、弹出面板、设置与详情窗�
 
 跨平台核心：Rust，负责采集、归一化、去重、存储、限额刷新、价格计算、SSH 调度和更新元数据获取。数据库使用 SQLite。
 
-Windows/Linux：Tauri 桌面界面，共享同一个核心协议、配置模型与测试样例。三端默认显示通过文件导入的桌宠，Windows 使用独立原生窗口，Linux 使用透明 WebView；可以切换为托盘。显示方式、隐藏偏好与桌宠位置保存在本机 `desktop.json`，托盘不可用时保留桌宠入口。本机会话每约 1 秒读取生命周期元数据，每台 SSH 机器独立约 5 秒更新，Codex、Claude Code、AGY 共用状态归一化逻辑。关闭详情不影响监测。文件格式、观察 hooks 和恢复规则见[桌面宠物与会话状态](desktop-pets.md)，平台构建与交互验收见[平台说明](windows-linux.md)。
+Windows/Linux：Tauri 桌面界面，共享同一个核心协议、配置模型与测试样例。三端默认显示通过文件导入的桌宠，Windows 与 Linux 使用独立原生桌宠窗口，Linux 通过 GTK/Cairo 绘制；悬浮面板使用独立 WebView；可以切换为托盘。显示方式、隐藏偏好与桌宠位置保存在本机 `desktop.json`，托盘不可用时保留桌宠入口。本机会话每约 1 秒读取生命周期元数据，每台 SSH 机器独立约 5 秒更新，Codex、Claude Code、AGY 共用状态归一化逻辑。关闭详情不影响监测。文件格式、观察 hooks 和恢复规则见[桌面宠物与会话状态](desktop-pets.md)，平台构建与交互验收见[平台说明](windows-linux.md)。
 
 macOS 原生界面与核心使用随应用分发的子进程，通过带协议版本的 JSON-RPC/stdin/stdout 通信，不监听本机网络端口。Tauri 外壳直接调用同一个 Rust 引擎，使用相同的方法名、输入和输出模型。原始命令标准错误不进入 UI，连接故障映射为简洁的状态文案。
 

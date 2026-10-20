@@ -76,7 +76,7 @@ class ReleaseTests(unittest.TestCase):
             self.assets(root)
             release.checksum_assets(root, "1.2.3")
             sums = (root / "SHA256SUMS").read_bytes()
-            self.assertEqual(len(sums.splitlines()), 11)
+            self.assertEqual(len(sums.splitlines()), 13)
             for line in sums.decode('utf-8').splitlines():
                 digest, name = line.split('  ', 1)
                 self.assertEqual(digest, hashlib.sha256((root / name).read_bytes()).hexdigest())

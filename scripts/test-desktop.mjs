@@ -336,6 +336,17 @@ test('native Windows panel close never focuses the hidden Web pet', async () => 
   assert.equal(h.info.panelOpen,false);
   assert.notEqual(h.document.activeElement,h.element('#ball'));
 });
+test('Linux native panel takes keyboard focus and closes explicitly even when pinned', async () => {
+  const h=harness('floating.js',{platform:'linux',nativePet:true,panelOpen:true,panelPinned:true});
+  await flush();await flush();
+  assert.equal(h.document.activeElement,h.element('#panel-refresh'));
+  await h.element('#panel-close').dispatch('click');await flush();
+  assert.equal(h.info.panelOpen,false);
+  assert.notEqual(h.document.activeElement,h.element('#ball'));
+  h.events.get('desktop:panel')({payload:{...h.info,panelOpen:true}});
+  await h.document.dispatch('keydown',{key:'Escape'});await flush();
+  assert.equal(h.info.panelOpen,false);
+});
 test('refresh menu arrow keys move between its actions', async () => {
   const h = harness('floating.js'); await flush();
   const items=['scan','quotas','prices','hosts'].map(id=>h.element(id));

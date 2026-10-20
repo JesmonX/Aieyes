@@ -19,7 +19,7 @@ Windows 和 Linux 默认显示桌宠，可通过文件、资源链接、npx 命�
 
 ## 窗口与界面
 
-Windows 使用自绘标题栏，支持拖动、双击最大化和右上角窗口按钮。默认客户区为 1294×840：1080×800 内容区外加 214px 侧栏和 40px 标题栏，侧栏收起为 72px。展开的悬浮面板为 450×720。Windows 11 build 22621 起请求 Desktop Acrylic，Windows 10 1809 起及较早的 Windows 11 使用原生 Blur；不支持、关闭透明效果或高对比度时回退不透明。主窗口与悬浮面板独立报告材质，Windows 窗口圆角为 8px。Linux 保留原生装饰和不透明窗口底色。实现、尺寸和验证限制见 [Windows 外观对齐](windows-appearance.md)。
+Windows 使用自绘标题栏，支持拖动、双击最大化和右上角窗口按钮。默认客户区为 1294×840：1080×800 内容区外加 214px 侧栏和 40px 标题栏，侧栏收起为 72px。展开的悬浮面板为 450×720。Windows 11 build 22621 起请求 Desktop Acrylic，Windows 10 1809 起及较早的 Windows 11 使用原生 Blur；不支持、关闭透明效果或高对比度时回退不透明。主窗口与悬浮面板独立报告材质，Windows 窗口圆角为 8px。Linux 主窗口保留原生装饰；桌宠使用 GTK/Cairo 原生透明窗口，450×720 面板独立显示，14px 圆角与实色内容底色。打开面板不隐藏桌宠，面板外点击和 Esc 可关闭；固定时仅停止外部点击自动关闭。实现、尺寸和验证限制见 [Windows 外观对齐](windows-appearance.md)。
 
 设置包含 Agent 接入、服务器、价格、定时唤醒、常规五个标签；账户、API 和机器目录集中在对应 Agent 下，应用代理位于「常规 → 网络代理」；协议下拉自动拼接 Host 和端口，也可输入完整代理 URL。价格支持模型 ID 与名称搜索，更新固定查询项目 Release。概览以四张卡片显示总 Token、成本、缓存命中率与输入／输出／缓存明细，计价不足仅显示感叹号；移除数据来源板块。服务器以圆环和状态条显示资源。
 
@@ -29,11 +29,11 @@ Windows 正文、表单、图表和原生桌宠使用随应用内置的 HarmonyO
 
 ## Linux 桌面适配
 
-每约 15 秒检查 AppIndicator 动态库和会话 D-Bus 的 `org.kde.StatusNotifierWatcher.IsStatusNotifierHostRegistered`。检测通过时创建原生托盘；服务未注册、库缺失、查询失败或图标创建失败时回退为桌宠。托盘服务恢复后，明确选择托盘的用户恢复托盘显示。
+每约 15 秒检查 AppIndicator 动态库和会话 D-Bus 的 `org.kde.StatusNotifierWatcher.IsStatusNotifierHostRegistered`。检测通过时创建 StatusNotifierItem 托盘；托盘服务直接通过 D-Bus 提供，不依赖当前 GTK/GDK 后端，因此在 XWayland 桌宠模式下也不会随窗口后端失效。服务未注册、库缺失、查询失败或图标创建失败时回退为桌宠。托盘服务恢复后，明确选择托盘的用户恢复托盘显示。
 
-检测工具为 GLib 提供的 `gdbus`；没有此工具时采用桌宠。GNOME 通常需要桌面提供 AppIndicator 扩展才能显示托盘；KDE 等桌面是否显示图标旁文字取决于具体实现。Tauri 的 Linux 托盘不发送鼠标点击事件，因此所有必需操作均通过原生菜单提供。
+Linux 在桌宠模式也保留可用的托盘图标。检测工具为 GLib 提供的 `gdbus`；没有此工具时采用桌宠。GNOME 通常需要桌面提供 AppIndicator/StatusNotifier 扩展才能显示托盘；KDE 等桌面是否显示图标旁文字取决于具体实现。托盘使用标准 DBusMenu，所有必需操作（打开面板、打开详情、设置、检查更新、隐藏/恢复桌宠、退出）均通过原生菜单提供。
 
-Wayland 下窗口位置、置顶和拖动由合成器决定，可能无法达到 X11 的效果；定位请求失败不会阻止桌宠显示。不同桌面组合仍需实测。
+GNOME Wayland 会话中，未设置 `GDK_BACKEND` 且 XWayland 可连接时自动使用 X11 后端，以支持桌宠定位、置顶和完整的外部点击关闭。显式设置 `GDK_BACKEND=wayland` 时保留原生 Wayland；绝对定位与置顶受合成器限制，仍可用托盘、Esc 和面板关闭按钮操作。应用不会修改系统会话或桌面扩展。
 
 ## 会话范围
 
@@ -73,14 +73,39 @@ sudo apt-get install -y build-essential pkg-config libssl-dev \
 sh scripts/build-desktop.sh debug
 ./apps/desktop/src-tauri/target/debug/aieyes-desktop
 
-# deb 和 AppImage
+# DEB、Fedora RPM 和 AppImage
 npm install --global @tauri-apps/cli@2
 sh scripts/build-desktop.sh release
 ```
 
-输出目录：`apps/desktop/src-tauri/target/release/bundle/`。deb 声明了 WebKitGTK、GTK、AppIndicator、GLib 工具和 SSH 客户端运行依赖。AppImage 所在系统仍需提供桌面服务；无托盘服务时使用桌宠。缺少 FUSE 的系统可尝试 `./Aieyes*.AppImage --appimage-extract-and-run`。
+输出目录：`apps/desktop/src-tauri/target/release/bundle/`。DEB/RPM 声明了 WebKitGTK、GTK、AppIndicator、GLib 工具、polkit 和 SSH 客户端运行依赖。Fedora 推荐 RPM，以使用系统维护的图形运行库；AppImage 提供便携运行。AppImage 所在系统仍需提供桌面服务；无托盘服务时使用桌宠。缺少 FUSE 的系统可尝试 `./Aieyes*.AppImage --appimage-extract-and-run`。
 
 CLI 也可使用 `cargo install tauri-cli --version '^2' --locked` 安装；构建脚本会优先选择已安装的 `tauri` 命令，其次使用 `cargo tauri`。npm 预编译版本安装更快，Node 仅用于构建与测试，运行应用无需 Node。
+
+## Fedora 安装与迁移
+
+```sh
+sudo dnf install ./Aieyes-版本-linux-x64.rpm
+/usr/bin/aieyes-desktop
+```
+
+RPM 依赖 `webkit2gtk4.1`、`gtk3`、`libayatana-appindicator-gtk3`、`glib2`、`openssh-clients` 和 `polkit`，推荐 `xorg-x11-server-Xwayland`。GNOME 的顶部托盘仍需要 AppIndicator 扩展；扩展缺失时应用保留桌宠入口。
+
+从解包后的 AppImage 迁移时，先退出旧进程，再安装 RPM。默认数据目录相同，账户、历史和桌宠库沿用原数据。检查 `~/.local/bin/aieyes` 与 `~/.local/share/applications/aieyes.desktop`：若仍指向旧的 `AppRun`，停用该旧启动器，使用 RPM 安装的启动项或 `/usr/bin/aieyes-desktop`；应用不会自动覆盖自定义启动器。解包目录本身不会被识别为已安装 RPM。
+
+## 包体积与原生窗口验收
+
+Linux 构建在 Cargo `OUT_DIR` 暂存前端资源，排除 Windows 的三份 HarmonyOS 字体，原始字体及许可保持不变。独立桌面 Cargo 工程启用符号剥离、Thin LTO 与单个 codegen unit，保留 panic unwind。`scripts/check-linux-package-size.py` 检查 DEB 内的两个 ELF 均不带符号表，桌面程序不含 Windows 字体资源，并报告三个安装包体积。正式 Linux 分发仍在 Ubuntu 22.04 构建；在 Fedora 上生成的测试包不作为通用 glibc 兼容基线。
+
+```sh
+python3 scripts/check-linux-package-size.py
+# Fedora 实机：GNOME/XWayland 实机会话，使用独立数据和临时测试背景，不修改现有设置
+python3 scripts/test-linux-desktop.py \
+  --binary apps/desktop/src-tauri/target/debug/aieyes-desktop \
+  --core apps/desktop/src-tauri/binaries/aieyes-core --duration 600
+```
+
+窗口验收脚本需要 Python GObject、Pillow、GNOME Shell、Xwayland 和 libXtst。真实 GNOME 会话覆盖托盘注册、100 次托盘菜单开关、桌宠置顶与位置保留、600 秒桌宠区域录屏及黑帧检测；隔离 Xvfb 会话另覆盖桌宠点击、桌面外部点击和 Esc。截图、录屏和 JSON 报告位于指定的报告目录。
 
 ## 数据与验证
 

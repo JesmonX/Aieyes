@@ -29,18 +29,19 @@ with tempfile.TemporaryDirectory(prefix='aieyes-signature-test-') as temporary:
     private = directory/'tauri.key'
     run([CLI, 'signer', 'generate', '--ci', '--password', '', '--write-keys', private])
     env = dict(os.environ, TAURI_SIGNING_PRIVATE_KEY=private.read_text().strip(), TAURI_SIGNING_PRIVATE_KEY_PASSWORD='', AIEYES_UPDATER_PUBLIC_KEY=private.with_suffix('.key.pub').read_text().strip())
-    package = directory/'fixture.AppImage'
-    package.write_bytes(b'fixture update installer')
-    run([CLI, 'signer', 'sign', '--app-version', '1.2.3', package], env=env)
-    run([verifier, package, '1.2.3'], env=env)
-    run([verifier, package, '1.2.4'], env=env, succeeds=False)
-    package.write_bytes(b'tampered installer')
-    run([verifier, package, '1.2.3'], env=env, succeeds=False)
-    package.write_bytes(b'fixture update installer')
     other = directory/'other.key'
     run([CLI, 'signer', 'generate', '--ci', '--password', '', '--write-keys', other])
-    run([verifier, package, '1.2.3'], env=dict(env, AIEYES_UPDATER_PUBLIC_KEY=other.with_suffix('.key.pub').read_text().strip()), succeeds=False)
-    print('Tauri: valid signature accepted; tampering, wrong version and wrong key rejected')
+    for suffix in ('AppImage', 'rpm', 'deb'):
+        package = directory/('fixture.'+suffix)
+        package.write_bytes(b'fixture update installer')
+        run([CLI, 'signer', 'sign', '--app-version', '1.2.3', package], env=env)
+        run([verifier, package, '1.2.3'], env=env)
+        run([verifier, package, '1.2.4'], env=env, succeeds=False)
+        package.write_bytes(b'tampered installer')
+        run([verifier, package, '1.2.3'], env=env, succeeds=False)
+        package.write_bytes(b'fixture update installer')
+        run([verifier, package, '1.2.3'], env=dict(env, AIEYES_UPDATER_PUBLIC_KEY=other.with_suffix('.key.pub').read_text().strip()), succeeds=False)
+    print('Tauri AppImage/RPM/DEB: valid signatures accepted; tampering, wrong versions and wrong keys rejected')
     if platform.system() == 'Darwin':
         sign = ROOT/'.build/sparkle-tools/bin/sign_update'
         seed = base64.b64encode(os.urandom(32)).decode()

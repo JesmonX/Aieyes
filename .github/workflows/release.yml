@@ -82,7 +82,7 @@ jobs:
           python-version: '3.12'
       - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libglib2.0-bin
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libglib2.0-bin rpm
       - name: Validate update signing configuration
         shell: bash
         run: |
@@ -172,7 +172,9 @@ jobs:
           if-no-files-found: warn
       - name: Linux packages
         if: runner.os == 'Linux'
-        run: sh scripts/build-desktop.sh release
+        run: |
+          sh scripts/build-desktop.sh release
+          python3 scripts/check-linux-package-size.py
       - name: Collect packages
         shell: bash
         run: python scripts/release.py collect --tag "$RELEASE_TAG" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}'
