@@ -2,6 +2,19 @@ import Foundation
 
 @main struct VerifyModels {
     static func main() throws {
+        let qoderIdentity = try JSONDecoder().decode(AccountIdentity.self, from: Data(#"{"key":"qoder:aaaaaaaaaaaa0123456789","email":"","subscription":"personal_standard"}"#.utf8))
+        precondition(qoderIdentity.displayName == "Qoder · aaaaaaaaaaaa")
+        precondition(qoderIdentity.summary == "Qoder · aaaaaaaaaaaa · personal_standard")
+        let qoderStatus = try JSONDecoder().decode(AccountDeviceStatus.self, from: Data(#"{"accountKey":"qoder:local","sourceId":"remote","machineId":"144","current":false,"credential":false,"authenticated":true,"identityConfirmed":true,"identity":{"key":"qoder:bbbbbbbbbbbb0123456789","email":"","subscription":"personal_standard"}}"#.utf8))
+        precondition(qoderStatus.identitySummary?.hasPrefix("身份不一致 · 当前登录 Qoder · bbbbbbbbbbbb") == true)
+        precondition(qoderStatus.machineIdentitySummary == "当前登录 Qoder · bbbbbbbbbbbb · personal_standard")
+        var directory = AgentSource(provider: "qoder", path: "~/.qoder")
+        precondition(directory.isDirectorySource)
+        directory.path = "  "
+        precondition(!directory.isDirectorySource)
+        directory.path = "~/.qoder"
+        directory.subscription = try JSONDecoder().decode(SubscriptionConfig.self, from: Data(#"{"mode":"cli","credentialRef":"","workspaceId":""}"#.utf8))
+        precondition(!directory.isDirectorySource, "Quota connections must not appear as history directories")
         let quotaJSON = #"{"sourceId":"kimi","accountId":"wallet","provider":"kimi","name":"Kimi","updatedAt":1,"origin":"live","windows":[],"extraUsage":{"currency":"USD","total":"90071992.54740993","balance":"0.00000001","monthlyLimitEnabled":true,"monthlyLimit":"0.00","monthlyUsed":"0.00"}}"#
         let walletQuota = try JSONDecoder().decode(Quota.self, from: Data(quotaJSON.utf8))
         precondition(walletQuota.extraUsage?.amount(walletQuota.extraUsage?.balance) == "USD 0.00000001")

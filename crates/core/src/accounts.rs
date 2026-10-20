@@ -101,6 +101,11 @@ fn fingerprint(settings: &Settings, account: &Account, source: &Source) -> u64 {
         (source.provider != "codex" && source.host_id.is_none()).then_some(&settings.proxy),
         account.identity_key,
         account.profile_refs(),
+        // Invalidate pre-CLI observations and follow the effective native root.
+        (source.provider == "qoder").then(|| (
+            1,
+            crate::subscriptions::qoder::config_dir(source, source.subscription.as_ref()).ok()
+        )),
         pre_command(settings, Some(account), source),
         connection
     ])
@@ -330,10 +335,24 @@ impl Engine {
         account: &Account,
         source: &Source,
     ) -> Result<String> {
+        // A native quota connection and a history directory can point at the
+        // same Qoder login. Query that root once, then project it onto accounts.
+        let location = if source.provider == "qoder"
+            && source
+                .subscription
+                .as_ref()
+                .is_none_or(|c| crate::subscriptions::native_cli(&source.provider, c))
+        {
+            crate::subscriptions::qoder::config_dir(source, source.subscription.as_ref())
+                .map(Value::String)
+                .unwrap_or_else(|_| json!([source.path, source.subscription]))
+        } else {
+            json!([source.path, source.subscription])
+        };
         Ok(crate::models::hash(
             &json!([
                 source.provider,
-                source.path,
+                location,
                 source.codex_binary,
                 pre_command(settings, Some(account), source),
                 source.proxy,
@@ -786,17 +805,57 @@ impl Engine {
                 json!({"current":current,"credential":credential,"profileCredentials":profile_credentials,"checkedAt":now(),"note": if identity.is_none() { "尚未验证账户身份，请读取当前登录或授权" } else { "" }}),
             );
         }
-        if source.subscription.is_some() && account.uses_source(source) {
-            let quota = crate::subscriptions::read(source, settings)?;
-            if source
+        if source.provider == "qoder"
+            && source
                 .subscription
                 .as_ref()
-                .is_some_and(|c| crate::subscriptions::native_cli(&source.provider, c))
-            {
-                return Ok(
-                    json!({"current":true,"credential":true,"authenticated":true,"identityConfirmed":true,"identity":quota.identity,"checkedAt":now(),"note":"已确认 Qoder CLI 当前登录账户","plan":quota.plan}),
-                );
+                .is_none_or(|c| crate::subscriptions::native_cli(&source.provider, c))
+        {
+            let observation = self.status_observation_key(settings, account, source)?;
+            let cached = self
+                .status_observations
+                .as_ref()
+                .and_then(|cache| cache.borrow().get(&observation).cloned());
+            let info = if let Some(value) = cached {
+                value
+            } else {
+                #[cfg(test)]
+                if let Some(reads) = &self.status_observation_reads {
+                    reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                let value = crate::subscriptions::qoder::inspect(
+                    source,
+                    settings,
+                    &pre_command(settings, Some(account), source),
+                )
+                .map(|identity| json!(identity))
+                .unwrap_or_else(|e| json!({"_statusError":e.to_string()}));
+                if let Some(cache) = &self.status_observations {
+                    cache.borrow_mut().insert(observation, value.clone());
+                }
+                value
+            };
+            if let Some(error) = info["_statusError"].as_str() {
+                anyhow::bail!("{error}");
             }
+            let identity: AccountIdentity = serde_json::from_value(info)?;
+            let current = account
+                .identity_key
+                .as_ref()
+                .map(|key| key == &identity.key);
+            let note = match current {
+                Some(true) => "已确认 Qoder CLI 当前登录账户",
+                Some(false) => "此机器当前登录另一 Qoder 账户",
+                None => "已读取 Qoder CLI 当前登录；此账户尚未绑定身份",
+            };
+            return Ok(
+                json!({"current":current,"credential":current,"authenticated":true,
+                "identityConfirmed":true,"identity":identity,"checkedAt":now(),"note":note,
+                "plan":identity.subscription}),
+            );
+        }
+        if source.subscription.is_some() && account.uses_source(source) {
+            let quota = crate::subscriptions::read(source, settings)?;
             return Ok(
                 json!({"current":null,"credential":true,"authenticated":true,"identityConfirmed":false,"checkedAt":now(),"note":"已验证查询凭据；客户端当前账户待确认","plan":quota.plan}),
             );

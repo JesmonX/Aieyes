@@ -227,6 +227,15 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
 @MainActor final class AccountStatusStore {
     private(set) var rows: [AccountDeviceStatus] = []
     private var projections: [String: AccountStatusProjection] = [:]
+    private var machineProjections: [String: AccountStatusProjection] = [:]
+    private func machineKey(_ row: AccountDeviceStatus) -> String { String(row.accountKey.split(separator: ":", maxSplits: 1).first ?? "") + ":" + row.machineId }
+    func machineProjection(_ provider: String, _ machine: String) -> AccountStatusProjection {
+        let key = provider + ":" + machine
+        if let value = machineProjections[key] { return value }
+        let value = AccountStatusProjection()
+        value.replace(rows.filter { machineKey($0) == key }); machineProjections[key] = value
+        return value
+    }
     func projection(_ key: String) -> AccountStatusProjection {
         if let value = projections[key] { return value }
         let value = AccountStatusProjection()
@@ -239,12 +248,19 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         rows = sorted
         let groups = Dictionary(grouping: rows, by: \.accountKey)
         for (key, value) in projections { value.replace(groups[key] ?? []) }
+        let machines = Dictionary(grouping: rows, by: machineKey)
+        for (key, value) in machineProjections { value.replace(machines[key] ?? []) }
     }
     func upsert(_ row: AccountDeviceStatus) {
+        let priorMachine = rows.first(where: { $0.id == row.id }).map(machineKey)
         if let index = rows.firstIndex(where: { $0.id == row.id }) {
             guard rows[index] != row else { return }; rows[index] = row
         } else { rows.append(row); rows.sort { $0.id < $1.id } }
         projections[row.accountKey]?.replace(rows.filter { $0.accountKey == row.accountKey })
+        let machine = machineKey(row)
+        for key in Set([machine, priorMachine ?? machine]) {
+            machineProjections[key]?.replace(rows.filter { machineKey($0) == key })
+        }
     }
 }
 

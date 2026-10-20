@@ -2,6 +2,23 @@ import Foundation
 
 @main struct VerifyConfiguration {
     @MainActor static func main() async throws {
+        let accountStatuses = AccountStatusStore()
+        let localQoder = accountStatuses.machineProjection("qoder", "local")
+        let remoteQoder = accountStatuses.machineProjection("qoder", "remote")
+        let localCodex = accountStatuses.machineProjection("codex", "local")
+        var qoderRow = try JSONDecoder().decode(AccountDeviceStatus.self, from: Data(#"{"accountKey":"qoder:first","sourceId":"directory","machineId":"local","current":true,"credential":true}"#.utf8))
+        accountStatuses.upsert(qoderRow)
+        precondition(localQoder.rows == [qoderRow] && remoteQoder.rows.isEmpty && localCodex.rows.isEmpty)
+        qoderRow.machineId = "remote"
+        accountStatuses.upsert(qoderRow)
+        precondition(localQoder.rows.isEmpty && remoteQoder.rows == [qoderRow], "Rebinding a source must also clear its former machine projection")
+        var anotherAccount = qoderRow
+        anotherAccount.accountKey = "qoder:second"
+        anotherAccount.current = false
+        accountStatuses.replace([qoderRow, anotherAccount])
+        precondition(remoteQoder.rows.count == 2 && localCodex.rows.isEmpty, "Machine status includes all account comparisons for its own provider")
+        accountStatuses.replace([])
+        precondition(remoteQoder.rows.isEmpty)
         let validation = AppModel(autostart: false)
         let intervals: [(String, WritableKeyPath<Settings, Int>, Int)] = [("quota", \.refreshSeconds, 5), ("history", \.historyInterval, 10), ("foreground", \.foregroundInterval, 2), ("background", \.serverRefreshSeconds, 2)]
         for (field, path, minimum) in intervals {

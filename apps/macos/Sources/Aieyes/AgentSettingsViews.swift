@@ -41,6 +41,9 @@ struct AgentMachinesSection: View {
             ForEach(unboundMachines, id: \.self) { id in
                 machine(id, name: (model.settings.sources.first { $0.hostId == id }?.lastMachineName ?? id) + " · 机器未绑定", available: false, unbound: true)
             }
+            if agent.provider == "qoder" {
+                Button(model.accountStatusBusy ? "检查中…" : "刷新账户状态") { Task { await model.loadAccountStatuses(refresh: true, provider: agent.provider) } }.disabled(model.accountStatusBusy || !agent.enabled)
+            }
             if model.settings.localDeviceEnabled == false && !model.settings.hosts.contains(where: \.enabled) {
                 Text("暂无可采集机器，请在服务器设置开启 Agent 采集。").foregroundStyle(.secondary)
             } else if !agent.machineIds.contains(where: { id in id == "local" ? model.settings.localDeviceEnabled != false : model.settings.hosts.contains { $0.id == id && $0.enabled } }) {
@@ -54,13 +57,18 @@ struct AgentMachinesSection: View {
         .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
     }
     private func machine(_ id: String, name: String, available: Bool, unbound: Bool = false) -> some View {
-        let sources = model.settings.sources.filter { $0.provider == agent.provider && ($0.hostId ?? "local") == id }
+        let sources = model.settings.sources.filter { $0.provider == agent.provider && ($0.hostId ?? "local") == id && $0.isDirectorySource }
         let enabled = sources.filter { $0.autoValuation?.enabled == true }.count
         return HStack(spacing: 10) {
-            Toggle(name + (available || unbound ? "" : " · 采集已暂停"), isOn: Binding(get: { !unbound && agent.machineIds.contains(id) }, set: { selected in
-                var ids = agent.machineIds.filter { $0 != id }; if selected { ids.append(id) }
-                Task { await model.configureAgent(agent.provider, enabled: true, machines: ids) }
-            })).toggleStyle(.checkbox).disabled(!agent.enabled || unbound || !available).lineLimit(2).help(name)
+            VStack(alignment: .leading, spacing: 3) {
+                Toggle(name + (available || unbound ? "" : " · 采集已暂停"), isOn: Binding(get: { !unbound && agent.machineIds.contains(id) }, set: { selected in
+                    var ids = agent.machineIds.filter { $0 != id }; if selected { ids.append(id) }
+                    Task { await model.configureAgent(agent.provider, enabled: true, machines: ids) }
+                })).toggleStyle(.checkbox).disabled(!agent.enabled || unbound || !available).lineLimit(2).help(name)
+                if agent.provider == "qoder" && !unbound {
+                    MachineAccountStatus(model: model, provider: agent.provider, machine: id)
+                }
+            }
             Spacer(minLength: 4)
             Button("目录 \(sources.count)") { directories = .init(provider: agent.provider, machine: id) }
             if !unbound { MachineSessionStatus(live: model.live, provider: agent.provider, sources: sources.filter { $0.subscription == nil }, collecting: sources.contains { $0.subscription == nil && model.settings.sourceEnabled($0) }) { hooks = .init(provider: agent.provider, machine: id) } }
@@ -83,6 +91,25 @@ struct AgentMachinesSection: View {
             }
         }.padding(.vertical, 3)
     }
+}
+private struct MachineAccountStatus: View {
+    @ObservedObject var status: AccountStatusProjection
+    let sourceIDs: Set<String>
+    init(model: AppModel, provider: String, machine: String) {
+        status = model.accountStatusStore.machineProjection(provider, machine)
+        sourceIDs = Set(model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && model.settings.sourceEnabled($0) }.map(\.id))
+    }
+    private var summary: String {
+        let rows = status.rows.filter { sourceIDs.contains($0.sourceId) }
+        let identified = rows.filter { $0.identity != nil }.sorted {
+            if ($0.error != nil) != ($1.error != nil) { return $0.error == nil }
+            return ($0.checkedAt ?? 0) > ($1.checkedAt ?? 0)
+        }
+        var seen = Set<String>()
+        let summaries = identified.filter { seen.insert($0.identity!.key).inserted }.compactMap(\.machineIdentitySummary)
+        return summaries.isEmpty ? "登录状态待确认" : summaries.joined(separator: "；")
+    }
+    var body: some View { Text(summary).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(2).help(summary).textSelection(.enabled) }
 }
 private struct MachineSessionStatus: View {
     @ObservedObject var live: LiveSessionState
@@ -125,7 +152,7 @@ struct AgentAutomaticValuationView: View {
     @Environment(\.dismiss) private var dismiss
     @SurfaceModel var model: AppModel
     let provider: String, machine: String
-    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine } }
+    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && $0.isDirectorySource } }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -153,7 +180,7 @@ struct AgentDirectoriesView: View {
     @State private var shellHost: Host?
     @State private var shellBaseline: Settings?
     @State private var commandAccount: AgentAccount?
-    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine } }
+    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && $0.isDirectorySource } }
     private var linkedAccounts: [AgentAccount] { model.settings.accounts.filter { a in a.archived != true && a.provider == provider && sources.contains { a.uses($0) } } }
     var body: some View {
         VStack {
@@ -471,7 +498,7 @@ struct AccountDevicesView: View {
                         ForEach(model.settings.sources.filter { $0.provider == account.provider && ($0.hostId ?? "local") == machine }) { source in
                             let status = model.accountStatuses.first { $0.accountKey == account.key && $0.sourceId == source.id }
                             HStack {
-                                VStack(alignment: .leading) { Text(source.name); Text(source.path).font(AppFont.secondary).foregroundStyle(.secondary) }
+                                VStack(alignment: .leading) { Text(source.name); Text(source.path.isEmpty ? (source.subscription?.mode == "cli" ? "CLI 额度连接" : "订阅额度连接") : source.path).font(AppFont.secondary).foregroundStyle(.secondary) }
                                 Spacer()
                                 if account.provider == "antigravity", source.accountId == account.id { Button("登录 / 检查") { agySource = source }.disabled(!model.settings.sourceEnabled(source)) }
                                 if account.provider == "codex" {

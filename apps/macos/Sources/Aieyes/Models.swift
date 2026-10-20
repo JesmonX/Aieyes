@@ -284,7 +284,12 @@ struct CreditsBalance: Codable, Equatable { var hasCredits: Bool, unlimited: Boo
 struct AccountIdentity: Codable, Equatable {
     var key: String, email: String
     var subscription: String?, checkedAt: Double?, stale: Bool?
-    var summary: String { email + (subscription.map { " · " + $0 } ?? " · 订阅未知") + (stale == true ? " · 订阅待更新" : "") }
+    var displayName: String {
+        if !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return email }
+        if key.hasPrefix("qoder:") { return "Qoder · " + key.dropFirst(6).prefix(12) }
+        return key.isEmpty ? "身份已确认" : key
+    }
+    var summary: String { displayName + (subscription.map { " · " + $0 } ?? " · 订阅未知") + (stale == true ? " · 订阅待更新" : "") }
 }
 struct Quota: Codable, Equatable, Identifiable {
     var identity: AccountIdentity? = nil
@@ -364,8 +369,9 @@ struct AccountDeviceStatus: Codable, Equatable, Identifiable {
     var id: String { accountKey + ":" + sourceId }
     var identitySummary: String? {
         guard let identity else { return authenticated == true ? "登录有效 · 账户身份待确认" : nil }
-        return (current == false ? "身份不一致 · 当前登录 " : "正在使用 ") + identity.summary + (error != nil ? " · 上次检查" : "")
+        return (current == nil ? "当前登录 " : current == false ? "身份不一致 · 当前登录 " : "正在使用 ") + identity.summary + (error != nil ? " · 上次检查" : "")
     }
+    var machineIdentitySummary: String? { identity.map { "当前登录 " + $0.summary + (error != nil ? " · 上次检查" : "") } }
 }
 struct AccountDeviceCounts {
     let total: Int, logged: Int, using: Int
@@ -450,6 +456,7 @@ struct SubscriptionConfig: Codable, Equatable {
     var nativeConfigDir: String?
 }
 struct AgentSource: Codable, Equatable, Identifiable {
+    var isDirectorySource: Bool { subscription == nil && !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var displayLocation: String {
         guard !path.isEmpty else { return name }
         let shortened = path.count > 60 ? "…" + path.suffix(59) : path
