@@ -5,7 +5,7 @@ struct CodexProfile: Decodable, Identifiable {
     var id: String, name: String, identity: Identity, current: Bool?
 }
 struct CodexProcess: Decodable, Identifiable { var pid: Int, name: String, canClose: Bool; var parentPid: Int?, blockingReason: String?; var id: Int { pid } }
-struct CodexInspection: Decodable { var profiles: [CodexProfile], processes: [CodexProcess], version: String?, storageMode: String; var storedIdentity: String?, selected: CodexSelectedConnection? }
+struct CodexInspection: Decodable { var profiles: [CodexProfile], processes: [CodexProcess], version: String?, storageMode: String; var storedIdentity: String?, selected: CodexSelectedConnection?; var cliAvailable: Bool?, resolvedBinary: String?, cliError: String?, cliErrorCode: String? }
 struct CodexOperation: Decodable, Identifiable {
     var operationId: String, status: String, authUrl: String?, userCode: String?, error: String?, message: String?, processes: [CodexProcess]?
     var accountArchived: Bool?, quotaEnabled: Bool?
@@ -69,6 +69,12 @@ struct CodexAccountsView: View {
 
                 }.disabled(busy || source == nil || operation != nil) }
                 if let info { Text("\(info.version ?? "CLI 版本未知") · 认证存储 \(info.storageMode) · \(info.processes.count) 个相关进程").font(AppFont.secondary).foregroundStyle(.secondary) }
+                if let info, info.cliAvailable == false {
+                    Text(info.cliError ?? "Codex CLI 暂不可用").foregroundStyle(Palette.warn).textSelection(.enabled)
+                    if let binary = info.resolvedBinary { Text("检查的程序：" + binary).font(AppFont.secondary).textSelection(.enabled) }
+                    Button("机器与 CLI 设置") { model.openSettings(.init(provider: "codex", section: "machines")) }
+                    Text("进程检测与 CLI 可调用性分别检查；已有登录档案仍可关联。").font(AppFont.secondary).foregroundStyle(.secondary)
+                }
             }
             ForEach(visibleProfiles) { profile in
                 Section {

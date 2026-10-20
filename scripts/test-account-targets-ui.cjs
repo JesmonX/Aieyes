@@ -8,7 +8,7 @@ function fixture(){
   const t=targetsTest;
   t.usingWork=false;t.holdStatus=false;
   function statusRows(){return settings.accounts.flatMap(a=>['local','local-copy','remote','offline'].map(sourceId=>({accountKey:'codex:'+a.id,sourceId,machineId:sourceId.startsWith('local')?'local':sourceId==='remote'?'server':'offline',current:sourceId==='offline'?null:sourceId==='remote'&&(t.usingWork?a.id==='b':a.id==='a'),credential:sourceId==='offline'?null:sourceId==='remote',error:sourceId==='offline'?'离线':null})));}
-  function rows(){return settings.accounts.filter(a=>!a.archived).flatMap(a=>settings.sources.map(s=>({accountKey:'codex:'+a.id,accountName:a.name,provider:'codex',sourceId:s.id,sourceName:s.name,path:s.path,machineId:s.hostId||'local',machineName:s.hostId?settings.hosts.find(h=>h.id===s.hostId).name:'本机',profileId:s.id==='offline'||s.id==='remote'&&!t.linked?null:s.codexHomeId+':'+a.id,current:s.id==='remote'&&a.id==='a',credential:s.id==='offline'?null:s.id==='remote'?true:false,canWake:s.id!=='offline'&&(s.id!=='remote'||t.linked),canSwitch:s.id==='remote'&&a.id==='b'&&t.linked})));}
+  function rows(){return settings.accounts.filter(a=>!a.archived).flatMap(a=>settings.sources.map(s=>({accountKey:'codex:'+a.id,accountName:a.name,provider:'codex',sourceId:s.id,sourceName:s.name,path:s.path,machineId:s.hostId||'local',machineName:s.hostId?settings.hosts.find(h=>h.id===s.hostId).name:'本机',bound:s.id!=='offline'&&(s.id!=='remote'||t.linked),canDraft:s.id!=='offline'&&(s.id!=='remote'||t.linked),draftReason:s.id==='remote'&&!t.linked?'请先将账户档案关联到账户':null,profileId:s.id==='offline'||s.id==='remote'&&!t.linked?null:s.codexHomeId+':'+a.id,current:s.id==='remote'&&a.id==='a',credential:s.id==='offline'?null:s.id==='remote'?true:false,canWake:s.id!=='offline'&&(s.id!=='remote'||t.linked),canSwitch:s.id==='remote'&&a.id==='b'&&t.linked})));}
   window.__TAURI__={event:{async listen(){return()=>{};}},window:{getCurrentWindow:()=>({async isMaximized(){return false;},async onResized(){return()=>{};}})},core:{async invoke(command,args){
     if(command==='desktop_info')return {page:'agent',platform:'windows',mode:'floating',effectiveMode:'floating',sessions:[],summary:'Idle',panelOpen:true};
     if(command!=='engine_call')return {};
@@ -23,7 +23,7 @@ function fixture(){
         if(t.holdOffline)await new Promise(resolve=>t.releaseOffline=()=>{t.holdOffline=false;resolve();});
         throw new Error('离线，可重试');
       }
-      if(params.sourceId==='remote')t.linked=true;
+      if(params.sourceId==='remote'){if(t.failRemote)throw new Error('Codex CLI 不可用');t.linked=true;}
       return {settings,issues:t.reconcileIssue&&params.sourceId==='local'?[{sourceId:'local',message:'未找到 Codex CLI <fixture>'}]:[]};
     }
     if(method==='wakeups.probe')return new Promise(resolve=>t.releaseProbe=()=>resolve({models:[{id:'STALE',efforts:['high']}],recommendedModel:'STALE',efforts:['high'],timezone:'UTC',message:'OLD'}));
@@ -97,6 +97,15 @@ function fixture(){
     await page.waitForFunction(()=>!document.querySelector('#editor').open);
     const saved=await page.evaluate(()=>targetsTest.calls.find(c=>c.method==='wakeups.save').params.task);
     assert.equal(saved.sourceId,'remote');assert.equal(saved.codexProfileId,'h2:b');
+    await page.evaluate(()=>{targetsTest.linked=false;targetsTest.failRemote=true;AieyesAccountTargets.open('codex:a');});
+    const unbound=page.locator('#account-targets .list-row').filter({hasText:'144 服务器'});
+    await unbound.getByRole('button',{name:'完成关联',exact:true}).waitFor();
+    await page.locator('#target-refresh:not([disabled])').waitFor();
+    assert.match(await unbound.innerText(),/正在使用/);
+    assert.match(await unbound.innerText(),/请先将账户档案关联到账户/);
+    await page.screenshot({path:path.resolve(__dirname,'../.local/ui-previews/codex-target-unbound.png')});
+    await unbound.getByRole('button',{name:'完成关联',exact:true}).click();
+    assert.deepEqual(await page.evaluate(()=>targetsTest.opened),['a','remote','login']);
     assert.deepEqual(errors,[]);
     console.log('Account targets: deduplicated device counts, settings parity, offline/paused devices, late status rejection, independent machines, archived eligibility, login/switch routing, reconciled wakeup selection and stale capabilities passed');
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

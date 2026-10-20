@@ -160,6 +160,7 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     let _lock = crate::file_lock::history(root, &source.id)?;
     let current = current_settings(store, settings, source)?;
     let settings = &current;
+    store.ensure_codex_evidence_scope(settings, source)?;
     if crate::providers::antigravity(&source.provider)
         && crate::antigravity::directory(&expand(&source.path)).is_some()
     {
@@ -406,6 +407,7 @@ fn scan_file(
                     }
                     let baseline = history.as_deref_mut().and_then(|r| r.metadata(&v));
                     let parsed = usage::parse(source, &mut state, &v);
+                    store.record_codex_history(source, &state, &v, parsed.as_ref())?;
                     if state.first_inherited_count
                         && let Some(baseline) = baseline
                     {

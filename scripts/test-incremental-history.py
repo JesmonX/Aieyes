@@ -38,6 +38,16 @@ def native_rows(frames):
 
 
 class PiHistoryTests(unittest.TestCase):
+    def test_codex_creator_identity_is_hashed_before_ssh_transport(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'rollout.jsonl'
+            row = dict(type='session_meta', timestamp='2026-10-20T00:00:00Z', payload=dict(id='session', creator_user_id='PRIVATE_USER', creator_account_id='PRIVATE_ACCOUNT', base_instructions='PRIVATE_PROMPT'))
+            path.write_text(json.dumps(row) + '\n')
+            result = events(collect(path, provider='codex'))
+            self.assertEqual(result[0]['payload']['creator_identity_key'], hashlib.sha256(b'PRIVATE_USER\0PRIVATE_ACCOUNT').hexdigest())
+            self.assertNotIn('PRIVATE', json.dumps(result))
+
     def test_pi_family_projection_has_only_metering_and_appends_are_incremental(self):
         for provider in ('pi','omp'):
             with self.subTest(provider=provider),tempfile.TemporaryDirectory() as directory:

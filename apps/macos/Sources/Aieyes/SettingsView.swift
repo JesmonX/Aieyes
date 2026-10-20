@@ -316,8 +316,7 @@ struct SettingsView: View {
                         }
                     }
                 }
-                Toggle("在筛选中显示已删除账户", isOn: Binding(get: { model.settingsDraft.historyShowDeletedAccounts == true }, set: { model.settingsDraft.historyShowDeletedAccounts = $0 }))
-                Text("在筛选中显示有历史记录的已删除账户；其用量始终计入总统计。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text("用量按 Agent 统计，已删除账户的历史用量仍计入总量。").font(AppFont.secondary).foregroundStyle(.secondary)
                 Text("重新读取已启用来源的完整日志，修正可确认的重复记录。已有历史和价格快照保留。").font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack {
                     Button(model.rescanning ? "全量重扫中…" : "全量重扫") { confirmRescan = true }

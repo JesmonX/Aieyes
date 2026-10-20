@@ -511,12 +511,49 @@ def layout(root, profile_id, kind):
 
 
 def cli_argv(loc, args):
-    binary = os.path.expanduser(loc.get('binary') or 'codex')
+    binary = resolve_cli(loc)
     if not loc.get('preCommand', '').strip():
         return [binary] + args
     import shlex
     script = 'set -e\n{\n' + loc['preCommand'] + '\n} </dev/null >&2\n'
     return [loc.get('shell') or '/bin/bash', '-c', script + 'exec ' + ' '.join(shlex.quote(a) for a in [binary] + args)]
+
+
+def resolve_cli(loc):
+    import shutil
+    binary = os.path.expanduser(loc.get('binary') or 'codex')
+    if binary != 'codex' or loc.get('preCommand', '').strip():
+        return binary
+    found = shutil.which(binary)
+    if found:
+        return found
+    for path in ('~/.local/bin/codex', '~/bin/codex', '~/.codex/packages/standalone/current/bin/codex', '/opt/homebrew/bin/codex', '/usr/local/bin/codex'):
+        expanded = os.path.expanduser(path)
+        if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
+            return expanded
+    return binary
+
+
+def probe_cli(loc, root, env=None):
+    result = dict(resolvedBinary=resolve_cli(loc), cliAvailable=False, version=None)
+    try:
+        output = subprocess.check_output(cli_argv(loc, ['--version']), env=env, cwd=root, timeout=5, stderr=subprocess.DEVNULL).decode()
+        match = re.search(r'(\d+)\.(\d+)\.(\d+)', output)
+        if not match:
+            result.update(cliErrorCode='invalidVersion', cliError='无法识别 Codex CLI 版本输出，请检查“Codex 程序”是否指向正确的 CLI')
+        elif (int(match[1]), int(match[2])) < (0, 99):
+            result.update(version='codex-cli ' + match[0], cliErrorCode='incompatible', cliError='接口不兼容：内存凭据查询需要 Codex 0.99.0 或更新版本')
+        else:
+            result.update(version='codex-cli ' + match[0], cliAvailable=True)
+    except FileNotFoundError:
+        result.update(cliErrorCode='notFound', cliError='未找到 Codex CLI，请检查“Codex 程序”路径、PATH 和前置命令')
+    except PermissionError:
+        result.update(cliErrorCode='permission', cliError='无法执行 Codex CLI，请检查程序执行权限')
+    except subprocess.TimeoutExpired:
+        result.update(cliErrorCode='timeout', cliError='Codex CLI 版本检查超时（5 秒），请检查程序启动速度和前置命令')
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        result.update(cliErrorCode='failed', cliError='Codex CLI 版本检查失败，请检查程序路径、运行环境和前置命令')
+    return result
 
 
 class Rpc:
@@ -531,21 +568,9 @@ class Rpc:
         if proxy.get('mode') == 'custom':
             env.update({key: proxy['url'] for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY')})
         if not managed:
-            try:
-                version = subprocess.check_output(cli_argv(loc, ['--version']), env=env, cwd=root, timeout=5, stderr=subprocess.DEVNULL).decode()
-                match = re.search(r'(\d+)\.(\d+)\.\d+', version)
-                if not match:
-                    raise ValueError('无法识别 Codex CLI 版本输出，请检查“Codex 程序”是否指向正确的 CLI')
-                if (int(match[1]), int(match[2])) < (0, 99):
-                    raise ValueError('接口不兼容：内存凭据查询需要 Codex 0.99.0 或更新版本')
-            except FileNotFoundError:
-                raise ValueError('未找到 Codex CLI，请检查“Codex 程序”路径、PATH 和前置命令') from None
-            except PermissionError:
-                raise ValueError('无法执行 Codex CLI，请检查程序执行权限') from None
-            except subprocess.TimeoutExpired:
-                raise ValueError('Codex CLI 版本检查超时（5 秒），请检查程序启动速度和前置命令') from None
-            except (OSError, subprocess.SubprocessError):
-                raise ValueError('Codex CLI 版本检查失败，请检查程序路径、运行环境和前置命令') from None
+            probe = probe_cli(loc, root, env)
+            if not probe['cliAvailable']:
+                raise ValueError(probe['cliError'])
         self.child = subprocess.Popen(cli_argv(loc, ['-c', 'cli_auth_credentials_store="%s"' % ('file' if managed else 'ephemeral'), 'app-server']), cwd=root, env=env,
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
         self.messages, self.notifications, self.next = queue.Queue(maxsize=64), [], 0
@@ -822,7 +847,7 @@ def call(request):
             except (OSError, ValueError, KeyError):
                 available = False
             rows.append(dict(id=p['id'], identityKey=p['identity']['key'], credential=available))
-        return dict(storageMode=mode(root), currentIdentity=active_key, currentCredential=active_key is not None, storedIdentity=stored, storedCredential=stored is not None, selected=selected, profiles=rows)
+        return dict(storageMode=mode(root), observedAt=int(time.time()), currentIdentity=active_key, currentCredential=active_key is not None, storedIdentity=stored, storedCredential=stored is not None, selected=selected, profiles=rows)
     if method in ('inspect', 'list', 'profiles.list'):
         stored = active(root)
         selected = api_helpers()['direct_selected'](root)
@@ -831,12 +856,8 @@ def call(request):
         for p in rows:
             p['current'] = current == p['identity']['key']
         if method == 'profiles.list':
-            return dict(protocolVersion=1, path=str(root), storageMode=mode(root), currentIdentity=current, storedIdentity=stored, selected=selected, profiles=rows)
-        try:
-            version = subprocess.check_output([os.path.expanduser(loc.get('binary') or 'codex'), '--version'], timeout=5, stderr=subprocess.DEVNULL).decode().strip()[:80]
-        except (OSError, subprocess.SubprocessError):
-            version = None
-        return dict(protocolVersion=1, path=str(root), version=version, storageMode=mode(root), currentIdentity=current, storedIdentity=stored, selected=selected, profiles=rows, processes=running(root))
+            return dict(protocolVersion=1, path=str(root), observedAt=int(time.time()), storageMode=mode(root), currentIdentity=current, storedIdentity=stored, selected=selected, profiles=rows)
+        return dict(protocolVersion=1, path=str(root), storageMode=mode(root), currentIdentity=current, storedIdentity=stored, selected=selected, profiles=rows, processes=running(root), **probe_cli(loc, root, dict(os.environ, CODEX_HOME=str(root))))
     if method == 'model.list':
         with Lock(root):
             require_file(root)
@@ -942,7 +963,7 @@ def call(request):
                 return revision(read(root/'auth.json')) if (root/'auth.json').exists() else None
             if record['status'] == 'committing':
                 if auth_revision() == record.get('targetRevision') and api_helpers()['revision'](root) == record.get('targetConfigRevision'):
-                    record['status'] = 'succeeded'; atomic(operation(root, op), record); return record
+                    record.update(status='succeeded', switchedAt=int(time.time())); atomic(operation(root, op), record); return record
                 raise ValueError('上次切换未完成，请重新检查当前登录方式')
             if record['status'] != 'prepared' or record['expiresAt'] < time.time(): raise ValueError('切换检查已过期，请重新检查')
             if record['revision'] != revision(snapshot(root)): raise ValueError('凭据或配置已更新，请重新检查后切换')
@@ -966,6 +987,15 @@ def call(request):
                     prior = next((p for p in profiles(root) if p['identity']['key'] == ident['key']), None)
                     save_profile(root, prior['id'] if prior else uuid.uuid4().hex, prior['name'] if prior else '之前的 ChatGPT', old)
             before = config(root)
+            if params.get('captureQuotaBoundary') and old:
+                try:
+                    with Rpc(loc, layout(root, 'switch-boundary', 'query')) as rpc:
+                        rpc.login(old)
+                        record['previousQuota'] = rpc.call('account/rateLimits/read', None)
+                        record['previousQuotaAt'] = int(time.time())
+                except Exception:
+                    pass  # An unavailable final observation must not prevent switching.
+            record.update(switchStartedAt=int(time.time()), previousIdentity=active(root), currentIdentity=identity(auth)['key'] if auth else None)
             record.update(status='committing', targetRevision=revision(auth or old) if auth or old else None)
             atomic(operation(root, op), record)
             written = api_helpers()['direct_select'](root, target)
@@ -980,7 +1010,7 @@ def call(request):
                 api_helpers()['direct_restore'](root, before, written)
                 record['status'] = 'failed'; atomic(operation(root, op), record)
                 raise
-            record.update(status='succeeded', message='登录方式已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话')
+            record.update(status='succeeded', switchedAt=int(time.time()), message='登录方式已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话')
             atomic(operation(root, op), record)
             return record
         if method == 'profiles.remove':

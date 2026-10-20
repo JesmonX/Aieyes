@@ -75,17 +75,21 @@ import Foundation
         PanelAccountPreference.migrateAntigravity(aliases, defaults: preferences)
         precondition(preferences.string(forKey: "panel.accounts.v2") == savedPreference)
         let legacyFilters = DashboardFilterPreference(provider: "codex", source: "old-source", account: "codex:old", model: "old-model", days: 30, dateRange: DashboardDateRange(kind: "custom", start: "2026-09-01", end: "2026-09-30"))
-        let todayFilters = DashboardFilterPreference(provider: "codex", account: "codex:old")
-        legacyFilters.save(defaults: preferences)
+        let todayFilters = DashboardFilterPreference(provider: "codex")
+        let analysisFilters = legacyFilters.normalized(for: "analysis")
+        preferences.set(try JSONEncoder().encode(legacyFilters), forKey: NativePanelKey.filters.rawValue)
         for scope in ["panel", "overview"] { precondition(DashboardFilterPreference.read(scope: scope, defaults: preferences) == todayFilters) }
-        precondition(DashboardFilterPreference.read(scope: "analysis", defaults: preferences) == legacyFilters)
+        precondition(DashboardFilterPreference.read(scope: "analysis", defaults: preferences) == analysisFilters)
         let panelFilters = DashboardFilterPreference(provider: "claude", days: 1)
         panelFilters.save(scope: "panel", defaults: preferences)
         precondition(DashboardFilterPreference.read(scope: "panel", defaults: preferences) == panelFilters)
         precondition(DashboardFilterPreference.read(scope: "overview", defaults: preferences) == todayFilters)
-        precondition(DashboardFilterPreference.read(scope: "analysis", defaults: preferences) == legacyFilters)
-        precondition(DashboardFilterPreference.read(defaults: preferences) == legacyFilters, "Migration preserves legacy preferences")
+        precondition(DashboardFilterPreference.read(scope: "analysis", defaults: preferences) == analysisFilters)
+        precondition(DashboardFilterPreference.read(defaults: preferences) == analysisFilters, "Legacy account restrictions are ignored in every usage scope")
         legacyFilters.save(scope: "overview", defaults: preferences)
+        let storedLegacyFilters = try JSONDecoder().decode(DashboardFilterPreference.self, from: preferences.data(forKey: NativePanelKey.filters.rawValue)!)
+        precondition(storedLegacyFilters == legacyFilters, "Reading legacy preferences does not overwrite them")
+        precondition(legacyFilters.parameters(settings: Settings())["accountId"] == nil, "Usage queries never send an account restriction")
         let savedTodayFilters = try JSONDecoder().decode(DashboardFilterPreference.self, from: preferences.data(forKey: "dashboard.filters.v2.overview")!)
         precondition(savedTodayFilters == todayFilters, "Overview persistence drops hidden historical date, source and model restrictions")
         precondition(Format.subscription("ultra") == "Ultra")
@@ -425,6 +429,8 @@ for line in sys.stdin:
         let estimate = QuotaEstimate(id: "sample", accountKey: "codex:fixture", windowId: "seven_day", windowName: "7d", sourceIds: [], sourceNames: [], status: "active", reason: "", startedAt: 1, checkpointAt: 2, endedAt: nil, consumedPercent: 1, cost: 1, totalTokens: 100, pricedTokens: 100, weeklyValue: nil, calculationNote: "测试采样")
         try encoder.encode(estimate).write(to: root.appendingPathComponent("estimate.json"))
         model.setWindowVisible(true, window: "panel")
+        var excluded = estimate; excluded.rollingExcludedReason = "缺少账户联合证据"; excluded.fiveHourValue = 999
+        precondition(EstimatePresentation.canonical([excluded]).isEmpty, "Retained unverified values never become live fallbacks")
         let sampling = Task { await model.performEstimate("start", accountKey: estimate.accountKey, params: ["accountKey":estimate.accountKey]) }
         try await Task.sleep(nanoseconds: 30_000_000)
         precondition(model.estimateBusy.contains(estimate.accountKey))
@@ -590,10 +596,10 @@ for line in sys.stdin:
         await model.reload()
         let lastHistoryCall = try String(contentsOf: root.appendingPathComponent("calls.jsonl"), encoding: .utf8).split(separator: "\n").compactMap {
             try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
-        }.last { $0["method"] as? String == "dashboard" && ($0["params"] as? [String: Any])?["accountId"] as? String == "history" }
+        }.last { $0["method"] as? String == "dashboard" }
         let historyParams = lastHistoryCall?["params"] as? [String: Any]
-        precondition(historyParams?["accountId"] as? String == "history" && historyParams?["provider"] as? String == "codex")
-        precondition(model.appliedScope.contains("旧账户历史（已删除）"))
+        precondition(lastHistoryCall != nil && historyParams?["accountId"] == nil && historyParams?["provider"] == nil, "Legacy account choices cannot restrict Agent usage")
+        precondition(!model.appliedScope.contains("账户") && model.selectedAccount == "all")
         model.settingsDraft.historyShowDeletedAccounts = false
         let historyHidden = await model.saveSettingsDraft()
         precondition(historyHidden && model.selectedAccount == "all" && model.settings.filterAccounts.isEmpty)
@@ -604,18 +610,18 @@ for line in sys.stdin:
         let originalAnalysis = workspace.analysisFilters
         workspace.updateFilters(DashboardFilterPreference(provider: "deepseek", account: "deepseek:fixture"), scope: "panel", resetDependents: false)
         workspace.updateFilters(DashboardFilterPreference(provider: "claude", days: 7), scope: "overview")
-        precondition(workspace.analysisFilters == originalAnalysis && workspace.panelFilters.account == "deepseek:fixture", "Ordinary filters stay local to their surface")
+        precondition(workspace.analysisFilters == originalAnalysis && workspace.panelFilters.account == "all" && workspace.panelFilters.provider == "deepseek", "Agent filters stay local and account restrictions are discarded")
         var destination: String?
         workspace.showDetailPage = { destination = $0 }
         workspace.openAnalysis(from: "panel")
-        precondition(destination == "analysis" && workspace.analysisFilters.account == "deepseek:fixture" && workspace.analysisFilters.provider == "deepseek")
+        precondition(destination == "analysis" && workspace.analysisFilters.account == "all" && workspace.analysisFilters.provider == "deepseek")
         precondition(workspace.analysisFilters.days == 30 && workspace.analysisFilters.dateRange == originalAnalysis.dateRange, "An explicit analysis jump carries identity and preserves analysis dates")
         precondition(workspace.overviewFilters.provider == "claude" && workspace.overviewFilters.days == 1)
         workspace.mergeConfiguration(Settings())
         precondition(workspace.panelFilters.account == "all" && workspace.analysisFilters.account == "all", "Removed accounts are reconciled in every scope")
         precondition(workspace.overviewFilters.days == 1 && workspace.analysisFilters.dateRange == originalAnalysis.dateRange)
         print("Workspace filter migration, independent scopes, analysis context and removal reconciliation passed")
-        print("Deleted account history is hidden by default, filters use the historical account identity, and hiding resets a stale selection")
+        print("Deleted account history remains available while usage queries and labels ignore legacy account restrictions")
         // Calendar changes invalidate relative-date snapshots even without new usage revisions.
         // Earlier models have background revision readers. Stop them before
         // counting requests, and expose only usage so this case does not also

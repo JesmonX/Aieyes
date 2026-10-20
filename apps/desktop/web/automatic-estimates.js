@@ -1,7 +1,7 @@
 // Source-scoped consent; switches always reflect the last saved configuration.
 window.AieyesAutomatic=(()=>{
   const consent='我确认影响订阅额度的所有设备用量均已纳入；按日志识别 API，不确定的区间跳过。';
-  const labels={collecting:'积累样本中',sampling:'自动采样中',waiting:'等待有效样本',waitingIdentity:'等待订阅登录',waitingManual:'等待手动采样结束',disabled:'已关闭'};
+  const labels={collecting:'积累样本中',sampling:'自动采样中',waiting:'等待有效样本',waitingIdentity:'等待订阅登录',waitingCoverage:'等待完整目录用量',waitingManual:'等待手动采样结束',disabled:'已关闭'};
   const status=s=>state.dashboard?.sources?.find(row=>row.id===s.id)?.autoValuationStatus;
   const description=s=>{const row=status(s);return !AieyesUI.sourceEnabled(state.settings,s)?'采集已暂停':!s.autoValuation?.enabled?'已关闭':(labels[row?.state]??'等待首个实时快照')+(row?.note?' · '+row.note:'');};
   const intro=provider=>provider==='codex'?'估算 5 小时 / 7 天额度及 credits 的 API 等价价值':'估算 5 小时 / 7 天额度的 API 等价价值';
@@ -57,7 +57,7 @@ async function openProviderEstimates(provider) {
   if(!dialog.open||dialog.dataset.loadingRequest!==request)return;
   const sources=state.settings.sources.filter(s=>s.provider===provider),accounts=state.settings.accounts.filter(a=>a.provider===provider&&!a.archived);
   const records=[...(snapshot.quotaEstimates??[]).map(e=>({...e,kind:'quota'})),...(snapshot.creditEstimates??[]).map(e=>({...e,kind:'credits'}))].filter(e=>e.accountKey.startsWith(provider+':')).sort((a,b)=>(b.checkpointAt??b.startedAt)-(a.checkpointAt??a.startedAt));
-  const recordHTML=record=>`<div class="sampling-row"><strong>${escapeHTML(historicalAccounts().find(a=>a.provider+':'+a.id===record.accountKey)?.name??record.accountKey)}</strong><span>${record.kind==='credits'?'credits 估值':escapeHTML((AieyesUI.estimatePeriods(snapshot.quotas?.find(q=>q.provider+':'+q.accountId===record.accountKey),[record],record.groupId)+' 额度估值').trim())} · ${escapeHTML(estimateStatus(record))}</span><small>${date(record.startedAt)} → ${date(record.checkpointAt)}</small><button type="button" data-valuation-record="${records.indexOf(record)}">查看与管理</button></div>`;
+  const recordHTML=record=>`<div class="sampling-row"><strong>${escapeHTML(historicalAccounts().find(a=>a.provider+':'+a.id===record.accountKey)?.name??record.accountKey)}</strong><span>${record.kind==='credits'?'credits 估值':escapeHTML((AieyesUI.estimatePeriods(snapshot.quotas?.find(q=>q.provider+':'+q.accountId===record.accountKey),[record],record.groupId)+' 额度估值').trim())} · ${escapeHTML(estimateStatus(record))}</span><small>${date(record.startedAt)} → ${date(record.checkpointAt)}</small>${record.rollingExcludedReason?`<small class="muted">${escapeHTML(record.rollingExcludedReason)}</small>`:''}<button type="button" data-valuation-record="${records.indexOf(record)}">查看与管理</button></div>`;
   const running=records.filter(e=>e.status!=='completed'&&e.samplingMode!=='automatic'),history=records.filter(e=>e.status==='completed'&&e.samplingMode!=='automatic'),automaticHistory=records.filter(e=>e.samplingMode==='automatic');
   const automatic=sources.length?window.AieyesAutomatic.html(sources):'<p class="muted">添加数据目录后可配置自动估值。</p>';
   const manual=()=>accounts.map(a=>`<div class="list-row"><strong class="row-body">${escapeHTML(a.name)}</strong><button type="button" data-valuation-account="${escapeHTML(a.provider+':'+a.id)}">额度采样</button>${provider==='codex'?`<button type="button" data-valuation-account="${escapeHTML(a.provider+':'+a.id)}" data-kind="credits">credits 采样</button>`:''}</div>`).join('')||'<p class="muted">添加账户后可开始手动采样。</p>';

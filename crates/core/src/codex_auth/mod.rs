@@ -9,6 +9,28 @@ use crate::{Engine, models::*, quota, store::expand};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
+pub(crate) fn cli_probe_key(
+    source: &Source,
+    settings: &Settings,
+    account: Option<&Account>,
+) -> String {
+    let host = settings
+        .hosts
+        .iter()
+        .find(|h| Some(&h.id) == source.host_id.as_ref())
+        .map(|h| json!([h.target, h.port, h.username, h.shell]));
+    let signature = hash(
+        &json!([
+            source.codex_binary,
+            source.path,
+            crate::accounts::pre_command(settings, account, source),
+            host
+        ])
+        .to_string(),
+    );
+    format!("codex-cli-probe:{}:{signature}", source.id)
+}
+
 pub fn location(source: &Source, settings: &Settings) -> local::Location {
     local::Location {
         path: home_path(&source.path),
@@ -453,7 +475,45 @@ impl Engine {
         if method == "quota" {
             return crate::quota_queries::raw_codex_quota(&self.store, &settings, &source, &params);
         }
+        if method == "switch.commit"
+            && source.auto_valuation.as_ref().is_some_and(|a| {
+                a.enabled && a.consent_version == crate::automatic::CONSENT_VERSION
+            })
+        {
+            params["captureQuotaBoundary"] = json!(true);
+        }
         let mut result = backend(&source, &settings, method, &params)?;
+        if result["cliAvailable"].is_boolean() {
+            let account = settings.accounts.iter().find(|a| {
+                a.provider == "codex"
+                    && (params["accountId"].as_str() == Some(&a.id)
+                        || (params["accountId"].as_str().is_none_or(str::is_empty)
+                            && source.account_id == a.id))
+            });
+            let key = cli_probe_key(&source, &settings, account);
+            let probe = json!({"checkedAt":now(),"cliAvailable":result["cliAvailable"],"cliError":result["cliError"],"cliErrorCode":result["cliErrorCode"],"resolvedBinary":result["resolvedBinary"]});
+            // Diagnostic persistence must not turn a successful inspection into a failure.
+            let _ = self.store.db.execute(
+                "INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                rusqlite::params![key, probe.to_string()],
+            );
+        }
+        if method == "switch.commit" && result["status"] == "succeeded" {
+            if self
+                .store
+                .record_codex_switch(&settings, &source, &result)
+                .is_err()
+            {
+                result["statusWarning"] = json!("账户已切换，估值边界未完整保存，将等待新基线");
+            }
+            if self
+                .finish_automatic_codex_switch(&source, &result)
+                .is_err()
+            {
+                result["statusWarning"] =
+                    json!("账户已切换，旧账户末段证据不足；已保留有效样本，新账户将重新建立基线");
+            }
+        }
         if method == "switch.commit"
             && result["status"] == "succeeded"
             && crate::accounts::codex_switched(&self.store, &source, &params["operationId"])

@@ -95,6 +95,8 @@ pub struct EstimateCommon {
     pub priced_tokens: u64,
     pub excluded_api_tokens: u64,
     pub calculation_note: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub rolling_excluded_reason: String,
     pub prices: Vec<Value>,
 }
 
@@ -568,7 +570,7 @@ impl Store {
         }
         // Enumerate scopes from the covering expression index, then seek only
         // the newest canonical record and each card's last finite value.
-        let canonical = "NOT EXISTS(SELECT 1 FROM estimates replacement WHERE replacement.kind=head.kind AND CAST(json_extract(replacement.payload,'$.originalEstimateId') AS TEXT)=head.id)";
+        let canonical = "COALESCE(json_extract(head.payload,'$.rollingExcludedReason'),'')='' AND NOT EXISTS(SELECT 1 FROM estimates replacement WHERE replacement.kind=head.kind AND CAST(json_extract(replacement.payload,'$.originalEstimateId') AS TEXT)=head.id)";
         let head_group = DISPLAY_GROUP
             .replace("kind", "head.kind")
             .replace("payload", "head.payload");
@@ -824,6 +826,7 @@ impl Store {
                 || !self.native_interval_complete(&e.source_ids, e.started_at, e.checkpoint_at)?);
         let mut boundary = false;
         let mut unmapped_group = false;
+        let mut unknown_account = None;
         // EXISTS avoids multiplying events observed through several selected sources.
         let mut stmt = self.db.prepare("SELECT e.payload,e.cost,e.priced_tokens,e.price FROM events e WHERE e.provider=?1 AND e.stamp>?3 AND e.stamp<=?4 AND EXISTS(SELECT 1 FROM event_sources s WHERE s.event_id=e.id AND s.source_id IN (SELECT value FROM json_each(?5)) AND (e.account_id=?2 OR s.source_id IN (SELECT value FROM json_each(?6))))")?;
         let rows = stmt.query_map(
@@ -858,6 +861,33 @@ impl Store {
             if billing == "api" {
                 e.excluded_api_tokens += event.tokens.total();
                 continue;
+            }
+            if strict && (e.sampling_mode == "automatic" || !e.shared_source_ids.is_empty()) {
+                match self.codex_usage_identity(&event, &e.source_ids)? {
+                    Ok(identity) => {
+                        if !settings.accounts.iter().any(|a| {
+                            a.provider == "codex"
+                                && a.id == account
+                                && a.identity_key.as_deref() == Some(&identity)
+                        }) {
+                            continue;
+                        }
+                        if !self.codex_request_quota_matches(
+                            &event,
+                            &e.source_ids,
+                            &key,
+                            e.started_at,
+                            e.checkpoint_at,
+                        )? {
+                            unknown_account = Some("请求额度与候选账户不一致");
+                            continue;
+                        }
+                    }
+                    Err(reason) => {
+                        unknown_account = Some(reason);
+                        continue;
+                    }
+                }
             }
             if strict && billing != "subscription" {
                 unknown_billing = true;
@@ -915,7 +945,11 @@ impl Store {
                 }
             }
         }
-        e.calculation_note = if unknown_billing {
+        e.calculation_note = if let Some(reason) = unknown_account {
+            e.calculation_status = "unknownAccount".into();
+            e.calculation_note = format!("{reason}；本区间不参与估值，已保留有效值");
+            return Ok(());
+        } else if unknown_billing {
             e.calculation_status = "unknownBilling".into();
             "存在未归属或不完整请求，本区间不参与估值；已保留有效值"
         } else if unmapped_group {

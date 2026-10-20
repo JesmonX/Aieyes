@@ -79,6 +79,7 @@ impl Store {
         crate::codex_api::usage::setup(&db)?;
         crate::history_corrections::setup(&db)?;
         crate::codex_routes::setup(&db)?;
+        crate::codex_attribution::setup(&db)?;
         crate::runtime::setup(&db)?;
         crate::rolling_estimates::setup(&db)?;
         let store = Self {

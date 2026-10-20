@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import json
 import os
 import sys
@@ -273,6 +274,9 @@ def _project(value, provider):
         kind = value.get("type")
         if kind == "session_meta":
             event = {"type": kind, "timestamp": value.get("timestamp"), "payload": {"timestamp": payload.get("timestamp"), "id": payload.get("id", payload.get("session_id")), "model_provider": payload.get("model_provider")}}
+            user, account = payload.get('creator_user_id'), payload.get('creator_account_id')
+            if isinstance(user, str) and user and isinstance(account, str) and account:
+                event['payload']['creator_identity_key'] = hashlib.sha256((user + '\0' + account).encode()).hexdigest()
             if isinstance(payload.get('history_base'), dict):
                 event['payload']['history_base'] = {k: payload['history_base'].get(k) for k in ('thread_id', 'end_byte_offset')}
         elif kind == "turn_context":

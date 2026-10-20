@@ -138,6 +138,7 @@ struct AgentValuationView: View {
                     HStack { Text(model.settings.historicalAccounts.first { $0.key == record.accountKey }?.name ?? record.accountKey); Spacer(); Button("查看与管理") { Task { await model.openEstimate(record) } } }
                     Text((record.kind == "credits" ? "credits 估值" : (EstimatePresentation.visibility((snapshot ?? model.dashboard).quotas.first { $0.id == record.accountKey }, records: [record], group: record.groupId).periods + " 额度估值").trimmingCharacters(in: .whitespaces)) + " · " + record.statusLabel).font(AppFont.secondary).foregroundStyle(.secondary)
                     Text(Format.date(record.startedAt) + " → " + Format.date(record.checkpointAt)).font(AppFont.secondary).foregroundStyle(.secondary)
+                    if let reason = record.rollingExcludedReason { Text(reason).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                     if let error = model.estimateErrors[record.accountKey] { ErrorNotice(message: error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                 }.padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
             }
@@ -406,6 +407,7 @@ struct QuotaEstimateView: View {
             resultHeader(e)
             if e.kind != "credits" { quotaValues(e) }
             Text(e.calculationNote).font(AppFont.secondary).foregroundStyle(.secondary)
+            if let reason = e.rollingExcludedReason { Text(reason).font(AppFont.secondary).foregroundStyle(Palette.warn) }
             if e.originalEstimateId != nil { Text("已修正 · 原采样记录保留").font(AppFont.secondary).foregroundStyle(.secondary) }
             else if e.samplingMode != "automatic" && e.status == "completed" && !e.hasValue { Button("按原记录修复估值") { perform("repair", ["id": e.id]) }.disabled(busy) }
             DisclosureGroup("计算依据") { calculationDetails(e) }

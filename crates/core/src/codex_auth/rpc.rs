@@ -20,6 +20,79 @@ pub struct Rpc {
     next: u64,
     notifications: std::collections::VecDeque<Value>,
 }
+
+fn resolve_binary(binary: &str, pre_command: &str) -> String {
+    if (binary.is_empty() || binary == "codex") && !pre_command.trim().is_empty() {
+        "codex".into()
+    } else {
+        crate::quota::resolve_codex(binary)
+    }
+}
+
+pub(super) fn inspect_cli(
+    binary: &str,
+    root: &std::path::Path,
+    proxy: &ProxyConfig,
+    pre_command: &str,
+    shell: &str,
+) -> Value {
+    let resolved = resolve_binary(binary, pre_command);
+    let mut command =
+        process::cli_command_with_pre_command(&resolved, &["--version"], pre_command, shell);
+    command.env("CODEX_HOME", root).current_dir(root);
+    network::apply_env(&mut command, proxy);
+    let mut result = json!({"resolvedBinary":resolved,"version":null,"cliAvailable":false});
+    match process::run(command, vec![], Duration::from_secs(5)) {
+        Ok(bytes) => {
+            let output = String::from_utf8_lossy(&bytes);
+            match external_version_supported(&output) {
+                Some(supported) => {
+                    let version = output
+                        .split_whitespace()
+                        .find(|p| {
+                            p.trim_start_matches('v')
+                                .split('.')
+                                .take(3)
+                                .all(|c| !c.is_empty() && c.bytes().all(|b| b.is_ascii_digit()))
+                                && p.contains('.')
+                        })
+                        .unwrap_or("unknown");
+                    result["version"] = json!(format!("codex-cli {version}"));
+                    result["cliAvailable"] = json!(supported);
+                    if !supported {
+                        result["cliErrorCode"] = json!("incompatible");
+                        result["cliError"] =
+                            json!("接口不兼容：内存凭据查询需要 Codex 0.99.0 或更新版本");
+                    }
+                }
+                None => {
+                    result["cliErrorCode"] = json!("invalidVersion");
+                    result["cliError"] =
+                        json!("无法识别 Codex CLI 版本输出，请检查“Codex 程序”是否指向正确的 CLI");
+                }
+            }
+        }
+        Err(error) => {
+            result["cliError"] = json!(version_check_error(&error));
+            result["cliErrorCode"] = json!(if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            {
+                "notFound"
+            } else if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
+            {
+                "permission"
+            } else if error.to_string() == "查询超时" {
+                "timeout"
+            } else {
+                "failed"
+            });
+        }
+    }
+    result
+}
 impl Rpc {
     pub(super) fn start_with_pre_command(
         binary: &str,
@@ -29,23 +102,13 @@ impl Rpc {
         pre_command: &str,
         shell: &str,
     ) -> Result<Self> {
-        let resolved = crate::quota::resolve_codex(binary);
+        let resolved = resolve_binary(binary, pre_command);
         if !managed {
-            let mut version = process::cli_command_with_pre_command(
-                &resolved,
-                &["--version"],
-                pre_command,
-                shell,
-            );
-            version.env("CODEX_HOME", root).current_dir(root);
-            network::apply_env(&mut version, proxy);
-            let value = process::run(version, vec![], Duration::from_secs(5))
-                .map_err(|error| anyhow::anyhow!(version_check_error(&error)))?;
-            let supported = external_version_supported(&String::from_utf8_lossy(&value))
-                .context("无法识别 Codex CLI 版本输出，请检查“Codex 程序”是否指向正确的 CLI")?;
+            let probe = inspect_cli(binary, root, proxy, pre_command, shell);
             ensure!(
-                supported,
-                "接口不兼容：内存凭据查询需要 Codex 0.99.0 或更新版本"
+                probe["cliAvailable"] == true,
+                "{}",
+                probe["cliError"].as_str().unwrap_or("Codex CLI 暂不可用")
             );
         }
         let mut command = process::cli_command_with_pre_command(

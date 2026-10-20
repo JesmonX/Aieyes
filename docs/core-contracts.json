@@ -1521,5 +1521,29 @@
       150,
       280
     ]
-  ]
+  ],
+  "usagePolicy": {
+    "grouping": "agent",
+    "accountIdFiltersUsage": false,
+    "accountIdFiltersQuotaStatus": true
+  },
+  "responseExtensions": {
+    "codexAuth.inspect": {
+      "cliAvailable": "boolean",
+      "resolvedBinary": "string",
+      "cliError": "optional string",
+      "cliErrorCode": "optional notFound | permission | timeout | incompatible | invalidVersion | failed"
+    },
+    "accounts.targets": {
+      "bound": "boolean",
+      "cliAvailable": "optional boolean"
+    },
+    "automaticEstimateSegment": {
+      "attributionVersion": "integer; Codex joint evidence starts at 1",
+      "attributionEvidence": "optional object; basis, quotaFrom, quotaTo, config"
+    },
+    "estimate": {
+      "rollingExcludedReason": "optional string; retained history excluded from current summaries"
+    }
+  }
 }

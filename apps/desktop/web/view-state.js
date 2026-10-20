@@ -6,8 +6,8 @@
     const next=defaults();
     for(const key of keys.slice(0,4))if(typeof value[key]==='string')next[key]=value[key];
     if(next.provider==='agy')next.provider='antigravity';
-    // Account aliases are resolved after settings load; changing the prefix here
-    // would lose legacy keys that point at a different canonical account ID.
+    // Old saved account filters must not silently hide shared Agent usage.
+    next.accountKey='';
     if([1,7,30,90,365].includes(value.days))next.days=value.days;
     if(['all','custom'].includes(value.dateRange?.kind))next.dateRange=structuredClone(value.dateRange);
     next.cost=value.cost===true;

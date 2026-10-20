@@ -5,6 +5,20 @@ import { readFileSync } from 'node:fs';
 
 const read = name => readFileSync(new URL(`../apps/desktop/web/${name}`, import.meta.url), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test('all usage surfaces discard legacy account filters but preserve analysis dimensions', () => {
+  const context={structuredClone};vm.runInNewContext(read('view-state.js'),context);
+  for(const scope of ['overview','panel','analysis']) {
+    const value=context.AieyesViewState.normalize({provider:'codex',accountKey:'codex:old',sourceId:'source',model:'model',days:30},scope);
+    assert.equal(value.accountKey,'');assert.equal(value.provider,'codex');
+    assert.equal(value.sourceId,scope==='analysis'?'source':'');
+  }
+});
+test('unverified retained estimates cannot become live value fallbacks', () => {
+  const window={};vm.runInNewContext(read('ui-state.js'),{window});
+  const old={id:'old',accountKey:'codex:a',status:'completed',startedAt:100,fiveHourValue:999,rollingExcludedReason:'缺少账户证据'};
+  assert.equal(window.AieyesUI.canonicalEstimates([old]).length,0);
+  assert.equal(window.AieyesUI.estimateIssue(old),'缺少账户证据');
+});
 test('error presentation keeps known actions and safely exposes unknown diagnostics', () => {
   const window = {};
   vm.runInNewContext(read('ui-state.js'), {window});

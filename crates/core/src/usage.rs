@@ -4,6 +4,9 @@ use serde_json::Value;
 
 pub const PARSER_VERSION: u32 = 6;
 pub fn parser_version(provider: &str) -> u32 {
+    if provider == "codex" {
+        return 7;
+    }
     if provider == "codebuddy" {
         return 9;
     }
@@ -114,7 +117,7 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             {
                 *state = ParseState {
                     session_id: id.into(),
-                    parser_version: PARSER_VERSION,
+                    parser_version: parser_version(&source.provider),
                     codex_precise_counting: state.codex_precise_counting,
                     ..Default::default()
                 };

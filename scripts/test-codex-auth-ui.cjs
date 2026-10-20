@@ -19,7 +19,7 @@ function fixture(){
   }
   if(method==='codexAuth.inspect'){
     if(authTest.failInspectNext){authTest.failInspectNext=false;throw new Error('fixture 状态读取失败');}
-    return {version:'codex-cli 0.161.0',storageMode:'file',processes:[],profiles:[{id:'one',name:'个人账户',current:authTest.active==='one',identity:{key:'one',email:'one@example.test',plan:'plus',workspace:'team'}},{id:'two',name:'工作账户',current:authTest.active==='two',identity:{key:'two',email:'two@example.test',plan:'pro',workspace:'team'}}]};
+    return {cliAvailable:!authTest.cliMissing,cliError:authTest.cliMissing?'未找到 Codex CLI，请检查程序路径和 PATH':null,resolvedBinary:'codex',version:authTest.cliMissing?null:'codex-cli 0.161.0',storageMode:'file',processes:[],profiles:[{id:'one',name:'个人账户',current:authTest.active==='one',identity:{key:'one',email:'one@example.test',plan:'plus',workspace:'team'}},{id:'two',name:'工作账户',current:authTest.active==='two',identity:{key:'two',email:'two@example.test',plan:'pro',workspace:'team'}}]};
   }
   if(method==='codexAuth.switch.prepare'){
     authTest.target=params.profileId;
@@ -131,6 +131,11 @@ function fixture(){
   await page.locator('[data-auth="open"]').click();assert.equal(await page.evaluate(()=>authTest.calls.find(c=>c.method==='codexAuth.openUrl').params.url),'https://auth.openai.com/device');
   await page.screenshot({path:path.resolve(__dirname,'../.local/codex-accounts.png'),fullPage:true});
   await page.locator('[data-auth="cancelLogin"]').click();await page.getByText('登录成功，已启用此账户的额度查询。',{exact:true}).waitFor();
+  await page.evaluate(()=>{authTest.cliMissing=true;document.querySelector('#auth-source').dispatchEvent(new Event('change'));});
+  await page.getByText('未找到 Codex CLI，请检查程序路径和 PATH',{exact:false}).waitFor();
+  await page.getByRole('button',{name:'机器与 CLI 设置',exact:true}).waitFor();
+  assert(!await page.locator('[data-auth="adopt"]').isDisabled(),'existing profiles may be adopted even when CLI is unavailable');
+  await page.screenshot({path:path.resolve(__dirname,'../.local/codex-cli-unavailable.png'),fullPage:true});
   await page.evaluate(()=>{state.settingsDraft.sources[0].name='未保存';renderSettings();});assert(!await page.locator('[data-auth="adopt"]').isDisabled());
   await page.evaluate(()=>AieyesAgentSettings.accept(structuredClone(state.settings)));
   assert.equal(await page.evaluate(()=>state.settingsDraft.sources[0].name),'未保存','account refresh retains unrelated source draft');

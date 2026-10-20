@@ -230,10 +230,6 @@ struct RootView: View, Equatable {
             ScrollView(.horizontal) { HStack(spacing: 4) { agentButtons } }.scrollIndicators(.hidden)
         }
         HStack {
-            Picker("账户", selection: filterBinding(\.account)) {
-                Text("全部账户").tag("all"); Text("未关联账户").tag("none")
-                ForEach(model.settings.filterAccounts.filter { filters.provider == "all" || CoreContract.sameAgent($0.provider, filters.provider) }, id: \.key) { Text(model.settings.accountFilterName($0)).tag($0.key) }
-            }.labelsHidden().frame(maxWidth: 240, alignment: .leading)
             Spacer(minLength: 0)
             Button("查看分析", systemImage: "arrow.up.right") { model.openAnalysis(from: scope) }.font(AppFont.caption)
         }
@@ -260,10 +256,7 @@ struct RootView: View, Equatable {
                 Text("全部 Agent").tag("all")
                 ForEach(CoreContract.agentProviders, id: \.self) { Text(Format.provider($0)).tag($0) }
             }.labelsHidden()
-            Picker("账户", selection: filterBinding(\.account)) {
-                Text("全部账户").tag("all"); Text("未关联账户").tag("none")
-                ForEach(model.settings.filterAccounts.filter { filters.provider == "all" || CoreContract.sameAgent($0.provider, filters.provider) }, id: \.key) { Text(model.settings.accountFilterName($0)).tag($0.key) }
-            }.labelsHidden()
+
             if !compact {
                 Picker("数据源", selection: filterBinding(\.source)) {
                     Text("全部数据源").tag("all")
@@ -325,7 +318,7 @@ struct RootView: View, Equatable {
             HStack { if onlyQuota { Button("添加日志来源") { model.openSettings(.init(provider: "codex", section: "machines")) } } else { Button("同步记录") { Task { await model.scan() } }; Button("扩大到最近一年") { filters.rangeChoice = "365"; if compact { model.showDetailPage?("agent") } }; if hasActiveFilters { Button("清除筛选") { filters.provider = "all"; filters.account = "all"; filters.source = "all"; filters.model = "all" } } } }
         }
     }
-    private var hasActiveFilters: Bool { filters.provider != "all" || filters.account != "all" || filters.source != "all" || filters.model != "all" || !filters.isToday }
+    private var hasActiveFilters: Bool { filters.provider != "all" || filters.source != "all" || filters.model != "all" || !filters.isToday }
     private var hasUsageData: Bool {
         usageDashboard.summary.total > 0 || usageDashboard.summary.hasNativeCredits || usageDashboard.trendDays.contains { $0.total > 0 || $0.hasNativeCredits } || usageDashboard.heatmap.contains { $0.total > 0 || $0.hasNativeCredits }
     }
@@ -351,7 +344,6 @@ struct RootView: View, Equatable {
     private var filterChips: some View {
             FlowLayout {
                 if filters.provider != "all" { filterChip("Agent：" + Format.provider(filters.provider)) { filters.provider = "all" } }
-                if filters.account != "all" { filterChip("账户：" + (filters.account == "none" ? "未关联账户" : model.settings.historicalAccounts.first { $0.key == filters.account }?.name ?? filters.account)) { filters.account = "all" } }
                 if !filters.isToday { filterChip(filters.rangeTitle) { filters.rangeChoice = "1" } }
                 Button("清除全部") { filters.provider = "all"; filters.account = "all"; filters.source = "all"; filters.model = "all"; filters.rangeChoice = "1" }
                 if filters.source != "all" {
@@ -368,14 +360,7 @@ struct RootView: View, Equatable {
     }
     private var recentDays: [Aggregate] { filters.dateRange == nil ? Array(usageDashboard.trendDays.suffix(max(7, filters.days))) : usageDashboard.trendDays }
     private var selectableSources: [AgentSource] {
-        let account = model.settings.historicalAccounts.first { $0.key == filters.account }
-        return model.settings.sources.filter { source in
-            guard filters.provider == "all" || CoreContract.sameAgent(source.provider, filters.provider) else { return false }
-            if filters.account == "all" { return true }
-            let ids = usageDashboard.sources.first { $0.id == source.id }?.accountIds ?? [source.accountId]
-            if filters.account == "none" { return ids.contains("") }
-            return source.provider == account?.provider && ids.contains(account?.id ?? "")
-        }
+        model.settings.sources.filter { filters.provider == "all" || CoreContract.sameAgent($0.provider, filters.provider) }
     }
     private var recentRows: [DayModel] {
         let dates = Set(recentDays.map(\.key))
@@ -385,7 +370,7 @@ struct RootView: View, Equatable {
     private var displayedQuotaAccounts: [AgentAccount] {
         let selections = PanelAccountPreference.selections(panelAccounts, accounts: model.settings.accounts, order: usageDashboard.quotaOrder ?? [])
         return model.quotaAccounts.filter { account in
-            (filters.provider == "all" || CoreContract.sameAgent(filters.provider, account.provider)) && (filters.account == "all" || filters.account == account.key) && (!compact || selections[account.provider]?.contains(account.key) == true)
+            (filters.provider == "all" || CoreContract.sameAgent(filters.provider, account.provider)) && (!compact || selections[account.provider]?.contains(account.key) == true)
         }
     }
     private var displayedQuotas: [Quota] { usageDashboard.quotas.filter { quota in !compact || displayedQuotaAccounts.contains { $0.key == quota.id } } }
@@ -851,7 +836,7 @@ struct QuotaCard: View {
     var quotaHistory: [QuotaEstimate] = []
     var creditHistory: [QuotaEstimate] = []
     var onAnalysis: (() -> Void)?
-    private var bestCredit: QuotaEstimate? { EstimatePresentation.credit(creditHistory) ?? creditEstimate }
+    private var bestCredit: QuotaEstimate? { EstimatePresentation.credit(creditHistory) ?? EstimatePresentation.canonical([creditEstimate].compactMap { $0 }).first }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var defaultExpanded: Bool
     @AppStorage private var storedExpanded: Bool?
@@ -921,7 +906,7 @@ struct QuotaCard: View {
         var text = Format.provider(quota.provider) + "，" + quota.name
         if let email = quota.identity?.email, email != quota.name { text += "，" + email }
         if let plan = quota.plan { text += "，订阅 " + Format.subscription(plan) }
-        if !expanded && quota.provider == "codex" { text += "，" + Format.creditBalance(quota.credits, estimate: creditEstimate) + "，Bank Reset " + (quota.bankReset.map { String($0.availableCount) } ?? "未知") + " 次可用" }
+        if !expanded && quota.provider == "codex" { text += "，" + Format.creditBalance(quota.credits, estimate: bestCredit) + "，Bank Reset " + (quota.bankReset.map { String($0.availableCount) } ?? "未知") + " 次可用" }
         text += expanded ? "，折叠额度" : "，展开额度"
         return text
     }

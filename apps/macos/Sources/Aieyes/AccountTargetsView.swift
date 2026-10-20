@@ -68,11 +68,12 @@ struct AccountTargetsView: View {
                                 Text(target.machineName).font(AppFont.section)
                                 Text(target.path).font(AppFont.secondary).textSelection(.enabled)
                                 Text(target.reason ?? (target.current == true ? "正在使用" : target.credential == true ? "已登录，尚未选用" : target.credential == false ? "未登录" : "登录状态待确认")).foregroundStyle(.secondary)
+                                if let reason = target.draftReason { Text(reason).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                             }
                             Spacer()
                             if targets.checking.contains(target.sourceId) { ProgressView().controlSize(.small) }
-                            if target.current != true {
-                                Button(target.canSwitch ? "切换" : target.credential == false ? "登录" : "检查 / 登录") {
+                            if target.current != true || target.bound == false || target.canDraft == false {
+                                Button(target.bound == false ? "完成关联" : target.canSwitch ? "切换" : target.credential == false ? "登录" : "检查 / 登录") {
                                     intent = target.canSwitch ? "switch" : "login"
                                     loginSource = model.settings.sources.first { $0.id == target.sourceId }
                                 }.disabled(targets.checking.contains(target.sourceId) && !target.canSwitch)

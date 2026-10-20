@@ -151,6 +151,7 @@ impl Store {
             )?;
             if let Ok(e) = self.estimate_for(&id, kind == "credits")
                 && e.sampling_mode == "automatic"
+                && e.rolling_excluded_reason.is_empty()
             {
                 let plan = self.historical_plan(&e)?;
                 let group = e.quota().and_then(|q| q.group_id.as_deref()).unwrap_or("");
@@ -164,6 +165,8 @@ impl Store {
                 };
                 for (index, s) in e.automatic_segments.iter().enumerate() {
                     if !s.valid
+                        || (e.account_key.starts_with("codex:")
+                            && s.attribution_version != crate::codex_attribution::VERSION)
                         || s.tokens == 0
                         || s.tokens != s.priced_tokens
                         || s.started_at >= s.ended_at
@@ -381,10 +384,12 @@ mod tests {
                 id: id.into(),
                 account_key: "codex:a".into(),
                 sampling_mode: "automatic".into(),
+                calculation_version: 4,
                 status: "completed".into(),
                 started_at: at - 30,
                 checkpoint_at: at,
                 automatic_segments: vec![AutoSegment {
+                    attribution_version: crate::codex_attribution::VERSION,
                     valid: true,
                     pool: "primary".into(),
                     started_at: at - 30,
@@ -401,6 +406,38 @@ mod tests {
             valuation_mode: "fiveHour".into(),
             ..Default::default()
         })
+    }
+    #[test]
+    fn legacy_codex_samples_remain_unchanged_history_but_leave_live_summaries() {
+        let root = tempfile::tempdir().unwrap();
+        let at = now();
+        let s = Store::open(root.path()).unwrap();
+        let mut old = record("legacy", at, 30.0, 10.0);
+        old.calculation_version = 3;
+        old.automatic_segments[0].attribution_version = 0;
+        old.cost = 30.0;
+        old.status = "active".into();
+        s.save_estimate(&old).unwrap();
+        drop(s);
+        let s = Store::open(root.path()).unwrap();
+        let retained = s.estimate_for("legacy", false).unwrap();
+        assert_eq!(retained.cost, 30.0);
+        assert_eq!(retained.automatic_segments[0].cost, 30.0);
+        assert_eq!(retained.status, "completed");
+        assert!(!retained.rolling_excluded_reason.is_empty());
+        assert!(s.automatic_estimate_summaries(at).unwrap().is_empty());
+        s.save_estimate(&record("verified", at + 1, 2.0, 10.0))
+            .unwrap();
+        assert_eq!(
+            s.automatic_estimate_summaries(at + 1).unwrap()[0].sample_count,
+            1
+        );
+        drop(s);
+        let s = Store::open(root.path()).unwrap();
+        assert_eq!(
+            serde_json::to_value(s.estimate_for("legacy", false).unwrap()).unwrap(),
+            serde_json::to_value(retained).unwrap()
+        );
     }
     #[test]
     fn rolling_weights_consumption_and_time_across_sealed_records() {

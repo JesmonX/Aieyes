@@ -1,6 +1,7 @@
 //! One projection of account, machine and profile relationships for all clients.
 use crate::{Engine, codex_auth};
 use anyhow::{Context, Result, ensure};
+use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 impl Engine {
@@ -20,6 +21,22 @@ impl Engine {
                     && (include_unavailable || settings.source_enabled(s))
             }) {
                 let available = settings.source_enabled(source);
+                let cached: Option<String> = self
+                    .store
+                    .db
+                    .query_row(
+                        "SELECT value FROM kv WHERE key=?1",
+                        [codex_auth::cli_probe_key(source, &settings, Some(account))],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let probe = cached
+                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                    .filter(|p| {
+                        p["checkedAt"]
+                            .as_i64()
+                            .is_some_and(|t| (0..=120).contains(&(crate::models::now() - t)))
+                    });
                 let status = statuses.as_array().and_then(|rows| {
                     rows.iter().find(|r| {
                         r["accountKey"] == crate::accounts::key(account)
@@ -73,7 +90,13 @@ impl Engine {
                                 "目标机器或 Agent 已暂停或未选择，请在设置中恢复".to_owned()
                             })
                         })
-                        .or_else(|| status.and_then(|r| r["error"].as_str().map(str::to_owned)));
+                        .or_else(|| status.and_then(|r| r["error"].as_str().map(str::to_owned)))
+                        .or_else(|| {
+                            probe
+                                .as_ref()
+                                .filter(|p| p["cliAvailable"] == false)
+                                .and_then(|p| p["cliError"].as_str().map(str::to_owned))
+                        });
                     let credential = status.and_then(|r| {
                         if let Some((_, id)) = profile.and_then(|p| p.split_once(':')) {
                             r["profileCredentials"]
@@ -90,7 +113,7 @@ impl Engine {
                         "sourceId":source.id,"sourceName":source.name,"path":source.path,"machineId":source.host_id.as_deref().unwrap_or("local"),
                         "machineName":source.host_id.as_ref().map(|id| settings.hosts.iter().find(|h| &h.id == id).map(|h| h.name.as_str()).unwrap_or_else(|| source.last_machine_name.as_deref().unwrap_or("已移除的机器"))).unwrap_or("本机"),
                         "profileId":profile,"current":status.map(|r| &r["current"]),"credential":credential,"checkedAt":status.map(|r| &r["checkedAt"]),
-                        "canDraft":draft_reason.is_none(),"draftReason":draft_reason,"available":available,
+                        "bound":bound,"cliAvailable":probe.as_ref().map(|p|&p["cliAvailable"]),"canDraft":draft_reason.is_none(),"draftReason":draft_reason,"available":available,
                         "canWake":available && bound && credential != Some(false) && reason.is_none() && crate::providers::supports_wakeup(&account.provider),
                         "canSwitch":available && account.provider == "codex" && profile.is_some() && credential == Some(true) && reason.is_none() && status.is_some_and(|r| r["current"] != true),"reason":reason}));
                 }

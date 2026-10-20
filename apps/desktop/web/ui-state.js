@@ -127,9 +127,10 @@ window.AieyesUI = {
   },
   canonicalEstimates(records = []) {
     const replaced = new Set(records.map(e=>e.originalEstimateId).filter(Boolean));
-    return records.filter(e=>!replaced.has(e.id)).sort((a,b)=>(b.samplingMode==='rolling')-(a.samplingMode==='rolling') || b.startedAt-a.startedAt || (b.repairedAt||0)-(a.repairedAt||0));
+    return records.filter(e=>!replaced.has(e.id)&&!e.rollingExcludedReason).sort((a,b)=>(b.samplingMode==='rolling')-(a.samplingMode==='rolling') || b.startedAt-a.startedAt || (b.repairedAt||0)-(a.repairedAt||0));
   },
   estimateIssue(record) {
+    if(record.rollingExcludedReason)return record.rollingExcludedReason;
     if (record.status==='pending') return record.reason || '待确认';
     return ({boundary:'用量边界待确认',noUsage:'暂无有效用量',unpriced:'模型价格不完整',insufficientUsage:'等待可确认的消耗',invalidPrice:'价格数据无效'})[record.calculationStatus] || record.calculationNote || '尚无估值';
   },

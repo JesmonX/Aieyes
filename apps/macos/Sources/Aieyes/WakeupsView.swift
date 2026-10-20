@@ -83,6 +83,7 @@ struct WakeEditor: View {
     @State private var initialDraft = ""
     @State private var confirmDiscard = false
     @State private var capabilities: WakeCapabilities?
+    @State private var associationSource: AgentSource?
     @State private var busy = false
     @State private var error: String?
     private let engine = EngineClient()
@@ -107,6 +108,12 @@ struct WakeEditor: View {
                             Text(target.wakeupLocationLabel).tag(target.id).help(target.path)
                         }
                     }.disabled(deployed)
+                    if let target = targets.rows.first(where: { $0.accountKey == selectedAccount && $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId }), let reason = target.draftReason ?? target.reason {
+                        Text(reason).font(AppFont.secondary).foregroundStyle(Palette.warn)
+                    }
+                    if let selected = model.settings.sources.first(where: { $0.id == task.sourceId && $0.provider == "codex" }) {
+                        Button("完成账户关联 / 登录") { associationSource = selected }
+                    }
                     if !targets.checking.isEmpty { ProgressView("正在检查机器登录…").controlSize(.small) }
                     ForEach(targets.errors, id: \.self) { Text($0).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                     Button("重新检查登录") { Task { await targets.load(model, includeUnavailable: true) } }.disabled(!targets.checking.isEmpty)
@@ -140,6 +147,9 @@ struct WakeEditor: View {
         .discardDraftConfirmation($confirmDiscard) { dismiss() }
         .updateDraftGuard("定时唤醒", snapshot: draftSnapshot(task), dirty: !initialDraft.isEmpty && initialDraft != draftSnapshot(task), saving: busy, save: { await saveDraft() }, discard: { dismiss() })
         .task { await targets.load(model, includeUnavailable: true) }
+        .sheet(item: $associationSource, onDismiss: { Task { await targets.load(model, includeUnavailable: true) } }) { source in
+            AccountConnectionView(model: model, account: model.settings.accounts.first { $0.key == selectedAccount }, initialSourceID: source.id, intent: "login")
+        }
         .onChange(of: targets.rows.map(\.id)) { _, _ in
             if selectedAccount.isEmpty { selectedAccount = targets.rows.first { $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId }?.accountKey ?? "" }
         }

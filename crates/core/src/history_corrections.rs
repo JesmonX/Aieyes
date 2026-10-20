@@ -51,7 +51,13 @@ impl Store {
             repaired.id = format!("{}-fork-v6-{revision}", original.id);
             repaired.original_estimate_id = Some(original.id.clone());
             repaired.repaired_at = Some(now());
-            repaired.calculation_version = 3;
+            repaired.calculation_version = if repaired.sampling_mode == "automatic"
+                && repaired.account_key.starts_with("codex:")
+            {
+                4
+            } else {
+                3
+            };
             repaired.clear_values();
             if self.recalculate_history_values(&mut repaired).is_err() {
                 repaired.clear_values();

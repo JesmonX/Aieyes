@@ -42,6 +42,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
     let store = Store::open(root)?;
     let current = crate::import::current_settings(&store, settings, source)?;
     let settings = &current;
+    store.ensure_codex_evidence_scope(settings, source)?;
     let host = settings
         .hosts
         .iter()
@@ -302,6 +303,7 @@ fn apply_batch(
             continue;
         }
         let parsed = usage::parse(source, &mut state, row);
+        store.record_codex_history(source, &state, row, parsed.as_ref())?;
         if settings.codex_precise_counting
             && state.first_inherited_count
             && row["inheritedHistory"].is_object()

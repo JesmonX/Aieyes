@@ -23,6 +23,22 @@ def credential(user, refresh='initial'):
 
 
 class CoordinatorTests(unittest.TestCase):
+    def test_inspection_and_rpc_use_the_same_initialized_command_and_safe_errors(self):
+        self.loc['preCommand'] = 'export PATH=/fixture/bin:$PATH'
+        with patch.object(a.subprocess, 'check_output', return_value=b'codex-cli 0.160.0 PRIVATE') as probe:
+            result = self.call('inspect')
+        self.assertTrue(result['cliAvailable'])
+        self.assertEqual(result['version'], 'codex-cli 0.160.0')
+        self.assertEqual(probe.call_args.args[0], a.cli_argv(self.loc, ['--version']))
+        self.assertEqual(probe.call_args.kwargs['cwd'], self.root)
+        self.assertNotIn('PRIVATE', json.dumps(result))
+        with patch.object(a.subprocess, 'check_output', side_effect=FileNotFoundError('PRIVATE')):
+            result = self.call('inspect')
+            self.assertFalse(result['cliAvailable'])
+            self.assertEqual(result['cliErrorCode'], 'notFound')
+            with self.assertRaisesRegex(ValueError, '未找到 Codex CLI'):
+                a.Rpc(self.loc, self.root)
+
     def test_version_probe_distinguishes_failures_without_exposing_output(self):
         for failure, message in [
             (FileNotFoundError('PRIVATE'), '未找到 Codex CLI'),
@@ -189,23 +205,49 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(a.read(self.root/'auth.json'),value)
 
     def test_switch_is_atomic_idempotent_preserves_history_and_rejects_stale(self):
+        helper = self
         class Rpc:
             def __init__(self,*args): pass
             def __enter__(self): return self
             def __exit__(self,*args): pass
-            def login(self,auth): return {}
-            def call(self,*args): return {}
+            def login(self,auth): self.identity = a.identity(auth)['key']; return {}
+            def call(self,*args):
+                helper.assertEqual(a.active(helper.root), a.identity(helper.one)['key'], 'the final observation is captured before replacing daily credentials')
+                return dict(fixtureIdentity=self.identity)
         history=self.root/'sessions';history.mkdir();(history/'session.jsonl').write_text('unchanged')
         op=self.call('switch.prepare',profileId='two')['operationId']
         with patch.object(a,'Rpc',Rpc):
-            result=self.call('switch.commit',operationId=op)
+            result=self.call('switch.commit',operationId=op,captureQuotaBoundary=True)
             self.assertEqual(result['status'],'succeeded')
+            self.assertEqual(result['previousQuota']['fixtureIdentity'],a.identity(self.one)['key'])
+            self.assertEqual(result['previousIdentity'],a.identity(self.one)['key'])
+            self.assertEqual(result['currentIdentity'],a.identity(self.two)['key'])
+            self.assertLessEqual(result['previousQuotaAt'],result['switchStartedAt'])
+            self.assertLessEqual(result['switchStartedAt'],result['switchedAt'])
             self.assertEqual(self.call('switch.commit',operationId=op),result)
         self.assertEqual(a.read(self.root/'auth.json'),self.two)
         self.assertEqual((history/'session.jsonl').read_text(),'unchanged')
         op=self.call('switch.prepare',profileId='one')['operationId']
         a.atomic(self.root/'auth.json',credential('two','rotated'))
         with self.assertRaisesRegex(ValueError,'凭据'): self.call('switch.commit',operationId=op,closeProcesses=True)
+
+    def test_missing_final_quota_observation_does_not_prevent_switching(self):
+        old_identity=a.identity(self.one)['key']
+        class Rpc:
+            def __init__(self,*args): pass
+            def __enter__(self): return self
+            def __exit__(self,*args): pass
+            def login(self,auth): self.identity=a.identity(auth)['key']; return {}
+            def call(self,*args):
+                if self.identity==old_identity: raise ValueError('PRIVATE boundary failure')
+                return {}
+        op=self.call('switch.prepare',profileId='two')['operationId']
+        with patch.object(a,'Rpc',Rpc):
+            result=self.call('switch.commit',operationId=op,captureQuotaBoundary=True)
+        self.assertEqual(result['status'],'succeeded')
+        self.assertNotIn('previousQuota',result)
+        self.assertNotIn('PRIVATE',json.dumps(result))
+        self.assertEqual(a.read(self.root/'auth.json'),self.two)
 
     def test_api_account_switch_and_failed_credential_write_restore_native_selection(self):
         class Rpc:

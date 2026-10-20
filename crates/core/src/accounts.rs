@@ -742,6 +742,12 @@ impl Engine {
             if let Some(error) = info["_statusError"].as_str() {
                 anyhow::bail!("{error}");
             }
+            self.store.record_codex_observation(
+                settings,
+                source,
+                info["currentIdentity"].as_str().unwrap_or(""),
+                info["observedAt"].as_i64().unwrap_or_else(now),
+            )?;
             if info["storageMode"] != "file" {
                 return Ok(
                     json!({"current":null,"credential":null,"checkedAt":now(),"note":"认证存储不支持状态识别"}),

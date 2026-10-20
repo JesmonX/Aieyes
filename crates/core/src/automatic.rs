@@ -20,7 +20,7 @@ use std::{
 };
 
 pub const CONSENT_VERSION: u32 = 1;
-const BASELINE_VERSION: u32 = 4;
+const BASELINE_VERSION: u32 = 5;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoValuationConfig {
@@ -33,6 +33,9 @@ pub struct AutoValuationConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoSegment {
+    pub attribution_version: u32,
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub attribution_evidence: Value,
     /// Weekly windows keep their own delayed counter and usage interval.
     pub pool: String,
     pub prices: Vec<Value>,
@@ -794,7 +797,7 @@ impl Store {
                     common.total_tokens = 0;
                     common.priced_tokens = 0;
                     common.prices.clear();
-                    common.calculation_version = 3;
+                    common.calculation_version = if q.provider == "codex" { 4 } else { 3 };
                     if let Some(w) = record_window {
                         Estimate::Quota(QuotaEstimate {
                             common,
@@ -827,6 +830,8 @@ impl Store {
                     continue;
                 }
                 record.automatic_segments.push(AutoSegment {
+                    attribution_version: if q.provider == "codex" { crate::codex_attribution::VERSION } else { 0 },
+                    attribution_evidence: if q.provider == "codex" { json!({"basis":"creator+timeline+quota","quotaFrom":from.updated_at,"quotaTo":q.updated_at,"config":config}) } else { Value::Null },
                     pool: if weekly { "weekly" } else { "primary" }.into(),
                     prices: sample.prices.clone(),
                     valid: true,
@@ -879,7 +884,95 @@ impl Store {
     }
 }
 
+pub(crate) fn codex_coverage_missing(
+    settings: &Settings,
+    ids: &[String],
+    key: &str,
+    statuses: &Value,
+    at: i64,
+) -> bool {
+    let Some(account) = settings
+        .accounts
+        .iter()
+        .find(|a| crate::accounts::key(a) == key)
+    else {
+        return true;
+    };
+    settings.sources.iter().any(|other| {
+        if other.provider != "codex" || !account.uses_source(other) || ids.contains(&other.id) {
+            return false;
+        }
+        // A query-only alias of an already observed home adds no usage.
+        if ids.iter().any(|id| {
+            settings
+                .sources
+                .iter()
+                .find(|s| &s.id == id)
+                .is_some_and(|s| {
+                    s.host_id == other.host_id
+                        && crate::codex_auth::home_path(&s.path)
+                            == crate::codex_auth::home_path(&other.path)
+                })
+        }) {
+            return false;
+        }
+        !statuses.as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row["sourceId"] == other.id
+                    && row["accountKey"] == key
+                    && row["current"] == false
+                    && row["error"].is_null()
+                    && row["checkedAt"]
+                        .as_i64()
+                        .is_some_and(|t| (0..=120).contains(&(at - t)))
+            })
+        })
+    })
+}
+
 impl Engine {
+    /// Pair the final observation captured under the remote/local credential lease.
+    /// Do not perform a second credential query after publishing the new login.
+    pub(crate) fn finish_automatic_codex_switch(
+        &mut self,
+        source: &Source,
+        result: &Value,
+    ) -> Result<()> {
+        if !enabled(source) {
+            return Ok(());
+        }
+        let settings = self.store.settings()?;
+        let Some(account) = settings.accounts.iter().find(|a| {
+            a.provider == "codex"
+                && result["previousIdentity"].as_str() == a.identity_key.as_deref()
+        }) else {
+            return Ok(());
+        };
+        let key = crate::accounts::key(account);
+        let baseline: Baseline = self.store.auto_get(&baseline_key(&key))?;
+        if baseline.version != BASELINE_VERSION || !baseline.source_ids.contains(&source.id) {
+            return Ok(());
+        }
+        let ids = baseline.source_ids;
+        ensure!(
+            result["previousQuota"].is_object(),
+            "旧账户最终额度快照不可用"
+        );
+        let mut query = source.clone();
+        query.account_id = account.id.clone();
+        query.name = account.name.clone();
+        let mut q = crate::quota::normalize(&query, &result["previousQuota"], "live")?;
+        q.updated_at = result["previousQuotaAt"]
+            .as_i64()
+            .context("旧账户额度时刻缺失")?;
+        if q.credits.is_some() {
+            q.credits_updated_at = Some(q.updated_at);
+        }
+        self.sync_estimate_sources(&ids)?;
+        self.store.quota(&q)?;
+        self.store.advance_automatic(&q, &ids, &baseline.config)
+    }
+
     pub(crate) fn configure_automatic(&mut self, p: Value) -> Result<Value> {
         let tx = self.store.write_transaction()?;
         let base = self.store.settings()?;
@@ -954,9 +1047,14 @@ impl Engine {
     pub(crate) fn sampling_identity(&self, settings: &Settings, source: &Source) -> Result<String> {
         if source.provider == "codex" && source.codex_home_id.is_some() {
             let info = crate::codex_auth::backend(source, settings, "profiles.list", &json!({}))?;
-            let identity = info["currentIdentity"]
-                .as_str()
-                .context("当前订阅登录身份无法确认")?;
+            let identity = info["currentIdentity"].as_str().unwrap_or("");
+            self.store.record_codex_observation(
+                settings,
+                source,
+                identity,
+                info["observedAt"].as_i64().unwrap_or_else(now),
+            )?;
+            ensure!(!identity.is_empty(), "当前订阅登录身份无法确认");
             let profile = info["profiles"]
                 .as_array()
                 .and_then(|v| {
@@ -988,6 +1086,21 @@ impl Engine {
                         && a.quota_enabled
                 })
                 .context("数据源未连接启用的订阅账户")?;
+            if source.provider == "codex" {
+                let info = crate::codex_auth::backend(source, settings, "status", &json!({}))?;
+                let identity = info["currentIdentity"].as_str().unwrap_or("");
+                self.store.record_codex_observation(
+                    settings,
+                    source,
+                    identity,
+                    info["observedAt"].as_i64().unwrap_or_else(now),
+                )?;
+                ensure!(!identity.is_empty(), "当前订阅登录身份无法确认");
+                ensure!(
+                    account.identity_key.as_deref() == Some(identity),
+                    "目录当前登录与配置账户不一致，请读取当前登录并重新关联"
+                );
+            }
             Ok(crate::accounts::key(account))
         }
     }
@@ -1070,6 +1183,20 @@ impl Engine {
         }
         for (key, mut ids) in groups {
             ids.sort();
+            let statuses = self.account_call("accounts.status.get", json!({}))?;
+            let missing = codex_coverage_missing(&settings, &ids, &key, &statuses, now());
+            if missing {
+                let prior = self.store.automatic_status(&ids[0])?;
+                self.store.invalidate_automatic_sources(&ids)?;
+                self.store.automatic_status_set(
+                    &ids,
+                    "waitingCoverage",
+                    "同一账户的其他目录未完整纳入，等待目录采集与登录状态确认",
+                    &key,
+                )?;
+                changed |= prior["state"] != "waitingCoverage" || prior["accountKey"] != key;
+                continue;
+            }
             let attempt_key = format!("automatic-attempt:{key}");
             let attempted: i64 = self.store.auto_get(&attempt_key)?;
             let last: Baseline = self.store.auto_get(&baseline_key(&key))?;
@@ -1267,6 +1394,58 @@ impl Drop for Background {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn other_account_devices_need_fresh_negative_identity_or_complete_coverage() {
+        let (_dir, e, _q) = setup(true);
+        let mut settings = e.store.settings().unwrap();
+        let mut other = settings.sources[0].clone();
+        other.id = "other".into();
+        other.codex_home_id = None;
+        other.account_id = "a".into();
+        other.path = "/another-home".into();
+        settings.sources.push(other);
+        let ids = vec!["s".into()];
+        let at = now();
+        assert!(codex_coverage_missing(
+            &settings,
+            &ids,
+            "codex:a",
+            &json!([]),
+            at
+        ));
+        let negative =
+            json!([{"accountKey":"codex:a","sourceId":"other","current":false,"checkedAt":at}]);
+        assert!(!codex_coverage_missing(
+            &settings, &ids, "codex:a", &negative, at
+        ));
+        assert!(codex_coverage_missing(
+            &settings,
+            &ids,
+            "codex:a",
+            &negative,
+            at + 121
+        ));
+        assert!(!codex_coverage_missing(
+            &settings,
+            &["s".into(), "other".into()],
+            "codex:a",
+            &json!([]),
+            at
+        ));
+        settings.sources[1].path = settings.sources[0].path.clone();
+        assert!(
+            !codex_coverage_missing(&settings, &ids, "codex:a", &json!([]), at),
+            "a query alias must not count the same home twice"
+        );
+        settings.sources[1].host_id = Some("another-machine".into());
+        assert!(codex_coverage_missing(
+            &settings,
+            &ids,
+            "codex:a",
+            &json!([]),
+            at
+        ));
+    }
     fn setup(shared: bool) -> (tempfile::TempDir, Engine, QuotaSnapshot) {
         let root = tempfile::tempdir().unwrap();
         let engine = Engine::open(root.path()).unwrap();
@@ -1365,6 +1544,28 @@ mod tests {
             .unwrap();
     }
     fn observe(e: &Engine, q: &QuotaSnapshot) {
+        let mut settings = e.store.settings().unwrap();
+        for a in &mut settings.accounts {
+            if a.provider == "codex" && a.identity_key.is_none() {
+                a.identity_key = Some(hash(&a.id));
+            }
+        }
+        e.store.save_auth_settings(&settings).unwrap();
+        let source = &settings.sources[0];
+        e.store
+            .ensure_codex_evidence_scope(&settings, source)
+            .unwrap();
+        if source.provider == "codex" {
+            let identity = settings
+                .accounts
+                .iter()
+                .find(|a| a.provider == "codex" && a.id == q.account_id)
+                .and_then(|a| a.identity_key.as_deref())
+                .unwrap();
+            e.store
+                .record_codex_identity(source, identity, q.updated_at, "observed", None)
+                .unwrap();
+        }
         e.store
             .advance_automatic(
                 q,
@@ -1648,6 +1849,7 @@ mod tests {
                         provider: "codex".into(),
                         quota_profile_id: Some("home:one".into()),
                         quota_source_id: Some("query".into()),
+                        identity_key: Some(files::identity(&first).unwrap().key),
                         ..Default::default()
                     },
                     Account {
@@ -1655,6 +1857,7 @@ mod tests {
                         name: "B".into(),
                         provider: "codex".into(),
                         quota_profile_id: Some("home:two".into()),
+                        identity_key: Some(files::identity(&auth("b")).unwrap().key),
                         ..Default::default()
                     },
                 ],
@@ -1708,6 +1911,16 @@ mod tests {
         fresh.credits_updated_at = Some(fresh.updated_at);
         fresh.windows[0].used_percent += 10.0;
         e.store.quota(&fresh).unwrap();
+        // The fixture advances quota/log clocks without waiting 30 wall seconds.
+        e.store
+            .record_codex_identity(
+                &source,
+                &files::identity(&first).unwrap().key,
+                fresh.updated_at,
+                "observed",
+                None,
+            )
+            .unwrap();
         e.tick_automatic().unwrap();
         let records = e.store.estimates().unwrap();
         assert_eq!(records[0].checkpoint_at, fresh.updated_at);
@@ -1775,7 +1988,12 @@ mod tests {
         copy.codex_home_id = None;
         copy.account_id = "a".into();
         settings.sources.push(copy);
+        settings.accounts[0].identity_key = Some(hash("a"));
         e.store.save_settings(&settings).unwrap();
+        let source = &settings.sources[0];
+        e.store
+            .record_codex_identity(source, &hash("a"), q.updated_at, "observed", None)
+            .unwrap();
         let ids = vec!["copy".into(), "s".into()];
         let fingerprint = e
             .store
@@ -1789,6 +2007,9 @@ mod tests {
             .unwrap();
         q.updated_at += 30;
         q.windows[0].used_percent += 10.0;
+        e.store
+            .record_codex_identity(source, &hash("a"), q.updated_at, "observed", None)
+            .unwrap();
         e.store.advance_automatic(&q, &ids, &fingerprint).unwrap();
         assert_eq!(e.store.estimates().unwrap()[0].cost, 1.0);
         event(&e, &q, "cross-boundary", 100, false);
@@ -1852,12 +2073,33 @@ mod tests {
     fn shared_manual_sampling_uses_only_the_interval_and_switch_keeps_valid_values() {
         let (_dir, e, mut q) = setup(true);
         q.updated_at = now() - 100;
+        let mut settings = e.store.settings().unwrap();
+        settings.accounts[0].identity_key = Some(hash("a"));
+        e.store.save_auth_settings(&settings).unwrap();
+        e.store
+            .record_codex_identity(
+                &settings.sources[0],
+                &hash("a"),
+                q.updated_at,
+                "observed",
+                None,
+            )
+            .unwrap();
         let manual = e
             .store
             .begin_estimate(&q, "week", vec!["s".into()], None)
             .unwrap();
         event(&e, &q, "manual-shared", 100, false);
         q.updated_at += 30;
+        e.store
+            .record_codex_identity(
+                &settings.sources[0],
+                &hash("a"),
+                q.updated_at,
+                "observed",
+                None,
+            )
+            .unwrap();
         q.windows[0].used_percent += 10.0;
         e.store.quota(&q).unwrap();
         let calculated = e.store.estimate_for(&manual.id, false).unwrap();

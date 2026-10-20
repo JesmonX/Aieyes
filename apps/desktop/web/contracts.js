@@ -1275,7 +1275,7 @@
       "darkAsset": "omp-dark"
     }
   },
-  "contractHash": "3d07938f0656bfabc574e6e34acf24c13d324cb960ab1fe564e89c32296a25cd",
+  "contractHash": "cde493bff081e56afcfa2ebb506848f129864a2a530673ad89938d731f157733",
   "petFrameDurations": [
     [
       280,

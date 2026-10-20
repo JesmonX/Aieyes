@@ -611,7 +611,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var prices: [ModelPrice] { get { priceCatalog.prices } set { priceCatalog.replace(newValue) } }
     @Published var provider = "all" { didSet { persistDashboardFilters() } }
     @Published var selectedSource = "all" { didSet { persistDashboardFilters() } }
-    @Published var selectedAccount = "all" { didSet { persistDashboardFilters() } }
+    @Published var selectedAccount = "all" { didSet { if selectedAccount != "all" { selectedAccount = "all" }; persistDashboardFilters() } }
     @Published var settingsTab = "integrations"
     @Published var settingsAgent = "codex"
     @Published var generalPage = "appearance"
@@ -661,7 +661,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func openAnalysis(from scope: String, account: String? = nil, provider: String? = nil) {
         let source = filters(for: scope)
         var next = analysisFilters
-        next.provider = provider ?? source.provider; next.account = account ?? source.account
+        next.provider = provider ?? account.flatMap { $0.split(separator: ":").first.map(String.init) } ?? source.provider; next.account = "all"
         next.source = "all"; next.model = "all"
         updateFilters(next, scope: "analysis", resetDependents: false)
         showDetailPage?("analysis")
@@ -790,7 +790,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func openPricing() { openSettings(.init(category: "prices")) }
     @Published private(set) var dashboardPending = false
     @Published private(set) var dashboardError: String?
-    @Published private(set) var appliedScope = "今日 · 全部 Agent · 全部账户 · 全部来源 · 全部模型"
+    @Published private(set) var appliedScope = "今日 · 全部 Agent · 全部来源 · 全部模型"
     private var dashboardRequest = 0
     private var reloadTask: Task<Bool, Never>?
     private var reloadAgain = false
@@ -873,7 +873,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 switch surface { case "panel": panelDashboard = value; case "overview": overviewDashboard = value; default: dashboard = value }
             }
             if let value = results["analysis"] {
-                appliedScope = [rangeTitle, provider == "all" ? "全部 Agent" : Format.provider(provider), settings.historicalAccounts.first { $0.key == selectedAccount }.map { settings.accountFilterName($0) } ?? (selectedAccount == "none" ? "未关联账户" : "全部账户"), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
+                appliedScope = [rangeTitle, provider == "all" ? "全部 Agent" : Format.provider(provider), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
                 let names = value.dayModels.map(\.model)
                 fallbackModelOptions = Array(Set(selectedModel == "all" ? names : fallbackModelOptions + names)).sorted()
             }

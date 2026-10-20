@@ -134,29 +134,13 @@ fn inspect(loc: &Location, root: &Path, runtime: bool) -> Result<Value> {
     }).collect::<Vec<_>>();
     if !runtime {
         return Ok(
-            json!({"protocolVersion":1,"path":root,"storageMode":mode(root)?,"currentIdentity":active,"storedIdentity":stored,"selected":selected,"profiles":rows}),
+            json!({"protocolVersion":1,"path":root,"observedAt":now(),"storageMode":mode(root)?,"currentIdentity":active,"storedIdentity":stored,"selected":selected,"profiles":rows}),
         );
     }
-    let mut cmd = crate::process::cli_command_with_pre_command(
-        &crate::quota::resolve_codex(&loc.binary),
-        &["--version"],
-        &loc.pre_command,
-        &loc.shell,
-    );
-    cmd.env("CODEX_HOME", root).current_dir(root);
-    crate::network::apply_env(&mut cmd, &loc.proxy);
-    let version = crate::process::run(cmd, vec![], Duration::from_secs(5))
-        .ok()
-        .map(|b| {
-            String::from_utf8_lossy(&b)
-                .trim()
-                .chars()
-                .take(80)
-                .collect::<String>()
-        });
-    Ok(
-        json!({"protocolVersion":1,"path":root,"version":version,"storageMode":mode(root)?,"currentIdentity":active,"storedIdentity":stored,"selected":selected,"profiles":rows,"processes":processes::list(root)?}),
-    )
+    let mut result =
+        super::rpc::inspect_cli(&loc.binary, root, &loc.proxy, &loc.pre_command, &loc.shell);
+    result.as_object_mut().unwrap().extend(json!({"protocolVersion":1,"path":root,"storageMode":mode(root)?,"currentIdentity":active,"storedIdentity":stored,"selected":selected,"profiles":rows,"processes":processes::list(root)?}).as_object().unwrap().clone());
+    Ok(result)
 }
 fn status(root: &Path) -> Result<Value> {
     let mode = mode(root)?;
@@ -178,7 +162,7 @@ fn status(root: &Path) -> Result<Value> {
         })
         .collect::<Vec<_>>();
     Ok(
-        json!({"storageMode":mode,"currentIdentity":active,"currentCredential":active.is_some(),"storedIdentity":stored,"storedCredential":stored.is_some(),"selected":selected,"profiles":rows}),
+        json!({"storageMode":mode,"observedAt":now(),"currentIdentity":active,"currentCredential":active.is_some(),"storedIdentity":stored,"storedCredential":stored.is_some(),"selected":selected,"profiles":rows}),
     )
 }
 fn snapshot(root: &Path) -> Value {
@@ -644,6 +628,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                     "上次切换未完成，请重新检查当前登录方式"
                 );
                 record["status"] = json!("succeeded");
+                record["switchedAt"] = json!(now());
                 update_operation(&root, op, &record)?;
                 return Ok(record);
             }
@@ -714,6 +699,33 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 )?;
             }
             let before = config(&root)?;
+            // Capture after the old processes have flushed, while this home's
+            // credential lease is still held. Failure must not prevent switching.
+            if params["captureQuotaBoundary"] == true
+                && let Some(old) = old.as_ref()
+            {
+                let boundary = (|| -> Result<Value> {
+                    let query = layout(&root, "switch-boundary", "query")?;
+                    let mut rpc = loc.rpc(&query, false)?;
+                    rpc.login_external(old)?;
+                    rpc.quota(old, &mut || Ok(old.clone()))
+                })();
+                if let Ok(quota) = boundary {
+                    record["previousQuota"] = quota;
+                    record["previousQuotaAt"] = json!(now());
+                }
+            }
+            record["switchStartedAt"] = json!(now());
+            record["previousIdentity"] = json!(
+                old.as_ref()
+                    .and_then(|a| files::identity(a).ok())
+                    .map(|i| i.key)
+            );
+            record["currentIdentity"] = json!(
+                auth.as_ref()
+                    .and_then(|a| files::identity(a).ok())
+                    .map(|i| i.key)
+            );
             record["status"] = json!("committing");
             record["targetRevision"] = json!(auth.as_ref().or(old.as_ref()).map(files::revision));
             update_operation(&root, op, &record)?;
@@ -745,6 +757,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 return Err(error);
             }
             record["status"] = json!("succeeded");
+            record["switchedAt"] = json!(now());
             record["message"] = json!("登录方式已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话");
             update_operation(&root, op, &record)?;
             Ok(record)

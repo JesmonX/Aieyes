@@ -7,6 +7,7 @@ pub mod antigravity;
 pub mod automatic;
 pub mod capacity;
 pub mod codex_api;
+mod codex_attribution;
 pub mod codex_auth;
 pub mod codex_history;
 mod codex_routes;
@@ -460,7 +461,10 @@ impl Engine {
                 .store
                 .dashboard_status(&serde_json::from_value(params)?),
             "dashboard" | "dashboard.summary" => {
-                let filter = serde_json::from_value::<Filter>(params)?;
+                let mut filter = serde_json::from_value::<Filter>(params)?;
+                // Usage belongs to an Agent/source, never the currently selected login.
+                // Keep account filters on quota/status endpoints for compatibility.
+                filter.account_id = None;
                 Ok((if method == "dashboard.summary" {
                     self.store.dashboard_summary(&filter)?
                 } else {
