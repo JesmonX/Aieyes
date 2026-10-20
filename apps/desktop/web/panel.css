@@ -3,7 +3,8 @@
 html[data-platform=linux][data-surface=panel],html[data-platform=linux][data-surface=panel] body { background:transparent; }
 body[data-platform=linux][data-view=panel]::before { display:none; }
 body[data-platform=linux][data-view=panel] #panel { border-radius:14px; overflow:hidden; background:var(--window-base); border:1px solid var(--border); box-sizing:border-box; }
-body[data-platform=linux] .panel-head { grid-template-columns:var(--panel-head-icon-size) minmax(0,1fr) auto; }
+body[data-platform=linux] .panel-head { grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); }
+body[data-platform=linux] .panel-mark { justify-self:start; }
 body[data-platform=linux] .panel-refresh-wrap { display:flex; align-items:center; gap:4px; }
 body[data-platform=linux] #panel-close { display:grid; place-items:center; width:var(--panel-head-icon-size); height:var(--panel-head-icon-size); padding:0; border:0; background:transparent; box-shadow:none; }
 body[data-view=ball]::before,body[data-view=ball] #panel,body[data-view=panel] #ball { display:none; }
