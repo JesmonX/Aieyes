@@ -18,4 +18,3 @@ node_modules/
 /apps/desktop/src-tauri/binaries/aieyes-core*
 
 /codex-audit-retry.py
-/codex-resume-sequence.py
