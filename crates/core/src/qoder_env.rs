@@ -4,12 +4,14 @@
 //! including processes launched by the desktop environment. We update shell
 //! startup files plus the macOS launchd / Linux systemd user environment.
 use crate::models::{Host, Settings};
+#[cfg(unix)]
 use anyhow::Result;
+#[cfg(unix)]
+use std::process::Command;
 use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 pub(crate) const ENV_NAME: &str = "QODER_EXPOSE_TOKEN_USAGE";
@@ -278,14 +280,6 @@ fn linux_user_environment(home: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn runtime_command(command: &mut Command) -> bool {
-    command
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
 fn runtime_command(command: &mut Command) -> bool {
     command
         .output()
