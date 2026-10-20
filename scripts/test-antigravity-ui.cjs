@@ -38,6 +38,7 @@ function fixture(){
   for(const group of ['Gemini Models','Claude and GPT Models','Future Models'])assert.equal(await card.locator('.agy-group').filter({hasText:group}).isVisible(),true,`Folded card retains ${group}`);
   if(panel){assert.equal(await page.evaluate(()=>state.accountKey),'antigravity:legacy-shared');assert.equal(await page.evaluate(()=>state.provider),'antigravity');assert.equal(await card.locator('details').evaluate(e=>e.open),false);await card.locator('.quota-title').click();}
   if(!await card.locator('.quota-disclosure').evaluate(el=>el.open))await card.locator('.quota-title').click();
+  assert(await card.evaluate(el=>Math.abs(el.getBoundingClientRect().width-el.closest('.quota-group').getBoundingClientRect().width)<1),'Expanded AGY card fills its single-account provider group');
   const entries=card.locator('[data-estimate]');assert.equal(await entries.count(),3);
   assert.equal(await entries.nth(0).innerText(),'5h ≈ $10.00 7d ≈ $50.00/$60.00');assert.equal(await entries.nth(1).innerText(),'5h ≈ $100.00 7d ≈ $500.00/$600.00');
   await page.evaluate(()=>{agyFixture.records.push({...agyFixture.records[0],id:'legacy',groupId:null,valuationMode:'weekly',fiveHourValue:null,weeklyRatioValue:null});state.dashboard.quotaEstimates=agyFixture.records;render();});

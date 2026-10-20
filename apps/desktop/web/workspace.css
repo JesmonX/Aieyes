@@ -118,7 +118,7 @@ aside nav button [data-ui-icon] { display:flex; width:20px; flex:0 0 20px; }
 .quota-groups { display:grid; grid-template-columns:repeat(var(--workspace-quota-columns,1),minmax(0,1fr)); gap:16px var(--space-card); align-items:start; }
 .quota-group { min-width:0; grid-column:1 / -1; }
 .quota-group[data-single-account=true] { grid-column:auto; }
-.quota-group[data-single-account=true] > .quotas { grid-template-columns:minmax(0,1fr); }
+body:not(:has(#panel)) .quota-group[data-single-account=true] > .quotas { grid-template-columns:minmax(0,1fr); }
 .panel-body .quota-groups { grid-template-columns:minmax(0,1fr); }
 .quota-group-heading { display:flex; align-items:center; gap:7px; margin-bottom:9px; font-size:var(--font-caption); list-style:none; }
 .quota-group-heading::after { content:'⌄'; margin-left:auto; transition:transform 220ms ease; }

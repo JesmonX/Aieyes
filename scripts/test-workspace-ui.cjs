@@ -60,6 +60,11 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     assert(Math.abs(groupBoxes[1].y-groupBoxes[2].y)<1,'Single-account providers share the second row at 1280px');
     assert(groupBoxes[1].x<groupBoxes[2].x,'Provider order is retained left to right');
     assert(Math.abs(groupBoxes[0].width-2*groupBoxes[1].width)<32,'Each single-account provider takes half the row');
+    for(const width of [760,1120,1280,1390,1800]){
+      await page.setViewportSize({width,height:800});
+      const cards=await page.locator('.quota-group[data-single-account=true]').evaluateAll(groups=>groups.map(group=>({group:group.getBoundingClientRect().width,card:group.querySelector('.quota-card,.quota-placeholder').getBoundingClientRect().width})));
+      for(const card of cards)assert(Math.abs(card.group-card.card)<1,`${width}px: a single-account card fills its provider group (${card.card}/${card.group})`);
+    }
     await page.setViewportSize({width:760,height:800});
     const narrowBoxes=await page.locator('.quota-group').evaluateAll(nodes=>nodes.map(node=>node.getBoundingClientRect().y));
     assert(narrowBoxes[2]>narrowBoxes[1],'Narrow windows stack groups');
