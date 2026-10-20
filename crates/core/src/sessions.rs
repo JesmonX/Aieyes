@@ -252,6 +252,7 @@ struct FileBatch {
     size: u64,
     offset: u64,
     modified: u64,
+    activity_at: u64,
     reset: bool,
     events: Vec<Event>,
     hook: bool,
@@ -429,6 +430,7 @@ impl Reader {
                 cursor.activity.phase = phase;
                 cursor.activity.turn = turn;
                 cursor.activity.session = f.session;
+                cursor.activity.at = f.activity_at.saturating_mul(1000);
             } else {
                 for mut event in f.events {
                     if source.provider == "zcode" && f.hook && event.kind == "Stop" {
@@ -456,7 +458,15 @@ impl Reader {
             let Some(mut phase) = cursor.activity.phase else {
                 continue;
             };
-            let elapsed = remote_now.saturating_sub(f.modified);
+            // SQLite maintenance/sync may touch many old AGY databases together.
+            // Their file mtime is not evidence of a new conversation event.
+            let activity_at =
+                if source.provider == "antigravity" && database && cursor.activity.at > 0 {
+                    cursor.activity.at / 1000
+                } else {
+                    f.modified
+                };
+            let elapsed = remote_now.saturating_sub(activity_at);
             let alive = if source.host_id.is_none() && cursor.activity.pid > 0 {
                 Some(
                     *self
@@ -479,6 +489,13 @@ impl Reader {
                 phase = Phase::Unknown;
             }
             if (elapsed >= 3600 && alive != Some(true)) || (phase.terminal() && elapsed >= 90) {
+                continue;
+            }
+            if source.provider == "antigravity"
+                && phase == Phase::Unknown
+                && elapsed >= 180
+                && alive != Some(true)
+            {
                 continue;
             }
             let session = &cursor.activity.session;
@@ -1242,9 +1259,25 @@ fn read_db(path: &Path) -> anyhow::Result<FileBatch> {
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     steps.reverse();
+    // Older schemas lack metadata; keep their mtime fallback. Bound the read
+    // to recent steps and extract only the known protobuf timestamp fields.
+    let activity_at = db
+        .prepare("SELECT metadata FROM steps WHERE length(metadata)>0 ORDER BY idx DESC LIMIT 32")
+        .ok()
+        .and_then(|mut query| {
+            let rows = query.query_map([], |r| r.get::<_, Vec<u8>>(0)).ok()?;
+            Some(
+                rows.filter_map(Result::ok)
+                    .filter_map(|raw| crate::antigravity::step_activity_at(&raw))
+                    .max()
+                    .unwrap_or(0),
+            )
+        })
+        .unwrap_or(0);
     Ok(FileBatch {
         key: path.to_string_lossy().into_owned(),
         modified: modified(path),
+        activity_at,
         session,
         steps: Some(steps),
         reset: true,
@@ -2050,6 +2083,58 @@ mod adapter_tests {
         fs::rename(replacement, &path).unwrap();
         reader.collect_local(&source, at + 11);
         assert_eq!(reader.database_reads, 3);
+    }
+    #[test]
+    fn agy_touched_history_uses_step_time_and_unknown_sessions_expire() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = source(temp.path(), "antigravity");
+        let mut reader = Reader::default();
+        let path = temp.path().join("s.db");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE trajectory_meta(cascade_id TEXT);INSERT INTO trajectory_meta VALUES('old');CREATE TABLE steps(idx INTEGER,step_type INTEGER,status INTEGER,metadata BLOB);").unwrap();
+        let metadata = [0x0a_u8, 3, 8, 0x8f, 0x4e, 0x42, 3, 8, 0x90, 0x4e];
+        db.execute("INSERT INTO steps VALUES(0,15,3,?1)", [metadata.as_slice()])
+            .unwrap();
+        assert_eq!(read_db(&path).unwrap().activity_at, 10_000);
+        let batch = |at| SourceBatch {
+            files: vec![FileBatch {
+                key: "old.db".into(),
+                modified: 10_000,
+                activity_at: at,
+                session: "old".into(),
+                steps: Some(vec![(0, 14, 3), (1, 15, 3)]),
+                reset: true,
+                database: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let snapshot = reader.consume(&source, batch(9_990), 20_000, 10_000, "ssh", None);
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.sessions[0].phase, Phase::Unknown);
+        assert_eq!(snapshot.sessions[0].updated_at, 19_990);
+        assert!(
+            reader
+                .consume(&source, batch(9_000), 20_000, 10_000, "ssh", None)
+                .sessions
+                .is_empty()
+        );
+        // Older schemas still use mtime, but cannot retain unconfirmed sessions for an hour.
+        assert!(
+            reader
+                .consume(&source, batch(0), 20_181, 10_181, "ssh", None)
+                .sessions
+                .is_empty()
+        );
+        let mut waiting = batch(9_000);
+        waiting.files[0].steps = Some(vec![(0, 14, 3), (1, 138, 9)]);
+        assert_eq!(
+            reader
+                .consume(&source, waiting, 20_000, 10_000, "ssh", None)
+                .sessions[0]
+                .phase,
+            Phase::NeedsInput
+        );
     }
     #[test]
     fn watcher_path_aliases_share_one_database_cache_entry() {

@@ -1908,6 +1908,7 @@ mod tests {
         for config in [
             include_str!("../tauri.windows.conf.json"),
             include_str!("../tauri.linux.conf.json"),
+            include_str!("../tauri.macos.conf.json"),
         ] {
             // Platform files are overlays, not complete configs (identifier comes from the base).
             let mut merged = base.clone();

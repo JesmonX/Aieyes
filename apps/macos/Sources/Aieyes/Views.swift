@@ -397,6 +397,36 @@ struct RootView: View, Equatable {
             return leftRank == rightRank ? (CoreContract.agentProviders.firstIndex(of: left) ?? 0) < (CoreContract.agentProviders.firstIndex(of: right) ?? 0) : leftRank < rightRank
         }
     }
+    private var quotaColumns: Int { compact ? 1 : workspaceCardColumns }
+    private func quotaAccounts(_ provider: String) -> [AgentAccount] {
+        displayedQuotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }.sorted {
+            (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max)
+        }
+    }
+    // Pack consecutive single-account groups into a shared row, preserving provider order.
+    private var quotaProviderRows: [[String]] {
+        var rows: [[String]] = []
+        for provider in quotaProviders {
+            if quotaAccounts(provider).count == 1, let last = rows.last,
+               last.count < quotaColumns, last.allSatisfy({ quotaAccounts($0).count == 1 }) {
+                rows[rows.count - 1].append(provider)
+            } else { rows.append([provider]) }
+        }
+        return rows
+    }
+    private func quotaGroup(_ provider: String) -> some View {
+        let accounts = quotaAccounts(provider)
+        return QuotaGroupSection(key: "quota.group." + scope + "." + provider, model: model, provider: provider,
+            accountCount: accounts.count,
+            quotas: displayedQuotas.filter { quota in CoreContract.sameAgent(quota.provider, provider) && accounts.contains { $0.key == quota.id } }) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 14, alignment: .top), count: min(quotaColumns, max(1, accounts.count))), alignment: .leading, spacing: 10) {
+                ForEach(accounts, id: \.key) { account in
+                    if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
+                    else { Surface(tint: Palette.category(provider)) { Text(account.name).font(AppFont.section); Text(model.quotaBusy ? "正在读取账户额度…" : "等待首次额度查询").font(AppFont.secondary).foregroundStyle(.secondary) } }
+                }
+            }
+        }
+    }
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -406,15 +436,11 @@ struct RootView: View, Equatable {
                 Button { model.showQuotaOrder?() } label: { Image(systemName: "arrow.up.arrow.down") }.help("调整账户顺序").accessibilityLabel("调整账户顺序")
                 Button(model.quotaBusy ? "读取中…" : "刷新额度") { Task { await model.refreshQuotas() } }.font(AppFont.caption).disabled(model.quotaBusy)
             }
-            ForEach(quotaProviders, id: \.self) { provider in
-                QuotaGroupSection(key: "quota.group." + scope + "." + provider, model: model, provider: provider,
-                    accountCount: displayedQuotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }.count,
-                    quotas: displayedQuotas.filter { quota in CoreContract.sameAgent(quota.provider, provider) && displayedQuotaAccounts.contains { $0.key == quota.id } }) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 14, alignment: .top), count: compact ? 1 : min(workspaceCardColumns, max(1, displayedQuotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }.count))), alignment: .leading, spacing: 10) {
-                        ForEach(displayedQuotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }.sorted { (usageDashboard.quotaOrder?.firstIndex(of: $0.key) ?? Int.max) < (usageDashboard.quotaOrder?.firstIndex(of: $1.key) ?? Int.max) }, id: \.key) { account in
-                            if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
-                            else { Surface(tint: Palette.category(provider)) { Text(account.name).font(AppFont.section); Text(model.quotaBusy ? "正在读取账户额度…" : "等待首次额度查询").font(AppFont.secondary).foregroundStyle(.secondary) } }
-                        }
+            ForEach(Array(quotaProviderRows.enumerated()), id: \.offset) { _, providers in
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(providers, id: \.self) { provider in quotaGroup(provider).frame(maxWidth: .infinity, alignment: .topLeading) }
+                    if providers.count < quotaColumns && providers.allSatisfy({ quotaAccounts($0).count == 1 }) {
+                        ForEach(0..<(quotaColumns - providers.count), id: \.self) { _ in Color.clear.frame(maxWidth: .infinity).frame(height: 0) }
                     }
                 }
             }

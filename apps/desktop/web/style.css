@@ -621,7 +621,6 @@ input[name=path],input[name=identityFile],input[name=target] { font-family:var(-
   .server-system-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 
-.quota-disclosure:not([open]) + .quota-content .agy-group:nth-child(n+2),
 .quota-disclosure:not([open]) + .quota-content .quota-windows > .quota-window:nth-child(n+3) { display:none; }
 
 .sidebar-collapsed .aside-foot { display:flex; }

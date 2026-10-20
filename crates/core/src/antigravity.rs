@@ -94,6 +94,16 @@ fn stamp(fields: &[(u64, Wire<'_>)], key: u64) -> Result<i64> {
         .try_into()?)
 }
 
+/// Lifecycle timestamps only; never project tool arguments or conversation text.
+pub(crate) fn step_activity_at(raw: &[u8]) -> Option<u64> {
+    let fields = fields(raw).ok()?;
+    [1, 6, 7, 8, 22, 32]
+        .into_iter()
+        .filter_map(|key| stamp(&fields, key).ok()?.try_into().ok())
+        .filter(|at| *at > 0)
+        .max()
+}
+
 pub fn group_for_model(model: &str) -> Option<&'static str> {
     let name = model
         .rsplit('/')

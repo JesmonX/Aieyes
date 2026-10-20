@@ -347,6 +347,18 @@ class ObserverTests(unittest.TestCase):
             source=dict(id='s',provider='antigravity',path=temp)
             result=m.collect(source,{str(path):m.read_db(path)})
             self.assertIsNotNone(result['files'][0]['steps'])
+    def test_agy_database_activity_comes_from_metadata_not_file_touches(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=pathlib.Path(temp)/'s.db';db=sqlite3.connect(path)
+            db.executescript("CREATE TABLE trajectory_meta(cascade_id TEXT);INSERT INTO trajectory_meta VALUES('s');CREATE TABLE steps(idx INTEGER,step_type INTEGER,status INTEGER,metadata BLOB);")
+            # created_at.seconds=9999; completed_at.seconds=10000.
+            raw=b'\x0a\x03\x08\x8f\x4e\x42\x03\x08\x90\x4e'
+            db.execute('INSERT INTO steps VALUES(0,15,3,?)',(raw,));db.commit();db.close()
+            row=m.read_db(path)
+            self.assertEqual(row['activityAt'],10000)
+            self.assertGreater(row['modified'],row['activityAt'])
+            self.assertNotIn('metadata',row)
+            self.assertEqual(m.agy_activity_at(b'\x0a\xff'),0)
     def test_failed_cached_database_read_preserves_a_degraded_placeholder(self):
         with tempfile.TemporaryDirectory() as temp:
             path=pathlib.Path(temp)/'s.db';path.write_bytes(b'invalid sqlite')

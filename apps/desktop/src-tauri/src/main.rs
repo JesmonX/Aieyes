@@ -333,6 +333,15 @@ async fn engine_call(
     result
 }
 
+fn default_data_dir(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBuf> {
+    // Both macOS frontends must observe the same accounts/history for a useful
+    // comparison. WebView preferences remain isolated by the bundle identifier.
+    #[cfg(target_os = "macos")]
+    return Ok(app.path().data_dir()?.join("Aieyes"));
+    #[cfg(not(target_os = "macos"))]
+    app.path().app_data_dir()
+}
+
 fn main() {
     if aieyes_core::session_hooks::run_if_requested() {
         return;
@@ -344,7 +353,7 @@ fn main() {
         .setup(|app| {
             let root = std::env::var_os("AIEYES_DATA_DIR")
                 .map(std::path::PathBuf::from)
-                .unwrap_or(app.path().app_data_dir()?);
+                .unwrap_or(default_data_dir(app.handle())?);
             let runner = app
                 .path()
                 .resource_dir()?

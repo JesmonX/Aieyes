@@ -34,6 +34,8 @@ function fixture(){
   assert.equal(await card.locator('.quota-email').textContent(),'a.very.long.account.name.for.layout.verification@example.test');
   assert.equal(await card.locator('.quota-email').getAttribute('title'),'a.very.long.account.name.for.layout.verification@example.test');
   const pref=await page.evaluate(()=>JSON.parse(localStorage.getItem('aieyes.panel.accounts.v2')));assert.deepEqual(pref.providers.antigravity.keys,['antigravity:legacy-shared']);assert(!pref.providers.agy);
+  assert.equal(await card.locator('.quota-disclosure').evaluate(el=>el.open),false);
+  for(const group of ['Gemini Models','Claude and GPT Models','Future Models'])assert.equal(await card.locator('.agy-group').filter({hasText:group}).isVisible(),true,`Folded card retains ${group}`);
   if(panel){assert.equal(await page.evaluate(()=>state.accountKey),'antigravity:legacy-shared');assert.equal(await page.evaluate(()=>state.provider),'antigravity');assert.equal(await card.locator('details').evaluate(e=>e.open),false);await card.locator('.quota-title').click();}
   if(!await card.locator('.quota-disclosure').evaluate(el=>el.open))await card.locator('.quota-title').click();
   const entries=card.locator('[data-estimate]');assert.equal(await entries.count(),3);

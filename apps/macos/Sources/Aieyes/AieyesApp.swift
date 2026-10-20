@@ -478,6 +478,7 @@ import Combine
                     for page in ["agent", "analysis", "servers", "settings"] {
                         model.detailPage = page; model.settingsTab = "integrations"; model.settingsAgent = "codex"
                         try await capture(MainWindowView(model: model), size: NSSize(width: 1080, height: 800), dark: dark, to: root.appendingPathComponent("workspace-\(page)-\(dark ? "dark" : "light").png"))
+                        if page == "agent" { try await capture(MainWindowView(model: model), size: NSSize(width: 1280, height: 900), dark: dark, to: root.appendingPathComponent("workspace-agent-1280-\(dark ? "dark" : "light").png")) }
                         try await capture(MainWindowView(model: model), size: NSSize(width: 760, height: 480), dark: dark, to: root.appendingPathComponent("workspace-\(page)-small-\(dark ? "dark" : "light").png"))
                     }
                     model.detailPage = "agent"

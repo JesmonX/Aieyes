@@ -11,6 +11,7 @@ if [ "$BUILD_MODE" = debug ]; then
   cargo build --manifest-path src-tauri/Cargo.toml --locked --features custom-protocol
   echo "$PROJECT_DIR/apps/desktop/src-tauri/target/debug/aieyes-desktop"
 else
+  if [ "$(uname -s)" = Darwin ]; then exec sh "$PROJECT_DIR/scripts/build-macos-tauri.sh"; fi
   if command -v tauri >/dev/null 2>&1; then set -- tauri; else set -- cargo tauri; fi
   if ! "$@" --version >/dev/null 2>&1; then
     echo 'Install the Tauri v2 CLI: npm install --global @tauri-apps/cli@2 (or cargo install tauri-cli --version "^2" --locked)' >&2
@@ -18,7 +19,7 @@ else
   fi
   case "$(uname -s)" in
     Linux) "$@" build --ci --bundles deb,appimage -- --locked ;;
-    *) echo 'Use scripts/build-macos.sh for macOS or scripts/build-desktop.ps1 for Windows.' >&2; exit 2 ;;
+    *) echo 'Use scripts/build-desktop.ps1 for Windows.' >&2; exit 2 ;;
   esac
   echo "$PROJECT_DIR/apps/desktop/src-tauri/target/release/bundle"
 fi

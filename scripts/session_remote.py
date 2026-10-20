@@ -343,6 +343,34 @@ def database_fingerprint(path):
         except FileNotFoundError:return None
     return 'db:'+hashlib.sha256(repr((stamp(path),stamp(pathlib.Path(str(path)+'-wal')))).encode()).hexdigest()
 
+def agy_activity_at(raw):
+    # Narrow protobuf projection matching core/antigravity.rs. Values other
+    # than lifecycle timestamps are skipped and never returned over SSH.
+    def varint(data, pos):
+        value=0
+        for shift in range(0,70,7):
+            byte=data[pos];pos+=1
+            if shift==63 and byte>1:raise ValueError('metadata integer overflow')
+            value|=(byte&127)<<shift
+            if byte<128:return value,pos
+        raise ValueError('metadata integer invalid')
+    def fields(data):
+        pos=0
+        while pos<len(data):
+            tag,pos=varint(data,pos);wire=tag&7;value=None
+            if not tag>>3:raise ValueError('metadata field invalid')
+            if wire==0:value,pos=varint(data,pos)
+            elif wire==2:
+                size,pos=varint(data,pos);value=data[pos:pos+size];pos+=size
+            elif wire in (1,5):pos+=8 if wire==1 else 4
+            else:raise ValueError('metadata wire invalid')
+            if pos>len(data):raise ValueError('metadata truncated')
+            yield tag>>3,value
+    try:
+        return max((seconds for key,value in fields(raw) if key in (1,6,7,8,22,32) and isinstance(value,bytes)
+                    for field,seconds in fields(value) if field==1 and isinstance(seconds,int) and seconds>0),default=0)
+    except (IndexError,ValueError,TypeError):return 0
+
 def read_db(path,cursor=None):
     import sqlite3
     from contextlib import closing
@@ -357,8 +385,11 @@ def read_db(path,cursor=None):
         db.execute('PRAGMA query_only=ON')
         session=db.execute('SELECT cascade_id FROM trajectory_meta LIMIT 1').fetchone()[0]
         steps=db.execute('SELECT idx,step_type,status FROM steps ORDER BY idx DESC LIMIT 2048').fetchall()[::-1]
+        try:
+            activity_at=max((agy_activity_at(raw) for (raw,) in db.execute('SELECT metadata FROM steps WHERE length(metadata)>0 ORDER BY idx DESC LIMIT 32')),default=0)
+        except sqlite3.OperationalError:activity_at=0 # Legacy schemas have no metadata column.
     if signature!=database_fingerprint(path):raise RuntimeError('Session database changed during read; retry')
-    return dict(metadata,reset=True,session=session,steps=steps)
+    return dict(metadata,reset=True,session=session,steps=steps,activityAt=activity_at)
 
 class FileWatch:
     """Bounded directory/file notifications; unavailable backends use reconciliation."""
