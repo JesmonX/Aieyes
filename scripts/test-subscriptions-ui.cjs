@@ -12,7 +12,11 @@ core.on('exit',()=>{for(const p of pending.values())p.reject(new Error(stderr));
 function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++seq;pending.set(id,{resolve,reject});core.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});}
 async function invoke(method,params){
   calls.push({method,params});
-  if(qoderRows&&method==='accounts.status.get')return qoderRows;
+  if(qoderRows&&method==='accounts.status.get'){
+    // Preserve an asynchronous status read so the fixture also covers slow CI hosts.
+    await new Promise(resolve=>setTimeout(resolve,75));
+    return qoderRows;
+  }
   if(qoderRows&&method==='accounts.status.refreshBatch')return qoderRows.filter(r=>!params.accountKeys||params.accountKeys.includes(r.accountKey));
   if(qoderRows&&method==='accounts.status.refresh')return qoderRows.find(r=>r.accountKey===params.accountKey&&r.sourceId===params.sourceId)??{};
   if(method==='subscriptions.openLogin')return {opened:true};
@@ -82,6 +86,7 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
     const nativeCall=calls.filter(c=>c.method==='subscriptions.connect'&&c.params.subscription.mode==='cli').at(-1);
     assert.equal(nativeCall.params.secret,null);assert.equal(nativeCall.params.subscription.nativeConfigDir,'/native/qoder configuration');
     const nativeSource=(await rpc('settings.get')).sources.find(s=>s.subscription?.mode==='cli');assert.equal(nativeSource.subscription.credentialRef,'');
+    await page.waitForFunction(()=>!AieyesAgentSettings.statusBusy);
     // Quota connections stay available to accounts, but never count as log directories.
     const connected=await rpc('settings.get'),keyA='qoder:'+'a'.repeat(64),keyB='qoder:'+'b'.repeat(64);
     connected.hosts.push(...['fedora','144'].map(id=>({id,name:id,target:id+'.invalid',enabled:true})));
@@ -93,8 +98,13 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
       const machineId=source.hostId||'local',current=account.id===nativeSource.accountId?machineId!=='144':null;
       qoderRows.push({accountKey:'qoder:'+account.id,sourceId:source.id,machineId,current,credential:current,authenticated:true,identityConfirmed:true,identity:{key:machineId==='144'?keyB:keyA,email:'',subscription:'personal_standard'},checkedAt:Date.now()/1000});
     }
-    await page.evaluate(async settings=>{AieyesAgentSettings.accept(settings);AieyesAgentSettings.navigate({provider:'qoder'});await AieyesAgentSettings.refreshStatuses(false);render();},machineSettings);
+    await page.evaluate(settings=>{AieyesAgentSettings.accept(settings);AieyesAgentSettings.navigate({provider:'qoder'});render();},machineSettings);
+    // accept() starts its own refresh. Wait for that observation before requesting
+    // another read: refreshStatuses() intentionally returns while already busy.
+    await page.waitForFunction(()=>!AieyesAgentSettings.statusBusy);
+    await page.evaluate(async()=>{await AieyesAgentSettings.refreshStatuses(false);render();});
     await page.locator('#agent-section-machines > summary').click();
+    await page.waitForFunction(()=>['local','fedora','144'].every(machine=>document.querySelector(`[data-machine-current="${machine}"][data-provider="qoder"]`)?.textContent.includes(machine==='144'?'bbbbbbbbbbbb':'aaaaaaaaaaaa')));
     for(const machine of ['local','fedora','144']){
       assert.equal(await page.locator(`[data-machine-directories="qoder"][data-machine="${machine}"]`).textContent(),'目录 1');
       const text=await page.locator(`[data-machine-current="${machine}"][data-provider="qoder"]`).textContent();
