@@ -48,7 +48,7 @@ import Foundation
         precondition(PanelAccountPreference.selections(included, accounts: [newAccount], order: [])["codex"] == [], "New accounts must not enter an explicit manual choice")
         let saved = DashboardFilterPreference(provider: "claude", source: "remote", account: "claude:a", model: "model", days: 30)
         saved.save(defaults: defaults)
-        precondition(DashboardFilterPreference.read(defaults: defaults) == saved)
+        precondition(DashboardFilterPreference.read(defaults: defaults) == DashboardFilterPreference(provider: "claude", source: "remote", model: "model", days: 30), "Legacy account filters clear on save")
         DashboardFilterPreference(provider: "unknown", days: 0).save(defaults: defaults)
         precondition(DashboardFilterPreference.read(defaults: defaults) == DashboardFilterPreference())
         defaults.set(true, forKey: NativePanelKey.expansion(.server, id: "host", compact: false))

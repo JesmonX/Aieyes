@@ -69,18 +69,11 @@ function browserFixture(){
   await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
   try {
     browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1180,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.exposeFunction('testRPC',invoke);await page.addInitScript(browserFixture);await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
-    assert.equal(await page.locator('#account option[value="codex:history"]').count(),0);
+    assert.equal(await page.locator('#account').count(),0,'Usage surfaces offer no account filter');
     const historyTotal=await page.evaluate(()=>state.dashboard.summary.total);assert.equal(historyTotal,100);
-    await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='refresh';render();});
-    await page.locator('#field-historyShowDeletedAccounts').check();await page.waitForFunction(()=>state.settings.historyShowDeletedAccounts===true&&!state.settingsCommitting);
-    await page.evaluate(()=>{state.page='agent';render();});
-    assert.equal(await page.locator('#account option[value="codex:history"]').textContent(),'旧账户历史（已删除）');
-    await page.locator('#account').selectOption('codex:history');await page.waitForFunction(()=>state.appliedFilters.accountKey==='codex:history'&&!state.dashboardPending);
-    assert(calls.some(c=>c.method==='dashboard'&&c.params.accountId==='history'&&c.params.provider==='codex'));
-    await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='refresh';render();});
-    await page.locator('#field-historyShowDeletedAccounts').uncheck();await page.waitForFunction(()=>state.settings.historyShowDeletedAccounts===false&&!state.settingsCommitting&&state.accountKey==='');
-    await page.evaluate(()=>{state.page='agent';render();});
-    assert.equal(await page.locator('#account option[value="codex:history"]').count(),0);assert.equal(await page.evaluate(()=>state.dashboard.summary.total),historyTotal);
+    await page.evaluate(()=>changeFilters({accountKey:'codex:history'}));await page.waitForFunction(()=>!state.dashboardPending);
+    assert.equal(await page.evaluate(()=>state.accountKey),'','Legacy account filters cannot hide shared usage');
+    assert.equal(await page.evaluate(()=>state.dashboard.summary.total),historyTotal,'Deleted account history stays included');
     await page.evaluate(()=>{state.page='settings';state.settingsTab='hosts';render();});
     const beforeHost=structuredClone((await rpc('settings.get')).hosts.find(h=>h.id==='server'));
     await page.locator('[data-edit="server"]').click();

@@ -28,8 +28,13 @@ const settle=page=>page.evaluate(async()=>{
     await context.addInitScript(fixture);
     const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(String(error)));
     await page.goto(url);await page.evaluate(()=>AieyesApp.ready);await page.evaluate(()=>AieyesTheme.loadFonts());await settle(page);
-    await page.waitForSelector('.win-select-trigger');
-    const geometry=await page.locator('.win-select').evaluateAll(wrappers=>wrappers.map(wrapper=>{
+    await page.evaluate(()=>{
+      const host=document.createElement('div');host.id='geometry-fixture';
+      host.innerHTML='<select id="geometry-native" aria-label="运行位置"><option>Local · 本机</option><option value="remote" selected>Remote · 服务器</option></select>';
+      document.body.append(host);AieyesSingleSelect.mountAll(host);
+    });
+    await page.waitForSelector('#geometry-native-choice');
+    const geometry=await page.locator('#geometry-fixture .win-select').evaluateAll(wrappers=>wrappers.map(wrapper=>{
       const a=wrapper.querySelector('select').getBoundingClientRect(),b=wrapper.querySelector('button').getBoundingClientRect();
       return Math.max(...['x','y','width','height'].map(key=>Math.abs(a[key]-b[key])));
     }));
