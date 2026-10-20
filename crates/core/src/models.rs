@@ -56,6 +56,10 @@ pub struct UsageEvent {
     pub billing: BillingEvidence,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_credits: Option<NativeCredits>,
+    /// Qoder first-party counters include cached input. Keep the original so a
+    /// parser upgrade can replace legacy, double-counted rows safely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_tokens: Option<Tokens>,
     #[serde(default)]
     pub interval_start: Option<i64>,
     #[serde(default)]

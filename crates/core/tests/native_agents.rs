@@ -718,6 +718,40 @@ fn qoder_real_zero_counters_do_not_become_estimated_tokens() {
 }
 
 #[test]
+fn qoder_parser_upgrade_replaces_inclusive_input_without_losing_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    let (engine, source, settings) = setup(temp.path(), "qoder");
+    let row = json!({
+        "type":"assistant","timestamp":"2026-10-18T04:29:24.853Z","sessionId":"session",
+        "message":{"id":"request","model":"qfmodel","usage":{
+            "input_tokens":100,"output_tokens":5,"cache_read_input_tokens":40,
+            "cache_creation_input_tokens":0
+        }},
+    });
+    let mut old = usage::parse(&source, &mut ParseState::default(), &row).unwrap();
+    old.tokens.input += old.tokens.cache_read + old.tokens.cache_write;
+    old.raw_tokens = None;
+    engine.store.put_event(&old, &[], &settings).unwrap();
+    let new = usage::parse(&source, &mut ParseState::default(), &row).unwrap();
+    engine.store.put_event(&new, &[], &settings).unwrap();
+    let raw: String = engine
+        .store
+        .db
+        .query_row("SELECT payload FROM events", [], |r| r.get(0))
+        .unwrap();
+    let event: UsageEvent = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        (
+            event.tokens.input,
+            event.tokens.cache_read,
+            event.tokens.total()
+        ),
+        (60, 40, 105)
+    );
+    assert!(event.raw_tokens.is_some());
+}
+
+#[test]
 fn qoder_request_credits_keep_discount_metadata_and_reject_errors_or_invalid_counters() {
     let source = Source {
         provider: "qoder".into(),

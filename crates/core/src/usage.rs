@@ -11,7 +11,7 @@ pub fn parser_version(provider: &str) -> u32 {
         return 9;
     }
     if provider == "qoder" {
-        return 8;
+        return 9;
     }
     if provider == "deepseek-harness" {
         return 8;
@@ -68,6 +68,7 @@ fn event(
             evidence: state.model_provider.clone(),
         },
         native_credits: None,
+        raw_tokens: None,
         interval_start: None,
         interval_evidence: String::new(),
     }
@@ -284,13 +285,22 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
     if let Some(id) = v["sessionId"].as_str() {
         state.session_id = id.into();
     }
-    let tokens = Tokens {
+    let raw_tokens = Tokens {
         input: count(u, "input_tokens"),
         output: count(u, "output_tokens"),
         cache_read: count(u, "cache_read_input_tokens"),
         cache_write: count(u, "cache_creation_input_tokens"),
         reasoning: 0,
     };
+    // Qoder's first-party counters use an inclusive prompt count. Custom
+    // Anthropic-compatible providers keep their original usage semantics.
+    let mut tokens = raw_tokens.clone();
+    if source.provider == "qoder" && v["modelSource"].as_str() != Some("custom") {
+        tokens.input = tokens
+            .input
+            .checked_sub(tokens.cache_read)?
+            .checked_sub(tokens.cache_write)?;
+    }
     let native_credits = if source.provider == "qoder" {
         u["credits"].as_f64().and_then(|credits| {
             let value = NativeCredits {
@@ -324,6 +334,9 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         "event",
     );
     parsed.native_credits = native_credits;
+    if source.provider == "qoder" {
+        parsed.raw_tokens = Some(raw_tokens);
+    }
     Some(parsed)
 }
 
@@ -481,6 +494,31 @@ mod tests {
         assert_eq!(e.tokens.total(), 160);
         assert_eq!(e.tokens.all_input(), 150);
     }
+    #[test]
+    fn qoder_first_party_cache_is_split_but_custom_usage_is_unchanged() {
+        let qoder = Source {
+            provider: "qoder".into(),
+            ..source()
+        };
+        let mut v = json!({"type":"assistant","timestamp":"2026-10-03T01:00:00Z","sessionId":"c","message":{"id":"m","model":"dfmodel","usage":{"input_tokens":120,"output_tokens":10,"cache_read_input_tokens":80,"cache_creation_input_tokens":20}}});
+        let e = parse(&qoder, &mut ParseState::default(), &v).unwrap();
+        assert_eq!(
+            e.tokens,
+            Tokens {
+                input: 20,
+                output: 10,
+                cache_read: 80,
+                cache_write: 20,
+                reasoning: 0,
+            }
+        );
+        assert_eq!(e.raw_tokens.unwrap().input, 120);
+        v["modelSource"] = json!("custom");
+        let e = parse(&qoder, &mut ParseState::default(), &v).unwrap();
+        assert_eq!((e.tokens.input, e.tokens.total()), (120, 230));
+        assert_eq!(e.raw_tokens.unwrap().input, 120);
+    }
+
     #[test]
     fn bank_count_is_not_detail_count() {
         let q = codex_quota(

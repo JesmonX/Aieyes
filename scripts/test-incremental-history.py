@@ -13,11 +13,12 @@ from unittest.mock import patch
 SCRIPT = pathlib.Path(__file__).with_name('remote_history.py')
 
 
-def collect(path, provider='custom', cursors=None, route_cursor=None, precise=True):
+def collect(path, provider='custom', cursors=None, route_cursor=None, precise=True,
+            qoder_state_cursors=None, qoder_state_reset=False):
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         try:
-            runpy.run_path(str(SCRIPT), init_globals={'REQUEST': dict(path=str(path), provider=provider, protocol=2, cursors=cursors or {}, routeCursor=route_cursor or {}, codexPreciseCounting=precise)})
+            runpy.run_path(str(SCRIPT), init_globals={'REQUEST': dict(path=str(path), provider=provider, protocol=2, cursors=cursors or {}, routeCursor=route_cursor or {}, codexPreciseCounting=precise, qoderStateCursors=qoder_state_cursors or {}, qoderStateReset=qoder_state_reset)})
         except SystemExit as error:
             assert error.code == 0
     lines = output.getvalue().splitlines()
@@ -103,10 +104,12 @@ class IncrementalHistory(unittest.TestCase):
         row=json.loads(fixture.read_text().splitlines()[-1])
         row['message']['content']='PRIVATE_RESPONSE'
         row['message']['usage']['extra']='PRIVATE_USAGE'
+        row['modelSource']='custom'
         with tempfile.TemporaryDirectory() as directory:
             path=pathlib.Path(directory)/'session.jsonl';path.write_text(json.dumps(row)+'\n')
             frames=collect(path,'qoder');projected=events(frames)[0]
             self.assertNotIn('PRIVATE_',json.dumps(frames))
+            self.assertEqual(projected['modelSource'],'custom')
             self.assertEqual(projected['message']['usage']['credits'],row['message']['usage']['credits'])
             self.assertIs(projected['message']['usage']['billable'],False)
             self.assertEqual(projected['message']['usage']['input_tokens'],0)
@@ -116,6 +119,26 @@ class IncrementalHistory(unittest.TestCase):
             export=collect(path,'qoder')
             self.assertNotIn('PRIVATE_',json.dumps(export))
             self.assertEqual(events(export)[0]['nativeCredits'],dict(credits=.5,originalCredits=1,billable=False))
+
+    def test_qoder_state_sidecar_is_forwarded_without_paths_or_content_and_respects_cursor(self):
+        import base64
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory);key=bytes(range(32));fake=root/'qodercli'
+            fake.write_bytes(b'prefix zMt=Buffer.from(['+b','.join(str(v).encode() for v in key)+b']) suffix')
+            state=root/'projects/p/session/state.json';state.parent.mkdir(parents=True)
+            payload=dict(sessionId='session',createdAt='2026-10-18T04:29:24.846Z',updatedAt='2026-10-18T04:29:24.851Z',workspaceDirectories=[str(root/'workspace')],items=dict(s0=dict(n=base64.b64encode(b'n'*12).decode(),p=base64.b64encode(b'PRIVATE_CIPHERTEXT').decode(),t=base64.b64encode(b't'*16).decode())))
+            state.write_text(json.dumps(payload));transcript=root/'projects/p/session.jsonl';transcript.write_text(json.dumps(dict(type='assistant',cwd=str(root/'workspace')))+'\n')
+            with patch.dict(os.environ, {'QODER_CLI_PATH': str(fake)}):
+                frames=collect(root,'qoder')
+                self.assertNotIn('PRIVATE_',json.dumps(frames))
+                states=[f for f in frames if f['kind']=='qoderState']
+                self.assertEqual(len(states),1)
+                self.assertIn(base64.b64encode(key).decode(),states[0]['keys'])
+                self.assertEqual(states[0]['states'][0]['sessionId'],'session')
+                self.assertTrue(states[0]['states'][0]['projectHashes'])
+                saved={states[0]['states'][0]['path']:states[0]['states'][0]['signature']}
+                repeat=collect(root,'qoder',qoder_state_cursors=saved)
+                self.assertEqual([f for f in repeat if f['kind']=='qoderState'],[])
 
     def test_opencode_real_messages_ignore_empty_future_table_and_private_parts(self):
         fixture=SCRIPT.parents[1]/'crates/core/tests/fixtures/native-agents/opencode-messages.json'

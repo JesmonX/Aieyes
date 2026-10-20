@@ -228,6 +228,11 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         }
         malformed += m;
     }
+    let mut qoder_issues = Vec::new();
+    if source.provider == "qoder" {
+        let report = crate::qoder_state::sync_local(store, settings, source, &prices)?;
+        qoder_issues = report.issues;
+    }
     let mut result = json!({"updatedAt":now(),"newEvents":count,"files":files.len(),"readBytes":read_bytes,"malformedLines":malformed});
     if full && malformed > 0 {
         result["partial"] = json!(true);
@@ -247,6 +252,17 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
             .as_array_mut()
             .unwrap();
         issues.push(json!({"code":"unsupportedNativeHistory","message":"Cursor 私有会话库的请求 Token 暂未接入；仅导入标准 JSONL，上下文占用不计入累计用量。"}));
+    }
+    if !qoder_issues.is_empty() {
+        result["partial"] = json!(true);
+        result
+            .as_object_mut()
+            .unwrap()
+            .entry("issues")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .unwrap()
+            .extend(qoder_issues);
     }
     let tx = store.write_transaction()?;
     current_settings(store, settings, source)?;

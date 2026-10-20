@@ -748,6 +748,7 @@ fn shared_history_totals_survive_and_profile_quotas_stay_visible() {
         session_id: "session".into(),
         attribution: "fixture".into(),
         billing: Default::default(),
+        raw_tokens: None,
         interval_start: None,
         interval_evidence: String::new(),
     };

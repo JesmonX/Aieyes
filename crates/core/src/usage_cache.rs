@@ -385,7 +385,9 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
                 a.total = a.tokens.total();
                 a.cost += cost;
                 a.priced_tokens += covered;
-                a.events += 1;
+                if e.attribution != "qoder-residual" {
+                    a.events += 1;
+                }
                 if covered < e.tokens.total() {
                     let price: Option<ModelPrice> = row
                         .get::<_, Option<String>>(3)?

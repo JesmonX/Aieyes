@@ -409,6 +409,7 @@ mod tests {
                 evidence: "fixture".into(),
             },
             native_credits: None,
+            raw_tokens: None,
             interval_start: Some(1010),
             interval_evidence: "task-request-v2".into(),
         };

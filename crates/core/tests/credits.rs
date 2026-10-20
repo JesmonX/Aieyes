@@ -68,6 +68,7 @@ fn event(store: &Store, q: &QuotaSnapshot, model: &str, category: &str, id: &str
             category: category.into(),
             evidence: "fixture".into(),
         },
+        raw_tokens: None,
         interval_start: Some(q.updated_at),
         interval_evidence: String::new(),
     };

@@ -97,7 +97,12 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         .map(|raw| serde_json::from_str(&raw))
         .transpose()?
         .unwrap_or(Value::Null);
-    let request = json!({"protocol":2,"path":source.path,"provider":source.provider,"cursors":cursors,"routeCursor":route_cursor,"codexPreciseCounting":settings.codex_precise_counting});
+    let qoder_state_cursors = if source.provider == "qoder" {
+        crate::qoder_state::remote_cursors(&store, source)?
+    } else {
+        Value::Null
+    };
+    let request = json!({"protocol":2,"path":source.path,"provider":source.provider,"cursors":cursors,"routeCursor":route_cursor,"codexPreciseCounting":settings.codex_precise_counting,"qoderStateCursors":qoder_state_cursors,"qoderStateReset":full});
     let prices = store.prices()?;
     if source.provider == "codex" {
         store.prepare_history_corrections()?;
@@ -105,6 +110,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
     let mut count = 0;
     let mut completed = None;
     let mut started = false;
+    let mut qoder_issues = Vec::new();
     ssh::history_stream(host, request, |line| {
         // Login profiles can print banners before our protocol starts.
         let frame: Value = match serde_json::from_slice(line) {
@@ -148,7 +154,17 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
             Some("batch") => {
                 count += apply_batch(&store, settings, source, &config, &prices, &frame)?;
             }
-            Some("done") => completed = Some(frame),
+            Some("qoderState") => {
+                let report = crate::qoder_state::apply_remote_frame(&store, source, &frame)?;
+                qoder_issues.extend(report.issues);
+            }
+            Some("done") => {
+                if source.provider == "qoder" {
+                    let report = crate::qoder_state::reconcile(&store, source, &prices, settings)?;
+                    qoder_issues.extend(report.issues);
+                }
+                completed = Some(frame);
+            }
             Some("error") => {
                 anyhow::bail!("{}", frame["error"].as_str().unwrap_or("远程记录读取失败"))
             }
@@ -161,6 +177,17 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
     result.as_object_mut().unwrap().remove("protocol");
     result["newEvents"] = json!(count);
     result["updatedAt"] = json!(now());
+    if !qoder_issues.is_empty() {
+        result["partial"] = json!(true);
+        result
+            .as_object_mut()
+            .unwrap()
+            .entry("issues")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .unwrap()
+            .extend(qoder_issues);
+    }
     if matches!(source.provider.as_str(), "opencode" | "zcode") {
         let states = store
             .db

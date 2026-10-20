@@ -352,6 +352,11 @@ impl Engine {
         self.store.save_auth_settings(&next)?;
         let saved = self.store.settings()?;
         tx.commit()?;
+        if !remove && source.provider == "qoder" {
+            for issue in crate::qoder_env::sync(&saved) {
+                eprintln!("Qoder 环境配置: {issue}");
+            }
+        }
         Ok(serde_json::to_value(saved)?)
     }
 
@@ -370,6 +375,7 @@ impl Engine {
         } else {
             vec![selected]
         };
+        let qoder_changed = providers.contains(&"qoder");
         // Apply a visible agent's switches in one settings transaction. The two
         // DeepSeek adapters keep their source/account IDs and credential formats.
         for provider in providers {
@@ -445,11 +451,17 @@ impl Engine {
                         .any(|id| id == source.host_id.as_deref().unwrap_or("local"));
             }
         }
-        Ok(serde_json::to_value(self.store.patch_settings(
+        let saved = self.store.patch_settings(
             &serde_json::to_value(base)?,
             &serde_json::to_value(next)?,
             false,
-        )?)?)
+        )?;
+        if qoder_changed {
+            for issue in crate::qoder_env::sync(&saved) {
+                eprintln!("Qoder 环境配置: {issue}");
+            }
+        }
+        Ok(serde_json::to_value(saved)?)
     }
 
     pub(crate) fn connect_account(&mut self, params: Value) -> Result<Value> {

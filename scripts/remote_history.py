@@ -330,7 +330,9 @@ def _project(value, provider):
             event = {k: value.get(k) for k in ("type", "timestamp", "sessionId", "requestId", "uuid", "isApiErrorMessage")}
             usage=message.get('usage') or {}
             keys=['input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens']
-            if provider=='qoder':keys+=['credits','original_credits','billable']
+            if provider=='qoder':
+                keys+=['credits','original_credits','billable']
+                event['modelSource']=value.get('modelSource')
             event["message"] = {k: message.get(k) for k in ("id", "model")}
             event["message"]['usage']={k:usage[k] for k in keys if k in usage}
     elif "tokens" in value:
@@ -410,6 +412,171 @@ def _cursor_private_history(root):
         if 'agent-transcripts' in dirs:return True
         dirs[:]=[] if len(os.path.relpath(directory,base).split(os.sep))>=2 else [d for d in dirs if not os.path.islink(os.path.join(directory,d))]
     return False
+
+def _qoder_keys(root):
+    """Read the embedded state key only for the lifetime of this collector."""
+    import base64
+    import re
+    import shutil
+    candidates = []
+    configured = os.environ.get('QODER_CLI_PATH')
+    if configured:
+        candidates.append(configured)
+    found = shutil.which('qodercli')
+    if found:
+        candidates.append(found)
+    home = os.path.expanduser('~')
+    candidates.extend([
+        os.path.join(home, '.local', 'bin', 'qodercli'),
+        os.path.join(home, 'bin', 'qodercli'),
+        '/usr/local/bin/qodercli',
+        '/opt/homebrew/bin/qodercli',
+    ])
+    directory = os.path.join(root, 'bin', 'qodercli')
+    if os.path.isdir(directory):
+        try:
+            candidates.extend(os.path.join(directory, name) for name in sorted(os.listdir(directory)))
+        except OSError:
+            pass
+    keys = []
+    marker = b'zMt=Buffer.from(['
+    pattern = re.compile(re.escape(marker) + rb'([\d,]+)\]\)')
+    for path in dict.fromkeys(candidates):
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, 'rb') as stream:
+                carry = b''
+                while True:
+                    chunk = stream.read(4 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    data = carry + chunk
+                    for match in pattern.finditer(data):
+                        try:
+                            key = bytes(int(part) for part in match.group(1).split(b','))
+                        except ValueError:
+                            continue
+                        if len(key) == 32 and key not in keys:
+                            keys.append(key)
+                    carry = data[-(len(marker) + 128):]
+        except OSError:
+            continue
+        if len(keys) >= 8:
+            break
+    return [base64.b64encode(key).decode('ascii') for key in keys]
+
+
+def _qoder_hash(path):
+    import hashlib
+    normalized = os.path.abspath(os.path.expanduser(path)).replace('\\', '/').lower()
+    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+
+
+def _qoder_project_hashes(path, value, session_id):
+    roots = []
+    for root in value.get('workspaceDirectories') or []:
+        if isinstance(root, str) and root:
+            roots.append(root)
+    project = os.path.dirname(os.path.dirname(path))
+    transcript = os.path.join(project, session_id + '.jsonl')
+    try:
+        with open(transcript, 'rb') as stream:
+            for _ in range(128):
+                line = stream.readline(1024 * 1024)
+                if not line:
+                    break
+                try:
+                    row = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                cwd = row.get('cwd') if isinstance(row, dict) else None
+                if isinstance(cwd, str) and cwd:
+                    roots.append(cwd)
+    except OSError:
+        pass
+    name = os.path.basename(project)
+    if name.startswith('-') and len(name) > 1:
+        # Best-effort fallback for legacy state files without workspace data.
+        roots.append('/' + name[1:].replace('-', '/'))
+    result = []
+    for root in roots:
+        digest = _qoder_hash(root)
+        if digest not in result:
+            result.append(digest)
+    return result
+
+
+def _qoder_states(root, request, emit, issue):
+    import hashlib
+    provider = request.get('provider')
+    if provider != 'qoder':
+        return
+    projects = os.path.join(root, 'projects') if os.path.isdir(os.path.join(root, 'projects')) else root
+    if not os.path.isdir(projects):
+        return
+    paths = []
+    try:
+        for project in sorted(os.listdir(projects)):
+            project_path = os.path.join(projects, project)
+            if not os.path.isdir(project_path) or os.path.islink(project_path):
+                continue
+            for session in sorted(os.listdir(project_path)):
+                session_path = os.path.join(project_path, session)
+                state = os.path.join(session_path, 'state.json')
+                if os.path.isdir(session_path) and os.path.isfile(state) and not os.path.islink(state):
+                    paths.append(state)
+    except OSError as error:
+        issue(projects, error, 'qoderStateRead')
+        return
+    cursors = request.get('qoderStateCursors') or {}
+    reset = bool(request.get('qoderStateReset'))
+    keys = None
+    batch, amount = [], 0
+
+    def flush():
+        nonlocal batch, amount
+        if batch:
+            emit('qoderState', keys=keys or [], states=batch)
+            batch, amount = [], 0
+
+    for path in paths:
+        try:
+            with open(path, 'rb') as stream:
+                raw = stream.read()
+            signature = hashlib.sha256(raw).hexdigest()
+            if not reset and cursors.get(path) == signature:
+                continue
+            value = json.loads(raw)
+        except (OSError, ValueError, UnicodeDecodeError) as error:
+            issue(path, error, 'qoderStateRead')
+            continue
+        session_id = value.get('sessionId')
+        if not isinstance(session_id, str) or not session_id:
+            session_id = os.path.basename(os.path.dirname(path))
+        item = ((value.get('items') or {}).get('s0')) if isinstance(value.get('items'), dict) else None
+        if not isinstance(item, dict) or not all(isinstance(item.get(k), str) for k in ('n', 'p', 't')):
+            continue
+        hashes = _qoder_project_hashes(path, value, session_id)
+        if not hashes:
+            issue(path, '无法确定 Qoder 会话项目路径，历史总量暂未补足', 'qoderStateRead')
+            continue
+        if keys is None:
+            keys = _qoder_keys(root)
+        if not keys:
+            issue(path, '未找到可读取的 qodercli 状态密钥，历史 Token 总量暂未补足', 'qoderStateKey')
+            return
+        state = dict(path=path, signature=signature, sessionId=session_id,
+                     createdAt=value.get('createdAt'), updatedAt=value.get('updatedAt'),
+                     segmentKey='s0', projectHashes=hashes,
+                     n=item['n'], p=item['p'], t=item['t'])
+        encoded = len(json.dumps(state).encode('utf-8'))
+        if batch and amount + encoded > 700 * 1024:
+            flush()
+        batch.append(state)
+        amount += encoded
+    flush()
+
 
 def _incremental(request):
     import hashlib
@@ -659,6 +826,7 @@ def _incremental(request):
                         issue(path, error)
         if provider == 'codex':
             _native_routes(root, request.get('routeCursor') or {}, emit)
+        _qoder_states(root, request, emit, issue)
         if provider=='cursor' and _cursor_private_history(root):
             issue(root,'Cursor 私有会话库的请求 Token 暂未接入；仅导入标准 JSONL，上下文占用不计入累计用量。','unsupportedNativeHistory')
         emit('done', files=file_count, readBytes=read_bytes, scannedRecords=scanned_records, issues=issues,

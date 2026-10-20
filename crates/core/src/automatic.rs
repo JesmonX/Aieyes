@@ -1532,6 +1532,7 @@ mod tests {
                         category: if api { "api" } else { "subscription" }.into(),
                         evidence: "fixture".into(),
                     },
+                    raw_tokens: None,
                     interval_start: Some(q.updated_at),
                     import_identity: None,
                     session_id: "session".into(),

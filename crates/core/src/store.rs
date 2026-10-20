@@ -76,6 +76,7 @@ impl Store {
         crate::native_credits::setup(&db)?;
         crate::quota_notifications::setup(&db)?;
         crate::remote_history::setup(&db)?;
+        crate::qoder_state::setup(&db)?;
         crate::codex_api::usage::setup(&db)?;
         crate::history_corrections::setup(&db)?;
         crate::codex_routes::setup(&db)?;
@@ -578,6 +579,7 @@ impl Store {
                             "DELETE FROM native_pending WHERE source_id=?1",
                             [&source.id],
                         )?;
+                        tx.execute("DELETE FROM qoder_state WHERE source_id=?1", [&source.id])?;
                         tx.execute("DELETE FROM source_status WHERE source_id=?1", [&source.id])?;
                     } else {
                         if old.account_id != source.account_id {
@@ -601,6 +603,10 @@ impl Store {
                                 "DELETE FROM remote_cursors WHERE source_id=?1",
                                 [&source.id],
                             )?;
+                            // Residual rows describe the old directory only.
+                            tx.execute("DELETE FROM event_sources WHERE event_id IN (SELECT id FROM events WHERE json_extract(payload,'$.attribution')='qoder-residual' AND json_extract(payload,'$.sourceId')=?1)", [&source.id])?;
+                            tx.execute("DELETE FROM events WHERE json_extract(payload,'$.attribution')='qoder-residual' AND json_extract(payload,'$.sourceId')=?1", [&source.id])?;
+                            tx.execute("DELETE FROM qoder_state WHERE source_id=?1", [&source.id])?;
                             tx.execute(
                                 "DELETE FROM source_status WHERE source_id=?1",
                                 [&source.id],
@@ -920,11 +926,21 @@ impl Store {
             next.account_id = prior.account_id;
             next.timestamp = next.timestamp.min(prior.timestamp);
             next.source_id = prior.source_id;
-            next.tokens.input = next.tokens.input.max(prior.tokens.input);
-            next.tokens.output = next.tokens.output.max(prior.tokens.output);
-            next.tokens.cache_read = next.tokens.cache_read.max(prior.tokens.cache_read);
-            next.tokens.cache_write = next.tokens.cache_write.max(prior.tokens.cache_write);
-            next.tokens.reasoning = next.tokens.reasoning.max(prior.tokens.reasoning);
+            // Parser 9 splits Qoder's inclusive first-party prompt count into
+            // ordinary input plus cached input. A v8 row still has input == raw
+            // input, so the normal max would preserve the old double count.
+            let qoder_legacy_inclusive = next.provider == "qoder"
+                && next.raw_tokens.as_ref().is_some_and(|raw| {
+                    prior.raw_tokens.is_none() && prior.tokens.input == raw.input
+                });
+            if !qoder_legacy_inclusive {
+                next.tokens.input = next.tokens.input.max(prior.tokens.input);
+                next.tokens.output = next.tokens.output.max(prior.tokens.output);
+                next.tokens.cache_read = next.tokens.cache_read.max(prior.tokens.cache_read);
+                next.tokens.cache_write = next.tokens.cache_write.max(prior.tokens.cache_write);
+                next.tokens.reasoning = next.tokens.reasoning.max(prior.tokens.reasoning);
+            }
+            next.raw_tokens = next.raw_tokens.take().or(prior.raw_tokens.clone());
         }
         // A proved counter correction is authoritative even when an older parser
         // or a second copy later supplies the original, larger cumulative value.
@@ -1578,7 +1594,9 @@ fn add_aggregate(a: &mut Aggregate, e: &UsageEvent, cost: f64, n: u64) {
     a.total = a.tokens.total();
     a.cost += cost;
     a.priced_tokens += n;
-    a.events += 1;
+    if e.attribution != "qoder-residual" {
+        a.events += 1;
+    }
 }
 pub fn home() -> PathBuf {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
