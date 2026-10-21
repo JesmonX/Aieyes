@@ -71,7 +71,6 @@ dependencies = [
  "gdkx11",
  "gtk",
  "ksni",
- "libloading",
  "minisign-verify",
  "pangocairo",
  "png 0.18.1",

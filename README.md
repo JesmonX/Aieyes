@@ -90,7 +90,10 @@ sh scripts/build-macos.sh debug
 Tauri 界面在安装目标系统构建依赖后运行：
 
 ```sh
+# Linux
 cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
+# Windows / macOS Tauri
+cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol,native-tray
 ```
 
 Windows 使用 `./scripts/build-desktop.ps1 debug`；Linux 使用 `sh scripts/build-desktop.sh debug`。将 `debug` 改为 `release` 可构建安装包，需要先安装 Tauri v2 CLI。macOS DMG 使用 `sh scripts/build-macos.sh release --dmg`，并需要 Python 3.11+。完整依赖、操作方式和平台验证范围见 [Windows / Linux 桌面版](docs/windows-linux.md)。

@@ -124,14 +124,17 @@ class IncrementalHistory(unittest.TestCase):
         import base64
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory);key=bytes(range(32));fake=root/'qodercli'
-            fake.write_bytes(b'prefix zMt=Buffer.from(['+b','.join(str(v).encode() for v in key)+b']) suffix')
+            fake.write_bytes(b'prefix Zjt=Buffer.from(['+b','.join(str(v).encode() for v in key)+b']) suffix')
             state=root/'projects/p/session/state.json';state.parent.mkdir(parents=True)
             payload=dict(sessionId='session',createdAt='2026-10-18T04:29:24.846Z',updatedAt='2026-10-18T04:29:24.851Z',workspaceDirectories=[str(root/'workspace')],items=dict(s0=dict(n=base64.b64encode(b'n'*12).decode(),p=base64.b64encode(b'PRIVATE_CIPHERTEXT').decode(),t=base64.b64encode(b't'*16).decode())))
             state.write_text(json.dumps(payload));transcript=root/'projects/p/session.jsonl';transcript.write_text(json.dumps(dict(type='assistant',cwd=str(root/'workspace')))+'\n')
+            broken=root/'projects/p/broken/state.json';broken.parent.mkdir();broken.write_text('[]')
             with patch.dict(os.environ, {'QODER_CLI_PATH': str(fake)}):
                 frames=collect(root,'qoder')
                 self.assertNotIn('PRIVATE_',json.dumps(frames))
                 states=[f for f in frames if f['kind']=='qoderState']
+                self.assertTrue(frames[-1]['partial'])
+                self.assertTrue(any(issue['code']=='qoderStateRead' for issue in frames[-1]['issues']))
                 self.assertEqual(len(states),1)
                 self.assertIn(base64.b64encode(key).decode(),states[0]['keys'])
                 self.assertEqual(states[0]['states'][0]['sessionId'],'session')

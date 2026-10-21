@@ -156,6 +156,7 @@ def main():
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--core', type=Path, required=True)
     parser.add_argument('--virtual', action='store_true', help='Use isolated Xvfb/Openbox instead of the current desktop')
+    parser.add_argument('--desktop', default='GNOME', help='Desktop environment advertised to the application (e.g. KDE)')
     parser.add_argument('--duration', type=int, default=600)
     parser.add_argument('--report', type=Path, default=Path('.local/linux-native'))
     args = parser.parse_args()
@@ -163,7 +164,7 @@ def main():
     args.report.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix='aieyes-gtk-acceptance-'))
     env = dict(os.environ, XDG_RUNTIME_DIR=f'/run/user/{os.getuid()}', XDG_SESSION_TYPE='wayland',
-               XDG_CURRENT_DESKTOP='GNOME', DBUS_SESSION_BUS_ADDRESS=f'unix:path=/run/user/{os.getuid()}/bus',
+               XDG_CURRENT_DESKTOP=args.desktop, DBUS_SESSION_BUS_ADDRESS=f'unix:path=/run/user/{os.getuid()}/bus',
                AIEYES_DATA_DIR=str(root/'data'), AIEYES_LINUX_TRACE='1')
     env.pop('GDK_BACKEND', None)
     (root/'data').mkdir()
@@ -176,7 +177,8 @@ def main():
     backdrop = None
     video = None
     screen = None
-    report = {'binary': str(args.binary), 'dataDirectory': str(root/'data'), 'virtual':args.virtual, 'checks': [], 'samples': 0}
+    report = {'binary': str(args.binary), 'dataDirectory': str(root/'data'), 'virtual':args.virtual, 'desktop':args.desktop, 'checks': [], 'samples': 0}
+    panel = None
     try:
         if args.virtual:
             env['WEBKIT_DISABLE_COMPOSITING_MODE']='1'

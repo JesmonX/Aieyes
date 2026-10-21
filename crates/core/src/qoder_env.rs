@@ -133,7 +133,11 @@ fn merge_file(path: &Path) -> std::io::Result<bool> {
     } else {
         path.to_path_buf()
     };
-    let old = fs::read_to_string(&path).unwrap_or_default();
+    let old = match fs::read_to_string(&path) {
+        Ok(old) => old,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
     let block = format!("{START}\nexport {ENV_NAME}={ENV_VALUE}\n{END}\n");
     let next = if let Some(start) = old.find(START) {
         if let Some(relative) = old[start + START.len()..].find(END) {
@@ -178,31 +182,19 @@ fn atomic_write(path: &Path, content: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("qoder-env");
-    let temporary = path.with_file_name(format!(
-        ".{name}.aieyes-{}-{}",
-        std::process::id(),
-        crate::models::now()
-    ));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&temporary)?;
+    let mut file = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
     file.write_all(content)?;
-    file.sync_all()?;
+    file.as_file().sync_all()?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = fs::metadata(path)
             .map(|m| m.permissions().mode())
             .unwrap_or(0o644);
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(mode))?;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(mode))?;
     }
-    fs::rename(&temporary, path)?;
+    file.persist(path).map_err(|error| error.error)?;
     Ok(())
 }
 
@@ -294,6 +286,20 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_shell_content_is_never_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(".profile");
+        let bytes = b"export KEEP=\xff\n";
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            merge_file(&path).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert!(merge_file(root.path()).is_err());
+    }
 
     #[test]
     fn managed_block_is_idempotent_and_replaces_old_values() {

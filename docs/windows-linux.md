@@ -29,11 +29,11 @@ Windows 正文、表单、图表和原生桌宠使用随应用内置的 HarmonyO
 
 ## Linux 桌面适配
 
-每约 15 秒检查 AppIndicator 动态库和会话 D-Bus 的 `org.kde.StatusNotifierWatcher.IsStatusNotifierHostRegistered`。检测通过时创建 StatusNotifierItem 托盘；托盘服务直接通过 D-Bus 提供，不依赖当前 GTK/GDK 后端，因此在 XWayland 桌宠模式下也不会随窗口后端失效。服务未注册、库缺失、查询失败或图标创建失败时回退为桌宠。托盘服务恢复后，明确选择托盘的用户恢复托盘显示。
+每约 15 秒检查会话 D-Bus 的 `org.kde.StatusNotifierWatcher.IsStatusNotifierHostRegistered`。检测通过时创建 StatusNotifierItem 托盘；托盘服务直接通过 D-Bus 提供，不依赖当前 GTK/GDK 后端，因此在 XWayland 桌宠模式下也不会随窗口后端失效。服务未注册、查询失败或图标创建失败时回退为桌宠；无需安装 AppIndicator 动态库。托盘服务恢复后，明确选择托盘的用户恢复托盘显示。
 
 Linux 在桌宠模式也保留可用的托盘图标。检测工具为 GLib 提供的 `gdbus`；没有此工具时采用桌宠。GNOME 通常需要桌面提供 AppIndicator/StatusNotifier 扩展才能显示托盘；KDE 等桌面是否显示图标旁文字取决于具体实现。托盘使用标准 DBusMenu，所有必需操作（打开面板、打开详情、设置、检查更新、隐藏/恢复桌宠、退出）均通过原生菜单提供。
 
-GNOME Wayland 会话中，未设置 `GDK_BACKEND` 且 XWayland 可连接时自动使用 X11 后端，以支持桌宠定位、置顶和完整的外部点击关闭。显式设置 `GDK_BACKEND=wayland` 时保留原生 Wayland；绝对定位与置顶受合成器限制，仍可用托盘、Esc 和面板关闭按钮操作。应用不会修改系统会话或桌面扩展。
+Wayland 会话中，未设置 `GDK_BACKEND` 且 XWayland 可连接时自动使用 X11 后端，以支持桌宠定位、置顶和完整的外部点击关闭。显式设置 `GDK_BACKEND=wayland` 时保留原生 Wayland；绝对定位与置顶受合成器限制，仍可用托盘、Esc 和面板关闭按钮操作。应用不会修改系统会话或桌面扩展。
 
 ## 会话范围
 
@@ -66,7 +66,7 @@ npm install --global @tauri-apps/cli@2
 ```sh
 sudo apt-get update
 sudo apt-get install -y build-essential pkg-config libssl-dev \
-  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+  libwebkit2gtk-4.1-dev librsvg2-dev \
   patchelf libglib2.0-bin openssh-client
 
 # 开发版
@@ -78,7 +78,7 @@ npm install --global @tauri-apps/cli@2
 sh scripts/build-desktop.sh release
 ```
 
-输出目录：`apps/desktop/src-tauri/target/release/bundle/`。DEB/RPM 声明了 WebKitGTK、GTK、AppIndicator、GLib 工具、polkit 和 SSH 客户端运行依赖。Fedora 推荐 RPM，以使用系统维护的图形运行库；AppImage 提供便携运行。AppImage 所在系统仍需提供桌面服务；无托盘服务时使用桌宠。缺少 FUSE 的系统可尝试 `./Aieyes*.AppImage --appimage-extract-and-run`。
+输出目录：`apps/desktop/src-tauri/target/release/bundle/`。DEB/RPM 声明了 WebKitGTK、GTK、GLib 工具、polkit 和 SSH 客户端运行依赖。Fedora 推荐 RPM，以使用系统维护的图形运行库；AppImage 提供便携运行。AppImage 所在系统仍需提供桌面服务；无托盘服务时使用桌宠。缺少 FUSE 的系统可尝试 `./Aieyes*.AppImage --appimage-extract-and-run`。
 
 CLI 也可使用 `cargo install tauri-cli --version '^2' --locked` 安装；构建脚本会优先选择已安装的 `tauri` 命令，其次使用 `cargo tauri`。npm 预编译版本安装更快，Node 仅用于构建与测试，运行应用无需 Node。
 
@@ -89,13 +89,13 @@ sudo dnf install ./Aieyes-版本-linux-x64.rpm
 /usr/bin/aieyes-desktop
 ```
 
-RPM 依赖 `webkit2gtk4.1`、`gtk3`、`libayatana-appindicator-gtk3`、`glib2`、`openssh-clients` 和 `polkit`，推荐 `xorg-x11-server-Xwayland`。GNOME 的顶部托盘仍需要 AppIndicator 扩展；扩展缺失时应用保留桌宠入口。
+RPM 依赖 `webkit2gtk4.1`、`gtk3`、`glib2`、`openssh-clients` 和 `polkit`，推荐 `xorg-x11-server-Xwayland`。GNOME 的顶部托盘仍需要 AppIndicator 扩展；扩展缺失时应用保留桌宠入口。
 
 从解包后的 AppImage 迁移时，先退出旧进程，再安装 RPM。默认数据目录相同，账户、历史和桌宠库沿用原数据。检查 `~/.local/bin/aieyes` 与 `~/.local/share/applications/aieyes.desktop`：若仍指向旧的 `AppRun`，停用该旧启动器，使用 RPM 安装的启动项或 `/usr/bin/aieyes-desktop`；应用不会自动覆盖自定义启动器。解包目录本身不会被识别为已安装 RPM。
 
 ## 包体积与原生窗口验收
 
-Linux 构建在 Cargo `OUT_DIR` 暂存前端资源，排除 Windows 的三份 HarmonyOS 字体，原始字体及许可保持不变。独立桌面 Cargo 工程启用符号剥离、Thin LTO 与单个 codegen unit，保留 panic unwind。`scripts/check-linux-package-size.py` 检查 DEB 内的两个 ELF 均不带符号表，桌面程序不含 Windows 字体资源，并报告三个安装包体积。正式 Linux 分发仍在 Ubuntu 22.04 构建；在 Fedora 上生成的测试包不作为通用 glibc 兼容基线。
+Linux 构建脚本使用 `--no-default-features`，仅使用 ksni 托盘；Windows/macOS 的平台配置显式启用 `native-tray` 特性。Linux 构建在 Cargo `OUT_DIR` 暂存前端资源，排除 Windows 的三份 HarmonyOS 字体，原始字体及许可保持不变。独立桌面 Cargo 工程启用符号剥离、Thin LTO 与单个 codegen unit，保留 panic unwind。`scripts/check-linux-package-size.py` 检查 DEB 内的两个 ELF 均不带符号表，桌面程序不含 Windows 字体资源，并报告三个安装包体积。正式 Linux 分发仍在 Ubuntu 22.04 构建；在 Fedora 上生成的测试包不作为通用 glibc 兼容基线。
 
 ```sh
 python3 scripts/check-linux-package-size.py
@@ -107,6 +107,8 @@ python3 scripts/test-linux-desktop.py \
 
 窗口验收脚本需要 Python GObject、Pillow、GNOME Shell、Xwayland 和 libXtst。真实 GNOME 会话覆盖托盘注册、100 次托盘菜单开关、桌宠置顶与位置保留、600 秒桌宠区域录屏及黑帧检测；隔离 Xvfb 会话另覆盖桌宠点击、桌面外部点击和 Esc。截图、录屏和 JSON 报告位于指定的报告目录。
 
+增加 `--virtual --desktop KDE` 可在隔离 Xvfb 中验证非 GNOME 的 Wayland 环境标识仍选择 X11 兼容后端；此模拟不代替 KDE 实机会话验收。
+
 ## 数据与验证
 
 Tauri 默认数据目录由系统应用数据路径和 `app.aieyes.desktop` 标识组成：Windows 为 `%APPDATA%\app.aieyes.desktop`，Linux 通常为 `~/.local/share/app.aieyes.desktop`（遵循 `XDG_DATA_HOME`）。`AIEYES_DATA_DIR` 可以覆盖此目录。独立核心 CLI 的默认数据路径与 Tauri 不同，如需共享请显式传入同一目录。
@@ -115,8 +117,9 @@ Tauri 默认数据目录由系统应用数据路径和 `app.aieyes.desktop` 标�
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 node --test scripts/test-desktop.mjs
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
-cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --features custom-protocol -- -D warnings
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --no-default-features --features custom-protocol
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --no-default-features --features custom-protocol -- -D warnings
+# Windows/macOS 直接 Cargo 构建时增加 --features native-tray
 ```
 
 `.github/workflows/desktop.yml` 在 main 更新或 PR 时构建 Windows / Ubuntu 安装包，生成 CI artifacts。默认执行 JavaScript 语法、交互、版本与发布校验，并在 Linux 运行浏览器集成测试及截图；Rust 直接进行一次 release 构建。使用 Rust 依赖缓存、npm 预编译 Tauri CLI、取消同分支过期任务及免压缩上传来加快构建。需要完整 Rust 测试时，可手动运行工作流并勾选 `full_checks`。

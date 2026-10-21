@@ -56,7 +56,7 @@ def _merge(path):
     try:
         with open(path, "rb") as stream:
             old = stream.read()
-    except OSError:
+    except FileNotFoundError:
         old = b""
     block = _block()
     start, end = START.encode(), END.encode()

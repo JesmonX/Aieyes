@@ -24,7 +24,7 @@
 | [verify-update-transfer.swift](../scripts/verify-update-transfer.swift) | 可选真实联网读取、下载和签名校验；需要包含 Sparkle 更新源、公钥的临时 plist，见 [传输说明](macos-performance-and-update-transport.md)；不安装更新 |
 | [test-ui-native-render.sh](../scripts/test-ui-native-render.sh) | `sh scripts/test-ui-native-render.sh`，合成场景原生截图矩阵；可用 `AIEYES_RENDER_BINARY`、`AIEYES_RENDER_ROOT` 指定构建与输出 |
 
-Tauri 宿主测试先运行 `node scripts/prepare-wakeup.cjs --debug`，再运行 `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol`。打包资源只匹配真实核心二进制，CI 也按此顺序准备资源。
+Tauri 宿主测试先运行 `node scripts/prepare-wakeup.cjs --debug`，再运行 `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol`。Windows/macOS Tauri 测试在上述 Cargo 命令中增加 `--features native-tray`；Linux 不启用此特性。打包资源只匹配真实核心二进制，CI 也按此顺序准备资源。
 
 测试输出放在 `.local/`；历史快照与过期安装包放在 `.local/archive/YYYY-MM-DD/`。这些文件不代表当前源码或可发布产物。
 

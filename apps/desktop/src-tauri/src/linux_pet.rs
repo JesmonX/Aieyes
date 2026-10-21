@@ -38,13 +38,8 @@ struct Surface {
 /// Select the compatibility backend before GTK or worker threads start. Explicit
 /// user backend choices win, and an unavailable X server never prevents startup.
 pub fn configure_backend() {
-    let gnome = std::env::var("XDG_CURRENT_DESKTOP")
-        .unwrap_or_default()
-        .to_uppercase()
-        .contains("GNOME");
     if std::env::var_os("GDK_BACKEND").is_none()
         && std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland")
-        && gnome
         && std::env::var_os("DISPLAY").is_some()
         && x11rb::connect(None).is_ok()
     {

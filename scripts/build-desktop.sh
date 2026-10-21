@@ -8,7 +8,11 @@ if [ "${AIEYES_OFFLINE:-0}" = 1 ]; then export CARGO_NET_OFFLINE=true; fi
 cd "$PROJECT_DIR/apps/desktop"
 if [ "$BUILD_MODE" = debug ]; then
   node ../../scripts/prepare-wakeup.cjs --debug
-  cargo build --manifest-path src-tauri/Cargo.toml --locked --features custom-protocol
+  if [ "$(uname -s)" = Linux ]; then
+    cargo build --manifest-path src-tauri/Cargo.toml --locked --no-default-features --features custom-protocol
+  else
+    cargo build --manifest-path src-tauri/Cargo.toml --locked --features custom-protocol,native-tray
+  fi
   echo "$PROJECT_DIR/apps/desktop/src-tauri/target/debug/aieyes-desktop"
 else
   if [ "$(uname -s)" = Darwin ]; then exec sh "$PROJECT_DIR/scripts/build-macos-tauri.sh"; fi
@@ -18,7 +22,7 @@ else
     exit 1
   fi
   case "$(uname -s)" in
-    Linux) "$@" build --ci --bundles deb,rpm,appimage -- --locked ;;
+    Linux) "$@" build --ci --bundles deb,rpm,appimage -- --locked --no-default-features ;;
     *) echo 'Use scripts/build-desktop.ps1 for Windows.' >&2; exit 2 ;;
   esac
   echo "$PROJECT_DIR/apps/desktop/src-tauri/target/release/bundle"

@@ -13,6 +13,7 @@ body[data-view=panel] { display:block; justify-items:normal; user-select:text; }
 .panel-head { display:grid; grid-template-columns:var(--panel-head-icon-size) minmax(0,1fr) var(--panel-head-icon-size); align-items:center; gap:12px; margin:0; padding:var(--panel-head-padding-y) var(--panel-chrome-inset); flex-shrink:0; border-bottom:1px solid var(--border); }
 .panel-mark { display:grid; place-items:center; width:var(--panel-head-icon-size); height:var(--panel-head-icon-size); }
 .panel-head .panel-tabs { width:var(--panel-tabs-width); max-width:100%; justify-self:center; }
+.panel-head .panel-tabs button { padding:3px 8px; white-space:nowrap; justify-content:center; }
 .panel-refresh-wrap { position:relative; justify-self:end; }
 #panel-refresh,.panel-actions > button,.panel-more > summary { display:grid; place-items:center; width:var(--icon-button-size); height:var(--icon-button-size); min-height:0; padding:0; border:0; border-radius:var(--radius-control); background:transparent; color:var(--muted); box-shadow:none; }
 #panel-refresh { width:var(--panel-head-icon-size); height:var(--panel-head-icon-size); }

@@ -109,8 +109,8 @@ AIEYES_UI_OUT=.local/windows-appearance/after node scripts/test-windows-ui.cjs
 node scripts/test-agent-settings-ui.cjs
 node scripts/test-theme-sync-ui.cjs
 pwsh -File scripts/test-windows-panel.ps1
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
-cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --features custom-protocol -- -D warnings
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol,native-tray
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --features custom-protocol,native-tray -- -D warnings
 ```
 
 浏览器检查覆盖六类数据场景、浅深色、设置页、640 × 440、侧栏开关、100% / 125% / 150% / 200% 缩放、实际渲染字体、两窗口独立材质、减少透明度、高对比度及本地字体许可。它检查 CSS 的透明度与布局，不代表真实 DWM 毛玻璃验收。

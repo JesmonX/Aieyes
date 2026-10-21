@@ -581,18 +581,8 @@ fn tray_supported() -> bool {
 }
 #[cfg(target_os = "linux")]
 fn tray_supported() -> bool {
-    // libappindicator panics without its dynamic library. Probe before building a tray.
-    let library = [
-        "libayatana-appindicator3.so.1",
-        "libappindicator3.so.1",
-        "libayatana-appindicator3.so",
-        "libappindicator3.so",
-    ]
-    .iter()
-    .any(|name| unsafe { libloading::Library::new(name).is_ok() });
-    if !library {
-        return false;
-    }
+    // Our StatusNotifierItem is served directly over D-Bus and does not require
+    // AppIndicator libraries. Only a registered tray host makes it usable.
     // A watcher can exist with no registered host (GNOME without an indicator extension).
     let mut command = std::process::Command::new("gdbus");
     command.args([

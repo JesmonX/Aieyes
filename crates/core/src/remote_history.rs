@@ -155,7 +155,8 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
                 count += apply_batch(&store, settings, source, &config, &prices, &frame)?;
             }
             Some("qoderState") => {
-                let report = crate::qoder_state::apply_remote_frame(&store, source, &frame)?;
+                let report =
+                    crate::qoder_state::apply_remote_frame(&store, settings, source, &frame)?;
                 qoder_issues.extend(report.issues);
             }
             Some("done") => {

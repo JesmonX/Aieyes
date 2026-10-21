@@ -439,7 +439,8 @@ def _qoder_keys(root):
         except OSError:
             pass
     keys = []
-    marker = b'zMt=Buffer.from(['
+    # The minified variable name changes between platforms and CLI versions.
+    marker = b'Buffer.from(['
     pattern = re.compile(re.escape(marker) + rb'([\d,]+)\]\)')
     for path in dict.fromkeys(candidates):
         if not path or not os.path.isfile(path):
@@ -475,7 +476,8 @@ def _qoder_hash(path):
 
 def _qoder_project_hashes(path, value, session_id):
     roots = []
-    for root in value.get('workspaceDirectories') or []:
+    directories = value.get('workspaceDirectories')
+    for root in directories if isinstance(directories, list) else []:
         if isinstance(root, str) and root:
             roots.append(root)
     project = os.path.dirname(os.path.dirname(path))
@@ -548,6 +550,8 @@ def _qoder_states(root, request, emit, issue):
             if not reset and cursors.get(path) == signature:
                 continue
             value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise ValueError('Qoder 会话状态必须是对象')
         except (OSError, ValueError, UnicodeDecodeError) as error:
             issue(path, error, 'qoderStateRead')
             continue

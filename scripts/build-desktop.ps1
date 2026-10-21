@@ -13,7 +13,7 @@ try {
     if ($Mode -eq 'debug') {
         & node ../../scripts/prepare-wakeup.cjs --debug
         if ($LASTEXITCODE -ne 0) { throw 'Wakeup runner build failed.' }
-        & cargo build --manifest-path src-tauri/Cargo.toml --locked --features custom-protocol
+        & cargo build --manifest-path src-tauri/Cargo.toml --locked --features 'custom-protocol,native-tray'
         if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed.' }
         Write-Output (Join-Path $ProjectDir 'apps/desktop/src-tauri/target/debug/aieyes-desktop.exe')
     } else {

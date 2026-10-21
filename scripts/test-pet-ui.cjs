@@ -166,7 +166,17 @@ function fixture(data){
       });assert(colors.visible>0);assert.equal(colors.fringe,0,'Isolated premultiplied frames have no black/white or neighboring-frame fringe at '+scale);
     }
     await page.evaluate(()=>{petTest.info.petScale=1;petTest.emit({...petTest.info.pet,label:'思考中'});});
-    await page.locator('#ball').click();assert.equal(await page.locator('body').getAttribute('data-view'),'panel');await page.keyboard.press('Escape');assert.equal(await page.locator('body').getAttribute('data-view'),'ball');
+    await page.locator('#ball').click();assert.equal(await page.locator('body').getAttribute('data-view'),'panel');
+    await page.setViewportSize({width:450,height:720});
+    await page.evaluate(()=>{document.body.classList.add('sidebar-collapsed');document.body.style.setProperty('--font-entry','14px');});
+    const navigation=await page.locator('.panel-head .panel-tabs').evaluate(nav=>{
+      const box=nav.getBoundingClientRect();
+      return {center:(box.left+box.right)/2,lines:[...nav.children].map(button=>{const range=document.createRange();range.selectNodeContents(button);return range.getClientRects().length;})};
+    });
+    assert.deepEqual(navigation.lines,[1,1],'panel labels stay on one line with collapsed sidebar styles');
+    assert(Math.abs(navigation.center-225)<1,'Linux panel navigation stays centered beside the close/refresh actions');
+    await page.keyboard.press('Escape');assert.equal(await page.locator('body').getAttribute('data-view'),'ball');
+    await page.setViewportSize({width:480,height:780});
     await page.locator('#ball').focus();await page.keyboard.press('Enter');assert.equal(await page.locator('body').getAttribute('data-view'),'panel');await page.keyboard.press('Escape');
     await page.locator('#ball').dispatchEvent('pointerdown',{button:0,buttons:1,clientX:50,clientY:60});await page.locator('#ball').dispatchEvent('pointermove',{buttons:1,clientX:65,clientY:70});assert.equal(await page.evaluate(()=>petTest.dragged),true);
     await page.emulateMedia({forcedColors:'active'});await page.locator('#ball').screenshot({path:path.join(out,'high-contrast.png')});

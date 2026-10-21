@@ -1,6 +1,7 @@
 {
   "productName": "Aieyes Tauri",
   "identifier": "app.aieyes.desktop.tauri",
+  "build": { "features": ["native-tray"] },
   "bundle": {
     "targets": ["app"],
     "macOS": {

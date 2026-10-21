@@ -29,7 +29,7 @@ macOS 使用 UserNotifications；Windows/Linux 使用 Tauri 通知插件。Windo
 ## 验证入口
 
 - Rust：`cargo test --workspace --locked`；通知专项为 `cargo test -p aieyes-core quota_notifications --lib`，包含真实查询提交、事务回滚、并发消费、重启、套餐变更和原生轮询场景。
-- 桌面宿主：`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --bin aieyes-desktop`。
+- 桌面宿主：`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --bin aieyes-desktop`（Windows/macOS Tauri 增加 `--features native-tray`）。
 - Web：`scripts/test-notifications-ui.cjs`、`scripts/test-agent-settings-ui.cjs`、设置导航、刷新和性能回归；已加入 `npm run test:ui`。
 - macOS：`scripts/test-native.sh` 验证真实核心的设置往返与自动保存；原生截图覆盖新增通知页的浅色、深色布局。快照和模型测试实例不访问用户通知中心。
 

@@ -21,7 +21,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, ubuntu-22.04]
+        include:
+          - os: windows-2022
+            features: custom-protocol,native-tray
+          - os: ubuntu-22.04
+            features: custom-protocol
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     steps:
@@ -42,7 +46,7 @@ jobs:
           python-version: '3.12'
       - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libglib2.0-bin rpm
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf libglib2.0-bin rpm
       - name: Shared checks
         shell: bash
         run: sh scripts/ci-checks.sh
@@ -72,8 +76,8 @@ jobs:
         run: cargo test -p aieyes-core codex_auth --locked
       - name: Desktop shell tests
         run: |
-          cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --features custom-protocol -- -D warnings
-          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol
+          cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --no-default-features --features "${{ matrix.features }}" -- -D warnings
+          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --no-default-features --features "${{ matrix.features }}"
       - name: Optional Rust tests
         if: inputs.full_checks == true
         shell: bash

@@ -2,9 +2,9 @@
   "bundle": {
     "targets": ["deb", "rpm", "appimage"],
     "linux": {
-      "deb": { "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1", "libglib2.0-bin", "openssh-client", "pkexec | policykit-1"] },
+      "deb": { "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libglib2.0-bin", "openssh-client", "pkexec | policykit-1"] },
       "rpm": {
-        "depends": ["webkit2gtk4.1", "gtk3", "libayatana-appindicator-gtk3", "glib2", "openssh-clients", "polkit"],
+        "depends": ["webkit2gtk4.1", "gtk3", "glib2", "openssh-clients", "polkit"],
         "recommends": ["xorg-x11-server-Xwayland"],
         "compression": { "type": "xz", "level": 6 }
       }

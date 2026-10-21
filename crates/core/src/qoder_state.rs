@@ -25,7 +25,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-const STATE_KEY_MARKER: &[u8] = b"zMt=Buffer.from([";
+// Minified binding names differ across CLI versions and operating systems.
+// AES-GCM authentication selects the matching key from 32-byte Buffer literals.
+const STATE_KEY_MARKER: &[u8] = b"Buffer.from([";
 const SEGMENT: &str = "s0";
 
 #[derive(Debug, Default)]
@@ -229,6 +231,8 @@ fn apply_pending(
             })
             .unwrap_or_else(now);
         let updated_at = persisted_timestamp(&item.value["updatedAt"]).unwrap_or(created_at);
+        let tx = store.write_transaction()?;
+        crate::import::current_settings(store, settings, source)?;
         store.db.execute(
             "INSERT INTO qoder_state(source_id,path,session_id,signature,created_at,updated_at,tokens)
              VALUES(?1,?2,?3,?4,?5,?6,?7)
@@ -243,6 +247,7 @@ fn apply_pending(
                 serde_json::to_string(&tokens)?,
             ],
         )?;
+        tx.commit()?;
         report.changed += 1;
     }
     let reconciled = reconcile(store, source, prices, settings)?;
@@ -251,7 +256,12 @@ fn apply_pending(
     Ok(report)
 }
 
-pub(crate) fn apply_remote_frame(store: &Store, source: &Source, frame: &Value) -> Result<Report> {
+pub(crate) fn apply_remote_frame(
+    store: &Store,
+    settings: &Settings,
+    source: &Source,
+    frame: &Value,
+) -> Result<Report> {
     let mut report = Report::default();
     let keys = decode_keys(frame)?;
     let states = frame["states"]
@@ -266,6 +276,7 @@ pub(crate) fn apply_remote_frame(store: &Store, source: &Source, frame: &Value) 
         return Ok(report);
     }
     let tx = store.write_transaction()?;
+    crate::import::current_settings(store, settings, source)?;
     for state in states {
         let path = state["path"].as_str().context("远程 Qoder 状态路径缺失")?;
         let session_id = state["sessionId"]
@@ -492,8 +503,9 @@ pub(crate) fn reconcile(
     if rows.is_empty() {
         return Ok(Report::default());
     }
-    let captured = captured_tokens(store, source)?;
     let tx = store.write_transaction()?;
+    crate::import::current_settings(store, settings, source)?;
+    let captured = captured_tokens(store, source)?;
     let mut report = Report::default();
     for (session_id, path, created_at, raw) in rows {
         let total: Tokens =
@@ -524,8 +536,7 @@ pub(crate) fn reconcile(
                     interval_start: Some(created_at),
                     interval_evidence: "qoder-state-v1".into(),
                 };
-                put_residual(store, &event, prices, settings)?;
-                report.changed += 1;
+                report.changed += u64::from(put_residual(store, &event, prices, settings)?);
             }
             None => {
                 delete_residual(store, &session_id, source)?;
@@ -581,7 +592,7 @@ fn put_residual(
     event: &UsageEvent,
     prices: &[ModelPrice],
     settings: &Settings,
-) -> Result<()> {
+) -> Result<bool> {
     if event.tokens.total() == 0 {
         store
             .db
@@ -589,14 +600,15 @@ fn put_residual(
         store
             .db
             .execute("DELETE FROM events WHERE id=?1", [&event.id])?;
-        return Ok(());
+        return Ok(false);
     }
     let price = pricing::find_price(&event.model, prices, &settings.model_mappings);
     let (cost, covered) = pricing::estimate(&event.tokens, price);
-    store.db.execute(
+    let changed = store.db.execute(
         "INSERT INTO events(id,provider,account_id,model,stamp,payload,cost,priced_tokens,price)
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
-         ON CONFLICT(id) DO UPDATE SET provider=excluded.provider,account_id=excluded.account_id,model=excluded.model,stamp=excluded.stamp,payload=excluded.payload,cost=excluded.cost,priced_tokens=excluded.priced_tokens,price=excluded.price",
+         ON CONFLICT(id) DO UPDATE SET provider=excluded.provider,account_id=excluded.account_id,model=excluded.model,stamp=excluded.stamp,payload=excluded.payload,cost=excluded.cost,priced_tokens=excluded.priced_tokens,price=excluded.price
+         WHERE events.payload IS NOT excluded.payload OR events.cost IS NOT excluded.cost OR events.priced_tokens IS NOT excluded.priced_tokens OR events.price IS NOT excluded.price",
         params![
             event.id,
             event.provider,
@@ -613,22 +625,35 @@ fn put_residual(
         "INSERT OR IGNORE INTO event_sources VALUES(?1,?2)",
         params![event.id, event.source_id],
     )?;
-    Ok(())
+    Ok(changed > 0)
 }
 
-type KeyCache = Mutex<Option<(Instant, Vec<Vec<u8>>)>>;
+type KeySignature = Vec<(PathBuf, u64, Option<std::time::SystemTime>)>;
+type KeyCache = Mutex<Option<(KeySignature, Instant, Vec<Vec<u8>>)>>;
 
 fn extract_keys(source: &Source) -> Vec<Vec<u8>> {
+    extract_candidate_keys(key_candidates(source))
+}
+
+fn extract_candidate_keys(paths: Vec<PathBuf>) -> Vec<Vec<u8>> {
     static CACHE: LazyLock<KeyCache> = LazyLock::new(|| Mutex::new(None));
+    let signature: KeySignature = paths
+        .iter()
+        .filter_map(|path| {
+            let metadata = fs::metadata(path).ok()?;
+            Some((path.clone(), metadata.len(), metadata.modified().ok()))
+        })
+        .collect();
     if let Ok(cache) = CACHE.lock()
-        && let Some((at, keys)) = cache.as_ref()
+        && let Some((known, at, keys)) = cache.as_ref()
+        && known == &signature
         && at.elapsed() < Duration::from_secs(600)
         && !keys.is_empty()
     {
         return keys.clone();
     }
     let mut keys = Vec::new();
-    for path in key_candidates(source) {
+    for path in paths {
         for key in keys_from_file(&path) {
             if !keys.contains(&key) {
                 keys.push(key);
@@ -636,7 +661,7 @@ fn extract_keys(source: &Source) -> Vec<Vec<u8>> {
         }
     }
     if let Ok(mut cache) = CACHE.lock() {
-        *cache = Some((Instant::now(), keys.clone()));
+        *cache = Some((signature, Instant::now(), keys.clone()));
     }
     keys
 }
@@ -715,11 +740,10 @@ fn keys_from_file(path: &Path) -> Vec<Vec<u8>> {
             }
             start += position + STATE_KEY_MARKER.len();
         }
-        let keep = data.len().saturating_sub(STATE_KEY_MARKER.len() - 1);
+        // The complete 32-byte decimal array may straddle the read boundary,
+        // even when its marker was already entirely inside the previous chunk.
+        let keep = data.len().saturating_sub(STATE_KEY_MARKER.len() + 128);
         carry = data[keep..].to_vec();
-        if carry.len() > 4096 {
-            carry.clear();
-        }
     }
     keys
 }
@@ -737,6 +761,35 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 mod tests {
     use super::*;
     use ring::rand::{SecureRandom, SystemRandom};
+
+    fn save_source(store: &Store, source: &Source) -> Settings {
+        let settings = Settings {
+            sources: vec![source.clone()],
+            accounts: if source.account_id.is_empty() {
+                vec![]
+            } else {
+                vec![Account {
+                    id: source.account_id.clone(),
+                    provider: source.provider.clone(),
+                    name: "Fixture account".into(),
+                    ..Default::default()
+                }]
+            },
+            hosts: source
+                .host_id
+                .iter()
+                .map(|id| Host {
+                    id: id.clone(),
+                    name: "Fixture host".into(),
+                    target: "fixture.invalid".into(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        store.save_settings(&settings).unwrap();
+        settings
+    }
 
     fn encrypt(key: &[u8], session: &str, project: &str, plaintext: &str) -> Value {
         let hash = project_hash(project);
@@ -819,6 +872,16 @@ mod tests {
             .unwrap();
         assert!(residual.contains("qoder-state-v1"));
 
+        let changes = store.db.total_changes();
+        let repeat =
+            sync_local_with_keys(&store, &settings, &source, &[], &[key.to_vec()]).unwrap();
+        assert_eq!((repeat.changed, repeat.residuals), (0, 0));
+        assert_eq!(
+            store.db.total_changes(),
+            changes,
+            "unchanged scans must not invalidate usage caches"
+        );
+
         fs::write(
             root.path().join("projects/p/session/state.json"),
             serde_json::to_vec(&encrypt(
@@ -836,6 +899,35 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
             .unwrap();
         assert_eq!(events, 1);
+
+        let signature: String = store
+            .db
+            .query_row(
+                "SELECT signature FROM qoder_state WHERE source_id=?1",
+                [&source.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mut paused = settings.clone();
+        paused.sources[0].enabled = false;
+        store.save_settings(&paused).unwrap();
+        fs::write(
+            root.path().join("projects/p/session/state.json"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        assert!(sync_local_with_keys(&store, &settings, &source, &[], &[key.to_vec()]).is_err());
+        assert_eq!(
+            store
+                .db
+                .query_row(
+                    "SELECT signature FROM qoder_state WHERE source_id=?1",
+                    [&source.id],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            signature
+        );
     }
 
     #[test]
@@ -848,7 +940,7 @@ mod tests {
             path: root.path().to_string_lossy().into_owned(),
             ..Default::default()
         };
-        let settings = Settings::default();
+        let settings = save_source(&store, &source);
         let key = [3u8; 32];
         let project = root.path().join("workspace");
         fs::create_dir_all(root.path().join("projects/p/session")).unwrap();
@@ -865,6 +957,7 @@ mod tests {
         .unwrap();
         sync_local_with_keys(&store, &settings, &source, &[], &[key.to_vec()]).unwrap();
         source.account_id = "account-2".into();
+        let settings = save_source(&store, &source);
         reconcile(&store, &source, &[], &settings).unwrap();
         let rows: u64 = store
             .db
@@ -897,7 +990,7 @@ mod tests {
             host_id: Some("server".into()),
             ..Default::default()
         };
-        let settings = Settings::default();
+        let settings = save_source(&store, &source);
         let key = [9u8; 32];
         let project = "/srv/workspace";
         let state = encrypt(
@@ -923,7 +1016,7 @@ mod tests {
                 "t":item["t"],
             }],
         });
-        let report = apply_remote_frame(&store, &source, &frame).unwrap();
+        let report = apply_remote_frame(&store, &settings, &source, &frame).unwrap();
         assert_eq!(report.changed, 1);
         let report = reconcile(&store, &source, &[], &settings).unwrap();
         assert_eq!(report.residuals, 1);
@@ -937,18 +1030,27 @@ mod tests {
             .unwrap();
         let event: UsageEvent = serde_json::from_str(&raw).unwrap();
         assert_eq!((event.tokens.input, event.tokens.total()), (50, 90));
+
+        let mut paused = settings.clone();
+        paused.sources[0].enabled = false;
+        store.save_settings(&paused).unwrap();
+        assert!(apply_remote_frame(&store, &settings, &source, &frame).is_err());
+        assert!(reconcile(&store, &source, &[], &settings).is_err());
     }
 
     #[test]
     fn embedded_key_is_found_across_chunk_boundaries() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("qodercli");
-        let key = (0u8..32).collect::<Vec<_>>();
+        let key = vec![255u8; 32];
         let encoded = key.iter().map(u8::to_string).collect::<Vec<_>>().join(",");
-        let mut bytes = vec![b'x'; 4 * 1024 * 1024 - 6];
-        bytes.extend_from_slice(format!("zMt=Buffer.from([{encoded}])").as_bytes());
-        fs::write(&path, bytes).unwrap();
-        assert_eq!(keys_from_file(&path), vec![key]);
+        let embedded = format!("Zjt=Buffer.from([{encoded}])");
+        for offset in [6, STATE_KEY_MARKER.len() + 20, embedded.len() - 1] {
+            let mut bytes = vec![b'x'; 4 * 1024 * 1024 - offset];
+            bytes.extend_from_slice(embedded.as_bytes());
+            fs::write(&path, bytes).unwrap();
+            assert_eq!(keys_from_file(&path), vec![key.clone()], "offset {offset}");
+        }
     }
 
     #[test]
@@ -961,6 +1063,23 @@ mod tests {
             decode_project_dir("-Users-Example-Work").as_deref(),
             Some("/Users/Example/Work")
         );
+    }
+
+    #[test]
+    fn key_cache_tracks_the_binary_for_each_source_and_upgrades() {
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("cli-a");
+        let b = root.path().join("cli-b");
+        let write = |path: &Path, byte: u8| {
+            let digits = vec![byte.to_string(); 32].join(",");
+            fs::write(path, format!("zMt=Buffer.from([{digits}])")).unwrap();
+        };
+        write(&a, 1);
+        write(&b, 2);
+        assert_eq!(extract_candidate_keys(vec![a.clone()]), vec![vec![1; 32]]);
+        assert_eq!(extract_candidate_keys(vec![b.clone()]), vec![vec![2; 32]]);
+        write(&b, 255);
+        assert_eq!(extract_candidate_keys(vec![b]), vec![vec![255; 32]]);
     }
 
     #[test]
