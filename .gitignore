@@ -14,7 +14,7 @@ node_modules/
 *.pem
 *.key
 /apps/desktop/src-tauri/gen/
-
+.qoder/
 /apps/desktop/src-tauri/binaries/aieyes-core*
 
 /codex-audit-retry.py
