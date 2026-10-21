@@ -258,7 +258,8 @@ class IncrementalHistory(unittest.TestCase):
             home = pathlib.Path(directory)
             parent = json.dumps(dict(type='session_meta', payload=dict(id='parent'))) + '\n'
             parent += json.dumps(dict(type='event_msg', timestamp=1800000000, payload=dict(type='token_count', info=dict(total_token_usage=dict(input_tokens=900))))) + '\n'
-            (home/'parent-export.jsonl').write_text(parent)
+            # history_base offsets count the physical UTF-8 bytes, without newline translation.
+            (home/'parent-export.jsonl').write_bytes(parent.encode('utf-8'))
             wrong = home/'wrong.jsonl'
             wrong.write_text(json.dumps(dict(type='session_meta', payload=dict(id='different'))) + '\n')
             (home/'child.jsonl').write_text(json.dumps(dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id='parent', end_byte_offset=len(parent.encode()))))) + '\n')
@@ -292,10 +293,10 @@ class IncrementalHistory(unittest.TestCase):
                 parent = json.dumps(dict(type='session_meta', payload=dict(id=thread))) + '\n'
                 parent += json.dumps(dict(type='event_msg', timestamp=1800000000, payload=dict(type='token_count', info=dict(total_token_usage=dict(input_tokens=900))))) + '\n'
                 if scenario != 'missing':
-                    (home/f'rollout-2026-10-15T14-21-58-{thread}.jsonl').write_text(parent.replace(thread, 'different-parent') if scenario == 'wrong-id' else parent)
+                    (home/f'rollout-2026-10-15T14-21-58-{thread}.jsonl').write_bytes((parent.replace(thread, 'different-parent') if scenario == 'wrong-id' else parent).encode('utf-8'))
                 if scenario == 'ambiguous':
                     (home/'copy').mkdir()
-                    (home/'copy'/f'rollout-2026-10-15T14-21-58-{thread}.jsonl').write_text(parent.replace('900', '800'))
+                    (home/'copy'/f'rollout-2026-10-15T14-21-58-{thread}.jsonl').write_bytes(parent.replace('900', '800').encode('utf-8'))
                 end = len(parent.encode()) - (1 if scenario == 'boundary' else 0)
                 (home/'child.jsonl').write_text(json.dumps(dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id=thread, end_byte_offset=end)))) + '\n')
                 first = collect(home, 'codex')

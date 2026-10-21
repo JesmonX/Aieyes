@@ -884,7 +884,7 @@ mod tests {
         fs::write(session.join("state.json"), state.to_string()).unwrap();
         let mut main = json!({"type":"assistant","timestamp":"2026-10-18T04:29:24Z","sessionId":"session","message":{"id":"main","model":"dfmodel","usage":{"input_tokens":0,"output_tokens":0,"credits":0.25}}});
         let auxiliary = json!({"type":"assistant","timestamp":"2026-10-18T04:29:25Z","sessionId":"session","isSidechain":true,"message":{"id":"aux","model":"lite","usage":{"input_tokens":10,"output_tokens":2,"credits":0.125}}});
-        let transcript = root.path().join("projects/p/session.jsonl");
+        let transcript = root.path().join("projects").join("p").join("session.jsonl");
         fs::write(&transcript, format!("{main}\n{auxiliary}\n")).unwrap();
         sync_local_with_keys(&store, &settings, &source, &[], &[key.to_vec()]).unwrap();
         let filter = Filter {

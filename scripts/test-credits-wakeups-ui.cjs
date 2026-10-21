@@ -37,7 +37,7 @@ function fixture(){
   assert.equal(await page.getByText('1234.13 credits',{exact:true}).count(),1);assert.equal(await page.getByText('Bank Reset · 2 次可用',{exact:true}).count(),1);
   const card=()=>page.locator('#content .quota-card');
   await card().locator('.quota-title').click();
-  assert.match(await card().locator('[data-credit-estimate]').textContent(),/^credits 估值（1000 credits ≈ —）$/);
+  assert.equal(await card().locator('[data-credit-estimate]').textContent(),'credits 估值');
   const expandedBalanceBox=await card().locator('.credit-row').boundingBox(),entryBox=await card().locator('[data-credit-estimate]').boundingBox();assert(entryBox.y>=expandedBalanceBox.y+expandedBalanceBox.height,'Credits estimate is on its own line below the balance');
   const decimals=[['1234.125','1234.13'],['1.005','1.01'],['10','10.00'],['0','0.00'],['-0.004','0.00'],['-1.005','-1.01'],['1e-3','0.00'],['9.999','10.00'],[null,'—'],['','—'],['NaN','—'],['12bad','—'],['Infinity','—']];
   for(const [input,expected] of decimals)assert.equal(await page.evaluate(v=>creditAmount(v),input),expected);
