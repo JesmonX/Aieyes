@@ -72,7 +72,8 @@ struct AccountTargetsView: View {
                             }
                             Spacer()
                             if targets.checking.contains(target.sourceId) { ProgressView().controlSize(.small) }
-                            if target.current != true || target.bound == false || target.canDraft == false {
+                            if target.nativeConnectionId != nil { NativeScanButton(model: model, provider: target.provider) }
+                            else if target.current != true || target.bound == false || target.canDraft == false {
                                 Button(target.bound == false ? "完成关联" : target.canSwitch ? "切换" : target.credential == false ? "登录" : "检查 / 登录") {
                                     intent = target.canSwitch ? "switch" : "login"
                                     loginSource = model.settings.sources.first { $0.id == target.sourceId }

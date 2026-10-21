@@ -27,6 +27,7 @@ use windows::Win32::Graphics::GdiPlus::Ok as GDI_OK;
 mod pet;
 const PET_TIMER: usize = 42;
 const WAKE: u32 = WM_APP + 41;
+const RESTORE_TOPMOST: u32 = WM_APP + 42;
 pub const WIDTH: f64 = 144.0;
 pub const HEIGHT: f64 = 168.0;
 enum Command {
@@ -416,6 +417,18 @@ unsafe fn pet_scale(hwnd: HWND) -> f64 {
             .unwrap_or(1.0),
     )
 }
+unsafe fn is_topmost(hwnd: HWND) -> bool {
+    GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0
+}
+unsafe fn raise_pet(hwnd: HWND, surface: &Surface, show: bool) {
+    let mut flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+    if show {
+        flags |= SWP_SHOWWINDOW;
+    }
+    if let Err(error) = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags) {
+        let _ = surface.app.emit("desktop:error", &error.to_string());
+    }
+}
 unsafe fn reshape(hwnd: HWND) {
     let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (style | WS_EX_LAYERED.0) as isize);
@@ -586,7 +599,11 @@ unsafe extern "system" fn window_proc(
                         let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                     Command::Visible(show) => {
-                        let _ = ShowWindow(hwnd, if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
+                        if show {
+                            raise_pet(hwnd, surface, true);
+                        } else {
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+                        }
                         animate(hwnd);
                     }
                     Command::Position(position) => {
@@ -618,6 +635,21 @@ unsafe extern "system" fn window_proc(
                         let _ = DestroyWindow(hwnd);
                     }
                 }
+            }
+            LRESULT(0)
+        }
+        WM_WINDOWPOSCHANGED => {
+            // A shell/window-management operation can demote the pet after
+            // creation. Defer recovery until that operation has completed.
+            // Do not raise hidden pets or reorder already-topmost peers.
+            if IsWindowVisible(hwnd).as_bool() && !is_topmost(hwnd) {
+                let _ = PostMessageW(Some(hwnd), RESTORE_TOPMOST, WPARAM(0), LPARAM(0));
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        RESTORE_TOPMOST => {
+            if IsWindowVisible(hwnd).as_bool() && !is_topmost(hwnd) {
+                raise_pet(hwnd, surface, false);
             }
             LRESULT(0)
         }

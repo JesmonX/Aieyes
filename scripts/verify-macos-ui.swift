@@ -23,6 +23,12 @@ import Foundation
         let presentation = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/estimate-presentation.json"))) as! [String: Any]
         let recordBase = presentation["record"] as! [String: Any]
         let fieldNames = ["five": "fiveHourValue", "week": "weeklyValue", "ratio": "weeklyRatioValue"]
+        precondition(EstimatePresentation.creditSummary([]) == "credits 估值")
+        for (status, amount, expected) in [("active", 0.0, "credits 估值（1000 credits ≈ $0.00）"), ("pending", 10.0, "credits 估值")] {
+            let raw: [String: Any] = ["status":status, "valuePer1000":amount]
+            let record = try JSONDecoder().decode(QuotaEstimate.self, from: JSONSerialization.data(withJSONObject: recordBase.merging(raw) { _, next in next }))
+            precondition(EstimatePresentation.creditSummary([record]) == expected)
+        }
         for row in presentation["cases"] as! [[String: Any]] {
             let name = row["name"] as! String
             let group = row["group"] as? String

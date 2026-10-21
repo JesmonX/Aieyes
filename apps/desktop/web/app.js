@@ -100,7 +100,7 @@ async function openSettings(target={}) {
 }
 function savePanelView() {
   if(!PANEL)return;
-  try{localStorage.setItem('aieyes.panel.view',JSON.stringify(Object.fromEntries(['page','provider','sourceId','accountKey','model','days','dateRange','cost','serverFilter'].map(k=>[k,state[k]]))));}catch(_){}
+  try{localStorage.setItem('aieyes.panel.view',JSON.stringify(Object.fromEntries(['page','provider','sourceId','accountKey','model','days','dateRange','cost','serverFilter','serverSelection'].map(k=>[k,state[k]]))));}catch(_){}
 }
 const viewPreferences=AieyesViewState.create(localStorage), dashboardCache=new Map(),appliedFilterCache=new Map();
 let currentDashboardScope=PANEL?'panel':'overview';
@@ -108,6 +108,7 @@ const dashboardScope=()=>currentDashboardScope;
 const viewKey=()=>PANEL?'panel:'+state.page:state.page==='settings'?'settings:'+state.settingsTab+':'+(state.settingsTab==='general'?state.generalTab:state.settingsAgent):state.page;
 Object.assign(state,viewPreferences.read(dashboardScope()));
 if(PANEL)try{const saved=JSON.parse(localStorage.getItem('aieyes.panel.view')||'{}');if(saved.page==='servers')state.page='servers';if(['all','errors','paused'].includes(saved.serverFilter))state.serverFilter=saved.serverFilter;}catch(_){}
+try{state.serverSelection=localStorage.getItem('aieyes.server.selection.'+(PANEL?'panel':'detail'))||'all';}catch(_){}
 let renderedViewKey=null;
 function rememberPage(){if(renderedViewKey)viewPreferences.savePosition(renderedViewKey,rememberView());}
 function syncNavigation(){
@@ -471,6 +472,15 @@ async function quotas(accountId,dueOnly=false) {
   try { await job('读取额度',async()=>{try{const rows=await api('quotas.refresh',{...(typeof accountId==='string'?{accountId}:{}),dueOnly});applyQuotaSamples(rows);if(dueOnly&&!rows.length)return false;if(rows.some(q=>q.identity&&state.settings.accounts.some(a=>a.id===q.accountId&&a.provider===q.provider&&a.identityKey!==q.identity.key)))await window.AieyesAgentSettings?.syncIdentitySettings();await loadDashboard();const error=batchError(rows,'读取额度');if(error)throw error;}catch(error){state.quotaError=error.failures?'部分账户读取失败，请逐项重试。':error.message??String(error);throw error;}finally{state.lastQuota=Date.now();}},'quotas',typeof accountId==='string'?accountId:null); }
   finally {state.quotaBusy=false;scheduleRefreshes();if(!dueOnly&&state.page==='agent'){if(interactionOpen())pendingRender=true;else render();}updateQuotaGroupAttention();}
 }
+async function referencePrices(model=null,name=''){
+  await job('智能引用价格',async()=>{
+    await saveAllSettings({refresh:false,section:'prices'});
+    const result=await api('prices.reference',model?{model,name}:{});
+    window.AieyesAgentSettings.accept(result.settings);
+    await loadDashboard();if(state.page==='settings')renderSettings(false);
+    notify(`已智能引用 ${result.matched} 个模型${result.unmatched.length?'；'+result.unmatched.length+' 个未匹配':''}${result.skipped?'；'+result.skipped+' 个已有价格或映射':''}。按参考价格估值，历史成本可点“保存并重算”更新。`);
+  });
+}
 async function syncPrices(){await job('同步价格',async()=>{await api('prices.sync');state.prices=await api('prices.list');await loadDashboard();if(state.page==='settings')renderSettings();notify('价格已更新');},'prices');}
 function applyQuotaSamples(rows){
   if(!state.dashboard||!Array.isArray(rows))return;
@@ -603,6 +613,7 @@ function mergeSettingsDraft(base,draft,saved){
   return structuredClone(draft);
 }
 function acceptSettings(saved,submittedForms=null){
+  AieyesUI.observePanelAccounts(saved,state.dashboard?.quotaOrder??[],state.settings);
   captureSettingsForms();
   state.settingsDraft=mergeSettingsDraft(state.settings,state.settingsDraft??state.settings,saved);
   state.settings=saved;state.settingsBaseline=configKey(saved);
@@ -729,9 +740,9 @@ function creditBalance(q, record, compact=false) {
   return `<span class="credit-balance" title="${escapeHTML('余额 '+full+' · '+(q.creditsUpdatedAt?'更新于 '+date(q.creditsUpdatedAt):'尚未取得 credits 信息'))}"><span class="credit-label">${uiIcon('credit')}余额</span> <strong>${compact?balance.replace(/ credits$/,''):full}</strong></span>`;
 }
 function creditRow(q,record,history=[]) {
-  const amount=AieyesUI.compactMoney(record?.status==='pending'?null:record?.valuePer1000);
-  const title=record?`1000 credits ≈ ${money(record.valuePer1000)} USD · ${estimateStatus(record)} · ${date(record.checkpointAt)}`:'尚无有效采样';
-  return `<div class="credit-row">${creditBalance(q,record)}</div><button class="credit-estimate-entry estimate-entry" data-credit-estimate="${escapeHTML(q.provider+':'+q.accountId)}" title="${escapeHTML(title)}">${uiIcon('trend')}<span>credits 估值（1000 credits ≈ ${amount}）</span>${uiIcon('right')}</button>${estimateNotice(history,true)}`;
+  const records=history.length?history:record?[record]:[],entry=AieyesUI.estimateEntries(records,true)[0];
+  const title=entry?`1000 credits ≈ ${money(entry.value)} USD · ${estimateStatus(entry.record)} · ${date(entry.record.checkpointAt)}`:'开始采样以估算 credits 价值';
+  return `<div class="credit-row">${creditBalance(q,record)}</div><button class="credit-estimate-entry estimate-entry" data-credit-estimate="${escapeHTML(q.provider+':'+q.accountId)}" title="${escapeHTML(title)}">${uiIcon('trend')}<span>${escapeHTML(AieyesUI.creditEstimateLine(records))}</span>${uiIcon('right')}</button>${estimateNotice(history,true)}`;
 }
 function tokenSummary(summary,inline=false) {
   return `<div class="token-summary"><button type="button" id="token-summary" title="总 Token：${summary.total.toLocaleString()}；缓存读取命中率 = 缓存读取 ÷（普通输入＋缓存读取＋缓存写入），不包含输出 Token。点击查看明细。" aria-expanded="false" aria-controls="token-popover" aria-label="总 Token，点击查看详情">${inline?'Token <strong>'+compact(summary.total)+'</strong>'+uiIcon('chevron'):stat('总 Token',compact(summary.total)+' <span class="token-rate">('+pct(cacheRate(summary.tokens))+')</span>','','✧')}${inline?'':'<span class="token-hint">点击查看详情</span>'}</button><div id="token-popover" popover="manual" role="region" aria-label="Token 细分" hidden>${cacheCard(summary.tokens).replace('class="stat cache-card"','class="card cache-card"')}</div></div>`;
@@ -761,10 +772,11 @@ function cacheCard(t){return `<div class="stat cache-card"><div class="token-bre
 
 const nativeCreditRows = usage => Object.entries(usage?.nativeCredits??{}).filter(([,row])=>row.requests>0);
 const hasNativeCredits = usage => nativeCreditRows(usage).length>0;
+const hasDisplayCredits = usage => nativeCreditRows(usage).some(([provider])=>provider!=='qoder');
 const creditCounter = value => Number(value).toLocaleString(undefined,{maximumFractionDigits:6});
 const equivalentCostAvailable = usage => usage.pricedTokens>0||(!usage.total&&!hasNativeCredits(usage));
 function nativeCreditText(usage) {
-  return nativeCreditRows(usage).map(([provider,row])=>`${providers[provider]??provider} 原生记录 ${creditCounter(row.credits)} Credits · ${row.requests} ${provider==='codebuddy'?'条计量':'次请求'}`).join('；');
+  return nativeCreditRows(usage).filter(([provider])=>provider!=='qoder').map(([provider,row])=>`${providers[provider]??provider} 原生记录 ${creditCounter(row.credits)} Credits · ${row.requests} ${provider==='codebuddy'?'条计量':'次请求'}`).join('；');
 }
 function nativeCreditDetail(row) {
   const parts=[['billable','billableRequests','标记可计费'],['nonBillable','nonBillableRequests','标记不计费'],['unknownBillability','unknownBillabilityRequests','计费状态未提供']].filter(([,key])=>row[key]>0).map(([key,count,label])=>`${label} ${creditCounter(row[key])}（${row[count]} 次）`);
@@ -772,15 +784,16 @@ function nativeCreditDetail(row) {
   return parts.join(' · ');
 }
 function nativeCreditsHTML(usage,models=[],inline=false) {
+  usage={...usage,nativeCredits:Object.fromEntries(nativeCreditRows(usage).filter(([provider])=>provider!=='qoder'))};
   if(!hasNativeCredits(usage))return '';
-  return `<div class="${inline?'native-credits':'card native-credits'}" data-native-credits><strong>${escapeHTML(nativeCreditText(usage))}</strong>${inline?'':nativeCreditRows(usage).map(([provider,row])=>`<p class="tiny muted">${escapeHTML(providers[provider]??provider)}：${escapeHTML(nativeCreditDetail(row))}</p>`).join('')}<p class="tiny muted">来自原生计量记录；不代表已扣费金额或账户剩余额度。${!usage.total?'原生记录没有可用的 Token 统计，API 等价成本暂不可计算。':''}</p>${!inline&&models.some(hasNativeCredits)?`<details><summary>按模型查看 Credits</summary>${models.filter(hasNativeCredits).map(row=>`<p><span>${escapeHTML(row.key)}</span> · ${escapeHTML(nativeCreditText(row))}</p>`).join('')}</details>`:''}</div>`;
+  return `<div class="${inline?'native-credits':'card native-credits'}" data-native-credits><strong>${escapeHTML(nativeCreditText(usage))}</strong>${inline?'':nativeCreditRows(usage).map(([provider,row])=>`<p class="tiny muted">${escapeHTML(providers[provider]??provider)}：${escapeHTML(nativeCreditDetail(row))}</p>`).join('')}<p class="tiny muted">来自原生计量记录；不代表已扣费金额或账户剩余额度。${!usage.total?'原生记录没有可用的 Token 统计，API 等价成本暂不可计算。':''}</p>${!inline&&models.some(hasDisplayCredits)?`<details><summary>按模型查看 Credits</summary>${models.filter(hasDisplayCredits).map(row=>`<p><span>${escapeHTML(modelName(row.key))}</span> · ${escapeHTML(nativeCreditText(row))}</p>`).join('')}</details>`:''}</div>`;
 }
 
 const cacheRate = t => { const input=t.input+t.cacheRead+t.cacheWrite; return input ? t.cacheRead/input*100 : null; };
 const missingLabels = gap => [['input','输入'],['output','输出'],['cacheRead','缓存读取'],['cacheWrite','缓存写入']].filter(([k])=>gap.tokens[k]>0).map(([,label])=>label).join('、');
 function gapList() {
   const gaps=state.dashboard?.pricingGaps??[];
-  return gaps.length ? `<div class="card pricing-gaps"><h2>待计价模型</h2>${gaps.map((g,i)=>`<div class="list-row"><div class="row-body"><strong>${escapeHTML(g.model)}</strong><small>缺少${missingLabels(g)} · ${compact(g.unpricedTokens)} Token</small></div><button data-gap-map="${i}" title="将日志模型名对应到 OpenRouter 模型 ID">映射</button><button data-gap-price="${i}" title="为缺失计价的模型补充价格">补充价格</button></div>`).join('')}</div>` : '';
+  return gaps.length ? `<div class="card pricing-gaps"><h2>待计价模型</h2>${gaps.map((g,i)=>`<div class="list-row"><div class="row-body"><strong>${escapeHTML(modelName(g.model))}</strong><small>缺少${missingLabels(g)} · ${compact(g.unpricedTokens)} Token</small></div><button data-gap-reference="${i}">智能引用</button><button data-gap-map="${i}" title="将日志模型名对应到 OpenRouter 模型 ID">映射</button><button data-gap-price="${i}" title="为缺失计价的模型补充价格">补充价格</button></div>`).join('')}</div>` : '';
 }
 async function openPricing() {
   if(PANEL){window.__TAURI__.core.invoke('desktop_action',{action:'prices'}).catch(e=>notify(String(e)));return;}
@@ -816,12 +829,12 @@ function renderAnalysis() {
   const sources=state.settings.sources.filter(src=>{const ids=d.sources.find(s=>s.id===src.id)?.accountIds??[src.accountId];return (!state.provider||AieyesUI.sameAgent(src.provider,state.provider))&&(!state.accountKey||(state.accountKey==='none'?ids.includes(''):src.provider===account?.provider&&ids.includes(account?.id)));});
   const trendModels=[...new Set(d.dayModels.map(r=>r.model))].sort();
   $('#title').textContent='用量分析';
-  $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${window.AieyesContract.agentProviders.map(k=>option(k,providers[k],state.provider)).join('')}</select><select id="source" aria-label="数据源">${option('','全部数据源',state.sourceId)}${sources.map(s=>option(s.id,s.name,state.sourceId)).join('')}</select><select id="model" aria-label="模型">${option('','全部模型',state.model)}${[...new Set([...(d.modelOptions??trendModels),...(state.model?[state.model]:[])])].map(m=>option(m,m,state.model)).join('')}</select></div>
+  $('#content').innerHTML=`${state.settings.sources.length?'':onboarding()}<div class="filters"><select id="provider" aria-label="Agent">${option('','全部 Agent',state.provider)}${window.AieyesContract.agentProviders.map(k=>option(k,providers[k],state.provider)).join('')}</select><select id="source" aria-label="数据源">${option('','全部数据源',state.sourceId)}${sources.map(s=>option(s.id,s.name,state.sourceId)).join('')}</select><select id="model" aria-label="模型">${option('','全部模型',state.model)}${[...new Set([...(d.modelOptions??trendModels),...(state.model?[state.model]:[])])].map(m=>option(m,modelName(m),state.model)).join('')}</select></div>
   ${s.total>0&&s.pricedTokens<s.total?attention('计价未完成：部分 Token 缺少价格','补充价格','pricing-attention'):''}
   <div class="section-head overview-heading"><h2>${!state.dateRange&&state.days===1?'今日概览':'使用概览'} ${refreshIndicator('scan')}</h2>${rangeSelectHTML()}</div>
   <div class="stats">${stat('总 Token',compact(s.total),'','✧')}${stat('API 等价成本'+(s.total>0&&s.pricedTokens<s.total?' <button id="repair-pricing" class="pricing-alert" aria-label="计价未完成，设置模型价格" title="部分 Token 尚未计价">!</button>':''),equivalentCostAvailable(s)?money(s.cost):'—','','$')}</div>${cacheCard(t)}${nativeCreditsHTML(s,models)}
   <div class="section-head"><h2>${!state.dateRange&&state.days===1?'近 7 天趋势':'使用趋势'}</h2><div id="cost-mode" class="metric-picker" role="group" aria-label="统计指标"><button type="button" data-cost-mode="false" aria-pressed="${!state.cost}">Token</button><button type="button" data-cost-mode="true" aria-pressed="${state.cost}">API 等价成本</button></div></div>
-  <div class="chart-row"><div class="card"><h2>每日用量 · 按模型</h2><canvas id="trend" aria-label="按模型堆叠的每日用量，下方有逐日数据"></canvas><details class="model-legend"><summary>模型图例 · 点击显示或隐藏</summary><div class="model-key">${trendModels.map(m=>`<button data-trend-model="${escapeHTML(m)}" aria-label="显示或隐藏模型 ${escapeHTML(m)}"><i style="background:${color(m)}"></i>${escapeHTML(m)}</button>`).join('')}</div></details></div><div class="card"><h2>所选范围 · 模型分布</h2>${modelDistribution(models)}</div></div>
+  <div class="chart-row"><div class="card"><h2>每日用量 · 按模型</h2><canvas id="trend" aria-label="按模型堆叠的每日用量，下方有逐日数据"></canvas><details class="model-legend"><summary>模型图例 · 点击显示或隐藏</summary><div class="model-key">${trendModels.map(m=>`<button data-trend-model="${escapeHTML(m)}" aria-label="显示或隐藏模型 ${escapeHTML(modelName(m))}"><i style="background:${color(m)}"></i>${escapeHTML(modelName(m))}</button>`).join('')}</div></details></div><div class="card"><h2>所选范围 · 模型分布</h2>${modelDistribution(models)}</div></div>
   ${samplingBanner(d)}<div class="card"><details class="daily" data-agent-detail="daily"><summary><h2>每日明细 · 可选择与复制精确数值</h2></summary>${dailyTable(d.trendDays,d.dayModels)}</details></div>
   <div class="card"><h2>${state.dateRange?'所选日期用量':'过去 365 天'}</h2>${state.dateRange?yearlyHeatmapHTML(d.heatmap):heatmapHTML(d.heatmap)}</div>
   `;
@@ -873,7 +886,7 @@ function shortenEmptyUsage(d) {
 }
 let dailyState=null;
 function dailyRowsHTML(days,byDay){
-  return days.map(day=>`<tbody data-agent-detail="day:${escapeHTML(day.key)}"><tr class="day"><th scope="row"><button data-day-toggle="${day.key}" aria-expanded="false" aria-label="展开 ${day.key} 的模型明细">${day.key}</button>${hasNativeCredits(day)?`<small class="muted">${escapeHTML(nativeCreditText(day))}</small>`:''}</th><td title="${day.total} Token">${compact(day.total)}</td><td>${pct(cacheRate(day.tokens))}</td><td>${equivalentCostAvailable(day)?day.cost.toFixed(6):'—'}</td></tr>${(byDay.get(day.key)??[]).map(r=>`<tr class="day-model" hidden><th scope="row"><span>${escapeHTML(r.model)}</span>${hasNativeCredits(r.usage)?`<small class="muted">${escapeHTML(nativeCreditText(r.usage))}</small>`:''}</th><td title="${r.usage.total} Token">${compact(r.usage.total)}</td><td>${pct(cacheRate(r.usage.tokens))}</td><td>${equivalentCostAvailable(r.usage)?r.usage.cost.toFixed(6):'—'}</td></tr>`).join('')}</tbody>`).join('');
+  return days.map(day=>`<tbody data-agent-detail="day:${escapeHTML(day.key)}"><tr class="day"><th scope="row"><button data-day-toggle="${day.key}" aria-expanded="false" aria-label="展开 ${day.key} 的模型明细">${day.key}</button>${hasDisplayCredits(day)?`<small class="muted">${escapeHTML(nativeCreditText(day))}</small>`:''}</th><td title="${day.total} Token">${compact(day.total)}</td><td>${pct(cacheRate(day.tokens))}</td><td>${equivalentCostAvailable(day)?day.cost.toFixed(6):'—'}</td></tr>${(byDay.get(day.key)??[]).map(r=>`<tr class="day-model" hidden><th scope="row"><span>${escapeHTML(modelName(r.model))}</span>${hasDisplayCredits(r.usage)?`<small class="muted">${escapeHTML(nativeCreditText(r.usage))}</small>`:''}</th><td title="${r.usage.total} Token">${compact(r.usage.total)}</td><td>${pct(cacheRate(r.usage.tokens))}</td><td>${equivalentCostAvailable(r.usage)?r.usage.cost.toFixed(6):'—'}</td></tr>`).join('')}</tbody>`).join('');
 }
 function dailyTable(days,rows) {
   const sorted=[...days].reverse(),byDay=new Map();for(const row of rows){if(!byDay.has(row.day))byDay.set(row.day,[]);byDay.get(row.day).push(row);}
@@ -1009,7 +1022,7 @@ function resourceStrip(title,percent,detail='') {
 }
 function resourceBlock(label,percent,detail='',kind='cpu') {
   const value=resourcePercent(percent);
-  return `<div class="resource-block" data-resource="${kind}"><div class="between"><span>${escapeHTML(label)}</span>${value>=90?`<span class="error">${uiIcon('warning')} 高负载</span>`:''}</div><strong>${value==null?'—':Math.round(value)+'%'}</strong>${resourceBar(value,label)}${detail?`<small>${escapeHTML(detail)}</small>`:''}</div>`;
+  return `<div class="resource-block" data-resource="${kind}"><div class="between"><span>${escapeHTML(label)}</span>${value>=90?`<span class="error" title="高负载" aria-label="高负载">${uiIcon('warning')}</span>`:''}</div><strong>${value==null?'—':Math.round(value)+'%'}</strong>${resourceBar(value,label)}${detail?`<small>${escapeHTML(detail)}</small>`:''}</div>`;
 }
 function serverSummary(host,sample) {
   const enabled=key=>(host.metrics??Object.keys(groups)).includes(key), memory=sample?.memory;
@@ -1129,8 +1142,8 @@ function generalSettingsHTML(s,tab=state.generalTab) {
   if(tab==='network')fields=`<h2>网络代理</h2>${proxyFields('app',s.proxy)}${field('proxyTestUrls','测试地址（逗号分隔）',(s.proxyTestUrls??['https://api.github.com/rate_limit','https://openrouter.ai']).join(', '))}`;
   if(tab==='refresh'){
     fields=`<h2>刷新与历史</h2>${field('refreshSeconds','额度查询间隔（秒）',s.refreshSeconds,'','number')}${field('historyRefreshSeconds','日志同步间隔（秒）',s.historyRefreshSeconds??Math.max(10,s.refreshSeconds),'','number')}${field('serverForegroundRefreshSeconds','服务器前台间隔（秒）',s.serverForegroundRefreshSeconds??2,'','number')}${field('serverRefreshSeconds','服务器后台间隔（秒）',s.serverRefreshSeconds,'','number')}<p class="muted tiny">用量按 Agent 统计，已删除账户的历史用量仍计入总量。</p>`;
-    fields+=`<h3>Codex 用量</h3><label><input id="field-codexPreciseCounting" type="checkbox" name="codexPreciseCounting" ${s.codexPreciseCounting?'checked':''}>精确计数</label><p class="muted tiny">开启后扣除 Codex fork 会话继承的父历史用量；关闭时允许重复计入。修改后在下次同步自动重算已有日志。</p>`;
-    const diagnostics=state.settings.codexPreciseCounting?(state.dashboard?.sources??[]).filter(source=>source.enabled&&(source.status?.forkHistoryIssues??[]).length).map(source=>'<details><summary>'+escapeHTML(source.name)+' · 父历史待确认</summary>'+source.status.forkHistoryIssues.map(issue=>'<p class="muted tiny">'+escapeHTML((issue.path?issue.path+' · ':'')+issue.message)+'</p>').join('')+'<p class="muted tiny">首段不确定累计暂不计入，后续有效增量继续统计；父历史恢复后自动补全。</p></details>').join(''):'';
+    fields+=`<h3>Codex 用量</h3><label><input id="field-codexPreciseCounting" type="checkbox" name="codexPreciseCounting" ${s.codexPreciseCounting?'checked':''}>精确计数</label><p class="muted tiny">开启后扣除 Codex 继承历史中的重复用量（包括 fork 和历史回退）；关闭时允许重复计入。修改后在下次同步自动重算已有日志。</p>`;
+    const diagnostics=state.settings.codexPreciseCounting?(state.dashboard?.sources??[]).filter(source=>source.enabled&&(source.status?.forkHistoryIssues??[]).length).map(source=>'<details><summary>'+escapeHTML(source.name)+' · 继承历史待确认</summary>'+source.status.forkHistoryIssues.map(issue=>'<p class="muted tiny">'+escapeHTML((issue.path?issue.path+' · ':'')+issue.message)+'</p>').join('')+'<p class="muted tiny">首段不确定累计暂不计入，后续有效增量继续统计；继承历史恢复后自动补全。</p></details>').join(''):'';
     body=`${diagnostics?'<div class="card"><h2>精确计数详情</h2>'+diagnostics+'</div>':''}<div class="card"><h2>历史记录 ${refreshIndicator('rescan')}</h2><p class="muted">重新读取已启用来源的完整日志，修正可确认的重复记录。已有历史和价格快照保留。</p><button type="button" id="history-rescan">全量重扫</button><p id="history-rescan-status" role="status" aria-live="polite" hidden></p></div>`;
   }
   if(tab==='notifications'){
@@ -1152,8 +1165,8 @@ function renderSettings(capture=true) {
   if(state.settingsTab==='integrations')body=window.AieyesAgentSettings.integrationsHTML();
   else if(state.settingsTab==='hosts'){
     const list=configuredHosts(s);
-    body=`<div class="actions ssh-import-toolbar"><button type="button" data-ssh-import>从 SSH 配置导入</button><button type="button" data-guide-open>配置向导</button></div><div class="card machine-list">${list.map(item=>{const collecting=item.id==='local'?s.localDeviceEnabled!==false:item.enabled,monitoring=item.id==='local'?item.enabled:item.monitoringEnabled!==false;return `<div class="list-row machine-row"><div class="row-body machine-info"><strong title="${escapeHTML(item.name||item.target)}">${escapeHTML(item.name||item.target)}</strong><small title="${escapeHTML(item.target)}">${escapeHTML(item.id==='local'?'本机':item.target)}</small></div><label class="machine-monitor"><input type="checkbox" role="switch" data-enable="${escapeHTML(item.id)}" ${monitoring?'checked':''} aria-label="资源监控 · ${escapeHTML(item.name||item.target)}">资源监控</label><label class="machine-collection"><input type="checkbox" role="switch" data-device-collection="${escapeHTML(item.id)}" ${collecting?'checked':''} aria-label="Agent 采集 · ${escapeHTML(item.name||item.target)}">Agent 采集</label><div class="machine-actions"><button data-edit="${escapeHTML(item.id)}" aria-label="编辑 ${escapeHTML(item.name||item.target)}">编辑</button>${item.id==='local'?'<span class="machine-action-placeholder" aria-hidden="true"></span>':`<button data-remove="${escapeHTML(item.id)}" aria-label="移除 ${escapeHTML(item.name)}">${uiIcon('minus')}</button>`}</div></div>`;}).join('')}${savedFeedback(state.settingsTab)}</div><button id="add-item" class="primary">${uiIcon('plus')} 添加主机</button>`;
-  }else if(state.settingsTab==='prices')body='<div class="between"><p class="muted save-model-note">价格与模型映射保存后生效。</p><button id="reprice" type="button" title="保存设置并按当前价格重新计算历史成本">保存并重算</button></div>'+gapList()+`<form id="mapping-form" class="card"><h2>模型映射</h2><details id="existing-mappings" data-agent-detail="existing-mappings"><summary>已有映射（${Object.keys(s.modelMappings).length}）</summary><div data-mapping-rows></div></details>${field('mappingModel','日志模型名称')}${field('mappingId','OpenRouter 模型 ID')}<button>添加映射</button></form>`+`<div class="price-toolbar"><input id="price-search" type="search" aria-label="搜索模型" placeholder="搜索模型" value="${escapeHTML(state.priceSearch)}"><button id="sync-prices" title="从项目 Release 同步 OpenRouter 价格表">同步 OpenRouter</button><button id="add-price" title="手动添加一个模型价格">添加价格</button>${savedFeedback('prices')}</div><div class="card prices-list">${priceRows()}</div><span class="muted tiny">USD / 百万 Token</span>`;
+    body=`<div class="actions ssh-import-toolbar"><button type="button" data-ssh-import>从 SSH 配置导入</button><button type="button" data-guide-open>配置向导</button></div><div class="card machine-list">${list.map(item=>{const collecting=item.id==='local'?s.localDeviceEnabled!==false:item.enabled,monitoring=item.id==='local'?item.enabled:item.monitoringEnabled!==false;return `<div class="list-row machine-row"><div class="row-body machine-info"><strong title="${escapeHTML(item.name||item.target)}">${escapeHTML(item.name||item.target)}</strong><small title="${escapeHTML(item.target)}">${escapeHTML(item.id==='local'?'本机':item.target)}</small>${collecting?`<button type="button" data-native-scan-machine="${escapeHTML(item.id)}" ${window.AieyesAccountScan?.busy?'disabled':''}>一键扫描账户与凭据</button>`:''}</div><label class="machine-monitor"><input type="checkbox" role="switch" data-enable="${escapeHTML(item.id)}" ${monitoring?'checked':''} aria-label="资源监控 · ${escapeHTML(item.name||item.target)}">资源监控</label><label class="machine-collection"><input type="checkbox" role="switch" data-device-collection="${escapeHTML(item.id)}" ${collecting?'checked':''} aria-label="Agent 采集 · ${escapeHTML(item.name||item.target)}">Agent 采集</label><div class="machine-actions"><button data-edit="${escapeHTML(item.id)}" aria-label="编辑 ${escapeHTML(item.name||item.target)}">编辑</button>${item.id==='local'?'<span class="machine-action-placeholder" aria-hidden="true"></span>':`<button data-remove="${escapeHTML(item.id)}" aria-label="移除 ${escapeHTML(item.name)}">${uiIcon('minus')}</button>`}</div></div>`;}).join('')}${savedFeedback(state.settingsTab)}</div><button id="add-item" class="primary">${uiIcon('plus')} 添加主机</button>`;
+  }else if(state.settingsTab==='prices')body='<div class="between"><p class="muted save-model-note">价格与模型映射保存后生效。智能引用按 ID、名称和版本匹配，未知供应商优先官方价格；无版本可匹配 latest，未标注 batch 不引用 batch，仅供估值。</p><button id="reprice" type="button" title="保存设置并按当前价格重新计算历史成本">保存并重算</button></div>'+gapList()+`<form id="mapping-form" class="card"><h2>模型映射</h2><details id="existing-mappings" data-agent-detail="existing-mappings"><summary>已有映射（${Object.keys(s.modelMappings).length}）</summary><div data-mapping-rows></div></details>${field('mappingModel','日志模型名称')}${field('mappingId','OpenRouter 模型 ID')}<button>添加映射</button></form>`+`<div class="price-toolbar"><input id="price-search" type="search" aria-label="搜索模型" placeholder="搜索模型" value="${escapeHTML(state.priceSearch)}"><button id="reference-prices" type="button" title="按模型 ID、名称和版本引用 OpenRouter 价格；未知供应商优先官方，仅供估值">智能引用</button><button id="sync-prices" title="同步 OpenRouter 模型价格表">同步 OpenRouter</button><button id="add-price" title="手动添加一个模型价格">添加价格</button>${savedFeedback('prices')}</div><div class="card prices-list">${priceRows()}</div><span class="muted tiny">USD / 百万 Token</span>`;
   else if(state.settingsTab==='wakeups')body=window.AieyesWakeups?.html()??'<p>正在加载…</p>';
   else body=generalSettingsHTML(state.settings);
   $('#title').textContent=state.settingsTab==='general'?(generalPages.find(([key])=>key===state.generalTab)?.[1]??'外观'):({integrations:'接入与账户',hosts:'机器与采集',prices:'模型价格',wakeups:'定时唤醒'}[state.settingsTab]??'设置');
@@ -1186,6 +1199,7 @@ function renderSettings(capture=true) {
     };
   });
   document.querySelectorAll('[data-gap-price]').forEach(b=>b.onclick=()=>{const g=state.dashboard.pricingGaps[Number(b.dataset.gapPrice)];editPrice(state.prices.find(p=>p.id===(g.priceId??g.model))??{id:g.priceId??g.model,name:g.model});});
+  document.querySelectorAll('[data-gap-reference]').forEach(b=>b.onclick=()=>{const g=state.dashboard.pricingGaps[Number(b.dataset.gapReference)];void referencePrices(g.model,modelName(g.model));});
   document.querySelectorAll('[data-gap-map]').forEach(b=>b.onclick=()=>{const g=state.dashboard.pricingGaps[Number(b.dataset.gapMap)];$('#field-mappingModel').value=g.model;$('#field-mappingId').value=g.priceId??'';$('#field-mappingId').focus();});
   const items=state.settingsTab==='sources'?s.sources:configuredHosts(s);
   document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>editItem(items.find(i=>i.id===b.dataset.edit)));
@@ -1229,6 +1243,7 @@ function renderSettings(capture=true) {
   }
   window.AieyesUpdates?.bindSettings();
   if($('#sync-prices'))$('#sync-prices').onclick=syncPrices;
+  if($('#reference-prices'))$('#reference-prices').onclick=()=>referencePrices();
   if($('#add-price'))$('#add-price').onclick=()=>editPrice();
   bindPrices();bindPriceViewport();bindExistingMappings();
   if($('#price-search'))$('#price-search').oninput=e=>{state.priceSearch=e.target.value;$('.prices-list').scrollTop=0;$('.prices-list').innerHTML=priceRows();bindPrices();};
@@ -1596,7 +1611,7 @@ async function boot(){
     const info=await api('hello');state.revisionEvents=Boolean(info.runtimeInvalidations);state.hostMonitoring=Boolean(info.hostMonitoring);const version=$('#app-version');if(version)version.textContent=info.version;
     if(info.contractHash&&info.contractHash!==window.AieyesContract.contractHash)throw new Error('应用资源与核心版本不一致，请重新安装同一版本');
     if(PANEL&&state.revisionEvents){const shell=await window.__TAURI__.core.invoke('desktop_info');state.panelOpen=Boolean(shell.panelOpen);state.panelPage=shell.panelPage??state.panelPage;}
-    state.settings=await api('settings.get');migrateProviderState();void window.AieyesAgentSettings?.refreshStatuses(true,null,true);await loadDashboard();
+    state.settings=await api('settings.get');migrateProviderState();AieyesUI.observePanelAccounts(state.settings);void window.AieyesAgentSettings?.refreshStatuses(true,null,true);await loadDashboard();
     if(!PANEL)window.AieyesSetup?.maybeStart();
     if(PANEL){
       // Restoring before bundled fonts settle lets scroll anchoring shift the saved position.
@@ -1743,7 +1758,7 @@ function openPanelAccounts(){
   const rawProviders=[...new Set([...accounts.map(a=>a.provider),...Object.keys(preference.providers)])],groups=[...new Set(rawProviders.map(p=>AieyesUI.agentProvider(p)))];
   const members=provider=>rawProviders.filter(p=>AieyesUI.sameAgent(p,provider));
   const manual=provider=>members(provider).some(p=>preference.providers[p]?.mode==='custom');
-  quotaDialog('面板显示账户','<p class="muted">自动显示每类前 5 个账户；手动选择可留空、不限数量。仅影响本机面板。</p>'+groups.map(provider=>'<fieldset class="panel-account-group" data-account-provider="'+escapeHTML(provider)+'"><legend>'+providerIdentity(provider)+' <span class="selected-count"></span><button type="button" data-panel-default="'+escapeHTML(provider)+'">恢复自动显示</button></legend>'+accounts.filter(a=>AieyesUI.sameAgent(a.provider,provider)).map(a=>'<label><input type="checkbox" data-panel-account="'+escapeHTML(a.provider+':'+a.id)+'" '+(selected[a.provider]?.includes(a.provider+':'+a.id)?'checked':'')+'>'+escapeHTML(a.name)+'</label>').join('')+'</fieldset>').join('')+(accounts.length?'':'<p>尚无可显示额度的账户</p>')+'<div class="dialog-foot"><button type="button" id="panel-accounts-cancel">取消</button><button type="button" class="primary" id="panel-accounts-save">保存面板选择</button></div>','selection');
+  quotaDialog('面板显示账户','<p class="muted">自动显示每类前 5 个账户；新增账户默认加入。手动选择可留空、不限数量，仅影响本机面板。</p>'+groups.map(provider=>'<fieldset class="panel-account-group" data-account-provider="'+escapeHTML(provider)+'"><legend>'+providerIdentity(provider)+' <span class="selected-count"></span><button type="button" data-panel-default="'+escapeHTML(provider)+'">恢复自动显示</button></legend>'+accounts.filter(a=>AieyesUI.sameAgent(a.provider,provider)).map(a=>'<label><input type="checkbox" data-panel-account="'+escapeHTML(a.provider+':'+a.id)+'" '+(selected[a.provider]?.includes(a.provider+':'+a.id)?'checked':'')+'>'+escapeHTML(a.name)+'</label>').join('')+'</fieldset>').join('')+(accounts.length?'':'<p>尚无可显示额度的账户</p>')+'<div class="dialog-foot"><button type="button" id="panel-accounts-cancel">取消</button><button type="button" class="primary" id="panel-accounts-save">保存面板选择</button></div>','selection');
   if(PANEL)$('#quota-dialog').dataset.opener='#panel-more > summary';
   const update=()=>{for(const group of document.querySelectorAll('[data-account-provider]')){const inputs=[...group.querySelectorAll('input')],count=inputs.filter(i=>i.checked).length;group.querySelector('.selected-count').textContent=(manual(group.dataset.accountProvider)?'手动 · ':'自动 · ')+count+' 个';}};
   document.querySelectorAll('[data-panel-account]').forEach(input=>input.onchange=()=>{const provider=input.closest('[data-account-provider]').dataset.accountProvider;for(const p of members(provider))preference.providers[p]={mode:'custom',keys:[]};update();});update();

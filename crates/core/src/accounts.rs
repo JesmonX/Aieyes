@@ -528,6 +528,20 @@ impl Engine {
             }
         });
         crate::operations::check()?;
+        self.refresh_native_connections(params)?;
+        let latest = self.store.settings()?;
+        all.extend(
+            crate::account_scan::status_rows(&latest)
+                .into_iter()
+                .filter(|row| {
+                    params["accountKeys"]
+                        .as_array()
+                        .is_none_or(|keys| keys.contains(&row["accountKey"]))
+                        && params["sourceIds"]
+                            .as_array()
+                            .is_none_or(|ids| ids.contains(&row["sourceId"]))
+                }),
+        );
         if all.is_empty() && !errors.is_empty() {
             anyhow::bail!(
                 "设备状态检查未完成：{}",
@@ -605,6 +619,7 @@ impl Engine {
                     rows.push(row);
                 }
             }
+            rows.extend(crate::account_scan::status_rows(&settings));
             return Ok(json!(rows));
         }
         if method == "accounts.deployments.sync" {

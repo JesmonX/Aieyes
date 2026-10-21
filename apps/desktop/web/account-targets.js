@@ -9,9 +9,9 @@
   };
   async function refresh(key, changed) {
     let targets = await api('accounts.targets', key ? {accountKey:key} : {});
-    const checkingSources=new Set(targets.filter(t=>t.provider==='codex').map(t=>t.sourceId));
+    const checkingSources=new Set(targets.filter(t=>t.provider==='codex'&&!t.nativeConnectionId).map(t=>t.sourceId));
     changed?.(targets, [], checkingSources);
-    const sources = [...new Set(targets.filter(t => t.provider === 'codex').map(t => t.sourceId))];
+    const sources = [...new Set(targets.filter(t => t.provider === 'codex'&&!t.nativeConnectionId).map(t => t.sourceId))];
     const issues = [];
     const machineName = sourceId => targets.find(t=>t.sourceId===sourceId)?.machineName || sourceId;
     await Promise.all(sources.map(async sourceId => {
@@ -30,7 +30,7 @@
   function paint() {
     if (!dialog?.open) return;
     const title = state.settings.accounts.find(a=>a.provider+':'+a.id===accountKey)?.name ?? '账户';
-    dialog.innerHTML = `<div class="dialog-head"><h2>切换为此账户 · ${e(title)}</h2></div><div class="account-target-body">${embedded?window.AieyesCodexAuth.html():`${checking?'<p role="status">正在检查各机器的登录…</p>':''}${errors.map(v=>`<div class="error">${e(v)}</div>`).join('')}${rows.map((t,i)=>`<div class="list-row"><div class="row-body"><strong>${e(t.machineName)}</strong><small class="source-path" title="${e(t.path)}">${e(AieyesUI.shortPath(t.path))}</small><small>${e(t.reason || (t.current===true?'正在使用':t.credential===true?'已登录，尚未选用':t.credential===false?'未登录':'登录状态待确认'))}</small>${t.draftReason?`<small class="error">${e(t.draftReason)}</small>`:''}</div>${t.current===true&&t.bound!==false&&t.canDraft!==false?'':`<button data-account-target="${i}" ${pendingSources.has(t.sourceId)&&!t.canSwitch?'disabled':''}>${t.bound===false?'完成关联':t.canSwitch?'切换':t.credential===false?'登录':'检查 / 登录'}</button>`}</div>`).join('')}`}</div><div class="dialog-foot">${embedded?'<button id="target-back">返回机器列表</button>':'<button id="target-refresh">重新检查</button>'}<button id="target-close">完成</button></div>`;
+    dialog.innerHTML = `<div class="dialog-head"><h2>切换为此账户 · ${e(title)}</h2></div><div class="account-target-body">${embedded?window.AieyesCodexAuth.html():`${checking?'<p role="status">正在检查各机器的登录…</p>':''}${errors.map(v=>`<div class="error">${e(v)}</div>`).join('')}${rows.map((t,i)=>`<div class="list-row"><div class="row-body"><strong>${e(t.machineName)}</strong><small class="source-path" title="${e(t.path)}">${e(AieyesUI.shortPath(t.path))}</small><small>${e(t.reason || (t.current===true?'正在使用':t.credential===true?'已登录，尚未选用':t.credential===false?'未登录':'登录状态待确认'))}</small>${t.draftReason?`<small class="error">${e(t.draftReason)}</small>`:''}</div>${t.nativeConnectionId?`<button data-native-scan-agent="${e(t.provider)}">重新扫描</button>`:t.current===true&&t.bound!==false&&t.canDraft!==false?'':`<button data-account-target="${i}" ${pendingSources.has(t.sourceId)&&!t.canSwitch?'disabled':''}>${t.bound===false?'完成关联':t.canSwitch?'切换':t.credential===false?'登录':'检查 / 登录'}</button>`}</div>`).join('')}`}</div><div class="dialog-foot">${embedded?'<button id="target-back">返回机器列表</button>':'<button id="target-refresh">重新检查</button>'}<button id="target-close">完成</button></div>`;
     dialog.querySelector('#target-close').disabled = embedded && window.AieyesCodexAuth.busy;
     dialog.querySelector('#target-close').onclick = () => { generation++; dialog.close(); embedded=false; };
     if (embedded) {

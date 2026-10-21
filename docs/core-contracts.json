@@ -469,6 +469,28 @@
       "updateBehavior": "finish"
     },
     {
+      "name": "accounts.native.remove",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "accounts.scan",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
       "name": "accounts.status.get",
       "lane": "configuration",
       "invalidates": [],
@@ -1045,6 +1067,17 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "observe"
+    },
+    {
+      "name": "prices.reference",
+      "lane": "main",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
     },
     {
       "name": "prices.recalculate",

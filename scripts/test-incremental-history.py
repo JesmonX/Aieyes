@@ -6,6 +6,7 @@ import os
 import pathlib
 import runpy
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -105,11 +106,13 @@ class IncrementalHistory(unittest.TestCase):
         row['message']['content']='PRIVATE_RESPONSE'
         row['message']['usage']['extra']='PRIVATE_USAGE'
         row['modelSource']='custom'
+        row['isSidechain']=True
         with tempfile.TemporaryDirectory() as directory:
             path=pathlib.Path(directory)/'session.jsonl';path.write_text(json.dumps(row)+'\n')
             frames=collect(path,'qoder');projected=events(frames)[0]
             self.assertNotIn('PRIVATE_',json.dumps(frames))
             self.assertEqual(projected['modelSource'],'custom')
+            self.assertIs(projected['isSidechain'],True)
             self.assertEqual(projected['message']['usage']['credits'],row['message']['usage']['credits'])
             self.assertIs(projected['message']['usage']['billable'],False)
             self.assertEqual(projected['message']['usage']['input_tokens'],0)
@@ -242,13 +245,111 @@ class IncrementalHistory(unittest.TestCase):
                 first = collect(home, 'codex')
                 self.assertFalse(first[-1]['partial'])
                 self.assertTrue(first[-1]['forkHistoryIssues'])
-                (home/f'rollout-2026-10-15T14-21-58-{parent_id}_{suffix_id}.jsonl').write_bytes(parent)
+                (home/f'imported-{parent_id}_{suffix_id}.jsonl').write_bytes(parent)
                 restored = collect(home, 'codex', cursors(first))
                 self.assertFalse(restored[-1]['partial'])
                 inherited = next(e['inheritedHistory'] for e in events(restored) if e.get('inheritedHistory'))
                 self.assertEqual(inherited['tokens']['input'], 900)
                 self.assertNotIn('PRIVATE_PARENT_TEXT', json.dumps(restored))
                 self.assertEqual(collect(home, 'codex', cursors(restored))[-1]['readBytes'], 0)
+
+    def test_parent_lookup_does_not_trust_a_stale_sqlite_pointer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            parent = json.dumps(dict(type='session_meta', payload=dict(id='parent'))) + '\n'
+            parent += json.dumps(dict(type='event_msg', timestamp=1800000000, payload=dict(type='token_count', info=dict(total_token_usage=dict(input_tokens=900))))) + '\n'
+            (home/'parent-export.jsonl').write_text(parent)
+            wrong = home/'wrong.jsonl'
+            wrong.write_text(json.dumps(dict(type='session_meta', payload=dict(id='different'))) + '\n')
+            (home/'child.jsonl').write_text(json.dumps(dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id='parent', end_byte_offset=len(parent.encode()))))) + '\n')
+            with contextlib.closing(sqlite3.connect(home/'state_5.sqlite')) as db, db:
+                db.execute('CREATE TABLE threads(id TEXT,rollout_path TEXT)')
+                db.execute('INSERT INTO threads VALUES(?,?)', ('parent', str(wrong)))
+            first = collect(home, 'codex')
+            self.assertEqual(first[-1]['forkHistoryIssues'], [])
+            baseline = next(e['inheritedHistory'] for e in events(first) if e.get('inheritedHistory'))
+            self.assertEqual(baseline['tokens']['input'], 900)
+
+    def test_replaced_nonfork_file_does_not_retain_a_stale_inheritance_warning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            child = home/'child.jsonl'
+            child.write_text(json.dumps(dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id='missing', end_byte_offset=123))))+'\n')
+            first = collect(home, 'codex')
+            self.assertEqual(first[-1]['forkHistoryIssues'][0]['reason'], 'parentNotFound')
+            child.write_text(json.dumps(dict(type='session_meta', payload=dict(id='ordinary-session')))+'\n')
+            replaced = collect(home, 'codex', cursors(first))
+            self.assertEqual(replaced[-1]['forkHistoryIssues'], [])
+            self.assertNotIn('inheritedHistory', cursors(replaced)[str(child)])
+            self.assertEqual(collect(home, 'codex', cursors(replaced))[-1]['forkHistoryIssues'], [])
+
+    def test_history_diagnostics_distinguish_ambiguous_corrupt_and_missing_records(self):
+        thread = '01a12393-1534-7750-8dbc-21bebb00678e'
+        for scenario, reason in [('missing', 'parentNotFound'), ('wrong-id', 'identityMismatch'),
+                                 ('boundary', 'boundaryInvalid'), ('ambiguous', 'ambiguousHistory')]:
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                home = pathlib.Path(directory)
+                parent = json.dumps(dict(type='session_meta', payload=dict(id=thread))) + '\n'
+                parent += json.dumps(dict(type='event_msg', timestamp=1800000000, payload=dict(type='token_count', info=dict(total_token_usage=dict(input_tokens=900))))) + '\n'
+                if scenario != 'missing':
+                    (home/f'rollout-2026-10-15T14-21-58-{thread}.jsonl').write_text(parent.replace(thread, 'different-parent') if scenario == 'wrong-id' else parent)
+                if scenario == 'ambiguous':
+                    (home/'copy').mkdir()
+                    (home/'copy'/f'rollout-2026-10-15T14-21-58-{thread}.jsonl').write_text(parent.replace('900', '800'))
+                end = len(parent.encode()) - (1 if scenario == 'boundary' else 0)
+                (home/'child.jsonl').write_text(json.dumps(dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id=thread, end_byte_offset=end)))) + '\n')
+                first = collect(home, 'codex')
+                self.assertFalse(first[-1]['partial'])
+                self.assertEqual(first[-1]['issues'], [])
+                diagnostic = first[-1]['forkHistoryIssues'][0]
+                self.assertEqual(diagnostic['reason'], reason)
+                self.assertEqual(diagnostic['parentRolloutId'], thread)
+                repeated = collect(home, 'codex', cursors(first))
+                self.assertEqual(repeated[-1]['forkHistoryIssues'][0]['reason'], reason)
+                self.assertEqual(repeated[-1]['readBytes'], 0)
+
+    def test_compressed_history_failure_reasons_and_bundled_ssh_helper(self):
+        thread = '01a12393-1534-7750-8dbc-21bebb00678e'
+        with tempfile.TemporaryDirectory() as directory:
+            home = pathlib.Path(directory)
+            rows = [dict(type='session_meta', payload=dict(id=thread)),
+                    dict(type='response_item', payload=dict(text='PRIVATE_PARENT 中文')),
+                    dict(type='event_msg', timestamp=1800000000, payload=dict(type='token_count', info=dict(total_token_usage=dict(input_tokens=900))))]
+            def compressed(data):
+                return subprocess.run(['node', '-e', "const z=require('node:zlib');process.stdout.write(z.zstdCompressSync(require('node:fs').readFileSync(0),{params:{[z.constants.ZSTD_c_checksumFlag]:1}}));"], input=data, capture_output=True, check=True).stdout
+            data = [(json.dumps(row, ensure_ascii=False)+'\n').encode() for row in rows]
+            packed = b''.join(compressed(row) for row in data)
+            parent = home/f'rollout-2026-10-15T14-21-58-{thread}.jsonl.zst'
+            parent.write_bytes(packed)
+            child = dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id=thread, end_byte_offset=sum(map(len, data)))))
+            (home/'child.jsonl').write_text(json.dumps(child)+'\n')
+            def bundled(cursors=None):
+                request = dict(protocol=2, path=str(home), provider='codex', codexPreciseCounting=True, cursors=cursors or {})
+                scope = dict(REQUEST=request, HARNESS_SCRIPT=SCRIPT.with_name('harness_remote.py').read_text(encoding='utf-8'))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    try:exec(compile(SCRIPT.read_text(encoding='utf-8'), '<wire-history>', 'exec'), scope)
+                    except SystemExit as error:self.assertEqual(error.code, 0)
+                self.assertNotIn('PRIVATE_PARENT', output.getvalue())
+                return [json.loads(line) for line in output.getvalue().splitlines()]
+            good = bundled()
+            self.assertEqual(good[-1]['forkHistoryIssues'], [])
+            baseline = events(good)[0]['inheritedHistory']
+            self.assertEqual(baseline['tokens']['input'], 900)
+            self.assertEqual(parent.read_bytes(), packed)
+            with patch('shutil.which', return_value=None):
+                unavailable = bundled(cursors(good))
+                self.assertEqual(unavailable[-1]['forkHistoryIssues'][0]['reason'], 'decoderUnavailable')
+                cached = bundled(cursors(unavailable))
+                self.assertEqual(cached[-1]['forkHistoryIssues'][0]['reason'], 'decoderUnavailable')
+                self.assertNotIn('尚未找到', cached[-1]['forkHistoryIssues'][0]['message'])
+            recovered = bundled(cursors(unavailable))
+            self.assertEqual(recovered[-1]['forkHistoryIssues'], [])
+            self.assertEqual(events(recovered)[0]['inheritedHistory']['proof'], baseline['proof'])
+            parent.write_bytes(packed[:-1])
+            broken = bundled(cursors(recovered))
+            self.assertEqual(broken[-1]['forkHistoryIssues'][0]['reason'], 'invalidCompressedHistory')
+            self.assertFalse(broken[-1]['partial'])
 
     def test_fork_resolves_archived_multilevel_parent_and_rechecks_changed_proof(self):
         for newline in ('\n', '\r\n'):

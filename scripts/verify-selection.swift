@@ -45,7 +45,30 @@ import Foundation
         newAccount.quotaEnabled = true
         PanelAccountPreference.includeNew(newAccount, accounts: [newAccount], defaults: defaults)
         let included = defaults.string(forKey: NativePanelKey.accounts.rawValue)!
-        precondition(PanelAccountPreference.selections(included, accounts: [newAccount], order: [])["codex"] == [], "New accounts must not enter an explicit manual choice")
+        precondition(PanelAccountPreference.selections(included, accounts: [newAccount], order: [])["codex"] == ["codex:new"], "New accounts enter even an explicit empty panel choice")
+        for provider in CoreContract.providers {
+            defaults.removeObject(forKey: NativePanelKey.knownAccounts.rawValue)
+            let visible = AgentAccount(id: "visible", name: "Visible", provider: provider, quotaEnabled: true)
+            let hiddenOld = AgentAccount(id: "hidden", name: "Hidden", provider: provider, quotaEnabled: true)
+            let added = AgentAccount(id: "added", name: "Added", provider: provider, quotaEnabled: true)
+            defaults.set(PanelAccountPreference.encode([provider: [visible.key]]), forKey: NativePanelKey.accounts.rawValue)
+            PanelAccountPreference.observeAccounts([visible, hiddenOld], defaults: defaults)
+            PanelAccountPreference.observeAccounts([visible, hiddenOld, added], defaults: defaults)
+            let included = defaults.string(forKey: NativePanelKey.accounts.rawValue)!
+            precondition(PanelAccountPreference.selections(included, accounts: [visible, hiddenOld, added], order: [])[provider] == [visible.key, added.key], provider)
+            defaults.set(PanelAccountPreference.encode([provider: [visible.key]]), forKey: NativePanelKey.accounts.rawValue)
+            PanelAccountPreference.observeAccounts([visible, hiddenOld, added], defaults: defaults)
+            let kept = defaults.string(forKey: NativePanelKey.accounts.rawValue)!
+            precondition(PanelAccountPreference.selections(kept, accounts: [visible, hiddenOld, added], order: [])[provider] == [visible.key], "Repeated loads must preserve a user hiding the new account")
+        }
+        defaults.removeObject(forKey: NativePanelKey.accounts.rawValue)
+        defaults.removeObject(forKey: NativePanelKey.knownAccounts.rawValue)
+        let five = (0..<5).map { AgentAccount(id: "auto-\($0)", name: "Auto", provider: "codex", quotaEnabled: true) }
+        PanelAccountPreference.observeAccounts(five, defaults: defaults)
+        let sixth = AgentAccount(id: "sixth", name: "Sixth", provider: "codex", quotaEnabled: true)
+        PanelAccountPreference.observeAccounts(five + [sixth], defaults: defaults)
+        let six = defaults.string(forKey: NativePanelKey.accounts.rawValue)!
+        precondition(PanelAccountPreference.selections(six, accounts: five + [sixth], order: [])["codex"]?.count == 6)
         let saved = DashboardFilterPreference(provider: "claude", source: "remote", account: "claude:a", model: "model", days: 30)
         saved.save(defaults: defaults)
         precondition(DashboardFilterPreference.read(defaults: defaults) == DashboardFilterPreference(provider: "claude", source: "remote", model: "model", days: 30), "Legacy account filters clear on save")

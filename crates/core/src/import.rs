@@ -224,7 +224,7 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
             && let Some((_, _, state)) = store.cursor(&source.id, &path.to_string_lossy())?
             && let Some(h) = state.inherited_history
         {
-            history_issues.push(json!({"code":"missingHistoryBase","path":path.file_name().unwrap_or_default().to_string_lossy(),"message":h.issue}));
+            history_issues.push(json!({"code":"missingHistoryBase","path":path.file_name().unwrap_or_default().to_string_lossy(),"message":h.issue,"reason":h.issue_code,"parentRolloutId":h.parent_thread,"endByteOffset":h.end_byte_offset}));
         }
         malformed += m;
     }
@@ -332,6 +332,7 @@ fn scan_file(
                     fresh.proof != old.proof
                         || fresh.tokens != old.tokens
                         || fresh.issue != old.issue
+                        || fresh.issue_code != old.issue_code
                 })
             });
     let (offset, mut state) = match cursor {

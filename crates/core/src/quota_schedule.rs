@@ -72,10 +72,11 @@ impl Poller {
                 crate::accounts::key(a) == key
                     && a.quota_enabled
                     && !a.archived
-                    && settings
+                    && (settings
                         .sources
                         .iter()
                         .any(|s| settings.source_enabled(s) && a.uses_source(s))
+                        || crate::account_scan::has_quota_target(&settings, a))
             }) {
                 continue;
             }
@@ -126,6 +127,7 @@ impl Engine {
                 .sources
                 .iter()
                 .any(|s| settings.source_enabled(s) && account.uses_source(s))
+                && !crate::account_scan::has_quota_target(&settings, account)
             {
                 continue;
             }

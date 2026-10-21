@@ -174,9 +174,8 @@ fn renamed_parent_uses_metadata_and_repairs_an_existing_missing_baseline() {
         );
         assert_eq!(usage_for(&store, "child"), 100);
         std::fs::write(
-            temp.path().join(format!(
-                "rollout-2026-10-15T14-21-58-{parent_id}_{suffix_id}.jsonl"
-            )),
+            temp.path()
+                .join(format!("imported-{parent_id}_{suffix_id}.jsonl")),
             parent,
         )
         .unwrap();
@@ -212,6 +211,256 @@ fn missing_parent_excludes_only_uncertain_prefix_and_later_arrival_repairs_it() 
     assert_eq!(usage_for(&store, "child"), 200);
     import::rescan(&store, &settings, &source).unwrap();
     assert_eq!(usage_for(&store, "child"), 200);
+}
+
+const THREAD: &str = "01a12393-1534-7750-8dbc-21bebb00678e";
+const REVISION: &str = "01a13e39-8119-7f31-a38c-69d61a59ebfb";
+const SECOND_REVISION: &str = "01a13e39-8119-7f31-a38c-69d61a59ebfc";
+
+fn rollout(thread: &str, revision: &str) -> String {
+    if thread == revision {
+        format!("rollout-2026-10-15T14-21-58-{thread}.jsonl")
+    } else {
+        format!("rollout-2026-10-15T14-21-58-{thread}_{revision}.jsonl")
+    }
+}
+
+fn packed(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = zstd::stream::Encoder::new(Vec::new(), 1).unwrap();
+    encoder.include_checksum(true).unwrap();
+    encoder.write_all(data).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn compare_remote_baseline(source: &Source, metadata: &str) {
+    use aieyes_core::codex_history::Resolver;
+    let mut resolver = Resolver::new(source, &import::paths(source).unwrap());
+    let meta: Value = serde_json::from_str(metadata.lines().next().unwrap()).unwrap();
+    let native = resolver.metadata(&meta).unwrap();
+    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // Exercise the real SSH loader shape: the helpers are bundled, without __file__.
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let output = std::process::Command::new(python).args(["-c", r#"
+import pathlib,json,sys
+root=pathlib.Path(sys.argv[1])
+scope={'REQUEST':dict(protocol=2,path=sys.argv[2],provider='codex',codexPreciseCounting=True),
+       'HARNESS_SCRIPT':(root/'scripts/harness_remote.py').read_text(encoding='utf-8')}
+exec(compile((root/'scripts/remote_history.py').read_text(encoding='utf-8'),'<wire-history>','exec'),scope)
+"#]).arg(&project).arg(&source.path).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(!text.contains("PRIVATE_PARENT"));
+    let frames: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let remote = frames
+        .iter()
+        .filter_map(|f| f["events"].as_array())
+        .flatten()
+        .find(|e| e["type"] == "session_meta" && e["payload"]["id"] == meta["payload"]["id"])
+        .unwrap()["inheritedHistory"]
+        .clone();
+    assert_eq!(remote, serde_json::to_value(native).unwrap());
+}
+
+#[test]
+fn same_thread_revert_resolves_physical_rollouts_instead_of_the_selected_db_revision() {
+    for newline in ["\n", "\r\n"] {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions = temp.path().join("sessions/2026/10/15");
+        let archive = temp.path().join("archived_sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&archive).unwrap();
+        let stamp = now() - 100;
+        let parent =
+            (meta(THREAD, stamp - 50, None) + &count(stamp - 40, 900, 900)).replace('\n', newline);
+        // No forked_from_id or manual fork: revert keeps the logical thread ID stable.
+        let first = (meta(THREAD, stamp - 30, Some((THREAD, parent.len())))
+            + &count(stamp - 20, 1000, 100))
+            .replace('\n', newline);
+        let second = (meta(THREAD, stamp - 15, Some((REVISION, first.len())))
+            + &count(stamp - 10, 1100, 100))
+            .replace('\n', newline);
+        let child = (meta("child", stamp - 5, Some((SECOND_REVISION, second.len())))
+            + &count(stamp, 1200, 100)
+            + &count(stamp + 1, 1300, 100))
+            .replace('\n', newline);
+        std::fs::write(archive.join(rollout(THREAD, THREAD)), &parent).unwrap();
+        std::fs::write(archive.join(rollout(THREAD, REVISION)), &first).unwrap();
+        let current = sessions.join(rollout(THREAD, SECOND_REVISION));
+        std::fs::write(&current, &second).unwrap();
+        std::fs::write(sessions.join("child.jsonl"), &child).unwrap();
+        let db = rusqlite::Connection::open(temp.path().join("state_5.sqlite")).unwrap();
+        db.execute_batch("CREATE TABLE threads(id TEXT,rollout_path TEXT);")
+            .unwrap();
+        db.execute(
+            "INSERT INTO threads VALUES(?1,?2)",
+            rusqlite::params![THREAD, current.to_string_lossy()],
+        )
+        .unwrap();
+        drop(db);
+        let (store, settings, source) = setup(temp.path());
+        let result = import::scan(&store, &settings, &source).unwrap();
+        assert!(result.get("missingHistoryBases").is_none(), "{result}");
+        assert_eq!(usage_for(&store, THREAD), 1100);
+        assert_eq!(usage_for(&store, "child"), 200);
+        compare_remote_baseline(&source, &child);
+        import::rescan(&store, &settings, &source).unwrap();
+        assert_eq!(usage_for(&store, THREAD), 1100);
+        assert_eq!(usage_for(&store, "child"), 200);
+    }
+}
+
+#[test]
+fn verified_parent_counter_does_not_require_an_unavailable_ancestor() {
+    let temp = tempfile::tempdir().unwrap();
+    let stamp = now() - 100;
+    let parent =
+        meta("parent", stamp - 20, Some(("unavailable", 123))) + &count(stamp - 10, 900, 100);
+    let child = meta("child", stamp - 5, Some(("parent", parent.len())))
+        + &count(stamp, 1000, 100)
+        + &count(stamp + 1, 1100, 100);
+    std::fs::write(temp.path().join("parent.jsonl"), &parent).unwrap();
+    std::fs::write(temp.path().join("child.jsonl"), &child).unwrap();
+    let wrong = temp.path().join("wrong.jsonl");
+    std::fs::write(&wrong, meta("different", stamp - 40, None)).unwrap();
+    let db = rusqlite::Connection::open(temp.path().join("state_5.sqlite")).unwrap();
+    db.execute_batch("CREATE TABLE threads(id TEXT,rollout_path TEXT);")
+        .unwrap();
+    db.execute(
+        "INSERT INTO threads VALUES(?1,?2)",
+        rusqlite::params!["parent", wrong.to_string_lossy()],
+    )
+    .unwrap();
+    drop(db);
+    let (store, settings, source) = setup(temp.path());
+    let result = import::scan(&store, &settings, &source).unwrap();
+    assert_eq!(usage_for(&store, "child"), 200);
+    assert_eq!(result["missingHistoryBases"], 1);
+    assert_eq!(result["forkHistoryIssues"][0]["path"], "parent.jsonl");
+    compare_remote_baseline(&source, &child);
+}
+
+#[test]
+fn metadata_only_revisions_recurse_with_matching_native_and_ssh_proofs() {
+    for compressed in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let stamp = now() - 100;
+        let parent = meta(THREAD, stamp - 30, None) + &count(stamp - 20, 900, 900);
+        let middle = meta(THREAD, stamp - 10, Some((THREAD, parent.len())));
+        let child =
+            meta("child", stamp - 5, Some((REVISION, middle.len()))) + &count(stamp, 1000, 100);
+        for (id, data) in [(THREAD, parent), (REVISION, middle)] {
+            let name = rollout(THREAD, id);
+            if compressed {
+                std::fs::write(
+                    temp.path().join(format!("{name}.zst")),
+                    packed(data.as_bytes()),
+                )
+                .unwrap();
+            } else {
+                std::fs::write(temp.path().join(name), data).unwrap();
+            }
+        }
+        std::fs::write(temp.path().join("child.jsonl"), &child).unwrap();
+        let (store, settings, source) = setup(temp.path());
+        assert!(
+            import::scan(&store, &settings, &source)
+                .unwrap()
+                .get("missingHistoryBases")
+                .is_none()
+        );
+        assert_eq!(usage_for(&store, "child"), 100);
+        compare_remote_baseline(&source, &child);
+    }
+}
+
+#[test]
+fn compressed_parent_recovers_and_representation_changes_preserve_the_prefix_proof() {
+    for newline in ["\n", "\r\n"] {
+        let temp = tempfile::tempdir().unwrap();
+        let stamp = now() - 100;
+        let parent = (meta(THREAD, stamp - 20, None)
+            + &line(json!({"type":"response_item","payload":{"text":"PRIVATE_PARENT 中文"}}))
+            + &count(stamp - 10, 900, 900))
+            .replace('\n', newline);
+        let child = (meta("child", stamp - 5, Some((REVISION, parent.len())))
+            + &count(stamp, 1000, 100)
+            + &count(stamp + 1, 1100, 100))
+            .replace('\n', newline);
+        let child_path = temp.path().join("child.jsonl");
+        std::fs::write(&child_path, &child).unwrap();
+        let (store, settings, source) = setup(temp.path());
+        assert_eq!(
+            import::scan(&store, &settings, &source).unwrap()["missingHistoryBases"],
+            1
+        );
+        assert_eq!(usage_for(&store, "child"), 100);
+        let plain = temp.path().join(rollout(THREAD, REVISION));
+        let compressed = temp
+            .path()
+            .join(format!("{}.zst", rollout(THREAD, REVISION)));
+        // Multiple checksummed frames, with a non-inherited tail after the frozen boundary.
+        let mut encoded = packed(parent.as_bytes());
+        encoded.extend(packed(count(stamp + 2, 9999, 9099).as_bytes()));
+        std::fs::write(&compressed, &encoded).unwrap();
+        let result = import::scan(&store, &settings, &source).unwrap();
+        assert!(result.get("missingHistoryBases").is_none(), "{result}");
+        assert_eq!(usage_for(&store, "child"), 200);
+        assert_eq!(std::fs::read(&compressed).unwrap(), encoded);
+        let proof = store
+            .cursor(&source.id, &child_path.to_string_lossy())
+            .unwrap()
+            .unwrap()
+            .2
+            .inherited_history
+            .unwrap()
+            .proof;
+        compare_remote_baseline(&source, &child);
+        // Existing cursors from the previous parser are repaired without a manual rescan.
+        store
+            .db
+            .execute(
+                "UPDATE files SET state=json_set(state,'$.parserVersion',7)",
+                [],
+            )
+            .unwrap();
+        import::scan(&store, &settings, &source).unwrap();
+        assert_eq!(usage_for(&store, "child"), 200);
+        std::fs::write(&plain, &parent).unwrap();
+        import::scan(&store, &settings, &source).unwrap();
+        assert_eq!(
+            store
+                .cursor(&source.id, &child_path.to_string_lossy())
+                .unwrap()
+                .unwrap()
+                .2
+                .inherited_history
+                .unwrap()
+                .proof,
+            proof
+        );
+        std::fs::remove_file(&plain).unwrap();
+        assert_eq!(
+            import::scan(&store, &settings, &source).unwrap()["readBytes"],
+            0
+        );
+        let last = encoded.len() - 1;
+        encoded[last] ^= 1;
+        std::fs::write(&compressed, &encoded).unwrap();
+        let invalid = import::scan(&store, &settings, &source).unwrap();
+        assert_eq!(
+            invalid["forkHistoryIssues"][0]["reason"],
+            "invalidCompressedHistory"
+        );
+        assert_eq!(usage_for(&store, "child"), 100);
+    }
 }
 
 #[test]

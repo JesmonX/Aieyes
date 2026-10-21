@@ -30,6 +30,35 @@ use std::{
 const STATE_KEY_MARKER: &[u8] = b"Buffer.from([";
 const SEGMENT: &str = "s0";
 
+pub(crate) fn model_display_name(model: &str) -> Option<&'static str> {
+    // Names observed in Qoder's SessionStart metadata, not inferred vendor models.
+    match model {
+        "dfmodel" => Some("DeepSeek-Flash"),
+        "qfmodel" => Some("Qwen3.8-Flash"),
+        "Qoder" => Some("Qoder（主模型待识别）"),
+        _ => None,
+    }
+}
+
+fn main_models(store: &Store, source: &Source) -> Result<BTreeMap<String, String>> {
+    let mut models = BTreeMap::new();
+    // Parser cursors retain main-chain metadata even when no usage event could
+    // be emitted. Both collectors replay old cursors on the parser upgrade.
+    let mut query = store.db.prepare(
+        "SELECT state FROM files WHERE source_id=?1
+         UNION ALL SELECT state FROM remote_cursors WHERE source_id=?1",
+    )?;
+    for row in query.query_map([&source.id], |r| r.get::<_, String>(0))? {
+        let state: ParseState = serde_json::from_str(&row?)?;
+        if !state.session_id.is_empty() && !state.qoder_main_model.is_empty() {
+            models
+                .entry(state.session_id)
+                .or_insert(state.qoder_main_model);
+        }
+    }
+    Ok(models)
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Report {
     pub changed: u64,
@@ -506,6 +535,7 @@ pub(crate) fn reconcile(
     let tx = store.write_transaction()?;
     crate::import::current_settings(store, settings, source)?;
     let captured = captured_tokens(store, source)?;
+    let main_models = main_models(store, source)?;
     let mut report = Report::default();
     for (session_id, path, created_at, raw) in rows {
         let total: Tokens =
@@ -523,7 +553,10 @@ pub(crate) fn reconcile(
                     account_id: source.account_id.clone(),
                     provider: "qoder".into(),
                     session_id: session_id.clone(),
-                    model: "Qoder".into(),
+                    model: main_models
+                        .get(&session_id)
+                        .cloned()
+                        .unwrap_or_else(|| "Qoder".into()),
                     timestamp: created_at,
                     tokens,
                     attribution: "qoder-residual".into(),
@@ -820,6 +853,115 @@ mod tests {
     }
 
     #[test]
+    fn main_model_history_replays_old_cursors_without_double_counting_auxiliary_usage() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let source = Source {
+            id: "qoder".into(),
+            provider: "qoder".into(),
+            path: root.path().to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let settings = save_source(&store, &source);
+        let key = [23u8; 32];
+        let session = root.path().join("projects/p/session");
+        fs::create_dir_all(&session).unwrap();
+        fs::create_dir_all(root.path().join("bin/qodercli")).unwrap();
+        fs::write(
+            root.path().join("bin/qodercli/fixture"),
+            format!(
+                "Buffer.from([{}])",
+                key.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
+            ),
+        )
+        .unwrap();
+        let state = encrypt(
+            &key,
+            "session",
+            root.path().to_str().unwrap(),
+            r#"{"total":{"input_tokens":110,"cache_read_input_tokens":40,"output_tokens":7},"credits":{"total":0,"byModel":{"dfmodel":{"credits":0},"lite":{"credits":0}}}}"#,
+        );
+        fs::write(session.join("state.json"), state.to_string()).unwrap();
+        let mut main = json!({"type":"assistant","timestamp":"2026-10-18T04:29:24Z","sessionId":"session","message":{"id":"main","model":"dfmodel","usage":{"input_tokens":0,"output_tokens":0,"credits":0.25}}});
+        let auxiliary = json!({"type":"assistant","timestamp":"2026-10-18T04:29:25Z","sessionId":"session","isSidechain":true,"message":{"id":"aux","model":"lite","usage":{"input_tokens":10,"output_tokens":2,"credits":0.125}}});
+        let transcript = root.path().join("projects/p/session.jsonl");
+        fs::write(&transcript, format!("{main}\n{auxiliary}\n")).unwrap();
+        sync_local_with_keys(&store, &settings, &source, &[], &[key.to_vec()]).unwrap();
+        let filter = Filter {
+            date_range: Some(DateRange::All),
+            ..Default::default()
+        };
+        assert_eq!(store.dashboard(&filter).unwrap().models[0].key, "Qoder");
+        crate::import::scan(&store, &settings, &source).unwrap();
+        let dashboard = store.dashboard(&filter).unwrap();
+        assert_eq!(dashboard.models.len(), 1);
+        assert_eq!(dashboard.models[0].key, "dfmodel");
+        assert_eq!(dashboard.model_display_names["dfmodel"], "DeepSeek-Flash");
+        assert_eq!(
+            (dashboard.summary.total, dashboard.summary.events),
+            (117, 2)
+        );
+        assert_eq!(dashboard.summary.native_credits["qoder"].credits, 0.375);
+        assert_eq!(
+            store
+                .dashboard(&Filter {
+                    model: Some("dfmodel".into()),
+                    ..filter.clone()
+                })
+                .unwrap()
+                .summary
+                .total,
+            117
+        );
+        // An old parser cursor must replay even when both files are unchanged.
+        let path = transcript.to_string_lossy();
+        let (signature, offset, mut cursor) = store.cursor(&source.id, &path).unwrap().unwrap();
+        cursor.parser_version = 9;
+        cursor.qoder_main_model.clear();
+        store
+            .set_cursor(&source.id, &path, &signature, offset, &cursor)
+            .unwrap();
+        reconcile(&store, &source, &[], &settings).unwrap();
+        assert!(
+            store
+                .dashboard(&filter)
+                .unwrap()
+                .models
+                .iter()
+                .any(|m| m.key == "Qoder")
+        );
+        crate::import::scan(&store, &settings, &source).unwrap();
+        assert_eq!(store.dashboard(&filter).unwrap().models.len(), 1);
+        let revisions: i64 = store
+            .db
+            .query_row("SELECT SUM(revision) FROM usage_day_revision", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        crate::import::scan(&store, &settings, &source).unwrap();
+        assert_eq!(
+            revisions,
+            store
+                .db
+                .query_row::<i64, _, _>("SELECT SUM(revision) FROM usage_day_revision", [], |r| r
+                    .get(0))
+                .unwrap()
+        );
+        main["message"]["usage"]["input_tokens"] = json!(100);
+        main["message"]["usage"]["cache_read_input_tokens"] = json!(40);
+        main["message"]["usage"]["output_tokens"] = json!(5);
+        fs::write(&transcript, format!("{main}\n{auxiliary}\n")).unwrap();
+        crate::import::rescan(&store, &settings, &source).unwrap();
+        let dashboard = store.dashboard(&filter).unwrap();
+        assert_eq!(
+            (dashboard.summary.total, dashboard.summary.events),
+            (117, 2)
+        );
+        assert_eq!(dashboard.summary.native_credits["qoder"].credits, 0.375);
+        assert_eq!(store.db.query_row::<i64, _, _>("SELECT COUNT(*) FROM events WHERE json_extract(payload,'$.attribution')='qoder-residual'", [], |r| r.get(0)).unwrap(), 0);
+    }
+
+    #[test]
     fn residual_is_net_of_cache_and_replaced_without_counting_a_request() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).unwrap();
@@ -992,6 +1134,16 @@ mod tests {
         };
         let settings = save_source(&store, &source);
         let key = [9u8; 32];
+        let mut cursor = ParseState::default();
+        let hidden = json!({"type":"assistant","timestamp":"2026-10-18T04:29:24Z","sessionId":"session","message":{"id":"main","model":"qfmodel","usage":{"input_tokens":0,"output_tokens":0}}});
+        assert!(crate::usage::parse(&source, &mut cursor, &hidden).is_none());
+        store
+            .db
+            .execute(
+                "INSERT INTO remote_cursors VALUES(?1,'remote.jsonl','fixture','{}',?2)",
+                params![source.id, serde_json::to_string(&cursor).unwrap()],
+            )
+            .unwrap();
         let project = "/srv/workspace";
         let state = encrypt(
             &key,
@@ -1030,6 +1182,17 @@ mod tests {
             .unwrap();
         let event: UsageEvent = serde_json::from_str(&raw).unwrap();
         assert_eq!((event.tokens.input, event.tokens.total()), (50, 90));
+        assert_eq!(event.model, "qfmodel");
+        assert_eq!(
+            store
+                .dashboard(&Filter {
+                    date_range: Some(DateRange::All),
+                    ..Default::default()
+                })
+                .unwrap()
+                .model_display_names["qfmodel"],
+            "Qwen3.8-Flash"
+        );
 
         let mut paused = settings.clone();
         paused.sources[0].enabled = false;

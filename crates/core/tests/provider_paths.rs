@@ -58,6 +58,68 @@ fn roots(root: &Path) {
 }
 
 #[test]
+fn discovery_never_creates_accounts_from_local_credentials() {
+    for auth in [
+        None,
+        Some(json!({"auth_mode":"apikey","OPENAI_API_KEY":"fixture"})),
+        Some(json!({"auth_mode":"chatgpt","tokens":{"account_id":"fixture-account"}})),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        roots(root);
+        let codex = root.join("home/.codex");
+        let agy = root.join("home/.gemini/antigravity-cli");
+        std::fs::create_dir_all(&codex).unwrap();
+        std::fs::create_dir_all(&agy).unwrap();
+        let claude = root.join("native/claude/.credentials.json");
+        let claude_auth = json!({"claudeAiOauth":{"accessToken":"fixture"}}).to_string();
+        std::fs::write(&claude, &claude_auth).unwrap();
+        if let Some(auth) = &auth {
+            std::fs::write(codex.join("auth.json"), auth.to_string()).unwrap();
+        }
+
+        // Every RPC starts a new process, covering both initialization and restart.
+        for _ in 0..2 {
+            let settings = rpc(root, "settings.get", json!({}));
+            assert_eq!(settings["accounts"], json!([]));
+            for provider in ["codex", "claude", "antigravity"] {
+                let source = settings["sources"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|s| s["provider"] == provider)
+                    .unwrap();
+                assert_eq!(source["accountId"], "", "{provider}");
+            }
+            assert_eq!(rpc(root, "dashboard", json!({}))["quotas"], json!([]));
+            assert_eq!(rpc(root, "accounts.status.get", json!({})), json!([]));
+        }
+        assert_eq!(std::fs::read_to_string(&claude).unwrap(), claude_auth);
+        if let Some(auth) = &auth {
+            assert_eq!(
+                std::fs::read_to_string(codex.join("auth.json")).unwrap(),
+                auth.to_string()
+            );
+        }
+
+        // Clearing only Aieyes data must not re-import the native logins.
+        std::fs::remove_dir_all(root.join("data")).unwrap();
+        assert_eq!(rpc(root, "settings.get", json!({}))["accounts"], json!([]));
+
+        // Explicit account creation and its saved name still survive a restart.
+        let created = rpc(
+            root,
+            "accounts.connect",
+            json!({"provider":"antigravity","name":"My account","sourceIds":["local-antigravity"]}),
+        );
+        let settings = rpc(root, "settings.get", json!({}));
+        assert_eq!(settings["accounts"].as_array().unwrap().len(), 1);
+        assert_eq!(settings["accounts"][0]["id"], created["accountId"]);
+        assert_eq!(settings["accounts"][0]["name"], "My account");
+    }
+}
+
+#[test]
 fn discovery_and_directory_defaults_use_each_clients_effective_root() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

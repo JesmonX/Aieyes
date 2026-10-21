@@ -91,7 +91,12 @@ impl Store {
         let next = normalize(next)?;
         // These values are managed by account deletion and provider migrations.
         // Unchanged stale values remain valid during concurrent system updates.
-        for key in ["deletedAccounts", "accountAliases", "codexApis"] {
+        for key in [
+            "deletedAccounts",
+            "accountAliases",
+            "codexApis",
+            "nativeConnections",
+        ] {
             ensure!(
                 base[key] == next[key],
                 "{key} 为只读设置，请使用账户操作修改"
@@ -771,7 +776,7 @@ mod tests {
         let mut legacy: Settings = serde_json::from_value(json!({"version":7,"hosts":[{"id":"old","target":"fixture.invalid","enabled":false}],"localMonitor":{"enabled":false}})).unwrap();
         assert!(legacy.local_device_enabled && legacy.hosts[0].monitoring_enabled);
         legacy.migrate();
-        assert_eq!(legacy.version, 10);
+        assert_eq!(legacy.version, 11);
         assert!(legacy.monitored_hosts().iter().all(|host| !host.enabled));
         legacy.local_device_enabled = false;
         legacy.local_monitor.enabled = true;

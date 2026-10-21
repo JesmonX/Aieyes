@@ -167,8 +167,26 @@ def _codex_home(root):
     return home
 
 
+class _CodexHistoryError(ValueError):
+    MESSAGES = dict(parentNotFound='继承历史记录尚未找到',
+                    identityMismatch='继承历史文件与所属会话标识不一致',
+                    boundaryInvalid='继承历史字节边界超出文件或未落在完整记录上',
+                    cycle='继承历史引用形成循环或超过层数限制',
+                    ambiguousHistory='继承历史存在内容不一致的同标识记录',
+                    invalidRecord='继承历史包含损坏记录',
+                    invalidCounter='继承历史累计用量无效',
+                    invalidCompressedHistory='继承历史压缩记录损坏或不完整',
+                    decoderUnavailable='读取压缩继承历史需要远程 Node 支持 Zstandard',
+                    resourceLimit='继承历史超过压缩读取大小限制',
+                    readError='无法读取完整继承历史')
+
+    def __init__(self, reason):
+        self.reason = reason if reason in self.MESSAGES else 'readError'
+        super().__init__(self.MESSAGES[self.reason])
+
+
 class _CodexHistory:
-    """Only export a verified counter and its proof; parent conversation text stays remote."""
+    """Resolve immutable rollout IDs; conversation text never leaves this host."""
     def __init__(self, root):
         import sqlite3
         self.paths, self.cache = {}, {}
@@ -177,89 +195,173 @@ class _CodexHistory:
         visited = []
         def walk(folder):
             for directory, children, names in os.walk(folder, followlinks=False):
-                children[:] = [name for name in children if name != '.aieyes' and not os.path.islink(os.path.join(directory, name))]
-                for name in names:
+                children[:] = sorted(name for name in children if name != '.aieyes' and not os.path.islink(os.path.join(directory, name)))
+                for name in sorted(names):
                     path = os.path.join(directory, name)
-                    if name.endswith('.jsonl') and not os.path.islink(path):
+                    if name.endswith(('.jsonl', '.jsonl.zst')) and not os.path.islink(path):
                         yield path
         for folder in folders:
             if any(os.path.commonpath([folder, earlier]) == earlier for earlier in visited):
                 continue
             visited.append(folder)
-            paths = [folder] if os.path.isfile(folder) else walk(folder)
-            for path in paths:
-                try:
-                    # Imported filenames can carry an unrelated UUID suffix.
-                    # Resolve references using the actual session metadata.
-                    with open(path, 'rb') as stream:
-                        row = json.loads(stream.readline(1024 * 1024))
-                    if row.get('type') == 'session_meta':
-                        payload = row.get('payload') or {}
-                        identity = payload.get('id') or payload.get('session_id')
-                        if identity:
-                            self.paths.setdefault(identity, path)
-                except (OSError, ValueError):
-                    pass
+            for path in ([folder] if os.path.isfile(folder) else walk(folder)):
+                self._index(path)
         database = os.path.join(home, 'state_5.sqlite')
         if os.path.isfile(database):
             try:
                 from pathlib import Path
                 with contextlib.closing(sqlite3.connect(Path(database).as_uri() + '?mode=ro', uri=True)) as db:
-                    for identity, path in db.execute('SELECT id,rollout_path FROM threads'):
-                        if os.path.isfile(path):
-                            self.paths[identity] = path
+                    for _, path in db.execute('SELECT id,rollout_path FROM threads'):
+                        # The DB points at the selected thread revision, not necessarily the base.
+                        self._index(path)
             except (OSError, sqlite3.Error):
                 pass
+
+    @staticmethod
+    def _representation(path):
+        plain = path[:-4] if path.endswith('.zst') else path
+        return plain if os.path.isfile(plain) else plain + '.zst' if os.path.isfile(plain + '.zst') else None
+
+    def _index(self, path):
+        import re
+        from datetime import datetime
+        path = self._representation(path)
+        if path is None:
+            return
+        uuid = r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+        match = re.fullmatch(r'rollout-(.{19})-(' + uuid + r')(?:_(' + uuid + r'))?\.jsonl(?:\.zst)?', os.path.basename(path))
+        if match:
+            try:
+                datetime.strptime(match[1], '%Y-%m-%dT%H-%M-%S')
+            except ValueError:
+                match = None
+        try:
+            if match:
+                identity, rollout = match[2], match[3] or match[2]
+            else:
+                if path.endswith('.zst'):
+                    value = _harness()['codex_prefix'](path)
+                    if value.get('reason'):
+                        return
+                    identity = value.get('thread')
+                else:
+                    with open(path, 'rb') as stream:
+                        row = json.loads(stream.readline(1024 * 1024))
+                    if not isinstance(row, dict) or row.get('type') != 'session_meta':
+                        return
+                    payload = row.get('payload') or {}
+                    if not isinstance(payload, dict):
+                        return
+                    identity = payload.get('id') or payload.get('session_id')
+                if not isinstance(identity, str) or not identity:
+                    return
+                rollout = identity
+            candidates = self.paths.setdefault(rollout, [])
+            if not any(self._representation(c[0]) == path for c in candidates):
+                candidates.append((path, identity, bool(match)))
+        except (OSError, ValueError, TypeError):
+            pass
 
     def resolve(self, base):
         thread, end = base.get('thread_id', ''), base.get('end_byte_offset')
         try:
             return self._resolve(thread, end, [])
-        except (OSError, ValueError, TypeError, KeyError):
-            return dict(parentThread=thread, endByteOffset=end if isinstance(end, int) and end >= 0 else 0,
-                        tokens=None, timestamp=None, proof='', issue='父会话历史缺失、损坏或边界无效')
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            reason = error.reason if isinstance(error, _CodexHistoryError) else 'readError' if isinstance(error, OSError) else 'invalidRecord'
+            return dict(parentThread=thread if isinstance(thread, str) else '',
+                        endByteOffset=end if type(end) is int and end >= 0 else 0,
+                        tokens=None, timestamp=None, proof='', issue=str(_CodexHistoryError(reason)), issueCode=reason)
 
     def _resolve(self, thread, end, ancestors):
-        import hashlib
-        from datetime import datetime
-        if not thread or thread in ancestors or len(ancestors) >= 64 or type(end) is not int or end < 0:
-            raise ValueError('invalid history reference')
+        if not isinstance(thread, str) or not thread:
+            raise _CodexHistoryError('identityMismatch')
+        if thread in ancestors or len(ancestors) >= 64:
+            raise _CodexHistoryError('cycle')
+        if type(end) is not int or not 0 <= end <= 2**64 - 1:
+            raise _CodexHistoryError('boundaryInvalid')
         if (thread, end) in self.cache:
             return self.cache[(thread, end)]
-        digest, offset, tokens, stamp, parent = hashlib.sha256(), 0, None, None, None
-        with open(self.paths[thread], 'rb') as stream:
-            if end > os.fstat(stream.fileno()).st_size:
-                raise ValueError('incomplete parent')
-            while offset < end:
-                line = stream.readline(min(end - offset, 16 * 1024 * 1024) + 1)
-                if not line.endswith(b'\n') or len(line) > 16 * 1024 * 1024 or offset + len(line) > end:
-                    raise ValueError('invalid boundary')
-                offset += len(line)
-                digest.update(line)
-                row = json.loads(line)
-                payload = row.get('payload') or {}
-                if row.get('type') == 'session_meta':
-                    if (payload.get('id') or payload.get('session_id')) != thread:
-                        raise ValueError('wrong parent')
-                    parent = payload.get('history_base')
-                if row.get('type') == 'event_msg' and payload.get('type') == 'token_count':
-                    usage = (payload.get('info') or {}).get('total_token_usage')
-                    if not isinstance(usage, dict):
-                        continue
-                    values = [usage.get(key, 0) for key in ('input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'reasoning_output_tokens')]
-                    if 'input_tokens' not in usage or any(type(v) is not int or v < 0 for v in values) or values[0] < values[2] + values[3]:
-                        raise ValueError('invalid counter')
-                    tokens = dict(input=values[0]-values[2]-values[3], output=values[1], cacheRead=values[2], cacheWrite=values[3], reasoning=values[4])
-                    raw = row.get('timestamp')
-                    stamp = int(datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp()) if isinstance(raw, str) else raw
-        if parent:
-            inherited = self._resolve(parent.get('thread_id'), parent.get('end_byte_offset'), ancestors + [thread])
-            digest.update(inherited['proof'].encode())
-            if tokens is None:
-                tokens, stamp = inherited['tokens'], inherited['timestamp']
-        result = dict(parentThread=thread, endByteOffset=end, tokens=tokens or dict(input=0, output=0, cacheRead=0, cacheWrite=0, reasoning=0), timestamp=stamp, proof=digest.hexdigest(), issue='')
+        candidates = self.paths.get(thread, [])
+        canonical = any(c[2] for c in candidates)
+        candidates = sorted(c for c in candidates if not canonical or c[2])
+        result, error = None, None
+        for candidate in candidates:
+            try:
+                value = self._read(candidate, thread, end, ancestors + [thread])
+            except (OSError, ValueError, TypeError, KeyError) as problem:
+                if error is None:
+                    error = problem
+                continue
+            if result and result['proof'] != value['proof']:
+                raise _CodexHistoryError('ambiguousHistory')
+            result = value
+        if result is None:
+            raise error or _CodexHistoryError('parentNotFound')
         self.cache[(thread, end)] = result
         return result
+
+    def _read(self, candidate, thread, end, ancestors):
+        from datetime import datetime
+        path, identity, _ = candidate
+        path = self._representation(path)
+        if path is None:
+            raise _CodexHistoryError('parentNotFound')
+        tokens, stamp, parent = None, None, None
+        if path.endswith('.zst'):
+            value = _harness()['codex_prefix'](path, end)
+            if value.get('reason'):
+                raise _CodexHistoryError(value['reason'])
+            if end and value.get('thread') != identity:
+                raise _CodexHistoryError('identityMismatch')
+            tokens, stamp, parent, proof = (value.get(k) for k in ('tokens', 'timestamp', 'parent', 'proof'))
+        else:
+            digest, offset = hashlib.sha256(), 0
+            with open(path, 'rb') as stream:
+                while offset < end:
+                    line = stream.readline(min(end - offset, 16 * 1024 * 1024) + 1)
+                    if not line.endswith(b'\n') or len(line) > 16 * 1024 * 1024 or offset + len(line) > end:
+                        raise _CodexHistoryError('boundaryInvalid')
+                    first = offset == 0
+                    offset += len(line)
+                    digest.update(line)
+                    try:
+                        row = json.loads(line)
+                    except (ValueError, UnicodeError):
+                        raise _CodexHistoryError('invalidRecord') from None
+                    if not isinstance(row, dict) or not isinstance(row.get('payload') or {}, dict):
+                        raise _CodexHistoryError('invalidRecord')
+                    payload = row.get('payload') or {}
+                    if first:
+                        if row.get('type') != 'session_meta' or (payload.get('id') or payload.get('session_id')) != identity:
+                            raise _CodexHistoryError('identityMismatch')
+                        base = payload.get('history_base')
+                        parent = base if isinstance(base, dict) else None
+                    if row.get('type') == 'event_msg' and payload.get('type') == 'token_count':
+                        if not isinstance(payload.get('info'), dict):
+                            continue
+                        usage = (payload.get('info') or {}).get('total_token_usage')
+                        if not isinstance(usage, dict):
+                            continue
+                        values = [usage.get(key, 0) for key in ('input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'reasoning_output_tokens')]
+                        if 'input_tokens' not in usage or any(type(v) is not int or not 0 <= v <= 2**64 - 1 for v in values) or values[0] < values[2] + values[3]:
+                            raise _CodexHistoryError('invalidCounter')
+                        tokens = dict(input=values[0]-values[2]-values[3], output=values[1], cacheRead=values[2], cacheWrite=values[3], reasoning=values[4])
+                        stamp = row.get('timestamp')
+            proof = digest.hexdigest()
+        if isinstance(stamp, str):
+            try:
+                stamp = int(datetime.fromisoformat(stamp.replace('Z', '+00:00')).timestamp())
+            except (ValueError, OverflowError):
+                stamp = None
+        elif type(stamp) is not int or not -(2**63) <= stamp < 2**63:
+            stamp = None
+        if tokens is None and parent:
+            inherited = self._resolve(parent.get('thread_id'), parent.get('end_byte_offset'), ancestors)
+            proof = hashlib.sha256((proof + inherited['proof']).encode()).hexdigest()
+            tokens, stamp = inherited['tokens'], inherited['timestamp']
+        return dict(parentThread=thread, endByteOffset=end,
+                    tokens=tokens if tokens is not None else dict(input=0, output=0, cacheRead=0, cacheWrite=0, reasoning=0),
+                    timestamp=stamp, proof=proof, issue='')
 
 
 def _project(value, provider):
@@ -326,13 +428,14 @@ def _project(value, provider):
             event=dict(method=value['method'],params=dict(sessionId=p.get('sessionId'),update=dict(sessionUpdate='turn_completed',prompt_id=update.get('prompt_id'),usage=dict(modelUsage=usage)),_meta={k:meta.get(k) for k in ('eventId','agentTimestampMs')}))
     elif provider in ("claude","qoder"):
         message = value.get("message") or {}
-        if value.get("type") == "assistant" and message.get("usage"):
+        if value.get("type") == "assistant" and (message.get("usage") or provider == 'qoder' and isinstance(message.get('model'), str)):
             event = {k: value.get(k) for k in ("type", "timestamp", "sessionId", "requestId", "uuid", "isApiErrorMessage")}
             usage=message.get('usage') or {}
             keys=['input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens']
             if provider=='qoder':
                 keys+=['credits','original_credits','billable']
                 event['modelSource']=value.get('modelSource')
+                event['isSidechain']=value.get('isSidechain') is True
             event["message"] = {k: message.get(k) for k in ("id", "model")}
             event["message"]['usage']={k:usage[k] for k in keys if k in usage}
     elif "tokens" in value:
@@ -600,11 +703,14 @@ def _incremental(request):
             raise ValueError('远程统计批次超过 1 MiB')
         print(line, flush=True)
 
-    def issue(path, error, code='fileRead'):
+    def issue(path, error, code='fileRead', history=None):
         nonlocal invalid_records
         if code == 'missingHistoryBase':
             if len(fork_issues) < 128:
-                fork_issues.append(dict(path=os.path.basename(path), code=code, message=str(error)[:400]))
+                detail = dict(path=os.path.basename(path), code=code, message=str(error)[:400])
+                if history:
+                    detail.update(reason=history.get('issueCode', ''), parentRolloutId=history.get('parentThread', ''), endByteOffset=history.get('endByteOffset', 0))
+                fork_issues.append(detail)
             return
         if code == 'invalidRecord': invalid_records += 1
         if len(issues) < 128:
@@ -629,11 +735,9 @@ def _incremental(request):
         inherited = old.get('inheritedHistory')
         if inherited and history:
             refreshed = history.resolve(dict(thread_id=inherited['parentThread'], end_byte_offset=inherited['endByteOffset']))
-            if (refreshed.get('tokens'), refreshed.get('proof'), refreshed.get('issue')) != (inherited.get('tokens'), inherited.get('proof'), inherited.get('issue')):
+            if any(refreshed.get(k) != inherited.get(k) for k in ('tokens', 'proof', 'issue', 'issueCode')):
                 old = {}
                 inherited = refreshed
-        if old and inherited and inherited.get('tokens') is None:
-            issue(path, '父会话历史尚未找到；首段累计暂不计入', 'missingHistoryBase')
         with open(path, 'rb') as stream:
             metadata = os.fstat(stream.fileno())
             size = metadata.st_size
@@ -655,6 +759,7 @@ def _incremental(request):
                      and not (size == old.get('size') and metadata.st_mtime_ns != old.get('mtimeNs')
                               and not (title_digest and old.get('titleDigest') and title_digest!=old['titleDigest'])))
             if not valid:
+                inherited = None
                 offset, prefix_size = 0, min(size-prefix_start, 128)
                 if provider=='kimi':
                     stream.seek(0)
@@ -702,8 +807,6 @@ def _incremental(request):
                 if event and history and event['type'] == 'session_meta' and 'history_base' in event['payload']:
                     inherited = history.resolve(event['payload']['history_base'])
                     event['inheritedHistory'] = inherited
-                    if inherited['tokens'] is None:
-                        issue(path, inherited['issue'], 'missingHistoryBase')
                 encoded = len(json.dumps(event).encode('utf-8')) if event else 0
                 if encoded > 768 * 1024:
                     raise ValueError('单条统计记录过大，保留上次游标')
@@ -720,6 +823,8 @@ def _incremental(request):
                     flush()
             if offset != last_commit or reset:
                 flush()
+            if inherited and history and inherited.get('tokens') is None:
+                issue(path, inherited.get('issue') or '继承历史尚未确认；首段累计暂不计入', 'missingHistoryBase', inherited)
 
     try:
         if not os.path.exists(root):

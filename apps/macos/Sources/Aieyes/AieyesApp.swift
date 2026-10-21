@@ -26,6 +26,9 @@ import Combine
     private var cancellables = Set<AnyCancellable>()
     private var model: AppModel!
     private var titleUpdatePending = false
+    private var measuredMenu: MenuStatusSnapshot?
+    private var measuredShowCount: Bool?
+    private var measuredScale: CGFloat?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -84,7 +87,16 @@ import Combine
         })
         model.live.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         model.objectWillChange.sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
+        model.menuStatus.$snapshot.dropFirst().sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification).sink { [weak self] _ in self?.scheduleTitleUpdate() }.store(in: &cancellables)
+        for name in [NSWindow.didChangeBackingPropertiesNotification, NSApplication.didChangeScreenParametersNotification] {
+            NotificationCenter.default.publisher(for: name).sink { [weak self] _ in
+                self?.measuredMenu = nil; self?.scheduleTitleUpdate()
+            }.store(in: &cancellables)
+        }
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification).sink { [weak self] _ in
+            self?.measuredMenu = nil; self?.scheduleTitleUpdate()
+        }.store(in: &cancellables)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
             Task { @MainActor in self?.dismissOutsidePanel() }
@@ -184,8 +196,15 @@ import Combine
     private func updateTitle() {
         guard let button = statusItem.button, let label = statusLabel else { return }
         let scale = button.window?.backingScaleFactor ?? 2
-        let width = ceil(label.fittingSize.width * scale) / scale
-        if statusItem.length != width { statusItem.length = width }
+        let snapshot = model.menuStatus.snapshot
+        let showCount = UserDefaults.standard.bool(forKey: NativePanelKey.showCount.rawValue)
+        if measuredMenu != snapshot || measuredShowCount != showCount || measuredScale != scale {
+            label.layoutSubtreeIfNeeded()
+            let width = ceil(label.fittingSize.width * scale) / scale
+            if statusItem.length != width { statusItem.length = width }
+            measuredMenu = snapshot; measuredShowCount = showCount; measuredScale = scale
+        }
+        let width = statusItem.length
         let frame = NSRect(x: 0, y: 0, width: width, height: button.bounds.height)
         if label.frame != frame { label.frame = frame }
         var tooltip = "Aieyes · 今日全部数据 · " + model.sessionSummary + (model.sessionPhase.map { " · " + $0.rawValue } ?? "")

@@ -133,33 +133,44 @@ struct PersistentSection<Content: View>: View {
 struct ScrollMemory: NSViewRepresentable {
     let key: String
     var ready = true
+    @Environment(\.surfaceActive) private var active
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSView { NSView() }
     func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.setActive(active)
         DispatchQueue.main.async { context.coordinator.attach(view.enclosingScrollView, key: key, ready: ready) }
     }
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { coordinator.detach() }
-    final class Coordinator {
+    @MainActor final class Coordinator {
         private weak var scroll: NSScrollView?
         private var observer: NSObjectProtocol?
         private var key = ""
         private var restorePoint: NSPoint?
         private var lastPoint: NSPoint?
+        private var active = true
+        private var ready = false
+        func setActive(_ value: Bool) {
+            if active && !value { ScrollPositionStore.shared.flush(key) }
+            if !active && value && !key.isEmpty { restorePoint = ScrollPositionStore.shared.position(for: key) }
+            active = value
+        }
         func attach(_ next: NSScrollView?, key: String, ready: Bool) {
+            self.ready = ready
             guard let next else { return }
-            if scroll === next, self.key == key { if ready { restore() }; return }
+            if scroll === next, self.key == key { if ready && active { restore() }; return }
             detach(); scroll = next; self.key = key
-            let storage = "view.scroll.v2." + key
-            if !CommandLine.arguments.contains("--render"), let point = UserDefaults.standard.array(forKey: storage) as? [Double], point.count == 2 {
-                restorePoint = NSPoint(x: point[0], y: point[1])
+            if !CommandLine.arguments.contains("--render") {
+                restorePoint = ScrollPositionStore.shared.position(for: key)
             }
-            if ready { restore() }
+            if ready && active { restore() }
             next.contentView.postsBoundsChangedNotifications = true
             observer = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: next.contentView, queue: .main) { [weak self, weak next] _ in
-                guard let self, let next, self.restorePoint == nil, !CommandLine.arguments.contains("--render"), next.window?.isVisible == true else { return }
-                let point = next.contentView.bounds.origin
-                guard self.lastPoint != point else { return }; self.lastPoint = point
-                UserDefaults.standard.set([Double(point.x), Double(point.y)], forKey: storage)
+                MainActor.assumeIsolated {
+                    guard let self, let next, self.active, self.ready, self.restorePoint == nil, !CommandLine.arguments.contains("--render"), next.window?.isVisible == true else { return }
+                    let point = next.contentView.bounds.origin
+                    guard self.lastPoint != point else { return }; self.lastPoint = point
+                    ScrollPositionStore.shared.record(point, for: self.key)
+                }
             }
         }
         private func restore() {
@@ -168,7 +179,7 @@ struct ScrollMemory: NSViewRepresentable {
             next.contentView.scroll(to: NSPoint(x: max(0, min(point.x, document.bounds.width - size.width)), y: max(0, min(point.y, document.bounds.height - size.height))))
             next.reflectScrolledClipView(next.contentView); lastPoint = next.contentView.bounds.origin; restorePoint = nil
         }
-        func detach() { if let observer { NotificationCenter.default.removeObserver(observer) }; observer = nil; scroll = nil; restorePoint = nil; lastPoint = nil }
-        deinit { detach() }
+        func detach() { ScrollPositionStore.shared.flush(key); if let observer { NotificationCenter.default.removeObserver(observer) }; observer = nil; scroll = nil; restorePoint = nil; lastPoint = nil }
+        deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
     }
 }

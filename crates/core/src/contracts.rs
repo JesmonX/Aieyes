@@ -41,6 +41,8 @@ pub const METHODS: &[Method] = &[
     Method { name: "accounts.delete", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.deletion.preview", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.deployments.sync", lane: Lane::Accounts, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "accounts.native.remove", lane: Lane::Accounts, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: true, refresh_key: None },
+    Method { name: "accounts.scan", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &["settings", "data"], invalidate_on_failure: true, refresh_key: None },
     Method { name: "accounts.status.get", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.status.refresh", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "accounts.status.refreshBatch", lane: Lane::Accounts, update_behavior: "cancel", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
@@ -108,6 +110,7 @@ pub const METHODS: &[Method] = &[
     Method { name: "pets.list", lane: Lane::Configuration, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "pets.select", lane: Lane::Configuration, update_behavior: "finish", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.list", lane: Lane::Main, update_behavior: "observe", invalidates: &[], invalidate_on_failure: false, refresh_key: None },
+    Method { name: "prices.reference", lane: Lane::Main, update_behavior: "finish", invalidates: &["settings", "data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.recalculate", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.save", lane: Lane::Main, update_behavior: "finish", invalidates: &["data"], invalidate_on_failure: false, refresh_key: None },
     Method { name: "prices.sync", lane: Lane::Main, update_behavior: "cancel", invalidates: &["data"], invalidate_on_failure: false, refresh_key: Some("prices") },
@@ -190,7 +193,7 @@ pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
     &[120, 120, 120, 120, 120, 220],
     &[150, 150, 150, 150, 150, 280],
 ];
-pub const CONTRACT_HASH: &str = "cde493bff081e56afcfa2ebb506848f129864a2a530673ad89938d731f157733";
+pub const CONTRACT_HASH: &str = "d9ef4fd5a6a6a2b91786b024acb13083710d2a8563b575d3cb485b1ddc38113d";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

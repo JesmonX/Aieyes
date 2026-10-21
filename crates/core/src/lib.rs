@@ -1,3 +1,4 @@
+pub mod account_scan;
 mod account_targets;
 pub mod accounts;
 pub mod agent_api;
@@ -220,6 +221,38 @@ impl Engine {
                     }
                 }
             }
+            if last.as_ref().is_none_or(|q| q.error.is_some()) {
+                for source in account_scan::quota_sources(&settings, account)
+                    .into_iter()
+                    .filter(|s| {
+                        params["sourceId"].as_str().is_none_or(|id| {
+                            s.id == id
+                                || settings.native_connections.iter().any(|r| {
+                                    s.id == format!("native-{}", r.id)
+                                        && r.source_id.as_deref() == Some(id)
+                                })
+                        })
+                    })
+                {
+                    match account_scan::read_native_quota(&self.store, &settings, account, &source)
+                    {
+                        Ok(q) => {
+                            last = Some(q);
+                            break;
+                        }
+                        Err(error) => {
+                            last = Some(QuotaSnapshot {
+                                source_id: source.id,
+                                account_id: account.id.clone(),
+                                provider: account.provider.clone(),
+                                name: account.name.clone(),
+                                error: Some(error.to_string()),
+                                ..Default::default()
+                            })
+                        }
+                    }
+                }
+            }
             if let Some(q) = last {
                 result.push(q);
             }
@@ -245,6 +278,8 @@ impl Engine {
             if method == "settings.save" {
                 params["accountAliases"] = serde_json::to_value(&aliases)?;
                 params["codexApis"] = serde_json::to_value(self.store.settings()?.codex_apis)?;
+                params["nativeConnections"] =
+                    serde_json::to_value(self.store.settings()?.native_connections)?;
             }
             providers::normalize_value(&mut params, &aliases);
             if method == "quotas.order.set"
@@ -271,6 +306,8 @@ impl Engine {
                 params["dryRun"].as_bool().unwrap_or(false),
             ),
             "accounts.targets" => self.account_targets(&params),
+            "accounts.scan" => self.scan_accounts(params),
+            "accounts.native.remove" => self.remove_native_connection(params),
             "accounts.status.refreshBatch" => self.refresh_account_status_batch(&params),
             "subscriptions.openLogin" => subscriptions::open_login(&params),
             "subscriptions.connect" => self.connect_subscription(params),
@@ -601,6 +638,7 @@ impl Engine {
             "quotas.schedule" => self.quota_schedule(),
             "quotas.refresh" => self.refresh_scheduled_quotas(params),
             "prices.list" => Ok(serde_json::to_value(self.store.prices()?)?),
+            "prices.reference" => self.reference_prices(params),
             "prices.sync" => {
                 let settings = self.store.settings()?;
                 let response = network::client(&settings.proxy)?
@@ -615,6 +653,10 @@ impl Engine {
                 let prices = pricing::parse_openrouter(&response.json::<Value>()?);
                 anyhow::ensure!(!prices.is_empty(), "价格列表为空");
                 self.store.save_prices(&prices)?;
+                self.store.db.execute(
+                    "INSERT OR REPLACE INTO kv(key,value) VALUES('openrouter-models',?1)",
+                    [serde_json::to_string(&prices)?],
+                )?;
                 let repriced = self.store.reprice(&settings, true)?;
                 Ok(json!({"models":prices.len(),"repriced":repriced,"updatedAt":now()}))
             }

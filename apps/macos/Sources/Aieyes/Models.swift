@@ -46,9 +46,11 @@ enum ProviderBoundary {
 
 enum NativePanelKey: String, CaseIterable {
     case accountsLegacy = "panel.accounts.v1", accounts = "panel.accounts.v2"
+    case knownAccounts = "panel.accounts.known.v1"
     case aliasMigration = "antigravity.preferences.v1", filters = "dashboard.filters.v1"
     case panelPage = "panel.page", detailPage = "detail.page"
     case panelServerFilter = "panel.serverFilter", detailServerFilter = "detail.serverFilter"
+    case panelServerSelection = "panel.serverSelection", detailServerSelection = "detail.serverSelection"
     case panelTrend = "panel.trendExpanded", detailTrend = "detail.trendExpanded"
     case panelSessions = "panel.sessionsExpanded", detailSessions = "detail.sessionsExpanded"
     case panelCost = "panel.costMode", detailCost = "detail.costMode"
@@ -65,8 +67,9 @@ enum NativePanelKey: String, CaseIterable {
             case .accountsLegacy, .filters: result[key.rawValue] = "{}"
             case .accounts: result[key.rawValue] = "{\"version\":2,\"providers\":{}}"
             case .aliasMigration: result[key.rawValue] = ""
+            case .knownAccounts: result[key.rawValue] = [String]()
             case .panelPage, .detailPage: result[key.rawValue] = "agent"
-            case .panelServerFilter, .detailServerFilter: result[key.rawValue] = "all"
+            case .panelServerFilter, .detailServerFilter, .panelServerSelection, .detailServerSelection: result[key.rawValue] = "all"
             default: result[key.rawValue] = false
             }
         }
@@ -211,9 +214,24 @@ enum PanelAccountPreference {
         }
         return result
     }
-    static func includeNew(_ account: AgentAccount, accounts: [AgentAccount], defaults: UserDefaults = .standard) {
-        // Automatic choices are derived at display time. A manual choice is explicit,
-        // including an empty choice, and never gains accounts as a side effect.
+    static func includeNew(_ account: AgentAccount, accounts: [AgentAccount], order: [String] = [], defaults: UserDefaults = .standard) {
+        guard account.archived != true, account.quotaEnabled else { return }
+        let raw = defaults.string(forKey: NativePanelKey.accounts.rawValue) ?? defaults.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}"
+        var pref = decode(raw)
+        let choice = pref.providers[account.provider]
+        var keys = choice?.mode == "custom" ? choice?.keys ?? [] : selections(raw, accounts: accounts.filter { $0.key != account.key }, order: order)[account.provider] ?? []
+        guard !keys.contains(account.key) else { return }
+        keys.append(account.key)
+        pref.providers[account.provider] = Choice(mode: "custom", keys: keys)
+        defaults.set(String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8), forKey: NativePanelKey.accounts.rawValue)
+    }
+    static func observeAccounts(_ accounts: [AgentAccount], previous: [AgentAccount]? = nil, order: [String] = [], aliases: [String: String] = [:], defaults: UserDefaults = .standard) {
+        func canonical(_ key: String) -> String { aliases[key] ?? (key.hasPrefix("agy:") ? "antigravity:" + key.dropFirst(4) : key) }
+        let known = Set((defaults.stringArray(forKey: NativePanelKey.knownAccounts.rawValue) ?? previous?.map(\.key) ?? accounts.map(\.key)).map(canonical))
+        let existing = accounts.filter { known.contains($0.key) }
+        for account in accounts where !known.contains(account.key) { includeNew(account, accounts: existing, order: order, defaults: defaults) }
+        let next = known.union(accounts.map(\.key)).sorted()
+        if defaults.stringArray(forKey: NativePanelKey.knownAccounts.rawValue) != next { defaults.set(next, forKey: NativePanelKey.knownAccounts.rawValue) }
     }
     static func encode(_ selections: [String: [String]], automatic: Set<String> = []) -> String {
         var value = Preference(providers: selections.mapValues { Choice(mode: "custom", keys: $0) })
@@ -230,11 +248,17 @@ struct Tokens: Codable, Equatable {
 struct Aggregate: Codable, Identifiable, Equatable {
     var key = "", tokens = Tokens(), total: Double = 0, cost: Double = 0, pricedTokens: Double = 0
     var nativeCredits: [String: NativeCreditsTotal]?
+    var displayCredits: Aggregate {
+        var value = self
+        value.nativeCredits = nativeCredits?.filter { $0.key != "qoder" }
+        return value
+    }
     var hasNativeCredits: Bool { nativeCredits?.values.contains { $0.requests > 0 } == true }
+    var hasDisplayCredits: Bool { displayCredits.hasNativeCredits }
     var costAvailable: Bool { pricedTokens > 0 || (total == 0 && !hasNativeCredits) }
     var nativeCreditText: String {
         (nativeCredits ?? [:]).keys.sorted().compactMap { provider in
-            guard let row = nativeCredits?[provider], row.requests > 0 else { return nil }
+            guard provider != "qoder", let row = nativeCredits?[provider], row.requests > 0 else { return nil }
             return Format.provider(provider) + " 原生记录 " + row.amount(row.credits) + " Credits · " + String(row.requests) + (provider == "codebuddy" ? " 条计量" : " 次请求")
         }.joined(separator: "；")
     }
@@ -305,7 +329,7 @@ struct Quota: Codable, Equatable, Identifiable {
         return reason
     }
 }
-struct SyncIssue: Codable { var path: String?; var message: String; var code: String?; var step: Int? }
+struct SyncIssue: Codable, Equatable { var path: String?; var message: String; var code: String?; var step: Int? }
 func syncFailureReason(error: String?, partial: Bool?, issues: [SyncIssue]?) -> String? {
     if let error { return error }
     guard partial == true else { return nil }
@@ -313,19 +337,19 @@ func syncFailureReason(error: String?, partial: Bool?, issues: [SyncIssue]?) -> 
     if !(issues ?? []).isEmpty && visible.isEmpty { return nil }
     return visible.isEmpty ? "部分记录需要处理" : visible.map { ($0.path.map { $0 + " · " } ?? "") + $0.message }.joined(separator: "；")
 }
-struct SourceStatus: Codable {
+struct SourceStatus: Codable, Equatable {
     var partial: Bool?, issues: [SyncIssue]?, forkHistoryIssues: [SyncIssue]?
     var updatedAt: Double?, files: Int?, readBytes: Int?, error: String?
     var failureReason: String? { syncFailureReason(error: error, partial: partial, issues: issues) }
 }
-struct AutomaticValuationStatus: Codable { var state: String?, note: String?, accountKey: String?, updatedAt: Double? }
+struct AutomaticValuationStatus: Codable, Equatable { var state: String?, note: String?, accountKey: String?, updatedAt: Double? }
 struct AutomaticValuationConfig: Codable, Equatable { var enabled: Bool, consentVersion: Int; var mode: String? }
-struct SourceSummary: Codable, Identifiable { var id: String, name: String, provider: String, enabled: Bool, status: SourceStatus?, accountIds: [String]?; var autoValuationStatus: AutomaticValuationStatus? }
-struct DayModel: Codable, Identifiable {
+struct SourceSummary: Codable, Identifiable, Equatable { var id: String, name: String, provider: String, enabled: Bool, status: SourceStatus?, accountIds: [String]?; var autoValuationStatus: AutomaticValuationStatus? }
+struct DayModel: Codable, Identifiable, Equatable {
     var day: String, model: String, usage: Aggregate
     var id: String { day + ":" + model }
 }
-struct PricingGap: Codable, Identifiable {
+struct PricingGap: Codable, Identifiable, Equatable {
     var model: String, priceId: String?, tokens: Tokens, unpricedTokens: Double
     var id: String { model }
     var missing: String { [("输入", tokens.input), ("输出", tokens.output), ("缓存读取", tokens.cacheRead), ("缓存写入", tokens.cacheWrite)].filter { $0.1 > 0 }.map { $0.0 }.joined(separator: "、") }
@@ -349,6 +373,7 @@ struct AccountTarget: Decodable, Identifiable {
     var canWake: Bool, canSwitch: Bool
     var canDraft: Bool? = nil, available: Bool? = nil, draftReason: String? = nil
     var bound: Bool? = nil
+    var nativeConnectionId: String? = nil
     var id: String { accountKey + ":" + sourceId + ":" + (profileId ?? "") }
     var wakeupLocationLabel: String {
         let location = path.count > 55 ? "…" + path.suffix(54) : path
@@ -373,7 +398,7 @@ struct AccountDeviceStatus: Codable, Equatable, Identifiable {
     }
     var machineIdentitySummary: String? { identity.map { "当前登录 " + $0.summary + (error != nil ? " · 上次检查" : "") } }
 }
-struct AccountDeviceCounts {
+struct AccountDeviceCounts: Equatable {
     let total: Int, logged: Int, using: Int
     let pending: Bool
     init(accountKey: String, machines: [String], rows: [AccountDeviceStatus]) {
@@ -408,11 +433,13 @@ struct AgentAccount: Codable, Equatable, Identifiable {
     var archived: Bool?
     var key: String { provider + ":" + id }
 }
-struct Dashboard: Codable {
+struct Dashboard: Codable, Equatable {
     var billingSummary: CodexBillingSummary?
     var generatedAt: Double = 0, summary = Aggregate(), heatmap: [Aggregate] = [], models: [Aggregate] = []
     var trendDays: [Aggregate] = [], dayModels: [DayModel] = [], pricingGaps: [PricingGap] = []
     var modelOptions: [String]? = nil
+    var modelDisplayNames: [String: String]? = nil
+    func modelName(_ key: String) -> String { modelDisplayNames?[key] ?? key }
     var quotaOrder: [String]? = nil, quotaEstimates: [QuotaEstimate]? = nil, creditEstimates: [QuotaEstimate]? = nil
     var automaticEstimateSummaries: [QuotaEstimate]?
     var quotas: [Quota] = [], sources: [SourceSummary] = []
@@ -423,6 +450,12 @@ struct DashboardStatus: Decodable {
     var automaticEstimateSummaries: [QuotaEstimate]?
 }
 extension Dashboard {
+    /// generatedAt marks readiness; payload timestamps remain part of equality.
+    func hasSameContent(as next: Dashboard) -> Bool {
+        guard (generatedAt > 0) == (next.generatedAt > 0) else { return false }
+        var value = next; value.generatedAt = generatedAt
+        return self == value
+    }
     func presentationEstimates(account: String, credits: Bool = false) -> [QuotaEstimate] {
         ((credits ? creditEstimates : quotaEstimates) ?? []).filter { $0.accountKey == account }
         + (automaticEstimateSummaries ?? []).filter { $0.accountKey == account && ($0.kind == "credits") == credits }
@@ -505,8 +538,16 @@ struct LocalMonitor: Codable, Equatable {
     init() {}
     init(_ h: Host) { enabled = h.enabled; metrics = h.metrics; devices = h.devices; details = h.details }
 }
+struct NativeConnection: Codable, Equatable, Identifiable {
+    var id: String, provider: String, machineId: String, root: String, configPath: String, selector: String, kind: String
+    var accountKey: String?, identityKey: String?
+    var email: String, baseUrl: String, models: [String], hasCredential: Bool, status: String, note: String, checkedAt: Double
+    var displayName: String { !email.isEmpty ? email : kind == "api" ? (baseUrl.isEmpty ? "原生 API" : baseUrl) : identityKey.map { $0.hasPrefix("qoder:") ? "Qoder · " + $0.dropFirst(6).prefix(12) : (CoreContract.providerNames[provider] ?? provider) + " 账户" } ?? "账户身份待确认" }
+    var statusLabel: String { ["pending":"待验证", "expired":"已过期", "unavailable":"需重新扫描", "observed":"已识别账户"][status] ?? "待验证" }
+}
 struct Settings: Codable, Equatable {
     var quotaResetNotifications: QuotaResetNotificationSettings?
+    var nativeConnections: [NativeConnection]?
     var codexApis: [CodexAPIConnection]?
     var deletedAccounts: [AgentAccount]?
     var historicalAccounts: [AgentAccount] { accounts + (deletedAccounts ?? []) }
@@ -523,7 +564,7 @@ struct Settings: Codable, Equatable {
 
     var configurationIssues: [String]?
     var localDeviceEnabled: Bool?
-    var version = 10, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
+    var version = 11, sources: [AgentSource] = [], accounts: [AgentAccount] = [], hosts: [Host] = [], proxy = ProxySettings()
     var refreshSeconds = 300, serverRefreshSeconds = 10, menuMetric = "icon"
     var historyRefreshSeconds: Int?, serverForegroundRefreshSeconds: Int?, localMonitor: LocalMonitor?
     var historyInterval: Int { get { historyRefreshSeconds ?? max(10, refreshSeconds) } set { historyRefreshSeconds = newValue } }
@@ -545,11 +586,14 @@ struct Settings: Codable, Equatable {
 struct ModelPrice: Codable, Equatable, Identifiable {
     var id = "", name = "", input: Double?, output: Double?, cacheRead: Double?, cacheWrite: Double?, fetchedAt: Double = 0
 }
+struct PriceReferenceResult: Decodable {
+    var settings: Settings, matched: Int, unmatched: [String], skipped: Int
+}
 struct CodexAPIConnection: Codable, Equatable, Identifiable {
     var id = "", sourceId = "", name = "OpenAI API", baseUrl = "https://api.openai.com/v1", revision = ""
 }
 struct CodexSelectedConnection: Decodable { var kind: String; var provider: String?, connectionId: String?, revision: String?, name: String? }
-struct CodexBillingSummary: Codable {
+struct CodexBillingSummary: Codable, Equatable {
     var apiCost: Double?, apiTokens: Double?, apiPricedTokens: Double?, apiHistoryTokens: Double?, apiUnmeteredTokens: Double?
     var subscriptionEquivalentCost: Double?, subscriptionTokens: Double?, subscriptionPricedTokens: Double?, unknownTokens: Double?, incompleteRequests: Int?
     var visible: Bool {
@@ -736,7 +780,7 @@ enum Format {
     static func provider(_ key: String) -> String { CoreContract.providerNames[key] ?? key }
 }
 
-struct QuotaEstimate: Codable, Identifiable {
+struct QuotaEstimate: Codable, Identifiable, Equatable {
     var samplingMode: String?
     var sampleCount: Int?, lookbackDays: Int?, halfLifeDays: Int?
     var quotaPlan: String?
@@ -767,18 +811,18 @@ struct QuotaEstimate: Codable, Identifiable {
     var statusLabel: String { ["active":"采样中", "pending":"需要确认", "completed":"已结束"][status] ?? status }
 }
 
-struct CapacityInfo: Codable {
+struct CapacityInfo: Codable, Equatable {
     var ratio: Double?
     var samples = 0
     var weeklyPercent: Double = 0
     var updatedAt: Double = 0
     var note: String { updatedAt > 0 && Date().timeIntervalSince1970 - updatedAt > 14 * 86400 ? "历史倍率" : weeklyPercent < 5 ? "倍率样本较少" : "近期倍率" }
 }
-struct EstimateSegment: Codable {
+struct EstimateSegment: Codable, Equatable {
     var startedAt: Double, endedAt: Double, fivePercent: Double, weeklyPercent: Double?, cost: Double
 }
-struct NetworkSite: Codable { var url: String, latencyMs: Double?, error: String? }
-struct NetworkTest: Codable {
+struct NetworkSite: Codable, Equatable { var url: String, latencyMs: Double?, error: String? }
+struct NetworkTest: Codable, Equatable {
     var testedAt: Double, mode: String, averageMs: Double?, status: String, sites: [NetworkSite]
     var label: String { status == "unstable" ? "连接不稳定" : status == "failed" ? "连接失败" : (mode == "direct" ? "直连 " : mode == "system" ? "系统 " : "代理 ") + String(Int(averageMs ?? 0)) + " ms" }
     var detail: String { sites.map { $0.url + " · " + ($0.latencyMs.map { String(Int($0)) + " ms" } ?? $0.error ?? "失败") }.joined(separator: "\n") + "\n测试于 " + Format.date(testedAt) }
@@ -856,12 +900,15 @@ enum EstimatePresentation {
         }
     }
     static func summary(_ records: [QuotaEstimate], quota: Quota? = nil, group: String? = nil) -> String {
-        let visible = visibility(quota, records: records, group: group)
         let values = entries(records, quota: quota, group: group)
-        func value(_ id: String) -> String { Format.compactMoney(values.first { $0.id == id }?.value) }
-        let week = [visible.ratio ? value("ratio") : nil, visible.direct ? value("week") : nil].compactMap { $0 }
-        let parts = [visible.five ? "5h ≈ " + value("five") : "", week.isEmpty ? "" : "7d ≈ " + week.joined(separator: "/")].filter { !$0.isEmpty }
+        func value(_ id: String) -> String? { values.first { $0.id == id }.map { Format.compactMoney($0.value) } }
+        let week = [value("ratio"), value("week")].compactMap { $0 }
+        let parts = [value("five").map { "5h ≈ " + $0 } ?? "", week.isEmpty ? "" : "7d ≈ " + week.joined(separator: "/")].filter { !$0.isEmpty }
         return parts.isEmpty ? "额度估值" : parts.joined(separator: "  ")
+    }
+    static func creditSummary(_ records: [QuotaEstimate]) -> String {
+        guard let entry = entries(records, credits: true).first else { return "credits 估值" }
+        return "credits 估值（1000 credits ≈ " + Format.compactMoney(entry.value) + "）"
     }
     static func credit(_ records: [QuotaEstimate]) -> QuotaEstimate? { entries(records, credits: true).first?.record }
 }
@@ -874,7 +921,7 @@ struct AccountCleanupRecord: Decodable, Identifiable { var accountKey: String, n
 // BEGIN GENERATED CORE CONTRACT
 // Generated by scripts/sync-core-contracts.py; edit docs/core-contracts.json.
 enum CoreContract {
-    static let contractHash = "cde493bff081e56afcfa2ebb506848f129864a2a530673ad89938d731f157733"
+    static let contractHash = "d9ef4fd5a6a6a2b91786b024acb13083710d2a8563b575d3cb485b1ddc38113d"
     static let providers = ["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "kimi", "deepseek-harness", "codebuddy", "pi", "omp", "custom"]
     static let wakeupProviders = ["codex", "claude", "antigravity"]
     static let agentProviders = ["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "kimi", "codebuddy", "pi", "omp", "custom"]
@@ -906,6 +953,8 @@ enum CoreContract {
         "accounts.delete": "accounts",
         "accounts.deletion.preview": "configuration",
         "accounts.deployments.sync": "accounts",
+        "accounts.native.remove": "accounts",
+        "accounts.scan": "accounts",
         "accounts.status.get": "configuration",
         "accounts.status.refresh": "accounts",
         "accounts.status.refreshBatch": "accounts",
@@ -973,6 +1022,7 @@ enum CoreContract {
         "pets.list": "configuration",
         "pets.select": "configuration",
         "prices.list": "main",
+        "prices.reference": "main",
         "prices.recalculate": "main",
         "prices.save": "main",
         "prices.sync": "main",
@@ -1017,7 +1067,7 @@ enum CoreContract {
         "hosts.monitor.configure": "hosts",
         "hosts.monitor.refresh": "hosts",
     ]
-    static let updateBehaviors: [String: String] = ["accounts.cleanup.list": "observe", "accounts.connect": "finish", "accounts.create": "finish", "accounts.delete": "finish", "accounts.deletion.preview": "finish", "accounts.deployments.sync": "finish", "accounts.status.get": "observe", "accounts.status.refresh": "cancel", "accounts.status.refreshBatch": "cancel", "accounts.targets": "observe", "agentApi.inspect": "observe", "agentApi.save": "finish", "agents.set": "finish", "agyAuth.cancel": "complete", "agyAuth.confirmWorkspace": "complete", "agyAuth.inspect": "finish", "agyAuth.openUrl": "complete", "agyAuth.start": "finish", "agyAuth.status": "complete", "agyAuth.submitCode": "complete", "agyAuth.verify": "complete", "autoEstimates.configure": "finish", "autoEstimates.tick": "cancel", "autoEstimates.rebuild": "cancel", "codexApi.list": "observe", "codexApi.probe": "cancel", "codexApi.remove": "finish", "codexApi.save": "finish", "codexApi.status": "observe", "codexAuth.adopt": "finish", "codexAuth.enable": "finish", "codexAuth.inspect": "finish", "codexAuth.list": "observe", "codexAuth.login.cancel": "complete", "codexAuth.login.start": "finish", "codexAuth.login.status": "complete", "codexAuth.model.list": "cancel", "codexAuth.openUrl": "complete", "codexAuth.profiles.bind": "finish", "codexAuth.profiles.list": "observe", "codexAuth.profiles.remove": "finish", "codexAuth.quota": "cancel", "codexAuth.reconcile": "cancel", "codexAuth.status": "cancel", "codexAuth.switch.commit": "complete", "codexAuth.switch.prepare": "finish", "credentials.save": "finish", "creditEstimates.get": "cancel", "creditEstimates.list": "observe", "creditEstimates.repair": "finish", "creditEstimates.restart": "finish", "creditEstimates.start": "finish", "creditEstimates.stop": "finish", "dashboard": "cancel", "dashboard.summary": "cancel", "hello": "observe", "hosts.credentials.delete": "finish", "hosts.credentials.save": "finish", "hosts.discover": "cancel", "hosts.sample": "cancel", "hosts.sshConfig.read": "cancel", "methods.manifest": "observe", "network.status": "finish", "network.test": "cancel", "operations.prepareUpdate": "observe", "operations.resume": "observe", "operations.status": "observe", "pets.asset": "observe", "pets.current": "observe", "pets.import": "cancel", "pets.list": "observe", "pets.select": "finish", "prices.list": "observe", "prices.recalculate": "finish", "prices.save": "finish", "prices.sync": "cancel", "quotaEstimates.get": "cancel", "quotaEstimates.list": "observe", "quotaEstimates.repair": "finish", "quotaEstimates.restart": "finish", "quotaEstimates.start": "finish", "quotaEstimates.stop": "finish", "quotaResetNotifications.take": "complete", "quotas.order.set": "finish", "quotas.refresh": "cancel", "quotas.schedule": "cancel", "runtime.revisions": "observe", "sessions.hooks.remove": "finish", "sessions.hooks.repair": "finish", "sessions.hooks.status": "observe", "sessions.list": "cancel", "settings.get": "observe", "settings.patch": "finish", "settings.save": "finish", "sources.defaultPath": "complete", "sources.configure": "finish", "sources.rebind": "finish", "sources.remove": "finish", "sources.rescan": "cancel", "sources.scan": "cancel", "subscriptions.connect": "finish", "subscriptions.openLogin": "finish", "wakeups.delete": "finish", "wakeups.deploy": "finish", "wakeups.disable": "finish", "wakeups.enable": "finish", "wakeups.history": "cancel", "wakeups.list": "observe", "wakeups.probe": "cancel", "wakeups.remove": "finish", "wakeups.run": "finish", "wakeups.save": "finish", "wakeups.status": "cancel", "dashboard.status": "cancel", "hosts.monitor.configure": "observe", "hosts.monitor.refresh": "cancel"]
+    static let updateBehaviors: [String: String] = ["accounts.cleanup.list": "observe", "accounts.connect": "finish", "accounts.create": "finish", "accounts.delete": "finish", "accounts.deletion.preview": "finish", "accounts.deployments.sync": "finish", "accounts.native.remove": "finish", "accounts.scan": "cancel", "accounts.status.get": "observe", "accounts.status.refresh": "cancel", "accounts.status.refreshBatch": "cancel", "accounts.targets": "observe", "agentApi.inspect": "observe", "agentApi.save": "finish", "agents.set": "finish", "agyAuth.cancel": "complete", "agyAuth.confirmWorkspace": "complete", "agyAuth.inspect": "finish", "agyAuth.openUrl": "complete", "agyAuth.start": "finish", "agyAuth.status": "complete", "agyAuth.submitCode": "complete", "agyAuth.verify": "complete", "autoEstimates.configure": "finish", "autoEstimates.tick": "cancel", "autoEstimates.rebuild": "cancel", "codexApi.list": "observe", "codexApi.probe": "cancel", "codexApi.remove": "finish", "codexApi.save": "finish", "codexApi.status": "observe", "codexAuth.adopt": "finish", "codexAuth.enable": "finish", "codexAuth.inspect": "finish", "codexAuth.list": "observe", "codexAuth.login.cancel": "complete", "codexAuth.login.start": "finish", "codexAuth.login.status": "complete", "codexAuth.model.list": "cancel", "codexAuth.openUrl": "complete", "codexAuth.profiles.bind": "finish", "codexAuth.profiles.list": "observe", "codexAuth.profiles.remove": "finish", "codexAuth.quota": "cancel", "codexAuth.reconcile": "cancel", "codexAuth.status": "cancel", "codexAuth.switch.commit": "complete", "codexAuth.switch.prepare": "finish", "credentials.save": "finish", "creditEstimates.get": "cancel", "creditEstimates.list": "observe", "creditEstimates.repair": "finish", "creditEstimates.restart": "finish", "creditEstimates.start": "finish", "creditEstimates.stop": "finish", "dashboard": "cancel", "dashboard.summary": "cancel", "hello": "observe", "hosts.credentials.delete": "finish", "hosts.credentials.save": "finish", "hosts.discover": "cancel", "hosts.sample": "cancel", "hosts.sshConfig.read": "cancel", "methods.manifest": "observe", "network.status": "finish", "network.test": "cancel", "operations.prepareUpdate": "observe", "operations.resume": "observe", "operations.status": "observe", "pets.asset": "observe", "pets.current": "observe", "pets.import": "cancel", "pets.list": "observe", "pets.select": "finish", "prices.list": "observe", "prices.reference": "finish", "prices.recalculate": "finish", "prices.save": "finish", "prices.sync": "cancel", "quotaEstimates.get": "cancel", "quotaEstimates.list": "observe", "quotaEstimates.repair": "finish", "quotaEstimates.restart": "finish", "quotaEstimates.start": "finish", "quotaEstimates.stop": "finish", "quotaResetNotifications.take": "complete", "quotas.order.set": "finish", "quotas.refresh": "cancel", "quotas.schedule": "cancel", "runtime.revisions": "observe", "sessions.hooks.remove": "finish", "sessions.hooks.repair": "finish", "sessions.hooks.status": "observe", "sessions.list": "cancel", "settings.get": "observe", "settings.patch": "finish", "settings.save": "finish", "sources.defaultPath": "complete", "sources.configure": "finish", "sources.rebind": "finish", "sources.remove": "finish", "sources.rescan": "cancel", "sources.scan": "cancel", "subscriptions.connect": "finish", "subscriptions.openLogin": "finish", "wakeups.delete": "finish", "wakeups.deploy": "finish", "wakeups.disable": "finish", "wakeups.enable": "finish", "wakeups.history": "cancel", "wakeups.list": "observe", "wakeups.probe": "cancel", "wakeups.remove": "finish", "wakeups.run": "finish", "wakeups.save": "finish", "wakeups.status": "cancel", "dashboard.status": "cancel", "hosts.monitor.configure": "observe", "hosts.monitor.refresh": "cancel"]
     static let configurationMethods = Set(methodLanes.filter { $0.value == "configuration" }.keys)
 }
 // END GENERATED CORE CONTRACT

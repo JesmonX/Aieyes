@@ -97,7 +97,7 @@ struct CodexAccountsView: View {
                     if let code = operation.userCode { HStack { Text("设备码：" + code).font(AppFont.section).textSelection(.enabled); Button("复制设备码") { copy(code) } } }
                     if let url = operation.authUrl { HStack { Button("打开登录页面") { perform { let _: Acknowledgement = try await call("openUrl", ["url":url]) } }; Button("复制登录链接") { copy(url) } } }
                     else { Text("正在准备登录…") }
-                    Button("取消登录") { perform { let _: Acknowledgement = try await call("login.cancel", ["operationId":operation.operationId]) } }
+                    Button("取消登录") { perform { let _: Acknowledgement = try await loginCall("login.cancel", ["operationId":operation.operationId]) } }
                     Text("请在浏览器完成授权。登录最多等待 10 分钟。").foregroundStyle(.secondary)
                 }
             }
@@ -125,7 +125,7 @@ struct CodexAccountsView: View {
             guard let id = operation?.operationId else { return }
             while !Task.isCancelled {
                 do {
-                    let result: CodexOperation = try await call("login.status", ["operationId":id, "accountId":accountID])
+                    let result: CodexOperation = try await loginCall("login.status", ["operationId":id, "accountId":accountID])
                     if ["succeeded","failed","cancelled"].contains(result.status) {
                         operation = nil; UserDefaults.standard.removeObject(forKey:"codexLogin.operation")
                         if result.status == "succeeded" { notice = result.accountArchived == true ? "登录已保存，该账户已归档，可在账户页恢复。" : result.quotaEnabled == false ? "登录成功，该账户的额度查询已暂停。" : "登录成功，已启用此账户的额度查询。"; try await settingsChanged(); try await refresh() }
@@ -147,7 +147,7 @@ struct CodexAccountsView: View {
                         try await ensureManaged()
                         var params: [String:Any] = ["deviceCode":source?.hostId != nil]
                         if let reauthID { params["profileId"] = reauthID }
-                        let result: CodexOperation = try await call("login.start",params)
+                        let result: CodexOperation = try await loginCall("login.start",params)
                         UserDefaults.standard.set(accountID,forKey:"codexLogin.account"); UserDefaults.standard.set(sourceID,forKey:"codexLogin.source"); UserDefaults.standard.set(result.operationId,forKey:"codexLogin.operation")
                         operation = result; loginSheet = false
                     }
@@ -159,8 +159,17 @@ struct CodexAccountsView: View {
         }
     }
     private func call<T: Decodable>(_ method: String, _ parameters: [String:Any] = [:]) async throws -> T {
+        try await call(method, parameters, via: engine)
+    }
+    // The background login worker lives in the engine process that starts it.
+    // Route login operations through the app-lifetime engine so closing this
+    // view no longer kills an authorization that can be resumed later.
+    private func loginCall<T: Decodable>(_ method: String, _ parameters: [String:Any] = [:]) async throws -> T {
+        try await call(method, parameters, via: model.accountEngine)
+    }
+    private func call<T: Decodable>(_ method: String, _ parameters: [String:Any], via client: EngineClient) async throws -> T {
         var params = parameters; params["sourceId"] = sourceID; if params["accountId"] == nil { params["accountId"] = accountID }
-        return try await engine.call("codexAuth." + method,params:params)
+        return try await client.call("codexAuth." + method,params:params)
     }
     private func refresh() async throws {
         info = try await call("inspect")

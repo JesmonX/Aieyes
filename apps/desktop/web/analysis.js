@@ -1,5 +1,6 @@
 /* Accessible equivalents and interaction for the usage charts. */
 const hiddenTrendModels=new Set();
+function modelName(key){return state.dashboard?.modelDisplayNames?.[key]??key;}
 function exactUsage(day){return `${day.total.toLocaleString()} Token · ${day.cost.toFixed(6)} USD · 读取命中率 ${pct(cacheRate(day.tokens))}`;}
 function trendUsage(day){return `${compact(day.total)} Token · ${day.cost.toFixed(2)} USD · 读取命中率 ${pct(cacheRate(day.tokens))}`;}
 // Annular sectors keep the native chart's gap and small corner radius at every DPI.
@@ -30,7 +31,7 @@ function modelDistribution(models){
   const ranked=[...models].sort((a,b)=>(state.cost?b.cost-a.cost:b.total-a.total)||a.key.localeCompare(b.key));
   const sum=ranked.reduce((n,m)=>n+(state.cost?m.cost:m.total),0),top=ranked.slice(0,5),other=ranked.slice(5);
   const slices=[...top,...(other.length?[{key:'其他',total:other.reduce((n,m)=>n+m.total,0),cost:other.reduce((n,m)=>n+m.cost,0)}]:[])];
-  const row=m=>`<div><span class="model" title="${escapeHTML(m.key)}">${escapeHTML(m.key)}</span><strong title="${state.cost?m.cost.toFixed(6)+' USD':m.total.toLocaleString()+' Token'}">${state.cost?money(m.cost)+' USD':compact(m.total)+' Token'} · ${pct(sum?(state.cost?m.cost:m.total)/sum*100:0)}</strong></div>`;
+  const row=m=>`<div><span class="model" title="${escapeHTML(modelName(m.key))}">${escapeHTML(modelName(m.key))}</span><strong title="${state.cost?m.cost.toFixed(6)+' USD':m.total.toLocaleString()+' Token'}">${state.cost?money(m.cost)+' USD':compact(m.total)+' Token'} · ${pct(sum?(state.cost?m.cost:m.total)/sum*100:0)}</strong></div>`;
   return `<div class="pie-wrap"><div class="donut" role="img" aria-label="前五模型与其他，精确数据见右侧列表">${modelRingSVG(slices,sum)}<div class="donut-inner">${models.length}<small>模型</small></div></div><div class="legend">${top.map(row).join('')}${other.length?`<details><summary>其他 ${other.length} 个模型 · ${state.cost?money(other.reduce((n,m)=>n+m.cost,0)):compact(other.reduce((n,m)=>n+m.total,0))} · ${pct(sum?other.reduce((n,m)=>n+(state.cost?m.cost:m.total),0)/sum*100:0)}</summary>${other.map(row).join('')}</details>`:''}</div></div>`;
 }
 function heatmapHTML(days,offset=0){

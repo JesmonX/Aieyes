@@ -4,18 +4,23 @@ struct NativeCreditsView: View {
     let usage: Aggregate
     var models: [Aggregate] = []
     var compact = false
+    var modelNames: [String: String] = [:]
+    private var displayed: Aggregate { usage.displayCredits }
     var body: some View {
+        if displayed.hasNativeCredits { content }
+    }
+    private var content: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(usage.nativeCreditText).font(AppFont.secondary).fontWeight(.medium).textSelection(.enabled)
+            Text(displayed.nativeCreditText).font(AppFont.secondary).fontWeight(.medium).textSelection(.enabled)
             if !compact {
-                ForEach((usage.nativeCredits ?? [:]).keys.sorted(), id: \.self) { provider in
-                    if let row = usage.nativeCredits?[provider] { Text(Format.provider(provider) + "：" + row.detail).font(AppFont.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                ForEach((displayed.nativeCredits ?? [:]).keys.sorted(), id: \.self) { provider in
+                    if let row = displayed.nativeCredits?[provider] { Text(Format.provider(provider) + "：" + row.detail).font(AppFont.caption).foregroundStyle(.secondary).textSelection(.enabled) }
                 }
             }
-            Text("来自原生计量记录；不代表已扣费金额或账户剩余额度。" + (usage.total == 0 ? "原生记录没有可用的 Token 统计，API 等价成本暂不可计算。" : "")).font(AppFont.caption).foregroundStyle(.secondary)
-            if !compact && models.contains(where: \.hasNativeCredits) {
+            Text("来自原生计量记录；不代表已扣费金额或账户剩余额度。" + (displayed.total == 0 ? "原生记录没有可用的 Token 统计，API 等价成本暂不可计算。" : "")).font(AppFont.caption).foregroundStyle(.secondary)
+            if !compact && models.contains(where: \.hasDisplayCredits) {
                 DisclosureGroup("按模型查看 Credits") {
-                    ForEach(models.filter(\.hasNativeCredits)) { row in Text(row.key + " · " + row.nativeCreditText).font(AppFont.secondary).textSelection(.enabled) }
+                    ForEach(models.map(\.displayCredits).filter(\.hasNativeCredits)) { row in Text((modelNames[row.key] ?? row.key) + " · " + row.nativeCreditText).font(AppFont.secondary).textSelection(.enabled) }
                 }.font(AppFont.secondary)
             }
         }
@@ -125,7 +130,7 @@ struct EstimateEntry: View {
     private var entries: [EstimatePresentation.Entry] { EstimatePresentation.entries(records, credits: credits, quota: quota, group: group) }
     private var latest: QuotaEstimate? { EstimatePresentation.canonical(records).first }
     private var label: String {
-        if credits { return "credits 估值（1000 credits ≈ " + Format.compactMoney(entries.first?.value) + "）" }
+        if credits { return EstimatePresentation.creditSummary(records) }
         return EstimatePresentation.summary(records, quota: quota, group: group)
     }
     private var help: String {

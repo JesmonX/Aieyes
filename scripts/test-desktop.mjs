@@ -137,6 +137,32 @@ test('panel account choices cap each Agent and preserve explicit empty choices',
   data.set('aieyes.panel.accounts.v2', '{');
   assert.deepEqual([...window.AieyesUI.panelAccounts(settings,order).codex], [...defaults.codex]);
 });
+test('new accounts join every Agent panel without restoring hidden old accounts', () => {
+  const data=new Map(),window={};
+  vm.runInNewContext(read('contracts.js'),{window});
+  vm.runInNewContext(read('ui-state.js'),{window,localStorage:{getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value)}});
+  const ui=window.AieyesUI;
+  for(const provider of [...window.AieyesContract.agentProviders,'deepseek-harness','future-agent']){
+    data.delete('aieyes.panel.accounts.known.v1');
+    const account=id=>({provider,id,quotaEnabled:true}),old={accounts:[account('visible'),account('hidden')]},next={accounts:[...old.accounts,account('new')]};
+    data.set('aieyes.panel.accounts.v2',JSON.stringify({version:2,providers:{[provider]:{mode:'custom',keys:[provider+':visible']}}}));
+    ui.observePanelAccounts(old);
+    ui.observePanelAccounts(next);
+    assert.deepEqual([...ui.panelAccounts(next)[provider]],[provider+':visible',provider+':new'],provider);
+    data.set('aieyes.panel.accounts.v2',JSON.stringify({version:2,providers:{[provider]:{mode:'custom',keys:[]}}}));
+    ui.observePanelAccounts(next);
+    assert.deepEqual([...ui.panelAccounts(next)[provider]],[],provider+' repeated load preserves explicit hiding');
+  }
+  data.clear();
+  const five={accounts:Array.from({length:5},(_,i)=>({provider:'codex',id:'a'+i,quotaEnabled:true}))};
+  ui.observePanelAccounts(five);
+  const next={accounts:[...five.accounts,{provider:'codex',id:'sixth',quotaEnabled:true}]};
+  ui.observePanelAccounts(next);
+  assert.equal(ui.panelAccounts(next).codex.length,6,'new accounts remain visible beyond five defaults');
+  data.clear();data.set('aieyes.panel.accounts.v2',JSON.stringify({version:2,providers:{codex:{mode:'custom',keys:[]}}}));
+  ui.observePanelAccounts(next);
+  assert.deepEqual([...ui.panelAccounts(next).codex],[],'first upgrade does not reveal previously hidden accounts');
+});
 test('wakeup source choices consume backend targets and contract capabilities', async () => {
   const source = (id, provider, extra = {}) => ({id, name:id, provider, enabled:true, accountId:'account', ...extra});
   for (const row of [
@@ -474,4 +500,22 @@ test('rolling values never fill missing periods with unrelated manual estimates'
   const quota={provider:'codex',plan:'pro',windows:[{windowMinutes:300},{windowMinutes:10080}]};
   const entries=[...window.AieyesUI.estimateEntries([manual,rolling],false,quota)];
   assert.equal(entries.length,1);assert.equal(entries[0].field,'weeklyValue');assert.equal(entries[0].value,25);
+});
+
+test('estimate labels omit unavailable amounts for every Agent and preserve zero', () => {
+  const window={};
+  vm.runInNewContext(read('contracts.js'),{window});
+  vm.runInNewContext(read('ui-state.js'),{window});
+  const ui=window.AieyesUI;
+  for(const provider of Object.keys(window.AieyesContract.providers)) {
+    const quota={provider,plan:'pro',windows:[{windowMinutes:300},{windowMinutes:10080}]};
+    assert.equal(ui.estimateLine([],quota),'额度估值',provider);
+    assert(!ui.estimateLine([{id:'pending',status:'pending',fiveHourValue:10,weeklyValue:20}],quota).includes('—'),provider);
+  }
+  assert.equal(ui.creditEstimateLine([]),'credits 估值');
+  assert.equal(ui.creditEstimateLine([{id:'pending',status:'pending',valuePer1000:123}]),'credits 估值');
+  assert.equal(ui.creditEstimateLine([{id:'invalid',status:'active',valuePer1000:NaN}]),'credits 估值');
+  assert.equal(ui.creditEstimateLine([{id:'zero',status:'active',valuePer1000:0}]),'credits 估值（1000 credits ≈ $0.00）');
+  const q={provider:'codex',plan:'pro',windows:[{windowMinutes:300},{windowMinutes:10080}]};
+  assert.equal(ui.estimateLine([{id:'zero',status:'active',valuationMode:'fiveHour',fiveHourValue:0}],q),'5h ≈ $0.00');
 });

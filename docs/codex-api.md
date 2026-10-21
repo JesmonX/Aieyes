@@ -23,9 +23,13 @@ API 与账号共用 Codex home 和对话历史。API 切换只选择原生 model
 
 「设置 → 常规 → 刷新与历史」中的「精确计数」默认关闭，新安装和升级用户均按各会话自身累计量计数，允许 fork 继承的父历史重复计入，不读取或校验父历史。开关同时控制本机和 SSH；切换后的下一次同步会重读已有 Codex 日志，之后恢复增量读取。
 
-开启精确计数时，按 `session_meta.payload.history_base.thread_id` 与精确的 `end_byte_offset` 递归解析父记录，包括归档、跨日期与多级 fork。仅使用指定字节边界之前的父累计量；后续父会话增长不影响子会话。父记录缺失、循环或边界不完整时，暂不计首个不确定累计值，之后可确认的增量继续记录。父记录恢复或发生变化后会重新校验。相关诊断仅在该设置页查看，不作为同步失败，也不在其他页面告警。
+开启精确计数时，按 `session_meta.payload.history_base.thread_id` 指定的物理 rollout 和精确的 `end_byte_offset` 解析继承记录，包括归档、跨日期与多级继承。该标识不一定等于日志内的逻辑会话 ID：Codex 历史回退会生成 `rollout-<时间>-<会话 ID>_<rollout ID>.jsonl`，保持会话 ID 不变。因此存在继承记录并不代表用户手动执行过 fork。数据库中的当前会话路径不能替代被引用的历史版本。
 
-会话 ID 以日志首行 `session_meta.payload.id`（或 `session_id`）为准，支持复制、迁移后附加 UUID 的文件名。本机与 SSH 来源使用相同规则；恢复父记录后，普通增量同步即可重新校验并补算。
+仅使用指定字节边界之前的累计量；边界之外的增长不影响当前会话。直接记录已有有效累计量时不强制追溯更早祖先；没有累计量时才递归解析。真实缺失、循环或边界不完整时，暂不计首个不确定累计值，之后可确认的增量继续记录。恢复或修复记录后，普通增量同步即可重新校验并补算。新解析版本也会自动重读可用的 Codex 日志，保留当前计数设置。
+
+标准文件名中的物理 rollout ID 与首行逻辑会话 ID 分别校验；非标准名称的导出、复制文件仍支持按首行 `session_meta.payload.id`（或 `session_id`）定位。同一物理标识存在内容不同的副本时暂不猜测。继承证据查找支持 `.jsonl.zst`，边界和校验证据按解压后的原始字节计算，不改写或解压落盘原始日志；不因此扩大普通用量导入的文件范围。SSH 在远端复用现有 Node/Zstandard 读取能力，不传输对话正文；能力不足时明确说明，不报告成文件丢失，也不自动安装依赖。
+
+相关诊断仅在该设置页查看，不作为同步失败，也不在其他页面告警。保持 `missingHistoryBase` 诊断代码兼容，另提供可选 `reason`、`parentRolloutId` 与 `endByteOffset`；游标中的兼容字段 `parentThread` 实际保存被引用的 rollout ID。`reason` 区分 `parentNotFound`、`identityMismatch`、`boundaryInvalid`、`cycle`、`ambiguousHistory`、`invalidRecord`、`invalidCounter`、`invalidCompressedHistory`、`decoderUnavailable`、`resourceLimit` 和 `readError`。
 
 首次修复已有 Codex 数据前创建数据库备份，保留原始日志、来源关系、冻结价格和修正审计。当前计数模式决定首段累计量，支持多次切换后的双向重算；重复同步不重复插入同一事件。受影响的历史估值按原区间和原价格生成独立修订的替代记录；无法可靠重算的旧值退出有效估值，原记录保留供审计。缺少原始日志时保留已有记录，日志恢复后继续重算。
 

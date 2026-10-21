@@ -125,6 +125,26 @@ window.AieyesUI = {
     }
     return selected;
   },
+  observePanelAccounts(settings, order = [], previous = null) {
+    try {
+      const accounts=settings?.accounts??[],key=a=>a.provider+':'+a.id;
+      let seen;
+      try {const value=JSON.parse(localStorage.getItem('aieyes.panel.accounts.known.v1'));if(Array.isArray(value)&&value.every(k=>typeof k==='string'))seen=value;} catch (_) {}
+      const known=new Set((seen??(previous?.accounts??accounts).map(key)).map(k=>this.canonicalAccountKey(k,settings?.accountAliases)));
+      const added=accounts.filter(a=>!known.has(key(a))&&!a.archived&&a.quotaEnabled);
+      if(added.length){
+        const pref=this.panelPreference(),selected=this.panelAccounts({accounts:accounts.filter(a=>known.has(key(a)))},order,pref);
+        for(const a of added){
+          const choice=pref.providers[a.provider],keys=choice?.mode==='custom'?[...choice.keys]:[...(selected[a.provider]??[])];
+          if(!keys.includes(key(a)))keys.push(key(a));
+          pref.providers[a.provider]={mode:'custom',keys};
+        }
+        localStorage.setItem('aieyes.panel.accounts.v2',JSON.stringify(pref));
+      }
+      const next=[...new Set([...known,...accounts.map(key)])].sort(),raw=JSON.stringify(next);
+      if(localStorage.getItem('aieyes.panel.accounts.known.v1')!==raw)localStorage.setItem('aieyes.panel.accounts.known.v1',raw);
+    } catch (_) { /* Local preferences must not block accepting saved accounts. */ }
+  },
   canonicalEstimates(records = []) {
     const replaced = new Set(records.map(e=>e.originalEstimateId).filter(Boolean));
     return records.filter(e=>!replaced.has(e.id)&&!e.rollingExcludedReason).sort((a,b)=>(b.samplingMode==='rolling')-(a.samplingMode==='rolling') || b.startedAt-a.startedAt || (b.repairedAt||0)-(a.repairedAt||0));
@@ -245,9 +265,13 @@ window.AieyesUI = {
     return five.length===1?five:q.provider==='claude'&&five.some(w=>w.id==='five_hour')?five.filter(w=>w.id==='five_hour'):week.length===1?week:week.filter(w=>q.provider==='claude'&&w.id==='seven_day');
   },
   estimateLine(records=[], quota=null, group='') {
-    const visible=this.estimateVisibility(quota,records,group),entries=this.estimateEntries(records,false,quota,group), value=field=>this.compactMoney(entries.find(e=>e.field===field)?.value);
-    const week=[visible.ratio?value('weeklyRatioValue'):null,visible.direct?value('weeklyValue'):null].filter(v=>v!==null);
-    return [visible.five?'5h ≈ '+value('fiveHourValue'):'',week.length?'7d ≈ '+week.join('/'):''].filter(Boolean).join('  ')||'额度估值';
+    const entries=this.estimateEntries(records,false,quota,group), value=field=>{const entry=entries.find(e=>e.field===field);return entry?this.compactMoney(entry.value):null;};
+    const five=value('fiveHourValue'),week=[value('weeklyRatioValue'),value('weeklyValue')].filter(v=>v!==null);
+    return [five!==null?'5h ≈ '+five:'',week.length?'7d ≈ '+week.join('/'):''].filter(Boolean).join('  ')||'额度估值';
+  },
+  creditEstimateLine(records=[]) {
+    const entry=this.estimateEntries(records,true)[0];
+    return entry?'credits 估值（1000 credits ≈ '+this.compactMoney(entry.value)+'）':'credits 估值';
   },
   migrateProviderPreferences(settings) {
     const aliases=settings?.accountAliases??{}, key=s=>aliases[s]??(s.startsWith('agy:')?'antigravity:'+s.slice(4):s);

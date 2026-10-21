@@ -1624,7 +1624,7 @@ for line in sys.stdin:
         drop(engine);
         engine = Engine::open(dir.path()).unwrap();
         let mut settings = engine.store.settings().unwrap();
-        assert_eq!(settings.version, 10);
+        assert_eq!(settings.version, 11);
         assert!(settings.accounts[0].device_settings[0].pre_command_reset_required);
         for source in &settings.sources {
             assert!(source.quota_pre_command.is_empty());

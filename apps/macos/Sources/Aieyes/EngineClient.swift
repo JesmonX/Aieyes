@@ -158,8 +158,8 @@ final class EngineClient: @unchecked Sendable {
 enum ClientError: LocalizedError { case message(String); var errorDescription: String? { if case .message(let text) = self { return text }; return nil } }
 struct Acknowledgement: Decodable { var partial: Bool?, issues: [SyncIssue]?; var id: String?, name: String?, error: String? }
 struct QuotaSchedule: Decodable { var nextDueAt: Double? }
-struct RefreshStatus { var busy = false; var succeededAt: Date?; var error: String? }
-struct ActionFailure: Identifiable { var action: String; var itemID: String? = nil; var name: String, reason: String; var dismissed = false; var id: String { action + ":" + (itemID ?? name) } }
+struct RefreshStatus: Equatable { var busy = false; var succeededAt: Date?; var error: String? }
+struct ActionFailure: Identifiable, Equatable { var action: String; var itemID: String? = nil; var name: String, reason: String; var dismissed = false; var id: String { action + ":" + (itemID ?? name) } }
 struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: String, explanation: String, affected: [String]; var id: String { kind + ":" + itemID } }
 
 /// Local catalogue reads must not queue behind scans or remote quota requests.
@@ -485,6 +485,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private var sessionTask: Task<Void, Never>?
     let live = LiveSessionState()
     lazy var menuStatus = MenuStatusStore(model: self)
+    lazy var sessionStripStatus = SessionStripStore(model: self)
     var sessions: [LiveSession] { get { live.sessions } set { if live.sessions != newValue { live.sessions = newValue } } }
     var sessionSources: [SessionSourceHealth] { get { live.sources } set { if live.sources != newValue { live.sources = newValue } } }
     var sessionsUnavailable: Bool { get { live.unavailable } set { if live.unavailable != newValue { live.unavailable = newValue } } }
@@ -600,7 +601,13 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published private(set) var actionFailures: [ActionFailure] = []
     @Published private(set) var fallbackModelOptions: [String] = []
     var modelOptions: [String] { dashboard.modelOptions ?? fallbackModelOptions }
-    @Published var settings = Settings() { didSet { invalidateQuotaSchedule() } }
+    @Published var settings = Settings() { didSet {
+        if !CommandLine.arguments.contains("--render") {
+            PanelAccountPreference.migrateAntigravity(settings.accountAliases ?? [:])
+            PanelAccountPreference.observeAccounts(settings.accounts, previous: settingsLoaded ? oldValue.accounts : nil, order: dashboard.quotaOrder ?? [], aliases: settings.accountAliases ?? [:])
+        }
+        invalidateQuotaSchedule()
+    } }
     @Published var settingsDraft = Settings()
     @Published var settingsLoaded = false
     @Published var settingsWindowVisible = false
@@ -763,8 +770,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let account = settings.historicalAccounts.first { $0.key == accountKey }
             let parts = accountKey.split(separator: ":", maxSplits: 1).map(String.init)
             let quota = snapshot.quotas.first(where: { $0.id == accountKey }) ?? Quota(sourceId: "", accountId: account?.id ?? parts.last ?? accountKey, provider: account?.provider ?? parts.first ?? "custom", name: account?.name ?? accountKey, updatedAt: 0, origin: "", windows: [], bankReset: nil, bankUpdatedAt: nil, plan: nil, error: nil)
-            dashboard.quotaEstimates = snapshot.quotaEstimates; dashboard.creditEstimates = snapshot.creditEstimates
-            dashboard.automaticEstimateSummaries = snapshot.automaticEstimateSummaries
+            var next = dashboard
+            next.quotaEstimates = snapshot.quotaEstimates; next.creditEstimates = snapshot.creditEstimates
+            next.automaticEstimateSummaries = snapshot.automaticEstimateSummaries
+            if !dashboard.hasSameContent(as: next) { dashboard = next }
             estimateErrors[accountKey] = nil
             showEstimate?(quota, credits, group)
         } catch { estimateErrors[accountKey] = error.localizedDescription }
@@ -830,7 +839,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         return await work.value
     }
     private func reloadOnce(request: Int) async -> Bool {
-        dashboardPending = true; dashboardError = nil
+        if !dashboardPending { dashboardPending = true }
+        if dashboardError != nil { dashboardError = nil }
         if let current: [String: Int] = try? await summaryEngine.call("runtime.revisions") { acceptRuntimeRevisions(current) }
         let revision = dashboardRevisions, usage = usageRevisions
         if scopeCacheRevision != usage { scopeCache.removeAll(); scopeStatusRevisions.removeAll(); scopeCacheRevision = usage }
@@ -843,8 +853,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             statusRequests[key] = request
             return try await request.value
         }
-        let summary = Task { @MainActor [weak self] in
-            guard let self else { return false }
+        let summary = Task<Dashboard?, Never> { @MainActor [weak self] in
+            guard let self else { return nil }
             do {
                 var menu: Dashboard
                 if !self.runtimeRevisions.isEmpty, let cached = self.menuCache, cached.usage == usage {
@@ -852,12 +862,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                     if cached.status != revision { menu.applyStatus(try await status([:])) }
                 } else { menu = try await self.summaryEngine.call("dashboard.summary", params: ["estimateHistory":"display"]) }
                 if revision == self.dashboardRevisions { self.menuCache = (usage, revision, menu) }
-                guard request == self.dashboardRequest else { return true }
-                self.menuDashboard = menu
-                self.dashboard.quotaEstimates = menu.quotaEstimates; self.dashboard.creditEstimates = menu.creditEstimates
-                self.dashboard.automaticEstimateSummaries = menu.automaticEstimateSummaries
-                return true
-            } catch { if request == self.dashboardRequest { self.dashboardError = "菜单摘要读取失败：" + error.localizedDescription }; return false }
+                return menu
+            } catch { if request == self.dashboardRequest { self.dashboardError = "菜单摘要读取失败：" + error.localizedDescription }; return nil }
         }
         let allSurfaces = !schedulingEnabled
         var requested: [(String, DashboardFilterPreference)] = []
@@ -871,30 +877,46 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                 var params = filter.parameters(settings: settings); params["estimateHistory"] = "display"
                 let key = String(data: try JSONSerialization.data(withJSONObject: params, options: .sortedKeys), encoding: .utf8)!
                 var next: Dashboard
+                var cacheChanged = false
                 if let shared = queried[key] { next = shared }
                 else if !runtimeRevisions.isEmpty, let cached = scopeCache[key] {
                     next = cached
-                    if scopeStatusRevisions[key] != revision { next.applyStatus(try await status(params)) }
-                } else { next = try await engine.call("dashboard", params: params) }
-                if revision == dashboardRevisions, let encoded = try? JSONEncoder().encode(next), encoded.count <= 2 * 1024 * 1024 {
+                    if scopeStatusRevisions[key] != revision { next.applyStatus(try await status(params)); cacheChanged = true }
+                } else { next = try await engine.call("dashboard", params: params); cacheChanged = true }
+                if cacheChanged, revision == dashboardRevisions, let encoded = try? JSONEncoder().encode(next), encoded.count <= 2 * 1024 * 1024 {
                     if scopeCache.count >= 4 && scopeCache[key] == nil { scopeCache.removeAll(); scopeStatusRevisions.removeAll() }
                     scopeCache[key] = next; scopeStatusRevisions[key] = revision
                 }
                 guard request == dashboardRequest else { _ = await summary.value; return true }
                 queried[key] = next; results[surface] = next
             }
-            let summaryLoaded = await summary.value
+            let menu = await summary.value
             guard request == dashboardRequest else { return true }
+            if let menu {
+                if !menuDashboard.hasSameContent(as: menu) { menuDashboard = menu }
+                if results["analysis"] == nil {
+                    var next = dashboard
+                    next.quotaEstimates = menu.quotaEstimates; next.creditEstimates = menu.creditEstimates
+                    next.automaticEstimateSummaries = menu.automaticEstimateSummaries
+                    if !dashboard.hasSameContent(as: next) { dashboard = next }
+                }
+            }
             for (surface, value) in results {
-                switch surface { case "panel": panelDashboard = value; case "overview": overviewDashboard = value; default: dashboard = value }
+                switch surface {
+                case "panel": if !panelDashboard.hasSameContent(as: value) { panelDashboard = value }
+                case "overview": if !overviewDashboard.hasSameContent(as: value) { overviewDashboard = value }
+                default: if !dashboard.hasSameContent(as: value) { dashboard = value }
+                }
             }
             if let value = results["analysis"] {
-                appliedScope = [rangeTitle, provider == "all" ? "全部 Agent" : Format.provider(provider), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
+                let scope = [rangeTitle, provider == "all" ? "全部 Agent" : Format.provider(provider), settings.sources.first { $0.id == selectedSource }?.name ?? "全部来源", selectedModel == "all" ? "全部模型" : selectedModel].joined(separator: " · ")
+                if appliedScope != scope { appliedScope = scope }
                 let names = value.dayModels.map(\.model)
-                fallbackModelOptions = Array(Set(selectedModel == "all" ? names : fallbackModelOptions + names)).sorted()
+                let options = Array(Set(selectedModel == "all" ? names : fallbackModelOptions + names)).sorted()
+                if fallbackModelOptions != options { fallbackModelOptions = options }
             }
             Palette.registerModels(Array(results.values).flatMap { ($0.modelOptions ?? []) + $0.models.map(\.key) + $0.dayModels.map(\.model) })
-            completedDashboardRevision = revision; dashboardPending = false; return summaryLoaded
+            completedDashboardRevision = revision; if dashboardPending { dashboardPending = false }; return menu != nil
         } catch { if request == dashboardRequest { dashboardPending = false; dashboardError = error.localizedDescription }; return false }
     }
     func saveQuotaOrder(_ keys: [String]) async throws {
@@ -968,9 +990,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     private func finishRefresh(_ key: String, failures: [ActionFailure], itemID: String? = nil) {
         var state = refreshStates[key] ?? RefreshStatus(); state.busy = false; state.error = failures.first?.reason
         if failures.isEmpty { state.succeededAt = Date() }
-        refreshStates[key] = state
-        actionFailures.removeAll { $0.action == key && (itemID == nil || $0.itemID == itemID) }; actionFailures += failures
-        state.error = actionFailures.first { $0.action == key }?.reason; refreshStates[key] = state
+        var nextFailures = actionFailures
+        nextFailures.removeAll { $0.action == key && (itemID == nil || $0.itemID == itemID) }; nextFailures += failures
+        if actionFailures != nextFailures { actionFailures = nextFailures }
+        state.error = nextFailures.first { $0.action == key }?.reason
+        if refreshStates[key] != state { refreshStates[key] = state }
     }
     func retry(_ failure: ActionFailure) async {
         switch failure.action {
@@ -1245,6 +1269,19 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         catch { message = error.localizedDescription; finishRefresh("prices", failures: [ActionFailure(action: "prices", name: "价格", reason: error.localizedDescription)]) }
     }
     func loadPrices(force: Bool = false) async { await priceCatalog.load(force: force) }
+    func referencePrices(model: String? = nil, name: String = "") async {
+        guard !busy, !repricing, await saveSettingsDraft(refreshDashboard: false) else { return }
+        busy = true; activity = "智能引用价格"
+        defer { busy = false; activity = "" }
+        do {
+            var params: [String: Any] = [:]
+            if let model { params = ["model":model, "name":name] }
+            let result: PriceReferenceResult = try await engine.call("prices.reference", params: params)
+            acceptConfiguration(result.settings)
+            await reload()
+            settingsMessage = "已智能引用 \(result.matched) 个模型；\(result.unmatched.count) 个未匹配；\(result.skipped) 个已有价格或映射。仅供估值，历史成本可点“保存并重算”更新。"
+        } catch { settingsMessage = error.localizedDescription }
+    }
     func savePrice(_ price: ModelPrice) async -> Bool {
         do {
             let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(price))

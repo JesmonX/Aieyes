@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -376,6 +377,7 @@ impl LocalMonitor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub native_connections: Vec<crate::account_scan::NativeConnection>,
     pub quota_reset_notifications: crate::quota_notifications::Preferences,
     pub codex_apis: Vec<crate::codex_api::Connection>,
     #[serde(skip_deserializing)]
@@ -404,6 +406,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            native_connections: vec![],
             quota_reset_notifications: Default::default(),
             codex_apis: vec![],
             configuration_issues: vec![],
@@ -621,7 +624,19 @@ impl Settings {
                 host.monitoring_enabled &= host.enabled;
             }
         }
-        self.version = self.version.max(10);
+        for connection in &mut self.native_connections {
+            if connection.account_key.as_ref().is_some_and(|key| {
+                !self
+                    .accounts
+                    .iter()
+                    .any(|a| crate::accounts::key(a) == *key)
+            }) {
+                connection.account_key = None;
+                connection.status = "pending".into();
+                connection.note = "账户关联已解除，可重新扫描或在原生客户端管理".into();
+            }
+        }
+        self.version = self.version.max(11);
         self.configuration_issues.clear();
         let mut providers = std::collections::HashSet::new();
         for agent in &self.agents {
@@ -676,6 +691,9 @@ impl Settings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ParseState {
+    /// First main-chain Qoder model, including requests whose counters are hidden.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub qoder_main_model: String,
     pub turn_id: String,
     pub parser_version: u32,
     // Absent in legacy cursors, which must be replayed once with the saved mode.
@@ -888,6 +906,8 @@ pub struct Dashboard {
     pub models: Vec<Aggregate>,
     /// Model choices honor the other filters but not the selected model itself.
     pub model_options: Vec<String>,
+    /// Display labels only; filters, pricing and persisted events keep their model keys.
+    pub model_display_names: BTreeMap<String, String>,
     pub trend_days: Vec<Aggregate>,
     pub day_models: Vec<DayModel>,
     pub pricing_gaps: Vec<PricingGap>,

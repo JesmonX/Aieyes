@@ -178,6 +178,7 @@ struct SettingsView: View {
         let information = VStack(alignment: .leading, spacing: 5) {
             Text(name).font(AppFont.section).lineLimit(2).help(name)
             Text(local ? "当前设备" : host.target).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(host.target)
+            if local ? model.settings.localDeviceEnabled != false : host.enabled { NativeScanButton(model: model, machine: host.id) }
         }.frame(maxWidth: .infinity, alignment: .leading)
         let controls = HStack(spacing: 12) {
             serverSwitch(host.id, resource: true).frame(width: 112, alignment: .leading)
@@ -209,7 +210,7 @@ struct SettingsView: View {
     private var prices: some View {
         ScrollViewReader { reader in ScrollView { LazyVStack(alignment: .leading, spacing: 14) {
             Section {
-                Text("价格和映射保存后生效；“保存并重算”同时更新历史成本。").font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                Text("智能引用按 ID、名称和版本匹配，未知供应商优先官方价格；无版本可匹配 latest，未标注 batch 不引用 batch，仅供估值。“保存并重算”更新历史成本。").font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 HStack { Text("USD / 百万 Token").font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(model.repricing ? "重算中…" : "保存并重算") { Task { await model.saveAndReprice() } }.disabled(model.settingsSaving || model.repricing).accessibilityIdentifier("save-and-reprice") }
             }
             if !model.dashboard.pricingGaps.isEmpty {
@@ -220,6 +221,7 @@ struct SettingsView: View {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 4) { Text(gap.model).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)); Text("缺少\(gap.missing) · \(Format.compact(gap.unpricedTokens)) Token").font(AppFont.secondary).foregroundStyle(.secondary) }
                                     Spacer()
+                                    Button("智能引用") { Task { await model.referencePrices(model: gap.model) } }.disabled(model.busy || model.settingsSaving)
                                     Button("映射") { mappingModel = gap.model; mappingID = gap.priceId ?? "" }
                                     Button("补充价格") { openGapPrice(gap) }
                                 }
@@ -240,6 +242,7 @@ struct SettingsView: View {
             }.id("model-mapping")
             HStack {
                 TextField("搜索模型", text: $catalog.query).textFieldStyle(.aieyes)
+                Button("智能引用") { Task { await model.referencePrices() } }.disabled(model.busy || model.settingsSaving || model.quotaBusy)
                 Button("同步 OpenRouter") { Task { await model.syncPrices() } }.disabled(model.busy || model.quotaBusy)
                 Button("添加价格") { priceEditor = ModelPrice() }
             }
@@ -305,14 +308,14 @@ struct SettingsView: View {
             }
             Section("历史记录") {
                 Toggle("精确计数", isOn: Binding(get: { model.settingsDraft.codexPreciseCounting == true }, set: { model.settingsDraft.codexPreciseCounting = $0 }))
-                Text("开启后扣除 Codex fork 会话继承的父历史用量；关闭时允许重复计入。修改后在下次同步自动重算已有日志。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text("开启后扣除 Codex 继承历史中的重复用量（包括 fork 和历史回退）；关闭时允许重复计入。修改后在下次同步自动重算已有日志。").font(AppFont.secondary).foregroundStyle(.secondary)
                 if model.settings.codexPreciseCounting == true {
                     ForEach(model.dashboard.sources.filter { $0.enabled && !($0.status?.forkHistoryIssues ?? []).isEmpty }) { source in
-                        DisclosureGroup(source.name + " · 父历史待确认") {
+                        DisclosureGroup(source.name + " · 继承历史待确认") {
                             ForEach(Array((source.status?.forkHistoryIssues ?? []).enumerated()), id: \.offset) { _, issue in
                                 Text((issue.path.map { $0 + " · " } ?? "") + issue.message).font(AppFont.secondary).textSelection(.enabled)
                             }
-                            Text("首段不确定累计暂不计入，后续有效增量继续统计；父历史恢复后自动补全。").font(AppFont.secondary).foregroundStyle(.secondary)
+                            Text("首段不确定累计暂不计入，后续有效增量继续统计；继承历史恢复后自动补全。").font(AppFont.secondary).foregroundStyle(.secondary)
                         }
                     }
                 }

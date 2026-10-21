@@ -244,3 +244,9 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
   label:has(> input[type=checkbox]:disabled) { color:GrayText; }
   .settings-block .card { background:Canvas; border-color:CanvasText; }
 }
+
+.native-scan-dialog{width:min(760px,calc(100vw - 48px));max-height:85vh;overflow:auto}.native-connections .row-body{min-width:0;overflow-wrap:anywhere}.machine-info [data-native-scan-machine]{align-self:flex-start;margin-top:6px}
+
+.account-agent-group > .between{flex-wrap:wrap;gap:8px}.native-scan-dialog .source-path{overflow-wrap:anywhere}
+
+.agent-selector.server-selector{margin-bottom:12px;max-width:100%;overflow-x:auto;flex-wrap:nowrap}.server-selector button{flex:none;white-space:nowrap}

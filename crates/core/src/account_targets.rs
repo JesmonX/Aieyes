@@ -119,6 +119,26 @@ impl Engine {
                 }
             }
         }
+        for row in crate::account_scan::status_rows(&settings) {
+            let Some(connection) = settings
+                .native_connections
+                .iter()
+                .find(|r| row["nativeConnectionId"] == r.id)
+            else {
+                continue;
+            };
+            if params["accountKey"]
+                .as_str()
+                .is_some_and(|key| row["accountKey"] != key)
+            {
+                continue;
+            }
+            let available = crate::account_scan::available(&settings, connection);
+            if !available && !include_unavailable {
+                continue;
+            }
+            rows.push(json!({"accountKey":row["accountKey"],"accountName":settings.accounts.iter().find(|a|Some(crate::accounts::key(a))==connection.account_key).map(|a|a.name.as_str()).unwrap_or("账户"),"provider":connection.provider,"nativeConnectionId":connection.id,"sourceId":row["sourceId"],"sourceName":"原生登录引用","path":connection.config_path,"machineId":connection.machine_id,"machineName":if connection.machine_id=="local"{"本机"}else{settings.hosts.iter().find(|h|h.id==connection.machine_id).map(|h|h.name.as_str()).unwrap_or("已移除机器")},"credential":row["credential"],"current":row["current"],"checkedAt":row["checkedAt"],"bound":true,"available":available,"canDraft":false,"canWake":false,"canSwitch":false,"reason":"原生凭据引用；登录切换及唤醒需使用已关联目录或 Codex 档案"}));
+        }
         Ok(json!(rows))
     }
 

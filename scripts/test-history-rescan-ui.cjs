@@ -95,8 +95,23 @@ db.execute('INSERT INTO event_sources VALUES(?,?)',(event['id'],'fixture'));db.c
     assert.equal((await rpc('dashboard')).summary.total,100,'Precise mode skips the unresolved fork prefix and retains unrelated history');
     await page.getByRole('heading',{name:'精确计数详情',exact:true}).waitFor();
     assert.equal(await page.evaluate(()=>state.refreshState.scan.error),null,'Fork diagnostics do not create sync failures');
+    assert.match(await page.locator('#content').textContent(),/继承历史待确认/);
+    assert.match(await page.locator('#content').textContent(),/继承历史记录尚未找到/);
+    const thread='01a12393-1534-7750-8dbc-21bebb00678e',revision='01a13e39-8119-7f31-a38c-69d61a59ebfb';
+    const encode=rows=>rows.map(JSON.stringify).join('\n')+'\n';
+    const original=encode([{type:'session_meta',payload:{id:thread}},{type:'event_msg',timestamp:stamp-2,payload:{type:'token_count',info:{total_token_usage:{input_tokens:900},last_token_usage:{input_tokens:900}}}}]);
+    const reverted=encode([{type:'session_meta',payload:{id:thread,history_base:{thread_id:thread,end_byte_offset:Buffer.byteLength(original)}}},{type:'event_msg',timestamp:stamp-1,payload:{type:'token_count',info:{total_token_usage:{input_tokens:1000},last_token_usage:{input_tokens:100}}}}]);
+    fs.writeFileSync(path.join(forkDir,`rollout-2026-10-15T14-21-58-${thread}.jsonl`),original);
+    fs.writeFileSync(path.join(forkDir,`rollout-2026-10-15T14-21-58-${thread}_${revision}.jsonl`),reverted);
+    fs.writeFileSync(path.join(forkDir,'child.jsonl'),encode([{type:'session_meta',payload:{id:'child',history_base:{thread_id:revision,end_byte_offset:Buffer.byteLength(reverted)}}},{type:'event_msg',timestamp:stamp+1,payload:{type:'token_count',info:{total_token_usage:{input_tokens:1100},last_token_usage:{input_tokens:100}}}}]));
+    await page.evaluate(async()=>{await scan();render();});
+    assert.equal((await rpc('dashboard')).summary.total,1200,'Revert and physical rollout references count only new consumption alongside retained history');
+    assert.equal(await page.getByRole('heading',{name:'精确计数详情',exact:true}).count(),0,'Recovered inheritance clears settings diagnostics');
+    assert.equal(await page.evaluate(()=>state.refreshState.scan.error),null);
+    await page.evaluate(async()=>{await scan();render();});
+    assert.equal((await rpc('dashboard')).summary.total,1200,'Repeated sync does not count inherited history again');
     await page.evaluate(()=>{state.page='agent';render();});
-    assert.equal(await page.getByText('父历史待确认',{exact:false}).count(),0,'Fork diagnostics stay inside settings');
+    assert.equal(await page.getByText('继承历史待确认',{exact:false}).count(),0,'Fork diagnostics stay inside settings');
     assert.deepEqual(errors,[]);
     console.log('Manual full rescan and precise counting: autosave, real fork mode replay, settings-only diagnostics, frozen price, repeated replay and missing-log feedback passed');
   } finally {

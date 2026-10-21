@@ -143,6 +143,26 @@
       "refreshKey": null,
       "updateBehavior": "finish"
     },
+    "accounts.native.remove": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "accounts.scan": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
     "accounts.status.get": {
       "lane": "configuration",
       "invalidates": [],
@@ -653,6 +673,16 @@
       "invalidateOnFailure": false,
       "refreshKey": null,
       "updateBehavior": "observe"
+    },
+    "prices.reference": {
+      "lane": "main",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
     },
     "prices.recalculate": {
       "lane": "main",
@@ -1275,7 +1305,7 @@
       "darkAsset": "omp-dark"
     }
   },
-  "contractHash": "cde493bff081e56afcfa2ebb506848f129864a2a530673ad89938d731f157733",
+  "contractHash": "d9ef4fd5a6a6a2b91786b024acb13083710d2a8563b575d3cb485b1ddc38113d",
   "petFrameDurations": [
     [
       280,

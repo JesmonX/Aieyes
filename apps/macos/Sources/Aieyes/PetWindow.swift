@@ -217,6 +217,8 @@ private final class PetHost: NSHostingView<PetView> {
     var window: NSWindow { panel }
     private var subscriptions = Set<AnyCancellable>()
     private var stateHeight: CGFloat = 168
+    private var appliedPreferences: Preferences?
+    private struct Preferences: Equatable { var enabled: Bool; var scale: Double }
     init(model: AppModel, checkUpdates: @escaping () -> Void = {}, open: @escaping (NSView, Bool) -> Void) {
         self.model = model
         UserDefaults.standard.register(defaults: ["aieyes.pet.enabled": true, "aieyes.pet.scale": 1.0])
@@ -235,8 +237,8 @@ private final class PetHost: NSHostingView<PetView> {
             self.stateHeight = state.height
             self.resize()
         }.store(in: &subscriptions)
-        NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: panel).sink { [weak self, weak model] _ in
-            if let self { model?.live.petVisible = self.panel.isVisible && self.panel.occlusionState.contains(.visible) }
+        NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: panel).sink { [weak self] _ in
+            self?.publishVisibility()
         }.store(in: &subscriptions)
         Self.clamp(panel); sync()
         NotificationCenter.default.publisher(for:UserDefaults.didChangeNotification).sink { [weak self] _ in self?.sync() }.store(in:&subscriptions)
@@ -252,7 +254,20 @@ private final class PetHost: NSHostingView<PetView> {
         panel.setFrame(frame, display: true)
         Self.clamp(panel)
     }
-    private func sync() { resize(); if UserDefaults.standard.bool(forKey:"aieyes.pet.enabled") { panel.orderFrontRegardless() } else { panel.orderOut(nil) }; model?.live.petVisible = panel.isVisible && panel.occlusionState.contains(.visible) }
+    private func publishVisibility() {
+        let visible = panel.isVisible && panel.occlusionState.contains(.visible)
+        if let model, model.live.petVisible != visible { model.live.petVisible = visible }
+    }
+    private func sync() {
+        let preferences = Preferences(enabled: UserDefaults.standard.bool(forKey: "aieyes.pet.enabled"),
+                                      scale: Double(PetAppearance.scale(UserDefaults.standard.double(forKey: "aieyes.pet.scale"))))
+        guard appliedPreferences != preferences else { return }
+        appliedPreferences = preferences
+        resize()
+        if preferences.enabled && !panel.isVisible { panel.orderFrontRegardless() }
+        else if !preferences.enabled && panel.isVisible { panel.orderOut(nil) }
+        publishVisibility()
+    }
     static func clamp(_ window: NSWindow, snap: Bool = false, preferredPoint: NSPoint? = nil) {
         window.setFrameOrigin(PetWindowGeometry.origin(frame: window.frame, areas: NSScreen.screens.map(\.visibleFrame), snap: snap, preferredPoint: preferredPoint))
     }

@@ -72,7 +72,7 @@ enum SetupGuide {
               steps: ["选择订阅账户与运行机器。", "读取可用模型，设置每日时刻。", "保存草稿，再部署任务。"], help: "修改草稿后需更新部署。执行时间、启用状态和运行记录见任务页。",
               actions: [.init(title: "定时唤醒设置", destination: .init(category: "wakeups"))]),
         .init(id: "panel", title: "选择面板账户", detail: "选择要在本机面板展示的账户。",
-              steps: ["开启账户的额度显示与查询。", "选择面板账户或使用自动模式。"], help: "自动模式显示每类前 5 个账户。手动模式可留空，新增账户需手动加入。",
+              steps: ["开启账户的额度显示与查询。", "选择面板账户或使用自动模式。"], help: "自动模式显示每类前 5 个账户。手动模式可留空；新增账户默认加入面板，可随时取消。",
               actions: [.init(title: "调整面板账户", destination: .init(section: "accounts"))]),
         .init(id: "prices", title: "补齐模型价格", detail: "通过日志用量和模型价格计算 API 等价成本。",
               steps: ["补齐模型价格和名称映射。", "同步价格后重新计价。"], help: "额度估值见“估值与采样”，与实际余额分开显示。",

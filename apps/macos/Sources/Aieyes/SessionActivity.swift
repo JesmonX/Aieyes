@@ -117,6 +117,27 @@ final class MenuActivityImage: NSView {
 struct MenuStatusSnapshot: Equatable {
     var phase: SessionPhase?, count = 0, text = "", sampling = "", samplingCount = 0, attention = false, animationEnabled = true
 }
+struct SessionStripSnapshot: Equatable {
+    var sessions: [LiveSession] = []
+    var sources: [SessionSourceHealth] = []
+    var unavailable = false
+}
+@MainActor final class SessionStripStore: ObservableObject {
+    @Published private(set) var snapshot: SessionStripSnapshot
+    private var subscription: AnyCancellable?
+    private var pending = false
+    init(model: AppModel) {
+        snapshot = SessionStripSnapshot(sessions: model.sessions, sources: model.sessionSources, unavailable: model.sessionsUnavailable)
+        subscription = model.live.objectWillChange.sink { [weak self, weak model] _ in
+            guard let self, !self.pending else { return }; self.pending = true
+            DispatchQueue.main.async { [weak self, weak model] in
+                guard let self, let model else { return }; self.pending = false
+                let next = SessionStripSnapshot(sessions: model.sessions, sources: model.sessionSources, unavailable: model.sessionsUnavailable)
+                if self.snapshot != next { self.snapshot = next }
+            }
+        }
+    }
+}
 @MainActor final class MenuStatusStore: ObservableObject {
     @Published private(set) var snapshot = MenuStatusSnapshot()
     private var subscriptions = Set<AnyCancellable>()
@@ -178,18 +199,36 @@ struct WindowNavigationSnapshot: Equatable {
     }
 }
 // Retain pages and their state, but do not invalidate hidden surfaces on every model publication.
+@MainActor private struct SurfaceSnapshot: Equatable {
+    let dashboard: Dashboard, menu: Dashboard, panel: Dashboard, overview: Dashboard
+    let settings: Settings, hosts: [HostResult], options: [String]
+    let analysisFilters: DashboardFilterPreference, panelFilters: DashboardFilterPreference, overviewFilters: DashboardFilterPreference
+    let installingUpdate: Bool, settingsLoaded: Bool, panelHeight: CGFloat
+    init(_ model: AppModel) {
+        dashboard = model.dashboard; menu = model.menuDashboard; panel = model.panelDashboard; overview = model.overviewDashboard
+        settings = model.settings; hosts = model.hosts; options = model.modelOptions
+        analysisFilters = model.analysisFilters; panelFilters = model.panelFilters; overviewFilters = model.overviewFilters
+        installingUpdate = model.installingUpdate; settingsLoaded = model.settingsLoaded; panelHeight = model.panelHeight
+    }
+}
 @MainActor final class SurfaceObservation: ObservableObject {
     private var subscription: AnyCancellable?
     private var pending = false
     init(model: AppModel, compact: Bool, page: String) {
         var wasActive = model.isWindowVisible(compact ? "panel" : "detail") && (compact || model.detailPage == page)
+        var previous = SurfaceSnapshot(model)
         subscription = model.objectWillChange.sink { [weak self, weak model] _ in
             guard let self, !self.pending else { return }; self.pending = true
             DispatchQueue.main.async { [weak self, weak model] in
                 guard let self, let model else { return }; self.pending = false
                 let active = model.isWindowVisible(compact ? "panel" : "detail") && (compact || model.detailPage == page)
                 let transitioned = wasActive != active; wasActive = active
-                if active || transitioned { self.objectWillChange.send() }
+                if active || transitioned {
+                    let next = SurfaceSnapshot(model)
+                    // Query progress/errors are observed by RefreshIndicator itself.
+                    // Editor drafts and other surfaces must not invalidate the page.
+                    if transitioned || next != previous { previous = next; self.objectWillChange.send() }
+                }
             }
         }
     }

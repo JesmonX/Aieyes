@@ -300,6 +300,9 @@ struct AccountsSettingsView: View {
                         else { NativeAPISettingsSection(model: model, provider: apiProvider) }
                     }.id("api")
                 }
+                if let provider, (model.settings.nativeConnections ?? []).contains(where: { CoreContract.sameAgent($0.provider, provider) && $0.kind == "api" }) {
+                    PersistentSection(key: sectionKey("native-api"), title: "原生 API 连接", initiallyExpanded: false) { NativeConnectionsSection(model: model, provider: provider, kind: "api") }
+                }
                 if let provider, let agent = model.machineConfiguration(provider) {
                     PersistentSection(key: sectionKey("machines"), title: "机器与目录", detail: "配置采集位置", initiallyExpanded: false) {
                         AgentMachinesSection(model: model, agent: agent)
@@ -330,6 +333,7 @@ struct AccountsSettingsView: View {
             HStack {
                 Label { Text(Format.provider(agent.provider)).font(AppFont.section) } icon: { ProviderMark(provider: agent.provider) }
                 Spacer()
+                if agent.provider != "custom" { NativeScanButton(model: model, provider: agent.provider) }
                 Button("添加账户", systemImage: "plus") { adding = agent }.disabled(!agent.enabled)
             }
             ForEach(accounts, id: \.key) { account in
@@ -339,6 +343,7 @@ struct AccountsSettingsView: View {
                 }
             }
             if accounts.isEmpty { Text("尚未添加账户").foregroundStyle(.secondary) }
+            NativeConnectionsSection(model: model, provider: agent.provider, kind: "login")
         }
     }
     private func machineRow(_ agent: AgentConfiguration, machine: String) -> some View {

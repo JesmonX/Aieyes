@@ -494,6 +494,17 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
         .collect();
     d.models.sort_by_key(|a| std::cmp::Reverse(a.total));
     d.model_options = options.into_iter().collect();
+    if f.provider.as_deref().is_none_or(|p| p == "qoder") {
+        let mut query = store.db.prepare_cached(
+            "SELECT DISTINCT model FROM events WHERE provider='qoder' AND model IN ('dfmodel','qfmodel','Qoder')",
+        )?;
+        for row in query.query_map([], |r| r.get::<_, String>(0))? {
+            let model = row?;
+            if let Some(name) = crate::qoder_state::model_display_name(&model) {
+                d.model_display_names.insert(model, name.into());
+            }
+        }
+    }
     d.pricing_gaps = gaps.into_values().collect();
     if !cacheable {
         pending.clear();

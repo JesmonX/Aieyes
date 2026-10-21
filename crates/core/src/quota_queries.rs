@@ -59,12 +59,19 @@ pub(crate) fn fingerprint(settings: &Settings, account: &Account) -> Result<Stri
     let hosts: Vec<_> = settings
         .hosts
         .iter()
-        .filter(|h| sources.iter().any(|s| s.host_id.as_ref() == Some(&h.id)))
+        .filter(|h| {
+            sources.iter().any(|s| s.host_id.as_ref() == Some(&h.id))
+                || settings.native_connections.iter().any(|r| {
+                    r.account_key.as_deref() == Some(&crate::accounts::key(account))
+                        && r.machine_id == h.id
+                })
+        })
         .collect();
     Ok(hash(&serde_json::to_string(&json!({
         "account": [account.provider, account.id, account.identity_key, account.quota_enabled,
             account.quota_source_id, account.quota_profile_id, account.connections, account.device_settings, account.archived],
         "sources": sources, "hosts": hosts, "proxy": settings.proxy,
+        "nativeConnections": settings.native_connections.iter().filter(|r| r.account_key.as_deref()==Some(&crate::accounts::key(account))).map(|r|json!([r.id,r.provider,r.machine_id,r.machine_fingerprint,r.root,r.config_path,r.selector,r.kind,r.account_key,r.identity_key,r.status,r.source_id,r.source_path,crate::account_scan::available(settings,r)])).collect::<Vec<_>>(),
         "localEnabled": settings.local_device_enabled,
     }))?))
 }
@@ -75,6 +82,11 @@ fn locations(settings: &Settings, account: &Account, root: &Path) -> Vec<PathBuf
         .filter(|s| settings.source_enabled(s) && account.uses_source(s))
         .map(|source| location(settings, source, root))
         .collect();
+    keys.extend(
+        crate::account_scan::quota_sources(settings, account)
+            .iter()
+            .map(|s| location(settings, s, root)),
+    );
     keys.sort();
     keys.dedup();
     keys
@@ -249,6 +261,7 @@ impl Engine {
                 .sources
                 .iter()
                 .any(|s| account.uses_source(s) && settings.source_enabled(s))
+                && !crate::account_scan::has_quota_target(&settings, account)
             {
                 continue;
             }

@@ -23,7 +23,81 @@ function text(v){if(v===undefined||v===null)return '';if(typeof v!=='string'||v.
 function short(v){return [...text(v)].slice(0,256).join('');}
 function number(v){if(v===undefined||v===null)return undefined;if(!Number.isSafeInteger(v)||v<0)throw Error();return v;}
 async function emit(row){const line=JSON.stringify(row)+'\n';if(Buffer.byteLength(line)>65536)throw Error();if(!process.stdout.write(line))await once(process.stdout,'drain');}
+// Shared by Harness projection and Codex inherited-prefix verification. Node 24
+// decodes only the first concatenated frame, so delimit frames before using zlib.
+async function decodeZstd(file,consume){
+ const iterator=file[Symbol.asyncIterator]();let buffer=Buffer.alloc(0),readBytes=0;
+ async function read(n,eof=false){while(buffer.length<n){const next=await iterator.next();if(next.done){if(eof&&!buffer.length)return null;throw Error();}readBytes+=next.value.length;if(readBytes>512*1024*1024)throw Error();buffer=Buffer.concat([buffer,next.value]);}const result=buffer.subarray(0,n);buffer=buffer.subarray(n);return result;}
+ for(;;){
+  const magic=await read(4,true);if(!magic)break;const id=magic.readUInt32LE();
+  if(id>=0x184d2a50&&id<=0x184d2a5f){let remaining=(await read(4)).readUInt32LE();while(remaining){const n=Math.min(65536,remaining);await read(n);remaining-=n;}continue;}
+  if(id!==0xfd2fb528)throw Error();
+  const descriptor=await read(1),flags=descriptor[0];if(flags&8)throw Error();
+  const single=!!(flags&32),sizeFlag=flags>>6;
+  const extra=(single?0:1)+[0,1,2,4][flags&3]+[single?1:0,2,4,8][sizeFlag];
+  const header=await read(extra),decoder=z.createZstdDecompress({params:{[z.constants.ZSTD_d_windowLogMax]:27}});
+  const consumption=(async()=>{for await(const chunk of decoder)await consume(chunk);})();consumption.catch(()=>{});
+  const write=chunk=>new Promise((resolve,reject)=>{
+   if(decoder.errored){reject(decoder.errored);return;}
+   const failed=error=>{decoder.off('error',failed);reject(error);};decoder.once('error',failed);
+   decoder.write(chunk,error=>{decoder.off('error',failed);error?reject(error):resolve();});
+  });
+  try{
+   await write(Buffer.concat([magic,descriptor,header]));
+   for(;;){const block=await read(3),bits=block.readUIntLE(0,3),type=(bits>>1)&3,size=bits>>>3;if(type===3||size>131072)throw Error();await write(block);if(type===1)await write(await read(1));else if(size)await write(await read(size));if(bits&1)break;}
+   if(flags&4)await write(await read(4));decoder.end();await consumption;
+  }catch(error){decoder.destroy(error);await consumption.catch(()=>{});throw error;}
+ }
+}
+
+async function codexPrefix(options){
+ const reject=reason=>{throw Object.assign(Error(),{reason});};
+ if(typeof z.createZstdDecompress!=='function')reject('decoderUnavailable');
+ const metadataOnly=options.limit===undefined,limit=metadataOnly?null:options.limit;
+ if(!metadataOnly&&(!Number.isSafeInteger(limit)||limit<0))reject('boundaryInvalid');
+ let pieces=[],lineBytes=0,offset=0,total=0,first=true,thread=null,parent=null,tokens=null,timestamp=null;
+ const digest=require('node:crypto').createHash('sha256');
+ function row(raw){
+  let v;try{v=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw));}catch{reject('invalidRecord');}
+  const p=v?.payload||{};
+  if(first){
+   first=false;thread=p.id||p.session_id;
+   if(v?.type!=='session_meta'||typeof thread!=='string'||!thread||thread.length>4096)reject('identityMismatch');
+   if(p.history_base&&typeof p.history_base==='object'&&!Array.isArray(p.history_base)){
+    parent={thread_id:typeof p.history_base.thread_id==='string'?text(p.history_base.thread_id):null,end_byte_offset:p.history_base.end_byte_offset};
+   }
+  }
+  if(v?.type==='event_msg'&&p.type==='token_count'&&p.info?.total_token_usage&&typeof p.info.total_token_usage==='object'){
+   const u=p.info.total_token_usage;
+   const values=['input_tokens','output_tokens','cached_input_tokens','cache_write_input_tokens','reasoning_output_tokens'].map(k=>u[k]===undefined?0:u[k]);
+   if(u.input_tokens===undefined||values.some(v=>!Number.isSafeInteger(v)||v<0)||values[0]<values[2]+values[3])reject('invalidCounter');
+   tokens={input:values[0]-values[2]-values[3],output:values[1],cacheRead:values[2],cacheWrite:values[3],reasoning:values[4]};
+   timestamp=v.timestamp;
+  }
+ }
+ async function consume(chunk){
+  total+=chunk.length;if(total>512*1024*1024)reject('resourceLimit');
+  if(metadataOnly&&!first||!metadataOnly&&offset===limit)return;
+  const used=metadataOnly?chunk:chunk.subarray(0,Math.min(chunk.length,limit-offset));
+  if(!metadataOnly){offset+=used.length;digest.update(used);}
+  let start=0;
+  while(start<used.length){
+   const index=used.indexOf(10,start),end=index<0?used.length:index,part=used.subarray(start,end);
+   lineBytes+=part.length;if(lineBytes+(index>=0?1:0)>16*1024*1024)reject('invalidRecord');
+   if(part.length)pieces.push(part);if(index<0)break;
+   row(Buffer.concat(pieces,lineBytes));pieces=[];lineBytes=0;start=index+1;
+   if(metadataOnly)return;
+  }
+ }
+ const file=fs.createReadStream(path,{highWaterMark:65536});
+ try{
+  try{await decodeZstd(file,consume);}catch(error){reject(error.reason||'invalidCompressedHistory');}
+  if(metadataOnly?first:offset!==limit||lineBytes||limit>0&&first)reject('boundaryInvalid');
+  await emit({codexPrefix:'complete',thread,parent,tokens,timestamp,proof:digest.digest('hex')});
+ }finally{file.destroy();}
+}
 async function main(){
+ if(mode==='codex-prefix')return codexPrefix(options);
  if(path.endsWith('.zstd')&&typeof z.createZstdDecompress!=='function'){process.exitCode=2;return;}
  const offset=number(options.offset)||0,size=number(options.size)||fs.statSync(path).size;
  const file=fs.createReadStream(path,{highWaterMark:65536,start:offset,end:Math.max(offset,size-1)});
@@ -58,39 +132,40 @@ async function main(){
  }
  try{
   if(!path.endsWith('.zstd')){for await(const chunk of file)await consume(chunk);}
-  else {
-   // Node 24 decodes only the first concatenated frame. Delimit each frame
-   // using RFC 8878 headers/blocks, then let zlib validate its checksum.
-   const iterator=file[Symbol.asyncIterator]();let buffer=Buffer.alloc(0),readBytes=0;
-   async function read(n,eof=false){while(buffer.length<n){const next=await iterator.next();if(next.done){if(eof&&!buffer.length)return null;throw Error();}readBytes+=next.value.length;if(readBytes>512*1024*1024)throw Error();buffer=Buffer.concat([buffer,next.value]);}const result=buffer.subarray(0,n);buffer=buffer.subarray(n);return result;}
-   for(;;){
-    const magic=await read(4,true);if(!magic)break;const id=magic.readUInt32LE();
-    if(id>=0x184d2a50&&id<=0x184d2a5f){let remaining=(await read(4)).readUInt32LE();while(remaining){const n=Math.min(65536,remaining);await read(n);remaining-=n;}continue;}
-    if(id!==0xfd2fb528)throw Error();
-    const descriptor=await read(1),flags=descriptor[0];if(flags&8)throw Error();
-    const single=!!(flags&32),sizeFlag=flags>>6;
-    const extra=(single?0:1)+[0,1,2,4][flags&3]+[single?1:0,2,4,8][sizeFlag];
-    const header=await read(extra),decoder=z.createZstdDecompress({params:{[z.constants.ZSTD_d_windowLogMax]:27}});
-    const consumption=(async()=>{for await(const chunk of decoder)await consume(chunk);})();consumption.catch(()=>{});
-    const write=chunk=>new Promise((resolve,reject)=>{
-     if(decoder.errored){reject(decoder.errored);return;}
-     const failed=error=>{decoder.off('error',failed);reject(error);};decoder.once('error',failed);
-     decoder.write(chunk,error=>{decoder.off('error',failed);error?reject(error):resolve();});
-    });
-    try{
-     await write(Buffer.concat([magic,descriptor,header]));
-     for(;;){const block=await read(3),bits=block.readUIntLE(0,3),type=(bits>>1)&3,size=bits>>>3;if(type===3||size>131072)throw Error();await write(block);if(type===1)await write(await read(1));else if(size)await write(await read(size));if(bits&1)break;}
-     if(flags&4)await write(await read(4));decoder.end();await consumption;
-    }catch(error){decoder.destroy(error);await consumption.catch(()=>{});throw error;}
-   }
-  }
+  else await decodeZstd(file,consume);
   // A plaintext append in progress is not a committed JSONL record.
   if(first||(path.endsWith('.zstd')&&lineBytes))throw Error();
   await emit({harnessProjection:'complete',offset:path.endsWith('.zstd')?size:offset+total-lineBytes,version,seed:legacySeed,session,inherited:seeded});
  }finally{file.destroy();}
 }
-main().catch(()=>{process.stderr.write('Harness v0/v4 projection rejected invalid, truncated or oversized data\n');process.exitCode=3;});
+main().catch(async error=>{if(mode==='codex-prefix')await emit({codexPrefix:'error',reason:error.reason||'readError'});else process.stderr.write('Harness v0/v4 projection rejected invalid, truncated or oversized data\n');process.exitCode=3;});
 '''
+
+
+def codex_prefix(path, limit=None):
+    """Decode on the SSH host; only bounded metering evidence reaches stdout."""
+    node = shutil.which('node')
+    if not node:
+        return dict(reason='decoderUnavailable')
+    options = {} if limit is None else dict(limit=limit)
+    before = fingerprint(path)
+    try:
+        result = subprocess.run([node, '-e', NODE, '--', str(path), 'codex-prefix', json.dumps(options)],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, timeout=8)
+    except subprocess.TimeoutExpired:
+        return dict(reason='readError')
+    if len(result.stdout) > 65536:
+        return dict(reason='invalidRecord')
+    try:
+        value = json.loads(result.stdout)
+    except (ValueError, UnicodeError):
+        return dict(reason='readError')
+    if result.returncode or value.get('codexPrefix') != 'complete':
+        return dict(reason=value.get('reason', 'invalidCompressedHistory'))
+    if before != fingerprint(path):
+        return dict(reason='readError')
+    return value
 
 
 def fingerprint(path):

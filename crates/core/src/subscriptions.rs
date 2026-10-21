@@ -257,10 +257,6 @@ fn request(
 }
 
 pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
-    ensure!(
-        source.host_id.is_none(),
-        "订阅凭据仅在本机查询；远程历史可单独配置"
-    );
     let config = source
         .subscription
         .as_ref()
@@ -274,6 +270,10 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
         qoder::check_identity(&snapshot, account, true)?;
         return Ok(snapshot);
     }
+    ensure!(
+        source.host_id.is_none(),
+        "此订阅凭据仅在本机查询；原生 CLI 连接可在远端查询"
+    );
     let url = endpoint(&source.provider, config)?;
     let secret = credentials::read(&config.credential_ref)
         .context("无法读取订阅凭据，请解锁系统凭据库或重新连接")?;

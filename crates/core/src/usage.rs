@@ -5,13 +5,13 @@ use serde_json::Value;
 pub const PARSER_VERSION: u32 = 6;
 pub fn parser_version(provider: &str) -> u32 {
     if provider == "codex" {
-        return 7;
+        return 8;
     }
     if provider == "codebuddy" {
         return 9;
     }
     if provider == "qoder" {
-        return 9;
+        return 10;
     }
     if provider == "deepseek-harness" {
         return 8;
@@ -139,7 +139,7 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                         .as_u64()
                         .unwrap_or(0),
                     issue: if state.codex_precise_counting.unwrap_or(false) {
-                        "父会话历史尚未解析".into()
+                        "继承历史尚未解析".into()
                     } else {
                         String::new()
                     },
@@ -273,16 +273,29 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         return None;
     }
     let msg = &v["message"];
-    let u = &msg["usage"];
-    if !u.is_object() {
-        return None;
-    }
     let model = msg["model"].as_str()?;
     if model.starts_with('<') {
         return None;
     }
+    if source.provider == "qoder" {
+        if let Some(id) = v["sessionId"].as_str() {
+            if state.session_id != id {
+                state.qoder_main_model.clear();
+            }
+            state.session_id = id.into();
+        }
+        if state.qoder_main_model.is_empty() && v["isSidechain"] != true {
+            state.qoder_main_model = model.into();
+        }
+    }
+    let u = &msg["usage"];
+    if !u.is_object() {
+        return None;
+    }
     let stamp = timestamp(&v["timestamp"])?;
-    if let Some(id) = v["sessionId"].as_str() {
+    if source.provider != "qoder"
+        && let Some(id) = v["sessionId"].as_str()
+    {
         state.session_id = id.into();
     }
     let raw_tokens = Tokens {
@@ -328,7 +341,14 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         source,
         state,
         stamp,
-        model.into(),
+        if source.provider == "qoder"
+            && v["isSidechain"] == true
+            && !state.qoder_main_model.is_empty()
+        {
+            state.qoder_main_model.clone()
+        } else {
+            model.into()
+        },
         tokens,
         identity,
         "event",
@@ -348,8 +368,15 @@ pub(crate) fn parse_normalized(
     let tokens: Tokens = serde_json::from_value(v.get("tokens")?.clone()).ok()?;
     let stamp = timestamp(&v["timestamp"])?;
     let id = v["id"].as_str()?;
-    state.session_id = v["sessionId"].as_str().unwrap_or("import").into();
+    let session = v["sessionId"].as_str().unwrap_or("import");
+    if source.provider == "qoder" && state.session_id != session {
+        state.qoder_main_model.clear();
+    }
+    state.session_id = session.into();
     let model = v["model"].as_str()?.to_string();
+    if source.provider == "qoder" && state.qoder_main_model.is_empty() {
+        state.qoder_main_model = model.clone();
+    }
     let mut parsed = event(
         source,
         state,

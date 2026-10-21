@@ -21,7 +21,7 @@ fn provider_capabilities_and_legacy_custom_settings_are_consistent() {
     }))
     .unwrap();
     settings.migrate();
-    assert_eq!(settings.version, 10);
+    assert_eq!(settings.version, 11);
     assert!(settings.accounts[0].quota_enabled);
     assert_eq!(settings.agents.len(), providers::PROVIDERS.len());
     assert!(

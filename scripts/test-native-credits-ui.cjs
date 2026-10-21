@@ -38,18 +38,22 @@ function bridge(){window.setInterval=()=>0;window.__TAURI__={event:{async listen
     const web=path.join(project,'apps/desktop/web'),out=path.join(project,'.local/native-credits',provider);fs.mkdirSync(out,{recursive:true});
     server=http.createServer((req,res)=>{if(serveFont(req,res))return;const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html','.png':'image/png'})[path.extname(file)]||'application/octet-stream');res.end(fs.readFileSync(file));});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1180,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.exposeFunction('testRPC',invoke);await page.addInitScript(bridge);await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
-    await page.locator('[data-native-credits]').getByText(provider==='codebuddy'?/0.4375 Credits · 3 条计量/:/0.4375 Credits · 3 次请求/).waitFor();
+    if(provider==='qoder')assert.equal(await page.locator('[data-native-credits]').count(),0);
+    else await page.locator('[data-native-credits]').getByText(provider==='codebuddy'?/0.4375 Credits · 3 条计量/:/0.4375 Credits · 3 次请求/).waitFor();
     assert.match(await page.locator('.usage-inline').textContent(),/API 等价成本\s*—/);
     await page.screenshot({path:path.join(out,'overview.png')});
     await page.setViewportSize({width:450,height:900});
-    assert(await page.locator('[data-native-credits]').isVisible());
+    if(provider==='qoder')assert.equal(await page.locator('[data-native-credits]').count(),0);
+    else assert(await page.locator('[data-native-credits]').isVisible());
     await page.screenshot({path:path.join(out,'overview-narrow.png')});
     await page.setViewportSize({width:1180,height:900});
     await page.locator('#open-detail').click();await page.waitForFunction(()=>state.page==='analysis'&&!state.dashboardPending);
-    const credits=page.locator('[data-native-credits]');if(provider==='codebuddy'){await credits.getByText(/计费状态未提供 0.4375（3 次）/).waitFor();assert(!/标记可计费|标记不计费|折扣前已记录/.test(await credits.textContent()));}else{await credits.getByText(/标记可计费 0.25（1 次）/).waitFor();assert.match(await credits.textContent(),/标记不计费 0.125（1 次）/);assert.match(await credits.textContent(),/计费状态未提供 0.0625（1 次）/);assert.match(await credits.textContent(),/折扣前已记录 0.875（3\/3 次请求）/);}
+    const credits=page.locator('[data-native-credits]');if(provider==='qoder'){assert.equal(await credits.count(),0);assert(!/Qoder 原生记录/.test(await page.locator('#content').innerText()));}
+    if(provider==='codebuddy'){await credits.getByText(/计费状态未提供 0.4375（3 次）/).waitFor();assert(!/标记可计费|标记不计费|折扣前已记录/.test(await credits.textContent()));}
     assert.equal(await page.locator('.empty-usage').count(),0);
-    await credits.locator('summary').click();assert.match(await credits.textContent(),/qfmodel-other/);
-    await page.locator('details.daily > summary').click();await page.locator('[data-day-toggle]').first().click();assert.match(await page.locator('.daily-table').textContent(),/原生记录/);
+    if(provider==='codebuddy'){await credits.locator('summary').click();assert.match(await credits.textContent(),/qfmodel-other/);}
+    if(provider==='qoder'){assert.match(await page.locator('#content').innerText(),/Qwen3.8-Flash/);assert.equal(await page.locator('#model option[value="qfmodel"]').textContent(),'Qwen3.8-Flash');assert(!/qfmodel(?!-other)/.test(await page.locator('#content').innerText()));}
+    await page.locator('details.daily > summary').click();await page.locator('[data-day-toggle]').first().click();if(provider==='codebuddy')assert.match(await page.locator('.daily-table').textContent(),/原生记录/);else assert(!/原生记录/.test(await page.locator('.daily-table').textContent()));
     await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:path.join(out,'analysis.png'),fullPage:true});
     await page.locator('#model').selectOption('qfmodel-other');await page.waitForFunction(()=>state.appliedFilters.model==='qfmodel-other'&&!state.dashboardPending);assert.equal(await page.evaluate(provider=>state.dashboard.summary.nativeCredits[provider].credits,provider),.0625);
     await page.locator('#provider').selectOption('claude');await page.waitForFunction(()=>state.appliedFilters.provider==='claude'&&!state.dashboardPending);assert.equal(await page.locator('[data-native-credits]').count(),0);

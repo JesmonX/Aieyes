@@ -2,6 +2,8 @@ import Foundation
 
 @main struct VerifyModels {
     static func main() throws {
+        let native = try JSONDecoder().decode(NativeConnection.self, from: Data(#"{"id":"native","provider":"qoder","machineId":"local","root":"/native","configPath":"/native/auth.json","selector":"","kind":"login","email":"","identityKey":"qoder:aaaaaaaaaaaa0123456789","baseUrl":"","models":[],"hasCredential":true,"status":"pending","note":"待验证","checkedAt":1}"#.utf8))
+        precondition(native.statusLabel == "待验证" && native.displayName == "Qoder · aaaaaaaaaaaa")
         let qoderIdentity = try JSONDecoder().decode(AccountIdentity.self, from: Data(#"{"key":"qoder:aaaaaaaaaaaa0123456789","email":"","subscription":"personal_standard"}"#.utf8))
         precondition(qoderIdentity.displayName == "Qoder · aaaaaaaaaaaa")
         precondition(qoderIdentity.summary == "Qoder · aaaaaaaaaaaa · personal_standard")
@@ -28,9 +30,11 @@ import Foundation
         precondition(missingWallet.amount(missingWallet.balance) == "未提供" && missingWallet.monthlyLimitLabel == "月度上限状态未提供")
         let creditUsage = try JSONDecoder().decode(Aggregate.self, from: Data(#"{"key":"qfmodel","tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"total":0,"cost":0,"pricedTokens":0,"nativeCredits":{"qoder":{"credits":0.25,"originalCredits":0.5,"originalCreditsRequests":1,"billable":0,"billableRequests":0,"nonBillable":0.25,"nonBillableRequests":1,"unknownBillability":0,"unknownBillabilityRequests":0,"requests":1}}}"#.utf8))
         precondition(creditUsage.hasNativeCredits && !creditUsage.costAvailable)
-        precondition(creditUsage.nativeCreditText.contains("0.25 Credits") && creditUsage.nativeCredits?["qoder"]?.detail.contains("标记不计费") == true)
+        precondition(!creditUsage.displayCredits.hasNativeCredits)
+        precondition(creditUsage.nativeCreditText.isEmpty && creditUsage.nativeCredits?["qoder"]?.detail.contains("标记不计费") == true)
         let codebuddyUsage = try JSONDecoder().decode(Aggregate.self, from: Data(#"{"key":"fixture","tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"total":0,"cost":0,"pricedTokens":0,"nativeCredits":{"codebuddy":{"credits":0.25,"billable":0,"nonBillable":0,"unknownBillability":0.25,"requests":1}}}"#.utf8))
         precondition(codebuddyUsage.hasNativeCredits && !codebuddyUsage.costAvailable)
+        precondition(codebuddyUsage.displayCredits.hasNativeCredits)
         precondition(codebuddyUsage.nativeCreditText.contains("1 条计量"))
         let legacyUsage = try JSONDecoder().decode(Aggregate.self, from: Data(#"{"key":"legacy","tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"total":0,"cost":0,"pricedTokens":0}"#.utf8))
         precondition(!legacyUsage.hasNativeCredits && legacyUsage.costAvailable)
@@ -62,6 +66,11 @@ import Foundation
         precondition(AccountDeviceCounts(accountKey: "codex:a", machines: [], rows: deviceRows).summary == "已登录设备 0/0 · 使用中设备 0/0")
         let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
         let dashboard = try JSONDecoder().decode(Dashboard.self, from: data)
+        var labeledDashboard = dashboard
+        labeledDashboard.modelDisplayNames = ["qfmodel": "Qwen3.8-Flash", "dfmodel": "DeepSeek-Flash"]
+        precondition(labeledDashboard.modelName("qfmodel") == "Qwen3.8-Flash")
+        precondition(labeledDashboard.modelName("dfmodel") == "DeepSeek-Flash")
+        precondition(dashboard.modelName("legacy") == "legacy")
         precondition(dashboard.trendDays.count == 7)
         precondition(dashboard.trendDays.reduce(0) { $0 + $1.total } == dashboard.dayModels.reduce(0) { $0 + $1.usage.total })
         precondition(dashboard.pricingGaps.reduce(0) { $0 + $1.unpricedTokens } == dashboard.summary.total - dashboard.summary.pricedTokens)

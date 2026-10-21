@@ -231,13 +231,21 @@ impl Store {
                             id: format!("local-{provider}"),
                             name: format!("{} · 本机", entry.name),
                             provider: provider.into(),
-                            account_id: local_account_id(provider, &root),
+                            // Discover history directories only. Explicit account
+                            // actions own account creation and identity-based naming.
                             path: root.to_string_lossy().into(),
                             ..Default::default()
                         });
                     }
                 }
                 crate::providers::normalize_settings(&mut settings);
+                // Fresh installations offer every named Agent, without importing logins
+                // or opting a newly added SSH machine into collection.
+                for agent in &mut settings.agents {
+                    if agent.provider != "custom" {
+                        agent.enabled = true;
+                    }
+                }
                 self.save_settings(&settings)?;
                 Ok(settings)
             }
@@ -1619,62 +1627,6 @@ pub fn expand(path: &str) -> PathBuf {
     }
 }
 
-/// Discovery distinguishes explicit API credentials from subscription logins without storing credentials.
-fn local_account_id(provider: &str, root: &Path) -> String {
-    let file = root.join(if provider == "codex" {
-        "auth.json"
-    } else {
-        ".credentials.json"
-    });
-    let auth = std::fs::read(file)
-        .ok()
-        .and_then(|data| serde_json::from_slice::<Value>(&data).ok());
-    match provider {
-        "codex" => {
-            let Some(auth) = auth else {
-                return String::new();
-            };
-            if auth["auth_mode"] == "apikey"
-                || (auth["OPENAI_API_KEY"].is_string() && !auth["tokens"].is_object())
-            {
-                return String::new();
-            }
-            if let Some(id) = auth["tokens"]["account_id"].as_str() {
-                return format!("codex-{}", &hash(id)[..16]);
-            }
-            if auth["auth_mode"] == "chatgpt" {
-                "codex-local".into()
-            } else {
-                String::new()
-            }
-        }
-        "claude" => {
-            if auth
-                .as_ref()
-                .is_some_and(|v| v["claudeAiOauth"]["accessToken"].is_string())
-            {
-                return "claude-local".into();
-            }
-            #[cfg(target_os = "macos")]
-            if root == home().join(".claude") {
-                // Check existence only: do not ask security to print the stored value.
-                if std::process::Command::new("/usr/bin/security")
-                    .args(["find-generic-password", "-s", "Claude Code-credentials"])
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .is_ok_and(|s| s.success())
-                {
-                    return "claude-local".into();
-                }
-            }
-            String::new()
-        }
-        "agy" | "antigravity" => "agy-local".into(),
-        _ => String::new(),
-    }
-}
-
 #[cfg(test)]
 mod discovery_tests {
     use super::*;
@@ -1695,23 +1647,5 @@ mod discovery_tests {
         for literal in ["~other/folder", "$HOME/folder", "relative folder", ""] {
             assert_eq!(expand(literal), PathBuf::from(literal));
         }
-    }
-
-    #[test]
-    fn api_credentials_do_not_create_a_subscription_account() {
-        let root = tempfile::tempdir().unwrap();
-        assert_eq!(local_account_id("codex", root.path()), "");
-        std::fs::write(
-            root.path().join("auth.json"),
-            r#"{"auth_mode":"apikey","OPENAI_API_KEY":"fixture"}"#,
-        )
-        .unwrap();
-        assert_eq!(local_account_id("codex", root.path()), "");
-        std::fs::write(
-            root.path().join("auth.json"),
-            r#"{"auth_mode":"chatgpt","tokens":{"account_id":"fixture-account"}}"#,
-        )
-        .unwrap();
-        assert!(local_account_id("codex", root.path()).starts_with("codex-"));
     }
 }

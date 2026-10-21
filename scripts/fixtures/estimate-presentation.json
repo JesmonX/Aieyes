@@ -288,7 +288,7 @@
       },
       "records": [],
       "fields": [],
-      "summary": "5h ≈ —  7d ≈ —"
+      "summary": "额度估值"
     },
     {
       "name": "Plus without a five hour window hides all three values",
@@ -364,7 +364,7 @@
       "fields": [
         "weeklyValue"
       ],
-      "summary": "5h ≈ —  7d ≈ —/$25.00"
+      "summary": "7d ≈ $25.00"
     },
     {
       "name": "Weekly rolling help describes only the available window",

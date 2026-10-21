@@ -16,6 +16,9 @@ public static class PanelProbe {
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h,StringBuilder text,int size);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out Rect r);
+  [DllImport("user32.dll",EntryPoint="GetWindowLongW")] public static extern int GetWindowLong(IntPtr h,int index);
+  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h,uint command);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int width,int height,uint flags);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point p);
@@ -84,6 +87,32 @@ function Click-At([int]$X,[int]$Y,[bool]$Right=$false) {
 }
 function Bounds([IntPtr]$Handle) {
     $rect=New-Object PanelProbe+Rect; $null=[PanelProbe]::GetWindowRect($Handle,[ref]$rect);return $rect
+}
+function Pet-IsTopmost { return ([PanelProbe]::GetWindowLong($script:pet,-20) -band 8) -ne 0 }
+function Pet-IsAboveBackground {
+    # GW_HWNDNEXT walks down the actual Z order; styles alone do not prove
+    # that another application's window cannot cover the pet.
+    $window=[PanelProbe]::GetWindow($script:pet,2)
+    while($window -ne [IntPtr]::Zero) {
+        if($window -eq $background.Handle){return $true}
+        $window=[PanelProbe]::GetWindow($window,2)
+    }
+    return $false
+}
+function Verify-PetTopmost {
+    Assert-That (Pet-IsTopmost) 'pet starts topmost'
+    foreach($after in @(-2,1)) {
+        $before=Bounds $script:pet
+        # HWND_NOTOPMOST / HWND_BOTTOM reproduce losing the topmost band.
+        # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE preserves input/geometry.
+        Assert-That ([PanelProbe]::SetWindowPos($script:pet,[IntPtr]::new($after),0,0,0,0,0x13)) "simulate pet demotion ($after)"
+        Wait-For { Pet-IsTopmost } "pet recovers topmost after demotion ($after)"
+        Assert-That (Pet-IsAboveBackground) "pet remains above ordinary windows ($after)"
+        Assert-That ([PanelProbe]::GetForegroundWindow() -eq $background.Handle) "topmost recovery preserves keyboard focus ($after)"
+        $afterRect=Bounds $script:pet
+        Assert-That ($before.Left -eq $afterRect.Left -and $before.Top -eq $afterRect.Top -and $before.Right -eq $afterRect.Right -and $before.Bottom -eq $afterRect.Bottom) "topmost recovery preserves pet geometry ($after)"
+    }
+    Screenshot 'pet-topmost-recovered'
 }
 function Pet-Click([bool]$Right=$false) {
     $r=Bounds $script:pet;Click-At ($r.Left+($r.Right-$r.Left)/2) ($r.Bottom-11*[PanelProbe]::GetDpiForWindow($script:pet)/96) $Right
@@ -194,6 +223,7 @@ try {
     $null=[PanelProbe]::SetForegroundWindow($background.Handle)
     Click-At 25 200
     Wait-For { [PanelProbe]::GetForegroundWindow() -eq $background.Handle } 'background focus established before pet click'
+    Verify-PetTopmost
     Pet-Click
     Wait-For {Panel-Visible} 'open panel'
     Assert-That ([PanelProbe]::GetForegroundWindow() -eq $background.Handle) 'opening preserves background keyboard focus'
@@ -249,6 +279,9 @@ try {
         Choose-MenuItem 5 '隐藏桌宠'
         Wait-For { -not [PanelProbe]::IsWindowVisible($script:pet) } 'native menu hides pet when tray is available'
         Assert-That (-not (Panel-Visible)) 'hiding pet also closes its panel'
+        Assert-That ([PanelProbe]::SetWindowPos($script:pet,[IntPtr]::new(1),0,0,0,0,0x13)) 'demote hidden pet'
+        Pump 200
+        Assert-That (-not [PanelProbe]::IsWindowVisible($script:pet)) 'topmost recovery does not reveal a hidden pet'
     } else {
         Assert-That ([PanelProbe]::IsWindowVisible($script:pet)) 'sole pet entry remains visible when hiding is disabled'
     }
