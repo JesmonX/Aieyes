@@ -52,24 +52,34 @@ import Combine
     @MainActor static func verifySurfaceProjections() async throws {
         let model = AppModel(autostart:false); defer { model.stop() }
         model.detailPage = "analysis"; model.setWindowVisible(true,window:"detail")
-        try await Task.sleep(for:.milliseconds(150))
+        // Test projections without a delayed dashboard request changing the fixture.
+        model.stop()
+        func flushPublications() async {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume(returning: ()) }
+            }
+        }
         let navigation = WindowNavigationStore(model:model)
         let surface = SurfaceObservation(model:model,compact:false,page:"analysis")
         var navigationChanges = 0, surfaceChanges = 0
         let nav = navigation.objectWillChange.sink { navigationChanges += 1 }
         let page = surface.objectWillChange.sink { surfaceChanges += 1 }
         model.message = "unrelated metric publication"
-        try await Task.sleep(for:.milliseconds(50))
-        precondition(navigationChanges == 0 && surfaceChanges > 0)
+        await flushPublications()
+        precondition(navigationChanges == 0 && surfaceChanges == 0,"Status messages must not invalidate page content")
+        model.dashboard.summary.total = 1
+        await flushPublications()
+        precondition(navigationChanges == 0 && surfaceChanges == 1,"Visible dashboard changes must publish")
         model.setWindowVisible(false,window:"detail")
-        try await Task.sleep(for:.milliseconds(50))
+        await flushPublications()
         let hidden = surfaceChanges
         precondition(navigationChanges > 0 && hidden > 1,"Hiding must publish once so child timelines stop")
         for i in 0..<10 { model.message = "hidden metric \(i)" }
-        try await Task.sleep(for:.milliseconds(50))
+        model.dashboard.summary.total = 2
+        await flushPublications()
         precondition(surfaceChanges == hidden,"Hidden surfaces defer unrelated publications")
         model.setWindowVisible(true,window:"detail")
-        try await Task.sleep(for:.milliseconds(50))
+        await flushPublications()
         precondition(surfaceChanges > hidden,"Showing publishes the latest retained state")
         nav.cancel();page.cancel()
         print("Navigation projections, hidden-page transition, deferred updates and show-time resumption passed")

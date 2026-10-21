@@ -9,6 +9,7 @@ fs.writeFileSync(path.join(home,'.codex/auth.json'),JSON.stringify(auth));fs.wri
 const env={...process.env,HOME:home,USERPROFILE:home,CODEX_HOME:path.join(home,'.codex'),XDG_DATA_HOME:path.join(home,'.local/share')};
 for(const key of ['CLAUDE_CONFIG_DIR','KIMI_CODE_HOME','GROK_HOME','QODER_CONFIG_DIR','CODEBUDDY_CONFIG_DIR','PI_CODING_AGENT_DIR','DSH_HOME','XDG_CONFIG_HOME'])env[key]=path.join(home,'unused',key);
 const core=spawn(path.join(project,'target/debug/aieyes-core'),['--data-dir',path.join(root,'data')],{env,stdio:['pipe','pipe','pipe']});
+const coreClosed=new Promise(resolve=>core.once('close',resolve));
 let next=0,stderr='';const pending=new Map(),calls=[];core.stderr.on('data',b=>stderr+=b);readline.createInterface({input:core.stdout}).on('line',line=>{const r=JSON.parse(line),p=pending.get(r.id);if(!p)return;pending.delete(r.id);r.error?p.reject(new Error(r.error.message)):p.resolve(r.result);});
 function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++next;pending.set(id,{resolve,reject});core.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n');});}
 (async()=>{
@@ -50,5 +51,5 @@ function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++
   await page.screenshot({path:path.join(preview,'pricing-references.png'),fullPage:true});
   assert.deepEqual(errors,[]);assert(calls.some(c=>c.method==='accounts.scan'&&c.params.scope==='machine'));assert(calls.some(c=>c.method==='accounts.scan'&&c.params.scope==='agent'));
   console.log('Account discovery UI: machine/Agent scopes, collapsed credentials, bulk removal, smart price references and empty estimate labels passed.');
- }finally{if(browser)await browser.close();if(server)await new Promise(resolve=>server.close(resolve));core.kill();fs.rmSync(root,{recursive:true,force:true});}
+ }finally{if(browser)await browser.close();if(server)await new Promise(resolve=>server.close(resolve));core.kill();await coreClosed;fs.rmSync(root,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exitCode=1;});
