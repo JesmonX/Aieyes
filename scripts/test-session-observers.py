@@ -56,11 +56,12 @@ class ObserverTests(unittest.TestCase):
             with path.open('a') as f:f.write('x'*(16*1024*1024+1))
             with self.assertRaisesRegex(ValueError,'16 MiB'):m.read_file(path,'pi',False,complete)
 
+    @unittest.skipIf(os.name=='nt','SSH observer installs on POSIX machines; local Windows uses Rust')
     def test_codebuddy_observer_install_preserves_custom_hooks_and_disabling(self):
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory);path=root/'settings.json'
             original=dict(theme='light',hooks=dict(Stop=[dict(matcher='custom',hooks=[dict(type='command',command='my-observer')])]))
-            path.write_text(json.dumps(original));source=dict(id='cb',provider='codebuddy',path=directory)
+            path.write_text(json.dumps(original));source=dict(id='cb',provider='codebuddy',path=directory,hostId='ssh')
             self.assertEqual(m.manage(source,'ensure')['state'],'installed')
             saved=json.loads(path.read_text());self.assertEqual(saved['hooks']['Stop'][0],original['hooks']['Stop'][0])
             self.assertIn('PermissionDenied',saved['hooks']);self.assertIn('SubagentStop',saved['hooks'])
