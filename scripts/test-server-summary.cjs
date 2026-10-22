@@ -64,7 +64,8 @@ function fixture(){
     for(const width of panel?[450,420,360]:[1380,1120,640]){
      await page.setViewportSize({width,height:800});
      const resourceHeights=await summary.locator('.server-system-metrics > .resource-block').evaluateAll(es=>es.map(e=>e.getBoundingClientRect().height));
-     assert.equal(resourceHeights[0],resourceHeights[1],`${surface} ${width} ${theme}: CPU and memory cards have equal heights`);
+     // Animated transforms can add floating-point roundoff to otherwise equal bounds.
+     assert(Math.abs(resourceHeights[0]-resourceHeights[1])<0.01,`${surface} ${width} ${theme}: CPU and memory cards have equal heights (${resourceHeights.join(' vs ')})`);
      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
      const overflow=await summary.evaluate(el=>[...el.querySelectorAll('.server-gpu,.resource-gauge,.server-network-total,.server-resource-strip')].filter(child=>child.scrollWidth>child.clientWidth+1).map(child=>child.className));
      assert.deepEqual(overflow,[],`${surface} ${width} ${theme} has overflowing resources`);
