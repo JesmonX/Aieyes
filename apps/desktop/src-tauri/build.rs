@@ -1,6 +1,6 @@
 fn main() {
     // Stage platform assets for direct cargo builds as well as the Tauri CLI.
-    // The shared source files (including licensed Windows fonts) stay untouched.
+    // Keep the shared fonts and their license in every Linux package as well.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         let source = std::path::Path::new("../web");
         let destination =
@@ -43,20 +43,12 @@ fn stage_web(source: &std::path::Path, destination: &std::path::Path) {
     for entry in std::fs::read_dir(source).unwrap() {
         let entry = entry.unwrap();
         let name = entry.file_name();
-        if name == "fonts" || name.to_string_lossy().starts_with('.') {
+        if name.to_string_lossy().starts_with('.') {
             continue;
         }
         let output = destination.join(&name);
         if entry.file_type().unwrap().is_dir() {
             stage_web(&entry.path(), &output);
-        } else if name == "tokens.css" {
-            let css = std::fs::read_to_string(entry.path()).unwrap();
-            let css = css
-                .lines()
-                .filter(|line| !line.trim_start().starts_with("@font-face"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            std::fs::write(output, css).unwrap();
         } else {
             std::fs::copy(entry.path(), output).unwrap();
         }

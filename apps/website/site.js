@@ -5,7 +5,7 @@ function setPlatform(value){
   platform=value;document.documentElement.dataset.platform=value;
   platformButtons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.platform===value)));
   document.querySelectorAll('img[data-preview]').forEach(image=>{
-    image.src=`/screenshots/${value}-${image.dataset.preview}.webp`;
+    image.src=`/screenshots/${document.documentElement.lang}/${value}-${image.dataset.preview}.webp`;
     image.alt=image.alt.replace(/ — (?:macOS|Windows)$/,'')+` — ${value==='macos'?'macOS':'Windows'}`;
   });
   try{sessionStorage.setItem('aieyes.previewPlatform',value);}catch{}

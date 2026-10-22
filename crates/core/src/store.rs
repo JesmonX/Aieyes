@@ -95,6 +95,7 @@ impl Store {
             #[cfg(test)]
             billing_memory: Default::default(),
         };
+        crate::history_counting::setup(&store)?;
         store.migrate_estimate_tables()?;
         store.migrate_antigravity()?;
         store.migrate_usage_ids()?;
@@ -211,8 +212,9 @@ impl Store {
             .optional()?;
         match raw {
             Some(s) => {
-                let mut settings: Settings = serde_json::from_str(&s)?;
+                let mut settings: Settings = crate::settings::decode(serde_json::from_str(&s)?)?;
                 crate::providers::normalize_settings(&mut settings);
+                settings.counting_generation = crate::history_counting::generation(self)?;
                 Ok(settings)
             }
             None => {
@@ -247,6 +249,7 @@ impl Store {
                     }
                 }
                 self.save_settings(&settings)?;
+                settings.counting_generation = crate::history_counting::generation(self)?;
                 Ok(settings)
             }
         }
@@ -525,7 +528,7 @@ impl Store {
             None
         };
         let tx = &self.db;
-        if let Some(previous) = previous {
+        if let Some(ref previous) = previous {
             // Archiving retains the namespace used to deduplicate imported records.
             // Protect history from destructive deletion by older clients as well.
             for account in &previous.accounts {
@@ -628,6 +631,15 @@ impl Store {
         }
         tx.execute("DELETE FROM remote_cursors WHERE source_id NOT IN (SELECT json_extract(value,'$.id') FROM json_each(?1))", [serde_json::to_string(&s.sources)?])?;
         tx.execute("DELETE FROM native_pending WHERE source_id NOT IN (SELECT json_extract(value,'$.id') FROM json_each(?1))", [serde_json::to_string(&s.sources)?])?;
+        if previous
+            .as_ref()
+            .is_some_and(|old| old.precise_counting != s.precise_counting)
+        {
+            tx.execute(
+                "UPDATE kv SET value=CAST(value AS INTEGER)+1 WHERE key='counting.generation'",
+                [],
+            )?;
+        }
         tx.execute("INSERT INTO kv VALUES('settings',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[serde_json::to_string(s)?])?;
         if !changed_models.is_empty() {
             self.reprice_in_transaction(s, true, Some(&changed_models))?;
@@ -879,7 +891,7 @@ impl Store {
         let old: Option<(String, Option<String>)> = self
             .db
             .query_row(
-                "SELECT payload,price FROM events WHERE id=?1",
+                "SELECT COALESCE(i.payload,e.payload),e.price FROM events e LEFT JOIN usage_inheritance i ON i.event_id=e.id WHERE e.id=?1",
                 [&next.id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
@@ -888,6 +900,11 @@ impl Store {
             .as_ref()
             .and_then(|(_, p)| p.as_ref())
             .and_then(|p| serde_json::from_str(p).ok());
+        let prior_model = old.as_ref().and_then(|(raw, _)| {
+            serde_json::from_str::<UsageEvent>(raw)
+                .ok()
+                .map(|e| e.model)
+        });
         if let Some((old, _)) = &old {
             let prior: UsageEvent = serde_json::from_str(old)?;
             match (&mut next.native_credits, prior.native_credits) {
@@ -941,7 +958,18 @@ impl Store {
                 && next.raw_tokens.as_ref().is_some_and(|raw| {
                     prior.raw_tokens.is_none() && prior.tokens.input == raw.input
                 });
-            if !qoder_legacy_inclusive {
+            if next.usage_version > 0 || prior.usage_version > 0 {
+                // Native snapshots are indivisible. A parser upgrade can
+                // reclassify cached input or correct a model, including downwards.
+                if next.usage_version < prior.usage_version
+                    || (next.usage_version == prior.usage_version
+                        && next.tokens.total() < prior.tokens.total())
+                {
+                    next.tokens = prior.tokens;
+                    next.model = prior.model;
+                    next.usage_version = prior.usage_version;
+                }
+            } else if !qoder_legacy_inclusive {
                 next.tokens.input = next.tokens.input.max(prior.tokens.input);
                 next.tokens.output = next.tokens.output.max(prior.tokens.output);
                 next.tokens.cache_read = next.tokens.cache_read.max(prior.tokens.cache_read);
@@ -949,6 +977,7 @@ impl Store {
                 next.tokens.reasoning = next.tokens.reasoning.max(prior.tokens.reasoning);
             }
             next.raw_tokens = next.raw_tokens.take().or(prior.raw_tokens.clone());
+            next.inheritance = next.inheritance.take().or(prior.inheritance);
         }
         // A proved counter correction is authoritative even when an older parser
         // or a second copy later supplies the original, larger cumulative value.
@@ -968,7 +997,17 @@ impl Store {
         crate::native_credits::resolve(self, &mut next)?;
         let price = frozen
             .as_ref()
+            .filter(|price| {
+                prior_model.as_deref() == Some(next.model.as_str())
+                    || pricing::find_price(
+                        &next.model,
+                        std::slice::from_ref(*price),
+                        &settings.model_mappings,
+                    )
+                    .is_some()
+            })
             .or_else(|| pricing::find_price(&next.model, prices, &settings.model_mappings));
+        crate::history_counting::observe(self, &mut next, price, settings)?;
         let (cost, covered) = pricing::estimate(&next.tokens, price);
         self.db.execute("INSERT INTO events VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(id) DO UPDATE SET model=excluded.model,stamp=excluded.stamp,payload=excluded.payload,cost=excluded.cost,priced_tokens=excluded.priced_tokens,price=excluded.price",
             params![next.id,next.provider,next.account_id,next.model,next.timestamp,serde_json::to_string(&next)?,cost,covered,price.map(serde_json::to_string).transpose()?])?;
@@ -990,7 +1029,13 @@ impl Store {
             self.db
                 .execute("DELETE FROM kv WHERE key='usage.ids.canonical.v1'", [])?;
         }
-        Ok(old.is_none())
+        Ok(old.is_none()
+            && (next.inheritance.is_none()
+                || next.tokens.total() > 0
+                || next
+                    .native_credits
+                    .as_ref()
+                    .is_some_and(|c| c.valid() && c.mirrored_by.is_none())))
     }
     pub fn reprice(&self, settings: &Settings, only_unpriced: bool) -> Result<u64> {
         let tx = self.write_transaction()?;
@@ -1381,7 +1426,7 @@ impl Store {
                 let status = status
                     .and_then(|s| serde_json::from_str::<Value>(&s).ok())
                     .map(|value| {
-                        crate::codex_history::sync_status(value, settings.codex_precise_counting)
+                        crate::codex_history::sync_status(value, settings.precise_counting)
                     });
                 d.sources.push(json!({"id":source.id,"name":source.name,"provider":source.provider,"enabled":settings.source_enabled(source),"accountId":source.account_id,"accountIds":account_ids,"codexHomeId":source.codex_home_id,"hostId":source.host_id,"status":status,"autoValuation":source.auto_valuation,"autoValuationStatus":self.automatic_status(&source.id)?}));
             }

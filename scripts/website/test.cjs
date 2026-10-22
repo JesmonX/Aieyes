@@ -1,9 +1,9 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const browsers=require('../../apps/desktop/node_modules/playwright');
 const root=path.resolve(__dirname,'../..'),site=path.join(root,'dist/website'),qa=path.join(root,'.local/website/qa');
-const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.webp':'image/webp','.png':'image/png','.xml':'application/xml','.txt':'text/plain'};
+const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.webp':'image/webp','.png':'image/png','.xml':'application/xml','.txt':'text/plain','.woff2':'font/woff2','.json':'application/json'};
 async function checkMobile(browser,origin,errors,failed){
-  for(const [language,url] of [['en','/'],['zh-CN','/zh-CN/']]){
+  for(const [language,url] of [['en','/'],['zh-CN','/zh-CN/index.html']]){
     for(const [width,height] of [[320,700],[360,800],[390,844],[430,932],[768,1024],[844,390]]){
       const context=await browser.newContext({viewport:{width,height},isMobile:true,hasTouch:true,deviceScaleFactor:2,reducedMotion:'reduce'});
       try{
@@ -18,7 +18,7 @@ async function checkMobile(browser,origin,errors,failed){
             const box=el=>el.getBoundingClientRect();
             const within=(inner,outer)=>inner.left>=outer.left-1&&inner.right<=outer.right+1&&inner.top>=outer.top-1&&inner.bottom<=outer.bottom+1;
             const overlap=(a,b)=>a.left<b.right&&b.left<a.right&&a.top<b.bottom&&b.top<a.bottom;
-            const controls=[...document.querySelectorAll('.brand,.menu-toggle,.header nav a,.platform-switch button,.button,[data-feature-tab],.dialog-close,.release-link,.faq summary,.footer-links a,.footer-bottom a')].filter(visible);
+            const controls=[...document.querySelectorAll('.brand,.menu-toggle,.header nav a,.platform-switch button,.button,.package-button,[data-feature-tab],.dialog-close,.release-link,.faq summary,.footer-links a,.footer-bottom a')].filter(visible);
             const small=controls.filter(el=>box(el).width<43.9||box(el).height<43.9).map(el=>el.outerHTML.slice(0,160));
             const overflowing=[...document.querySelectorAll('.wrap,.hero-pet,.hero-pet .animated-pet,.stage-tag,.feature-copy,.type-art,.pet-line,.pet-line em,.pet-line .animated-pet,.download-card,.footer-links')].filter(visible).filter(el=>box(el).left< -1||box(el).right>innerWidth+1).map(el=>el.className);
             const clippedPets=[...document.querySelectorAll('.animated-pet')].filter(visible).filter(el=>{const container=el.closest('.type-art');return container&&!within(box(el),box(container));});
@@ -76,6 +76,57 @@ async function checkMobile(browser,origin,errors,failed){
     }
   }
 }
+
+async function checkFontsAndAnimation(browser,origin){
+  const contracts=JSON.parse(fs.readFileSync(path.join(root,'docs/core-contracts.json'),'utf8'));
+  const page=await browser.newPage({viewport:{width:1440,height:1100},reducedMotion:'no-preference'});
+  try{
+    await page.goto(origin+'/#sessions');await page.evaluate(()=>document.fonts.ready);
+    const fonts=await page.evaluate(async()=>{await Promise.all([document.fonts.load('18px "Comic Neue"','Aieyes'),document.fonts.load('18px "LXGW WenKai"','工作账户')]);return {comic:document.fonts.check('18px "Comic Neue"','Aieyes'),chinese:document.fonts.check('18px "LXGW WenKai"','工作账户'),family:getComputedStyle(document.body).fontFamily,body:getComputedStyle(document.body).fontSize};});
+    assert(fonts.comic&&fonts.chinese);assert.equal(fonts.family.split(',')[0].trim().replace(/^["']|["']$/g,''),'Comic Sans MS');assert.equal(fonts.body,'18px');
+    for(const provider of contracts.providers.filter(p=>p.icon&&p.id!=='custom')){
+      const asset=provider.icon.darkAsset||provider.icon.asset;
+      assert(await page.locator(`.provider img[src="/providers/provider-${asset}.png"]`).count()>0);
+      if(provider.icon.monochrome)assert.equal(await page.locator(`.provider img[src="/providers/provider-${asset}.png"]`).first().evaluate(el=>getComputedStyle(el).filter),'brightness(0) invert(1)');
+    }
+    const frames=[];
+    for(const [state,row] of [['idle',0],['working',1],['complete',4]]){
+      const actual=await page.locator(`#sessions .pet-${state}`).evaluate(async(el,{row,durations})=>{
+        const animation=el.getAnimations().find(a=>a.effect.target===el);animation.pause();await animation.ready;
+        const timing=animation.effect.getTiming(),size=parseFloat(getComputedStyle(el).getPropertyValue('--pet-size'));
+        const sprite=new Image();sprite.src='/pet-spritesheet.webp';await sprite.decode();
+        const canvas=document.createElement('canvas');canvas.width=sprite.width/8;canvas.height=sprite.height/9;const context=canvas.getContext('2d');
+        let elapsed=0;const frames=[];
+        for(const [frame,duration] of durations.entries()){
+          // Sample a complete later iteration so staggered negative delays do
+          // not put the animation before its active interval.
+          animation.currentTime=timing.delay+timing.duration+elapsed+duration/2;
+          context.clearRect(0,0,canvas.width,canvas.height);context.drawImage(sprite,frame*canvas.width,row*canvas.height,canvas.width,canvas.height,0,0,canvas.width,canvas.height);
+          const rgba=context.getImageData(0,0,canvas.width,canvas.height).data;let visible=0;for(let i=3;i<rgba.length;i+=4)if(rgba[i]>16)visible++;
+          frames.push({frame,x:parseFloat(getComputedStyle(el).backgroundPositionX),expected:-frame*size,visible});elapsed+=duration;
+        }
+        return {duration:timing.duration,frames};
+      },{row,durations:contracts.petFrameDurations[row]});
+      assert.equal(actual.duration,contracts.petFrameDurations[row].reduce((a,b)=>a+b,0));
+      for(const frame of actual.frames){assert(Math.abs(frame.x-frame.expected)<.1,JSON.stringify(frame));assert(frame.visible>100,`${state} frame ${frame.frame} is not blank`);}
+      frames.push({state,...actual});
+    }
+    fs.writeFileSync(path.join(qa,`animation-${process.env.AIEYES_WEBSITE_BROWSER||'chromium'}.json`),JSON.stringify({fonts,frames},null,2));
+  }finally{await page.close();}
+}
+async function checkNoScript(browser,origin){
+  const context=await browser.newContext({javaScriptEnabled:false});
+  try{const page=await context.newPage();for(const [language,url] of [['en','/'],['zh-CN','/zh-CN/index.html']]){
+    await page.goto(origin+url);assert.equal(await page.locator('.package-button').count(),6);
+    assert(await page.locator('.hero-actions a[href="#download"]').isVisible());
+    assert.equal(await page.locator('.hero-shot img').getAttribute('src'),`/screenshots/${language}/macos-overview.webp`);
+    for(const platform of ['macos','windows'])for(const feature of ['overview','analytics','servers','panel']){
+      const file=path.join(site,'screenshots',language,`${platform}-${feature}.webp`);assert(fs.statSync(file).size>1000,file);
+      if(language==='en')assert(fs.readFileSync(file).equals(fs.readFileSync(path.join(site,'screenshots',`${platform}-${feature}.webp`))));
+    }
+  }}finally{await context.close();}
+}
+
 for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
   const markdown=fs.readFileSync(path.join(root,name),'utf8');
   const targets=[...markdown.matchAll(/(?:\]\(|src=")([^\s)"#]+)(?:#[^\s)"]*)?[)"]/g)].map(m=>m[1]).filter(t=>!/^https?:|^mailto:/.test(t));
@@ -97,15 +148,22 @@ for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
   try{
     const page=await browser.newPage({viewport:{width:1440,height:1100},reducedMotion:'reduce'});
     page.on('pageerror',error=>errors.push(String(error)));page.on('response',response=>{if(response.status()>=400)failed.push(response.url());});
-    for(const [language,url] of [['en','/'],['zh-CN','/zh-CN/']]){
-      await page.goto(origin+url);assert.equal(await page.locator('html').getAttribute('lang'),language);
+    for(const [language,url] of [['en','/'],['zh-CN','/zh-CN/index.html']]){
+      await page.goto(origin+url);await page.evaluate(()=>document.fonts.ready);assert.equal(await page.locator('html').getAttribute('lang'),language);
       assert.equal(await page.locator('h1').count(),1);assert.equal(await page.locator('.feature').count(),6);
       await page.evaluate(()=>document.querySelectorAll('img').forEach(image=>image.loading='eager'));
       await page.waitForFunction(()=>[...document.images].filter(image=>image.getAttribute('src')).every(image=>image.complete&&image.naturalWidth>0));
       assert.equal(await page.locator('link[rel=alternate][hreflang]').count(),3);
-      assert.equal(await page.locator('.downloads a').count(),3);
+      assert.equal(await page.locator('.downloads a').count(),6);
       assert(await page.locator('a[data-language]').getAttribute('href'));
+      assert.equal(await page.locator('a[data-track="github"]').first().getAttribute('href'),'https://aieyes.2h3ngy4n.space/go/github');
+      for(const route of ['macos/arm64/dmg','macos/x64/dmg','windows/x64/exe','linux/x64/appimage','linux/x64/deb','linux/x64/rpm'])assert.equal(await page.locator(`a[data-track="download-${route.replaceAll('/','-')}"]`).getAttribute('href'),`https://aieyes.2h3ngy4n.space/go/download/${route}`);
+      assert.equal(await page.locator('a[data-track="download-latest"]').getAttribute('href'),'https://aieyes.2h3ngy4n.space/go/download/latest');
       await page.screenshot({path:path.join(qa,`${language}-desktop.png`)});
+      for(const [name,selector] of [['providers','.ecosystem'],['downloads','.download']]){
+        await page.locator(selector).evaluate(el=>el.scrollIntoView({block:'center'}));
+        await page.locator(selector).screenshot({path:path.join(qa,`${language}-${name}.png`)});
+      }
       for(const id of ['overview','analytics','accounts','sessions','servers','wakeups']){
         await page.locator(`[data-feature-tab="${id}"]`).click();
         assert.equal(await page.locator('[data-feature-panel]:visible').count(),1);
@@ -139,10 +197,12 @@ for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
       await page.setViewportSize({width:768,height:1024});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'tablet must not overflow horizontally');
       await page.setViewportSize({width:1440,height:1100});
     }
-    await page.goto(origin+'/#accounts');await page.locator('[data-language]').click();assert.equal(new URL(page.url()).pathname,'/zh-CN/');assert.equal(new URL(page.url()).hash,'#accounts');
+    await page.goto(origin+'/#accounts');await page.locator('[data-language]').click();assert.equal(new URL(page.url()).pathname,'/zh-CN/index.html');assert.equal(new URL(page.url()).hash,'#accounts');
     await page.locator('[data-feature-tab="servers"]').click();
     await page.locator('#servers').screenshot({path:path.join(qa,'server-section.png')});
     await page.goto(origin+'/');await page.locator('button[data-platform=macos]').click();await page.evaluate(()=>scrollTo(0,0));await page.screenshot({path:path.join(qa,'hero-final.png')});
+    await checkFontsAndAnimation(browser,origin);
+    await checkNoScript(browser,origin);
     await checkMobile(browser,origin,errors,failed);
     assert.deepEqual(errors,[]);assert.deepEqual(failed,[]);
     console.log('Passed: bilingual content, assets, links, six feature galleries, platform switching, zoom/focus/Escape, navigation, FAQ, mobile/tablet layout, language anchors.');

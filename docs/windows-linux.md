@@ -23,7 +23,7 @@ Windows 使用自绘标题栏，支持拖动、双击最大化和右上角窗口
 
 设置包含 Agent 接入、服务器、价格、定时唤醒、常规五个标签；账户、API 和机器目录集中在对应 Agent 下，应用代理位于「常规 → 网络代理」；协议下拉自动拼接 Host 和端口，也可输入完整代理 URL。价格支持模型 ID 与名称搜索，更新固定查询项目 Release。概览以四张卡片显示总 Token、成本、缓存命中率与输入／输出／缓存明细，计价不足仅显示感叹号；移除数据来源板块。服务器以圆环和状态条显示资源。
 
-Windows 正文、表单、图表和原生桌宠使用随应用内置的 HarmonyOS Sans SC（鸿蒙黑体），无需安装或联网；「设置 → 常规 → 外观」可查看字体许可。主要数值为 24px，资源条统一为 4px 实色，模型名旁的复制按钮已移除。Linux 继续使用系统字体。支持浅深色、减少动态效果、减少透明度和高对比度。过渡与入场动画只作用于 transform 和 opacity，遵循系统减少动态效果设置。鼠标悬停或键盘聚焦带说明的控件约半秒后显示统一提示气泡，气泡固定在视口内、不会撑宽页面，按下鼠标、滚动或 Esc 立即关闭。服务器编辑使用分组下拉多选；搜索后的全选、清空、反选仅作用于匹配结果。高级设置仍支持手填设备表达式，旧配置直接兼容。
+Windows 和 Linux 正文、表单、图表和原生桌宠使用随应用内置的 HarmonyOS Sans SC（鸿蒙黑体），无需安装或联网；「设置 → 常规 → 外观」可查看字体许可。主要数值为 24px，资源条统一为 4px 实色，模型名旁的复制按钮已移除。Linux 的 GTK 菜单也使用鸿蒙字体，并保留系统字号；合成器绘制的标题栏和托盘菜单遵循桌面环境。支持浅深色、减少动态效果、减少透明度和高对比度。过渡与入场动画只作用于 transform 和 opacity，遵循系统减少动态效果设置。鼠标悬停或键盘聚焦带说明的控件约半秒后显示统一提示气泡，气泡固定在视口内、不会撑宽页面，按下鼠标、滚动或 Esc 立即关闭。服务器编辑使用分组下拉多选；搜索后的全选、清空、反选仅作用于匹配结果。高级设置仍支持手填设备表达式，旧配置直接兼容。
 
 编辑弹窗内显示验证与保存错误。打开弹窗后，后台页面不可操作，Windows 标题栏仍可拖动或使用最小化、最大化和关闭按钮。Tab 在弹窗控件与标题栏按钮之间循环；Esc 优先关闭多选面板，再关闭编辑弹窗。保存期间禁用重复提交与取消。
 
@@ -31,7 +31,9 @@ Windows 正文、表单、图表和原生桌宠使用随应用内置的 HarmonyO
 
 每约 15 秒检查会话 D-Bus 的 `org.kde.StatusNotifierWatcher.IsStatusNotifierHostRegistered`。检测通过时创建 StatusNotifierItem 托盘；托盘服务直接通过 D-Bus 提供，不依赖当前 GTK/GDK 后端，因此在 XWayland 桌宠模式下也不会随窗口后端失效。服务未注册、查询失败或图标创建失败时回退为桌宠；无需安装 AppIndicator 动态库。托盘服务恢复后，明确选择托盘的用户恢复托盘显示。
 
-Linux 在桌宠模式也保留可用的托盘图标。检测工具为 GLib 提供的 `gdbus`；没有此工具时采用桌宠。GNOME 通常需要桌面提供 AppIndicator/StatusNotifier 扩展才能显示托盘；KDE 等桌面是否显示图标旁文字取决于具体实现。托盘使用标准 DBusMenu，所有必需操作（打开面板、打开详情、设置、检查更新、隐藏/恢复桌宠、退出）均通过原生菜单提供。
+Linux 在桌宠模式也保留可用的托盘图标。可用性检测通过进程内 GIO 查询会话 D-Bus，不启动系统 `gdbus`，避免 AppImage 内置 GLib 与宿主工具的版本冲突。托盘服务句柄失效时重新创建并恢复菜单；图标保持 Active，桌宠的隐藏状态单独控制菜单文字，后台刷新不会把「显示桌宠」改回「隐藏桌宠」。GNOME 通常需要桌面提供 AppIndicator/StatusNotifier 扩展才能显示托盘；KDE 等桌面是否显示图标旁文字取决于具体实现。托盘使用标准 DBusMenu，所有必需操作（打开面板、打开详情、设置、检查更新、隐藏/恢复桌宠、退出）均通过原生菜单提供。
+
+Esc 由当前获得焦点的面板处理，优先关闭菜单或弹窗，再关闭面板；固定面板也可明确关闭。在其它窗口按 Esc 不影响固定面板。从托盘打开面板或详情时使用当前 X11 服务端时间激活窗口，避免 D-Bus 菜单缺少输入时间戳而无法获得焦点。
 
 Wayland 会话中，未设置 `GDK_BACKEND` 且 XWayland 可连接时自动使用 X11 后端，以支持桌宠定位、置顶和完整的外部点击关闭。显式设置 `GDK_BACKEND=wayland` 时保留原生 Wayland；绝对定位与置顶受合成器限制，仍可用托盘、Esc 和面板关闭按钮操作。应用不会修改系统会话或桌面扩展。
 
@@ -95,19 +97,24 @@ RPM 依赖 `webkit2gtk4.1`、`gtk3`、`glib2`、`openssh-clients` 和 `polkit`�
 
 ## 包体积与原生窗口验收
 
-Linux 构建脚本使用 `--no-default-features`，仅使用 ksni 托盘；Windows/macOS 的平台配置显式启用 `native-tray` 特性。Linux 构建在 Cargo `OUT_DIR` 暂存前端资源，排除 Windows 的三份 HarmonyOS 字体，原始字体及许可保持不变。独立桌面 Cargo 工程启用符号剥离、Thin LTO 与单个 codegen unit，保留 panic unwind。`scripts/check-linux-package-size.py` 检查 DEB 内的两个 ELF 均不带符号表，桌面程序不含 Windows 字体资源，并报告三个安装包体积。正式 Linux 分发仍在 Ubuntu 22.04 构建；在 Fedora 上生成的测试包不作为通用 glibc 兼容基线。
+Linux 构建脚本使用 `--no-default-features`，仅使用 ksni 托盘；Windows/macOS 的平台配置显式启用 `native-tray` 特性。Linux 构建在 Cargo `OUT_DIR` 暂存前端资源，包含与 Windows 相同的三份原始 HarmonyOS 字体、来源清单及许可。WebView 和 GTK/Pango 原生文字共用这份内嵌资源；原生端仅在应用生命周期内写入私有临时目录，通过独立 Fontconfig 配置注册，不安装系统字体。独立桌面 Cargo 工程启用符号剥离、Thin LTO 与单个 codegen unit，保留 panic unwind。`scripts/check-linux-package-size.py` 分别解开 DEB、RPM 和 AppImage，检查各包的两个 ELF 均为已剥离符号的 x86-64 程序、glibc 要求不高于 2.35，核对三份字体及许可的内嵌资源索引，并比较程序代码、压缩资源、桌面启动项和图标。构建前还会按来源清单校验原始字体的大小及 SHA-256。Tauri 的包类型标记及 AppImage 的 ELF 路径修补允许不同，其余程序内容必须一致。正式 Linux 分发仍在 Ubuntu 22.04 构建；在 Fedora 上生成的测试包不作为通用 glibc 兼容基线。
 
 ```sh
 python3 scripts/check-linux-package-size.py
-# Fedora 实机：GNOME/XWayland 实机会话，使用独立数据和临时测试背景，不修改现有设置
+# Fedora 已安装的 RPM：使用独立数据和临时测试背景，不修改现有应用设置
 python3 scripts/test-linux-desktop.py \
-  --binary apps/desktop/src-tauri/target/debug/aieyes-desktop \
-  --core apps/desktop/src-tauri/binaries/aieyes-core --duration 600
+  --binary /usr/bin/aieyes-desktop --core /usr/lib/Aieyes/binaries/aieyes-core \
+  --package /path/to/Aieyes-0.1.54-linux-x64.rpm \
+  --cycles 100 --duration 600 --scenario all --report .local/linux-native/rpm
 ```
 
-窗口验收脚本需要 Python GObject、Pillow、GNOME Shell、Xwayland 和 libXtst。真实 GNOME 会话覆盖托盘注册、100 次托盘菜单开关、桌宠置顶与位置保留、600 秒桌宠区域录屏及黑帧检测；隔离 Xvfb 会话另覆盖桌宠点击、桌面外部点击和 Esc。截图、录屏和 JSON 报告位于指定的报告目录。
+窗口验收脚本需要 Python GObject、Pillow、GNOME Shell、Xwayland、GStreamer 的 PipeWire 插件、libXtst 和 ffmpeg。真实 GNOME 会话通过临时 Mutter RemoteDesktop/ScreenCast 会话输入鼠标键盘并录屏；按协商得到的视频像素尺寸换算分数缩放，不依赖 XTest 向 XWayland 投递输入。测试期间该桌面应避免同时进行其它鼠标键盘操作。
 
-增加 `--virtual --desktop KDE` 可在隔离 Xvfb 中验证非 GNOME 的 Wayland 环境标识仍选择 X11 兼容后端；此模拟不代替 KDE 实机会话验收。
+默认执行 100 次桌宠／托盘交替打开，以及桌宠／外部点击／Esc 交替关闭；另验收主窗口首次显示与重开、菜单和弹窗的 Esc 顺序、固定面板、隐藏和恢复、面板跟随拖动、设置页显示方式切换、退出重启后的偏好与位置、浅深色和中英文同步。600 秒观察同时检查透明角、非空且持续变化的动画，以及合成器录屏中的黑帧。录屏使用真实时间戳，截图、日志、包校验值和 JSON 报告位于指定的报告目录。`--duration 0` 明确跳过动画观察，不报告动画通过。
+
+AppImage 应把 `--binary` 指向实际文件，可增加 `--launch-arg=--appimage-extract-and-run` 验证无 FUSE 启动；脚本会跟踪启动器的真实子进程。DEB 在相应发行版安装后使用其 `/usr/bin/aieyes-desktop` 运行。
+
+增加 `--virtual` 使用隔离 Xvfb/Openbox（需要安装两者）。通过 `dbus-run-session -- python3 scripts/test-linux-desktop.py … --virtual --tray-cycle` 可模拟无托盘宿主、宿主出现、丢失和 watcher 重启，并验证回退及恢复；不会接管用户的会话总线。`--desktop KDE` 只验证非 GNOME 环境标识下的后端选择，不代替 KDE 实机验收。`--backend x11 --language en --theme dark` 可补测显式后端和另一套外观。真实 GNOME 上可增加 `--shell-tray`，识别顶部栏中可见的品牌图标、实际点击并截图原生菜单；无法唯一识别时会报错。
 
 ## 数据与验证
 
@@ -126,9 +133,7 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --l
 
 2026-10-03 [首次原生构建](https://github.com/JesmonX/Aieyes/actions/runs/37125369069) 已通过：Windows 生成 NSIS 安装包，Ubuntu 22.04 生成 deb 和 AppImage，两个平台的 JavaScript 语法与 4 项交互测试均通过。产物在运行页面的 Artifacts，保留 14 天。
 
-已在 macOS 宿主完成 30 项核心、3 项桌面、4 项 Node、4 项 Python 测试及 Clippy 严格检查。Windows 专用 `.cmd` 执行测试仅在 Windows 启用完整测试时运行，本次默认构建未运行完整 Rust 测试。
-
-目标平台验收：Windows 拖动与点击／右键、重启后位置、不同 DPI／多屏、隐藏窗口后的会话更新、npm CLI 查询；Linux 有／无托盘、托盘服务退出及恢复、X11／Wayland、退出应用；最后检查安装与卸载流程。本轮未完成图形会话的视觉和交互验收。
+0.1.54 的 CI 产物来源、修复候选、Fedora 与 Ubuntu 原生验收及 macOS 对照见 [Linux 包一致性报告](linux-consistency-0.1.54.md)。报告分别记录实际安装包、浏览器矩阵和模拟桌面环境的覆盖范围；Windows 原生、多屏和显式 Wayland 的限制单独列出。
 
 
 ## 本地浏览器验证

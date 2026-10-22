@@ -328,6 +328,10 @@
   --font-display:var(--font-ui);
   --window-radius:8px;
 }
+:root[data-platform=linux] {
+  --font-ui:"Aieyes HarmonyOS Sans SC","Noto Sans CJK SC","Noto Sans",sans-serif;
+  --font-display:var(--font-ui);
+}
 /* Only enable alpha surfaces after the HWND has successfully acquired a backdrop. */
 :root[data-platform=windows]:where([data-material=acrylic],[data-material=blur]) {
   --card-fill:var(--panel);

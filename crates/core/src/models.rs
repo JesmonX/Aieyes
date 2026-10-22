@@ -39,6 +39,9 @@ impl Tokens {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageEvent {
+    /// Revision of a native request's complete measurement, not a cumulative counter.
+    #[serde(default, skip_serializing_if = "is_zero_revision")]
+    pub usage_version: u32,
     #[serde(default)]
     pub turn_id: String,
     pub id: String,
@@ -61,10 +64,28 @@ pub struct UsageEvent {
     /// parser upgrade can replace legacy, double-counted rows safely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_tokens: Option<Tokens>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inheritance: Option<UsageInheritance>,
     #[serde(default)]
     pub interval_start: Option<i64>,
     #[serde(default)]
     pub interval_evidence: String,
+}
+
+fn is_zero_revision(value: &u32) -> bool {
+    *value == 0
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// Native metering identity shared by copied history, never inferred from content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageInheritance {
+    pub origin: String,
+    pub inherited: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -384,7 +405,10 @@ pub struct Settings {
     pub configuration_issues: Vec<String>,
     pub deleted_accounts: Vec<Account>,
     pub history_show_deleted_accounts: bool,
-    pub codex_precise_counting: bool,
+    #[serde(alias = "codexPreciseCounting")]
+    pub precise_counting: bool,
+    #[serde(skip)]
+    pub counting_generation: u64,
     pub agents: Vec<AgentConfiguration>,
     pub account_aliases: std::collections::BTreeMap<String, String>,
     pub appearance: Appearance,
@@ -412,7 +436,8 @@ impl Default for Settings {
             configuration_issues: vec![],
             deleted_accounts: vec![],
             history_show_deleted_accounts: false,
-            codex_precise_counting: false,
+            precise_counting: true,
+            counting_generation: 0,
             agents: vec![],
             appearance: Appearance::default(),
             account_aliases: Default::default(),
@@ -694,13 +719,24 @@ impl Settings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ParseState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_checkpoint: Option<FileCheckpoint>,
     /// First main-chain Qoder model, including requests whose counters are hidden.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub qoder_main_model: String,
     pub turn_id: String,
     pub parser_version: u32,
     // Absent in legacy cursors, which must be replayed once with the saved mode.
-    pub codex_precise_counting: Option<bool>,
+    #[serde(alias = "codexPreciseCounting")]
+    pub precise_counting: Option<bool>,
+    #[serde(default)]
+    pub counting_generation: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub inherited_prefix_end: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub inherited_segment: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inherited_usage: bool,
     pub task_started_at: Option<i64>,
     pub session_id: String,
     pub model: String,
@@ -717,6 +753,16 @@ pub struct ParseState {
     pub database_checkpoint: Option<DatabaseCheckpoint>,
     #[serde(skip)]
     pub counter_correction: Option<crate::codex_history::CounterCorrection>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FileCheckpoint {
+    pub identity: String,
+    pub anchor: String,
+    pub size: u64,
+    pub modified: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

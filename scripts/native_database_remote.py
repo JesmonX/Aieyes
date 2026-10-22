@@ -11,7 +11,7 @@ import pathlib
 import sqlite3
 
 LIMIT = 256
-VERSION = 1
+VERSION = 2
 
 
 def fingerprint(path):
@@ -32,7 +32,7 @@ def connect(path):
     return contextlib.closing(db)
 
 
-def schema(db, provider, history):
+def schema(db, provider, history, selected=None):
     if provider == 'zcode':
         if not history:
             return 'turn_usage', "rowid,session_id,turn_id,started_at,COALESCE(NULLIF(completed_at,0),started_at),json_object('status',status)"
@@ -42,15 +42,37 @@ def schema(db, provider, history):
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('message','session_message')")}
     if not tables:
         raise ValueError('Unsupported OpenCode database schema')
-    v2 = 'session_message' in tables and ('message' not in tables or db.execute('SELECT 1 FROM session_message LIMIT 1').fetchone() is not None)
+    v2 = selected == 'session_message' if selected else 'session_message' in tables and ('message' not in tables or db.execute('SELECT 1 FROM session_message LIMIT 1').fetchone() is not None)
     table = 'session_message' if v2 else 'message'
     role = 'type' if v2 else "json_extract(data,'$.role')"
     if not history:
-        return table, "rowid,session_id,id,time_created,time_updated,CASE WHEN json_valid(data) THEN json_object('role',%s,'completed',json_extract(data,'$.time.completed'),'finish',json_extract(data,'$.finish'),'error',json_extract(data,'$.error.name')) ELSE '{}' END" % role
+        tool=("CASE WHEN EXISTS(SELECT 1 FROM json_each(data,'$.content') WHERE json_extract(value,'$.type')='tool' AND json_extract(value,'$.state.status') IN ('pending','streaming','running') AND json_extract(value,'$.name') IN ('question','ask_question')) THEN 'question' WHEN EXISTS(SELECT 1 FROM json_each(data,'$.content') WHERE json_extract(value,'$.type')='tool' AND json_extract(value,'$.state.status') IN ('pending','streaming','running')) THEN 'tool' END") if v2 else 'NULL'
+        return table, "rowid,session_id,id,COALESCE(CASE WHEN json_valid(data) THEN json_extract(data,'$.time.created') END,time_created),COALESCE(CASE WHEN json_valid(data) THEN COALESCE(json_extract(data,'$.time.completed'),json_extract(data,'$.time.created')) END,time_created),CASE WHEN json_valid(data) THEN json_object('role',%s,'completed',json_extract(data,'$.time.completed'),'finish',json_extract(data,'$.finish'),'error',COALESCE(json_extract(data,'$.error.name'),json_extract(data,'$.error.type'),json_extract(data,'$.error._tag')),'outcome',json_extract(data,'$.outcome'),'tool',%s) ELSE '{}' END" % (role,tool)
     model, provider_key = ('$.model.id', '$.model.providerID') if v2 else ('$.modelID', '$.providerID')
     # Whitelist every token field: unknown nested fields may contain payloads.
     tokens = "CASE WHEN json_type(data,'$.tokens')='object' THEN json_object('input',json_extract(data,'$.tokens.input'),'output',json_extract(data,'$.tokens.output'),'reasoning',json_extract(data,'$.tokens.reasoning'),'cache',json_object('read',json_extract(data,'$.tokens.cache.read'),'write',json_extract(data,'$.tokens.cache.write'))) ELSE NULL END"
-    return table, "rowid,id,CASE WHEN json_valid(data) THEN json_object('session',session_id,'role',%s,'tokens',%s,'completed',json_extract(data,'$.time.completed'),'model',json_extract(data,'%s'),'provider',json_extract(data,'%s')) ELSE '{}' END" % (role, tokens, model, provider_key)
+    completed="CASE WHEN type='compaction' AND json_extract(data,'$.status') IN ('completed','failed') THEN COALESCE(json_extract(data,'$.time.completed'),json_extract(data,'$.time.created')) ELSE json_extract(data,'$.time.completed') END" if v2 else "json_extract(data,'$.time.completed')"
+    inherited='0'
+    if v2 and {'fork_session_id','fork_boundary'}.issubset({row[1] for row in db.execute('PRAGMA table_info(session_v2)')}):
+        inherited="EXISTS(SELECT 1 FROM session_v2 f JOIN session_message b ON b.session_id=f.fork_session_id WHERE f.id=session_message.session_id AND CASE WHEN json_valid(f.fork_boundary) THEN b.id=json_extract(f.fork_boundary,'$.messageID') AND ((json_extract(f.fork_boundary,'$.type')='before' AND session_message.seq<b.seq) OR (json_extract(f.fork_boundary,'$.type')='through' AND session_message.seq<=b.seq)) ELSE 0 END)"
+    return table, "rowid,id,CASE WHEN json_valid(data) THEN json_object('session',session_id,'role',%s,'status',json_extract(data,'$.status'),'tokens',%s,'completed',%s,'model',json_extract(data,'%s'),'provider',json_extract(data,'%s'),'inherited',%s) ELSE '{}' END" % (role,tokens,completed,model,provider_key,inherited)
+
+
+def tables(db,provider):
+    if provider=='zcode':return ['model_usage']
+    found={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('message','session_message')")}
+    if not found:raise ValueError('Unsupported OpenCode database schema')
+    return [name for name in ('message','session_message') if name in found]
+
+
+def history_all(path,provider,cursors,emit):
+    if provider!='opencode':return history(path,provider,cursors.get(str(path),{}),emit)
+    with connect(path) as db:names=tables(db,provider)
+    total=dict(readBytes=0,scannedRecords=0)
+    for name in names:
+        stats=history(path,provider,cursors.get(str(path)+'#'+name,{}),emit,selected=name)
+        for k in total:total[k]+=stats[k]
+    return total
 
 
 def identity(path):
@@ -58,13 +80,13 @@ def identity(path):
     return '%s:%s' % (stat.st_dev, stat.st_ino)
 
 
-def history(path, provider, old, emit):
+def history(path, provider, old, emit, selected=None):
     before = fingerprint(path)
     if old.get('nativeVersion') == VERSION and old.get('database') == before:
         return dict(readBytes=0, scannedRecords=0)
     scanned = amount = 0
     with connect(path) as db:
-        table, columns = schema(db, provider, True)
+        table, columns = schema(db, provider, True, selected)
         current_identity = identity(path)
         offset = old.get('offset', 0)
         anchor = db.execute('SELECT id FROM %s WHERE rowid=?' % table, (offset,)).fetchone()
@@ -88,7 +110,7 @@ def history(path, provider, old, emit):
 
             def flush(gone_rows=()):
                 nonlocal first
-                emit('batch', path=str(path), reset=False, nativeReset=first and reset, nativeRows=list(part), gone=list(gone_rows), events=[], cursor=dict(checkpoint))
+                emit('batch', path=str(path)+('#'+table if selected else ''), reset=False, nativeReset=first and reset, nativeRows=list(part), gone=list(gone_rows), events=[], cursor=dict(checkpoint))
                 first = False
 
             for rowid, request, raw in rows:
@@ -148,11 +170,13 @@ def _phase(row, db, parts):
     data = row[5]
     if 'status' in data:
         return {'completed': 'complete', 'error': 'failed', 'cancelled': 'interrupted', 'running': 'start'}.get(data['status'], 'unknown')
+    if data.get('role')=='idle':return {'succeeded':'complete','failed':'failed','interrupted':'interrupted'}.get(data.get('outcome'),'unknown')
     error, finish = data.get('error'), data.get('finish')
     kind = ('interrupted' if error in ('MessageAbortedError', 'AbortedError') else 'failed' if error
             else 'start' if data.get('role') == 'user'
             else 'complete' if data.get('completed') is not None and finish in ('stop', 'end_turn')
-            else 'failed' if data.get('completed') is not None and finish == 'length' else 'thinking')
+            else 'failed' if data.get('completed') is not None and finish == 'length'
+            else 'PermissionRequest' if data.get('tool')=='question' else 'tool' if data.get('tool')=='tool' else 'thinking')
     if parts and kind not in ('complete', 'failed', 'interrupted'):
         tools = db.execute("SELECT json_extract(data,'$.tool') FROM part WHERE message_id=? AND json_valid(data) AND json_extract(data,'$.type')='tool' AND json_extract(data,'$.state.status') IN ('pending','running') LIMIT 64", (row[2],)).fetchall()
         if tools:
@@ -170,48 +194,49 @@ def cached_sessions(path, cursor, now):
 
 
 def sessions(path, provider, cursor, now):
-    before = fingerprint(path)
-    old = cursor.get('continuation') or {}
-    if old.get('nativeVersion') == VERSION and cursor.get('signature') == before:
-        return cached_sessions(path, cursor, now), 0
-    scanned = 0
+    before=fingerprint(path);old=cursor.get('continuation') or {}
+    if old.get('nativeVersion')==VERSION and cursor.get('signature')==before:
+        return cached_sessions(path,cursor,now),0
+    scanned=0
     with connect(path) as db:
-        table, columns = schema(db, provider, False)
-        current_identity = identity(path)
-        offset = old.get('offset', 0)
-        query = 'SELECT %s FROM %s' % (columns, table)
-        anchor = db.execute(query + ' WHERE rowid=?', (offset,)).fetchone()
-        if (old.get('nativeVersion') != VERSION or old.get('identity') != current_identity or old.get('table') != table
-                or (offset > 0 and (anchor is None or list(anchor[1:3]) != old.get('anchor')))):
-            old = dict(offset=0, anchor=[], rows=[])
-        state = dict(old, nativeVersion=VERSION, identity=current_identity, table=table)
-        rows = {}
-        ids = [r[0] for r in old.get('rows', [])][:LIMIT]
-        if ids:
-            for native in db.execute(query + ' WHERE rowid IN (%s)' % ','.join('?' for _ in ids), ids):
-                row = _state_row(native)
-                rows[row[1]] = row
-                scanned += 1
-        while True:
-            added = db.execute(query + ' WHERE rowid>? ORDER BY rowid LIMIT 256', (state['offset'],)).fetchall()
-            if not added:
-                break
-            for native in added:
-                row = _state_row(native)
-                scanned += 1
-                state.update(offset=row[0], anchor=row[1:3])
-                prior = rows.get(row[1])
-                if now - row[4] // 1000 < 86400 and (prior is None or (row[3], row[2]) >= (prior[3], prior[2])):
-                    rows[row[1]] = row
-            rows = _trim(rows, now)
-        rows = _trim(rows, now)
-        parts = provider == 'opencode' and table == 'message' and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='part'").fetchone() is not None
-        files = []
-        for row in rows.values():
-            base = dict(session=row[1], turn=row[2], at=row[4])
-            files.append(dict(key=str(path) + '#' + row[1], modified=row[4] // 1000, reset=True, database=True,
-                              events=[dict(base, kind='start'), dict(base, kind=_phase(row, db, parts))]))
-        state['rows'] = list(rows.values())
-    signature = before if before == fingerprint(path) else ''
-    files.append(dict(key=str(path), modified=int(pathlib.Path(path).stat().st_mtime), signature=signature, database=True, reset=True, events=[], continuation=state))
-    return files, scanned
+        current_identity=identity(path)
+        if old.get('nativeVersion')!=VERSION or old.get('identity')!=current_identity:old={}
+        state=dict(nativeVersion=VERSION,identity=current_identity,tables={})
+        selected=tables(db,provider) if provider=='opencode' else ['turn_usage']
+        latest={}
+        for name in selected:
+            table,columns=schema(db,provider,False,name)
+            saved=(old.get('tables') or {}).get(table,{})
+            query='SELECT %s FROM %s'%(columns,table)
+            offset=saved.get('offset',0)
+            anchor=db.execute(query+' WHERE rowid=?',(offset,)).fetchone()
+            if offset>0 and (anchor is None or list(anchor[1:3])!=saved.get('anchor')):saved={}
+            table_state=dict(offset=saved.get('offset',0),anchor=saved.get('anchor',[]))
+            rows={};ids=[r[0] for r in saved.get('rows',[])][:LIMIT]
+            if ids:
+                for native in db.execute(query+' WHERE rowid IN (%s)'%','.join('?' for _ in ids),ids):
+                    row=_state_row(native);rows[row[1]]=row;scanned+=1
+            while True:
+                added=db.execute(query+' WHERE rowid>? ORDER BY rowid LIMIT 256',(table_state['offset'],)).fetchall()
+                if not added:break
+                for native in added:
+                    row=_state_row(native);scanned+=1
+                    table_state.update(offset=row[0],anchor=row[1:3]);prior=rows.get(row[1])
+                    if now-row[4]//1000<86400 and (prior is None or (row[3],row[2])>=(prior[3],prior[2])):rows[row[1]]=row
+                rows=_trim(rows,now)
+            rows=_trim(rows,now);table_state['rows']=list(rows.values());state['tables'][table]=table_state
+            for row in rows.values():
+                prior=latest.get(row[1])
+                if prior is None or (row[3],row[2],table)>=(prior[0][3],prior[0][2],prior[1]):latest[row[1]]=(row,table)
+        has_parts=provider=='opencode' and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='part'").fetchone() is not None
+        parents=provider=='opencode' and 'parent_id' in {r[1] for r in db.execute('PRAGMA table_info(session)')}
+        files=[];visible=[]
+        for row,table in sorted(latest.values(),key=lambda pair:pair[0][4],reverse=True)[:LIMIT]:
+            parent=db.execute('SELECT parent_id FROM session WHERE id=?',(row[1],)).fetchone() if parents else None
+            base=dict(session=row[1],turn=row[2],at=row[4],parentSession=parent[0] if parent and isinstance(parent[0],str) else '')
+            files.append(dict(key=str(path)+'#'+row[1],modified=row[4]//1000,reset=True,database=True,events=[dict(base,kind='start'),dict(base,kind=_phase(row,db,has_parts and table=='message'))]))
+            visible.append(row)
+        state['rows']=visible
+    signature=before if before==fingerprint(path) else ''
+    files.append(dict(key=str(path),modified=int(pathlib.Path(path).stat().st_mtime),signature=signature,database=True,reset=True,events=[],continuation=state))
+    return files,scanned

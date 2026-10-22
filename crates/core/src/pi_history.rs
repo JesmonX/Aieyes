@@ -64,8 +64,24 @@ pub(crate) fn parse(source: &Source, state: &mut ParseState, row: &Value) -> Opt
         .unwrap_or("unknown");
     let normalized = json!({"id":identity,"sessionId":state.session_id,"timestamp":stamp,"model":model,"tokens":tokens});
     let mut event = usage::parse_normalized(source, &mut state.clone(), &normalized)?;
-    event.id = usage::event_id(&source.provider, &source.id, &source.account_id, &identity);
-    event.import_identity = Some(identity);
+    if id.is_some() {
+        event.inheritance = Some(UsageInheritance {
+            origin: identity.clone(),
+            inherited: false,
+        });
+    }
+    let observation = if id.is_some() {
+        format!("{}:{identity}", state.session_id)
+    } else {
+        identity
+    };
+    event.id = usage::event_id(
+        &source.provider,
+        &source.id,
+        &source.account_id,
+        &observation,
+    );
+    event.import_identity = Some(observation);
     event.turn_id = state.turn_id.clone();
     event.attribution = format!("{}-local", source.provider);
     event.billing.evidence = data["provider"].as_str().unwrap_or("").into();
@@ -81,11 +97,8 @@ pub(crate) fn put(
     prices: &[ModelPrice],
     settings: &Settings,
 ) -> Result<bool> {
-    if event
-        .import_identity
-        .as_deref()
-        .is_some_and(|id| id.starts_with("entry:"))
-    {
+    if let Some(proof) = &event.inheritance {
+        crate::history_counting::migrate_pi_identity(store, event, &proof.origin, settings)?;
         let legacy = format!(
             "legacy:{}:{}:{}",
             event.session_id, state.cumulative_segment, event.timestamp
@@ -120,6 +133,7 @@ pub(crate) fn put(
                     "Pi 旧请求与迁移后的计量不一致，请保留原始记录"
                 );
                 prior.import_identity = event.import_identity.clone();
+                prior.inheritance = event.inheritance.clone();
                 prior.id = usage::event_id(
                     &prior.provider,
                     &prior.source_id,

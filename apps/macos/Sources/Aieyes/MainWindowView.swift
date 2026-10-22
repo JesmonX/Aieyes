@@ -94,7 +94,7 @@ struct MainWindowView: View {
     }
     private func navigationButton(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 10) { Image(systemName: icon).frame(width: 22); if !collapsed { Text(title); Spacer(minLength: 0) } }
+            HStack(spacing: 10) { Image(systemName: icon).frame(width: 22); if !collapsed { Text(title).lineLimit(1); Spacer(minLength: 0) } }
                 .font(AppFont.body).padding(.horizontal, 10).padding(.vertical, 9)
                 .frame(maxWidth: .infinity, alignment: collapsed ? .center : .leading)
                 .foregroundStyle(selected ? Palette.accent : Color.secondary)

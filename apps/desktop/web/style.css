@@ -743,7 +743,7 @@ details:has([data-command-field]) > label { display:grid; gap:8px; margin:12px 0
 .font-notice button { border:0; background:transparent; box-shadow:none; padding:2px 4px; font-size:inherit; color:var(--accent); }
 @media(prefers-reduced-transparency:reduce) { html body::before { background:var(--window-base); } }
 @media(forced-colors:active) { html body::before { background:Canvas; box-shadow:none; } }
-body:not([data-platform=windows]) .font-notice { display:none; }
+body:not([data-platform=windows]):not([data-platform=linux]) .font-notice { display:none; }
 .font-license-text { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:var(--font-secondary); }
 
 /* Refresh feedback occupies a fixed slot beside its section title. */
@@ -834,4 +834,10 @@ body:not([data-platform=windows]) .font-notice { display:none; }
 }
 
 [data-language-toggle] { min-width: 56px; height: 28px; padding: 0 8px; font: inherit; font-size: 11px; white-space: nowrap; }
+
+/* Short interface labels occupy the same row in both languages. */
+nav button, .settings-sidebar button, .stat-label > span, .stat-value,
+.metric-picker button, .panel-tabs button { white-space:nowrap; }
+.account-switch-entry { min-width:144px; white-space:nowrap; flex-shrink:0; }
+.quota-window .between > strong { white-space:nowrap; flex-shrink:0; }
 html[lang=en] .aside-group-label { letter-spacing: .04em; }

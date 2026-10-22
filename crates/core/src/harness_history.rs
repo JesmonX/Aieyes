@@ -20,7 +20,22 @@ pub(crate) fn generation(path: &Path) -> Option<u64> {
     let version: u64 = raw.parse().ok()?;
     (version > 0 && version.to_string() == raw).then_some(version)
 }
+#[cfg(test)]
 pub(crate) fn paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let (files, issues) = discover(root)?;
+    ensure!(
+        issues.is_empty(),
+        "{}",
+        issues[0]["message"]
+            .as_str()
+            .unwrap_or("Harness history unavailable")
+    );
+    Ok(files)
+}
+
+/// A session's unsupported generation or conflicting encodings must not hide
+/// other independent sessions. Never fall back to an older generation.
+pub(crate) fn discover(root: &Path) -> Result<(Vec<PathBuf>, Vec<Value>)> {
     let explicit = root.is_file();
     ensure!(
         !explicit || !root.is_symlink(),
@@ -31,16 +46,22 @@ pub(crate) fn paths(root: &Path) -> Result<Vec<PathBuf>> {
     } else {
         root.to_path_buf()
     };
+    let mut issues = Vec::new();
     let mut selected = BTreeMap::<PathBuf, BTreeMap<u64, Vec<PathBuf>>>::new();
     for entry in walkdir::WalkDir::new(folder).follow_links(false) {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                issues.push(serde_json::json!({"code":"fileRead","message":error.to_string()}));
+                continue;
+            }
+        };
         if !entry.file_type().is_file() {
             continue;
         }
         let Some(version) = generation(entry.path()) else {
             continue;
         };
-        ensure!(version <= 4, "Harness 会话版本高于 v4，需要更新适配器");
         let parent = entry.path().parent().unwrap_or(entry.path()).to_path_buf();
         selected
             .entry(parent)
@@ -49,21 +70,25 @@ pub(crate) fn paths(root: &Path) -> Result<Vec<PathBuf>> {
             .or_default()
             .push(entry.into_path());
     }
-    selected
-        .into_values()
-        .map(|mut versions| {
-            let (version, mut files) = versions.pop_last().unwrap();
-            ensure!(
-                explicit || files.len() == 1,
-                "Harness 同一会话存在两种编码，请选择明确的文件"
-            );
-            ensure!(
-                matches!(version, 0 | 4),
-                "Harness v1–v3 统计适配尚未接入，请保留原始记录"
-            );
-            Ok(files.remove(0))
-        })
-        .collect()
+    let mut result = Vec::new();
+    for mut versions in selected.into_values() {
+        let (version, mut files) = versions.pop_last().unwrap();
+        let error = if version > 4 {
+            Some("Harness 会话版本高于 v4，需要更新适配器")
+        } else if !explicit && files.len() != 1 {
+            Some("Harness 同一会话存在两种编码，请选择明确的文件")
+        } else if !matches!(version, 0 | 4) {
+            Some("Harness v1–v3 统计适配尚未接入，请保留原始记录")
+        } else {
+            None
+        };
+        if let Some(message) = error {
+            issues.push(serde_json::json!({"path":files[0].file_name().unwrap_or_default().to_string_lossy(),"code":"unsupportedHistory","message":message}));
+        } else {
+            result.push(files.remove(0));
+        }
+    }
+    Ok((result, issues))
 }
 
 pub(crate) fn put(
@@ -174,7 +199,7 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        let settings = store.settings().unwrap();
+        let mut settings = store.settings().unwrap();
         let request = row(2);
         let mut inherited = request.clone();
         inherited["seq"] = json!(0);
@@ -227,7 +252,7 @@ mod tests {
                 .db
                 .query_row("SELECT count(*) FROM events", [], |r| r.get::<_, u64>(0))
                 .unwrap(),
-            1
+            2
         );
         let mut found = 0;
         native_agents::read_dsh(&old, |r| {
@@ -235,7 +260,19 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert_eq!(found, 1);
+        assert_eq!(found, 2);
+        // Both generations retain the same live identity. The seed remains
+        // reversible even after a newer file no longer contains its prefix.
+        for (mode, total) in [(false, 1019), (true, 15)] {
+            settings.precise_counting = mode;
+            store.save_settings(&settings).unwrap();
+            settings = store.settings().unwrap();
+            import::rescan(&store, &settings, &source).unwrap();
+            assert_eq!(
+                store.dashboard(&Filter::default()).unwrap().summary.total,
+                total
+            );
+        }
         std::fs::write(folder.join("session.v5.jsonl"), "{}\n").unwrap();
         assert!(paths(&folder).is_err());
         let malformed = folder.join("session.v4.jsonl");

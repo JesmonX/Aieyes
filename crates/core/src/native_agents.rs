@@ -5,6 +5,100 @@ use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+pub(crate) fn file_identity(file: &std::fs::File) -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = file.metadata()?;
+        Ok(format!("{}:{}", meta.dev(), meta.ino()))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        };
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(format!(
+            "{}:{}:{}",
+            info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
+        ))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Ok(format!("{:?}", file.metadata()?.created()?))
+    }
+}
+
+/// Distinguish a present but invalid measurement from a record which has not
+/// settled yet. Zero counters are valid; they are not an unreadable request.
+pub(crate) fn invalid_usage(provider: &str, row: &Value) -> bool {
+    if provider == "codebuddy" {
+        let p = &row["providerData"];
+        let settled = row["status"].as_str().is_none_or(|s| s == "completed");
+        return settled
+            && (!p["rawUsage"].is_null() || !p["usage"].is_null())
+            && ["function_call", "model-usage", "message"]
+                .iter()
+                .any(|t| row["type"] == *t)
+            && codebuddy_tokens(&p["rawUsage"]).is_none()
+            && codebuddy_tokens(&p["usage"]).is_none()
+            && !(p["rawUsage"]["credit"].is_number()
+                && p["rawUsage"].as_object().is_some_and(|u| u.len() == 1));
+    }
+    if provider == "grok"
+        && row["method"] == "_x.ai/session/update"
+        && row["params"]["update"]["sessionUpdate"] == "turn_completed"
+    {
+        let models = &row["params"]["update"]["usage"]["modelUsage"];
+        return !models.is_null()
+            && models
+                .as_object()
+                .is_none_or(|m| m.values().any(|u| grok_tokens(u).is_none()));
+    }
+    let (usage, fields): (&Value, &[&str]) = if provider == "kimi" && row["type"] == "usage.record"
+    {
+        (
+            &row["usage"],
+            &[
+                "inputOther",
+                "output",
+                "inputCacheRead",
+                "inputCacheCreation",
+            ],
+        )
+    } else if matches!(provider, "pi" | "omp") {
+        let data = if row["type"] == "message" {
+            &row["message"]
+        } else {
+            row
+        };
+        if data["usage"].is_null() {
+            return false;
+        }
+        let u = &data["usage"];
+        let valid = || -> Option<()> {
+            let count = |k: &str| u.get(k).map_or(Some(0), Value::as_u64);
+            u["input"]
+                .as_u64()?
+                .checked_add(u["output"].as_u64()?)?
+                .checked_add(count("cacheRead")?)?
+                .checked_add(count("cacheWrite")?)?;
+            (count("reasoning")? <= u["output"].as_u64()?).then_some(())
+        };
+        return valid().is_none();
+    } else {
+        return false;
+    };
+    fields
+        .iter()
+        .try_fold(0u64, |sum, k| sum.checked_add(usage[*k].as_u64()?))
+        .is_none()
+}
+
 pub fn is_dsh_log(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|s| s.to_str()),
@@ -83,7 +177,7 @@ pub(crate) fn read_dsh_from(
         } else {
             ensure!(row["type"] != "session", "Harness 流中出现重复会话头");
             if version == 0 && row["seq"].as_u64().is_some_and(|seq| seq < legacy_seed) {
-                continue;
+                row["_aieyesInherited"] = json!(true);
             }
         }
         row["harnessVersion"] = json!(version);
@@ -101,20 +195,29 @@ pub fn scan_dsh(
 ) -> Result<Value> {
     let root = crate::store::expand(&source.path);
     ensure!(root.exists(), "数据目录不存在");
-    let files = crate::harness_history::paths(&root)?;
+    let (files, mut issues) = crate::harness_history::discover(&root)?;
     let prices = store.prices()?;
     let mut inserted = 0;
     let mut read_bytes = 0;
     for path in &files {
-        let (events, bytes) = scan_dsh_file(store, settings, source, path, &prices, full)?;
-        inserted += events;
-        read_bytes += bytes;
+        match scan_dsh_file(store, settings, source, path, &prices, full) {
+            Ok((events, bytes)) => {
+                inserted += events;
+                read_bytes += bytes;
+            }
+            Err(error) if error.downcast_ref::<rusqlite::Error>().is_none() => {
+                crate::import::current_settings(store, settings, source)?;
+                issues.push(json!({"path":path.file_name().unwrap_or_default().to_string_lossy(),"code":"fileRead","message":error.to_string()}));
+            }
+            Err(error) => return Err(error),
+        }
     }
-    let result = json!({"updatedAt":now(),"newEvents":inserted,"files":files.len(),"readBytes":read_bytes,"format":"harness-native"});
+    let result = json!({"updatedAt":now(),"newEvents":inserted,"files":files.len(),"readBytes":read_bytes,"format":"harness-native","partial":!issues.is_empty(),"failedFiles":issues.len(),"issues":issues});
     let tx = store.write_transaction()?;
     crate::import::current_settings(store, settings, source)?;
     store.source_status(&source.id, &result)?;
     tx.commit()?;
+    store.repair_history_estimates()?;
     Ok(result)
 }
 
@@ -135,6 +238,8 @@ fn scan_dsh_file(
     };
     if prior.as_ref().is_some_and(|(_, _, state)| {
         state.parser_version == usage::parser_version(&source.provider)
+            && state.precise_counting == Some(settings.precise_counting)
+            && state.counting_generation == settings.counting_generation
             && state
                 .harness_checkpoint
                 .as_ref()
@@ -158,6 +263,8 @@ fn scan_dsh_file(
             if prefix == signature
                 && offset <= size
                 && state.parser_version == usage::parser_version(&source.provider)
+                && state.precise_counting == Some(settings.precise_counting)
+                && state.counting_generation == settings.counting_generation
                 && state.harness_checkpoint.as_ref().is_some_and(|c| {
                     c.identity == identity
                         && size > c.size
@@ -171,6 +278,8 @@ fn scan_dsh_file(
             0,
             ParseState {
                 parser_version: usage::parser_version(&source.provider),
+                precise_counting: Some(settings.precise_counting),
+                counting_generation: settings.counting_generation,
                 ..Default::default()
             },
         ),
@@ -194,7 +303,7 @@ fn scan_dsh_file(
                 }
                 Some("session/end-seed") => json!({"type":"session/end-seed"}),
                 Some("assistant/message") => {
-                    json!({"type":"assistant/message","harnessVersion":row["harnessVersion"],"seq":row["seq"],"time":row["time"],"data":{"turn":row["data"]["turn"],"step":row["data"]["step"],"message":{"source":{"model":row["data"]["message"]["source"]["model"]}},"usage":{"inputTokens":row["data"]["usage"]["inputTokens"],"outputTokens":row["data"]["usage"]["outputTokens"],"cacheReadTokens":row["data"]["usage"]["cacheReadTokens"],"cacheWriteTokens":row["data"]["usage"]["cacheWriteTokens"],"reasoningTokens":row["data"]["usage"]["reasoningTokens"]}}})
+                    json!({"type":"assistant/message","_aieyesInherited":row["_aieyesInherited"],"harnessVersion":row["harnessVersion"],"seq":row["seq"],"time":row["time"],"data":{"turn":row["data"]["turn"],"step":row["data"]["step"],"message":{"source":{"model":row["data"]["message"]["source"]["model"]}},"usage":{"inputTokens":row["data"]["usage"]["inputTokens"],"outputTokens":row["data"]["usage"]["outputTokens"],"cacheReadTokens":row["data"]["usage"]["cacheReadTokens"],"cacheWriteTokens":row["data"]["usage"]["cacheWriteTokens"],"reasoningTokens":row["data"]["usage"]["reasoningTokens"]}}})
                 }
                 _ => return Ok(()),
             };
@@ -277,7 +386,8 @@ pub fn parse_dsh(source: &Source, state: &mut ParseState, row: &Value) -> Option
             state.first_inherited_count = false;
             None
         }
-        "assistant/message" if !state.first_inherited_count => {
+        "assistant/message" => {
+            state.inherited_usage = state.first_inherited_count || row["_aieyesInherited"] == true;
             let seq = row["seq"].as_u64()?;
             let data = &row["data"];
             let route = &data["message"]["source"];
@@ -291,18 +401,26 @@ pub fn parse_dsh(source: &Source, state: &mut ParseState, row: &Value) -> Option
                 reasoning: optional_counter(u, "reasoningTokens")?,
             };
             state.turn_id = data["turn"].to_string();
+            let identity = if let (Some(time), Some(turn), Some(step)) = (
+                row["time"].as_u64(),
+                data["turn"].as_u64(),
+                data["step"].as_u64(),
+            ) {
+                format!("request:{time}:{turn}:{step}:{}", route["model"].as_str()?)
+            } else {
+                format!("seq:{seq}")
+            };
+            // Seed coordinates can repeat in a live turn. Preserve each
+            // observation without letting an inherited row suppress new work.
+            let identity = if state.inherited_usage {
+                format!("inherited:{identity}")
+            } else {
+                identity
+            };
             normalized(
                 source,
                 state,
-                if let (Some(time), Some(turn), Some(step)) = (
-                    row["time"].as_u64(),
-                    data["turn"].as_u64(),
-                    data["step"].as_u64(),
-                ) {
-                    format!("request:{time}:{turn}:{step}:{}", route["model"].as_str()?)
-                } else {
-                    format!("seq:{seq}")
-                },
+                identity,
                 millis(&row["time"])?,
                 route["model"].as_str()?,
                 tokens,
@@ -340,6 +458,34 @@ pub fn session_id(path: &Path) -> String {
             .to_string_lossy()
             .into_owned()
     }
+}
+
+/// Kimi's state.json explicitly names each subagent's parent. A forked
+/// transcript alone is not enough evidence to merge two independent sessions.
+pub(crate) fn kimi_parent(path: &Path) -> Option<String> {
+    let agent_dir = path.parent()?;
+    let agents = agent_dir.parent()?;
+    if agents.file_name()? != "agents" {
+        return None;
+    }
+    let root = agents.parent()?;
+    let file = std::fs::File::open(root.join("state.json")).ok()?;
+    let mut bytes = Vec::new();
+    file.take(1024 * 1024 + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > 1024 * 1024 {
+        return None;
+    }
+    let metadata: Value = serde_json::from_slice(&bytes).ok()?;
+    let session = root.file_name()?.to_str()?;
+    if metadata["id"].as_str()? != session {
+        return None;
+    }
+    let agent = agent_dir.file_name()?.to_str()?;
+    let parent = metadata["agents"][agent]["parentAgentId"].as_str()?;
+    if parent.is_empty() || parent == agent || !metadata["agents"][parent].is_object() {
+        return None;
+    }
+    Some(format!("{session}:{parent}"))
 }
 
 /// Forks copy the parent's wire prefix and append a `forked` boundary. Those
@@ -391,8 +537,15 @@ fn normalized(
     }
     let row = json!({"id":id,"sessionId":state.session_id,"timestamp":stamp,"model":model,"tokens":tokens});
     let mut event = usage::parse_normalized(source, &mut state.clone(), &row)?;
+    event.usage_version = usage::parser_version(&source.provider);
     event.attribution = format!("{}-local", source.provider);
     event.turn_id = state.turn_id.clone();
+    if state.inherited_usage {
+        event.inheritance = Some(UsageInheritance {
+            origin: event.import_identity.clone().unwrap_or_default(),
+            inherited: true,
+        });
+    }
     Some(event)
 }
 
@@ -415,7 +568,13 @@ pub fn parse(source: &Source, state: &mut ParseState, row: &Value) -> Option<Usa
             None
         }
         Some("usage.record") => {
-            state.cumulative_segment += 1;
+            let identity = if state.inherited_usage {
+                state.inherited_segment += 1;
+                format!("inherited-request:{}", state.inherited_segment)
+            } else {
+                state.cumulative_segment += 1;
+                format!("request:{}", state.cumulative_segment)
+            };
             let u = &row["usage"];
             let tokens = Tokens {
                 input: u["inputOther"].as_u64()?,
@@ -424,15 +583,14 @@ pub fn parse(source: &Source, state: &mut ParseState, row: &Value) -> Option<Usa
                 cache_write: u["inputCacheCreation"].as_u64()?,
                 reasoning: 0,
             };
-            let model = if state.model.is_empty() {
-                row["model"].as_str()?
-            } else {
-                &state.model
-            };
+            let model = row["model"]
+                .as_str()
+                .filter(|m| !m.is_empty())
+                .or_else(|| (!state.model.is_empty()).then_some(state.model.as_str()))?;
             normalized(
                 source,
                 state,
-                format!("request:{}", state.cumulative_segment),
+                identity,
                 millis(&row["time"])?,
                 model,
                 tokens,
@@ -496,33 +654,120 @@ pub fn grok_events(source: &Source, row: &Value) -> Vec<UsageEvent> {
     models
         .iter()
         .filter_map(|(model, u)| {
-            let tokens = Tokens {
-                input: u["inputTokens"].as_u64()?,
-                output: u["outputTokens"].as_u64()?,
-                cache_read: u["cachedReadTokens"].as_u64()?,
-                cache_write: u["cacheCreationTokens"].as_u64()?,
-                reasoning: optional_counter(u, "reasoningTokens")?,
-            };
-            // Grok reports mutually exclusive input/cache categories. Refuse
-            // inconsistent future counters rather than double-counting cache.
-            let total = tokens
-                .input
-                .checked_add(tokens.output)?
-                .checked_add(tokens.cache_read)?
-                .checked_add(tokens.cache_write)?;
-            if u["totalTokens"].as_u64().is_some_and(|n| n != total) {
-                return None;
-            }
-            normalized(
+            let tokens = grok_tokens(u)?;
+            let mut event = normalized(
                 source,
                 &state,
                 format!("{id}:{model}"),
                 stamp,
                 model,
                 tokens,
-            )
+            )?;
+            event.inheritance = Some(UsageInheritance {
+                origin: format!("event:{id}:{model}:{}", p["_meta"]["agentTimestampMs"]),
+                inherited: false,
+            });
+            Some(event)
         })
         .collect()
+}
+
+fn grok_tokens(u: &Value) -> Option<Tokens> {
+    let tokens = Tokens {
+        input: u["inputTokens"].as_u64()?,
+        output: u["outputTokens"].as_u64()?,
+        cache_read: u["cachedReadTokens"].as_u64()?,
+        cache_write: u["cacheCreationTokens"].as_u64()?,
+        reasoning: optional_counter(u, "reasoningTokens")?,
+    };
+    // Grok's input and cache categories are mutually exclusive.
+    let total = tokens
+        .input
+        .checked_add(tokens.output)?
+        .checked_add(tokens.cache_read)?
+        .checked_add(tokens.cache_write)?;
+    if tokens.reasoning > tokens.output
+        || u.get("totalTokens")
+            .is_some_and(|n| !n.is_null() && n.as_u64() != Some(total))
+    {
+        return None;
+    }
+    Some(tokens)
+}
+
+/// Native CodeBuddy emits OpenAI, Anthropic and normalized SDK usage. Their
+/// input fields have different cache semantics; never infer one from another.
+pub(crate) fn codebuddy_tokens(raw: &Value) -> Option<Tokens> {
+    let count = |key: &str| optional_counter(raw, key);
+    let detail = |name: &str, key: &str| -> Option<u64> {
+        match raw.get(name) {
+            None | Some(Value::Null) => Some(0),
+            Some(Value::Object(_)) => optional_counter(&raw[name], key),
+            Some(Value::Array(parts)) => parts.iter().try_fold(0u64, |sum, part| {
+                part.as_object()?;
+                sum.checked_add(optional_counter(part, key)?)
+            }),
+            _ => None,
+        }
+    };
+    let tokens = if raw.get("prompt_tokens").is_some() {
+        let read = detail("prompt_tokens_details", "cached_tokens")?;
+        Tokens {
+            input: raw["prompt_tokens"].as_u64()?.checked_sub(read)?,
+            output: raw["completion_tokens"].as_u64()?,
+            cache_read: read,
+            reasoning: detail("completion_tokens_details", "reasoning_tokens")?,
+            ..Default::default()
+        }
+    } else if raw.get("input_tokens").is_some() {
+        let anthropic = raw.get("cache_read_input_tokens").is_some()
+            || raw.get("cache_creation_input_tokens").is_some();
+        let read = if anthropic {
+            count("cache_read_input_tokens")?
+        } else {
+            detail("input_tokens_details", "cached_tokens")?
+        };
+        Tokens {
+            input: if anthropic {
+                raw["input_tokens"].as_u64()?
+            } else {
+                raw["input_tokens"].as_u64()?.checked_sub(read)?
+            },
+            output: raw["output_tokens"].as_u64()?,
+            cache_read: read,
+            cache_write: if anthropic {
+                count("cache_creation_input_tokens")?
+            } else {
+                0
+            },
+            reasoning: detail("output_tokens_details", "reasoning_tokens")?,
+        }
+    } else if raw.get("inputTokens").is_some() {
+        let read = detail("inputTokensDetails", "cached_tokens")?;
+        Tokens {
+            input: raw["inputTokens"].as_u64()?.checked_sub(read)?,
+            output: raw["outputTokens"].as_u64()?,
+            cache_read: read,
+            reasoning: detail("outputTokensDetails", "reasoning_tokens")?,
+            ..Default::default()
+        }
+    } else {
+        return None;
+    };
+    let total = tokens
+        .input
+        .checked_add(tokens.output)?
+        .checked_add(tokens.cache_read)?
+        .checked_add(tokens.cache_write)?;
+    if tokens.reasoning > tokens.output
+        || raw
+            .get("total_tokens")
+            .or(raw.get("totalTokens"))
+            .is_some_and(|n| n.as_u64() != Some(total))
+    {
+        return None;
+    }
+    Some(tokens)
 }
 
 fn codebuddy(source: &Source, state: &mut ParseState, row: &Value) -> Option<UsageEvent> {
@@ -572,35 +817,9 @@ fn codebuddy(source: &Source, state: &mut ParseState, row: &Value) -> Option<Usa
     }
     let raw = &p["rawUsage"];
     let credits = raw["credit"].as_f64().filter(|n| n.is_finite() && *n > 0.0);
-    let tokens = if raw.get("prompt_tokens").is_some() {
-        let read = raw["prompt_tokens_details"]["cached_tokens"]
-            .as_u64()
-            .unwrap_or(0);
-        Tokens {
-            input: raw["prompt_tokens"].as_u64()?.checked_sub(read)?,
-            output: raw["completion_tokens"].as_u64()?,
-            cache_read: read,
-            reasoning: raw["completion_tokens_details"]["reasoning_tokens"]
-                .as_u64()
-                .unwrap_or(0),
-            ..Default::default()
-        }
-    } else if raw.get("input_tokens").is_some() {
-        let read = raw["input_tokens_details"]["cached_tokens"]
-            .as_u64()
-            .unwrap_or(0);
-        Tokens {
-            input: raw["input_tokens"].as_u64()?.checked_sub(read)?,
-            output: raw["output_tokens"].as_u64()?,
-            cache_read: read,
-            reasoning: raw["output_tokens_details"]["reasoning_tokens"]
-                .as_u64()
-                .unwrap_or(0),
-            ..Default::default()
-        }
-    } else {
-        Tokens::default()
-    };
+    let tokens = codebuddy_tokens(raw)
+        .or_else(|| codebuddy_tokens(&p["usage"]))
+        .or_else(|| credits.map(|_| Tokens::default()))?;
     tokens
         .input
         .checked_add(tokens.output)?
@@ -611,8 +830,17 @@ fn codebuddy(source: &Source, state: &mut ParseState, row: &Value) -> Option<Usa
     let id = p["messageId"].as_str().or(row["id"].as_str())?;
     let data = json!({"id":id,"sessionId":state.session_id,"timestamp":millis(&row["timestamp"])? ,"model":p["model"].as_str().or(p["requestModelId"].as_str()).unwrap_or("unknown"),"tokens":tokens});
     let mut event = usage::parse_normalized(source, &mut state.clone(), &data)?;
+    if tokens.total() > 0 {
+        event.usage_version = usage::parser_version(&source.provider);
+    }
     event.turn_id = state.turn_id.clone();
     event.attribution = "codebuddy-local".into();
+    if p["messageId"].as_str().is_some_and(|id| !id.is_empty()) {
+        event.inheritance = Some(UsageInheritance {
+            origin: format!("response:{id}:{}", row["timestamp"]),
+            inherited: false,
+        });
+    }
     if let Some(credits) = credits {
         event.native_credits = Some(NativeCredits {
             credits,

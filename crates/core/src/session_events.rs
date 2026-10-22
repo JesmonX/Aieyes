@@ -11,6 +11,10 @@ pub struct Event {
     pub session: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub session_source: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub parent_session: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub parent_session_path: String,
     pub turn: String,
     pub record: String,
     pub parent: String,
@@ -67,11 +71,12 @@ pub fn hook(provider: &str, kind: &str, input: &Value, at: u64) -> Event {
             ..Event::default()
         };
     }
-    Event {
+    let mut event = Event {
         kind: kind.into(),
         at,
-        session: field(input, &["session_id", "conversationId"]),
-        turn: field(input, &["turn_id", "turnId"]),
+        session: field(input, &["session_id", "conversationId", "sessionId"]),
+        parent_session: field(input, &["parent_session_id", "parentSessionId"]),
+        turn: field(input, &["turn_id", "turnId", "prompt_id"]),
         call: field(
             input,
             &["tool_use_id", "toolUseId", "agent_id", "elicitation_id"],
@@ -81,7 +86,11 @@ pub fn hook(provider: &str, kind: &str, input: &Value, at: u64) -> Event {
         } else {
             field(input, &["tool_name"])
         },
-        fully_idle: input["fullyIdle"].as_bool(),
+        fully_idle: input["fullyIdle"].as_bool().or_else(|| {
+            (provider == "codebuddy")
+                .then(|| input["background_tasks"].as_array().map(Vec::is_empty))
+                .flatten()
+        }),
         failed: kind == "StopFailure"
             || (kind == "Stop"
                 && (input["terminationReason"] == "error"
@@ -91,7 +100,19 @@ pub fn hook(provider: &str, kind: &str, input: &Value, at: u64) -> Event {
             .is_some_and(|s| s.contains("cancel") || s.contains("interrupt")),
         notification: field(input, &["notification_type"]),
         ..Event::default()
+    };
+    if matches!(provider, "codebuddy" | "claude")
+        && !matches!(kind, "SubagentStart" | "SubagentStop")
+        && let Some(agent) = input["agent_id"].as_str().filter(|s| !s.is_empty())
+    {
+        event.parent_session = event.session.clone();
+        event.session = format!("{}:{agent}", event.session);
     }
+    if kind == "PostToolUseFailure" && input["is_interrupt"] == true {
+        event.kind = "interrupted".into();
+        event.interrupted = true;
+    }
+    event
 }
 
 pub fn codex(row: &Value) -> Option<Event> {
@@ -119,6 +140,14 @@ pub fn codex(row: &Value) -> Option<Event> {
         } else {
             String::new()
         },
+        parent_session: if kind == "identity" {
+            field(
+                &p["source"]["subagent"]["thread_spawn"],
+                &["parent_thread_id"],
+            )
+        } else {
+            String::new()
+        },
         turn: field(p, &["turn_id"]),
         call: field(p, &["call_id"]),
         tool: field(p, &["name"]),
@@ -133,7 +162,13 @@ pub fn codex(row: &Value) -> Option<Event> {
 
 /// Native lifecycle records. Only identifiers and state cross this boundary.
 pub fn native(provider: &str, row: &Value) -> Option<Event> {
-    let mut event = Event::default();
+    if provider == "deepseek-harness" && row["_aieyesInherited"] == true {
+        return None;
+    }
+    let mut event = Event {
+        parent_session: field(row, &["parentSessionId", "parent_session_id"]),
+        ..Default::default()
+    };
     let kind = match provider {
         "kimi" => {
             event.at = row["time"].as_u64().unwrap_or(0);
@@ -142,6 +177,15 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
                 .map(|v| v.to_string())
                 .unwrap_or_default();
             match row["type"].as_str() {
+                Some("interaction.request" | "interaction.resolved") => {
+                    event.call = field(row, &["id", "interactionId"]);
+                    event.tool = field(row, &["toolName"]);
+                    if row["type"] == "interaction.request" {
+                        "Elicitation"
+                    } else {
+                        "ElicitationResult"
+                    }
+                }
                 Some("turn.prompt") => "start",
                 Some("llm.request") => "thinking",
                 Some("turn.ended") => match row["reason"].as_str() {
@@ -187,6 +231,23 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
             match row["type"].as_str()? {
                 "turn_started" => "start",
                 "phase_changed" if row["phase"] == "waiting_for_model" => "thinking",
+                "phase_changed" if row["phase"] == "tool_execution" => "tool_phase",
+                "tool_started" => "tool",
+                "tool_completed" | "tool_finished" | "tool_failed" => "output",
+                "permission_requested"
+                | "permission_resolved"
+                | "permission_response"
+                | "permission_responded" => {
+                    event.call = field(
+                        row,
+                        &["permission_id", "request_id", "tool_call_id", "call_id"],
+                    );
+                    if row["type"] == "permission_requested" {
+                        "PermissionRequest"
+                    } else {
+                        "ElicitationResult"
+                    }
+                }
                 "turn_ended" => match row["outcome"].as_str()? {
                     "completed" => "complete",
                     "cancelled" | "interrupted" => "interrupted",
@@ -202,6 +263,12 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
             event.turn = field(&row["providerData"], &["conversationRequestId"]);
             event.record = field(row, &["id"]);
             event.parent = field(row, &["parentId"]);
+            if row["isSidechain"] == true
+                && let Some(agent) = row["agentId"].as_str().filter(|s| !s.is_empty())
+            {
+                event.parent_session = event.session.clone();
+                event.session = format!("{}:{agent}", event.session);
+            }
             if row["type"] == "message" && row["role"] == "user" && event.turn.is_empty() {
                 event.turn = event.record.clone();
             }
@@ -209,8 +276,41 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
                 ("message", Some("user")) => "start",
                 ("reasoning", _) => "thinking",
                 ("function_call", _) => "tool",
+                ("message" | "function_call_output" | "function_call_result", _)
+                    if row["status"] == "incomplete"
+                        && row["providerData"]["skipRun"] == true
+                        && row["providerData"]["error"]["message"] == "Interrupted by user" =>
+                {
+                    "interrupted"
+                }
                 ("function_call_output" | "function_call_result", _) => "output",
-                ("message", Some("assistant")) if row["status"] == "completed" => "complete",
+                ("message", Some("assistant"))
+                    if row["status"] == "incomplete"
+                        && row["providerData"]["skipRun"] == true
+                        && row["providerData"]["error"].is_object() =>
+                {
+                    // Native cancellation persists this fixed diagnostic,
+                    // then emits a generic Stop without an outcome flag.
+                    if row["providerData"]["error"]["message"] == "Interrupted by user" {
+                        "interrupted"
+                    } else if row["providerData"]["error"]["isRetryable"] == false {
+                        "failed"
+                    } else {
+                        "unknown"
+                    }
+                }
+                ("message", Some("assistant")) if row["status"] == "completed" => {
+                    // Current CodeBuddy persists commentary as a completed
+                    // message before its following tool call. Only the final
+                    // message carries this model step's settled usage.
+                    let p = &row["providerData"];
+                    if p["messageId"].is_string() && p["rawUsage"].is_null() && p["usage"].is_null()
+                    {
+                        "thinking"
+                    } else {
+                        "complete"
+                    }
+                }
                 _ if !event.record.is_empty() => "identity",
                 _ => return None,
             }
@@ -250,10 +350,18 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
         } else {
             row
         };
-        event.call = field(p, &["toolCallId", "callId", "call_id", "id"]);
-        event.tool = field(p, &["name"]);
+        event.call = field(
+            p,
+            &["toolCallId", "tool_call_id", "callId", "call_id", "id"],
+        );
+        event.tool = field(p, &["name", "tool_name", "toolName"]);
     }
-    event.kind = kind.into();
+    event.kind = if provider == "grok" && kind == "tool" && event.call.is_empty() {
+        "anonymous_tool"
+    } else {
+        kind
+    }
+    .into();
     Some(event)
 }
 /// Pi-family transcripts preserve tool calls inside assistant content arrays.
@@ -267,6 +375,12 @@ pub fn pi(row: &Value) -> Vec<Event> {
         at,
         record: field(row, &["id"]),
         parent: field(row, &["parentId"]),
+        parent_session: field(row, &["parentSessionId", "parent_session_id"]),
+        parent_session_path: if row["type"] == "session" {
+            field(row, &["parentSession"])
+        } else {
+            String::new()
+        },
         ..Default::default()
     };
     if row["type"] == "session" {
@@ -364,11 +478,18 @@ pub fn claude(row: &Value) -> Vec<Event> {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|t| t.timestamp_millis().max(0) as u64)
         .unwrap_or(0);
-    let base = Event {
+    let mut base = Event {
         session,
         at,
+        parent_session: field(row, &["parentSessionId", "parent_session_id"]),
         ..Event::default()
     };
+    if row["isSidechain"] == true
+        && let Some(agent) = row["agentId"].as_str().filter(|s| !s.is_empty())
+    {
+        base.parent_session = base.session.clone();
+        base.session = format!("{}:{agent}", base.session);
+    }
     let content = row["message"]["content"].as_array();
     let mut out = Vec::new();
     match row["type"].as_str() {
@@ -431,12 +552,15 @@ pub struct Activity {
     pub phase: Option<Phase>,
     pub session: String,
     pub session_source: String,
+    pub parent_session: String,
+    pub parent_session_path: String,
     pub turn: String,
     pub at: u64,
     pub pid: u32,
     pub process_start: u64,
     waiting: HashSet<String>,
     tools: HashSet<String>,
+    anonymous_tools: u16,
     background: HashSet<String>,
     generation: u64,
     turn_started: u64,
@@ -446,6 +570,9 @@ pub struct Activity {
     record_order: VecDeque<String>,
 }
 impl Activity {
+    pub fn turn_started_at(&self) -> u64 {
+        self.turn_started
+    }
     pub fn background_active(&self) -> bool {
         self.external_background || !self.background.is_empty()
     }
@@ -472,11 +599,19 @@ impl Activity {
         if !e.session.is_empty() {
             self.session = e.session.clone();
         }
+        if !e.parent_session.is_empty() {
+            self.parent_session = e.parent_session.clone();
+        }
+        if !e.parent_session_path.is_empty() {
+            self.parent_session_path = e.parent_session_path.clone();
+        }
         if e.kind == "identity" {
-            self.session_source = e.session_source;
+            if !e.session_source.is_empty() {
+                self.session_source = e.session_source;
+            }
             return;
         }
-        if e.at > 0 && e.at < self.turn_started {
+        if e.at > 0 && e.at < self.at.max(self.turn_started) {
             return;
         }
         if e.pid > 0 {
@@ -497,6 +632,7 @@ impl Activity {
             self.turn_started = e.at;
             self.waiting.clear();
             self.tools.clear();
+            self.anonymous_tools = 0;
             self.background.clear();
             self.pending_stop = false;
             self.external_background = false;
@@ -509,6 +645,7 @@ impl Activity {
                 self.phase = None;
                 self.waiting.clear();
                 self.tools.clear();
+                self.anonymous_tools = 0;
                 self.background.clear();
                 self.turn.clear();
                 self.turn_started = e.at;
@@ -526,9 +663,12 @@ impl Activity {
                 match e.kind.as_str() {
                     "unknown" => self.phase = Some(Phase::Unknown),
                     "thinking" => self.phase = Some(Phase::Thinking),
-                    "tool" | "PreToolUse" => {
+                    "tool_phase" => self.phase = Some(Phase::Tool),
+                    "tool" | "anonymous_tool" | "PreToolUse" => {
                         if !e.call.is_empty() {
                             self.tools.insert(e.call.clone());
+                        } else if e.kind == "anonymous_tool" {
+                            self.anonymous_tools = self.anonymous_tools.saturating_add(1).min(256);
                         }
                         let tool = e.tool.rsplit(['.', ':']).next().unwrap_or("");
                         if matches!(
@@ -554,12 +694,21 @@ impl Activity {
                     {
                         self.waiting.insert("notification".into());
                     }
-                    "output" | "PostToolUse" | "PostToolUseFailure" | "ElicitationResult" => {
+                    "output" | "PostToolUse" | "PostToolUseFailure" | "PermissionDenied"
+                    | "ElicitationResult" => {
                         self.waiting.remove(&e.call);
+                        // CodeBuddy's permission hook may omit the call ID;
+                        // its subsequent tool result still answers that prompt.
+                        if e.kind != "ElicitationResult" {
+                            self.waiting.remove("");
+                        }
                         self.waiting.remove("notification");
-                        self.tools.remove(&e.call);
+                        if e.kind != "ElicitationResult" && !self.tools.remove(&e.call) {
+                            // Grok only assigns a call ID at completion.
+                            self.anonymous_tools = self.anonymous_tools.saturating_sub(1);
+                        }
                         // An individual tool failure is recoverable. Only a terminal event can fail a turn.
-                        self.phase = Some(if self.tools.is_empty() {
+                        self.phase = Some(if self.tools.is_empty() && self.anonymous_tools == 0 {
                             Phase::Working
                         } else {
                             Phase::Tool
@@ -571,6 +720,9 @@ impl Activity {
                     }
                     "SubagentStop" => {
                         self.background.remove(&e.call);
+                        if let Some(idle) = e.fully_idle {
+                            self.external_background = !idle;
+                        }
                         if self.pending_stop && !self.background_active() {
                             self.phase = Some(Phase::Complete);
                             self.pending_stop = false;
@@ -594,17 +746,20 @@ impl Activity {
                             });
                             self.waiting.clear();
                             self.tools.clear();
+                            self.anonymous_tools = 0;
                         }
                     }
                     "failed" | "StopFailure" => {
                         self.phase = Some(Phase::Failed);
                         self.waiting.clear();
                         self.tools.clear();
+                        self.anonymous_tools = 0;
                     }
                     "interrupted" | "SessionEnd" => {
                         self.phase = Some(Phase::Interrupted);
                         self.waiting.clear();
                         self.tools.clear();
+                        self.anonymous_tools = 0;
                     }
                     _ => {}
                 }

@@ -116,18 +116,6 @@ pub(crate) fn panel_generation(app: &AppHandle) -> (u64, u64) {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn escape_pressed(app: &AppHandle) {
-    if app
-        .state::<Desktop>()
-        .state
-        .lock()
-        .is_ok_and(|state| state.panel && !state.native_interacting)
-    {
-        let _ = request_native_panel(app, PanelRequest::Dismiss);
-    }
-}
-
-#[cfg(target_os = "linux")]
 pub(crate) fn outside_click(app: &AppHandle, x: i32, y: i32, generation: (u64, u64)) {
     #[cfg(debug_assertions)]
     eprintln!(
@@ -590,24 +578,7 @@ fn tray_supported() -> bool {
 }
 #[cfg(target_os = "linux")]
 fn tray_supported() -> bool {
-    // Our StatusNotifierItem is served directly over D-Bus and does not require
-    // AppIndicator libraries. Only a registered tray host makes it usable.
-    // A watcher can exist with no registered host (GNOME without an indicator extension).
-    let mut command = std::process::Command::new("gdbus");
-    command.args([
-        "call",
-        "--session",
-        "--dest",
-        "org.kde.StatusNotifierWatcher",
-        "--object-path",
-        "/StatusNotifierWatcher",
-        "--method",
-        "org.freedesktop.DBus.Properties.Get",
-        "org.kde.StatusNotifierWatcher",
-        "IsStatusNotifierHostRegistered",
-    ]);
-    aieyes_core::process::run(command, vec![], Duration::from_secs(2))
-        .is_ok_and(|out| String::from_utf8_lossy(&out).trim() == "(<true>,)")
+    crate::linux_tray::host_available()
 }
 
 fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
@@ -647,18 +618,9 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
     let builder = builder.transparent(true);
     let window = builder.build()?;
     configure_webview(&window);
-    #[cfg(target_os = "linux")]
-    if let Ok(native) = window.gtk_window() {
-        use gtk::prelude::*;
-        let app = window.app_handle().clone();
-        native.connect_key_press_event(move |_, event| {
-            if event.keyval() == gtk::gdk::keys::constants::Escape {
-                let _ = request_native_panel(&app, PanelRequest::Dismiss);
-                return gtk::glib::Propagation::Stop;
-            }
-            gtk::glib::Propagation::Proceed
-        });
-    }
+    // Keep Escape in the focused webview: nested menus/dialogs consume it
+    // first, then floating.js explicitly closes even a pinned panel. A native
+    // key handler would bypass that hierarchy and consume the event twice.
     #[cfg(target_os = "windows")]
     if let Ok(hwnd) = window.hwnd() {
         // Recreating the renderer may call this from a worker; configure on its UI thread.
@@ -735,6 +697,7 @@ pub(crate) fn pet_moved(app: &AppHandle, x: i32, y: i32) {
 enum PanelRequest {
     Set(bool),
     Toggle,
+    /// Passive dismissal from outside clicks or focus loss; pinning blocks it.
     Dismiss,
     Restore(u64),
 }
@@ -875,7 +838,7 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
             if !was_open {
                 // Use the activating click's timestamp; CurrentTime can be
                 // rejected by focus-stealing prevention on X11 window managers.
-                crate::native_pet::focus_panel(&native);
+                crate::native_pet::focus_window(&native);
                 window
                     .with_webview(|view| view.inner().grab_focus())
                     .map_err(|e| e.to_string())?;
@@ -897,7 +860,7 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
                     }
                     if let Some(window) = handle.get_webview_window("floating") {
                         if let Ok(native) = window.gtk_window() {
-                            crate::native_pet::focus_panel(&native);
+                            crate::native_pet::focus_window(&native);
                         }
                         let _ = window.with_webview(|view| view.inner().grab_focus());
                     }
@@ -1011,7 +974,13 @@ fn tray_present(app: &AppHandle) -> bool {
     #[cfg(target_os = "linux")]
     {
         app.try_state::<Desktop>()
-            .and_then(|desktop| desktop._tray.lock().ok().map(|tray| tray.is_some()))
+            .and_then(|desktop| {
+                desktop
+                    ._tray
+                    .lock()
+                    .ok()
+                    .map(|tray| tray.as_ref().is_some_and(|tray| !tray.is_closed()))
+            })
             .unwrap_or(false)
     }
     #[cfg(not(target_os = "linux"))]
@@ -1020,21 +989,10 @@ fn tray_present(app: &AppHandle) -> bool {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn tray_set_visible(app: &AppHandle, visible: bool) {
-    #[cfg(target_os = "linux")]
-    {
-        let desktop = app.state::<Desktop>();
-        if let Ok(tray) = desktop._tray.lock()
-            && let Some(tray) = &*tray
-        {
-            tray.set_visible(visible);
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        if let Some(tray) = app.tray_by_id(TRAY_ID) {
-            let _ = tray.set_visible(visible);
-        }
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_visible(visible);
     }
 }
 
@@ -1079,16 +1037,19 @@ fn tray_set_icon(app: &AppHandle, phase: Option<Phase>, dark: bool) {
 fn create_tray(app: &AppHandle, desktop: &Desktop) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
-        if desktop
-            ._tray
-            .lock()
-            .map(|tray| tray.is_some())
-            .unwrap_or(false)
-        {
+        let mut stored = desktop._tray.lock().unwrap_or_else(|e| e.into_inner());
+        if stored.as_ref().is_some_and(|tray| !tray.is_closed()) {
             return Ok(());
         }
+        // ksni closes its service when the session bus disappears. Retaining
+        // that handle must not make an unusable tray suppress the pet fallback.
+        *stored = None;
         let tray = crate::linux_tray::start(app)?;
-        *desktop._tray.lock().unwrap_or_else(|e| e.into_inner()) = Some(tray);
+        *stored = Some(tray);
+        drop(stored);
+        // The replacement starts with default menu values. Replay the current
+        // hide/restore actions even if the shell's state has not changed.
+        *desktop.menu_state.lock().unwrap_or_else(|e| e.into_inner()) = None;
         Ok(())
     }
     #[cfg(not(target_os = "linux"))]
@@ -1258,6 +1219,9 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
         }
     }
     // Keep a secondary tray entry on Windows, and always keep one while the ball is hidden.
+    // Linux's StatusNotifierItem stays Active; its pet visibility belongs only
+    // to the menu. Background updates must not overwrite Hide/Show pet labels.
+    #[cfg(not(target_os = "linux"))]
     tray_set_visible(
         app,
         available && (!floating || cfg!(any(windows, target_os = "linux")) || hidden),
@@ -1555,7 +1519,7 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
         "settings" => show_main(app, "settings"),
         "pet-settings" => show_main(
             app,
-            "settings-target:{\"tab\":\"general\",\"section\":\"desktop\"}",
+            "settings-target:{\"category\":\"general\",\"section\":\"desktop\"}",
         ),
         "prices" => show_main(app, "prices"),
         "add-source" => show_main(app, "add-source"),
@@ -1651,6 +1615,20 @@ fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "windows")]
     let _ = fit_main_window(&window);
+    #[cfg(target_os = "linux")]
+    {
+        let focus = window.clone();
+        window
+            .run_on_main_thread(move || {
+                use gtk::prelude::*;
+                if let Ok(native) = focus.gtk_window() {
+                    crate::native_pet::focus_window(&native);
+                }
+                let _ = focus.with_webview(|view| view.inner().grab_focus());
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "linux"))]
     window.set_focus().map_err(|e| e.to_string())?;
     let _ = window.emit("desktop:navigate", page);
     Ok(())
@@ -2214,6 +2192,15 @@ mod tests {
             Some(false)
         );
         assert_eq!(PanelRequest::Dismiss.resolve(true, true, false, 1), None);
+        // Escape/close and pet toggles remain explicit actions when pinned.
+        assert_eq!(
+            PanelRequest::Set(false).resolve(true, true, false, 1),
+            Some(false)
+        );
+        assert_eq!(
+            PanelRequest::Toggle.resolve(true, true, false, 1),
+            Some(false)
+        );
         assert_eq!(PanelRequest::Dismiss.resolve(true, false, true, 1), None);
         assert_eq!(PanelRequest::Dismiss.resolve(false, false, false, 1), None);
         assert_eq!(

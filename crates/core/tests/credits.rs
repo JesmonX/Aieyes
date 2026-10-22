@@ -46,6 +46,7 @@ fn setup() -> (tempfile::TempDir, Store, QuotaSnapshot) {
 }
 fn event(store: &Store, q: &QuotaSnapshot, model: &str, category: &str, id: &str) {
     let event = UsageEvent {
+        usage_version: 0,
         native_credits: None,
         turn_id: String::new(),
         id: id.into(),
@@ -69,6 +70,7 @@ fn event(store: &Store, q: &QuotaSnapshot, model: &str, category: &str, id: &str
             evidence: "fixture".into(),
         },
         raw_tokens: None,
+        inheritance: None,
         interval_start: Some(q.updated_at),
         interval_evidence: String::new(),
     };

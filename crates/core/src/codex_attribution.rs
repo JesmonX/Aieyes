@@ -390,6 +390,7 @@ mod tests {
             .ensure_codex_evidence_scope(&settings, &source)
             .unwrap();
         let event = UsageEvent {
+            usage_version: 0,
             id: "request".into(),
             turn_id: "turn".into(),
             import_identity: None,
@@ -410,6 +411,7 @@ mod tests {
             },
             native_credits: None,
             raw_tokens: None,
+            inheritance: None,
             interval_start: Some(1010),
             interval_evidence: "task-request-v2".into(),
         };

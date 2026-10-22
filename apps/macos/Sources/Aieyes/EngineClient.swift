@@ -1259,7 +1259,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let params = try JSONSerialization.jsonObject(with: data) as! [String: Any]
             let baseline = try JSONSerialization.jsonObject(with: JSONEncoder().encode(base))
             let saved: Settings = try await engine.call("settings.patch", params: ["base": baseline, "settings": params])
-            let historyConfigurationChanged = settings.codexPreciseCounting != saved.codexPreciseCounting || settings.historyShowDeletedAccounts != saved.historyShowDeletedAccounts || settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.modelMappings != saved.modelMappings
+            let historyConfigurationChanged = settings.preciseCounting != saved.preciseCounting || settings.historyShowDeletedAccounts != saved.historyShowDeletedAccounts || settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.modelMappings != saved.modelMappings
             let quotaConfigurationChanged = settings.accounts != saved.accounts || settings.sources != saved.sources || settings.hosts != saved.hosts || settings.agents != saved.agents || settings.proxy != saved.proxy
             if settings.proxy != saved.proxy || settings.proxyTestUrls != saved.proxyTestUrls { networkRevision += 1; networkTest = nil; lastNetworkAttempt = .distantPast }
             mergeConfiguration(saved, submitted: draft, draftAtSubmission: draftAtSubmission)

@@ -1,14 +1,18 @@
 /* Saved application appearance, shared by every web surface. */
 (() => {
-  // Start loading the bundled faces before IPC/layout on an actual Windows host.
-  if (typeof navigator !== 'undefined' && /Win/i.test(navigator.userAgentData?.platform || navigator.platform || '')) document.documentElement.dataset.platform = 'windows';
+  // Start loading the bundled faces before IPC/layout on Windows and Linux.
+  if (typeof navigator !== 'undefined') {
+    const platform = navigator.userAgentData?.platform || navigator.platform || '';
+    if (/Win/i.test(platform)) document.documentElement.dataset.platform = 'windows';
+    else if (/Linux/i.test(platform)) document.documentElement.dataset.platform = 'linux';
+  }
   const media = matchMedia('(prefers-color-scheme: dark)');
   let current = { theme: 'system', accent: 'indigo' },nativeKey = '';
   try {current = JSON.parse(localStorage.getItem('aieyes.appearance') || 'null') || current;} catch (_) {}
   let busy = false;
   let fonts = null;
   function loadFonts() {
-    if (document.documentElement.dataset.platform !== 'windows' || !document.fonts) return Promise.resolve();
+    if (!['windows', 'linux'].includes(document.documentElement.dataset.platform) || !document.fonts) return Promise.resolve();
     if (!fonts) fonts = Promise.allSettled([400, 500, 700].map((weight) => document.fonts.load(`${weight} 15px "Aieyes HarmonyOS Sans SC"`, AieyesI18n.t("今日概览 Token 0123456789")))).then(() => {
       window.dispatchEvent(new CustomEvent('aieyes:fonts'));
     });

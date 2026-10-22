@@ -2,6 +2,8 @@
 mod context_menu;
 mod desktop;
 #[cfg(target_os = "linux")]
+mod linux_fonts;
+#[cfg(target_os = "linux")]
 mod linux_tray;
 mod localization;
 #[cfg(target_os = "windows")]
@@ -363,6 +365,10 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            #[cfg(target_os = "linux")]
+            if let Err(error) = linux_fonts::setup(app.handle()) {
+                eprintln!("Could not load bundled HarmonyOS fonts: {error}");
+            }
             let root = std::env::var_os("AIEYES_DATA_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or(default_data_dir(app.handle())?);

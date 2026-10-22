@@ -43,7 +43,14 @@ class HarnessProjection(unittest.TestCase):
             inherited=json.loads(json.dumps(request));inherited['seq']=0;inherited['data']['usage']['inputTokens']=999
             old=[dict(type='session',version=0,id='session',seedLength=2),inherited,dict(type='permission/preset',seq=1),request]
             legacy.write_bytes(compressed(''.join(json.dumps(r)+'\n' for r in old).encode()))
-            projected=list(h.project(legacy,'history'));self.assertEqual(projected[0]['harnessVersion'],0);self.assertFalse(projected[0]['isSeeded']);self.assertEqual(len(projected),2);self.assertEqual(projected[1]['data']['step'],1);self.assertEqual(projected[1]['seq'],2);self.assertNotIn('PRIVATE',json.dumps(projected))
+            projected=list(h.project(legacy,'history'))
+            self.assertEqual(projected[0]['harnessVersion'],0)
+            self.assertFalse(projected[0]['isSeeded'])
+            self.assertEqual(len(projected),3)
+            self.assertEqual([r['_aieyesInherited'] for r in projected[1:]],[True,False])
+            self.assertEqual([r['seq'] for r in projected[1:]],[0,2])
+            self.assertEqual(projected[2]['data']['step'],1)
+            self.assertNotIn('PRIVATE',json.dumps(projected))
             self.assertEqual(h.paths(root),[legacy])
             modern=root/'session.v4.jsonl';modern.write_text(FIXTURE.read_text())
             (root/'session.jsonl').write_text('{}\n')
@@ -104,7 +111,20 @@ class HarnessProjection(unittest.TestCase):
             self.assertEqual(h.paths(path),[path])
             (root/'session.v4.jsonl').unlink()
             (root/'session.v5.jsonl').write_text('{}\n')
-            self.assertEqual(collect(root)[-1]['kind'],'error')
+            self.assertTrue(collect(root)[-1]['partial'])
+
+    def test_unsupported_and_corrupt_sessions_do_not_block_healthy_siblings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory)
+            for name in ('good','future','broken'):(root/name).mkdir()
+            (root/'good/session.v4.jsonl').write_bytes(FIXTURE.read_bytes())
+            (root/'future/session.v5.jsonl').write_text('{}\n')
+            broken=root/'broken/session.v4.jsonl.zstd';broken.write_bytes(b'broken')
+            first=collect(root)
+            self.assertTrue(first[-1]['partial']);self.assertEqual(first[-1]['failedFiles'],2)
+            self.assertTrue(any(e.get('type')=='assistant/message' for r in first if r['kind']=='batch' for e in r['events']))
+            (root/'future/session.v5.jsonl').unlink();broken.write_bytes(compressed(FIXTURE.read_bytes()))
+            repaired=collect(root,cursors(first));self.assertFalse(repaired[-1]['partial'])
 
     def test_state_seed_boundary_and_failed_read_preserve_last_good_cursor(self):
         import time

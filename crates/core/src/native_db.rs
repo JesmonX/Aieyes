@@ -27,7 +27,18 @@ pub(crate) fn scan(
     project: impl FnOnce(&Connection) -> Result<Projection>,
     parse: impl Fn(&Source, &str, &Value) -> Result<Record>,
 ) -> Result<Value> {
-    let key = path.to_string_lossy();
+    let db = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    db.busy_timeout(std::time::Duration::from_millis(500))?;
+    db.execute_batch("PRAGMA query_only=ON;BEGIN")?;
+    let projection = project(&db)?;
+    let key = if source.provider == "opencode" {
+        format!("{}#{}", path.display(), projection.table)
+    } else {
+        path.to_string_lossy().into_owned()
+    };
     let fingerprint = crate::sessions::database_fingerprint(path);
     let scope = hash(
         &json!([
@@ -48,20 +59,15 @@ pub(crate) fn scan(
     let version = usage::parser_version(&source.provider);
     if let Some((_, _, state)) = &previous
         && state.parser_version == version
+        && state.precise_counting == Some(settings.precise_counting)
+        && state.counting_generation == settings.counting_generation
         && let Some(saved) = state
             .database_checkpoint
             .as_ref()
             .filter(|c| c.fingerprint == fingerprint)
     {
-        return finish(store, settings, source, 0, 0, saved.malformed);
+        return finish(store, settings, source, &key, 0, 0, saved.malformed);
     }
-    let db = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    db.busy_timeout(std::time::Duration::from_millis(500))?;
-    db.execute_batch("PRAGMA query_only=ON;BEGIN")?;
-    let projection = project(&db)?;
     let metadata = std::fs::metadata(path)?;
     #[cfg(unix)]
     let identity = {
@@ -71,7 +77,11 @@ pub(crate) fn scan(
     #[cfg(not(unix))]
     let identity = format!("{:?}", metadata.created());
     let (mut offset, mut state) = previous
-        .filter(|(_, _, s)| s.parser_version == version)
+        .filter(|(_, _, s)| {
+            s.parser_version == version
+                && s.precise_counting == Some(settings.precise_counting)
+                && s.counting_generation == settings.counting_generation
+        })
         .map(|(_, o, s)| (o, s))
         .unwrap_or_default();
     let mut checkpoint = state.database_checkpoint.clone().unwrap_or_default();
@@ -106,6 +116,8 @@ pub(crate) fn scan(
         checkpoint.pending_fingerprint = fingerprint.clone();
     }
     state.parser_version = version;
+    state.precise_counting = Some(settings.precise_counting);
+    state.counting_generation = settings.counting_generation;
     let prices = store.prices()?;
     let query = format!(
         "SELECT rowid,id,{} FROM {}",
@@ -236,21 +248,28 @@ pub(crate) fn scan(
     crate::import::current_settings(store, settings, source)?;
     store.set_cursor(&source.id, &key, &scope, offset, &state)?;
     tx.commit()?;
-    finish(store, settings, source, inserted, scanned, malformed)
+    finish(store, settings, source, &key, inserted, scanned, malformed)
 }
 
 fn finish(
     store: &Store,
     settings: &Settings,
     source: &Source,
+    key: &str,
     inserted: u64,
     scanned: u64,
     malformed: u64,
 ) -> Result<Value> {
-    let result = json!({"updatedAt":now(),"newEvents":inserted,"files":1,"scannedRecords":scanned,"malformedRecords":malformed,"partial":malformed>0,"format":format!("{}-native",source.provider),"issues":if malformed>0 {vec![json!({"code":"invalidRecord","message":"部分原生统计格式无效，将在记录变化后重试；已保留其他计量。"})]} else {vec![]}});
+    let pending: u64 = store.db.query_row(
+        "SELECT count(*) FROM native_pending WHERE source_id=?1 AND path=?2 AND invalid=0",
+        params![source.id, key],
+        |r| r.get(0),
+    )?;
+    let result = json!({"updatedAt":now(),"newEvents":inserted,"files":1,"scannedRecords":scanned,"pendingRecords":pending,"malformedRecords":malformed,"partial":malformed>0,"format":format!("{}-native",source.provider),"issues":if malformed>0 {vec![json!({"code":"invalidRecord","message":"部分原生统计格式无效，将在记录变化后重试；已保留其他计量。"})]} else {vec![]}});
     let tx = store.write_transaction()?;
     crate::import::current_settings(store, settings, source)?;
     store.source_status(&source.id, &result)?;
     tx.commit()?;
+    store.repair_history_estimates()?;
     Ok(result)
 }

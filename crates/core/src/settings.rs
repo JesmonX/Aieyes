@@ -3,6 +3,15 @@ use crate::{Engine, models::*, store::Store};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
+pub(crate) fn decode(mut value: Value) -> Result<Settings> {
+    if let Some(object) = value.as_object_mut()
+        && object.contains_key("preciseCounting")
+    {
+        object.remove("codexPreciseCounting");
+    }
+    Ok(serde_json::from_value(value)?)
+}
+
 // Preserve concurrent edits to unrelated fields and rows. A conflicting field
 // fails before any configuration is written; clients retain their form input.
 fn merge(base: &Value, next: &Value, current: &Value, path: &str) -> Result<Value> {
@@ -82,7 +91,7 @@ impl Store {
     pub fn patch_settings(&self, base: &Value, next: &Value, auth: bool) -> Result<Settings> {
         let tx = self.write_transaction()?;
         let normalize = |v: &Value| -> Result<Value> {
-            let mut s: Settings = serde_json::from_value(v.clone())?;
+            let mut s: Settings = decode(v.clone())?;
             crate::providers::normalize_settings(&mut s);
             Ok(serde_json::to_value(s)?)
         };

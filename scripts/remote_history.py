@@ -4,6 +4,26 @@ import json
 import os
 import sys
 
+def _kimi_inherited_prefix_end(stream):
+    """Only complete fork boundaries prove that the preceding usage was copied."""
+    position, boundary = stream.tell(), 0
+    try:
+        stream.seek(0)
+        while True:
+            line = stream.readline(16 * 1024 * 1024 + 1)
+            if not line:
+                return boundary
+            if len(line) > 16 * 1024 * 1024:
+                raise ValueError('Kimi 单条记录过大')
+            try:
+                value = json.loads(line)
+                if line.endswith(b'\n') and isinstance(value, dict) and value.get('type') == 'forked':
+                    boundary = stream.tell()
+            except (ValueError, UnicodeDecodeError):
+                pass
+    finally:
+        stream.seek(position)
+
 def _harness():
     if '_HARNESS' not in globals():
         from pathlib import Path
@@ -150,9 +170,11 @@ def _agy_iter(path):
                 model = models.get(index) or (next(iter(names)) if len(names) == 1 else 'antigravity-unknown-' + str(numeric))
                 if model.startswith('antigravity-unknown-'):
                     yield {'issue': dict(step=index, code='unknownModel', message='模型身份未知；已保留 Token，暂不计价')}
-                identity = _agy_text(usage, 7) or _agy_text(usage, 11) or 'step:' + str(index)
+                request = _agy_text(usage, 7) or _agy_text(usage, 11)
+                identity = request or 'step:' + str(index)
                 yield {'event': dict(id=identity, sessionId=session, timestamp=end, intervalStart=start,
-                                   intervalEvidence='antigravity-step-v1', model=model, tokens=tokens)}
+                                   intervalEvidence='antigravity-step-v1', model=model, tokens=tokens,
+                                   inheritance=dict(origin=f'request:{request}:{start}:{end}',inherited=False) if request else None)}
             except (ValueError, TypeError, IndexError, OverflowError) as error:
                 yield {'issue': dict(step=index, code='invalidRecord', message=str(error))}
     finally:
@@ -364,9 +386,75 @@ class _CodexHistory:
                     timestamp=stamp, proof=proof, issue='')
 
 
+def _usage_problem(value,provider):
+    limit=2**64-1
+    def counter(n):
+        return type(n) is int and 0<=n<=limit
+    def valid_counts(data,keys):
+        return isinstance(data,dict) and all(counter(data.get(k)) for k in keys) and sum(data[k] for k in keys)<=limit
+    if provider=='kimi' and value.get('type')=='usage.record':
+        return not valid_counts(value.get('usage'),('inputOther','output','inputCacheRead','inputCacheCreation'))
+    if provider=='codebuddy' and value.get('type') in ('function_call','model-usage','message') and value.get('status','completed')=='completed':
+        p=value.get('providerData') or {}
+        def valid(u):
+            if not isinstance(u,dict):return False
+            if set(u)=={'credit'}:return type(u['credit']) in (int,float)
+            keys=('prompt_tokens','completion_tokens') if 'prompt_tokens' in u else ('input_tokens','output_tokens') if 'input_tokens' in u else ('inputTokens','outputTokens')
+            if not valid_counts(u,keys):return False
+            def optional(k):
+                n=u.get(k)
+                if n is None:return 0
+                if not counter(n):raise ValueError()
+                return n
+            def detail(name,key):
+                parts=u.get(name)
+                if parts is None:return 0
+                if isinstance(parts,dict):parts=[parts]
+                if not isinstance(parts,list):raise ValueError()
+                total=0
+                for part in parts:
+                    if not isinstance(part,dict):raise ValueError()
+                    n=part.get(key)
+                    if n is not None and not counter(n):raise ValueError()
+                    total+=n or 0
+                if total>limit:raise ValueError()
+                return total
+            try:
+                exclusive=keys[0]=='input_tokens' and any(k in u for k in ('cache_read_input_tokens','cache_creation_input_tokens'))
+                if exclusive:read,write,reasoning=optional('cache_read_input_tokens'),optional('cache_creation_input_tokens'),detail('output_tokens_details','reasoning_tokens')
+                else:
+                    names={'prompt_tokens':('prompt_tokens_details','completion_tokens_details'),'input_tokens':('input_tokens_details','output_tokens_details'),'inputTokens':('inputTokensDetails','outputTokensDetails')}[keys[0]]
+                    read,write,reasoning=detail(names[0],'cached_tokens'),0,detail(names[1],'reasoning_tokens')
+                total=u[keys[0]]+u[keys[1]]+(read+write if exclusive else 0)
+                return total<=limit and reasoning<=u[keys[1]] and (exclusive or read<=u[keys[0]]) and all(counter(u[k]) and u[k]==total for k in ('total_tokens','totalTokens') if k in u)
+            except ValueError:return False
+        return any(p.get(k) is not None for k in ('rawUsage','usage')) and not any(valid(p.get(k)) for k in ('rawUsage','usage'))
+    if provider=='grok' and value.get('method')=='_x.ai/session/update':
+        update=(value.get('params') or {}).get('update') or {}
+        models=(update.get('usage') or {}).get('modelUsage')
+        if update.get('sessionUpdate')!='turn_completed' or models is None:return False
+        if not isinstance(models,dict):return True
+        for u in models.values():
+            keys=('inputTokens','outputTokens','cachedReadTokens','cacheCreationTokens')
+            if not valid_counts(u,keys):return True
+            reasoning=u.get('reasoningTokens')
+            if reasoning is not None and (not counter(reasoning) or reasoning>u['outputTokens']):return True
+            total=u.get('totalTokens')
+            if total is not None and (not counter(total) or total!=sum(u[k] for k in keys)):return True
+    if provider in ('pi','omp'):
+        data=value.get('message') if value.get('type')=='message' else value
+        if not isinstance(data,dict) or data.get('usage') is None:return False
+        u=data['usage']
+        if not valid_counts(u,('input','output')):return True
+        return any(not counter(u[k]) for k in ('cacheRead','cacheWrite','reasoning') if k in u) or sum(u.get(k,0) for k in ('input','output','cacheRead','cacheWrite'))>limit or u.get('reasoning',0)>u['output']
+    return False
+
+
 def _project(value, provider):
     if provider in ('kimi','codebuddy','grok','qoder','pi','omp') and isinstance(value.get('tokens'),dict):
         event={k:value.get(k) for k in ('id','sessionId','timestamp','model','tokens','billing','intervalStart','intervalEvidence')}
+        if isinstance(value.get('inheritance'),dict):
+            event['inheritance']={k:value['inheritance'].get(k) for k in ('origin','inherited')}
         if provider in ('qoder','codebuddy') and isinstance(value.get('nativeCredits'),dict):
             event['nativeCredits']={k:value['nativeCredits'].get(k) for k in ('credits','originalCredits','billable')}
         return event
@@ -415,10 +503,16 @@ def _project(value, provider):
         elif value.get('type') in ('function_call','model-usage','credit-usage') or value.get('type')=='message' and value.get('role')=='assistant':
             p=value.get('providerData') or {}; u=p.get('rawUsage') or {}
             event={k:value.get(k) for k in ('type','role','id','status','sessionId','timestamp')}
-            raw={k:u[k] for k in ('prompt_tokens','completion_tokens','input_tokens','output_tokens','credit') if k in u}
-            for detail,key in [('prompt_tokens_details','cached_tokens'),('completion_tokens_details','reasoning_tokens'),('input_tokens_details','cached_tokens'),('output_tokens_details','reasoning_tokens')]:
-                if isinstance(u.get(detail),dict):raw[detail]={key:u[detail].get(key)}
-            event['providerData']=dict(model=p.get('model'),messageId=p.get('messageId'),conversationRequestId=p.get('conversationRequestId'),rawUsage=raw)
+            def usage_fields(u):
+                if not isinstance(u,dict):return None
+                raw={k:u[k] for k in ('prompt_tokens','completion_tokens','input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens','inputTokens','outputTokens','total_tokens','totalTokens','credit') if k in u}
+                for detail,key in [('prompt_tokens_details','cached_tokens'),('completion_tokens_details','reasoning_tokens'),('input_tokens_details','cached_tokens'),('output_tokens_details','reasoning_tokens'),('inputTokensDetails','cached_tokens'),('outputTokensDetails','reasoning_tokens')]:
+                    value=u.get(detail)
+                    if isinstance(value,dict):raw[detail]={key:value[key]} if key in value else {}
+                    elif isinstance(value,list):raw[detail]=[{key:p[key]} if isinstance(p,dict) and key in p else {} for p in value]
+                    elif detail in u:raw[detail]=value
+                return raw
+            event['providerData']=dict(model=p.get('model'),messageId=p.get('messageId'),conversationRequestId=p.get('conversationRequestId'),rawUsage=usage_fields(p.get('rawUsage')),usage=usage_fields(p.get('usage')))
             event['providerData'].update({k:p[k] for k in ('requestId','requestModelId','credit','source','stageId') if k in p})
     elif provider == "grok":
         p=value.get('params') or {}; update=p.get('update') or {}; meta=p.get('_meta') or {}
@@ -440,6 +534,8 @@ def _project(value, provider):
             event["message"]['usage']={k:usage[k] for k in keys if k in usage}
     elif "tokens" in value:
         event = {k: value.get(k) for k in ("id", "sessionId", "timestamp", "model", "tokens", "billing", "intervalStart", "intervalEvidence")}
+        if isinstance(value.get('inheritance'),dict):
+            event['inheritance']={k:value['inheritance'].get(k) for k in ('origin','inherited')}
     return event
 
 
@@ -571,9 +667,10 @@ def _qoder_keys(root):
     return [base64.b64encode(key).decode('ascii') for key in keys]
 
 
-def _qoder_hash(path):
+def _qoder_hash(path, preserve_case=False):
     import hashlib
-    normalized = os.path.abspath(os.path.expanduser(path)).replace('\\', '/').lower()
+    normalized = os.path.abspath(os.path.expanduser(path)).replace('\\', '/')
+    if not preserve_case: normalized = normalized.lower()
     return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
 
 
@@ -606,9 +703,10 @@ def _qoder_project_hashes(path, value, session_id):
         roots.append('/' + name[1:].replace('-', '/'))
     result = []
     for root in roots:
-        digest = _qoder_hash(root)
-        if digest not in result:
-            result.append(digest)
+        for preserve_case in (True, False):
+            digest = _qoder_hash(root, preserve_case)
+            if digest not in result:
+                result.append(digest)
     return result
 
 
@@ -692,7 +790,8 @@ def _incremental(request):
     cursor_native=provider=='cursor' and (os.path.basename(root)=='.cursor' or _cursor_private_history(root))
     grok_native = provider=='grok' and os.path.isdir(os.path.join(root,'sessions'))
     cursors = request.get('cursors', {})
-    precise = bool(request.get('codexPreciseCounting', False))
+    precise = bool(request.get('preciseCounting', request.get('codexPreciseCounting', True)))
+    counting_generation = request.get('countingGeneration', 0)
     history = _CodexHistory(root) if provider == 'codex' and precise else None
     fork_issues = []
     issues, failed, invalid_records, read_bytes, file_count, scanned_records = [], 0, 0, 0, 0, 0
@@ -730,7 +829,7 @@ def _incremental(request):
     def jsonl(path):
         nonlocal read_bytes
         old = cursors.get(path, {})
-        if provider == 'codex' and old.get('codexPreciseCounting') != precise:
+        if old.get('preciseCounting', old.get('codexPreciseCounting')) != precise or old.get('countingGeneration', 0) != counting_generation:
             old = {}
         inherited = old.get('inheritedHistory')
         if inherited and history:
@@ -752,7 +851,7 @@ def _incremental(request):
                         prefix_start=256;title_digest=hashlib.sha256(slot).hexdigest()
                 except (ValueError,UnicodeError):pass
             prefix_size = int(old.get('prefixBytes', min(size-prefix_start, 128)))
-            valid = (old.get('identity') == identity and 0 <= offset <= size
+            valid = (old.get('fileVersion') == 2 and old.get('identity') == identity and 0 <= offset <= size
                      and 0 <= prefix_size <= min(size-prefix_start, 128) and old.get('prefixStart',0)==prefix_start
                      and old.get('prefix') == digest(stream, prefix_start, prefix_size)
                      and old.get('anchor') == digest(stream, max(0, offset - 128), min(offset, 128))
@@ -761,13 +860,8 @@ def _incremental(request):
             if not valid:
                 inherited = None
                 offset, prefix_size = 0, min(size-prefix_start, 128)
-                if provider=='kimi':
-                    stream.seek(0)
-                    for line in stream:
-                        if len(line)>16*1024*1024:raise ValueError('Kimi 单条记录过大')
-                        try:
-                            if json.loads(line).get('type')=='forked':offset=stream.tell()
-                        except (ValueError,UnicodeDecodeError):pass
+                if provider == 'kimi':
+                    old['inheritedPrefixEnd'] = _kimi_inherited_prefix_end(stream)
             prefix_size = min(size-prefix_start, 128)
             prefix = digest(stream, prefix_start, prefix_size)
             reset, events, bytes_in_batch = not valid, [], 0
@@ -775,11 +869,12 @@ def _incremental(request):
 
             def flush():
                 nonlocal reset, events, bytes_in_batch, last_commit
-                cursor = dict(identity=identity, prefixStart=prefix_start, titleDigest=title_digest, prefixBytes=prefix_size, prefix=prefix,
+                cursor = dict(fileVersion=2, identity=identity, prefixStart=prefix_start, titleDigest=title_digest, prefixBytes=prefix_size, prefix=prefix,
                               offset=offset, size=size, mtimeNs=metadata.st_mtime_ns,
                               anchor=digest(stream, max(0, offset - 128), min(offset, 128)))
-                if provider == 'codex':
-                    cursor['codexPreciseCounting'] = precise
+                cursor['preciseCounting'] = precise
+                cursor['countingGeneration'] = counting_generation
+                if provider == 'kimi': cursor['inheritedPrefixEnd'] = old.get('inheritedPrefixEnd', 0)
                 if inherited:
                     cursor['inheritedHistory'] = inherited
                 emit('batch', path=path, reset=reset, events=events, cursor=cursor)
@@ -789,21 +884,25 @@ def _incremental(request):
             stream.seek(offset)
             while offset < size:
                 start = stream.tell()
-                line = stream.readline(min(size - start, 64 * 1024 * 1024 + 1))
+                line = stream.readline(min(size - start, 16 * 1024 * 1024 + 1))
                 read_bytes += len(line)
-                if len(line) > 64 * 1024 * 1024:
-                    raise ValueError('单条日志超过 64 MiB，保留上次游标')
+                if len(line) > 16 * 1024 * 1024:
+                    flush()
+                    raise ValueError('单条日志超过 16 MiB，保留失败位置供重试')
                 if not line.endswith(b'\n'):
                     break
                 try:
                     value = json.loads(line)
                 except (ValueError, UnicodeDecodeError):
-                    # Match legacy collectors: complete malformed lines do not contain usable events.
-                    offset = stream.tell()
-                    if offset - last_commit >= 8 * 1024 * 1024:
-                        flush()
-                    continue
+                    flush()
+                    issue(path,'记录格式无效，已保留失败位置供重试','invalidRecord')
+                    return
+                if not isinstance(value,dict) or _usage_problem(value,provider):
+                    flush()
+                    issue(path,'用量记录格式无效，已保留失败位置供重试','invalidRecord')
+                    return
                 event = _project(value, provider)
+                if event and provider == 'kimi': event['_aieyesInherited'] = stream.tell() <= old.get('inheritedPrefixEnd', 0)
                 if event and history and event['type'] == 'session_meta' and 'history_base' in event['payload']:
                     inherited = history.resolve(event['payload']['history_base'])
                     event['inheritedHistory'] = inherited
@@ -832,8 +931,10 @@ def _incremental(request):
         native = root if os.path.basename(root) == 'conversations' else os.path.join(root, 'conversations')
         zcode_db = _zcode_database(root) if provider=='zcode' else None
         opencode_db = _opencode_database(root) if provider=='opencode' else None
-        harness_paths=_harness()['paths'](root) if provider=='deepseek-harness' else []
-        if harness_paths:
+        harness_paths,discovery_issues=_harness()['discover'](root) if provider=='deepseek-harness' else ([],[])
+        if harness_paths or discovery_issues:
+            for item in discovery_issues:
+                failed+=1;issue(item['path'],item['message'],item['code'])
             for path in harness_paths:
                 path=str(path);file_count+=1
                 signature=_harness()['fingerprint'](path)
@@ -859,7 +960,7 @@ def _incremental(request):
             path=zcode_db or opencode_db;file_count+=1
             if os.path.islink(path):raise ValueError('Select the actual native database rather than a symbolic link')
             try:
-                stats=_native_database()['history'](path,provider,cursors.get(path,{}),emit)
+                stats=_native_database()['history_all'](path,provider,cursors,emit)
                 read_bytes+=stats['readBytes'];scanned_records+=stats['scannedRecords']
             except Exception as error:
                 failed+=1;issue(path,error)
@@ -1002,6 +1103,7 @@ try:
     for path in sorted(files):
         events = []
         with open(path, "rb") as stream:
+            inherited_prefix_end = _kimi_inherited_prefix_end(stream) if provider == 'kimi' else 0
             for line in stream:
                 if not line.endswith(b"\n"):
                     continue
@@ -1010,6 +1112,7 @@ try:
                 except (ValueError, UnicodeDecodeError):
                     continue
                 event = _project(value, provider)
+                if event and provider == 'kimi': event['_aieyesInherited'] = stream.tell() <= inherited_prefix_end
                 if event:
                     size += len(json.dumps(event))
                     if size > 48 * 1024 * 1024:

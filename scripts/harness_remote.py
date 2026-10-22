@@ -111,7 +111,7 @@ async function main(){
    first=false;version=v.version;legacySeed=version===0?(number(v.seedLength)||0):0;seeded=version===4&&v.isSeeded===true;session=mode==='history'?text(v.id):short(v.id);if(!session)throw Error();
    await emit(mode==='history'?{type:'session',version,id:session,isSeeded:seeded,harnessVersion:version}:{kind:'identity',session,at:0});return;
   }
-  if(version===0&&number(v.seq)<legacySeed)return;
+  if(mode!=='history'&&version===0&&number(v.seq)<legacySeed)return;
   if(v.type==='session')throw Error();
   if(v.type==='session/end-seed'){seeded=false;if(mode==='history')await emit({type:v.type});return;}
   const d=v.data&&typeof v.data==='object'?v.data:{};
@@ -119,7 +119,7 @@ async function main(){
    if(v.type!=='assistant/message')return;
    const source=d.message?.source||{},u=d.usage||{},usage={};
    for(const k of ['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','reasoningTokens','totalTokens']){const n=number(u[k]);if(n!==undefined)usage[k]=n;}
-   await emit({type:v.type,harnessVersion:version,seq:number(v.seq),time:number(v.time),data:{turn:number(d.turn),step:number(d.step),message:{source:{kind:text(source.kind),provider:text(source.provider),model:text(source.model)}},usage}});return;
+   await emit({type:v.type,_aieyesInherited:seeded||(version===0&&number(v.seq)<legacySeed),harnessVersion:version,seq:number(v.seq),time:number(v.time),data:{turn:number(d.turn),step:number(d.step),message:{source:{kind:text(source.kind),provider:text(source.provider),model:text(source.model)}},usage}});return;
   }
   if(seeded)return;
   let kind={'turn/start':'start','step/start':'thinking','tool/call':'tool','tool/result':'output'}[v.type];
@@ -183,6 +183,12 @@ def generation(path):
 
 
 def paths(root):
+    files,issues=discover(root)
+    if issues:raise ValueError(issues[0]['message'])
+    return files
+
+
+def discover(root):
     root=pathlib.Path(root);explicit=root.is_file()
     if explicit and root.is_symlink():raise ValueError('Select the actual Harness session file rather than a symbolic link')
     if explicit:candidates=[root]
@@ -196,15 +202,16 @@ def paths(root):
         if path.is_symlink() or not path.is_file():continue
         version=generation(path)
         if version is None:continue
-        if version>4:raise ValueError('Harness session version newer than v4 is unsupported')
         selected.setdefault(path.parent,{}).setdefault(version,[]).append(path)
-    result=[]
+    result=[];issues=[]
     for versions in selected.values():
         version=max(versions);files=versions[version]
-        if not explicit and len(files)>1:raise ValueError('Harness session has conflicting plaintext and compressed encodings; select one file explicitly')
-        if version not in (0,4):raise ValueError('Harness v1-v3 statistics are not yet supported; preserve original records')
-        result.append(files[0])
-    return sorted(result)
+        error=('Harness session version newer than v4 is unsupported' if version>4 else
+               'Harness session has conflicting plaintext and compressed encodings; select one file explicitly' if not explicit and len(files)>1 else
+               'Harness v1-v3 statistics are not yet supported; preserve original records' if version not in (0,4) else None)
+        if error:issues.append(dict(path=str(files[0]),code='unsupportedHistory',message=error))
+        else:result.append(files[0])
+    return sorted(result),issues
 
 
 def project(path,mode,timeout=8,cursor=None,checkpoint=None):

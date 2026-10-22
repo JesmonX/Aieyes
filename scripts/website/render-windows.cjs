@@ -1,10 +1,9 @@
-/* Actual Tauri frontend, production English catalog, synthetic IPC only. */
+/* Actual Tauri frontend, production bilingual catalog, synthetic IPC only. */
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {execFileSync}=require('node:child_process');
 const {chromium}=require('../../apps/desktop/node_modules/playwright');
 const {encode}=require('./encode.cjs');
 const root=path.resolve(__dirname,'../..'),web=path.join(root,'apps/desktop/web');
-const data=JSON.parse(execFileSync('python3',[path.join(__dirname,'fixture.py'),'--fixture'],{encoding:'utf8',maxBuffer:16*1024*1024}));
 function install(data){
   const NativeDate=Date;
   window.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:[1792584060000]));}static now(){return 1792584060000;}};
@@ -19,7 +18,7 @@ function install(data){
     return structuredClone(results[args.method]??{});
   }}};
   localStorage.setItem('aieyes.appearance',JSON.stringify(data.settings.appearance));
-  localStorage.setItem('aieyes.language','en');
+  localStorage.setItem('aieyes.language',data.settings.appearance.language);
   localStorage.setItem('quota.expanded.v2.detail.codex:codex','true');
   localStorage.setItem('quota.expanded.v2.panel.codex:codex','true');
 }
@@ -33,8 +32,14 @@ function install(data){
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const browser=await chromium.launch(),origin=`http://127.0.0.1:${server.address().port}`;
-  const out=path.join(root,'apps/website/public/screenshots');fs.mkdirSync(out,{recursive:true});
-  const context=await browser.newContext({viewport:{width:1360,height:1000},deviceScaleFactor:1,colorScheme:'dark',locale:'en-US',reducedMotion:'reduce'});
+  try{
+  const requested=process.argv.includes('--language')?process.argv[process.argv.indexOf('--language')+1]:'all';
+  if(!['all','en','zh-CN'].includes(requested))throw Error('Unsupported preview language');
+  for(const language of requested==='all'?['en','zh-CN']:[requested]){
+  const data=JSON.parse(execFileSync('python3',[path.join(__dirname,'fixture.py'),'--fixture'],{encoding:'utf8',maxBuffer:16*1024*1024,env:{...process.env,AIEYES_LANGUAGE:language}}));
+  const out=path.join(root,'apps/website/public/screenshots',language);fs.mkdirSync(out,{recursive:true});
+  const native=path.join(root,'.local/website/windows',language);fs.mkdirSync(native,{recursive:true});
+  const context=await browser.newContext({viewport:{width:1360,height:1000},deviceScaleFactor:1,colorScheme:'dark',locale:language==='en'?'en-US':'zh-CN',reducedMotion:'reduce'});
   await context.addInitScript(install,data);
   const errors=[],unknown={};
   try{
@@ -53,15 +58,19 @@ function install(data){
       await page.evaluate(async()=>{await AieyesTheme.loadFonts();await document.fonts.ready;});
       await page.waitForTimeout(220);
       unknown[feature]=await page.locator('body').innerText();
-      const png=await page.screenshot({path:path.join(root,'.local/website',`windows-${feature}.png`),animations:'disabled'});
+      const png=await page.screenshot({path:path.join(native,`windows-${feature}.png`),animations:'disabled'});
       fs.writeFileSync(path.join(out,`windows-${feature}.webp`),await encode(page,png));
-      console.log(`Rendered windows-${feature}`);
+      console.log(`Rendered ${language} windows-${feature}`);
     }
     const panel=await context.newPage();await panel.setViewportSize({width:450,height:720});
     await panel.goto(origin+'/floating.html');await panel.evaluate(()=>AieyesApp.ready);await panel.evaluate(()=>AieyesTheme.loadFonts());
-    const png=await panel.screenshot({path:path.join(root,'.local/website/windows-panel.png'),animations:'disabled'});
+    const png=await panel.screenshot({path:path.join(native,'windows-panel.png'),animations:'disabled'});
     fs.writeFileSync(path.join(out,'windows-panel.webp'),await encode(panel,png));
-    fs.writeFileSync(path.join(root,'.local/website/windows-text.json'),JSON.stringify(unknown,null,2));
+    console.log(`Rendered ${language} windows-panel`);
+    fs.writeFileSync(path.join(native,'windows-text.json'),JSON.stringify(unknown,null,2));
     if(errors.length)throw Error(errors.join('\n'));
+  }finally{await context.close();}
+  if(language==='en')for(const name of fs.readdirSync(out).filter(name=>/^windows-.*\.webp$/.test(name)))fs.copyFileSync(path.join(out,name),path.join(out,'..',name));
+  }
   }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

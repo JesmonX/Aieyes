@@ -288,6 +288,20 @@ function browserFixture(){
     installedZcode=JSON.parse(fs.readFileSync(zcodeConfig));assert.deepEqual(installedZcode.hooks.events.PreToolUse,[foreignZcode]);assert.equal(installedZcode.mcp.keep,true);
     await page.locator('#session-hooks [data-hook-toggle]').click();await page.locator('#session-hooks [data-hook-label]').getByText('已安装',{exact:true}).waitFor();
     await page.screenshot({animations:'disabled',path:path.join(out,'zcode-session-hooks.png')});await page.locator('#session-hooks [data-close]').click();
+    const buddyHome=path.join(root,'.codebuddy');fs.mkdirSync(buddyHome);
+    const buddyConfig=path.join(buddyHome,'settings.json'),foreignBuddy={hooks:[{type:'command',command:'other-observer'}]};
+    fs.writeFileSync(buddyConfig,JSON.stringify({theme:'keep',hooks:{PreToolUse:[foreignBuddy]}}));
+    const buddySettings=await rpc('settings.get');buddySettings.sources.push({id:'codebuddy-ui',provider:'codebuddy',name:'CodeBuddy UI',path:buddyHome,enabled:true});
+    const buddyAgent=buddySettings.agents.find(a=>a.provider==='codebuddy');buddyAgent.enabled=true;buddyAgent.machineIds=['local'];await rpc('settings.save',buddySettings);
+    await page.evaluate(async()=>{state.settings=await api('settings.get');AieyesAgentSettings.navigate({provider:'codebuddy'});render();});
+    if(!await page.locator('#agent-section-machines').evaluate(el=>el.open))await page.locator('#agent-section-machines > summary').click();
+    await page.locator('[data-machine-hooks="codebuddy"][data-machine="local"]').click();
+    await page.locator('#session-hooks [data-hook-repair]').click();await page.locator('#session-hooks [data-hook-label]').getByText('已安装',{exact:true}).waitFor();
+    let installedBuddy=JSON.parse(fs.readFileSync(buddyConfig));assert.deepEqual(installedBuddy.hooks.PreToolUse[0],foreignBuddy);assert(installedBuddy.hooks.PermissionRequest.length);assert(installedBuddy.hooks.SubagentStop.length);
+    await page.locator('#session-hooks [data-hook-toggle]').click();await page.locator('#session-hooks [data-hook-label]').getByText('已停用',{exact:true}).waitFor();
+    installedBuddy=JSON.parse(fs.readFileSync(buddyConfig));assert.deepEqual(installedBuddy.hooks.PreToolUse,[foreignBuddy]);assert.equal(installedBuddy.theme,'keep');
+    await page.locator('#session-hooks [data-hook-toggle]').click();await page.locator('#session-hooks [data-hook-label]').getByText('已安装',{exact:true}).waitFor();
+    await page.screenshot({animations:'disabled',path:path.join(out,'codebuddy-session-hooks.png')});await page.locator('#session-hooks [data-close]').click();
     // Two normal accounts coexist in the compact floating panel renderer.
     const panel=await browser.newPage({viewport:{width:450,height:900}});await panel.exposeFunction('testRPC',invoke);await panel.addInitScript(browserFixture);panel.on('pageerror',e=>errors.push(String(e)));await panel.goto(`http://127.0.0.1:${server.address().port}/floating.html`);await panel.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);assert(await panel.getByText('个人 Codex',{exact:true}).count());assert(await panel.getByText('工作 Codex',{exact:true}).count());await panel.screenshot({path:path.join(out,'panel.png'),fullPage:true});
     for(const theme of ['light','dark'])for(const accent of ['indigo','blue','teal','purple']){

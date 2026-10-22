@@ -10,10 +10,11 @@ MARKER = '--aieyes-session-hook'
 CLAUDE = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop', 'Stop', 'StopFailure', 'SessionEnd', 'Elicitation', 'ElicitationResult']
 AGY = ['SessionStart', 'PreInvocation', 'PostToolUse', 'PostInvocation', 'Stop']
 ZCODE = ['SessionStart','UserPromptSubmit','PreToolUse','PermissionRequest','PostToolUse','PostToolUseFailure','Stop']
+CODEBUDDY = CLAUDE + ['PermissionDenied']
 CURSOR = ['sessionStart','beforeSubmitPrompt','preToolUse','postToolUse','postToolUseFailure','afterAgentThought','stop','sessionEnd']
 def hook_names(provider):
-    return CLAUDE if provider=='claude' else CURSOR if provider=='cursor' else ZCODE if provider=='zcode' else AGY
-EVENT_KEYS = {'kind', 'session', 'sessionSource', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification'}
+    return CODEBUDDY if provider=='codebuddy' else CLAUDE if provider=='claude' else CURSOR if provider=='cursor' else ZCODE if provider=='zcode' else AGY
+EVENT_KEYS = {'kind', 'session', 'sessionSource', 'parentSession', 'parentSessionPath', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification'}
 
 def text(value):
     return value[:256] if isinstance(value, str) else ''
@@ -33,7 +34,7 @@ def native_database():
     return globals()['_NATIVE_DATABASE']
 
 def target(source):
-    path = pathlib.Path(os.path.expanduser(source.get('path') or ('~/.gemini/antigravity-cli' if source['provider'] == 'antigravity' else '~/.cursor' if source['provider']=='cursor' else '~/.zcode' if source['provider']=='zcode' else '~/.claude')))
+    path = pathlib.Path(os.path.expanduser(source.get('path') or ('~/.gemini/antigravity-cli' if source['provider'] == 'antigravity' else '~/.cursor' if source['provider']=='cursor' else '~/.zcode' if source['provider']=='zcode' else '~/.codebuddy' if source['provider']=='codebuddy' else '~/.claude')))
     if source['provider']=='zcode':
         home=path if path.name=='cli' else path.parent.parent if path.suffix=='.sqlite' and path.parent.name=='db' else path/'cli'
         return home,home/'config.json',True
@@ -157,7 +158,7 @@ def process_info(pid):
     except (OSError, ValueError, StopIteration): return None
 
 def ancestor(provider):
-    if provider in ('cursor','zcode'):return 0,0
+    if provider in ('cursor','zcode','codebuddy'):return 0,0
     pid = os.getppid()
     for _ in range(8):
         p = process_info(pid)
@@ -180,12 +181,18 @@ def observe(provider, kind, home):
         data = inbox.get(timeout=.5)
         if len(data) > 1024*1024: return
         v = json.loads(data)
-        session = text((v.get('conversation_id') or v.get('session_id')) if provider=='cursor' else v.get('session_id') or v.get('conversationId'))
+        session = text((v.get('conversation_id') or v.get('session_id')) if provider=='cursor' else v.get('session_id') or v.get('conversationId') or v.get('sessionId'))
         if not session: return
-        row = dict(kind=kind, at=at, session=session, turn=text(v.get('turn_id') or v.get('turnId')), call=text(v.get('tool_use_id') or v.get('agent_id') or v.get('elicitation_id')), tool=text((v.get('toolCall') or {}).get('name') if provider == 'antigravity' else v.get('tool_name')), notification=text(v.get('notification_type')))
+        row = dict(kind=kind, at=at, session=session, turn=text(v.get('turn_id') or v.get('turnId') or v.get('prompt_id')), call=text(v.get('tool_use_id') or v.get('agent_id') or v.get('elicitation_id')), tool=text((v.get('toolCall') or {}).get('name') if provider == 'antigravity' else v.get('tool_name')), notification=text(v.get('notification_type')))
+        row['parentSession']=text(v.get('parent_session_id') or v.get('parentSessionId'))
+        if provider in ('claude','codebuddy') and kind not in ('SubagentStart','SubagentStop') and text(v.get('agent_id')):
+            row['parentSession']=session
+            session=row['session']=session+':'+text(v.get('agent_id'))
+        if provider=='codebuddy' and isinstance(v.get('background_tasks'),list):row['fullyIdle']=not v['background_tasks']
         if isinstance(v.get('fullyIdle'), bool): row['fullyIdle'] = v['fullyIdle']
         row['failed'] = kind == 'StopFailure' or (kind == 'Stop' and (v.get('terminationReason') == 'error' or bool(v.get('error'))))
         row['interrupted'] = any(s in str(v.get('terminationReason', '')) for s in ['cancel', 'interrupt'])
+        if kind=='PostToolUseFailure' and v.get('is_interrupt') is True:row.update(kind='interrupted',interrupted=True)
         if provider=='cursor':
             terminal=lambda status: {'completed':'complete','error':'failed','aborted':'interrupted','window_close':'interrupted','user_close':'interrupted'}.get(status,'unknown')
             event={'sessionStart':'SessionStart','beforeSubmitPrompt':'start','preToolUse':'PreToolUse','postToolUse':'PostToolUse','postToolUseFailure':'PostToolUseFailure','afterAgentThought':'thinking'}.get(kind,'unknown')
@@ -224,11 +231,16 @@ def metadata(v, provider, hook):
         kind = 'identity' if v.get('type') == 'session_meta' else kinds.get(key)
         if not kind:return []
         row=dict(kind=kind,at=at,session=text(p.get('id')) if kind=='identity' else '',turn=text(p.get('turn_id')),call=text(p.get('call_id')),tool=text(p.get('name')))
-        if kind=='identity':row['sessionSource']=text(p.get('source'))
+        if kind=='identity':
+            row['sessionSource']=text(p.get('source'))
+            source=p.get('source')
+            if isinstance(source,dict):row['parentSession']=text(((source.get('subagent') or {}).get('thread_spawn') or {}).get('parent_thread_id'))
         return [row]
     rows = []; message = v.get('message') or {}; content = message.get('content')
     content = content if isinstance(content,list) else []
-    base = dict(at=at,session=text(v.get('sessionId')))
+    base = dict(at=at,session=text(v.get('sessionId')),parentSession=text(v.get('parentSessionId') or v.get('parent_session_id')))
+    if v.get('isSidechain') is True and text(v.get('agentId')):
+        base['parentSession']=base['session'];base['session']+=':'+text(v.get('agentId'))
     if v.get('type') == 'user':
         results = [p for p in content if isinstance(p,dict) and p.get('type')=='tool_result']
         if not results and not v.get('isMeta'): rows.append(dict(base,kind='start',turn=text(v.get('uuid'))))
@@ -243,8 +255,8 @@ def metadata(v, provider, hook):
     return rows
 
 def pi_metadata(v):
-    base=dict(at=milliseconds(v.get('timestamp')),record=text(v.get('id')),parent=text(v.get('parentId')))
-    if v.get('type')=='session':return [dict(base,kind='identity',session=text(v.get('id')))]
+    base=dict(at=milliseconds(v.get('timestamp')),record=text(v.get('id')),parent=text(v.get('parentId')),parentSession=text(v.get('parentSessionId') or v.get('parent_session_id')))
+    if v.get('type')=='session':return [dict(base,kind='identity',session=text(v.get('id')),parentSessionPath=text(v.get('parentSession')))]
     data=v.get('data') or {}
     if v.get('type')=='custom' and v.get('customType')=='tool_execution_start':
         return [dict(base,kind='tool',call=text(data.get('toolCallId')),tool=text(data.get('toolName')))]
@@ -265,9 +277,10 @@ def native_metadata(v, provider):
     kind=None; row={}
     if provider=='kimi':
         row=dict(at=v.get('time',0),turn=str(v['turnId']) if 'turnId' in v else '')
-        kind={'turn.prompt':'start','llm.request':'thinking'}.get(v.get('type'))
+        kind={'turn.prompt':'start','llm.request':'thinking','interaction.request':'Elicitation','interaction.resolved':'ElicitationResult'}.get(v.get('type'))
+        if v.get('type') in ('interaction.request','interaction.resolved'):row.update(call=text(v.get('id') or v.get('interactionId')),tool=text(v.get('toolName')))
         if v.get('type')=='turn.ended':
-            kind={'completed':'complete','cancelled':'interrupted','failed':'failed','blocked':'PermissionRequest'}.get(v.get('reason'))
+            kind={'completed':'complete','cancelled':'interrupted','canceled':'interrupted','interrupted':'interrupted','error':'failed','failed':'failed','blocked':'PermissionRequest'}.get(v.get('reason'))
         if v.get('type')=='context.append_loop_event':
             event=v.get('event') or {}
             kind={'tool.call':'tool','tool.result':'output'}.get(event.get('type'))
@@ -277,7 +290,11 @@ def native_metadata(v, provider):
             kind={'TurnBegin':'start','StepBegin':'thinking','ToolCall':'tool','ToolResult':'output','TurnEnd':'complete','TurnInterrupted':'interrupted'}.get(v['message'].get('type'))
     elif provider=='grok':
         row=dict(at=milliseconds(v.get('ts')),session=text(v.get('session_id')),turn=str(v['turn_number']) if 'turn_number' in v else '')
-        kind={'turn_started':'start'}.get(v.get('type'))
+        kind={'turn_started':'start','tool_started':'tool','tool_completed':'output','tool_finished':'output','tool_failed':'output','permission_requested':'PermissionRequest','permission_resolved':'ElicitationResult','permission_response':'ElicitationResult','permission_responded':'ElicitationResult'}.get(v.get('type'))
+        if kind in ('tool','output'):row.update(call=text(v.get('tool_call_id') or v.get('call_id') or v.get('id')),tool=text(v.get('tool_name') or v.get('name')))
+        if kind=='tool' and not row.get('call'):kind='anonymous_tool'
+        if kind in ('PermissionRequest','ElicitationResult'):row['call']=text(v.get('permission_id') or v.get('request_id') or v.get('tool_call_id') or v.get('call_id'))
+        if v.get('type')=='phase_changed' and v.get('phase')=='tool_execution':kind='tool_phase'
         if v.get('type')=='phase_changed' and v.get('phase')=='waiting_for_model':kind='thinking'
         if v.get('type')=='turn_ended':kind={'completed':'complete','cancelled':'interrupted','interrupted':'interrupted','failed':'failed','error':'failed'}.get(v.get('outcome'))
     elif provider=='codebuddy':
@@ -288,9 +305,16 @@ def native_metadata(v, provider):
             if v.get('role')=='user':
                 kind='start'
                 if not row['turn']:row['turn']=row['record']
-            elif v.get('role')=='assistant' and v.get('status')=='completed':kind='complete'
+            elif v.get('role')=='assistant' and v.get('status')=='completed':
+                kind='thinking' if isinstance(p.get('messageId'),str) and p.get('rawUsage') is None and p.get('usage') is None else 'complete'
+            elif v.get('role')=='assistant' and v.get('status')=='incomplete' and p.get('skipRun') is True and isinstance(p.get('error'),dict):
+                error=p['error']
+                kind='interrupted' if error.get('message')=='Interrupted by user' else 'failed' if error.get('isRetryable') is False else 'unknown'
+        if v.get('type') in ('message','function_call_output','function_call_result') and v.get('status')=='incomplete' and p.get('skipRun') is True and (p.get('error') or {}).get('message')=='Interrupted by user':kind='interrupted'
         row.update(call=text(v.get('callId') or v.get('call_id')),tool=text(v.get('name')))
         if not kind and row['record']:kind='identity'
+        if v.get('isSidechain') is True and text(v.get('agentId')):
+            row['parentSession']=row['session'];row['session']+=':'+text(v.get('agentId'))
     else:
         data=v.get('data') or {}
         row=dict(at=v.get('time',0),turn=str(data['turn']) if 'turn' in data else '')
@@ -299,41 +323,80 @@ def native_metadata(v, provider):
         if v.get('type')=='turn/end':
             kind={'completed':'complete','aborted':'interrupted','interrupted':'interrupted','error':'failed','max-tokens':'failed','blocked':'PermissionRequest'}.get((data.get('reason') or {}).get('kind'))
         row.update(call=text(data.get('callId')),tool=text(data.get('name')))
-    if kind: row['kind']=kind; return [row]
+    if kind:
+        row['kind']=kind
+        if 'parentSession' not in row:row['parentSession']=text(v.get('parentSessionId') or v.get('parent_session_id'))
+        return [row]
     return []
 
+def kimi_parent(path):
+    if path.parent.parent.name!='agents':return ''
+    root=path.parent.parent.parent
+    try:
+        with (root/'state.json').open('rb') as f:raw=f.read(1024*1024+1)
+        if len(raw)>1024*1024:return ''
+        data=json.loads(raw);agents=data.get('agents') or {};agent=path.parent.name
+        parent=(agents.get(agent) or {}).get('parentAgentId')
+        if data.get('id')==root.name and isinstance(parent,str) and parent and parent!=agent and isinstance(agents.get(parent),dict):return root.name+':'+parent
+    except (OSError,ValueError,TypeError,AttributeError):pass
+    return ''
+
 def read_file(path, provider, hook, cursor):
-    stat = path.stat(); size = stat.st_size; modified = int(stat.st_mtime)
-    identity = str(stat.st_ino)
-    reset = cursor.get('identity') != identity or size < cursor.get('offset',0) or (size == cursor.get('size') and str(stat.st_mtime_ns) != cursor.get('signature'))
-    offset = max(0,size-262144) if reset else cursor.get('offset',0)
-    rows = []; complete = 0
-    if reset or offset != size or cursor.get('signature') != str(stat.st_mtime_ns):
+    limit=16*1024*1024
+    stat=path.stat();size=stat.st_size;modified=int(stat.st_mtime)
+    identity='%s:%s'%(stat.st_dev,stat.st_ino)
+    signature='%s:%s'%(stat.st_mtime_ns,stat.st_ctime_ns)
+    reset=(cursor.get('identity')!=identity or size<cursor.get('offset',0)
+           or size==cursor.get('size') and signature!=cursor.get('signature'))
+    offset=cursor.get('offset',0)
+    rows=[];anchor=cursor.get('anchor','')
+    if reset or offset!=size or signature!=cursor.get('signature'):
         with path.open('rb') as f:
-            f.seek(offset); data = f.read(524288)
-            if reset and offset:
-                prefix, sep, data = data.partition(b'\n'); offset += len(prefix) + len(sep)
+            if not reset and anchor:
+                f.seek(max(0,offset-128))
+                reset=hashlib.sha256(f.read(min(offset,128))).hexdigest()!=anchor
             if reset:
+                if provider=='codebuddy' and not hook and path.parent.name=='subagents' and path.stem.startswith('agent-'):
+                    rows.append(dict(kind='identity',parentSessionPath=str(path.parent.parent.with_suffix('.jsonl'))))
+                if provider=='kimi' and not hook:
+                    parent=kimi_parent(path)
+                    if parent:rows.append(dict(kind='identity',parentSession=parent))
+                offset=max(0,size-262144)
+                target=offset
+                while offset:
+                    start=max(0,offset-65536);f.seek(start);chunk=f.read(offset-start)
+                    index=chunk.rfind(b'\n')
+                    if index>=0:offset=start+index+1;break
+                    offset=start
+                    if target-offset>limit:raise ValueError('Session record exceeds 16 MiB; retry position retained')
                 f.seek(0)
                 for _ in range(2 if provider in ('codex','pi','omp') else 1):
-                    try: rows.extend(e for e in metadata(json.loads(f.readline(65536)), provider, hook) if e.get('kind') == 'identity' and (e.get('session') or e.get('sessionSource')))
-                    except (ValueError, TypeError): pass
-            complete = data.rfind(b'\n') + 1
-            for line in data[:complete].splitlines():
+                    line=f.readline(limit+1)
+                    if len(line)>limit:raise ValueError('Session record exceeds 16 MiB; retry position retained')
+                    if not line.endswith(b'\n'):break
+                    try:rows.extend(e for e in metadata(json.loads(line),provider,hook) if e.get('kind')=='identity' and (e.get('session') or e.get('sessionSource')))
+                    except (ValueError,TypeError):pass
+            f.seek(offset);start=offset
+            while True:
+                line=f.readline(limit+1)
+                if len(line)>limit:raise ValueError('Session record exceeds 16 MiB; retry position retained')
+                if not line.endswith(b'\n'):break
+                offset+=len(line)
                 try:
                     value=json.loads(line)
-                    if provider=='kimi' and value.get('type')=='forked':rows=[]
+                    if provider=='kimi' and value.get('type')=='forked':rows=[r for r in rows if r.get('kind')=='identity' and r.get('parentSession')]
                     rows.extend(metadata(value,provider,hook))
-                except (ValueError,TypeError,AttributeError): pass
-            if not complete and len(data) == 524288: complete=len(data)
-    pid = cursor.get('pid',0); start = cursor.get('processStart',0)
+                except (ValueError,TypeError,AttributeError):pass
+                if offset-start>=524288:break
+            f.seek(max(0,offset-128));anchor=hashlib.sha256(f.read(min(offset,128))).hexdigest()
+    pid=cursor.get('pid',0);start=cursor.get('processStart',0)
     for row in rows:
-        if row.get('pid'): pid=row['pid']; start=row.get('processStart',0)
-    alive = None
+        if row.get('pid'):pid=row['pid'];start=row.get('processStart',0)
+    alive=None
     if pid and pathlib.Path('/proc').is_dir():
         p=process_info(pid)
-        alive = (not start or p[2]==start) if p else (None if pathlib.Path('/proc/%d' % pid).exists() else False)
-    return dict(key=str(path), identity=identity, signature=str(stat.st_mtime_ns), size=size, modified=modified, offset=offset+complete, reset=reset, events=rows, hook=hook,alive=alive)
+        alive=(not start or p[2]==start) if p else (None if pathlib.Path('/proc/%d'%pid).exists() else False)
+    return dict(key=str(path),identity=identity,signature=signature,anchor=anchor,size=size,modified=modified,offset=offset,reset=reset,events=rows,hook=hook,alive=alive)
 
 def database_fingerprint(path):
     def stamp(p):
@@ -553,7 +616,8 @@ def collect_native(source,cursors,database_cache=False,harness_deadline=None):
         if provider=='deepseek-harness':
             if harness_deadline is None:harness_deadline=time.monotonic()+8
             if not path.exists():raise FileNotFoundError('Harness data directory does not exist')
-            files=harness()['paths'](path)
+            files,issues=harness()['discover'](path)
+            if issues:result['error']=issues[0]['message']
             stamps=((f.stat().st_mtime,f) for f in files)
             recent=[f for _,f in sorted((row for row in stamps if time.time()-row[0]<86400),reverse=True)]
             if len(recent)>256:result['error']='Too many recent sessions; showing the most recent 256'
@@ -573,7 +637,7 @@ def collect_native(source,cursors,database_cache=False,harness_deadline=None):
         if not path.exists(): raise FileNotFoundError('Agent data directory does not exist')
         roots=[] if provider=='cursor' else [(path / ('sessions' if provider in ('codex','kimi','grok','pi','omp') else 'projects' if provider in ('claude','codebuddy','qoder') else 'conversations'),False)]
         if roots and not roots[0][0].is_dir(): roots=[(path,False)]
-        if provider in ('claude','antigravity','cursor'): roots.append((target(source)[0]/'.aieyes/session-events',True))
+        if provider in ('claude','antigravity','cursor','codebuddy'): roots.append((target(source)[0]/'.aieyes/session-events',True))
         files=recent_files(provider,roots)
         if len(files)>256: result['error']='Too many recent sessions; showing the most recent 256'
         for _,f,hook in sorted(files,reverse=True)[:256]:
@@ -602,7 +666,7 @@ def main(request):
     action=request.get('action','collect'); sources=request.get('sources',[])
     hooks=[]; seen=set()
     for s in sources:
-        if s['provider'] not in ('claude','antigravity','cursor','zcode'): continue
+        if s['provider'] not in ('claude','antigravity','cursor','zcode','codebuddy'): continue
         key=(s['provider'],str(target(s)[0]))
         if key in seen: continue
         seen.add(key); hooks.append(manage(s,'ensure' if action=='collect' else action))

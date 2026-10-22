@@ -137,14 +137,14 @@ import Foundation
             precondition(saved.accounts[0].quotaResetNotifications == preferences, "Account notification overrides must round-trip, including return to inheritance")
             precondition(model.settingsDraft == saved)
         }
-        precondition(model.settings.codexPreciseCounting != true)
-        for precise in [true, false] {
-            model.settingsDraft.codexPreciseCounting = precise
+        precondition(model.settings.preciseCounting == true)
+        for precise in [false, true, false] {
+            model.settingsDraft.preciseCounting = precise
             await model.saveGeneralConfiguration()
             let saved: Settings = try await other.call("settings.get")
-            precondition(saved.codexPreciseCounting == precise && model.settingsDraft == saved, "Precise counting must round-trip through general autosave")
+            precondition(saved.preciseCounting == precise && model.settingsDraft == saved, "Precise counting must round-trip through general autosave")
         }
-        print("Native precise counting: default off, enable and disable autosave passed")
+        print("Native shared precise counting: default on, disable/enable/disable autosave passed")
         print("Native notification defaults: real-core general autosave and draft synchronization passed")
         print("Native account notification overrides: enable, disable and restore inheritance passed")
         print("Native source-level automatic opt-in and disable: real-core persistence and draft synchronization passed")

@@ -465,15 +465,22 @@ fn project_hashes(path: &Path, value: &Value, session_id: &str) -> Vec<String> {
     }
     let mut hashes = Vec::new();
     for root in roots {
-        let hash = project_hash(&root);
-        if !hash.is_empty() && !hashes.contains(&hash) {
-            hashes.push(hash);
+        for lowercase in [false, true] {
+            let hash = project_hash_case(&root, lowercase);
+            if !hash.is_empty() && !hashes.contains(&hash) {
+                hashes.push(hash);
+            }
         }
     }
     hashes
 }
 
+#[cfg(test)]
 fn project_hash(root: &str) -> String {
+    project_hash_case(root, true)
+}
+
+fn project_hash_case(root: &str, lowercase: bool) -> String {
     let path = Path::new(root);
     let path = if path.is_absolute() {
         path.to_path_buf()
@@ -492,10 +499,12 @@ fn project_hash(root: &str) -> String {
             other => normalized.push(other.as_os_str()),
         }
     }
-    let normalized = normalized
-        .to_string_lossy()
-        .replace('\\', "/")
-        .to_lowercase();
+    let normalized = normalized.to_string_lossy().replace('\\', "/");
+    let normalized = if lowercase {
+        normalized.to_lowercase()
+    } else {
+        normalized
+    };
     bytes_hash(normalized.as_bytes())
 }
 
@@ -546,6 +555,7 @@ pub(crate) fn reconcile(
             Some(tokens) => {
                 let identity = format!("qoder-state:{session_id}");
                 let event = UsageEvent {
+                    usage_version: 0,
                     turn_id: String::new(),
                     id: residual_id(source, &session_id),
                     import_identity: Some(identity),
@@ -566,6 +576,7 @@ pub(crate) fn reconcile(
                     },
                     native_credits: None,
                     raw_tokens: None,
+                    inheritance: None,
                     interval_start: Some(created_at),
                     interval_evidence: "qoder-state-v1".into(),
                 };
@@ -583,7 +594,7 @@ pub(crate) fn reconcile(
 
 fn captured_tokens(store: &Store, source: &Source) -> Result<BTreeMap<String, Tokens>> {
     let mut query = store.db.prepare(
-        "SELECT e.payload FROM events e JOIN event_sources es ON es.event_id=e.id WHERE es.source_id=?1",
+        "SELECT COALESCE(i.payload,e.payload) FROM events e JOIN event_sources es ON es.event_id=e.id LEFT JOIN usage_inheritance i ON i.event_id=e.id WHERE es.source_id=?1",
     )?;
     let mut captured = BTreeMap::<String, Tokens>::new();
     for row in query.query_map([&source.id], |r| r.get::<_, String>(0))? {
@@ -825,7 +836,17 @@ mod tests {
     }
 
     fn encrypt(key: &[u8], session: &str, project: &str, plaintext: &str) -> Value {
-        let hash = project_hash(project);
+        encrypt_case(key, session, project, plaintext, true)
+    }
+
+    fn encrypt_case(
+        key: &[u8],
+        session: &str,
+        project: &str,
+        plaintext: &str,
+        lowercase: bool,
+    ) -> Value {
+        let hash = project_hash_case(project, lowercase);
         let aad = aad(session, &hash, SEGMENT);
         let mut nonce = [0u8; 12];
         SystemRandom::new().fill(&mut nonce).unwrap();
@@ -1226,6 +1247,96 @@ mod tests {
             decode_project_dir("-Users-Example-Work").as_deref(),
             Some("/Users/Example/Work")
         );
+    }
+
+    #[test]
+    fn authenticated_state_accepts_both_project_hash_generations_and_rejects_corruption() {
+        let key = vec![19; 32];
+        for lowercase in [false, true] {
+            let state = encrypt_case(
+                &key,
+                "session",
+                "/Users/Example/Work",
+                r#"{"total":{"input_tokens":100,"output_tokens":20}}"#,
+                lowercase,
+            );
+            let hashes = project_hashes(
+                Path::new("/missing/project/session/state.json"),
+                &state,
+                "session",
+            );
+            assert_eq!(hashes.len(), 2);
+            assert_eq!(
+                decrypt_usage(
+                    &state["items"]["s0"],
+                    "session",
+                    &hashes,
+                    std::slice::from_ref(&key)
+                )
+                .unwrap()
+                .total(),
+                120
+            );
+            assert!(
+                decrypt_usage(
+                    &state["items"]["s0"],
+                    "other-session",
+                    &hashes,
+                    std::slice::from_ref(&key)
+                )
+                .is_none()
+            );
+            let mut corrupt = state["items"]["s0"].clone();
+            corrupt["t"] = json!(STANDARD.encode([0; 16]));
+            assert!(
+                decrypt_usage(&corrupt, "session", &hashes, std::slice::from_ref(&key)).is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn state_residual_never_reintroduces_suppressed_inherited_requests() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let source = Source {
+            id: "qoder".into(),
+            provider: "qoder".into(),
+            ..Default::default()
+        };
+        let mut settings = save_source(&store, &source);
+        for session in ["parent", "child"] {
+            let row = json!({"type":"assistant","timestamp":now(),"sessionId":session,"requestId":"original","message":{"id":"response","model":"fixture","usage":{"input_tokens":100,"output_tokens":20,"credits":0.5}}});
+            let event = crate::usage::parse(&source, &mut ParseState::default(), &row).unwrap();
+            store.put_event(&event, &[], &settings).unwrap();
+            store
+                .db
+                .execute(
+                    "INSERT INTO qoder_state VALUES(?1,?2,?2,'v1',?3,?3,?4)",
+                    params![
+                        source.id,
+                        session,
+                        now(),
+                        serde_json::to_string(&Tokens {
+                            input: 100,
+                            output: 20,
+                            ..Default::default()
+                        })
+                        .unwrap()
+                    ],
+                )
+                .unwrap();
+        }
+        for (mode, total) in [(true, 120), (false, 240), (true, 120)] {
+            settings.precise_counting = mode;
+            store.save_settings(&settings).unwrap();
+            crate::history_counting::prepare_source(&store, &settings, &source).unwrap();
+            reconcile(&store, &source, &[], &settings).unwrap();
+            assert_eq!(
+                store.dashboard(&Filter::default()).unwrap().summary.total,
+                total
+            );
+            assert_eq!(store.db.query_row::<i64,_,_>("SELECT COUNT(*) FROM events WHERE json_extract(payload,'$.attribution')='qoder-residual'",[],|r|r.get(0)).unwrap(),0);
+        }
     }
 
     #[test]

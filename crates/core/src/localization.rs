@@ -156,7 +156,7 @@ mod tests {
         );
         assert_eq!(
             translate("en", "切换为此账户 · 用户中文名称"),
-            "Switch to this account · 用户中文名称"
+            "Switch account · 用户中文名称"
         );
         assert_eq!(translate("en", "my-本机-project"), "my-本机-project");
         assert_eq!(normalize("fr"), "zh-CN");

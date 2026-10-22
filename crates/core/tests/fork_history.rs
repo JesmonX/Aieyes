@@ -25,7 +25,7 @@ fn setup(path: &Path) -> (Store, Settings, Source) {
         ..Default::default()
     };
     let settings = Settings {
-        codex_precise_counting: true,
+        precise_counting: true,
         sources: vec![source.clone()],
         ..Default::default()
     };
@@ -103,7 +103,7 @@ fn nested_fork_zero_is_repaired_and_old_parser_cannot_resurrect_it() {
     let backup: String = store
         .db
         .query_row(
-            "SELECT value FROM kv WHERE key='history-correction-backup-v5'",
+            "SELECT value FROM kv WHERE key='history-correction-backup-shared-v1'",
             [],
             |r| r.get(0),
         )
@@ -244,7 +244,7 @@ fn compare_remote_baseline(source: &Source, metadata: &str) {
     let output = std::process::Command::new(python).args(["-c", r#"
 import pathlib,json,sys
 root=pathlib.Path(sys.argv[1])
-scope={'REQUEST':dict(protocol=2,path=sys.argv[2],provider='codex',codexPreciseCounting=True),
+scope={'REQUEST':dict(protocol=2,path=sys.argv[2],provider='codex',preciseCounting=True),
        'HARNESS_SCRIPT':(root/'scripts/harness_remote.py').read_text(encoding='utf-8')}
 exec(compile((root/'scripts/remote_history.py').read_text(encoding='utf-8'),'<wire-history>','exec'),scope)
 "#]).arg(&project).arg(&source.path).output().unwrap();
@@ -506,7 +506,7 @@ fn historical_estimate_is_repaired_with_original_prices_and_audit_after_parent_a
     copy.id = "copy".into();
     let settings = Settings {
         sources: vec![source.clone(), copy.clone()],
-        codex_precise_counting: true,
+        precise_counting: true,
         accounts: vec![Account {
             id: "account".into(),
             name: "Fixture".into(),
@@ -617,7 +617,7 @@ fn historical_estimate_is_repaired_with_original_prices_and_audit_after_parent_a
     assert_eq!(store.estimates().unwrap().len(), 3);
     assert_eq!(usage_for(&store, "child"), 100);
     let mut cumulative = settings.clone();
-    cumulative.codex_precise_counting = false;
+    cumulative.precise_counting = false;
     store.save_settings(&cumulative).unwrap();
     import::scan(&store, &cumulative, &source).unwrap();
     assert_eq!(usage_for(&store, "child"), 1000);
@@ -699,11 +699,11 @@ fn cyclic_parents_never_charge_the_first_cumulative_counter() {
 }
 
 #[test]
-fn counting_mode_defaults_off_and_replays_both_directions_with_frozen_prices() {
+fn counting_mode_defaults_on_and_replays_both_directions_with_frozen_prices() {
     assert!(
-        !serde_json::from_value::<Settings>(json!({}))
+        serde_json::from_value::<Settings>(json!({}))
             .unwrap()
-            .codex_precise_counting
+            .precise_counting
     );
     let temp = tempfile::tempdir().unwrap();
     let stamp = now() - 100;
@@ -713,7 +713,7 @@ fn counting_mode_defaults_off_and_replays_both_directions_with_frozen_prices() {
         + &count(stamp + 1, 1100, 100);
     std::fs::write(temp.path().join("child.jsonl"), child).unwrap();
     let (store, mut settings, source) = setup(temp.path());
-    settings.codex_precise_counting = false;
+    settings.precise_counting = false;
     store.save_settings(&settings).unwrap();
     store
         .save_prices(&[ModelPrice {
@@ -740,7 +740,7 @@ fn counting_mode_defaults_off_and_replays_both_directions_with_frozen_prices() {
     let mut first = true;
     for (precise, expected) in [(true, 100), (false, 1100), (true, 100), (false, 1100)] {
         let old = settings.clone();
-        settings.codex_precise_counting = precise;
+        settings.precise_counting = precise;
         store.save_settings(&settings).unwrap();
         assert!(import::scan(&store, &old, &source).is_err());
         let result = import::scan(&store, &settings, &source).unwrap();
@@ -760,7 +760,7 @@ fn counting_mode_defaults_off_and_replays_both_directions_with_frozen_prices() {
         assert_eq!(usage_for(&store, "child"), expected);
     }
     std::fs::write(temp.path().join("parent.jsonl"), parent).unwrap();
-    settings.codex_precise_counting = true;
+    settings.precise_counting = true;
     store.save_settings(&settings).unwrap();
     import::scan(&store, &settings, &source).unwrap();
     assert_eq!(usage_for(&store, "child"), 200);
@@ -768,21 +768,21 @@ fn counting_mode_defaults_off_and_replays_both_directions_with_frozen_prices() {
     store
         .db
         .execute(
-            "UPDATE files SET state=json_remove(state,'$.codexPreciseCounting')",
+            "UPDATE files SET state=json_remove(state,'$.preciseCounting')",
             [],
         )
         .unwrap();
     store
         .db
         .execute(
-            "UPDATE kv SET value=json_remove(value,'$.codexPreciseCounting') WHERE key='settings'",
+            "UPDATE kv SET value=json_remove(value,'$.preciseCounting') WHERE key='settings'",
             [],
         )
         .unwrap();
     let upgraded = store.settings().unwrap();
-    assert!(!upgraded.codex_precise_counting);
+    assert!(upgraded.precise_counting);
     import::scan(&store, &upgraded, &source).unwrap();
-    assert_eq!(usage_for(&store, "child"), 1100);
+    assert_eq!(usage_for(&store, "child"), 200);
     let child_cost: f64 = store
         .db
         .query_row(
@@ -791,7 +791,7 @@ fn counting_mode_defaults_off_and_replays_both_directions_with_frozen_prices() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(child_cost, 11.0);
+    assert_eq!(child_cost, 2.0);
     assert_eq!(
         store
             .db

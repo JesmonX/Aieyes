@@ -24,6 +24,11 @@ ssh $SSH_OPTIONS proxyus bash -s -- "$RELEASE_NAME" <<'REMOTE'
 set -euo pipefail
 release=$1
 base=/var/www/aieyes
+caddy_user=$(systemctl show -p User --value caddy)
+caddy_group=$(systemctl show -p Group --value caddy)
+test -n "$caddy_user" || caddy_user=caddy
+test -n "$caddy_group" || caddy_group=caddy
+sudo -n install -d -m 0750 -o "$caddy_user" -g "$caddy_group" /var/log/caddy
 chmod -R u=rwX,go=rX "$base/releases/$release"
 backup="/etc/caddy/aieyes-backups/$release"
 sudo -n install -d -m 0700 "$backup"

@@ -29,7 +29,8 @@ function browserFixture(){
 (async()=>{
   let server,browser;
   try {
-    await rpc('settings.save',{version:6,sources:[{id:'fixture',name:'测试历史',provider:'antigravity',accountId:'account',path:log,enabled:true}],accounts:[{id:'account',provider:'antigravity',name:'测试账户',quotaEnabled:false}],hosts:[],localMonitor:{enabled:false},modelMappings:{}});
+    assert.equal((await rpc('settings.get')).preciseCounting,true,'New installations enable shared precise counting');
+    await rpc('settings.save',{version:6,preciseCounting:false,sources:[{id:'fixture',name:'测试历史',provider:'antigravity',accountId:'account',path:log,enabled:true}],accounts:[{id:'account',provider:'antigravity',name:'测试账户',quotaEnabled:false}],hosts:[],localMonitor:{enabled:false},modelMappings:{}});
     await rpc('prices.save',{prices:[{id:'fixture',input:0.01}]});
     await rpc('sources.scan');
     execFileSync(process.platform==='win32'?'python':'python3',['-c',`
@@ -50,12 +51,12 @@ db.execute('INSERT INTO event_sources VALUES(?,?)',(event['id'],'fixture'));db.c
     assert.equal(await page.evaluate(()=>state.dashboard.summary.total),200);
     assert.equal(calls.filter(call=>call.method==='sources.rescan').length,0);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='refresh';render();});
-    assert.equal(await page.locator('#field-codexPreciseCounting').isChecked(),false);
-    await page.locator('#field-codexPreciseCounting').check();
-    await page.waitForFunction(()=>state.settings.codexPreciseCounting===true&&!state.settingsCommitting);
-    assert.equal((await rpc('settings.get')).codexPreciseCounting,true);
-    await page.locator('#field-codexPreciseCounting').uncheck();
-    await page.waitForFunction(()=>state.settings.codexPreciseCounting===false&&!state.settingsCommitting);
+    assert.equal(await page.locator('#field-preciseCounting').isChecked(),false);
+    await page.locator('#field-preciseCounting').check();
+    await page.waitForFunction(()=>state.settings.preciseCounting===true&&!state.settingsCommitting);
+    assert.equal((await rpc('settings.get')).preciseCounting,true);
+    await page.locator('#field-preciseCounting').uncheck();
+    await page.waitForFunction(()=>state.settings.preciseCounting===false&&!state.settingsCommitting);
     await page.locator('#history-rescan').click();await page.locator('#cancel-editor').click();
     assert.equal(calls.filter(call=>call.method==='sources.rescan').length,0,'Cancelling must not replay history');
     holdRescan=true;await page.locator('#history-rescan').click();await page.getByRole('button',{name:'开始重扫',exact:true}).click();
@@ -88,9 +89,9 @@ db.execute('INSERT INTO event_sources VALUES(?,?)',(event['id'],'fixture'));db.c
     await rpc('settings.patch',{base:beforeFork,settings:forkSettings});
     await page.reload();await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
     await page.evaluate(async()=>{await scan();state.page='settings';state.settingsTab='general';state.generalTab='refresh';render();});
-    assert.equal((await rpc('dashboard')).summary.total,1100,'Default mode includes inherited cumulative usage alongside retained historical data');
+    assert.equal((await rpc('dashboard')).summary.total,1100,'Disabled precise counting includes inherited cumulative usage alongside retained historical data');
     assert.equal(await page.evaluate(()=>state.refreshState.scan.error),null,JSON.stringify(await page.evaluate(()=>state.refreshState.scan.failures)));
-    await page.locator('#field-codexPreciseCounting').check();await page.waitForFunction(()=>state.settings.codexPreciseCounting===true&&!state.settingsCommitting);
+    await page.locator('#field-preciseCounting').check();await page.waitForFunction(()=>state.settings.preciseCounting===true&&!state.settingsCommitting);
     await page.evaluate(async()=>{await scan();render();});
     assert.equal((await rpc('dashboard')).summary.total,100,'Precise mode skips the unresolved fork prefix and retains unrelated history');
     await page.getByRole('heading',{name:'精确计数详情',exact:true}).waitFor();

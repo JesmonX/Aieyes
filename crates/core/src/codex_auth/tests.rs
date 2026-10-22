@@ -732,6 +732,7 @@ fn shared_history_totals_survive_and_profile_quotas_stay_visible() {
     };
     store.save_settings(&settings).unwrap();
     let event = UsageEvent {
+        usage_version: 0,
         native_credits: None,
         turn_id: String::new(),
         id: "event".into(),
@@ -749,6 +750,7 @@ fn shared_history_totals_survive_and_profile_quotas_stay_visible() {
         attribution: "fixture".into(),
         billing: Default::default(),
         raw_tokens: None,
+        inheritance: None,
         interval_start: None,
         interval_evidence: String::new(),
     };

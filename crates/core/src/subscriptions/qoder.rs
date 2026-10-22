@@ -101,12 +101,12 @@ fn remote_script(root: &str) -> String {
     )
 }
 
-fn query(
+fn command(
     source: &Source,
     settings: &Settings,
     config: Option<&SubscriptionConfig>,
     pre_command: &str,
-) -> Result<Value> {
+) -> Result<std::process::Command> {
     let root = config_dir(source, config)?;
     let command = if let Some(host_id) = &source.host_id {
         let mut host = settings
@@ -142,28 +142,157 @@ fn query(
         );
         command
     };
-    let frames = [
-        ("initialize", "aieyes-init"),
-        ("get_usage_info", "aieyes-usage"),
-    ]
-    .into_iter()
-    .map(|(kind, id)| {
-        json!({"type":"control_request","request_id":id,"request":{"type":kind,"subtype":kind}})
-            .to_string()
-            + "\n"
-    })
-    .collect::<String>();
-    let output = crate::process::run(
-        command,
-        frames.into_bytes(),
-        std::time::Duration::from_secs(45),
-    )
-    .map_err(|_| {
-        anyhow::anyhow!("Qoder CLI 账户查询失败；请检查所在机器的安装、目录、登录和网络")
-    })?;
-    response(&output)
+    Ok(command)
 }
 
+#[derive(Debug)]
+struct QueryFailure {
+    message: &'static str,
+    retry: bool,
+}
+
+fn control_frame(kind: &str, id: &str) -> Vec<u8> {
+    serde_json::to_vec(
+        &json!({"type":"control_request","request_id":id,"request":{"type":kind,"subtype":kind}}),
+    )
+    .unwrap()
+}
+
+fn await_response(
+    process: &crate::process::LineProcess,
+    id: &str,
+    deadline: std::time::Instant,
+    size: &mut usize,
+) -> std::result::Result<Value, QueryFailure> {
+    let initializing = id == "aieyes-init";
+    loop {
+        let line = process
+            .read(deadline.saturating_duration_since(std::time::Instant::now()))
+            .map_err(|_| QueryFailure {
+                message: match (initializing, std::time::Instant::now() >= deadline) {
+                    (true, true) => "Qoder CLI 初始化超时",
+                    (false, true) => "Qoder CLI 额度查询超时",
+                    (true, false) => "Qoder CLI 连接中断，未收到初始化响应",
+                    (false, false) => "Qoder CLI 连接中断，未收到额度响应",
+                },
+                retry: true,
+            })?;
+        *size += line.len();
+        if *size > 2 * 1024 * 1024 {
+            return Err(QueryFailure {
+                message: "Qoder 额度响应过大",
+                retry: false,
+            });
+        }
+        let Ok(frame) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        if frame["type"] != "control_response" || frame["response"]["request_id"] != id {
+            continue;
+        }
+        let response = &frame["response"];
+        if response["subtype"] != "success" {
+            let code = response["error"]["code"].as_str().unwrap_or("");
+            return Err(QueryFailure {
+                message: if initializing {
+                    "Qoder CLI 初始化失败，请检查登录"
+                } else {
+                    "Qoder CLI 未返回额度，请检查登录或客户端版本"
+                },
+                retry: matches!(
+                    code,
+                    "temporarily_unavailable" | "quota_unavailable" | "network_error" | "timeout"
+                ),
+            });
+        }
+        return Ok(response["response"].clone());
+    }
+}
+
+fn exchange(
+    command: std::process::Command,
+    deadline: std::time::Instant,
+) -> std::result::Result<Value, QueryFailure> {
+    let process = crate::process::LineProcess::spawn(command).map_err(|_| QueryFailure {
+        message: "Qoder CLI 启动失败，请检查安装和配置目录",
+        retry: false,
+    })?;
+    let mut size = 0;
+    process
+        .send(control_frame("initialize", "aieyes-init"))
+        .map_err(|_| QueryFailure {
+            message: "Qoder CLI 初始化连接中断",
+            retry: true,
+        })?;
+    await_response(&process, "aieyes-init", deadline, &mut size)?;
+    process
+        .send(control_frame("get_usage_info", "aieyes-usage"))
+        .map_err(|_| QueryFailure {
+            message: "Qoder CLI 额度查询连接中断",
+            retry: true,
+        })?;
+    let result = await_response(&process, "aieyes-usage", deadline, &mut size)?;
+    let usage = &result["usage"];
+    if usage.is_null() {
+        return Err(QueryFailure {
+            message: "Qoder 账户额度暂不可用",
+            retry: true,
+        });
+    }
+    Ok(usage.clone())
+}
+
+fn query(
+    source: &Source,
+    settings: &Settings,
+    config: Option<&SubscriptionConfig>,
+    pre_command: &str,
+) -> Result<Value> {
+    query_with_budget(
+        source,
+        settings,
+        config,
+        pre_command,
+        std::time::Duration::from_secs(45),
+    )
+}
+
+fn query_with_budget(
+    source: &Source,
+    settings: &Settings,
+    config: Option<&SubscriptionConfig>,
+    pre_command: &str,
+    budget: std::time::Duration,
+) -> Result<Value> {
+    query_attempts(|| command(source, settings, config, pre_command), budget)
+}
+
+fn query_attempts(
+    mut command: impl FnMut() -> Result<std::process::Command>,
+    budget: std::time::Duration,
+) -> Result<Value> {
+    let started = std::time::Instant::now();
+    let deadline = started + budget;
+    for attempt in 0..2 {
+        crate::operations::check()?;
+        let command = command()?;
+        let until = if attempt == 0 {
+            started + budget / 2
+        } else {
+            deadline
+        };
+        match exchange(command, until) {
+            Ok(value) => return Ok(value),
+            Err(error) if !error.retry || attempt == 1 || std::time::Instant::now() >= deadline => {
+                anyhow::bail!(error.message)
+            }
+            Err(_) => {}
+        }
+    }
+    unreachable!()
+}
+
+#[cfg(test)]
 fn response(output: &[u8]) -> Result<Value> {
     ensure!(output.len() <= 2 * 1024 * 1024, "Qoder 额度响应过大");
     let mut usage = None;
@@ -277,6 +406,101 @@ pub(super) fn apply(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn scripted_cli(tail: &str) -> std::process::Command {
+        let mut command = std::process::Command::new("python3");
+        command.args(["-u", "-c", &format!(r#"
+import json,sys,time,select
+init=json.loads(sys.stdin.readline())
+assert init['request']['type']=='initialize'
+# A request before the initialization response is a protocol violation.
+assert not select.select([sys.stdin],[],[],.04)[0]
+print(json.dumps(dict(type='control_response',response=dict(request_id='aieyes-init',subtype='success',response={{}}))))
+request=json.loads(sys.stdin.readline())
+assert request['request']['type']=='get_usage_info'
+{tail}
+"#)]);
+        command
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn waits_for_initialization_and_keeps_input_open_until_matched_usage() {
+        let usage = json!({"userId":"fixture","userQuota":{"unit":"credits","total":0,"used":0,"remaining":0}});
+        let tail = format!(
+            "print('{}')\nprint('{}')\nassert not select.select([sys.stdin],[],[],.03)[0]\ntime.sleep(30)",
+            json!({"type":"control_response","response":{"request_id":"other","subtype":"success","response":{"usage":{"wrong":true}}}}),
+            json!({"type":"control_response","response":{"request_id":"aieyes-usage","subtype":"success","response":{"usage":usage}}})
+        );
+        let started = std::time::Instant::now();
+        let result = exchange(
+            scripted_cli(&tail),
+            started + std::time::Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(result, usage);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        let mut snapshot = QuotaSnapshot::default();
+        apply(&mut snapshot, &result).unwrap();
+        assert_eq!(snapshot.is_available, Some(false));
+        assert_eq!(snapshot.windows.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retries_only_once_for_eof_or_missing_usage_and_never_for_login_errors() {
+        for (tail, expected) in [
+            ("sys.exit(0)", 2),
+            (
+                "print('{\"type\":\"control_response\",\"response\":{\"request_id\":\"aieyes-usage\",\"subtype\":\"success\",\"response\":{\"session\":{\"credits\":999}}}}')",
+                2,
+            ),
+            (
+                "print('{\"type\":\"control_response\",\"response\":{\"request_id\":\"aieyes-usage\",\"subtype\":\"error\",\"error\":{\"code\":\"unauthorized\",\"message\":\"PRIVATE\"}}}')",
+                1,
+            ),
+        ] {
+            let mut attempts = 0;
+            let error = query_attempts(
+                || {
+                    attempts += 1;
+                    Ok(scripted_cli(tail))
+                },
+                std::time::Duration::from_secs(2),
+            )
+            .unwrap_err();
+            assert_eq!(attempts, expected);
+            assert!(!error.to_string().contains("PRIVATE"));
+        }
+        let mut attempts = 0;
+        let result=query_attempts(|| {
+            attempts+=1;
+            Ok(scripted_cli(if attempts==1 {"sys.exit(0)"} else {"print('{\"type\":\"control_response\",\"response\":{\"request_id\":\"aieyes-usage\",\"subtype\":\"success\",\"response\":{\"usage\":{\"userId\":\"fixture\"}}}}')"}))
+        },std::time::Duration::from_secs(2)).unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(result["userId"], "fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn total_deadline_includes_both_attempts_and_hung_initialization() {
+        let mut attempts = 0;
+        let started = std::time::Instant::now();
+        let error = query_attempts(
+            || {
+                attempts += 1;
+                let mut command = std::process::Command::new("python3");
+                command.args(["-c", "import time;time.sleep(30)"]);
+                Ok(command)
+            },
+            std::time::Duration::from_millis(400),
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 2);
+        assert!(error.to_string().contains("初始化超时"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
     #[test]
     fn login_identity_is_independent_of_quota_and_never_uses_tokens_or_logs() {
         let usage =
@@ -352,7 +576,11 @@ for arg do
     if [ "${next:-}" = config ]; then config=$arg; next=; fi
     if [ "$arg" = --config-dir ]; then next=config; fi
 done
-cat > "$config/requests.jsonl"
+IFS= read -r init
+printf '%s\n' "$init" > "$config/requests.jsonl"
+printf '%s\n' '{"type":"control_response","response":{"request_id":"aieyes-init","subtype":"success","response":{}}}'
+IFS= read -r usage
+printf '%s\n' "$usage" >> "$config/requests.jsonl"
 printf '%s\n' "$@" > "$config/args.txt"
 printf 'query\n' >> "$config/queries.txt"
 cat "$config/response.jsonl"
@@ -371,6 +599,89 @@ cat "$config/response.jsonl"
         std::fs::create_dir_all(root).unwrap();
         let frame = json!({"type":"control_response","response":{"request_id":"aieyes-usage","subtype":"success","response":{"usage":{"userId":user,"userType":"personal_standard"}}}});
         std::fs::write(root.join("response.jsonl"), frame.to_string() + "\n").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_refresh_retains_last_successful_quota_and_timestamp() {
+        let root = tempfile::tempdir().unwrap();
+        let pre_command = fixture_cli(root.path());
+        let profile = root.path().join("profile");
+        std::fs::create_dir(&profile).unwrap();
+        let usage = json!({"userId":"fixture","userType":"personal_standard",
+            "userQuota":{"unit":"credits","total":100,"used":25,"remaining":75}});
+        let success = json!({"type":"control_response","response":{"request_id":"aieyes-usage","subtype":"success","response":{"usage":usage}}});
+        std::fs::write(profile.join("response.jsonl"), format!("{success}\n")).unwrap();
+        let mut engine = Engine::open(&root.path().join("data")).unwrap();
+        engine
+            .store
+            .save_auth_settings(&Settings {
+                accounts: vec![Account {
+                    id: "a".into(),
+                    provider: "qoder".into(),
+                    name: "Quota fixture".into(),
+                    quota_enabled: true,
+                    identity_key: Some(identity(&usage).unwrap().key),
+                    ..Default::default()
+                }],
+                sources: vec![Source {
+                    id: "quota".into(),
+                    provider: "qoder".into(),
+                    account_id: "a".into(),
+                    subscription: Some(SubscriptionConfig {
+                        mode: "cli".into(),
+                        native_config_dir: profile.to_string_lossy().into(),
+                        ..Default::default()
+                    }),
+                    quota_pre_command: pre_command,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let params = json!({"accountKey":"qoder:a","sourceId":"quota"});
+        engine.call("quotas.refresh", params.clone()).unwrap();
+        let before = engine
+            .store
+            .dashboard(&Filter::default())
+            .unwrap()
+            .quotas
+            .remove(0);
+        assert!(before.error.is_none());
+        assert!(before.updated_at > 0);
+        assert_eq!(before.windows.len(), 1);
+        let failure = json!({"type":"control_response","response":{"request_id":"aieyes-usage","subtype":"error","error":{"code":"unauthorized","message":"PRIVATE_CREDENTIAL"}}});
+        std::fs::write(profile.join("response.jsonl"), format!("{failure}\n")).unwrap();
+        engine.call("quotas.refresh", params).unwrap();
+        let after = engine
+            .store
+            .dashboard(&Filter::default())
+            .unwrap()
+            .quotas
+            .remove(0);
+        assert!(after.error.is_some());
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(
+            serde_json::to_value(&after.windows).unwrap(),
+            serde_json::to_value(&before.windows).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&after.balances).unwrap(),
+            serde_json::to_value(&before.balances).unwrap()
+        );
+        assert!(
+            !serde_json::to_string(&after)
+                .unwrap()
+                .contains("PRIVATE_CREDENTIAL")
+        );
+        assert_eq!(
+            std::fs::read_to_string(profile.join("queries.txt"))
+                .unwrap()
+                .lines()
+                .count(),
+            2,
+            "login failures must not retry"
+        );
     }
 
     #[cfg(unix)]

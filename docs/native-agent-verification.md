@@ -2,6 +2,8 @@
 
 核实日期：2026-10-19。验收对象为现有非 Codex 客户端及新增 Kimi Code、DeepSeek Harness、Pi、Oh My Pi、CodeBuddy。以下区分真实客户端调用、协议回归和缺少服务凭据的项目。
 
+2026-10-22 的核查、修复和新实测见[后续验收报告](agent-integration-audit-2026-10-22.md)。下文的版本、调用数字及开发包信息保留为此前验收证据。
+
 ## 安装与真实调用
 
 本机为 macOS Intel，远端为已配置的 Linux SSH 测试主机。模型服务为用户提供的自建兼容端点，实际模型 ID 为 `Qwen3.8-27B`，无需 Key；原生 SDK 要求非空 Key 时使用 `not-required`。测试没有注入模型回复或 Token。用于观察状态的代理只延迟转发。
@@ -39,7 +41,7 @@
 
 OMP 路径解析按官方规则处理 `OMP_PROFILE`、旧 `PI_PROFILE`、`PI_CONFIG_DIR`、`PI_CODING_AGENT_DIR` 与已存在的 XDG 数据目录。新增/发现目录使用原生环境变量；已保存的明确路径不会静默改绑。SSH 使用远端明确路径或默认目录，不套用本机环境。
 
-OpenCode 只读 v1 `message` / v2 `session_message` 统计；预建但为空的 v2 表不会遮住 v1。ZCode 只读 `model_usage` 结算，实时状态来自原生 process Hooks，完成以 `turn_usage` 的持久结算为准。`ZCODE_DATA_BASE_DIR` 不移动 CLI 历史，不能用它推断统计路径。
+OpenCode 同时只读 v1 `message` 和 v2 `session_message` 统计，各表游标独立，以稳定身份去重；新表不会遮住旧表独立记录。ZCode 只读 `model_usage` 结算，实时状态来自原生 process Hooks，完成以 `turn_usage` 的持久结算为准。`ZCODE_DATA_BASE_DIR` 不移动 CLI 历史，不能用它推断统计路径。
 
 Qoder 读取消息 Token、独立请求 Credits、折扣前值与 `billable`，不重复计算 Result 的累计值。Claude、Antigravity 保留现有原生适配。Cursor 状态接入官方 Hooks，私有库的请求级 Token 明确标为未支持；上下文占用不冒充累计用量，标准 JSONL 导出仍可读。
 

@@ -35,8 +35,9 @@ pub(crate) fn current_settings(
         "来源配置已改变，同步已停止"
     );
     anyhow::ensure!(
-        source.provider != "codex"
-            || settings.codex_precise_counting == expected.codex_precise_counting,
+        settings.precise_counting == expected.precise_counting
+            && (expected.counting_generation == 0
+                || settings.counting_generation == expected.counting_generation),
         "计数设置已改变，下次同步将按新设置重新计数"
     );
     if let Some(id) = &source.host_id {
@@ -160,6 +161,7 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     let _lock = crate::file_lock::history(root, &source.id)?;
     let current = current_settings(store, settings, source)?;
     let settings = &current;
+    crate::history_counting::prepare_source(store, settings, source)?;
     store.ensure_codex_evidence_scope(settings, source)?;
     if crate::providers::antigravity(&source.provider)
         && crate::antigravity::directory(&expand(&source.path)).is_some()
@@ -196,7 +198,7 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     if source.provider == "codex" {
         store.prepare_history_corrections()?;
     }
-    let mut history = if source.provider == "codex" && settings.codex_precise_counting {
+    let mut history = if source.provider == "codex" && settings.precise_counting {
         Some(crate::codex_history::Resolver::new(source, &files))
     } else {
         None
@@ -206,8 +208,9 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     let mut read_bytes = 0;
     let mut missing_history = 0;
     let mut history_issues = Vec::new();
+    let mut file_issues = Vec::new();
     for path in &files {
-        let (n, b, m, missing) = scan_file(
+        let scanned = scan_file(
             store,
             settings,
             source,
@@ -215,7 +218,18 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
             &prices,
             full,
             history.as_mut(),
-        )?;
+        );
+        let (n, b, m, missing, error) = match scanned {
+            Ok(report) => report,
+            Err(error) if error.downcast_ref::<std::io::Error>().is_some() => {
+                current_settings(store, settings, source)?;
+                (0, 0, 0, 0, Some(error.to_string()))
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(error) = error {
+            file_issues.push(json!({"code":"fileRead","path":path.file_name().unwrap_or_default().to_string_lossy(),"message":error}));
+        }
         count += n;
         read_bytes += b;
         missing_history += missing;
@@ -234,9 +248,12 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         qoder_issues = report.issues;
     }
     let mut result = json!({"updatedAt":now(),"newEvents":count,"files":files.len(),"readBytes":read_bytes,"malformedLines":malformed});
-    if full && malformed > 0 {
+    if malformed > 0 {
+        file_issues.push(json!({"code":"invalidRecord","message":format!("{malformed} 行记录或用量格式无效，已保留其他历史并保留失败位置供重试。") }));
+    }
+    if !file_issues.is_empty() {
         result["partial"] = json!(true);
-        result["issues"] = json!([{"code":"invalidRecord","message":format!("{malformed} 行记录格式无效，已保留其他可读取的历史。") }]);
+        result["issues"] = json!(file_issues);
     }
     if missing_history > 0 {
         result["missingHistoryBases"] = json!(missing_history);
@@ -296,6 +313,41 @@ fn cursor_private_history(root: &Path) -> bool {
         .any(|e| e.file_type().is_dir() && e.file_name() == "agent-transcripts")
 }
 
+fn content_digest(reader: &mut (impl Read + Seek), len: u64, provider: &str) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    reader.seek(SeekFrom::Start(0))?;
+    let mut start = 0;
+    if provider == "omp" && len >= 256 {
+        let mut slot = [0; 256];
+        reader.read_exact(&mut slot)?;
+        if slot.last() == Some(&b'\n')
+            && serde_json::from_slice::<Value>(&slot).is_ok_and(|v| v["type"] == "title")
+        {
+            start = 256;
+        }
+    }
+    reader.seek(SeekFrom::Start(start))?;
+    let mut input = reader.take(len - start);
+    let mut digest = Sha256::new();
+    let mut chunk = [0; 65536];
+    loop {
+        let n = input.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        digest.update(&chunk[..n]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn anchor(reader: &mut (impl Read + Seek), offset: u64) -> Result<String> {
+    reader.seek(SeekFrom::Start(offset.saturating_sub(128)))?;
+    let mut bytes = vec![0; offset.min(128) as usize];
+    reader.read_exact(&mut bytes)?;
+    use sha2::{Digest, Sha256};
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
 fn scan_file(
     store: &Store,
     settings: &Settings,
@@ -304,9 +356,12 @@ fn scan_file(
     prices: &[ModelPrice],
     full: bool,
     mut history: Option<&mut crate::codex_history::Resolver>,
-) -> Result<(u64, u64, u64, u64)> {
+) -> Result<(u64, u64, u64, u64, Option<String>)> {
     let file = File::open(path).context("打开记录失败")?;
-    let len = file.metadata()?.len();
+    let meta = file.metadata()?;
+    let len = meta.len();
+    let identity = crate::native_agents::file_identity(&file)?;
+    let modified = format!("{:?}", meta.modified()?);
     let mut reader = BufReader::new(file);
     // A fixed prefix is stable as a file grows. Tiny files are rescanned on the next pass.
     let signature = if source.provider == "omp" {
@@ -317,12 +372,30 @@ fn scan_file(
         hash(&String::from_utf8_lossy(&prefix))
     };
     let key = path.to_string_lossy();
-    let cursor = if full {
+    let mut cursor = if full {
         None
     } else {
         store.cursor(&source.id, &key)?
     };
-    let parent_changed = settings.codex_precise_counting
+    let valid_file = if let Some((_, offset, state)) = &cursor {
+        if let Some(saved) = &state.file_checkpoint {
+            saved.identity == identity
+                && *offset <= len
+                && saved.anchor == anchor(&mut reader, *offset)?
+                && (saved.size != len
+                    || saved.modified == modified
+                    || (!saved.content.is_empty()
+                        && saved.content == content_digest(&mut reader, len, &source.provider)?))
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if !valid_file {
+        cursor = None;
+    }
+    let parent_changed = settings.precise_counting
         && cursor
             .as_ref()
             .and_then(|(_, _, state)| state.inherited_history.as_ref())
@@ -340,18 +413,14 @@ fn scan_file(
             if s == signature
                 && o <= len
                 && p.parser_version == usage::parser_version(&source.provider)
-                && (source.provider != "codex"
-                    || p.codex_precise_counting == Some(settings.codex_precise_counting))
+                && p.precise_counting == Some(settings.precise_counting)
+                && p.counting_generation == settings.counting_generation
                 && !parent_changed =>
         {
             (o, p)
         }
         _ => (
-            if source.provider == "kimi" {
-                crate::native_agents::kimi_fork_offset(path)?
-            } else {
-                0
-            },
+            0,
             ParseState {
                 session_id: if source.provider == "kimi" {
                     crate::native_agents::session_id(path)
@@ -359,23 +428,39 @@ fn scan_file(
                     format!("{}:{}", source.id, hash(&key))
                 },
                 parser_version: usage::parser_version(&source.provider),
-                codex_precise_counting: Some(settings.codex_precise_counting),
+                precise_counting: Some(settings.precise_counting),
+                counting_generation: settings.counting_generation,
+                inherited_prefix_end: if source.provider == "kimi" {
+                    crate::native_agents::kimi_fork_offset(path)?
+                } else {
+                    0
+                },
                 ..Default::default()
             },
         ),
     };
     if offset == len {
+        if let Some(saved) = &mut state.file_checkpoint
+            && saved.modified != modified
+        {
+            saved.modified = modified;
+            let tx = store.write_transaction()?;
+            current_settings(store, settings, source)?;
+            store.set_cursor(&source.id, &key, &signature, offset, &state)?;
+            tx.commit()?;
+        }
         return Ok((
             0,
             0,
             0,
             u64::from(
-                settings.codex_precise_counting
+                settings.precise_counting
                     && state
                         .inherited_history
                         .as_ref()
                         .is_some_and(|h| h.tokens.is_none()),
             ),
+            None,
         ));
     }
     reader.seek(SeekFrom::Start(offset))?;
@@ -383,6 +468,8 @@ fn scan_file(
     let mut inserted = 0;
     let mut malformed = 0;
     let mut eof = false;
+    let mut read_error = None;
+    let mut retry: Option<(u64, ParseState)> = None;
     while !eof {
         crate::operations::check()?;
         // Read a bounded batch before taking SQLite's writer lock.
@@ -390,14 +477,22 @@ fn scan_file(
         let mut bytes = 0u64;
         while rows.len() < 256 && bytes < 1024 * 1024 {
             let mut line = Vec::new();
-            let n = (&mut reader)
+            let read = (&mut reader)
                 .take(16 * 1024 * 1024 + 1)
-                .read_until(b'\n', &mut line)?;
-            anyhow::ensure!(
-                n <= 16 * 1024 * 1024,
-                "记录行超过 16 MiB，已提交进度保留：{}",
-                path.display()
-            );
+                .read_until(b'\n', &mut line);
+            let n = match read {
+                Ok(n) if n <= 16 * 1024 * 1024 => n,
+                Ok(_) => {
+                    read_error = Some("记录行超过 16 MiB，已保留失败位置供重试".into());
+                    eof = true;
+                    break;
+                }
+                Err(error) => {
+                    read_error = Some(error.to_string());
+                    eof = true;
+                    break;
+                }
+            };
             if n == 0 || line.last() != Some(&b'\n') {
                 eof = true;
                 break;
@@ -408,12 +503,30 @@ fn scan_file(
         if rows.is_empty() {
             break;
         }
+        let content = if source.provider == "omp" && pos + bytes == len {
+            let digest = content_digest(&mut reader, len, &source.provider)?;
+            reader.seek(SeekFrom::Start(pos + bytes))?;
+            digest
+        } else {
+            String::new()
+        };
         let tx = store.write_transaction()?;
         let current = current_settings(store, settings, source)?;
         let settings = &current;
+        let mut row_offset = pos;
         for line in rows {
+            let start = row_offset;
+            row_offset += line.len() as u64;
+            let before = state.clone();
             match serde_json::from_slice::<Value>(&line) {
                 Ok(v) => {
+                    if source.provider == "kimi" {
+                        state.inherited_usage = row_offset <= state.inherited_prefix_end;
+                    }
+                    if crate::native_agents::invalid_usage(&source.provider, &v) {
+                        malformed += 1;
+                        retry.get_or_insert((start, before));
+                    }
                     if source.provider == "grok" && v.get("method").is_some() {
                         for event in crate::native_agents::grok_events(source, &v) {
                             if store.put_event(&event, prices, settings)? {
@@ -459,11 +572,23 @@ fn scan_file(
                         ))?;
                     }
                 }
-                Err(_) => malformed += 1,
+                Err(_) => {
+                    malformed += 1;
+                    retry.get_or_insert((start, before));
+                }
             }
         }
         pos += bytes;
-        store.set_cursor(&source.id, &key, &signature, pos, &state)?;
+        let (saved_pos, mut saved_state) = retry.clone().unwrap_or((pos, state.clone()));
+        saved_state.file_checkpoint = Some(FileCheckpoint {
+            identity: identity.clone(),
+            anchor: anchor(&mut reader, saved_pos)?,
+            size: len,
+            modified: modified.clone(),
+            content,
+        });
+        reader.seek(SeekFrom::Start(pos))?;
+        store.set_cursor(&source.id, &key, &signature, saved_pos, &saved_state)?;
         tx.commit()?;
     }
     Ok((
@@ -471,12 +596,13 @@ fn scan_file(
         pos - offset,
         malformed,
         u64::from(
-            settings.codex_precise_counting
+            settings.precise_counting
                 && state
                     .inherited_history
                     .as_ref()
                     .is_some_and(|h| h.tokens.is_none()),
         ),
+        read_error,
     ))
 }
 

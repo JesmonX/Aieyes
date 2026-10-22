@@ -554,7 +554,7 @@ struct Settings: Codable, Equatable {
     var deletedAccounts: [AgentAccount]?
     var historicalAccounts: [AgentAccount] { accounts + (deletedAccounts ?? []) }
     var historyShowDeletedAccounts: Bool?
-    var codexPreciseCounting: Bool?
+    var preciseCounting: Bool?
     var filterAccounts: [AgentAccount] { accounts + (historyShowDeletedAccounts == true ? deletedAccounts ?? [] : []) }
     func accountFilterName(_ account: AgentAccount) -> String {
         account.name + (accounts.contains { $0.key == account.key } ? (account.archived == true ? L("（已归档）") : "") : L("（已删除）"))

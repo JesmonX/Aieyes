@@ -7,17 +7,74 @@ aieyes.2h3ngy4n.space {
         X-Frame-Options DENY
         Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         Strict-Transport-Security "max-age=15552000"
-        Cache-Control "no-cache"
     }
-    @assets path /screenshots/* /providers/* /brand.png /favicon.png /og.png /pet-*.webp
+    @pages not path /screenshots/* /providers/* /fonts/* /brand.png /favicon.png /og.png /pet-*.webp /go/download/*
+    header @pages Cache-Control "no-cache"
+    @assets path /screenshots/* /providers/* /fonts/* /brand.png /favicon.png /og.png /pet-*.webp
     header @assets Cache-Control "public, max-age=3600"
+    redir /go/github https://github.com/JesmonX/Aieyes 302
+    redir /go/download/macos /#download-macos 302
+    redir /go/download/windows /go/download/windows/x64/exe 302
+    redir /go/download/linux /#download-linux 302
+    redir /go/download/latest https://github.com/JesmonX/Aieyes/releases/latest 302
+    # Resolve the current stable tag at request time; GitHub serves the package.
+    @package path /go/download/macos/arm64/dmg /go/download/macos/x64/dmg /go/download/windows/x64/exe /go/download/linux/x64/appimage /go/download/linux/x64/deb /go/download/linux/x64/rpm
+    map {path} {package_file} {
+        /go/download/macos/arm64/dmg macos-arm64.dmg
+        /go/download/macos/x64/dmg macos-x64.dmg
+        /go/download/windows/x64/exe windows-x64.exe
+        /go/download/linux/x64/appimage linux-x64.AppImage
+        /go/download/linux/x64/deb linux-x64.deb
+        /go/download/linux/x64/rpm linux-x64.rpm
+    }
+    header /go/download/* Cache-Control "no-store, max-age=0"
+    handle @package {
+        reverse_proxy https://github.com {
+            method GET
+            rewrite /JesmonX/Aieyes/releases/latest
+            header_up Host github.com
+            header_up -Cookie
+            header_up -Authorization
+            transport http {
+                dial_timeout 5s
+                response_header_timeout 10s
+            }
+            @release status 302
+            handle_response @release {
+                route {
+                    map {rp.header.Location} {release_version} {
+                        ~^https://github\.com/JesmonX/Aieyes/releases/tag/v([0-9]+\.[0-9]+\.[0-9]+)$ ${1}
+                        default ""
+                    }
+                    @resolved expression `{release_version} != ""`
+                    redir @resolved https://github.com/JesmonX/Aieyes/releases/download/v{release_version}/Aieyes-{release_version}-{package_file} 302
+                    error "Latest release unavailable" 502
+                }
+            }
+            handle_response {
+                error "Latest release unavailable" 502
+            }
+        }
+    }
     file_server
     handle_errors {
-        rewrite * /404.html
-        file_server
+        @downloadFailure path /go/download/*
+        handle @downloadFailure {
+            header Cache-Control "no-store, max-age=0"
+            rewrite * /download-error.html
+            file_server
+        }
+        handle {
+            rewrite * /404.html
+            file_server
+        }
     }
     log {
-        output stdout
+        output file /var/log/caddy/aieyes-access.log {
+            roll_size 50MiB
+            roll_keep 10
+            roll_keep_for 2160h
+        }
         format json
     }
 }

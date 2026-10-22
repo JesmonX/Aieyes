@@ -14,9 +14,44 @@ use ksni::{
 };
 use tauri::{AppHandle, Emitter};
 
+/// A watcher without a registered host cannot display the tray. Query it in
+/// process: AppImage's bundled GLib can break a newer host's gdbus executable
+/// through LD_LIBRARY_PATH, falsely hiding an otherwise working tray.
+pub(crate) fn host_available() -> bool {
+    use gtk::{gio, glib::variant::ToVariant};
+    let Ok(connection) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else {
+        return false;
+    };
+    connection
+        .call_sync(
+            Some("org.kde.StatusNotifierWatcher"),
+            "/StatusNotifierWatcher",
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            Some(
+                &(
+                    "org.kde.StatusNotifierWatcher",
+                    "IsStatusNotifierHostRegistered",
+                )
+                    .to_variant(),
+            ),
+            None,
+            gio::DBusCallFlags::NO_AUTO_START,
+            2_000,
+            gio::Cancellable::NONE,
+        )
+        .is_ok_and(|reply| host_registered(&reply))
+}
+
+fn host_registered(reply: &gtk::glib::Variant) -> bool {
+    reply
+        .get::<(gtk::glib::Variant,)>()
+        .is_some_and(|(value,)| value.get::<bool>() == Some(true))
+}
+
 pub(crate) struct LinuxTray {
     app: AppHandle,
-    visible: bool,
+    pet_visible: bool,
     can_hide: bool,
     sampling: bool,
     summary: String,
@@ -87,7 +122,9 @@ impl Tray for LinuxTray {
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let mut items = vec![self.item(crate::localization::label("打开面板"), "open-panel", true)];
-        for row in crate::context_menu::entries(false, self.visible, self.can_hide, self.sampling) {
+        for row in
+            crate::context_menu::entries(false, self.pet_visible, self.can_hide, self.sampling)
+        {
             if row.action == "separator" {
                 items.push(MenuItem::Separator);
             } else {
@@ -103,17 +140,17 @@ pub(crate) struct LinuxTrayHandle {
 }
 
 impl LinuxTrayHandle {
+    pub(crate) fn is_closed(&self) -> bool {
+        self.handle.is_closed()
+    }
+
     fn update(&self, f: impl FnOnce(&mut LinuxTray)) {
         let _ = self.handle.update(f);
     }
 
-    pub(crate) fn set_visible(&self, visible: bool) {
-        self.update(|tray| tray.visible = visible);
-    }
-
     pub(crate) fn set_menu(&self, visible: bool, can_hide: bool, sampling: bool) {
         self.update(|tray| {
-            tray.visible = visible;
+            tray.pet_visible = visible;
             tray.can_hide = can_hide;
             tray.sampling = sampling;
         });
@@ -134,7 +171,7 @@ impl LinuxTrayHandle {
 pub(crate) fn start(app: &AppHandle) -> Result<LinuxTrayHandle, String> {
     let tray = LinuxTray {
         app: app.clone(),
-        visible: true,
+        pet_visible: true,
         can_hide: false,
         sampling: false,
         summary: "Aieyes".into(),
@@ -145,4 +182,18 @@ pub(crate) fn start(app: &AppHandle) -> Result<LinuxTrayHandle, String> {
         .spawn()
         .map_err(|error| format!("无法创建 Linux 状态栏图标：{error}"))?;
     Ok(LinuxTrayHandle { handle })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_registered;
+    use gtk::glib::variant::ToVariant;
+
+    #[test]
+    fn only_a_registered_status_notifier_host_can_replace_the_pet() {
+        assert!(host_registered(&(true.to_variant(),).to_variant()));
+        assert!(!host_registered(&(false.to_variant(),).to_variant()));
+        assert!(!host_registered(&("true".to_variant(),).to_variant()));
+        assert!(!host_registered(&true.to_variant()));
+    }
 }

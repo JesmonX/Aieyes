@@ -155,7 +155,7 @@ struct RootView: View, Equatable {
     private var styledContent: some View {
         rootLayout
         .accessibilityIdentifier(activePage == "servers" ? "server-overview" : "agent-overview")
-        .frame(width: compact ? 450 : nil, height: compact ? model.panelHeight : nil)
+        .frame(height: compact ? model.panelHeight : nil)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background { rootBackground }
         .environment(\.translucentPanel, compact)
@@ -1076,6 +1076,8 @@ struct QuotaCard: View, Equatable {
                     Button(action: onSwitch) {
                         Label(L("切换为此账户"), systemImage: "arrow.left.arrow.right")
                             .font(AppFont.secondary.weight(.medium)).foregroundStyle(Palette.accent)
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                            .frame(minWidth: 124)
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: DesignTokens.radiusAccountSwitch))
                             .overlay { RoundedRectangle(cornerRadius: DesignTokens.radiusAccountSwitch).strokeBorder(Palette.accent.opacity(0.30), lineWidth: 1) }

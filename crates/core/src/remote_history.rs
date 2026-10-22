@@ -12,7 +12,7 @@ fn configuration(source: &Source, host: &Host, precise: bool) -> String {
     hash(
         &serde_json::to_string(&(
             usage::parser_version(&source.provider),
-            source.provider == "codex" && precise,
+            precise,
             &source.provider,
             &source.path,
             &source.account_id,
@@ -48,7 +48,12 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         .iter()
         .find(|h| Some(&h.id) == source.host_id.as_ref() && h.enabled)
         .context("主机不存在或已暂停")?;
-    let config = configuration(source, host, settings.codex_precise_counting);
+    crate::history_counting::prepare_source(&store, settings, source)?;
+    let config = format!(
+        "{}:{}",
+        configuration(source, host, settings.precise_counting),
+        settings.counting_generation
+    );
     store.db.execute(
         "DELETE FROM remote_cursors WHERE source_id=?1 AND configuration<>?2",
         params![source.id, config],
@@ -102,7 +107,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
     } else {
         Value::Null
     };
-    let request = json!({"protocol":2,"path":source.path,"provider":source.provider,"cursors":cursors,"routeCursor":route_cursor,"codexPreciseCounting":settings.codex_precise_counting,"qoderStateCursors":qoder_state_cursors,"qoderStateReset":full});
+    let request = json!({"protocol":2,"path":source.path,"provider":source.provider,"cursors":cursors,"routeCursor":route_cursor,"preciseCounting":settings.precise_counting,"countingGeneration":settings.counting_generation,"qoderStateCursors":qoder_state_cursors,"qoderStateReset":full});
     let prices = store.prices()?;
     if source.provider == "codex" {
         store.prepare_history_corrections()?;
@@ -141,8 +146,11 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
                     .find(|h| h.id == host.id && h.enabled)
                     .context("主机配置已改变")?;
                 ensure!(
-                    configuration(current_source, current_host, current.codex_precise_counting)
-                        == config,
+                    format!(
+                        "{}:{}",
+                        configuration(current_source, current_host, current.precise_counting),
+                        current.counting_generation
+                    ) == config,
                     "来源配置已改变，同步已停止"
                 );
                 let routes: Vec<crate::codex_routes::Route> =
@@ -201,6 +209,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
             malformed += state.database_checkpoint.map_or(0, |c| c.malformed);
         }
         result["malformedRecords"] = json!(malformed);
+        result["pendingRecords"] = json!(store.db.query_row("SELECT count(*) FROM native_pending p JOIN remote_cursors c ON c.source_id=p.source_id AND c.path=p.path WHERE p.source_id=?1 AND c.configuration=?2 AND p.invalid=0",params![source.id,config],|r|r.get::<_,u64>(0))?);
         if malformed > 0 {
             result["partial"] = json!(true);
             if let Some(issues) = result["issues"].as_array_mut() {
@@ -242,7 +251,8 @@ fn apply_batch(
             } else {
                 format!("{}:{}", source.id, path)
             },
-            codex_precise_counting: Some(settings.codex_precise_counting),
+            precise_counting: Some(settings.precise_counting),
+            counting_generation: settings.counting_generation,
             ..Default::default()
         });
     let mut count = 0;
@@ -330,9 +340,12 @@ fn apply_batch(
             }
             continue;
         }
+        if source.provider == "kimi" {
+            state.inherited_usage = row["_aieyesInherited"] == true;
+        }
         let parsed = usage::parse(source, &mut state, row);
         store.record_codex_history(source, &state, row, parsed.as_ref())?;
-        if settings.codex_precise_counting
+        if settings.precise_counting
             && state.first_inherited_count
             && row["inheritedHistory"].is_object()
         {
@@ -539,14 +552,40 @@ mod tests {
             .unwrap()
             .map(|r| serde_json::from_str::<Value>(&r.unwrap()).unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 3);
         assert!(rows.iter().all(|r| r["sessionId"] == "native-session"));
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r["inheritance"]["inherited"] == true && r["tokens"]["input"] == 0)
+                .count(),
+            1
+        );
         assert_eq!(
             rows.iter()
                 .map(|r| r["tokens"]["input"].as_u64().unwrap())
                 .sum::<u64>(),
             33
         );
+        let mut settings = settings;
+        for (mode, total) in [(false, 1038), (true, 37)] {
+            settings.precise_counting = mode;
+            store.save_settings(&settings).unwrap();
+            settings = store.settings().unwrap();
+            crate::history_counting::prepare_source(&store, &settings, &source).unwrap();
+            apply_batch(&store, &settings, &source, "config", &prices, &first).unwrap();
+            apply_batch(&store, &settings, &source, "config", &prices, &second).unwrap();
+            assert_eq!(
+                store
+                    .dashboard(&Filter {
+                        date_range: Some(DateRange::All),
+                        ..Default::default()
+                    })
+                    .unwrap()
+                    .summary
+                    .total,
+                total
+            );
+        }
     }
     #[test]
     fn two_sources_commit_batches_while_configuration_and_quota_are_written() {
@@ -699,9 +738,9 @@ mod tests {
         ]});
         for (precise, expected) in [(false, 1000), (true, 100), (false, 1000), (true, 100)] {
             let previous = settings.clone();
-            settings.codex_precise_counting = precise;
+            settings.precise_counting = precise;
             store.save_settings(&settings).unwrap();
-            if previous.codex_precise_counting != precise {
+            if previous.precise_counting != precise {
                 assert!(apply_batch(&store, &previous, &source, "mode", &[], &frame).is_err());
             }
             apply_batch(&store, &settings, &source, "mode", &[], &frame).unwrap();

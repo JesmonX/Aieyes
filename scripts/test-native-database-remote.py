@@ -80,6 +80,66 @@ class Queue:
 
 
 class NativeDatabaseTests(unittest.TestCase):
+    def test_v2_fork_boundaries_preserve_new_requests_and_delegation(self):
+        for boundary in ('before', 'through'):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as directory:
+                path = pathlib.Path(directory) / 'opencode.db'
+                stamp = int(time.time() * 1000)
+                with contextlib.closing(sqlite3.connect(path)) as db, db:
+                    db.executescript('CREATE TABLE session_v2(id TEXT,parent_id TEXT,fork_session_id TEXT,fork_boundary TEXT);CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT,seq INTEGER,time_created INTEGER,data TEXT);')
+                    db.execute('INSERT INTO session_v2 VALUES(?,?,?,?)', ('child', None, 'parent', json.dumps(dict(type=boundary, messageID='boundary'))))
+                    db.execute("INSERT INTO session_v2 VALUES('worker','parent',NULL,NULL)")
+                    for session, identity, seq in [('parent','original',1), ('parent','boundary',2), ('child','copy',1), ('child','boundary-copy',2), ('child','new',3), ('worker','independent',1)]:
+                        data = dict(time=dict(created=stamp, completed=stamp), model=dict(id='fixture', providerID='api'), tokens=dict(input=100, output=0), content='PRIVATE_TRANSCRIPT')
+                        db.execute('INSERT INTO session_message VALUES(?,?,?,?,?,?)', (identity, session, 'assistant', seq, stamp, json.dumps(data)))
+                original = path.read_bytes()
+                queue = Queue()
+                queue.scan(path, 'opencode')
+                rows = {r['id']: r['data'] for frame in queue.frames for r in frame['nativeRows']}
+                self.assertEqual({key for key, row in rows.items() if row['inherited']}, {'copy', 'boundary-copy'} if boundary == 'through' else {'copy'})
+                self.assertFalse(rows['new']['inherited'])
+                self.assertFalse(rows['independent']['inherited'])
+                self.assertNotIn('PRIVATE', json.dumps(queue.frames))
+                self.assertEqual(path.read_bytes(), original)
+                self.assertEqual(queue.scan(path, 'opencode')['readBytes'], 0)
+
+    def test_mixed_tables_and_compaction_have_separate_cursors_and_no_private_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=pathlib.Path(directory)/'native.db';create(path,'opencode');at=int(time.time()*1000)
+            with contextlib.closing(sqlite3.connect(path)) as db,db:
+                add(db,'opencode',1)
+                db.execute('CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT,time_created INTEGER,time_updated INTEGER,data TEXT)')
+                data=dict(model=dict(id='fixture',providerID='test'),status='completed',time=dict(created=at),tokens=dict(input=10,output=5,reasoning=0,cache=dict(read=0,write=0)),summary='PRIVATE')
+                db.execute('INSERT INTO session_message VALUES(?,?,?,?,?,?)',('compact','other','compaction',at,at,json.dumps(data)))
+            frames=[];saved={}
+            def emit(kind,**frame):
+                frames.append(frame);saved[frame['path']]=frame['cursor']
+            stats=m.history_all(path,'opencode',saved,emit)
+            self.assertEqual(stats['scannedRecords'],2);self.assertEqual(len(saved),2)
+            rows=[r for f in frames for r in f['nativeRows']]
+            self.assertEqual({r['id'] for r in rows},{'1','compact'})
+            self.assertEqual(next(r for r in rows if r['id']=='compact')['data']['completed'],at)
+            self.assertNotIn('PRIVATE',json.dumps(frames))
+            self.assertEqual(m.history_all(path,'opencode',saved,emit)['scannedRecords'],0)
+
+    def test_v2_inline_tools_idle_and_old_event_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=pathlib.Path(directory)/'native.db';now=int(time.time());at=now*1000
+            with contextlib.closing(sqlite3.connect(path)) as db,db:
+                db.execute('CREATE TABLE session_message(id TEXT,session_id TEXT,type TEXT,time_created INTEGER,time_updated INTEGER,data TEXT)')
+                db.execute('CREATE TABLE session(id TEXT,parent_id TEXT)');db.execute("INSERT INTO session VALUES('child','parent')")
+                data=dict(time=dict(created=at),content=[dict(type='tool',name='question',state=dict(status='running',input='PRIVATE'))])
+                db.execute('INSERT INTO session_message VALUES(?,?,?,?,?,?)',('tool','child','assistant',at,at,json.dumps(data)))
+                old=at-172800000
+                db.execute('INSERT INTO session_message VALUES(?,?,?,?,?,?)',('old','old','idle',old,at,json.dumps(dict(time=dict(created=old),outcome='succeeded'))))
+            files,_=m.sessions(path,'opencode',{},now)
+            self.assertEqual(len(files),2);self.assertEqual(files[0]['events'][-1]['kind'],'PermissionRequest')
+            self.assertEqual(files[0]['events'][-1]['parentSession'],'parent');self.assertNotIn('PRIVATE',json.dumps(files))
+            with contextlib.closing(sqlite3.connect(path)) as db,db:
+                db.execute('INSERT INTO session_message VALUES(?,?,?,?,?,?)',('idle','child','idle',at+1,at+1,json.dumps(dict(time=dict(created=at+1),outcome='succeeded'))))
+            next_files,_=m.sessions(path,'opencode',files[-1],now)
+            self.assertEqual(next_files[0]['events'][-1]['kind'],'complete')
+
     def test_history_append_and_old_pending_completion_read_two_rows_at_both_sizes(self):
         for provider in ('opencode', 'zcode'):
             for count in (10, 3000):

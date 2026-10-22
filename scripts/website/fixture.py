@@ -11,6 +11,8 @@ from datetime import date, timedelta
 
 ROOT = Path(__file__).resolve().parents[2]
 STAMP = 1792584060
+LANGUAGE = os.environ.get("AIEYES_LANGUAGE", "en")
+if LANGUAGE not in ("en", "zh-CN"): raise ValueError("Unsupported preview language")
 env = dict(os.environ, AIEYES_UI_SCENARIO="workspace", AIEYES_UI_STAMP=str(STAMP))
 data = json.loads(subprocess.check_output([sys.executable, str(ROOT / "scripts/preview-quota-core.py"), "--fixture"], env=env))
 settings, dashboard = data["settings"], data["dashboard"]
@@ -18,6 +20,8 @@ for key in ["accounts", "sources"]:
     settings[key] = [r for r in settings[key] if r["provider"] != "deepseek"]
 dashboard["quotas"] = [q for q in dashboard["quotas"] if q["provider"] != "deepseek"]
 names = {"codex": "Personal workspace", "codex-team": "Studio workspace", "claude": "Claude workspace", "antigravity": "Gemini workspace", "deepseek": "DeepSeek API"}
+if LANGUAGE == "zh-CN":
+    names.update({"codex":"个人工作区","codex-team":"团队工作区","claude":"Claude 工作区","antigravity":"Gemini 工作区"})
 for account in settings["accounts"]:
     account["name"] = names[account["id"]]
 for source in settings["sources"]:
@@ -28,7 +32,7 @@ for quota in dashboard["quotas"]:
     quota["name"] = names[quota["accountId"]]
     for window in quota["windows"]:
         window["resetsAt"] = STAMP + (7200 if window["windowMinutes"] == 300 else 259200)
-settings.update(appearance=dict(language="en", theme="dark", accent="indigo", chartPalette="classic", chartContrast="high"), localDeviceName="Mac Studio", panelQuotaAccounts=["codex:codex", "claude:claude", "antigravity:antigravity"], panelQuotaSelectionMode="manual")
+settings.update(appearance=dict(language=LANGUAGE, theme="dark", accent="indigo", chartPalette="classic", chartContrast="high"), localDeviceName="Mac Studio", panelQuotaAccounts=["codex:codex", "claude:claude", "antigravity:antigravity"], panelQuotaSelectionMode="manual")
 providers = json.loads((ROOT / "docs/core-contracts.json").read_text())["providers"]
 settings["agents"] = [dict(provider=p["id"], enabled=p["id"] in {"codex", "claude", "antigravity", "opencode", "kimi", "pi"}, machineIds=["local", "preview-host"] if p["id"] in {"codex", "claude", "antigravity"} else ["local"]) for p in providers]
 settings["codexApis"] = [dict(id="demo-api", sourceId="codex-source", name="Studio Responses API", baseUrl="https://api.example.invalid/v1", model="gpt-5.1-codex", effort="medium", revision="preview", prices=[])]

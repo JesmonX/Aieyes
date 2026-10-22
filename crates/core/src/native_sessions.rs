@@ -1,6 +1,5 @@
-//! Bounded live-state projection from append/update native SQLite tables.
-//! Cold start enumerates metadata once; later polls read appended rows and the
-//! latest row of at most 256 visible sessions. No transcript content is loaded.
+//! Bounded native SQLite state. Each coexisting table has an independent cursor;
+//! only visible rows and newly appended rows are read after discovery.
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
@@ -9,12 +8,15 @@ use std::{collections::HashMap, path::Path};
 #[derive(Clone, Default)]
 pub(crate) struct State {
     identity: String,
-    table: String,
+    tables: HashMap<String, TableState>,
+    #[cfg(test)]
+    scanned: usize,
+}
+#[derive(Clone, Default)]
+struct TableState {
     offset: i64,
     anchor: String,
     rows: HashMap<String, Row>,
-    #[cfg(test)]
-    scanned: usize,
 }
 #[derive(Clone)]
 struct Row {
@@ -30,7 +32,7 @@ impl Row {
         format!("{}:{}", self.session, self.turn)
     }
 }
-pub(crate) type Activity = (String, String, String, u64);
+pub(crate) type Activity = (String, String, String, u64, String);
 
 pub(crate) fn refresh(
     provider: &str,
@@ -48,21 +50,10 @@ pub(crate) fn refresh(
     )?;
     db.busy_timeout(std::time::Duration::from_millis(500))?;
     db.execute_batch("PRAGMA query_only=ON;BEGIN")?;
-    let (table, columns) = if provider == "opencode" {
-        let (table, v2) = crate::opencode::schema(&db)?;
-        let role = if v2 {
-            "type"
-        } else {
-            "json_extract(data,'$.role')"
-        };
-        (
-            table,
-            format!(
-                "rowid,session_id,id,time_created,time_updated,CASE WHEN json_valid(data) THEN json_object('role',{role},'completed',json_extract(data,'$.time.completed'),'finish',json_extract(data,'$.finish'),'error',json_extract(data,'$.error.name')) ELSE '{{}}' END"
-            ),
-        )
+    let tables = if provider == "opencode" {
+        crate::opencode::schemas(&db)?
     } else {
-        ("turn_usage","rowid,session_id,turn_id,started_at,COALESCE(NULLIF(completed_at,0),started_at),json_object('status',status)".into())
+        vec![("turn_usage", false)]
     };
     let meta = std::fs::metadata(path)?;
     #[cfg(unix)]
@@ -72,90 +63,110 @@ pub(crate) fn refresh(
     };
     #[cfg(not(unix))]
     let identity = format!("{:?}", meta.created());
-    let query = format!("SELECT {columns} FROM {table}");
-    let decode = |r: &rusqlite::Row<'_>| -> rusqlite::Result<Row> {
-        Ok(Row {
-            rowid: r.get(0)?,
-            session: r.get(1)?,
-            turn: r.get(2)?,
-            created: r.get::<_, i64>(3)?.max(0) as u64,
-            at: r.get::<_, i64>(4)?.max(0) as u64,
-            data: serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or_default(),
-        })
-    };
-    let anchor = db
-        .query_row(&format!("{query} WHERE rowid=?1"), [state.offset], decode)
-        .optional()?;
-    if state.identity != identity
-        || state.table != table
-        || (state.offset > 0 && anchor.as_ref().map(Row::anchor).as_deref() != Some(&state.anchor))
-    {
+    if state.identity != identity {
         state = State {
             identity,
-            table: table.into(),
             ..Default::default()
         };
     }
-    // Refresh rows already visible, including delayed completion of old turns.
-    if !state.rows.is_empty() {
-        let ids = state
-            .rows
-            .values()
-            .map(|row| row.rowid.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        let rows = db
-            .prepare(&format!("{query} WHERE rowid IN ({ids})"))?
-            .query_map([], decode)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        #[cfg(test)]
-        {
-            state.scanned += rows.len();
+    state
+        .tables
+        .retain(|table, _| tables.iter().any(|(name, _)| name == table));
+    let mut latest: HashMap<String, (Row, bool)> = HashMap::new();
+    for (table, v2) in tables {
+        let columns = if provider == "opencode" {
+            crate::opencode::state_columns(v2)
+        } else {
+            "rowid,session_id,turn_id,started_at,COALESCE(NULLIF(completed_at,0),started_at),json_object('status',status)".into()
+        };
+        let query = format!("SELECT {columns} FROM {table}");
+        let decode = |r: &rusqlite::Row<'_>| -> rusqlite::Result<Row> {
+            Ok(Row {
+                rowid: r.get(0)?,
+                session: r.get(1)?,
+                turn: r.get(2)?,
+                created: r.get::<_, i64>(3)?.max(0) as u64,
+                at: r.get::<_, i64>(4)?.max(0) as u64,
+                data: serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or_default(),
+            })
+        };
+        let saved = state.tables.entry(table.into()).or_default();
+        let anchor = db
+            .query_row(&format!("{query} WHERE rowid=?1"), [saved.offset], decode)
+            .optional()?;
+        if saved.offset > 0 && anchor.as_ref().map(Row::anchor).as_deref() != Some(&saved.anchor) {
+            *saved = TableState::default();
         }
-        state.rows.clear();
-        for row in rows {
-            state.rows.insert(row.session.clone(), row);
-        }
-    }
-    loop {
-        crate::operations::check()?;
-        let rows = db
-            .prepare(&format!("{query} WHERE rowid>?1 ORDER BY rowid LIMIT 256"))?
-            .query_map([state.offset], decode)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        if rows.is_empty() {
-            break;
-        }
-        #[cfg(test)]
-        {
-            state.scanned += rows.len();
-        }
-        for row in rows {
-            state.offset = row.rowid;
-            state.anchor = row.anchor();
-            if now.saturating_sub(row.at / 1000) >= 86400 {
-                continue;
-            }
-            if state
+        if !saved.rows.is_empty() {
+            let ids = saved
                 .rows
-                .get(&row.session)
-                .is_none_or(|old| (row.created, &row.turn) >= (old.created, &old.turn))
+                .values()
+                .map(|r| r.rowid.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            let rows = db
+                .prepare(&format!("{query} WHERE rowid IN ({ids})"))?
+                .query_map([], decode)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            #[cfg(test)]
             {
-                state.rows.insert(row.session.clone(), row);
+                state.scanned += rows.len();
+            }
+            saved.rows.clear();
+            for row in rows {
+                saved.rows.insert(row.session.clone(), row);
             }
         }
-        trim(&mut state, now);
+        loop {
+            crate::operations::check()?;
+            let rows = db
+                .prepare(&format!("{query} WHERE rowid>?1 ORDER BY rowid LIMIT 256"))?
+                .query_map([saved.offset], decode)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if rows.is_empty() {
+                break;
+            }
+            #[cfg(test)]
+            {
+                state.scanned += rows.len();
+            }
+            for row in rows {
+                saved.offset = row.rowid;
+                saved.anchor = row.anchor();
+                if now.saturating_sub(row.at / 1000) >= 86400 {
+                    continue;
+                }
+                if saved
+                    .rows
+                    .get(&row.session)
+                    .is_none_or(|old| (row.created, &row.turn) >= (old.created, &old.turn))
+                {
+                    saved.rows.insert(row.session.clone(), row);
+                }
+            }
+            trim(&mut saved.rows, now);
+        }
+        trim(&mut saved.rows, now);
+        for row in saved.rows.values() {
+            if latest.get(&row.session).is_none_or(|(old, old_v2)| {
+                (row.created, &row.turn, v2) >= (old.created, &old.turn, *old_v2)
+            }) {
+                latest.insert(row.session.clone(), (row.clone(), v2));
+            }
+        }
     }
-    trim(&mut state, now);
-    let parts = provider == "opencode"
-        && table == "message"
-        && db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='part')",
-            [],
-            |r| r.get::<_, bool>(0),
-        )?;
+    let parts = provider == "opencode" && crate::opencode::table_exists(&db, "part")?;
+    let parents = if provider == "opencode" && crate::opencode::table_exists(&db, "session")? {
+        db.prepare("PRAGMA table_info(session)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|c| c == "parent_id")
+    } else {
+        false
+    };
     let mut result = Vec::new();
-    for row in state.rows.values() {
+    for (row, v2) in latest.into_values() {
         let mut kind = if provider == "zcode" {
             match row.data["status"].as_str() {
                 Some("completed") => "complete",
@@ -165,47 +176,42 @@ pub(crate) fn refresh(
                 _ => "unknown",
             }
         } else {
-            let error = row.data["error"].as_str().unwrap_or("");
-            let finish = row.data["finish"].as_str().unwrap_or("");
-            if ["MessageAbortedError", "AbortedError"].contains(&error) {
-                "interrupted"
-            } else if !error.is_empty() {
-                "failed"
-            } else if row.data["role"] == "user" {
-                "start"
-            } else if !row.data["completed"].is_null() && ["stop", "end_turn"].contains(&finish) {
-                "complete"
-            } else if !row.data["completed"].is_null() && finish == "length" {
-                "failed"
-            } else {
-                "thinking"
-            }
+            crate::opencode::phase(&row.data)
         };
-        if parts && !["complete", "failed", "interrupted"].contains(&kind) {
-            let tools=db.prepare("SELECT json_extract(data,'$.tool') FROM part WHERE message_id=?1 AND json_valid(data) AND json_extract(data,'$.type')='tool' AND json_extract(data,'$.state.status') IN ('pending','running') LIMIT 64")?.query_map([&row.turn],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        if parts && !v2 && !["complete", "failed", "interrupted"].contains(&kind) {
+            let tools = db.prepare("SELECT json_extract(data,'$.tool') FROM part WHERE message_id=?1 AND json_valid(data) AND json_extract(data,'$.type')='tool' AND json_extract(data,'$.state.status') IN ('pending','running') LIMIT 64")?.query_map([&row.turn],|r|r.get::<_,Option<String>>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
             if !tools.is_empty() {
-                kind = if tools.iter().any(|t| t == "question") {
+                kind = if tools.iter().any(|t| t.as_deref() == Some("question")) {
                     "PermissionRequest"
                 } else {
                     "tool"
                 };
             }
         }
-        // ZCode emits exact live tool/model transitions through its observer;
-        // the statistics projection supplies durable settlement only.
-        result.push((row.session.clone(), row.turn.clone(), kind.into(), row.at));
+        let parent = if parents {
+            db.query_row(
+                "SELECT parent_id FROM session WHERE id=?1",
+                [&row.session],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        result.push((row.session, row.turn, kind.into(), row.at, parent));
     }
-    result.sort_by_key(|row| std::cmp::Reverse(row.3));
+    result.sort_by_key(|r| std::cmp::Reverse(r.3));
+    result.truncate(256);
     Ok((state, result))
 }
-fn trim(state: &mut State, now: u64) {
-    state
-        .rows
-        .retain(|_, row| now.saturating_sub(row.at / 1000) < 86400);
-    if state.rows.len() > 256 {
-        let mut rows = state.rows.drain().collect::<Vec<_>>();
-        rows.sort_by_key(|(_, row)| std::cmp::Reverse(row.at));
-        state.rows.extend(rows.into_iter().take(256));
+fn trim(rows: &mut HashMap<String, Row>, now: u64) {
+    rows.retain(|_, r| now.saturating_sub(r.at / 1000) < 86400);
+    if rows.len() > 256 {
+        let mut sorted = rows.drain().collect::<Vec<_>>();
+        sorted.sort_by_key(|(_, r)| std::cmp::Reverse(r.at));
+        rows.extend(sorted.into_iter().take(256));
     }
 }
 

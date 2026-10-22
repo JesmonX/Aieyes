@@ -312,9 +312,9 @@ struct SettingsView: View {
                 LabeledContent(L("服务器后台间隔（秒）")) { TextField(L("服务器后台间隔（秒）"), value: $model.settingsDraft.serverRefreshSeconds, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "background") }
             }
             Section(L("历史记录")) {
-                Toggle(L("精确计数"), isOn: Binding(get: { model.settingsDraft.codexPreciseCounting == true }, set: { model.settingsDraft.codexPreciseCounting = $0 }))
-                Text(L("开启后扣除 Codex 继承历史中的重复用量（包括 fork 和历史回退）；关闭时允许重复计入。修改后在下次同步自动重算已有日志。")).font(AppFont.secondary).foregroundStyle(.secondary)
-                if model.settings.codexPreciseCounting == true {
+                Toggle(L("精确计数"), isOn: Binding(get: { model.settingsDraft.preciseCounting == true }, set: { model.settingsDraft.preciseCounting = $0 }))
+                Text(L("为所有 Agent 去除可识别的 fork 和继承历史重复用量。关闭时按各会话计入；修改后在下次同步自动重算。")).font(AppFont.secondary).foregroundStyle(.secondary)
+                if model.settings.preciseCounting == true {
                     ForEach(model.dashboard.sources.filter { $0.enabled && !($0.status?.forkHistoryIssues ?? []).isEmpty }) { source in
                         DisclosureGroup(source.name + L(" · 继承历史待确认")) {
                             ForEach(Array((source.status?.forkHistoryIssues ?? []).enumerated()), id: \.offset) { _, issue in

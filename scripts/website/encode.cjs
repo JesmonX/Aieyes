@@ -27,7 +27,16 @@ if(require.main===module)(async()=>{
       for(const [state,row] of [['idle',0],['working',1],['complete',4]])fs.writeFileSync(path.join(out,`pet-${state}.webp`),await encode(page,png,{row}));
       console.log('Extracted original kiffin pet artwork');
     }else{
-      for(const file of fs.readdirSync(path.join(work,'native')).filter(name=>/^macos-(overview|analytics|servers|panel)\.png$/.test(name))){fs.writeFileSync(path.join(out,'screenshots',file.replace('.png','.webp')),await encode(page,fs.readFileSync(path.join(work,'native',file))));console.log('Encoded',file);}
+      const language=process.argv[process.argv.indexOf('--language')+1]||'all';
+      for(const locale of language==='all'||!['en','zh-CN'].includes(language)?['en','zh-CN']:[language]){
+        const input=path.join(work,'native',locale),target=path.join(out,'screenshots',locale);fs.mkdirSync(target,{recursive:true});
+        for(const file of fs.readdirSync(input).filter(name=>/^macos-(overview|analytics|servers|panel)\.png$/.test(name))){
+          const bytes=await encode(page,fs.readFileSync(path.join(input,file))),name=file.replace('.png','.webp');
+          fs.writeFileSync(path.join(target,name),bytes);
+          if(locale==='en')fs.writeFileSync(path.join(out,'screenshots',name),bytes);
+          console.log('Encoded',locale,file);
+        }
+      }
     }
   }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

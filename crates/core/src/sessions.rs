@@ -91,6 +91,14 @@ pub struct LiveSession {
     pub background: bool,
     #[serde(skip)]
     pub event_at: u64,
+    #[serde(skip)]
+    pub parent_id: String,
+    #[serde(skip)]
+    pub path: String,
+    #[serde(skip)]
+    pub parent_path: String,
+    #[serde(skip)]
+    pub turn_started_at: u64,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -169,11 +177,88 @@ impl Snapshot {
         }
     }
     fn finish(&mut self) {
+        let paths: HashMap<_, _> = self
+            .sessions
+            .iter()
+            .map(|s| {
+                (
+                    (
+                        s.machine_id.clone(),
+                        s.provider.clone(),
+                        PathBuf::from(&s.path),
+                    ),
+                    s.id.clone(),
+                )
+            })
+            .collect();
+        for session in &mut self.sessions {
+            if session.parent_id.is_empty() && !session.parent_path.is_empty() {
+                let path = Path::new(&session.parent_path);
+                let path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    Path::new(&session.path)
+                        .parent()
+                        .unwrap_or(Path::new(""))
+                        .join(path)
+                };
+                let mut normalized = PathBuf::new();
+                for part in path.components() {
+                    match part {
+                        std::path::Component::ParentDir => {
+                            normalized.pop();
+                        }
+                        std::path::Component::CurDir => {}
+                        _ => normalized.push(part.as_os_str()),
+                    }
+                }
+                if let Some(id) = paths.get(&(
+                    session.machine_id.clone(),
+                    session.provider.clone(),
+                    normalized,
+                )) {
+                    session.parent_id = id.clone();
+                }
+            }
+        }
+        // CodeBuddy's child transcript uses a fresh session UUID, while its
+        // hooks use parent UUID + agent ID. The native subagents directory and
+        // an independently discovered parent transcript prove that alias.
+        let aliases: HashMap<_, _> = self
+            .sessions
+            .iter()
+            .filter_map(|s| {
+                if s.provider != "codebuddy" || s.parent_id.is_empty() {
+                    return None;
+                }
+                let path = Path::new(&s.path);
+                codebuddy_parent_path(path)?;
+                let parent = path.parent()?.parent()?.file_name()?.to_str()?;
+                let agent = path.file_stem()?.to_str()?;
+                if crate::models::hash(&format!("{}:codebuddy:{parent}", s.machine_id))
+                    != s.parent_id
+                {
+                    return None;
+                }
+                Some((
+                    crate::models::hash(&format!("{}:codebuddy:{parent}:{agent}", s.machine_id)),
+                    s.id.clone(),
+                ))
+            })
+            .collect();
+        for session in &mut self.sessions {
+            if session.evidence == "hook"
+                && let Some(id) = aliases.get(&session.id)
+            {
+                session.id = id.clone();
+            }
+        }
         let mut unique: HashMap<String, LiveSession> = HashMap::new();
         for s in self.sessions.drain(..) {
             unique
                 .entry(s.id.clone())
                 .and_modify(|old| {
+                    let same_turn = !s.turn_id.is_empty() && s.turn_id == old.turn_id;
                     if s.provider == "zcode" {
                         // Stop hooks can request another model step. Only the
                         // settled turn record confirms that this turn ended.
@@ -199,30 +284,70 @@ impl Snapshot {
                     }
                     let old_hook = old.evidence == "hook" && old.phase != Phase::Unknown;
                     let new_hook = s.evidence == "hook" && s.phase != Phase::Unknown;
-                    // A parallel tool return does not answer an outstanding DB permission request.
-                    if old.evidence == "database"
+                    if s.provider == "codebuddy" {
+                        // CodeBuddy's generic Stop also fires after a native
+                        // cancellation/error. It cannot turn that outcome into
+                        // success; a later user prompt can start a new turn.
+                        if old.evidence == "log"
+                            && matches!(old.phase, Phase::Interrupted | Phase::Failed)
+                            && new_hook
+                            && s.phase == Phase::Complete
+                            && (same_turn || s.turn_started_at <= old.event_at)
+                        {
+                            return;
+                        }
+                        if s.evidence == "log"
+                            && matches!(s.phase, Phase::Interrupted | Phase::Failed)
+                            && old_hook
+                            && old.phase == Phase::Complete
+                            && (same_turn || old.turn_started_at <= s.event_at)
+                        {
+                            *old = s.clone();
+                            return;
+                        }
+                    }
+                    // A parallel transcript update does not answer a native
+                    // database or hook permission request.
+                    if matches!(old.evidence.as_str(), "database" | "hook")
                         && old.phase == Phase::NeedsInput
                         && s.phase.active()
+                        && (same_turn || s.turn_started_at <= old.event_at)
                     {
                         return;
                     }
-                    if s.evidence == "database"
+                    if matches!(s.evidence.as_str(), "database" | "hook")
                         && s.phase == Phase::NeedsInput
                         && old.phase.active()
+                        && (same_turn || old.turn_started_at <= s.event_at)
                     {
                         *old = s.clone();
                         return;
                     }
                     if old_hook
+                        && (same_turn || s.turn_started_at <= old.event_at)
                         && (s.phase == Phase::Unknown
                             || (old.background && s.phase == Phase::Complete))
                     {
                         return;
                     }
-                    if (new_hook
+                    if new_hook
+                        && (same_turn || old.turn_started_at <= s.event_at)
                         && (old.phase == Phase::Unknown
-                            || (s.background && old.phase == Phase::Complete)))
-                        || s.updated_at > old.updated_at
+                            || (s.background && old.phase == Phase::Complete))
+                    {
+                        *old = s.clone();
+                        return;
+                    }
+                    // Native millisecond time orders turns across all providers.
+                    // File maintenance times and display priority cannot revive
+                    // an old completion or hide the next prompt in that second.
+                    if s.event_at > 0 && old.event_at > 0 && s.event_at != old.event_at {
+                        if s.event_at > old.event_at {
+                            *old = s.clone();
+                        }
+                        return;
+                    }
+                    if s.updated_at > old.updated_at
                         || (s.updated_at == old.updated_at
                             && (s.phase.priority() < old.phase.priority()
                                 || (new_hook && s.phase.priority() == old.phase.priority())))
@@ -232,7 +357,50 @@ impl Snapshot {
                 })
                 .or_insert(s);
         }
-        self.sessions = unique.into_values().collect();
+        let mut roots: HashMap<String, Vec<LiveSession>> = HashMap::new();
+        for session in unique.values() {
+            let mut root = session;
+            let mut seen = HashSet::new();
+            while !root.parent_id.is_empty() && seen.insert(root.id.clone()) {
+                let Some(parent) = unique.get(&root.parent_id) else {
+                    break;
+                };
+                root = parent;
+            }
+            // A cycle is not evidence of a root. Standalone Codex workers do
+            // not establish that their parent is a visible CLI/editor session.
+            if seen.contains(&root.id) {
+                root = session;
+            }
+            if session.provider == "codex" && !root.parent_id.is_empty() {
+                continue;
+            }
+            roots
+                .entry(root.id.clone())
+                .or_default()
+                .push(session.clone());
+        }
+        self.sessions = roots
+            .into_iter()
+            .map(|(id, members)| {
+                let mut main = unique[&id].clone();
+                let active = members
+                    .iter()
+                    .filter(|s| s.id != id && s.phase.active())
+                    .min_by_key(|s| (s.phase.priority(), std::cmp::Reverse(s.event_at)));
+                if let Some(child) = active {
+                    if child.phase == Phase::NeedsInput
+                        || (main.phase != Phase::NeedsInput && main.phase != Phase::Failed)
+                    {
+                        main.phase = child.phase;
+                    }
+                    main.updated_at = main.updated_at.max(child.updated_at);
+                    main.event_at = main.event_at.max(child.event_at);
+                    main.background = true;
+                }
+                main
+            })
+            .collect();
         self.sessions.sort_by_key(|s| {
             (
                 s.phase.priority(),
@@ -249,6 +417,7 @@ struct FileBatch {
     key: String,
     identity: String,
     signature: String,
+    anchor: String,
     size: u64,
     offset: u64,
     modified: u64,
@@ -275,6 +444,7 @@ struct SourceBatch {
 struct Cursor {
     identity: String,
     signature: String,
+    anchor: String,
     size: u64,
     offset: u64,
     modified: u64,
@@ -393,7 +563,7 @@ fn wire_source(s: &Source) -> Value {
 }
 impl Reader {
     fn manifest(&self) -> Value {
-        Value::Object(self.cursors.iter().map(|(p,c)|(p.clone(),json!({"identity":c.identity,"signature":c.signature,"size":c.size,"offset":c.offset,"modified":c.modified,"pid":c.activity.pid,"processStart":c.activity.process_start,"continuation":c.continuation}))).collect())
+        Value::Object(self.cursors.iter().map(|(p,c)|(p.clone(),json!({"identity":c.identity,"signature":c.signature,"anchor":c.anchor,"size":c.size,"offset":c.offset,"modified":c.modified,"pid":c.activity.pid,"processStart":c.activity.process_start,"continuation":c.continuation}))).collect())
     }
     fn consume(
         &mut self,
@@ -406,6 +576,9 @@ impl Reader {
     ) -> Snapshot {
         let mut out = Snapshot::default();
         for f in batch.files {
+            if f.hook && hook_state.as_deref() == Some("disabled") {
+                continue;
+            }
             if source.provider == "zcode" && f.hook && hook_state.as_deref() != Some("installed") {
                 continue;
             }
@@ -436,9 +609,6 @@ impl Reader {
                     if source.provider == "zcode" && f.hook && event.kind == "Stop" {
                         event.kind = "PostInvocation".into();
                     }
-                    if event.at == 0 {
-                        event.at = f.modified * 1000;
-                    }
                     cursor.activity.apply(event);
                 }
             }
@@ -447,11 +617,15 @@ impl Reader {
             cursor.modified = f.modified;
             cursor.identity = f.identity;
             cursor.signature = f.signature;
+            if !f.anchor.is_empty() {
+                cursor.anchor = f.anchor;
+            }
             cursor.continuation = f.continuation;
             // Creation source is independent of the tools called in a normal
             // conversation. Unknown sources fail closed, including subagents.
             if source.provider == "codex"
                 && !matches!(cursor.activity.session_source.as_str(), "cli" | "vscode")
+                && cursor.activity.parent_session.is_empty()
             {
                 continue;
             }
@@ -460,12 +634,11 @@ impl Reader {
             };
             // SQLite maintenance/sync may touch many old AGY databases together.
             // Their file mtime is not evidence of a new conversation event.
-            let activity_at =
-                if source.provider == "antigravity" && database && cursor.activity.at > 0 {
-                    cursor.activity.at / 1000
-                } else {
-                    f.modified
-                };
+            let activity_at = if cursor.activity.at > 0 {
+                cursor.activity.at / 1000
+            } else {
+                f.modified
+            };
             let elapsed = remote_now.saturating_sub(activity_at);
             let alive = if source.host_id.is_none() && cursor.activity.pid > 0 {
                 Some(
@@ -523,6 +696,19 @@ impl Reader {
                 .into(),
                 background: cursor.activity.background_active(),
                 event_at: cursor.activity.at,
+                parent_id: if cursor.activity.parent_session.is_empty() {
+                    String::new()
+                } else {
+                    crate::models::hash(&format!(
+                        "{}:{}:{}",
+                        source.host_id.as_deref().unwrap_or("local"),
+                        source.provider,
+                        cursor.activity.parent_session
+                    ))
+                },
+                path: f.key.clone(),
+                parent_path: cursor.activity.parent_session_path.clone(),
+                turn_started_at: cursor.activity.turn_started_at(),
             });
         }
         let error = batch.error.or_else(|| {
@@ -638,7 +824,7 @@ impl Reader {
                     Ok((state, rows)) => {
                         let files: Vec<_> = rows
                             .into_iter()
-                            .map(|(session, turn, kind, at)| FileBatch {
+                            .map(|(session, turn, kind, at, parent_session)| FileBatch {
                                 key: format!("{}#{session}", path.display()),
                                 modified: at / 1000,
                                 reset: true,
@@ -649,6 +835,7 @@ impl Reader {
                                         session: session.clone(),
                                         turn: turn.clone(),
                                         at,
+                                        parent_session,
                                         ..Default::default()
                                     },
                                     Event {
@@ -820,16 +1007,21 @@ impl Reader {
             for (root, hook) in &roots {
                 let hook = *hook;
                 if !hook && source.provider == "deepseek-harness" {
-                    match crate::harness_history::paths(root) {
-                        Ok(files) => paths.extend(
-                            files
-                                .into_iter()
-                                .map(|p| {
-                                    let stamp = modified(&p);
-                                    (p, false, stamp)
-                                })
-                                .filter(|(_, _, stamp)| now.saturating_sub(*stamp) < 86400),
-                        ),
+                    match crate::harness_history::discover(root) {
+                        Ok((files, issues)) => {
+                            if let Some(issue) = issues.first() {
+                                error = issue["message"].as_str().map(str::to_string);
+                            }
+                            paths.extend(
+                                files
+                                    .into_iter()
+                                    .map(|p| {
+                                        let stamp = modified(&p);
+                                        (p, false, stamp)
+                                    })
+                                    .filter(|(_, _, stamp)| now.saturating_sub(*stamp) < 86400),
+                            );
+                        }
                         Err(e) => error = Some(e.to_string()),
                     }
                     continue;
@@ -1090,49 +1282,25 @@ fn read_file(
     hook: bool,
     cursor: Option<&Cursor>,
 ) -> std::io::Result<FileBatch> {
-    #[cfg(windows)]
-    let mut file = File::open(path)?;
-    #[cfg(windows)]
-    let meta = file.metadata()?;
-    #[cfg(not(windows))]
+    use std::io::{BufRead, BufReader};
+    const MAX_RECORD: u64 = 16 * 1024 * 1024;
+    const BATCH: u64 = 512 * 1024;
     let meta = fs::metadata(path)?;
     let modified = seconds(meta.modified()?);
-    let signature = meta
-        .modified()?
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-        .to_string();
+    let signature = format!("{:?}:{:?}", meta.modified()?, meta.created());
+    #[cfg(unix)]
+    let signature = {
+        use std::os::unix::fs::MetadataExt;
+        format!("{signature}:{}:{}", meta.ctime(), meta.ctime_nsec())
+    };
     #[cfg(unix)]
     let identity = {
         use std::os::unix::fs::MetadataExt;
-        meta.ino().to_string()
+        format!("{}:{}", meta.dev(), meta.ino())
     };
-    #[cfg(windows)]
-    let identity = {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::{
-            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-        };
-        // NTFS can preserve creation time when a same-name file is replaced.
-        // Query the opened file's actual ID so its old source cannot survive.
-        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        format!(
-            "{}:{}:{}",
-            info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
-        )
-    };
-    #[cfg(not(any(unix, windows)))]
-    let identity = meta
-        .created()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos().to_string())
-        .unwrap_or_default();
-    let reset = cursor.is_none_or(|c| {
+    #[cfg(not(unix))]
+    let identity = crate::native_agents::file_identity(&File::open(path)?)?;
+    let mut reset = cursor.is_none_or(|c| {
         c.identity != identity
             || c.offset > meta.len()
             || (c.size == meta.len() && c.signature != signature)
@@ -1153,38 +1321,86 @@ fn read_file(
             ..Default::default()
         });
     }
+    let mut file = File::open(path)?;
+    if !reset && let Some(c) = cursor.filter(|c| !c.anchor.is_empty()) {
+        reset = crate::native_agents::region_digest(
+            &mut file,
+            c.offset.saturating_sub(128),
+            c.offset.min(128),
+        )
+        .map_err(std::io::Error::other)?
+            != c.anchor;
+    }
     let mut offset = if reset {
         meta.len().saturating_sub(262144)
     } else {
         cursor.unwrap().offset
     };
-    #[cfg(not(windows))]
-    let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(offset))?;
-    let mut data = Vec::new();
-    (&mut file).take(524288).read_to_end(&mut data)?;
-    #[cfg(test)]
-    let mut read_bytes = data.len() as u64;
+    let mut _read_bytes = 0u64;
+    // Start at the beginning of the record crossing the cold-tail boundary.
+    // A valid large last record must never be discarded as a partial prefix.
     if reset && offset > 0 {
-        let skip = data
-            .iter()
-            .position(|b| *b == b'\n')
-            .map(|i| i + 1)
-            .unwrap_or(data.len());
-        offset += skip as u64;
-        data.drain(..skip);
-    }
-    let mut events = Vec::new();
-    if reset && matches!(provider, "codex" | "pi" | "omp") {
-        file.seek(SeekFrom::Start(0))?;
-        let mut first = Vec::new();
-        (&mut file).take(65536).read_to_end(&mut first)?;
-        #[cfg(test)]
-        {
-            read_bytes += first.len() as u64;
+        let target = offset;
+        loop {
+            let start = offset.saturating_sub(65536);
+            file.seek(SeekFrom::Start(start))?;
+            let mut bytes = vec![0; (offset - start) as usize];
+            file.read_exact(&mut bytes)?;
+            _read_bytes += bytes.len() as u64;
+            if let Some(newline) = bytes.iter().rposition(|b| *b == b'\n') {
+                offset = start + newline as u64 + 1;
+                break;
+            }
+            offset = start;
+            if target - offset > MAX_RECORD {
+                return Err(std::io::Error::other("会话记录超过 16 MiB，保留位置供重试"));
+            }
+            if offset == 0 {
+                break;
+            }
         }
-        for line in first.split(|b| *b == b'\n').take(2) {
-            if let Ok(v) = serde_json::from_slice::<Value>(line) {
+    }
+    let mut reader = BufReader::new(file);
+    let mut events = Vec::new();
+    if reset
+        && provider == "codebuddy"
+        && !hook
+        && let Some(parent) = codebuddy_parent_path(path)
+    {
+        events.push(Event {
+            kind: "identity".into(),
+            parent_session_path: parent.to_string_lossy().into(),
+            ..Default::default()
+        });
+    }
+    if reset
+        && provider == "kimi"
+        && !hook
+        && let Some(parent_session) = crate::native_agents::kimi_parent(path)
+    {
+        events.push(Event {
+            kind: "identity".into(),
+            session: crate::native_agents::session_id(path),
+            parent_session,
+            ..Default::default()
+        });
+    }
+    if reset && !hook && matches!(provider, "codex" | "pi" | "omp") {
+        reader.seek(SeekFrom::Start(0))?;
+        for _ in 0..2 {
+            let mut line = Vec::new();
+            let n = reader
+                .by_ref()
+                .take(MAX_RECORD + 1)
+                .read_until(b'\n', &mut line)?;
+            _read_bytes += n as u64;
+            if n as u64 > MAX_RECORD {
+                return Err(std::io::Error::other("会话记录超过 16 MiB，保留位置供重试"));
+            }
+            if line.last() != Some(&b'\n') {
+                break;
+            }
+            if let Ok(v) = serde_json::from_slice::<Value>(&line) {
                 let rows = if provider == "codex" {
                     session_events::codex(&v).into_iter().collect()
                 } else {
@@ -1196,37 +1412,50 @@ fn read_file(
             }
         }
     }
-    let complete = data
-        .iter()
-        .rposition(|b| *b == b'\n')
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    for line in data[..complete].split(|b| *b == b'\n') {
-        let Ok(value) = serde_json::from_slice::<Value>(line) else {
-            continue;
-        };
-        if hook {
-            if let Ok(e) = serde_json::from_value(value) {
-                events.push(e);
+    reader.seek(SeekFrom::Start(offset))?;
+    let start = offset;
+    loop {
+        let mut line = Vec::new();
+        let n = reader
+            .by_ref()
+            .take(MAX_RECORD + 1)
+            .read_until(b'\n', &mut line)?;
+        _read_bytes += n as u64;
+        if n as u64 > MAX_RECORD {
+            return Err(std::io::Error::other("会话记录超过 16 MiB，保留位置供重试"));
+        }
+        if n == 0 || line.last() != Some(&b'\n') {
+            break;
+        }
+        offset += n as u64;
+        if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+            if hook {
+                if let Ok(event) = serde_json::from_value(value) {
+                    events.push(event);
+                }
+            } else if matches!(provider, "kimi" | "codebuddy" | "grok") {
+                if provider == "kimi" && value["type"] == "forked" {
+                    events.retain(|e| e.kind == "identity" && !e.parent_session.is_empty());
+                }
+                events.extend(session_events::native(provider, &value));
+            } else if matches!(provider, "pi" | "omp") {
+                events.extend(session_events::pi(&value));
+            } else if provider == "codex" {
+                events.extend(session_events::codex(&value));
+            } else {
+                events.extend(session_events::claude(&value));
             }
-        } else if matches!(provider, "kimi" | "codebuddy" | "grok") {
-            if provider == "kimi" && value["type"] == "forked" {
-                events.clear();
-            }
-            events.extend(session_events::native(provider, &value));
-        } else if matches!(provider, "pi" | "omp") {
-            events.extend(session_events::pi(&value));
-        } else if provider == "codex" {
-            events.extend(session_events::codex(&value));
-        } else {
-            events.extend(session_events::claude(&value));
+        }
+        if offset - start >= BATCH {
+            break;
         }
     }
-    offset += if complete == 0 && data.len() == 524288 {
-        data.len()
-    } else {
-        complete
-    } as u64;
+    let anchor = crate::native_agents::region_digest(
+        reader.get_mut(),
+        offset.saturating_sub(128),
+        offset.min(128),
+    )
+    .map_err(std::io::Error::other)?;
     Ok(FileBatch {
         key: path.to_string_lossy().into_owned(),
         identity,
@@ -1237,11 +1466,21 @@ fn read_file(
         reset,
         events,
         hook,
+        anchor,
         #[cfg(test)]
-        read_bytes,
+        read_bytes: _read_bytes,
         ..Default::default()
     })
 }
+
+fn codebuddy_parent_path(path: &Path) -> Option<PathBuf> {
+    let directory = path.parent()?;
+    if directory.file_name()? != "subagents" || !path.file_stem()?.to_str()?.starts_with("agent-") {
+        return None;
+    }
+    Some(directory.parent()?.with_extension("jsonl"))
+}
+
 fn read_db(path: &Path) -> anyhow::Result<FileBatch> {
     let db = rusqlite::Connection::open_with_flags(
         path,
@@ -2355,6 +2594,9 @@ mod adapter_tests {
         fs::create_dir_all(&codex).unwrap();
         hooks_only(&claude);
         hooks_only(&agy);
+        // This fixture supplies enabled Claude hook events. Explicitly
+        // disabled observers now correctly ignore retained event files.
+        fs::remove_file(claude.join(".aieyes/session-hooks-disabled")).unwrap();
         fs::create_dir(agy.join("conversations")).unwrap();
         fs::write(codex.join("s.jsonl"),"{\"type\":\"session_meta\",\"payload\":{\"id\":\"s\",\"source\":\"cli\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"text\":\"SECRET\"}}\n").unwrap();
         let at = seconds(SystemTime::now()) * 1000;
@@ -2392,7 +2634,12 @@ mod adapter_tests {
         };
         let mut monitor = SessionMonitor::default();
         let snapshot = monitor.read(&settings, SystemTime::now());
-        assert_eq!(snapshot.active_count(), 3);
+        assert_eq!(
+            snapshot.active_count(),
+            3,
+            "{}",
+            serde_json::to_string(&snapshot).unwrap()
+        );
         assert_eq!(snapshot.phase(), Some(Phase::NeedsInput));
         assert!(
             snapshot
@@ -2887,7 +3134,7 @@ mod codex_source_tests {
                     host_id: host,
                     ..Default::default()
                 };
-                let snap = Reader::default().consume(
+                let mut snap = Reader::default().consume(
                     &source,
                     SourceBatch {
                         files: vec![batch],
@@ -2898,6 +3145,7 @@ mod codex_source_tests {
                     "Fixture",
                     None,
                 );
+                snap.finish();
                 assert_eq!(
                     !snap.sessions.is_empty(),
                     case["visible"] == true,

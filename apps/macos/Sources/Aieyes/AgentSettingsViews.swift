@@ -126,7 +126,7 @@ private struct MachineSessionStatus: View {
         if sources.isEmpty { return L("会话监测未启用") }
         if !collecting { return L("采集已暂停") }
         let rows = live.sources.filter { row in sources.contains { $0.id == row.sourceId } }
-        if ["codex", "kimi", "codebuddy", "deepseek-harness", "grok", "qoder", "opencode", "pi", "omp"].contains(provider) { return rows.count == sources.count && rows.allSatisfy { $0.state == "healthy" } ? L("日志接入") : L("日志待确认") }
+        if ["codex", "kimi", "deepseek-harness", "grok", "qoder", "opencode", "pi", "omp"].contains(provider) { return rows.count == sources.count && rows.allSatisfy { $0.state == "healthy" } ? L("日志接入") : L("日志待确认") }
         if rows.contains(where: { $0.hooks == "error" }) { return L("接入失败") }
         if rows.contains(where: { $0.hooks == "disabled" }) { return L("实时监测已停用") }
         return rows.count == sources.count && rows.allSatisfy { $0.hooks == "installed" } ? L("会话监测已启用") : L("等待监测安装")
@@ -146,7 +146,7 @@ private struct MachineSessionHooksView: View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 14) {
             HStack { Text(L("会话监测 · ") + model.machineName(machine)).font(AppFont.title); Spacer(); Button(L("完成")) { dismiss() } }
-            if ["codex", "kimi", "codebuddy", "deepseek-harness", "grok", "qoder", "opencode", "pi", "omp"].contains(provider) {
+            if ["codex", "kimi", "deepseek-harness", "grok", "qoder", "opencode", "pi", "omp"].contains(provider) {
                 Text(L("从 Agent 原生记录读取会话状态。")).foregroundStyle(.secondary)
             } else {
                 Text(provider == "zcode" ? L("实时状态由 ZCode 原生监测提供；停用后仅显示已结算的状态。SSH 监测需要远端 Python 3。") : provider == "cursor" ? L("从用户或项目的 .cursor/hooks.json 接收状态；停用后不再接收新状态。原生会话库的 Token 暂未接入，SSH 监测需要远端 Python 3。") : machine == "local" ? L("采集时自动监测会话；停用实时监测后仍读取日志。") : L("通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。")).foregroundStyle(.secondary)

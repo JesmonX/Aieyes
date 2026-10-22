@@ -18,6 +18,7 @@ pub mod estimates;
 pub mod file_lock;
 mod harness_history;
 mod history_corrections;
+mod history_counting;
 mod host_monitor;
 mod host_sampling;
 pub mod import;
@@ -493,7 +494,7 @@ impl Engine {
             "settings.get" => Ok(serde_json::to_value(self.store.settings()?)?),
             "settings.save" => {
                 self.progress("保存配置");
-                let s: Settings = serde_json::from_value(params)?;
+                let s: Settings = crate::settings::decode(params)?;
                 self.store.save_settings(&s)?;
                 Ok(json!({"saved":true}))
             }

@@ -5,6 +5,68 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('sessions',ROOT/'scripts/session_remote.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);m.SCRIPT=(ROOT/'scripts/session_remote.py').read_text()
 class ObserverTests(unittest.TestCase):
+    def test_codebuddy_nested_child_identity_and_intermediate_commentary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory);path=root/'parent/subagents/agent-worker.jsonl';path.parent.mkdir(parents=True)
+            row=dict(type='message',role='assistant',status='completed',sessionId='independent-native-child',id='commentary',timestamp=1234,providerData=dict(messageId='step'),content='PRIVATE')
+            path.write_text(json.dumps(row)+'\n')
+            result=m.read_file(path,'codebuddy',False,{})
+            self.assertEqual(result['events'][0]['parentSessionPath'],str(root/'parent.jsonl'))
+            self.assertEqual(result['events'][-1]['kind'],'thinking')
+            self.assertEqual(result['events'][-1]['session'],'independent-native-child')
+            self.assertNotIn('PRIVATE',json.dumps(result))
+            row['providerData']['usage']=dict(inputTokens=1,outputTokens=1)
+            self.assertEqual(m.native_metadata(row,'codebuddy')[0]['kind'],'complete')
+            row.update(status='incomplete',providerData=dict(skipRun=True,error=dict(message='Interrupted by user',isRetryable=False)))
+            self.assertEqual(m.native_metadata(row,'codebuddy')[0]['kind'],'interrupted')
+            row['type']='function_call_result'
+            self.assertEqual(m.native_metadata(row,'codebuddy')[0]['kind'],'interrupted')
+            row['type']='message'
+            row['providerData']['error']['message']='PRIVATE_ERROR'
+            self.assertEqual(m.native_metadata(row,'codebuddy')[0]['kind'],'failed')
+            self.assertNotIn('PRIVATE',json.dumps(m.native_metadata(row,'codebuddy')))
+
+    def test_native_wait_ids_grok_tools_and_parent_metadata_are_projected(self):
+        for kind,expected in [('interaction.request','Elicitation'),('interaction.resolved','ElicitationResult')]:
+            event=m.native_metadata(dict(type=kind,id='approval',time=1234,payload='PRIVATE'),'kimi')[0]
+            self.assertEqual((event['kind'],event['call'],event['at']),(expected,'approval',1234))
+            self.assertNotIn('PRIVATE',json.dumps(event))
+        for kind,expected in [('tool_started','tool'),('tool_completed','output'),('permission_requested','PermissionRequest'),('permission_resolved','ElicitationResult')]:
+            event=m.native_metadata(dict(type=kind,tool_name='read',tool_call_id='call',request_id='permission',arguments='PRIVATE'),'grok')[0]
+            self.assertEqual(event['kind'],expected)
+            self.assertNotIn('PRIVATE',json.dumps(event))
+        event=m.metadata(dict(type='session_meta',payload=dict(id='child',source=dict(subagent=dict(thread_spawn=dict(parent_thread_id='parent',prompt='PRIVATE'))))),'codex',False)[0]
+        self.assertEqual(event['parentSession'],'parent');self.assertNotIn('PRIVATE',json.dumps(event))
+
+    def test_large_complete_and_split_session_records_survive_both_boundaries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=pathlib.Path(directory)/'session.jsonl'
+            header=dict(type='session',id='large')
+            answer=dict(type='message',id='answer',timestamp='2026-10-22T00:00:00Z',message=dict(role='assistant',stopReason='stop',content=[dict(type='text',text='PRIVATE_'*45000)]))
+            path.write_text(json.dumps(header)+'\n'+json.dumps(answer)+'\n')
+            first=m.read_file(path,'pi',False,{})
+            self.assertEqual(first['events'][-1]['kind'],'complete');self.assertNotIn('PRIVATE_',json.dumps(first))
+            row=json.dumps(dict(type='message',id='prompt',message=dict(role='user',content='x'*(600*1024))))+'\n'
+            with path.open('a') as f:f.write(row[:400*1024])
+            partial=m.read_file(path,'pi',False,first)
+            self.assertEqual(partial['events'],[]);self.assertEqual(partial['offset'],first['offset'])
+            with path.open('a') as f:f.write(row[400*1024:])
+            complete=m.read_file(path,'pi',False,partial)
+            self.assertEqual(complete['events'][-1]['kind'],'start');self.assertEqual(complete['offset'],complete['size'])
+            with path.open('a') as f:f.write('x'*(16*1024*1024+1))
+            with self.assertRaisesRegex(ValueError,'16 MiB'):m.read_file(path,'pi',False,complete)
+
+    def test_codebuddy_observer_install_preserves_custom_hooks_and_disabling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory);path=root/'settings.json'
+            original=dict(theme='light',hooks=dict(Stop=[dict(matcher='custom',hooks=[dict(type='command',command='my-observer')])]))
+            path.write_text(json.dumps(original));source=dict(id='cb',provider='codebuddy',path=directory)
+            self.assertEqual(m.manage(source,'ensure')['state'],'installed')
+            saved=json.loads(path.read_text());self.assertEqual(saved['hooks']['Stop'][0],original['hooks']['Stop'][0])
+            self.assertIn('PermissionDenied',saved['hooks']);self.assertIn('SubagentStop',saved['hooks'])
+            saved['disableAllHooks']=True;path.write_text(json.dumps(saved));before=path.read_bytes()
+            self.assertEqual(m.manage(source,'ensure')['state'],'disabled');self.assertEqual(path.read_bytes(),before)
+
     def tearDown(self):
         for discovery in m._DISCOVERY.values(): discovery.watch.close()
         m._DISCOVERY.clear()

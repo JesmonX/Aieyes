@@ -114,7 +114,14 @@ fn real_client_samples_import_correctly_repeat_and_rescan_without_content() {
             .query_row("SELECT payload FROM events", [], |r| r.get(0))
             .unwrap();
         let event: UsageEvent = serde_json::from_str(&raw).unwrap();
-        assert_eq!(event.model, "Qwen3.8-27B");
+        assert_eq!(
+            event.model,
+            if provider == "kimi" {
+                "qwen-test"
+            } else {
+                "Qwen3.8-27B"
+            }
+        );
         assert_eq!((event.tokens.input, event.tokens.output), (input, output));
         assert_eq!(event.billing.category, "unknown");
         assert!(!raw.contains("content"));
@@ -123,7 +130,10 @@ fn real_client_samples_import_correctly_repeat_and_rescan_without_content() {
             bytes,
             "client file must remain unchanged"
         );
-        let snapshot = SessionMonitor::default().read(&settings, SystemTime::now());
+        let snapshot = SessionMonitor::default().read(
+            &settings,
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(event.timestamp as u64 + 1),
+        );
         assert_eq!(snapshot.sessions.len(), 1, "{provider}: {snapshot:?}");
         assert_eq!(snapshot.phase(), Some(Phase::Complete), "{provider}");
         assert!(!snapshot.unavailable, "{provider}: {snapshot:?}");
@@ -378,7 +388,10 @@ fn harness_compressed_append_reads_only_new_frames_and_retries_torn_frames() {
         let added = zstd::stream::encode_all(message(history + 1).as_bytes(), 1).unwrap();
         let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
         file.write_all(&added[..added.len() - 1]).unwrap();
-        assert!(import::scan(&engine.store, &settings, &source).is_err());
+        assert_eq!(
+            import::scan(&engine.store, &settings, &source).unwrap()["partial"],
+            true
+        );
         file.write_all(&added[added.len() - 1..]).unwrap();
         let delta = import::scan(&engine.store, &settings, &source).unwrap();
         assert_eq!(delta["newEvents"], 1);
@@ -501,7 +514,9 @@ fn harness_seed_prefix_compression_errors_and_future_versions_are_explicit() {
         .iter()
         .find(|r| r["type"] == "assistant/message")
         .unwrap();
-    assert!(native_agents::parse_dsh(&source, &mut state, assistant).is_none());
+    let inherited = native_agents::parse_dsh(&source, &mut state, assistant).unwrap();
+    assert!(inherited.inheritance.unwrap().inherited);
+    assert!(inherited.tokens.total() > 0);
     native_agents::parse_dsh(&source, &mut state, &json!({"type":"session/end-seed"}));
     assert!(native_agents::parse_dsh(&source, &mut state, assistant).is_some());
     let temp = tempfile::tempdir().unwrap();
@@ -531,7 +546,10 @@ fn harness_explicit_file_resolves_conflicting_encodings() {
         zstd::stream::encode_all(DSH.as_bytes(), 1).unwrap(),
     )
     .unwrap();
-    assert!(import::scan(&engine.store, &settings, &source).is_err());
+    assert_eq!(
+        import::scan(&engine.store, &settings, &source).unwrap()["partial"],
+        true
+    );
     source.path = plain.to_string_lossy().into_owned();
     settings.sources = vec![source.clone()];
     engine.store.save_settings(&settings).unwrap();
@@ -697,7 +715,17 @@ fn qoder_real_zero_counters_do_not_become_estimated_tokens() {
     );
     assert_eq!(
         SessionMonitor::default()
-            .read(&settings, SystemTime::now())
+            .read(
+                &settings,
+                std::time::UNIX_EPOCH
+                    + std::time::Duration::from_secs(
+                        serde_json::from_str::<Value>(fixture.lines().last().unwrap())
+                            .ok()
+                            .and_then(|r| timestamp(&r["timestamp"]))
+                            .unwrap() as u64
+                            + 1
+                    )
+            )
             .phase(),
         Some(Phase::Complete)
     );

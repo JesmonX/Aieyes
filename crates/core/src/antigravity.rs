@@ -304,12 +304,15 @@ pub fn read_database_detailed(path: &Path) -> Result<DatabaseRead> {
                         .and_then(|names| names.first().cloned())
                 })
                 .unwrap_or_else(|| format!("antigravity-unknown-{numeric}"));
-            let id = text(&stats, 7)
-                .or_else(|| text(&stats, 11))
-                .unwrap_or_else(|| format!("step:{index}"));
+            let request = text(&stats, 7).or_else(|| text(&stats, 11));
+            let inheritance = request.as_ref().map(|id| UsageInheritance {
+                origin: format!("request:{id}:{start}:{end}"),
+                inherited: false,
+            });
+            let id = request.unwrap_or_else(|| format!("step:{index}"));
             Ok(Some(
                 json!({"id":id,"sessionId":session,"timestamp":end,"intervalStart":start,
-                "intervalEvidence":"antigravity-step-v1","model":model,"tokens":tokens}),
+                "intervalEvidence":"antigravity-step-v1","model":model,"tokens":tokens,"inheritance":inheritance}),
             ))
         })();
         match event {
@@ -353,30 +356,32 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     let mut issues = Vec::new();
     let mut failed_files = 0;
     for path in &paths {
-        let signature = "antigravity-v2:".to_owned()
-            + &[
-                path.clone(),
-                PathBuf::from(format!("{}-wal", path.display())),
-            ]
-            .iter()
-            .map(|p| {
-                std::fs::metadata(p)
-                    .ok()
-                    .map(|m| {
-                        format!(
-                            "{}:{}",
-                            m.len(),
-                            m.modified()
-                                .ok()
-                                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                                .map(|t| t.as_nanos())
-                                .unwrap_or(0)
-                        )
-                    })
-                    .unwrap_or_default()
-            })
-            .collect::<Vec<_>>()
-            .join(":");
+        let signature = format!(
+            "antigravity-v3:{}:{}:",
+            settings.precise_counting, settings.counting_generation
+        ) + &[
+            path.clone(),
+            PathBuf::from(format!("{}-wal", path.display())),
+        ]
+        .iter()
+        .map(|p| {
+            std::fs::metadata(p)
+                .ok()
+                .map(|m| {
+                    format!(
+                        "{}:{}",
+                        m.len(),
+                        m.modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                            .map(|t| t.as_nanos())
+                            .unwrap_or(0)
+                    )
+                })
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(":");
         let key = path.to_string_lossy();
         if !full
             && store
@@ -442,6 +447,7 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     crate::import::current_settings(store, settings, source)?;
     store.source_status(&source.id, &status)?;
     tx.commit()?;
+    store.repair_history_estimates()?;
     Ok(status)
 }
 

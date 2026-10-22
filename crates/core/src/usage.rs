@@ -8,16 +8,28 @@ pub fn parser_version(provider: &str) -> u32 {
         return 8;
     }
     if provider == "codebuddy" {
+        return 11;
+    }
+    if provider == "kimi" {
         return 9;
     }
-    if provider == "qoder" {
-        return 10;
-    }
-    if provider == "deepseek-harness" {
+    if provider == "opencode" {
         return 8;
     }
-    if matches!(provider, "kimi" | "grok" | "pi" | "omp") {
-        7
+    if provider == "qoder" {
+        return 11;
+    }
+    if provider == "deepseek-harness" {
+        return 9;
+    }
+    if matches!(provider, "pi" | "omp") {
+        return 8;
+    }
+    if provider == "claude" {
+        return 7;
+    }
+    if provider == "grok" {
+        8
     } else {
         PARSER_VERSION
     }
@@ -52,6 +64,7 @@ fn event(
     attribution: &str,
 ) -> UsageEvent {
     UsageEvent {
+        usage_version: 0,
         turn_id: state.turn_id.clone(),
         id: event_id(&source.provider, &source.id, &source.account_id, &identity),
         import_identity: Some(identity),
@@ -69,6 +82,7 @@ fn event(
         },
         native_credits: None,
         raw_tokens: None,
+        inheritance: None,
         interval_start: None,
         interval_evidence: String::new(),
     }
@@ -119,7 +133,8 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                 *state = ParseState {
                     session_id: id.into(),
                     parser_version: parser_version(&source.provider),
-                    codex_precise_counting: state.codex_precise_counting,
+                    precise_counting: state.precise_counting,
+                    counting_generation: state.counting_generation,
                     ..Default::default()
                 };
             }
@@ -138,7 +153,7 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
                     end_byte_offset: payload["history_base"]["end_byte_offset"]
                         .as_u64()
                         .unwrap_or(0),
-                    issue: if state.codex_precise_counting.unwrap_or(false) {
+                    issue: if state.precise_counting.unwrap_or(true) {
                         "继承历史尚未解析".into()
                     } else {
                         String::new()
@@ -169,7 +184,7 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             let mut interval_start = (state.last_timestamp > 0)
                 .then_some(state.last_timestamp)
                 .or(state.session_started_at);
-            let precise = state.codex_precise_counting.unwrap_or(false);
+            let precise = state.precise_counting.unwrap_or(true);
             let (tokens, attribution) = if inherited.is_some() && !precise {
                 (cumulative.clone(), "session-summary")
             } else if inherited.as_ref().is_some_and(|h| h.tokens.is_none()) {
@@ -354,6 +369,17 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         "event",
     );
     parsed.native_credits = native_credits;
+    // Native response IDs survive history copies; the original timestamp disambiguates
+    // clients that reuse short response IDs across independent requests.
+    parsed.inheritance = Some(UsageInheritance {
+        origin: format!(
+            "response:{}:{}:{}",
+            v["requestId"].as_str().unwrap_or(""),
+            id,
+            v["timestamp"]
+        ),
+        inherited: false,
+    });
     if source.provider == "qoder" {
         parsed.raw_tokens = Some(raw_tokens);
     }
@@ -388,6 +414,11 @@ pub(crate) fn parse_normalized(
     );
     parsed.interval_start = timestamp(&v["intervalStart"]);
     parsed.interval_evidence = v["intervalEvidence"].as_str().unwrap_or("").into();
+    // Standard exports may explicitly name the original request. Absent that
+    // evidence, session relationships or matching counters prove nothing.
+    parsed.inheritance = serde_json::from_value::<UsageInheritance>(v["inheritance"].clone())
+        .ok()
+        .filter(|proof| !proof.origin.trim().is_empty() && proof.origin.len() <= 4096);
     if matches!(source.provider.as_str(), "qoder" | "codebuddy") {
         parsed.native_credits = serde_json::from_value::<NativeCredits>(v["nativeCredits"].clone())
             .ok()

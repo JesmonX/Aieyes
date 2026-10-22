@@ -60,14 +60,35 @@ const ZCODE: &[&str] = &[
     "PostToolUseFailure",
     "Stop",
 ];
+const CODEBUDDY: &[&str] = &[
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PermissionRequest",
+    "PermissionDenied",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "Notification",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+    "StopFailure",
+    "SessionEnd",
+    "Elicitation",
+    "ElicitationResult",
+];
 pub fn supported(provider: &str) -> bool {
-    matches!(provider, "claude" | "antigravity" | "cursor" | "zcode")
+    matches!(
+        provider,
+        "claude" | "antigravity" | "cursor" | "zcode" | "codebuddy"
+    )
 }
 fn names(provider: &str) -> &'static [&'static str] {
     match provider {
         "claude" => CLAUDE,
         "cursor" => CURSOR,
         "zcode" => ZCODE,
+        "codebuddy" => CODEBUDDY,
         _ => AGY,
     }
 }
@@ -556,13 +577,19 @@ pub fn call(settings: &Settings, method: &str, params: &Value) -> Result<Value> 
 }
 fn ancestry(provider: &str) -> (u32, u64) {
     // Cursor and ZCode commonly run as Node; do not attribute an arbitrary Node ancestor.
-    if matches!(provider, "cursor" | "zcode") {
+    if matches!(provider, "cursor" | "zcode" | "codebuddy") {
         return (0, 0);
     }
     let mut system = sysinfo::System::new();
     let mut pid = sysinfo::Pid::from_u32(std::process::id());
     for _ in 0..8 {
-        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+        // Only identity and ancestry are needed. CPU, disk and executable
+        // collection can exhaust the observer's short deadline under load.
+        system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[pid]),
+            true,
+            sysinfo::ProcessRefreshKind::nothing(),
+        );
         let Some(process) = system.process(pid) else {
             break;
         };

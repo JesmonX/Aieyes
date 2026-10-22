@@ -89,7 +89,7 @@ label:has(> input[type=checkbox]:disabled) { color:var(--muted); cursor:default;
 /* Settings sit on the window backdrop, using the floating panel's card finish. */
 .settings-layout { display:grid; grid-template-columns:var(--settings-sidebar-width) minmax(0,1fr); gap:var(--space-layout); align-items:start; }
 .settings-sidebar { display:flex; flex-direction:column; gap:6px; position:sticky; top:12px; padding:7px; border-radius:var(--radius-overlay); background:transparent; }
-.settings-sidebar button { width:100%; min-height:36px; padding:8px 10px; text-align:left; justify-content:flex-start; border:0; box-shadow:none; background:transparent; font-size:var(--font-body); white-space:normal; }
+.settings-sidebar button { width:100%; min-height:36px; padding:8px 10px; text-align:left; justify-content:flex-start; border:0; box-shadow:none; background:transparent; font-size:var(--font-body); white-space:nowrap; }
 .settings-sidebar button.active { color:var(--accent); background:var(--soft); }
 .settings-subpage { min-width:0; display:grid; gap:var(--settings-section-gap); container:settings-form / inline-size; }
 .settings-subpage > .card { margin:0; }

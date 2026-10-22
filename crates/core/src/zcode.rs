@@ -63,6 +63,10 @@ pub fn event(source: &Source, row: &Value) -> Result<UsageEvent> {
         .context("ZCode 用量格式无效")?;
     event.attribution = "zcode-local".into();
     event.turn_id = row["turn"].as_str().unwrap_or("").into();
+    event.inheritance = Some(UsageInheritance {
+        origin: format!("request:{}:{}", row["id"], row["completed"]),
+        inherited: false,
+    });
     Ok(event)
 }
 

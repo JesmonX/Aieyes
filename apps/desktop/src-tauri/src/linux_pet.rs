@@ -50,17 +50,25 @@ pub fn configure_backend() {
     }
 }
 
-/// A user explicitly opened this panel. Coordinate GTK activation with X11's
+/// A user explicitly opened this window. Coordinate GTK activation with X11's
 /// keyboard focus, including WMs that decline activation of a skip-taskbar window.
-pub fn focus_panel(window: &gtk::ApplicationWindow) {
-    let time = gtk::current_event_time();
-    window.present_with_time(time);
+pub fn focus_window(window: &gtk::ApplicationWindow) {
+    let mut time = gtk::current_event_time();
     let Some(surface) = window.window() else {
+        window.present_with_time(time);
         return;
     };
     let Ok(surface) = surface.downcast::<gdkx11::X11Window>() else {
+        window.present_with_time(time);
         return;
     };
+    if time == 0 {
+        // DBusMenu actions have no GTK event timestamp. Reusing the last pet
+        // click (or CurrentTime) lets GNOME reject focus after an outside click.
+        time = gdkx11::functions::x11_get_server_time(&surface);
+    }
+    surface.set_user_time(time);
+    window.present_with_time(time);
     surface.upcast_ref::<gdk::Window>().display().sync();
     use x11rb::{
         connection::Connection,
@@ -80,7 +88,7 @@ pub fn focus_panel(window: &gtk::ApplicationWindow) {
                 event,
             );
         }
-        let _ = connection.set_input_focus(InputFocus::PARENT, id, x11rb::CURRENT_TIME);
+        let _ = connection.set_input_focus(InputFocus::PARENT, id, time);
         let _ = connection.flush();
     }
 }
@@ -458,7 +466,9 @@ fn paint(s: &Surface, cr: &cairo::Context) -> Result<(), cairo::Error> {
             count.to_string()
         };
         let layout = s.area.create_pango_layout(Some(&text));
-        layout.set_font_description(Some(&gtk::pango::FontDescription::from_string("Sans 9")));
+        layout.set_font_description(Some(&gtk::pango::FontDescription::from_string(
+            "HarmonyOS Sans SC 9",
+        )));
         let (width, height) = layout.pixel_size();
         let width = f64::from(width + 10);
         rounded(cr, 144.0 - width, 18.0, width, 20.0, 10.0);
@@ -471,7 +481,9 @@ fn paint(s: &Surface, cr: &cairo::Context) -> Result<(), cairo::Error> {
     let dark = gtk::Settings::default().is_some_and(|s| s.is_gtk_application_prefer_dark_theme());
     let label = crate::localization::text(&s.state.label);
     let layout = s.area.create_pango_layout(Some(&label));
-    layout.set_font_description(Some(&gtk::pango::FontDescription::from_string("Sans 9")));
+    layout.set_font_description(Some(&gtk::pango::FontDescription::from_string(
+        "HarmonyOS Sans SC 9",
+    )));
     layout.set_alignment(gtk::pango::Alignment::Center);
     let (width, height) = layout.pixel_size();
     let w = f64::from(width + 24).min(140.0);
@@ -560,10 +572,7 @@ fn watch_outside(app: AppHandle, stopped: Arc<AtomicBool>) {
         }
         let mask = xinput::EventMask {
             deviceid: xinput::Device::ALL_MASTER.into(),
-            mask: vec![
-                xinput::XIEventMask::RAW_BUTTON_PRESS,
-                xinput::XIEventMask::RAW_KEY_PRESS,
-            ],
+            mask: vec![xinput::XIEventMask::RAW_BUTTON_PRESS],
         };
         let Ok(selected) = connection.xinput_xi_select_events(root, &[mask]) else {
             return;
@@ -588,17 +597,6 @@ fn watch_outside(app: AppHandle, stopped: Arc<AtomicBool>) {
                                 i32::from(pointer.root_y),
                                 generation,
                             )
-                        });
-                    }
-                }
-                Ok(Event::XinputRawKeyPress(event)) => {
-                    // Escape closes the panel even when the WebKit child did
-                    // not receive keyboard focus (common under XWayland).
-                    if event.detail == 9 {
-                        let app = app.clone();
-                        let owner = app.clone();
-                        let _ = owner.run_on_main_thread(move || {
-                            crate::desktop::escape_pressed(&app);
                         });
                     }
                 }

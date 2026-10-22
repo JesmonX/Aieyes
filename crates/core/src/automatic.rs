@@ -1516,6 +1516,7 @@ mod tests {
         e.store
             .put_event(
                 &UsageEvent {
+                    usage_version: 0,
                     native_credits: None,
                     turn_id: String::new(),
                     id: id.into(),
@@ -1533,6 +1534,7 @@ mod tests {
                         evidence: "fixture".into(),
                     },
                     raw_tokens: None,
+                    inheritance: None,
                     interval_start: Some(q.updated_at),
                     import_identity: None,
                     session_id: "session".into(),

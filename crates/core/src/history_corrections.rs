@@ -97,17 +97,15 @@ impl Store {
         Ok(())
     }
     pub(crate) fn prepare_history_corrections(&self) -> Result<()> {
-        let key = "history-correction-backup-v5";
+        let key = "history-correction-backup-shared-v1";
         let done: bool =
             self.db
                 .query_row("SELECT EXISTS(SELECT 1 FROM kv WHERE key=?1)", [key], |r| {
                     r.get(0)
                 })?;
-        let has_history: bool = self.db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM events WHERE provider='codex')",
-            [],
-            |r| r.get(0),
-        )?;
+        let has_history: bool =
+            self.db
+                .query_row("SELECT EXISTS(SELECT 1 FROM events)", [], |r| r.get(0))?;
         if done || !has_history {
             return Ok(());
         }
@@ -141,7 +139,11 @@ impl Store {
         }
         let folder = root.join("history-backups");
         std::fs::create_dir_all(&folder)?;
-        let backup = folder.join(format!("codex-v5-{}-{}.sqlite", now(), std::process::id()));
+        let backup = folder.join(format!(
+            "shared-counting-v1-{}-{}.sqlite",
+            now(),
+            std::process::id()
+        ));
         let mut options = std::fs::OpenOptions::new();
         options.create_new(true).write(true);
         #[cfg(unix)]

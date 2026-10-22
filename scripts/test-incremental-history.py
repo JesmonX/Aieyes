@@ -19,7 +19,7 @@ def collect(path, provider='custom', cursors=None, route_cursor=None, precise=Tr
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         try:
-            runpy.run_path(str(SCRIPT), init_globals={'REQUEST': dict(path=str(path), provider=provider, protocol=2, cursors=cursors or {}, routeCursor=route_cursor or {}, codexPreciseCounting=precise, qoderStateCursors=qoder_state_cursors or {}, qoderStateReset=qoder_state_reset)})
+            runpy.run_path(str(SCRIPT), init_globals={'REQUEST': dict(path=str(path), provider=provider, protocol=2, cursors=cursors or {}, routeCursor=route_cursor or {}, preciseCounting=precise, qoderStateCursors=qoder_state_cursors or {}, qoderStateReset=qoder_state_reset)})
         except SystemExit as error:
             assert error.code == 0
     lines = output.getvalue().splitlines()
@@ -40,6 +40,37 @@ def native_rows(frames):
 
 
 class PiHistoryTests(unittest.TestCase):
+    def test_bad_json_and_usage_retry_without_blocking_other_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory);bad=root/'bad.jsonl';healthy=root/'healthy.jsonl'
+            bad.write_text(record(1)+'BROKEN_PRIVATE\n'+record(2));healthy.write_text(record(3))
+            first=collect(root)
+            self.assertTrue(first[-1]['partial']);self.assertNotIn('PRIVATE',json.dumps(first))
+            self.assertEqual({e['id'] for e in events(first)},{'1','3'})
+            saved=cursors(first)
+            retry=collect(root,cursors=saved)
+            self.assertTrue(retry[-1]['partial']);self.assertEqual(events(retry),[])
+            self.assertEqual(cursors(retry)[str(bad)]['offset'],len(record(1).encode()))
+            bad.write_text(record(1)+record(2))
+            repaired=collect(root,cursors={**saved,**cursors(retry)})
+            self.assertFalse(repaired[-1]['partial']);self.assertIn('2',{e['id'] for e in events(repaired)})
+        for invalid in [dict(inputTokens=20,outputTokens=4,inputTokensDetails=['PRIVATE']),
+                        dict(prompt_tokens=20,completion_tokens=4,prompt_tokens_details=dict(cached_tokens=21)),
+                        dict(input_tokens=20,output_tokens=4,cache_read_input_tokens=10,total_tokens=24)]:
+            with self.subTest(usage=invalid),tempfile.TemporaryDirectory() as directory:
+                root=pathlib.Path(directory)
+                row=dict(type='model-usage',id='bad',sessionId='s',timestamp=1800000000000,providerData=dict(model='fixture',usage=invalid))
+                path=root/'bad.jsonl';path.write_text(json.dumps(row)+'\n')
+                good=json.loads(json.dumps(row));good['id']='good';good['providerData']['usage']=dict(inputTokens=0,outputTokens=0)
+                (root/'good.jsonl').write_text(json.dumps(good)+'\n')
+                first=collect(root,'codebuddy');self.assertTrue(first[-1]['partial'])
+                self.assertEqual([e['id'] for e in events(first)],['good'])
+                self.assertNotIn('PRIVATE',json.dumps(first))
+                row['providerData']['usage']=dict(inputTokens=20,outputTokens=4)
+                path.write_text(json.dumps(row)+'\n')
+                fixed=collect(root,'codebuddy',cursors(first));self.assertFalse(fixed[-1]['partial'])
+                self.assertEqual([e['id'] for e in events(fixed)],['bad'])
+
     def test_codex_creator_identity_is_hashed_before_ssh_transport(self):
         import hashlib
         with tempfile.TemporaryDirectory() as directory:
@@ -160,8 +191,10 @@ class IncrementalHistory(unittest.TestCase):
                             data['model']=dict(id=data['modelID'],providerID=data['providerID'])
                             db.execute('INSERT INTO session_message VALUES(?,?,?,?)',(row['id'],row['session'],'assistant',json.dumps(data)))
                 before=path.read_bytes();first=collect(root,'opencode')
-                self.assertFalse(first[-1]['partial']);self.assertEqual(len(native_rows(first)),3)
-                self.assertEqual(sum(e['data']['tokens']['input'] for e in native_rows(first)),8315)
+                self.assertFalse(first[-1]['partial']);self.assertEqual(len(native_rows(first)),6 if v2 else 3)
+                requests={(e['data']['session'],e['id']):e for e in native_rows(first)}
+                self.assertEqual(len(requests),3)
+                self.assertEqual(sum(e['data']['tokens']['input'] for e in requests.values()),8315)
                 self.assertNotIn('PRIVATE_',json.dumps(first));self.assertEqual(before,path.read_bytes())
                 self.assertEqual(collect(root,'opencode',cursors(first))[-1]['readBytes'],0)
 
@@ -181,14 +214,26 @@ class IncrementalHistory(unittest.TestCase):
                 second=collect(root,provider,cursors(first))
                 self.assertEqual(events(second),[])
 
-    def test_kimi_remote_fork_skips_inherited_request_counters(self):
+    def test_kimi_remote_fork_preserves_reversible_inheritance_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             path=pathlib.Path(directory)/'wire.jsonl'
             usage=dict(type='usage.record',model='fixture',time=1792296701000,usage=dict(inputOther=10,output=3,inputCacheRead=0,inputCacheCreation=0))
             path.write_text(json.dumps(usage)+'\n'+json.dumps(dict(type='forked'))+'\n'+json.dumps(usage)+'\n')
             first=collect(path,'kimi')
-            self.assertEqual(len(events(first)),1)
+            self.assertEqual(len(events(first)),2)
+            self.assertEqual([e['_aieyesInherited'] for e in events(first)],[True,False])
             self.assertEqual(events(collect(path,'kimi',cursors(first))),[])
+            off=collect(path,'kimi',cursors(first),precise=False)
+            self.assertEqual([e['_aieyesInherited'] for e in events(off)],[True,False])
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), patch('sys.argv', [str(SCRIPT), str(path), 'kimi']):
+                runpy.run_path(str(SCRIPT))
+            legacy = json.loads(output.getvalue())
+            self.assertEqual([e['_aieyesInherited'] for e in legacy['files'][0]['events']], [True, False])
+            # Replacing a fork file with a normal session must discard its old boundary.
+            path.write_text(json.dumps(usage)+'\n')
+            replaced=collect(path,'kimi',cursors(first))
+            self.assertEqual([e['_aieyesInherited'] for e in events(replaced)],[False])
 
     def test_zcode_native_sqlite_projection_is_readonly_and_incremental(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -325,7 +370,7 @@ class IncrementalHistory(unittest.TestCase):
             child = dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id=thread, end_byte_offset=sum(map(len, data)))))
             (home/'child.jsonl').write_text(json.dumps(child)+'\n')
             def bundled(cursors=None):
-                request = dict(protocol=2, path=str(home), provider='codex', codexPreciseCounting=True, cursors=cursors or {})
+                request = dict(protocol=2, path=str(home), provider='codex', preciseCounting=True, cursors=cursors or {})
                 scope = dict(REQUEST=request, HARNESS_SCRIPT=SCRIPT.with_name('harness_remote.py').read_text(encoding='utf-8'))
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):
