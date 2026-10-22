@@ -136,7 +136,7 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
         const panel=await page.evaluate(()=>{
           const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
           const body=document.querySelector('.panel-body');
-          return {tabs:rect('.panel-tabs'),head:rect('.panel-head'),body:rect('.panel-body'),bodyClientWidth:body.clientWidth,scrollbarGutter:body.offsetWidth-body.clientWidth,foot:rect('.panel-foot'),usage:rect('.overview-usage'),quota:rect('.quota-heading'),buttons:[...document.querySelectorAll('.panel-actions > button,.panel-more > summary')].map(el=>el.getBoundingClientRect().toJSON()),overflow:document.documentElement.scrollWidth>innerWidth};
+          return {tabs:rect('.panel-tabs'),head:rect('.panel-head'),body:rect('.panel-body'),bodyClientWidth:body.clientWidth,scrollbarGutter:body.offsetWidth-body.clientWidth,foot:rect('.panel-foot'),usage:rect('.overview-usage'),quota:rect('.quota-heading'),buttons:[...document.querySelectorAll('.panel-actions > button,.panel-more > summary')].map(el=>({...el.getBoundingClientRect().toJSON(),language:el.hasAttribute('data-language-toggle'),contentFits:el.scrollWidth<=el.clientWidth})),overflow:document.documentElement.scrollWidth>innerWidth};
         });
         assert(!panel.overflow,'compact panel fits its client area');
         near(panel.tabs.width,design['panel-tabs-width'],'visible segmented picker width');
@@ -152,7 +152,9 @@ module.exports=async function verifyAlignment({browser,url,data,installFixture,o
         near(viewport.width-panel.usage.right,design['panel-padding']+panel.scrollbarGutter,'compact content ends before the scrollbar gutter');
         assert(panel.usage.bottom<=panel.quota.y,'usage summary appears above account quotas');
         for(const [i,button] of panel.buttons.entries()) {
-          near(button.width,design['icon-button-size'],'footer button size');
+          near(button.height,design['icon-button-size'],'footer button height');
+          if(button.language)assert(button.width>=design['icon-button-size']&&button.contentFits,'language label fits the footer button');
+          else near(button.width,design['icon-button-size'],'footer icon button width');
           if(i)near(button.x-panel.buttons[i-1].right,design['space-control'],'footer button gap');
         }
         await capture('panel-'+viewport.width);

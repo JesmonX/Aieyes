@@ -47,9 +47,9 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           },{theme,material});
           const appearance=await page.locator('[data-general-section=appearance] select').evaluateAll(selects=>selects.map(select=>{
             const control=select.closest('.win-select')??select;
-            return {rect:control.getBoundingClientRect().toJSON(),row:select.closest('.form-row').getBoundingClientRect().toJSON()};
+            return {name:select.name,rect:control.getBoundingClientRect().toJSON(),row:select.closest('.form-row').getBoundingClientRect().toJSON()};
           }));
-          assert.equal(appearance.length,4);
+          assert.deepEqual(appearance.map(choice=>choice.name),['appearanceLanguage','appearanceTheme','appearanceAccent','appearanceChartPalette','appearanceChartContrast']);
           for(const {rect,row} of appearance) {
             assert(rect.width>=Math.min(160,row.right-rect.x)&&rect.right<=row.right,'appearance choices have a readable width and fit their form');
             assert.equal(rect.x,appearance[0].rect.x,'selected text starts in the same column');
