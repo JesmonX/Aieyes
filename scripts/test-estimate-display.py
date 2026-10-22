@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory(prefix='aieyes-display-golden-') as temporary:
     subprocess.run(['node','-e',r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const context=vm.createContext({window:{}});
-for(const file of ['contracts.js','ui-state.js'])vm.runInContext(fs.readFileSync('apps/desktop/web/'+file,'utf8'),context);
+for(const file of ['contracts.js','i18n-catalog.js','i18n.js','ui-state.js'])vm.runInContext(fs.readFileSync('apps/desktop/web/'+file,'utf8'),context);
 const ui=context.window.AieyesUI,cases=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));
 for(const row of cases){
  const entries=rows=>JSON.stringify(ui.estimateEntries(rows,row.credits,row.quota,row.group).map(e=>[e.field,e.value,e.record.id,e.historical]));
@@ -69,5 +69,5 @@ struct Case: Decodable { var name: String, credits: Bool, group: String, quota: 
 }
 ''')
         executable=root/'verify'
-        subprocess.run(['swiftc','-module-cache-path',str(ROOT/'.build/swift-module-cache'),str(ROOT/'apps/macos/Sources/Aieyes/MonitorSelection.swift'),str(ROOT/'apps/macos/Sources/Aieyes/Models.swift'),str(verifier),'-o',str(executable)],check=True)
+        subprocess.run(['swiftc',str(ROOT/'apps/macos/Sources/Aieyes/Localization.swift'),str(ROOT/'apps/macos/Sources/Aieyes/LocalizationCatalog.swift'),'-module-cache-path',str(ROOT/'.build/swift-module-cache'),str(ROOT/'apps/macos/Sources/Aieyes/MonitorSelection.swift'),str(ROOT/'apps/macos/Sources/Aieyes/Models.swift'),str(verifier),'-o',str(executable)],check=True)
         subprocess.run([str(executable),str(fixture)],check=True)

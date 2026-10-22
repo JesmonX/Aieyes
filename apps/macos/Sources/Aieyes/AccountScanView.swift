@@ -15,7 +15,7 @@ private struct NativeScanResult: Decodable {
     @Published var rows: [NativeScanRow] = []
     func scan(_ model: AppModel, provider: String?, machine: String?) async {
         guard !busy else { return }
-        busy = true; stage = "正在读取原生配置…"; rows = []
+        busy = true; stage = L("正在读取原生配置…"); rows = []
         defer { busy = false }
         var parameters: [String: Any] = ["scope": machine == nil ? "agent" : "machine"]
         if let machine { parameters["machineId"] = machine }
@@ -25,7 +25,7 @@ private struct NativeScanResult: Decodable {
             model.acceptConfiguration(result.settings)
             rows = result.results
             let failures = rows.filter { $0.status == "failed" }.count
-            stage = "新增 \(result.addedAccounts) 个账户、\(result.addedConnections) 个连接" + (failures > 0 ? "；\(failures) 项读取失败" : "")
+            stage = L("新增 {0} 个账户、{1} 个连接" , result.addedAccounts, result.addedConnections) + (failures > 0 ? L("；{0} 项读取失败" , failures) : "")
             Task { await model.loadAccountStatuses() }
         } catch {
             if let settings: Settings = try? await model.engine.call("settings.get") { model.acceptConfiguration(settings) }
@@ -44,27 +44,29 @@ private struct NativeScanResult: Decodable {
         guard let provider else { return false }
         return (model.settings.agents ?? []).contains { a in CoreContract.sameAgent(a.provider, provider) && a.provider != "deepseek" && a.provider != "custom" && a.enabled && a.machineIds.contains { id in id == "local" ? model.settings.localDeviceEnabled != false : model.settings.hosts.contains { $0.id == id && $0.enabled } } }
     }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
-        Button(machine == nil ? "扫描已启用机器" : "一键扫描账户与凭据") { showing = true; Task { await scanner.scan(model, provider: provider, machine: machine) } }
+        let _ = interfaceLanguage;
+        Button(machine == nil ? L("扫描已启用机器") : L("一键扫描账户与凭据")) { showing = true; Task { await scanner.scan(model, provider: provider, machine: machine) } }
             .disabled(scanner.busy || !available)
-            .help(available ? "读取现有登录和原生 API 配置，凭据保留在原机器" : "先启用 Agent、选择机器并开启 Agent 采集")
+            .help(available ? L("读取现有登录和原生 API 配置，凭据保留在原机器") : L("先启用 Agent、选择机器并开启 Agent 采集"))
             .sheet(isPresented: $showing) {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("扫描账户与凭据").font(AppFont.title)
+                    Text(L("扫描账户与凭据")).font(AppFont.title)
                     if scanner.busy { ProgressView().controlSize(.small) }
-                    Text(scanner.stage).textSelection(.enabled)
+                    Text(L(scanner.stage)).textSelection(.enabled)
                     ScrollView { LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(Array(scanner.rows.enumerated()), id: \.offset) { _, row in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(Format.provider(row.provider) + " · " + model.machineName(row.machineId)).font(AppFont.section)
-                                Text(row.message ?? row.status).font(AppFont.secondary).foregroundStyle(row.status == "failed" ? Palette.warn : .secondary)
+                                Text(L(row.message ?? row.status)).font(AppFont.secondary).foregroundStyle(row.status == "failed" ? Palette.warn : .secondary)
                                 if let path = row.configPath { Text(path).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }
                     } }
                     HStack {
-                        if !scanner.busy { Button("重新扫描") { Task { await scanner.scan(model, provider: provider, machine: machine) } } }
-                        Spacer(); Button(scanner.busy ? "关闭，后台继续" : "完成") { showing = false }
+                        if !scanner.busy { Button(L("重新扫描")) { Task { await scanner.scan(model, provider: provider, machine: machine) } } }
+                        Spacer(); Button(scanner.busy ? L("关闭，后台继续") : L("完成")) { showing = false }
                     }
                 }.padding(22).frame(width: 640, height: 480)
             }
@@ -78,30 +80,32 @@ private struct NativeScanResult: Decodable {
     @State private var error: String?
     @State private var expanded = false
     private var rows: [NativeConnection] { (model.settings.nativeConnections ?? []).filter { CoreContract.sameAgent($0.provider, provider) && $0.kind == kind } }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         if !rows.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text((kind == "api" ? "原生 API 连接" : "已发现的原生登录凭据") + "（\(rows.count)）").font(AppFont.section)
+                    Text((kind == "api" ? L("原生 API 连接") : L("已发现的原生登录凭据")) + "（\(rows.count)）").font(AppFont.section)
                     Spacer()
-                    Button("一键取消引用") { remove(rows.map(\.id)) }.disabled(removing != nil || scanner.busy)
+                    Button(L("一键取消引用")) { remove(rows.map(\.id)) }.disabled(removing != nil || scanner.busy)
                 }
-                DisclosureGroup(kind == "api" ? "查看连接" : "查看凭据", isExpanded: $expanded) {
+                DisclosureGroup(kind == "api" ? L("查看连接") : L("查看凭据"), isExpanded: $expanded) {
                 ForEach(rows) { row in
                     HStack(alignment: .top) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(row.displayName)
-                            Text(model.machineName(row.machineId) + " · " + row.statusLabel + (row.accountKey == nil ? "" : " · 已关联账户")).font(AppFont.secondary).foregroundStyle(.secondary)
+                            Text(model.machineName(row.machineId) + " · " + row.statusLabel + (row.accountKey == nil ? "" : L(" · 已关联账户"))).font(AppFont.secondary).foregroundStyle(.secondary)
                             if !row.models.isEmpty { Text(row.models.joined(separator: "、")).font(AppFont.secondary) }
                             Text(row.configPath).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled)
-                            Text(row.note).font(AppFont.secondary).foregroundStyle(.secondary)
+                            Text(L(row.note)).font(AppFont.secondary).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
-                        Button("取消引用") { remove([row.id]) }.disabled(removing != nil || scanner.busy)
+                        Button(L("取消引用")) { remove([row.id]) }.disabled(removing != nil || scanner.busy)
                     }
                 }
-                Text("凭据保留在原机器的 Agent 配置中；取消引用不会删除原文件。").font(AppFont.secondary).foregroundStyle(.secondary)
+                Text(L("凭据保留在原机器的 Agent 配置中；取消引用不会删除原文件。")).font(AppFont.secondary).foregroundStyle(.secondary)
                 }
-                if let error { Text(error).foregroundStyle(Palette.warn) }
+                if let error { Text(L(error)).foregroundStyle(Palette.warn) }
             }
         }
     }

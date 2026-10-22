@@ -107,7 +107,7 @@ impl NativePet {
             .application()
             .ok_or("GTK 应用不可用")?;
         let window = gtk::ApplicationWindow::new(&application);
-        window.set_title("Aieyes 桌宠");
+        window.set_title(crate::localization::label("Aieyes 桌宠"));
         window.set_decorated(false);
         window.set_resizable(false);
         window.set_skip_taskbar_hint(true);
@@ -266,10 +266,13 @@ impl NativePet {
                     s.area.set_size_request(size.0, size.1);
                     s.window.resize(size.0, size.1);
                 }
-                s.area.set_tooltip_text(Some(&format!(
-                    "Aieyes · {}\n单击打开面板 · 拖动移动 · 右键菜单",
-                    s.state.label
-                )));
+                s.window
+                    .set_title(crate::localization::label("Aieyes 桌宠"));
+                s.area
+                    .set_tooltip_text(Some(&crate::localization::text(&format!(
+                        "Aieyes · {}\n单击打开面板 · 拖动移动 · 右键菜单",
+                        crate::localization::text(&s.state.label)
+                    ))));
                 s.area.queue_draw();
                 drop(s);
                 schedule(surface);
@@ -466,7 +469,8 @@ fn paint(s: &Surface, cr: &cairo::Context) -> Result<(), cairo::Error> {
         pangocairo::functions::show_layout(cr, &layout);
     }
     let dark = gtk::Settings::default().is_some_and(|s| s.is_gtk_application_prefer_dark_theme());
-    let layout = s.area.create_pango_layout(Some(&s.state.label));
+    let label = crate::localization::text(&s.state.label);
+    let layout = s.area.create_pango_layout(Some(&label));
     layout.set_font_description(Some(&gtk::pango::FontDescription::from_string("Sans 9")));
     layout.set_alignment(gtk::pango::Alignment::Center);
     let (width, height) = layout.pixel_size();

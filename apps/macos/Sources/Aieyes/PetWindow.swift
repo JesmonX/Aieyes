@@ -7,13 +7,15 @@ enum PetAppearance {
 }
 struct PetScaleControl: View {
     @AppStorage("aieyes.pet.scale") private var savedScale = 1.0
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         HStack {
-            Text("桌宠缩放")
+            Text(L("桌宠缩放"))
             Slider(value: Binding(get: { PetAppearance.scale(savedScale) }, set: { savedScale = $0 }), in: 0.5...2, step: 0.05)
-                .accessibilityLabel("桌宠缩放").accessibilityValue("\(Int((PetAppearance.scale(savedScale) * 100).rounded()))%")
+                .accessibilityLabel(L("桌宠缩放")).accessibilityValue("\(Int((PetAppearance.scale(savedScale) * 100).rounded()))%")
             Text("\(Int((PetAppearance.scale(savedScale) * 100).rounded()))%").monospacedDigit().frame(width: 44, alignment: .trailing)
-            Button("恢复 100%") { savedScale = 1 }.disabled(savedScale == 1)
+            Button(L("恢复 100%")) { savedScale = 1 }.disabled(savedScale == 1)
         }
     }
 }
@@ -123,11 +125,13 @@ private struct PetSpriteView: View {
     @Environment(\.accessibilityReduceMotion) private var reduced
     @StateObject private var frames = PetFrameStore()
     private func configure() { frames.load(asset, row: state.row) }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         Group {
             if !frames.images.isEmpty {
                 PetLayerSprite(images: frames.images, state: state, identity: (asset?.contentHash ?? "") + ":" + state.animationIdentity, playing: enabled, reduced: reduced)
-            } else if asset == nil { Text("请导入桌宠").font(.system(size: 13 * scale)) } else { Color.clear }
+            } else if asset == nil { Text(L("请导入桌宠")).font(.system(size: 13 * scale)) } else { Color.clear }
         }.frame(width: 132 * scale, height: 143 * scale)
             .onAppear { configure() }
             .onChange(of: state.row) { _, _ in configure() }
@@ -140,19 +144,21 @@ private struct PetView: View {
     init(model: AppModel) { self.model = model; live = model.live }
     @AppStorage("aieyes.pet.enabled") private var enabled = true
     @AppStorage("aieyes.pet.scale") private var savedScale = 1.0
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         let state = live.pet
         let scale = PetAppearance.scale(savedScale)
         VStack(spacing: 0) {
             PetSpriteView(state: state, asset: live.asset, scale: scale, enabled: enabled && live.petVisible && !live.suspended)
-            Text(state.label).font(.system(size: 12 * scale, weight: .medium))
+            Text(L(state.label)).font(.system(size: 12 * scale, weight: .medium))
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 9 * scale).padding(.vertical, 3 * scale)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay * scale))
                 .overlay(RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay * scale).strokeBorder(Palette.cardBorder.opacity(DesignTokens.cardBorderOpacity)))
         }.frame(width: 144 * scale, height: state.height * scale)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Aieyes · " + state.label).accessibilityHint("单击打开面板，拖动移动，右键菜单")
+            .accessibilityLabel("Aieyes · " + L(state.label)).accessibilityHint(L("单击打开面板，拖动移动，右键菜单"))
     }
 }
 private final class PetPanel: NSPanel { override var canBecomeKey: Bool { false } }
@@ -223,13 +229,13 @@ private final class PetHost: NSHostingView<PetView> {
         self.model = model
         UserDefaults.standard.register(defaults: ["aieyes.pet.enabled": true, "aieyes.pet.scale": 1.0])
         panel = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 144,height: 168), styleMask: [.borderless,.nonactivatingPanel], backing: .buffered, defer: false)
-        panel.title="Aieyes 宠物"; panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
+        panel.title=L("Aieyes 宠物"); panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
         panel.level = .floating; panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.hidesOnDeactivate=false
         let host=PetHost(rootView: PetView(model:model)); host.sizingOptions=[]; host.open=open; panel.contentView=host
         host.update = checkUpdates
         host.settings = { [weak model] in model?.openSettings() }
         host.petSettings = { [weak model] in model?.openSettings(.init(category: "general", section: "desktop")) }
-        host.setAccessibilityRole(.button); host.setAccessibilityLabel("Aieyes 宠物，单击打开面板")
+        host.setAccessibilityRole(.button); host.setAccessibilityLabel(L("Aieyes 宠物，单击打开面板"))
         if let saved=UserDefaults.standard.string(forKey:"aieyes.pet.position") { panel.setFrameOrigin(NSPointFromString(saved)) }
         else if let screen=NSScreen.main { panel.setFrameOrigin(NSPoint(x:screen.visibleFrame.maxX-168,y:screen.visibleFrame.midY)) }
         model.live.$pet.sink { [weak self] state in
@@ -314,21 +320,23 @@ struct PetLibraryView: View {
     @State private var input = ""
     @Environment(\.surfaceActive) private var active
     private var height: CGFloat { min(260, max(100, CGFloat(model.petLibrary.count) * 96)) }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 10) {
-            TextField("桌宠资源", text: $input, prompt: Text("粘贴资源链接、npx 命令或 npm 包名"), axis: .vertical).labelsHidden().textFieldStyle(.aieyes).lineLimit(2...4)
+            TextField(L("桌宠资源"), text: $input, prompt: Text(L("粘贴资源链接、npx 命令或 npm 包名")), axis: .vertical).labelsHidden().textFieldStyle(.aieyes).lineLimit(2...4)
             HStack {
-                Button(model.petImportBusy ? "导入中…" : "导入") { let value = input; Task { await model.importPet(input: value); if model.petImportError == nil && input == value { input = "" } } }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.petImportBusy || model.petSelectionBusy != nil)
-                Button("选择本地文件…") {
+                Button(model.petImportBusy ? L("导入中…") : L("导入")) { let value = input; Task { await model.importPet(input: value); if model.petImportError == nil && input == value { input = "" } } }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.petImportBusy || model.petSelectionBusy != nil)
+                Button(L("选择本地文件…")) {
                     let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-                    panel.title = "选择桌宠 ZIP 或 pet.json"; panel.showsHiddenFiles = true
+                    panel.title = L("选择桌宠 ZIP 或 pet.json"); panel.showsHiddenFiles = true
                     if panel.runModal() == .OK, let url = panel.url { Task { await model.importPet(input: url.path) } }
                 }.disabled(model.petImportBusy || model.petSelectionBusy != nil)
                 if model.petImportBusy || (model.petLibraryBusy && model.petLibrary.isEmpty) { ProgressView().controlSize(.small) }
             }
-            Text("导入后立即使用，已有桌宠保留。").font(AppFont.secondary).foregroundStyle(.secondary)
+            Text(L("导入后立即使用，已有桌宠保留。")).font(AppFont.secondary).foregroundStyle(.secondary)
             if let error = model.petImportError { ErrorNotice(message: error) }
-            if let error = model.petLibraryError { HStack { ErrorNotice(message: error).foregroundStyle(Palette.warn); Button("重试读取") { Task { await model.loadPetLibrary() } } }.font(AppFont.secondary) }
+            if let error = model.petLibraryError { HStack { ErrorNotice(message: error).foregroundStyle(Palette.warn); Button(L("重试读取")) { Task { await model.loadPetLibrary() } } }.font(AppFont.secondary) }
             if !model.petLibrary.isEmpty {
                 GeometryReader { viewport in
                     ScrollView { LazyVStack(alignment: .leading, spacing: 8) {
@@ -349,7 +357,9 @@ private struct PetLibraryRow: View {
     @Environment(\.petPreviewViewport) private var enclosingViewport
     @State private var visible = false
     private var selected: Bool { model.importedPet?.libraryKey == pet.libraryKey }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         HStack(spacing: 10) {
             Group { if visible && playing { PetSpriteView(state: .idle, asset: pet, scale: 0.5, enabled: true) } else { Color.clear.frame(width: 66, height: 71.5) } }.accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
@@ -358,7 +368,7 @@ private struct PetLibraryRow: View {
                 if let source = pet.source, !source.isEmpty { Text(source).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(source) }
                 if let date = pet.importedAt { Text(date.replacingOccurrences(of: "T", with: " ").prefix(16)).font(AppFont.secondary).foregroundStyle(.secondary) }
             }.frame(maxWidth: .infinity, alignment: .leading)
-            Button(selected ? "使用中" : model.petSelectionBusy == pet.libraryKey ? "切换中…" : "使用") { Task { await model.selectPet(pet) } }.disabled(selected || model.petImportBusy || model.petSelectionBusy != nil)
+            Button(selected ? L("使用中") : model.petSelectionBusy == pet.libraryKey ? L("切换中…") : L("使用")) { Task { await model.selectPet(pet) } }.disabled(selected || model.petImportBusy || model.petSelectionBusy != nil)
         }.padding(8).background(selected ? Palette.accent.opacity(0.08) : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
         .background { GeometryReader { geometry in
             let showing = PetPreviewVisibility.isVisible(geometry.frame(in: .global), viewport: viewport, enclosing: enclosingViewport)

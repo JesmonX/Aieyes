@@ -1,0 +1,9 @@
+{
+  "name": "aieyes-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ../../scripts/website/build.mjs",
+    "test": "node ../../scripts/website/test.cjs"
+  }
+}

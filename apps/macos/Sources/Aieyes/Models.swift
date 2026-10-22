@@ -4,14 +4,14 @@ import Foundation
 struct UserFacingError {
     let summary: String
     let details: String?
-    init(_ message: String, context: String = "操作未完成") {
-        var text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    init(_ message: String, context: String = L("操作未完成")) {
+        var text = AieyesLocale.message(message).trimmingCharacters(in: .whitespacesAndNewlines)
         let rules = [
-            (#"(?i)([\"']?cookie[\"']?\s*[:=]\s*[\"']?)[^\r\n]+"#, "$1[已隐藏]"),
-            (#"(?i)(bearer\s+)[a-z0-9._~+/=-]+"#, "$1[已隐藏]"),
-            (#"(?i)((?:[\"']?)(?:api[_ -]?key|access[_-]?token|refresh[_-]?token|token|authorization|password)(?:[\"']?)\s*[:=]\s*[\"']?)[^\s\"';,}&]+"#, "$1[已隐藏]"),
-            (#"(https?://)[^\s/@]+:[^\s/@]+@"#, "$1[已隐藏]@"),
-            (#"\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{8,}"#, "[已隐藏]")
+            (#"(?i)([\"']?cookie[\"']?\s*[:=]\s*[\"']?)[^\r\n]+"#, L("$1[已隐藏]")),
+            (#"(?i)(bearer\s+)[a-z0-9._~+/=-]+"#, L("$1[已隐藏]")),
+            (#"(?i)((?:[\"']?)(?:api[_ -]?key|access[_-]?token|refresh[_-]?token|token|authorization|password)(?:[\"']?)\s*[:=]\s*[\"']?)[^\s\"';,}&]+"#, L("$1[已隐藏]")),
+            (#"(https?://)[^\s/@]+:[^\s/@]+@"#, L("$1[已隐藏]@")),
+            (#"\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{8,}"#, L("[已隐藏]"))
         ]
         for (pattern, replacement) in rules {
             if let expression = try? NSRegularExpression(pattern: pattern) {
@@ -20,7 +20,7 @@ struct UserFacingError {
         }
         let first = text.components(separatedBy: .newlines).first ?? ""
         let sourceFirst = message.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).first ?? ""
-        let readable = sourceFirst.range(of: #"\p{Han}"#, options: .regularExpression) != nil && !["{", "["].contains(String(sourceFirst.prefix(1)))
+        let readable = (sourceFirst.range(of: #"\p{Han}"#, options: .regularExpression) != nil || AieyesLocale.message(message) != message) && !["{", "["].contains(String(sourceFirst.prefix(1)))
         summary = first.count <= 72 && readable ? first : context
         details = !text.isEmpty && text != summary ? text : nil
     }
@@ -128,7 +128,7 @@ struct DashboardFilterPreference: Codable, Equatable {
     }
     func save(scope: String? = nil, defaults: UserDefaults = .standard) { defaults.set(try? JSONEncoder().encode(normalized(for: scope)), forKey: scope.map { "dashboard.filters.v2." + $0 } ?? NativePanelKey.filters.rawValue) }
     var isToday: Bool { dateRange == nil && days == 1 }
-    var rangeTitle: String { dateRange.map { $0.kind == "all" ? "所有" : ($0.start ?? "") + " 至 " + ($0.end ?? "") } ?? (days == 1 ? "今日" : "最近 \(days) 天") }
+    var rangeTitle: String { dateRange.map { $0.kind == "all" ? L("所有") : ($0.start ?? "") + L(" 至 ") + ($0.end ?? "") } ?? (days == 1 ? L("今日") : L("最近 {0} 天" , days)) }
     var rangeChoice: String {
         get { dateRange?.kind ?? String(days) }
         set {
@@ -259,7 +259,7 @@ struct Aggregate: Codable, Identifiable, Equatable {
     var nativeCreditText: String {
         (nativeCredits ?? [:]).keys.sorted().compactMap { provider in
             guard provider != "qoder", let row = nativeCredits?[provider], row.requests > 0 else { return nil }
-            return Format.provider(provider) + " 原生记录 " + row.amount(row.credits) + " Credits · " + String(row.requests) + (provider == "codebuddy" ? " 条计量" : " 次请求")
+            return Format.provider(provider) + L(" 原生记录 ") + row.amount(row.credits) + " Credits · " + String(row.requests) + (provider == "codebuddy" ? L(" 条计量") : L(" 次请求"))
         }.joined(separator: "；")
     }
     var id: String { key }
@@ -272,10 +272,10 @@ struct NativeCreditsTotal: Codable, Equatable {
     func amount(_ value: Double) -> String { value.formatted(.number.precision(.fractionLength(0...6))) }
     var detail: String {
         var parts: [String] = []
-        if (billableRequests ?? 0) > 0 { parts.append("标记可计费 " + amount(billable) + "（\(billableRequests!) 次）") }
-        if (nonBillableRequests ?? 0) > 0 { parts.append("标记不计费 " + amount(nonBillable) + "（\(nonBillableRequests!) 次）") }
-        if (unknownBillabilityRequests ?? 0) > 0 { parts.append("计费状态未提供 " + amount(unknownBillability) + "（\(unknownBillabilityRequests!) 次）") }
-        if let originalCredits, let count = originalCreditsRequests, count > 0 { parts.append("折扣前已记录 " + amount(originalCredits) + "（\(count)/\(requests) 次请求）") }
+        if (billableRequests ?? 0) > 0 { parts.append(L("标记可计费 ") + amount(billable) + L("（{0} 次）" , billableRequests!)) }
+        if (nonBillableRequests ?? 0) > 0 { parts.append(L("标记不计费 ") + amount(nonBillable) + L("（{0} 次）" , nonBillableRequests!)) }
+        if (unknownBillabilityRequests ?? 0) > 0 { parts.append(L("计费状态未提供 ") + amount(unknownBillability) + L("（{0} 次）" , unknownBillabilityRequests!)) }
+        if let originalCredits, let count = originalCreditsRequests, count > 0 { parts.append(L("折扣前已记录 ") + amount(originalCredits) + L("（{0}/{1} 次请求）" , count, requests)) }
         return parts.joined(separator: " · ")
     }
 }
@@ -298,10 +298,10 @@ struct Balance: Codable, Equatable, Identifiable {
 struct ExtraUsageWallet: Codable, Equatable {
     var currency: String, total: String
     var balance: String?, monthlyLimitEnabled: Bool?, monthlyLimit: String?, monthlyUsed: String?
-    func amount(_ value: String?) -> String { value.map { currency + " " + $0 } ?? "未提供" }
+    func amount(_ value: String?) -> String { value.map { currency + " " + $0 } ?? L("未提供") }
     var monthlyLimitLabel: String {
-        if monthlyLimitEnabled == true { return "月度上限 " + amount(monthlyLimit) }
-        return monthlyLimitEnabled == false ? "月度上限未启用" : "月度上限状态未提供"
+        if monthlyLimitEnabled == true { return L("月度上限 ") + amount(monthlyLimit) }
+        return monthlyLimitEnabled == false ? L("月度上限未启用") : L("月度上限状态未提供")
     }
 }
 struct CreditsBalance: Codable, Equatable { var hasCredits: Bool, unlimited: Bool, balance: String? }
@@ -311,9 +311,9 @@ struct AccountIdentity: Codable, Equatable {
     var displayName: String {
         if !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return email }
         if key.hasPrefix("qoder:") { return "Qoder · " + key.dropFirst(6).prefix(12) }
-        return key.isEmpty ? "身份已确认" : key
+        return key.isEmpty ? L("身份已确认") : key
     }
-    var summary: String { displayName + (subscription.map { " · " + $0 } ?? " · 订阅未知") + (stale == true ? " · 订阅待更新" : "") }
+    var summary: String { displayName + (subscription.map { " · " + $0 } ?? L(" · 订阅未知")) + (stale == true ? L(" · 订阅待更新") : "") }
 }
 struct Quota: Codable, Equatable, Identifiable {
     var identity: AccountIdentity? = nil
@@ -335,7 +335,7 @@ func syncFailureReason(error: String?, partial: Bool?, issues: [SyncIssue]?) -> 
     guard partial == true else { return nil }
     let visible = (issues ?? []).filter { $0.code != "unknownModel" && $0.code != "missingHistoryBase" }
     if !(issues ?? []).isEmpty && visible.isEmpty { return nil }
-    return visible.isEmpty ? "部分记录需要处理" : visible.map { ($0.path.map { $0 + " · " } ?? "") + $0.message }.joined(separator: "；")
+    return visible.isEmpty ? L("部分记录需要处理") : visible.map { ($0.path.map { $0 + " · " } ?? "") + $0.message }.joined(separator: "；")
 }
 struct SourceStatus: Codable, Equatable {
     var partial: Bool?, issues: [SyncIssue]?, forkHistoryIssues: [SyncIssue]?
@@ -352,7 +352,7 @@ struct DayModel: Codable, Identifiable, Equatable {
 struct PricingGap: Codable, Identifiable, Equatable {
     var model: String, priceId: String?, tokens: Tokens, unpricedTokens: Double
     var id: String { model }
-    var missing: String { [("输入", tokens.input), ("输出", tokens.output), ("缓存读取", tokens.cacheRead), ("缓存写入", tokens.cacheWrite)].filter { $0.1 > 0 }.map { $0.0 }.joined(separator: "、") }
+    var missing: String { [(L("输入"), tokens.input), (L("输出"), tokens.output), (L("缓存读取"), tokens.cacheRead), (L("缓存写入"), tokens.cacheWrite)].filter { $0.1 > 0 }.map { $0.0 }.joined(separator: "、") }
 }
 struct AccountConnection: Codable, Equatable { var sourceId: String; var profileId: String? }
 struct AgentConfiguration: Codable, Equatable, Identifiable {
@@ -377,7 +377,7 @@ struct AccountTarget: Decodable, Identifiable {
     var id: String { accountKey + ":" + sourceId + ":" + (profileId ?? "") }
     var wakeupLocationLabel: String {
         let location = path.count > 55 ? "…" + path.suffix(54) : path
-        let state = available == false ? " · 已暂停" : canWake ? "" : " · 执行待确认"
+        let state = available == false ? L(" · 已暂停") : canWake ? "" : L(" · 执行待确认")
         return [machineName, location].joined(separator: " · ") + state
     }
 }
@@ -393,10 +393,10 @@ struct AccountDeviceStatus: Codable, Equatable, Identifiable {
     var current: Bool?, credential: Bool?, checkedAt: Double?, error: String?, note: String?
     var id: String { accountKey + ":" + sourceId }
     var identitySummary: String? {
-        guard let identity else { return authenticated == true ? "登录有效 · 账户身份待确认" : nil }
-        return (current == nil ? "当前登录 " : current == false ? "身份不一致 · 当前登录 " : "正在使用 ") + identity.summary + (error != nil ? " · 上次检查" : "")
+        guard let identity else { return authenticated == true ? L("登录有效 · 账户身份待确认") : nil }
+        return (current == nil ? L("当前登录 ") : current == false ? L("身份不一致 · 当前登录 ") : L("正在使用 ")) + identity.summary + (error != nil ? L(" · 上次检查") : "")
     }
-    var machineIdentitySummary: String? { identity.map { "当前登录 " + $0.summary + (error != nil ? " · 上次检查" : "") } }
+    var machineIdentitySummary: String? { identity.map { L("当前登录 ") + $0.summary + (error != nil ? L(" · 上次检查") : "") } }
 }
 struct AccountDeviceCounts: Equatable {
     let total: Int, logged: Int, using: Int
@@ -409,10 +409,10 @@ struct AccountDeviceCounts: Equatable {
         using = ids.filter { id in matching.contains { $0.machineId == id && $0.current == true } }.count
         pending = ids.contains { id in let rows = matching.filter { $0.machineId == id }; return rows.isEmpty || rows.contains { $0.current == nil || $0.credential == nil || $0.error != nil } }
     }
-    var loginText: String { "已登录设备 \(logged)/\(total)" }
-    var usageText: String { "使用中设备 \(using)/\(total)" }
+    var loginText: String { L("已登录设备 {0}/{1}" , logged, total) }
+    var usageText: String { L("使用中设备 {0}/{1}" , using, total) }
     var inlineSummary: String { loginText + " · " + usageText }
-    var summary: String { inlineSummary + (pending ? " · 有设备待确认" : "") }
+    var summary: String { inlineSummary + (pending ? L(" · 有设备待确认") : "") }
 }
 struct QuotaResetNotificationSettings: Codable, Equatable {
     var unexpected: Bool?
@@ -510,7 +510,7 @@ struct Host: Codable, Equatable, Identifiable {
     var metrics = ["cpu", "memory", "gpu", "filesystems", "disk", "network"], devices: [String] = []
     var details: [String]? = Host.detailOptions.map { $0.0 }
     var authMode: String?, username: String?, passwordRef: String?
-    static let detailOptions = [("uptime", "连续运行时间"), ("cpuTimes", "CPU 时间分布"), ("memoryCache", "内存缓存 / Buffer"), ("swap", "Swap"), ("fsAvailable", "文件系统可用空间"), ("fsType", "文件系统类型 / 设备"), ("inodes", "inode"), ("diskIops", "磁盘 IOPS"), ("diskBusy", "磁盘忙碌率"), ("networkTotals", "累计流量"), ("networkErrors", "网络错误 / 丢包"), ("gpuMemory", "GPU 显存"), ("gpuThermals", "GPU 温度 / 功耗")]
+    static var detailOptions: [(String, String)] { [("uptime", L("连续运行时间")), ("cpuTimes", L("CPU 时间分布")), ("memoryCache", L("内存缓存 / Buffer")), ("swap", "Swap"), ("fsAvailable", L("文件系统可用空间")), ("fsType", L("文件系统类型 / 设备")), ("inodes", "inode"), ("diskIops", L("磁盘 IOPS")), ("diskBusy", L("磁盘忙碌率")), ("networkTotals", L("累计流量")), ("networkErrors", L("网络错误 / 丢包")), ("gpuMemory", L("GPU 显存")), ("gpuThermals", L("GPU 温度 / 功耗"))] }
     var connectionIdentity: String { [target, port.map(String.init) ?? "", identityFile, shell, preCommand, authMode ?? "ssh", username ?? "", passwordRef ?? ""].joined(separator: "\u{0}") }
     func shows(_ key: String) -> Bool { details?.contains(key) ?? true }
     // Also filter retained samples immediately when the device selection changes.
@@ -521,10 +521,12 @@ struct Host: Codable, Equatable, Identifiable {
     }
 }
 struct AppearanceSettings: Codable, Equatable {
+    var language = "zh-CN"
     var theme = "system", accent = "indigo", chartPalette = "classic", chartContrast = "high"
     init() {}
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        language = AieyesLocale.normalize(try container.decodeIfPresent(String.self, forKey: .language))
         theme = try container.decodeIfPresent(String.self, forKey: .theme) ?? "system"
         accent = try container.decodeIfPresent(String.self, forKey: .accent) ?? "indigo"
         chartPalette = try container.decodeIfPresent(String.self, forKey: .chartPalette) ?? "classic"
@@ -534,7 +536,7 @@ struct AppearanceSettings: Codable, Equatable {
 struct LocalMonitor: Codable, Equatable {
     var enabled = true
     var metrics = Host().metrics, devices: [String] = [], details: [String]? = Host().details
-    var host: Host { var h = Host(); h.id = "local"; h.name = "本机"; h.target = "本机"; h.enabled = enabled; h.metrics = metrics; h.devices = devices; h.details = details; return h }
+    var host: Host { var h = Host(); h.id = "local"; h.name = L("本机"); h.target = L("本机"); h.enabled = enabled; h.metrics = metrics; h.devices = devices; h.details = details; return h }
     init() {}
     init(_ h: Host) { enabled = h.enabled; metrics = h.metrics; devices = h.devices; details = h.details }
 }
@@ -542,8 +544,8 @@ struct NativeConnection: Codable, Equatable, Identifiable {
     var id: String, provider: String, machineId: String, root: String, configPath: String, selector: String, kind: String
     var accountKey: String?, identityKey: String?
     var email: String, baseUrl: String, models: [String], hasCredential: Bool, status: String, note: String, checkedAt: Double
-    var displayName: String { !email.isEmpty ? email : kind == "api" ? (baseUrl.isEmpty ? "原生 API" : baseUrl) : identityKey.map { $0.hasPrefix("qoder:") ? "Qoder · " + $0.dropFirst(6).prefix(12) : (CoreContract.providerNames[provider] ?? provider) + " 账户" } ?? "账户身份待确认" }
-    var statusLabel: String { ["pending":"待验证", "expired":"已过期", "unavailable":"需重新扫描", "observed":"已识别账户"][status] ?? "待验证" }
+    var displayName: String { !email.isEmpty ? email : kind == "api" ? (baseUrl.isEmpty ? L("原生 API") : baseUrl) : identityKey.map { $0.hasPrefix("qoder:") ? "Qoder · " + $0.dropFirst(6).prefix(12) : (CoreContract.providerNames[provider] ?? provider) + L(" 账户") } ?? L("账户身份待确认") }
+    var statusLabel: String { ["pending":L("待验证"), "expired":L("已过期"), "unavailable":L("需重新扫描"), "observed":L("已识别账户")][status] ?? L("待验证") }
 }
 struct Settings: Codable, Equatable {
     var quotaResetNotifications: QuotaResetNotificationSettings?
@@ -555,7 +557,7 @@ struct Settings: Codable, Equatable {
     var codexPreciseCounting: Bool?
     var filterAccounts: [AgentAccount] { accounts + (historyShowDeletedAccounts == true ? deletedAccounts ?? [] : []) }
     func accountFilterName(_ account: AgentAccount) -> String {
-        account.name + (accounts.contains { $0.key == account.key } ? (account.archived == true ? "（已归档）" : "") : "（已删除）")
+        account.name + (accounts.contains { $0.key == account.key } ? (account.archived == true ? L("（已归档）") : "") : L("（已删除）"))
     }
     var agents: [AgentConfiguration]?
     var accountAliases: [String: String]?
@@ -650,9 +652,9 @@ enum Format {
         guard let seconds, seconds.isFinite, seconds >= 0, seconds / 60 < Double(Int.max) else { return "—" }
         let minutes = Int(seconds / 60)
         var parts: [String] = []
-        if minutes >= 1440 { parts.append("\(minutes / 1440) 天") }
-        if minutes >= 60 { parts.append("\(minutes % 1440 / 60) 小时") }
-        parts.append("\(minutes % 60) 分")
+        if minutes >= 1440 { parts.append(L("{0} 天" , minutes / 1440)) }
+        if minutes >= 60 { parts.append(L("{0} 小时" , minutes % 1440 / 60)) }
+        parts.append(L("{0} 分" , minutes % 60))
         return parts.joined(separator: " ")
     }
     // A zero usage percentage does not establish whether a window has started.
@@ -663,16 +665,16 @@ enum Format {
     }
     static func resetCountdown(_ stamp: Double?, now: Date = Date()) -> String {
         guard let target = resetDisplayTime(stamp, now: now) else {
-            return stamp.map { $0.isFinite && $0 > 0 ? "确认重置中" : "重置时间未知" } ?? "重置时间未知"
+            return stamp.map { $0.isFinite && $0 > 0 ? L("确认重置中") : L("重置时间未知") } ?? L("重置时间未知")
         }
         let rawMinutes = ceil((target - now.timeIntervalSince1970) / 60)
-        guard rawMinutes.isFinite, rawMinutes > 0, rawMinutes < Double(Int.max) else { return "重置时间未知" }
+        guard rawMinutes.isFinite, rawMinutes > 0, rawMinutes < Double(Int.max) else { return L("重置时间未知") }
         let minutes = Int(rawMinutes)
         var parts: [String] = []
-        if minutes >= 1440 { parts.append("\(minutes / 1440) 天") }
-        if minutes % 1440 >= 60 { parts.append("\(minutes % 1440 / 60) 小时") }
-        if minutes < 1440 && minutes % 60 > 0 { parts.append("\(minutes % 60) 分") }
-        return parts.joined(separator: " ") + "后重置"
+        if minutes >= 1440 { parts.append(L("{0} 天" , minutes / 1440)) }
+        if minutes % 1440 >= 60 { parts.append(L("{0} 小时" , minutes % 1440 / 60)) }
+        if minutes < 1440 && minutes % 60 > 0 { parts.append(L("{0} 分" , minutes % 60)) }
+        return parts.joined(separator: " ") + L("后重置")
     }
     static func quotaReset(_ window: QuotaWindow, now: Date = Date()) -> String {
         if !(window.resetsAt.map { $0.isFinite && $0 > 0 } ?? false), window.usedPercent == 0 {
@@ -692,8 +694,8 @@ enum Format {
         return ["plus":"Plus", "pro":"Pro", "free":"Free", "max":"Max", "team":"Team", "business":"Business", "enterprise":"Enterprise", "api":"API"][name.lowercased()] ?? (name.prefix(1).uppercased() + name.dropFirst())
     }
     static func creditPrimary(_ balance: CreditsBalance?) -> String {
-        if balance?.unlimited == true { return "无限" }
-        guard let raw = balance?.balance else { return balance?.hasCredits == true ? "数量未知" : "—" }
+        if balance?.unlimited == true { return L("无限") }
+        guard let raw = balance?.balance else { return balance?.hasCredits == true ? L("数量未知") : "—" }
         return credits(raw)
     }
 
@@ -722,10 +724,10 @@ enum Format {
         return formatter.string(from: NSDecimalNumber(decimal: rounded)) ?? "—"
     }
     static func creditBalance(_ balance: CreditsBalance?, estimate: QuotaEstimate?) -> String {
-        if balance?.unlimited == true { return "余额 无限" }
-        guard let raw = balance?.balance else { return balance?.hasCredits == true ? "余额 数量未知" : "余额 —" }
+        if balance?.unlimited == true { return L("余额 无限") }
+        guard let raw = balance?.balance else { return balance?.hasCredits == true ? L("余额 数量未知") : L("余额 —") }
         let formatted = credits(raw)
-        var text = "余额 " + formatted + (formatted == "—" ? "" : " credits")
+        var text = L("余额 ") + formatted + (formatted == "—" ? "" : " credits")
         if formatted != "—", let amount = Double(raw), amount.isFinite, let estimate, estimate.status != "pending", let unit = estimate.valuePer1000, unit.isFinite, (amount * unit / 1000).isFinite {
             if let decimal = Decimal(string: raw), let rate = Decimal(string: String(unit)) {
                 var value = decimal * rate / 1000, rounded = Decimal()
@@ -736,7 +738,7 @@ enum Format {
         return text
     }
     static func creditValue(_ estimate: QuotaEstimate) -> String {
-        if estimate.status == "pending" { return "待确认" }
+        if estimate.status == "pending" { return L("待确认") }
         guard let value=estimate.valuePer1000, value.isFinite else { return estimate.issueLabel }
         return "1000 credit ≈ " + money(value) + " USD"
     }
@@ -776,8 +778,8 @@ enum Format {
         let formatter = RelativeDateTimeFormatter(); formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: now)
     }
-    static func time(_ stamp: Double) -> String { Date(timeIntervalSince1970: stamp).formatted(date: .omitted, time: .shortened) }
-    static func provider(_ key: String) -> String { CoreContract.providerNames[key] ?? key }
+    static func time(_ stamp: Double) -> String { Date(timeIntervalSince1970: stamp).formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(AieyesLocale.locale)) }
+    static func provider(_ key: String) -> String { L(CoreContract.providerNames[key] ?? key) }
 }
 
 struct QuotaEstimate: Codable, Identifiable, Equatable {
@@ -793,9 +795,9 @@ struct QuotaEstimate: Codable, Identifiable, Equatable {
     var hasValue: Bool { [fiveHourValue, weeklyValue, valuePer1000].compactMap { $0 }.contains { $0.isFinite } }
     var issueLabel: String {
         if let reason = rollingExcludedReason, !reason.isEmpty { return reason }
-        if status == "pending" { return reason.isEmpty ? "待确认" : reason }
-        if let code = calculationStatus, let label = ["boundary":"用量边界待确认", "noUsage":"暂无有效用量", "unpriced":"模型价格不完整", "insufficientUsage":"等待可确认的消耗", "invalidPrice":"价格数据无效"][code] { return label }
-        return calculationNote.isEmpty ? "尚无估值" : calculationNote
+        if status == "pending" { return reason.isEmpty ? L("待确认") : reason }
+        if let code = calculationStatus, let label = ["boundary":L("用量边界待确认"), "noUsage":L("暂无有效用量"), "unpriced":L("模型价格不完整"), "insufficientUsage":L("等待可确认的消耗"), "invalidPrice":L("价格数据无效")][code] { return label }
+        return calculationNote.isEmpty ? L("尚无估值") : calculationNote
     }
 
     var kind: String?, consumedCredits: Double?, valuePer1000: Double?
@@ -808,7 +810,7 @@ struct QuotaEstimate: Codable, Identifiable, Equatable {
     var prices: [ModelPrice]?
     var valuationMode: String?, fiveHourValue: Double?, weeklyDirectValue: Double?, weeklyRatioValue: Double?
     var capacity: CapacityInfo?, segments: [EstimateSegment]?
-    var statusLabel: String { ["active":"采样中", "pending":"需要确认", "completed":"已结束"][status] ?? status }
+    var statusLabel: String { ["active":L("采样中"), "pending":L("需要确认"), "completed":L("已结束")][status] ?? status }
 }
 
 struct CapacityInfo: Codable, Equatable {
@@ -816,7 +818,7 @@ struct CapacityInfo: Codable, Equatable {
     var samples = 0
     var weeklyPercent: Double = 0
     var updatedAt: Double = 0
-    var note: String { updatedAt > 0 && Date().timeIntervalSince1970 - updatedAt > 14 * 86400 ? "历史倍率" : weeklyPercent < 5 ? "倍率样本较少" : "近期倍率" }
+    var note: String { updatedAt > 0 && Date().timeIntervalSince1970 - updatedAt > 14 * 86400 ? L("历史倍率") : weeklyPercent < 5 ? L("倍率样本较少") : L("近期倍率") }
 }
 struct EstimateSegment: Codable, Equatable {
     var startedAt: Double, endedAt: Double, fivePercent: Double, weeklyPercent: Double?, cost: Double
@@ -824,8 +826,8 @@ struct EstimateSegment: Codable, Equatable {
 struct NetworkSite: Codable, Equatable { var url: String, latencyMs: Double?, error: String? }
 struct NetworkTest: Codable, Equatable {
     var testedAt: Double, mode: String, averageMs: Double?, status: String, sites: [NetworkSite]
-    var label: String { status == "unstable" ? "连接不稳定" : status == "failed" ? "连接失败" : (mode == "direct" ? "直连 " : mode == "system" ? "系统 " : "代理 ") + String(Int(averageMs ?? 0)) + " ms" }
-    var detail: String { sites.map { $0.url + " · " + ($0.latencyMs.map { String(Int($0)) + " ms" } ?? $0.error ?? "失败") }.joined(separator: "\n") + "\n测试于 " + Format.date(testedAt) }
+    var label: String { status == "unstable" ? L("连接不稳定") : status == "failed" ? L("连接失败") : (mode == "direct" ? L("直连 ") : mode == "system" ? L("系统 ") : L("代理 ")) + String(Int(averageMs ?? 0)) + " ms" }
+    var detail: String { sites.map { $0.url + " · " + ($0.latencyMs.map { String(Int($0)) + " ms" } ?? $0.error.map { L($0) } ?? L("失败")) }.joined(separator: "\n") + L("\n测试于 ") + Format.date(testedAt) }
 }
 
 enum EstimatePresentation {
@@ -834,11 +836,11 @@ enum EstimatePresentation {
         var rolling = false
         var periods: String { [five ? "5h" : "", direct || ratio ? "7d" : ""].filter { !$0.isEmpty }.joined(separator: " / ") }
         var help: String {
-            if rolling { return "滚动估值：汇总最近 90 天的有效片段，权重每 7 天减半，按额度消耗量加权。" + (five ? "5h 按对应额度片段计算。" : "") + (direct ? "7d 按对应周额度片段计算。" : "") + (ratio ? "7d 容量推算为滚动 5h 价值乘近期容量倍率。" : "") + "金额为 API 等价价值，不可兑换。" }
-            if ratio && direct { return "7d 左值：5h 等价值 × 近期容量倍率；右值：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。" }
-            if ratio { return "7d：5h 等价值 × 近期容量倍率；这些金额为 API 等价价值。" }
-            if direct { return "7d：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。" }
-            return "按采样时段的 API 等价成本与对应额度消耗比例计算。"
+            if rolling { return L("滚动估值：汇总最近 90 天的有效片段，权重每 7 天减半，按额度消耗量加权。") + (five ? L("5h 按对应额度片段计算。") : "") + (direct ? L("7d 按对应周额度片段计算。") : "") + (ratio ? L("7d 容量推算为滚动 5h 价值乘近期容量倍率。") : "") + L("金额为 API 等价价值，不可兑换。") }
+            if ratio && direct { return L("7d 左值：5h 等价值 × 近期容量倍率；右值：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。") }
+            if ratio { return L("7d：5h 等价值 × 近期容量倍率；这些金额为 API 等价价值。") }
+            if direct { return L("7d：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。") }
+            return L("按采样时段的 API 等价成本与对应额度消耗比例计算。")
         }
     }
     static func visibility(_ quota: Quota?, records: [QuotaEstimate], group: String? = nil) -> Visibility {
@@ -891,11 +893,11 @@ enum EstimatePresentation {
         let visible = visibility(quota, records: records, group: group)
         let fields: [(String, String, KeyPath<QuotaEstimate, Double?>)] = credits
             ? [("credits", "1000 credits", \.valuePer1000)]
-            : [("five", "5h", \.fiveHourValue), ("week", "7d 同期 / 整周", \.weeklyValue), ("ratio", "7d 容量倍率", \.weeklyRatioValue)]
+            : [("five", "5h", \.fiveHourValue), ("week", L("7d 同期 / 整周"), \.weeklyValue), ("ratio", L("7d 容量倍率"), \.weeklyRatioValue)]
         return fields.compactMap { id, label, path in
             guard credits || (id == "five" ? visible.five : id == "week" ? visible.direct : visible.ratio) else { return nil }
             guard let record = all.first(where: { $0.status != "pending" && $0[keyPath: path]?.isFinite == true }), let value = record[keyPath: path] else { return nil }
-            let title = id == "week" ? (record.valuationMode == "fiveHour" ? "7d 同期" : "7d 整周") : label
+            let title = id == "week" ? (record.valuationMode == "fiveHour" ? L("7d 同期") : L("7d 整周")) : label
             return Entry(id: id, label: title, value: value, record: record, historical: record.id != all.first?.id || record.status == "completed")
         }
     }
@@ -904,11 +906,11 @@ enum EstimatePresentation {
         func value(_ id: String) -> String? { values.first { $0.id == id }.map { Format.compactMoney($0.value) } }
         let week = [value("ratio"), value("week")].compactMap { $0 }
         let parts = [value("five").map { "5h ≈ " + $0 } ?? "", week.isEmpty ? "" : "7d ≈ " + week.joined(separator: "/")].filter { !$0.isEmpty }
-        return parts.isEmpty ? "额度估值" : parts.joined(separator: "  ")
+        return parts.isEmpty ? L("额度估值") : parts.joined(separator: "  ")
     }
     static func creditSummary(_ records: [QuotaEstimate]) -> String {
-        guard let entry = entries(records, credits: true).first else { return "credits 估值" }
-        return "credits 估值（1000 credits ≈ " + Format.compactMoney(entry.value) + "）"
+        guard let entry = entries(records, credits: true).first else { return L("credits 估值") }
+        return L("credits 估值（1000 credits ≈ ") + Format.compactMoney(entry.value) + "）"
     }
     static func credit(_ records: [QuotaEstimate]) -> QuotaEstimate? { entries(records, credits: true).first?.record }
 }

@@ -433,6 +433,15 @@ pub(crate) fn refresh_materials(app: &AppHandle) {
 }
 
 pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let settings = std::fs::read(root.join("settings.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .unwrap_or(Value::Null);
+    crate::localization::set_language(
+        settings["appearance"]["language"]
+            .as_str()
+            .unwrap_or("zh-CN"),
+    );
     let path = root.join("desktop.json");
     let preferences: Preferences = std::fs::read(&path)
         .ok()
@@ -607,7 +616,7 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
     }
     let builder =
         WebviewWindowBuilder::new(app, "floating", WebviewUrl::App("floating.html".into()))
-            .title("Aieyes 面板")
+            .title(crate::localization::label("Aieyes 面板"))
             .inner_size(
                 if cfg!(any(windows, target_os = "linux")) {
                     PANEL_WIDTH
@@ -1030,6 +1039,7 @@ fn tray_set_visible(app: &AppHandle, visible: bool) {
 }
 
 fn tray_set_summary(app: &AppHandle, summary: String) {
+    let summary = crate::localization::text(&summary);
     #[cfg(target_os = "linux")]
     {
         let desktop = app.state::<Desktop>();
@@ -1257,7 +1267,12 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn desktop_appearance(app: AppHandle, theme: String, accent: String) -> Result<(), String> {
+pub fn desktop_appearance(
+    app: AppHandle,
+    theme: String,
+    accent: String,
+    language: Option<String>,
+) -> Result<(), String> {
     let theme = match theme.as_str() {
         "dark" => Some(tauri::Theme::Dark),
         "light" => Some(tauri::Theme::Light),
@@ -1273,8 +1288,27 @@ pub fn desktop_appearance(app: AppHandle, theme: String, accent: String) -> Resu
         .map_err(|_| "显示状态不可用")?
         .accent = accent;
     app.set_theme(theme);
+    if let Some(language) = language
+        && crate::localization::set_language(&language)
+    {
+        *app.state::<Desktop>()
+            .menu_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        refresh_menu(&app);
+        let summary = app
+            .state::<Desktop>()
+            .state
+            .lock()
+            .map(|state| state.snapshot.summary())
+            .unwrap_or_default();
+        tray_set_summary(&app, summary);
+    }
     for window in app.webview_windows().values() {
         let _ = window.set_theme(theme);
+        if window.label() == "floating" {
+            let _ = window.set_title(crate::localization::label("Aieyes 面板"));
+        }
     }
     #[cfg(target_os = "windows")]
     refresh_materials(&app);
@@ -1291,12 +1325,12 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "platform": std::env::consts::OS, "material": materials.main.kind, "mode": state.preferences.mode,
         "effectiveMode": if state.floating { "pet" } else { "tray" },
         "trayAvailable": desktop.tray_available.load(Ordering::Relaxed),
-        "reason": state.reason,
+        "reason": crate::localization::text(&state.reason),
         "petEnabled": state.floating,
         "petScale": aieyes_core::pets::normalized_scale(state.preferences.pet_scale),
         "petAsset": state.pet_asset["pet"], "petError": state.pet_asset["error"],
         "pet": aieyes_core::pets::project(&state.snapshot),
-        "summary": state.snapshot.summary(), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
+        "summary": crate::localization::text(&state.snapshot.summary()), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sources": state.snapshot.sources, "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
         "showCount": state.preferences.show_count, "panelPage": state.panel_page, "nativePet": cfg!(any(windows, target_os = "linux")),

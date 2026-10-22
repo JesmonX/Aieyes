@@ -58,8 +58,8 @@ fn send(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
     }
     app.notification()
         .builder()
-        .title(title)
-        .body(body)
+        .title(crate::localization::text(title))
+        .body(crate::localization::text(body))
         .show()
         .map_err(|e| e.to_string())
 }
@@ -77,7 +77,11 @@ fn content(event: &ResetEvent) -> (String, String) {
         .windows
         .iter()
         .map(|w| {
-            let mut text = format!("{}：剩余 {:.0}%", w.name, 100.0 - w.used_percent);
+            let mut text = crate::localization::text(&format!(
+                "{}：剩余 {:.0}%",
+                crate::localization::text(&w.name),
+                100.0 - w.used_percent
+            ));
             if event.kind == Kind::Unexpected {
                 // The desktop shell formats using the machine's timezone without a webview.
                 let date = chrono::DateTime::from_timestamp(w.expected_reset_at, 0)
@@ -87,12 +91,16 @@ fn content(event: &ResetEvent) -> (String, String) {
                             .to_string()
                     })
                     .unwrap_or_default();
-                text.push_str(&format!("（原预计 {date}）"));
+                text.push_str(&crate::localization::text(&format!("（原预计 {date}）")));
             }
             text
         })
         .collect::<Vec<_>>()
-        .join("；");
+        .join(if crate::localization::language() == "en" {
+            "; "
+        } else {
+            "；"
+        });
     (title, format!("{name} · {}\n{windows}", event.name))
 }
 fn report(app: &tauri::AppHandle, result: Result<(), String>) {

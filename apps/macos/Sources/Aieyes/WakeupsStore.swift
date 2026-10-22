@@ -3,7 +3,7 @@ import Combine
 
 struct WakeTask: Codable, Identifiable, Equatable {
     var codexProfileId: String?
-    var id = "", name = "订阅唤醒", sourceId = "", times = ["08:00"], model = "", effort = "low"
+    var id = "", name = L("订阅唤醒"), sourceId = "", times = ["08:00"], model = "", effort = "low"
     var prompt = "Hi. Reply only OK. Do not use any tools.", binary = ""
     var parameters: [String: Any] { (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(self))) as? [String: Any] ?? [:] }
 }
@@ -15,7 +15,7 @@ struct WakeRun: Decodable, Identifiable {
     var startedAt: Double, endedAt: Double?, status: String, model: String, effort: String
     var stage: String?, errorCode: String?, message: String?
     var id: String { "\(startedAt):\(model)" }
-    var label: String { message ?? (["success":"已完成", "running":"运行中", "failed":"调用失败，请检查登录、模型及代理", "timeout":"调用超时", "interrupted":"执行中断", "skipped-overlap":"同账户任务运行中，已跳过"][status] ?? status) }
+    var label: String { message ?? (["success":L("已完成"), "running":L("运行中"), "failed":L("调用失败，请检查登录、模型及代理"), "timeout":L("调用超时"), "interrupted":L("执行中断"), "skipped-overlap":L("同账户任务运行中，已跳过")][status] ?? status) }
 }
 struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: String, nextRunAt: Double?, history: [WakeRun] }
 
@@ -108,7 +108,7 @@ struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: Str
     }
     func save(_ task: WakeTask) async throws {
         let id = task.id.isEmpty ? "new" : task.id
-        guard operating.insert(id).inserted else { throw ClientError.message("此任务正在操作，请稍候重试") }
+        guard operating.insert(id).inserted else { throw ClientError.message(L("此任务正在操作，请稍候重试")) }
         defer { operating.remove(id); pruneReaders() }
         let record: WakeRecord = try await reader(id).call("wakeups.save", params: ["task": task.parameters])
         listRevision += 1; taskRevisions[record.id, default: 0] += 1
@@ -126,7 +126,7 @@ struct WakeStatus: Decodable { var installed: Bool, enabled: Bool, timezone: Str
                 let _: Acknowledgement = try await reader(id).call("wakeups." + action, params: ["id": id])
                 taskRevisions[id, default: 0] += 1
                 operationErrors[id]?[action] = nil
-                if action == "run" { notices[id] = "已启动一次唤醒，正在跟进运行结果。" }
+                if action == "run" { notices[id] = L("已启动一次唤醒，正在跟进运行结果。") }
                 await load(refreshStatuses: false)
                 if records.contains(where: { $0.id == id && $0.deployment != nil }) { Task { await readStatus(id) } }
                 if action == "run" { followRun(id) }

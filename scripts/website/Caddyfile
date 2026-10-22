@@ -1,0 +1,23 @@
+aieyes.2h3ngy4n.space {
+    root * /var/www/aieyes/current
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        X-Frame-Options DENY
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        Strict-Transport-Security "max-age=15552000"
+        Cache-Control "no-cache"
+    }
+    @assets path /screenshots/* /providers/* /brand.png /favicon.png /og.png /pet-*.webp
+    header @assets Cache-Control "public, max-age=3600"
+    file_server
+    handle_errors {
+        rewrite * /404.html
+        file_server
+    }
+    log {
+        output stdout
+        format json
+    }
+}

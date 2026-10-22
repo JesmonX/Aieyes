@@ -832,3 +832,6 @@ body:not([data-platform=windows]) .font-notice { display:none; }
 @container (max-width:311px) {
   .quota-disclosure:not([open]) + .quota-content .quota-windows { grid-template-columns:minmax(0,1fr); }
 }
+
+[data-language-toggle] { min-width: 56px; height: 28px; padding: 0 8px; font: inherit; font-size: 11px; white-space: nowrap; }
+html[lang=en] .aside-group-label { letter-spacing: .04em; }

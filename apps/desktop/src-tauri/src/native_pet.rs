@@ -224,7 +224,12 @@ impl NativePet {
                             )
                             .ok(),
                         );
-                        tooltip(hwnd, &surface, "Aieyes · 单击打开面板，右键菜单", true);
+                        tooltip(
+                            hwnd,
+                            &surface,
+                            crate::localization::label("Aieyes · 单击打开面板，右键菜单"),
+                            true,
+                        );
                         let _ = ready.send(Result::Ok(hwnd.0 as usize));
                         HOOK_SURFACE.with(|slot| slot.set(&*surface));
                         let mut message = MSG::default();
@@ -591,8 +596,11 @@ unsafe extern "system" fn window_proc(
                         animate(hwnd);
                         let title = format!(
                             "Aieyes · {} · 单击打开面板，右键菜单",
-                            surface.info.borrow()["summary"].as_str().unwrap_or("")
+                            crate::localization::text(
+                                surface.info.borrow()["summary"].as_str().unwrap_or("")
+                            )
                         );
+                        let title = crate::localization::text(&title);
                         tooltip(hwnd, surface, &title, false);
                         let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
                         let _ = SetWindowTextW(hwnd, PCWSTR(title.as_ptr()));

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 
-const read = name => readFileSync(new URL(`../apps/desktop/web/${name}`, import.meta.url), 'utf8');
+const localeRuntime = 'if(typeof window!=="undefined"&&!window.addEventListener)window.addEventListener=()=>{};\n' + readFileSync(new URL('../apps/desktop/web/i18n.js', import.meta.url), 'utf8');
+const read = name => localeRuntime + '\n' + readFileSync(new URL(`../apps/desktop/web/${name}`, import.meta.url), 'utf8');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 test('all usage surfaces discard legacy account filters but preserve analysis dimensions', () => {
   const context={structuredClone};vm.runInNewContext(read('view-state.js'),context);

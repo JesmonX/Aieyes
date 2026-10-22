@@ -8,9 +8,9 @@ on:
         default: false
   push:
     branches: [main, 'feat/**']
-    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'docs/chart-palettes.json', 'Cargo.*', '.github/workflows/desktop.yml']
+    paths: ['apps/desktop/**', 'crates/core/**', 'locales/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'docs/chart-palettes.json', 'Cargo.*', '.github/workflows/desktop.yml']
   pull_request:
-    paths: ['apps/desktop/**', 'crates/core/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'docs/chart-palettes.json', 'Cargo.*', '.github/workflows/desktop.yml']
+    paths: ['apps/desktop/**', 'crates/core/**', 'locales/**', 'scripts/**', 'docs/core-contracts.json', 'docs/ui-phase-colors.json', 'docs/chart-palettes.json', 'Cargo.*', '.github/workflows/desktop.yml']
 permissions:
   contents: read
 concurrency:
@@ -65,6 +65,7 @@ jobs:
           name: UI-previews-${{ runner.os }}
           path: |
             .local/ui-previews/*.png
+            .local/i18n/*.png
             .local/pets/*.png
             .local/windows-ui-sync/browser/*
             .local/windows-ui-sync/interactions/*.png

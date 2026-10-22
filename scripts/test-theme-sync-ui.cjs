@@ -40,7 +40,7 @@ function fixture(){
     const expectTheme=async(theme)=>{for(const page of [main,panel]){await page.waitForFunction(t=>document.documentElement.dataset.theme===t,theme);assert.equal(await page.evaluate(()=>state.settings.appearance.theme),theme);}};
     await expectTheme('light');
     await main.evaluate(()=>{state.settingsDraft=structuredClone(state.settings);state.settingsDraft.modelMappings.unsaved='keep-this-draft';});
-    await main.locator('[data-theme-toggle]').click();await expectTheme('dark');assert.deepEqual((await rpc('settings.get')).appearance,{theme:'dark',accent:'teal',chartPalette:'classic',chartContrast:'high'});
+    await main.locator('[data-theme-toggle]').click();await expectTheme('dark');assert.deepEqual((await rpc('settings.get')).appearance,{theme:'dark',accent:'teal',chartPalette:'classic',chartContrast:'high',language:'zh-CN'});
     assert.equal(await main.evaluate(()=>state.settingsDraft.modelMappings.unsaved),'keep-this-draft');assert.equal((await rpc('settings.get')).modelMappings.unsaved,undefined);
     await panel.evaluate(()=>render());await expectTheme('dark');await panel.evaluate(()=>loadDashboard());await expectTheme('dark');
     await panel.locator('[data-theme-toggle]').click();await expectTheme('light');
@@ -65,7 +65,7 @@ function fixture(){
     assert.equal(await main.locator('[name=appearanceAccent]').inputValue(),'blue','Failed local appearance edit is retained');
     await main.locator('#settings-retry-save').click();
     await main.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&!state.saveError);
-    assert.deepEqual((await rpc('settings.get')).appearance,{theme:'light',accent:'blue',chartPalette:'classic',chartContrast:'high'});
+    assert.deepEqual((await rpc('settings.get')).appearance,{theme:'light',accent:'blue',chartPalette:'classic',chartContrast:'high',language:'zh-CN'});
     for(const page of [main,panel])await page.waitForFunction(()=>document.documentElement.dataset.accent==='blue');
     await panel.locator('[data-theme-toggle]').click();await expectTheme('dark');
     // Exercise the saved controls against the real core, including every theme/contrast combination.

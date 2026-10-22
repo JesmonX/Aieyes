@@ -21,6 +21,7 @@ mod history_corrections;
 mod host_monitor;
 mod host_sampling;
 pub mod import;
+pub mod localization;
 pub mod metrics;
 pub mod models;
 pub mod monitoring;

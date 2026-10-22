@@ -17,33 +17,35 @@ struct MainWindowView: View {
     @State private var visitedSettings = false
     @State private var guideActive = false
     @State private var workspaceWidth: CGFloat = 1120
-    private let monitoring = [("agent", "Agent 总览", "square.grid.2x2"), ("analysis", "用量分析", "chart.xyaxis.line"), ("servers", "服务器", "server.rack")]
-    private let configuration = [("integrations", "接入与账户", "person.crop.circle"), ("servers", "机器与采集", "desktopcomputer"), ("prices", "模型价格", "dollarsign.circle"), ("wakeups", "定时唤醒", "alarm")]
-    private let preferences = [("appearance", "外观", "paintpalette"), ("desktop", "桌宠与会话", "pawprint"), ("network", "网络代理", "network"), ("refresh", "刷新与历史", "clock.arrow.circlepath"), ("notifications", "通知", "bell"), ("updates", "更新与关于", "info.circle")]
+    private var monitoring: [(String, String, String)] { [("agent", L("Agent 总览"), "square.grid.2x2"), ("analysis", L("用量分析"), "chart.xyaxis.line"), ("servers", L("服务器"), "server.rack")] }
+    private var configuration: [(String, String, String)] { [("integrations", L("接入与账户"), "person.crop.circle"), ("servers", L("机器与采集"), "desktopcomputer"), ("prices", L("模型价格"), "dollarsign.circle"), ("wakeups", L("定时唤醒"), "alarm")] }
+    private var preferences: [(String, String, String)] { [("appearance", L("外观"), "paintpalette"), ("desktop", L("桌宠与会话"), "pawprint"), ("network", L("网络代理"), "network"), ("refresh", L("刷新与历史"), "clock.arrow.circlepath"), ("notifications", L("通知"), "bell"), ("updates", L("更新与关于"), "info.circle")] }
     private var title: String {
-        if model.detailPage == "setup" { return "配置向导" }
-        if model.detailPage != "settings" { return monitoring.first { $0.0 == model.detailPage }?.1 ?? "Agent 总览" }
-        return model.settingsTab == "general" ? preferences.first { $0.0 == model.generalPage }?.1 ?? "外观" : configuration.first { $0.0 == model.settingsTab }?.1 ?? "接入与账户"
+        if model.detailPage == "setup" { return L("配置向导") }
+        if model.detailPage != "settings" { return monitoring.first { $0.0 == model.detailPage }?.1 ?? L("Agent 总览") }
+        return model.settingsTab == "general" ? preferences.first { $0.0 == model.generalPage }?.1 ?? L("外观") : configuration.first { $0.0 == model.settingsTab }?.1 ?? L("接入与账户")
     }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Button { withAnimation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.88)) { collapsed.toggle() } } label: { BrandMark().frame(width: 30, height: 30).frame(width: 34, height: 34).contentShape(Rectangle()) }.buttonStyle(.plain).help(collapsed ? "展开导航" : "收起导航").accessibilityLabel(collapsed ? "展开导航" : "收起导航").accessibilityValue(collapsed ? "已收起" : "已展开")
+                    Button { withAnimation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.88)) { collapsed.toggle() } } label: { BrandMark().frame(width: 30, height: 30).frame(width: 34, height: 34).contentShape(Rectangle()) }.buttonStyle(.plain).help(collapsed ? L("展开导航") : L("收起导航")).accessibilityLabel(collapsed ? L("展开导航") : L("收起导航")).accessibilityValue(collapsed ? L("已收起") : L("已展开"))
                     if !collapsed { Text("Aieyes").font(AppFont.title); Spacer() }
                 }.padding(.horizontal, 12).padding(.top, 18)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
-                        groupLabel("监测")
+                        groupLabel(L("监测"))
                         ForEach(monitoring, id: \.0) { key, title, icon in
                             navigationButton(title, icon: icon, selected: model.detailPage == key) { select(key) }
                         }
-                        groupLabel("配置")
-                        navigationButton("配置向导", icon: "checklist", selected: model.detailPage == "setup") { select("setup") }
+                        groupLabel(L("配置"))
+                        navigationButton(L("配置向导"), icon: "checklist", selected: model.detailPage == "setup") { select("setup") }
                         ForEach(configuration, id: \.0) { key, title, icon in
                             navigationButton(title, icon: icon, selected: model.detailPage == "settings" && model.settingsTab == key) { model.openSettings(.init(category: key)); select("settings") }
                         }
-                        groupLabel("偏好")
+                        groupLabel(L("偏好"))
                         ForEach(preferences, id: \.0) { key, title, icon in
                             navigationButton(title, icon: icon, selected: model.detailPage == "settings" && model.settingsTab == "general" && model.generalPage == key) { model.openSettings(.init(category: "general", section: key)); select("settings") }
                         }
@@ -57,7 +59,7 @@ struct MainWindowView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(title).font(AppFont.title).padding(.horizontal, 22).padding(.vertical, 15)
                 if guideActive && model.detailPage == "settings" {
-                    HStack { Button("配置向导") { select("setup") }; Spacer() }.padding(.horizontal, 22).padding(.bottom, 12)
+                    HStack { Button(L("配置向导")) { select("setup") }; Spacer() }.padding(.horizontal, 22).padding(.bottom, 12)
                 }
                 ZStack {
                     if model.detailPage == "setup" { SetupGuideView(model: model) { guideActive = false; select("agent") } }
@@ -122,7 +124,9 @@ struct PersistentSection<Content: View>: View {
         self.title = title; self.detail = detail; self.tint = tint; self.content = content()
         _expanded = AppStorage(wrappedValue: initiallyExpanded, key)
     }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         DisclosureGroup(isExpanded: $expanded) { content.padding(.top, 8) } label: {
             HStack(spacing: 7) { Circle().fill(tint).frame(width: 7, height: 7); Text(title).font(AppFont.secondary.weight(.medium)); Spacer(minLength: 0); Text(detail).font(AppFont.caption).foregroundStyle(detail.contains("⚠") ? Palette.warn : Color.secondary) }
         }.animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.9), value: expanded)

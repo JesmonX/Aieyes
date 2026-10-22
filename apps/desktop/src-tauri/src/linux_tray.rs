@@ -86,7 +86,7 @@ impl Tray for LinuxTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let mut items = vec![self.item("打开面板", "open-panel", true)];
+        let mut items = vec![self.item(crate::localization::label("打开面板"), "open-panel", true)];
         for row in crate::context_menu::entries(false, self.visible, self.can_hide, self.sampling) {
             if row.action == "separator" {
                 items.push(MenuItem::Separator);

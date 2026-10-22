@@ -31,7 +31,7 @@ import OSLog
         self.automatic = defaults.object(forKey: "updates.automatic") as? Bool ?? true
         super.init()
     }
-    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版本" }
+    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? L("开发版本") }
     var busy: Bool { ["checking", "downloading", "extracting", "installing", "preparing"].contains(phase) }
     func preparationStatus(_ text: String) { message = text }
     var preparationError: String?
@@ -60,7 +60,7 @@ import OSLog
     func start() {
         guard updater == nil else { return }
         guard let key = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String, !key.isEmpty else {
-            message = "此开发构建未配置更新签名公钥"; return
+            message = L("此开发构建未配置更新签名公钥"); return
         }
         let service = SPUUpdater(hostBundle: .main, applicationBundle: .main, userDriver: self, delegate: self)
         service.automaticallyChecksForUpdates = false
@@ -78,19 +78,19 @@ import OSLog
         if automatic && Date().timeIntervalSince1970 - last >= 86400 { check(manual: false) }
     }
     func check(manual: Bool = true) {
-        guard let updater else { phase = "error"; message = "此构建未配置应用内更新，请安装正式发布版本。"; return }
+        guard let updater else { phase = "error"; message = L("此构建未配置应用内更新，请安装正式发布版本。"); return }
         if choice != nil || (busy && phase != "checking") { if manual { present() }; return }
         guard updater.canCheckForUpdates, !busy else { return }
-        guard let feed = originalFeed else { phase = "error"; message = "此构建缺少更新清单地址"; return }
+        guard let feed = originalFeed else { phase = "error"; message = L("此构建缺少更新清单地址"); return }
         cycle += 1; let request = cycle
         interruptedMessage = nil; cycleStarted = Date()
-        self.manual = manual; phase = "checking"; message = "正在检查更新…"
+        self.manual = manual; phase = "checking"; message = L("正在检查更新…")
         defaults.set(Date().timeIntervalSince1970, forKey: "updates.lastCheck")
         deadline?.cancel()
         deadline = Task { [weak self] in
             try? await Task.sleep(for: .seconds(25))
             guard !Task.isCancelled, let self, self.cycle == request, self.phase == "checking" else { return }
-            self.interruptCheck(message: "检查更新超时，请检查应用代理后重试", failed: true)
+            self.interruptCheck(message: L("检查更新超时，请检查应用代理后重试"), failed: true)
         }
         checkTask = Task { [weak self] in
             guard let self else { return }
@@ -107,14 +107,14 @@ import OSLog
     }
     func install() {
         guard let choice, !busy else { return }
-        phase = "preparing"; preparationError = nil; message = "正在准备更新…"
+        phase = "preparing"; preparationError = nil; message = L("正在准备更新…")
         Task {
-            if readyToInstall { guard await prepareInstallation?(true) ?? true else { phase = "available"; message = preparationError ?? "已取消更新准备；后台刷新已恢复。"; finishedInstallationAttempt?(); return } }
+            if readyToInstall { guard await prepareInstallation?(true) ?? true else { phase = "available"; message = preparationError ?? L("已取消更新准备；后台刷新已恢复。"); finishedInstallationAttempt?(); return } }
             if !readyToInstall, let feed = originalFeed {
                 do { try await transport.start(feed: feed) }
                 catch { phase = "available"; message = error.localizedDescription; finishedInstallationAttempt?(); return }
             }
-            self.choice = nil; phase = readyToInstall ? "installing" : "downloading"; message = readyToInstall ? "正在安装并重启…" : "正在下载更新…"; choice(.install)
+            self.choice = nil; phase = readyToInstall ? "installing" : "downloading"; message = readyToInstall ? L("正在安装并重启…") : L("正在下载更新…"); choice(.install)
         }
     }
     func later() {
@@ -123,7 +123,7 @@ import OSLog
         defaults.set(Date().addingTimeInterval(86400).timeIntervalSince1970, forKey: "updates.deferUntil")
         let reply = choice; choice = nil; wantsPresentation = false; reply?(readyToInstall ? .skip : .dismiss); window?.orderOut(nil)
     }
-    func cancelDownload() { interruptCheck(message: "已取消更新", failed: false) }
+    func cancelDownload() { interruptCheck(message: L("已取消更新"), failed: false) }
     private func interruptCheck(message: String, failed: Bool) {
         interruptedMessage = message; cycle += 1
         deadline?.cancel(); checkTask?.cancel(); checkTask = nil
@@ -148,7 +148,7 @@ import OSLog
         wantsPresentation = false
         if window == nil {
             let view = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 510, height: 400), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-            view.title = "Aieyes 更新"; view.isReleasedWhenClosed = false; view.delegate = self
+            view.title = L("Aieyes 更新"); view.isReleasedWhenClosed = false; view.delegate = self
             view.contentMinSize = NSSize(width: 450, height: 300)
             view.contentView = NSHostingView(rootView: UpdateWindowView(updater: self)); view.center(); window = view
         }
@@ -164,11 +164,11 @@ import OSLog
         finishCheck()
         guard interruptedMessage == nil else { reply(.dismiss); return }
         guard !appcastItem.isInformationOnlyUpdate else {
-            phase = "error"; message = "此版本暂未提供可安装的更新包"; reply(.dismiss); return
+            phase = "error"; message = L("此版本暂未提供可安装的更新包"); reply(.dismiss); return
         }
         hasUpdate = true
         latestVersion = appcastItem.displayVersionString; notes = appcastItem.itemDescription ?? ""
-        phase = "available"; message = "发现新版本 v\(latestVersion)"; choice = reply; cancellation = nil
+        phase = "available"; message = L("发现新版本 v{0}" , latestVersion); choice = reply; cancellation = nil
         if !manual && defaults.string(forKey: "updates.deferredVersion") == latestVersion && defaults.double(forKey: "updates.deferUntil") > Date().timeIntervalSince1970 {
             choice = nil; reply(.dismiss); return
         }
@@ -184,9 +184,9 @@ import OSLog
         let reason = (info[SPUNoUpdateFoundReasonKey] as? NSNumber)?.intValue
         if let item = info[SPULatestAppcastItemFoundKey] as? SUAppcastItem { latestVersion = item.displayVersionString }
         switch reason {
-        case 1: phase = "current"; message = "已是最新版本 v\(currentVersion)"
-        case 2: phase = "current"; message = "当前版本 v\(currentVersion) 高于最新稳定版 v\(latestVersion)"
-        default: phase = "error"; message = "没有适用于当前系统的更新：" + error.localizedDescription
+        case 1: phase = "current"; message = L("已是最新版本 v{0}" , currentVersion)
+        case 2: phase = "current"; message = L("当前版本 v{0} 高于最新稳定版 v{1}" , currentVersion, latestVersion)
+        default: phase = "error"; message = L("没有适用于当前系统的更新：") + L(error.localizedDescription)
         }
         acknowledgement()
     }
@@ -197,25 +197,25 @@ import OSLog
     }
     func showDownloadInitiated(cancellation: @escaping () -> Void) {
         guard interruptedMessage == nil else { cancellation(); return }
-        self.cancellation = cancellation; progress.downloaded = 0; progress.expected = 0; phase = "downloading"; message = "正在下载更新…"
+        self.cancellation = cancellation; progress.downloaded = 0; progress.expected = 0; phase = "downloading"; message = L("正在下载更新…")
     }
     func showDownloadDidReceiveExpectedContentLength(_ expectedContentLength: UInt64) { if interruptedMessage == nil { progress.expected = expectedContentLength } }
     func showDownloadDidReceiveData(ofLength length: UInt64) { if interruptedMessage == nil { progress.downloaded += length } }
-    func showDownloadDidStartExtractingUpdate() { guard interruptedMessage == nil else { return }; cancellation = nil; phase = "extracting"; message = "正在校验并解包更新…" }
+    func showDownloadDidStartExtractingUpdate() { guard interruptedMessage == nil else { return }; cancellation = nil; phase = "extracting"; message = L("正在校验并解包更新…") }
     func showExtractionReceivedProgress(_ progress: Double) { }
     func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
         guard interruptedMessage == nil else { reply(.dismiss); return }
         readyToInstall = true
         Task {
-            if await prepareInstallation?(true) ?? true { phase = "installing"; message = "正在安装并重启…"; reply(.install) }
-            else { phase = "available"; message = preparationError ?? "已取消更新准备；后台刷新已恢复。"; finishedInstallationAttempt?(); choice = reply }
+            if await prepareInstallation?(true) ?? true { phase = "installing"; message = L("正在安装并重启…"); reply(.install) }
+            else { phase = "available"; message = preparationError ?? L("已取消更新准备；后台刷新已恢复。"); finishedInstallationAttempt?(); choice = reply }
         }
     }
     func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool, retryTerminatingApplication: @escaping () -> Void) {
-        phase = "installing"; message = applicationTerminated ? "正在安装更新…" : "正在等待应用退出；若已取消退出，请重试重启。"
+        phase = "installing"; message = applicationTerminated ? L("正在安装更新…") : L("正在等待应用退出；若已取消退出，请重试重启。")
         retryTermination = applicationTerminated ? nil : retryTerminatingApplication
     }
-    func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) { hasUpdate = false; phase = "installed"; message = "更新已安装"; acknowledgement() }
+    func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) { hasUpdate = false; phase = "installed"; message = L("更新已安装"); acknowledgement() }
     func dismissUpdateInstallation() { finishedInstallationAttempt?(); readyToInstall = false; choice = nil; cancellation = nil; retryTermination = nil; wantsPresentation = false }
     func showUpdateInFocus() { present() }
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
@@ -229,36 +229,40 @@ import OSLog
 
 struct UpdateSettingsView: View {
     @ObservedObject var updater = AppUpdater.shared
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 10) {
-            Text("当前版本 v\(updater.currentVersion)")
-            Toggle("启动时及每天检查更新", isOn: $updater.automatic)
-            HStack { Button(updater.phase == "checking" ? "检查中…" : "检查更新") { updater.check() }.disabled(updater.busy); if updater.phase == "checking" { Button("取消检查") { updater.cancelDownload() } }; if updater.phase == "available" || (updater.busy && updater.phase != "checking") { Button(updater.busy ? "查看进度" : "查看更新") { updater.check() } } }
+            Text(L("当前版本 v{0}" , updater.currentVersion))
+            Toggle(L("启动时及每天检查更新"), isOn: $updater.automatic)
+            HStack { Button(updater.phase == "checking" ? L("检查中…") : L("检查更新")) { updater.check() }.disabled(updater.busy); if updater.phase == "checking" { Button(L("取消检查")) { updater.cancelDownload() } }; if updater.phase == "available" || (updater.busy && updater.phase != "checking") { Button(updater.busy ? L("查看进度") : L("查看更新")) { updater.check() } } }
             if !updater.message.isEmpty {
-                if updater.phase == "error" { ErrorNotice(message: updater.message, context: "更新未完成") }
-                else { Text(updater.message).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) }
+                if updater.phase == "error" { ErrorNotice(message: updater.message, context: L("更新未完成")) }
+                else { Text(L(updater.message)).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) }
             }
         }.aieyesAccent().font(AppFont.body)
     }
 }
 struct UpdateWindowView: View {
     @ObservedObject var updater: AppUpdater
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 16) {
-            Text("Aieyes 更新").font(AppFont.title)
-            Text("当前版本 v\(updater.currentVersion) → 新版本 v\(updater.latestVersion)").font(AppFont.section)
-            ScrollView { Text(updater.notes.isEmpty ? "此版本包含改进与修复。" : updater.notes).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }.frame(maxHeight: .infinity)
-            if updater.phase == "error" { ErrorNotice(message: updater.message, context: "更新未完成") }
-            else { Text(updater.message).font(AppFont.secondary).foregroundStyle(.secondary) }
+            Text(L("Aieyes 更新")).font(AppFont.title)
+            Text(L("当前版本 v{0} → 新版本 v{1}" , updater.currentVersion, updater.latestVersion)).font(AppFont.section)
+            ScrollView { Text(updater.notes.isEmpty ? L("此版本包含改进与修复。") : updater.notes).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }.frame(maxHeight: .infinity)
+            if updater.phase == "error" { ErrorNotice(message: updater.message, context: L("更新未完成")) }
+            else { Text(L(updater.message)).font(AppFont.secondary).foregroundStyle(.secondary) }
             if updater.phase == "downloading" { UpdateProgressView(progress: updater.progress) }
             HStack {
-                if updater.phase == "downloading" { Button("取消下载") { updater.cancelDownload() } }
+                if updater.phase == "downloading" { Button(L("取消下载")) { updater.cancelDownload() } }
                 Spacer()
-                if updater.phase == "installing" { Button("重试重启") { updater.retryRestart() } }
+                if updater.phase == "installing" { Button(L("重试重启")) { updater.retryRestart() } }
                 else if !updater.busy {
-                    Button("稍后") { updater.later() }.keyboardShortcut(.cancelAction)
-                    if updater.phase == "available" { Button("更新并重启") { updater.install() }.buttonStyle(.aieyesPrimary) }
-                    else { Button("重新检查") { updater.check() } }
+                    Button(L("稍后")) { updater.later() }.keyboardShortcut(.cancelAction)
+                    if updater.phase == "available" { Button(L("更新并重启")) { updater.install() }.buttonStyle(.aieyesPrimary) }
+                    else { Button(L("重新检查")) { updater.check() } }
                 }
             }
         }.aieyesAccent().font(AppFont.body).padding(24)
@@ -267,7 +271,9 @@ struct UpdateWindowView: View {
 
 struct UpdateProgressView: View {
     @ObservedObject var progress: UpdateProgress
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 6) {
             if progress.expected > 0 { ProgressView(value: Double(progress.downloaded), total: Double(max(progress.expected, progress.downloaded))) }
             else { ProgressView().controlSize(.small) }
@@ -278,12 +284,14 @@ struct UpdateProgressView: View {
 
 struct UpdateMenuButton: View {
     @ObservedObject private var updater = AppUpdater.shared
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         Button { updater.check() } label: {
             Image(systemName: "arrow.down.circle").frame(width: 28, height: 28)
                 .overlay(alignment: .topTrailing) { if updater.hasUpdate { Text("!").font(.system(size: 11, weight: .bold)).foregroundStyle(Palette.warn) } }
-        }.help(updater.hasUpdate ? "发现新版本 · 查看更新" : "检查更新")
-            .accessibilityLabel(updater.hasUpdate ? "发现新版本，查看更新" : "检查更新")
+        }.help(updater.hasUpdate ? L("发现新版本 · 查看更新") : L("检查更新"))
+            .accessibilityLabel(updater.hasUpdate ? L("发现新版本，查看更新") : L("检查更新"))
             .disabled(updater.phase == "checking")
     }
 }
@@ -307,12 +315,12 @@ private struct UpdateDraftGuard: ViewModifier {
     @State private var order = ProcessInfo.processInfo.systemUptime
     private func register() {
         AppUpdater.shared.editorPreparations[id] = (order, {
-            guard !saving else { AppUpdater.shared.preparationError = title + "正在保存，请稍后重试"; return false }
+            guard !saving else { AppUpdater.shared.preparationError = title + L("正在保存，请稍后重试"); return false }
             if !dirty { discard(); return true }
-            switch await updateChoice("更新前保存“" + title + "”中的更改？", message: "保存失败时保留输入，并返回对应编辑器。", buttons: ["保存并更新", "放弃更改并更新", "取消"]) {
+            switch await updateChoice(L("更新前保存“") + title + L("”中的更改？"), message: L("保存失败时保留输入，并返回对应编辑器。"), buttons: [L("保存并更新"), L("放弃更改并更新"), L("取消")]) {
             case 0:
                 let saved = await save()
-                if !saved { AppUpdater.shared.preparationError = title + "保存失败，请检查编辑器中的错误提示" }
+                if !saved { AppUpdater.shared.preparationError = title + L("保存失败，请检查编辑器中的错误提示") }
                 return saved
             case 1: discard(); return true
             default: return false
@@ -320,7 +328,7 @@ private struct UpdateDraftGuard: ViewModifier {
         })
     }
     func body(content: Content) -> some View {
-        content.updateOperation(title + "处理中", active: saving).onAppear { register() }.onChange(of: snapshot) { _,_ in register() }.onChange(of: dirty) { _,_ in register() }.onChange(of: saving) { _,_ in register() }.onDisappear { AppUpdater.shared.editorPreparations.removeValue(forKey: id) }
+        content.updateOperation(title + L("处理中"), active: saving).onAppear { register() }.onChange(of: snapshot) { _,_ in register() }.onChange(of: dirty) { _,_ in register() }.onChange(of: saving) { _,_ in register() }.onDisappear { AppUpdater.shared.editorPreparations.removeValue(forKey: id) }
     }
 }
 private struct UpdateOperation: ViewModifier {

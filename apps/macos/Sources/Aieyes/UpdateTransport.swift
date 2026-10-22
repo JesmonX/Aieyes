@@ -38,7 +38,7 @@ import OSLog
             timeout = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(5))
                 guard !Task.isCancelled else { return }
-                self?.stop(error: TransportError.failed("启动更新连接超时，请重试"))
+                self?.stop(error: TransportError.failed(L("启动更新连接超时，请重试")))
             }
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 var buffer = Data()
@@ -57,7 +57,7 @@ import OSLog
                 }
                 Task { @MainActor [weak self] in
                     guard self?.process === p else { return }
-                    self?.stop(error: TransportError.failed("更新连接已断开，请重试"))
+                    self?.stop(error: TransportError.failed(L("更新连接已断开，请重试")))
                 }
             }
         }

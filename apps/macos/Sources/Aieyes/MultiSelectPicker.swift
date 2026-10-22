@@ -23,15 +23,17 @@ struct MultiSelectPicker: View {
     }
     private var count: Int { options.filter { selected.contains($0.id) }.count }
     private var summary: String {
-        if all ?? (!options.isEmpty && count == options.count) { return "全部" }
-        return count == 0 ? "未选择" : "已选 \(count) / \(options.count)"
+        if all ?? (!options.isEmpty && count == options.count) { return L("全部") }
+        return count == 0 ? L("未选择") : L("已选 {0} / {1}" , count, options.count)
     }
     private func apply(_ action: MonitorSelection.Action) {
         let targets = Set(filtered.map(\.id))
         onChange(MonitorSelection.apply(selected, targets: targets, action: action), action == .all && term.isEmpty)
     }
 
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         Button {
             query = ""
             presented.toggle()
@@ -47,12 +49,12 @@ struct MultiSelectPicker: View {
         .accessibilityLabel("\(title)，\(summary)")
         .popover(isPresented: $presented, arrowEdge: .bottom) {
             VStack(spacing: 10) {
-                TextField("搜索", text: $query).textFieldStyle(.aieyes)
-                    .accessibilityLabel("搜索\(title)").focused($searchFocused).onSubmit { }
+                TextField(L("搜索"), text: $query).textFieldStyle(.aieyes)
+                    .accessibilityLabel(L("搜索{0}" , title)).focused($searchFocused).onSubmit { }
                 HStack(spacing: 12) {
-                    Button(term.isEmpty ? "全选" : "全选结果") { apply(.all) }
-                    Button(term.isEmpty ? "清空" : "清空结果") { apply(.clear) }
-                    Button(term.isEmpty ? "反选" : "反选结果") { apply(.invert) }
+                    Button(term.isEmpty ? L("全选") : L("全选结果")) { apply(.all) }
+                    Button(term.isEmpty ? L("清空") : L("清空结果")) { apply(.clear) }
+                    Button(term.isEmpty ? L("反选") : L("反选结果")) { apply(.invert) }
                     Spacer()
                     Text("\(count) / \(options.count)").foregroundStyle(.secondary).monospacedDigit()
                 }.font(AppFont.secondary).buttonStyle(.borderless).disabled(filtered.isEmpty)
@@ -64,11 +66,11 @@ struct MultiSelectPicker: View {
                             })) {
                                 HStack {
                                     Text(option.label).fixedSize(horizontal: false, vertical: true)
-                                    if option.unavailable { Spacer(); Text("暂不可用").font(AppFont.secondary).foregroundStyle(.secondary) }
+                                    if option.unavailable { Spacer(); Text(L("暂不可用")).font(AppFont.secondary).foregroundStyle(.secondary) }
                                 }
                             }.toggleStyle(.checkbox).font(AppFont.secondary).padding(.vertical, 8)
                         }
-                        if filtered.isEmpty { Text("没有匹配项").foregroundStyle(.secondary).padding() }
+                        if filtered.isEmpty { Text(L("没有匹配项")).foregroundStyle(.secondary).padding() }
                     }.padding(.horizontal, 2)
                 }.frame(maxHeight: 270)
             }

@@ -75,8 +75,8 @@ extension AppModel {
                 deploymentSyncRequested = false
                 do {
                     let result: AccountCleanupResult = try await accountEngine.call("accounts.deployments.sync")
-                    deploymentSyncMessage = result.failedTasks?.isEmpty == false ? "配置已保存，部分唤醒部署待同步，可重试。" : nil
-                } catch { deploymentSyncMessage = "配置已保存，唤醒部署待同步：" + error.localizedDescription }
+                    deploymentSyncMessage = result.failedTasks?.isEmpty == false ? L("配置已保存，部分唤醒部署待同步，可重试。") : nil
+                } catch { deploymentSyncMessage = L("配置已保存，唤醒部署待同步：") + L(error.localizedDescription) }
             } while deploymentSyncRequested && !Task.isCancelled
         }
     }
@@ -115,15 +115,15 @@ extension AppModel {
         if !includePaused { return Array(Set(active)).sorted { $0 == "local" && $1 != "local" || ($0 != "local" && $1 != "local" && $0 < $1) } }
         return Array(Set(active + settings.sources.filter { $0.provider == provider }.map { $0.hostId ?? "local" })).sorted { $0 == "local" && $1 != "local" || ($0 != "local" && $1 != "local" && $0 < $1) }
     }
-    func machineName(_ id: String) -> String { id == "local" ? "本机" : settings.hosts.first { $0.id == id }.map { $0.name.isEmpty ? $0.target : $0.name } ?? "已移除设备" }
+    func machineName(_ id: String) -> String { id == "local" ? L("本机") : settings.hosts.first { $0.id == id }.map { $0.name.isEmpty ? $0.target : $0.name } ?? L("已移除设备") }
     func accountDeviceSummary(_ account: AgentAccount, machine: String) -> String {
         let rows = accountStatuses.filter { $0.accountKey == account.key && $0.machineId == machine }
         if let summary = rows.first(where: { $0.identity != nil })?.identitySummary ?? rows.compactMap(\.identitySummary).first { return summary }
         let current = rows.contains { $0.current == true }, credential = rows.contains { $0.credential == true }
         let uncertain = rows.isEmpty || rows.contains { $0.error != nil || $0.current == nil || $0.credential == nil }
-        let loginText = current || credential ? "已登录" : (!rows.isEmpty && rows.allSatisfy { $0.current == false && $0.credential == false } ? "未登录" : "登录待确认")
-        let usageText = current ? "正在使用" : (!rows.isEmpty && rows.allSatisfy { $0.current == false } ? "未使用" : "使用状态待确认")
-        return loginText + " · " + usageText + (uncertain ? " · 待确认" : "")
+        let loginText = current || credential ? L("已登录") : (!rows.isEmpty && rows.allSatisfy { $0.current == false && $0.credential == false } ? L("未登录") : L("登录待确认"))
+        let usageText = current ? L("正在使用") : (!rows.isEmpty && rows.allSatisfy { $0.current == false } ? L("未使用") : L("使用状态待确认"))
+        return loginText + " · " + usageText + (uncertain ? L(" · 待确认") : "")
     }
     func accountDeviceCounts(_ key: String) -> AccountDeviceCounts {
         let provider = settings.accounts.first { $0.key == key }?.provider ?? "codex"
@@ -147,10 +147,10 @@ extension AppModel {
         let work = Task { @MainActor in
             defer { generalSaveTask = nil }
             while !Task.isCancelled {
-                let intervals = [("quota", settingsDraft.refreshSeconds, 5, "额度查询"), ("history", settingsDraft.historyInterval, 10, "日志同步"), ("foreground", settingsDraft.foregroundInterval, 2, "服务器前台监控"), ("background", settingsDraft.serverRefreshSeconds, 2, "服务器后台监控")]
+                let intervals = [("quota", settingsDraft.refreshSeconds, 5, L("额度查询")), ("history", settingsDraft.historyInterval, 10, L("日志同步")), ("foreground", settingsDraft.foregroundInterval, 2, L("服务器前台监控")), ("background", settingsDraft.serverRefreshSeconds, 2, L("服务器后台监控"))]
                 if let (field, _, minimum, label) = intervals.first(where: { !(($0.2)...86400).contains($0.1) }) {
                     settingsValidationField = field
-                    settingsMessage = label + "间隔须为 \(minimum)–86400 秒，输入已保留"
+                    settingsMessage = label + L("间隔须为 {0}–86400 秒，输入已保留" , minimum)
                     return
                 }
                 settingsValidationField = nil
@@ -174,10 +174,10 @@ extension AppModel {
     }
     func persistConfiguration(_ next: Settings, base: Settings? = nil) async throws {
         guard await save(next, base: base) else {
-            settingsMessage = message ?? "保存失败，输入已保留"
-            throw ClientError.message(settingsMessage ?? "保存失败，输入已保留")
+            settingsMessage = message ?? L("保存失败，输入已保留")
+            throw ClientError.message(settingsMessage ?? L("保存失败，输入已保留"))
         }
-        settingsMessage = "已保存 · " + Format.time(Date().timeIntervalSince1970)
+        settingsMessage = L("已保存 · ") + Format.time(Date().timeIntervalSince1970)
         synchronizeAccountDeployments()
         Task { await loadAccountStatuses() }
     }
@@ -190,7 +190,7 @@ extension AppModel {
             var item = host
             if host.authMode == "password" && !password.isEmpty {
                 let result: [String: String] = try await engine.call("hosts.credentials.save", params: ["password": password])
-                guard let reference = result["passwordRef"], !reference.isEmpty else { throw ClientError.message("密码保存失败") }
+                guard let reference = result["passwordRef"], !reference.isEmpty else { throw ClientError.message(L("密码保存失败")) }
                 created = reference
                 item.passwordRef = reference
             }

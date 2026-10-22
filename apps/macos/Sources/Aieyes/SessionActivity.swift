@@ -4,6 +4,7 @@ import Combine
 
 // Only lifecycle metadata is retained; prompts and tool arguments are never displayed.
 enum SessionPhase: String {
+    var label: String { L(rawValue) }
     case idle = "空闲", working = "进行中", thinking = "思考中", tool = "执行工具", complete = "已完成", interrupted = "已中断", unknown = "状态待确认", needsInput = "等待输入", failed = "执行失败"
     var active: Bool { self == .working || self == .thinking || self == .tool || self == .needsInput }
     var color: Color {
@@ -14,7 +15,7 @@ enum SessionPhase: String {
     }
 }
 struct LiveSession: Identifiable, Decodable, Equatable {
-    var provider = "codex", machine = "本机", machineId = "local", sourceId = "", turnId = ""
+    var provider = "codex", machine = L("本机"), machineId = "local", sourceId = "", turnId = ""
     var id: String, source: String, phase: SessionPhase, updatedAt: Date
     init(id: String, source: String, phase: SessionPhase, updatedAt: Date) {
         self.id = id; self.source = source; self.phase = phase; self.updatedAt = updatedAt
@@ -25,7 +26,7 @@ struct LiveSession: Identifiable, Decodable, Equatable {
         id = try row.decode(String.self, forKey: .id)
         source = try row.decode(String.self, forKey: .source)
         provider = try row.decodeIfPresent(String.self, forKey: .provider) ?? "codex"
-        machine = try row.decodeIfPresent(String.self, forKey: .machine) ?? "本机"
+        machine = try row.decodeIfPresent(String.self, forKey: .machine) ?? L("本机")
         machineId = try row.decodeIfPresent(String.self, forKey: .machineId) ?? "local"
         sourceId = try row.decodeIfPresent(String.self, forKey: .sourceId) ?? ""
         turnId = try row.decodeIfPresent(String.self, forKey: .turnId) ?? ""
@@ -40,26 +41,28 @@ struct SessionSourceHealth: Decodable, Identifiable, Equatable {
     var error: String?
     var hooks: String?
     var id: String { machineId + ":" + sourceId }
-    var message: String { error ?? (state == "connecting" ? "正在连接…" : "状态暂不可用") }
+    var message: String { error ?? (state == "connecting" ? L("正在连接…") : L("状态暂不可用")) }
 }
 struct SessionHookStatus: Decodable {
     var sourceId: String, provider: String, machineId: String, configPath: String, state: String
     var error: String?
-    var label: String { ["installed":"已接入", "missing":"等待监测安装", "disabled":"已停用", "error":"接入失败"][state] ?? state }
+    var label: String { ["installed":L("已接入"), "missing":L("等待监测安装"), "disabled":L("已停用"), "error":L("接入失败")][state] ?? state }
 }
 
 struct ActivityIndicator: View {
     var phase: SessionPhase?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.surfaceActive) private var surfaceActive
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         Image(systemName: phase?.symbol ?? "circle.dotted")
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(phase?.color ?? .secondary)
             .symbolEffect(.pulse, options: .repeating, isActive: phase?.active == true && !reduceMotion && surfaceActive)
             .frame(width: 22, height: 22)
             .background((phase?.color ?? .secondary).opacity(0.12), in: Circle())
-            .accessibilityLabel(phase?.rawValue ?? "无活跃会话")
+            .accessibilityLabel(phase?.label ?? L("无活跃会话"))
     }
 }
 // AppKit exposes the same system pulse effect without SwiftUI's per-frame body updates.
@@ -96,11 +99,11 @@ final class MenuActivityImage: NSView {
     func configure(phase: SessionPhase?, playing: Bool) {
         if !initialized || self.phase != phase {
             self.phase = phase; initialized = true
-            icon.image = NSImage(systemSymbolName: phase?.symbol ?? "circle.dotted", accessibilityDescription: phase?.rawValue ?? "无活跃会话")
+            icon.image = NSImage(systemSymbolName: phase?.symbol ?? "circle.dotted", accessibilityDescription: phase?.label ?? L("无活跃会话"))
             colors()
         }
         requested = playing && phase?.active == true; sync()
-        setAccessibilityElement(true); setAccessibilityRole(.image); setAccessibilityLabel(phase?.rawValue ?? "无活跃会话")
+        setAccessibilityElement(true); setAccessibilityRole(.image); setAccessibilityLabel(phase?.label ?? L("无活跃会话"))
     }
     private func colors() {
         let color = NSColor(phase?.color ?? .secondary)
@@ -237,12 +240,14 @@ struct MenuActivityLabel: View {
     @ObservedObject private var status: MenuStatusStore
     init(model: AppModel) { status = model.menuStatus }
     @AppStorage(NativePanelKey.showCount.rawValue) private var showCount = false
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         let value = status.snapshot
         HStack(spacing: 5) {
             BrandMark(template: true).frame(width: 22, height: 22)
             MenuActivityIndicator(phase: value.phase, enabled: value.animationEnabled).frame(width: 22, height: 22)
-            if showCount && value.count > 0 { Text("\(value.count)").monospacedDigit().padding(.horizontal, 5).background(.quaternary, in: Capsule()).accessibilityLabel("\(value.count) 个活跃会话") }
+            if showCount && value.count > 0 { Text("\(value.count)").monospacedDigit().padding(.horizontal, 5).background(.quaternary, in: Capsule()).accessibilityLabel(L("{0} 个活跃会话" , value.count)) }
             if !value.text.isEmpty { Text(value.text).monospacedDigit() }
             if value.samplingCount > 0 {
                 Image(systemName: value.attention ? "pause.circle.fill" : "record.circle")
@@ -265,7 +270,9 @@ struct BrandMark: View {
         image.isTemplate = template
         return image
     }
-    var body: some View { Image(nsImage: template ? Self.monochrome : Self.full).resizable().scaledToFit().accessibilityLabel("Aieyes") }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    var body: some View {
+        let _ = interfaceLanguage; Image(nsImage: template ? Self.monochrome : Self.full).resizable().scaledToFit().accessibilityLabel("Aieyes") }
 }
 
 private struct SurfaceActiveKey: EnvironmentKey { static let defaultValue = true }
@@ -280,7 +287,9 @@ struct SurfaceTimeline<Content: View>: View {
     var interval: TimeInterval
     @ViewBuilder var content: (SurfaceTimeContext) -> Content
     @Environment(\.surfaceActive) private var active
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         if active { TimelineView(.periodic(from: .now, by: interval)) { content(SurfaceTimeContext(date: $0.date)) } }
         else { content(SurfaceTimeContext(date: .now)) }
     }
@@ -293,8 +302,8 @@ struct PetState: Decodable, Equatable {
     var activeCount: Int?
     var phaseCounts: [String: Int]?
     var height: CGFloat { 168 + CGFloat(max(0, label.components(separatedBy: "\n").count - 1)) * 18 }
-    static let idle = PetState(behavior: "idle", label: "空闲", row: 0, frames: 6, frameMs: 100, key: "idle")
-    static let unknown = PetState(behavior: "unknown", label: "状态不可用", row: 6, frames: 6, frameMs: 100, key: "unknown")
+    static var idle: PetState { PetState(behavior: "idle", label: L("空闲"), row: 0, frames: 6, frameMs: 100, key: "idle") }
+    static var unknown: PetState { PetState(behavior: "unknown", label: L("状态不可用"), row: 6, frames: 6, frameMs: 100, key: "unknown") }
     var durations: [Int] {
         if let frameDurationsMs, frameDurationsMs.count == frames, frameDurationsMs.allSatisfy({ $0 > 0 }) { return frameDurationsMs }
         if frameDurationsMs?.isEmpty != false, CoreContract.petFrameDurations.indices.contains(row), CoreContract.petFrameDurations[row].count == frames { return CoreContract.petFrameDurations[row] }

@@ -1,0 +1,4 @@
+# Preserve the server's existing Hysteria listener on UDP 443.
+servers :443 {
+    protocols h1 h2
+}

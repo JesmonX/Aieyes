@@ -9,7 +9,7 @@ pub(crate) fn entries(pet: bool, visible: bool, can_hide: bool, sampling: bool) 
     let mut rows = Vec::new();
     let mut add = |label, action, enabled| {
         rows.push(Entry {
-            label,
+            label: crate::localization::label(label),
             action,
             enabled,
         })

@@ -41,7 +41,9 @@ import Combine
         model = AppModel()
         appearanceController = AppAppearanceController(popover: popover)
         model.$settings.map(\.appearance).removeDuplicates().sink { [weak self] appearance in
+            AieyesLocale.apply(appearance?.language)
             self?.appearanceController?.apply(theme: appearance?.theme ?? "system", accent: appearance?.accent ?? "indigo", chartPalette: appearance?.chartPalette ?? "classic", chartContrast: appearance?.chartContrast ?? "high")
+            self?.refreshLanguage()
         }.store(in: &cancellables)
         AppUpdater.shared.prepareInstallation = { [weak self] _ in
             guard let self else { return false }
@@ -193,8 +195,28 @@ import Combine
             self?.titleUpdatePending = false; self?.updateTitle()
         }
     }
+    private func refreshLanguage() {
+        measuredMenu = nil
+        scheduleTitleUpdate()
+        accountSwitchWindow?.title = L("切换账户")
+        samplingWindow?.title = L("管理采样")
+        quotaOrderWindow?.title = L("调整账户顺序")
+        panelAccountsWindow?.title = L("面板显示账户")
+        for (key, window) in estimateWindows {
+            if let quota = model.dashboard.quotas.first(where: { key == $0.id + ":credits" || key == $0.id + ":quota" }) {
+                window.title = quota.name + (key.hasSuffix(":credits") ? L(" · credit 价值") : L(" · 额度估值"))
+            }
+        }
+        for item in detailWindow?.toolbar?.items ?? [] {
+            if let button = item.view as? NSPopUpButton {
+                let labels = [L("刷新"), L("同步记录"), L("刷新额度"), L("同步价格"), L("刷新服务器")]
+                for (index, entry) in button.itemArray.enumerated() where index < labels.count { entry.title = labels[index] }
+                item.label = L("刷新"); button.setAccessibilityLabel(L("刷新选项"))
+            }
+        }
+    }
     private func updateTitle() {
-        guard let button = statusItem.button, let label = statusLabel else { return }
+        guard let button = statusItem?.button, let label = statusLabel else { return }
         let scale = button.window?.backingScaleFactor ?? 2
         let snapshot = model.menuStatus.snapshot
         let showCount = UserDefaults.standard.bool(forKey: NativePanelKey.showCount.rawValue)
@@ -207,7 +229,7 @@ import Combine
         let width = statusItem.length
         let frame = NSRect(x: 0, y: 0, width: width, height: button.bounds.height)
         if label.frame != frame { label.frame = frame }
-        var tooltip = "Aieyes · 今日全部数据 · " + model.sessionSummary + (model.sessionPhase.map { " · " + $0.rawValue } ?? "")
+        var tooltip = L("Aieyes · 今日全部数据 · ") + model.sessionSummary + (model.sessionPhase.map { " · " + $0.label } ?? "")
         if !model.runningEstimates.isEmpty { tooltip += " · " + model.samplingSummary }
         if button.toolTip != tooltip { button.toolTip = tooltip; button.setAccessibilityLabel(tooltip) }
         if let window = detailWindow, window.isDocumentEdited != model.settingsDirty { window.isDocumentEdited = model.settingsDirty }
@@ -233,9 +255,9 @@ import Combine
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         let item = NSToolbarItem(itemIdentifier: identifier)
         if identifier.rawValue == "refresh" {
-            let button = NSPopUpButton(frame: .zero, pullsDown: true); button.addItem(withTitle: "刷新")
-            for (index, title) in ["同步记录", "刷新额度", "同步价格", "刷新服务器"].enumerated() { let entry = NSMenuItem(title: title, action: #selector(toolbarRefresh(_:)), keyEquivalent: ""); entry.tag = index; entry.target = self; button.menu?.addItem(entry) }
-            button.setAccessibilityLabel("刷新选项"); item.view = button; item.label = "刷新"
+            let button = NSPopUpButton(frame: .zero, pullsDown: true); button.addItem(withTitle: L("刷新"))
+            for (index, title) in [L("同步记录"), L("刷新额度"), L("同步价格"), L("刷新服务器")].enumerated() { let entry = NSMenuItem(title: title, action: #selector(toolbarRefresh(_:)), keyEquivalent: ""); entry.tag = index; entry.target = self; button.menu?.addItem(entry) }
+            button.setAccessibilityLabel(L("刷新选项")); item.view = button; item.label = L("刷新")
         }
         return item
     }
@@ -253,10 +275,10 @@ import Combine
         func blockers() -> [String] { Array(Set(model.updateBlockers + Array(AppUpdater.shared.operationBlockers.values))).sorted() }
         while !blockers().isEmpty {
             for task in blockers() where started[task] == nil { started[task] = Date() }
-            let tasks = blockers().map { $0 + "（已等待 " + String(Int(Date().timeIntervalSince(started[$0] ?? Date()))) + " 秒）" }.joined(separator: "、")
-            AppUpdater.shared.preparationStatus("等待当前任务完成：" + tasks)
+            let tasks = blockers().map { $0 + L("（已等待 ") + String(Int(Date().timeIntervalSince(started[$0] ?? Date()))) + L(" 秒）") }.joined(separator: "、")
+            AppUpdater.shared.preparationStatus(L("等待当前任务完成：") + tasks)
             if Date() >= deadline {
-                guard await updateChoice("更新仍在等待", message: tasks + "。可取消等待，回到对应页面处理。", buttons: ["继续等待", "取消并返回"]) == 0 else { return false }
+                guard await updateChoice(L("更新仍在等待"), message: tasks + L("。可取消等待，回到对应页面处理。"), buttons: [L("继续等待"), L("取消并返回")]) == 0 else { return false }
                 deadline = Date().addingTimeInterval(30)
             }
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return false }
@@ -270,8 +292,8 @@ import Combine
         }
         guard model.settingsDirty else { completed = await quiesceForUpdate(); return completed }
         openSettings()
-        let response = await updateChoice("更新前保存配置更改？", message: "更新会重启 Aieyes。采样记录将保留。", buttons: ["保存并更新", "放弃更改并更新", "取消"])
-        if response == 0 { completed = await model.saveSettingsDraft(); if completed { completed = await quiesceForUpdate() }; if !completed { AppUpdater.shared.preparationError = model.settingsMessage ?? "设置保存失败，请检查设置页" }; return completed }
+        let response = await updateChoice(L("更新前保存配置更改？"), message: L("更新会重启 Aieyes。采样记录将保留。"), buttons: [L("保存并更新"), L("放弃更改并更新"), L("取消")])
+        if response == 0 { completed = await model.saveSettingsDraft(); if completed { completed = await quiesceForUpdate() }; if !completed { AppUpdater.shared.preparationError = model.settingsMessage ?? L("设置保存失败，请检查设置页") }; return completed }
         if response == 1 { model.discardSettingsDraft(); completed = await quiesceForUpdate(); return completed }
         return false
     }
@@ -279,10 +301,10 @@ import Combine
         var blockers = await EngineClient.coordinateUpdate("operations.prepareUpdate")
         var deadline = Date().addingTimeInterval(30)
         while !blockers.isEmpty {
-            AppUpdater.shared.preparationStatus("正在完成账户或配置操作：" + Array(Set(blockers)).sorted().joined(separator: "、"))
+            AppUpdater.shared.preparationStatus(L("正在完成账户或配置操作：") + Array(Set(blockers)).sorted().joined(separator: "、"))
             do { try await Task.sleep(for: .milliseconds(250)) } catch { _ = await EngineClient.coordinateUpdate("operations.resume"); return false }
             if Date() >= deadline {
-                guard await updateChoice("更新仍在等待", message: blockers.joined(separator: "、"), buttons: ["继续等待", "取消并返回"]) == 0 else { _ = await EngineClient.coordinateUpdate("operations.resume"); return false }
+                guard await updateChoice(L("更新仍在等待"), message: blockers.joined(separator: "、"), buttons: [L("继续等待"), L("取消并返回")]) == 0 else { _ = await EngineClient.coordinateUpdate("operations.resume"); return false }
                 deadline = Date().addingTimeInterval(30)
             }
             blockers = await EngineClient.coordinateUpdate("operations.status")
@@ -294,18 +316,18 @@ import Combine
         popover.performClose(nil)
         let window = estimateWindows[key] ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 530, height: 600), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         if estimateWindows[key] == nil {
-            window.title = quota.name + (credits ? " · credit 价值" : " · 额度估值"); window.isReleasedWhenClosed = false
+            window.title = quota.name + (credits ? L(" · credit 价值") : L(" · 额度估值")); window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: 490, height: 360)
             window.center(); estimateWindows[key] = window
         }
-        window.title = quota.name + (credits ? " · credit 价值" : " · 额度估值")
+        window.title = quota.name + (credits ? L(" · credit 价值") : L(" · 额度估值"))
         window.contentView = NSHostingView(rootView: QuotaEstimateView(model: model, quota: quota, onClose: { [weak window] in window?.close() }, credits: credits, initialGroup: group))
         fitToVisibleScreen(window); showWindow(window)
     }
     private func openAccountSwitch(_ key: String) {
         popover.performClose(nil)
         let window = accountSwitchWindow ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 470), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        window.title = "切换账户"; window.isReleasedWhenClosed = false
+        window.title = L("切换账户"); window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: AccountTargetsView(model: model, accountKey: key))
         if accountSwitchWindow == nil { window.center() }
         accountSwitchWindow = window; fitToVisibleScreen(window); showWindow(window)
@@ -314,7 +336,7 @@ import Combine
         popover.performClose(nil)
         if samplingWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 530, height: 400), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-            window.title = "管理采样"; window.isReleasedWhenClosed = false
+            window.title = L("管理采样"); window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: 470, height: 260)
             window.contentView = NSHostingView(rootView: SamplingManagementView(model: model))
             window.center(); samplingWindow = window
@@ -325,7 +347,7 @@ import Combine
         popover.performClose(nil)
         if quotaOrderWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 488, height: 430), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = "调整账户顺序"; window.isReleasedWhenClosed = false; window.center(); quotaOrderWindow = window
+            window.title = L("调整账户顺序"); window.isReleasedWhenClosed = false; window.center(); quotaOrderWindow = window
         }
         guard let window = quotaOrderWindow else { return }
         window.contentView = NSHostingView(rootView: QuotaOrderView(model: model, onClose: { [weak window] in window?.close() }))
@@ -335,7 +357,7 @@ import Combine
         popover.performClose(nil)
         if panelAccountsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 488, height: 528), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = "面板显示账户"; window.isReleasedWhenClosed = false; window.center(); panelAccountsWindow = window
+            window.title = L("面板显示账户"); window.isReleasedWhenClosed = false; window.center(); panelAccountsWindow = window
         }
         guard let window = panelAccountsWindow else { return }
         window.contentView = NSHostingView(rootView: PanelAccountsView(model: model, onClose: { [weak window] in window?.close() }))
@@ -356,11 +378,11 @@ import Combine
         guard !model.settingsSaving, !model.repricing, sender.attachedSheet == nil else { return false }
         guard model.settingsDirty else { return true }
         let alert = NSAlert()
-        alert.messageText = "保存配置更改？"
-        alert.informativeText = "关闭设置前，保存全部配置，或放弃本次未保存的更改。Aieyes 将继续在菜单栏运行。"
-        alert.addButton(withTitle: "保存")
-        alert.addButton(withTitle: "放弃更改")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = L("保存配置更改？")
+        alert.informativeText = L("关闭设置前，保存全部配置，或放弃本次未保存的更改。Aieyes 将继续在菜单栏运行。")
+        alert.addButton(withTitle: L("保存"))
+        alert.addButton(withTitle: L("放弃更改"))
+        alert.addButton(withTitle: L("取消"))
         alert.buttons[2].keyEquivalent = "\u{1b}"
         alert.beginSheetModal(for: sender) { [weak self, weak sender] response in
             guard let self, let sender else { return }
@@ -400,11 +422,11 @@ import Combine
         openSettings()
         guard let window = detailWindow, window.attachedSheet == nil else { return .terminateCancel }
         let alert = NSAlert()
-        alert.messageText = "退出前保存配置更改？"
-        alert.informativeText = "保存全部配置，或放弃本次未保存的更改。"
-        alert.addButton(withTitle: "保存并退出")
-        alert.addButton(withTitle: "放弃更改并退出")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = L("退出前保存配置更改？")
+        alert.informativeText = L("保存全部配置，或放弃本次未保存的更改。")
+        alert.addButton(withTitle: L("保存并退出"))
+        alert.addButton(withTitle: L("放弃更改并退出"))
+        alert.addButton(withTitle: L("取消"))
         alert.buttons[2].keyEquivalent = "\u{1b}"
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self else { sender.reply(toApplicationShouldTerminate: false); return }
@@ -436,7 +458,7 @@ import Combine
         try await Task.sleep(nanoseconds: 200_000_000)
         view.layoutSubtreeIfNeeded()
         view.displayIfNeeded()
-        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw ClientError.message("界面渲染失败") }
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw ClientError.message(L("界面渲染失败")) }
         view.cacheDisplay(in: view.bounds, to: bitmap)
         if let data = bitmap.representation(using: .png, properties: [:]) { try data.write(to: url) }
     }
@@ -594,13 +616,13 @@ import Combine
                 try await capture(RootView(model: model).environment(\.previewAccessibleSurfaces, true), size: NSSize(width: 450, height: 720), dark: dark, to: root.appendingPathComponent("increased-contrast-\(dark ? "dark" : "light").png"))
                 for (kind, id) in [("host", model.settings.hosts.first?.id), ("source", model.settings.sources.first?.id), ("account", model.settings.accounts.first?.key)] {
                     if let id, let request = model.removalRequest(kind, id: id) {
-                        try await capture(DangerConfirmation(title: request.title, explanation: request.explanation, affected: request.affected, confirmLabel: "确认移除", cancel: {}, confirm: {}), size: NSSize(width: 510, height: 340), dark: dark, to: root.appendingPathComponent("confirm-\(kind)-\(dark ? "dark" : "light").png"))
+                        try await capture(DangerConfirmation(title: request.title, explanation: request.explanation, affected: request.affected, confirmLabel: L("确认移除"), cancel: {}, confirm: {}), size: NSSize(width: 510, height: 340), dark: dark, to: root.appendingPathComponent("confirm-\(kind)-\(dark ? "dark" : "light").png"))
                     }
                 }
             }
             try await captureSetupGuide(to: root)
             for dark in [false, true] {
-                let preview = SSHConfigResult(path: "~/.ssh/config", hosts: [.init(alias: "gpu-lab", hostName: "10.0.0.1", user: "alice", port: 2200), .init(alias: "dev-server", hostName: "dev.example", user: nil, port: nil)], warnings: ["Match 条件未执行；预览地址仅供参考，连接仍使用原 SSH 配置"])
+                let preview = SSHConfigResult(path: "~/.ssh/config", hosts: [.init(alias: "gpu-lab", hostName: "10.0.0.1", user: "alice", port: 2200), .init(alias: "dev-server", hostName: "dev.example", user: nil, port: nil)], warnings: [L("Match 条件未执行；预览地址仅供参考，连接仍使用原 SSH 配置")])
                 try await capture(SSHConfigImportView(model: model, preview: preview), size: NSSize(width: 650, height: 600), dark: dark, to: root.appendingPathComponent("ssh-import-\(dark ? "dark" : "light").png"))
             }
             model.settingsTab = "prices"

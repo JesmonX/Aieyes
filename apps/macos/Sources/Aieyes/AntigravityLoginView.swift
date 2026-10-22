@@ -24,25 +24,27 @@ struct AntigravityLoginView: View {
         }
         catch { self.error = error.localizedDescription }
     }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 18) {
-            HStack { Text("Antigravity 登录").font(AppFont.title); Spacer(); Button("完成") { Task { if active { await call("cancel") }; dismiss() } }.disabled(sending) }
+            HStack { Text(L("Antigravity 登录")).font(AppFont.title); Spacer(); Button(L("完成")) { Task { if active { await call("cancel") }; dismiss() } }.disabled(sending) }
             Text(source.name).font(AppFont.section)
-            Text("读取机器现有登录，或通过浏览器授权。凭据保存在登录机器。").font(AppFont.secondary).foregroundStyle(.secondary)
-            HStack { if active { ProgressView().controlSize(.small) }; Text(status?.message ?? "准备检查…").textSelection(.enabled) }
+            Text(L("读取机器现有登录，或通过浏览器授权。凭据保存在登录机器。")).font(AppFont.secondary).foregroundStyle(.secondary)
+            HStack { if active { ProgressView().controlSize(.small) }; Text(L(status?.message ?? L("准备检查…"))).textSelection(.enabled) }
             if let identity = status?.identity { Text(identity.summary).textSelection(.enabled).foregroundStyle(status?.current == false ? Palette.warn : Color.primary) }
-            if let note = status?.metadataError { Text(note).font(AppFont.secondary).foregroundStyle(.secondary) }
+            if let note = status?.metadataError { Text(L(note)).font(AppFont.secondary).foregroundStyle(.secondary) }
             if let raw = status?.authUrl, let url = URL(string: raw) {
-                HStack { Link("打开授权网页", destination: url); Button("复制授权网址") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(raw, forType: .string) } }
-                SecureField("浏览器返回的授权码", text: $code)
-                Button("提交授权码") { let value = code; code = ""; Task { await call("submitCode", extra: ["code":value]) } }.disabled(code.isEmpty || sending)
+                HStack { Link(L("打开授权网页"), destination: url); Button(L("复制授权网址")) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(raw, forType: .string) } }
+                SecureField(L("浏览器返回的授权码"), text: $code)
+                Button(L("提交授权码")) { let value = code; code = ""; Task { await call("submitCode", extra: ["code":value]) } }.disabled(code.isEmpty || sending)
             }
-            if status?.workspaceConfirmationRequired == true { Button("确认临时目录") { Task { await call("confirmWorkspace") } }.disabled(sending) }
+            if status?.workspaceConfirmationRequired == true { Button(L("确认临时目录")) { Task { await call("confirmWorkspace") } }.disabled(sending) }
             if let error { ErrorNotice(message: error) }
             HStack {
-                if status != nil { Button("验证登录") { Task { await call("verify") } }.disabled(sending || status?.phase == "verifying" || status?.phase == "checking") }
-                if !active || status == nil { Button("重新登录 / 检查") { Task { await call("start") } }.disabled(sending) }
-                if active, status != nil { Button("取消授权") { Task { await call("cancel") } }.disabled(sending) }
+                if status != nil { Button(L("验证登录")) { Task { await call("verify") } }.disabled(sending || status?.phase == "verifying" || status?.phase == "checking") }
+                if !active || status == nil { Button(L("重新登录 / 检查")) { Task { await call("start") } }.disabled(sending) }
+                if active, status != nil { Button(L("取消授权")) { Task { await call("cancel") } }.disabled(sending) }
             }
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogAgyWidth).textFieldStyle(.aieyes).interactiveDismissDisabled(active || sending)
         .task {

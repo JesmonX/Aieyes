@@ -158,7 +158,9 @@ private struct AieyesButtonBody: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
     private var tint: Color? { configuration.role == .destructive ? Palette.danger : emphasized ? Palette.accent : nil }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         configuration.label
             .font(.system(size: DesignTokens.fontSecondary))
             .foregroundStyle(configuration.role == .destructive ? Palette.danger : Color.primary)
@@ -181,7 +183,9 @@ struct AieyesTextFieldStyle: TextFieldStyle {
 private struct AieyesStyledField<Content: View>: View {
     let content: Content
     @State private var editing = false
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         content.textFieldStyle(.plain)
             .padding(.horizontal, DesignTokens.controlPaddingX).padding(.vertical, 3)
             .frame(minHeight: DesignTokens.inputHeight)

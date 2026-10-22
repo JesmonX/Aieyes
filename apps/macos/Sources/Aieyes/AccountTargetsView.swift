@@ -52,29 +52,31 @@ struct AccountTargetsView: View {
     @State private var loginSource: AgentSource?
     @State private var intent = "login"
     private var account: AgentAccount? { model.settings.accounts.first { $0.key == accountKey && $0.archived != true } }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Text("切换为此账户 · " + (account?.name ?? "账户")).font(AppFont.title); Spacer(); Button("重新检查") { Task { await targets.load(model, accountKey: accountKey) } }.disabled(!targets.checking.isEmpty) }
+            HStack { Text(L("切换为此账户 · ") + (account?.name ?? L("账户"))).font(AppFont.title); Spacer(); Button(L("重新检查")) { Task { await targets.load(model, accountKey: accountKey) } }.disabled(!targets.checking.isEmpty) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(targets.errors, id: \.self) { Text($0).foregroundStyle(Palette.warn).textSelection(.enabled) }
                     if targets.rows.isEmpty {
-                        Text("暂无可登录或切换的机器。请启用 Agent、选择机器并开启目录采集。").foregroundStyle(.secondary)
-                        Button("打开机器与采集设置") { model.openSettings(.init(provider: "codex", section: "machines")) }
+                        Text(L("暂无可登录或切换的机器。请启用 Agent、选择机器并开启目录采集。")).foregroundStyle(.secondary)
+                        Button(L("打开机器与采集设置")) { model.openSettings(.init(provider: "codex", section: "machines")) }
                     }
                     ForEach(targets.rows) { target in
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(target.machineName).font(AppFont.section)
                                 Text(target.path).font(AppFont.secondary).textSelection(.enabled)
-                                Text(target.reason ?? (target.current == true ? "正在使用" : target.credential == true ? "已登录，尚未选用" : target.credential == false ? "未登录" : "登录状态待确认")).foregroundStyle(.secondary)
-                                if let reason = target.draftReason { Text(reason).font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                                Text(L(target.reason ?? (target.current == true ? L("正在使用") : target.credential == true ? L("已登录，尚未选用") : target.credential == false ? L("未登录") : L("登录状态待确认")))).foregroundStyle(.secondary)
+                                if let reason = target.draftReason { Text(L(reason)).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                             }
                             Spacer()
                             if targets.checking.contains(target.sourceId) { ProgressView().controlSize(.small) }
                             if target.nativeConnectionId != nil { NativeScanButton(model: model, provider: target.provider) }
                             else if target.current != true || target.bound == false || target.canDraft == false {
-                                Button(target.bound == false ? "完成关联" : target.canSwitch ? "切换" : target.credential == false ? "登录" : "检查 / 登录") {
+                                Button(target.bound == false ? L("完成关联") : target.canSwitch ? L("切换") : target.credential == false ? L("登录") : L("检查 / 登录")) {
                                     intent = target.canSwitch ? "switch" : "login"
                                     loginSource = model.settings.sources.first { $0.id == target.sourceId }
                                 }.disabled(targets.checking.contains(target.sourceId) && !target.canSwitch)

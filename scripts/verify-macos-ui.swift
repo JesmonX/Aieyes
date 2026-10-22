@@ -10,6 +10,13 @@ import Foundation
         var panels: [Panel], windows: [Windows]
     }
     @MainActor static func main() async throws {
+        func waitFor(_ description: String, _ condition: () -> Bool) async throws {
+            let deadline = ProcessInfo.processInfo.systemUptime + 5
+            while !condition() && ProcessInfo.processInfo.systemUptime < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            precondition(condition(), "Timed out waiting for \(description)")
+        }
         let fixture = try JSONDecoder().decode(SemanticsFixture.self, from: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/ui-semantics.json")))
         for row in fixture.panels {
             let preference = try row.rawPreference ?? String(data: JSONEncoder().encode(row.preference), encoding: .utf8)!
@@ -160,8 +167,12 @@ for line in sys.stdin:
     elif method=='settings.patch' and req['params']['settings']['refreshSeconds'] < 5: response['error']=dict(message='刷新间隔无效')
     elif method.startswith('quotaEstimates.'):
         import time
+        time.sleep(float(os.environ.get('AIEYES_UI_PROGRESS_DELAY', '0')))
         print(json.dumps(dict(jsonrpc='2.0',method='operations.progress',params=dict(stage='同步来源 · 测试来源'))),flush=True)
-        time.sleep(0.15)
+        release=root+'/release-'+method.replace('.', '-')
+        deadline=time.monotonic()+10
+        while not os.path.exists(release) and time.monotonic()<deadline: time.sleep(.01)
+        assert os.path.exists(release), 'test did not acknowledge estimate progress'
         estimate=json.load(open(root+'/estimate.json'))
         dashboard=json.load(open(root+'/dashboard.json'))
         if method=='quotaEstimates.restart':
@@ -438,20 +449,22 @@ for line in sys.stdin:
         var excluded = estimate; excluded.rollingExcludedReason = "缺少账户联合证据"; excluded.fiveHourValue = 999
         precondition(EstimatePresentation.canonical([excluded]).isEmpty, "Retained unverified values never become live fallbacks")
         let sampling = Task { await model.performEstimate("start", accountKey: estimate.accountKey, params: ["accountKey":estimate.accountKey]) }
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await waitFor("start progress") { model.estimateStages[estimate.accountKey] == "同步来源 · 测试来源" }
         precondition(model.estimateBusy.contains(estimate.accountKey))
         precondition(model.estimateStages[estimate.accountKey] == "同步来源 · 测试来源")
         let duplicate = await model.performEstimate("start", accountKey: estimate.accountKey, params: [:])
         precondition(!duplicate)
         model.setWindowVisible(false, window: "panel")
+        try Data().write(to: root.appendingPathComponent("release-quotaEstimates-start"))
         let started = await sampling.value
         precondition(started && model.estimateBusy.isEmpty && !model.isPinned)
         precondition(model.runningEstimates.count == 1 && model.samplingSummary.contains("采样中"))
         model.selectedAccount = "deepseek:fixture"
         precondition(model.runningEstimates.count == 1, "Menu sampling badge must not depend on usage filters")
         let restarting = Task { await model.performEstimate("restart", accountKey: estimate.accountKey, params: ["id": estimate.id]) }
-        try await Task.sleep(nanoseconds: 30_000_000)
+        try await waitFor("restart progress") { model.estimateStages[estimate.accountKey] == "同步来源 · 测试来源" }
         precondition(model.estimateStages[estimate.accountKey] == "同步来源 · 测试来源", "Actions addressed by estimate ID must route progress to the record's account")
+        try Data().write(to: root.appendingPathComponent("release-quotaEstimates-restart"))
         let failedRestart = await restarting.value
         precondition(!failedRestart && model.samplingNeedsAttention && model.estimateErrors[estimate.accountKey] == "模拟采样同步失败")
         precondition(!model.panelVisible && model.estimateBusy.isEmpty)

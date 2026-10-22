@@ -6,7 +6,9 @@ struct NativeCreditsView: View {
     var compact = false
     var modelNames: [String: String] = [:]
     private var displayed: Aggregate { usage.displayCredits }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         if displayed.hasNativeCredits { content }
     }
     private var content: some View {
@@ -17,9 +19,9 @@ struct NativeCreditsView: View {
                     if let row = displayed.nativeCredits?[provider] { Text(Format.provider(provider) + "：" + row.detail).font(AppFont.caption).foregroundStyle(.secondary).textSelection(.enabled) }
                 }
             }
-            Text("来自原生计量记录；不代表已扣费金额或账户剩余额度。" + (displayed.total == 0 ? "原生记录没有可用的 Token 统计，API 等价成本暂不可计算。" : "")).font(AppFont.caption).foregroundStyle(.secondary)
+            Text(L("来自原生计量记录；不代表已扣费金额或账户剩余额度。") + (displayed.total == 0 ? L("原生记录没有可用的 Token 统计，API 等价成本暂不可计算。") : "")).font(AppFont.caption).foregroundStyle(.secondary)
             if !compact && models.contains(where: \.hasDisplayCredits) {
-                DisclosureGroup("按模型查看 Credits") {
+                DisclosureGroup(L("按模型查看 Credits")) {
                     ForEach(models.map(\.displayCredits).filter(\.hasNativeCredits)) { row in Text((modelNames[row.key] ?? row.key) + " · " + row.nativeCreditText).font(AppFont.secondary).textSelection(.enabled) }
                 }.font(AppFont.secondary)
             }
@@ -31,14 +33,16 @@ struct PricingWarning: View {
     var action: () -> Void
     @FocusState private var focused: Bool
     @State private var showingHint = false
-    private let hint = "计价未完成：部分模型缺少价格，点击设置模型价格。"
+    private var hint: String { L("计价未完成：部分模型缺少价格，点击设置模型价格。") }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         Button { showingHint = false; action() } label: {
             Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.warn)
         }.buttonStyle(.plain).focused($focused).help(hint)
-            .accessibilityLabel("计价未完成，设置模型价格")
+            .accessibilityLabel(L("计价未完成，设置模型价格"))
             .onChange(of: focused) { _, value in showingHint = value }
-            .popover(isPresented: $showingHint) { Text(hint).font(AppFont.secondary).padding(12).frame(maxWidth: 260) }
+            .popover(isPresented: $showingHint) { Text(L(hint)).font(AppFont.secondary).padding(12).frame(maxWidth: 260) }
     }
 }
 
@@ -54,7 +58,9 @@ struct ProviderMark: View {
             if let image = NSImage(contentsOf: url) { result[key] = image }
         }
     }()
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         Group {
             if let asset = (colorScheme == .dark ? CoreContract.providerDarkIcons[provider] : nil) ?? CoreContract.providerIcons[provider], let image = Self.images[asset] {
                 Image(nsImage: image).resizable().renderingMode(CoreContract.monochromeIcons.contains(provider) ? .template : .original).scaledToFit()
@@ -65,32 +71,40 @@ struct ProviderMark: View {
 struct ProviderIdentity: View {
     var provider: String
     var markSize: CGFloat = DesignTokens.providerMarkSize
-    var body: some View { HStack(spacing: 5) { ProviderMark(provider: provider, size: markSize); Text(Format.provider(provider)) } }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    var body: some View {
+        let _ = interfaceLanguage; HStack(spacing: 5) { ProviderMark(provider: provider, size: markSize); Text(Format.provider(provider)) } }
 }
 struct SubscriptionBadge: View {
     var plan: String
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         Text(Format.subscription(plan)).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).lineLimit(1)
             .padding(.horizontal, 6).padding(.vertical, 3)
             .foregroundStyle(Palette.accent).background(Palette.accent.opacity(0.12), in: Capsule())
-            .help(plan).accessibilityLabel("订阅 " + Format.subscription(plan))
+            .help(plan).accessibilityLabel(L("订阅 ") + Format.subscription(plan))
     }
 }
 struct CreditBalanceLabel: View {
     var balance: CreditsBalance?
     var estimate: QuotaEstimate?
     var compact = false
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         HStack(spacing: 4) {
-            Label("余额", systemImage: "c.circle").foregroundStyle(Palette.balanceBlue)
-            Text(compact ? Format.creditPrimary(balance) : String(Format.creditBalance(balance, estimate: estimate).dropFirst(3)))
+            Label(L("余额"), systemImage: "c.circle").foregroundStyle(Palette.balanceBlue)
+            Text(compact ? Format.creditPrimary(balance) : String(Format.creditBalance(balance, estimate: estimate).dropFirst(L("余额 ").count)))
                 .monospacedDigit().lineLimit(compact ? 1 : nil)
         }.font(AppFont.secondary).help(Format.creditBalance(balance, estimate: estimate))
     }
 }
 struct QuotaResetLabel: View {
     var window: QuotaWindow
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         SurfaceTimeline(interval: 30) { context in
             Text(Format.quotaReset(window, now: context.date)).font(AppFont.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
@@ -137,14 +151,16 @@ struct EstimateEntry: View {
         let rolling = latest?.samplingMode == "rolling" ? (latest?.calculationNote ?? "") + "\n" : ""
         let lines: [String] = entries.map { entry in
             let amount = Format.money(entry.value)
-            let historical = entry.historical ? "历史采样 · " : ""
+            let historical = entry.historical ? L("历史采样 · ") : ""
             let date = Format.date(entry.record.checkpointAt)
             return "\(entry.label) ≈ \(amount) USD · \(historical)\(date)"
         }
         let visibility = credits ? "" : "\n" + EstimatePresentation.visibility(quota, records: records, group: group).help
         return rolling + lines.joined(separator: "\n") + visibility
     }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 3) {
             Button(action: action) {
                 HStack(spacing: 5) {
@@ -154,11 +170,11 @@ struct EstimateEntry: View {
                     Image(systemName: "chevron.right")
                 }.font(.system(size: DesignTokens.fontEntry)).frame(minHeight: 30).contentShape(Rectangle())
             }.buttonStyle(.plain).foregroundStyle(Palette.accent).help(help).accessibilityLabel(label + "，" + help)
-            if latest?.samplingMode == "rolling" { Text("滚动估值 · " + String(latest?.sampleCount ?? 0) + " 个有效片段").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).help(help) }
-            if entries.contains(where: { $0.record.originalEstimateId != nil }) { Text("已修正").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary) }
-            if entries.contains(where: \.historical) { Text("历史采样").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).help(help) }
+            if latest?.samplingMode == "rolling" { Text(L("滚动估值 · ") + String(latest?.sampleCount ?? 0) + L(" 个有效片段")).font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).help(help) }
+            if entries.contains(where: { $0.record.originalEstimateId != nil }) { Text(L("已修正")).font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary) }
+            if entries.contains(where: \.historical) { Text(L("历史采样")).font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).help(help) }
             if let latest, !latest.hasValue || latest.status == "pending" {
-                Text("最新采样 · " + latest.statusLabel + " · " + latest.issueLabel).font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(L("最新采样 · ") + latest.statusLabel + " · " + latest.issueLabel).font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }

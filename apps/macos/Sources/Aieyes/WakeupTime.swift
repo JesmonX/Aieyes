@@ -8,12 +8,12 @@ enum WakeupTime {
         var approximate = false
         var label: String {
             if let date {
-                return "本地 " + date.formatted(date: .abbreviated, time: .shortened) + (approximate ? "（按当前偏移估算）" : "")
+                return L("本地 ") + date.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(AieyesLocale.locale)) + (approximate ? L("（按当前偏移估算）") : "")
             }
             switch status {
-            case .pending: return "目标时区待读取"
-            case .invalidTime: return "请输入 HH:mm"
-            default: return "时区换算待确认，以部署状态为准"
+            case .pending: return L("目标时区待读取")
+            case .invalidTime: return L("请输入 HH:mm")
+            default: return L("时区换算待确认，以部署状态为准")
             }
         }
     }

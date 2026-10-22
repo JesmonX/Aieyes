@@ -25,6 +25,10 @@ jobs:
         with:
           node-version: '24'
       - uses: Swatinem/rust-cache@v2
+      - name: Localization catalogs and source coverage
+        run: |
+          python scripts/sync-localizations.py --check
+          python scripts/check-localizations.py
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Windows CLI stdin forwarding regression

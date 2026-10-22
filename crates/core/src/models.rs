@@ -440,6 +440,7 @@ impl Default for Settings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Appearance {
+    pub language: String,
     pub theme: String,
     pub accent: String,
     pub chart_palette: String,
@@ -448,6 +449,7 @@ pub struct Appearance {
 impl Default for Appearance {
     fn default() -> Self {
         Self {
+            language: "zh-CN".into(),
             theme: "system".into(),
             accent: "indigo".into(),
             chart_palette: "classic".into(),
@@ -458,6 +460,7 @@ impl Default for Appearance {
 
 impl Settings {
     pub fn migrate(&mut self) {
+        self.appearance.language = crate::localization::normalize(&self.appearance.language).into();
         if self.version < 2 {
             for source in &self.sources {
                 if !source.account_id.is_empty()

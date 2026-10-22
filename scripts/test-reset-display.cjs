@@ -1,6 +1,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const sandbox={window:{},Date,localStorage:{getItem(){return null;},setItem(){}}};
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../apps/desktop/web/i18n.js'),'utf8'),sandbox);
 vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../apps/desktop/web/contracts.js'),'utf8'),sandbox);
 vm.runInContext(fs.readFileSync(path.resolve(__dirname,'../apps/desktop/web/ui-state.js'),'utf8'),sandbox);
 const fixture=require('./fixtures/reset-display.json');

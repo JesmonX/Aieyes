@@ -2,7 +2,7 @@
 
 ## 建议架构
 
-2026-10-03 实现进度：共享核心先集中在 `crates/core` 内按模块分层。macOS 外壳已实现；Windows/Linux Tauri 外壳已通过原生 CI 编译与安装包生成。下述多 crate 目录为后续拆分目标。当前能力与未完成项以 [README](../README.md) 为准。
+2026-10-03 实现进度：共享核心先集中在 `crates/core` 内按模块分层。macOS 外壳已实现；Windows/Linux Tauri 外壳已通过原生 CI 编译与安装包生成。下述多 crate 目录为后续拆分目标。当前能力与未完成项以 [开发与验证说明](development.md) 为准。
 
 macOS：SwiftUI + AppKit，原生状态栏、弹出面板、设置与详情窗口。菜单栏用 AppKit 精细管理锚点、焦点和固定窗口行为；统计页面使用原生图表与视图。
 

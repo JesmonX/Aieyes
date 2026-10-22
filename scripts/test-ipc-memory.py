@@ -91,7 +91,7 @@ def main():
             source = source[:source.index('struct Acknowledgement:')]
             swift = root/(label+'.swift'); swift.write_text(source+STUBS+boundary+HARNESS)
             executable = root/label; report = root/(label+'.json')
-            subprocess.run(['swiftc','-parse-as-library','-module-cache-path',str(root/'module-cache'),str(swift),'-o',str(executable)],check=True)
+            subprocess.run(['swiftc',str(ROOT/'apps/macos/Sources/Aieyes/Localization.swift'),str(ROOT/'apps/macos/Sources/Aieyes/LocalizationCatalog.swift'),'-parse-as-library','-module-cache-path',str(root/'module-cache'),str(swift),'-o',str(executable)],check=True)
             subprocess.run([str(executable),str(report),str(args.calls)],env={**os.environ,'AIEYES_CORE_PATH':str(echo)},check=True,timeout=120)
             reports[label] = json.loads(report.read_text())
             samples = reports[label]['samples']

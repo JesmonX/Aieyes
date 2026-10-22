@@ -52,57 +52,59 @@ struct CodexAccountsView: View {
             return account.profileRefs.contains(reference) || !model.settings.accounts.contains { $0.profileRefs.contains(reference) }
         }
     }
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
+        let _ = interfaceLanguage;
         Form {
-            Section(intent == "switch" ? "切换账户" : "Codex 登录") {
-                Text(intent == "switch" ? "选择目标账户后，检查并确认切换。" : account.map { "在所选机器登录「" + $0.name + "」，请使用同一个账户。" } ?? "登录成功后自动添加账户，默认以邮箱命名；已有账户会自动识别。").foregroundStyle(.secondary)
-                Text("切换会改变机器当前使用的账户。").foregroundStyle(.secondary)
-                Picker("运行位置", selection: $sourceID) { Text("请选择来源").tag(""); ForEach(sources) { Text(model.machineName($0.hostId ?? "local") + " · " + $0.displayLocation).tag($0.id).help($0.path) } }.disabled(busy || operation != nil)
-                if sources.isEmpty { Text("暂无可用运行位置。请启用 Codex、选择机器并开启目录采集。").foregroundStyle(.secondary); Button("机器与采集设置") { model.openSettings(.init(provider: "codex", section: "machines")); dismiss() } }
+            Section(intent == "switch" ? L("切换账户") : L("Codex 登录")) {
+                Text(intent == "switch" ? L("选择目标账户后，检查并确认切换。") : account.map { L("在所选机器登录「") + $0.name + L("」，请使用同一个账户。") } ?? L("登录成功后自动添加账户，默认以邮箱命名；已有账户会自动识别。")).foregroundStyle(.secondary)
+                Text(L("切换会改变机器当前使用的账户。")).foregroundStyle(.secondary)
+                Picker(L("运行位置"), selection: $sourceID) { Text(L("请选择来源")).tag(""); ForEach(sources) { Text(model.machineName($0.hostId ?? "local") + " · " + $0.displayLocation).tag($0.id).help($0.path) } }.disabled(busy || operation != nil)
+                if sources.isEmpty { Text(L("暂无可用运行位置。请启用 Codex、选择机器并开启目录采集。")).foregroundStyle(.secondary); Button(L("机器与采集设置")) { model.openSettings(.init(provider: "codex", section: "machines")); dismiss() } }
                 if let source { Text(source.path).font(AppFont.secondary).textSelection(.enabled) }
-                if let error { HStack { ErrorNotice(message: error); Button("重试读取") { perform { if let id = switchedProfileID { await refreshAfterSwitch(profileID: id) } else { try await refresh() } } }.disabled(busy) } }
-                if let notice { Text(notice).foregroundStyle(Palette.ok) }
+                if let error { HStack { ErrorNotice(message: error); Button(L("重试读取")) { perform { if let id = switchedProfileID { await refreshAfterSwitch(profileID: id) } else { try await refresh() } } }.disabled(busy) } }
+                if let notice { Text(L(notice)).foregroundStyle(Palette.ok) }
                 if busy { ProgressView().controlSize(.small) }
                 if intent == "login" { HStack {
-                    Button("读取当前登录账户") { perform { try await ensureManaged(); let _: Acknowledgement = try await call("adopt", ["accountId":accountID]); try await settingsChanged(); try await refresh() } }
-                    Button(account == nil ? "登录新账户" : "登录此账户") { reauthID = nil; loginSheet = true }
+                    Button(L("读取当前登录账户")) { perform { try await ensureManaged(); let _: Acknowledgement = try await call("adopt", ["accountId":accountID]); try await settingsChanged(); try await refresh() } }
+                    Button(account == nil ? L("登录新账户") : L("登录此账户")) { reauthID = nil; loginSheet = true }
 
                 }.disabled(busy || source == nil || operation != nil) }
-                if let info { Text("\(info.version ?? "CLI 版本未知") · 认证存储 \(info.storageMode) · \(info.processes.count) 个相关进程").font(AppFont.secondary).foregroundStyle(.secondary) }
+                if let info { Text(L("{0} · 认证存储 {1} · {2} 个相关进程" , info.version ?? L("CLI 版本未知"), info.storageMode, info.processes.count)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 if let info, info.cliAvailable == false {
-                    Text(info.cliError ?? "Codex CLI 暂不可用").foregroundStyle(Palette.warn).textSelection(.enabled)
-                    if let binary = info.resolvedBinary { Text("检查的程序：" + binary).font(AppFont.secondary).textSelection(.enabled) }
-                    Button("机器与 CLI 设置") { model.openSettings(.init(provider: "codex", section: "machines")) }
-                    Text("进程检测与 CLI 可调用性分别检查；已有登录档案仍可关联。").font(AppFont.secondary).foregroundStyle(.secondary)
+                    Text(info.cliError ?? L("Codex CLI 暂不可用")).foregroundStyle(Palette.warn).textSelection(.enabled)
+                    if let binary = info.resolvedBinary { Text(L("检查的程序：") + binary).font(AppFont.secondary).textSelection(.enabled) }
+                    Button(L("机器与 CLI 设置")) { model.openSettings(.init(provider: "codex", section: "machines")) }
+                    Text(L("进程检测与 CLI 可调用性分别检查；已有登录档案仍可关联。")).font(AppFont.secondary).foregroundStyle(.secondary)
                 }
             }
             ForEach(visibleProfiles) { profile in
                 Section {
-                    HStack { Text(profile.name).font(AppFont.section); if profile.current == true { Text("当前日常账户").foregroundStyle(.secondary) } }
+                    HStack { Text(profile.name).font(AppFont.section); if profile.current == true { Text(L("当前日常账户")).foregroundStyle(.secondary) } }
                     Text("\(profile.identity.email) · \(profile.identity.plan)").font(AppFont.secondary).textSelection(.enabled)
                     HStack {
                         if intent == "login" && !model.settings.accounts.contains(where: { $0.profileRefs.contains((source?.codexHomeId ?? "") + ":" + profile.id) }) {
-                            Button("添加此账户") { perform { let _: Acknowledgement = try await call("profiles.bind", ["profileId":profile.id, "accountId":accountID]); try await settingsChanged(); notice = "账户已添加" } }
+                            Button(L("添加此账户")) { perform { let _: Acknowledgement = try await call("profiles.bind", ["profileId":profile.id, "accountId":accountID]); try await settingsChanged(); notice = L("账户已添加") } }
                         }
-                        if intent == "login" { Button("重新登录") { reauthID = profile.id; loginSheet = true } }
+                        if intent == "login" { Button(L("重新登录")) { reauthID = profile.id; loginSheet = true } }
                         if profile.current != true {
-                            if intent == "switch" || targetAccountID != nil { Button("切换到此账户") { perform { await prepareSwitch(profile) } } }
-                            if intent == "login" { Button("移除", role: .destructive) { removeProfile = profile } }
+                            if intent == "switch" || targetAccountID != nil { Button(L("切换到此账户")) { perform { await prepareSwitch(profile) } } }
+                            if intent == "login" { Button(L("移除"), role: .destructive) { removeProfile = profile } }
                         }
                     }.disabled(busy || operation != nil || source == nil)
                 }
             }
             if let operation {
-                Section("等待授权") {
-                    if let code = operation.userCode { HStack { Text("设备码：" + code).font(AppFont.section).textSelection(.enabled); Button("复制设备码") { copy(code) } } }
-                    if let url = operation.authUrl { HStack { Button("打开登录页面") { perform { let _: Acknowledgement = try await call("openUrl", ["url":url]) } }; Button("复制登录链接") { copy(url) } } }
-                    else { Text("正在准备登录…") }
-                    Button("取消登录") { perform { let _: Acknowledgement = try await loginCall("login.cancel", ["operationId":operation.operationId]) } }
-                    Text("请在浏览器完成授权。登录最多等待 10 分钟。").foregroundStyle(.secondary)
+                Section(L("等待授权")) {
+                    if let code = operation.userCode { HStack { Text(L("设备码：") + code).font(AppFont.section).textSelection(.enabled); Button(L("复制设备码")) { copy(code) } } }
+                    if let url = operation.authUrl { HStack { Button(L("打开登录页面")) { perform { let _: Acknowledgement = try await call("openUrl", ["url":url]) } }; Button(L("复制登录链接")) { copy(url) } } }
+                    else { Text(L("正在准备登录…")) }
+                    Button(L("取消登录")) { perform { let _: Acknowledgement = try await loginCall("login.cancel", ["operationId":operation.operationId]) } }
+                    Text(L("请在浏览器完成授权。登录最多等待 10 分钟。")).foregroundStyle(.secondary)
                 }
             }
         }.formStyle(.grouped).aieyesAccent()
-        .updateOperation("Codex 账户操作", active: busy)
+        .updateOperation(L("Codex 账户操作"), active: busy)
         .onChange(of: busy) { _, value in onBusyChanged(value) }
         .onChange(of: sources.map(\.id)) { _, _ in if source == nil && operation == nil { sourceID = "" } }
         .task {
@@ -128,8 +130,8 @@ struct CodexAccountsView: View {
                     let result: CodexOperation = try await loginCall("login.status", ["operationId":id, "accountId":accountID])
                     if ["succeeded","failed","cancelled"].contains(result.status) {
                         operation = nil; UserDefaults.standard.removeObject(forKey:"codexLogin.operation")
-                        if result.status == "succeeded" { notice = result.accountArchived == true ? "登录已保存，该账户已归档，可在账户页恢复。" : result.quotaEnabled == false ? "登录成功，该账户的额度查询已暂停。" : "登录成功，已启用此账户的额度查询。"; try await settingsChanged(); try await refresh() }
-                        else { error = result.error ?? "登录已结束" }; break
+                        if result.status == "succeeded" { notice = result.accountArchived == true ? L("登录已保存，该账户已归档，可在账户页恢复。") : result.quotaEnabled == false ? L("登录成功，该账户的额度查询已暂停。") : L("登录成功，已启用此账户的额度查询。"); try await settingsChanged(); try await refresh() }
+                        else { error = result.error ?? L("登录已结束") }; break
                     }
                     operation = result
                 } catch { self.error = error.localizedDescription }
@@ -139,10 +141,10 @@ struct CodexAccountsView: View {
         .sheet(isPresented: $switchSheet, onDismiss: { prepared = nil; switchTarget = nil; switchError = nil }) { switchConfirmation }
         .sheet(isPresented:$loginSheet) {
             VStack(alignment:.leading, spacing:16) {
-                Text(reauthID == nil ? "添加 Codex 账户" : "重新登录原账户").font(AppFont.section)
-                Text("默认以邮箱命名，可在账户设置中修改。").foregroundStyle(.secondary)
+                Text(reauthID == nil ? L("添加 Codex 账户") : L("重新登录原账户")).font(AppFont.section)
+                Text(L("默认以邮箱命名，可在账户设置中修改。")).foregroundStyle(.secondary)
                 if let error { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
-                HStack { Button("取消") { loginSheet = false }; Spacer(); Button("开始登录") {
+                HStack { Button(L("取消")) { loginSheet = false }; Spacer(); Button(L("开始登录")) {
                     perform {
                         try await ensureManaged()
                         var params: [String:Any] = ["deviceCode":source?.hostId != nil]
@@ -155,7 +157,7 @@ struct CodexAccountsView: View {
             }.padding(DesignTokens.dialogPadding).frame(width:450).interactiveDismissDisabled(busy)
         }
         .sheet(item:$removeProfile) { profile in
-            DangerConfirmation(title:"移除账户档案？",explanation:"删除此位置保存的登录凭据，历史记录保留。",affected:[profile.name],confirmLabel:"确认移除",cancel:{removeProfile = nil},confirm:{removeProfile = nil;perform { let _: Acknowledgement = try await call("profiles.remove",["profileId":profile.id]);try await settingsChanged();try await refresh() }})
+            DangerConfirmation(title:L("移除账户档案？"),explanation:L("删除此位置保存的登录凭据，历史记录保留。"),affected:[profile.name],confirmLabel:L("确认移除"),cancel:{removeProfile = nil},confirm:{removeProfile = nil;perform { let _: Acknowledgement = try await call("profiles.remove",["profileId":profile.id]);try await settingsChanged();try await refresh() }})
         }
     }
     private func call<T: Decodable>(_ method: String, _ parameters: [String:Any] = [:]) async throws -> T {
@@ -176,39 +178,39 @@ struct CodexAccountsView: View {
     }
     private var switchConfirmation: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("确认切换账户").font(AppFont.title)
-            Text((info?.profiles.first(where: { $0.current == true })?.name ?? "当前登录") + " → " + (switchTarget?.name ?? "目标账户")).font(AppFont.section)
+            Text(L("确认切换账户")).font(AppFont.title)
+            Text((info?.profiles.first(where: { $0.current == true })?.name ?? L("当前登录")) + " → " + (switchTarget?.name ?? L("目标账户"))).font(AppFont.section)
             if let source { Text(source.name + " · " + source.path).font(AppFont.secondary).textSelection(.enabled) }
-            Text("切换账户将关闭此设备上使用登录账户的 Codex 和 ChatGPT 进程及应用；已确认使用独立 API 凭据的实例及其辅助进程会保留。请先保存工作。").foregroundStyle(Palette.warn)
+            Text(L("切换账户将关闭此设备上使用登录账户的 Codex 和 ChatGPT 进程及应用；已确认使用独立 API 凭据的实例及其辅助进程会保留。请先保存工作。")).foregroundStyle(Palette.warn)
             if let switchError { ErrorNotice(message: switchError).foregroundStyle(Palette.warn).textSelection(.enabled) }
-            if busy { HStack { ProgressView().controlSize(.small); Text(prepared == nil ? "正在检查…" : "正在切换…") } }
+            if busy { HStack { ProgressView().controlSize(.small); Text(prepared == nil ? L("正在检查…") : L("正在切换…")) } }
             if let prepared {
                 if let preserved = prepared.preservedProcesses, !preserved.isEmpty {
-                    Text("将保留 \(preserved.count) 个使用独立 API 凭据的进程（含辅助进程）。").foregroundStyle(.secondary)
+                    Text(L("将保留 {0} 个使用独立 API 凭据的进程（含辅助进程）。" , preserved.count)).foregroundStyle(.secondary)
                 }
                 if (prepared.processes ?? []).contains(where: { !$0.canClose }) {
-                    Text("暂时无法切换，请先处理以下进程，再重新检查。").foregroundStyle(Palette.warn)
+                    Text(L("暂时无法切换，请先处理以下进程，再重新检查。")).foregroundStyle(Palette.warn)
                 } else {
-                    Text((prepared.processes ?? []).isEmpty ? "没有需要关闭的 Codex 或 ChatGPT 进程。" : "确认后将关闭以下进程及应用。")
+                    Text((prepared.processes ?? []).isEmpty ? L("没有需要关闭的 Codex 或 ChatGPT 进程。") : L("确认后将关闭以下进程及应用。"))
                 }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(prepared.processes ?? []) { process in
                             VStack(alignment: .leading, spacing: 3) {
                                 Text("\(process.name) · PID \(process.pid)")
-                                if let parent = process.parentPid { Text("父进程 PID \(parent)").font(AppFont.secondary).foregroundStyle(.secondary) }
-                                if !process.canClose { Text(process.blockingReason ?? "无法确认归属，请手动关闭后重新检查").foregroundStyle(Palette.warn) }
+                                if let parent = process.parentPid { Text(L("父进程 PID {0}" , parent)).font(AppFont.secondary).foregroundStyle(.secondary) }
+                                if !process.canClose { Text(process.blockingReason ?? L("无法确认归属，请手动关闭后重新检查")).foregroundStyle(Palette.warn) }
                             }
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.frame(maxHeight: 210)
             }
-            Text("切换后请按需手动重新打开 Codex 或 ChatGPT 并恢复会话。").foregroundStyle(.secondary)
+            Text(L("切换后请按需手动重新打开 Codex 或 ChatGPT 并恢复会话。")).foregroundStyle(.secondary)
             HStack {
-                Button("取消") { switchSheet = false }.keyboardShortcut(.cancelAction)
-                Button("重新检查") { if let target = switchTarget { perform { await prepareSwitch(target) } } }
+                Button(L("取消")) { switchSheet = false }.keyboardShortcut(.cancelAction)
+                Button(L("重新检查")) { if let target = switchTarget { perform { await prepareSwitch(target) } } }
                 Spacer()
-                Button((prepared?.processes ?? []).isEmpty ? "确认切换" : "关闭并切换") { perform { await commitSwitch() } }
+                Button((prepared?.processes ?? []).isEmpty ? L("确认切换") : L("关闭并切换")) { perform { await commitSwitch() } }
                     .buttonStyle(.aieyesPrimary)
                     .disabled(prepared == nil || (prepared?.processes ?? []).contains { !$0.canClose })
             }.disabled(busy)
@@ -227,7 +229,7 @@ struct CodexAccountsView: View {
         guard let prepared, let target = switchTarget, switchSourceID == sourceID else { return }
         do {
             let result: CodexOperation = try await call("switch.commit", ["operationId":prepared.operationId, "closeProcesses":!(prepared.processes ?? []).isEmpty])
-            guard result.status == "succeeded" else { throw ClientError.message(result.error ?? "切换尚未完成，请重新检查") }
+            guard result.status == "succeeded" else { throw ClientError.message(result.error ?? L("切换尚未完成，请重新检查")) }
             self.prepared = nil; switchedProfileID = target.id; switchSheet = false
             switchSettingsPending = result.accountId != nil; switchWarning = result.statusWarning
             await refreshAfterSwitch(profileID: target.id)
@@ -243,15 +245,15 @@ struct CodexAccountsView: View {
             let current = info?.profiles.first { $0.id == profileID }?.current == true
             let updated = await model.refreshCodexAccountStatuses(sourceID: sourceID, using: engine)
             if current {
-                notice = "账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话"
-                if !updated { error = "账户已切换，设备状态刷新失败，请重试读取。" }
+                notice = L("账户已切换，请按需重新打开 Codex 或 ChatGPT 并恢复会话")
+                if !updated { error = L("账户已切换，设备状态刷新失败，请重试读取。") }
                 else if let switchWarning { error = switchWarning }
             } else {
-                notice = nil; error = "当前登录与目标账户不一致，请重新检查。"
+                notice = nil; error = L("当前登录与目标账户不一致，请重新检查。")
             }
         } catch {
-            notice = "切换已提交，当前账户待确认。"
-            self.error = "状态读取失败：" + error.localizedDescription
+            notice = L("切换已提交，当前账户待确认。")
+            self.error = L("状态读取失败：") + L(error.localizedDescription)
         }
     }
 
@@ -264,7 +266,7 @@ struct CodexAccountsView: View {
     }
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
-        if NSPasteboard.general.setString(text, forType: .string) { notice = "已复制" } else { error = "复制失败，请重试" }
+        if NSPasteboard.general.setString(text, forType: .string) { notice = L("已复制") } else { error = L("复制失败，请重试") }
     }
     private func perform(_ action: @escaping @MainActor () async throws -> Void) {
         guard !busy else { return }; busy = true; error = nil; notice = nil

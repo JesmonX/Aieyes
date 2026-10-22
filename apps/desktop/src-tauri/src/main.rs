@@ -3,6 +3,7 @@ mod context_menu;
 mod desktop;
 #[cfg(target_os = "linux")]
 mod linux_tray;
+mod localization;
 #[cfg(target_os = "windows")]
 mod material;
 #[cfg(target_os = "windows")]
@@ -39,15 +40,15 @@ async fn select_local_path(
         } else {
             initial.parent().unwrap_or(std::path::Path::new("."))
         };
-        let dialog = app
-            .dialog()
-            .file()
-            .set_directory(folder)
-            .set_title(if directory {
-                "选择数据目录"
-            } else {
-                "选择本机文件"
-            });
+        let dialog =
+            app.dialog()
+                .file()
+                .set_directory(folder)
+                .set_title(crate::localization::label(if directory {
+                    "选择数据目录"
+                } else {
+                    "选择本机文件"
+                }));
         let selected = if directory {
             dialog.blocking_pick_folder()
         } else {
