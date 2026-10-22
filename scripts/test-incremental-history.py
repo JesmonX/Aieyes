@@ -41,19 +41,23 @@ def native_rows(frames):
 
 class PiHistoryTests(unittest.TestCase):
     def test_bad_json_and_usage_retry_without_blocking_other_files(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=pathlib.Path(directory);bad=root/'bad.jsonl';healthy=root/'healthy.jsonl'
-            bad.write_text(record(1)+'BROKEN_PRIVATE\n'+record(2));healthy.write_text(record(3))
-            first=collect(root)
-            self.assertTrue(first[-1]['partial']);self.assertNotIn('PRIVATE',json.dumps(first))
-            self.assertEqual({e['id'] for e in events(first)},{'1','3'})
-            saved=cursors(first)
-            retry=collect(root,cursors=saved)
-            self.assertTrue(retry[-1]['partial']);self.assertEqual(events(retry),[])
-            self.assertEqual(cursors(retry)[str(bad)]['offset'],len(record(1).encode()))
-            bad.write_text(record(1)+record(2))
-            repaired=collect(root,cursors={**saved,**cursors(retry)})
-            self.assertFalse(repaired[-1]['partial']);self.assertIn('2',{e['id'] for e in events(repaired)})
+        for newline in ('\n', '\r\n'):
+            with self.subTest(newline=repr(newline)), tempfile.TemporaryDirectory() as directory:
+                root=pathlib.Path(directory);bad=root/'bad.jsonl';healthy=root/'healthy.jsonl'
+                prefix=record(1).replace('\n',newline).encode('utf-8')
+                suffix=record(2).replace('\n',newline).encode('utf-8')
+                bad.write_bytes(prefix+('BROKEN_PRIVATE'+newline).encode('utf-8')+suffix)
+                healthy.write_bytes(record(3).replace('\n',newline).encode('utf-8'))
+                first=collect(root)
+                self.assertTrue(first[-1]['partial']);self.assertNotIn('PRIVATE',json.dumps(first))
+                self.assertEqual({e['id'] for e in events(first)},{'1','3'})
+                saved=cursors(first)
+                retry=collect(root,cursors=saved)
+                self.assertTrue(retry[-1]['partial']);self.assertEqual(events(retry),[])
+                self.assertEqual(cursors(retry)[str(bad)]['offset'],len(prefix))
+                bad.write_bytes(prefix+suffix)
+                repaired=collect(root,cursors={**saved,**cursors(retry)})
+                self.assertFalse(repaired[-1]['partial']);self.assertIn('2',{e['id'] for e in events(repaired)})
         for invalid in [dict(inputTokens=20,outputTokens=4,inputTokensDetails=['PRIVATE']),
                         dict(prompt_tokens=20,completion_tokens=4,prompt_tokens_details=dict(cached_tokens=21)),
                         dict(input_tokens=20,output_tokens=4,cache_read_input_tokens=10,total_tokens=24)]:

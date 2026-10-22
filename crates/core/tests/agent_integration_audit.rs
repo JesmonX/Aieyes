@@ -349,7 +349,11 @@ fn mixed_opencode_tables_keep_independent_usage_compaction_and_idle() {
 fn replaced_file_and_repaired_bad_line_are_retried_without_losing_other_files() {
     let root = tempfile::tempdir().unwrap();
     let (engine, source, settings) = setup(root.path(), "pi");
-    let path = Path::new(&source.path).join("sessions/project/log.jsonl");
+    // Use the same native separators as directory discovery and cursor keys.
+    let path = Path::new(&source.path)
+        .join("sessions")
+        .join("project")
+        .join("log.jsonl");
     let header = json!({"type":"session","id":"session","padding":"x".repeat(160)});
     let row = |id: &str| json!({"type":"message","id":id,"timestamp":stamp(now()*1000),"message":{"role":"assistant","model":"test","usage":{"input":10,"output":5}}});
     let first = row("first");
@@ -379,14 +383,14 @@ fn replaced_file_and_repaired_bad_line_are_retried_without_losing_other_files() 
     let scan = import::scan(&engine.store, &settings, &source).unwrap();
     assert_eq!(scan["newEvents"], 1);
     assert_eq!(scan["partial"], true);
-    assert!(
+    assert_eq!(
         engine
             .store
             .cursor(&source.id, &path.to_string_lossy())
             .unwrap()
-            .unwrap()
-            .1
-            < fs::metadata(&path).unwrap().len()
+            .expect("the scanner must save the discovered file's cursor")
+            .1,
+        format!("{header}\n").len() as u64
     );
     write(&path, &[header, repaired, other]);
     assert_eq!(
