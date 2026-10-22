@@ -52,6 +52,15 @@ dashboard["dayModels"] = [dict(day=day["key"], model=key, usage=usage(int(day["t
 dashboard["sources"] = [dict(source, status=dict(updatedAt=STAMP)) for source in settings["sources"]]
 for record in dashboard["quotaEstimates"] + dashboard["creditEstimates"]:
     record.update(sourceNames=["Personal workspace"], calculationNote="Rolling estimate · 12 observed quota windows", totalTokens=2840000, pricedTokens=2840000, cost=48.76)
+for record in dashboard["quotaEstimates"]:
+    if record["accountKey"] == "codex:codex":
+        record.update(fiveHourValue=7.1, weeklyValue=43.2, weeklyDirectValue=43.2, weeklyRatioValue=43.2,
+                      cost=.852, totalTokens=50000, pricedTokens=50000)
+        record["capacity"].update(ratio=43.2/7.1, weeklyPercent=.852/43.2*100)
+for record in dashboard["creditEstimates"]:
+    if record["accountKey"] == "codex:codex":
+        record.update(valuePer1000=40, cost=.4, totalTokens=25000, pricedTokens=25000,
+                      weeklyDirectValue=None, weeklyRatioValue=None)
 for row in data["wakeups"]:
     row["task"].update(name="Morning workspace", times=["08:30", "13:30"], model="gpt-5.1-codex", effort="medium")
     row["deployment"].update(task=row["task"], target="Local device", timezone="UTC+08:00")

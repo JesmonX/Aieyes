@@ -15,6 +15,8 @@ node scripts/website/test.cjs
 
 输出位于 `dist/website`。测试使用桌面项目已有的 Playwright，检查中英页面、全部图片、README 本地链接、平台切换、放大与焦点恢复、移动端菜单、FAQ、锚点和窄屏布局；视觉验收截图位于 `.local/website/qa`。可用本地静态服务器预览此目录。
 
+触控检查覆盖 320、360、390、430px 手机宽度、768px 平板及 844 × 390 横屏，验证至少 44px 的操作区域、功能标签可见性、桌宠与说明不重叠，以及图片弹窗和菜单在矮屏内完整显示。安装 Playwright 的 WebKit 后，可运行 `AIEYES_WEBSITE_BROWSER=webkit node scripts/website/test.cjs` 复核另一浏览器引擎。
+
 部署后可使用 `AIEYES_WEBSITE_ORIGIN=https://aieyes.2h3ngy4n.space node scripts/website/test.cjs` 对正式域名运行同一套浏览器检查，覆盖线上资源与 CSP 下的交互。
 
 ## 重建展示图
@@ -31,6 +33,8 @@ node scripts/website/test.cjs
 macOS 渲染要求本机图形会话、Xcode/Swift 和已有的 `.build/swift/debug/Sparkle.framework`。首次可运行项目现有 macOS 构建来准备依赖。Windows 展示使用项目实际前端在 Chromium 中渲染。原始 PNG、预览源码、临时应用及隔离数据只写入 `.local/website`；优化后的展示素材位于 `apps/website/public`。
 
 `fixture.py` 提供固定的合成账户、用量、服务器、任务与会话数据，不读取个人配置，不联系模型服务商。渲染使用产品共用的英文词库与真实语言设置，不再替换预览副本中的中文。页面明确标注演示数据；Windows 图片不作为实机材质验收记录。仅保留总览、分析、服务器及面板四类截图，其他功能通过文字与动画呈现。
+
+Codex 展示账户使用 5h $7.10、7d $43.20、每 1000 Credits $40.00 的合成估值；这些数字只用于官网渲染。
 
 桌宠动画直接使用原有 8 × 9 帧图集，遵守减少动态效果的系统偏好。内置月薪喵素材来自项目既有资源，作者为 **kiffin**，页面保留来源署名。Provider 图标复用项目既有接入素材。分享图由实际产品界面与网页排版生成。
 

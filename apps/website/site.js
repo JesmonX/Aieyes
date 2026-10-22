@@ -14,15 +14,31 @@ platformButtons.forEach(button=>button.addEventListener('click',()=>setPlatform(
 setPlatform(platform);
 const featureTabs=[...document.querySelectorAll('[data-feature-tab]')];
 const featurePanels=[...document.querySelectorAll('[data-feature-panel]')];
+const tabList=document.querySelector('.workspace-tabs');
+const compactFeatures=matchMedia('(max-width:700px), (max-width:1000px) and (pointer:coarse)');
+function revealFeatureTab(){
+  const active=featureTabs.find(button=>button.getAttribute('aria-selected')==='true');
+  if(!active||!tabList||tabList.scrollWidth<=tabList.clientWidth)return;
+  const button=active.getBoundingClientRect(),list=tabList.getBoundingClientRect();
+  tabList.scrollLeft+=button.left+button.width/2-list.left-list.width/2;
+}
+function updateFeatureLayout(){
+  tabList?.setAttribute('aria-orientation',compactFeatures.matches?'horizontal':'vertical');
+  revealFeatureTab();
+}
+compactFeatures.addEventListener('change',updateFeatureLayout);
+window.addEventListener('resize',revealFeatureTab);
 function setFeature(value,updateHash=true){
   const id=featureTabs.some(button=>button.dataset.featureTab===value)?value:'overview';
   featureTabs.forEach(button=>{const active=button.dataset.featureTab===id;button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1;});
   featurePanels.forEach(panel=>{const active=panel.dataset.featurePanel===id;panel.hidden=!active;panel.classList.toggle('is-active',active);});
+  revealFeatureTab();
   if(updateHash&&location.hash!==`#${id}`)history.replaceState(null,'',`#${id}`);
 }
 featureTabs.forEach(button=>button.addEventListener('click',()=>{setFeature(button.dataset.featureTab);document.querySelector('#features')?.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'start'});}));
 window.addEventListener('hashchange',()=>setFeature(location.hash.slice(1),false));
 setFeature(location.hash.slice(1),false);
+updateFeatureLayout();
 const menu=document.querySelector('.menu-toggle'),nav=document.querySelector('#navigation');
 function closeMenu(){menu?.setAttribute('aria-expanded','false');nav?.classList.remove('open');}
 menu?.addEventListener('click',()=>{const open=menu.getAttribute('aria-expanded')!=='true';menu.setAttribute('aria-expanded',String(open));nav.classList.toggle('open',open);});
