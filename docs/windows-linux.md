@@ -69,7 +69,7 @@ npm install --global @tauri-apps/cli@2
 sudo apt-get update
 sudo apt-get install -y build-essential pkg-config libssl-dev \
   libwebkit2gtk-4.1-dev librsvg2-dev \
-  patchelf libglib2.0-bin openssh-client
+  patchelf libglib2.0-bin openssh-client rpm libarchive-tools
 
 # 开发版
 sh scripts/build-desktop.sh debug

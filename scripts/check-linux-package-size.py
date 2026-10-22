@@ -69,21 +69,16 @@ def deb_files(path, member_prefix='data.tar'):
 
 
 def rpm_files(path):
-    data = subprocess.check_output(['rpm2cpio', str(path)])
-    offset = 0
-    while offset + 110 <= len(data):
-        header = data[offset:offset+110]
-        if header[:6] not in (b'070701', b'070702'):
-            raise ValueError('Unsupported RPM cpio payload')
-        fields = [int(header[i:i+8], 16) for i in range(6, 110, 8)]
-        mode, size, namesize = fields[1], fields[6], fields[11]
-        name = data[offset+110:offset+110+namesize-1].decode()
-        start = (offset+110+namesize+3) & ~3
-        if name == 'TRAILER!!!': return
-        if mode & 0o170000 == 0o100000:
-            yield name, data[start:start+size]
-        offset = (start+size+3) & ~3
-    raise ValueError('Truncated RPM cpio payload')
+    # Ubuntu 22.04's rpm2cpio rejects Tauri RPMs without an archive-size tag.
+    # libarchive reads their cpio payload directly and still rejects corruption.
+    with tempfile.TemporaryFile() as payload:
+        subprocess.run(['bsdtar', '-cf', '-', '@' + str(path.resolve())],
+                       stdout=payload, check=True)
+        payload.seek(0)
+        with tarfile.open(fileobj=payload, mode='r:') as archive:
+            for member in archive:
+                if member.isfile():
+                    yield member.name, archive.extractfile(member).read()
 
 
 def appimage_files(path):
