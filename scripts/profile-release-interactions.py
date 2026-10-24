@@ -8,6 +8,7 @@ run: drive real NSHostingViews and report process CPU, latency, visibility and R
 """
 import argparse
 import ctypes
+from contextlib import closing
 import hashlib
 import json
 import math
@@ -40,8 +41,8 @@ def write_json(path, value):
 
 def database_copy(source, target):
     target.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True) as src:
-        with sqlite3.connect(target) as dst:
+    with closing(sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True)) as src:
+        with closing(sqlite3.connect(target)) as dst:
             src.backup(dst)
     target.chmod(0o600)
 
@@ -333,8 +334,11 @@ def build(args):
     framework = ROOT/'.build/swift/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64'
     if args.ref == 'workspace':
         source = output/'source-workspace/apps/macos/Sources/Aieyes'
-        shutil.copytree(ROOT/'apps/macos/Sources/Aieyes',source,dirs_exist_ok=True)
-        shutil.copytree(ROOT/'apps/macos/Resources',output/'source-workspace/apps/macos/Resources',dirs_exist_ok=True)
+        if '--reuse-source' in args.driver_args:
+            if not source.is_dir(): raise FileNotFoundError('No captured workspace source to reuse')
+        else:
+            shutil.copytree(ROOT/'apps/macos/Sources/Aieyes',source,dirs_exist_ok=True)
+            shutil.copytree(ROOT/'apps/macos/Resources',output/'source-workspace/apps/macos/Resources',dirs_exist_ok=True)
     else:
         checkout = output/('source-'+args.ref)
         checkout.mkdir(parents=True,exist_ok=True)
@@ -347,9 +351,10 @@ def build(args):
     original = engine.read_text()
     # The only source instrumentation: a control that pauses recurring work while
     # retaining production visibility/query selection and all manual handlers.
-    original = original.replace('private func scheduleRefreshes() {',
-        'private func scheduleRefreshes() {\n        if ProcessInfo.processInfo.environment["AIEYES_PROFILE_STATIC"] == "1" { return }')
-    engine.write_text(original + '''
+    if 'func profilePauseBackground()' not in original:
+        original = original.replace('private func scheduleRefreshes() {',
+            'private func scheduleRefreshes() {\n        if ProcessInfo.processInfo.environment["AIEYES_PROFILE_STATIC"] == "1" { return }')
+        engine.write_text(original + '''
 extension AppModel {
     func profilePauseBackground() {
         timer?.invalidate(); timer = nil

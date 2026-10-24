@@ -4,6 +4,77 @@ import Combine
 import ApplicationServices
 @testable import Aieyes
 
+private struct RetainedFixture: View {
+    let key: String
+    @State private var count = 0
+    @Environment(\.surfaceActive) private var active
+    @Environment(\.workspaceCardColumns) private var columns
+    var body: some View {
+        VStack {
+            Button { count += 1 } label: { Text(verbatim:"Increment \(key): \(count)") }
+            Text(verbatim:"\(key):\(active):\(columns)")
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+@MainActor private final class RetainedState: ObservableObject {
+    @Published var key = "first"
+    @Published var columns = 2
+    @Published var active = true
+}
+private struct RetainedFixtureOwner: View {
+    @ObservedObject var state: RetainedState
+    var body: some View {
+        RetainedPageHost(selection:state.key,active:state.active) { RetainedFixture(key:$0) }
+            .environment(\.workspaceCardColumns,state.columns)
+    }
+}
+private struct LayoutFrames: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, new in new }) }
+}
+@MainActor private final class LayoutState: ObservableObject {
+    @Published var width: CGFloat = 320
+    @Published var font: CGFloat = 13
+    @Published var text = "Long text that wraps across several lines"
+    @Published var count = 5
+    var frames: [String: CGRect] = [:]
+}
+private struct LayoutFixture: View {
+    @ObservedObject var state: LayoutState
+    private func cell(_ index: Int, group: String) -> some View {
+        Text(index == 0 ? state.text : "Cell \(index)").font(.system(size: state.font))
+            .fixedSize(horizontal: false, vertical: true)
+            .background(GeometryReader { geometry in Color.clear.preference(key: LayoutFrames.self, value: [group + String(index):geometry.frame(in: .named(group))]) })
+    }
+    var body: some View {
+        VStack {
+            BalancedGridLayout(minimumWidth: 140) { ForEach(0..<state.count, id: \.self) { cell($0, group: "grid") } }.coordinateSpace(name: "grid")
+            FlowLayout { ForEach(0..<state.count, id: \.self) { cell($0, group: "flow") } }.coordinateSpace(name: "flow")
+            ChartPairLayout { ForEach(0..<2, id: \.self) { cell($0, group: "pair") } }.coordinateSpace(name: "pair")
+        }.frame(width: state.width).onPreferenceChange(LayoutFrames.self) { state.frames = $0 }
+    }
+}
+private struct ExpandingCell: View {
+    let key: String
+    @State private var expanded = false
+    var body: some View {
+        VStack { Button("Resize " + key) { expanded.toggle() }; Color.clear.frame(height:expanded ? 140:20) }
+    }
+}
+private struct DescendantLayoutFixture: View {
+    @ObservedObject var state: LayoutState
+    private func size(_ key:String) -> some View {
+        GeometryReader { geometry in Color.clear.preference(key:LayoutFrames.self,value:[key:geometry.frame(in:.global)]) }
+    }
+    var body: some View {
+        VStack {
+            BalancedGridLayout(minimumWidth:140) { ExpandingCell(key:"grid"); Text("Other") }.background(size("grid"))
+            FlowLayout { ExpandingCell(key:"flow"); Text("Other") }.background(size("flow"))
+            ChartPairLayout { ExpandingCell(key:"pair"); Text("Other") }.background(size("pair"))
+        }.frame(width:320).onPreferenceChange(LayoutFrames.self) { state.frames = $0 }
+    }
+}
+
 @MainActor final class OptimizationChecks: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -216,6 +287,10 @@ import ApplicationServices
         precondition(pageUpdates == 0 && progressUpdates >= 2, "Progress feedback must update without invalidating unchanged page content")
         ipc.quotaBusy = true;try await wait();precondition(pageUpdates == 0, "Busy feedback must remain local to controls")
         ipc.quotaBusy = false;try await wait()
+        let unrelatedHosts = ipc.hosts
+        ipc.hosts = [HostResult(id:"unrelated", name:"Unrelated", sample:nil, error:nil)]
+        try await wait();precondition(pageUpdates == 0, "Server samples must not invalidate the analysis page")
+        ipc.hosts = unrelatedHosts;try await wait()
         ipc.range = 7
         let old = Task { await ipc.reload() }
         for _ in 0..<100 {
@@ -241,6 +316,73 @@ import ApplicationServices
         precondition(window.firstResponder === focused && ipc.settingsDirty)
         ipc.detailPage = "analysis";try await wait();ipc.detailPage = "settings";try await wait()
         precondition(ipc.settingsDraft.proxy.url == "http://127.0.0.1:9999", "Page switches must retain unsaved input")
+        precondition(descendants(host).contains { $0 === field }, "A retained editor must reuse its native field")
+        precondition((window.firstResponder as? NSTextView)?.delegate as? NSTextField === field || window.firstResponder === field, "Returning to an editor must restore focus")
+        try await retainedPages(in: window)
+        try await layouts(in: window)
+        try await descendantLayouts(in:window)
+        let filterModel = AppModel(autostart:false)
+        var filterPublications = 0
+        let filterObserver = filterModel.objectWillChange.sink { filterPublications += 1 }
+        filterModel.updateFilters(DashboardFilterPreference(provider:"qoder", days:7), scope:"analysis")
+        precondition(filterPublications == 1, "A filter action must publish one complete value")
+        filterModel.updateFilters(DashboardFilterPreference(provider:"qoder", days:7), scope:"analysis")
+        precondition(filterPublications == 1, "The same filter must not publish again")
+        filterObserver.cancel();filterModel.stop()
+    }
+    func retainedPages(in window: NSWindow) async throws {
+        let state = RetainedState()
+        let owner = NSHostingView(rootView:RetainedFixtureOwner(state:state));window.contentView = owner
+        try await wait(150);owner.layoutSubtreeIfNeeded();try await wait()
+        guard let container = descendants(owner).compactMap({ $0 as? RetainedPageHost<RetainedFixture>.Container }).first else { throw ClientError.message("Expected a retained page container") }
+        let first = container.entries["first"]!.host
+        precondition(first.frame.width > 0 && first.frame.height > 0 && first.window != nil, "The selected page must fill its native window")
+        precondition(press(in: first, containing:"Increment first: 0"));try await wait()
+        precondition(control(in:first,containing:"Increment first: 1") != nil)
+        ScrollPositionStore.shared.record(NSPoint(x:0,y:77),for:"retained.switch")
+        state.key = "second"
+        try await wait()
+        precondition(ScrollPositionStore.shared.pendingCount == 0, "Page detachment must flush pending scroll positions before the debounce")
+        precondition(container.subviews.count == 1 && first.superview == nil && !first.rootView.active)
+        precondition(press(in:container,containing:"Increment second: 0"));try await wait()
+        state.columns = 3;state.key = "first"
+        try await wait();container.layoutSubtreeIfNeeded()
+        precondition(container.entries["first"]!.host === first && container.subviews.count == 1)
+        precondition(control(in:first,containing:"Increment first: 1") != nil, "Page-local state must survive detachment and environment updates")
+        precondition(first.rootView.environment.workspaceCardColumns == 3)
+        container.setFrameSize(NSSize(width:640,height:500));container.layoutSubtreeIfNeeded()
+        precondition(first.frame.size == container.bounds.size)
+        container.deactivate();precondition(container.entries.values.allSatisfy { !$0.host.rootView.active })
+    }
+    func layouts(in window: NSWindow) async throws {
+        let state = LayoutState()
+        let host = NSHostingView(rootView:LayoutFixture(state:state));window.contentView = host
+        for width: CGFloat in [320,817,818,1000,280] {
+            state.width = width;try await wait();host.layoutSubtreeIfNeeded();try await wait()
+            for group in ["grid","flow","pair"] {
+                let frames = state.frames.filter { $0.key.hasPrefix(group) }.map(\.value)
+                precondition(frames.count == (group == "pair" ? 2 : state.count) && frames.allSatisfy { $0.maxX <= width + 1 && $0.minX >= -1 && $0.height > 0 })
+                for i in frames.indices { for j in frames.indices where i < j { let overlap = frames[i].intersection(frames[j]);precondition(overlap.isNull || overlap.width * overlap.height < 1, "Cached cells must not overlap") } }
+            }
+            let first = state.frames["pair0"]!, second = state.frames["pair1"]!
+            precondition(width >= 818 ? abs(first.minY-second.minY)<1 && second.minX>=468 : second.minY>=first.maxY, "Charts must keep the existing 818-point responsive breakpoint")
+        }
+        let old = state.frames["grid0"]!.height
+        state.font = 25;state.text += " and another line of dynamically updated content";state.count = 6
+        try await wait();host.layoutSubtreeIfNeeded();try await wait()
+        precondition(state.frames.count == 14 && state.frames["grid0"]!.height > old, "Font/content changes must invalidate layout measurements")
+    }
+    func descendantLayouts(in window:NSWindow) async throws {
+        let state = LayoutState(), owner = NSHostingView(rootView:DescendantLayoutFixture(state:LayoutState()))
+        owner.rootView = DescendantLayoutFixture(state:state);window.contentView = owner
+        try await wait();owner.layoutSubtreeIfNeeded();try await wait()
+        for key in ["grid","flow","pair"] {
+            let old = state.frames[key]!.height
+            precondition(press(in:owner,containing:"Resize " + key));try await wait();owner.layoutSubtreeIfNeeded();try await wait()
+            precondition(state.frames[key]!.height >= old+110, "A descendant's local expansion must invalidate \(key) measurements")
+            precondition(press(in:owner,containing:"Resize " + key));try await wait();owner.layoutSubtreeIfNeeded();try await wait()
+            precondition(abs(state.frames[key]!.height-old)<1, "A descendant's collapse must shrink \(key) again")
+        }
     }
 }
 @main struct VerifyOptimization {

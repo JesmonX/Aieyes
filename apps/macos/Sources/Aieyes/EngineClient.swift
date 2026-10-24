@@ -635,24 +635,28 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var requestHostEditor = false
     @Published var hosts: [HostResult] = []
     var prices: [ModelPrice] { get { priceCatalog.prices } set { priceCatalog.replace(newValue) } }
-    @Published var provider = "all" { didSet { persistDashboardFilters() } }
-    @Published var selectedSource = "all" { didSet { persistDashboardFilters() } }
-    @Published var selectedAccount = "all" { didSet { if selectedAccount != "all" { selectedAccount = "all" }; persistDashboardFilters() } }
+    @Published private(set) var analysisFilters = DashboardFilterPreference() { didSet { persistDashboardFilters() } }
+    private func updateAnalysis<Value: Equatable>(_ key: WritableKeyPath<DashboardFilterPreference, Value>, _ value: Value) {
+        guard analysisFilters[keyPath: key] != value else { return }
+        analysisFilters[keyPath: key] = value
+    }
+    var provider: String { get { analysisFilters.provider } set { updateAnalysis(\.provider, newValue) } }
+    var selectedSource: String { get { analysisFilters.source } set { updateAnalysis(\.source, newValue) } }
+    var selectedAccount: String { get { analysisFilters.account } set { updateAnalysis(\.account, "all") } }
     @Published var settingsTab = "integrations"
     @Published var settingsAgent = "codex"
     @Published var generalPage = "appearance"
     @Published var settingsSection: String?
-    @Published var selectedModel = "all" { didSet { persistDashboardFilters() } }
-    @Published var range = 1 { didSet { persistDashboardFilters() } }
-    @Published var dateRange: DashboardDateRange? { didSet { persistDashboardFilters() } }
+    var selectedModel: String { get { analysisFilters.model } set { updateAnalysis(\.model, newValue) } }
+    var range: Int { get { analysisFilters.days } set { updateAnalysis(\.days, newValue) } }
+    var dateRange: DashboardDateRange? { get { analysisFilters.dateRange } set { updateAnalysis(\.dateRange, newValue) } }
     var isToday: Bool { dateRange == nil && range == 1 }
     var rangeTitle: String { dateRange.map { $0.kind == "all" ? L("所有") : ($0.start ?? "") + L(" 至 ") + ($0.end ?? "") } ?? (range == 1 ? L("今日") : L("最近 {0} 天" , range)) }
     var rangeChoice: String {
         get { dateRange?.kind ?? String(range) }
         set {
-            if newValue == "all" { dateRange = DashboardDateRange(kind: "all") }
-            else if newValue == "custom" { dateRange = DashboardDateRange(kind: "custom", start: DashboardDateRange.day(Calendar.current.date(byAdding: .day, value: -6, to: Date())!), end: DashboardDateRange.day(Date())) }
-            else { dateRange = nil; range = Int(newValue) ?? 1 }
+            var next = analysisFilters; next.rangeChoice = newValue
+            if next != analysisFilters { analysisFilters = next }
         }
     }
     var customStart: Date {
@@ -668,7 +672,6 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         guard filterPersistenceEnabled else { return }
         analysisFilters.save(scope: "analysis")
     }
-    var analysisFilters: DashboardFilterPreference { DashboardFilterPreference(provider: provider, source: selectedSource, account: selectedAccount, model: selectedModel, days: range, dateRange: dateRange) }
     func filters(for scope: String) -> DashboardFilterPreference { (scope == "panel" ? panelFilters : scope == "overview" ? overviewFilters : analysisFilters).normalized(for: scope) }
     func updateFilters(_ value: DashboardFilterPreference, scope: String, resetDependents: Bool = true) {
         var next = value.normalized(for: scope)
@@ -679,9 +682,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         switch scope {
         case "panel": panelFilters = next
         case "overview": overviewFilters = next
-        default: provider = next.provider; selectedAccount = next.account; selectedSource = next.source; selectedModel = next.model; range = next.days; dateRange = next.dateRange
+        default: analysisFilters = next
         }
-        if filterPersistenceEnabled { next.save(scope: scope) }
+        if filterPersistenceEnabled && ["panel", "overview"].contains(scope) { next.save(scope: scope) }
         requestDashboardReload()
     }
     func openAnalysis(from scope: String, account: String? = nil, provider: String? = nil) {
@@ -787,7 +790,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         guard autostart else { return }
         panelFilters = DashboardFilterPreference.read(scope: "panel"); overviewFilters = DashboardFilterPreference.read(scope: "overview")
         let saved = DashboardFilterPreference.read(scope: "analysis")
-        provider = saved.provider; selectedSource = saved.source; selectedAccount = saved.account; selectedModel = saved.model; range = saved.days; dateRange = saved.dateRange
+        analysisFilters = saved
         filterPersistenceEnabled = true
         schedulingEnabled = true
         startAutomatic()
@@ -834,7 +837,9 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         dashboardRequest += 1; reloadAgain = true
         if let reloadTask { return await reloadTask.value }
         let work = Task { @MainActor in
-            defer { reloadTask = nil }
+            // Superseded/cancelled requests may exit before reloadOnce's apply step.
+            // A finished worker must never leave an orphaned loading indicator.
+            defer { reloadTask = nil; if dashboardPending { dashboardPending = false } }
             var result = true
             repeat { reloadAgain = false; result = await reloadOnce(request: dashboardRequest) } while reloadAgain && !Task.isCancelled
             return result
@@ -887,9 +892,13 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
                     next = cached
                     if scopeStatusRevisions[key] != revision { next.applyStatus(try await status(params)); cacheChanged = true }
                 } else { next = try await engine.call("dashboard", params: params); cacheChanged = true }
-                if cacheChanged, revision == dashboardRevisions, let encoded = try? JSONEncoder().encode(next), encoded.count <= 2 * 1024 * 1024 {
-                    if scopeCache.count >= 4 && scopeCache[key] == nil { scopeCache.removeAll(); scopeStatusRevisions.removeAll() }
-                    scopeCache[key] = next; scopeStatusRevisions[key] = revision
+                if cacheChanged {
+                    let candidate = next
+                    let bytes = await Task.detached(priority: .utility) { (try? JSONEncoder().encode(candidate).count) ?? Int.max }.value
+                    if request == dashboardRequest, revision == dashboardRevisions, bytes <= 2 * 1024 * 1024 {
+                        if scopeCache.count >= 4 && scopeCache[key] == nil { scopeCache.removeAll(); scopeStatusRevisions.removeAll() }
+                        scopeCache[key] = next; scopeStatusRevisions[key] = revision
+                    }
                 }
                 guard request == dashboardRequest else { _ = await summary.value; return true }
                 queried[key] = next; results[surface] = next

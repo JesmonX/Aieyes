@@ -115,23 +115,34 @@ struct QuotaResetLabel: View {
 /// Wrapping chips preserve their intrinsic label width without shrinking numeric content.
 struct FlowLayout: Layout {
     var spacing: CGFloat = 6
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        arrange(subviews, width: proposal.width ?? 600).size
+    struct Cache {
+        struct Measurement { let width: CGFloat, spacing: CGFloat, size: CGSize, points: [CGPoint], widths: [CGFloat] }
+        var measurements: [Measurement] = []
     }
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let layout = arrange(subviews, width: bounds.width)
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache.measurements.removeAll(keepingCapacity: true) }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        arrange(subviews, width: proposal.width, cache: &cache).size
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let layout = arrange(subviews, width: bounds.width, cache: &cache)
         for (index, point) in layout.points.enumerated() {
-            subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), proposal: ProposedViewSize(width: min(subviews[index].sizeThatFits(.unspecified).width, bounds.width), height: nil))
+            subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), proposal: ProposedViewSize(width: layout.widths[index], height: nil))
         }
     }
-    private func arrange(_ subviews: Subviews, width: CGFloat) -> (size: CGSize, points: [CGPoint]) {
-        var x: CGFloat = 0, y: CGFloat = 0, height: CGFloat = 0, points: [CGPoint] = []
+    private func arrange(_ subviews: Subviews, width proposed: CGFloat?, cache: inout Cache) -> Cache.Measurement {
+        let width = max(0, proposed.flatMap { $0.isFinite ? $0 : nil } ?? 600)
+        if let known = cache.measurements.first(where: { $0.width == width && $0.spacing == spacing && $0.points.count == subviews.count }) { return known }
+        var x: CGFloat = 0, y: CGFloat = 0, height: CGFloat = 0, points: [CGPoint] = [], widths: [CGFloat] = []
         for view in subviews {
             let size = view.sizeThatFits(ProposedViewSize(width: width, height: nil))
             if x > 0 && x + size.width > width { x = 0; y += height + spacing; height = 0 }
             points.append(CGPoint(x: x, y: y)); x += size.width + spacing; height = max(height, size.height)
+            widths.append(min(view.sizeThatFits(.unspecified).width, width))
         }
-        return (CGSize(width: width, height: y + height), points)
+        let result = Cache.Measurement(width: width, spacing: spacing, size: CGSize(width: width, height: y + height), points: points, widths: widths)
+        if cache.measurements.count >= 8 { cache.measurements.removeFirst() }
+        cache.measurements.append(result); return result
     }
 }
 

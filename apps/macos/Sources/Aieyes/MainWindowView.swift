@@ -14,7 +14,6 @@ struct MainWindowView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
-    @State private var visitedSettings = false
     @State private var guideActive = false
     @State private var workspaceWidth: CGFloat = 1120
     private var monitoring: [(String, String, String)] { [("agent", L("Agent 总览"), "square.grid.2x2"), ("analysis", L("用量分析"), "chart.xyaxis.line"), ("servers", L("服务器"), "server.rack")] }
@@ -61,22 +60,11 @@ struct MainWindowView: View {
                 if guideActive && model.detailPage == "settings" {
                     HStack { Button(L("配置向导")) { select("setup") }; Spacer() }.padding(.horizontal, 22).padding(.bottom, 12)
                 }
-                ZStack {
-                    if model.detailPage == "setup" { SetupGuideView(model: model) { guideActive = false; select("agent") } }
-                    ForEach(monitoring, id: \.0) { key, _, _ in
-                        RootView(model: model, compact: false, page: key).equatable()
-                            .opacity(model.detailPage == key ? 1 : 0)
-                            .allowsHitTesting(model.detailPage == key)
-                            .disabled(model.detailPage != key)
-                            .accessibilityHidden(model.detailPage != key)
-                    }
-                    if visitedSettings || model.detailPage == "settings" {
-                        SettingsView(model: model)
-                            .environment(\.surfaceActive, model.detailPage == "settings" && model.isWindowVisible("detail"))
-                            .opacity(model.detailPage == "settings" ? 1 : 0)
-                            .allowsHitTesting(model.detailPage == "settings")
-                            .disabled(model.detailPage != "settings")
-                            .accessibilityHidden(model.detailPage != "settings")
+                RetainedPageHost(selection: model.detailPage, active: model.isWindowVisible("detail")) { key in
+                    switch key {
+                    case "setup": SetupGuideView(model: model) { guideActive = false; select("agent") }
+                    case "settings": SettingsView(model: model)
+                    default: RootView(model: model, compact: false, page: key).equatable()
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
@@ -106,11 +94,91 @@ struct MainWindowView: View {
         let page = ["agent", "analysis", "servers", "settings", "setup"].contains(value) ? value : "agent"
         if model.detailPage != page { model.detailPage = page }
         if !CommandLine.arguments.contains("--render") { savedPage = page }
-        if page == "settings" { visitedSettings = true }
         if page == "setup" { guideActive = true; if !CommandLine.arguments.contains("--render") { UserDefaults.standard.set(true, forKey: "setup.seen.v1") } }
         model.settingsWindowVisible = page == "settings" && model.isWindowVisible("detail")
         model.setServerVisible(page == "servers", window: "detail")
         if page == "servers" { Task { await model.sampleHosts() } }
+    }
+}
+
+/// Keep a page's SwiftUI identity and native controls, without laying out hidden pages.
+/// The owner retains editors/sheets; only the selected hosting view belongs to the window.
+struct RetainedPageHost<Content: View>: NSViewRepresentable {
+    let selection: String
+    var active = true
+    @ViewBuilder var content: (String) -> Content
+    func makeNSView(context: Context) -> Container { Container() }
+    func updateNSView(_ view: Container, context: Context) {
+        view.show(selection, active: active, environment: context.environment, content: content(selection))
+    }
+    static func dismantleNSView(_ view: Container, coordinator: ()) { view.deactivate() }
+    struct Page: View {
+        let content: Content, environment: EnvironmentValues
+        var active: Bool
+        // A hosting view is a new SwiftUI root. Copy only public presentation
+        // values: the parent's private render/accessibility context belongs to
+        // its original graph and must never be installed in another host.
+        private var presentation: some View {
+            content.environment(\.workspaceCardColumns, environment.workspaceCardColumns)
+                .environment(\.previewAccessibleSurfaces, environment.previewAccessibleSurfaces)
+                .environment(\.translucentPanel, environment.translucentPanel)
+                .environment(\.surfaceActive, active)
+                .environment(\.colorScheme, environment.colorScheme)
+            // Read-only accessibility values are supplied by AppKit to each host.
+        }
+        var body: some View {
+            presentation.environment(\.layoutDirection, environment.layoutDirection)
+                .environment(\.locale, environment.locale)
+                .environment(\.calendar, environment.calendar)
+                .environment(\.timeZone, environment.timeZone)
+                .environment(\.displayScale, environment.displayScale)
+                .font(environment.font).controlSize(environment.controlSize)
+                .disabled(!environment.isEnabled)
+        }
+    }
+    @MainActor final class Container: NSView {
+        @MainActor final class Entry {
+            let host: NSHostingView<Page>
+            weak var responder: NSView?
+            init(_ content: Content, environment: EnvironmentValues) {
+                host = NSHostingView(rootView: Page(content: content, environment: environment, active: false))
+                host.sizingOptions = []
+                host.autoresizingMask = [.width, .height]
+            }
+        }
+        private(set) var entries: [String: Entry] = [:]
+        private(set) var selected: String?
+        override var isFlipped: Bool { true }
+        func show(_ key: String, active: Bool, environment: EnvironmentValues, content: Content) {
+            let changed = selected != key
+            if changed, let old = selected.flatMap({ entries[$0] }) {
+                // Detachment can defer SwiftUI's representable update. Persist
+                // the latest position before taking the old graph off-window.
+                ScrollPositionStore.shared.flushAll()
+                let responder = (window?.firstResponder as? NSTextView).flatMap { $0.isFieldEditor ? $0.delegate as? NSView : $0 } ?? window?.firstResponder as? NSView
+                if let responder, responder === old.host || responder.isDescendant(of: old.host) { old.responder = responder; window?.makeFirstResponder(nil) }
+                if old.host.rootView.active { old.host.rootView.active = false }
+                old.host.removeFromSuperview()
+            }
+            let entry: Entry
+            if let known = entries[key] {
+                entry = known
+                entry.host.rootView = Page(content: content, environment: environment, active: active)
+            } else { entry = Entry(content, environment: environment); entries[key] = entry }
+            selected = key
+            if entry.host.rootView.active != active { entry.host.rootView.active = active }
+            if entry.host.superview !== self { entry.host.frame = bounds; addSubview(entry.host) }
+            if changed, let responder = entry.responder {
+                DispatchQueue.main.async { [weak self, weak responder] in
+                    guard let self, self.selected == key, let responder, responder.window === self.window else { return }
+                    self.window?.makeFirstResponder(responder)
+                }
+            }
+        }
+        func deactivate() {
+            for entry in entries.values where entry.host.rootView.active { entry.host.rootView.active = false }
+            ScrollPositionStore.shared.flushAll()
+        }
     }
 }
 

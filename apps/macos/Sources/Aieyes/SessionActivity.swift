@@ -203,15 +203,17 @@ struct WindowNavigationSnapshot: Equatable {
 }
 // Retain pages and their state, but do not invalidate hidden surfaces on every model publication.
 @MainActor private struct SurfaceSnapshot: Equatable {
-    let dashboard: Dashboard, menu: Dashboard, panel: Dashboard, overview: Dashboard
+    let dashboard: Dashboard?
     let settings: Settings, hosts: [HostResult], options: [String]
-    let analysisFilters: DashboardFilterPreference, panelFilters: DashboardFilterPreference, overviewFilters: DashboardFilterPreference
-    let installingUpdate: Bool, settingsLoaded: Bool, panelHeight: CGFloat
-    init(_ model: AppModel) {
-        dashboard = model.dashboard; menu = model.menuDashboard; panel = model.panelDashboard; overview = model.overviewDashboard
-        settings = model.settings; hosts = model.hosts; options = model.modelOptions
-        analysisFilters = model.analysisFilters; panelFilters = model.panelFilters; overviewFilters = model.overviewFilters
-        installingUpdate = model.installingUpdate; settingsLoaded = model.settingsLoaded; panelHeight = model.panelHeight
+    let filters: DashboardFilterPreference
+    let installingUpdate: Bool, settingsLoaded: Bool, ready: Bool, panelHeight: CGFloat
+    init(_ model: AppModel, compact: Bool, page: String) {
+        dashboard = compact ? model.panelDashboard : page == "servers" ? nil : page == "analysis" ? model.dashboard : model.overviewDashboard
+        settings = model.settings; hosts = compact || page == "servers" ? model.hosts : []
+        options = !compact && page == "analysis" ? model.modelOptions : []
+        filters = model.filters(for: compact ? "panel" : page == "analysis" ? "analysis" : "overview")
+        ready = (compact ? model.panelDashboard : page == "analysis" ? model.dashboard : model.overviewDashboard).generatedAt > 0
+        installingUpdate = model.installingUpdate; settingsLoaded = model.settingsLoaded; panelHeight = compact ? model.panelHeight : 0
     }
 }
 @MainActor final class SurfaceObservation: ObservableObject {
@@ -219,7 +221,7 @@ struct WindowNavigationSnapshot: Equatable {
     private var pending = false
     init(model: AppModel, compact: Bool, page: String) {
         var wasActive = model.isWindowVisible(compact ? "panel" : "detail") && (compact || model.detailPage == page)
-        var previous = SurfaceSnapshot(model)
+        var previous = SurfaceSnapshot(model, compact: compact, page: page)
         subscription = model.objectWillChange.sink { [weak self, weak model] _ in
             guard let self, !self.pending else { return }; self.pending = true
             DispatchQueue.main.async { [weak self, weak model] in
@@ -227,7 +229,7 @@ struct WindowNavigationSnapshot: Equatable {
                 let active = model.isWindowVisible(compact ? "panel" : "detail") && (compact || model.detailPage == page)
                 let transitioned = wasActive != active; wasActive = active
                 if active || transitioned {
-                    let next = SurfaceSnapshot(model)
+                    let next = SurfaceSnapshot(model, compact: compact, page: page)
                     // Query progress/errors are observed by RefreshIndicator itself.
                     // Editor drafts and other surfaces must not invalidate the page.
                     if transitioned || next != previous { previous = next; self.objectWillChange.send() }

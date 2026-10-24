@@ -94,7 +94,9 @@ extension UserDefaults {
     }
     private func pause(_ seconds: Double) async throws { try await Task.sleep(for: .seconds(seconds)) }
     private func matches(_ name:String)->Bool {
-        only.isEmpty || (only.hasPrefix("=") ? name==String(only.dropFirst()):name.contains(only))
+        only.isEmpty || only.split(separator: ",").contains { pattern in
+            pattern.hasPrefix("=") ? name == String(pattern.dropFirst()) : name.contains(pattern)
+        }
     }
     private func flush() {
         for window in [workspace, popover?.contentViewController?.view.window, dialog].compactMap({ $0 }) where window.isVisible {
@@ -424,13 +426,23 @@ extension UserDefaults {
                 .max { ($0.documentView?.bounds.height ?? 0)-$0.contentView.bounds.height < ($1.documentView?.bounds.height ?? 0)-$1.contentView.bounds.height }
             if let catalog { _=catalog.scrollToVisible(catalog.bounds) }
         }) { try await self.scroll(in:self.hosting,target:catalog) }
-        try await measure("servers.scroll",debounce:false,setup:{
-            self.page("servers")
-            for host in self.model.settings.monitoredHosts where host.enabled {
-                UserDefaults.standard.set(true,forKey:"server.expanded.detail."+host.id)
-                UserDefaults.standard.set(true,forKey:"server.metric.expanded.detail."+host.id+":cpu")
-            }
-        }) { try await self.scroll(in:self.hosting) }
+        if matches("servers.scroll") {
+            // A saved single-host filter may fit without scrolling. Never let
+            // the fallback select an overflowing *hidden* page in that case.
+            // Restore the user's filter before testing the other surfaces.
+            let defaults = UserDefaults.standard
+            let selectionKey = NativePanelKey.detailServerSelection.rawValue, filterKey = NativePanelKey.detailServerFilter.rawValue
+            let selection = defaults.object(forKey:selectionKey), filter = defaults.object(forKey:filterKey)
+            defer { defaults.set(selection,forKey:selectionKey);defaults.set(filter,forKey:filterKey) }
+            try await measure("servers.scroll",debounce:false,setup:{
+                self.page("servers")
+                defaults.set("all",forKey:selectionKey);defaults.set("all",forKey:filterKey)
+                for host in self.model.settings.monitoredHosts where host.enabled {
+                    defaults.set(true,forKey:"server.expanded.detail."+host.id)
+                    defaults.set(true,forKey:"server.metric.expanded.detail."+host.id+":cpu")
+                }
+            }) { try await self.scroll(in:self.hosting) }
+        }
         for interacting in [false,true] {
             try await measure(interacting ? "panel.scroll-with-feedback":"panel.scroll",debounce:false,setup:{
                 if let button=self.statusItem?.button {

@@ -9,6 +9,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from argparse import Namespace
+from contextlib import closing
 
 SCRIPT=Path(__file__).with_name('profile-release-interactions.py')
 SPEC=importlib.util.spec_from_file_location('interaction_profiler',SCRIPT)
@@ -17,17 +20,34 @@ SPEC.loader.exec_module(profiler)
 
 
 class IsolationTests(unittest.TestCase):
+    def test_relinking_a_baseline_keeps_captured_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);output=root/'audit';source=output/'source-workspace/apps/macos/Sources/Aieyes'
+            source.mkdir(parents=True)
+            (source/'EngineClient.swift').write_text('private func scheduleRefreshes() {}\n')
+            (source/'MainWindowView.swift').write_text('struct MainWindowView: View {}\n')
+            args=Namespace(output=output,ref='workspace',driver_args=['--reuse-source'])
+            with patch.object(profiler,'ROOT',root),patch.object(profiler.subprocess,'run'),patch('builtins.print'):
+                profiler.build(args)
+                captured={p.name:p.read_bytes() for p in source.glob('*.swift')}
+                profiler.build(args)
+            self.assertEqual(captured,{p.name:p.read_bytes() for p in source.glob('*.swift')})
+            self.assertEqual((source/'EngineClient.swift').read_text().count('func profilePauseBackground()'),1)
+            with tempfile.TemporaryDirectory() as missing:
+                with self.assertRaises(FileNotFoundError):
+                    profiler.build(Namespace(output=Path(missing),ref='workspace',driver_args=['--reuse-source']))
+
     def test_online_backup_includes_wal_and_does_not_change_source(self):
         with tempfile.TemporaryDirectory() as directory:
             source=Path(directory)/'source.sqlite'; target=Path(directory)/'copy/data.sqlite'
-            with sqlite3.connect(source) as db:
+            with closing(sqlite3.connect(source)) as db:
                 db.execute('pragma journal_mode=wal')
                 db.execute('create table example(value text)')
                 db.execute("insert into example values('in the WAL')"); db.commit()
                 before=source.read_bytes()
                 profiler.database_copy(source,target)
                 self.assertEqual(source.read_bytes(),before)
-                with sqlite3.connect(target) as copy:
+                with closing(sqlite3.connect(target)) as copy:
                     self.assertEqual(copy.execute('select * from example').fetchall(),[('in the WAL',)])
                     copy.execute("insert into example values('isolated mutation')");copy.commit()
                 self.assertEqual(db.execute('select count(*) from example').fetchone()[0],1)

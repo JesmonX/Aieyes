@@ -51,3 +51,4 @@ sh scripts/test-native-pets.sh
 python3 scripts/test-dashboard-cache.py
 
 sh scripts/test-native-quota-layout.sh
+AIEYES_SKIP_BUILD=1 sh scripts/test-cpu-optimization.sh

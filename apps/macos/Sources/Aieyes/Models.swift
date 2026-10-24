@@ -101,9 +101,9 @@ struct DashboardDateRange: Codable, Equatable {
     var end: String?
     static func day(_ date: Date) -> String { formatter.string(from: date) }
     static func date(_ day: String?) -> Date { day.flatMap { formatter.date(from: $0) } ?? Date() }
-    private static var formatter: DateFormatter {
+    private static let formatter: DateFormatter = {
         let value = DateFormatter(); value.locale = Locale(identifier: "en_US_POSIX"); value.calendar = Calendar(identifier: .gregorian); value.timeZone = .autoupdatingCurrent; value.dateFormat = "yyyy-MM-dd"; return value
-    }
+    }()
     var parameters: [String: Any] { var result: [String: Any] = ["kind":kind]; if let start { result["start"] = start }; if let end { result["end"] = end }; return result }
 }
 
@@ -508,7 +508,8 @@ struct Host: Codable, Equatable, Identifiable {
     var monitoringEnabled: Bool?
     var id = UUID().uuidString, name = "", target = "", port: Int?, identityFile = "", shell = "/bin/bash", preCommand = "", enabled = true
     var metrics = ["cpu", "memory", "gpu", "filesystems", "disk", "network"], devices: [String] = []
-    var details: [String]? = Host.detailOptions.map { $0.0 }
+    var details: [String]? = Host.defaultDetailKeys
+    static let defaultDetailKeys = ["uptime", "cpuTimes", "memoryCache", "swap", "fsAvailable", "fsType", "inodes", "diskIops", "diskBusy", "networkTotals", "networkErrors", "gpuMemory", "gpuThermals"]
     var authMode: String?, username: String?, passwordRef: String?
     static var detailOptions: [(String, String)] { [("uptime", L("连续运行时间")), ("cpuTimes", L("CPU 时间分布")), ("memoryCache", L("内存缓存 / Buffer")), ("swap", "Swap"), ("fsAvailable", L("文件系统可用空间")), ("fsType", L("文件系统类型 / 设备")), ("inodes", "inode"), ("diskIops", L("磁盘 IOPS")), ("diskBusy", L("磁盘忙碌率")), ("networkTotals", L("累计流量")), ("networkErrors", L("网络错误 / 丢包")), ("gpuMemory", L("GPU 显存")), ("gpuThermals", L("GPU 温度 / 功耗"))] }
     var connectionIdentity: String { [target, port.map(String.init) ?? "", identityFile, shell, preCommand, authMode ?? "ssh", username ?? "", passwordRef ?? ""].joined(separator: "\u{0}") }
@@ -645,6 +646,18 @@ struct HostSampleBatch: Decodable {
 }
 
 enum Format {
+    private static let dateLock = NSLock()
+    private static let displayDateFormatter: DateFormatter = {
+        let value = DateFormatter(); value.locale = Locale(identifier: "en_US_POSIX")
+        value.timeZone = .current; value.dateFormat = "MM/dd HH:mm"; return value
+    }()
+    private static let relativeFormatter: RelativeDateTimeFormatter = { let value = RelativeDateTimeFormatter(); value.unitsStyle = .short; return value }()
+    private static func displayDate(_ stamp: Double) -> String {
+        dateLock.lock(); defer { dateLock.unlock() }
+        let zone = TimeZone.current
+        if displayDateFormatter.timeZone != zone { displayDateFormatter.timeZone = zone }
+        return displayDateFormatter.string(from: Date(timeIntervalSince1970: stamp))
+    }
     static func usedCapacity(_ total: Double?, _ available: Double?) -> Double? {
         guard let total, let available, total.isFinite, available.isFinite else { return nil }
         return total - available
@@ -688,11 +701,7 @@ enum Format {
         }
         let countdown = resetCountdown(window.resetsAt, now: now)
         guard let stamp = resetDisplayTime(window.resetsAt, now: now) else { return countdown }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .autoupdatingCurrent
-        formatter.dateFormat = "MM/dd HH:mm"
-        return countdown + " · " + formatter.string(from: Date(timeIntervalSince1970: stamp))
+        return countdown + " · " + displayDate(stamp)
     }
     static func subscription(_ plan: String) -> String {
         let name = plan.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -773,15 +782,13 @@ enum Format {
     static func speed(_ value: Double?) -> String { value.map { bytes($0) + "/s" } ?? "—" }
     static func date(_ stamp: Double?) -> String {
         guard let stamp, stamp > 0 else { return "—" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .autoupdatingCurrent
-        formatter.dateFormat = "MM/dd HH:mm"
-        return formatter.string(from: Date(timeIntervalSince1970: stamp))
+        return displayDate(stamp)
     }
     static func relative(_ date: Date, now: Date = Date()) -> String {
-        let formatter = RelativeDateTimeFormatter(); formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: now)
+        dateLock.lock(); defer { dateLock.unlock() }
+        let locale = Locale.current
+        if relativeFormatter.locale != locale { relativeFormatter.locale = locale }
+        return relativeFormatter.localizedString(for: date, relativeTo: now)
     }
     static func time(_ stamp: Double) -> String { Date(timeIntervalSince1970: stamp).formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(AieyesLocale.locale)) }
     static func provider(_ key: String) -> String { L(CoreContract.providerNames[key] ?? key) }

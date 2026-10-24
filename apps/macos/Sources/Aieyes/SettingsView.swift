@@ -26,7 +26,6 @@ struct SettingsView: View {
     @State private var confirmRescan = false
     @State private var importSSH = false
     @State private var mappingsExpanded = false
-    @State private var hasVisitedPrices = false
     @State private var savingServerSwitches: Set<String> = []
     private var mappingModel: String { get { model.mappingModel } nonmutating set { model.mappingModel = newValue } }
     private var mappingID: String { get { model.mappingID } nonmutating set { model.mappingID = newValue } }
@@ -55,24 +54,15 @@ struct SettingsView: View {
             if let message = model.message, model.settingsMessage == nil, !message.hasPrefix(L("已保存")) { HStack { Text(L(message)).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel(L("关闭提示")) }.padding(.horizontal, 22).padding(.bottom, 10) }
             ForEach(model.settings.configurationIssues ?? [], id: \.self) { Text(L($0)).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled).padding(.horizontal, 22) }
             Divider().opacity(0.5)
-            ZStack(alignment: .top) {
-                // Keep the lazily created catalog and its native controls across
-                // tab switches, preserving scroll/drafts without recreating rows.
-                if hasVisitedPrices || model.settingsTab == "prices" {
-                    prices.opacity(model.settingsTab == "prices" ? 1 : 0)
-                        .allowsHitTesting(model.settingsTab == "prices")
-                        .disabled(model.settingsTab != "prices")
-                        .accessibilityHidden(model.settingsTab != "prices")
-                }
-                if model.settingsTab != "prices" {
+            RetainedPageHost(selection: model.settingsTab == "general" ? "general." + model.generalPage : model.settingsTab, active: parentActive || CommandLine.arguments.contains("--render")) { _ in
                 switch model.settingsTab {
+                case "prices": prices
                 case "integrations", "accounts", "codexAuth": AgentsSettingsView(model: model)
                 case "wakeups": WakeupsView(model: model)
                 case "sources": AgentsSettingsView(model: model)
                 case "servers": servers
                 case "general", "connection": general
                 default: AgentsSettingsView(model: model)
-                }
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).padding(.horizontal, 16).padding(.bottom, 16).disabled(model.repricing || !model.settingsLoaded)
         }
@@ -86,7 +76,7 @@ struct SettingsView: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity).aieyesAccent()
         .onAppear { normalizeCategory(); consumeEditorRequest() }
-        .onChange(of: model.settingsTab, initial: true) { _, tab in normalizeCategory(); if tab == "prices" { hasVisitedPrices = true } }
+        .onChange(of: model.settingsTab, initial: true) { _, _ in normalizeCategory() }
         .onChange(of: model.settingsDraft) { _, _ in
             guard model.settingsTab == "general", model.settingsDraft != model.settings else { return }
             autoSaveTask?.cancel()

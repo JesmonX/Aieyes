@@ -6,35 +6,75 @@ struct BalancedGridLayout: Layout {
     var minimumWidth: CGFloat
     var spacing: CGFloat = 10
     var maximumColumns: Int = .max
+    struct Cache {
+        struct Key: Equatable { let width: CGFloat, minimum: CGFloat, spacing: CGFloat; let maximum: Int, count: Int }
+        struct Measurement { let key: Key, size: CGSize, points: [CGPoint], sizes: [CGSize] }
+        var measurements: [Measurement] = []
+    }
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache.measurements.removeAll(keepingCapacity: true) }
     private func columns(_ width: CGFloat, _ count: Int) -> Int {
-        let fit = max(1, min(count, maximumColumns, Int((width + spacing) / (minimumWidth + spacing))))
+        let available = Int(min(CGFloat(max(1, count)), max(1, (width + spacing) / max(1, minimumWidth + spacing))))
+        let fit = max(1, min(count, maximumColumns, available))
         return max(1, Int(ceil(Double(count) / ceil(Double(max(1, count)) / Double(fit)))))
     }
     private func rows(_ width: CGFloat, _ subviews: Subviews) -> [[Int]] {
         let count = columns(width, subviews.count)
         return stride(from: 0, to: subviews.count, by: count).map { Array($0..<min($0 + count, subviews.count)) }
     }
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? minimumWidth
+    private func measure(_ proposedWidth: CGFloat?, subviews: Subviews, cache: inout Cache) -> Cache.Measurement {
+        let width = max(0, proposedWidth.flatMap { $0.isFinite ? $0 : nil } ?? minimumWidth)
+        let key = Cache.Key(width: width, minimum: minimumWidth, spacing: spacing, maximum: maximumColumns, count: subviews.count)
+        if let known = cache.measurements.first(where: { $0.key == key }) { return known }
         let columns = columns(width, subviews.count)
-        let heights = rows(width, subviews).map { row in
-            let cell = row.count == 1 ? width : (width - CGFloat(columns - 1) * spacing) / CGFloat(columns)
-            return row.map { subviews[$0].sizeThatFits(.init(width: cell, height: nil)).height }.max() ?? 0
-        }
-        return CGSize(width: width, height: heights.reduce(0, +) + CGFloat(max(0, heights.count - 1)) * spacing)
-    }
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let columns = columns(bounds.width, subviews.count)
-        var y = bounds.minY
-        for row in rows(bounds.width, subviews) {
-            let cell = row.count == 1 ? bounds.width : (bounds.width - CGFloat(columns - 1) * spacing) / CGFloat(columns)
+        var points: [CGPoint] = [], sizes: [CGSize] = [], y: CGFloat = 0
+        for row in rows(width, subviews) {
+            let cell = max(0, row.count == 1 ? width : (width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
             var height: CGFloat = 0
             for (column, index) in row.enumerated() {
                 let size = subviews[index].sizeThatFits(.init(width: cell, height: nil))
-                subviews[index].place(at: CGPoint(x: bounds.minX + CGFloat(column) * (cell + spacing), y: y), anchor: .topLeading, proposal: .init(width: cell, height: size.height))
+                points.append(CGPoint(x: CGFloat(column) * (cell + spacing), y: y)); sizes.append(CGSize(width: cell, height: size.height))
                 height = max(height, size.height)
             }
             y += height + spacing
+        }
+        let result = Cache.Measurement(key: key, size: CGSize(width: width, height: max(0, y - (subviews.isEmpty ? 0 : spacing))), points: points, sizes: sizes)
+        if cache.measurements.count >= 8 { cache.measurements.removeFirst() }
+        cache.measurements.append(result); return result
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize { measure(proposal.width, subviews: subviews, cache: &cache).size }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let measured = measure(bounds.width, subviews: subviews, cache: &cache)
+        for index in subviews.indices {
+            subviews[index].place(at: CGPoint(x: bounds.minX + measured.points[index].x, y: bounds.minY + measured.points[index].y), anchor: .topLeading, proposal: ProposedViewSize(measured.sizes[index]))
+        }
+    }
+}
+
+/// Measure each chart once. ViewThatFits would build and probe both a horizontal
+/// and a vertical copy of the same expensive Chart/legend trees on every update.
+struct ChartPairLayout: Layout {
+    struct Cache { var width: CGFloat?; var sizes: [CGSize] = []; var proposals: [CGFloat] = []; var horizontal = false }
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = Cache() }
+    private func measure(_ proposed: CGFloat?, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let width = max(0, proposed.flatMap { $0.isFinite ? $0 : nil } ?? 818)
+        if cache.width != width || cache.sizes.count != subviews.count {
+            cache.width = width;cache.horizontal = subviews.count == 2 && width >= 818
+            let first = max(450, (width - 18) / 2)
+            cache.proposals = cache.horizontal ? [first, width - 18 - first] : Array(repeating:width,count:subviews.count)
+            cache.sizes = subviews.indices.map { subviews[$0].sizeThatFits(.init(width:cache.proposals[$0],height:nil)) }
+        }
+        let height = cache.horizontal ? cache.sizes.map(\.height).max() ?? 0 : cache.sizes.map(\.height).reduce(0,+) + CGFloat(max(0,subviews.count-1))*18
+        return CGSize(width:width,height:height)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize { measure(proposal.width,subviews:subviews,cache:&cache) }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        _ = measure(bounds.width,subviews:subviews,cache:&cache)
+        var point = bounds.origin
+        for index in subviews.indices {
+            subviews[index].place(at:point,anchor:.topLeading,proposal:.init(width:cache.proposals[index],height:cache.sizes[index].height))
+            if cache.horizontal { point.x += cache.proposals[index]+18 } else { point.y += cache.sizes[index].height+18 }
         }
     }
 }
@@ -266,10 +306,7 @@ struct RootView: View, Equatable {
             } else {
                 Text(L("用量分析遵循当前筛选；今日总览的趋势为近 7 天，热力图为过去 365 天。")).font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack { Text(filters.isToday ? L("近 7 天趋势") : L("使用趋势")).font(AppFont.section); Spacer(); Picker(L("统计指标"), selection: $costMode) { Text("Token").tag(false); Text(L("API 等价成本")).tag(true) }.pickerStyle(.segmented).frame(width: 230) }
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 18) { trendSurface.frame(minWidth: 450); modelSurface.frame(minWidth: 350) }
-                    VStack(spacing: 18) { trendSurface; modelSurface }
-                }
+                ChartPairLayout { trendSurface; modelSurface }
                 Surface(title: L("每日明细 · 可选择与复制精确数值")) { DailyUsage(days: usageDashboard.trendDays, rows: usageDashboard.dayModels, compact: false, cost: costMode, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable() }
                 Surface(title: filters.dateRange == nil ? L("过去 365 天") : L("所选日期用量")) { if filters.dateRange == nil { Heatmap(days: usageDashboard.heatmap, cost: costMode).equatable() } else { YearlyHeatmaps(days: usageDashboard.heatmap, cost: costMode) } }
             }
@@ -591,6 +628,27 @@ struct EmptyCard: View {
     }
 }
 
+/// Immutable inputs shared by the plot and daily list; pointer movement never regroups data.
+private final class UsageChartData {
+    let days: [Aggregate], rows: [DayModel], models: [String], dates: [String], axisDates: [String]
+    let grouped: [String: [DayModel]]
+    private static let cache: NSCache<NSString, UsageChartData> = { let value = NSCache<NSString, UsageChartData>(); value.countLimit = 8; value.totalCostLimit = 8 * 1024 * 1024; return value }()
+    static func get(days: [Aggregate], rows: [DayModel]) -> UsageChartData {
+        var hash = Hasher()
+        for day in days { hash.combine(day.key); hash.combine(day.total); hash.combine(day.cost) }
+        for row in rows { hash.combine(row.day); hash.combine(row.model); hash.combine(row.usage.total); hash.combine(row.usage.cost) }
+        let key = String(hash.finalize()) as NSString
+        if let known = cache.object(forKey: key), known.days == days && known.rows == rows { return known }
+        let value = UsageChartData(days: days, rows: rows)
+        cache.setObject(value, forKey: key, cost: max(1, rows.count * 256 + days.count * 128)); return value
+    }
+    private init(days: [Aggregate], rows: [DayModel]) {
+        self.days = days; self.rows = rows
+        models = Array(Set(rows.map(\.model))).sorted(); dates = days.map(\.key)
+        axisDates = days.enumerated().filter { $0.offset % max(1, days.count / 7) == 0 }.map { $0.element.key }
+        grouped = Dictionary(grouping: rows, by: \.day)
+    }
+}
 struct UsageChart: View, Equatable {
     @AppStorage("appearance.chartPalette") private var chartPalette = "classic"
     @AppStorage("appearance.chartContrast") private var chartContrast = "high"
@@ -601,7 +659,12 @@ struct UsageChart: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.days == rhs.days && lhs.rows == rhs.rows && lhs.cost == rhs.cost && lhs.modelNames == rhs.modelNames
     }
-    private var models: [String] { Array(Set(rows.map(\.model))).sorted() }
+    private let data: UsageChartData
+    private var models: [String] { data.models }
+    init(days: [Aggregate], rows: [DayModel], cost: Bool, modelNames: [String: String] = [:]) {
+        self.days = days; self.rows = rows; self.cost = cost; self.modelNames = modelNames
+        data = UsageChartData.get(days: days, rows: rows)
+    }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
@@ -613,11 +676,11 @@ struct UsageChart: View, Equatable {
                 if let selected { RuleMark(x: .value(L("所选日期"), selected)).foregroundStyle(Palette.accent).lineStyle(StrokeStyle(lineWidth: 1, dash: [3])) }
             }
             .chartForegroundStyleScale(domain: models, range: models.map { Palette.model($0, preset: chartPalette, contrast: chartContrast) })
-            .chartXScale(domain: days.map(\.key)).chartLegend(.hidden)
-            .chartXSelection(value: $selected)
-            .chartXAxis { AxisMarks(values: days.enumerated().filter { $0.offset % max(1, days.count / 7) == 0 }.map { $0.element.key }) { value in AxisValueLabel { if let label = value.as(String.self) { Text(String(label.suffix(5))).font(AppFont.secondary) } } } }
+            .chartXScale(domain: data.dates).chartLegend(.hidden)
+            .chartXSelection(value: Binding(get: { selected }, set: { if selected != $0 { selected = $0 } }))
+            .chartXAxis { AxisMarks(values: data.axisDates) { value in AxisValueLabel { if let label = value.as(String.self) { Text(String(label.suffix(5))).font(AppFont.secondary) } } } }
             .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine().foregroundStyle(.primary.opacity(DesignTokens.chartGridOpacity)); AxisValueLabel { if let n = value.as(Double.self) { Text(cost ? Format.money(n) : Format.compact(n)).font(AppFont.secondary) } } } }
-            .chartOverlay { proxy in GeometryReader { geometry in Color.clear.contentShape(Rectangle()).onContinuousHover { phase in if case .active(let point) = phase, let frame = proxy.plotFrame { selected = proxy.value(atX: point.x - geometry[frame].minX, as: String.self) } } } }
+            .chartOverlay { proxy in GeometryReader { geometry in Color.clear.contentShape(Rectangle()).onContinuousHover { phase in if case .active(let point) = phase, let frame = proxy.plotFrame { let next = proxy.value(atX: point.x - geometry[frame].minX, as: String.self); if selected != next { selected = next } } } } }
             .frame(height: DesignTokens.chartHeight).focusable().focusEffectDisabled().onKeyPress(.leftArrow) { move(-1); return .handled }.onKeyPress(.rightArrow) { move(1); return .handled }
             .accessibilityLabel(L("每日用量，左右方向键选择日期，下方提供精确读数"))
             Group { if let day = days.first(where: { $0.key == selected }) {
@@ -639,10 +702,15 @@ struct DailyUsage: View, Equatable {
     var days: [Aggregate], rows: [DayModel], compact: Bool
     var cost = false
     var modelNames: [String: String] = [:]
+    private let data: UsageChartData
+    init(days: [Aggregate], rows: [DayModel], compact: Bool, cost: Bool = false, modelNames: [String: String] = [:]) {
+        self.days = days; self.rows = rows; self.compact = compact; self.cost = cost; self.modelNames = modelNames
+        data = UsageChartData.get(days: days, rows: rows)
+    }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        let grouped = Dictionary(grouping: rows, by: \.day)
+        let grouped = data.grouped
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 ForEach(days.reversed()) { day in DailyUsageDay(day: day, rows: grouped[day.key] ?? [], cost: cost, modelNames: modelNames) }
