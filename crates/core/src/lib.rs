@@ -51,6 +51,7 @@ pub mod rolling_estimates;
 pub mod runtime;
 pub mod session_events;
 pub mod session_hooks;
+pub mod session_sounds;
 pub mod sessions;
 pub mod settings;
 pub mod ssh;
@@ -303,10 +304,18 @@ impl Engine {
             }
             "autoEstimates.configure" => self.configure_automatic(params),
             "autoEstimates.tick" => self.tick_automatic(),
-            "autoEstimates.rebuild" => self.store.rebuild_automatic_history(
-                params["accountKey"].as_str(),
-                params["dryRun"].as_bool().unwrap_or(false),
-            ),
+            "autoEstimates.rebuild" => {
+                let range = match (params["from"].as_i64(), params["to"].as_i64()) {
+                    (None, None) => None,
+                    (Some(from), Some(to)) => Some((from, to)),
+                    _ => anyhow::bail!("历史恢复需要同时指定 from 和 to"),
+                };
+                self.store.rebuild_automatic_history_range(
+                    params["accountKey"].as_str(),
+                    params["dryRun"].as_bool().unwrap_or(false),
+                    range,
+                )
+            }
             "accounts.targets" => self.account_targets(&params),
             "accounts.scan" => self.scan_accounts(params),
             "accounts.native.remove" => self.remove_native_connection(params),

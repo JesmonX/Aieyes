@@ -84,6 +84,7 @@ import Combine
             guard let self else { return }
             if self.popover.isShown { if toggle { self.popover.performClose(nil) }; return }
             NSApp.activate(ignoringOtherApps: true)
+            self.preparePopover(screen: anchor.window?.screen)
             self.popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
             self.model.setWindowVisible(true, window: "panel")
         })
@@ -153,10 +154,15 @@ import Combine
         if popover.isShown { popover.performClose(nil) }
         else { showPopover() }
     }
+    private func preparePopover(screen: NSScreen?) {
+        let area = (screen ?? NSScreen.main)?.visibleFrame.size ?? NSSize(width: 1024, height: 800)
+        let size = NSSize(width: min(450, max(1, area.width - 24)), height: min(720, max(1, area.height - 34)))
+        (popover.contentViewController as? PanelContainer)?.prepare(size: size)
+        popover.contentSize = size
+    }
     private func showPopover() {
         guard let button = statusItem.button else { return }
-        model.panelHeight = min(720, max(360, (button.window?.screen?.visibleFrame.height ?? 800) - 34))
-        popover.contentSize = NSSize(width: 450, height: model.panelHeight)
+        preparePopover(screen: button.window?.screen)
         appearanceController?.updatePanel()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         model.setWindowVisible(true, window: "panel")

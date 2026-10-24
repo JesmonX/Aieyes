@@ -144,6 +144,9 @@ pub(crate) fn atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     result.map_err(|_| anyhow::anyhow!("无法安全保存凭据或管理记录"))
 }
 pub fn lock(root: &Path) -> Result<crate::file_lock::FileLock> {
+    lock_named(root, "凭据保存或续期")
+}
+pub fn lock_named(root: &Path, name: &str) -> Result<crate::file_lock::FileLock> {
     let state = root.join(".aieyes/state");
     private_dir(&state)?;
     let path = state.join("coordinator.lock");
@@ -156,9 +159,71 @@ pub fn lock(root: &Path) -> Result<crate::file_lock::FileLock> {
         options.mode(0o600);
     }
     let f = options.open(path)?;
-    crate::file_lock::FileLock::try_exclusive(f)
-        .map_err(|_| anyhow::anyhow!("此 Codex 目录有正在执行的账户操作，请稍后重试"))
+    let guard = crate::file_lock::FileLock::try_exclusive(f)
+        .map_err(|_| anyhow::anyhow!("此 Codex 目录有正在执行的账户操作，请稍后重试"))?;
+    atomic(
+        &state.join("coordinator-operation.json"),
+        &json!({"name":name}),
+    )?;
+    Ok(guard)
 }
+/// Switching waits for credential writers; ordinary network reads hold no home lease.
+pub fn lock_wait(root: &Path) -> Result<crate::file_lock::FileLock> {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        crate::operations::check()?;
+        match lock_named(root, "账户切换") {
+            Ok(guard) => return Ok(guard),
+            Err(error) => {
+                if !error.to_string().contains("正在执行的账户操作") {
+                    return Err(error);
+                }
+                let owner = read(&root.join(".aieyes/state/coordinator-operation.json"))
+                    .unwrap_or_default();
+                ensure!(
+                    std::time::Instant::now() < until,
+                    "等待{}完成超时，请稍后重试切换",
+                    owner["name"].as_str().unwrap_or("凭据写入")
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+}
+pub fn query_epoch(root: &Path) -> Result<Value> {
+    let path = root.join(".aieyes/state/query-epoch.json");
+    if path.exists() {
+        read(&path)
+    } else {
+        Ok(Value::Null)
+    }
+}
+pub fn check_query_epoch(root: &Path, epoch: &Value) -> Result<()> {
+    ensure!(&query_epoch(root)? == epoch, "账户切换已开始，已取消旧查询");
+    Ok(())
+}
+pub fn advance_query_epoch(root: &Path) -> Result<()> {
+    private_dir(&root.join(".aieyes/state"))?;
+    atomic(
+        &root.join(".aieyes/state/query-epoch.json"),
+        &json!(new_id()),
+    )
+}
+pub fn query_lock(path: &Path) -> Result<crate::file_lock::FileLock> {
+    let file = path.join("query.lock");
+    safe(&file)?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let f = options.open(file)?;
+    crate::file_lock::FileLock::try_exclusive(f)
+        .map_err(|_| anyhow::anyhow!("此账户已有查询，等待下次刷新"))
+}
+
 fn claims(token: &str) -> Value {
     token
         .split('.')

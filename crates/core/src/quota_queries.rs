@@ -187,12 +187,17 @@ pub(crate) fn raw_codex_quota(
         "INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         rusqlite::params![format!("quota-attempt:{key}"), now().to_string()],
     )?;
-    let value = result?;
+    let mut value = result?;
     ensure!(
         signature(&store.settings()?)? == expected
             && crate::accounts::status_revision(store, source)? == revision,
         "查询期间账户或机器配置已改变，结果已丢弃"
     );
+    let observations = value
+        .as_object_mut()
+        .and_then(|object| object.remove("_aieyesIdentityObservations"))
+        .unwrap_or(Value::Null);
+    store.record_codex_query_observations(settings, source, &observations)?;
     Ok(value)
 }
 fn pause(start: Instant) -> Result<()> {

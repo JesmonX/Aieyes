@@ -500,6 +500,10 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         let mut pet_revision = None;
         let mut pet_asset = Value::Null;
         loop {
+            let preferences = store
+                .settings()
+                .map(|s| s.session_sounds)
+                .unwrap_or_default();
             let snapshot = match store.settings() {
                 Ok(settings) => monitor.read(&settings, std::time::SystemTime::now()),
                 Err(_) => Snapshot {
@@ -553,6 +557,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
                     app.state::<Desktop>()
                         .sampling
                         .store(sampling, Ordering::Relaxed);
+                    crate::session_sounds::update(&app, &snapshot, &preferences);
                     update(&app, snapshot, pet_asset, supported);
                     refresh_menu(&app);
                 })
@@ -774,7 +779,7 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
         let pet_window = app
             .try_state::<crate::native_pet::NativePet>()
             .ok_or("悬浮入口不可用")?;
-        let (x, y, ball_width, ball_height, scale) = pet_window.geometry()?;
+        let (x, y, ball_width, ball_height, _pet_scale) = pet_window.geometry()?;
         let monitors = window.available_monitors().map_err(|e| e.to_string())?;
         let monitor = monitors
             .into_iter()
@@ -788,6 +793,7 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
             .or(window.primary_monitor().map_err(|e| e.to_string())?)
             .ok_or("屏幕不可用")?;
         let area = monitor.work_area();
+        let scale = monitor.scale_factor();
         let (width, height) = panel_size(scale, Some(area.size.height));
         let width = width.min(area.size.width.saturating_sub((24.0 * scale) as u32).max(1));
         let pos = panel_rect(
@@ -956,6 +962,37 @@ fn recovery_failed(app: &AppHandle, generation: u64, error: &str) {
     emit_shell(app);
     let _ = app.emit("desktop:error", error);
 }
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn repair_panel_geometry(app: &AppHandle) -> Result<(), String> {
+    let open = app
+        .state::<Desktop>()
+        .state
+        .lock()
+        .map_err(|_| "显示状态不可用")?
+        .panel;
+    if !open {
+        return Ok(());
+    }
+    let window = app.get_webview_window("floating").ok_or("面板不可用")?;
+    if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
+        let area = monitor.work_area();
+        let scale = monitor.scale_factor();
+        let (width, height) = panel_size(scale, Some(area.size.height));
+        let width = width.min(
+            area.size
+                .width
+                .saturating_sub((24.0 * scale).round() as u32)
+                .max(1),
+        );
+        let actual = window.inner_size().map_err(|e| e.to_string())?;
+        if actual.width.abs_diff(width) > 1 || actual.height.abs_diff(height) > 1 {
+            window
+                .set_size(PhysicalSize::new(width, height))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
 #[tauri::command]
 pub fn desktop_panel_ready(app: AppHandle, generation: u64) -> Result<(), String> {
     {
@@ -966,6 +1003,8 @@ pub fn desktop_panel_ready(app: AppHandle, generation: u64) -> Result<(), String
         }
         state.recovery.clear();
     }
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    repair_panel_geometry(&app)?;
     emit_shell(&app);
     Ok(())
 }
@@ -2074,6 +2113,10 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                     }
                 });
             });
+        }
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        tauri::WindowEvent::ScaleFactorChanged { .. } if window.label() == "floating" => {
+            let _ = repair_panel_geometry(window.app_handle());
         }
         #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         tauri::WindowEvent::ScaleFactorChanged { .. } if window.label() == "floating" => {

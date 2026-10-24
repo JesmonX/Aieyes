@@ -3,6 +3,7 @@ import SwiftUI
 struct QuotaNotificationSettingsView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var service: QuotaNotificationService
+    @State private var soundError: String?
     private func binding(_ key: WritableKeyPath<QuotaResetNotificationSettings, Bool?>, fallback: Bool) -> Binding<Bool> {
         Binding(get: { model.settingsDraft.quotaResetNotifications?[keyPath: key] ?? fallback }, set: { value in
             var preferences = model.settingsDraft.quotaResetNotifications ?? QuotaResetNotificationSettings()
@@ -12,6 +13,18 @@ struct QuotaNotificationSettingsView: View {
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
+        Section(L("会话提示音")) {
+            Toggle(L("等待输入提示音"), isOn: Binding(get: { model.settingsDraft.sessionSounds?.needsInput ?? true }, set: { value in
+                var preferences = model.settingsDraft.sessionSounds ?? SessionSoundSettings(); preferences.needsInput = value; model.settingsDraft.sessionSounds = preferences
+            }))
+            Button(L("试听等待输入")) { soundError = model.sessionSounds.preview("needsInput") }
+            Toggle(L("任务完成提示音"), isOn: Binding(get: { model.settingsDraft.sessionSounds?.complete ?? true }, set: { value in
+                var preferences = model.settingsDraft.sessionSounds ?? SessionSoundSettings(); preferences.complete = value; model.settingsDraft.sessionSounds = preferences
+            }))
+            Button(L("试听任务完成")) { soundError = model.sessionSounds.preview("complete") }
+            Text(L("仅在新状态发生时播放；关闭面板后仍有效。音量跟随系统输出。")).font(AppFont.secondary).foregroundStyle(.secondary)
+            if let soundError { ErrorNotice(message: soundError) }
+        }
         Section(L("订阅额度重置提醒")) {
             Toggle(L("提前重置时提醒"), isOn: binding(\.unexpected, fallback: true))
             Toggle(L("到期重置时提醒"), isOn: binding(\.natural, fallback: false))

@@ -197,12 +197,13 @@ private struct CodexConnectionSwitchSheet: View {
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 220)
+            Text(L("确认后也会自动关闭随后出现的相关登录进程；独立 API 实例会保留。")).font(AppFont.secondary).foregroundStyle(.secondary)
             if let preserved = prepared?.preservedProcesses, !preserved.isEmpty { Text(L("将保留 {0} 个独立 API 进程。" , preserved.count)).font(AppFont.secondary).foregroundStyle(.secondary) }
             HStack {
                 Button(L("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(L("重新检查")) { Task { await prepare() } }.disabled(!available)
                 Spacer()
-                Button(processes.isEmpty ? L("确认切换") : L("关闭并切换")) { Task { await commit() } }
+                Button(L("关闭并切换")) { Task { await commit() } }
                     .buttonStyle(.aieyesPrimary).disabled(!available || prepared == nil || processes.contains { !$0.canClose })
             }.disabled(busy)
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogApiWidth).aieyesAccent().interactiveDismissDisabled(busy)
@@ -230,7 +231,7 @@ private struct CodexConnectionSwitchSheet: View {
     private func commit() async {
         guard !busy, available, let prepared else { return }; busy = true; error = nil; defer { busy = false }
         do {
-            let result: CodexOperation = try await model.engine.call("codexAuth.switch.commit", params: ["sourceId":request.sourceID,"operationId":prepared.operationId,"closeProcesses":!processes.isEmpty])
+            let result: CodexOperation = try await model.engine.call("codexAuth.switch.commit", params: ["sourceId":request.sourceID,"operationId":prepared.operationId,"closeProcesses":true])
             guard result.status == "succeeded" else { throw ClientError.message(result.error ?? L("切换尚未完成，请重新检查")) }
             if let saved: Settings = try? await model.engine.call("settings.get") { model.acceptConfiguration(saved) }
             completed()

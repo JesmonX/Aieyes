@@ -50,7 +50,7 @@
     const review = switchReview,checked = prepared;
     if (!review || !checked || review.sourceId !== sourceId || review.accountId !== targetAccountId) return;
     try {
-      const result = await call('switch.commit', { operationId: checked.operationId, closeProcesses: (checked.processes ?? []).length > 0 });
+      const result = await call('switch.commit', { operationId: checked.operationId, closeProcesses: true });
       if (result.status !== 'succeeded') throw new Error(result.error || AieyesI18n.t("切换尚未完成，请重新检查"));
       prepared = null;switchReview = null;
       review.settingsPending = Boolean(result.accountId);review.warning = result.statusWarning;
@@ -67,13 +67,13 @@
         <p class="muted">${e(switchReview.sourceName)} · ${e(switchReview.path)}</p>
         <div class="warning">${AieyesI18n.t("确认后将关闭下面列出的受影响进程，包含使用当前默认 API 的实例；已确认使用独立 API 配置的实例及其辅助进程会保留。请先保存工作。")}</div>
         ${switchError ? `<div class="error" role="alert">${e(switchError)}</div>` : ''}
-        ${busy ? `<p role="status">${prepared ? AieyesI18n.t("正在切换…") : AieyesI18n.t("正在检查…")}</p>` : ''}
+        <p class="muted">${AieyesI18n.t("确认后也会自动关闭随后出现的相关登录进程；独立 API 实例会保留。")}</p>${busy ? `<p role="status">${prepared ? AieyesI18n.t("正在切换…") : AieyesI18n.t("正在检查…")}</p>` : ''}
         ${prepared?.preservedProcesses?.length ? `<p class="muted">${AieyesI18n.t("将保留 {0} 个使用独立 API 凭据的进程（含辅助进程）。", prepared.preservedProcesses.length)}</p>` : ''}
         ${prepared ? `<div ${blocked ? 'class="error" role="alert"' : ''}>${blocked ? AieyesI18n.t("暂时无法切换，请先处理以下进程，再重新检查。") : processes.length ? AieyesI18n.t("确认后将关闭以下进程及应用。") : AieyesI18n.t("没有需要关闭的 Codex 或 ChatGPT 进程。")}</div>
         <ul class="codex-switch-processes">${processes.map((p) => `<li>${e(p.name)} · PID ${p.pid}${p.parentPid ? `<small>${AieyesI18n.t("父进程 PID {0}", p.parentPid)}</small>` : ''}${p.canClose ? '' : `<small class="error">${e(p.blockingReason || AieyesI18n.t("无法确认归属，请手动关闭后重新检查"))}</small>`}</li>`).join('')}</ul>` : ''}
         <p class="muted">${AieyesI18n.t("切换后请按需手动重新打开 Codex 或 ChatGPT 并恢复会话。")}</p>
       </div>
-      <div class="dialog-foot"><button data-auth="cancelSwitch" ${busy ? 'disabled' : ''} autofocus>${AieyesI18n.t("取消")}</button><button data-auth="retrySwitch" ${busy ? 'disabled' : ''}>${AieyesI18n.t("重新检查")}</button><button class="primary" data-auth="commit" ${busy || !prepared || blocked ? 'disabled' : ''}>${processes.length ? AieyesI18n.t("关闭并切换") : AieyesI18n.t("确认切换")}</button></div>
+      <div class="dialog-foot"><button data-auth="cancelSwitch" ${busy ? 'disabled' : ''} autofocus>${AieyesI18n.t("取消")}</button><button data-auth="retrySwitch" ${busy ? 'disabled' : ''}>${AieyesI18n.t("重新检查")}</button><button class="primary" data-auth="commit" ${busy || !prepared || blocked ? 'disabled' : ''}>${AieyesI18n.t("关闭并切换")}</button></div>
     </dialog>`;
   }
 

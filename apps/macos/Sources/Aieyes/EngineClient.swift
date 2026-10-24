@@ -577,6 +577,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         for row in rows { if let index = sessionSources.firstIndex(where: { $0.sourceId == row.sourceId }) { sessionSources[index].hooks = row.state } }
         return rows
     }
+    let sessionSounds = SessionSoundService()
     func refreshSessions() async {
         guard !sessionBusy, !stopped, !installingUpdate else { return }
         sessionBusy = true
@@ -584,6 +585,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         do {
             let result: SessionSnapshot = try await sessionEngine.call("sessions.list")
             guard !stopped, !installingUpdate, !Task.isCancelled else { return }
+            sessionSounds.consume(result, preferences: settings.sessionSounds)
             sessions = result.sessions; sessionSources = result.sources ?? []; sessionsUnavailable = result.unavailable; petState = result.pet ?? .unknown; coreSessionSummary = result.summary
 
         } catch {
@@ -721,6 +723,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         let pending = runningEstimates.count - active
         return [(active > 0 ? L("{0} 项采样中" , active) : nil), (pending > 0 ? L("{0} 项待确认" , pending) : nil)].compactMap { $0 }.joined(separator: " · ")
     }
+    @Published var panelWidth: CGFloat = 450
     @Published var panelHeight: CGFloat = 720
     @Published private(set) var visibleWindows = Set<String>()
     func isWindowVisible(_ window: String) -> Bool { visibleWindows.contains(window) }

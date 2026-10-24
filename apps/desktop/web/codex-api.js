@@ -90,19 +90,19 @@ window.AieyesCodexAPI = (() => {
       const rows = prepared?.processes ?? [],blocked = rows.some((p) => !p.canClose),body = dialog.querySelector('.quota-dialog-body');
       const name = connection?.name || inspection?.profiles.find((p) => p.id === profileId)?.name || AieyesI18n.t("已保存账户");
       body.innerHTML = '<p><strong>' + e(location(sources().find((s) => s.id === sourceId))) + ' → ' + e(name) + '</strong></p>' + (
-      !connection && inspection?.profiles.length ? AieyesI18n.t("<label>目标账户<select id=\"api-switch-profile\">") + inspection.profiles.map((p) => '<option value="' + e(p.id) + '" ' + (p.id === profileId ? 'selected' : '') + '>' + e(p.name) + '</option>').join('') + '</select></label>' : '') + AieyesI18n.t("<p class=\"muted\">确认后会关闭下面列出的受影响进程。已确认使用独立 API 配置的实例会保留；请先保存工作。</p>") + (
+      !connection && inspection?.profiles.length ? AieyesI18n.t("<label>目标账户<select id=\"api-switch-profile\">") + inspection.profiles.map((p) => '<option value="' + e(p.id) + '" ' + (p.id === profileId ? 'selected' : '') + '>' + e(p.name) + '</option>').join('') + '</select></label>' : '') + AieyesI18n.t("<p class=\"muted\">确认后会关闭下面列出及随后出现的相关登录进程。已确认使用独立 API 配置的实例会保留；请先保存工作。</p>") + (
 
       error ? '<div class="error" role="alert">' + e(AieyesI18n.message(error)) + '</div>' : '') + (
       prepared ? rows.length ? '<ul>' + rows.map((p) => '<li>' + e(p.name) + ' · PID ' + p.pid + (p.canClose ? '' : ' · ' + e(p.blockingReason)) + '</li>').join('') + '</ul>' : AieyesI18n.t("<p>没有需要关闭的进程。</p>") : '') + (
       prepared?.preservedProcesses?.length ? AieyesI18n.t("<p class=\"tiny muted\">将保留 ") + prepared.preservedProcesses.length + AieyesI18n.t(" 个独立 API 进程。</p>") : '') + AieyesI18n.t("<div class=\"actions\"><button id=\"api-switch-cancel\">取消</button><button id=\"api-switch-retry\">重新检查</button><button class=\"primary\" id=\"api-switch-confirm\" ") + (
-      !prepared || blocked ? 'disabled' : '') + '>' + (rows.length ? AieyesI18n.t("关闭并切换") : AieyesI18n.t("确认切换")) + '</button></div>';
+      !prepared || blocked ? 'disabled' : '') + '>' + AieyesI18n.t("关闭并切换") + '</button></div>';
       body.querySelector('#api-switch-cancel').onclick = finish;
       body.querySelector('#api-switch-retry').onclick = () => {error = '';void prepare();};
       const picker = body.querySelector('#api-switch-profile');if (picker) picker.onchange = () => {profileId = picker.value;error = '';void prepare();};
       body.querySelector('#api-switch-confirm').onclick = async () => {
         if (!prepared || working) return;setWorking(true);body.querySelectorAll('button,select').forEach((b) => b.disabled = true);
         try {
-          const result = await api('codexAuth.switch.commit', { sourceId, operationId: prepared.operationId, closeProcesses: rows.length > 0 });
+          const result = await api('codexAuth.switch.commit', { sourceId, operationId: prepared.operationId, closeProcesses: true });
           if (result.status !== 'succeeded') throw new Error(result.error || AieyesI18n.t("切换尚未完成，请重新检查"));
           prepared = null;
           notice = result.statusWarning || AieyesI18n.t("登录方式已切换，可重新打开 Codex 并恢复会话。");

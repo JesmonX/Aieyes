@@ -254,17 +254,56 @@ fn renew(loc: &Location, root: &Path, p: &Profile) -> Result<Value> {
     read_authority(root, p)
 }
 fn quota(loc: &Location, root: &Path, profile: &str) -> Result<Value> {
-    let _lock = files::lock(root)?;
-    file_mode(root)?;
-    recover(root)?;
-    let p = files::profile(root, profile)?;
-    let active_before = current(root);
-    let auth = read_authority(root, &p)?;
-    let query = layout(root, profile, "query")?;
+    let observation = || -> Result<Value> {
+        let selected = crate::codex_api::direct::selected(root)?;
+        let identity = if selected["kind"] == "account" {
+            current(root).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        Ok(json!({"identityKey":identity,"stamp":now()}))
+    };
+    let (epoch, before) = {
+        let _lease = files::lock(root)?;
+        (files::query_epoch(root)?, observation()?)
+    };
+    let mut result = quota_read(loc, root, profile)?;
+    let _lease = files::lock(root)?;
+    files::check_query_epoch(root, &epoch)?;
+    let after = observation()?;
+    ensure!(
+        before["identityKey"] == after["identityKey"],
+        "日常账户已改变，已丢弃旧查询结果"
+    );
+    result
+        .as_object_mut()
+        .context("额度查询结果无效")?
+        .insert("_aieyesIdentityObservations".into(), json!([before, after]));
+    Ok(result)
+}
+fn quota_read(loc: &Location, root: &Path, profile: &str) -> Result<Value> {
+    let (p, active_before, auth, epoch, query) = {
+        let _lock = files::lock(root)?;
+        file_mode(root)?;
+        recover(root)?;
+        let p = files::profile(root, profile)?;
+        let auth = read_authority(root, &p)?;
+        (
+            p,
+            current(root),
+            auth,
+            files::query_epoch(root)?,
+            layout(root, profile, "query")?,
+        )
+    };
+    let _query_lock = files::query_lock(&query)?;
     let attempt = |auth: &Value| -> Result<Value> {
+        files::check_query_epoch(root, &epoch)?;
         let mut rpc = loc.rpc(&query, false)?;
+        rpc.guard_query(root, &epoch)?;
         rpc.login_external(auth)?;
         let quota = rpc.quota(auth, &mut || read_authority(root, &p))?;
+        files::check_query_epoch(root, &epoch)?;
         ensure!(
             current(root) == active_before,
             "日常账户已改变，已丢弃旧查询结果"
@@ -274,6 +313,7 @@ fn quota(loc: &Location, root: &Path, profile: &str) -> Result<Value> {
     match attempt(&auth) {
         Ok(value) => Ok(value),
         Err(first) => {
+            files::check_query_epoch(root, &epoch)?;
             let latest = read_authority(root, &p)?;
             if files::revision(&latest) != files::revision(&auth) {
                 return attempt(&latest);
@@ -290,14 +330,19 @@ fn quota(loc: &Location, root: &Path, profile: &str) -> Result<Value> {
             {
                 return Err(first);
             }
+            let lock = files::lock_named(root, "凭据续期")?;
+            files::check_query_epoch(root, &epoch)?;
             let fresh = renew(loc, root, &p)?;
+            drop(lock);
             match attempt(&fresh) {
                 Ok(value) => Ok(value),
                 Err(second) => {
                     if !second.to_string().contains("接口不兼容") {
                         return Err(second);
                     }
-                    // Old CLIs can still query an inactive credential under our exclusive lock.
+                    // The legacy file-auth fallback can rotate credentials, so keep its lease.
+                    let _lock = files::lock(root)?;
+                    files::check_query_epoch(root, &epoch)?;
                     ensure!(
                         current(root).as_deref() != Some(&p.identity.key)
                             || processes::list(root)?.is_empty(),
@@ -461,20 +506,30 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
         "inspect" | "list" => inspect(loc, &root, true),
         "profiles.list" => inspect(loc, &root, false),
         "model.list" => {
-            let _lock = files::lock(&root)?;
-            file_mode(&root)?;
-            recover(&root)?;
-            let p = files::profile(
-                &root,
-                params["profileId"].as_str().context("请选择账户档案")?,
-            )?;
-            let auth = read_authority(&root, &p)?;
-            let path = layout(&root, &p.id, "query")?;
+            let (p, auth, path, epoch) = {
+                let _lock = files::lock(&root)?;
+                file_mode(&root)?;
+                recover(&root)?;
+                let p = files::profile(
+                    &root,
+                    params["profileId"].as_str().context("请选择账户档案")?,
+                )?;
+                let auth = read_authority(&root, &p)?;
+                let path = layout(&root, &p.id, "query")?;
+                (p, auth, path, files::query_epoch(&root)?)
+            };
+            let _query_lock = files::query_lock(&path)?;
             let mut rpc = loc.rpc(&path, false)?;
+            rpc.guard_query(&root, &epoch)?;
             let mut info = rpc.login_external(&auth)?;
             info["models"] = rpc.call("model/list", json!({"includeHidden":false}), &mut |_| {
                 Ok(None)
             })?;
+            files::check_query_epoch(&root, &epoch)?;
+            ensure!(
+                read_authority(&root, &p).is_ok(),
+                "账户身份改变，已丢弃旧查询结果"
+            );
             Ok(info)
         }
         "quota" => quota(
@@ -507,7 +562,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             Ok(json!({"cancelRequested":true}))
         }
         "login.start" => {
-            let lock = files::lock(&root)?;
+            let lock = files::lock_named(&root, "账户登录")?;
             file_mode(&root)?;
             let replacement = params["profileId"]
                 .as_str()
@@ -579,7 +634,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             Ok(json!({"profile":p}))
         }
         "switch.prepare" => {
-            let _lock = files::lock(&root)?;
+            let _lock = files::lock_wait(&root)?;
             file_mode(&root)?;
             recover(&root)?;
             let mut target = params
@@ -603,7 +658,7 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             Ok(record)
         }
         "switch.commit" => {
-            let _lock = files::lock(&root)?;
+            let _lock = files::lock_wait(&root)?;
             file_mode(&root)?;
             let op = params["operationId"].as_str().context("缺少切换操作标识")?;
             let mut record = files::read(&operation(&root, op)?)?;
@@ -646,12 +701,13 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 validated["configRevision"] == target["configRevision"],
                 "Codex 配置已变化，请重新检查"
             );
+            files::advance_query_epoch(&root)?;
             let auth = if target["kind"] == "account" {
                 let profile = target["profileId"].as_str().context("目标档案缺失")?;
                 let p = files::profile(&root, profile)?;
                 let auth = read_authority(&root, &p)?;
                 policy(&root, &auth)?;
-                let query = layout(&root, profile, "query")?;
+                let query = layout(&root, profile, "switch-query")?;
                 let mut rpc = loc.rpc(&query, false)?;
                 rpc.login_external(&auth)?;
                 rpc.quota(&auth, &mut || Ok(auth.clone()))?;
@@ -669,7 +725,9 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
                 running.is_empty() || params["closeProcesses"] == true,
                 "Codex / ChatGPT 正在运行，尚未授权关闭"
             );
-            processes::close_for_switch_at(&root, &running)?;
+            if params["closeProcesses"] == true {
+                processes::close_for_switch_at(&root, &running)?;
+            }
             ensure!(
                 processes::list_for_switch_at(&root)?.is_empty(),
                 "Codex / ChatGPT 已重新启动，尚未切换"
@@ -733,9 +791,12 @@ pub fn call(loc: &Location, method: &str, params: &Value) -> Result<Value> {
             record["targetConfigRevision"] = json!(written);
             let applied = (|| -> Result<()> {
                 update_operation(&root, op, &record)?;
+                if params["closeProcesses"] == true {
+                    processes::close_for_switch_at(&root, &running)?;
+                }
                 ensure!(
                     processes::list_for_switch_at(&root)?.is_empty(),
-                    "切换期间 Codex / ChatGPT 已重新启动，请重新检查"
+                    "仍有 Codex / ChatGPT 进程，尚未授权关闭"
                 );
                 ensure!(
                     auth_revision() == old.as_ref().map(files::revision),

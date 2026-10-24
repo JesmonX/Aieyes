@@ -19,6 +19,7 @@ mod passive_window;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod pet_frames;
 mod phase_colors;
+mod session_sounds;
 mod updates;
 
 use aieyes_core::Engine;
@@ -394,6 +395,7 @@ fn main() {
                 Arc::new(Mutex::new(Engine::open(&root)?)),
             ));
             updates::setup(app.handle(), &root);
+            app.manage(session_sounds::Sounds::default());
             notifications::start(app.handle(), &root);
             desktop::setup(app, &root)?;
             let automatic_app = app.handle().clone();
@@ -409,6 +411,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             engine_call,
             notifications::notifications_info,
+            session_sounds::session_sounds_preview,
             notifications::notifications_test,
             select_local_path,
             check_local_path,

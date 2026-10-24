@@ -547,7 +547,12 @@ struct NativeConnection: Codable, Equatable, Identifiable {
     var displayName: String { !email.isEmpty ? email : kind == "api" ? (baseUrl.isEmpty ? L("原生 API") : baseUrl) : identityKey.map { $0.hasPrefix("qoder:") ? "Qoder · " + $0.dropFirst(6).prefix(12) : (CoreContract.providerNames[provider] ?? provider) + L(" 账户") } ?? L("账户身份待确认") }
     var statusLabel: String { ["pending":L("待验证"), "expired":L("已过期"), "unavailable":L("需重新扫描"), "observed":L("已识别账户")][status] ?? L("待验证") }
 }
+struct SessionSoundSettings: Codable, Equatable {
+    var needsInput: Bool? = true
+    var complete: Bool? = true
+}
 struct Settings: Codable, Equatable {
+    var sessionSounds: SessionSoundSettings?
     var quotaResetNotifications: QuotaResetNotificationSettings?
     var nativeConnections: [NativeConnection]?
     var codexApis: [CodexAPIConnection]?

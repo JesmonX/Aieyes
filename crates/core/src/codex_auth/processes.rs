@@ -502,21 +502,41 @@ pub fn list_for_switch_at(root: &Path) -> Result<Vec<Running>> {
     Ok(review_at(root, &[])?.0)
 }
 pub fn close_for_switch_at(root: &Path, expected: &[Running]) -> Result<()> {
-    #[cfg(windows)]
-    let signal = |pid| {
-        windows::terminate(
-            expected
-                .iter()
-                .find(|p| p.pid == pid)
-                .expect("confirmed PID"),
-        )
-    };
-    #[cfg(unix)]
-    let signal = terminate;
+    // Retain every confirmed identity so helpers reparented during shutdown remain known.
+    let confirmed = std::cell::RefCell::new(expected.to_vec());
     close_with(
         expected,
-        || Ok(review_at(root, expected)?.0),
-        signal,
+        || {
+            let rows = review_at(root, &confirmed.borrow())?.0;
+            for row in rows.iter().filter(|p| p.can_close) {
+                if !confirmed
+                    .borrow()
+                    .iter()
+                    .any(|p| p.pid == row.pid && p.fingerprint == row.fingerprint)
+                {
+                    confirmed.borrow_mut().push(row.clone());
+                }
+            }
+            Ok(rows)
+        },
+        |pid| {
+            let rows = review_at(root, &confirmed.borrow())?.0;
+            let Some(actual) = rows.iter().find(|p| p.pid == pid) else {
+                return Ok(());
+            };
+            ensure!(
+                actual.can_close
+                    && confirmed
+                        .borrow()
+                        .iter()
+                        .any(|p| p.pid == pid && p.fingerprint == actual.fingerprint),
+                "进程身份改变，已跳过本次关闭"
+            );
+            #[cfg(windows)]
+            return windows::terminate(actual);
+            #[cfg(unix)]
+            terminate(pid)
+        },
         Duration::from_secs(10),
     )
 }
@@ -539,16 +559,10 @@ pub fn list(root: &Path) -> Result<Vec<Running>> {
     windows::list(root)
 }
 
-fn unchanged(actual: &[Running], expected: &[Running]) -> Result<()> {
+fn closable(actual: &[Running]) -> Result<()> {
     ensure!(
         actual.iter().all(|p| p.can_close),
-        "进程认证方式或依赖已变化，账户未切换，请重新检查"
-    );
-    ensure!(
-        actual.iter().all(|p| expected
-            .iter()
-            .any(|old| p.pid == old.pid && p.fingerprint == old.fingerprint)),
-        "Codex / ChatGPT 已重新启动或运行进程已变化，账户未切换，请重新检查"
+        "无法确认进程认证方式或依赖，请手动处理后重试切换"
     );
     Ok(())
 }
@@ -559,32 +573,39 @@ fn close_with(
     mut signal: impl FnMut(u32) -> Result<()>,
     timeout: Duration,
 ) -> Result<()> {
-    ensure!(
-        expected.iter().all(|p| p.can_close),
-        "无法确认部分进程归属，请手动关闭 Codex 和 ChatGPT 后重试"
-    );
-    unchanged(&read()?, expected)?;
-    let mut ordered = expected.to_vec();
-    ordered.sort_by_key(|p| (process_depth(p, expected), p.pid));
-    for p in ordered {
-        let current = read()?;
-        unchanged(&current, expected)?;
-        if current.iter().any(|actual| actual.pid == p.pid) {
-            signal(p.pid)?;
-        }
-    }
+    closable(expected)?;
     let until = std::time::Instant::now() + timeout;
+    let mut signalled = std::collections::HashSet::new();
     loop {
-        let current = read()?;
-        unchanged(&current, expected)?;
+        let mut current = read()?;
+        closable(&current)?;
         if current.is_empty() {
+            return Ok(());
+        }
+        let original = current.clone();
+        current.sort_by_key(|p| (process_depth(p, &original), p.pid));
+        for p in current {
+            let latest = read()?;
+            closable(&latest)?;
+            // A stale observation never authorizes signalling a reused PID.
+            if latest
+                .iter()
+                .any(|v| v.pid == p.pid && v.fingerprint == p.fingerprint)
+                && signalled.insert((p.pid, p.fingerprint.clone()))
+            {
+                signal(p.pid)?;
+            }
+        }
+        let remaining = read()?;
+        closable(&remaining)?;
+        if remaining.is_empty() {
             return Ok(());
         }
         ensure!(
             std::time::Instant::now() < until,
-            "Codex / ChatGPT 未退出，账户未切换，请手动关闭后重新检查"
+            "Codex / ChatGPT 未退出或持续重新启动，账户未切换，请手动关闭后重试"
         );
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -1042,9 +1063,8 @@ mod tests {
         .unwrap();
     }
     #[test]
-    fn unknown_reused_and_restarted_processes_are_never_signalled() {
-        let original = running(10, None);
-        let mut blocked = original.clone();
+    fn newly_observed_processes_are_closed_but_unknown_processes_are_not() {
+        let mut blocked = running(10, None);
         blocked.can_close = false;
         assert!(
             close_with(
@@ -1055,29 +1075,27 @@ mod tests {
             )
             .is_err()
         );
+        let original = running(10, None);
         let mut reused = original.clone();
         reused.fingerprint = "new-start".into();
-        assert!(
-            close_with(
-                std::slice::from_ref(&original),
-                || Ok(vec![reused.clone()]),
-                |_| panic!("reused PID"),
-                Duration::ZERO
-            )
-            .is_err()
-        );
-        let state = RefCell::new(vec![original.clone()]);
-        let error = close_with(
+        let state = RefCell::new(vec![reused]);
+        let mut order = vec![];
+        close_with(
             &[original],
             || Ok(state.borrow().clone()),
-            |_| {
-                *state.borrow_mut() = vec![running(20, None)];
+            |pid| {
+                order.push(pid);
+                *state.borrow_mut() = if pid == 10 {
+                    vec![running(20, None)]
+                } else {
+                    vec![]
+                };
                 Ok(())
             },
-            Duration::ZERO,
+            Duration::from_secs(1),
         )
-        .unwrap_err();
-        assert!(error.to_string().contains("重新启动"));
+        .unwrap();
+        assert_eq!(order, [10, 20]);
     }
     #[test]
     fn refusal_to_exit_times_out_and_old_records_decode() {

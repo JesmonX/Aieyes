@@ -49,6 +49,7 @@ struct Surface<Content: View>: View {
     var spacing: CGFloat = DesignTokens.spaceCardContent
     var padding: CGFloat = DesignTokens.spaceCard
     var tint: Color = .clear
+    var minimumHeight: CGFloat? = nil
     @ViewBuilder var content: Content
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
@@ -58,6 +59,7 @@ struct Surface<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(padding)
+        .frame(minHeight: minimumHeight, alignment: .topLeading)
         .modifier(NeutralCard(tint: tint))
     }
 }
@@ -369,7 +371,7 @@ struct RootView: View, Equatable {
         return QuotaGroupSection(key: "quota.group." + scope + "." + provider, model: model, provider: provider,
             accountCount: accounts.count,
             quotas: displayedQuotas.filter { quota in CoreContract.sameAgent(quota.provider, provider) && accounts.contains { $0.key == quota.id } }) {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 14, alignment: .top), count: min(quotaColumns, max(1, accounts.count))), alignment: .leading, spacing: 10) {
+            BalancedGridLayout(minimumWidth: 1, spacing: 14, maximumColumns: min(quotaColumns, max(1, accounts.count))) {
                 ForEach(accounts, id: \.key) { account in
                     if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
                     else { QuotaAwaitingCard(model: model, account: account, provider: provider) }
@@ -823,9 +825,36 @@ private struct QuotaErrorNotice: View {
 private struct QuotaAwaitingCard: View {
     @SurfaceModel var model: AppModel
     let account: AgentAccount, provider: String
+    @Environment(\.collapsedQuotaHeight) private var collapsedHeight
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    private var labels: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.spaceCardContent) {
+            Text(account.name).font(AppFont.section)
+            Text(model.quotaBusy ? L("正在读取账户额度…") : L("等待首次额度查询")).font(AppFont.secondary).foregroundStyle(.secondary)
+        }
+    }
     var body: some View {
-        let _ = interfaceLanguage; Surface(tint: Palette.category(provider)) { Text(account.name).font(AppFont.section); Text(model.quotaBusy ? L("正在读取账户额度…") : L("等待首次额度查询")).font(AppFont.secondary).foregroundStyle(.secondary) } }
+        let _ = interfaceLanguage
+        Surface(tint: Palette.category(provider), minimumHeight: collapsedHeight) { labels }
+            .background { GeometryReader { proxy in
+                Surface(tint: Palette.category(provider)) { labels }.frame(width: proxy.size.width)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(GeometryReader { measured in Color.clear.preference(key: CollapsedQuotaMeasurements.self, value: [provider + ":" + account.id: ceil(measured.size.height)]) })
+                    .hidden().accessibilityHidden(true).allowsHitTesting(false)
+            } }
+    }
+}
+
+struct CollapsedQuotaHeight: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+struct CollapsedQuotaMeasurements: PreferenceKey {
+    static let defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) { value.merge(nextValue(), uniquingKeysWith: max) }
+}
+extension EnvironmentValues {
+    var collapsedQuotaHeight: CGFloat {
+        get { self[CollapsedQuotaHeight.self] }
+        set { self[CollapsedQuotaHeight.self] = newValue }
+    }
 }
 
 private struct QuotaGroupSection<Content: View>: View {
@@ -835,6 +864,7 @@ private struct QuotaGroupSection<Content: View>: View {
     let quotas: [Quota]
     let content: Content
     @AppStorage private var expanded: Bool
+    @State private var collapsedHeight: CGFloat = 0
     @State private var showingFailures = false
     @State private var openingSettings = false
     @FocusState private var headerFocused: Bool
@@ -869,7 +899,13 @@ private struct QuotaGroupSection<Content: View>: View {
                         .popover(isPresented: $showingFailures) { failureList }
                 }
             }
-            if expanded { content.padding(.top, 8) }
+            if expanded {
+                content.padding(.top, 8).environment(\.collapsedQuotaHeight, collapsedHeight)
+                    .onPreferenceChange(CollapsedQuotaMeasurements.self) { values in
+                        let next = values.values.max() ?? 0
+                        if abs(collapsedHeight - next) > 0.5 { collapsedHeight = next }
+                    }
+            }
         }
         .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.9), value: expanded)
         .onChange(of: showingFailures) { _, showing in
@@ -982,7 +1018,10 @@ struct QuotaCard: View, Equatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var defaultExpanded: Bool
     @AppStorage private var storedExpanded: Bool?
-    private var expanded: Bool { !collapsible || (storedExpanded ?? defaultExpanded) }
+    private var isMeasurement = false
+    @Environment(\.collapsedQuotaHeight) private var collapsedHeight
+    private var measuring: QuotaCard { var copy = self; copy.isMeasurement = true; return copy }
+    private var expanded: Bool { !isMeasurement && (!collapsible || (storedExpanded ?? defaultExpanded)) }
     init(quota: Quota, compact: Bool = false, collapsible: Bool = false, defaultExpanded: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, deviceCounts: AccountDeviceCounts? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = [], onAnalysis: (() -> Void)? = nil, actionOwner: ObjectIdentifier? = nil) {
         self.actionOwner = actionOwner
         self.defaultExpanded = defaultExpanded; self.onAnalysis = onAnalysis
@@ -994,7 +1033,18 @@ struct QuotaCard: View, Equatable {
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        fullCard
+        if isMeasurement {
+            fullCard.fixedSize(horizontal: false, vertical: true)
+                .background(GeometryReader { proxy in Color.clear.preference(key: CollapsedQuotaMeasurements.self, value: [quota.id: ceil(proxy.size.height)]) })
+        } else {
+            fullCard
+                .background(alignment: .topLeading) {
+                    if collapsible { GeometryReader { proxy in
+                        AnyView(measuring).frame(width: proxy.size.width).fixedSize(horizontal: false, vertical: true)
+                            .hidden().accessibilityHidden(true).allowsHitTesting(false)
+                    } }
+                }
+        }
     }
     @ViewBuilder private var balanceContent: some View {
         if let wallet = quota.extraUsage {
@@ -1095,7 +1145,7 @@ struct QuotaCard: View, Equatable {
             }
     }
     private var fullCard: some View {
-        Surface(spacing: compact ? 9 : 14, padding: compact ? 12 : 16, tint: Palette.category(quota.provider)) {
+        Surface(spacing: compact ? 9 : 14, padding: compact ? 12 : 16, tint: Palette.category(quota.provider), minimumHeight: !isMeasurement && collapsible && !expanded ? collapsedHeight : nil) {
             cardHeader
             if !expanded {
                 if quota.provider == "codex" {

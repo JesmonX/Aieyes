@@ -205,12 +205,13 @@ struct CodexAccountsView: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.frame(maxHeight: 210)
             }
+            Text(L("确认后也会自动关闭随后出现的相关登录进程；独立 API 实例会保留。"))
             Text(L("切换后请按需手动重新打开 Codex 或 ChatGPT 并恢复会话。")).foregroundStyle(.secondary)
             HStack {
                 Button(L("取消")) { switchSheet = false }.keyboardShortcut(.cancelAction)
                 Button(L("重新检查")) { if let target = switchTarget { perform { await prepareSwitch(target) } } }
                 Spacer()
-                Button((prepared?.processes ?? []).isEmpty ? L("确认切换") : L("关闭并切换")) { perform { await commitSwitch() } }
+                Button(L("关闭并切换")) { perform { await commitSwitch() } }
                     .buttonStyle(.aieyesPrimary)
                     .disabled(prepared == nil || (prepared?.processes ?? []).contains { !$0.canClose })
             }.disabled(busy)
@@ -228,7 +229,7 @@ struct CodexAccountsView: View {
     private func commitSwitch() async {
         guard let prepared, let target = switchTarget, switchSourceID == sourceID else { return }
         do {
-            let result: CodexOperation = try await call("switch.commit", ["operationId":prepared.operationId, "closeProcesses":!(prepared.processes ?? []).isEmpty])
+            let result: CodexOperation = try await call("switch.commit", ["operationId":prepared.operationId, "closeProcesses":true])
             guard result.status == "succeeded" else { throw ClientError.message(result.error ?? L("切换尚未完成，请重新检查")) }
             self.prepared = nil; switchedProfileID = target.id; switchSheet = false
             switchSettingsPending = result.accountId != nil; switchWarning = result.statusWarning

@@ -16,8 +16,9 @@ const fixture=require('./fixtures/browser-ui.cjs');
     page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);
     await page.addInitScript(()=>{
       const original=__TAURI__.core.invoke;
-      window.notificationFixture={permission:'denied',tests:0,fail:false};
+      window.notificationFixture={permission:'denied',tests:0,fail:false,sounds:[]};
       __TAURI__.core.invoke=async(command,args)=>{
+        if(command==='session_sounds_preview'){notificationFixture.sounds.push(args.kind);return;}
         if(command==='notifications_info')return {permission:notificationFixture.permission};
         if(command==='notifications_test'){notificationFixture.tests++;if(notificationFixture.fail)throw Error('模拟系统通知失败');return;}
         return original(command,args);
@@ -27,6 +28,14 @@ const fixture=require('./fixtures/browser-ui.cjs');
     await page.waitForFunction(()=>!state.busy&&!state.quotaBusy);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='notifications';render();});
     await page.waitForFunction(()=>document.querySelector('#notification-permission')?.textContent.includes('未授权'));
+    assert.equal(await page.locator('[name=needsInputSound]').isChecked(),true);
+    assert.equal(await page.locator('[name=completeSound]').isChecked(),true);
+    await page.locator('[data-sound-preview=needsInput]').click();
+    await page.locator('[data-sound-preview=complete]').click();
+    assert.deepEqual(await page.evaluate(()=>notificationFixture.sounds),['needsInput','complete']);
+    await page.locator('[name=needsInputSound]').uncheck();
+    await page.locator('[name=completeSound]').uncheck();
+    await page.waitForFunction(()=>state.settingsDraft.sessionSounds?.needsInput===false && state.settingsDraft.sessionSounds?.complete===false);
     await page.evaluate(()=>notificationFixture.fail=true);await page.locator('#notification-test').click();
     await page.waitForFunction(()=>document.querySelector('#notification-error')?.textContent.includes('模拟系统通知失败'));
     assert.equal(await page.locator('#notification-test').isEnabled(),true);

@@ -18,6 +18,7 @@ pub struct Rpc {
     input: ChildStdin,
     messages: Receiver<Value>,
     next: u64,
+    query_epoch: Option<(std::path::PathBuf, Value)>,
     notifications: std::collections::VecDeque<Value>,
 }
 
@@ -174,6 +175,7 @@ impl Rpc {
             input,
             messages,
             next: 0,
+            query_epoch: None,
             notifications: Default::default(),
         };
         rpc.call("initialize", json!({"clientInfo":{"name":"aieyes","title":"Aieyes","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}), &mut |_| Ok(None))?;
@@ -183,6 +185,11 @@ impl Rpc {
     pub fn send(&mut self, value: &Value) -> Result<()> {
         writeln!(self.input, "{value}").map_err(|_| anyhow::anyhow!("Codex 连接已断开"))?;
         self.input.flush().context("Codex 连接已断开")
+    }
+    pub fn guard_query(&mut self, root: &std::path::Path, epoch: &Value) -> Result<()> {
+        super::files::check_query_epoch(root, epoch)?;
+        self.query_epoch = Some((root.to_owned(), epoch.clone()));
+        Ok(())
     }
     pub fn receive(&mut self, timeout: Duration) -> Result<Value> {
         if let Some(value) = self.notifications.pop_front() {
@@ -194,6 +201,9 @@ impl Rpc {
         let start = Instant::now();
         loop {
             crate::operations::check()?;
+            if let Some((root, epoch)) = &self.query_epoch {
+                super::files::check_query_epoch(root, epoch)?;
+            }
             let remaining = timeout.saturating_sub(start.elapsed());
             if remaining.is_zero() {
                 anyhow::bail!("Codex 响应超时");

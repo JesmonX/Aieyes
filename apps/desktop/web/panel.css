@@ -70,3 +70,7 @@ body[data-view=panel] { display:block; justify-items:normal; user-select:text; }
 .panel-body details[data-agent-detail=panel-trend] > summary h2 { display:inline; margin:0; font-size:var(--font-secondary); font-weight:var(--weight-regular); }
 .panel-body .card h2 { font-size:var(--font-card-title); }
 @media(forced-colors:active) { .panel-menu,.panel-more-menu { background:Canvas; border-color:CanvasText; } }
+
+/* Do not let a hidden pet's intrinsic width become the first panel layout proposal. */
+html[data-surface=panel],body[data-view=panel] { width:100vw; min-width:100vw; max-width:100vw; }
+body[data-view=panel] #panel { width:100vw; min-width:100vw; max-width:100vw; }

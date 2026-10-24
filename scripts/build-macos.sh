@@ -23,6 +23,7 @@ cp "$PROJECT_DIR/apps/macos/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources
 cp "$PROJECT_DIR/apps/macos/Resources/Brand.png" "$APP_DIR/Contents/Resources/Brand.png"
 cp "$PROJECT_DIR/apps/macos/Resources/BrandTemplate.png" "$APP_DIR/Contents/Resources/BrandTemplate.png"
 cp "$PROJECT_DIR"/apps/desktop/web/provider-*.png "$APP_DIR/Contents/Resources/"
+cp "$PROJECT_DIR"/apps/desktop/web/sounds/*.wav "$APP_DIR/Contents/Resources/"
 cp "$PROJECT_DIR/apps/macos/Info.plist" "$APP_DIR/Contents/Info.plist"
 if [ "$BUILD_MODE" = debug ]; then
   /usr/libexec/PlistBuddy -c "Add :AieyesDevelopmentDataDirectory string $PROJECT_DIR/.local/app" "$APP_DIR/Contents/Info.plist"

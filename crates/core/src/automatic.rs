@@ -299,13 +299,27 @@ impl Store {
     /// Bounded, resumable replay of stored evidence. Never query credentials or
     /// remote machines, nor rewrite the imported events or live baseline.
     pub fn rebuild_automatic_history(&self, account: Option<&str>, dry_run: bool) -> Result<Value> {
+        self.rebuild_automatic_history_range(account, dry_run, None)
+    }
+    pub fn rebuild_automatic_history_range(
+        &self,
+        account: Option<&str>,
+        dry_run: bool,
+        range: Option<(i64, i64)>,
+    ) -> Result<Value> {
+        if let Some((from, to)) = range {
+            ensure!(from > 0 && from < to && to <= now(), "历史恢复时间区间无效");
+        }
         let tx = self.write_transaction()?;
         let settings = self.settings()?;
         let batch_started = std::time::Instant::now();
         let mut reports = Vec::new();
         let mut changed = false;
         for a in settings.accounts.iter().filter(|a| {
-            crate::providers::antigravity(&a.provider) && a.quota_enabled && !a.archived
+            (crate::providers::antigravity(&a.provider)
+                || a.provider == "codex" && account.is_some())
+                && a.quota_enabled
+                && !a.archived
         }) {
             let key = crate::accounts::key(a);
             if account.is_some_and(|v| v != key) {
@@ -316,7 +330,11 @@ impl Store {
                 .iter()
                 .filter(|s| {
                     s.provider == a.provider
-                        && s.account_id == a.id
+                        && (if a.provider == "codex" {
+                            a.uses_source(s)
+                        } else {
+                            s.account_id == a.id
+                        })
                         && enabled(s)
                         && settings.source_enabled(s)
                 })
@@ -331,7 +349,20 @@ impl Store {
                 crate::estimates::source_config(&settings, &ids, &key)?,
                 &settings.model_mappings,
             ))?);
-            let marker = format!("automatic-history.v4:{key}:{scope}");
+            let marker = if a.provider == "codex" {
+                format!(
+                    "automatic-codex-history.v1:{key}:{scope}:{}:{}",
+                    range.map_or(0, |r| r.0),
+                    range.map_or(0, |r| r.1)
+                )
+            } else {
+                format!("automatic-history.v4:{key}:{scope}")
+            };
+            let config = if a.provider == "codex" {
+                hash(&format!("{config}:{marker}"))
+            } else {
+                config
+            };
             let mut report: Value = self.auto_get(&marker)?;
             if report["complete"] == true {
                 reports.push(report);
@@ -343,20 +374,25 @@ impl Store {
                     [&key],
                     |r| r.get(0),
                 )?;
-                report = json!({"accountKey":key,"cursor":0,"lastId":last,"since":now()-90*86400,"observations":0,"restoredIntervals":0,"skippedReasons":{},"complete":false});
+                report = json!({"accountKey":key,"cursor":0,"lastId":last,"since":range.map_or(now()-90*86400, |r| r.0),"until":range.map_or(now(), |r| r.1),"observations":0,"restoredIntervals":0,"skippedReasons":{},"complete":false});
                 self.auto_put(
-                    &format!("automatic-replay-baseline:{key}"),
+                    &if a.provider == "codex" {
+                        format!("automatic-replay-baseline:{key}:{config}")
+                    } else {
+                        format!("automatic-replay-baseline:{key}")
+                    },
                     &Baseline::default(),
                 )?;
             }
-            let mut query = self.db.prepare("SELECT id,payload FROM quota_history WHERE account_key=?1 AND stamp>=?2 AND id>?3 AND id<=?4 ORDER BY id LIMIT 512")?;
+            let mut query = self.db.prepare("SELECT id,payload FROM quota_history WHERE account_key=?1 AND stamp>=?2 AND id>?3 AND id<=?4 AND stamp<=?5 ORDER BY id LIMIT 512")?;
             let rows = query
                 .query_map(
                     rusqlite::params![
                         key,
                         report["since"].as_i64(),
                         report["cursor"].as_i64(),
-                        report["lastId"].as_i64()
+                        report["lastId"].as_i64(),
+                        report["until"].as_i64().unwrap_or(i64::MAX)
                     ],
                     |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
                 )?
@@ -541,7 +577,11 @@ impl Store {
             "采样过程中登录或来源设置变化"
         );
         let storage_key = if replay {
-            format!("automatic-replay-baseline:{key}")
+            if snapshot.provider == "codex" {
+                format!("automatic-replay-baseline:{key}:{config}")
+            } else {
+                format!("automatic-replay-baseline:{key}")
+            }
         } else {
             baseline_key(&key)
         };
@@ -724,6 +764,31 @@ impl Store {
                     checkpoint_at: q.updated_at,
                     ..Default::default()
                 };
+                if replay
+                    && q.provider == "codex"
+                    && !self.codex_replay_covered(
+                        settings,
+                        ids,
+                        &key,
+                        from.updated_at,
+                        q.updated_at,
+                    )?
+                {
+                    baseline.pending.insert(pool, q.clone());
+                    waiting_reason = "其他设备历史身份或采集覆盖不足，或区间跨越账户切换".into();
+                    continue;
+                }
+                if replay && q.provider == "codex" {
+                    let win = record_window.map(window_id).unwrap_or("credits");
+                    let overlaps: bool = self.db.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM estimates e,json_each(e.payload,'$.automaticSegments') s WHERE e.account_key=?1 AND json_extract(e.payload,'$.windowId')=?2 AND COALESCE(json_extract(e.payload,'$.rollingExcludedReason'),'')='' AND json_extract(e.payload,'$.samplingMode')='automatic' AND COALESCE(json_extract(s.value,'$.valid'),1)=1 AND json_extract(s.value,'$.attributionVersion')=?3 AND (COALESCE(json_extract(s.value,'$.pool'),'primary')='weekly')=?4 AND json_extract(s.value,'$.startedAt')<?5 AND json_extract(s.value,'$.endedAt')>?6)",
+                        rusqlite::params![key,win,crate::codex_attribution::VERSION,weekly,q.updated_at,from.updated_at], |r| r.get(0))?;
+                    if overlaps {
+                        baseline.pending.insert(pool, q.clone());
+                        waiting_reason = "与已保存的可靠额度片段重叠，保留原片段".into();
+                        continue;
+                    }
+                }
                 self.calculate_usage(&mut sample, group)?;
                 let reliable = sample.calculation_status == "ready"
                     && sample.cost.is_finite()
@@ -2383,6 +2448,110 @@ mod tests {
                 .unwrap()
                 .contains("可靠样本")
         );
+    }
+    #[test]
+    fn codex_replay_is_explicit_bounded_idempotent_and_preserves_live_records() {
+        let (_dir, e, mut q) = setup(false);
+        observe(&e, &q);
+        e.store.quota(&q).unwrap();
+        let from = q.updated_at;
+        event(&e, &q, "history", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 10.0;
+        observe(&e, &q);
+        e.store.quota(&q).unwrap();
+        event(&e, &q, "missing-history", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 10.0;
+        let settings = e.store.settings().unwrap();
+        e.store
+            .record_codex_identity(
+                &settings.sources[0],
+                &hash("a"),
+                q.updated_at,
+                "observed",
+                None,
+            )
+            .unwrap();
+        e.store.quota(&q).unwrap();
+        let original = serde_json::to_value(e.store.estimates().unwrap()).unwrap();
+        let live: String = e
+            .store
+            .db
+            .query_row(
+                "SELECT value FROM kv WHERE key='automatic-baseline:codex:a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            e.store.rebuild_automatic_history(None, false).unwrap()["changed"],
+            false
+        );
+        let preview = e
+            .store
+            .rebuild_automatic_history_range(Some("codex:a"), true, Some((from, q.updated_at)))
+            .unwrap();
+        assert_eq!(preview["reports"][0]["restoredIntervals"], 1);
+        assert_eq!(
+            serde_json::to_value(e.store.estimates().unwrap()).unwrap(),
+            original
+        );
+        let result = e
+            .store
+            .rebuild_automatic_history_range(Some("codex:a"), false, Some((from, q.updated_at)))
+            .unwrap();
+        assert_eq!(result["complete"], true);
+        let records = e.store.estimates().unwrap();
+        assert!(
+            records
+                .iter()
+                .any(|r| r.id.starts_with("auto-replay-") && r.cost == 1.0)
+        );
+        let count = records.len();
+        assert_eq!(
+            e.store
+                .rebuild_automatic_history_range(Some("codex:a"), false, Some((from, q.updated_at)))
+                .unwrap()["changed"],
+            false
+        );
+        assert_eq!(e.store.estimates().unwrap().len(), count);
+        assert_eq!(
+            e.store
+                .db
+                .query_row(
+                    "SELECT value FROM kv WHERE key='automatic-baseline:codex:a'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            live
+        );
+    }
+    #[test]
+    fn codex_replay_rejects_missing_historical_device_coverage() {
+        let (_dir, e, mut q) = setup(false);
+        observe(&e, &q);
+        e.store.quota(&q).unwrap();
+        event(&e, &q, "history", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 10.0;
+        observe(&e, &q);
+        e.store.quota(&q).unwrap();
+        let mut settings = e.store.settings().unwrap();
+        let mut other = settings.sources[0].clone();
+        other.id = "offline-device".into();
+        other.path = "/other".into();
+        settings.sources.push(other);
+        e.store.save_settings(&settings).unwrap();
+        let before = e.store.estimates().unwrap().len();
+        let result = e
+            .store
+            .rebuild_automatic_history(Some("codex:a"), false)
+            .unwrap();
+        assert_eq!(result["changed"], false);
+        assert!(result.to_string().contains("其他设备历史身份"));
+        assert_eq!(e.store.estimates().unwrap().len(), before);
     }
     #[test]
     fn agy_history_replay_is_dry_runnable_resumable_and_does_not_change_live_baseline() {

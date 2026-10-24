@@ -343,3 +343,44 @@ struct PetLibrary: Decodable { var pets: [ImportedPet]; var selectedLibraryId: S
     @Published var pet = PetState.idle
     @Published var summary: String?
 }
+
+// Exactly one instance belongs to AppModel, independently of visible surfaces.
+@MainActor final class SessionSoundService {
+    private var initialized = false
+    private var startedAt = Date.distantFuture
+    private var seen: [String: LiveSession] = [:]
+    private var unhealthy = Set<String>()
+    private var sounds: [String: NSSound] = [:]
+    private let player: ((String) -> Void)?
+    init(player: ((String) -> Void)? = nil) { self.player = player }
+    func consume(_ snapshot: SessionSnapshot, preferences: SessionSoundSettings?, now: Date = Date()) {
+        if !initialized { startedAt = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970)) }
+        let blocked = Set((snapshot.sources ?? []).filter { $0.state != "healthy" }.map { $0.machineId + ":" + $0.sourceId })
+        var kinds = Set<String>()
+        for session in snapshot.sessions {
+            let source = session.machineId + ":" + session.sourceId
+            let key = session.provider + ":" + source + ":" + session.id
+            let prior = seen[key]
+            let changed = prior == nil || ((prior!.phase != session.phase || prior!.turnId != session.turnId) && session.updatedAt >= prior!.updatedAt)
+            let fresh = session.updatedAt >= startedAt && session.updatedAt <= now && now.timeIntervalSince(session.updatedAt) <= 10
+            if initialized && changed && fresh && !blocked.contains(source) && !unhealthy.contains(source) {
+                if session.phase == .needsInput && preferences?.needsInput != false { kinds.insert("needsInput") }
+                if session.phase == .complete && preferences?.complete != false { kinds.insert("complete") }
+            }
+            if prior == nil || session.updatedAt >= prior!.updatedAt { seen[key] = session }
+        }
+        seen = seen.filter { now.timeIntervalSince($0.value.updatedAt) <= 86400 }
+        unhealthy = blocked; initialized = true
+        for kind in ["needsInput", "complete"] where kinds.contains(kind) { if let player { player(kind) } else { _ = preview(kind) } }
+    }
+    @discardableResult func preview(_ kind: String) -> String? {
+        let name: String
+        switch kind { case "needsInput": name = "needs-input"; case "complete": name = "complete"; default: return L("无效提示音") }
+        if sounds[kind] == nil {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "wav"), let sound = NSSound(contentsOf: url, byReference: false) else { return L("无法读取提示音资源") }
+            sounds[kind] = sound
+        }
+        sounds[kind]?.stop()
+        return sounds[kind]?.play() == true ? nil : L("无法播放提示音，请检查系统音频输出")
+    }
+}

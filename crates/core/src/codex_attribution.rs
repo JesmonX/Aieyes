@@ -228,6 +228,108 @@ impl Store {
         Ok(())
     }
 
+    /// Quota queries already inspect the daily credential. Persist those observations
+    /// independently of automatic valuation, including queries for inactive profiles.
+    pub(crate) fn record_codex_query_observations(
+        &self,
+        settings: &Settings,
+        source: &Source,
+        observations: &Value,
+    ) -> Result<()> {
+        if observations.is_null() {
+            return Ok(());
+        } // Older SSH helpers remain compatible.
+        let rows = observations
+            .as_array()
+            .filter(|v| v.len() == 2)
+            .context("额度查询身份观测无效")?;
+        let from = rows[0]["stamp"]
+            .as_i64()
+            .filter(|t| *t > 0)
+            .context("额度查询身份观测无效")?;
+        let to = rows[1]["stamp"]
+            .as_i64()
+            .filter(|t| *t >= from)
+            .context("额度查询身份观测无效")?;
+        let identity = rows[0]["identityKey"]
+            .as_str()
+            .context("额度查询身份观测无效")?;
+        ensure!(
+            (identity.is_empty()
+                || identity.len() == 64 && identity.bytes().all(|b| b.is_ascii_hexdigit()))
+                && rows[1]["identityKey"].as_str() == Some(identity),
+            "额度查询身份观测无效"
+        );
+        let tx = self
+            .db
+            .is_autocommit()
+            .then(|| self.write_transaction())
+            .transpose()?;
+        self.ensure_codex_evidence_scope(settings, source)?;
+        self.record_codex_identity(source, identity, from, "quotaQuery", None)?;
+        self.record_codex_identity(source, identity, to, "quotaQuery", None)?;
+        if let Some(tx) = tx {
+            tx.commit()?;
+        }
+        Ok(())
+    }
+
+    /// History replay cannot use today's login/status to prove yesterday's device coverage.
+    pub(crate) fn codex_replay_covered(
+        &self,
+        settings: &Settings,
+        ids: &[String],
+        account: &str,
+        from: i64,
+        to: i64,
+    ) -> Result<bool> {
+        let Some(account) = settings
+            .accounts
+            .iter()
+            .find(|a| crate::accounts::key(a) == account)
+        else {
+            return Ok(false);
+        };
+        let Some(expected) = account.identity_key.as_deref() else {
+            return Ok(false);
+        };
+        let mut active = false;
+        for source in settings
+            .sources
+            .iter()
+            .filter(|s| s.provider == "codex" && account.uses_source(s))
+        {
+            if !ids.contains(&source.id) || !settings.source_enabled(source) {
+                return Ok(false);
+            }
+            let scope: Option<String> = self
+                .db
+                .query_row(
+                    "SELECT value FROM kv WHERE key=?1",
+                    [format!("codex-evidence-scope:{}", source.id)],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if scope.as_deref() != Some(evidence_scope(settings, source).as_str()) {
+                return Ok(false);
+            }
+            let before: Option<(i64,String)> = self.db.query_row("SELECT stamp,identity_key FROM codex_account_timeline WHERE source_id=?1 AND stamp<=?2 ORDER BY stamp DESC,id DESC LIMIT 1", params![source.id,from], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let after: Option<(i64,String)> = self.db.query_row("SELECT stamp,identity_key FROM codex_account_timeline WHERE source_id=?1 AND stamp>=?2 ORDER BY stamp,id LIMIT 1", params![source.id,to], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let (Some((left, key)), Some((right, end_key))) = (before, after) else {
+                return Ok(false);
+            };
+            if key.is_empty() || key != end_key || right - left > MAX_GAP {
+                return Ok(false);
+            }
+            let uncertain: bool = self.db.query_row("SELECT EXISTS(SELECT 1 FROM codex_account_timeline WHERE source_id=?1 AND ((stamp>?2 AND stamp<=?3 AND identity_key<>?4) OR (uncertain_from IS NOT NULL AND uncertain_from<?3 AND stamp>?2)))", params![source.id,from,to,key], |r| r.get(0))?;
+            if uncertain {
+                return Ok(false);
+            }
+            active |= key == expected;
+        }
+        Ok(active)
+    }
+
     /// Returns an identity key, not an account label on the usage event.
     pub(crate) fn codex_usage_identity(
         &self,
@@ -249,8 +351,11 @@ impl Store {
             let (Some((left, identity)), Some((right, end_identity))) = (before, after) else {
                 continue;
             };
-            if identity.is_empty() || identity != end_identity || right - left > MAX_GAP {
-                return Ok(Err("请求跨账户或身份观测存在缺口"));
+            if identity.is_empty() || identity != end_identity {
+                return Ok(Err("请求前后的登录身份不一致或无法确认"));
+            }
+            if right - left > MAX_GAP {
+                return Ok(Err("请求前后身份观测间隔超过五分钟"));
             }
             let conflict: bool = self.db.query_row("SELECT EXISTS(SELECT 1 FROM codex_account_timeline WHERE source_id=?1 AND ((stamp>?2 AND stamp<=?3 AND identity_key<>?4) OR (uncertain_from IS NOT NULL AND uncertain_from<?3 AND stamp>?2)))",params![source,start,event.timestamp,identity],|r|r.get(0))?;
             if conflict {
@@ -424,6 +529,43 @@ mod tests {
             )
             .unwrap();
         (dir, store, source, event)
+    }
+    #[test]
+    fn ordinary_queries_record_daily_identity_without_relabeling_usage() {
+        let (_dir, store, source, event) = fixture();
+        let settings = store.settings().unwrap();
+        let raw_before: String = store
+            .db
+            .query_row("SELECT payload FROM events WHERE id=?1", [&event.id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        store
+            .record_codex_query_observations(
+                &settings,
+                &source,
+                &json!([
+                    {"stamp":1010,"identityKey":hash("b")},{"stamp":1020,"identityKey":hash("b")}
+                ]),
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .codex_usage_identity(&event, std::slice::from_ref(&source.id))
+                .unwrap()
+                .unwrap(),
+            hash("b")
+        );
+        let raw_after: String = store
+            .db
+            .query_row("SELECT payload FROM events WHERE id=?1", [&event.id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(raw_before, raw_after);
+        assert!(store.record_codex_query_observations(&settings, &source, &json!([
+            {"stamp":1030,"identityKey":hash("a")},{"stamp":1040,"identityKey":hash("b")}
+        ])).is_err());
     }
     #[test]
     fn resumed_thread_follows_switch_epoch_instead_of_original_creator() {

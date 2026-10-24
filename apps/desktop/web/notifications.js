@@ -15,6 +15,13 @@
   window.AieyesNotifications = {
     settingsHTML: () => AieyesI18n.t("<section class=\"card\"><h2>系统通知</h2><p id=\"notification-permission\" role=\"status\">正在读取通知权限…</p><button type=\"button\" id=\"notification-test\">发送测试通知</button><p id=\"notification-test-result\" role=\"status\"></p><div id=\"notification-error\" class=\"error\" role=\"status\"></div><p class=\"muted tiny\">通知显示和声音由系统通知及勿扰设置控制。</p></section>"),
     bind() {
+      for (const button of document.querySelectorAll('[data-sound-preview]')) button.onclick = async () => {
+        button.disabled = true;
+        const result = document.querySelector('[data-sound-result]');
+        try { await window.__TAURI__.core.invoke('session_sounds_preview', { kind: button.dataset.soundPreview }); if (result) result.textContent = ''; }
+        catch (error) { if (result) result.textContent = AieyesI18n.message(String(error)); }
+        finally { button.disabled = false; }
+      };
       const button = document.querySelector('#notification-test');if (!button) return;
       button.onclick = async () => {
         button.disabled = true;lastError = '';lastNotice = '';

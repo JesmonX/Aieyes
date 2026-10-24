@@ -8,7 +8,7 @@ import pathlib
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 spec = importlib.util.spec_from_file_location('auth_helper', pathlib.Path(__file__).with_name('remote_codex_auth.py'))
 a = importlib.util.module_from_spec(spec)
@@ -23,6 +23,36 @@ def credential(user, refresh='initial'):
 
 
 class CoordinatorTests(unittest.TestCase):
+    def test_read_queries_release_home_lock_and_reject_round_trip_switch_results(self):
+        for method in ('quota', 'model.list'):
+            rpc = MagicMock();rpc.__enter__.return_value = rpc;rpc.login.return_value = {}
+            def read(*args, **kwargs):
+                with a.Lock(self.root): pass
+                return {'primary': {'usedPercent': 1}}
+            rpc.call.side_effect = read
+            with patch.object(a, 'Rpc', return_value=rpc): self.call(method, profileId='one')
+        rpc = MagicMock();rpc.__enter__.return_value = rpc
+        def switched(*args, **kwargs):
+            with a.Lock(self.root):
+                a.atomic(self.root / '.aieyes/state/query-epoch.json', 'switch-one')
+                a.atomic(self.root / 'auth.json', self.two)
+                a.atomic(self.root / '.aieyes/state/query-epoch.json', 'switch-two')
+                a.atomic(self.root / 'auth.json', self.one)
+            return {'primary': {'usedPercent': 1}}
+        rpc.call.side_effect = switched
+        with patch.object(a, 'Rpc', return_value=rpc):
+            with self.assertRaisesRegex(ValueError, '已取消旧查询'): self.call('quota', profileId='one')
+        with a.Lock(self.root, name='账户登录'):
+            with patch.object(a.time, 'monotonic', side_effect=[0, 31]):
+                with self.assertRaisesRegex(ValueError, '等待账户登录完成超时'): a.Lock(self.root, wait=True)
+
+    def test_inactive_profile_query_reports_daily_identity_not_query_identity(self):
+        rpc = MagicMock();rpc.__enter__.return_value = rpc;rpc.call.return_value = {'primary': {'usedPercent': 1}}
+        with patch.object(a, 'Rpc', return_value=rpc): result = self.call('quota', profileId='two')
+        observations = result['_aieyesIdentityObservations']
+        self.assertEqual([v['identityKey'] for v in observations], [a.identity(self.one)['key']]*2)
+        self.assertNotEqual(observations[0]['identityKey'], a.identity(self.two)['key'])
+
     def test_inspection_and_rpc_use_the_same_initialized_command_and_safe_errors(self):
         self.loc['preCommand'] = 'export PATH=/fixture/bin:$PATH'
         with patch.object(a.subprocess, 'check_output', return_value=b'codex-cli 0.160.0 PRIVATE') as probe:
@@ -369,7 +399,7 @@ class CoordinatorTests(unittest.TestCase):
         public = json.dumps(dict(processes=rows, preservedProcesses=preserved))
         self.assertNotIn('FIXTURE_SECRET', public); self.assertNotIn('fixture.invalid', public)
 
-    def test_switch_closes_application_first_and_rejects_restarts(self):
+    def test_switch_closes_application_first_and_handles_new_processes(self):
         rows = [dict(pid=pid, parentPid=parent, fingerprint=str(pid), canClose=True) for pid,parent in [(10,20),(20,50),(50,90),(90,1)]]
         current = list(rows)
         order = []
@@ -379,9 +409,11 @@ class CoordinatorTests(unittest.TestCase):
         with patch.object(a, 'switch_running', side_effect=lambda *args, **kwargs: list(current)), patch.object(a.os, 'kill', side_effect=terminate):
             a.close_processes(self.root, rows)
         self.assertEqual(order, [90,50,20,10])
-        with patch.object(a, 'switch_running', return_value=[dict(rows[0], fingerprint='reused')]), patch.object(a.os, 'kill') as kill:
-            with self.assertRaisesRegex(ValueError, '重新启动'): a.close_processes(self.root, rows)
-            kill.assert_not_called()
+        current[:] = [dict(rows[0], fingerprint='reused')]
+        with patch.object(a, 'switch_running', side_effect=lambda *args, **kwargs: list(current)), patch.object(a.os, 'kill', side_effect=terminate):
+            a.close_processes(self.root, rows)
+        self.assertFalse(current)
+        self.assertEqual(order[-1], 10)
         with patch.object(a, 'switch_running', return_value=[]), patch.object(a.os, 'kill') as kill:
             a.close_processes(self.root, rows)
             kill.assert_not_called()

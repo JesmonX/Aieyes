@@ -841,3 +841,8 @@ nav button, .settings-sidebar button, .stat-label > span, .stat-value,
 .account-switch-entry { min-width:144px; white-space:nowrap; flex-shrink:0; }
 .quota-window .between > strong { white-space:nowrap; flex-shrink:0; }
 html[lang=en] .aside-group-label { letter-spacing: .04em; }
+
+/* Natural expanded heights remain independent of neighboring collapsed cards. */
+.quotas { align-items:start; }
+.quota-placeholder,.quota-card:has(> .quota-disclosure:not([open])) { min-height:var(--quota-collapsed-min,0px); }
+.quota-measure-layer { position:fixed; top:0; left:-100000px; width:1px; height:1px; overflow:hidden; visibility:hidden; pointer-events:none; contain:layout style; }

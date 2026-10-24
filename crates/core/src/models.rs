@@ -398,6 +398,7 @@ impl LocalMonitor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    pub session_sounds: crate::session_sounds::Preferences,
     pub native_connections: Vec<crate::account_scan::NativeConnection>,
     pub quota_reset_notifications: crate::quota_notifications::Preferences,
     pub codex_apis: Vec<crate::codex_api::Connection>,
@@ -430,6 +431,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            session_sounds: Default::default(),
             native_connections: vec![],
             quota_reset_notifications: Default::default(),
             codex_apis: vec![],

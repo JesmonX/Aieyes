@@ -7,11 +7,25 @@ import SwiftUI
     private let model: AppModel
     init(model: AppModel) { self.model = model; super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+    func prepare(size: NSSize) {
+        model.panelWidth = size.width; model.panelHeight = size.height
+        preferredContentSize = size
+        view.setFrameSize(size)
+        // Auto Layout may not solve an unattached popover tree before its first show.
+        // Seed both layers explicitly so the very first drawing uses the full bounds.
+        for child in view.subviews { child.frame = view.bounds }
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+    }
     override func loadView() {
-        let container = NSView()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: model.panelWidth, height: model.panelHeight))
         let background = PanelTintView()
         let content = NSHostingView(rootView: RootView(model: model, nativePanelBackground: true))
+        // The popover owns geometry. An old SwiftUI ideal size must not constrain
+        // the first frame after creation or a move to a smaller display.
+        content.sizingOptions = []
         for child in [background, content] {
+            child.frame = container.bounds
             child.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(child)
             NSLayoutConstraint.activate([

@@ -95,23 +95,52 @@ def revision(value):
 
 
 class Lock:
-    def __init__(self, root):
+    def __init__(self, root, wait=False, name='凭据保存或续期'):
         import fcntl
-        path = private(root / '.aieyes/state') / 'coordinator.lock'
-        fd = os.open(str(safe(path)), os.O_RDWR | os.O_CREAT, 0o600)
+        state = private(root / '.aieyes/state')
+        fd = os.open(str(safe(state / 'coordinator.lock')), os.O_RDWR | os.O_CREAT, 0o600)
         self.file = os.fdopen(fd, 'r+')
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        end = time.monotonic() + (30 if wait else 0)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= end:
+                    self.file.close()
+                    if wait:
+                        try: owner = read(state / 'coordinator-operation.json')['name']
+                        except (OSError, ValueError, KeyError): owner = '凭据写入'
+                        raise ValueError('等待' + owner + '完成超时，请稍后重试切换') from None
+                    raise ValueError('此 Codex 目录有正在执行的账户操作，请稍后重试') from None
+                time.sleep(.05)
+        try: atomic(state / 'coordinator-operation.json', dict(name=name))
+        except Exception:
             self.file.close()
-            raise ValueError('此 Codex 目录有正在执行的账户操作，请稍后重试') from None
+            raise
 
-    def __enter__(self):
-        return self
+    def __enter__(self): return self
+    def __exit__(self, *args): self.file.close()
 
-    def __exit__(self, *args):
-        # Closing, rather than explicit LOCK_UN, preserves a forked login worker's lock.
-        self.file.close()
+
+def query_epoch(root):
+    path = root / '.aieyes/state/query-epoch.json'
+    return read(path) if path.exists() else None
+
+
+def check_query_epoch(root, epoch):
+    if query_epoch(root) != epoch: raise ValueError('账户切换已开始，已取消旧查询')
+
+
+@contextlib.contextmanager
+def query_lock(path):
+    import fcntl
+    fd = os.open(str(safe(path / 'query.lock')), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError: raise ValueError('此账户已有查询，等待下次刷新') from None
+        yield
+    finally: os.close(fd)
 
 
 def claims(token):
@@ -426,31 +455,36 @@ def switch_running(confirmed=(), proc_root=pathlib.Path('/proc'), preserved=None
 def close_processes(root, expected):
     if any(not p['canClose'] for p in expected):
         raise ValueError('无法确认部分进程归属，请手动关闭 Codex 和 ChatGPT 后重试')
+    confirmed = list(expected)
+    signalled = set()
+    end = time.monotonic() + 10
     def checked():
-        actual = switch_running(expected, home=root)
+        actual = switch_running(confirmed, home=root)
         if any(not p['canClose'] for p in actual):
-            raise ValueError('进程认证方式或依赖已变化，账户未切换，请重新检查')
-        if any(not any(p['pid'] == old['pid'] and p['fingerprint'] == old['fingerprint'] for old in expected) for p in actual):
-            raise ValueError('Codex / ChatGPT 已重新启动或运行进程已变化，请重新检查后切换')
+            raise ValueError('无法确认进程认证方式或依赖，请手动处理后重试切换')
+        for p in actual:
+            if not any(v['pid'] == p['pid'] and v['fingerprint'] == p['fingerprint'] for v in confirmed): confirmed.append(p)
         return actual
     def depth(p):
         seen = set()
         while p.get('parentPid') and p['pid'] not in seen:
             seen.add(p['pid'])
-            parent = next((v for v in expected if v['pid'] == p['parentPid']), None)
+            parent = next((v for v in confirmed if v['pid'] == p['parentPid']), None)
             if parent is None: break
             p = parent
         return len(seen)
-    checked()
-    for p in sorted(expected, key=lambda p: (depth(p), p['pid'])):
-        if any(v['pid'] == p['pid'] for v in checked()):
-            try: os.kill(p['pid'], signal.SIGTERM)
-            except ProcessLookupError: pass
-    end = time.monotonic() + 10
-    while checked():
-        if time.monotonic() >= end:
-            raise ValueError('Codex / ChatGPT 未退出，账户未切换，请手动关闭后重新检查')
-        time.sleep(.25)
+    while True:
+        actual = checked()
+        if not actual: return
+        for p in sorted(actual, key=lambda p: (depth(p), p['pid'])):
+            key = (p['pid'], p['fingerprint'])
+            if key not in signalled and any(v['pid'] == p['pid'] and v['fingerprint'] == p['fingerprint'] for v in checked()):
+                signalled.add(key)
+                try: os.kill(p['pid'], signal.SIGTERM)
+                except ProcessLookupError: pass
+        if not checked(): return
+        if time.monotonic() >= end: raise ValueError('Codex / ChatGPT 未退出或持续重新启动，账户未切换，请手动关闭后重试')
+        time.sleep(.05)
 
 
 def config(root):
@@ -574,6 +608,7 @@ class Rpc:
         self.child = subprocess.Popen(cli_argv(loc, ['-c', 'cli_auth_credentials_store="%s"' % ('file' if managed else 'ephemeral'), 'app-server']), cwd=root, env=env,
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
         self.messages, self.notifications, self.next = queue.Queue(maxsize=64), [], 0
+        self.query_guard = None
         def reader():
             try:
                 while True:
@@ -604,13 +639,15 @@ class Rpc:
         return self.wire(timeout)
 
     def wire(self, timeout):
-        try:
-            value = self.messages.get(timeout=max(timeout, 0))
-        except queue.Empty:
-            raise TimeoutError('Codex 响应超时') from None
-        if value is None:
-            raise ValueError('Codex 连接已断开')
-        return value
+        end = time.monotonic() + max(timeout, 0)
+        while True:
+            if self.query_guard: check_query_epoch(*self.query_guard)
+            remaining = end - time.monotonic()
+            if remaining <= 0: raise TimeoutError('Codex 响应超时')
+            try: value = self.messages.get(timeout=min(remaining, .1))
+            except queue.Empty: continue
+            if value is None: raise ValueError('Codex 连接已断开')
+            return value
 
     def call(self, method, params, refresh=None):
         self.next += 1
@@ -699,6 +736,20 @@ def renew(loc, root, p):
 
 
 def quota(loc, root, profile_id):
+    def observation():
+        key = active(root) if api_helpers()['direct_selected'](root)['kind'] == 'account' else None
+        return dict(identityKey=key or '', stamp=int(time.time()))
+    with Lock(root): epoch, before = query_epoch(root), observation()
+    result = quota_read(loc, root, profile_id)
+    with Lock(root):
+        check_query_epoch(root, epoch)
+        after = observation()
+        if before['identityKey'] != after['identityKey']: raise ValueError('日常账户已改变，已丢弃旧查询结果')
+        result['_aieyesIdentityObservations'] = [before,after]
+    return result
+
+
+def quota_read(loc, root, profile_id):
     with Lock(root):
         require_file(root)
         recover(root)
@@ -706,36 +757,45 @@ def quota(loc, root, profile_id):
         active_before = active(root)
         auth = current_auth(root, p)
         query = layout(root, profile_id, 'query')
-        def attempt(auth):
-            with Rpc(loc, query) as rpc:
-                rpc.login(auth)
-                def refresh(params):
-                    if params.get('previousAccountId') not in (None, p['identity']['workspace']):
-                        raise ValueError('刷新请求工作区不一致')
-                    latest = current_auth(root, p)
-                    if latest['tokens']['access_token'] == auth['tokens']['access_token']:
-                        return None
-                    value = external(latest)
-                    value.pop('type')
-                    return value
-                result = rpc.call('account/rateLimits/read', None, refresh)
-                if active(root) != active_before:
-                    raise ValueError('日常账户已改变，已丢弃旧查询结果')
-                return result
-        try:
-            return attempt(auth)
-        except ValueError as error:
-            latest = current_auth(root, p)
-            if revision(latest) != revision(auth):
-                return attempt(latest)
-            if active_before == p['identity']['key'] and running(root):
-                raise
-            if not any(s in str(error) for s in ('认证已失效', '接口不兼容')):
-                raise
+        epoch = query_epoch(root)
+    def attempt(auth):
+        check_query_epoch(root, epoch)
+        with Rpc(loc, query) as rpc:
+            rpc.query_guard = (root, epoch)
+            rpc.login(auth)
+            def refresh(params):
+                if params.get('previousAccountId') not in (None, p['identity']['workspace']):
+                    raise ValueError('刷新请求工作区不一致')
+                latest = current_auth(root, p)
+                if latest['tokens']['access_token'] == auth['tokens']['access_token']:
+                    return None
+                value = external(latest)
+                value.pop('type')
+                return value
+            result = rpc.call('account/rateLimits/read', None, refresh)
+            check_query_epoch(root, epoch)
+            if active(root) != active_before:
+                raise ValueError('日常账户已改变，已丢弃旧查询结果')
+            return result
+    try:
+        with query_lock(query): return attempt(auth)
+    except ValueError as error:
+        check_query_epoch(root, epoch)
+        latest = current_auth(root, p)
+        if revision(latest) != revision(auth):
+            with query_lock(query): return attempt(latest)
+        if active_before == p['identity']['key'] and running(root):
+            raise
+        if not any(s in str(error) for s in ('认证已失效', '接口不兼容')):
+            raise
+        with Lock(root, name='凭据续期'):
+            check_query_epoch(root, epoch)
             fresh = renew(loc, root, p)
-            try:
-                return attempt(fresh)
-            except ValueError as second:
+        try:
+            with query_lock(query): return attempt(fresh)
+        except ValueError as second:
+            with Lock(root):
+                check_query_epoch(root, epoch)
                 if '接口不兼容' not in str(second):
                     raise
                 if active(root) == p['identity']['key'] and running(root):
@@ -863,10 +923,16 @@ def call(request):
             require_file(root)
             recover(root)
             p = profile(root, params['profileId'])
-            with Rpc(loc, layout(root, p['id'], 'query')) as rpc:
-                info = rpc.login(current_auth(root, p))
-                info['models'] = rpc.call('model/list', dict(includeHidden=False))
-                return info
+            auth = current_auth(root, p)
+            query = layout(root, p['id'], 'query')
+            epoch = query_epoch(root)
+        with query_lock(query), Rpc(loc, query) as rpc:
+            rpc.query_guard = (root, epoch)
+            check_query_epoch(root, epoch)
+            info = rpc.login(auth)
+            info['models'] = rpc.call('model/list', dict(includeHidden=False))
+            check_query_epoch(root, epoch)
+            return info
     if method == 'quota':
         return quota(loc, root, params['profileId'])
     if method == 'login.status':
@@ -887,7 +953,7 @@ def call(request):
         return dict(cancelRequested=True)
     if method == 'home.identity':
         return read(root / '.aieyes/state/home.json')
-    with Lock(root):
+    with Lock(root, wait=method in ('switch.prepare', 'switch.commit'), name='账户切换' if method.startswith('switch.') else '账户登录或凭据保存'):
         if method == 'enable':
             require_file(root)
             marker = root / '.aieyes/state/home.json'
@@ -969,14 +1035,15 @@ def call(request):
             if record['revision'] != revision(snapshot(root)): raise ValueError('凭据或配置已更新，请重新检查后切换')
             validated = api_helpers()['direct_prepare'](root, target)
             if validated['configRevision'] != target['configRevision']: raise ValueError('Codex 配置已变化，请重新检查')
+            atomic(root / '.aieyes/state/query-epoch.json', uuid.uuid4().hex)
             auth = None
             if target['kind'] == 'account':
                 p = profile(root, target['profileId']); auth = current_auth(root, p); policy(root, auth)
-                with Rpc(loc, layout(root, p['id'], 'query')) as rpc:
+                with Rpc(loc, layout(root, p['id'], 'switch-query')) as rpc:
                     rpc.login(auth); rpc.call('account/rateLimits/read', None)
             if record['revision'] != revision(snapshot(root)): raise ValueError('验证期间凭据已改变，请重新检查后切换')
             if record['processes'] and not params.get('closeProcesses'): raise ValueError('Codex / ChatGPT 正在运行，尚未授权关闭')
-            close_processes(root, record['processes'])
+            if params.get('closeProcesses'): close_processes(root, record['processes'])
             if switch_running(home=root): raise ValueError('Codex / ChatGPT 已重新启动，尚未切换')
             if record['revision'] != revision(snapshot(root)): raise ValueError('关闭进程期间凭据或配置已更新，请重新检查')
             old = read(root/'auth.json') if (root/'auth.json').exists() else None
@@ -1002,7 +1069,8 @@ def call(request):
             record['targetConfigRevision'] = written
             try:
                 atomic(operation(root, op), record)
-                if switch_running(home=root): raise ValueError('切换期间 Codex / ChatGPT 已重新启动，请重新检查')
+                if params.get('closeProcesses'): close_processes(root, record['processes'])
+                if switch_running(home=root): raise ValueError('仍有 Codex / ChatGPT 进程，尚未授权关闭')
                 if (read(root/'auth.json') if (root/'auth.json').exists() else None) != old: raise ValueError('外部凭据已变化，尚未切换')
                 if auth is not None: atomic(root/'auth.json', auth)
                 if auth_revision() != record['targetRevision']: raise ValueError('切换后凭据被其他程序修改，请重新检查')

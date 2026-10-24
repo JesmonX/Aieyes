@@ -52,7 +52,7 @@
       window.AieyesNetwork?.refresh();
       if (typeof render === 'function') render();
       window.AieyesMotion?.panel(true);
-      requestAnimationFrame(() => {if (typeof drawTrend === 'function') drawTrend();});
+      requestAnimationFrame(() => {if (typeof drawTrend === 'function') drawTrend();invoke('desktop_panel_ready', { generation: window.AIEYES_SHELL_GENERATION ?? 0 }).catch(failure);});
       if (info?.platform === 'linux') requestAnimationFrame(() => document.querySelector('#panel-refresh')?.focus({ preventScroll: true }));
       // Mouse-opened floating surfaces preserve the other application's keyboard focus.
       const refresh = window.AieyesApp?.refreshPanel;
@@ -163,6 +163,8 @@
       update(initial);
       if (typeof appReady !== 'undefined') await appReady;
       await window.AieyesTheme?.loadFonts?.();
+      await document.fonts?.ready;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       await invoke('desktop_panel_ready', { generation: window.AIEYES_SHELL_GENERATION ?? 0 });
     } catch (error) {failure(error);}
   }

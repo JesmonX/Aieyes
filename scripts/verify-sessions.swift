@@ -4,7 +4,24 @@ import Combine
 @main struct VerifySessions {
     static func event(_ type: String) -> String { "{\"type\":\"event_msg\",\"payload\":{\"type\":\"\(type)\"}}\n" }
     static func item(_ type: String) -> String { "{\"type\":\"response_item\",\"payload\":{\"type\":\"\(type)\"}}\n" }
-    static func main() async throws {
+    @MainActor static func main() async throws {
+        var played: [String] = []
+        let soundService = SessionSoundService(player: { played.append($0) })
+        var row = LiveSession(id: "sound-test", source: "fixture", phase: .complete, updatedAt: Date(timeIntervalSince1970: 100))
+        row.turnId = "first"
+        @MainActor func sounds(_ at: Double) { soundService.consume(SessionSnapshot(sessions: [row], unavailable: false), preferences: nil, now: Date(timeIntervalSince1970: at)) }
+        sounds(100); precondition(played.isEmpty)
+        row.phase = .working; row.updatedAt = Date(timeIntervalSince1970: 101); sounds(101)
+        row.phase = .needsInput; row.updatedAt = Date(timeIntervalSince1970: 102); sounds(102); sounds(103)
+        precondition(played == ["needsInput"])
+        row.phase = .complete; row.updatedAt = Date(timeIntervalSince1970: 104); sounds(104)
+        precondition(played == ["needsInput", "complete"])
+        row.turnId = "second"; row.updatedAt = Date(timeIntervalSince1970: 105); sounds(105)
+        precondition(played.count == 3)
+        row.phase = .needsInput; row.updatedAt = Date(timeIntervalSince1970: 106)
+        soundService.consume(SessionSnapshot(sessions: [row], unavailable: false), preferences: SessionSoundSettings(needsInput:false, complete:false), now: Date(timeIntervalSince1970:106))
+        sounds(107); precondition(played.count == 3)
+
         let start = "{\"type\":\"session_meta\",\"payload\":{\"id\":\"fixture\",\"source\":\"cli\"}}\n" + event("task_started")
         let snapshot = try JSONDecoder().decode(SessionSnapshot.self, from: Data(#"{"sessions":[{"id":"s","source":"Codex","phase":"tool","updatedAt":1791640000}],"unavailable":false}"#.utf8))
         precondition(snapshot.sessions[0].phase == .tool)

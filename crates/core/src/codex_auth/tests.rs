@@ -1098,3 +1098,22 @@ for line in sys.stdin:
         .unwrap();
     assert_eq!(row["current"], true);
 }
+
+#[test]
+fn query_epochs_reject_round_trip_switches_and_switches_wait_for_writers() {
+    let (_dir, root) = root();
+    let before = files::query_epoch(&root).unwrap();
+    files::advance_query_epoch(&root).unwrap();
+    files::advance_query_epoch(&root).unwrap();
+    assert!(files::check_query_epoch(&root, &before).is_err());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let home = root.clone();
+    let writer = std::thread::spawn(move || {
+        let _lease = files::lock_named(&home, "账户登录").unwrap();
+        tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    });
+    rx.recv().unwrap();
+    let _switch = files::lock_wait(&root).unwrap();
+    writer.join().unwrap();
+}

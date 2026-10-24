@@ -49,3 +49,5 @@ swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/Lo
 
 sh scripts/test-native-pets.sh
 python3 scripts/test-dashboard-cache.py
+
+sh scripts/test-native-quota-layout.sh
