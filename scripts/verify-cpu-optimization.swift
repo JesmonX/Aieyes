@@ -83,6 +83,13 @@ private struct DescendantLayoutFixture: View {
             catch { fputs("CPU regression failed: \(error)\n", stderr); exit(1) } }
     }
     func wait(_ ms: Int = 50) async throws { try await Task.sleep(for: .milliseconds(ms)) }
+    func waitUntil(_ message: String, condition: () -> Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 10
+        while !condition() {
+            guard ProcessInfo.processInfo.systemUptime < deadline else { throw ClientError.message(message) }
+            try await wait(10)
+        }
+    }
     func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     func control(in root: NSObject, containing text: String) -> NSObject? {
         var visited = Set<ObjectIdentifier>()
@@ -248,10 +255,24 @@ private struct DescendantLayoutFixture: View {
         let ipc = AppModel(autostart: false);defer { ipc.stop();unsetenv("AIEYES_CORE_PATH") }
         ipc.settings = seedSettings;ipc.settingsLoaded = true;ipc.settingsDraft = ipc.settings
         let initiallyLoaded = await ipc.reload();precondition(initiallyLoaded)
+        func revisionCalls() -> Int {
+            let text = (try? String(contentsOf:root.appendingPathComponent("calls"),encoding:.utf8)) ?? ""
+            return text.split(separator:"\n").filter { line in
+                guard let row = try? JSONSerialization.jsonObject(with:Data(line.utf8)) as? [String:Any] else { return false }
+                return row["method"] as? String == "runtime.revisions"
+            }.count
+        }
+        let beforeVisibility = revisionCalls()
+        // Visibility schedules a debounced reload. A deliberately slow reply
+        // must finish before injecting an estimate for the following UI test.
+        // A fixed render delay races that reload on slower CI runners.
+        try configure(1,delay:0.35)
         ipc.setWindowVisible(true, window: "panel")
         quotaWindow.setContentSize(NSSize(width: 450, height: 720))
         let panelHost = NSHostingView(rootView: RootView(model: ipc))
         quotaWindow.contentView = panelHost;try await wait(200);panelHost.layoutSubtreeIfNeeded()
+        try await waitUntil("The visibility-triggered reload did not finish") { revisionCalls() > beforeVisibility && !ipc.dashboardPending }
+        try configure(1)
         ipc.quotaBusy = true;try await wait();panelHost.layoutSubtreeIfNeeded()
         precondition(self.control(in: panelHost, containing: "读取中…") != nil, "Local quota controls must still show busy feedback")
         ipc.quotaBusy = false;ipc.networkBusy = true;try await wait();panelHost.layoutSubtreeIfNeeded()
