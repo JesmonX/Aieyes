@@ -283,9 +283,12 @@ test('floating ball receives live status and opens the panel on click', async ()
   assert.equal(h.element('#phase').textContent, '思考中');
   assert.equal(h.element('#count').textContent, '2');
   assert.equal(h.document.body.dataset.active, 'true');
+  h.window.AIEYES_SHELL_GENERATION = 7;
+  const beforeOpen = h.calls.length;
   await h.element('#ball').dispatch('click',{detail:1}); await flush();
-  assert.equal(h.calls.at(-1).command,'desktop_panel');
-  assert.equal(h.calls.at(-1).args.open,true);
+  assert.deepEqual(h.calls.slice(beforeOpen).map(call => call.command), ['desktop_panel', 'desktop_panel_ready']);
+  assert.equal(h.calls.at(-2).args.open,true);
+  assert.equal(h.calls.at(-1).args.generation,7);
   assert.equal(h.document.body.dataset.view,'panel');
   h.events.get('desktop:status')({payload:{...h.info,panelOpen:true,phase:'complete',activeCount:0}});
   assert.equal(h.element('#count').hidden,true);
@@ -304,7 +307,10 @@ test('dragging snaps the ball without opening the panel; keyboard activation sti
   await ball.dispatch('click',{detail:1}); await flush();
   assert.equal(h.calls.filter(c=>c.command==='desktop_panel').length,0);
   await ball.dispatch('click',{detail:0}); await flush();
-  assert.equal(h.calls.at(-1).command,'desktop_panel');
+  const panelCalls = h.calls.filter(c=>c.command==='desktop_panel');
+  assert.equal(panelCalls.length,1);
+  assert.equal(panelCalls[0].args.open,true);
+  assert.equal(h.info.panelOpen,true);
   await h.document.dispatch('contextmenu',{target:{}});
   assert.equal(h.calls.at(-1).args.action,'menu');
 });
