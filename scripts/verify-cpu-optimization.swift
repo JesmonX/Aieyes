@@ -328,14 +328,31 @@ private struct DescendantLayoutFixture: View {
         let recoveredReload = await ipc.reload();precondition(recoveredReload);precondition(ipc.dashboardError == nil && ipc.dashboard.summary.total == 40)
         ipc.detailPage = "settings";ipc.settingsTab = "general";ipc.generalPage = "network"
         ipc.settingsDraft.proxy.mode = "custom";ipc.settingsDraft.proxy.url = "http://127.0.0.1:9999"
-        let host = NSHostingView(rootView: MainWindowView(model: ipc));window.contentView = host;window.orderFrontRegardless()
-        try await wait(150);host.layoutSubtreeIfNeeded()
+        let host = NSHostingView(rootView: MainWindowView(model: ipc));window.contentView = host
+        window.makeKeyAndOrderFront(nil);NSApp.activate(ignoringOtherApps:true)
+        try await waitUntil("The editor probe needs an active key window and a rendered network page") {
+            host.layoutSubtreeIfNeeded()
+            return NSApp.isActive && window.isKeyWindow && descendants(host).contains { ($0 as? NSTextField)?.stringValue == "127.0.0.1" }
+        }
         let field = descendants(host).compactMap { $0 as? NSTextField }.first { $0.stringValue == "127.0.0.1" }
         guard let field else { throw ClientError.message("Expected native network editor") }
         precondition(window.makeFirstResponder(field));let focused = window.firstResponder
         _ = await ipc.reload();try await wait()
         precondition(window.firstResponder === focused && ipc.settingsDirty)
-        ipc.detailPage = "analysis";try await wait();ipc.detailPage = "settings";try await wait()
+        for _ in 0..<5 {
+            ipc.detailPage = "analysis"
+            try await waitUntil("Leaving the editor must detach its native page") {
+                host.layoutSubtreeIfNeeded();return field.window == nil
+            }
+            ipc.detailPage = "settings"
+            // SwiftUI attachment and the host's queued focus restoration are
+            // separate main-loop work. Await the result, not a 50 ms render
+            // budget; a missing restoration must still fail the bounded wait.
+            try await waitUntil("Returning to an editor must restore focus") {
+                host.layoutSubtreeIfNeeded()
+                return field.window === window && ((window.firstResponder as? NSTextView)?.delegate as? NSTextField === field || window.firstResponder === field)
+            }
+        }
         precondition(ipc.settingsDraft.proxy.url == "http://127.0.0.1:9999", "Page switches must retain unsaved input")
         precondition(descendants(host).contains { $0 === field }, "A retained editor must reuse its native field")
         precondition((window.firstResponder as? NSTextView)?.delegate as? NSTextField === field || window.firstResponder === field, "Returning to an editor must restore focus")
