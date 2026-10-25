@@ -24,7 +24,7 @@ struct SetupGuideView: View {
     var finish: () -> Void
     @StateObject private var observations = SetupGuideObservations()
     @AppStorage("setup.scene.v1") private var savedScene = ""
-    @AppStorage("setup.expanded.v2") private var expanded = ""
+    @AppStorage("setup.expanded.v2") private var expanded = "usage,network,refresh,hosts,wakeups,panel,prices,notifications"
     @AppStorage(NativePanelKey.accounts.rawValue) private var panelPreference = "{}"
     private var scene: String { ["local", "ssh", "mixed"].contains(savedScene) ? savedScene : model.settings.hosts.isEmpty ? "local" : model.settings.localDeviceEnabled == false ? "ssh" : "mixed" }
     private var checks: SetupGuideChecks {
@@ -43,7 +43,6 @@ struct SetupGuideView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 Surface(title: L("你想用 Aieyes 做什么？")) {
-                    Text(L("选择目标完成配置，下方显示最近读取的状态。")).foregroundStyle(.secondary)
                     FlowLayout(spacing: 12) {
                         Picker(L("使用场景"), selection: Binding(get: { scene }, set: { savedScene = $0 })) {
                             Text(L("仅本机")).tag("local"); Text(L("仅 SSH 服务器")).tag("ssh"); Text(L("本机与 SSH")).tag("mixed")
@@ -62,12 +61,11 @@ struct SetupGuideView: View {
                             ForEach(Array(SetupGuide.more.enumerated()), id: \.offset) { _, item in
                                 Divider()
                                 Text(item.0).font(AppFont.section)
-                                Text(item.1).foregroundStyle(.secondary)
-                                Button(L("了解与设置")) { model.openSettings(item.2) }
+                                Button(destinationLabel(item.2)) { model.openSettings(item.2) }
                             }
                         }.padding(.top, 12)
                     } label: {
-                        VStack(alignment: .leading, spacing: 6) { Text(L("更多功能")).font(AppFont.section); Text(L("多账户与切换、API 连接、桌宠与会话、外观和更新")).font(AppFont.secondary).foregroundStyle(.secondary) }
+                        VStack(alignment: .leading, spacing: 6) { Text(L("更多功能")).font(AppFont.section) }
                     }
                 }
             }.padding(22).background(OverlayScrollStyle()).background(ScrollMemory(key: "setup", ready: !observations.loading))
@@ -81,9 +79,6 @@ struct SetupGuideView: View {
             DisclosureGroup(isExpanded: expansion(goal.id)) {
                 VStack(alignment: .leading, spacing: 12) {
                     Divider()
-                    if goal.id == "network" { networkHelp }
-                    else { ForEach(Array(goal.steps.enumerated()), id: \.offset) { index, text in Text("\(index + 1). " + text).fixedSize(horizontal: false, vertical: true) } }
-                    Text(L("当前状态")).font(AppFont.secondary.weight(.semibold))
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in checkRow(row) }
                     if goal.id == "usage" {
                         FlowLayout(spacing: 8) {
@@ -95,20 +90,29 @@ struct SetupGuideView: View {
                     FlowLayout(spacing: 8) {
                         ForEach(Array(goal.actions.enumerated()), id: \.offset) { _, action in Button(action.title) { model.openSettings(action.destination) } }
                     }
-                    if !goal.help.isEmpty {
-                        DisclosureGroup(L("更多说明")) {
-                            Text(goal.help).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                    if goal.id == "network" { networkHelp }
+                    else { DisclosureGroup(L("配置步骤")) {
+                        ForEach(Array(goal.steps.enumerated()), id: \.offset) { index, text in Text("\(index + 1). " + text).fixedSize(horizontal: false, vertical: true) }
+                        if !goal.help.isEmpty { Text(goal.help).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                    } }
                 }.padding(.top, 12)
             } label: {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(goal.title).font(AppFont.section).fixedSize(horizontal: false, vertical: true)
-                    Text(goal.detail).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Text(status).font(AppFont.secondary).foregroundStyle(warnings > 0 ? Palette.warn : Color.secondary)
                 }
             }
         }
+    }
+    private func destinationLabel(_ target: SettingsDestination) -> String {
+        if target.accountKey != nil { return L("管理账户") }
+        switch target.normalizedCategory {
+        case "servers": return L("配置机器")
+        case "prices": return L("设置价格")
+        case "wakeups": return L("管理任务")
+        default: break
+        }
+        return ["accounts": L("管理账户"), "machines": L("选择目录"), "api": L("配置 API"), "valuation": L("管理采样"), "appearance": L("设置外观"), "desktop": L("设置桌宠"), "network": L("设置网络"), "refresh": L("调整刷新"), "notifications": L("设置通知"), "updates": L("检查更新")][target.section ?? ""] ?? L("接入 Agent")
     }
     private func checkRow(_ row: SetupGuide.Check) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -126,7 +130,7 @@ struct SetupGuideView: View {
             if !row.details.isEmpty {
                 DisclosureGroup(L("状态说明")) { Text(row.details).font(AppFont.secondary).foregroundStyle(.secondary) }
             }
-            Button(L("查看设置")) { model.openSettings(row.destination) }
+            Button(destinationLabel(row.destination)) { model.openSettings(row.destination) }
             Divider()
         }
     }

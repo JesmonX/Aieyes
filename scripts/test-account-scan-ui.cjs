@@ -1,3 +1,4 @@
+const {revealControl} = require('./ui-test-helpers.cjs');
 /* Real-core discovery; disposable credentials and no provider network calls. */
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),http=require('node:http'),readline=require('node:readline');
 const {spawn}=require('node:child_process'),{chromium}=require('../apps/desktop/node_modules/playwright');
@@ -44,7 +45,7 @@ function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++
   await page.locator('#reference-prices').click();
   await page.waitForFunction(()=>!state.busy&&state.settings.modelMappings['relay/Claude-4-5-Sonnet']==='anthropic/claude-sonnet-4.5');
   assert.equal((await rpc('settings.get')).modelMappings['relay/Claude-4-5-Sonnet'],'anthropic/claude-sonnet-4.5');
-  await page.locator('#existing-mappings summary').click();await page.waitForFunction(()=>document.querySelector('[data-mapping-rows]')?.textContent.includes('relay/Claude-4-5-Sonnet'));assert.match(await page.locator('[data-mapping-rows]').textContent(),/relay\/Claude-4-5-Sonnet → anthropic\/claude-sonnet-4.5/);
+  await revealControl(page, '#existing-mappings > summary');await page.waitForFunction(()=>document.querySelector('[data-mapping-rows]')?.textContent.includes('relay/Claude-4-5-Sonnet'));assert.match(await page.locator('[data-mapping-rows]').textContent(),/relay\/Claude-4-5-Sonnet → anthropic\/claude-sonnet-4.5/);
   const emptyLabels=await page.evaluate(()=>({quota:estimateEntry({provider:'codex',accountId:'fixture',windows:[{windowMinutes:300},{windowMinutes:10080}]},[]),credits:creditRow({provider:'codex',accountId:'fixture',credits:{balance:'0'}},null,[])}));
   assert(!emptyLabels.quota.includes('≈ —'));assert(!emptyLabels.credits.includes('≈ —'));
   assert(emptyLabels.quota.includes('data-estimate='));assert(emptyLabels.credits.includes('data-credit-estimate='));

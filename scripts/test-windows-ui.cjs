@@ -1,3 +1,4 @@
+const {openGeneralPage} = require('./ui-test-helpers.cjs');
 // The Python fixture also drives the native macOS renderer; no account/network access.
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
@@ -131,8 +132,8 @@ function installFixture(data) {
       }
       if(surface==='index.html') {
         await page.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
-        await page.locator('[data-general-page=desktop]').click();assert.equal(await page.locator('input[role=switch]').first().evaluate(el=>el.getBoundingClientRect().height),design['switch-height']);await page.locator('[data-general-page=appearance]').click();
-        await page.locator('#font-license').click();await page.locator('#quota-dialog').waitFor({state:'visible'});
+        await openGeneralPage(page, 'desktop');assert.equal(await page.locator('input[role=switch]').first().evaluate(el=>el.getBoundingClientRect().height),design['switch-height']);await openGeneralPage(page, 'appearance');
+        await openGeneralPage(page, 'updates');await page.locator('#font-license').click();await page.locator('#quota-dialog').waitFor({state:'visible'});
         assert.match(await page.locator('#quota-dialog').innerText(),/HarmonyOS Sans Fonts License Agreement/);
         await page.locator('#quota-dialog').evaluate(el=>el.getAnimations().forEach(a=>a.finish()));
         assert(await page.locator('#quota-dialog').evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=40&&r.bottom<=innerHeight-8;}),'license stays inside the client area');

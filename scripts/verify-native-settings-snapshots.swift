@@ -28,7 +28,7 @@ for scenario in ["empty", "single", "multi", "long", "failure", "capacity"] {
         let file = root.appendingPathComponent(scenario + "/servers-" + theme + ".png")
         let text = try recognizedText(file)
         precondition(text.contains("台主机") && text.contains("监控设置"), "Server screenshot did not render server controls: " + file.path + "\n" + text)
-        precondition(!text.contains("实时账户额度"), "Server screenshot rendered the Agent overview: " + file.path)
+        precondition(!text.contains("账户额度"), "Server screenshot rendered the Agent overview: " + file.path)
         let guide = try recognizedText(root.appendingPathComponent(scenario + "/setup-guide-" + theme + ".png"))
         precondition(guide.contains("你想用Aieyes做什么") && guide.contains("调整刷新频率"), "Setup guide must show user goals and refresh help")
         let network = try recognizedText(root.appendingPathComponent(scenario + "/setup-network-" + theme + ".png"))

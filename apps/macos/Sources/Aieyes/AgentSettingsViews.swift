@@ -301,7 +301,6 @@ struct AccountsSettingsView: View {
                             Text(L("启用")).fixedSize()
                             Toggle(L("启用 ") + Format.provider(provider), isOn: Binding(get: { agent.enabled }, set: { value in Task { await model.configureAgent(provider, enabled: value, machines: value && agent.machineIds.isEmpty ? ["local"] : nil, group: true) } })).labelsHidden().toggleStyle(.switch).fixedSize()
                         }
-                        if provider == "deepseek" { Text(L("通过 API Key 查询账户余额，在机器与目录中配置 DeepSeek CLI 的采集。")).font(AppFont.secondary).foregroundStyle(.secondary) }
                     }
                 }
                 PersistentSection(key: sectionKey("accounts"), title: L("账户"), detail: L("{0} 个账户" , model.settings.accounts.filter { $0.archived != true && (provider == nil || CoreContract.sameAgent($0.provider, provider!)) }.count), tint: Palette.category(provider ?? "custom")) {
@@ -320,13 +319,12 @@ struct AccountsSettingsView: View {
                     PersistentSection(key: sectionKey("native-api"), title: L("原生 API 连接"), initiallyExpanded: false) { NativeConnectionsSection(model: model, provider: provider, kind: "api") }
                 }
                 if let provider, let agent = model.machineConfiguration(provider) {
-                    PersistentSection(key: sectionKey("machines"), title: L("机器与目录"), detail: L("配置采集位置"), initiallyExpanded: false) {
+                    PersistentSection(key: sectionKey("machines"), title: L("机器与目录"), detail: L("{0} 台机器", agent.machineIds.count), initiallyExpanded: false) {
                         AgentMachinesSection(model: model, agent: agent)
                     }.id("machines")
                 }
                 if let provider, model.settings.agentSupports(provider, "valuation") {
                     PersistentSection(key: sectionKey("valuation"), title: L("估值与采样"), initiallyExpanded: false) {
-                        Text(L("按来源管理自动估值，查看采样状态和已有记录。")).font(AppFont.secondary).foregroundStyle(.secondary)
                         Button(L("管理估值与采样")) { showingValuation = true }
                     }.id("valuation")
                 }
@@ -347,7 +345,7 @@ struct AccountsSettingsView: View {
         let accounts = model.settings.accounts.filter { CoreContract.sameAgent($0.provider, agent.provider) && $0.archived != true }
         return Section {
             HStack {
-                Label { Text(Format.provider(agent.provider)).font(AppFont.section) } icon: { ProviderMark(provider: agent.provider) }
+                if provider == nil { Label { Text(Format.provider(agent.provider)).font(AppFont.section) } icon: { ProviderMark(provider: agent.provider) } }
                 Spacer()
                 if agent.provider != "custom" { NativeScanButton(model: model, provider: agent.provider) }
                 Button(L("添加账户"), systemImage: "plus") { adding = agent }.disabled(!agent.enabled)
@@ -468,6 +466,7 @@ struct AccountDevicesView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var pendingSaveCount = 0
     @State private var intervalText = ""
+    @State private var queryExpanded = false
     @State private var showingConnection = false
     @FocusState private var focusedField: String?
     @AppStorage(NativePanelKey.accounts.rawValue) private var panelPreference = "{}"
@@ -483,6 +482,7 @@ struct AccountDevicesView: View {
                     if model.settings.supports(account.provider, "quota") {
                     Toggle(L("显示并查询额度"), isOn: Binding(get: { account.quotaEnabled }, set: { value in account.quotaEnabled = value; save { $0.quotaEnabled = value } }))
                     if let message = model.dashboard.quotas.first(where: { $0.id == account.key })?.error { ErrorNotice(message: message, context: L("额度查询失败")) }
+                    DisclosureGroup(L("查询与提醒"), isExpanded: $queryExpanded) {
                     Picker(L("优先查询位置"), selection: Binding(get: { account.quotaSourceId ?? "" }, set: { value in account.quotaSourceId = value.isEmpty ? nil : value; save { $0.quotaSourceId = value.isEmpty ? nil : value } })) {
                         Text(L("自动 · 优先本机")).tag("")
                         ForEach(model.settings.sources.filter { current.uses($0) }) { source in Text(model.machineName(source.hostId ?? "local") + " · " + source.displayLocation + (model.settings.sourceEnabled(source) ? "" : L(" · 已暂停"))).tag(source.id) }
@@ -497,14 +497,15 @@ struct AccountDevicesView: View {
                             save { next in var p = next.quotaResetNotifications ?? QuotaResetNotificationSettings(); p.natural = value; next.quotaResetNotifications = p }
                         }
                     }
-                    LabeledContent(L("查询间隔（秒）")) { TextField(L("查询间隔（秒）"), text: $intervalText, prompt: Text(L("沿用全局"))).labelsHidden().frame(width: DesignTokens.fieldHintWidth).focused($focusedField, equals: "interval") }.help(L("留空沿用全局 · {0} 秒" , model.settings.refreshSeconds))
-                    Text(L("留空沿用全局间隔；自定义范围 5–86400 秒。")).font(AppFont.secondary).foregroundStyle(.secondary)
+                    LabeledContent(L("查询间隔（秒）")) { TextField(L("查询间隔（秒）"), text: $intervalText, prompt: Text(L("沿用全局 · {0} 秒", model.settings.refreshSeconds))).labelsHidden().frame(width: DesignTokens.fieldHintWidth).focused($focusedField, equals: "interval") }.help(L("留空沿用全局 · {0} 秒" , model.settings.refreshSeconds))
+                    HelpNote(title: L("查询间隔"), text: L("留空沿用全局间隔；自定义范围 5–86400 秒。"))
+                    }
                     }
                     TextField(L("账户名称"), text: $account.name).focused($focusedField, equals: "name")
                     Toggle(L("归档账户"), isOn: Binding(get: { account.archived == true }, set: { value in account.archived = value; save { $0.archived = value } }))
                     if model.settings.supports(account.provider, "quota") {
                     Toggle(L("在面板显示"), isOn: panelBinding).disabled(!current.quotaEnabled)
-                    Text(L("面板已选择 {0} 个账户；手动选择不限数量。" , panelSelectionCount)).font(AppFont.secondary).foregroundStyle(.secondary)
+                    HStack { Text(L("已选 {0} 个账户", panelSelectionCount)).font(AppFont.secondary).foregroundStyle(.secondary); HelpNote(title: L("面板账户"), text: L("自动模式显示每类前 5 个账户。手动模式可留空；新增账户默认加入面板，可随时取消。")) }
                     if !PanelAccountPreference.automatic(panelPreference, provider: account.provider) {
                         Button(L("恢复自动选择")) { var pref = PanelAccountPreference.decode(panelPreference); pref.providers[account.provider] = .init(); panelPreference = String(data: (try? JSONEncoder().encode(pref)) ?? Data(), encoding: .utf8) ?? "{}" }
                     }
@@ -528,7 +529,7 @@ struct AccountDevicesView: View {
                                 if account.provider == "antigravity", source.accountId == account.id { Button(L("登录 / 检查")) { agySource = source }.disabled(!model.settings.sourceEnabled(source)) }
                                 if account.provider == "codex" {
                                     if status?.current == true { Text(L("正在使用")).foregroundStyle(.secondary) }
-                                    else if status?.credential == true { Button(L("切换到此账户")) { openLogin(source, intent: "switch") }.disabled(!model.settings.sourceEnabled(source)) }
+                                    else if status?.credential == true { Button(L("切换账户")) { openLogin(source, intent: "switch") }.disabled(!model.settings.sourceEnabled(source)) }
                                     else { Button(L("登录")) { openLogin(source, intent: "login") }.disabled(!model.settings.sourceEnabled(source)) }
                                 }
                             }
@@ -540,7 +541,7 @@ struct AccountDevicesView: View {
                                 if expanded { expandedCommands.insert(machine) } else { expandedCommands.remove(machine) }
                             })) {
                                 TextEditor(text: Binding(get: { commands[machine] ?? inheritedCommand(machine) }, set: { commands[machine] = $0 })).font(.system(size: DesignTokens.fontEntry, design: .monospaced)).frame(height: 85).focused($focusedField, equals: machine)
-                                Text(L("用于此账户的授权、切换、额度查询及定时唤醒；不用于同步历史或监控。清空后不执行。")).font(AppFont.secondary).foregroundStyle(.secondary)
+                                HelpNote(title: L("前置命令"), text: L("用于此账户的授权、切换、额度查询及定时唤醒；不用于同步历史或监控。清空后不执行。"))
                                 if current.deviceSettings?.first(where: { $0.machineId == machine })?.preCommandResetRequired == true {
                                     Text(L("此机器的旧目录前置命令不一致，已清空，请重新设置。")).foregroundStyle(Palette.warn)
                                     Button(L("保存此机器的前置命令")) { commands[machine] = commands[machine] ?? ""; saveEditedText(force: true) }
@@ -579,7 +580,7 @@ struct AccountDevicesView: View {
         let name = account.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let text = intervalText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { error = L("请输入账户名称"); return false }
-        guard text.isEmpty || Int(text).map({ (5...86400).contains($0) }) == true else { error = L("查询间隔范围为 5–86400 秒"); return false }
+        guard text.isEmpty || Int(text).map({ (5...86400).contains($0) }) == true else { queryExpanded = true; error = L("查询间隔范围为 5–86400 秒"); return false }
         let interval = Int(text), edits = commands
         let notificationChanged = account.quotaResetNotifications != current.quotaResetNotifications
         let flagsChanged = notificationChanged || account.quotaEnabled != current.quotaEnabled || (account.archived == true) != (current.archived == true) || account.quotaSourceId != current.quotaSourceId

@@ -440,7 +440,7 @@ test('main window escapes source names and can navigate from the native menu', a
   h.events.get('desktop:navigate')({payload:'prices'}); await flush();
   h.events.get('desktop:navigate')({payload:'settings-target:{"category":"hosts","hostId":"host"}'}); await flush();
   h.events.get('desktop:navigate')({payload:'edit-account:claude:work'}); await flush();
-  assert.deepEqual(destinations,[{},{category:'prices'},{category:'hosts',hostId:'host'},{accountKey:'claude:work'}]);
+  assert.deepEqual(destinations,[{category:'general'},{category:'prices'},{category:'hosts',hostId:'host'},{accountKey:'claude:work'}]);
   h.window.AieyesDesktop.bindSettings();
   const mode = h.element('#desktop-mode');
   mode.value='tray';

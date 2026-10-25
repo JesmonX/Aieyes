@@ -228,7 +228,7 @@ struct PanelAccountsView: View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 14) {
             Text(L("面板显示账户")).font(AppFont.title)
-            Text(L("自动显示每类前 5 个账户；新增账户默认加入。手动选择可留空、不限数量，仅影响本机面板。")).font(AppFont.secondary).foregroundStyle(.secondary)
+            HelpNote(title: L("面板账户"), text: L("自动显示每类前 5 个账户；新增账户默认加入。手动选择可留空、不限数量，仅影响本机面板。"))
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(Set(model.quotaAccounts.map { CoreContract.agentProvider($0.provider) })).sorted(), id: \.self) { provider in

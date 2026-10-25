@@ -353,8 +353,8 @@ struct PetLibrary: Decodable { var pets: [ImportedPet]; var selectedLibraryId: S
     private var seen: [String: LiveSession] = [:]
     private var unhealthy = Set<String>()
     private var sounds: [String: NSSound] = [:]
-    private let player: ((String) -> Void)?
-    init(player: ((String) -> Void)? = nil) { self.player = player }
+    private let player: ((String, String, Float) -> Void)?
+    init(player: ((String, String, Float) -> Void)? = nil) { self.player = player }
     func consume(_ snapshot: SessionSnapshot, preferences: SessionSoundSettings?, now: Date = Date()) {
         if !initialized { startedAt = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970)) }
         let blocked = Set((snapshot.sources ?? []).filter { $0.state != "healthy" }.map { $0.machineId + ":" + $0.sourceId })
@@ -373,16 +373,26 @@ struct PetLibrary: Decodable { var pets: [ImportedPet]; var selectedLibraryId: S
         }
         seen = seen.filter { now.timeIntervalSince($0.value.updatedAt) <= 86400 }
         unhealthy = blocked; initialized = true
-        for kind in ["needsInput", "complete"] where kinds.contains(kind) { if let player { player(kind) } else { _ = preview(kind) } }
-    }
-    @discardableResult func preview(_ kind: String) -> String? {
-        let name: String
-        switch kind { case "needsInput": name = "needs-input"; case "complete": name = "complete"; default: return L("无效提示音") }
-        if sounds[kind] == nil {
-            guard let url = Bundle.main.url(forResource: name, withExtension: "wav"), let sound = NSSound(contentsOf: url, byReference: false) else { return L("无法读取提示音资源") }
-            sounds[kind] = sound
+        let preferences = preferences ?? SessionSoundSettings()
+        for kind in ["needsInput", "complete"] where kinds.contains(kind) && preferences.playbackVolume > 0 {
+            if let player { player(kind, preferences.tone(for: kind), preferences.playbackVolume) }
+            else { _ = play(kind, preferences: preferences, stopOthers: false) }
         }
-        sounds[kind]?.stop()
-        return sounds[kind]?.play() == true ? nil : L("无法播放提示音，请检查系统音频输出")
+    }
+    @discardableResult func preview(_ kind: String, preferences: SessionSoundSettings? = nil) -> String? {
+        play(kind, preferences: preferences ?? SessionSoundSettings(), stopOthers: true)
+    }
+    private func play(_ kind: String, preferences: SessionSoundSettings, stopOthers: Bool) -> String? {
+        guard let name = preferences.file(for: kind) else { return L("无效提示音") }
+        let key = kind + ":" + name
+        if stopOthers { for sound in sounds.values { sound.stop() } }
+        else { sounds[key]?.stop() }
+        guard preferences.playbackVolume > 0 else { return nil }
+        if sounds[key] == nil {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "wav"), let sound = NSSound(contentsOf: url, byReference: false) else { return L("无法读取提示音资源") }
+            sounds[key] = sound
+        }
+        sounds[key]?.volume = preferences.playbackVolume
+        return sounds[key]?.play() == true ? nil : L("无法播放提示音，请检查系统音频输出")
     }
 }

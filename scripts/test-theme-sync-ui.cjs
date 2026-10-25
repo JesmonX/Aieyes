@@ -1,3 +1,4 @@
+const {openGeneralPage} = require('./ui-test-helpers.cjs');
 /* Browser windows share storage and a disposable core configuration. */
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http'),readline=require('node:readline');
 const {spawn,execFileSync}=require('node:child_process');
@@ -58,9 +59,9 @@ function fixture(){
     await main.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
     failSave=true;await main.locator('[name=appearanceAccent]').selectOption('blue');
     await main.waitForFunction(()=>!state.generalSavePending&&state.saveError==='模拟主题保存失败');
-    await main.locator('[data-general-page=network]').click();failSave=false;
+    await openGeneralPage(main, 'network');failSave=false;
     await panel.locator('[data-theme-toggle]').click();await expectTheme('light');
-    await main.locator('[data-general-page=appearance]').click();
+    await openGeneralPage(main, 'appearance');
     assert.equal(await main.locator('[name=appearanceTheme]').inputValue(),'light','Inactive appearance page adopts the saved sibling theme');
     assert.equal(await main.locator('[name=appearanceAccent]').inputValue(),'blue','Failed local appearance edit is retained');
     await main.locator('#settings-retry-save').click();

@@ -233,9 +233,8 @@ struct UpdateSettingsView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 10) {
-            Text(L("当前版本 v{0}" , updater.currentVersion))
+            HStack { Text(L("当前版本 v{0}" , updater.currentVersion)); Spacer(); Button(updater.phase == "checking" ? L("检查中…") : L("检查更新")) { updater.check() }.disabled(updater.busy); if updater.phase == "checking" { Button(L("取消检查")) { updater.cancelDownload() } }; if updater.phase == "available" || (updater.busy && updater.phase != "checking") { Button(updater.busy ? L("查看进度") : L("查看更新")) { updater.check() } } }
             Toggle(L("启动时及每天检查更新"), isOn: $updater.automatic)
-            HStack { Button(updater.phase == "checking" ? L("检查中…") : L("检查更新")) { updater.check() }.disabled(updater.busy); if updater.phase == "checking" { Button(L("取消检查")) { updater.cancelDownload() } }; if updater.phase == "available" || (updater.busy && updater.phase != "checking") { Button(updater.busy ? L("查看进度") : L("查看更新")) { updater.check() } } }
             if !updater.message.isEmpty {
                 if updater.phase == "error" { ErrorNotice(message: updater.message, context: L("更新未完成")) }
                 else { Text(L(updater.message)).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) }

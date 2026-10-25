@@ -26,6 +26,7 @@ struct SettingsView: View {
     @State private var confirmRescan = false
     @State private var importSSH = false
     @State private var mappingsExpanded = false
+    @State private var mappingSectionExpanded = false
     @State private var savingServerSwitches: Set<String> = []
     private var mappingModel: String { get { model.mappingModel } nonmutating set { model.mappingModel = newValue } }
     private var mappingID: String { get { model.mappingID } nonmutating set { model.mappingID = newValue } }
@@ -54,6 +55,17 @@ struct SettingsView: View {
             if let message = model.message, model.settingsMessage == nil, !message.hasPrefix(L("已保存")) { HStack { Text(L(message)).font(AppFont.secondary).textSelection(.enabled); Spacer(); Button { model.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel(L("关闭提示")) }.padding(.horizontal, 22).padding(.bottom, 10) }
             ForEach(model.settings.configurationIssues ?? [], id: \.self) { Text(L($0)).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled).padding(.horizontal, 22) }
             Divider().opacity(0.5)
+            if model.settingsTab == "general" {
+                FlowLayout(spacing: 8) {
+                    ForEach([( "appearance", L("外观")), ("desktop", L("桌宠与会话")), ("network", L("网络代理")), ("refresh", L("刷新与历史")), ("notifications", L("通知")), ("updates", L("更新与关于"))], id: \.0) { key, title in
+                        Button(title) { model.generalPage = key }
+                            .buttonStyle(.plain).font(AppFont.body).padding(.horizontal, 10).padding(.vertical, 7)
+                            .foregroundStyle(model.generalPage == key ? Palette.accent : Color.secondary)
+                            .background(model.generalPage == key ? Palette.accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
+                            .accessibilityAddTraits(model.generalPage == key ? .isSelected : [])
+                    }
+                }.padding(.horizontal, 22).padding(.vertical, 12)
+            }
             RetainedPageHost(selection: model.settingsTab == "general" ? "general." + model.generalPage : model.settingsTab, active: parentActive || CommandLine.arguments.contains("--render")) { _ in
                 switch model.settingsTab {
                 case "prices": prices
@@ -158,18 +170,19 @@ struct SettingsView: View {
     }
     private var servers: some View {
         GeometryReader { geometry in VStack(spacing: 12) {
+            HStack { Button(L("添加 SSH 主机"), systemImage: "plus") { editHost(Host()) }.buttonStyle(.aieyesPrimary); Button(L("从 SSH 配置导入")) { importSSH = true }; Spacer(); Button(L("测试采样")) { Task { await model.sampleHosts() } }.disabled(model.hostRefreshBusy()) }.padding(.horizontal, 8)
             Form {
                 serverRow((model.settings.localMonitor ?? LocalMonitor()).host, narrow: geometry.size.width < 650)
                 ForEach(model.settings.hosts) { host in serverRow(host, narrow: geometry.size.width < 650) }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle())
-            HStack { Button(L("从 SSH 配置导入")) { importSSH = true }; Button(L("添加 SSH 主机"), systemImage: "plus") { editHost(Host()) }; Spacer(); Button(L("测试采样")) { Task { await model.sampleHosts() } }.disabled(model.hostRefreshBusy()) }.padding(.horizontal, 8)
+
         }.padding(.vertical, 12) }
     }
     private func serverRow(_ host: Host, narrow: Bool) -> some View {
         let local = host.id == "local", name = host.id == "local" ? L("本机") : host.name.isEmpty ? host.target : host.name
         let information = VStack(alignment: .leading, spacing: 5) {
             Text(name).font(AppFont.section).lineLimit(2).help(name)
-            Text(local ? L("当前设备") : host.target).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(host.target)
+            if !local && name != host.target { Text(host.target).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(host.target) }
             if local ? model.settings.localDeviceEnabled != false : host.enabled { NativeScanButton(model: model, machine: host.id) }
         }.frame(maxWidth: .infinity, alignment: .leading)
         let controls = HStack(spacing: 12) {
@@ -190,7 +203,7 @@ struct SettingsView: View {
     private func applyMappingDraft() -> Bool {
         let from = mappingModel.trimmingCharacters(in: .whitespacesAndNewlines), to = mappingID.trimmingCharacters(in: .whitespacesAndNewlines)
         if from.isEmpty && to.isEmpty { return true }
-        guard !from.isEmpty && !to.isEmpty else { model.settingsMessage = L("请补全模型映射两端，输入已保留"); mappingFocused = true; return false }
+        guard !from.isEmpty && !to.isEmpty else { model.settingsMessage = L("请补全模型映射两端，输入已保留"); mappingSectionExpanded = true; mappingFocused = true; return false }
         guard draft.modelMappings[from] == nil || draft.modelMappings[from] == to else { model.settingsMessage = L("该模型已有映射，请在已有映射中编辑"); return false }
         draft.modelMappings[from] = to
         return true
@@ -201,9 +214,17 @@ struct SettingsView: View {
     }
     private var prices: some View {
         ScrollViewReader { reader in ScrollView { LazyVStack(alignment: .leading, spacing: 14) {
-            Section {
-                Text(L("智能引用按 ID、名称和版本匹配，未知供应商优先官方价格；无版本可匹配 latest，未标注 batch 不引用 batch，仅供估值。“保存并重算”更新历史成本。")).font(AppFont.secondary).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                HStack { Text(L("USD / 百万 Token")).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(model.repricing ? L("重算中…") : L("保存并重算")) { Task { await model.saveAndReprice() } }.disabled(model.settingsSaving || model.repricing).accessibilityIdentifier("save-and-reprice") }
+            HStack {
+                TextField(L("搜索模型"), text: $catalog.query).textFieldStyle(.aieyes)
+                Button(L("智能引用")) { Task { await model.referencePrices() } }.disabled(model.busy || model.settingsSaving || model.quotaBusy)
+                Button(L("同步 OpenRouter")) { Task { await model.syncPrices() } }.disabled(model.busy || model.quotaBusy)
+                Button(L("添加价格")) { priceEditor = ModelPrice() }
+            }
+            HStack {
+                Text(L("USD / 百万 Token")).font(AppFont.secondary).foregroundStyle(.secondary)
+                Spacer()
+                HelpNote(title: L("智能引用与重算"), text: L("智能引用按 ID、名称和版本匹配，未知供应商优先官方价格；无版本可匹配 latest，未标注 batch 不引用 batch，仅供估值。“保存并重算”更新历史成本。"))
+                Button(model.repricing ? L("重算中…") : L("保存并重算")) { Task { await model.saveAndReprice() } }.disabled(model.settingsSaving || model.repricing).accessibilityIdentifier("save-and-reprice")
             }
             if !model.dashboard.pricingGaps.isEmpty {
                 Section(L("待计价模型")) {
@@ -214,29 +235,13 @@ struct SettingsView: View {
                                     VStack(alignment: .leading, spacing: 4) { Text(gap.model).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)); Text(L("缺少{0} · {1} Token" , gap.missing, Format.compact(gap.unpricedTokens))).font(AppFont.secondary).foregroundStyle(.secondary) }
                                     Spacer()
                                     Button(L("智能引用")) { Task { await model.referencePrices(model: gap.model) } }.disabled(model.busy || model.settingsSaving)
-                                    Button(L("映射")) { mappingModel = gap.model; mappingID = gap.priceId ?? "" }
+                                    Button(L("映射")) { mappingSectionExpanded = true; mappingModel = gap.model; mappingID = gap.priceId ?? ""; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }
                                     Button(L("补充价格")) { openGapPrice(gap) }
                                 }
                             }
                         }.padding(6)
                     }.frame(height: 100)
                 }
-            }
-            Section(L("模型映射")) {
-                VStack(spacing: 8) {
-                    HStack { TextField(L("日志中的模型名称"), text: $model.mappingModel); Image(systemName: "arrow.right"); TextField(L("OpenRouter 模型 ID"), text: $model.mappingID).focused($mappingFocused); Button(L("添加映射")) { if applyMappingDraft() { Task { _ = await model.saveSettingsDraft() } } }.disabled(mappingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mappingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-                    DisclosureGroup(L("已有映射（{0}）" , draft.modelMappings.count), isExpanded: $mappingsExpanded) {
-                        if mappingsExpanded {
-                            ScrollView { LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in ExistingMappingRow(model: model, name: key) } }.padding(.vertical, 4) }.frame(height: min(180, CGFloat(draft.modelMappings.count) * 48))
-                        }
-                    }
-                }.padding(6)
-            }.id("model-mapping")
-            HStack {
-                TextField(L("搜索模型"), text: $catalog.query).textFieldStyle(.aieyes)
-                Button(L("智能引用")) { Task { await model.referencePrices() } }.disabled(model.busy || model.settingsSaving || model.quotaBusy)
-                Button(L("同步 OpenRouter")) { Task { await model.syncPrices() } }.disabled(model.busy || model.quotaBusy)
-                Button(L("添加价格")) { priceEditor = ModelPrice() }
             }
             HStack {
                 Text(L("模型价格 · {0} 项" , catalog.filtered.count)).font(AppFont.section)
@@ -248,20 +253,38 @@ struct SettingsView: View {
             }
             ScrollView { LazyVStack(spacing: 8) {
                 ForEach(catalog.filtered) { price in
-                    PriceCatalogRow(price: price, map: { mappingID = price.id; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }, edit: { priceEditor = price }).equatable()
+                    PriceCatalogRow(price: price, map: { mappingSectionExpanded = true; mappingID = price.id; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }, edit: { priceEditor = price }).equatable()
                 }
             } }.frame(height: 372)
+            DisclosureGroup(L("模型映射"), isExpanded: $mappingSectionExpanded) {
+                VStack(spacing: 8) {
+                    HStack { TextField(L("日志中的模型名称"), text: $model.mappingModel); Image(systemName: "arrow.right"); TextField(L("OpenRouter 模型 ID"), text: $model.mappingID).focused($mappingFocused); Button(L("添加映射")) { if applyMappingDraft() { Task { _ = await model.saveSettingsDraft() } } }.disabled(mappingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mappingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                    DisclosureGroup(L("已有映射（{0}）" , draft.modelMappings.count), isExpanded: $mappingsExpanded) {
+                        if mappingsExpanded {
+                            ScrollView { LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in ExistingMappingRow(model: model, name: key) } }.padding(.vertical, 4) }.frame(height: min(180, CGFloat(draft.modelMappings.count) * 48))
+                        }
+                    }
+                }.padding(6)
+            }.id("model-mapping")
             if !catalog.loading && catalog.error == nil && catalog.filtered.isEmpty {
                 Text(catalog.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? L("同步模型价格") : L("无匹配模型")).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding()
             }
         }.padding(16) }.textFieldStyle(.aieyes) }
+    }
+    private func refreshInterval(_ label: String, value: Binding<Int>, field: String) -> some View {
+        LabeledContent(label) {
+            HStack(spacing: 8) {
+                TextField(label, value: value, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: field)
+                Text(L("秒")).foregroundStyle(.secondary)
+            }
+        }
     }
     private var general: some View {
         HStack(alignment: .top, spacing: 12) {
 
             GeometryReader { viewport in Form {
             if model.generalPage == "appearance" {
-            Section(L("外观")) {
+            Section(L("界面")) {
                 Picker(L("语言"), selection: Binding(get: { model.settingsDraft.appearance?.language ?? "zh-CN" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.language = value; model.settingsDraft.appearance = appearance })) {
                     Text(verbatim: "简体中文").tag("zh-CN"); Text(verbatim: "English").tag("en")
                 }
@@ -271,39 +294,38 @@ struct SettingsView: View {
                 Picker(L("强调色"), selection: Binding(get: { model.settingsDraft.appearance?.accent ?? "indigo" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.accent = value; model.settingsDraft.appearance = appearance })) {
                     Text(L("靛蓝")).tag("indigo"); Text(L("蓝")).tag("blue"); Text(L("青绿")).tag("teal"); Text(L("紫")).tag("purple")
                 }
+            }
+            Section(L("图表")) {
                 Picker(L("图表配色"), selection: Binding(get: { model.settingsDraft.appearance?.chartPalette ?? "classic" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.chartPalette = value; model.settingsDraft.appearance = appearance })) {
                     ForEach(Palette.chartPresets, id: \.id) { Text(L($0.name)).tag($0.id) }
                 }
                 Picker(L("图表对比度"), selection: Binding(get: { model.settingsDraft.appearance?.chartContrast ?? "high" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.chartContrast = value; model.settingsDraft.appearance = appearance })) {
-                    Text(L("高对比度")).tag("high"); Text(L("低对比度 · 柔和")).tag("low")
+                    Text(L("高对比度")).tag("high"); Text(L("柔和")).tag("low")
                 }
                 ChartPalettePreview(preset: model.settingsDraft.appearance?.chartPalette ?? "classic", contrast: model.settingsDraft.appearance?.chartContrast ?? "high")
-                Text(L("图表配色随明暗主题调整。高对比度适合小色块，低对比度更柔和。")).font(AppFont.secondary).foregroundStyle(.secondary)
             }
             }
             if model.generalPage == "desktop" {
             Section(L("桌面宠物")) {
-                Toggle(L("显示桌面宠物（本机，立即生效）"), isOn: $petEnabled)
+                HStack { Toggle(L("显示桌宠"), isOn: $petEnabled); HelpNote(title: L("桌面显示"), text: L("桌宠展示本机和 SSH 会话。单击打开面板，拖动移动。")) }
                 PetScaleControl()
                 PetLibraryView(model: model)
-                Text(L("桌宠展示本机和 SSH 的 Codex、Claude Code、Antigravity 会话。单击打开面板，拖动移动。")).font(AppFont.secondary).foregroundStyle(.secondary)
             }
             Section(L("菜单栏")) {
-                Toggle(L("显示活跃会话数（本机与 SSH）"), isOn: $showMenuCount)
-                Text(L("菜单栏显示今日全部数据，独立于页面筛选。")).font(AppFont.secondary).foregroundStyle(.secondary)
+                HStack { Toggle(L("显示活跃会话数"), isOn: $showMenuCount); HelpNote(title: L("菜单栏"), text: L("菜单栏显示今日全部数据，独立于页面筛选。")) }
                 Picker(L("显示内容"), selection: $model.settingsDraft.menuMetric) { Text(L("图标")).tag("icon"); Text(L("今日全部 Token")).tag("tokens"); Text(L("首个账户剩余额度")).tag("quota"); Text(L("首台服务器 CPU")).tag("cpu") }
             }
             }
             if model.generalPage == "refresh" {
             Section(L("刷新")) {
-                LabeledContent(L("额度查询间隔（秒）")) { TextField(L("额度查询间隔（秒）"), value: $model.settingsDraft.refreshSeconds, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "quota") }
-                LabeledContent(L("日志同步间隔（秒）")) { TextField(L("日志同步间隔（秒）"), value: $model.settingsDraft.historyInterval, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "history") }
-                LabeledContent(L("服务器前台间隔（秒）")) { TextField(L("服务器前台间隔（秒）"), value: $model.settingsDraft.foregroundInterval, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "foreground") }
-                LabeledContent(L("服务器后台间隔（秒）")) { TextField(L("服务器后台间隔（秒）"), value: $model.settingsDraft.serverRefreshSeconds, format: .number).labelsHidden().frame(width: DesignTokens.fieldShortWidth).focused($generalField, equals: "background") }
+                refreshInterval(L("额度查询"), value: $model.settingsDraft.refreshSeconds, field: "quota")
+                refreshInterval(L("日志同步"), value: $model.settingsDraft.historyInterval, field: "history")
+                refreshInterval(L("服务器前台"), value: $model.settingsDraft.foregroundInterval, field: "foreground")
+                refreshInterval(L("服务器后台"), value: $model.settingsDraft.serverRefreshSeconds, field: "background")
             }
             Section(L("历史记录")) {
                 Toggle(L("精确计数"), isOn: Binding(get: { model.settingsDraft.preciseCounting == true }, set: { model.settingsDraft.preciseCounting = $0 }))
-                Text(L("为所有 Agent 去除可识别的 fork 和继承历史重复用量。关闭时按各会话计入；修改后在下次同步自动重算。")).font(AppFont.secondary).foregroundStyle(.secondary)
+                HStack { Text(L("去除可识别的继承重复用量")).font(AppFont.secondary).foregroundStyle(.secondary); HelpNote(title: L("精确计数"), text: L("为所有 Agent 去除可识别的 fork 和继承历史重复用量。关闭时按各会话计入；修改后在下次同步自动重算。")) }
                 if model.settings.preciseCounting == true {
                     ForEach(model.dashboard.sources.filter { $0.enabled && !($0.status?.forkHistoryIssues ?? []).isEmpty }) { source in
                         DisclosureGroup(source.name + L(" · 继承历史待确认")) {
@@ -314,12 +336,11 @@ struct SettingsView: View {
                         }
                     }
                 }
-                Text(L("用量按 Agent 统计，已删除账户的历史用量仍计入总量。")).font(AppFont.secondary).foregroundStyle(.secondary)
-                Text(L("重新读取已启用来源的完整日志，修正可确认的重复记录。已有历史和价格快照保留。")).font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack {
                     Button(model.rescanning ? L("全量重扫中…") : L("全量重扫")) { confirmRescan = true }
                         .disabled(model.busy || model.quotaBusy || model.settingsSaving || !model.estimateBusy.isEmpty)
                     RefreshIndicator(model: model, key: "rescan")
+                    HelpNote(title: L("历史用量"), text: L("用量按 Agent 统计，已删除账户的历史用量仍计入总量。"))
                 }
                 if model.rescanning { ProgressView(L("正在重新读取完整日志…")).controlSize(.small) }
                 if let result = model.rescanMessage { Text(result).font(AppFont.secondary).foregroundStyle(model.rescanFailed ? Palette.warn : Color.secondary).textSelection(.enabled) }
@@ -328,14 +349,16 @@ struct SettingsView: View {
             if model.generalPage == "network" {
             Section(L("网络代理")) {
                 ProxyFields(proxy: $model.settingsDraft.proxy, testURLs: model.settingsDraft.proxyTestUrls)
+                DisclosureGroup(L("测试选项")) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(L("测试地址（逗号分隔）"))
                     TextField(L("测试地址（逗号分隔）"), text: Binding(get: { (model.settingsDraft.proxyTestUrls ?? ["https://api.github.com/rate_limit", "https://openrouter.ai"]).joined(separator: ", ") }, set: { model.settingsDraft.proxyTestUrls = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }), axis: .vertical).labelsHidden().textFieldStyle(.aieyes).lineLimit(2...4)
                 }
+                }
             }
             }
             if model.generalPage == "notifications" { QuotaNotificationSettingsView(model: model, service: model.resetNotifications) }
-            if model.generalPage == "updates" { Section(L("更新")) { UpdateSettingsView() } }
+            if model.generalPage == "updates" { Section(L("更新")) { UpdateSettingsView() }; Section(L("关于")) { Text("Aieyes").font(AppFont.section); Link(L("项目主页"), destination: URL(string: "https://github.com/JesmonX/Aieyes")!) } }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).environment(\.petPreviewViewport, viewport.frame(in: .global)) }
         }.padding(.top, 12)
     }
@@ -533,7 +556,7 @@ struct SourceEditor: View {
                 if let error { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.aieyes).disabled(saving)
             HStack {
-                Button(L("取消")) { cancel() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer(); Text(L("保存后立即生效")).font(AppFont.secondary).foregroundStyle(.secondary); Spacer()
+                Button(L("取消")) { cancel() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer()
                 Button(saving ? L("处理中…") : L("保存")) { Task { await save() } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(saving)
             }.padding(20)
         }.font(AppFont.body).frame(width: DesignTokens.dialogSourceWidth, height: EditorLayout.height(660))
@@ -638,7 +661,7 @@ struct HostEditor: View {
                 else { HStack { TextField(L("密钥路径"), text: $host.identityFile, prompt: Text(L("跟随 SSH 配置"))); Button(L("选择…")) { let panel = NSOpenPanel(); panel.showsHiddenFiles = true; if panel.runModal() == .OK { host.identityFile = panel.url?.path ?? host.identityFile } } } }
                 }
                 Button(discovering ? L("读取中…") : L("连接并读取设备")) { Task { await discover() } }.disabled(discovering || host.target.isEmpty)
-                DisclosureGroup(L("监控指标与设备 · 按需选择")) {
+                DisclosureGroup(L("监控指标与设备")) {
                 Section {
                     MultiSelectPicker(title: L("采集项目"), options: groups.map { SelectionOption(id: $0.0, label: $0.1) }, selected: Set(host.metrics)) { selected, _ in
                         host.metrics = selected.sorted()
@@ -661,7 +684,7 @@ struct HostEditor: View {
                 }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.aieyes)
             if let saveError { ErrorNotice(message: saveError) }
-            HStack { Button(L("取消")) { cancel() }.keyboardShortcut(.cancelAction); Spacer(); Text(L("保存后立即生效")).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(saving ? L("保存中…") : L("保存")) { Task { saving = true; saveError = nil; defer { saving = false }; host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; do { try await onSave(host, password) } catch { saveError = error.localizedDescription } } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty || saving) }.padding(20)
+            HStack { Button(L("取消")) { cancel() }.keyboardShortcut(.cancelAction); Spacer(); Button(saving ? L("保存中…") : L("保存")) { Task { saving = true; saveError = nil; defer { saving = false }; host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; do { try await onSave(host, password) } catch { saveError = error.localizedDescription } } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty || saving) }.padding(20)
         }.font(AppFont.body).frame(width: DesignTokens.dialogHostWidth, height: EditorLayout.height(650)).onChange(of: connectionIdentity) { _, _ in discoveryRequest = UUID(); discovered = [:]; discoveryInfo = nil; discoveryError = L("连接配置已更改，请重新读取设备") }
         .updateDraftGuard(host.id == "local" ? L("本机监测") : L("SSH 主机"), snapshot: draftValue, dirty: !initialDraft.isEmpty && initialDraft != draftValue, saving: saving || discovering, save: {
             saving = true; defer { saving = false }; saveError = nil
@@ -695,7 +718,6 @@ struct PriceEditor: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack { Text(L("模型价格")).font(AppFont.title); Spacer(); Text(L("USD / 百万 Token")).font(AppFont.secondary).foregroundStyle(.secondary) }
-                Text(L("保存此价格后立即生效，不需要再保存设置。")).font(AppFont.secondary).foregroundStyle(.secondary)
             }.padding(.horizontal, 22).padding(.vertical, 12)
             Form {
                 TextField(L("模型 ID"), text: $price.id, prompt: Text("openai/model-name"))

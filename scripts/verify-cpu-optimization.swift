@@ -189,7 +189,7 @@ private struct DescendantLayoutFixture: View {
         quota.updatedAt += 1;quota.windows[0].usedPercent = 35;quotaHost.rootView = AnyView(card())
         try await wait(100);quotaHost.layoutSubtreeIfNeeded()
         precondition(UserDefaults.standard.bool(forKey: expansionKey), "Data refresh must retain disclosure state")
-        precondition(press(in: quotaHost, containing: "切换为此账户") && switches == 1, "Equatable cards must retain working actions")
+        precondition(press(in: quotaHost, containing: "切换账户") && switches == 1, "Equatable cards must retain working actions")
         precondition(press(in: quotaHost, containing: "折叠额度"));try await wait(300)
         precondition(!UserDefaults.standard.bool(forKey: expansionKey))
         let projection = model.sessionStripStatus

@@ -56,7 +56,7 @@ struct AccountTargetsView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Text(L("切换为此账户 · ") + (account?.name ?? L("账户"))).font(AppFont.title); Spacer(); Button(L("重新检查")) { Task { await targets.load(model, accountKey: accountKey) } }.disabled(!targets.checking.isEmpty) }
+            HStack { Text(L("切换账户 · ") + (account?.name ?? L("账户"))).font(AppFont.title); Spacer(); Button(L("重新检查")) { Task { await targets.load(model, accountKey: accountKey) } }.disabled(!targets.checking.isEmpty) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(targets.errors, id: \.self) { Text($0).foregroundStyle(Palette.warn).textSelection(.enabled) }

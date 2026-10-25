@@ -88,7 +88,7 @@ struct CodexAccountsView: View {
                         }
                         if intent == "login" { Button(L("重新登录")) { reauthID = profile.id; loginSheet = true } }
                         if profile.current != true {
-                            if intent == "switch" || targetAccountID != nil { Button(L("切换到此账户")) { perform { await prepareSwitch(profile) } } }
+                            if intent == "switch" || targetAccountID != nil { Button(L("切换账户")) { perform { await prepareSwitch(profile) } } }
                             if intent == "login" { Button(L("移除"), role: .destructive) { removeProfile = profile } }
                         }
                     }.disabled(busy || operation != nil || source == nil)
@@ -181,7 +181,7 @@ struct CodexAccountsView: View {
             Text(L("确认切换账户")).font(AppFont.title)
             Text((info?.profiles.first(where: { $0.current == true })?.name ?? L("当前登录")) + " → " + (switchTarget?.name ?? L("目标账户"))).font(AppFont.section)
             if let source { Text(source.name + " · " + source.path).font(AppFont.secondary).textSelection(.enabled) }
-            Text(L("切换账户将关闭此设备上使用登录账户的 Codex 和 ChatGPT 进程及应用；已确认使用独立 API 凭据的实例及其辅助进程会保留。请先保存工作。")).foregroundStyle(Palette.warn)
+            Text(L("请先保存工作。切换将关闭相关登录进程；已确认使用独立 API 凭据的实例及其辅助进程会保留。")).foregroundStyle(Palette.warn)
             if let switchError { ErrorNotice(message: switchError).foregroundStyle(Palette.warn).textSelection(.enabled) }
             if busy { HStack { ProgressView().controlSize(.small); Text(prepared == nil ? L("正在检查…") : L("正在切换…")) } }
             if let prepared {

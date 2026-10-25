@@ -193,7 +193,16 @@ pub const PET_FRAME_DURATIONS: &[&[u64]] = &[
     &[120, 120, 120, 120, 120, 220],
     &[150, 150, 150, 150, 150, 280],
 ];
-pub const CONTRACT_HASH: &str = "d9ef4fd5a6a6a2b91786b024acb13083710d2a8563b575d3cb485b1ddc38113d";
+#[rustfmt::skip]
+pub const SESSION_SOUND_TONES: &[(&str, &str, &str)] = &[
+    ("default", "经典", "default"),
+    ("bell", "清铃", "bell"),
+    ("chime", "和弦", "chime"),
+    ("marimba", "木琴", "marimba"),
+    ("droplet", "水滴", "droplet"),
+    ("pulse", "电子", "pulse"),
+];
+pub const CONTRACT_HASH: &str = "17519a23efea81767ec72e25d9b856aa25e12d7679eb4f0579eb4cdbfd6c0156";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

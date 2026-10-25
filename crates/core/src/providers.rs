@@ -162,6 +162,7 @@ pub fn normalize_value(value: &mut Value, aliases: &BTreeMap<String, String>) {
 }
 pub fn normalize_settings(settings: &mut Settings) {
     settings.migrate();
+    settings.session_sounds.normalize();
     let mut value = serde_json::to_value(&*settings).expect("serializable settings");
     normalize_value(&mut value, &settings.account_aliases);
     *settings = serde_json::from_value(value).expect("normalized settings");

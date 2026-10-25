@@ -14,6 +14,9 @@ q = lambda value: json.dumps(value, ensure_ascii=False)
 array = lambda values: '[' + ', '.join(q(v) for v in values) + ']'
 providers, methods = table['providers'], table['methods']
 pet_frames = table['petFrameDurations']
+sound_tones = table['sessionSoundTones']
+assert sound_tones[0]['id'] == 'default' and len({tone['id'] for tone in sound_tones}) == len(sound_tones)
+assert all(re.fullmatch(r'[a-z-]+', tone['id']) and re.fullmatch(r'[a-z-]+', tone['file']) for tone in sound_tones)
 assert len(pet_frames) == 9 and all(1 <= len(row) <= 8 and all(isinstance(ms, int) and ms > 0 for ms in row) for row in pet_frames)
 assert len({m['name'] for m in methods}) == len(methods), 'Duplicate RPC method'
 assert all(m['lane'] in ('main', 'hosts', 'network', 'configuration', 'accounts', 'dashboard', 'quotas', 'wakeups') for m in methods)
@@ -66,6 +69,7 @@ for name, values in [('PROVIDER_IDS',[p['id'] for p in providers]),('EXCLUDED_FS
     rust += f'#[rustfmt::skip]\npub const {name}: &[&str] = &{array(values)};\n'
 rust += f'pub const FIVE_HOUR_MINUTES: i64 = {table["windows"]["fiveHour"]};\npub const WEEK_MINUTES: i64 = {table["windows"]["week"]};\n'
 rust += '#[rustfmt::skip]\npub const PET_FRAME_DURATIONS: &[&[u64]] = &[\n' + ''.join(f'    &{array(row)},\n' for row in pet_frames) + '];\n'
+rust += '#[rustfmt::skip]\npub const SESSION_SOUND_TONES: &[(&str, &str, &str)] = &[\n' + ''.join(f'    ({q(tone["id"])}, {q(tone["name"])}, {q(tone["file"])}),\n' for tone in sound_tones) + '];\n'
 rust += f'pub const CONTRACT_HASH: &str = {q(contract_hash)};\n'
 rust += '''pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
@@ -86,6 +90,7 @@ web['providerCapabilities'] = {p['id']: p.get('capabilities', []) for p in provi
 web['providerIcons'] = {p['id']: p['icon'] for p in providers if 'icon' in p}
 web['contractHash'] = contract_hash
 web['petFrameDurations'] = pet_frames
+web['sessionSoundTones'] = sound_tones
 js = header + '(typeof window === "undefined" ? globalThis : window).AieyesContract = ' + json.dumps(web, ensure_ascii=False, indent=2) + ';\n'
 begin, end = '// BEGIN GENERATED CORE CONTRACT', '// END GENERATED CORE CONTRACT'
 swift = begin + '\n' + header + 'enum CoreContract {\n'
@@ -112,6 +117,7 @@ swift += '    static let apiGuidance: [String: [String: String]] = [' + ', '.joi
 swift += f'    static let fiveHourMinutes = {table["windows"]["fiveHour"]}\n    static let weekMinutes = {table["windows"]["week"]}\n'
 swift += f'    static let excludedFilesystemTypes: Set<String> = {array(table["filesystems"]["excludedTypes"])}\n    static let excludedFilesystemPaths = {array(table["filesystems"]["excludedPaths"])}\n'
 swift += '    static let petFrameDurations: [[Int]] = ' + json.dumps(pet_frames) + '\n'
+swift += '    static let sessionSoundTones: [(id: String, name: String, file: String)] = [' + ', '.join(f'({q(tone["id"])}, {q(tone["name"])}, {q(tone["file"])})' for tone in sound_tones) + ']\n'
 swift += '    static let methodLanes: [String: String] = [\n' + ''.join(f'        {q(m["name"])}: {q(m["lane"])},\n' for m in methods) + '    ]\n'
 swift += '    static let updateBehaviors: [String: String] = [' + ', '.join(f'{q(m["name"])}: {q(m["updateBehavior"])}' for m in methods) + ']\n'
 swift += '    static let configurationMethods = Set(methodLanes.filter { $0.value == "configuration" }.keys)\n}\n' + end

@@ -54,7 +54,7 @@ function fixture(){
   await page.locator('[data-auth="switch"]').click();
   await page.locator('#codex-switch[open]').waitFor();
   await page.getByRole('button',{name:'关闭并切换',exact:true}).waitFor();
-  await page.locator('#codex-switch').getByText('确认后将关闭下面列出的受影响进程，包含使用当前默认 API 的实例；已确认使用独立 API 配置的实例及其辅助进程会保留。请先保存工作。',{exact:true}).waitFor();
+  await page.locator('#codex-switch').getByText('请先保存工作。确认后将关闭下列进程，包括使用当前默认 API 的实例；已确认的独立 API 实例及其辅助进程会保留。',{exact:true}).waitFor();
   await page.locator('#codex-switch').getByText('ChatGPT 应用 · PID 123',{exact:true}).waitFor();
   await page.locator('#codex-switch').getByText('将保留 1 个使用独立 API 凭据的进程（含辅助进程）。',{exact:true}).waitFor();
   assert.equal(await page.locator('#codex-switch .codex-switch-processes').getByText('PID 999',{exact:false}).count(),0);

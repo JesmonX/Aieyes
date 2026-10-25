@@ -138,6 +138,23 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --l
 
 ## 本地浏览器验证
 
+在 macOS 上可直接运行 Windows / Linux 界面调试工作台，需要 Node.js 24 和 Python 3，无需构建 Rust 或安装桌面应用：
+
+```sh
+npm --prefix apps/desktop run preview:desktop
+# 也可直接进入对应平台；进入后仍可随时切换
+npm --prefix apps/desktop run preview:windows
+npm --prefix apps/desktop run preview:linux
+# 自定义端口，或只启动服务
+npm --prefix apps/desktop run preview:desktop -- --port 4174 --no-open
+```
+
+默认打开 `http://127.0.0.1:4173`。工作台加载实际应用源码，可切换主窗口 / 悬浮面板、场景、主题、语言和 CSS 窗口尺寸；修改源码后自动重载。编辑账户配置、服务器、价格、唤醒草稿和设置只影响浏览器内的模拟数据，按平台和场景分别保留；刷新后保留已保存内容，“重置当前场景”可恢复初始数据及界面偏好。预览存储归属于端口对应的浏览器来源；切换端口会使用另一份存储。未提交的表单在重载时可能丢失。
+
+请求延迟和查询 / 保存故障可通过工具栏注入；“调用与错误”显示模拟 IPC、结果、耗时和页面异常。模拟文件选择仅接受路径文本，路径检查仅检查非空，服务器连接、网络测试和模型能力均返回合成结果。预览不会读取个人账户、执行 SSH、部署任务或安装更新；登录授权、实际账户切换等外部操作会提示预览边界。Windows 的系统托盘、桌宠、DWM、真实 DPI，以及 Linux 的 GTK、托盘、Wayland / X11 行为仍需目标系统验收。Linux 外层标题栏仅为示意，画布缩放不等于系统 DPI。
+
+工作台实现位于 `scripts/desktop-preview/`，通过开发服务注入桥接脚本，不会打包进正式应用。新增浏览器验收命令：`npm --prefix apps/desktop run test:desktop-preview`。
+
 需要 Node.js 24。测试使用内存中的 IPC 数据，不访问个人账户或服务器：
 
 ```sh

@@ -210,7 +210,7 @@ import Darwin
             menu.performActionForItem(at: 0); menu.performActionForItem(at: 0)
             precondition(opens == 3, "The context menu always requests opening, never toggling")
             menu.performActionForItem(at: 1)
-            precondition(model.settingsTab == "integrations")
+            precondition(model.settingsTab == "general", "The generic Settings action opens preferences")
             menu.performActionForItem(at: 2)
             precondition(model.settingsTab == "general" && model.generalPage == "desktop")
             menu.performActionForItem(at: 4)

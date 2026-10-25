@@ -1,3 +1,4 @@
+const {revealControl} = require('./ui-test-helpers.cjs');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {execFileSync}=require('node:child_process');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
@@ -214,7 +215,7 @@ function fixture(data){
     assert.equal(await page.evaluate(()=>petTest.previewPaints),0,'leaving desktop settings disposes preview playback');
     await page.evaluate(()=>{state.generalTab='desktop';renderSettings();});
     await page.evaluate(()=>{petTest.failImport=true;});
-    await page.locator('#pet-import-input').fill('npx @fixture/pet@latest');await page.locator('#import-pet').click();
+    await revealControl(page, '#pet-import-input');await page.locator('#pet-import-input').fill('npx @fixture/pet@latest');await page.locator('#import-pet').click();
     await page.getByText('模拟导入失败',{exact:true}).waitFor();
     assert.equal(await page.locator('#pet-import-input').inputValue(),'npx @fixture/pet@latest');
     assert.notEqual(await page.evaluate(()=>petTest.selection.pet.libraryId),'imported','failed imports preserve the selected pet');
@@ -222,7 +223,7 @@ function fixture(data){
     await page.waitForFunction(()=>document.querySelector('#current-pet').textContent.includes('导入成功'));
     assert.ok(await page.evaluate(()=>petTest.calls.some(c=>c.args.method==='pets.import'&&c.args.params.input==='npx @fixture/pet@latest')));
     assert.equal(await page.locator('[data-pet-select]').count(),19,'successful imports preserve the existing library');
-    await page.locator('#select-pet-file').click();
+    await revealControl(page, '#select-pet-file');await page.locator('#select-pet-file').click();
     await page.waitForFunction(()=>!document.querySelector('#select-pet-file').disabled);
     assert.ok(await page.evaluate(()=>petTest.calls.some(c=>c.args.method==='pets.import'&&c.args.params.input==='/fixture/import.zip')));
     assert.equal(await page.locator('[data-pet-select]').count(),19,'identical imports reuse a library entry');
@@ -245,7 +246,7 @@ function fixture(data){
     await race.goto(`http://127.0.0.1:${server.address().port}/index.html`);await race.evaluate(()=>AieyesApp.ready);
     await race.evaluate(()=>{petTest.holdList=true;state.page='settings';state.settingsTab='general';state.generalTab='desktop';render();});
     await race.waitForFunction(()=>petTest.releaseList);
-    await race.locator('#pet-import-input').fill('@fixture/fast-import');await race.locator('#import-pet').click();
+    await revealControl(race, '#pet-import-input');await race.locator('#pet-import-input').fill('@fixture/fast-import');await race.locator('#import-pet').click();
     await race.waitForFunction(()=>petTest.selection.pet.libraryId==='imported');await race.evaluate(()=>petTest.releaseList());
     await race.waitForFunction(()=>document.querySelector('#current-pet').textContent.includes('导入成功')&&!document.querySelector('#import-pet').disabled);
     assert.equal(await race.locator('[data-pet-select]').count(),19,'a late initial list cannot hide a pet imported while metadata was loading');

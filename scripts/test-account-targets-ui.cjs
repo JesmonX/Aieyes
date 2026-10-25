@@ -41,9 +41,9 @@ function fixture(){
     const page=await browser.newPage({reducedMotion:'reduce'}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
     assert.equal(await page.locator('[data-switch-account="codex:old"]').count(),0);
     for(const key of ['codex:a','codex:b'])await page.locator('[data-quota="'+key+'"] > details > summary').click();
-    await page.locator('[data-device-counts="codex:a"]').getByText('已登录设备 1/3 · 使用中设备 1/3',{exact:true}).waitFor();
-    await page.locator('[data-device-counts="codex:a"]').getByText(/使用中设备 1\/3/).waitFor();
-    assert.match(await page.locator('[data-device-counts="codex:b"]').innerText(),/使用中设备 0\/3/);
+    await page.locator('[data-device-counts="codex:a"]').getByText('已登录 1/3 · 使用中 1/3',{exact:true}).waitFor();
+    await page.locator('[data-device-counts="codex:a"]').getByText(/使用中 1\/3/).waitFor();
+    assert.match(await page.locator('[data-device-counts="codex:b"]').innerText(),/使用中 0\/3/);
     assert.match(await page.locator('[data-device-counts="codex:b"] .device-count-line').evaluate(el=>el.title||el.dataset.hint||el.getAttribute('data-tooltip')),/待确认/);
     // Font swaps and viewport reflow can otherwise be measured on different frames.
     await page.evaluate(()=>document.fonts.ready);
@@ -59,9 +59,9 @@ function fixture(){
     await page.evaluate(()=>{targetsTest.holdStatus=true;void AieyesAgentSettings.refreshStatuses(true);});
     await page.waitForFunction(()=>targetsTest.releaseStatus);
     await page.evaluate(async()=>{targetsTest.holdStatus=false;targetsTest.usingWork=true;await AieyesAgentSettings.refreshCodexSource('remote');targetsTest.releaseStatus();});
-    await page.locator('[data-device-counts="codex:b"]').getByText(/使用中设备 1\/3/).waitFor();
+    await page.locator('[data-device-counts="codex:b"]').getByText(/使用中 1\/3/).waitFor();
     await page.waitForTimeout(50);
-    assert.match(await page.locator('[data-device-counts="codex:a"]').innerText(),/使用中设备 0\/3/,'late status cannot restore the previous account');
+    assert.match(await page.locator('[data-device-counts="codex:a"]').innerText(),/使用中 0\/3/,'late status cannot restore the previous account');
 
     await page.evaluate(()=>{AieyesCodexAuth.open=(...args)=>targetsTest.opened=args;AieyesCodexAuth.html=()=>'<p>登录或切换确认</p>';AieyesCodexAuth.bind=()=>{};});
     await page.locator('[data-switch-account="codex:b"]').click();
@@ -81,9 +81,9 @@ function fixture(){
     assert.deepEqual(await page.evaluate(()=>targetsTest.opened),['b','local','login']);
     await page.locator('#target-close').click();
     await page.evaluate(()=>{state.page='settings';state.settingsTab='accounts';renderSettings();});
-    await page.getByText('已登录设备 1/3 · 使用中设备 1/3 · 有设备待确认',{exact:true}).waitFor();
+    await page.getByText('已登录 1/3 · 使用中 1/3 · 有设备待确认',{exact:true}).waitFor();
     await page.evaluate(()=>{targetsTest.settings.hosts.find(h=>h.id==='offline').enabled=false;AieyesAgentSettings.accept(structuredClone(targetsTest.settings));state.page='agent';render();});
-    await page.locator('[data-device-counts="codex:b"]').getByText(/使用中设备 1\/2/).waitFor();
+    await page.locator('[data-device-counts="codex:b"]').getByText(/使用中 1\/2/).waitFor();
     await page.evaluate(()=>{targetsTest.settings.hosts.find(h=>h.id==='offline').enabled=true;AieyesAgentSettings.accept(structuredClone(targetsTest.settings));render();});
     await page.evaluate(()=>{state.page='settings';state.settingsTab='wakeups';renderSettings();});await page.locator('#wake-add:not([disabled])').click();
     await page.locator('#wake-account').selectOption('codex:a');await page.locator('#wake-source').selectOption('remote');

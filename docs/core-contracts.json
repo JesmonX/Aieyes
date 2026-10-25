@@ -1578,5 +1578,37 @@
     "estimate": {
       "rollingExcludedReason": "optional string; retained history excluded from current summaries"
     }
-  }
+  },
+  "sessionSoundTones": [
+    {
+      "id": "default",
+      "name": "经典",
+      "file": "default"
+    },
+    {
+      "id": "bell",
+      "name": "清铃",
+      "file": "bell"
+    },
+    {
+      "id": "chime",
+      "name": "和弦",
+      "file": "chime"
+    },
+    {
+      "id": "marimba",
+      "name": "木琴",
+      "file": "marimba"
+    },
+    {
+      "id": "droplet",
+      "name": "水滴",
+      "file": "droplet"
+    },
+    {
+      "id": "pulse",
+      "name": "电子",
+      "file": "pulse"
+    }
+  ]
 }

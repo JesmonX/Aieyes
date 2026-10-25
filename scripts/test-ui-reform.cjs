@@ -1,3 +1,5 @@
+const {revealControl} = require('./ui-test-helpers.cjs');
+const {openGeneralPage} = require('./ui-test-helpers.cjs');
 const {discardEditor,commitSettings}=require('./ui-test-helpers.cjs');
 // 10-06 behavior and visual matrix. All data and RPC responses are synthetic.
 const assert=require('node:assert/strict');
@@ -110,14 +112,14 @@ function fixture(){
     }
    }
    else{
-    await page.keyboard.press('Control+,');assert.equal(await page.locator('#general-form').count(),0);await page.locator('[data-settings-tab=general]').click();assert.equal(await page.locator('#settings-save-all').count(),0);assert.equal(await page.locator('#connection-form').count(),0);
-    await page.locator('[data-general-page=refresh]').click();await page.locator('#field-refreshSeconds').fill('180');await commitSettings(page);await page.waitForFunction(()=>state.settings.refreshSeconds===180);assert.match(await page.locator('#settings-save-bar').textContent(),/已保存/);assert(await page.locator('#message').isHidden());assert.equal(await page.evaluate(()=>state.settings.refreshSeconds),180);assert.equal(await page.evaluate(()=>reform.saved.at(-1).refreshSeconds),180);
+    await page.keyboard.press('Control+,');assert.equal(await page.locator('#general-form').count(),1);assert.equal(await page.evaluate(()=>state.settingsTab),'general');await page.locator('[data-settings-tab=general]').click();assert.equal(await page.locator('#settings-save-all').count(),0);assert.equal(await page.locator('#connection-form').count(),0);
+    await openGeneralPage(page, 'refresh');await page.locator('#field-refreshSeconds').fill('180');await commitSettings(page);await page.waitForFunction(()=>state.settings.refreshSeconds===180);assert.match(await page.locator('#settings-save-bar').textContent(),/已保存/);assert(await page.locator('#message').isHidden());assert.equal(await page.evaluate(()=>state.settings.refreshSeconds),180);assert.equal(await page.evaluate(()=>reform.saved.at(-1).refreshSeconds),180);
     await page.locator('[data-settings-tab=hosts]').click();await page.locator('[data-remove=h1]').click();assert.match(await page.locator('#editor-fields').textContent(),/本机 Codex/);assert.equal(await page.locator('#cancel-editor').evaluate(el=>el===document.activeElement),true);await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>state.settings.hosts.length),1);
     await page.keyboard.press('Control+Shift+D');
    }
    for(const scenario of ['empty','single','multi','long','failure'])for(const theme of ['light','dark']){
     await page.emulateMedia({colorScheme:theme});await page.evaluate(async scenario=>{notify('');reform.scenario=scenario;state.page='agent';state.settings=await api('settings.get');state.provider=state.accountKey=state.sourceId=state.model='';await loadDashboard();if(scenario==='failure'){reform.failures=[{id:'s1',error:'连接失败：模拟 SSH 与日志不可读取'}];await scan();}else{reform.failures=[];await scan();}},scenario);
-    if(scenario==='empty'){assert.equal(await page.locator('.stat').count(),0);assert.equal(await page.locator('.filters').count(),1);assert.equal(await page.locator('.onboarding').count(),1);}
+    if(scenario==='empty'){assert.equal(await page.locator('.stat').count(),0);assert.equal(await page.locator('.agent-selector').count(),1);assert.equal(await page.locator('.onboarding').count(),1);}
     if(panel&&scenario==='single'){
      await page.screenshot({animations:'disabled',path:path.join(output,'panel-small-layout.png')});
      const footer=await page.locator('.panel-foot').boundingBox();
@@ -131,7 +133,7 @@ function fixture(){
    if(!panel){
     await page.evaluate(async()=>{reform.scenario='single';state.settings=await api('settings.get');await loadDashboard();});await page.setViewportSize({width:640,height:440});
     for(const theme of ['light','dark']){await page.emulateMedia({colorScheme:theme});await page.screenshot({animations:'disabled',path:path.join(output,`minimum-detail-${theme}.png`)});}
-    await page.keyboard.press('Control+,');await page.locator('[data-settings-tab=prices]').click();assert.equal(await page.locator('[data-unmap]').count(),0,'Existing mappings stay unmounted while collapsed');await page.locator('#existing-mappings > summary').click();await page.waitForFunction(()=>document.querySelectorAll('[data-unmap]').length===30);await page.screenshot({animations:'disabled',path:path.join(output,'mappings-30-minimum.png')});
+    await page.keyboard.press('Control+,');await page.locator('[data-settings-tab=prices]').click();assert.equal(await page.locator('[data-unmap]').count(),0,'Existing mappings stay unmounted while collapsed');await revealControl(page, '#existing-mappings > summary');await page.waitForFunction(()=>document.querySelectorAll('[data-unmap]').length===30);await page.screenshot({animations:'disabled',path:path.join(output,'mappings-30-minimum.png')});
     await page.locator('[data-settings-tab=hosts]').click();await page.locator('[data-edit=h1]').click();await page.screenshot({animations:'disabled',path:path.join(output,'editor-minimum.png')});await page.keyboard.press('Escape');
    }
    await page.close();

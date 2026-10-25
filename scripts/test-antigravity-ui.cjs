@@ -56,7 +56,7 @@ function fixture(){
   assert.equal(await entries.nth(0).innerText(),'5h ≈ $25.00 7d ≈ $125.00/$150.00');
   assert.match(await card.innerText(),/滚动估值 · 12 个有效片段/);
   assert.match(await entries.nth(0).getAttribute('title'),/权重每 7 天减半/);
-  await entries.nth(0).click();assert.match(await page.locator('#quota-dialog').innerText(),/滚动估值 · 持续更新/);await page.locator('#quota-close').click();
+  await entries.nth(0).click();assert.match(await page.locator('#quota-dialog').innerText(),/滚动估值 · 已暂停/);assert.match(await page.locator('#quota-dialog').innerText(),/滚动估值 · 最近 90 天 · 权重每 7 天减半/);await page.locator('#quota-close').click();
   await page.evaluate(()=>{agyFixture.summaries=[];state.dashboard.automaticEstimateSummaries=[];render();});
   for(const theme of ['light','dark'])for(const width of panel?[360,420,450]:[640,1120]){
     await page.emulateMedia({colorScheme:theme});await page.setViewportSize({width,height:850});

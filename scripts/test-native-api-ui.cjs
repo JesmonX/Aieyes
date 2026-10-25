@@ -1,3 +1,4 @@
+const {revealControl} = require('./ui-test-helpers.cjs');
 /* Browser -> real core -> local HTTP fixture -> native config. No paid key or default client files. */
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),http=require('node:http'),readline=require('node:readline');
 const {spawn}=require('node:child_process');
@@ -58,9 +59,10 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
     await page.locator('#agent-section-api > summary').click();await page.locator('[data-native-api="open"]').click();
     if(harness){await page.locator('#field-configPath').fill(config);await page.locator('#native-api-read').click();await page.waitForFunction(()=>!document.querySelector('#native-api-read').disabled);assert.equal(await page.locator('#native-api-read-status').textContent(),'已读取');}
     await page.locator('#field-baseUrl').fill(`http://127.0.0.1:${server.address().port}`+(provider==='claude'?'':'/v1'));await page.locator('#field-model').fill('fixture-model');await page.locator('#field-apiKey').fill('private-test-key');
-    if(['kimi','grok','qoder'].includes(provider)||harness||provider==='zcode'||piFamily)await page.locator('#field-contextWindow').fill('261000');
-    if(harness||['zcode','grok','qoder','pi','omp'].includes(provider))await page.locator('#field-maxOutputTokens').fill('2048');
-    if(['claude','zcode','codebuddy','pi','omp'].includes(provider))await page.locator('#field-effort').selectOption('low');
+    await page.locator('#editor .settings-details > summary').click();
+    if(['kimi','grok','qoder'].includes(provider)||harness||provider==='zcode'||piFamily) { await revealControl(page, '#field-contextWindow');await page.locator('#field-contextWindow').fill('261000'); }
+    if(harness||['zcode','grok','qoder','pi','omp'].includes(provider)) { await revealControl(page, '#field-maxOutputTokens');await page.locator('#field-maxOutputTokens').fill('2048'); }
+    if(['claude','zcode','codebuddy','pi','omp'].includes(provider)) { await revealControl(page, '#field-effort');await page.locator('#field-effort').selectOption('low'); }
     if(provider==='claude')await page.locator('#field-authMode').selectOption(authMode);
     await page.locator('#editor-form button[type=submit]').click();await page.locator('#editor-error:visible').waitFor();
     assert.equal(await page.locator('#field-apiKey').inputValue(),'private-test-key');assert.deepEqual(readConfig(),original);assert(!(await page.locator('#editor-error').textContent()).includes('private-error-body'));
@@ -73,7 +75,7 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
     if(harness){
       changeNative=true;await page.locator('#editor-form button[type=submit]').click();await page.getByText('验证期间 Harness 合成配置已改变，请重新读取后保存',{exact:false}).waitFor();assert.deepEqual(readConfig(),original);
       await page.locator('#native-api-read').click();await page.waitForFunction(()=>!document.querySelector('#native-api-read').disabled);
-      await page.locator('#field-baseUrl').fill(`http://127.0.0.1:${server.address().port}/v1`);await page.locator('#field-model').fill('fixture-model');await page.locator('#field-apiKey').fill('private-test-key');await page.locator('#field-contextWindow').fill('261000');await page.locator('#field-maxOutputTokens').fill('2048');
+      await page.locator('#field-baseUrl').fill(`http://127.0.0.1:${server.address().port}/v1`);await page.locator('#field-model').fill('fixture-model');await page.locator('#field-apiKey').fill('private-test-key');await revealControl(page, '#field-contextWindow');await page.locator('#field-contextWindow').fill('261000');await revealControl(page, '#field-maxOutputTokens');await page.locator('#field-maxOutputTokens').fill('2048');
     }
     await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open).catch(async e=>{throw new Error(provider+': '+await page.locator('#editor-error').textContent()+' / '+e.message);});
     const saved=readConfig();
@@ -97,7 +99,7 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
       assert(!(await rpc('agentApi.inspect',{sourceId:'open'})).apiKey);
       for(const choice of ['disabled','minimal']){
         expectedEffort=choice==='disabled'?undefined:choice;
-        await page.locator('#field-effort').selectOption(choice);await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
+        await revealControl(page, '#field-effort');await page.locator('#field-effort').selectOption(choice);await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
         const changed=readConfig();assert.equal(changed.alwaysThinkingEnabled,choice!=='disabled');if(choice!=='disabled')assert.equal(changed.reasoningEffort,choice);
         const catalog=JSON.parse(fs.readFileSync(modelPath));assert.equal(catalog.models.length,2);assert.deepEqual(catalog.models[0],originalModels.models[0]);assert.equal(catalog.models[1].supportsReasoning,choice!=='disabled');if(choice!=='disabled')assert.equal(catalog.models[1].reasoning.defaultEffort,choice);
         await page.locator('[data-native-api="open"]').click();await page.waitForFunction(()=>document.querySelector('#editor').open);assert.equal(await page.locator('#field-effort').inputValue(),choice);assert.equal(await page.locator('#field-apiKey').inputValue(),'');

@@ -144,7 +144,7 @@ import json,sys,os
 root=os.environ['AIEYES_UI_FIXTURE']
 for line in sys.stdin:
     req=json.loads(line); method=req['method']
-    with open(root+'/calls.jsonl','a') as log: log.write(json.dumps(req)+'\n')
+    with open(root+'/calls.jsonl','a') as log: log.write(json.dumps(dict(req, fixtureOwner=os.environ.get('AIEYES_UI_REQUEST_OWNER','')))+'\n')
     response=dict(jsonrpc='2.0',id=req['id'])
     if method=='settings.get': response['result']=json.load(open(root+'/settings.json'))
     elif method in ('dashboard','dashboard.summary'):
@@ -269,9 +269,10 @@ for line in sys.stdin:
         model.discardSettingsDraft()
         precondition(model.quotaError == "模拟限额连接失败")
         precondition(model.quotaNextAttempt == nil, "Autostart-disabled models do not schedule background polls")
-        func calls(_ method: String) throws -> Int {
+        func calls(_ method: String, owner: String? = nil) throws -> Int {
             try String(contentsOf: root.appendingPathComponent("calls.jsonl"), encoding: .utf8).split(separator: "\n").filter { line in
-                (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["method"] as? String == method
+                guard let row = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return false }
+                return row["method"] as? String == method && (owner == nil || row["fixtureOwner"] as? String == owner)
             }.count
         }
         let startupQueries = try calls("quotas.refresh")
@@ -647,17 +648,25 @@ for line in sys.stdin:
         // initiate an unrelated settings refresh from the shared fixture.
         model.stop(); agyModel.stop(); workspace.stop()
         try Data().write(to:root.appendingPathComponent("enable-revisions"))
+        let cacheOwner = UUID().uuidString
+        setenv("AIEYES_UI_REQUEST_OWNER", cacheOwner, 1)
+        defer { unsetenv("AIEYES_UI_REQUEST_OWNER") }
         let calendarCache = AppModel(autostart:false)
         var calendarDate = Date(timeIntervalSince1970:1767225600)
         calendarCache.dashboardCacheNow = { calendarDate }
-        let firstReads = try calls("dashboard")
+        let firstReads = try calls("dashboard", owner: cacheOwner)
         await calendarCache.reload()
-        let loadedReads = try calls("dashboard");precondition(loadedReads == firstReads+1,"Initial snapshot reads: \(loadedReads-firstReads), expected 1")
+        // The first revision response schedules a refresh after 120 ms. A slow
+        // fixture process can make that refresh supersede the initial request.
+        // Settle revision discovery before measuring cache reuse and expiry.
+        try await Task.sleep(for: .milliseconds(250))
         await calendarCache.reload()
-        let reusedReads = try calls("dashboard");precondition(reusedReads == loadedReads,"Identical revisions and day reuse the full snapshot")
+        let loadedReads = try calls("dashboard", owner: cacheOwner);precondition(loadedReads > firstReads, "Cold cache must read a full snapshot")
+        await calendarCache.reload()
+        let reusedReads = try calls("dashboard", owner: cacheOwner);precondition(reusedReads == loadedReads,"Identical revisions and day reuse the full snapshot")
         calendarDate = calendarDate.addingTimeInterval(86400)
         await calendarCache.reload()
-        let nextDayReads = try calls("dashboard");precondition(nextDayReads == reusedReads+1,"Midnight must invalidate cached relative ranges")
+        let nextDayReads = try calls("dashboard", owner: cacheOwner);precondition(nextDayReads == reusedReads+1,"Midnight must invalidate cached relative ranges")
         calendarCache.stop();try FileManager.default.removeItem(at:root.appendingPathComponent("enable-revisions"))
         print("Relative dashboard caches refresh on calendar-day changes without data writes")
         print("Antigravity login accepts committed identity immediately, rejects older status reads, retains identity after quota failure, and preserves drafts")

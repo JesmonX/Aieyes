@@ -107,7 +107,7 @@ import Combine
         localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
             if event.type == .keyDown, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, event.charactersIgnoringModifiers == "," {
-                self.openSettings(); return nil
+                self.model.openSettings(.init(category: "general")); return nil
             }
             if event.type == .keyDown, event.window === self.detailWindow, event.modifierFlags.contains(.command), let key = event.charactersIgnoringModifiers, ["1", "2", "3"].contains(key) {
                 self.model.requestedDetailPage = key == "1" ? "agent" : key == "2" ? "analysis" : "servers"; return nil
@@ -185,7 +185,7 @@ import Combine
         NSApp.activate(ignoringOtherApps: true)
     }
     @objc private func detailAction() { openDetail() }
-    @objc private func settingsAction() { model.openSettings() }
+    @objc private func settingsAction() { model.openSettings(.init(category: "general")) }
     @objc private func updateAction() { AppUpdater.shared.check() }
     @objc private func togglePetAction() {
         let visible = UserDefaults.standard.object(forKey: "aieyes.pet.enabled") as? Bool ?? true

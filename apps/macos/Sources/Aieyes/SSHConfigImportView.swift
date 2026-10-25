@@ -30,7 +30,7 @@ struct SSHConfigImportView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if let result {
                         Text(result.path).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled)
-                        Text(L("沿用 SSH 别名、密钥和跳板配置。导入后可测试连接。")).foregroundStyle(.secondary)
+                        HelpNote(title: L("SSH 配置"), text: L("沿用 SSH 别名、密钥和跳板配置。导入后可测试连接。"))
                         TextField(L("搜索别名或地址"), text: $search).textFieldStyle(.aieyes)
                         HStack {
                             Button(L("全选当前结果")) { selected.formUnion(rows.filter { !existing.contains($0.alias.lowercased()) }.map(\.alias)) }

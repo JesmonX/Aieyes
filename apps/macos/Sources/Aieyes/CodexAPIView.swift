@@ -27,7 +27,6 @@ struct CodexAPISettingsSection: View {
         let _ = interfaceLanguage;
         if !sources.isEmpty || !connections.isEmpty {
             Section(L("Codex · API 连接")) {
-                Text(L("添加 API 连接后可切换登录方式，沿用 Codex 的模型、推理强度和网络设置。")).font(AppFont.secondary).foregroundStyle(.secondary)
                 ForEach(connections) { connection in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {

@@ -1,3 +1,4 @@
+const {revealControl} = require('./ui-test-helpers.cjs');
 /* Production catalogs and populated IPC fixtures. No provider calls or personal data. */
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), http = require('node:http'), vm = require('node:vm');
@@ -141,12 +142,13 @@ function populate() {
       const panel = await context.newPage();await panel.setViewportSize({width: 360, height: 720});
       await panel.goto(origin + '/floating.html');await panel.evaluate(() => AieyesApp.ready);
       await page.evaluate(() => AieyesApp.openSettings({category: 'general', section: 'network'}));
-      await page.locator('#field-proxyTestUrls').fill('https://draft.invalid');
+      await page.evaluate(() => {window.languageDraftChanges=[];document.addEventListener('change', event => languageDraftChanges.push({id:event.target.id,value:event.target.value,language:AieyesI18n.language}));});
+      await revealControl(page, '#field-proxyTestUrls');await page.locator('#field-proxyTestUrls').fill('https://draft.invalid');
       await panel.evaluate(() => setLanguage('zh-CN'));await page.waitForFunction(() => AieyesI18n.language === 'zh-CN');
       assert.equal(await page.locator('#field-proxyTestUrls').inputValue(), 'https://draft.invalid');
       await panel.evaluate(() => setLanguage('en'));await page.waitForFunction(() => AieyesI18n.language === 'en');
       assert.equal(await page.locator('#field-proxyTestUrls').inputValue(), 'https://draft.invalid');
-      assert.deepEqual(await page.evaluate(() => navigationFixture.settings.proxyTestUrls), ['https://fixture.invalid']);
+      assert.deepEqual(await page.evaluate(() => navigationFixture.settings.proxyTestUrls), ['https://fixture.invalid'], JSON.stringify(await page.evaluate(() => languageDraftChanges)));
       assert.equal(await panel.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
       await panel.screenshot({path: path.join(evidence, `${platform}-panel-en.png`)});
       // Keep the desktop layout usable at its narrow supported width.

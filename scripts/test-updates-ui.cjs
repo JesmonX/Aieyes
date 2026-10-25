@@ -1,3 +1,4 @@
+const {openGeneralPage} = require('./ui-test-helpers.cjs');
 const {commitSettings}=require('./ui-test-helpers.cjs');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -58,18 +59,18 @@ function fixture() {
     assert.match(await page.locator('#update-versions').textContent(),/1\.2\.3.*1\.2\.4/);
     assert.equal(await page.locator('#update-notes script').count(),0);
     await page.locator('#update-later').click();assert.equal(await page.locator('#update-dialog[open]').count(),0);
-    await page.locator('[data-general-page=refresh]').click();
+    await openGeneralPage(page, 'refresh');
     await page.evaluate(()=>updateTest.saveFails=true);await page.locator('#field-refreshSeconds').fill('123');await commitSettings(page);assert.equal(await page.evaluate(()=>state.settings.refreshSeconds),300);
-    await page.locator('[data-general-page=updates]').click();await page.locator('#update-view').click();await page.locator('#update-install').click();
+    await openGeneralPage(page, 'updates');await page.locator('#update-view').click();await page.locator('#update-install').click();
     assert.match(await page.locator('#update-message').textContent(),/保存应用设置/);
     await page.locator('#update-preparation-actions button').filter({hasText:'保存并更新'}).click();
     await page.waitForFunction(()=>!document.querySelector('#update-dialog').open);
     assert.equal(await page.evaluate(()=>AieyesUpdates.busy),false);
-    await page.locator('[data-general-page=refresh]').click();
+    await openGeneralPage(page, 'refresh');
     assert.equal(await page.locator('#field-refreshSeconds').inputValue(),'123');
     assert.equal(await page.evaluate(()=>updateTest.calls.filter(x=>x==='updates_install').length),0);
     await page.evaluate(()=>updateTest.saveFails=false);await page.locator('#field-refreshSeconds').fill('124');await commitSettings(page);await page.waitForFunction(()=>state.settings.refreshSeconds===124);
-    await page.locator('[data-general-page=updates]').click();
+    await openGeneralPage(page, 'updates');
     await page.evaluate(()=>{state.serverBusy=true;state.busy=true;updateTest.protected=['settings.save'];});await page.locator('#update-view').click();await page.locator('#update-install').click();
     await page.waitForFunction(()=>document.querySelector('#update-message').textContent.includes('settings.save'));
     assert(await page.evaluate(()=>updateTest.calls.includes('updates_download')),'Download starts while background work is running');

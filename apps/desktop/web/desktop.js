@@ -53,7 +53,7 @@
       await window.AieyesApp.openSetupInMain(page === 'add-host' ? 'hosts' : page === 'add-quota' ? 'quota' : 'sources');
       return;
     }
-    if (page === 'settings' || page === 'prices') {await window.AieyesApp.openSettings(page === 'prices' ? { category: 'prices' } : {});return;}
+    if (page === 'settings' || page === 'prices') {await window.AieyesApp.openSettings(page === 'prices' ? { category: 'prices' } : { category: 'general' });return;}
     await window.AieyesApp.navigatePage(['analysis', 'servers'].includes(page) ? page : 'agent');
   }
   async function bindTitlebar(info) {
@@ -78,7 +78,7 @@
   }
   window.AieyesDesktop = {
     settingsHTML() {
-      return `<div class="card"><h2>${AieyesI18n.t("桌面显示")}</h2><div class="form-row"><label for="desktop-mode">${AieyesI18n.t("显示方式")}</label><select id="desktop-mode"><option value="pet">${AieyesI18n.t("桌面宠物")}</option><option value="tray">${AieyesI18n.t("系统状态栏 / 托盘")}</option></select></div><div class="form-row pet-scale-control"><label for="pet-scale">${AieyesI18n.t("桌宠缩放")}</label><input id="pet-scale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="pet-scale-value" for="pet-scale">100%</output><button type="button" id="reset-pet-scale">${AieyesI18n.t("恢复 100%")}</button></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">${AieyesI18n.t("显示活跃会话数（本机与 SSH）")}</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : AieyesI18n.t("正在检测桌面…"))}</p><p class="muted tiny">${AieyesI18n.t("单击打开面板，悬停查看状态，拖动松手后贴边。隐藏后可从托盘菜单恢复。")}</p>${window.AieyesPetLibrary?.html() ?? ''}<div class="between"><button type="button" id="reset-ball">${AieyesI18n.t("重置桌宠位置")}</button><button type="button" id="hide-ball">${AieyesI18n.t("暂时隐藏桌宠")}</button><button type="button" id="quit-app">${AieyesI18n.t("退出 Aieyes")}</button></div></div>`;
+      return `<div class="card"><h2>${AieyesI18n.t("桌面显示")}</h2><div class="form-row"><label for="desktop-mode">${AieyesI18n.t("显示方式")}</label><select id="desktop-mode"><option value="pet">${AieyesI18n.t("桌面宠物")}</option><option value="tray">${AieyesI18n.t("系统状态栏 / 托盘")}</option></select></div><div class="form-row pet-scale-control"><label for="pet-scale">${AieyesI18n.t("桌宠缩放")}</label><input id="pet-scale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="pet-scale-value" for="pet-scale">100%</output><button type="button" id="reset-pet-scale">${AieyesI18n.t("恢复 100%")}</button></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">${AieyesI18n.t("显示活跃会话数")}</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : AieyesI18n.t("正在检测桌面…"))}</p>${helpHTML(AieyesI18n.t("桌面显示"), AieyesI18n.t("单击打开面板，悬停查看状态，拖动松手后贴边。隐藏后可从托盘菜单恢复。"))}${window.AieyesPetLibrary?.html() ?? ''}<div class="between"><button type="button" id="reset-ball">${AieyesI18n.t("重置桌宠位置")}</button><button type="button" id="hide-ball">${AieyesI18n.t("暂时隐藏桌宠")}</button><button type="button" id="quit-app">${AieyesI18n.t("退出 Aieyes")}</button></div></div>`;
     },
     bindSettings() {
       window.AieyesPetLibrary?.bind();

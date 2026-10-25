@@ -25,6 +25,7 @@ fi
 "$PYTHON" scripts/sync-chart-palettes.py --check
 "$PYTHON" scripts/sync-ui-design-tokens.py --check
 "$PYTHON" scripts/sync-core-contracts.py --check
+"$PYTHON" scripts/generate-session-sounds.py --check
 "$PYTHON" scripts/sync-localizations.py --check
 "$PYTHON" scripts/check-localizations.py
 for script in apps/desktop/web/*.js; do node --check "$script"; done

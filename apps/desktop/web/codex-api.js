@@ -14,7 +14,7 @@ window.AieyesCodexAPI = (() => {
   }
   function html() {
     if (!sources().length && !connections().length) return '';
-    return AieyesI18n.t("<section class=\"card codex-api-settings\"><div class=\"between\"><h2>Codex · API 连接</h2><button data-codex-api=\"add\" ") + (busy || !sources().length ? 'disabled' : '') + AieyesI18n.t(">添加 API</button></div>") + AieyesI18n.t("<p class=\"muted\">添加 API 连接后可切换登录方式，沿用 Codex 的模型、推理强度和网络设置。</p>") + (
+    return AieyesI18n.t("<section class=\"card codex-api-settings\"><div class=\"between\"><h2>Codex · API 连接</h2><button data-codex-api=\"add\" ") + (busy || !sources().length ? 'disabled' : '') + AieyesI18n.t(">添加 API</button></div>") + (
 
     error ? '<div class="error" role="alert">' + e(AieyesI18n.message(error)) + '</div>' : '') + (notice ? '<p role="status">' + e(AieyesI18n.message(notice)) + '</p>' : '') +
     connections().map((c) => {
@@ -26,7 +26,7 @@ window.AieyesCodexAPI = (() => {
       [['probe', AieyesI18n.t("测试连接")], ['switch', applied ? AieyesI18n.t("正在使用") : AieyesI18n.t("切换到此 API")], ['remove', AieyesI18n.t("移除")]].map(([action, label]) =>
       '<button data-codex-api="' + action + '" data-api-id="' + e(c.id) + '" ' + (busy || !source || action === 'switch' && (!available(source) || applied) ? 'disabled' : '') + '>' + label + '</button>').join('') + '</div></div>';
     }).join('') + (
-    !connections().length ? AieyesI18n.t("<p class=\"muted\">尚未添加 API 连接。密钥保存在所选设备。</p>") : '') +
+    !connections().length ? AieyesI18n.t("<p class=\"muted\">尚未添加 API 连接。</p>") : '') +
     [...new Set(connections().map((c) => c.sourceId))].map((id) => {
       const selected = statuses.get(id)?.selected;
       return '<div class="list-row"><span class="row-body tiny muted">' + e(location(sources().find((s) => s.id === id))) + ' · ' + (
@@ -90,7 +90,7 @@ window.AieyesCodexAPI = (() => {
       const rows = prepared?.processes ?? [],blocked = rows.some((p) => !p.canClose),body = dialog.querySelector('.quota-dialog-body');
       const name = connection?.name || inspection?.profiles.find((p) => p.id === profileId)?.name || AieyesI18n.t("已保存账户");
       body.innerHTML = '<p><strong>' + e(location(sources().find((s) => s.id === sourceId))) + ' → ' + e(name) + '</strong></p>' + (
-      !connection && inspection?.profiles.length ? AieyesI18n.t("<label>目标账户<select id=\"api-switch-profile\">") + inspection.profiles.map((p) => '<option value="' + e(p.id) + '" ' + (p.id === profileId ? 'selected' : '') + '>' + e(p.name) + '</option>').join('') + '</select></label>' : '') + AieyesI18n.t("<p class=\"muted\">确认后会关闭下面列出及随后出现的相关登录进程。已确认使用独立 API 配置的实例会保留；请先保存工作。</p>") + (
+      !connection && inspection?.profiles.length ? AieyesI18n.t("<label>目标账户<select id=\"api-switch-profile\">") + inspection.profiles.map((p) => '<option value="' + e(p.id) + '" ' + (p.id === profileId ? 'selected' : '') + '>' + e(p.name) + '</option>').join('') + '</select></label>' : '') + AieyesI18n.t("<p class=\"muted\">请先保存工作。确认后将关闭下列及随后出现的相关登录进程；已确认的独立 API 实例会保留。</p>") + (
 
       error ? '<div class="error" role="alert">' + e(AieyesI18n.message(error)) + '</div>' : '') + (
       prepared ? rows.length ? '<ul>' + rows.map((p) => '<li>' + e(p.name) + ' · PID ' + p.pid + (p.canClose ? '' : ' · ' + e(p.blockingReason)) + '</li>').join('') + '</ul>' : AieyesI18n.t("<p>没有需要关闭的进程。</p>") : '') + (

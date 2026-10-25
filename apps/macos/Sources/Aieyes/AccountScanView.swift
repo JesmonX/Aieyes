@@ -88,7 +88,7 @@ private struct NativeScanResult: Decodable {
                 HStack {
                     Text((kind == "api" ? L("原生 API 连接") : L("已发现的原生登录凭据")) + "（\(rows.count)）").font(AppFont.section)
                     Spacer()
-                    Button(L("一键取消引用")) { remove(rows.map(\.id)) }.disabled(removing != nil || scanner.busy)
+                    Button(L("取消全部引用")) { remove(rows.map(\.id)) }.disabled(removing != nil || scanner.busy)
                 }
                 DisclosureGroup(kind == "api" ? L("查看连接") : L("查看凭据"), isExpanded: $expanded) {
                 ForEach(rows) { row in

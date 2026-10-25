@@ -1,3 +1,4 @@
+const {openGeneralPage} = require('./ui-test-helpers.cjs');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium}=require('../apps/desktop/node_modules/playwright');
 const {serveFont}=require('./ui-test-helpers.cjs');
@@ -70,7 +71,7 @@ function fixture(){
     assert(await page.evaluate(()=>wakeupFixture.calls.some(c=>c.method==='accounts.targets'&&c.params.includeUnavailable===true)));
     assert.equal(await page.evaluate(()=>wakeupFixture.calls.filter(c=>['wakeups.probe','wakeups.deploy'].includes(c.method)).length),0,'saving an associated paused target does not probe or deploy');
 
-    await page.locator('[data-settings-tab=general]').click();await page.locator('[data-general-page=refresh]').click();
+    await page.locator('[data-settings-tab=general]').click();await openGeneralPage(page, 'refresh');
     await page.locator('#field-refreshSeconds').fill('360');await page.locator('#field-refreshSeconds').blur();
     await page.waitForFunction(()=>state.settings.refreshSeconds===360&&!state.settingsCommitting);
     assert.equal(await page.evaluate(()=>wakeupFixture.tasks.find(r=>r.task.id==='pending').deployment.state),'settings-pending','general saves finish while a remote sync remains pending');

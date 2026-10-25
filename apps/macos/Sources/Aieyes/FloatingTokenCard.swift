@@ -5,7 +5,6 @@ struct FloatingTokenCard: View {
     var total: Double
     var tokens: Tokens
     var inline = false
-    @State private var hovering = false
     @State private var expanded = false
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
@@ -15,18 +14,17 @@ struct FloatingTokenCard: View {
                 HStack(spacing: 5) { Text("Token").foregroundStyle(.secondary); Text(Format.compact(total)).bold().monospacedDigit(); Image(systemName: "chevron.down").font(AppFont.caption).foregroundStyle(.secondary) }
             } else {
             VStack(alignment: .leading, spacing: 8) {
-                HStack { Text(L("总 Token")); Spacer(); Image(systemName: "sparkle") }.font(AppFont.secondary).foregroundStyle(.secondary)
+                HStack { Text(L("总 Token")); Spacer(); Image(systemName: "chevron.down") }.font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(Format.compact(total)).font(.system(size: DesignTokens.fontNumber, weight: DesignTokens.weightStrong))
                     Text("(" + Format.percent(tokens.cacheRate.map { $0 * 100 }) + ")").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary)
                 }.monospacedDigit()
-                Text(L("点击查看详情")).font(.system(size: DesignTokens.fontHint)).foregroundStyle(.secondary).opacity(hovering ? 1 : 0)
             }.frame(maxWidth: .infinity, alignment: .leading).padding(DesignTokens.tokenCardPadding).modifier(NeutralCard())
             }
-        }.buttonStyle(.plain).onHover { hovering = $0 }.accessibilityLabel(L("总 Token，点击查看详情"))
-            .help(L("总 Token：") + String(format: "%.0f", total) + L("；点击查看输入、输出与缓存明细"))
+        }.buttonStyle(.plain).accessibilityLabel(L("总 Token，点击查看详情"))
+            .help(L("总 Token：") + String(format: "%.0f", total))
             .popover(isPresented: $expanded, arrowEdge: .bottom) {
-                CacheSummaryCard(tokens: tokens).padding(10).frame(width: 340)
+                VStack(alignment: .leading) { CacheSummaryCard(tokens: tokens); HelpNote(title: L("缓存读取命中率"), text: L("缓存读取 ÷（普通输入＋缓存读取＋缓存写入），不包含输出 Token。")) }.padding(10).frame(width: 340)
             }
     }
 }

@@ -15,10 +15,13 @@
   window.AieyesNotifications = {
     settingsHTML: () => AieyesI18n.t("<section class=\"card\"><h2>系统通知</h2><p id=\"notification-permission\" role=\"status\">正在读取通知权限…</p><button type=\"button\" id=\"notification-test\">发送测试通知</button><p id=\"notification-test-result\" role=\"status\"></p><div id=\"notification-error\" class=\"error\" role=\"status\"></div><p class=\"muted tiny\">通知显示和声音由系统通知及勿扰设置控制。</p></section>"),
     bind() {
+      const volume = document.querySelector('[name=soundVolume]');
+      if (volume) volume.addEventListener('input', () => {const output = document.querySelector('[data-sound-volume]');if (output) output.textContent = volume.value + '%';});
       for (const button of document.querySelectorAll('[data-sound-preview]')) button.onclick = async () => {
         button.disabled = true;
         const result = document.querySelector('[data-sound-result]');
-        try { await window.__TAURI__.core.invoke('session_sounds_preview', { kind: button.dataset.soundPreview }); if (result) result.textContent = ''; }
+        const kind = button.dataset.soundPreview,tone = document.querySelector('[name=' + (kind === 'needsInput' ? 'needsInputTone' : 'completeTone') + ']')?.value ?? 'default';
+        try { await window.__TAURI__.core.invoke('session_sounds_preview', { kind, tone, volume: Number(volume?.value ?? 100) / 100 }); if (result) result.textContent = ''; }
         catch (error) { if (result) result.textContent = AieyesI18n.message(String(error)); }
         finally { button.disabled = false; }
       };

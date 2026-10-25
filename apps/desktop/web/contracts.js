@@ -1305,7 +1305,7 @@
       "darkAsset": "omp-dark"
     }
   },
-  "contractHash": "d9ef4fd5a6a6a2b91786b024acb13083710d2a8563b575d3cb485b1ddc38113d",
+  "contractHash": "17519a23efea81767ec72e25d9b856aa25e12d7679eb4f0579eb4cdbfd6c0156",
   "petFrameDurations": [
     [
       280,
@@ -1382,5 +1382,37 @@
       150,
       280
     ]
+  ],
+  "sessionSoundTones": [
+    {
+      "id": "default",
+      "name": "经典",
+      "file": "default"
+    },
+    {
+      "id": "bell",
+      "name": "清铃",
+      "file": "bell"
+    },
+    {
+      "id": "chime",
+      "name": "和弦",
+      "file": "chime"
+    },
+    {
+      "id": "marimba",
+      "name": "木琴",
+      "file": "marimba"
+    },
+    {
+      "id": "droplet",
+      "name": "水滴",
+      "file": "droplet"
+    },
+    {
+      "id": "pulse",
+      "name": "电子",
+      "file": "pulse"
+    }
   ]
 };

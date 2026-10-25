@@ -1,15 +1,22 @@
 //! Native playback continues while WebViews are hidden, without browser autoplay policy.
-use aieyes_core::session_sounds::{Preferences, Tracker};
+use aieyes_core::session_sounds::{
+    Preferences, Tracker, normalized_volume, scale_pcm16, sound_file,
+};
 use aieyes_core::sessions::Snapshot;
 use std::sync::Mutex;
 use tauri::Manager;
 
 #[derive(Default)]
 pub struct Sounds(Mutex<Tracker>);
-fn bytes(kind: &str) -> Result<&'static [u8], String> {
-    match kind {
-        "needsInput" => Ok(include_bytes!("../../web/sounds/needs-input.wav")),
-        "complete" => Ok(include_bytes!("../../web/sounds/complete.wav")),
+fn bytes(kind: &str, tone: &str) -> Result<&'static [u8], String> {
+    match sound_file(kind, tone) {
+        Some("needs-input") => Ok(include_bytes!("../../web/sounds/needs-input.wav")),
+        Some("complete") => Ok(include_bytes!("../../web/sounds/complete.wav")),
+        Some("bell") => Ok(include_bytes!("../../web/sounds/bell.wav")),
+        Some("chime") => Ok(include_bytes!("../../web/sounds/chime.wav")),
+        Some("marimba") => Ok(include_bytes!("../../web/sounds/marimba.wav")),
+        Some("droplet") => Ok(include_bytes!("../../web/sounds/droplet.wav")),
+        Some("pulse") => Ok(include_bytes!("../../web/sounds/pulse.wav")),
         _ => Err("无效提示音".into()),
     }
 }
@@ -27,22 +34,41 @@ pub fn update(app: &tauri::AppHandle, snapshot: &Snapshot, preferences: &Prefere
         })
         .unwrap_or_default();
     if !alerts.is_empty() {
+        let preferences = preferences.clone();
         std::thread::spawn(move || {
             for kind in alerts {
-                let _ = play(bytes(kind).expect("known sound"));
+                let _ = play_tone(kind, preferences.tone(kind), preferences.volume);
             }
         });
     }
 }
 #[tauri::command]
-pub async fn session_sounds_preview(kind: String) -> Result<(), String> {
-    let bytes = bytes(&kind)?;
-    tauri::async_runtime::spawn_blocking(move || play(bytes))
-        .await
-        .map_err(|e| e.to_string())?
+pub async fn session_sounds_preview(
+    kind: String,
+    tone: Option<String>,
+    volume: Option<f64>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        play_tone(
+            &kind,
+            tone.as_deref().unwrap_or("default"),
+            volume.unwrap_or(1.0),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+fn play_tone(kind: &str, tone: &str, volume: f64) -> Result<(), String> {
+    let bytes = bytes(kind, tone)?;
+    let volume = normalized_volume(volume);
+    if volume == 0.0 {
+        return Ok(());
+    }
+    let pcm = scale_pcm16(bytes, volume).map_err(str::to_owned)?;
+    play(&pcm)
 }
 #[cfg(windows)]
-fn play(bytes: &'static [u8]) -> Result<(), String> {
+fn play(bytes: &[u8]) -> Result<(), String> {
     #[link(name = "winmm")]
     unsafe extern "system" {
         fn PlaySoundW(sound: *const u16, module: *mut std::ffi::c_void, flags: u32) -> i32;
@@ -55,7 +81,7 @@ fn play(bytes: &'static [u8]) -> Result<(), String> {
     }
 }
 #[cfg(target_os = "linux")]
-fn play(bytes: &'static [u8]) -> Result<(), String> {
+fn play(bytes: &[u8]) -> Result<(), String> {
     use std::ffi::{CString, c_char, c_int, c_void};
     use std::io::Write;
     type Ptr = *mut c_void;
@@ -153,6 +179,24 @@ fn play(bytes: &'static [u8]) -> Result<(), String> {
     }
 }
 #[cfg(not(any(windows, target_os = "linux")))]
-fn play(_bytes: &'static [u8]) -> Result<(), String> {
+fn play(_bytes: &[u8]) -> Result<(), String> {
     Err("此宿主使用原生 macOS 应用播放提示音".into())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn every_catalog_tone_is_bundled_for_both_events() {
+        for kind in ["needsInput", "complete"] {
+            for (tone, _, _) in aieyes_core::contracts::SESSION_SOUND_TONES {
+                let audio = bytes(kind, tone).unwrap();
+                let silent = scale_pcm16(audio, 0.0).unwrap();
+                assert_eq!(&silent[..44], &audio[..44]);
+                assert!(silent[44..].iter().all(|byte| *byte == 0));
+            }
+        }
+        assert!(bytes("invalid", "default").is_err());
+        assert!(bytes("complete", "../../invalid").is_err());
+        assert!(play_tone("complete", "bell", 0.0).is_ok());
+    }
 }

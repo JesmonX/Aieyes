@@ -233,7 +233,7 @@ private final class PetHost: NSHostingView<PetView> {
         panel.level = .floating; panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.hidesOnDeactivate=false
         let host=PetHost(rootView: PetView(model:model)); host.sizingOptions=[]; host.open=open; panel.contentView=host
         host.update = checkUpdates
-        host.settings = { [weak model] in model?.openSettings() }
+        host.settings = { [weak model] in model?.openSettings(.init(category: "general")) }
         host.petSettings = { [weak model] in model?.openSettings(.init(category: "general", section: "desktop")) }
         host.setAccessibilityRole(.button); host.setAccessibilityLabel(L("Aieyes 宠物，单击打开面板"))
         if let saved=UserDefaults.standard.string(forKey:"aieyes.pet.position") { panel.setFrameOrigin(NSPointFromString(saved)) }
@@ -324,19 +324,6 @@ struct PetLibraryView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 10) {
-            TextField(L("桌宠资源"), text: $input, prompt: Text(L("粘贴资源链接、npx 命令或 npm 包名")), axis: .vertical).labelsHidden().textFieldStyle(.aieyes).lineLimit(2...4)
-            HStack {
-                Button(model.petImportBusy ? L("导入中…") : L("导入")) { let value = input; Task { await model.importPet(input: value); if model.petImportError == nil && input == value { input = "" } } }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.petImportBusy || model.petSelectionBusy != nil)
-                Button(L("选择本地文件…")) {
-                    let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-                    panel.title = L("选择桌宠 ZIP 或 pet.json"); panel.showsHiddenFiles = true
-                    if panel.runModal() == .OK, let url = panel.url { Task { await model.importPet(input: url.path) } }
-                }.disabled(model.petImportBusy || model.petSelectionBusy != nil)
-                if model.petImportBusy || (model.petLibraryBusy && model.petLibrary.isEmpty) { ProgressView().controlSize(.small) }
-            }
-            Text(L("导入后立即使用，已有桌宠保留。")).font(AppFont.secondary).foregroundStyle(.secondary)
-            if let error = model.petImportError { ErrorNotice(message: error) }
-            if let error = model.petLibraryError { HStack { ErrorNotice(message: error).foregroundStyle(Palette.warn); Button(L("重试读取")) { Task { await model.loadPetLibrary() } } }.font(AppFont.secondary) }
             if !model.petLibrary.isEmpty {
                 GeometryReader { viewport in
                     ScrollView { LazyVStack(alignment: .leading, spacing: 8) {
@@ -346,7 +333,22 @@ struct PetLibraryView: View {
                     }.padding(4) }
                 }.frame(height: height)
             }
+            if let error = model.petImportError { ErrorNotice(message: error) }
+            if let error = model.petLibraryError { HStack { ErrorNotice(message: error).foregroundStyle(Palette.warn); Button(L("重试读取")) { Task { await model.loadPetLibrary() } } }.font(AppFont.secondary) }
             ForEach(model.petLibraryWarnings) { warning in ErrorNotice(message: warning.path + "：" + warning.error).font(AppFont.secondary).foregroundStyle(Palette.warn).textSelection(.enabled) }
+            DisclosureGroup(L("导入桌宠")) {
+            TextField(L("桌宠资源"), text: $input, prompt: Text(L("粘贴资源链接、npx 命令或 npm 包名")), axis: .vertical).labelsHidden().textFieldStyle(.aieyes).lineLimit(2...4)
+            HStack {
+                Button(model.petImportBusy ? L("导入中…") : L("导入并使用")) { let value = input; Task { await model.importPet(input: value); if model.petImportError == nil && input == value { input = "" } } }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.petImportBusy || model.petSelectionBusy != nil)
+                Button(L("选择本地文件…")) {
+                    let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+                    panel.title = L("选择桌宠 ZIP 或 pet.json"); panel.showsHiddenFiles = true
+                    if panel.runModal() == .OK, let url = panel.url { Task { await model.importPet(input: url.path) } }
+                }.disabled(model.petImportBusy || model.petSelectionBusy != nil)
+                HelpNote(title: L("桌宠资源"), text: L("支持 ZIP、pet.json、桌宠链接、npx 命令和 npm 包名。导入后立即使用，已有桌宠保留。"))
+                if model.petImportBusy || (model.petLibraryBusy && model.petLibrary.isEmpty) { ProgressView().controlSize(.small) }
+            }
+            }
         }.task { await model.loadPetLibrary() }
     }
 }

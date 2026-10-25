@@ -19,7 +19,8 @@ struct NativeCreditsView: View {
                     if let row = displayed.nativeCredits?[provider] { Text(Format.provider(provider) + "：" + row.detail).font(AppFont.caption).foregroundStyle(.secondary).textSelection(.enabled) }
                 }
             }
-            Text(L("来自原生计量记录；不代表已扣费金额或账户剩余额度。") + (displayed.total == 0 ? L("原生记录没有可用的 Token 统计，API 等价成本暂不可计算。") : "")).font(AppFont.caption).foregroundStyle(.secondary)
+            HelpNote(title: L("原生 Credits"), text: L("来自原生计量记录；不代表已扣费金额或账户剩余额度。"))
+            if displayed.total == 0 { Text(L("原生记录没有可用的 Token 统计，API 等价成本暂不可计算。")).font(AppFont.caption).foregroundStyle(.secondary) }
             if !compact && models.contains(where: \.hasDisplayCredits) {
                 DisclosureGroup(L("按模型查看 Credits")) {
                     ForEach(models.map(\.displayCredits).filter(\.hasNativeCredits)) { row in Text((modelNames[row.key] ?? row.key) + " · " + row.nativeCreditText).font(AppFont.secondary).textSelection(.enabled) }

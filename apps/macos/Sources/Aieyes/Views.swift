@@ -236,13 +236,9 @@ struct RootView: View, Equatable {
             HStack(spacing: 4) { agentButtons }
             ScrollView(.horizontal) { HStack(spacing: 4) { agentButtons } }.scrollIndicators(.hidden)
         }
-        HStack {
-            Spacer(minLength: 0)
-            Button(L("查看分析"), systemImage: "arrow.up.right") { model.openAnalysis(from: scope) }.font(AppFont.caption)
-        }
         sessionStrip
         Surface(spacing: 6, padding: 12) {
-            HStack { Text(L("今日用量")).font(AppFont.caption).foregroundStyle(.secondary); RefreshIndicator(model: model, key: "scan"); Spacer(); if usageDashboard.summary.pricedTokens < usageDashboard.summary.total { PricingWarning { model.openPricing() } } }
+            HStack { Text(L("今日用量")).font(AppFont.caption).foregroundStyle(.secondary); RefreshIndicator(model: model, key: "scan"); Spacer(); Button(L("查看分析"), systemImage: "arrow.up.right") { model.openAnalysis(from: scope) }.font(AppFont.caption); if usageDashboard.summary.pricedTokens < usageDashboard.summary.total { PricingWarning { model.openPricing() } } }
             HStack { FloatingTokenCard(total: usageDashboard.summary.total, tokens: usageDashboard.summary.tokens, inline: true); Spacer(); Text(L("API 等价成本 ")).foregroundStyle(.secondary) + Text(usageDashboard.summary.costAvailable ? Format.money(usageDashboard.summary.cost) : "—").bold() }.font(AppFont.secondary).monospacedDigit()
         }
         if usageDashboard.summary.hasDisplayCredits { NativeCreditsView(usage: usageDashboard.summary, compact: true) }
@@ -258,7 +254,7 @@ struct RootView: View, Equatable {
     }
     @ViewBuilder private var analysisContent: some View {
         if model.settings.sources.isEmpty { connectionGuide }
-        HStack(spacing: 8) {
+        FlowLayout(spacing: 8) {
             Picker("Agent", selection: filterBinding(\.provider)) {
                 Text(L("全部 Agent")).tag("all")
                 ForEach(CoreContract.agentProviders, id: \.self) { Text(Format.provider($0)).tag($0) }
@@ -274,13 +270,13 @@ struct RootView: View, Equatable {
                     ForEach(Array(Set(model.modelOptions + (filters.model == "all" ? [] : [filters.model]))).sorted(), id: \.self) { Text(usageDashboard.modelName($0)).tag($0) }
                 }.labelsHidden()
             }
+            Group { Picker(L("时间范围"), selection: Binding(get: { filters.rangeChoice }, set: { filters.rangeChoice = $0 })) { Text(L("今日")).tag("1"); Text(L("最近 7 天")).tag("7"); Text(L("最近 30 天")).tag("30"); Text(L("最近 90 天")).tag("90"); Text(L("最近一年")).tag("365"); Text(L("所有")).tag("all"); Text(L("自定义日期")).tag("custom") }.labelsHidden().fixedSize() }
         }.controlSize(.regular)
         activeFilters
 
         HStack(alignment: .firstTextBaseline) {
             Text(filters.isToday ? L("今日概览") : L("使用概览")).font(.system(size: compact ? DesignTokens.fontPanelOverview : DesignTokens.fontTitle, weight: DesignTokens.weightStrong)); RefreshIndicator(model: model, key: "scan")
             Spacer()
-            Group { Picker(L("时间范围"), selection: Binding(get: { filters.rangeChoice }, set: { filters.rangeChoice = $0 })) { Text(L("今日")).tag("1"); Text(L("最近 7 天")).tag("7"); Text(L("最近 30 天")).tag("30"); Text(L("最近 90 天")).tag("90"); Text(L("最近一年")).tag("365"); Text(L("所有")).tag("all"); Text(L("自定义日期")).tag("custom") }.labelsHidden().fixedSize() }
         }
         if filters.dateRange?.kind == "custom" {
             VStack(alignment: .leading, spacing: 8) {
@@ -304,16 +300,15 @@ struct RootView: View, Equatable {
                 DisclosureGroup(filters.dateRange == nil ? L("近 {0} 天趋势与每日明细" , max(7, filters.days)) : L("所选日期趋势与每日明细"), isExpanded: $trendExpanded) { UsageChart(days: recentDays, rows: recentRows, cost: false, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable().frame(minHeight: 220); DailyUsage(days: recentDays, rows: recentRows, compact: true, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable() }.font(AppFont.secondary)
                 Button { model.showDetailPage?("agent") } label: { Text(L("用量详情")).frame(maxWidth: .infinity) }.buttonStyle(.aieyes).accessibilityLabel(L("打开用量详情"))
             } else {
-                Text(L("用量分析遵循当前筛选；今日总览的趋势为近 7 天，热力图为过去 365 天。")).font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack { Text(filters.isToday ? L("近 7 天趋势") : L("使用趋势")).font(AppFont.section); Spacer(); Picker(L("统计指标"), selection: $costMode) { Text("Token").tag(false); Text(L("API 等价成本")).tag(true) }.pickerStyle(.segmented).frame(width: 230) }
                 ChartPairLayout { trendSurface; modelSurface }
-                Surface(title: L("每日明细 · 可选择与复制精确数值")) { DailyUsage(days: usageDashboard.trendDays, rows: usageDashboard.dayModels, compact: false, cost: costMode, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable() }
+                Surface(title: L("每日明细")) { DailyUsage(days: usageDashboard.trendDays, rows: usageDashboard.dayModels, compact: false, cost: costMode, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable() }
                 Surface(title: filters.dateRange == nil ? L("过去 365 天") : L("所选日期用量")) { if filters.dateRange == nil { Heatmap(days: usageDashboard.heatmap, cost: costMode).equatable() } else { YearlyHeatmaps(days: usageDashboard.heatmap, cost: costMode) } }
             }
         }
     }
-    private var trendSurface: some View { Surface(title: L("每日用量 · 按模型")) { UsageChart(days: usageDashboard.trendDays, rows: usageDashboard.dayModels, cost: costMode, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable().frame(minHeight: DesignTokens.chartSurfaceHeight) } }
-    private var modelSurface: some View { Surface(title: L("所选范围 · 模型分布")) { ModelChart(models: usageDashboard.models, cost: costMode, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable().frame(minHeight: DesignTokens.chartSurfaceHeight) } }
+    private var trendSurface: some View { Surface(title: L("每日用量")) { UsageChart(days: usageDashboard.trendDays, rows: usageDashboard.dayModels, cost: costMode, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable().frame(minHeight: DesignTokens.chartSurfaceHeight) } }
+    private var modelSurface: some View { Surface(title: L("模型分布")) { ModelChart(models: usageDashboard.models, cost: costMode, modelNames: usageDashboard.modelDisplayNames ?? [:]).equatable().frame(minHeight: DesignTokens.chartSurfaceHeight) } }
     private var usageEmptyState: some View {
         let onlyQuota = model.settings.sources.allSatisfy { $0.provider == "deepseek" }
         let failed = usageDashboard.sources.contains { $0.enabled && $0.status?.failureReason != nil }
@@ -328,7 +323,6 @@ struct RootView: View, Equatable {
     }
     private var connectionGuide: some View {
         Surface(title: L("启用你的第一个 Agent")) {
-            Text(L("接入日志查看用量，或连接账户查看额度与余额。")).font(AppFont.secondary).foregroundStyle(.secondary)
             ViewThatFits(in: .horizontal) {
                 HStack { connectionButtons }
                 VStack(alignment: .leading, spacing: 8) { connectionButtons }
@@ -336,9 +330,8 @@ struct RootView: View, Equatable {
         }
     }
     @ViewBuilder private var connectionButtons: some View {
-        Button(L("Agent 接入"), systemImage: "folder") { model.openSettings(.init(section: "machines")) }
-        Button(L("账户额度"), systemImage: "person.crop.circle") { model.openSettings(.init(section: "accounts")) }
-        Button(L("SSH 主机"), systemImage: "server.rack") { model.openSettings(.init(category: "servers", section: "add-host")) }
+        Button(L("接入 Agent"), systemImage: "folder") { model.openSettings(.init(section: "machines")) }.buttonStyle(.aieyesPrimary)
+        Button(L("配置向导"), systemImage: "checklist") { model.showDetailPage?("setup") }
     }
     @ViewBuilder private var activeFilters: some View {
         if hasActiveFilters {
@@ -419,7 +412,7 @@ struct RootView: View, Equatable {
     private var quotaSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(L("实时账户额度")).font(compact ? AppFont.section : AppFont.title)
+                Text(L("账户额度")).font(compact ? AppFont.section : AppFont.title)
                 RefreshIndicator(model: model, key: "quotas")
                 Spacer()
                 Button { model.showQuotaOrder?() } label: { Image(systemName: "arrow.up.arrow.down") }.help(L("调整账户顺序")).accessibilityLabel(L("调整账户顺序"))
@@ -434,7 +427,7 @@ struct RootView: View, Equatable {
                 }
             }
             if displayedQuotaAccounts.isEmpty {
-                Surface { Text(compact ? L("当前面板未显示账户，可在更多中选择。") : L("添加账户后查看额度与余额。")).font(AppFont.secondary).foregroundStyle(.secondary); Button(L("接入账户")) { model.openSettings(.init(section: "accounts")) } }
+                Surface { Text(L("尚未显示账户")).font(AppFont.section); Button(compact && !model.quotaAccounts.isEmpty ? L("选择面板账户") : L("接入账户")) { if compact && !model.quotaAccounts.isEmpty { model.showPanelAccounts?() } else { model.openSettings(.init(section: "accounts")) } } }
             }
             QuotaErrorNotice(model: model)
         }
@@ -528,7 +521,7 @@ private struct SurfaceFooter: View {
                     UpdateMenuButton()
                     Button { model.showDetailPage?(activePage) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle()) }.help(L("打开详情")).accessibilityLabel(L("打开详情"))
                 }
-                Button { model.openSettings() } label: { Image(systemName: "gearshape").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle()) }.help(L("设置")).accessibilityLabel(L("设置")).keyboardShortcut(",")
+                Button { model.openSettings(.init(category: "general")) } label: { Image(systemName: "gearshape").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle()) }.help(L("设置")).accessibilityLabel(L("设置")).keyboardShortcut(",")
                 Menu {
                     if compact { Button(L("面板显示账户…")) { model.showPanelAccounts?() }; Button(model.isPinned ? L("取消固定面板") : L("固定面板")) { model.isPinned.toggle() }; Divider() }
                     Button(model.networkBusy ? L("出站测试中…") : L("测试出站连接")) { Task { await model.testNetwork() } }.disabled(model.networkBusy)
@@ -687,7 +680,7 @@ struct UsageChart: View, Equatable {
                 Text(day.key + " · " + (cost ? String(format: "%.2f USD", day.cost) : Format.compact(day.total) + " Token")).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
             }
             }.frame(height: DesignTokens.chartReadingHeight, alignment: .leading)
-            DisclosureGroup(L("模型图例 · 点击显示或隐藏")) {
+            DisclosureGroup(L("模型图例")) {
                 FlowLayout { ForEach(models, id: \.self) { name in Button { if hidden.contains(name) { hidden.remove(name) } else { hidden.insert(name) } } label: { HStack(spacing: 6) { Circle().fill(Palette.model(name, preset: chartPalette, contrast: chartContrast)).frame(width: DesignTokens.chartLegendDot, height: DesignTokens.chartLegendDot); Label(modelNames[name] ?? name, systemImage: hidden.contains(name) ? "eye.slash" : "eye").strikethrough(hidden.contains(name)) }.font(AppFont.secondary) }.buttonStyle(.plain).help(modelNames[name] ?? name).accessibilityLabel((hidden.contains(name) ? L("显示模型 ") : L("隐藏模型 ")) + (modelNames[name] ?? name)) } }
             }.font(AppFont.secondary)
         }
@@ -1052,6 +1045,7 @@ private struct AccountObservedQuota: View {
             quotaHistory: model.dashboard.presentationEstimates(account: quota.id),
             creditHistory: model.dashboard.presentationEstimates(account: quota.id, credits: true),
             onAnalysis: { model.openAnalysis(from: compact ? "panel" : "overview", account: quota.id, provider: quota.provider) },
+            onRetry: { Task { await model.refreshQuotas(accountID: quota.accountId) } },
             actionOwner: ObjectIdentifier(model)).equatable()
     }
 }
@@ -1070,6 +1064,7 @@ struct QuotaCard: View, Equatable {
     var quotaHistory: [QuotaEstimate] = []
     var creditHistory: [QuotaEstimate] = []
     var onAnalysis: (() -> Void)?
+    var onRetry: (() -> Void)?
     private var actionOwner: ObjectIdentifier?
     static func == (lhs: Self, rhs: Self) -> Bool {
         // Opt in only where actions capture the same retained model and quota.
@@ -1080,7 +1075,7 @@ struct QuotaCard: View, Equatable {
             && lhs.quotaHistory == rhs.quotaHistory && lhs.creditHistory == rhs.creditHistory
             && lhs.deviceCounts == rhs.deviceCounts && (lhs.onSwitch == nil) == (rhs.onSwitch == nil)
             && (lhs.onEstimate == nil) == (rhs.onEstimate == nil) && (lhs.onCredits == nil) == (rhs.onCredits == nil)
-            && (lhs.onAnalysis == nil) == (rhs.onAnalysis == nil)
+            && (lhs.onAnalysis == nil) == (rhs.onAnalysis == nil) && (lhs.onRetry == nil) == (rhs.onRetry == nil)
     }
     private var bestCredit: QuotaEstimate? { EstimatePresentation.credit(creditHistory) ?? EstimatePresentation.canonical([creditEstimate].compactMap { $0 }).first }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1090,9 +1085,9 @@ struct QuotaCard: View, Equatable {
     @Environment(\.collapsedQuotaHeight) private var collapsedHeight
     private var measuring: QuotaCard { var copy = self; copy.isMeasurement = true; return copy }
     private var expanded: Bool { !isMeasurement && (!collapsible || (storedExpanded ?? defaultExpanded)) }
-    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, defaultExpanded: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, deviceCounts: AccountDeviceCounts? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = [], onAnalysis: (() -> Void)? = nil, actionOwner: ObjectIdentifier? = nil) {
+    init(quota: Quota, compact: Bool = false, collapsible: Bool = false, defaultExpanded: Bool = false, sourceName: String = "", estimate: QuotaEstimate? = nil, deviceCounts: AccountDeviceCounts? = nil, onSwitch: (() -> Void)? = nil, onEstimate: ((String?) -> Void)? = nil, onCredits: (() -> Void)? = nil, creditEstimate: QuotaEstimate? = nil, quotaHistory: [QuotaEstimate] = [], creditHistory: [QuotaEstimate] = [], onAnalysis: (() -> Void)? = nil, onRetry: (() -> Void)? = nil, actionOwner: ObjectIdentifier? = nil) {
         self.actionOwner = actionOwner
-        self.defaultExpanded = defaultExpanded; self.onAnalysis = onAnalysis
+        self.defaultExpanded = defaultExpanded; self.onAnalysis = onAnalysis; self.onRetry = onRetry
         self.deviceCounts = deviceCounts; self.onSwitch = onSwitch
         self.quotaHistory = quotaHistory; self.creditHistory = creditHistory
         self.collapsible = collapsible; self.quota = quota; self.compact = compact; self.sourceName = sourceName; self.estimate = estimate; self.onEstimate = onEstimate; self.onCredits = onCredits; self.creditEstimate = creditEstimate
@@ -1125,7 +1120,7 @@ struct QuotaCard: View, Equatable {
                     Text(L("钱包总额 ") + wallet.amount(wallet.total)).font(AppFont.secondary).foregroundStyle(.secondary)
                     Text(L("本月扣费 ") + wallet.amount(wallet.monthlyUsed)).font(AppFont.secondary).foregroundStyle(.secondary)
                     Text(wallet.monthlyLimitLabel).font(AppFont.secondary).foregroundStyle(.secondary)
-                    Text(L("钱包与订阅额度分别计算")).font(AppFont.secondary).foregroundStyle(.secondary)
+                    HelpNote(title: L("额外用量"), text: L("钱包与订阅额度分别计算"))
                 }
             }
         }
@@ -1192,7 +1187,7 @@ struct QuotaCard: View, Equatable {
             if expanded, let onSwitch {
                 FlowLayout(spacing: 8) {
                     Button(action: onSwitch) {
-                        Label(L("切换为此账户"), systemImage: "arrow.left.arrow.right")
+                        Label(L("切换账户"), systemImage: "arrow.left.arrow.right")
                             .font(AppFont.secondary.weight(.medium)).foregroundStyle(Palette.accent)
                             .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                             .frame(minWidth: 124)
@@ -1208,7 +1203,7 @@ struct QuotaCard: View, Equatable {
                 }
             }
             if expanded {
-                HStack { Text(Format.provider(quota.provider)); Spacer(); if quota.updatedAt > 0 { Text("\(quota.origin == "log" ? L("记录") : L("更新")) \(Format.date(quota.updatedAt))") } }.font(AppFont.secondary).foregroundStyle(.secondary)
+                HStack { Spacer(); if quota.updatedAt > 0 { Text("\(quota.origin == "log" ? L("记录") : L("更新")) \(Format.date(quota.updatedAt))") } }.font(AppFont.secondary).foregroundStyle(.secondary)
                 if let note = quota.metadataError { Text(L(note) + (quota.identity?.stale == true && quota.plan != nil ? L(" · 显示上次订阅") : "")).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) }
             }
     }
@@ -1238,7 +1233,7 @@ struct QuotaCard: View, Equatable {
                     }
                 }
                 }
-                if quota.error != nil { Label(L("额度更新失败 · 展开查看"), systemImage: "exclamationmark.triangle").font(AppFont.secondary).foregroundStyle(Palette.warn) }
+                if quota.error != nil { HStack { Label(L("额度更新失败"), systemImage: "exclamationmark.triangle"); Spacer(); if let onRetry { Button(L("重试"), action: onRetry) } }.font(AppFont.secondary).foregroundStyle(Palette.warn) }
             }
             if expanded {
             balanceContent
@@ -1277,8 +1272,7 @@ struct QuotaCard: View, Equatable {
                 }
             }
             if let error = quota.error {
-                if expanded { ErrorNotice(message: error, context: L("额度查询失败")) }
-                else { Text(L("额度更新失败 · 展开查看")).font(AppFont.secondary).foregroundStyle(Palette.warn).help(UserFacingError(error).summary) }
+                if expanded { HStack(alignment: .top) { ErrorNotice(message: error, context: L("额度查询失败")); if let onRetry { Button(L("重试"), action: onRetry) } } }
             }
             if let onAnalysis { Button(L("查看分析"), systemImage: "arrow.up.right", action: onAnalysis).font(AppFont.caption) }
             if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.extraUsage == nil && quota.error == nil && quota.credits == nil { Text(L("暂无额度数据")).font(AppFont.secondary).foregroundStyle(.secondary) }
@@ -1722,7 +1716,7 @@ private struct SessionStrip: View {
         } label: {
             HStack(spacing: 9) {
                 ActivityIndicator(phase: phase)
-                Text(summary).font(.system(size: DesignTokens.fontBody, weight: DesignTokens.weightMedium)).help(L("已启用的本机和 SSH Codex / Claude Code / Antigravity 会话"))
+                Text(summary).font(.system(size: DesignTokens.fontBody, weight: DesignTokens.weightMedium)).help(L("已启用的本机和 SSH 会话"))
                 Spacer()
                 Text(counts).font(AppFont.caption).foregroundStyle(sessions.contains { $0.phase == .needsInput || $0.phase == .failed } ? Palette.warn : Color.secondary).lineLimit(2)
             }

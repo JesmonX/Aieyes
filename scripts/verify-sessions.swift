@@ -6,7 +6,8 @@ import Combine
     static func item(_ type: String) -> String { "{\"type\":\"response_item\",\"payload\":{\"type\":\"\(type)\"}}\n" }
     @MainActor static func main() async throws {
         var played: [String] = []
-        let soundService = SessionSoundService(player: { played.append($0) })
+        var choices: [(String, Float)] = []
+        let soundService = SessionSoundService(player: { kind, tone, volume in played.append(kind); choices.append((tone, volume)) })
         var row = LiveSession(id: "sound-test", source: "fixture", phase: .complete, updatedAt: Date(timeIntervalSince1970: 100))
         row.turnId = "first"
         @MainActor func sounds(_ at: Double) { soundService.consume(SessionSnapshot(sessions: [row], unavailable: false), preferences: nil, now: Date(timeIntervalSince1970: at)) }
@@ -21,6 +22,25 @@ import Combine
         row.phase = .needsInput; row.updatedAt = Date(timeIntervalSince1970: 106)
         soundService.consume(SessionSnapshot(sessions: [row], unavailable: false), preferences: SessionSoundSettings(needsInput:false, complete:false), now: Date(timeIntervalSince1970:106))
         sounds(107); precondition(played.count == 3)
+        precondition(choices.allSatisfy { $0.0 == "default" && $0.1 == 1 })
+        let customSound = SessionSoundSettings(needsInputTone: "bell", completeTone: "marimba", volume: 0.35)
+        row.phase = .complete; row.turnId = "custom"; row.updatedAt = Date(timeIntervalSince1970: 108)
+        soundService.consume(SessionSnapshot(sessions: [row], unavailable: false), preferences: customSound, now: Date(timeIntervalSince1970: 108))
+        precondition(choices.last!.0 == "marimba" && abs(choices.last!.1 - 0.35) < 0.001)
+        row.phase = .needsInput; row.updatedAt = Date(timeIntervalSince1970: 109)
+        soundService.consume(SessionSnapshot(sessions: [row], unavailable: false), preferences: customSound, now: Date(timeIntervalSince1970: 109))
+        precondition(choices.last!.0 == "bell")
+        let countBeforeMute = played.count
+        row.phase = .complete; row.updatedAt = Date(timeIntervalSince1970: 110)
+        soundService.consume(SessionSnapshot(sessions: [row], unavailable: false), preferences: SessionSoundSettings(volume: 0), now: Date(timeIntervalSince1970: 110))
+        soundService.consume(SessionSnapshot(sessions: [row], unavailable: false), preferences: customSound, now: Date(timeIntervalSince1970: 111))
+        precondition(played.count == countBeforeMute, "Unmuting must not replay a muted event")
+        let oldSound = try JSONDecoder().decode(SessionSoundSettings.self, from: Data(#"{"needsInput":true,"complete":false}"#.utf8))
+        precondition(oldSound.playbackVolume == 1 && oldSound.file(for: "needsInput") == "needs-input")
+        precondition(SessionSoundSettings(completeTone: "unknown", volume: 2).file(for: "complete") == "complete")
+        precondition(SessionSoundSettings(volume: -1).playbackVolume == 0)
+        precondition(SessionSoundSettings(volume: .nan).playbackVolume == 1)
+        print("Native session sounds: legacy defaults, independent tones, per-app volume and mute/resume passed")
 
         let start = "{\"type\":\"session_meta\",\"payload\":{\"id\":\"fixture\",\"source\":\"cli\"}}\n" + event("task_started")
         let snapshot = try JSONDecoder().decode(SessionSnapshot.self, from: Data(#"{"sessions":[{"id":"s","source":"Codex","phase":"tool","updatedAt":1791640000}],"unavailable":false}"#.utf8))

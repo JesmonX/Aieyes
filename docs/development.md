@@ -77,6 +77,8 @@ Codex 账户新增 credits 余额及每 500 / 1000 credits 的 API 等价估值�
 
 ## 构建与验证
 
+在 macOS 上调试 Windows / Linux 页面可运行 `npm --prefix apps/desktop run preview:desktop`，无需构建桌面包。工作台提供实际页面、合成数据、模拟保存、故障注入和调用日志；详细用法及原生验收边界见 [本地浏览器验证](windows-linux.md#本地浏览器验证)。
+
 界面语言在「常规 → 外观」或面板语言按钮中切换，保存为 `appearance.language`（`zh-CN` / `en`）。`locales/en.json` 是三端共用词库，修改后运行 `python3 scripts/sync-localizations.py` 生成 Web 与 Swift 资源；Rust 直接嵌入同一文件。新增文案使用 Web 的 `AieyesI18n.t` 或原生的 `L`，后端状态在显示边界翻译，账户名、路径、凭据和用户输入不参与翻译。
 
 `python3 scripts/check-localizations.py` 检查精确源文案、未翻译英文和参数一致性；`node scripts/test-i18n.cjs` 使用合成账户覆盖双语页面、弹窗、草稿、跨窗口和窄屏。两项已纳入 CI，原生语言与金额格式回归包含在 `scripts/test-native.sh`。

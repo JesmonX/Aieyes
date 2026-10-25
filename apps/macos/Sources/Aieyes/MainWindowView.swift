@@ -16,13 +16,12 @@ struct MainWindowView: View {
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
     @State private var guideActive = false
     @State private var workspaceWidth: CGFloat = 1120
-    private var monitoring: [(String, String, String)] { [("agent", L("Agent 总览"), "square.grid.2x2"), ("analysis", L("用量分析"), "chart.xyaxis.line"), ("servers", L("服务器"), "server.rack")] }
+    private var monitoring: [(String, String, String)] { [("agent", L("总览"), "square.grid.2x2"), ("analysis", L("用量分析"), "chart.xyaxis.line"), ("servers", L("服务器"), "server.rack")] }
     private var configuration: [(String, String, String)] { [("integrations", L("接入与账户"), "person.crop.circle"), ("servers", L("机器与采集"), "desktopcomputer"), ("prices", L("模型价格"), "dollarsign.circle"), ("wakeups", L("定时唤醒"), "alarm")] }
-    private var preferences: [(String, String, String)] { [("appearance", L("外观"), "paintpalette"), ("desktop", L("桌宠与会话"), "pawprint"), ("network", L("网络代理"), "network"), ("refresh", L("刷新与历史"), "clock.arrow.circlepath"), ("notifications", L("通知"), "bell"), ("updates", L("更新与关于"), "info.circle")] }
     private var title: String {
         if model.detailPage == "setup" { return L("配置向导") }
-        if model.detailPage != "settings" { return monitoring.first { $0.0 == model.detailPage }?.1 ?? L("Agent 总览") }
-        return model.settingsTab == "general" ? preferences.first { $0.0 == model.generalPage }?.1 ?? L("外观") : configuration.first { $0.0 == model.settingsTab }?.1 ?? L("接入与账户")
+        if model.detailPage != "settings" { return monitoring.first { $0.0 == model.detailPage }?.1 ?? L("总览") }
+        return model.settingsTab == "general" ? L("设置") : configuration.first { $0.0 == model.settingsTab }?.1 ?? L("接入与账户")
     }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
@@ -40,16 +39,20 @@ struct MainWindowView: View {
                             navigationButton(title, icon: icon, selected: model.detailPage == key) { select(key) }
                         }
                         groupLabel(L("配置"))
-                        navigationButton(L("配置向导"), icon: "checklist", selected: model.detailPage == "setup") { select("setup") }
                         ForEach(configuration, id: \.0) { key, title, icon in
                             navigationButton(title, icon: icon, selected: model.detailPage == "settings" && model.settingsTab == key) { model.openSettings(.init(category: key)); select("settings") }
                         }
-                        groupLabel(L("偏好"))
-                        ForEach(preferences, id: \.0) { key, title, icon in
-                            navigationButton(title, icon: icon, selected: model.detailPage == "settings" && model.settingsTab == "general" && model.generalPage == key) { model.openSettings(.init(category: "general", section: key)); select("settings") }
-                        }
                     }.padding(.horizontal, 8).padding(.bottom, 12)
                 }.scrollIndicators(.hidden)
+                VStack(spacing: 4) {
+                    navigationButton(L("设置"), icon: "gearshape", selected: model.detailPage == "settings" && model.settingsTab == "general") { model.openSettings(.init(category: "general")); select("settings") }
+                    Menu {
+                        Button(L("配置向导")) { select("setup") }
+                    } label: {
+                        HStack(spacing: 10) { Image(systemName: "questionmark.circle").frame(width: 22); if !collapsed { Text(L("帮助")); Spacer(minLength: 0) } }
+                            .font(AppFont.body).padding(.horizontal, 10).padding(.vertical, 9).frame(maxWidth: .infinity, alignment: collapsed ? .center : .leading)
+                    }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(.secondary).help(L("帮助")).accessibilityLabel(L("帮助"))
+                }.padding(.horizontal, 8).padding(.bottom, 12)
             }.frame(width: collapsed ? 62 : 214).background {
                 if reduceTransparency || previewAccessible || contrast == .increased { Color(nsColor: .windowBackgroundColor) }
                 else { Rectangle().fill(.ultraThinMaterial) }

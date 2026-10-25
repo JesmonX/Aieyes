@@ -25,10 +25,15 @@ struct NativeAPISettingsSection: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 10) {
-            Text(L("验证 {0} 端点后，保存到本机 {1} 配置并设为默认模型。已有配置会备份，Key 保存在原生配置文件中。" , provider == "claude" ? "Anthropic Messages" : "Chat Completions", name)).font(AppFont.secondary).foregroundStyle(.secondary)
-            if ["pi", "omp"].contains(provider) { Text(L("额度由当前模型服务商提供；本地 Token 和预估费用不代表可用余额。")).font(AppFont.secondary).foregroundStyle(.secondary) }
-            ForEach(sources) { source in Button(source.name + L(" · 配置 API")) { editing = source } }
-            if sources.isEmpty { Text(L("先在机器与目录中添加本机数据目录。")).font(AppFont.secondary).foregroundStyle(.secondary) }
+            HStack {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(sources) { source in Button(source.name + L(" · 配置 API")) { editing = source } }
+                    if sources.isEmpty { Text(L("先在机器与目录中添加本机数据目录。")).font(AppFont.secondary).foregroundStyle(.secondary) }
+                }
+                Spacer()
+                HelpNote(title: L("API 连接"), text: L("验证 {0} 端点后，保存到本机 {1} 配置并设为默认模型。已有配置会备份，Key 保存在原生配置文件中。", provider == "claude" ? "Anthropic Messages" : "Chat Completions", name))
+                if ["pi", "omp"].contains(provider) { HelpNote(title: L("额度"), text: L("额度由当前模型服务商提供；本地 Token 和预估费用不代表可用余额。")) }
+            }
             if let message { Text(L(message)).font(AppFont.secondary).foregroundStyle(.secondary) }
         }.sheet(item: $editing) { source in NativeAPIEditor(model: model, source: source) { message = L("API 已验证并保存，可重新打开 {0} 使用。" , name) } }
     }
@@ -63,17 +68,21 @@ private struct NativeAPIEditor: View {
             Button(L("读取此配置")) { Task { await read() } }
             TextField(source.provider == "claude" ? L("API 根地址（不含 /v1）") : L("Base URL（含 /v1）"), text: $baseUrl)
             TextField(L("模型 ID"), text: $modelID)
+            if source.provider == "claude" { Picker(L("认证方式"), selection: $authMode) { Text("API Key · X-Api-Key").tag("api-key"); Text("Bearer Token").tag("auth-token") } }
+            DisclosureGroup(L("模型选项")) {
             if ["kimi", "deepseek-harness", "zcode", "grok", "qoder", "pi", "omp"].contains(source.provider) { TextField(L("模型上下文窗口（Token）"), text: $contextWindow) }
             if ["deepseek-harness", "zcode", "grok", "qoder", "pi", "omp"].contains(source.provider) { TextField(L("最大输出 Token"), text: $maxOutputTokens) }
-            if source.provider == "claude" { Picker(L("认证方式"), selection: $authMode) { Text("API Key · X-Api-Key").tag("api-key"); Text("Bearer Token").tag("auth-token") } }
             if ["claude", "zcode", "codebuddy", "pi", "omp"].contains(source.provider) { Picker(L("推理强度"), selection: $effort) { if ["codebuddy", "pi", "omp"].contains(source.provider) { Text(L("不发送推理强度")).tag("disabled") } else { Text(source.provider == "zcode" ? L("服务端默认") : L("客户端默认")).tag("") }; ForEach(source.provider == "codebuddy" ? ["minimal", "low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh", "max"], id: \.self) { Text($0).tag($0) } } }
             if source.provider == "codebuddy" { Text(L("新连接默认使用 low；模型不支持推理参数时，选择不发送推理强度。")).font(AppFont.secondary).foregroundStyle(.secondary) }
+            }
             SecureField(source.provider == "claude" ? L("API Key / Token（留空保留）") : L("API Key（留空保留已保存 Key）"), text: $apiKey)
             Toggle(L("服务无需 Key"), isOn: $noKey)
-            Text(L("验证成功后保存并设为 {0} 默认模型。配置路径应与客户端实际使用的文件一致；客户端启动参数或环境变量可能覆盖文件设置。" , name)).font(AppFont.secondary).foregroundStyle(.secondary)
             if let message { Text(L(message)).font(AppFont.secondary) }
             if let error { Text(L(error)).foregroundStyle(.red).textSelection(.enabled) }
-            Button(busy ? L("处理中…") : L("验证并保存")) { Task { await save() } }.buttonStyle(.aieyesPrimary).disabled(loaded == nil)
+            HStack {
+                Button(busy ? L("处理中…") : L("验证并设为默认")) { Task { await save() } }.buttonStyle(.aieyesPrimary).disabled(loaded == nil)
+                HelpNote(title: L("API 连接"), text: L("验证成功后保存并设为 {0} 默认模型。配置路径应与客户端实际使用的文件一致；客户端启动参数或环境变量可能覆盖文件设置。", name))
+            }
         }.padding(24).frame(width: 560).disabled(busy)
             .task { await read() }
             .interactiveDismissDisabled(busy)

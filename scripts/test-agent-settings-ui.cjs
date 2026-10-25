@@ -1,3 +1,4 @@
+const {openGeneralPage,revealControl} = require('./ui-test-helpers.cjs');
 /* Configuration calls use the real core and a disposable database; auth is simulated. */
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),http=require('node:http'),readline=require('node:readline');
 const {spawn,execFileSync}=require('node:child_process');
@@ -166,23 +167,23 @@ function browserFixture(){
     const connected=(await rpc('settings.get')).accounts.find(a=>a.name==='Claude Code 账户');assert.equal(connected.connections.length,2);
     await page.screenshot({path:path.join(out,'accounts.png'),fullPage:true});
     assert.equal(await page.locator('.account-agent-group').count(),1);
-    for(const group of await page.locator('.account-agent-group').all()){const heading=await group.locator('h2').boundingBox(),button=await group.locator('[data-account-add]').boundingBox();assert(button.x>heading.x+heading.width);}
+    for(const group of await page.locator('.account-agent-group').all()){const heading=await page.locator('#agent-section-accounts > summary strong').boundingBox(),button=await group.locator('[data-account-add]').boundingBox();assert(button.x>heading.x+heading.width);}
     await page.locator('[data-settings-agent=codex]').click();await page.waitForFunction(()=>!AieyesAgentSettings.statusBusy);assert.equal(await page.locator('#account-status-refresh').count(),0);assert.equal(await page.locator('[data-device-manage][data-intent="login"]').count(),1);assert.equal(await page.locator('[data-device-manage][data-intent="switch"]').count(),1);
     await page.locator('[data-settings-agent=claude]').click();await page.locator('[data-account-edit="'+connected.provider+':'+connected.id+'"]').click();await page.getByText('前置命令',{exact:true}).click();await page.locator('[data-command-field="server"]').fill('export ACCOUNT_FIXTURE=claude');await page.locator('[data-command-field="server"]').blur();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.deviceSettings?.some(d=>d.preCommand==='export ACCOUNT_FIXTURE=claude')));
     assert.equal((await rpc('settings.get')).accounts.find(a=>a.id===connected.id).deviceSettings[0].preCommand,'export ACCOUNT_FIXTURE=claude');
     assert.equal(await page.locator('[data-account-reset=unexpected]').inputValue(),'inherit');
-    await page.locator('[data-account-reset=unexpected]').selectOption('off');
+    await revealControl(page, '[data-account-reset=unexpected]');await page.locator('[data-account-reset=unexpected]').selectOption('off');
     await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaResetNotifications?.unexpected===false));
-    await page.locator('[data-account-reset=natural]').selectOption('on');
+    await revealControl(page, '[data-account-reset=natural]');await page.locator('[data-account-reset=natural]').selectOption('on');
     await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaResetNotifications?.natural===true));
     assert.deepEqual((await rpc('settings.get')).accounts.find(a=>a.id===connected.id).quotaResetNotifications,{unexpected:false,natural:true});
-    await page.locator('[data-account-reset=unexpected]').selectOption('inherit');
+    await revealControl(page, '[data-account-reset=unexpected]');await page.locator('[data-account-reset=unexpected]').selectOption('inherit');
     await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaResetNotifications?.unexpected===null&&a.quotaResetNotifications?.natural===true));
-    await page.locator('#account-interval').fill('60');await page.locator('#account-interval').blur();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaRefreshSeconds===60));
+    await revealControl(page, '#account-interval');await page.locator('#account-interval').fill('60');await page.locator('#account-interval').blur();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaRefreshSeconds===60));
     failSave=true;await page.locator('#account-name').fill('保留失败输入');await page.locator('#account-name').blur();await page.locator('[data-account-retry]').waitFor();assert.equal(await page.locator('#account-name').inputValue(),'保留失败输入');failSave=false;await page.locator('[data-account-retry]').click();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.name==='保留失败输入'));
-    await page.locator('#account-interval').fill('4');await page.locator('#account-interval').blur();await page.getByText('查询间隔范围为 5–86400 秒',{exact:false}).first().waitFor();assert.equal((await rpc('settings.get')).accounts.find(a=>a.id===connected.id).quotaRefreshSeconds,60);
-    await page.locator('#account-interval').fill('5');await page.locator('#account-interval').blur();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaRefreshSeconds===5));
-    await page.locator('#account-interval').fill('120');await page.locator('#account-interval').blur();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaRefreshSeconds===120));
+    await revealControl(page, '#account-interval');await page.locator('#account-interval').fill('4');await page.locator('#account-interval').blur();await page.getByText('查询间隔范围为 5–86400 秒',{exact:false}).first().waitFor();assert.equal((await rpc('settings.get')).accounts.find(a=>a.id===connected.id).quotaRefreshSeconds,60);
+    await revealControl(page, '#account-interval');await page.locator('#account-interval').fill('5');await page.locator('#account-interval').blur();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaRefreshSeconds===5));
+    await revealControl(page, '#account-interval');await page.locator('#account-interval').fill('120');await page.locator('#account-interval').blur();await page.waitForFunction(()=>state.settings.accounts.some(a=>a.quotaRefreshSeconds===120));
     await page.evaluate(()=>{
       const quota=document.querySelector('[data-account-quota]');quota.checked=false;quota.dispatchEvent(new Event('change'));
       const interval=document.querySelector('#account-interval');interval.value='180';interval.dispatchEvent(new Event('input'));interval.dispatchEvent(new Event('change'));
@@ -194,7 +195,7 @@ function browserFixture(){
     loggedIn=false;await page.locator('#accounts-back').click();await page.locator('.machine-menu > summary').first().click();await page.locator('[data-device-manage="codex-local"][data-intent="login"]').click();await page.locator('[data-auth="login"]').waitFor();
     await page.locator('#accounts-back').click();const beforeLogin=(await rpc('settings.get')).accounts.map(a=>a.id);await page.locator('[data-account-add="codex"]').click();await page.locator('[data-auth="login"]').waitFor();assert.equal(await page.locator('#auth-account').count(),0);assert.equal(await page.locator('#field-name').count(),0);assert.equal(await page.locator('#editor[open]').count(),0);assert.deepEqual((await rpc('settings.get')).accounts.map(a=>a.id),beforeLogin);await page.locator('[data-auth="login"]').click();assert.equal(await page.locator('#field-name').count(),0);await page.locator('#editor-form button[type=submit]').click();assert.equal(calls.filter(c=>c.method==='codexAuth.login.start').at(-1).params.name,undefined);await page.locator('[data-auth="copyUrl"]').waitFor();await page.locator('[data-auth="copyUrl"]').click();assert.equal(await page.evaluate(()=>window.copied),'https://auth.openai.com/device');await page.locator('[data-auth="copyCode"]').click();assert.equal(await page.evaluate(()=>window.copied),'TEST-CODE');
     await page.screenshot({path:path.join(out,'login.png'),fullPage:true});authDone=true;loggedIn=true;await page.getByText('登录成功，已启用此账户的额度查询。',{exact:true}).waitFor();await page.locator('#accounts-back').click();await page.locator('[data-account-edit="codex:third"]').waitFor();assert.equal((await rpc('settings.get')).accounts.find(a=>a.id==='third').name,'third@example.test');assert.equal(calls.filter(c=>c.method==='codexAuth.profiles.bind').length,0);
-    await page.locator('[data-account-edit="codex:b"]').click();assert.equal(await page.locator('[data-account-login][data-intent="login"]').count(),0);await page.getByText('已登录设备 1/1 · 使用中设备 0/1',{exact:true}).waitFor();await page.getByText('已登录 · 未使用',{exact:true}).waitFor();await page.locator('[data-account-login="codex:b"][data-intent="switch"]').first().click();await page.locator('[data-auth="commit"]').waitFor();assert.equal(calls.filter(c=>c.method==='codexAuth.switch.prepare').at(-1).params.profileId,'two');assert.equal(await page.locator('[data-auth="login"]').count(),0);await page.locator('[data-auth="cancelSwitch"]').click();await page.locator('#accounts-back').click();await page.locator('#account-detail-back').click();
+    await page.locator('[data-account-edit="codex:b"]').click();assert.equal(await page.locator('[data-account-login][data-intent="login"]').count(),0);await page.getByText('已登录 1/1 · 使用中 0/1',{exact:true}).waitFor();await page.getByText('已登录 · 未使用',{exact:true}).waitFor();await page.locator('[data-account-login="codex:b"][data-intent="switch"]').first().click();await page.locator('[data-auth="commit"]').waitFor();assert.equal(calls.filter(c=>c.method==='codexAuth.switch.prepare').at(-1).params.profileId,'two');assert.equal(await page.locator('[data-auth="login"]').count(),0);await page.locator('[data-auth="cancelSwitch"]').click();await page.locator('#accounts-back').click();await page.locator('#account-detail-back').click();
     // Archived accounts stay archived; restoring is explicit and immediate.
     assert((await rpc('settings.get')).accounts.find(a=>a.id==='old').archived);
     await page.getByText('已归档账户',{exact:true}).click();await page.locator('[data-account-restore="codex:old"]').click();await page.locator('[data-account-edit="codex:old"]').waitFor();
@@ -209,29 +210,29 @@ function browserFixture(){
     assert.equal(calls.filter(c=>c.method==='accounts.create').length,0);await page.locator('#accounts-back').click();
     // Global notification preferences use the real configuration merge and survive navigation.
     await page.evaluate(()=>{state.settingsTab='general';state.generalTab='notifications';renderSettings();});
-    assert.equal(await page.getByRole('checkbox',{name:'提前重置时提醒',exact:true}).isChecked(),true);
-    assert.equal(await page.getByRole('checkbox',{name:'到期重置时提醒',exact:true}).isChecked(),false);
-    await page.getByRole('checkbox',{name:'提前重置时提醒',exact:true}).uncheck();
+    assert.equal(await page.getByRole('switch',{name:'提前重置时提醒',exact:true}).isChecked(),true);
+    assert.equal(await page.getByRole('switch',{name:'到期重置时提醒',exact:true}).isChecked(),false);
+    await page.getByRole('switch',{name:'提前重置时提醒',exact:true}).uncheck();
     await page.waitForFunction(()=>state.settings.quotaResetNotifications?.unexpected===false&&!state.settingsCommitting);
-    await page.getByRole('checkbox',{name:'到期重置时提醒',exact:true}).check();
+    await page.getByRole('switch',{name:'到期重置时提醒',exact:true}).check();
     await page.waitForFunction(()=>state.settings.quotaResetNotifications?.natural===true&&!state.settingsCommitting);
     assert.deepEqual((await rpc('settings.get')).quotaResetNotifications,{unexpected:false,natural:true});
-    await page.locator('[data-general-page=appearance]').click();await page.locator('[data-general-page=notifications]').click();
-    assert.equal(await page.getByRole('checkbox',{name:'提前重置时提醒',exact:true}).isChecked(),false);
-    assert.equal(await page.getByRole('checkbox',{name:'到期重置时提醒',exact:true}).isChecked(),true);
+    await openGeneralPage(page, 'appearance');await openGeneralPage(page, 'notifications');
+    assert.equal(await page.getByRole('switch',{name:'提前重置时提醒',exact:true}).isChecked(),false);
+    assert.equal(await page.getByRole('switch',{name:'到期重置时提醒',exact:true}).isChecked(),true);
     await page.screenshot({path:path.join(out,'notifications.png'),fullPage:true});
     // Existing mappings are lazy, editable, and retain the editor on real-core conflicts.
     const mappingBase=await rpc('settings.get'),mappingNext=structuredClone(mappingBase);mappingNext.modelMappings={'fixture-old':'provider/old'};
     const mappingSaved=await rpc('settings.patch',{base:mappingBase,settings:mappingNext});
     await page.evaluate(saved=>{AieyesAgentSettings.accept(saved);state.settingsTab='prices';renderSettings(false);},mappingSaved);
     assert.equal(await page.locator('#existing-mappings').evaluate(el=>el.open),false);assert.equal(await page.locator('[data-mapping-edit]').count(),0);
-    await page.locator('#existing-mappings > summary').click();await page.locator('[data-mapping-edit="fixture-old"]').click();
+    await revealControl(page, '#existing-mappings > summary');await page.locator('[data-mapping-edit="fixture-old"]').click();
     await page.locator('#field-to').fill('provider/cancelled');await page.locator('#cancel-editor').click();await page.locator('#editor-confirm-discard').click();
     assert.equal((await rpc('settings.get')).modelMappings['fixture-old'],'provider/old');
     await page.locator('[data-mapping-edit="fixture-old"]').click();await page.locator('#field-from').fill('fixture-new');await page.locator('#field-to').fill('provider/new');
     await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
     assert.deepEqual((await rpc('settings.get')).modelMappings,{'fixture-new':'provider/new'});
-    if(!await page.locator('#existing-mappings').evaluate(el=>el.open))await page.locator('#existing-mappings > summary').click();
+    if(!await page.locator('#existing-mappings').evaluate(el=>el.open))await revealControl(page, '#existing-mappings > summary');
     await page.locator('[data-mapping-edit="fixture-new"]').click();await page.locator('#field-to').fill('provider/draft');
     const conflictBase=await rpc('settings.get'),conflictNext=structuredClone(conflictBase);conflictNext.modelMappings['fixture-new']='provider/external';await rpc('settings.patch',{base:conflictBase,settings:conflictNext});
     await page.locator('#editor-form button[type=submit]').click();await page.locator('#editor-error:visible').waitFor();

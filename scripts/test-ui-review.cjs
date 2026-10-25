@@ -89,7 +89,7 @@ function fixture() {
     assert.equal(await page.locator('[data-settings-tab=integrations]').getAttribute('aria-current'),'page');
     await page.locator('[data-settings-agent=deepseek]').click();
     assert.equal(await page.locator('[data-agent-enable=deepseek]').isChecked(),false);
-    assert.match(await page.locator('.agent-integration-header').textContent(),/API Key.*余额/);
+    assert.equal(await page.locator('.agent-integration-header p').count(),0,'provider controls replace introductory copy');assert.equal(await page.locator('[data-account-add=deepseek]').count(),1);
     assert.equal(await page.locator('#editor[open]').count(),0);
     assert.equal(await page.evaluate(()=>state.settings.sources.length),0);
     await page.locator('[data-settings-tab=hosts]').click();await page.locator('[data-edit=host]').click();
@@ -165,7 +165,7 @@ function fixture() {
     await panel.locator('#panel-more > summary').click();await panel.locator('#panel-quit').waitFor();
     await panel.keyboard.press('Escape');assert.equal(await panel.locator('#panel-more').evaluate(el=>el.open),false);
     assert.equal(await panel.locator('body').getAttribute('data-view'),'panel','Esc dismisses More before the panel');
-    await panel.locator('#add-first-quota').click();assert.ok((await panel.evaluate(()=>review.actions)).includes('add-quota'));
+    await panel.locator('[data-add-quota]').click();assert.ok((await panel.evaluate(()=>review.actions)).includes('add-quota'));
     await panel.locator('#add-first-source').click();
     assert.ok((await panel.evaluate(()=>review.actions)).includes('add-source'));
     await panel.evaluate(async()=>{review.empty=false;review.settings.sources=[{id:'preview',name:'示例日志',provider:'codex',path:'~/.codex',enabled:false,accountId:''}];await reviewEmit('desktop:settings',null);});

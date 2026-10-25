@@ -9,9 +9,7 @@ struct WakeupsView: View {
     var body: some View {
         let _ = interfaceLanguage;
         Form {
-            Text(L("按设定时间调用订阅模型。可用于帮助规划 5h 重置时间。")).font(AppFont.section.weight(.semibold)).foregroundStyle(Palette.accent).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-            Section(L("定时唤醒")) {
-                Text(L("使用本机或 SSH Linux 服务器的订阅登录，按目标机器时区运行。")).foregroundStyle(.secondary)
+            Section {
                 DisclosureGroup(L("执行规则")) {
                     Text(L("保存草稿后需部署，修改后需更新部署。退出 Aieyes 后任务继续运行；本机 macOS / Windows 需保持用户登录。休眠、离线或错过时刻不补发。模型请求可能消耗额度。")).font(AppFont.secondary).foregroundStyle(.secondary)
                 }
@@ -127,7 +125,7 @@ struct WakeEditor: View {
                     }
                     Button(L("添加时刻")) { task.times.append("08:00") }
                     Text(L("跟随目标机器时区，错过时刻不补发。")).font(AppFont.secondary).foregroundStyle(.secondary)
-                    TextField(L("CLI 路径（留空使用数据源配置）"), text: $task.binary)
+                    DisclosureGroup(L("执行选项")) { TextField(L("CLI 路径（留空使用数据源配置）"), text: $task.binary) }
                     Button(L("读取可用模型")) { probe() }.disabled(task.sourceId.isEmpty)
                     if let capabilities { Text(capabilities.timezone + " · " + L(capabilities.message)).font(AppFont.secondary).foregroundStyle(.secondary)
                         if !capabilities.models.isEmpty {
