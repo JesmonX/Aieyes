@@ -204,6 +204,16 @@ window.AieyesUI = {
     return this.usageSources(settings).filter((s) => s.provider === account.provider && (
     s.accountId === account.id || s.codexHomeId && profiles.some((r) => r.startsWith(s.codexHomeId + ':'))));
   },
+  automaticEstimateState(record, settings, dashboard) {
+    if (!['rolling', 'automatic'].includes(record.samplingMode) || record.samplingMode === 'automatic' && record.status === 'completed') return null;
+    const separator = record.accountKey.indexOf(':'),quota = {provider: record.accountKey.slice(0, separator), accountId: record.accountKey.slice(separator + 1)};
+    const enabled = this.estimateSources(settings, quota).filter((s) => s.autoValuation?.enabled);
+    const rows = enabled.map((source) => ({source, status: dashboard?.sources?.find((s) => s.id === source.id)?.autoValuationStatus})).filter(({status}) => !status?.accountKey || status.accountKey === record.accountKey);
+    const priority = ['waitingCoverage', 'waitingIdentity', 'waitingManual', 'waiting', 'collecting', 'sampling'];
+    const selected = rows.find(({status}) => !priority.includes(status?.state)) ?? priority.flatMap((state) => rows.filter(({status}) => status?.state === state))[0];
+    const labels = {sampling: AieyesI18n.t("自动采样中"), collecting: AieyesI18n.t("积累样本中"), waiting: AieyesI18n.t("等待有效样本"), waitingCoverage: AieyesI18n.t("等待完整目录用量"), waitingIdentity: AieyesI18n.t("等待订阅登录"), waitingManual: AieyesI18n.t("等待手动采样结束")};
+    return {label: selected ? labels[selected.status?.state] ?? AieyesI18n.t("等待首个实时快照") : enabled.length ? AieyesI18n.t("当前账户未采样") : AieyesI18n.t("已暂停"), note: selected?.status?.note ? AieyesI18n.message(selected.status.note) : '', sourceNames: rows.map(({source}) => source.name)};
+  },
   freshness(settings, dashboard, now = Date.now() / 1000) {
     const sources = this.usageSources(settings);
     const statuses = sources.map((s) => dashboard?.sources?.find((row) => row.id === s.id)?.status);

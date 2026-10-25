@@ -53,6 +53,32 @@ import Foundation
         precondition(roundtrip.autoValuation == automatic.autoValuation)
         let legacySource = try JSONDecoder().decode(AgentSource.self, from: Data(#"{"id":"old","name":"Old","provider":"codex","path":"/fixture","accountId":"","enabled":true,"quotaCommand":"","quotaPreCommand":"","codexBinary":"codex"}"#.utf8))
         precondition(legacySource.autoValuation == nil)
+        let estimateFixture = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/estimate-presentation.json"))) as! [String: Any]
+        var rolling = try JSONDecoder().decode(QuotaEstimate.self, from: JSONSerialization.data(withJSONObject: estimateFixture["record"]!))
+        rolling.accountKey = "codex:a"; rolling.samplingMode = "rolling"; rolling.status = "active"
+        var samplingSettings = Settings()
+        samplingSettings.accounts = [AgentAccount(id: "a")]
+        var local = automatic; local.accountId = "a"; local.name = "Local"
+        var remote = local; remote.id = "remote"; remote.name = "Remote"; remote.hostId = "server"
+        samplingSettings.sources = [local, remote]
+        var server = Host(); server.id = "server"; server.enabled = false
+        samplingSettings.hosts = [server]
+        var liveRows = [SourceSummary(id: local.id, name: local.name, provider: "codex", enabled: true, status: nil, accountIds: nil, autoValuationStatus: AutomaticValuationStatus(state: "waitingCoverage", note: "缺少完整用量", accountKey: "codex:a"))]
+        var live = EstimatePresentation.automaticState(rolling, settings: samplingSettings, sources: liveRows)!
+        precondition(live.label == "等待完整目录用量" && live.note == "缺少完整用量" && live.sourceNames == ["Local"])
+        liveRows[0].autoValuationStatus?.state = "collecting"
+        precondition(EstimatePresentation.automaticState(rolling, settings: samplingSettings, sources: liveRows)?.label == "积累样本中")
+        liveRows[0].autoValuationStatus?.state = "sampling"
+        precondition(EstimatePresentation.automaticState(rolling, settings: samplingSettings, sources: liveRows)?.label == "自动采样中")
+        liveRows[0].autoValuationStatus?.accountKey = "codex:b"
+        precondition(EstimatePresentation.automaticState(rolling, settings: samplingSettings, sources: liveRows)?.label == "当前账户未采样")
+        liveRows[0].autoValuationStatus?.accountKey = ""; liveRows[0].autoValuationStatus?.state = "waitingIdentity"
+        precondition(EstimatePresentation.automaticState(rolling, settings: samplingSettings, sources: liveRows)?.label == "等待订阅登录")
+        samplingSettings.sources[0].enabled = false
+        live = EstimatePresentation.automaticState(rolling, settings: samplingSettings, sources: liveRows)!
+        precondition(live.label == "已暂停" && live.sourceNames.isEmpty)
+        rolling.samplingMode = "automatic"; rolling.status = "completed"
+        precondition(EstimatePresentation.automaticState(rolling, settings: samplingSettings, sources: liveRows) == nil)
         let legacy = try JSONDecoder().decode(AppearanceSettings.self, from: Data(#"{"theme":"dark","accent":"teal"}"#.utf8))
         precondition(legacy.chartPalette == "classic" && legacy.chartContrast == "high")
         let legacyRoundtrip = try JSONDecoder().decode(AppearanceSettings.self, from: JSONEncoder().encode(legacy))

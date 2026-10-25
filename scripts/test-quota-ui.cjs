@@ -10,13 +10,13 @@ function fixture(){
   const rows=[{provider:'codex',accountId:'c',name:'个人订阅',plan:'pro',sourceId:'c',updatedAt:now,origin:'live',windows:[win('weekly','7d',10080)]},{provider:'agy',accountId:'a',name:'工作空间 agy',sourceId:'a',updatedAt:now,origin:'live',windows:['Claude Opus','Claude Sonnet','Gemini Pro'].flatMap(g=>[win(g+':5h',g+' · 5h',300,g),win(g+':7d',g+' · 7d',10080,g)])}];
   const settings={accounts:rows.map(q=>({id:q.accountId,name:q.name,provider:q.provider,quotaEnabled:true})),sources:rows.map(q=>({id:q.accountId,name:q.name,provider:q.provider,accountId:q.accountId,enabled:true,path:'/fixture'})),hosts:[],modelMappings:{},proxy:{mode:'system',url:''},refreshSeconds:300,serverRefreshSeconds:10};
   settings.sources[0].accountId='';settings.sources[0].codexHomeId='fixture-home';settings.accounts[0].quotaProfileId='fixture-home:profile';
-  window.quotaFixture={rows,settings,order:['codex:c','antigravity:a'],records:[],calls:[],fail:false,panelOpen:true};
+  window.quotaFixture={rows,settings,order:['codex:c','antigravity:a'],records:[],rolling:[],automaticStatus:null,calls:[],fail:false,panelOpen:true};
   const info=()=>({platform:'windows',material:'opaque',mode:'floating',effectiveMode:'floating',sessions:[],summary:'暂无活跃会话',panelOpen:window.quotaFixture.panelOpen,panelPinned:true,hidden:false});
   window.__TAURI__={event:{async listen(){return ()=>{};}},window:{getCurrentWindow:()=>({async isMaximized(){return false;},async onResized(){return ()=>{};}})},core:{async invoke(command,args){
     const f=window.quotaFixture;if(command==='desktop_info')return info();if(command==='desktop_panel'){f.panelOpen=args.open;return info();}if(command!=='engine_call')return {};
     const {method,params}=args;f.calls.push({method,params});
     if(method==='hello')return {version:'test'};if(method==='settings.get')return structuredClone(settings);
-    if(method==='dashboard'||method==='dashboard.summary')return {generatedAt:now,summary,quotas:[...rows].sort((a,b)=>f.order.indexOf(AieyesUI.canonicalProvider(a.provider)+':'+a.accountId)-f.order.indexOf(AieyesUI.canonicalProvider(b.provider)+':'+b.accountId)),quotaOrder:f.order,quotaEstimates:f.records,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:settings.sources.map(s=>({...s,autoValuationStatus:s.autoValuation?.enabled?{state:'collecting',note:'等待有效样本',accountKey:'codex:c'}:null})),pricingGaps:[]};
+    if(method==='dashboard'||method==='dashboard.summary')return {generatedAt:now,summary,quotas:[...rows].sort((a,b)=>f.order.indexOf(AieyesUI.canonicalProvider(a.provider)+':'+a.accountId)-f.order.indexOf(AieyesUI.canonicalProvider(b.provider)+':'+b.accountId)),quotaOrder:f.order,quotaEstimates:f.records,automaticEstimateSummaries:f.rolling,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:settings.sources.map(s=>({...s,autoValuationStatus:s.autoValuation?.enabled?(f.automaticStatus??{state:'collecting',note:'等待有效样本',accountKey:'codex:c'}):null})),pricingGaps:[]};
     if(method==='autoEstimates.configure'){if(f.failAutomatic)throw new Error('模拟自动估值保存失败');const src=settings.sources.find(s=>s.id===params.sourceId);if(params.enabled&&!params.confirmed)throw new Error('请同意');src.autoValuation=params.enabled?{enabled:true,consentVersion:1}:null;return {settings:structuredClone(settings)};}
     if(method==='sources.scan')return [];if(method==='quotas.refresh')return rows;
     if(method==='quotas.order.set'){if(f.fail)throw new Error('保存失败，请重试');f.order=params.keys;return f.order;}
@@ -190,7 +190,27 @@ function fixture(){
    assert.equal(await page.locator('#auto-consent').count(),0,'Disabling saves directly');
    await page.locator('#quota-close').click();
    if(surface==='index.html')assert.match(await page.locator('[data-auto-machine-status="local"][data-auto-provider="codex"]').textContent(),/已关闭/,'Machine status updates after saving');
-   await page.evaluate(()=>{state.page='agent';render();});
+   await page.evaluate(async()=>{
+     state.page='agent';
+     quotaFixture.settings.sources[0].autoValuation={enabled:true,consentVersion:1};
+     state.settings=structuredClone(quotaFixture.settings);
+     const record=JSON.parse(JSON.stringify({id:'rolling',accountKey:'codex:c',kind:'quota',samplingMode:'rolling',status:'active',windowId:'weekly',windowName:'7d',sourceIds:['old-remote'],sourceNames:['旧远程机器'],startedAt:1,checkpointAt:2,consumedPercent:5,cost:1,totalTokens:100,pricedTokens:100,weeklyValue:20,calculationNote:'已有滚动样本'}));
+     quotaFixture.records=[];quotaFixture.rolling=[record];
+     quotaFixture.automaticStatus={state:'waitingCoverage',note:'同一账户的其他目录未完整纳入，等待目录采集与登录状态确认',accountKey:'codex:c'};
+     await loadDashboard();await openQuotaEstimate('codex:c');
+   });
+   const rollingResult=page.locator('#quota-dialog .estimate-result');
+   assert.match(await rollingResult.textContent(),/滚动估值 · 等待完整目录用量/);
+   assert.match(await rollingResult.textContent(),/样本截止：/);
+   assert.match(await rollingResult.textContent(),/当前参与来源：个人订阅/);
+   assert.match(await rollingResult.textContent(),/历史样本来源：旧远程机器/);
+   assert.doesNotMatch(await rollingResult.textContent(),/持续更新/);
+   await page.evaluate(async()=>{quotaFixture.automaticStatus={state:'sampling',note:'已更新可靠样本；小样本也会立即显示',accountKey:'codex:c'};await loadDashboard();});
+   await page.waitForFunction(()=>document.querySelector('#quota-dialog .estimate-result')?.textContent.includes('滚动估值 · 自动采样中'));
+   await page.evaluate(async()=>{quotaFixture.rolling[0].checkpointAt=3;await loadDashboard();});
+   await page.waitForFunction(()=>JSON.parse(document.querySelector('#quota-dialog').dataset.estimateLiveRevision)[0][0].checkpointAt===3);
+   await page.locator('#quota-close').click();
+   await page.evaluate(()=>{quotaFixture.rolling=[];quotaFixture.automaticStatus=null;state.page='agent';render();});
    for(const colorScheme of ['light','dark']){await page.emulateMedia({colorScheme});await page.screenshot({path:path.join(output,surface+'-'+colorScheme+'.png')});}
    assert.deepEqual(errors,[]);await page.close();
   }

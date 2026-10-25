@@ -12,6 +12,9 @@ struct AutomaticValuationControls: View {
                 Text(L("数据源自动估值")).font(AppFont.section)
                 Text(eligible.contains { $0.provider == "codex" } ? L("估算 5 小时 / 7 天额度及 credits 的 API 等价价值") : L("估算 5 小时 / 7 天额度的 API 等价价值")).font(AppFont.secondary).foregroundStyle(.secondary)
                 ForEach(eligible) { source in AutomaticValuationSourceControls(model: model, source: source) }
+                if eligible.contains(where: { $0.provider == "codex" }) {
+                    Text(L("已暂停的机器不参与实时估值；暂停期间请勿在这些机器上使用同一账户。")).font(AppFont.secondary).foregroundStyle(.secondary)
+                }
                 if let error = model.automaticError { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
             }
         }
@@ -421,6 +424,12 @@ struct QuotaEstimateView: View {
             resultHeader(e)
             if e.kind != "credits" { quotaValues(e) }
             Text(L(e.calculationNote)).font(AppFont.secondary).foregroundStyle(.secondary)
+            if let live = EstimatePresentation.automaticState(e, settings: model.settings, sources: model.dashboard.sources), !live.note.isEmpty {
+                Text(live.note).font(AppFont.secondary).foregroundStyle(.secondary)
+            }
+            if e.samplingMode == "rolling" || e.samplingMode == "automatic" {
+                Text(L("样本截止：{0}", Format.date(e.checkpointAt))).font(AppFont.secondary).foregroundStyle(.secondary)
+            }
             if let reason = e.rollingExcludedReason { Text(L(reason)).font(AppFont.secondary).foregroundStyle(Palette.warn) }
             if e.originalEstimateId != nil { Text(L("已修正 · 原采样记录保留")).font(AppFont.secondary).foregroundStyle(.secondary) }
             else if e.samplingMode != "automatic" && e.status == "completed" && !e.hasValue { Button(L("按原记录修复估值")) { perform("repair", ["id": e.id]) }.disabled(busy) }
@@ -429,10 +438,17 @@ struct QuotaEstimateView: View {
     }
     private func resultHeader(_ e: QuotaEstimate) -> some View {
         HStack {
-            Text(e.samplingMode == "rolling" ? (e.status == "completed" ? L("滚动估值 · 历史") : L("滚动估值 · 持续更新")) : e.samplingMode == "automatic" ? (e.status == "completed" ? L("自动估值 · 已封存") : L("自动估值 · 持续更新")) : e.status == "active" ? ((e.fiveHourValue ?? e.weeklyValue ?? e.valuePer1000) == nil ? L("正在积累样本") : L("可输出估值 · 采样继续")) : e.statusLabel).foregroundStyle(e.status == "pending" ? Palette.warn : Palette.accent)
+            Text(estimateStatus(e)).foregroundStyle(e.status == "pending" ? Palette.warn : Palette.accent)
             Spacer()
             Text(resultValue(e)).font(AppFont.section).monospacedDigit()
         }
+    }
+    private func estimateStatus(_ e: QuotaEstimate) -> String {
+        if let live = EstimatePresentation.automaticState(e, settings: model.settings, sources: model.dashboard.sources) {
+            return (e.samplingMode == "rolling" ? L("滚动估值") + " · " : L("自动估值 · ")) + live.label
+        }
+        if e.samplingMode == "automatic" { return L("自动估值 · 已封存") }
+        return e.status == "active" ? (e.hasValue ? L("可输出估值 · 采样继续") : L("正在积累样本")) : e.statusLabel
     }
     private func resultValue(_ e: QuotaEstimate) -> String {
         if e.kind == "credits" { return Format.creditValue(e) }
@@ -467,7 +483,10 @@ struct QuotaEstimateView: View {
             Text("\(Format.date(e.startedAt)) → \(Format.date(e.checkpointAt))")
             Text(L("{0} · 消耗 {1} · 样本成本 {2} USD" , L(e.windowName), consumption(e), Format.money(e.cost)))
             Text(L("计价 Token：{0} / {1}" , Format.compact(e.pricedTokens), Format.compact(e.totalTokens)))
-            Text(e.sourceNames.joined(separator: "、"))
+            if let live = EstimatePresentation.automaticState(e, settings: model.settings, sources: model.dashboard.sources) {
+                Text(L("当前参与来源：{0}", live.sourceNames.isEmpty ? "—" : live.sourceNames.joined(separator: "、")))
+            }
+            Text(L("历史样本来源：{0}", e.sourceNames.joined(separator: "、")))
             if let segments = e.segments, !segments.isEmpty {
                 Text(L("已保存 {0} 个有效片段" , segments.count))
                 ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in

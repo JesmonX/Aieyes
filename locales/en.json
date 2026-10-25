@@ -3350,5 +3350,11 @@
   "额度查询结果无效": "Invalid quota query result.",
   "请求前后的登录身份不一致或无法确认": "Sign-in identities before and after the request differ or cannot be confirmed.",
   "请求前后身份观测间隔超过五分钟": "Identity observations bracketing the request are more than five minutes apart.",
-  "凭据续期": "Credential renewal"
+  "凭据续期": "Credential renewal",
+  "滚动估值": "Rolling estimate",
+  "当前账户未采样": "Not sampling this account",
+  "当前参与来源：{0}": "Current sampling sources: {0}",
+  "历史样本来源：{0}": "Historical sample sources: {0}",
+  "样本截止：{0}": "Samples through: {0}",
+  "已暂停的机器不参与实时估值；暂停期间请勿在这些机器上使用同一账户。": "Paused machines are excluded from live estimates; do not use the same account on them while paused."
 }

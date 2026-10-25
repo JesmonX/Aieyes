@@ -20,7 +20,7 @@ use std::{
 };
 
 pub const CONSENT_VERSION: u32 = 1;
-const BASELINE_VERSION: u32 = 5;
+const BASELINE_VERSION: u32 = 6;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoValuationConfig {
@@ -69,6 +69,26 @@ fn enabled(s: &Source) -> bool {
     s.auto_valuation
         .as_ref()
         .is_some_and(|a| a.enabled && a.consent_version == CONSENT_VERSION)
+}
+
+/// Paused devices leave the live scope, but enabled, unreachable devices do not.
+/// Include non-sampling homes as well so even a pause/resume between ticks breaks pairing.
+fn codex_coverage_scope(settings: &Settings, key: &str) -> Vec<(String, bool, bool)> {
+    let Some(account) = settings
+        .accounts
+        .iter()
+        .find(|a| crate::accounts::key(a) == key)
+    else {
+        return Vec::new();
+    };
+    let mut scope: Vec<_> = settings
+        .sources
+        .iter()
+        .filter(|s| s.provider == "codex" && account.uses_source(s))
+        .map(|s| (s.id.clone(), settings.source_enabled(s), enabled(s)))
+        .collect();
+    scope.sort();
+    scope
 }
 fn baseline_key(key: &str) -> String {
     format!("automatic-baseline:{key}")
@@ -296,6 +316,28 @@ pub(crate) fn recalculate(e: &mut Estimate) {
 }
 
 impl Store {
+    pub(crate) fn reconcile_automatic_scopes(
+        &self,
+        previous: &Settings,
+        next: &Settings,
+    ) -> Result<()> {
+        let keys: std::collections::BTreeSet<_> = previous
+            .accounts
+            .iter()
+            .chain(&next.accounts)
+            .filter(|a| a.provider == "codex")
+            .map(crate::accounts::key)
+            .collect();
+        for key in keys {
+            let old = codex_coverage_scope(previous, &key);
+            let new = codex_coverage_scope(next, &key);
+            if old != new {
+                let ids: Vec<_> = old.into_iter().chain(new).map(|(id, _, _)| id).collect();
+                self.invalidate_automatic_sources(&ids)?;
+            }
+        }
+        Ok(())
+    }
     /// Bounded, resumable replay of stored evidence. Never query credentials or
     /// remote machines, nor rewrite the imported events or live baseline.
     pub fn rebuild_automatic_history(&self, account: Option<&str>, dry_run: bool) -> Result<Value> {
@@ -529,7 +571,8 @@ impl Store {
         Ok(hash(&serde_json::to_string(&json!([
             config,
             revisions,
-            settings.model_mappings
+            settings.model_mappings,
+            codex_coverage_scope(settings, key)
         ]))?))
     }
 
@@ -964,7 +1007,11 @@ pub(crate) fn codex_coverage_missing(
         return true;
     };
     settings.sources.iter().any(|other| {
-        if other.provider != "codex" || !account.uses_source(other) || ids.contains(&other.id) {
+        if other.provider != "codex"
+            || !account.uses_source(other)
+            || !settings.source_enabled(other)
+            || ids.contains(&other.id)
+        {
             return false;
         }
         // A query-only alias of an already observed home adds no usage.
@@ -1503,6 +1550,17 @@ mod tests {
             "a query alias must not count the same home twice"
         );
         settings.sources[1].host_id = Some("another-machine".into());
+        settings.hosts.push(Host {
+            id: "another-machine".into(),
+            ..Default::default()
+        });
+        settings
+            .agents
+            .iter_mut()
+            .find(|a| a.provider == "codex")
+            .unwrap()
+            .machine_ids
+            .push("another-machine".into());
         assert!(codex_coverage_missing(
             &settings,
             &ids,
@@ -1510,6 +1568,150 @@ mod tests {
             &json!([]),
             at
         ));
+    }
+    #[test]
+    fn paused_devices_leave_live_coverage_but_failures_and_disabled_valuation_do_not() {
+        let (_dir, e, _q) = setup(false);
+        let mut settings = e.store.settings().unwrap();
+        let mut remote = settings.sources[0].clone();
+        remote.id = "remote".into();
+        remote.host_id = Some("server".into());
+        settings.sources.push(remote);
+        settings.hosts.push(Host {
+            id: "server".into(),
+            ..Default::default()
+        });
+        settings
+            .agents
+            .iter_mut()
+            .find(|a| a.provider == "codex")
+            .unwrap()
+            .machine_ids
+            .push("server".into());
+        let ids = vec!["s".into()];
+        let failed = json!([{"sourceId":"remote","accountKey":"codex:a","current":false,"error":"offline","checkedAt":now()}]);
+        assert!(codex_coverage_missing(
+            &settings,
+            &ids,
+            "codex:a",
+            &failed,
+            now()
+        ));
+        settings.hosts[0].enabled = false;
+        assert!(!codex_coverage_missing(
+            &settings,
+            &ids,
+            "codex:a",
+            &failed,
+            now()
+        ));
+        settings.hosts[0].enabled = true;
+        assert!(codex_coverage_missing(
+            &settings,
+            &ids,
+            "codex:a",
+            &failed,
+            now()
+        ));
+        settings.sources[1].auto_valuation = None;
+        assert!(codex_coverage_missing(
+            &settings,
+            &ids,
+            "codex:a",
+            &json!([]),
+            now()
+        ));
+        settings.sources[1].enabled = false;
+        assert!(!codex_coverage_missing(
+            &settings,
+            &ids,
+            "codex:a",
+            &json!([]),
+            now()
+        ));
+        settings.sources[1].enabled = true;
+        settings
+            .agents
+            .iter_mut()
+            .find(|a| a.provider == "codex")
+            .unwrap()
+            .machine_ids = vec!["local".into()];
+        assert!(!codex_coverage_missing(
+            &settings,
+            &ids,
+            "codex:a",
+            &json!([]),
+            now()
+        ));
+        settings
+            .agents
+            .iter_mut()
+            .find(|a| a.provider == "codex")
+            .unwrap()
+            .machine_ids
+            .push("server".into());
+        assert!(codex_coverage_missing(
+            &settings,
+            &ids,
+            "codex:a",
+            &json!([]),
+            now()
+        ));
+    }
+    #[test]
+    fn coverage_scope_changes_archive_samples_and_break_even_pause_resume_between_ticks() {
+        let (_dir, e, mut q) = setup(false);
+        observe(&e, &q);
+        event(&e, &q, "before", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 5.0;
+        observe(&e, &q);
+        let original = e.store.estimates().unwrap()[0].clone();
+        let mut settings = e.store.settings().unwrap();
+        let mut other = settings.sources[0].clone();
+        other.id = "other".into();
+        other.path = "/other-home".into();
+        other.enabled = false;
+        settings.sources.push(other);
+        e.store.save_settings(&settings).unwrap();
+        // Adding a paused associated source also changes the scope and ends the old record.
+        let archived = e.store.estimate_for(&original.id, false).unwrap();
+        assert_eq!(archived.status, "completed");
+        assert_eq!(archived.cost, original.cost);
+        assert_eq!(archived.checkpoint_at, original.checkpoint_at);
+        observe(&e, &q);
+        let fingerprint = e
+            .store
+            .automatic_fingerprint(&settings, &["s".into()], "codex:a")
+            .unwrap();
+        settings.sources[1].enabled = true;
+        e.store.save_settings(&settings).unwrap();
+        assert!(
+            e.store
+                .advance_automatic(&q, &["s".into()], &fingerprint)
+                .is_err()
+        );
+        settings.sources[1].enabled = false;
+        e.store.save_settings(&settings).unwrap();
+        event(&e, &q, "cross-scope", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 5.0;
+        observe(&e, &q);
+        assert_eq!(
+            e.store.estimates().unwrap().len(),
+            1,
+            "scope changes require a fresh baseline"
+        );
+        event(&e, &q, "after", 100, false);
+        q.updated_at += 30;
+        q.windows[0].used_percent += 5.0;
+        observe(&e, &q);
+        let records = e.store.estimates().unwrap();
+        assert_eq!(records.len(), 2);
+        let new = records.iter().find(|e| e.status == "active").unwrap();
+        assert_eq!(new.cost, 1.0);
+        assert_eq!(new.source_ids, vec!["s"]);
+        assert_eq!(new.automatic_segments[0].started_at, q.updated_at - 30);
     }
     fn setup(shared: bool) -> (tempfile::TempDir, Engine, QuotaSnapshot) {
         let root = tempfile::tempdir().unwrap();
@@ -2551,6 +2753,17 @@ mod tests {
             .unwrap();
         assert_eq!(result["changed"], false);
         assert!(result.to_string().contains("其他设备历史身份"));
+        assert_eq!(e.store.estimates().unwrap().len(), before);
+        settings.sources[1].enabled = false;
+        e.store.save_settings(&settings).unwrap();
+        let result = e
+            .store
+            .rebuild_automatic_history(Some("codex:a"), false)
+            .unwrap();
+        assert_eq!(
+            result["changed"], false,
+            "today's pause is not historical coverage evidence"
+        );
         assert_eq!(e.store.estimates().unwrap().len(), before);
     }
     #[test]

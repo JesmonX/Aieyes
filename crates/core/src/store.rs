@@ -646,6 +646,9 @@ impl Store {
         }
         self.mark_wakeup_settings_pending(s)?;
         self.reconcile_estimates(s)?;
+        if let Some(previous) = &previous {
+            self.reconcile_automatic_scopes(previous, s)?;
+        }
         self.reconcile_reset_notifications(s)?;
         let owns_transaction = transaction.is_some();
         if let Some(transaction) = transaction {

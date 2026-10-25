@@ -20,6 +20,23 @@ test('unverified retained estimates cannot become live value fallbacks', () => {
   assert.equal(window.AieyesUI.canonicalEstimates([old]).length,0);
   assert.equal(window.AieyesUI.estimateIssue(old),'缺少账户证据');
 });
+test('automatic estimate state follows live account scope instead of a retained value', () => {
+  const window = {};vm.runInNewContext(read('ui-state.js'), {window});
+  const ui = window.AieyesUI, record = {accountKey:'codex:a',samplingMode:'rolling',status:'active',checkpointAt:100,sourceNames:['Old remote']};
+  const settings = {accounts:[{id:'a',provider:'codex'}],sources:[{id:'local',name:'Local',provider:'codex',accountId:'a',enabled:true,autoValuation:{enabled:true}},{id:'remote',name:'Remote',provider:'codex',accountId:'a',hostId:'server',enabled:true,autoValuation:{enabled:true}}],hosts:[{id:'server',enabled:false}]};
+  const status = {state:'waitingCoverage',accountKey:'codex:a',note:'缺少完整用量'};
+  const dashboard = {sources:[{id:'local',autoValuationStatus:status},{id:'remote',autoValuationStatus:{state:'sampling',accountKey:'codex:a'}}]};
+  let live = ui.automaticEstimateState(record, settings, dashboard);
+  assert.equal(live.label,'等待完整目录用量');assert.equal(live.note,'缺少完整用量');assert.deepEqual([...live.sourceNames],['Local']);
+  status.state='collecting';assert.equal(ui.automaticEstimateState(record,settings,dashboard).label,'积累样本中');
+  status.state='sampling';assert.equal(ui.automaticEstimateState(record,settings,dashboard).label,'自动采样中');
+  status.accountKey='codex:b';assert.equal(ui.automaticEstimateState(record,settings,dashboard).label,'当前账户未采样');
+  status.accountKey='';status.state='waitingIdentity';assert.equal(ui.automaticEstimateState(record,settings,dashboard).label,'等待订阅登录');
+  settings.sources[0].enabled=false;assert.equal(ui.automaticEstimateState(record,settings,dashboard).label,'已暂停');
+  assert.equal(ui.automaticEstimateState({...record,samplingMode:'automatic',status:'completed'},settings,dashboard),null);
+  assert.equal(ui.automaticEstimateState({...record,samplingMode:'manual'},settings,dashboard),null);
+  assert.equal(record.checkpointAt,100);assert.deepEqual(record.sourceNames,['Old remote']);
+});
 test('error presentation keeps known actions and safely exposes unknown diagnostics', () => {
   const window = {};
   vm.runInNewContext(read('ui-state.js'), {window});

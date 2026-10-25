@@ -843,6 +843,20 @@ struct NetworkTest: Codable, Equatable {
 }
 
 enum EstimatePresentation {
+    struct AutomaticState {
+        var label: String, note: String, sourceNames: [String]
+    }
+    static func automaticState(_ record: QuotaEstimate, settings: Settings, sources: [SourceSummary]) -> AutomaticState? {
+        guard ["rolling", "automatic"].contains(record.samplingMode ?? ""), !(record.samplingMode == "automatic" && record.status == "completed") else { return nil }
+        let account = settings.accounts.first { $0.key == record.accountKey }
+        let enabled = settings.usageSources.filter { $0.autoValuation?.enabled == true && account?.uses($0) == true }
+        let rows = enabled.map { source in (source, sources.first { $0.id == source.id }?.autoValuationStatus) }
+            .filter { $0.1?.accountKey == nil || $0.1?.accountKey == "" || $0.1?.accountKey == record.accountKey }
+        let priority = ["waitingCoverage", "waitingIdentity", "waitingManual", "waiting", "collecting", "sampling"]
+        let selected = rows.first { !priority.contains($0.1?.state ?? "") } ?? priority.compactMap { state in rows.first { $0.1?.state == state } }.first
+        let labels = ["sampling": L("自动采样中"), "collecting": L("积累样本中"), "waiting": L("等待有效样本"), "waitingCoverage": L("等待完整目录用量"), "waitingIdentity": L("等待订阅登录"), "waitingManual": L("等待手动采样结束")]
+        return AutomaticState(label: selected == nil ? (enabled.isEmpty ? L("已暂停") : L("当前账户未采样")) : labels[selected?.1?.state ?? ""] ?? L("等待首个实时快照"), note: selected?.1?.note.map { L($0) } ?? "", sourceNames: rows.map { $0.0.name })
+    }
     struct Visibility {
         var five: Bool, direct: Bool, ratio: Bool
         var rolling = false
