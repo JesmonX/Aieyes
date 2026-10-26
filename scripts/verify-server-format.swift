@@ -43,6 +43,12 @@ import Foundation
         precondition(host.selectedDevices("network", [DeviceMetric(id: "eth0", name: nil, device: nil, type: nil)]).isEmpty)
         let missing = try decoder.decode(MetricSample.self, from: Data(#"{"timestamp":1,"load":[],"errors":{},"memory":{"total":1024}}"#.utf8))
         precondition(missing.memory?.used == nil && missing.uptime == nil)
+        for (fields, expected) in [(#""available":768,"used":512"#, 512.0), (#""available":768"#, 256.0), (#""available":768,"used":0"#, 0.0)] {
+            let memory = try decoder.decode(MemoryMetric.self, from: Data(("{\"total\":1024," + fields + "}").utf8))
+            precondition(memory.used == expected)
+            let restoredMemory = try decoder.decode(MemoryMetric.self, from: JSONEncoder().encode(memory))
+            precondition(restoredMemory.used == expected)
+        }
         print("Native server uptime, capacities, missing readings, device filters and legacy configuration passed")
     }
 }

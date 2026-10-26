@@ -4,13 +4,13 @@
     "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/comicneue/ComicNeue-Regular.ttf",
     "license": "https://raw.githubusercontent.com/google/fonts/main/ofl/comicneue/OFL.txt",
     "sha256": "a0ee5a37c8b27c4db0700137d928598b1e23b0089e1546a8961909176b779360",
-    "bytes": 12872
+    "bytes": 12868
   },
   {
     "file": "lxgw-wenkai-regular.woff2",
     "source": "https://github.com/lxgw/LxgwWenKai/releases/download/v1.530/LXGWWenKai-Regular.ttf",
     "license": "https://raw.githubusercontent.com/lxgw/LxgwWenKai/main/OFL.txt",
     "sha256": "2d73eea94ad808999d90c0000c239a84a33b09d4bc6ab6c5b8bbf1eda8a7fc8b",
-    "bytes": 99436
+    "bytes": 101824
   }
 ]

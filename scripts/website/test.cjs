@@ -154,7 +154,7 @@ for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
       await page.evaluate(()=>document.querySelectorAll('img').forEach(image=>image.loading='eager'));
       await page.waitForFunction(()=>[...document.images].filter(image=>image.getAttribute('src')).every(image=>image.complete&&image.naturalWidth>0));
       assert.equal(await page.locator('link[rel=alternate][hreflang]').count(),3);
-      assert.equal(await page.locator('.downloads a').count(),6);
+      assert.equal(await page.locator('.downloads .package-button').count(),6);
       assert(await page.locator('a[data-language]').getAttribute('href'));
       assert.equal(await page.locator('a[data-track="github"]').first().getAttribute('href'),'https://aieyes.2h3ngy4n.space/go/github');
       for(const route of ['macos/arm64/dmg','macos/x64/dmg','windows/x64/exe','linux/x64/appimage','linux/x64/deb','linux/x64/rpm'])assert.equal(await page.locator(`a[data-track="download-${route.replaceAll('/','-')}"]`).getAttribute('href'),`https://aieyes.2h3ngy4n.space/go/download/${route}`);

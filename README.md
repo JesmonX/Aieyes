@@ -48,7 +48,7 @@ History, quota queries, API setup and session status vary by integration. For ex
 | --- | --- |
 | macOS 14+ | Apple Silicon and Intel DMG |
 | Windows x64 | NSIS installer |
-| Linux x64 | AppImage, DEB and RPM |
+| Linux x64 | AppImage, DEB and RPM. Testing across Linux distributions has been limited; support is currently theoretical. If you find any issues or details that affect your experience, please [report them](https://github.com/JesmonX/Aieyes/issues). |
 
 Release downloads include `SHA256SUMS`. Current macOS builds use ad-hoc signing and Windows builds do not have a publisher certificate; your operating system may ask you to allow the first launch. See [installation and release details](docs/releases.md).
 

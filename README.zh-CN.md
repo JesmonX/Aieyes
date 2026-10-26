@@ -48,7 +48,7 @@ Codex · Claude Code · Antigravity · DeepSeek · ZCode · Qoder · Grok · Cur
 | --- | --- |
 | macOS 14+ | Apple Silicon 与 Intel DMG |
 | Windows x64 | NSIS 安装包 |
-| Linux x64 | AppImage、DEB、RPM |
+| Linux x64 | AppImage、DEB、RPM。Linux 各发行版的实测较少，目前仅为理论支持。如发现任何问题或影响体验的细节，欢迎[反馈](https://github.com/JesmonX/Aieyes/issues)。 |
 
 发布页提供 `SHA256SUMS` 校验和。当前 macOS 构建使用 ad-hoc 签名，Windows 暂无发布者证书，首次打开可能需要在系统中允许。具体见[安装与发布说明](docs/releases.md)。
 

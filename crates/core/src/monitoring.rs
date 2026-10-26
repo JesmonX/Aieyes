@@ -88,6 +88,8 @@ impl LocalSampler {
         if enabled("memory") {
             self.system.refresh_memory();
             result["memory"] = json!({"total":self.system.total_memory(),"available":self.system.available_memory(),
+                // On macOS available memory is not the complement of used memory.
+                "used":self.system.used_memory(),
                 "swapTotal":self.system.total_swap(),"swapFree":self.system.free_swap()});
         }
         if enabled("filesystems") || enabled("disk") {

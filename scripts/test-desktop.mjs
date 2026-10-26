@@ -543,3 +543,22 @@ test('estimate labels omit unavailable amounts for every Agent and preserve zero
   const q={provider:'codex',plan:'pro',windows:[{windowMinutes:300},{windowMinutes:10080}]};
   assert.equal(ui.estimateLine([{id:'zero',status:'active',valuationMode:'fiveHour',fiveHourValue:0}],q),'5h ≈ $0.00');
 });
+
+test('memory summary prefers native used memory and supports legacy Linux samples', () => {
+  const source = readFileSync(new URL('../apps/desktop/web/app.js', import.meta.url), 'utf8');
+  const summary = source.slice(source.indexOf('function serverSummary('), source.indexOf('\nfunction ', source.indexOf('function serverSummary(') + 1));
+  const context = {
+    groups: {memory:'Memory'}, AieyesI18n: {t: text => text},
+    hostDevices: () => [], hostShows: () => false,
+    usedCapacity: (total, available) => total == null || available == null ? null : total - available,
+    capacityPercent: (used, total) => used / total * 100,
+    capacityPair: (used, total) => used + '/' + total,
+    resourceBlock: (_label, percent, detail) => percent + '% ' + detail,
+    date: () => '', escapeHTML: value => value
+  };
+  vm.runInNewContext(summary, context);
+  const render = memory => context.serverSummary({metrics:['memory'], enabled:true}, {memory});
+  assert.match(render({total:1024, available:768, used:512}), /50% 512\/1024/);
+  assert.match(render({total:1024, available:768}), /25% 256\/1024/);
+  assert.match(render({total:1024, available:768, used:0}), /0% 0\/1024/);
+});

@@ -633,7 +633,12 @@ struct DeviceMetric: Codable, Identifiable, Equatable {
 }
 struct MemoryMetric: Codable, Equatable {
     var total: Double?, available: Double?, cached: Double?, buffers: Double?, swapTotal: Double?, swapFree: Double?
-    var used: Double? { Format.usedCapacity(total, available) }
+    var reportedUsed: Double? = nil
+    enum CodingKeys: String, CodingKey {
+        case total, available, cached, buffers, swapTotal, swapFree
+        case reportedUsed = "used"
+    }
+    var used: Double? { reportedUsed ?? Format.usedCapacity(total, available) }
     var swapUsed: Double? { Format.usedCapacity(swapTotal, swapFree) }
 }
 struct MetricSample: Codable, Equatable {

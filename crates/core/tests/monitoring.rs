@@ -75,6 +75,14 @@ fn local_sampling_uses_native_metrics_and_can_be_disabled() {
         .unwrap();
     assert_eq!(result[0]["id"], "local");
     assert!(result[0]["sample"]["memory"]["total"].as_u64().unwrap() > 0);
+    let memory = &result[0]["sample"]["memory"];
+    let used = memory["used"].as_u64().expect("native used memory");
+    assert!(used <= memory["total"].as_u64().unwrap());
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    assert_eq!(
+        used,
+        memory["total"].as_u64().unwrap() - memory["available"].as_u64().unwrap()
+    );
     assert!(result[0]["sample"]["cpu"][0]["utilization"].is_number());
     assert!(result[0]["sample"]["uptime"].is_number());
     settings.local_monitor.enabled = false;

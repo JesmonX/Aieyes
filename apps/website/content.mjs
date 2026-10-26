@@ -160,6 +160,8 @@ export const en = {
       "platform": "linux",
       "title": "Linux",
       "subtitle": "Linux x64",
+      "note": "Testing across Linux distributions has been limited; support is currently theoretical. If you find any issues or details that affect your experience, please let us know.",
+      "feedback": "Report an issue",
       "downloads": [
         [
           "linux/x64/appimage",
@@ -365,6 +367,8 @@ export const zh = {
       "platform": "linux",
       "title": "Linux",
       "subtitle": "Linux x64",
+      "note": "Linux 各发行版的实测较少，目前仅为理论支持。如发现任何问题或影响体验的细节，欢迎反馈。",
+      "feedback": "反馈问题",
       "downloads": [
         [
           "linux/x64/appimage",
