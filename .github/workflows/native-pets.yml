@@ -2,6 +2,7 @@ name: Native pet graphics tests
 on:
   workflow_dispatch:
   push:
+    branches: ['**']
     paths: ['apps/macos/Sources/Aieyes/**', 'crates/core/src/pets.rs', 'crates/core/Cargo.toml', 'Cargo.*', 'scripts/verify-pets.swift', 'scripts/test-native-pets.sh', '.github/workflows/native-pets.yml']
   pull_request:
     paths: ['apps/macos/Sources/Aieyes/**', 'crates/core/src/pets.rs', 'crates/core/Cargo.toml', 'Cargo.*', 'scripts/verify-pets.swift', 'scripts/test-native-pets.sh', '.github/workflows/native-pets.yml']

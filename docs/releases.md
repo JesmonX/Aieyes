@@ -18,6 +18,25 @@ node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-r
 
 在 `docs/release-notes/<标签>.md` 编写更新日志，以最近一次已公开的稳定 Release 为起点，核对该标签到待发布提交之间的完整日志与最终差异。按功能和修复归纳整个版本区间，写明起止版本并附比较链接；不要只描述最后一个提交，也不要把期间已被替换的实现当作当前功能。Release 页面和应用内更新说明共用这份文件。
 
+## 发布推送只运行 Release
+
+普通 Core/macOS、Native pet 和 Desktop 工作流只接受分支推送；`v*` 标签仅启动 Release。Release 自身保留共享检查、完整 Rust 测试、浏览器与原生检查、四平台构建、签名和附件核验。
+
+发布准备提交完成后，先单独推送标签，再用空的同步提交把版本改动快进到 `main`。同步提交的 `[skip ci]` 跳过普通分支 CI；发布标签指向不含跳过标记的准备提交，所以 Release 正常启动。以后发布沿用此顺序，不将分支与标签一起推送，也不把跳过标记写进标签指向的提交。
+
+```sh
+# 在 main 上完成版本同步、发布说明及检查，提交发布准备改动。
+git commit -m "Prepare v0.1.61 release"
+git tag -a v0.1.61 -m "Aieyes v0.1.61"
+git push origin refs/tags/v0.1.61
+
+# 同步版本记录，验证由 Release 流水线承担，不再启动普通 CI。
+git commit --allow-empty -m "Sync v0.1.61 release to main [skip ci]"
+git push origin main
+```
+
+示例版本替换为本次待发布版本。必须继续跟踪 Release 到验证、四个平台构建和公开发布均成功，不能把标签推送成功当成已发布。
+
 ## 一次性配置更新签名
 
 更新签名不需要 Apple Developer 或 Windows 证书，但需要两组长期密钥。公钥内置应用；私钥仅用于发布签名。使用仓库 Variables/Secrets，不能把测试密钥用于正式更新，不能每次发布重新生成密钥。
