@@ -38,6 +38,8 @@ const {chromium} = require(process.env.AIEYES_PLAYWRIGHT_PATH || '../apps/deskto
       assert.equal(info.materials.main, 'mica');
       assert.equal(info.materials.floating, 'acrylic');
       await page.evaluate(() => AieyesApp.openSettings({category:'general', section:'desktop'}));
+      assert.equal(await page.locator('#material-main, #material-floating').count(), 0, 'Pet settings do not contain window materials');
+      await page.evaluate(() => AieyesApp.openSettings({category:'general', section:'appearance'}));
       for (const [main, floating] of [['acrylic','mica'], ['opaque','mica'], ['mica','opaque'], ['default','default'], ['acrylic','mica']]) {
         await page.locator('#material-main').selectOption(main);
         await page.waitForFunction(main => document.querySelector('#material-main')?.value === main && !document.querySelector('#material-main').disabled, main);

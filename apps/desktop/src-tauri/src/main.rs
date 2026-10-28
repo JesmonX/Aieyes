@@ -476,8 +476,8 @@ fn main() {
         .invoke_handler(move |invoke| {
             #[cfg(target_os = "linux")]
             let invoke = match linux_bridge::forward(invoke) {
-                Ok(()) => return true,
-                Err(invoke) => invoke,
+                None => return true,
+                Some(invoke) => invoke,
             };
             handler(invoke)
         })
@@ -486,13 +486,12 @@ fn main() {
     app.run(|app, event| {
         // Recreating the helper's only WebView must not end its GTK pet process.
         #[cfg(target_os = "linux")]
-        if linux_bridge::child() {
-            if let tauri::RunEvent::ExitRequested {
+        if linux_bridge::child()
+            && let tauri::RunEvent::ExitRequested {
                 code: None, api, ..
             } = &event
-            {
-                api.prevent_exit();
-            }
+        {
+            api.prevent_exit();
         }
         if matches!(event, tauri::RunEvent::Exit) {
             #[cfg(target_os = "linux")]

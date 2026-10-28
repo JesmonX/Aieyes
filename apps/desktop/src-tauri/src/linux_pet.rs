@@ -668,15 +668,13 @@ fn update_shape(s: &mut Surface) {
                             if opaque && start.is_none() {
                                 start = Some(x)
                             }
-                            if !opaque {
-                                if let Some(left) = start.take() {
-                                    rectangles.push(cairo::RectangleInt::new(
-                                        left + (6.0 * scale).round() as i32,
-                                        y,
-                                        x - left,
-                                        1,
-                                    ));
-                                }
+                            if !opaque && let Some(left) = start.take() {
+                                rectangles.push(cairo::RectangleInt::new(
+                                    left + (6.0 * scale).round() as i32,
+                                    y,
+                                    x - left,
+                                    1,
+                                ));
                             }
                         }
                     }

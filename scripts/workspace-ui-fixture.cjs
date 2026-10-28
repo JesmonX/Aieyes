@@ -10,6 +10,8 @@ function fixture({platform, failStatus = false}) {
   const record = {id: 'running', accountKey: 'codex:a0', kind: 'quota', status: 'active', samplingMode: 'manual', valuationMode: 'fiveHour', fiveHourValue: 20, weeklyValue: 100, weeklyDirectValue: 100, weeklyRatioValue: 110, startedAt: stamp - 100, checkpointAt: stamp, sourceIds: ['s-a0'], sourceNames: ['Codex 账户 0来源'], windowName: '5h', windowId: 'five', calculationNote: '测试样本', reason: '', consumedPercent: 10, totalTokens: 70000, pricedTokens: 70000, cost: 1, prices: []};
   const quotas = accounts.map(a => ({provider: a.provider, accountId: a.id, name: a.name, sourceId: 's-' + a.id, updatedAt: stamp, origin: 'live', windows: a.provider === 'deepseek' ? [] : [{id: 'five', name: '5h', windowMinutes: 300, usedPercent: 20, resetsAt: stamp + 1000}, {id: 'week', name: '7d', windowMinutes: 10080, usedPercent: 10, resetsAt: stamp + 100000}], credits: a.provider === 'codex' ? {balance: '100', unlimited: false} : null}));
   const nav = window.navigationFixture = {settings, quotas, records: [record, {...record, id: 'history', status: 'completed', checkpointAt: stamp - 20}], calls: [], listeners: {}, failSave: false, holdSave: false, failStatus};
+  const materialPreferences = {main:'default', floating:'default'};
+  const desktopInfo = () => ({platform, page:'agent', mode:'floating', effectiveMode:'floating', sessions:[], panelOpen:true, materialPreferences:{...materialPreferences}, materials:platform === 'windows' ? {main:materialPreferences.main === 'default' ? 'mica' : materialPreferences.main, floating:materialPreferences.floating === 'default' ? 'acrylic' : materialPreferences.floating} : {main:'opaque',floating:'opaque'}});
   const copy = v => structuredClone(v);
   nav.emit = (name, payload) => Promise.all((nav.listeners[name] || []).map(fn => fn({payload})));
   function merge(base, next, current) {
@@ -26,7 +28,8 @@ function fixture({platform, failStatus = false}) {
     window: {getCurrentWindow: () => ({async isMaximized() {return false;}, async onResized() {return () => {};}})},
     core: {async invoke(command, args) {
       nav.calls.push({command, args: copy(args)});
-      if (command === 'desktop_info' || command === 'desktop_panel') return {platform, page: 'agent', mode: 'floating', effectiveMode: 'floating', sessions: [], panelOpen: true, materials: {main: 'opaque', floating: 'opaque'}};
+      if (command === 'desktop_info' || command === 'desktop_panel') return desktopInfo();
+      if (command === 'desktop_materials') {Object.assign(materialPreferences,args);return desktopInfo();}
       if (command !== 'engine_call') return {};
       const {method, params} = args;
       if (method === 'hello') return {version: 'fixture'};

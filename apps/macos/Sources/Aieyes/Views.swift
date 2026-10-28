@@ -665,30 +665,98 @@ struct UsageChart: View, Equatable {
     }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
-        let _ = interfaceLanguage;
+        let _ = interfaceLanguage
         VStack(alignment: .leading, spacing: 8) {
-            Chart {
-                ForEach(rows.filter { !hidden.contains($0.model) }) { row in
-                    BarMark(x: .value(L("日期"), row.day), y: .value(cost ? "USD" : "Token", cost ? row.usage.cost : row.usage.total)).foregroundStyle(by: .value(L("模型"), row.model)).accessibilityLabel(Text(modelNames[row.model] ?? row.model)).accessibilityValue(Text(row.day + " · " + (cost ? Format.money(row.usage.cost) + " USD" : Format.compact(row.usage.total) + " Token")))
-                }
-                if let selected { RuleMark(x: .value(L("所选日期"), selected)).foregroundStyle(Palette.accent).lineStyle(StrokeStyle(lineWidth: 1, dash: [3])) }
-            }
-            .chartForegroundStyleScale(domain: models, range: models.map { Palette.model($0, preset: chartPalette, contrast: chartContrast) })
-            .chartXScale(domain: data.dates).chartLegend(.hidden)
-            .chartXSelection(value: Binding(get: { selected }, set: { if selected != $0 { selected = $0 } }))
-            .chartXAxis { AxisMarks(values: data.axisDates) { value in AxisValueLabel { if let label = value.as(String.self) { Text(String(label.suffix(5))).font(AppFont.secondary) } } } }
-            .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine().foregroundStyle(.primary.opacity(DesignTokens.chartGridOpacity)); AxisValueLabel { if let n = value.as(Double.self) { Text(cost ? Format.money(n) : Format.compact(n)).font(AppFont.secondary) } } } }
-            .chartOverlay { proxy in GeometryReader { geometry in Color.clear.contentShape(Rectangle()).onContinuousHover { phase in if case .active(let point) = phase, let frame = proxy.plotFrame { let next = proxy.value(atX: point.x - geometry[frame].minX, as: String.self); if selected != next { selected = next } } } } }
-            .frame(height: DesignTokens.chartHeight).focusable().onKeyPress(.leftArrow) { move(-1); return .handled }.onKeyPress(.rightArrow) { move(1); return .handled }
-            .accessibilityElement(children: .contain).accessibilityLabel(L("每日用量")).accessibilityHint(L("左右方向键选择日期，下方提供精确读数"))
-            Group { if let day = days.first(where: { $0.key == selected }) {
-                Text(day.key + " · " + (cost ? String(format: "%.2f USD", day.cost) : Format.compact(day.total) + " Token")).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
-            }
-            }.frame(height: DesignTokens.chartReadingHeight, alignment: .leading)
-            DisclosureGroup(L("模型图例"), isExpanded: $legendExpanded) {
-                FlowLayout { ForEach(models, id: \.self) { name in Button { if hidden.contains(name) { hidden.remove(name) } else { hidden.insert(name) } } label: { HStack(spacing: 6) { Circle().fill(Palette.model(name, preset: chartPalette, contrast: chartContrast)).frame(width: DesignTokens.chartLegendDot, height: DesignTokens.chartLegendDot); Label(modelNames[name] ?? name, systemImage: hidden.contains(name) ? "eye.slash" : "eye").strikethrough(hidden.contains(name)) }.font(AppFont.secondary) }.buttonStyle(.plain).help(modelNames[name] ?? name).accessibilityLabel((hidden.contains(name) ? L("显示模型 ") : L("隐藏模型 ")) + (modelNames[name] ?? name)) } }
-            }.font(AppFont.secondary)
+            usageChart
+            selectedReading
+            modelLegend
         }
+    }
+    private var visibleRows: [DayModel] { rows.filter { !hidden.contains($0.model) } }
+    private var modelColors: [Color] { models.map { Palette.model($0, preset: chartPalette, contrast: chartContrast) } }
+    private var usageChart: some View {
+        Chart {
+            ForEach(visibleRows) { row in usageBar(row) }
+            if let selected {
+                RuleMark(x: .value(L("所选日期"), selected))
+                    .foregroundStyle(Palette.accent)
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3]))
+            }
+        }
+        .chartForegroundStyleScale(domain: models, range: modelColors)
+        .chartXScale(domain: data.dates)
+        .chartLegend(.hidden)
+        .chartXSelection(value: Binding(get: { selected }, set: { if selected != $0 { selected = $0 } }))
+        .chartXAxis { dateAxis }
+        .chartYAxis { usageAxis }
+        .chartOverlay { proxy in hoverOverlay(proxy) }
+        .frame(height: DesignTokens.chartHeight)
+        .focusable()
+        .onKeyPress(.leftArrow) { move(-1); return .handled }
+        .onKeyPress(.rightArrow) { move(1); return .handled }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(L("每日用量"))
+        .accessibilityHint(L("左右方向键选择日期，下方提供精确读数"))
+    }
+    private func usageBar(_ row: DayModel) -> some ChartContent {
+        let amount = cost ? row.usage.cost : row.usage.total
+        let reading = cost ? Format.money(amount) + " USD" : Format.compact(amount) + " Token"
+        return BarMark(x: .value(L("日期"), row.day), y: .value(cost ? "USD" : "Token", amount))
+            .foregroundStyle(by: .value(L("模型"), row.model))
+            .accessibilityLabel(Text(modelNames[row.model] ?? row.model))
+            .accessibilityValue(Text(row.day + " · " + reading))
+    }
+    private var dateAxis: some AxisContent {
+        AxisMarks(values: data.axisDates) { value in
+            AxisValueLabel {
+                if let label = value.as(String.self) { Text(String(label.suffix(5))).font(AppFont.secondary) }
+            }
+        }
+    }
+    private var usageAxis: some AxisContent {
+        AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+            AxisGridLine().foregroundStyle(.primary.opacity(DesignTokens.chartGridOpacity))
+            AxisValueLabel {
+                if let amount = value.as(Double.self) { Text(cost ? Format.money(amount) : Format.compact(amount)).font(AppFont.secondary) }
+            }
+        }
+    }
+    private func hoverOverlay(_ proxy: ChartProxy) -> some View {
+        GeometryReader { geometry in
+            Color.clear.contentShape(Rectangle()).onContinuousHover { phase in
+                if case .active(let point) = phase, let frame = proxy.plotFrame {
+                    let next = proxy.value(atX: point.x - geometry[frame].minX, as: String.self)
+                    if selected != next { selected = next }
+                }
+            }
+        }
+    }
+    private var selectedReading: some View {
+        Group {
+            if let day = days.first(where: { $0.key == selected }) {
+                Text(day.key + " · " + (cost ? String(format: "%.2f USD", day.cost) : Format.compact(day.total) + " Token"))
+                    .font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
+            }
+        }.frame(height: DesignTokens.chartReadingHeight, alignment: .leading)
+    }
+    private var modelLegend: some View {
+        DisclosureGroup(L("模型图例"), isExpanded: $legendExpanded) {
+            FlowLayout { ForEach(models, id: \.self) { name in legendButton(name) } }
+        }.font(AppFont.secondary)
+    }
+    private func legendButton(_ name: String) -> some View {
+        let title = modelNames[name] ?? name
+        let isHidden = hidden.contains(name)
+        return Button {
+            if isHidden { hidden.remove(name) } else { hidden.insert(name) }
+        } label: {
+            HStack(spacing: 6) {
+                Circle().fill(Palette.model(name, preset: chartPalette, contrast: chartContrast))
+                    .frame(width: DesignTokens.chartLegendDot, height: DesignTokens.chartLegendDot)
+                Label(title, systemImage: isHidden ? "eye.slash" : "eye").strikethrough(isHidden)
+            }.font(AppFont.secondary)
+        }.buttonStyle(.plain).help(title)
+            .accessibilityLabel((isHidden ? L("显示模型 ") : L("隐藏模型 ")) + title)
     }
     private func move(_ offset: Int) { guard !days.isEmpty else { return }; let index = selected.flatMap { key in days.firstIndex { $0.key == key } } ?? 0; selected = days[min(days.count - 1, max(0, index + offset))].key }
 }

@@ -86,6 +86,17 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
 
       await page.locator('[data-settings-tab=general]').click();
       assert.deepEqual(await page.locator('[data-general-page]').allTextContents(), ['外观','桌宠与会话','网络代理','刷新与历史','通知','更新与关于']);
+      assert.equal(await page.locator('[data-general-section=appearance] #material-main, [data-general-section=appearance] #material-floating').count(), platform === 'windows' ? 2 : 0, 'Windows material controls belong to Appearance');
+      await openGeneralPage(page, 'desktop');
+      assert.equal(await page.locator('#material-main, #material-floating').count(), 0, 'Pet settings contain no window material controls');
+      await openGeneralPage(page, 'appearance');
+      if (platform === 'windows') {
+        await page.locator('#material-main').selectOption('acrylic');
+        await page.waitForFunction(() => !document.querySelector('#material-main').disabled);
+        assert.equal(await page.locator('#material-floating').inputValue(), 'default', 'Changing main material preserves the panel preference');
+        assert.match(await page.locator('#material-actual-main').innerText(), /Acrylic/);
+        assert.deepEqual(await page.evaluate(() => navigationFixture.calls.filter(call => call.command === 'desktop_materials').at(-1).args), {main:'acrylic',floating:'default'}, 'Appearance controls call the native material command');
+      }
       for (const shortcut of ['Control+,', 'Meta+,']) {
         await page.keyboard.press(shortcut);
         assert.equal(await page.evaluate(() => state.settingsTab), 'general', shortcut + ' opens preferences');

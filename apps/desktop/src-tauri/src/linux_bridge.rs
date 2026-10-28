@@ -61,10 +61,10 @@ pub fn cached(app: &tauri::AppHandle) -> Option<Value> {
     })
 }
 pub fn remember(app: &tauri::AppHandle, info: &Value) {
-    if let Some(b) = app.try_state::<Bridge>() {
-        if let Ok(mut cached) = b.info.lock() {
-            *cached = info.clone();
-        }
+    if let Some(b) = app.try_state::<Bridge>()
+        && let Ok(mut cached) = b.info.lock()
+    {
+        *cached = info.clone();
     }
 }
 pub fn failed(app: &tauri::AppHandle) -> bool {
@@ -100,21 +100,22 @@ pub fn send(app: &tauri::AppHandle, name: &str, payload: Value) -> bool {
 pub fn request(app: &tauri::AppHandle, command: &str, args: Value) {
     let _ = write(app, json!({"type":"request","command":command,"args":args}));
 }
-pub fn forward(invoke: tauri::ipc::Invoke) -> Result<(), tauri::ipc::Invoke> {
+/// Return the invocation only when it still needs local dispatch.
+pub fn forward(invoke: tauri::ipc::Invoke) -> Option<tauri::ipc::Invoke> {
     if !child() {
-        return Err(invoke);
+        return Some(invoke);
     }
     // File pickers belong to the requesting X11 window. Renderer readiness is local.
     if matches!(
         invoke.message.command(),
         "desktop_panel_ready" | "select_local_path" | "check_local_path"
     ) {
-        return Err(invoke);
+        return Some(invoke);
     }
     let app = invoke.message.webview().app_handle().clone();
     let Some(bridge) = app.try_state::<Bridge>() else {
         invoke.resolver.reject("辅助进程连接不可用");
-        return Ok(());
+        return None;
     };
     let id = bridge.sequence.fetch_add(1, Ordering::Relaxed);
     let args = match invoke.message.payload() {
@@ -126,19 +127,18 @@ pub fn forward(invoke: tauri::ipc::Invoke) -> Result<(), tauri::ipc::Invoke> {
         let mut pending = bridge.pending.lock().unwrap();
         if pending.len() >= 128 {
             invoke.resolver.reject("辅助进程请求过多，请稍后重试");
-            return Ok(());
+            return None;
         }
         pending.insert(id, invoke.resolver);
     }
     if !write(
         &app,
         json!({"type":"request","id":id,"command":command,"args":args}),
-    ) {
-        if let Some(resolver) = bridge.pending.lock().unwrap().remove(&id) {
-            resolver.reject("辅助进程连接已断开");
-        }
+    ) && let Some(resolver) = bridge.pending.lock().unwrap().remove(&id)
+    {
+        resolver.reject("辅助进程连接已断开");
     }
-    Ok(())
+    None
 }
 // Called before dispatching a native pet/menu action in the child.
 pub fn action(app: &tauri::AppHandle, action: &str) -> bool {

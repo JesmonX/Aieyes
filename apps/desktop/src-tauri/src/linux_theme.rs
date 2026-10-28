@@ -55,10 +55,9 @@ pub fn setup(app: &AppHandle) {
         gio::DBusCallFlags::NONE,
         1500,
         gio::Cancellable::NONE,
-    ) {
-        if let Some(value) = reply.child_value(0).as_variant().and_then(|v| scheme(&v)) {
-            PORTAL.store(value.min(2) as u8, Ordering::Relaxed);
-        }
+    ) && let Some(value) = reply.child_value(0).as_variant().and_then(|v| scheme(&v))
+    {
+        PORTAL.store(value.min(2) as u8, Ordering::Relaxed);
     }
     let handle = app.clone();
     bus.signal_subscribe(

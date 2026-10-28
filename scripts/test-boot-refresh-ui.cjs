@@ -7,6 +7,9 @@ const {serveFont}=require('./ui-test-helpers.cjs');
 const project=path.resolve(__dirname,'..'),root=fs.mkdtempSync(path.join(os.tmpdir(),'aieyes-boot-')),home=path.join(root,'home');fs.mkdirSync(home);
 // Empty data directory and home: the real core starts as a fresh install, without the developer's agent data.
 const core=spawn(path.join(project,'target/debug/aieyes-core'),['--data-dir',path.join(root,'data')],{stdio:['pipe','pipe','pipe'],env:{...process.env,HOME:home,USERPROFILE:home,CLAUDE_CONFIG_DIR:path.join(home,'.claude'),CODEX_HOME:path.join(home,'.codex')}});
+// `kill()` requests termination; Windows can retain SQLite/credential handles
+// until the process and its stdio have actually closed.
+const coreClosed=new Promise(resolve=>core.once('close',resolve));
 let counter=0,stderr='',settingsReads=0;const pending=new Map();core.stderr.on('data',b=>stderr+=b);
 readline.createInterface({input:core.stdout}).on('line',line=>{const r=JSON.parse(line),p=pending.get(r.id);if(!p)return;pending.delete(r.id);if(r.error)p.reject(new Error(r.error.message));else p.resolve(r.result);});
 core.on('exit',()=>{for(const p of pending.values())p.reject(new Error('Core exited: '+stderr));pending.clear();});
@@ -49,5 +52,11 @@ function browserFixture(panel){
       await page.close();
     }
     console.log('Boot refresh race UI checks passed');
-  } finally {await browser?.close();server.close();core.kill();fs.rmSync(root,{recursive:true,force:true});}
+  } finally {
+    await browser?.close();
+    await new Promise(resolve=>server.close(resolve));
+    core.kill();
+    await coreClosed;
+    fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+  }
 })().catch(error=>{console.error(error);process.exitCode=1;});

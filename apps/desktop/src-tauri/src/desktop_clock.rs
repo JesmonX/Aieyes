@@ -8,7 +8,7 @@ pub fn hour_cycle() -> Option<&'static str> {
         };
         let mut value = [0u16; 16];
         let count = unsafe { GetLocaleInfoEx(PCWSTR::null(), LOCALE_ITIME, Some(&mut value)) };
-        return if count > 1 {
+        if count > 1 {
             Some(if value[0] == b'0' as u16 {
                 "h12"
             } else {
@@ -16,7 +16,7 @@ pub fn hour_cycle() -> Option<&'static str> {
             })
         } else {
             None
-        };
+        }
     }
     #[cfg(target_os = "linux")]
     {
@@ -29,19 +29,18 @@ pub fn hour_cycle() -> Option<&'static str> {
             .any(|name| matches!(name, "gnome" | "unity" | "cinnamon" | "budgie"))
             && let Some(schema) = gio::SettingsSchemaSource::default()
                 .and_then(|source| source.lookup("org.gnome.desktop.interface", true))
+            && schema.has_key("clock-format")
         {
-            if schema.has_key("clock-format") {
-                let settings = gio::Settings::new_full(&schema, gio::SettingsBackend::NONE, None);
-                return match settings.string("clock-format").as_str() {
-                    "12h" => Some("h12"),
-                    "24h" => Some("h23"),
-                    _ => None,
-                };
-            }
+            let settings = gio::Settings::new_full(&schema, gio::SettingsBackend::NONE, None);
+            return match settings.string("clock-format").as_str() {
+                "12h" => Some("h12"),
+                "24h" => Some("h23"),
+                _ => None,
+            };
         }
         // Plasma's regional time format is LC_TIME. A GNOME schema can be installed
         // on KDE/Xfce too; its default must not override that desktop's locale.
-        return locale_hour_cycle();
+        locale_hour_cycle()
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     None

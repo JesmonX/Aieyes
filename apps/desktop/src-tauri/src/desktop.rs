@@ -644,67 +644,66 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         _tray: Mutex::new(None),
     });
     #[cfg(target_os = "linux")]
-    if !crate::linux_bridge::child() {
-        if let Some(window) = app.get_webview_window("main") {
-            let saved = app
-                .state::<Desktop>()
-                .state
-                .lock()
-                .ok()
-                .and_then(|s| s.preferences.main_window);
-            let monitors = window.available_monitors().unwrap_or_default();
-            let monitor = saved
-                .and_then(|p| p.position)
-                .and_then(|pos| {
-                    monitors
-                        .iter()
-                        .find(|m| {
-                            let a = m.work_area();
-                            pos.x >= a.position.x
-                                && pos.y >= a.position.y
-                                && pos.x < a.position.x + a.size.width as i32
-                                && pos.y < a.position.y + a.size.height as i32
-                        })
-                        .cloned()
-                })
-                .or_else(|| window.primary_monitor().ok().flatten())
-                .or_else(|| monitors.first().cloned());
-            if let Some(monitor) = monitor {
-                let area = monitor.work_area();
-                let scale = monitor.scale_factor();
-                let requested = saved
-                    .map(|s| (s.width.clamp(760.0, 3840.0), s.height.clamp(480.0, 2160.0)))
-                    .unwrap_or((1120.0, 800.0));
-                let position = saved.and_then(|s| s.position).unwrap_or(Position {
-                    x: area.position.x,
-                    y: area.position.y,
-                });
-                let (position, size) = main_window_bounds(
-                    position,
-                    requested,
-                    (
-                        area.position.x,
-                        area.position.y,
-                        area.size.width,
-                        area.size.height,
-                    ),
-                    scale,
-                );
-                let _ = window.set_min_size(Some(tauri::LogicalSize::new(
-                    760.0_f64.min(area.size.width as f64 / scale),
-                    480.0_f64.min(area.size.height as f64 / scale),
-                )));
-                let _ = window.set_size(PhysicalSize::new(size.0, size.1));
-                // Compositors own Wayland placement; an X11 position is never
-                // replayed into a Wayland session or outside a remaining monitor.
-                if std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland") && saved.is_some()
-                {
-                    let _ = window.set_position(PhysicalPosition::new(position.x, position.y));
-                }
+    if !crate::linux_bridge::child()
+        && let Some(window) = app.get_webview_window("main")
+    {
+        let saved = app
+            .state::<Desktop>()
+            .state
+            .lock()
+            .ok()
+            .and_then(|s| s.preferences.main_window);
+        let monitors = window.available_monitors().unwrap_or_default();
+        let monitor = saved
+            .and_then(|p| p.position)
+            .and_then(|pos| {
+                monitors
+                    .iter()
+                    .find(|m| {
+                        let a = m.work_area();
+                        pos.x >= a.position.x
+                            && pos.y >= a.position.y
+                            && pos.x < a.position.x + a.size.width as i32
+                            && pos.y < a.position.y + a.size.height as i32
+                    })
+                    .cloned()
+            })
+            .or_else(|| window.primary_monitor().ok().flatten())
+            .or_else(|| monitors.first().cloned());
+        if let Some(monitor) = monitor {
+            let area = monitor.work_area();
+            let scale = monitor.scale_factor();
+            let requested = saved
+                .map(|s| (s.width.clamp(760.0, 3840.0), s.height.clamp(480.0, 2160.0)))
+                .unwrap_or((1120.0, 800.0));
+            let position = saved.and_then(|s| s.position).unwrap_or(Position {
+                x: area.position.x,
+                y: area.position.y,
+            });
+            let (position, size) = main_window_bounds(
+                position,
+                requested,
+                (
+                    area.position.x,
+                    area.position.y,
+                    area.size.width,
+                    area.size.height,
+                ),
+                scale,
+            );
+            let _ = window.set_min_size(Some(tauri::LogicalSize::new(
+                760.0_f64.min(area.size.width as f64 / scale),
+                480.0_f64.min(area.size.height as f64 / scale),
+            )));
+            let _ = window.set_size(PhysicalSize::new(size.0, size.1));
+            // Compositors own Wayland placement; an X11 position is never
+            // replayed into a Wayland session or outside a remaining monitor.
+            if std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland") && saved.is_some() {
+                let _ = window.set_position(PhysicalPosition::new(position.x, position.y));
             }
-            if saved.is_some_and(|s| s.maximized) {
-                let _ = window.maximize();
-            }
+        }
+        if saved.is_some_and(|s| s.maximized) {
+            let _ = window.maximize();
         }
     }
     #[cfg(target_os = "linux")]
@@ -1873,10 +1872,10 @@ fn window_corners() -> &'static str {
 #[tauri::command]
 pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
     #[cfg(target_os = "linux")]
-    if crate::linux_bridge::child() {
-        if let Some(info) = crate::linux_bridge::cached(&app) {
-            return Ok(info);
-        }
+    if crate::linux_bridge::child()
+        && let Some(info) = crate::linux_bridge::cached(&app)
+    {
+        return Ok(info);
     }
     let desktop = app.state::<Desktop>();
     #[cfg(target_os = "linux")]
@@ -2657,44 +2656,41 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             event,
             tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
         )
+        && let Some(desktop) = window.app_handle().try_state::<Desktop>()
+        && let Ok(mut state) = desktop.state.lock()
     {
-        if let Some(desktop) = window.app_handle().try_state::<Desktop>() {
-            if let Ok(mut state) = desktop.state.lock() {
-                let maximized = window.is_maximized().unwrap_or(false);
-                let previous = state.preferences.main_window;
-                let size = window
-                    .inner_size()
+        let maximized = window.is_maximized().unwrap_or(false);
+        let previous = state.preferences.main_window;
+        let size = window
+            .inner_size()
+            .ok()
+            .map(|size| size.to_logical::<f64>(window.scale_factor().unwrap_or(1.0)));
+        if let Some(size) = size {
+            let (width, height) = if maximized {
+                previous
+                    .map(|p| (p.width, p.height))
+                    .unwrap_or((1100.0, 760.0))
+            } else {
+                (size.width, size.height)
+            };
+            let position = if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
+                None
+            } else if maximized {
+                previous.and_then(|p| p.position)
+            } else {
+                window
+                    .outer_position()
                     .ok()
-                    .map(|size| size.to_logical::<f64>(window.scale_factor().unwrap_or(1.0)));
-                if let Some(size) = size {
-                    let (width, height) = if maximized {
-                        previous
-                            .map(|p| (p.width, p.height))
-                            .unwrap_or((1100.0, 760.0))
-                    } else {
-                        (size.width, size.height)
-                    };
-                    let position = if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland")
-                    {
-                        None
-                    } else if maximized {
-                        previous.and_then(|p| p.position)
-                    } else {
-                        window
-                            .outer_position()
-                            .ok()
-                            .map(|p| Position { x: p.x, y: p.y })
-                    };
-                    if width >= 760.0 && height >= 480.0 {
-                        state.preferences.main_window = Some(MainWindowPreferences {
-                            width,
-                            height,
-                            maximized,
-                            position,
-                        });
-                        state.dirty = true;
-                    }
-                }
+                    .map(|p| Position { x: p.x, y: p.y })
+            };
+            if width >= 760.0 && height >= 480.0 {
+                state.preferences.main_window = Some(MainWindowPreferences {
+                    width,
+                    height,
+                    maximized,
+                    position,
+                });
+                state.dirty = true;
             }
         }
     }
@@ -3019,6 +3015,54 @@ pub(crate) fn refresh_tray_icon(app: &AppHandle) {
     tray_set_icon(app, phase, false);
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn helper_status(app: &AppHandle, info: Value) {
+    crate::linux_bridge::remember(app, &info);
+    if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+        state.floating = info["petEnabled"] == true;
+        state.visible = state.floating && info["hidden"] != true;
+        state.hidden = info["hidden"] == true;
+        state.pin = info["panelPinned"] == true;
+        state.preferences.pet_scale = info["petScale"].as_f64().unwrap_or(1.0);
+        state.preferences.show_count = info["showCount"] == true;
+        state.pet_asset = json!({"pet":info["petAsset"]});
+        if let Some(page) = info["panelPage"].as_str() {
+            state.panel_page = page.into();
+        }
+    }
+    if let Some(language) = info["language"].as_str() {
+        crate::localization::set_language(language);
+    }
+    app.set_theme(Some(if info["dark"] == true {
+        tauri::Theme::Dark
+    } else {
+        tauri::Theme::Light
+    }));
+    if let Some(pet) = app.try_state::<crate::native_pet::NativePet>() {
+        pet.status(info.clone());
+        pet.visible(info["petEnabled"] == true && info["hidden"] != true);
+    }
+}
+#[cfg(target_os = "linux")]
+pub(crate) fn helper_control(app: &AppHandle, name: &str, payload: Value) {
+    match name {
+        "status" => helper_status(app, payload),
+        "panel" => {
+            let _ = set_native_panel_on_ui(app, payload == true);
+        }
+        "refresh" => {
+            let _ = refresh_floating(app);
+        }
+        "position" => {
+            if let Some(pet) = app.try_state::<crate::native_pet::NativePet>() {
+                let pos = serde_json::from_value::<Option<Position>>(payload).unwrap_or(None);
+                pet.position(pos.map(|p| (p.x, p.y)));
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3306,53 +3350,5 @@ mod tests {
         assert_eq!(size, (1600, 1000));
         let (_, size) = main_window_bounds(Position { x: -1700, y: 80 }, (800.0, 600.0), area, 1.0);
         assert_eq!(size, (800, 600));
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn helper_status(app: &AppHandle, info: Value) {
-    crate::linux_bridge::remember(app, &info);
-    if let Ok(mut state) = app.state::<Desktop>().state.lock() {
-        state.floating = info["petEnabled"] == true;
-        state.visible = state.floating && info["hidden"] != true;
-        state.hidden = info["hidden"] == true;
-        state.pin = info["panelPinned"] == true;
-        state.preferences.pet_scale = info["petScale"].as_f64().unwrap_or(1.0);
-        state.preferences.show_count = info["showCount"] == true;
-        state.pet_asset = json!({"pet":info["petAsset"]});
-        if let Some(page) = info["panelPage"].as_str() {
-            state.panel_page = page.into();
-        }
-    }
-    if let Some(language) = info["language"].as_str() {
-        crate::localization::set_language(language);
-    }
-    app.set_theme(Some(if info["dark"] == true {
-        tauri::Theme::Dark
-    } else {
-        tauri::Theme::Light
-    }));
-    if let Some(pet) = app.try_state::<crate::native_pet::NativePet>() {
-        pet.status(info.clone());
-        pet.visible(info["petEnabled"] == true && info["hidden"] != true);
-    }
-}
-#[cfg(target_os = "linux")]
-pub(crate) fn helper_control(app: &AppHandle, name: &str, payload: Value) {
-    match name {
-        "status" => helper_status(app, payload),
-        "panel" => {
-            let _ = set_native_panel_on_ui(app, payload == true);
-        }
-        "refresh" => {
-            let _ = refresh_floating(app);
-        }
-        "position" => {
-            if let Some(pet) = app.try_state::<crate::native_pet::NativePet>() {
-                let pos = serde_json::from_value::<Option<Position>>(payload).unwrap_or(None);
-                pet.position(pos.map(|p| (p.x, p.y)));
-            }
-        }
-        _ => {}
     }
 }
