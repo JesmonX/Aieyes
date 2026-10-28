@@ -201,15 +201,24 @@ private struct DescendantLayoutFixture: View {
         model.sessions = [LiveSession(id: "fixture",source: "fixture",phase: .working,updatedAt: Date())]
         try await wait();precondition(sessionUpdates == 1 && projection.snapshot.sessions.count == 1)
         UserDefaults.standard.set(true,forKey: "aieyes.pet.enabled");UserDefaults.standard.set(1.0,forKey: "aieyes.pet.scale")
+        // Fullscreen transitions have their own integration checks. Keep this
+        // defaults-deduplication fixture independent of other desktop windows.
+        UserDefaults.standard.set(false,forKey: "aieyes.pet.hideInFullscreen")
         let pet = PetWindowController(model: model) { _,_ in };defer { pet.window.orderOut(nil) }
-        try await wait(100)
+        // AppKit reports initial occlusion asynchronously, especially on cold CI
+        // desktops. Do not count that first visibility publication as a response
+        // to the unrelated defaults writes below.
+        try await waitUntil("Pet visibility did not finish initializing") {
+            pet.window.isVisible && pet.window.occlusionState.contains(.visible) && model.live.petVisible
+        }
         var visibilityUpdates = 0
         let visibleObserver = model.live.$petVisible.dropFirst().sink { _ in visibilityUpdates += 1 };defer { visibleObserver.cancel() }
         let petOrigin = pet.window.frame.origin
         for i in 0..<30 { UserDefaults.standard.set(i,forKey: "view.scroll.v2.unrelated") }
         NotificationCenter.default.post(name: UserDefaults.didChangeNotification,object: nil)
         try await wait(100)
-        precondition(visibilityUpdates == 0 && pet.window.frame.origin == petOrigin)
+        precondition(visibilityUpdates == 0, "Unrelated defaults published \(visibilityUpdates) pet visibility updates after initialization")
+        precondition(pet.window.frame.origin == petOrigin, "Unrelated defaults moved the pet from \(petOrigin) to \(pet.window.frame.origin)")
         UserDefaults.standard.set(false,forKey: "aieyes.pet.enabled");NotificationCenter.default.post(name: UserDefaults.didChangeNotification,object: nil)
         try await wait();precondition(!pet.window.isVisible && !model.live.petVisible)
         UserDefaults.standard.set(1.25,forKey: "aieyes.pet.scale");UserDefaults.standard.set(true,forKey: "aieyes.pet.enabled")
