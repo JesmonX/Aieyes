@@ -13,7 +13,10 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::{Gdi::*, GdiPlus::*},
-        System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
+        System::{
+            LibraryLoader::GetModuleHandleW,
+            Threading::{GetCurrentProcessId, GetCurrentThreadId},
+        },
         UI::{
             Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
             Controls::*,
@@ -498,8 +501,55 @@ unsafe fn pet_scale(hwnd: HWND) -> f64 {
 unsafe fn is_topmost(hwnd: HWND) -> bool {
     GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0
 }
-/// A fullscreen Direct3D app, presentation mode or another fullscreen app ("busy") is in front:
-/// the pet hides and session sounds stay silent until it ends.
+/// Check the foreground client area as well as the shell's notification heuristic.
+/// Borderless fullscreen windows are not consistently reported as QUNS_BUSY on every shell.
+unsafe fn foreground_fullscreen() -> bool {
+    let hwnd = GetForegroundWindow();
+    if hwnd.is_invalid()
+        || hwnd == GetDesktopWindow()
+        || hwnd == GetShellWindow()
+        || !IsWindowVisible(hwnd).as_bool()
+        || IsIconic(hwnd).as_bool()
+    {
+        return false;
+    }
+    let mut process = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut process));
+    if process == 0 || process == GetCurrentProcessId() {
+        return false;
+    }
+    let mut class = [0u16; 64];
+    let length = GetClassNameW(hwnd, &mut class) as usize;
+    if matches!(
+        String::from_utf16_lossy(&class[..length]).as_str(),
+        "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+    ) {
+        return false;
+    }
+    let mut client = RECT::default();
+    let mut origin = POINT::default();
+    let mut monitor = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if GetClientRect(hwnd, &mut client).is_err()
+        || !ClientToScreen(hwnd, &mut origin).as_bool()
+        || !GetMonitorInfoW(
+            MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+            &mut monitor,
+        )
+        .as_bool()
+    {
+        return false;
+    }
+    // Client bounds exclude the caption and resize frame. An ordinary maximized
+    // window therefore does not count, even when the taskbar auto-hides.
+    origin.x <= monitor.rcMonitor.left
+        && origin.y <= monitor.rcMonitor.top
+        && origin.x + client.right >= monitor.rcMonitor.right
+        && origin.y + client.bottom >= monitor.rcMonitor.bottom
+}
+/// Fullscreen apps and presentation mode hide the pet and silence session sounds.
 pub fn quiet_desktop() -> bool {
     use windows::Win32::UI::Shell::{
         QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
@@ -512,7 +562,7 @@ pub fn quiet_desktop() -> bool {
             QUNS_PRESENTATION_MODE,
         ]
         .contains(&state)
-    })
+    }) || unsafe { foreground_fullscreen() }
 }
 unsafe fn raise_pet(hwnd: HWND, surface: &Surface, show: bool) {
     let mut flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;

@@ -21,6 +21,7 @@ public static class PanelProbe {
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int width,int height,uint flags);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("shell32.dll")] public static extern int SHQueryUserNotificationState(out int state);
   [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point p);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h,uint flags);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
@@ -117,14 +118,26 @@ function Verify-PetTopmost {
     Screenshot 'pet-topmost-recovered'
 }
 function Verify-QuietDesktop {
-    # Windows reports a borderless window covering the monitor as a fullscreen app (QUNS_BUSY).
+    # Explicit monitor bounds make this fullscreen, independently of how WinForms
+    # maximizes a borderless form on a particular Windows/.NET version.
     $before=Bounds $script:pet
     $fullscreen=New-Object System.Windows.Forms.Form
-    $fullscreen.Text='Aieyes isolated fullscreen app';$fullscreen.FormBorderStyle='None';$fullscreen.WindowState='Maximized';$fullscreen.BackColor=[Drawing.Color]::FromArgb(20,24,31)
+    $screen=[System.Windows.Forms.Screen]::FromHandle($script:pet)
+    $fullscreen.Text='Aieyes isolated fullscreen app';$fullscreen.FormBorderStyle='None';$fullscreen.StartPosition='Manual';$fullscreen.Bounds=$screen.Bounds;$fullscreen.BackColor=[Drawing.Color]::FromArgb(20,24,31)
     try {
         $fullscreen.Show();$fullscreen.Activate();$null=[PanelProbe]::SetForegroundWindow($fullscreen.Handle)
+        Wait-For { [PanelProbe]::GetForegroundWindow() -eq $fullscreen.Handle } 'fullscreen fixture has keyboard focus' 3
+        $rect=Bounds $fullscreen.Handle
+        $state=0;$hr=[PanelProbe]::SHQueryUserNotificationState([ref]$state)
+        $result.fullscreen=@{bounds=@($rect.Left,$rect.Top,$rect.Right,$rect.Bottom);monitor=@($screen.Bounds.Left,$screen.Bounds.Top,$screen.Bounds.Right,$screen.Bounds.Bottom);notificationState=$state;notificationHResult=$hr}
+        Assert-That ($rect.Left -eq $screen.Bounds.Left -and $rect.Top -eq $screen.Bounds.Top -and $rect.Right -eq $screen.Bounds.Right -and $rect.Bottom -eq $screen.Bounds.Bottom) 'fullscreen fixture covers the monitor including taskbar'
+        Screenshot 'fullscreen'
         Wait-For { -not [PanelProbe]::IsWindowVisible($script:pet) } 'pet steps aside for fullscreen app' 8
         Assert-That (-not [PanelProbe]::IsWindowVisible($script:pet)) 'fullscreen app hides the pet'
+        # The same foreground application occupying only the work area is not fullscreen.
+        $fullscreen.Bounds=$screen.WorkingArea
+        Wait-For { [PanelProbe]::IsWindowVisible($script:pet) } 'pet returns for ordinary work-area window' 8
+        Assert-That ([PanelProbe]::GetForegroundWindow() -eq $fullscreen.Handle) 'leaving fullscreen preserves application focus'
     } finally {$fullscreen.Close();$fullscreen.Dispose()}
     $null=[PanelProbe]::SetForegroundWindow($background.Handle)
     Wait-For { [PanelProbe]::IsWindowVisible($script:pet) } 'pet returns after fullscreen app' 8
