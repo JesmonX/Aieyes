@@ -57,6 +57,7 @@ db.execute('INSERT INTO event_sources VALUES(?,?)',(event['id'],'fixture'));db.c
     assert.equal((await rpc('settings.get')).preciseCounting,true);
     await page.locator('#field-preciseCounting').uncheck();
     await page.waitForFunction(()=>state.settings.preciseCounting===false&&!state.settingsCommitting);
+    assert(await page.locator('#history-rescan').isEnabled(),'History replay must become available again after autosave completes');
     await page.locator('#history-rescan').click();await page.locator('#cancel-editor').click();
     assert.equal(calls.filter(call=>call.method==='sources.rescan').length,0,'Cancelling must not replay history');
     holdRescan=true;await page.locator('#history-rescan').click();await page.getByRole('button',{name:'开始重扫',exact:true}).click();

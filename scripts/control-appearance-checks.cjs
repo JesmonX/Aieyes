@@ -43,7 +43,7 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           await page.evaluate(({theme,material})=>{
             state.settings.appearance={...state.settings.appearance,theme};
             state.page='settings';state.settingsTab='general';state.generalTab='appearance';render();
-            __setDesktopMaterials(material,'opaque');window.scrollTo(0,0);
+            __setDesktopMaterials(material,'opaque');(window.pageScroller?.()??document.scrollingElement).scrollTo(0,0);
           },{theme,material});
           const appearance=await page.locator('[data-general-section=appearance] select').evaluateAll(selects=>selects.map(select=>{
             const control=select.closest('.win-select')??select;
@@ -53,7 +53,7 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           for(const {rect,row} of appearance) {
             assert(rect.width>=Math.min(160,row.right-rect.x)&&rect.right<=row.right,'appearance choices have a readable width and fit their form');
             assert.equal(rect.x,appearance[0].rect.x,'selected text starts in the same column');
-            assert.equal(rect.height,design['input-height']);
+            assert.equal(rect.height,design['control-md'],'form fields use the control-md size (§5.1)');
           }
           const surfaces=await page.evaluate(()=>({card:getComputedStyle(document.querySelector('#general-form')).backgroundColor,
             panel:getComputedStyle(document.documentElement).getPropertyValue('--panel').trim(),
@@ -65,16 +65,24 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           // Alpha < 1 alone allowed the previous .94/.97 overlays to pass.
           const finishes=await page.evaluate(()=>{
             const probe=document.createElement('div');
-            probe.innerHTML='<button type="button">取消</button><button type="button" class="primary">保存</button><input type="text" value="搜索"><input type="checkbox" checked><input type="checkbox" role="switch" checked>';
+            probe.innerHTML='<button type="button">取消</button><button type="button" class="tinted">添加</button><input type="text" value="搜索"><input type="checkbox" checked><input type="checkbox" role="switch" checked>';
             document.body.append(probe);
             const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
             const ctx=canvas.getContext('2d');
             const opacity=color=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=color;ctx.fillRect(0,0,1,1);return ctx.getImageData(0,0,1,1).data[3]/255;};
             const result={controls:[...probe.children].map(el=>opacity(getComputedStyle(el).backgroundColor)),
               edge:opacity(getComputedStyle(document.documentElement).getPropertyValue('--window-edge'))};
-            probe.remove();return result;
+            // The one primary action per view is solid accent with readable text (§5.2).
+            const primary=document.createElement('button');primary.className='primary';primary.textContent='保存';document.body.append(primary);
+            const rgb=color=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=color;ctx.fillRect(0,0,1,1);return [...ctx.getImageData(0,0,1,1).data].slice(0,3);};
+            const luminance=c=>{const [r,g,b]=c.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return .2126*r+.7152*g+.0722*b;};
+            const style=getComputedStyle(primary),[a,b]=[luminance(rgb(style.color)),luminance(rgb(style.backgroundColor))];
+            result.primary={fill:opacity(style.backgroundColor),contrast:(Math.max(a,b)+.05)/(Math.min(a,b)+.05)};
+            primary.remove();probe.remove();return result;
           });
-          for(const opacity of finishes.controls)assert(opacity>0.05&&opacity<0.5,'ordinary, primary, field and selected controls use soft fills');
+          for(const opacity of finishes.controls)assert(opacity>0.05&&opacity<0.5,'ordinary, tinted, field and selected controls use soft fills');
+          assert.equal(finishes.primary.fill,1,'the primary action is solid');
+          assert(finishes.primary.contrast>=4.5,`primary text contrast ${finishes.primary.contrast.toFixed(2)} is at least 4.5:1`);
           if(platform==='windows') {
             assert(finishes.edge<=0.15,'white window edges remain subtle independently of surface opacity');
             await page.locator('[data-general-section=appearance] .win-select-trigger').first().click();
@@ -125,7 +133,7 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           await page.locator('.settings-subpage').evaluate(el=>el.style.maxWidth='');
         }
         await page.setViewportSize({width:1294,height:840});
-        await page.evaluate(()=>{__setDesktopMaterials('opaque','opaque');state.settingsTab='integrations';renderSettings(false);window.scrollTo(0,0);});
+        await page.evaluate(()=>{__setDesktopMaterials('opaque','opaque');state.settingsTab='integrations';renderSettings(false);(window.pageScroller?.()??document.scrollingElement).scrollTo(0,0);});
         await checkChoices(page);await capture(`agents-${theme}`);
         await page.evaluate(()=>{
           // Use real control markup without application save handlers to inspect every visual state.
@@ -147,7 +155,7 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
             title:'监控设备与显示内容',options:()=>[{id:'cpu',label:'CPU · 处理器'},{id:'network',label:'网络 · Ethernet'}],
             selected:()=>[...selected],onChange:values=>{selected.clear();values.forEach(value=>selected.add(value));}
           });
-          window.scrollTo(0,0);
+          (window.pageScroller?.()??document.scrollingElement).scrollTo(0,0);
         });
         await checkChoices(page);
         const choice=page.locator('#control-choice');await choice.focus();await page.keyboard.press('Space');

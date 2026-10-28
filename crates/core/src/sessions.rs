@@ -575,6 +575,7 @@ impl Reader {
         hook_state: Option<String>,
     ) -> Snapshot {
         let mut out = Snapshot::default();
+        let mut excluded = HashSet::new();
         for f in batch.files {
             if f.hook && hook_state.as_deref() == Some("disabled") {
                 continue;
@@ -621,6 +622,20 @@ impl Reader {
                 cursor.anchor = f.anchor;
             }
             cursor.continuation = f.continuation;
+            if source.provider == "claude"
+                && matches!(
+                    cursor.activity.session_source.as_str(),
+                    "sdk-cli" | "sdk-ts" | "sdk-py" | "mcp" | "claude-code-github-action"
+                )
+            {
+                excluded.insert(crate::models::hash(&format!(
+                    "{}:{}:{}",
+                    source.host_id.as_deref().unwrap_or("local"),
+                    source.provider,
+                    cursor.activity.session
+                )));
+                continue;
+            }
             // Creation source is independent of the tools called in a normal
             // conversation. Unknown sources fail closed, including subagents.
             if source.provider == "codex"
@@ -711,6 +726,20 @@ impl Reader {
                 turn_started_at: cursor.activity.turn_started_at(),
             });
         }
+        // A legacy hook may lack source metadata while its native log has it.
+        // Suppress both projections, including descendants of an excluded run.
+        loop {
+            let before = excluded.len();
+            for session in &out.sessions {
+                if excluded.contains(&session.parent_id) {
+                    excluded.insert(session.id.clone());
+                }
+            }
+            if excluded.len() == before {
+                break;
+            }
+        }
+        out.sessions.retain(|s| !excluded.contains(&s.id));
         let error = batch.error.or_else(|| {
             if source.provider == "cursor" {
                 return (hook_state.as_deref()!=Some("installed")).then(|| "Cursor 实时监测未启用或配置不可用；原生私有会话库不能替代状态事件，请在接入与账户中启用或修复监测".into());
@@ -1385,7 +1414,7 @@ fn read_file(
             ..Default::default()
         });
     }
-    if reset && !hook && matches!(provider, "codex" | "pi" | "omp") {
+    if reset && !hook && matches!(provider, "codex" | "claude" | "pi" | "omp") {
         reader.seek(SeekFrom::Start(0))?;
         for _ in 0..2 {
             let mut line = Vec::new();
@@ -1403,6 +1432,8 @@ fn read_file(
             if let Ok(v) = serde_json::from_slice::<Value>(&line) {
                 let rows = if provider == "codex" {
                     session_events::codex(&v).into_iter().collect()
+                } else if provider == "claude" {
+                    session_events::claude(&v)
                 } else {
                     session_events::pi(&v)
                 };
@@ -2968,6 +2999,168 @@ mod adapter_tests {
         worker.completions = Some(rx);
         worker.pending = true;
         assert!(!monitor.read(&settings, SystemTime::now()).unavailable);
+    }
+}
+
+#[cfg(test)]
+mod claude_source_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn claude_local_and_ssh_sources_survive_cold_tail_append_and_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let collector =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/session_remote.py");
+        let script = "import json,pathlib,runpy,sys;m=runpy.run_path(sys.argv[1]);print(json.dumps(m['read_file'](pathlib.Path(sys.argv[2]),'claude',False,{})))";
+        for entrypoint in [
+            "cli",
+            "claude-vscode",
+            "",
+            "sdk-cli",
+            "sdk-ts",
+            "sdk-py",
+            "mcp",
+            "claude-code-github-action",
+        ] {
+            let header = json!({"type":"user","sessionId":"session","entrypoint":entrypoint,"message":{"content":"PRIVATE_PROMPT"}});
+            let padding = json!({"type":"ignored","text":"PRIVATE_".repeat(50000)});
+            let body = json!({"type":"assistant","sessionId":"session","message":{"stop_reason":"end_turn"}});
+            fs::write(&path, format!("{header}\n{padding}\n{body}\n")).unwrap();
+            let local = read_file(&path, "claude", false, None).unwrap();
+            let output =
+                std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+                    .args(["-c", script])
+                    .arg(&collector)
+                    .arg(&path)
+                    .output()
+                    .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("PRIVATE_"));
+            let remote: FileBatch = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                serde_json::to_value(&local.events).unwrap(),
+                serde_json::to_value(&remote.events).unwrap()
+            );
+            let visible = matches!(entrypoint, "cli" | "claude-vscode" | "");
+            for (batch, host_id) in [(local, None), (remote, Some("ssh".into()))] {
+                let source = Source {
+                    id: "s".into(),
+                    provider: "claude".into(),
+                    host_id,
+                    ..Default::default()
+                };
+                let mut reader = Reader::default();
+                let now = seconds(SystemTime::now());
+                let snapshot = reader.consume(
+                    &source,
+                    SourceBatch {
+                        files: vec![batch],
+                        ..Default::default()
+                    },
+                    now,
+                    now,
+                    "Fixture",
+                    None,
+                );
+                assert_eq!(!snapshot.sessions.is_empty(), visible, "{entrypoint}");
+                // Further lifecycle events may omit creation metadata. The cursor
+                // must retain the classification across appends and unchanged polls.
+                let mut stream = fs::OpenOptions::new().append(true).open(&path).unwrap();
+                writeln!(stream,"{}",json!({"type":"user","sessionId":"session","message":{"content":"PRIVATE_PROMPT"}})).unwrap();
+                drop(stream);
+                for _ in 0..2 {
+                    let batch = read_file(
+                        &path,
+                        "claude",
+                        false,
+                        reader.cursors.get(path.to_str().unwrap()),
+                    )
+                    .unwrap();
+                    let snapshot = reader.consume(
+                        &source,
+                        SourceBatch {
+                            files: vec![batch],
+                            ..Default::default()
+                        },
+                        now,
+                        now,
+                        "Fixture",
+                        None,
+                    );
+                    assert_eq!(
+                        snapshot.active_count(),
+                        usize::from(visible),
+                        "{entrypoint}"
+                    );
+                    assert_eq!(snapshot.phase(), visible.then_some(Phase::Working));
+                    assert_eq!(
+                        crate::pets::project(&snapshot).behavior,
+                        if visible { "running" } else { "idle" }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn claude_noninteractive_logs_exclude_legacy_hook_duplicates_and_descendants_in_every_phase() {
+        let now = seconds(SystemTime::now());
+        let source = Source {
+            id: "s".into(),
+            provider: "claude".into(),
+            ..Default::default()
+        };
+        for kind in [
+            "UserPromptSubmit",
+            "PermissionRequest",
+            "Stop",
+            "StopFailure",
+        ] {
+            let mut reader = Reader::default();
+            let file = |key: &str, session: &str, parent: &str, entrypoint: &str| FileBatch {
+                key: key.into(),
+                reset: true,
+                modified: now,
+                events: vec![Event {
+                    kind: kind.into(),
+                    session: session.into(),
+                    parent_session: parent.into(),
+                    session_source: entrypoint.into(),
+                    at: now * 1000,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let batch = SourceBatch {
+                files: vec![
+                    file("legacy-hook", "headless", "", ""),
+                    file("child-hook", "headless:child", "headless", ""),
+                    file(
+                        "grandchild-hook",
+                        "headless:child:grandchild",
+                        "headless:child",
+                        "",
+                    ),
+                    file("native-log", "headless", "", "sdk-cli"),
+                ],
+                ..Default::default()
+            };
+            let snapshot = reader.consume(&source, batch, now, now, "Fixture", None);
+            assert!(snapshot.sessions.is_empty(), "{kind}");
+            assert_eq!(snapshot.active_count(), 0);
+            assert!(snapshot.phase_counts().is_empty());
+            assert_eq!(snapshot.phase(), None);
+            let mut sounds = crate::session_sounds::Tracker::default();
+            let prefs = crate::session_sounds::Preferences::default();
+            sounds.update(&Snapshot::default(), now, &prefs);
+            assert!(sounds.update(&snapshot, now + 1, &prefs).is_empty());
+        }
     }
 }
 

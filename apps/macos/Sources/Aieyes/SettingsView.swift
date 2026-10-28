@@ -21,7 +21,7 @@ struct SettingsView: View {
     @State private var hostEditor: HostEditorRequest?
     @State private var priceEditor: ModelPrice?
     @AppStorage("aieyes.pet.enabled") private var petEnabled = true
-    @AppStorage(NativePanelKey.showCount.rawValue) private var showMenuCount = false
+    @AppStorage("aieyes.pet.hideInFullscreen") private var hidePetInFullscreen = true
     @State private var removal: RemovalRequest?
     @State private var confirmRescan = false
     @State private var importSSH = false
@@ -170,7 +170,7 @@ struct SettingsView: View {
     }
     private var servers: some View {
         GeometryReader { geometry in VStack(spacing: 12) {
-            HStack { Button(L("添加 SSH 主机"), systemImage: "plus") { editHost(Host()) }.buttonStyle(.aieyesPrimary); Button(L("从 SSH 配置导入")) { importSSH = true }; Spacer(); Button(L("测试采样")) { Task { await model.sampleHosts() } }.disabled(model.hostRefreshBusy()) }.padding(.horizontal, 8)
+            HStack { Button(L("添加 SSH 主机"), systemImage: "plus") { editHost(Host()) }.buttonStyle(.aieyesTinted); Button(L("从 SSH 配置导入")) { importSSH = true }; Spacer(); Button(L("测试采样")) { Task { await model.sampleHosts() } }.disabled(model.hostRefreshBusy()) }.padding(.horizontal, 8)
             Form {
                 serverRow((model.settings.localMonitor ?? LocalMonitor()).host, narrow: geometry.size.width < 650)
                 ForEach(model.settings.hosts) { host in serverRow(host, narrow: geometry.size.width < 650) }
@@ -185,16 +185,22 @@ struct SettingsView: View {
             if !local && name != host.target { Text(host.target).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(host.target) }
             if local ? model.settings.localDeviceEnabled != false : host.enabled { NativeScanButton(model: model, machine: host.id) }
         }.frame(maxWidth: .infinity, alignment: .leading)
+        // Switches take their labels' width and wrap below each other before they
+        // could overlap the buttons (English labels are wider than Chinese ones).
+        let switches = ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) { serverSwitch(host.id, resource: true); serverSwitch(host.id, resource: false) }
+            VStack(alignment: .trailing, spacing: 8) { serverSwitch(host.id, resource: true); serverSwitch(host.id, resource: false) }
+        }
         let controls = HStack(spacing: 12) {
-            serverSwitch(host.id, resource: true).frame(width: 112, alignment: .leading)
-            serverSwitch(host.id, resource: false).frame(width: 112, alignment: .leading)
+            switches
             if narrow { Spacer(minLength: 0) }
             HStack(spacing: 8) {
-                Button(local ? L("监控设置") : L("编辑")) { editHost(host) }.frame(width: 78).accessibilityLabel(L("编辑") + name)
+                // Every row reserves the wider label so the switch columns line up.
+                Button { editHost(host) } label: { ZStack { Text(L("监控设置")).hidden(); Text(L("编辑")).hidden(); Text(local ? L("监控设置") : L("编辑")) } }.accessibilityLabel(L("编辑") + name)
                 if local { Color.clear.frame(width: 20, height: 20).accessibilityHidden(true) }
-                else { Button { removal = model.removalRequest("host", id: host.id) } label: { Image(systemName: "minus.circle").frame(width: 20, height: 20) }.buttonStyle(.borderless).help(L("移除主机")).accessibilityLabel(L("移除服务器 ") + name) }
-            }.frame(width: 106, alignment: .trailing)
-        }
+                else { Button { removal = model.removalRequest("host", id: host.id) } label: { Image(systemName: "minus.circle").frame(width: 20, height: 20) }.buttonStyle(.borderless).foregroundStyle(Palette.danger).help(L("移除主机")).accessibilityLabel(L("移除服务器 ") + name) }
+            }.fixedSize()
+        }.layoutPriority(1)
         return Group {
             if narrow { VStack(alignment: .leading, spacing: 12) { information; controls } }
             else { HStack(spacing: 12) { information; controls } }
@@ -215,7 +221,7 @@ struct SettingsView: View {
     private var prices: some View {
         ScrollViewReader { reader in ScrollView { LazyVStack(alignment: .leading, spacing: 14) {
             HStack {
-                TextField(L("搜索模型"), text: $catalog.query).textFieldStyle(.aieyes)
+                SearchField(prompt: L("搜索模型"), text: $catalog.query).frame(minWidth: 160, maxWidth: .infinity)
                 Button(L("智能引用")) { Task { await model.referencePrices() } }.disabled(model.busy || model.settingsSaving || model.quotaBusy)
                 Button(L("同步 OpenRouter")) { Task { await model.syncPrices() } }.disabled(model.busy || model.quotaBusy)
                 Button(L("添加价格")) { priceEditor = ModelPrice() }
@@ -228,21 +234,31 @@ struct SettingsView: View {
             }
             if !model.dashboard.pricingGaps.isEmpty {
                 Section(L("待计价模型")) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(model.dashboard.pricingGaps) { gap in
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) { Text(gap.model).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)); Text(L("缺少{0} · {1} Token" , gap.missing, Format.compact(gap.unpricedTokens))).font(AppFont.secondary).foregroundStyle(.secondary) }
-                                    Spacer()
-                                    Button(L("智能引用")) { Task { await model.referencePrices(model: gap.model) } }.disabled(model.busy || model.settingsSaving)
-                                    Button(L("映射")) { mappingSectionExpanded = true; mappingModel = gap.model; mappingID = gap.priceId ?? ""; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }
-                                    Button(L("补充价格")) { openGapPrice(gap) }
-                                }
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(model.dashboard.pricingGaps) { gap in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) { Text(gap.model).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)); Text(L("缺少{0} · {1} Token" , gap.missing, Format.compact(gap.unpricedTokens))).font(AppFont.secondary).foregroundStyle(.secondary) }
+                                Spacer()
+                                Button(L("智能引用")) { Task { await model.referencePrices(model: gap.model) } }.disabled(model.busy || model.settingsSaving)
+                                Button(L("映射")) { mappingSectionExpanded = true; mappingModel = gap.model; mappingID = gap.priceId ?? ""; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }
+                                Button(L("补充价格")) { openGapPrice(gap) }
                             }
-                        }.padding(6)
-                    }.frame(height: 100)
+                        }
+                    }.padding(6)
                 }
             }
+            // The page is the only scroll area: fixed-height inner lists trapped the wheel and left blank space.
+            // The collapsed mapping editor sits above the long catalog so it stays reachable.
+            DisclosureGroup(L("模型映射"), isExpanded: $mappingSectionExpanded) {
+                VStack(spacing: 8) {
+                    HStack { TextField(L("日志中的模型名称"), text: $model.mappingModel); Image(systemName: "arrow.right"); TextField(L("OpenRouter 模型 ID"), text: $model.mappingID).focused($mappingFocused); Button(L("添加映射")) { if applyMappingDraft() { Task { _ = await model.saveSettingsDraft() } } }.disabled(mappingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mappingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                    DisclosureGroup(L("已有映射（{0}）" , draft.modelMappings.count), isExpanded: $mappingsExpanded) {
+                        if mappingsExpanded {
+                            LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in ExistingMappingRow(model: model, name: key) } }.padding(.vertical, 4)
+                        }
+                    }
+                }.padding(6)
+            }.id("model-mapping")
             HStack {
                 Text(L("模型价格 · {0} 项" , catalog.filtered.count)).font(AppFont.section)
                 Spacer()
@@ -251,21 +267,11 @@ struct SettingsView: View {
             if let error = catalog.error {
                 HStack { ErrorNotice(message: error).foregroundStyle(Palette.warn); Spacer(); Button(L("重试读取")) { Task { await catalog.load(force: true) } } }.font(AppFont.secondary)
             }
-            ScrollView { LazyVStack(spacing: 8) {
+            LazyVStack(spacing: 8) {
                 ForEach(catalog.filtered) { price in
                     PriceCatalogRow(price: price, map: { mappingSectionExpanded = true; mappingID = price.id; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }, edit: { priceEditor = price }).equatable()
                 }
-            } }.frame(height: 372)
-            DisclosureGroup(L("模型映射"), isExpanded: $mappingSectionExpanded) {
-                VStack(spacing: 8) {
-                    HStack { TextField(L("日志中的模型名称"), text: $model.mappingModel); Image(systemName: "arrow.right"); TextField(L("OpenRouter 模型 ID"), text: $model.mappingID).focused($mappingFocused); Button(L("添加映射")) { if applyMappingDraft() { Task { _ = await model.saveSettingsDraft() } } }.disabled(mappingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || mappingID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-                    DisclosureGroup(L("已有映射（{0}）" , draft.modelMappings.count), isExpanded: $mappingsExpanded) {
-                        if mappingsExpanded {
-                            ScrollView { LazyVStack(spacing: 8) { ForEach(draft.modelMappings.keys.sorted(), id: \.self) { key in ExistingMappingRow(model: model, name: key) } }.padding(.vertical, 4) }.frame(height: min(180, CGFloat(draft.modelMappings.count) * 48))
-                        }
-                    }
-                }.padding(6)
-            }.id("model-mapping")
+            }
             if !catalog.loading && catalog.error == nil && catalog.filtered.isEmpty {
                 Text(catalog.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? L("同步模型价格") : L("无匹配模型")).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding()
             }
@@ -291,8 +297,8 @@ struct SettingsView: View {
                 Picker(L("主题"), selection: Binding(get: { model.settingsDraft.appearance?.theme ?? "system" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.theme = value; model.settingsDraft.appearance = appearance })) {
                     Text(L("跟随系统")).tag("system"); Text(L("浅色")).tag("light"); Text(L("深色")).tag("dark")
                 }
-                Picker(L("强调色"), selection: Binding(get: { model.settingsDraft.appearance?.accent ?? "indigo" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.accent = value; model.settingsDraft.appearance = appearance })) {
-                    Text(L("靛蓝")).tag("indigo"); Text(L("蓝")).tag("blue"); Text(L("青绿")).tag("teal"); Text(L("紫")).tag("purple")
+                Picker(L("强调色"), selection: Binding(get: { model.settingsDraft.appearance?.accent ?? "system" }, set: { value in var appearance = model.settingsDraft.appearance ?? AppearanceSettings(); appearance.accent = value; model.settingsDraft.appearance = appearance })) {
+                    Text(L("跟随系统")).tag("system"); Text(L("靛蓝")).tag("indigo"); Text(L("蓝")).tag("blue"); Text(L("青绿")).tag("teal"); Text(L("紫")).tag("purple")
                 }
             }
             Section(L("图表")) {
@@ -308,11 +314,12 @@ struct SettingsView: View {
             if model.generalPage == "desktop" {
             Section(L("桌面宠物")) {
                 HStack { Toggle(L("显示桌宠"), isOn: $petEnabled); HelpNote(title: L("桌面显示"), text: L("桌宠展示本机和 SSH 会话。单击打开面板，拖动移动。")) }
+                Toggle(L("全屏时隐藏"), isOn: $hidePetInFullscreen)
                 PetScaleControl()
                 PetLibraryView(model: model)
             }
             Section(L("菜单栏")) {
-                HStack { Toggle(L("显示活跃会话数"), isOn: $showMenuCount); HelpNote(title: L("菜单栏"), text: L("菜单栏显示今日全部数据，独立于页面筛选。")) }
+                HelpNote(title: L("菜单栏"), text: L("菜单栏显示今日全部数据，独立于页面筛选。"))
                 Picker(L("显示内容"), selection: $model.settingsDraft.menuMetric) { Text(L("图标")).tag("icon"); Text(L("今日全部 Token")).tag("tokens"); Text(L("首个账户剩余额度")).tag("quota"); Text(L("首台服务器 CPU")).tag("cpu") }
             }
             }
@@ -410,7 +417,7 @@ private struct ExistingMappingRow: View {
                 HStack {
                     Text(name); Image(systemName: "arrow.right"); Text(model.settingsDraft.modelMappings[name] ?? ""); Spacer()
                     Button(L("编辑")) { baseline = model.settings; from = name; to = model.settingsDraft.modelMappings[name] ?? ""; editing = true }
-                    Button { model.settingsDraft.modelMappings.removeValue(forKey: name); Task { _ = await model.saveSettingsDraft() } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain).accessibilityLabel(L("移除映射 ") + name)
+                    Button { model.settingsDraft.modelMappings.removeValue(forKey: name); Task { _ = await model.saveSettingsDraft() } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain).foregroundStyle(Palette.danger).accessibilityLabel(L("移除映射 ") + name)
                 }
             }
         }.font(AppFont.secondary)
@@ -535,10 +542,10 @@ struct SourceEditor: View {
                     Text(L("此来源只查询订阅；历史请在机器与采集中添加独立目录。")).font(AppFont.secondary).foregroundStyle(.secondary)
                 } else if source.provider == "deepseek" {
                     Text(L("API Key 请在账户页添加或更新。")).font(AppFont.secondary).foregroundStyle(.secondary)
-                    DisclosureGroup(L("高级设置")) { TextField(L("API Key 文件（可选）"), text: $source.path) }
+                    DisclosureGroup(L("高级设置")) { LabeledContent(L("API Key 文件（可选）")) { TextField(L("API Key 文件（可选）"), text: $source.path).labelsHidden() } }
                 } else {
                     HStack {
-                        TextField(L("数据目录"), text: $source.path)
+                        LabeledContent(L("数据目录")) { TextField(L("数据目录"), text: $source.path).labelsHidden() }
                         if source.hostId == nil {
                             Button(L("选择")) { let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.showsHiddenFiles = true; if panel.runModal() == .OK, let url = panel.url { source.path = url.path } }
                         }
@@ -546,9 +553,9 @@ struct SourceEditor: View {
                 }
                 if source.codexHomeId != nil { Text(L("更换目录会解除旧账户连接，保留原文件和凭据。之后请读取新目录的登录。")).font(AppFont.secondary).foregroundStyle(.secondary) }
                 DisclosureGroup(source.hostId == nil ? L("高级连接选项 · CLI / 代理") : L("高级连接选项 · CLI")) {
-                if source.provider == "antigravity" { TextField(L("agy 程序"), text: Binding(get: { source.agyBinary ?? "agy" }, set: { source.agyBinary = $0 })) }
-                if source.provider == "codex" { TextField(L("Codex 程序"), text: $source.codexBinary) }
-                if ["custom", "kimi", "deepseek-harness", "codebuddy"].contains(source.provider) || CoreContract.subscriptionModes[source.provider] != nil { TextField(L("额度查询命令"), text: $source.quotaCommand) }
+                if source.provider == "antigravity" { LabeledContent(L("agy 程序")) { TextField(L("agy 程序"), text: Binding(get: { source.agyBinary ?? "agy" }, set: { source.agyBinary = $0 })).labelsHidden() } }
+                if source.provider == "codex" { LabeledContent(L("Codex 程序")) { TextField(L("Codex 程序"), text: $source.codexBinary).labelsHidden() } }
+                if ["custom", "kimi", "deepseek-harness", "codebuddy"].contains(source.provider) || CoreContract.subscriptionModes[source.provider] != nil { LabeledContent(L("额度查询命令")) { TextField(L("额度查询命令"), text: $source.quotaCommand).labelsHidden() } }
                 if source.hostId == nil {
                     ProxyFields(proxy: Binding(get: { source.proxy ?? ProxySettings(mode: "inherit") }, set: { source.proxy = $0.mode == "inherit" ? nil : $0 }), inherit: true, inheritedProxy: appProxy, testURLs: testURLs)
                 }
@@ -556,7 +563,7 @@ struct SourceEditor: View {
                 if let error { ErrorNotice(message: error).foregroundStyle(Palette.warn) }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.aieyes).disabled(saving)
             HStack {
-                Button(L("取消")) { cancel() }.keyboardShortcut(.cancelAction).disabled(saving); Spacer()
+                Spacer(); Button(L("取消")) { cancel() }.keyboardShortcut(.cancelAction).disabled(saving)
                 Button(saving ? L("处理中…") : L("保存")) { Task { await save() } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(saving)
             }.padding(20)
         }.font(AppFont.body).frame(width: DesignTokens.dialogSourceWidth, height: EditorLayout.height(660))
@@ -626,7 +633,7 @@ struct HostEditor: View {
             let object = try JSONSerialization.jsonObject(with: data)
             let sample: MetricSample = try await discoveryEngine.call("hosts.discover", params: ["host": object])
             guard request == discoveryRequest, identity == connectionIdentity else { return }
-            discoveryInfo = L("从 ") + testingHost.target + L(" 读取 · ") + Format.time(Date().timeIntervalSince1970)
+            discoveryInfo = L("从 {0} 读取 · {1}", testingHost.target, Format.time(Date().timeIntervalSince1970))
             for (group, rows) in [("cpu",sample.cpu),("gpu",sample.gpu),("filesystems",sample.filesystems),("disk",sample.disk),("network",sample.network)] {
                 if let rows { discovered[group] = rows }
             }
@@ -650,15 +657,15 @@ struct HostEditor: View {
             Form {
                 if host.id != "local" {
                 if let model { Button(L("从 SSH 配置导入")) { importSSH = true }.sheet(isPresented: $importSSH) { SSHConfigImportView(model: model) { if initialDraft == draftValue { dismiss() } } } }
-                TextField(L("名称"), text: $host.name)
-                TextField(L("SSH 别名或地址"), text: $host.target, prompt: Text(L("my-server 或 user@host")))
+                LabeledContent(L("名称")) { TextField(L("名称"), text: $host.name).labelsHidden() }
+                LabeledContent(L("SSH 别名或地址")) { TextField(L("SSH 别名或地址"), text: $host.target, prompt: Text(L("my-server 或 user@host"))).labelsHidden() }
                 LabeledContent(L("端口")) { TextField(L("端口"), text: Binding(get: { host.port.map(String.init) ?? "" }, set: { host.port = Int($0) }), prompt: Text(L("跟随配置"))).labelsHidden().frame(width: DesignTokens.fieldHintWidth) }
                 Picker(L("登录方式"), selection: Binding(get: { host.authMode ?? "ssh" }, set: { host.authMode = $0 })) {
                     Text(L("SSH 配置 / 密钥")).tag("ssh"); Text(L("用户名和密码")).tag("password")
                 }
-                TextField(L("用户名"), text: Binding(get: { host.username ?? "" }, set: { host.username = $0 }), prompt: Text(L("跟随地址或 SSH 配置")))
-                if host.authMode == "password" { SecureField(L("密码（留空保留）"), text: $password) }
-                else { HStack { TextField(L("密钥路径"), text: $host.identityFile, prompt: Text(L("跟随 SSH 配置"))); Button(L("选择…")) { let panel = NSOpenPanel(); panel.showsHiddenFiles = true; if panel.runModal() == .OK { host.identityFile = panel.url?.path ?? host.identityFile } } } }
+                LabeledContent(L("用户名")) { TextField(L("用户名"), text: Binding(get: { host.username ?? "" }, set: { host.username = $0 }), prompt: Text(L("跟随地址或 SSH 配置"))).labelsHidden() }
+                if host.authMode == "password" { LabeledContent(L("密码（留空保留）")) { SecureField(L("密码（留空保留）"), text: $password).labelsHidden() } }
+                else { HStack { LabeledContent(L("密钥路径")) { TextField(L("密钥路径"), text: $host.identityFile, prompt: Text(L("跟随 SSH 配置"))).labelsHidden() }; Button(L("选择…")) { let panel = NSOpenPanel(); panel.showsHiddenFiles = true; if panel.runModal() == .OK { host.identityFile = panel.url?.path ?? host.identityFile } } } }
                 }
                 Button(discovering ? L("读取中…") : L("连接并读取设备")) { Task { await discover() } }.disabled(discovering || host.target.isEmpty)
                 DisclosureGroup(L("监控指标与设备")) {
@@ -679,12 +686,12 @@ struct HostEditor: View {
                 }
                 }
                 DisclosureGroup(L("高级设置"), isExpanded: $advancedExpanded) {
-                    if host.id != "local" { TextField(L("远程 Shell"), text: $host.shell).focused($shellFocused) }
-                    TextField(L("设备表达式"), text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/")).help(L("留空使用推荐设备；文件系统默认隐藏虚拟挂载。全选可显示全部"))
+                    if host.id != "local" { LabeledContent(L("远程 Shell")) { TextField(L("远程 Shell"), text: $host.shell).labelsHidden().focused($shellFocused) } }
+                    LabeledContent(L("设备表达式")) { TextField(L("设备表达式"), text: $devices, prompt: Text("network:eth0, gpu:0, filesystems:/")).labelsHidden().help(L("留空使用推荐设备；文件系统默认隐藏虚拟挂载。全选可显示全部")) }
                 }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.aieyes)
             if let saveError { ErrorNotice(message: saveError) }
-            HStack { Button(L("取消")) { cancel() }.keyboardShortcut(.cancelAction); Spacer(); Button(saving ? L("保存中…") : L("保存")) { Task { saving = true; saveError = nil; defer { saving = false }; host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; do { try await onSave(host, password) } catch { saveError = error.localizedDescription } } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty || saving) }.padding(20)
+            HStack { Spacer(); Button(L("取消")) { cancel() }.keyboardShortcut(.cancelAction); Button(saving ? L("保存中…") : L("保存")) { Task { saving = true; saveError = nil; defer { saving = false }; host.devices = MonitorSelection.parse(devices); if host.name.isEmpty { host.name = host.target }; do { try await onSave(host, password) } catch { saveError = error.localizedDescription } } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(host.target.isEmpty || saving) }.padding(20)
         }.font(AppFont.body).frame(width: DesignTokens.dialogHostWidth, height: EditorLayout.height(650)).onChange(of: connectionIdentity) { _, _ in discoveryRequest = UUID(); discovered = [:]; discoveryInfo = nil; discoveryError = L("连接配置已更改，请重新读取设备") }
         .updateDraftGuard(host.id == "local" ? L("本机监测") : L("SSH 主机"), snapshot: draftValue, dirty: !initialDraft.isEmpty && initialDraft != draftValue, saving: saving || discovering, save: {
             saving = true; defer { saving = false }; saveError = nil
@@ -720,16 +727,16 @@ struct PriceEditor: View {
                 HStack { Text(L("模型价格")).font(AppFont.title); Spacer(); Text(L("USD / 百万 Token")).font(AppFont.secondary).foregroundStyle(.secondary) }
             }.padding(.horizontal, 22).padding(.vertical, 12)
             Form {
-                TextField(L("模型 ID"), text: $price.id, prompt: Text("openai/model-name"))
-                TextField(L("显示名称"), text: $price.name)
+                LabeledContent(L("模型 ID")) { TextField(L("模型 ID"), text: $price.id, prompt: Text("openai/model-name")).labelsHidden() }
+                LabeledContent(L("显示名称")) { TextField(L("显示名称"), text: $price.name).labelsHidden() }
                 LabeledContent(L("输入")) { TextField(L("输入"), text: $input, prompt: Text(L("待定价"))).labelsHidden().frame(width: DesignTokens.fieldPriceWidth) }; LabeledContent(L("输出")) { TextField(L("输出"), text: $output, prompt: Text(L("待定价"))).labelsHidden().frame(width: DesignTokens.fieldPriceWidth) }
                 LabeledContent(L("缓存读取")) { TextField(L("缓存读取"), text: $cacheRead, prompt: Text(L("待定价"))).labelsHidden().frame(width: DesignTokens.fieldPriceWidth) }; LabeledContent(L("缓存写入")) { TextField(L("缓存写入"), text: $cacheWrite, prompt: Text(L("待定价"))).labelsHidden().frame(width: DesignTokens.fieldPriceWidth) }
                 if !valid { Text(L("价格须为大于或等于 0 的数字；留空表示待定价。")).foregroundStyle(Palette.warn) }
                 if let error { ErrorNotice(message: error).accessibilityLabel(L("保存失败，") + error) }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).textFieldStyle(.aieyes).disabled(saving)
             HStack {
-                Button(L("取消")) { cancel() }.keyboardShortcut(.cancelAction).disabled(saving)
                 Spacer()
+                Button(L("取消")) { cancel() }.keyboardShortcut(.cancelAction).disabled(saving)
                 Button(saving ? L("保存中…") : L("保存价格")) { Task { await save() } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(saving || !valid || price.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }.padding(20)
         }.font(AppFont.body).frame(width: DesignTokens.dialogPriceWidth, height: EditorLayout.height(470)).interactiveDismissDisabled(saving || initialDraft != draftValue)

@@ -26,40 +26,35 @@ struct MainWindowView: View {
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        HStack(spacing: 0) {
+        NavigationSplitView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Button { withAnimation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.88)) { collapsed.toggle() } } label: { BrandMark().frame(width: 30, height: 30).frame(width: 34, height: 34).contentShape(Rectangle()) }.buttonStyle(.plain).help(collapsed ? L("展开导航") : L("收起导航")).accessibilityLabel(collapsed ? L("展开导航") : L("收起导航")).accessibilityValue(collapsed ? L("已收起") : L("已展开"))
                     if !collapsed { Text("Aieyes").font(AppFont.title); Spacer() }
                 }.padding(.horizontal, 12).padding(.top, 18)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        groupLabel(L("监测"))
-                        ForEach(monitoring, id: \.0) { key, title, icon in
-                            navigationButton(title, icon: icon, selected: model.detailPage == key) { select(key) }
-                        }
-                        groupLabel(L("配置"))
-                        ForEach(configuration, id: \.0) { key, title, icon in
-                            navigationButton(title, icon: icon, selected: model.detailPage == "settings" && model.settingsTab == key) { model.openSettings(.init(category: key)); select("settings") }
-                        }
-                    }.padding(.horizontal, 8).padding(.bottom, 12)
-                }.scrollIndicators(.hidden)
-                VStack(spacing: 4) {
-                    navigationButton(L("设置"), icon: "gearshape", selected: model.detailPage == "settings" && model.settingsTab == "general") { model.openSettings(.init(category: "general")); select("settings") }
-                    Menu {
-                        Button(L("配置向导")) { select("setup") }
-                    } label: {
-                        HStack(spacing: 10) { Image(systemName: "questionmark.circle").frame(width: 22); if !collapsed { Text(L("帮助")); Spacer(minLength: 0) } }
-                            .font(AppFont.body).padding(.horizontal, 10).padding(.vertical, 9).frame(maxWidth: .infinity, alignment: collapsed ? .center : .leading)
-                    }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(.secondary).help(L("帮助")).accessibilityLabel(L("帮助"))
-                }.padding(.horizontal, 8).padding(.bottom, 12)
+                if collapsed {
+                    ScrollView { VStack(spacing:4) {
+                        ForEach(monitoring, id:\.0) { key,title,icon in navigationButton(title,icon:icon,selected:model.detailPage == key) { select(key) } }
+                        Divider()
+                        ForEach(configuration, id:\.0) { key,title,icon in navigationButton(title,icon:icon,selected:model.detailPage == "settings" && model.settingsTab == key) { choose("settings:" + key) } }
+                        navigationButton(L("设置"),icon:"gearshape",selected:selectedNavigation == "settings:general") { choose("settings:general") }
+                        navigationButton(L("配置向导"),icon:"questionmark.circle",selected:model.detailPage == "setup") { select("setup") }
+                    }.padding(.horizontal,8) }
+                } else {
+                    List(selection:Binding<String?>(get:{selectedNavigation},set:{ if let value = $0 { choose(value) } })) {
+                        Section(L("监测")) { ForEach(monitoring,id:\.0) { key,title,icon in Label(title,systemImage:icon).tag(key) } }
+                        Section(L("配置")) { ForEach(configuration,id:\.0) { key,title,icon in Label(title,systemImage:icon).tag("settings:" + key) } }
+                        Label(L("设置"),systemImage:"gearshape").tag("settings:general")
+                        Label(L("配置向导"),systemImage:"questionmark.circle").tag("setup")
+                    }.listStyle(.sidebar)
+                }
             }.frame(width: collapsed ? 62 : 214).background {
                 if reduceTransparency || previewAccessible || contrast == .increased { Color(nsColor: .windowBackgroundColor) }
                 else { Rectangle().fill(.ultraThinMaterial) }
             }
-            Divider().opacity(0.5)
+            .navigationSplitViewColumnWidth(min:collapsed ? 62 : 190,ideal:collapsed ? 62 : 214,max:collapsed ? 62 : 260)
+        } detail: {
             VStack(alignment: .leading, spacing: 0) {
-                Text(title).font(AppFont.title).padding(.horizontal, 22).padding(.vertical, 15)
                 if guideActive && model.detailPage == "settings" {
                     HStack { Button(L("配置向导")) { select("setup") }; Spacer() }.padding(.horizontal, 22).padding(.bottom, 12)
                 }
@@ -71,7 +66,9 @@ struct MainWindowView: View {
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-        }.frame(minWidth: 760, minHeight: 480).aieyesAccent()
+        }.navigationSplitViewStyle(.balanced).toolbar(removing:.sidebarToggle)
+        .frame(minWidth: 760, minHeight: 480).aieyesAccent()
+        .background(WindowPageTitle(title:title + " — Aieyes"))
         .environment(\.workspaceCardColumns, workspaceWidth >= 1800 ? 4 : workspaceWidth >= 1390 ? 3 : workspaceWidth >= 974 ? 2 : 1)
         .background { GeometryReader { geometry in Color.clear.onChange(of: geometry.size.width, initial: true) { _, width in workspaceWidth = width } } }
         .onAppear { select(model.requestedDetailPage ?? model.detailPage); model.requestedDetailPage = nil }
@@ -79,14 +76,19 @@ struct MainWindowView: View {
         .onChange(of: model.detailPage) { _, page in select(page) }
         .onChange(of: model.visibleWindows) { _, _ in model.settingsWindowVisible = model.detailPage == "settings" && model.isWindowVisible("detail") }
     }
+    private var selectedNavigation: String { model.detailPage == "settings" ? "settings:" + model.settingsTab : model.detailPage }
+    private func choose(_ value:String) {
+        if value.hasPrefix("settings:") { model.openSettings(.init(category:String(value.dropFirst(9))));select("settings") }
+        else { select(value) }
+    }
     @ViewBuilder private func groupLabel(_ text: String) -> some View {
         if collapsed { Divider().padding(.vertical, 6) }
-        else { Text(text).font(AppFont.caption).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.top, 14).padding(.bottom, 3) }
+        else { Text(text).font(AppFont.caption).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 3) }
     }
     private func navigationButton(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) { Image(systemName: icon).frame(width: 22); if !collapsed { Text(title).lineLimit(1); Spacer(minLength: 0) } }
-                .font(AppFont.body).padding(.horizontal, 10).padding(.vertical, 9)
+                .font(AppFont.body).padding(.horizontal, 10).padding(.vertical, 6)
                 .frame(maxWidth: .infinity, alignment: collapsed ? .center : .leading)
                 .foregroundStyle(selected ? Palette.accent : Color.secondary)
                 .background(selected ? Palette.accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 8))
@@ -102,6 +104,17 @@ struct MainWindowView: View {
         model.setServerVisible(page == "servers", window: "detail")
         if page == "servers" { Task { await model.sampleHosts() } }
     }
+}
+
+private struct WindowPageTitle: NSViewRepresentable {
+    var title:String
+    final class TitleView:NSView {
+        var title = ""
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
+        func apply() { if window?.title != title { window?.title = title } }
+    }
+    func makeNSView(context:Context) -> TitleView { TitleView() }
+    func updateNSView(_ view:TitleView,context:Context) { view.title = title;view.apply() }
 }
 
 /// Keep a page's SwiftUI identity and native controls, without laying out hidden pages.

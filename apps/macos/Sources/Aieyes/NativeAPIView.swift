@@ -62,7 +62,7 @@ private struct NativeAPIEditor: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Text(name + L(" · API 连接")).font(AppFont.title); Spacer(); Button(L("完成")) { dismiss() }.disabled(busy) }
+            Text(name + L(" · API 连接")).font(AppFont.title)
             if source.provider == "qoder" { Text(L("此配置目录需先完成 qodercli login；保存通过原生 CLI 的自定义模型管理接口。")).font(AppFont.secondary).foregroundStyle(.secondary) }
             TextField(name + L(" 配置文件"), text: $configPath)
             Button(L("读取此配置")) { Task { await read() } }
@@ -80,8 +80,10 @@ private struct NativeAPIEditor: View {
             if let message { Text(L(message)).font(AppFont.secondary) }
             if let error { Text(L(error)).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
-                Button(busy ? L("处理中…") : L("验证并设为默认")) { Task { await save() } }.buttonStyle(.aieyesPrimary).disabled(loaded == nil)
                 HelpNote(title: L("API 连接"), text: L("验证成功后保存并设为 {0} 默认模型。配置路径应与客户端实际使用的文件一致；客户端启动参数或环境变量可能覆盖文件设置。", name))
+                Spacer()
+                Button(L("取消")) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(busy ? L("处理中…") : L("验证并设为默认")) { Task { await save() } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(loaded == nil)
             }
         }.padding(24).frame(width: 560).disabled(busy)
             .task { await read() }

@@ -91,7 +91,8 @@ private struct DescendantLayoutFixture: View {
         }
     }
     func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-    func control(in root: NSObject, containing text: String) -> NSObject? {
+    /// The first accessibility element showing `text`; `role` nil matches any role (static text exposes its value).
+    func control(in root: NSObject, containing text: String, role: String? = "AXButton") -> NSObject? {
         var visited = Set<ObjectIdentifier>()
         func find(_ node: NSObject, depth: Int) -> NSObject? {
             guard depth < 40, visited.insert(ObjectIdentifier(node)).inserted else { return nil }
@@ -99,8 +100,8 @@ private struct DescendantLayoutFixture: View {
                 let selector = NSSelectorFromString(name)
                 return node.responds(to: selector) ? node.perform(selector)?.takeUnretainedValue() : nil
             }
-            let label = (value("accessibilityLabel") as? String) ?? (value("accessibilityTitle") as? String) ?? ""
-            if label.contains(text), value("accessibilityRole") as? String == "AXButton" { return node }
+            let label = (value("accessibilityLabel") as? String) ?? (value("accessibilityTitle") as? String) ?? (value("accessibilityValue") as? String) ?? ""
+            if label.contains(text), role == nil || value("accessibilityRole") as? String == role { return node }
             let children = ((value("accessibilityChildren") as? [NSObject]) ?? []) + ((node as? NSView)?.subviews ?? [])
             for child in children { if let found = find(child, depth: depth + 1) { return found } }
             return nil
@@ -276,7 +277,7 @@ private struct DescendantLayoutFixture: View {
         ipc.quotaBusy = true;try await wait();panelHost.layoutSubtreeIfNeeded()
         precondition(self.control(in: panelHost, containing: "读取中…") != nil, "Local quota controls must still show busy feedback")
         ipc.quotaBusy = false;ipc.networkBusy = true;try await wait();panelHost.layoutSubtreeIfNeeded()
-        precondition(self.control(in: panelHost, containing: "刷新额度") != nil && self.control(in: panelHost, containing: "测试中…") != nil, "Footer and quota feedback must update independently")
+        precondition(self.control(in: panelHost, containing: "刷新额度") != nil && self.control(in: panelHost, containing: "测试中…", role: nil) != nil, "Footer and quota feedback must update independently")
         let credit = try JSONDecoder().decode(QuotaEstimate.self, from: Data(#"{"id":"credit","accountKey":"codex:fixture","windowId":"credits","windowName":"credits","sourceIds":[],"sourceNames":[],"status":"completed","reason":"","startedAt":1,"checkpointAt":2,"cost":1,"totalTokens":1,"pricedTokens":1,"calculationNote":"","kind":"credits","consumedCredits":1,"valuePer1000":42}"#.utf8))
         ipc.dashboard.creditEstimates = [credit];try await wait(200);panelHost.layoutSubtreeIfNeeded()
         precondition(ipc.dashboard.creditEstimates?.first?.id == "credit")

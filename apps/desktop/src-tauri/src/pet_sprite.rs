@@ -72,9 +72,20 @@ pub(super) struct Renderer {
     surface: Option<Dib>,
     label: LabelCache,
 }
+/// What the status layer shows; an equal spec at the same size reuses the cached pixels.
+#[derive(Clone, PartialEq)]
+struct LabelSpec {
+    text: String,
+    background: u32,
+    foreground: u32,
+    /// Phase colour of the dot before the text.
+    dot: u32,
+    /// Active-session count at the top right, when enabled: (text, fill, ink).
+    badge: Option<(String, u32, u32)>,
+}
 #[derive(Default)]
 struct LabelCache {
-    key: Option<(i32, i32, String, u32, u32)>,
+    key: Option<(i32, i32, LabelSpec)>,
     pixels: Vec<u8>,
 }
 #[allow(clippy::too_many_arguments)]
@@ -202,36 +213,71 @@ unsafe fn draw_cached(
     if !canvas.is_null() {
         GdipDisposeImage(canvas.cast());
     }
-    let label = if sprite.frames.is_empty() {
-        "请导入桌宠"
+    // The drawing spec of linux_pet.rs: translated label after a phase dot, optional count badge.
+    let text = if sprite.frames.is_empty() {
+        crate::localization::label("请导入桌宠").to_owned()
     } else if info["recovery"] == "failed" {
-        "恢复失败"
+        crate::localization::label("恢复失败").to_owned()
     } else if info["recovery"] == "refreshing" {
-        "恢复中"
+        crate::localization::label("恢复中").to_owned()
     } else {
-        label
+        crate::localization::text(label)
     };
-    let contrast = high_contrast();
-    let background = if contrast {
-        system_argb(COLOR_WINDOW)
+    let (contrast, dark) = (high_contrast(), info["dark"] == true);
+    let (background, foreground) = if contrast {
+        (system_argb(COLOR_WINDOW), system_argb(COLOR_WINDOWTEXT))
+    } else if dark {
+        (0xee202735, 0xffedf2fc)
     } else {
-        0xeef6f6f8
+        (0xeef6f8fc, 0xff243049)
     };
-    let foreground = if contrast {
-        system_argb(COLOR_WINDOWTEXT)
+    let dot = if contrast {
+        foreground
     } else {
-        0xff243049
+        let [r, g, b] = crate::phase_colors::rgb(info["phase"].as_str().unwrap_or("idle"), dark);
+        0xff00_0000 | u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
     };
-    let key = (width, height, label.to_owned(), background, foreground);
-    if label_cache.key.as_ref() != Some(&key) {
-        label_cache.pixels = render_label(width, height, font, label, background, foreground);
-        label_cache.key = Some(key);
+    let badge = info["activeCount"]
+        .as_u64()
+        .filter(|count| *count > 0 && info["showCount"] == true)
+        .map(|count| {
+            let text = if count > 99 {
+                "99+".to_owned()
+            } else {
+                count.to_string()
+            };
+            if contrast {
+                (
+                    text,
+                    system_argb(COLOR_HIGHLIGHT),
+                    system_argb(COLOR_HIGHLIGHTTEXT),
+                )
+            } else {
+                (text, 0xff4d59d9, 0xffffffff)
+            }
+        });
+    let spec = LabelSpec {
+        text,
+        background,
+        foreground,
+        dot,
+        badge,
+    };
+    if label_cache
+        .key
+        .as_ref()
+        .is_none_or(|(w, h, cached)| (*w, *h) != (width, height) || *cached != spec)
+    {
+        label_cache.pixels = render_label(width, height, font, &spec);
+        label_cache.key = Some((width, height, spec));
     }
     // Both layers contain premultiplied BGRA; source-over preserves transparent edges.
     let pixels = std::slice::from_raw_parts_mut(bits, (width * height * 4) as usize);
     for (dst, src) in pixels
-        .chunks_exact_mut(4)
-        .zip(label_cache.pixels.chunks_exact(4))
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(label_cache.pixels.as_chunks::<4>().0)
     {
         let inverse = 255 - u16::from(src[3]);
         for channel in 0..4 {
@@ -243,14 +289,73 @@ unsafe fn draw_cached(
 }
 // Grayscale coverage at 3x physical resolution, then area-filter once. ClearType
 // subpixels cannot be composed correctly onto a transparent layered window.
-unsafe fn render_label(
-    width: i32,
-    height: i32,
+unsafe fn fill_round_rect(graphics: *mut GpGraphics, color: u32, rect: RectF, diameter: f32) {
+    let (mut brush, mut path) = (null_mut(), null_mut());
+    GdipCreateSolidFill(color, &mut brush);
+    if GdipCreatePath(FillModeWinding, &mut path) == GDI_OK {
+        let RectF {
+            X: x,
+            Y: y,
+            Width: w,
+            Height: h,
+        } = rect;
+        for (left, top, angle) in [
+            (x, y, 180.0),
+            (x + w - diameter, y, 270.0),
+            (x + w - diameter, y + h - diameter, 0.0),
+            (x, y + h - diameter, 90.0),
+        ] {
+            GdipAddPathArc(path, left, top, diameter, diameter, angle, 90.0);
+        }
+        GdipClosePathFigure(path);
+        GdipFillPath(graphics, brush.cast(), path);
+        GdipDeletePath(path);
+    }
+    GdipDeleteBrush(brush.cast());
+}
+unsafe fn draw_text(
+    graphics: *mut GpGraphics,
     font: *mut GpFont,
-    label: &str,
-    background: u32,
-    foreground: u32,
-) -> Vec<u8> {
+    format: *mut GpStringFormat,
+    text: &[u16],
+    color: u32,
+    rect: &RectF,
+) {
+    let mut brush = null_mut();
+    GdipCreateSolidFill(color, &mut brush);
+    GdipDrawString(
+        graphics,
+        PCWSTR(text.as_ptr()),
+        text.len() as i32,
+        font,
+        rect,
+        format,
+        brush.cast(),
+    );
+    GdipDeleteBrush(brush.cast());
+}
+unsafe fn measure_width(
+    graphics: *mut GpGraphics,
+    font: *mut GpFont,
+    format: *mut GpStringFormat,
+    text: &[u16],
+    layout: &RectF,
+) -> Option<f32> {
+    let mut measured = RectF::default();
+    (GdipMeasureString(
+        graphics,
+        PCWSTR(text.as_ptr()),
+        text.len() as i32,
+        font,
+        layout,
+        format,
+        &mut measured,
+        null_mut(),
+        null_mut(),
+    ) == GDI_OK)
+        .then_some(measured.Width)
+}
+unsafe fn render_label(width: i32, height: i32, font: *mut GpFont, spec: &LabelSpec) -> Vec<u8> {
     let high = vec![0u8; (width * height * 4 * 9) as usize];
     let mut canvas = null_mut();
     let mut graphics = null_mut();
@@ -267,70 +372,55 @@ unsafe fn render_label(
     {
         GdipScaleWorldTransform(graphics, scale * 3.0, scale * 3.0, MatrixOrderPrepend);
         GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
-        let text: Vec<u16> = label.encode_utf16().collect();
+        let text: Vec<u16> = spec.text.encode_utf16().collect();
         let mut format = null_mut();
         GdipCreateStringFormat(0, 0, &mut format);
         GdipSetStringFormatAlign(format, StringAlignmentCenter);
         GdipSetStringFormatLineAlign(format, StringAlignmentCenter);
-        let mut measured = RectF::default();
+        let area = height as f32 / scale - 143.0;
         let layout = RectF {
             X: 0.0,
             Y: 0.0,
-            Width: 120.0,
-            Height: height as f32 / scale - 143.0,
+            Width: 110.0,
+            Height: area,
         };
-        let measured_ok = GdipMeasureString(
-            graphics,
-            PCWSTR(text.as_ptr()),
-            text.len() as i32,
-            font,
-            &layout,
-            format,
-            &mut measured,
-            null_mut(),
-            null_mut(),
-        ) == GDI_OK;
-        let w = if measured_ok {
-            (measured.Width.ceil() + 18.0).clamp(30.0, 138.0)
-        } else {
-            138.0
+        // 9 px padding on both sides plus 10 px for the phase dot.
+        let w = measure_width(graphics, font, format, &text, &layout).map_or(138.0, |measured| {
+            (measured.ceil() + 28.0).clamp(30.0, 138.0)
+        });
+        let (x, y, h) = ((144.0 - w) / 2.0, 145.0, area - 4.0);
+        let pill = RectF {
+            X: x,
+            Y: y,
+            Width: w,
+            Height: h,
         };
-        let (x, y, h) = ((144.0 - w) / 2.0, 145.0, height as f32 / scale - 147.0);
+        fill_round_rect(graphics, spec.background, pill, 20.0_f32.min(h));
         let mut brush = null_mut();
-        GdipCreateSolidFill(background, &mut brush);
-        let diameter = 20.0_f32.min(h);
-        let mut path = null_mut();
-        if GdipCreatePath(FillModeWinding, &mut path) == GDI_OK {
-            for (left, top, angle) in [
-                (x, y, 180.0),
-                (x + w - diameter, y, 270.0),
-                (x + w - diameter, y + h - diameter, 0.0),
-                (x, y + h - diameter, 90.0),
-            ] {
-                GdipAddPathArc(path, left, top, diameter, diameter, angle, 90.0);
-            }
-            GdipClosePathFigure(path);
-            GdipFillPath(graphics, brush.cast(), path);
-            GdipDeletePath(path);
-        }
+        GdipCreateSolidFill(spec.dot, &mut brush);
+        GdipFillEllipse(graphics, brush.cast(), x + 9.5, y + h / 2.0 - 2.5, 5.0, 5.0);
         GdipDeleteBrush(brush.cast());
         GdipSetTextRenderingHint(graphics, TextRenderingHintAntiAliasGridFit);
-        GdipCreateSolidFill(foreground, &mut brush);
-        GdipDrawString(
-            graphics,
-            PCWSTR(text.as_ptr()),
-            text.len() as i32,
-            font,
-            &RectF {
-                X: x + 9.0,
-                Y: 143.0,
-                Width: w - 18.0,
-                Height: height as f32 / scale - 143.0,
-            },
-            format,
-            brush.cast(),
-        );
-        GdipDeleteBrush(brush.cast());
+        let rect = RectF {
+            X: x + 19.0,
+            Y: 143.0,
+            Width: w - 28.0,
+            Height: area,
+        };
+        draw_text(graphics, font, format, &text, spec.foreground, &rect);
+        if let Some((count, fill, ink)) = &spec.badge {
+            let count: Vec<u16> = count.encode_utf16().collect();
+            let bw = measure_width(graphics, font, format, &count, &layout)
+                .map_or(20.0, |measured| (measured.ceil() + 10.0).max(20.0));
+            let badge = RectF {
+                X: 144.0 - bw,
+                Y: 18.0,
+                Width: bw,
+                Height: 20.0,
+            };
+            fill_round_rect(graphics, *fill, badge, 20.0);
+            draw_text(graphics, font, format, &count, *ink, &badge);
+        }
         GdipDeleteStringFormat(format);
         GdipDeleteGraphics(graphics);
     }
@@ -456,19 +546,44 @@ mod tests {
                 for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
                     let width = (144.0_f64 * scale).round() as i32;
                     let height = (186.0_f64 * scale).round() as i32;
+                    let spec = |text: &str, badge: Option<(String, u32, u32)>| LabelSpec {
+                        text: text.into(),
+                        background: 0xeef6f8fc,
+                        foreground: 0xff243049,
+                        dot: 0xff7a879d,
+                        badge,
+                    };
                     let pixels = render_label(
                         width,
                         height,
                         font.font,
-                        "等待1 · 工作2\n思考1",
-                        0xeef6f6f8,
-                        0xff243049,
+                        &spec("等待1 · 工作2\n思考1", None),
                     );
-                    let short =
-                        render_label(width, height, font.font, "空闲", 0xeef6f6f8, 0xff243049);
+                    let short = render_label(width, height, font.font, &spec("空闲", None));
+                    let counted = render_label(
+                        width,
+                        height,
+                        font.font,
+                        &spec("空闲", Some(("3".into(), 0xff4d59d9, 0xffffffff))),
+                    );
+                    let top_right = |buffer: &[u8]| {
+                        let row = (28.0 * width as f64 / 144.0) as usize;
+                        buffer[row * width as usize * 4..(row + 1) * width as usize * 4]
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .skip(width as usize * 3 / 4)
+                            .any(|p| p[3] > 0)
+                    };
+                    assert!(
+                        !top_right(&short) && top_right(&counted),
+                        "count badge draws at the top right"
+                    );
                     let extent = |buffer: &[u8]| {
                         let columns: Vec<_> = buffer
-                            .chunks_exact(4)
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
                             .enumerate()
                             .filter_map(|(index, p)| (p[3] > 0).then_some(index % width as usize))
                             .collect();
@@ -490,12 +605,18 @@ mod tests {
                     assert_eq!(pixels.len(), (width * height * 4) as usize);
                     assert_eq!(pixels[3], 0);
                     assert!(
-                        pixels.chunks_exact(4).any(|p| p[3] > 240 && p[0] < 180),
+                        pixels
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .any(|p| p[3] > 240 && p[0] < 180),
                         "text strokes are visible"
                     );
                     assert!(
                         pixels
-                            .chunks_exact(4)
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
                             .all(|p| p[..3].iter().all(|c| *c <= p[3])),
                         "filtered coverage stays premultiplied"
                     );

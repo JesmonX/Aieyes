@@ -241,7 +241,7 @@ function harness(file, initial = {}) {
     });
     return elements.get(id);
   }
-  const document = {body:element('body'),documentElement:element('html'),activeElement:null,querySelector:element,listeners:new Map(),
+  const document = {body:element('body'),documentElement:element('html'),activeElement:null,querySelector:element,listeners:new Map(),hasFocus:()=>true,
     addEventListener(name, fn) { this.listeners.set(name, [...(this.listeners.get(name) || []), fn]); },
     async dispatch(name, fields = {}) { const event={defaultPrevented:false,stopped:false,preventDefault(){this.defaultPrevented=true;},stopPropagation(){},stopImmediatePropagation(){this.stopped=true;},...fields}; for(const fn of this.listeners.get(name)||[]){await fn(event);if(event.stopped)break;} },
   };
@@ -254,7 +254,7 @@ function harness(file, initial = {}) {
     async close(){windowCalls.push('close');},
     async onResized(fn){events.set('resize',fn);return ()=>{};},
   };
-  const window = {__TAURI__:{
+  const window = {addEventListener(){},__TAURI__:{
     core:{async invoke(command, args) {
       calls.push({command,args});
       if (command === 'desktop_panel') { info.panelOpen = args.open; return {...info}; }
@@ -275,6 +275,7 @@ function harness(file, initial = {}) {
     quotas: async () => { runs.push('quotas'); },
     syncPrices: async () => { runs.push('prices'); },
     sample: async () => { runs.push('hosts'); },
+    userRefresh: async key => sandbox[{prices:'syncPrices',hosts:'sample'}[key] ?? key](),
     api: async () => ({ prices: [] }),
     setTimeout: (fn, ms = 0) => { const id = ++timerId; timers.set(id, {fn, ms}); return id; },
     clearTimeout: id => { timers.delete(id); },
@@ -389,7 +390,7 @@ test('native Windows panel close never focuses the hidden Web pet', async () => 
 test('Linux native panel takes keyboard focus and closes explicitly even when pinned', async () => {
   const h=harness('floating.js',{platform:'linux',nativePet:true,panelOpen:true,panelPinned:true});
   await flush();await flush();
-  assert.equal(h.document.activeElement,h.element('#panel-refresh'));
+  assert.equal(h.document.activeElement,h.element('#panel'),'Focus parks on the panel, not on a control');
   await h.element('#panel-close').dispatch('click');await flush();
   assert.equal(h.info.panelOpen,false);
   assert.notEqual(h.document.activeElement,h.element('#ball'));

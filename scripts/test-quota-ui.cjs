@@ -1,3 +1,4 @@
+const {selectSettingsAgent}=require('./ui-test-helpers.cjs');
 const {discardEditor}=require('./ui-test-helpers.cjs');
 // End-to-end quota UI flows on both desktop surfaces, with isolated in-memory IPC.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
@@ -15,6 +16,7 @@ function fixture(){
   window.__TAURI__={event:{async listen(){return ()=>{};}},window:{getCurrentWindow:()=>({async isMaximized(){return false;},async onResized(){return ()=>{};}})},core:{async invoke(command,args){
     const f=window.quotaFixture;if(command==='desktop_info')return info();if(command==='desktop_panel'){f.panelOpen=args.open;return info();}if(command!=='engine_call')return {};
     const {method,params}=args;f.calls.push({method,params});
+    if(method==='agents.manage'){settings.appearance={...settings.appearance,settingsAgentIds:[...new Set([...(settings.appearance?.settingsAgentIds||AieyesUI.agentConfigurations(settings.agents||Object.keys(providers).map(provider=>({provider,enabled:settings.sources.some(s=>s.provider===provider),machineIds:[]}))).filter(a=>a.enabled).map(a=>a.provider)),params.provider])]};return structuredClone(settings);}
     if(method==='hello')return {version:'test'};if(method==='settings.get')return structuredClone(settings);
     if(method==='dashboard'||method==='dashboard.summary')return {generatedAt:now,summary,quotas:[...rows].sort((a,b)=>f.order.indexOf(AieyesUI.canonicalProvider(a.provider)+':'+a.accountId)-f.order.indexOf(AieyesUI.canonicalProvider(b.provider)+':'+b.accountId)),quotaOrder:f.order,quotaEstimates:f.records,automaticEstimateSummaries:f.rolling,modelOptions:[],models:[],dayModels:[],trendDays:[],heatmap:[],sources:settings.sources.map(s=>({...s,autoValuationStatus:s.autoValuation?.enabled?(f.automaticStatus??{state:'collecting',note:'等待有效样本',accountKey:'codex:c'}):null})),pricingGaps:[]};
     if(method==='autoEstimates.configure'){if(f.failAutomatic)throw new Error('模拟自动估值保存失败');const src=settings.sources.find(s=>s.id===params.sourceId);if(params.enabled&&!params.confirmed)throw new Error('请同意');src.autoValuation=params.enabled?{enabled:true,consentVersion:1}:null;return {settings:structuredClone(settings)};}
@@ -176,14 +178,14 @@ function fixture(){
      await page.locator('[data-machine-directories="codex"]').first().click();
      assert.equal(await page.locator('[data-auto-source], [data-machine-estimates]').count(),0,'Directory settings contain no automatic valuation entry');
      await page.locator('#directories-back').click();
-     await page.locator('[data-settings-agent=claude]').click();
+     await selectSettingsAgent(page,'claude');
      assert.match(await page.locator('[data-auto-machine-status="local"][data-auto-provider="claude"]').textContent(),/未配置目录/);
      await page.locator('#agent-section-valuation > summary').click();await page.locator('[data-agent-estimates="claude"]').click();
      assert.match(await page.locator('#quota-dialog').innerText(),/估算 5 小时 \/ 7 天额度的 API 等价价值/);
      assert(!await page.locator('#quota-dialog').innerText().then(text=>text.includes('credits')));
      await page.locator('#quota-close').click();
      await page.screenshot({path:path.join(output,'source-automatic-settings.png'),fullPage:true});
-     await page.locator('[data-settings-agent=codex]').click();await page.locator('#agent-section-valuation > summary').click();await page.locator('[data-agent-estimates="codex"]').click();
+     await selectSettingsAgent(page,'codex');await page.locator('#agent-section-valuation > summary').click();await page.locator('[data-agent-estimates="codex"]').click();
    }else await page.evaluate(()=>openProviderEstimates('codex'));
    await page.locator('[data-auto-save="c"]').click();
    await page.waitForFunction(()=>!state.settings.sources.find(s=>s.id==='c').autoValuation?.enabled&&!document.querySelector('#quota-dialog').dataset.busy);

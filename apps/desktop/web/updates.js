@@ -2,7 +2,7 @@
   const escape = (value) => window.AieyesUI.escapeHTML(value);
   const invoke = (command, args) => window.__TAURI__.core.invoke(command, args);
   let status = { currentVersion: '', phase: 'idle', message: '', automatic: true, prompt: false };
-  let dialog = null,submitting = false,preparing = false,cancelled = false,answer = null;
+  let dialog = null,submitting = false,preparing = false,cancelled = false,answer = null,waited = '';
   const busy = () => preparing || submitting || ['checking', 'downloading', 'verifying', 'installing'].includes(status.phase);
   const installing = () => ['downloading', 'verifying', 'installing'].includes(status.phase);
   function settingsHTML() {
@@ -50,10 +50,10 @@
   function renderDialog() {
     dialog.querySelector('#update-versions').textContent = AieyesI18n.t("当前版本 v{0} → 新版本 v{1}", status.currentVersion, status.latestVersion ?? '—');
     dialog.querySelector('#update-notes').textContent = status.notes || AieyesI18n.t("此版本包含改进与修复。");
-    const message = dialog.querySelector('#update-message');if (status.phase === 'error') AieyesUI.showError(message, status.message, AieyesI18n.t("更新未完成"));else message.textContent = AieyesI18n.message(status.message);message.classList.toggle('error', status.phase === 'error');
+    const message = dialog.querySelector('#update-message');if (status.phase === 'error') AieyesUI.showError(message, status.message, AieyesI18n.t("更新未完成"));else if (message.textContent !== AieyesI18n.message(status.message)) message.textContent = AieyesI18n.message(status.message);message.classList.toggle('error', status.phase === 'error');
     const progress = dialog.querySelector('progress');progress.hidden = !installing();
     if (status.total > 0) {progress.max = Math.max(status.total, status.downloaded);progress.value = status.downloaded;} else {progress.removeAttribute('value');}
-    dialog.querySelector('#update-bytes').textContent = status.phase === 'downloading' ? `${(status.downloaded / 1048576).toFixed(1)} MB${status.total ? ' / ' + (status.total / 1048576).toFixed(1) + ' MB' : ''}` : '';
+    dialog.querySelector('#update-bytes').textContent = status.phase === 'downloading' ? `${(status.downloaded / 1048576).toFixed(1)} MB${status.total ? ' / ' + (status.total / 1048576).toFixed(1) + ' MB' : ''}` : preparing ? waited : '';
     const install = dialog.querySelector('#update-install');install.disabled = busy();install.textContent = AieyesI18n.message(status.phase === 'error' ? AieyesI18n.t("重新检查") : AieyesI18n.t("更新并重启"));
     install.hidden = !['available', 'error', 'downloading', 'verifying', 'installing'].includes(status.phase);
     dialog.querySelector('#update-later').disabled = busy() && !preparing;
@@ -62,7 +62,7 @@
   function present() {
     if (!dialog) {
       dialog = document.createElement('dialog');dialog.id = 'update-dialog';dialog.setAttribute('aria-labelledby', 'update-title');
-      dialog.innerHTML = AieyesI18n.t("<div class=\"dialog-head\"><h2 id=\"update-title\">Aieyes 更新</h2></div><p id=\"update-versions\"></p><div id=\"update-notes\"></div><p id=\"update-message\" role=\"status\"></p><progress hidden></progress><p id=\"update-bytes\"></p><div class=\"dialog-foot\"><button id=\"update-later\">稍后</button><button id=\"update-install\" class=\"primary\">更新并重启</button></div>");
+      dialog.innerHTML = `<div class="dialog-head"><h2 id="update-title">${AieyesI18n.t("Aieyes 更新")}</h2></div><p id="update-versions"></p><div id="update-notes"></div><p id="update-message" role="status"></p><progress hidden></progress><p id="update-bytes"></p><div class="dialog-foot"><button id="update-later">${AieyesI18n.t("稍后")}</button><button id="update-install" class="primary">${AieyesI18n.t("更新并重启")}</button></div>`;
       document.body.append(dialog);
       dialog.oncancel = (event) => {event.preventDefault();if (!busy()) later();};
       dialog.querySelector('#update-later').onclick = later;
@@ -93,8 +93,10 @@
     while (!cancelled) {
       const tasks = blockers();if (!tasks.length) break;
       for (const task of tasks) if (!started.has(task)) started.set(task, Date.now());
-      status.message = AieyesI18n.t("等待当前任务完成：") + tasks.map((task) => task + AieyesI18n.t("（已等待 ") + Math.floor((Date.now() - started.get(task)) / 1000) + AieyesI18n.t(" 秒）")).join('、');renderDialog();
-      if (Date.now() >= deadline) {if ((await decide(status.message + AieyesI18n.t("。可取消等待，回到对应页面处理。"), [['continue', AieyesI18n.t("继续等待")], ['cancel', AieyesI18n.t("取消并返回")]])) === 'cancel') return false;deadline = Date.now() + 30000;}
+      // The live message names the tasks; elapsed seconds stay in the non-live detail line.
+      status.message = AieyesI18n.t("等待当前任务完成：") + tasks.join('、');
+      waited = AieyesI18n.t("等待当前任务完成：{0}", tasks.map(task => AieyesI18n.t("{0}（已等待 {1} 秒）", task, Math.floor((Date.now() - started.get(task)) / 1000))).join("、"));renderDialog();
+      if (Date.now() >= deadline) {if ((await decide(AieyesI18n.t("{0}。可取消等待，回到对应页面处理。", waited), [['continue', AieyesI18n.t("继续等待")], ['cancel', AieyesI18n.t("取消并返回")]])) === 'cancel') return false;deadline = Date.now() + 30000;}
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
     if (cancelled) return false;
@@ -102,7 +104,7 @@
     const editor = document.querySelector('#editor');
     if (editor?.open) {
       if (editorSnapshot() !== editorBaseline) {
-        const choice = await decide(AieyesI18n.t("更新前保存“") + document.querySelector('#editor-title').textContent + AieyesI18n.t("”中的更改？"), [['save', AieyesI18n.t("保存并更新")], ['discard', AieyesI18n.t("放弃更改并更新")], ['cancel', AieyesI18n.t("取消")]]);
+        const choice = await decide(AieyesI18n.t("更新前保存“{0}”中的更改？", document.querySelector('#editor-title').textContent), [['save', AieyesI18n.t("保存并更新")], ['discard', AieyesI18n.t("放弃更改并更新")], ['cancel', AieyesI18n.t("取消")]]);
         if (choice === 'cancel') return false;
         if (choice === 'save') {const form = document.querySelector('#editor-form');if (!form.reportValidity()) {dialog.close();return false;}await form.onsubmit({ preventDefault() {}, target: form });if (editor.open) {status.message = AieyesI18n.t("编辑器保存失败，请检查显示的错误。");dialog.close();document.querySelector('#editor-error')?.focus();return false;}} else
         closeEditor(true);

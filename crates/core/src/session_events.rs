@@ -74,6 +74,11 @@ pub fn hook(provider: &str, kind: &str, input: &Value, at: u64) -> Event {
     let mut event = Event {
         kind: kind.into(),
         at,
+        session_source: if provider == "claude" {
+            field(input, &["entrypoint"])
+        } else {
+            String::new()
+        },
         session: field(input, &["session_id", "conversationId", "sessionId"]),
         parent_session: field(input, &["parent_session_id", "parentSessionId"]),
         turn: field(input, &["turn_id", "turnId", "prompt_id"]),
@@ -480,6 +485,7 @@ pub fn claude(row: &Value) -> Vec<Event> {
         .unwrap_or(0);
     let mut base = Event {
         session,
+        session_source: field(row, &["entrypoint"]),
         at,
         parent_session: field(row, &["parentSessionId", "parent_session_id"]),
         ..Event::default()
@@ -492,6 +498,12 @@ pub fn claude(row: &Value) -> Vec<Event> {
     }
     let content = row["message"]["content"].as_array();
     let mut out = Vec::new();
+    if !base.session_source.is_empty() {
+        out.push(Event {
+            kind: "identity".into(),
+            ..base.clone()
+        });
+    }
     match row["type"].as_str() {
         Some("user") => {
             let results: Vec<_> = content
@@ -605,10 +617,10 @@ impl Activity {
         if !e.parent_session_path.is_empty() {
             self.parent_session_path = e.parent_session_path.clone();
         }
+        if !e.session_source.is_empty() {
+            self.session_source = e.session_source.clone();
+        }
         if e.kind == "identity" {
-            if !e.session_source.is_empty() {
-                self.session_source = e.session_source;
-            }
             return;
         }
         if e.at > 0 && e.at < self.at.max(self.turn_started) {

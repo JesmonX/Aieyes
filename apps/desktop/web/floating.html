@@ -30,17 +30,17 @@
       <section id="content"></section>
     </div>
     <footer class="panel-foot">
-      <div class="panel-connection"><span id="activity" aria-live="polite">正在加载</span>
+      <div class="panel-connection"><span id="activity">正在加载</span>
       </div><div class="panel-actions">
-      <button type="button" data-language-toggle translate="no" aria-label="切换到英文" title="切换到英文">English</button><button type="button" data-theme-toggle aria-label="切换明暗模式" title="切换明暗模式"></button>
+      <details class="theme-menu" data-menu data-theme-menu><summary aria-label="主题" title="主题"></summary><div class="theme-menu-body"><button type="button" role="menuitemradio" data-theme-choice="system">跟随系统</button><button type="button" role="menuitemradio" data-theme-choice="light">浅色</button><button type="button" role="menuitemradio" data-theme-choice="dark">深色</button></div></details>
       <button type="button" id="panel-update" aria-label="检查更新" title="检查更新"><span data-ui-icon="download" aria-hidden="true"></span><span class="update-badge" hidden>!</span></button>
       <button type="button" id="panel-detail" aria-label="打开详情" title="打开详情（Ctrl+Shift+D）" data-ui-icon="expand"></button>
       <button type="button" id="panel-settings" aria-label="设置" title="设置（Ctrl+,）" data-ui-icon="settings"></button>
-      <details id="panel-more" class="panel-more"><summary aria-label="更多操作" title="更多操作" data-ui-icon="more"></summary><div class="panel-more-menu"><button type="button" id="panel-accounts">面板显示账户…</button><button type="button" id="panel-latency">测试出站连接</button><button type="button" id="panel-pin" data-pinned="false" aria-pressed="false">固定面板</button><button type="button" id="panel-quit">退出 Aieyes</button></div></details>
+      <details id="panel-more" class="panel-more" data-menu><summary aria-label="更多操作" title="更多操作" data-ui-icon="more"></summary><div class="panel-more-menu"><button type="button" id="panel-accounts">面板显示账户…</button><button type="button" id="panel-add-host">添加 SSH 主机…</button><button type="button" id="panel-latency">测试出站连接</button><button type="button" id="panel-pin" data-pinned="false" aria-pressed="false">固定面板</button><button type="button" id="panel-quit">退出 Aieyes</button></div></details>
       </div>
     </footer>
   </div>
-  <script src="icons.js"></script><script src="scroll-affordance.js"></script><script src="webview-guards.js"></script><script src="tooltip.js"></script><script src="motion.js"></script><script src="single-select.js"></script>
+  <script src="icons.js"></script><script src="scroll-affordance.js"></script><script src="webview-guards.js"></script><script src="tooltip.js"></script><script src="menu.js"></script><script src="motion.js"></script><script src="single-select.js"></script>
   <script src="sessions.js"></script>
   <script src="refresh.js"></script><script src="multiselect.js"></script><script src="ui-state.js"></script><script src="balanced-grid.js"></script><script src="pet-animation.js"></script><script src="analysis.js"></script><script src="server-renderer.js"></script><script src="account-targets.js"></script><script src="codex-api.js"></script>
 <script src="view-state.js"></script><script src="app.js"></script><script src="quota-card-layout.js"></script><script src="automatic-estimates.js"></script><script src="agent-settings.js"></script>

@@ -3,14 +3,13 @@ use std::{ffi::c_void, mem::size_of, sync::OnceLock};
 use windows::{
     Win32::{
         Foundation::HWND,
-        Graphics::{Dwm::*, Gdi::*},
+        Graphics::Dwm::*,
         System::{
             LibraryLoader::{GetModuleHandleW, GetProcAddress},
             Registry::*,
         },
         UI::{
             Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
-            HiDpi::GetDpiForWindow,
             WindowsAndMessaging::*,
         },
     },
@@ -27,7 +26,7 @@ struct Version {
     service_pack: [u16; 128],
 }
 
-fn build_number() -> u32 {
+pub(crate) fn build_number() -> u32 {
     static BUILD: OnceLock<u32> = OnceLock::new();
     *BUILD.get_or_init(|| unsafe {
         let Ok(module) = GetModuleHandleW(w!("ntdll.dll")) else {
@@ -86,11 +85,33 @@ pub fn effects_enabled() -> bool {
     }
 }
 
-fn preferred(build: u32, effects: bool) -> &'static str {
-    if !effects {
+/// The taskbar has its own light/dark setting; a missing value means Windows 10's default dark taskbar.
+pub fn taskbar_dark() -> bool {
+    let (mut light, mut size) = (0u32, size_of::<u32>() as u32);
+    let found = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            w!("SystemUsesLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&mut light as *mut u32).cast()),
+            Some(&mut size),
+        )
+    } == windows::Win32::Foundation::ERROR_SUCCESS;
+    !found || light == 0
+}
+/// Long-lived main windows use Mica (cheaper, Windows 11 22H2+); the transient panel keeps Acrylic.
+fn preferred(build: u32, effects: bool, main: bool, requested: &str) -> &'static str {
+    if !effects || requested == "opaque" {
         "opaque"
     } else if build >= 22621 {
-        "acrylic"
+        match requested {
+            "mica" => "mica",
+            "acrylic" => "acrylic",
+            _ if main => "mica",
+            _ => "acrylic",
+        }
     } else if build >= 17763 {
         "blur"
     } else {
@@ -140,9 +161,9 @@ unsafe fn legacy_blur(hwnd: HWND, enabled: bool, dark: bool) -> bool {
     }
 }
 
-pub fn apply(hwnd: HWND, dark: bool, effects: bool) -> &'static str {
+pub fn apply(hwnd: HWND, dark: bool, effects: bool, main: bool, requested: &str) -> &'static str {
     let build = build_number();
-    let preferred = preferred(build, effects);
+    let preferred = preferred(build, effects, main, requested);
     unsafe {
         let dark = i32::from(dark);
         let _ = DwmSetWindowAttribute(
@@ -152,10 +173,10 @@ pub fn apply(hwnd: HWND, dark: bool, effects: bool) -> &'static str {
             size_of::<i32>() as u32,
         );
         let result = if build >= 22621 {
-            let backdrop = if preferred == "acrylic" {
-                DWMSBT_TRANSIENTWINDOW
-            } else {
-                DWMSBT_NONE
+            let backdrop = match preferred {
+                "mica" => DWMSBT_MAINWINDOW,
+                "acrylic" => DWMSBT_TRANSIENTWINDOW,
+                _ => DWMSBT_NONE,
             };
             DwmSetWindowAttribute(
                 hwnd,
@@ -174,51 +195,29 @@ pub fn apply(hwnd: HWND, dark: bool, effects: bool) -> &'static str {
     }
 }
 
-/// Native and web clipping both use 8 logical pixels. Maximized windows are square.
+/// Windows 11 rounds through DWM: 8 logical pixels, matching the web pane, square when maximized.
+pub fn rounded_corners() -> bool {
+    build_number() >= 22000
+}
+
+/// Windows 10 windows stay square, as native ones are there: a window region would also drop the DWM
+/// shadow, and GetWindowRect includes the invisible resize border, which hid the rounding anyway.
 pub fn reshape(hwnd: HWND) {
+    if !rounded_corners() {
+        return;
+    }
     unsafe {
-        let maximized = IsZoomed(hwnd).as_bool();
-        if build_number() >= 22000 {
-            let corner = if maximized {
-                DWMWCP_DONOTROUND
-            } else {
-                DWMWCP_ROUND
-            };
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_WINDOW_CORNER_PREFERENCE,
-                (&corner as *const DWM_WINDOW_CORNER_PREFERENCE).cast(),
-                size_of::<DWM_WINDOW_CORNER_PREFERENCE>() as u32,
-            );
+        let corner = if IsZoomed(hwnd).as_bool() {
+            DWMWCP_DONOTROUND
         } else {
-            let mut rect = windows::Win32::Foundation::RECT::default();
-            if GetWindowRect(hwnd, &mut rect).is_err() {
-                return;
-            }
-            let radius = if maximized {
-                0
-            } else {
-                (16 * GetDpiForWindow(hwnd).max(96) / 96) as i32
-            };
-            let region = CreateRoundRectRgn(
-                0,
-                0,
-                rect.right - rect.left + 1,
-                rect.bottom - rect.top + 1,
-                radius,
-                radius,
-            );
-            if region.is_invalid() {
-                return;
-            }
-            let current = CreateRectRgn(0, 0, 0, 0);
-            let same =
-                GetWindowRgn(hwnd, current).0 != ERROR && EqualRgn(region, current).as_bool();
-            let _ = DeleteObject(current.into());
-            if same || SetWindowRgn(hwnd, Some(region), true) == 0 {
-                let _ = DeleteObject(region.into());
-            }
-        }
+            DWMWCP_ROUND
+        };
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            (&corner as *const DWM_WINDOW_CORNER_PREFERENCE).cast(),
+            size_of::<DWM_WINDOW_CORNER_PREFERENCE>() as u32,
+        );
     }
 }
 
@@ -227,11 +226,16 @@ mod tests {
     use super::preferred;
     #[test]
     fn material_tracks_os_support_and_accessibility() {
-        assert_eq!(preferred(22621, true), "acrylic");
-        assert_eq!(preferred(22000, true), "blur");
-        assert_eq!(preferred(19045, true), "blur");
-        assert_eq!(preferred(17763, true), "blur");
-        assert_eq!(preferred(17134, true), "opaque");
-        assert_eq!(preferred(26100, false), "opaque");
+        assert_eq!(preferred(22621, true, true, "default"), "mica");
+        assert_eq!(preferred(22621, true, false, "default"), "acrylic");
+        assert_eq!(preferred(22000, true, true, "default"), "blur");
+        assert_eq!(preferred(19045, true, false, "default"), "blur");
+        assert_eq!(preferred(17763, true, true, "default"), "blur");
+        assert_eq!(preferred(17134, true, true, "default"), "opaque");
+        assert_eq!(preferred(26100, false, true, "default"), "opaque");
+        assert_eq!(preferred(26100, true, true, "acrylic"), "acrylic");
+        assert_eq!(preferred(26100, true, false, "mica"), "mica");
+        assert_eq!(preferred(26100, true, true, "opaque"), "opaque");
+        assert_eq!(preferred(19045, true, true, "mica"), "blur");
     }
 }

@@ -10,20 +10,50 @@ struct AgentsSettingsView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 12) {
-            FlowLayout(spacing: 6) {
-                ForEach(model.agentConfigurations) { agent in
-                    let selected = model.settingsAgent == agent.provider
-                    Button { model.settingsAgent = agent.provider } label: {
-                        HStack(spacing: 6) { ProviderMark(provider: agent.provider, size: 20); Text(Format.provider(agent.provider)) }
-                            .font(AppFont.secondary).padding(.horizontal, 10).padding(.vertical, 7)
-                            .foregroundStyle(selected ? Palette.category(agent.provider) : Color.secondary)
-                            .background(selected ? Palette.category(agent.provider).opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
-                    }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
-                }
+            AgentEntrySelector(model: model)
+            if model.settingsAgentIDs.isEmpty && model.requestedAccountKey == nil {
+                Text(L("添加要接入的 Agent")).foregroundStyle(.secondary)
+            } else {
+                AccountsSettingsView(model: model, provider: model.settingsAgent) { model.requestedAccountKey = $0.key }.id(model.settingsAgent)
             }
-            AccountsSettingsView(model: model, provider: model.settingsAgent) { model.requestedAccountKey = $0.key }
-                .id(model.settingsAgent)
         }.padding(.top, 12)
+    }
+}
+
+private struct AgentEntrySelector: View {
+    @SurfaceModel var model: AppModel
+    @State private var selecting = false
+    @State private var managing = false
+    @State private var search = ""
+    private var entries: [AgentConfiguration] { model.settingsAgentIDs.compactMap { id in model.agentConfigurations.first { $0.provider == id } } }
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                ForEach(entries.prefix(4)) { agent in
+                    Button { model.settingsAgent = agent.provider } label: { Label { Text(Format.provider(agent.provider)) } icon: { ProviderMark(provider:agent.provider,size:20) } }
+                        .buttonStyle(.plain).padding(6).background(model.settingsAgent == agent.provider ? Palette.accent.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
+                }
+                Spacer(minLength:8)
+                Button(L("更多 Agent")) { selecting = true }
+                Button(L("管理 Agent")) { managing = true }
+            }
+            HStack { Button(Format.provider(model.settingsAgent), systemImage:"chevron.down") { selecting = true }; Spacer(); Button(L("管理 Agent")) { managing = true } }
+        }
+        .popover(isPresented:$selecting) {
+            VStack { TextField(L("搜索 Agent"),text:$search); ScrollView { VStack(alignment:.leading) { ForEach(entries.filter { search.isEmpty || Format.provider($0.provider).localizedCaseInsensitiveContains(search) }) { agent in Button(Format.provider(agent.provider)) { model.settingsAgent = agent.provider; selecting = false }.buttonStyle(.plain).padding(6) } } } }.padding().frame(width:280,height:300)
+        }
+        .sheet(isPresented:$managing) {
+            VStack(alignment:.leading,spacing:12) {
+                Text(L("管理 Agent")).font(AppFont.title)
+                Text(L("移出会暂停采集，保留目录、账户和历史。定时唤醒由任务开关独立控制。")).font(AppFont.secondary).foregroundStyle(.secondary)
+                TextField(L("搜索 Agent"),text:$search)
+                List(model.agentConfigurations.filter { search.isEmpty || Format.provider($0.provider).localizedCaseInsensitiveContains(search) }) { agent in
+                    HStack { Text(Format.provider(agent.provider)); Spacer(); Button(L(model.settingsAgentIDs.contains(agent.provider) ? "移出并暂停采集" : "添加")) { Task { await model.manageAgent(agent.provider,visible:!model.settingsAgentIDs.contains(agent.provider)) } }.disabled(model.settingsSaving) }
+                }
+                if let message = model.settingsMessage { Text(message).foregroundStyle(Palette.danger) }
+                HStack { Spacer(); Button(L("完成")) { managing = false }.keyboardShortcut(.defaultAction) }
+            }.padding(20).frame(width:520,height:480)
+        }
     }
 }
 
@@ -91,7 +121,7 @@ struct AgentMachinesSection: View {
                     if !sources.contains(where: { model.settings.sourceEnabled($0) }) { Text(L("登录与切换需要启用 Agent、选择机器并开启目录采集")) }
                     Button(L("机器与采集设置")) { model.openSettings(.init(category: "servers")) }
                     Button(available ? L("暂停 Agent 采集") : L("恢复 Agent 采集")) { Task { await model.setDeviceEnabled(id, enabled: !available) } }
-                } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel(name + L("操作"))
+                } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).menuIndicator(.hidden).tint(Color.primary).fixedSize().accessibilityLabel(name + L("操作"))
             }
         }.padding(.vertical, 3)
     }
@@ -134,7 +164,7 @@ private struct MachineSessionStatus: View {
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        if ["codex", "claude", "antigravity", "cursor", "kimi", "codebuddy", "deepseek-harness", "grok", "zcode", "qoder", "opencode", "pi", "omp"].contains(provider) { Button(label, action: open).disabled(sources.isEmpty).font(AppFont.secondary) }
+        if ["codex", "claude", "antigravity", "cursor", "kimi", "codebuddy", "deepseek-harness", "grok", "zcode", "qoder", "opencode", "pi", "omp"].contains(provider) { Button(label, action: open).disabled(sources.isEmpty).font(AppFont.secondary).lineLimit(1).help(label) }
     }
 }
 private struct MachineSessionHooksView: View {
@@ -145,7 +175,7 @@ private struct MachineSessionHooksView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 14) {
-            HStack { Text(L("会话监测 · ") + model.machineName(machine)).font(AppFont.title); Spacer(); Button(L("完成")) { dismiss() } }
+            Text(L("会话监测 · ") + model.machineName(machine)).font(AppFont.title)
             if ["codex", "kimi", "deepseek-harness", "grok", "qoder", "opencode", "pi", "omp"].contains(provider) {
                 Text(L("从 Agent 原生记录读取会话状态。")).foregroundStyle(.secondary)
             } else {
@@ -154,6 +184,8 @@ private struct MachineSessionHooksView: View {
                     ForEach(model.settings.sources.filter { $0.provider == provider && $0.subscription == nil && ($0.hostId ?? "local") == machine && !$0.unbound }) { source in SessionHookControls(model: model, source: source) }
                 } }
             }
+            // Changes apply immediately, so the sheet ends with Done (§5.2).
+            HStack { Spacer(); Button(L("完成")) { dismiss() }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction) }
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogHooksWidth, height: provider == "codex" ? 180 : 400).aieyesAccent()
     }
 }
@@ -167,12 +199,9 @@ struct AgentAutomaticValuationView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text(Format.provider(provider) + " · " + model.machineName(machine)).font(AppFont.title)
-                Spacer()
-                Button(L("完成")) { dismiss() }.disabled(model.automaticSaving)
-            }
+            Text(Format.provider(provider) + " · " + model.machineName(machine)).font(AppFont.title)
             ScrollView { AutomaticValuationControls(model: model, sources: sources).frame(maxWidth: .infinity, alignment: .leading) }
+            HStack { Spacer(); Button(L("完成")) { dismiss() }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(model.automaticSaving) }
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogAutomaticWidth, height: 440).aieyesAccent()
             .interactiveDismissDisabled(model.automaticSaving)
             .updateOperation(L("自动估值设置"), active: model.automaticSaving)
@@ -198,7 +227,7 @@ struct AgentDirectoriesView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack {
-            HStack { Text(Format.provider(provider) + " · " + model.machineName(machine)).font(AppFont.title); Spacer(); Button(L("完成")) { dismiss() } }.padding()
+            Text(Format.provider(provider) + " · " + model.machineName(machine)).font(AppFont.title).frame(maxWidth: .infinity, alignment: .leading).padding()
             Form {
                 ForEach(sources) { source in
                     Section {
@@ -236,6 +265,7 @@ struct AgentDirectoriesView: View {
                 }
                 if let error { ErrorNotice(message: error) }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).disabled(busy)
+            HStack { Spacer(); Button(L("完成")) { dismiss() }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction) }.padding()
         }.frame(width: 600, height: 480).aieyesAccent().interactiveDismissDisabled(busy)
         .updateOperation(L("Agent 目录配置"), active: busy)
         .sheet(item: $shellHost) { host in
@@ -475,7 +505,7 @@ struct AccountDevicesView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack {
-            HStack { Text(account.name).font(AppFont.title); Spacer(); Button(L("完成")) { focusedField = nil; guard saveEditedText(force: error != nil) else { return }; Task { await saveTask?.value; if error == nil { dismiss() } } }.disabled(busy) }.padding(20)
+            Text(account.name).font(AppFont.title).frame(maxWidth: .infinity, alignment: .leading).padding(20)
             ScrollViewReader { scroll in
             Form {
                 Section {
@@ -497,11 +527,12 @@ struct AccountDevicesView: View {
                             save { next in var p = next.quotaResetNotifications ?? QuotaResetNotificationSettings(); p.natural = value; next.quotaResetNotifications = p }
                         }
                     }
-                    LabeledContent(L("查询间隔（秒）")) { TextField(L("查询间隔（秒）"), text: $intervalText, prompt: Text(L("沿用全局 · {0} 秒", model.settings.refreshSeconds))).labelsHidden().frame(width: DesignTokens.fieldHintWidth).focused($focusedField, equals: "interval") }.help(L("留空沿用全局 · {0} 秒" , model.settings.refreshSeconds))
-                    HelpNote(title: L("查询间隔"), text: L("留空沿用全局间隔；自定义范围 5–86400 秒。"))
+                    LabeledContent { TextField(L("查询间隔（秒）"), text: $intervalText, prompt: Text(L("沿用全局 · {0} 秒", model.settings.refreshSeconds))).labelsHidden().frame(width: DesignTokens.fieldHintWidth).focused($focusedField, equals: "interval") } label: {
+                        HStack(spacing: 4) { Text(L("查询间隔（秒）")); HelpNote(title: L("查询间隔"), text: L("留空沿用全局间隔；自定义范围 5–86400 秒。")) }
+                    }.help(L("留空沿用全局 · {0} 秒" , model.settings.refreshSeconds))
                     }
                     }
-                    TextField(L("账户名称"), text: $account.name).focused($focusedField, equals: "name")
+                    LabeledContent(L("账户名称")) { TextField(L("账户名称"), text: $account.name).labelsHidden().focused($focusedField, equals: "name") }
                     Toggle(L("归档账户"), isOn: Binding(get: { account.archived == true }, set: { value in account.archived = value; save { $0.archived = value } }))
                     if model.settings.supports(account.provider, "quota") {
                     Toggle(L("在面板显示"), isOn: panelBinding).disabled(!current.quotaEnabled)
@@ -537,16 +568,17 @@ struct AccountDevicesView: View {
                             if let time = status?.checkedAt { Text(L("检查于 ") + Format.time(time)).font(AppFont.secondary).foregroundStyle(.secondary) }
                         }
                         if machine != "local" {
-                            DisclosureGroup(L("前置命令"), isExpanded: Binding(get: { expandedCommands.contains(machine) }, set: { expanded in
+                            DisclosureGroup(isExpanded: Binding(get: { expandedCommands.contains(machine) }, set: { expanded in
                                 if expanded { expandedCommands.insert(machine) } else { expandedCommands.remove(machine) }
                             })) {
                                 TextEditor(text: Binding(get: { commands[machine] ?? inheritedCommand(machine) }, set: { commands[machine] = $0 })).font(.system(size: DesignTokens.fontEntry, design: .monospaced)).frame(height: 85).focused($focusedField, equals: machine)
-                                HelpNote(title: L("前置命令"), text: L("用于此账户的授权、切换、额度查询及定时唤醒；不用于同步历史或监控。清空后不执行。"))
                                 if current.deviceSettings?.first(where: { $0.machineId == machine })?.preCommandResetRequired == true {
                                     Text(L("此机器的旧目录前置命令不一致，已清空，请重新设置。")).foregroundStyle(Palette.warn)
                                     Button(L("保存此机器的前置命令")) { commands[machine] = commands[machine] ?? ""; saveEditedText(force: true) }
                                 }
 
+                            } label: {
+                                HStack(spacing: 4) { Text(L("前置命令")); HelpNote(title: L("前置命令"), text: L("用于此账户的授权、切换、额度查询及定时唤醒；不用于同步历史或监控。清空后不执行。")) }
                             }.id("command:" + machine)
                         }
                     }
@@ -561,6 +593,8 @@ struct AccountDevicesView: View {
                 }
             }
             }
+            // Toggles apply at once; Done also commits the text fields still being edited.
+            HStack { Spacer(); Button(L("完成")) { focusedField = nil; guard saveEditedText(force: error != nil) else { return }; Task { await saveTask?.value; if error == nil { dismiss() } } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(busy) }.padding(20)
         }.frame(width: 680, height: 650).aieyesAccent().interactiveDismissDisabled(busy || error != nil || focusedField != nil)
         .updateDraftGuard(L("账户设置"), snapshot: draftSnapshot(account) + intervalText + draftSnapshot(commands), dirty: account != current || !commands.isEmpty || intervalText != (current.quotaRefreshSeconds.map(String.init) ?? ""), saving: busy, save: { focusedField = nil; guard saveEditedText(force: true) else { return false }; await saveTask?.value; if error == nil { dismiss(); return true }; return false }, discard: { dismiss() })
         .onAppear { intervalText = account.quotaRefreshSeconds.map(String.init) ?? "" }
@@ -710,6 +744,9 @@ struct AccountConnectionView: View {
     @State private var preparedKey: (key: String, path: String)?
     @State private var busy = false
     @State private var error: String?
+    @State private var confirmDiscard = false
+    /// Typed keys and machine choices are only kept by saving; Cancel and Esc ask before dropping them.
+    private var dirty: Bool { !selection.isEmpty || !apiKey.isEmpty || useLocalLogin || !workspaceID.isEmpty || !nativeConfigDir.isEmpty }
     private var usesSubscription: Bool { CoreContract.subscriptionModes[provider] != nil && !(provider == "deepseek" && account != nil && model.settings.sources.contains { account!.uses($0) && $0.subscription == nil }) }
     private var supportsLocalLogin: Bool { (provider == "grok" && subscriptionMode == "subscription") || (provider == "opencode" && subscriptionMode == "go") }
     private var needsWorkspace: Bool { (provider == "grok" && subscriptionMode == "api") || (provider == "opencode" && subscriptionMode == "console") }
@@ -718,7 +755,7 @@ struct AccountConnectionView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text(intent == "switch" ? L("切换账户") : account == nil ? L("添加账户") : provider == "deepseek" ? L("更新 API Key") : CoreContract.subscriptionModes[provider] != nil ? L("更新额度凭据") : L("连接机器")).font(AppFont.title); Spacer(); Button(L("完成")) { dismiss() }.disabled(busy) }.padding(.horizontal, 20).padding(.top, 20)
+            Text(intent == "switch" ? L("切换账户") : account == nil ? L("添加账户") : provider == "deepseek" ? L("更新 API Key") : CoreContract.subscriptionModes[provider] != nil ? L("更新额度凭据") : L("连接机器")).font(AppFont.title).padding(.horizontal, 20).padding(.top, 20)
             Text(Format.provider(provider)).font(AppFont.section).padding(.horizontal, 20)
             if provider == "codex" { CodexAccountsView(model: model, targetAccountID: account?.id, initialSourceID: initialSourceID, intent: intent, onBusyChanged: { busy = $0 }) }
             else {
@@ -730,16 +767,16 @@ struct AccountConnectionView: View {
                         }
                         if modes.count > 1 { Picker(L("服务 / 地区"), selection: $subscriptionMode) { ForEach(modes.keys.sorted(), id: \.self) { key in Text(L(modes[key] ?? key)).tag(key) } } }
                         if provider == "qoder" && subscriptionMode == "cli" {
-                            TextField(L("CLI 配置目录（留空跟随客户端）"), text: $nativeConfigDir)
+                            LabeledContent(L("CLI 配置目录（留空跟随客户端）")) { TextField(L("CLI 配置目录（留空跟随客户端）"), text: $nativeConfigDir).labelsHidden() }
                             Text(L("读取 CLI 当前登录并绑定账户身份，无需填写密钥。CLI 切换账号后请切回原账户或另建账户。")).foregroundStyle(.secondary)
                         } else {
-                            if needsWorkspace { TextField(provider == "grok" ? "Team ID" : "Workspace ID", text: $workspaceID) }
-                            if !supportsLocalLogin || !useLocalLogin { SecureField(L("API Key / 登录令牌 / Cookie"), text: $apiKey) }
+                            if needsWorkspace { LabeledContent(provider == "grok" ? "Team ID" : "Workspace ID") { TextField(provider == "grok" ? "Team ID" : "Workspace ID", text: $workspaceID).labelsHidden() } }
+                            if !supportsLocalLogin || !useLocalLogin { LabeledContent(L("API Key / 登录令牌 / Cookie")) { SecureField(L("API Key / 登录令牌 / Cookie"), text: $apiKey).labelsHidden() } }
                         }
                         if supportsLocalLogin { Toggle(L("读取本机已登录凭据"), isOn: $useLocalLogin) }
                         if !(provider == "qoder" && subscriptionMode == "cli") { Text(L("验证成功后保存到系统凭据库；不会切换客户端账户。")).foregroundStyle(.secondary) }
                     } else if provider == "deepseek" {
-                        SecureField("API Key", text: $apiKey)
+                        LabeledContent("API Key") { SecureField("API Key", text: $apiKey).labelsHidden() }
                         Text(L("Key 保存在本机，只用于查询账户余额。")).foregroundStyle(.secondary)
                     } else {
                         Section(L("已有登录的机器 · 可多选")) {
@@ -749,10 +786,19 @@ struct AccountConnectionView: View {
                     }
                     if account == nil { Text(L("添加后可修改账户的显示名称。")).foregroundStyle(.secondary) }
                     if let error { ErrorNotice(message: error) }
-                    Button(busy ? L("保存中…") : account == nil ? L("添加账户") : provider == "deepseek" ? L("更新 API Key") : CoreContract.subscriptionModes[provider] != nil ? L("保存额度凭据") : L("保存连接")) { Task { await save() } }.buttonStyle(.aieyesPrimary).disabled(busy)
                 }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).disabled(busy)
             }
-        }.frame(width: DesignTokens.dialogAccountWidth, height: 620).interactiveDismissDisabled(busy)
+            HStack {
+                Spacer()
+                // Codex manages its own sign-in steps; the sheet only closes.
+                if provider == "codex" { Button(L("完成")) { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy) }
+                else {
+                    Button(L("取消")) { if dirty { confirmDiscard = true } else { dismiss() } }.keyboardShortcut(.cancelAction).disabled(busy)
+                    Button(busy ? L("保存中…") : account == nil ? L("添加账户") : provider == "deepseek" ? L("更新 API Key") : CoreContract.subscriptionModes[provider] != nil ? L("保存额度凭据") : L("保存连接")) { Task { await save() } }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(busy)
+                }
+            }.padding([.horizontal, .bottom], 20)
+        }.frame(width: DesignTokens.dialogAccountWidth, height: 620).interactiveDismissDisabled(busy || dirty)
+        .discardDraftConfirmation($confirmDiscard) { dismiss() }
         .updateDraftGuard(L("账户连接"), snapshot: provider + draftSnapshot(selection.sorted()) + apiKey + subscriptionMode + workspaceID + nativeConfigDir + String(useLocalLogin), dirty: !selection.isEmpty || !apiKey.isEmpty || useLocalLogin || !workspaceID.isEmpty || !nativeConfigDir.isEmpty, saving: busy, save: { await save(); return error == nil }, discard: { dismiss() })
         .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
         .onAppear { provider = account?.provider ?? initialProvider ?? (initialSourceID != nil ? "codex" : model.agentConfigurations.first(where: { $0.enabled })?.provider ?? "") }

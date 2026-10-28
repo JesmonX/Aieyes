@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Aieyes promo</title>
+<style>
+@font-face{font-family:"LXGW WenKai";src:url('/.local/promo/fonts/LXGWWenKai-Regular.ttf');font-weight:400}
+@font-face{font-family:"LXGW WenKai";src:url('/.local/promo/fonts/LXGWWenKai-Medium.ttf');font-weight:600}
+:root{--bg:#090b10;--text:#eff0f5;--muted:#a3a6b7;--violet:#b9a4ff;--cyan:#8ddbdc;--blue:#94b9ff;--pink:#eeb3cf;--green:#9ad6bb;--orange:#ebc198;
+  --font:"Comic Sans MS","LXGW WenKai",sans-serif;--ui:-apple-system,"SF Pro Text","PingFang SC",sans-serif}
+*{box-sizing:border-box;margin:0}
+html,body{width:1920px;height:1080px;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased}
+#stage{position:absolute;inset:0;overflow:hidden}
+.glow{position:absolute;width:1400px;height:1400px;border-radius:50%;filter:blur(40px);opacity:.0;will-change:transform}
+.scene{position:absolute;inset:0;display:none}
+.abs{position:absolute}
+.center{position:absolute;left:0;right:0;text-align:center}
+.char{display:inline-block;white-space:pre}
+.kicker{font-size:24px;letter-spacing:3px;font-weight:400}
+.question{font-size:30px;color:var(--muted)}
+.head{font-size:62px;line-height:1.18;font-weight:600;letter-spacing:-.5px}
+.sub{font-size:28px;color:var(--muted);line-height:1.6}
+.window{position:absolute;border-radius:14px;overflow:hidden;box-shadow:0 40px 120px rgba(0,0,0,.65),0 0 0 1px rgba(255,255,255,.13);background:#1e1e1e;transform-origin:0 0}
+.titlebar{height:40px;background:#262626;border-bottom:1px solid #111;position:relative}
+.lights{position:absolute;left:16px;top:14px;display:flex;gap:8px}
+.lights i{width:12px;height:12px;border-radius:50%;display:block}
+.titlebar span{position:absolute;left:0;right:0;top:10px;text-align:center;font:600 14px var(--ui);color:#cfcfcf}
+.viewport{position:relative;overflow:hidden}
+.world{position:absolute;left:0;top:0;transform-origin:0 0}
+.world img{display:block}
+.hl{position:absolute;border-radius:12px;opacity:0;box-shadow:0 0 0 0 transparent}
+.callout{position:absolute;padding:12px 22px;border-radius:999px;background:rgba(20,22,30,.86);border:1px solid rgba(255,255,255,.16);font-size:26px;white-space:nowrap;box-shadow:0 12px 40px rgba(0,0,0,.5);opacity:0}
+.callout b{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:12px;vertical-align:middle;position:relative;top:-2px}
+.chip{position:absolute;display:flex;align-items:center;gap:12px;padding:12px 20px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);font-size:24px;white-space:nowrap}
+.chip img{width:30px;height:30px;object-fit:contain}
+.demo{position:absolute;right:34px;bottom:24px;font:15px var(--ui);color:#6f7386;letter-spacing:.5px}
+.bar{position:absolute;border-radius:10px}
+.menubar{position:absolute;left:0;right:0;top:0;height:34px;background:rgba(30,30,36,.72);backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,.08);font:500 15px var(--ui);color:#e6e6e6;display:flex;align-items:center;padding:0 18px;gap:24px}
+.menubar .right{margin-left:auto;display:flex;align-items:center;gap:20px}
+.pet{position:absolute;width:192px}
+.pet .label{margin:0 auto;width:max-content;font:500 17px var(--ui);padding:5px 14px;border-radius:12px;background:rgba(40,40,46,.92);border:1px solid rgba(255,255,255,.14);text-align:center;line-height:1.45;white-space:pre}
+.code{position:absolute;height:12px;border-radius:6px}
+html[data-theme=light]{--bg:#f4f5f9;--text:#1c1d24;--muted:#686d7e;--violet:#7a5af5;--cyan:#138f93;--blue:#3a6fdc;--pink:#cf4f8b;--green:#23905f;--orange:#c8742a}
+[data-theme=light] .window{background:#ffffff;box-shadow:0 30px 90px rgba(40,44,70,.18),0 0 0 1px rgba(0,0,0,.1)}
+[data-theme=light] .titlebar{background:#f3f3f4;border-bottom:1px solid #e1e1e3}
+[data-theme=light] .titlebar span{color:#4a4a4e}
+[data-theme=light] .callout{background:rgba(255,255,255,.94);border-color:rgba(0,0,0,.08);box-shadow:0 12px 36px rgba(40,44,70,.14)}
+[data-theme=light] .chip{background:rgba(255,255,255,.8);border-color:rgba(0,0,0,.08);box-shadow:0 6px 20px rgba(40,44,70,.06)}
+[data-theme=light] .demo{color:#9a9eae}
+[data-theme=light] .menubar{background:rgba(250,250,252,.8);border-bottom-color:rgba(0,0,0,.08);color:#1d1d1f}
+[data-theme=light] .pet .label{background:rgba(255,255,255,.94);border-color:rgba(0,0,0,.1);color:#1d1d1f}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script src="app.js"></script>
+</body>
+</html>

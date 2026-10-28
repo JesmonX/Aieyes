@@ -14,25 +14,25 @@ window.AieyesCodexAPI = (() => {
   }
   function html() {
     if (!sources().length && !connections().length) return '';
-    return AieyesI18n.t("<section class=\"card codex-api-settings\"><div class=\"between\"><h2>Codex · API 连接</h2><button data-codex-api=\"add\" ") + (busy || !sources().length ? 'disabled' : '') + AieyesI18n.t(">添加 API</button></div>") + (
+    return `<section class="card codex-api-settings"><div class="between"><h2>${AieyesI18n.t("Codex · API 连接")}</h2><button data-codex-api="add" ` + (busy || !sources().length ? 'disabled' : '') + `>${AieyesI18n.t("添加 API")}</button></div>` + (
 
     error ? '<div class="error" role="alert">' + e(AieyesI18n.message(error)) + '</div>' : '') + (notice ? '<p role="status">' + e(AieyesI18n.message(notice)) + '</p>' : '') +
     connections().map((c) => {
       const source = sources().find((s) => s.id === c.sourceId),selected = statuses.get(c.sourceId)?.selected;
       const active = selected?.connectionId === c.id,applied = active && selected.revision === c.revision;
       return '<div class="api-connection"><div class="list-row"><div class="row-body"><strong>' + e(c.name) + (active ? AieyesI18n.t(" · 当前 API") : '') +
-      '</strong><small>' + e(location(source)) + '</small><small>' + e(c.baseUrl) + '</small>' + (active && !applied ? AieyesI18n.t("<small>有已保存的更改，切换后生效</small>") : '') + (!available(source) ? AieyesI18n.t("<small>采集已暂停或目录不可用；恢复后可切换。</small><button data-api-machine-settings>机器设置</button>") : '') +
-      '</div><button data-codex-api="edit" data-api-id="' + e(c.id) + '" ' + (busy ? 'disabled' : '') + AieyesI18n.t(">设置</button></div><div class=\"actions\">") +
+      '</strong><small>' + e(location(source)) + '</small><small>' + e(c.baseUrl) + '</small>' + (active && !applied ? `<small>${AieyesI18n.t("有已保存的更改，切换后生效")}</small>` : '') + (!available(source) ? `<small>${AieyesI18n.t("采集已暂停或目录不可用；恢复后可切换。")}</small><button data-api-machine-settings>${AieyesI18n.t("机器设置")}</button>` : '') +
+      '</div><button data-codex-api="edit" data-api-id="' + e(c.id) + '" ' + (busy ? 'disabled' : '') + `>${AieyesI18n.t("设置")}</button></div><div class="actions">` +
       [['probe', AieyesI18n.t("测试连接")], ['switch', applied ? AieyesI18n.t("正在使用") : AieyesI18n.t("切换到此 API")], ['remove', AieyesI18n.t("移除")]].map(([action, label]) =>
       '<button data-codex-api="' + action + '" data-api-id="' + e(c.id) + '" ' + (busy || !source || action === 'switch' && (!available(source) || applied) ? 'disabled' : '') + '>' + label + '</button>').join('') + '</div></div>';
     }).join('') + (
-    !connections().length ? AieyesI18n.t("<p class=\"muted\">尚未添加 API 连接。</p>") : '') +
+    !connections().length ? `<p class="muted">${AieyesI18n.t("尚未添加 API 连接。")}</p>` : '') +
     [...new Set(connections().map((c) => c.sourceId))].map((id) => {
       const selected = statuses.get(id)?.selected;
       return '<div class="list-row"><span class="row-body tiny muted">' + e(location(sources().find((s) => s.id === id))) + ' · ' + (
       selected ? selected.kind === 'api' ? AieyesI18n.t("当前使用 ") + e(selected.name || 'API') : AieyesI18n.t("当前使用账户") : AieyesI18n.t("状态待检查")) +
-      '</span><button data-codex-api="refresh" data-api-source="' + e(id) + '" ' + (busy ? 'disabled' : '') + AieyesI18n.t(">刷新状态</button>") +
-      '<button data-codex-api="account" data-api-source="' + e(id) + '" ' + (busy || !available(sources().find((s) => s.id === id)) ? 'disabled' : '') + AieyesI18n.t(">切换到已保存账户</button></div>");
+      '</span><button data-codex-api="refresh" data-api-source="' + e(id) + '" ' + (busy ? 'disabled' : '') + `>${AieyesI18n.t("刷新状态")}</button>` +
+      '<button data-codex-api="account" data-api-source="' + e(id) + '" ' + (busy || !available(sources().find((s) => s.id === id)) ? 'disabled' : '') + `>${AieyesI18n.t("切换到已保存账户")}</button></div>`;
     }).join('') + '</section>';
   }
   function bind() {
@@ -46,7 +46,7 @@ window.AieyesCodexAPI = (() => {
     showEditor(existing ? AieyesI18n.t("设置 Codex API") : AieyesI18n.t("添加 Codex API"),
     select('apiSource', AieyesI18n.t("保存到设备"), sources().map((s) => [s.id, location(s)]), c.sourceId) +
     field('apiName', AieyesI18n.t("连接名称"), c.name) + field('apiBaseUrl', 'Base URL', c.baseUrl, 'https://api.openai.com/v1') +
-    field('apiKey', 'API Key', '', existing ? AieyesI18n.t("留空保留已保存的密钥") : AieyesI18n.t("填写 API Key"), 'password') + AieyesI18n.t("<p class=\"tiny muted\">支持 OpenAI 和兼容 Responses API 的服务。保存后可切换使用。</p>"),
+    field('apiKey', 'API Key', '', existing ? AieyesI18n.t("留空保留已保存的密钥") : AieyesI18n.t("填写 API Key"), 'password') + `<p class="tiny muted">${AieyesI18n.t("支持 OpenAI 和兼容 Responses API 的服务。保存后可切换使用。")}</p>`,
 
     async (f) => {
       const connection = { ...c, sourceId: existing ? c.sourceId : f.get('apiSource'), name: f.get('apiName').trim(), baseUrl: f.get('apiBaseUrl').trim() };
@@ -61,7 +61,7 @@ window.AieyesCodexAPI = (() => {
   async function switchConnection(sourceId, connection) {
     if (busy) return;
     busy = true;error = '';notice = '';paint();
-    const dialog = quotaDialog(AieyesI18n.t("切换 Codex 登录方式"), AieyesI18n.t("<p role=\"status\">正在检查设备与切换目标…</p>"), 'api');
+    const dialog = quotaDialog(AieyesI18n.t("切换 Codex 登录方式"), `<p role="status">${AieyesI18n.t("正在检查设备与切换目标…")}</p>`, 'api');
     let prepared = null,profileId = '',inspection = null,working = false,epoch = 0;
     const originalClose = dialog.onclose;
     const finish = () => {if (!working) dialog.close();};
@@ -72,7 +72,7 @@ window.AieyesCodexAPI = (() => {
     async function prepare() {
       const request = ++epoch;setWorking(true);prepared = null;
       const body = dialog.querySelector('.quota-dialog-body');
-      body.innerHTML = AieyesI18n.t("<p role=\"status\">正在检查受影响的进程…</p>");
+      body.innerHTML = `<p role="status">${AieyesI18n.t("正在检查受影响的进程…")}</p>`;
       try {
         const source = sources().find((s) => s.id === sourceId);
         if (!source?.codexHomeId) {await api('codexAuth.enable', { sourceId });window.AieyesAgentSettings.accept(await api('settings.get'));}
@@ -90,12 +90,12 @@ window.AieyesCodexAPI = (() => {
       const rows = prepared?.processes ?? [],blocked = rows.some((p) => !p.canClose),body = dialog.querySelector('.quota-dialog-body');
       const name = connection?.name || inspection?.profiles.find((p) => p.id === profileId)?.name || AieyesI18n.t("已保存账户");
       body.innerHTML = '<p><strong>' + e(location(sources().find((s) => s.id === sourceId))) + ' → ' + e(name) + '</strong></p>' + (
-      !connection && inspection?.profiles.length ? AieyesI18n.t("<label>目标账户<select id=\"api-switch-profile\">") + inspection.profiles.map((p) => '<option value="' + e(p.id) + '" ' + (p.id === profileId ? 'selected' : '') + '>' + e(p.name) + '</option>').join('') + '</select></label>' : '') + AieyesI18n.t("<p class=\"muted\">请先保存工作。确认后将关闭下列及随后出现的相关登录进程；已确认的独立 API 实例会保留。</p>") + (
+      !connection && inspection?.profiles.length ? `<label>${AieyesI18n.t("目标账户")}<select id="api-switch-profile">` + inspection.profiles.map((p) => '<option value="' + e(p.id) + '" ' + (p.id === profileId ? 'selected' : '') + '>' + e(p.name) + '</option>').join('') + '</select></label>' : '') + `<p class="muted">${AieyesI18n.t("请先保存工作。确认后将关闭下列及随后出现的相关登录进程；已确认的独立 API 实例会保留。")}</p>` + (
 
       error ? '<div class="error" role="alert">' + e(AieyesI18n.message(error)) + '</div>' : '') + (
-      prepared ? rows.length ? '<ul>' + rows.map((p) => '<li>' + e(p.name) + ' · PID ' + p.pid + (p.canClose ? '' : ' · ' + e(p.blockingReason)) + '</li>').join('') + '</ul>' : AieyesI18n.t("<p>没有需要关闭的进程。</p>") : '') + (
-      prepared?.preservedProcesses?.length ? AieyesI18n.t("<p class=\"tiny muted\">将保留 ") + prepared.preservedProcesses.length + AieyesI18n.t(" 个独立 API 进程。</p>") : '') + AieyesI18n.t("<div class=\"actions\"><button id=\"api-switch-cancel\">取消</button><button id=\"api-switch-retry\">重新检查</button><button class=\"primary\" id=\"api-switch-confirm\" ") + (
-      !prepared || blocked ? 'disabled' : '') + '>' + AieyesI18n.t("关闭并切换") + '</button></div>';
+      prepared ? rows.length ? '<ul>' + rows.map((p) => '<li>' + e(p.name) + ' · PID ' + p.pid + (p.canClose ? '' : ' · ' + e(p.blockingReason)) + '</li>').join('') + '</ul>' : `<p>${AieyesI18n.t("没有需要关闭的进程。")}</p>` : '') + (
+      prepared?.preservedProcesses?.length ? `<p class="tiny muted">${AieyesI18n.t("将保留 {0} 个独立 API 进程。", prepared.preservedProcesses.length)}</p>` : '') + `<div class="actions dialog-actions"><button id="api-switch-retry">${AieyesI18n.t("重新检查")}</button><button id="api-switch-cancel">${AieyesI18n.t("取消")}</button><button class="primary" id="api-switch-confirm" ` + (
+      !prepared || blocked ? 'disabled' : '') + `>${AieyesI18n.t("关闭并切换")}</button></div>`;
       body.querySelector('#api-switch-cancel').onclick = finish;
       body.querySelector('#api-switch-retry').onclick = () => {error = '';void prepare();};
       const picker = body.querySelector('#api-switch-profile');if (picker) picker.onchange = () => {profileId = picker.value;error = '';void prepare();};
@@ -131,9 +131,9 @@ window.AieyesCodexAPI = (() => {
     const button = event.target.closest('[data-codex-api]');if (!button || busy) return;
     const action = button.dataset.codexApi,c = connections().find((v) => v.id === button.dataset.apiId);
     if (action === 'add' || action === 'edit') return edit(c);
-    if (action === 'remove' && c) {showEditor(AieyesI18n.t("移除 API 连接"), AieyesI18n.t("<p>移除「") + e(c.name) + AieyesI18n.t("」的连接与密钥，历史用量保留。</p>"), async () => {
+    if (action === 'remove' && c) {confirmDestructive(AieyesI18n.t("移除 API 连接"), `<p>${AieyesI18n.t("移除「{0}」的连接与密钥，历史用量保留。", e(c.name))}</p>`, async () => {
         const saved = await api('codexApi.remove', { sourceId: c.sourceId, id: c.id, revision: c.revision });window.AieyesAgentSettings.accept(saved.settings);statuses.delete(c.sourceId);markSaved();paint();
-      });return;}
+      }, AieyesI18n.t("确认移除"));return;}
     void perform(action, c, button.dataset.apiSource || c?.sourceId);
   });
   return { html, bind };

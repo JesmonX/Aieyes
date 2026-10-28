@@ -1,0 +1,36 @@
+{
+  "checkedAt": "2026-10-27T13:09:35.486Z",
+  "checks": [
+    "exact 1536x1872 RGBA",
+    "8 columns x 9 rows",
+    "192x208 cells",
+    "57 nonempty unique frames per character",
+    "15 transparent unused cells per character",
+    "no alpha in 4px cell boundary",
+    "row counts match live core-contracts.json",
+    "actual production JS frame clock at every boundary and loop wrap",
+    "reduced-motion uses first frame of each action"
+  ],
+  "characters": [
+    {
+      "id": "01-folded-ear-scout",
+      "width": 1536,
+      "height": 1872,
+      "channels": 4,
+      "validFrames": 57,
+      "transparentUnusedCells": 15,
+      "uniqueFrameHashes": 57,
+      "sizeBytes": 2187415
+    },
+    {
+      "id": "06-inkdrop-artisan",
+      "width": 1536,
+      "height": 1872,
+      "channels": 4,
+      "validFrames": 57,
+      "transparentUnusedCells": 15,
+      "uniqueFrameHashes": 57,
+      "sizeBytes": 1356941
+    }
+  ]
+}

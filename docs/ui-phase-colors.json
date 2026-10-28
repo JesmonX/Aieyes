@@ -1,6 +1,6 @@
 {
   "idle": {
-    "light": "8491a7",
+    "light": "7a879d",
     "dark": "91a0b7",
     "mac": "secondary"
   },
@@ -20,23 +20,23 @@
     "mac": "Palette.accent"
   },
   "complete": {
-    "light": "219355",
-    "dark": "44ad76",
+    "light": "2e7d32",
+    "dark": "7cc97f",
     "mac": "Palette.ok"
   },
   "interrupted": {
-    "light": "b1761f",
-    "dark": "d9a44c",
-    "mac": "Palette.warn"
+    "light": "75706b",
+    "dark": "c8c3bd",
+    "mac": "secondary"
   },
   "unknown": {
-    "light": "895712",
-    "dark": "e0b062",
+    "light": "4b5363",
+    "dark": "6c7689",
     "mac": "secondary"
   },
   "needsInput": {
-    "light": "ab6b14",
-    "dark": "e8b25c",
+    "light": "c2560c",
+    "dark": "fb923c",
     "mac": "Palette.warn"
   },
   "failed": {

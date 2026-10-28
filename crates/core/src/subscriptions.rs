@@ -69,8 +69,7 @@ pub(crate) fn open_login(params: &Value) -> Result<Value> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut cmd = std::process::Command::new("xdg-open");
     cmd.arg(url);
-    crate::process::run(cmd, vec![], std::time::Duration::from_secs(10))
-        .context("无法打开官方登录页")?;
+    crate::process::open_external(cmd).context("无法打开官方登录页")?;
     Ok(json!({"opened":true}))
 }
 

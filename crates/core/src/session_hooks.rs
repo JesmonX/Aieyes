@@ -635,6 +635,12 @@ pub fn run_if_requested() -> bool {
             ensure!(bytes.len() <= 1024 * 1024, "hook input too large");
             let input: Value = serde_json::from_slice(&bytes)?;
             let mut event = session_events::hook(&provider, &kind, &input, at);
+            if provider == "claude"
+                && let Ok(entrypoint) = std::env::var("CLAUDE_CODE_ENTRYPOINT")
+                && !entrypoint.is_empty()
+            {
+                event.session_source = entrypoint.chars().take(256).collect();
+            }
             ensure!(!event.session.is_empty(), "missing session");
             (event.pid, event.process_start) = ancestry(&provider);
             let root = home.context("missing home")?.join(".aieyes");

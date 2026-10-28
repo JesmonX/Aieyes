@@ -10,7 +10,9 @@ function measure(selectors){
   for(const selector of selectors)document.querySelectorAll(selector).forEach((el,index)=>{
     if(!el.checkVisibility({checkVisibilityCSS:true}))return;
     const range=document.createRange(),walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT),rects=[];let node;
-    while((node=walker.nextNode())){if(!node.textContent.trim()||node.parentElement.closest('svg'))continue;range.selectNodeContents(node);rects.push(...[...range.getClientRects()].filter(r=>r.width>.5&&r.height>.5));}
+    // Visually hidden labels (collapsed sidebar: 1px box, clip-path) are for screen readers and paint nothing.
+    const hidden=(n)=>{for(let e=n;e&&e!==el.parentElement;e=e.parentElement){const s=getComputedStyle(e);if(s.clipPath==='inset(50%)')return true;}return false;};
+    while((node=walker.nextNode())){if(!node.textContent.trim()||node.parentElement.closest('svg')||hidden(node.parentElement))continue;range.selectNodeContents(node);rects.push(...[...range.getClientRects()].filter(r=>r.width>.5&&r.height>.5));}
     const box=el.getBoundingClientRect(),lines=new Set(rects.map(r=>Math.round((r.top-box.top)/4)));
     const text=el.innerText.trim();
     const clipped=el.scrollWidth>el.clientWidth+2||rects.some(r=>r.left<box.left-2||r.right>box.right+2);

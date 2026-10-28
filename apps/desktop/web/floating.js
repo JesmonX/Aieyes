@@ -11,8 +11,8 @@
   function failure(error) {
     document.querySelector('#phase').textContent = AieyesI18n.t("连接异常");
     document.body.dataset.active = 'false';
-    ball.title = String(error) + AieyesI18n.t("；右键打开菜单");
-    if (panelOpen && typeof notify === 'function') notify(String(error));
+    ball.title = AieyesI18n.t("{0}；右键打开菜单", String(error));
+    if (panelOpen && typeof notify === 'function') notify(String(error), 'error');
   }
   async function action(name) {
     try {return await invoke('desktop_action', { action: name });} catch (error) {failure(error);}
@@ -53,7 +53,9 @@
       if (typeof render === 'function') render();
       window.AieyesMotion?.panel(true);
       requestAnimationFrame(() => {if (typeof drawTrend === 'function') drawTrend();invoke('desktop_panel_ready', { generation: window.AIEYES_SHELL_GENERATION ?? 0 }).catch(failure);});
-      if (info?.platform === 'linux') requestAnimationFrame(() => document.querySelector('#panel-refresh')?.focus({ preventScroll: true }));
+      // The Linux panel window takes keyboard focus; park it on the panel itself so opening shows no
+      // focus ring or tooltip, and Tab starts at the first control.
+      if (info?.platform === 'linux') requestAnimationFrame(() => {panel.tabIndex = -1;panel.focus({ preventScroll: true });});
       // Mouse-opened floating surfaces preserve the other application's keyboard focus.
       const refresh = window.AieyesApp?.refreshPanel;
       if (refresh) refresh().catch((error) => failure(error));
@@ -125,6 +127,7 @@
   });
   document.querySelector('#panel-detail').addEventListener('click', () => {setPanel(false);if (typeof openDetail === 'function') openDetail();else action('open');});
   document.querySelector('#panel-settings').addEventListener('click', () => {setPanel(false);action('settings');});
+  document.querySelector('#panel-add-host')?.addEventListener('click', () => openSetup('hosts'));
   document.querySelector('#panel-accounts')?.addEventListener('click', () => {const more = document.querySelector('#panel-more');if (more) more.open = false;window.AieyesApp?.openPanelAccounts();});
   document.querySelector('#panel-quit').addEventListener('click', () => action('quit'));
   document.querySelector('#panel-close')?.addEventListener('click', () => setPanel(false));
@@ -135,17 +138,19 @@
   window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener('change', () => {if (info) update(info, false);});
   function update(next, applyOpen = true) {
     info = next;
+    window.AieyesI18n?.setHourCycle(next.hourCycle);
     document.body.dataset.phase = next.phase || 'idle';
     document.body.dataset.active = String(next.activeCount > 0);
     document.body.dataset.platform = next.platform || '';
     document.documentElement.dataset.platform = next.platform || '';
     document.documentElement.dataset.material = next.materials?.floating || 'opaque';
+    document.documentElement.dataset.corners = next.windowCorners || 'round';
     window.AieyesTheme?.loadFonts?.();
     document.querySelector('#phase').textContent = next.recovery === 'failed' ? AieyesI18n.t("恢复失败") : next.recovery === 'refreshing' ? AieyesI18n.t("恢复中") : next.unavailable ? AieyesI18n.t("状态不全") : labels[next.phase] || AieyesI18n.t("空闲");
     const count = document.querySelector('#count');
     count.textContent = next.activeCount > 99 ? '99+' : String(next.activeCount);
     count.hidden = !next.activeCount || !next.showCount;
-    count.setAttribute('aria-label', next.activeCount + AieyesI18n.t(" 个活跃会话"));
+    count.setAttribute('aria-label', AieyesI18n.t("{0} 个活跃会话", next.activeCount));
     if (typeof phaseColor === 'function') document.body.style.setProperty('--phase-color', phaseColor(next.phase || 'idle'));
     ball.title = AieyesI18n.t("Aieyes · {0}\n单击打开面板 · 拖动移动 · 右键菜单", AieyesI18n.message(next.summary));
     ball.setAttribute('aria-label', ball.title);

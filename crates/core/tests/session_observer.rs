@@ -6,9 +6,22 @@ use std::{
     time::{Duration, Instant},
 };
 fn observer(provider: &str, event: &str, input: &Value) -> (String, String) {
+    observer_with_entrypoint(provider, event, input, None)
+}
+fn observer_with_entrypoint(
+    provider: &str,
+    event: &str,
+    input: &Value,
+    entrypoint: Option<&str>,
+) -> (String, String) {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir_all(root.path().join(".aieyes/session-events")).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_aieyes-core"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_aieyes-core"));
+    command.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    if let Some(entrypoint) = entrypoint {
+        command.env("CLAUDE_CODE_ENTRYPOINT", entrypoint);
+    }
+    let mut child = command
         .args([
             "--aieyes-session-hook",
             provider,
@@ -36,6 +49,18 @@ fn observer(provider: &str, event: &str, input: &Value) -> (String, String) {
         .map(|e| fs::read_to_string(e.path()).unwrap())
         .collect();
     (String::from_utf8(result.stdout).unwrap(), rows)
+}
+#[test]
+fn claude_observer_retains_noninteractive_source_without_prompt_content() {
+    let (_, rows) = observer_with_entrypoint(
+        "claude",
+        "UserPromptSubmit",
+        &json!({"session_id":"headless","entrypoint":"cli","prompt":"SECRET"}),
+        Some("sdk-cli"),
+    );
+    let event: Value = serde_json::from_str(rows.trim()).unwrap();
+    assert_eq!(event["sessionSource"], "sdk-cli");
+    assert!(!rows.contains("SECRET"));
 }
 #[test]
 fn observer_protocol_is_noop_and_persists_only_lifecycle_metadata() {

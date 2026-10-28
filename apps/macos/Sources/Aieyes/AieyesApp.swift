@@ -4,10 +4,38 @@ import Combine
 
 @main struct AieyesApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    var body: some Scene { SwiftUI.Settings { EmptyView() } }
+    init() { AieyesLocale.alignSystemLanguage() }
+    var body: some Scene { SwiftUI.Settings { EmptyView() }.commands { AieyesCommands(delegate: delegate) } }
 }
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate, NSToolbarDelegate {
+/// Main-menu commands use the same entry points as the status item and the pet, so
+/// "Settings…" never opens the empty SwiftUI settings scene.
+struct AieyesCommands: Commands {
+    let delegate: AppDelegate
+    @AppStorage("aieyes.language") private var language = "zh-CN"
+    var body: some Commands {
+        let _ = language
+        CommandGroup(replacing: .appSettings) {
+            Button(L("设置…")) { delegate.menuOpenSettings() }.keyboardShortcut(",")
+        }
+        CommandGroup(replacing: .newItem) {
+            Button(L("关闭窗口")) { NSApp.keyWindow?.performClose(nil) }.keyboardShortcut("w")
+        }
+        CommandGroup(before: .toolbar) {
+            Button(L("总览")) { delegate.menuShowPage("agent") }.keyboardShortcut("1")
+            Button(L("用量分析")) { delegate.menuShowPage("analysis") }.keyboardShortcut("2")
+            Button(L("服务器")) { delegate.menuShowPage("servers") }.keyboardShortcut("3")
+            Divider()
+            Button(L("刷新")) { delegate.menuRefresh() }.keyboardShortcut("r")
+            Divider()
+        }
+        CommandGroup(replacing: .help) {
+            Button(L("配置向导")) { delegate.menuShowPage("setup") }
+        }
+    }
+}
+
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate, NSToolbarDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private var statusLabel: NSHostingView<MenuActivityLabel>?
     private let popover = NSPopover()
@@ -106,11 +134,9 @@ import Combine
         }
         localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
+            // The popover-only (accessory) state has no visible main menu; keep ⌘, there too.
             if event.type == .keyDown, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command, event.charactersIgnoringModifiers == "," {
-                self.model.openSettings(.init(category: "general")); return nil
-            }
-            if event.type == .keyDown, event.window === self.detailWindow, event.modifierFlags.contains(.command), let key = event.charactersIgnoringModifiers, ["1", "2", "3"].contains(key) {
-                self.model.requestedDetailPage = key == "1" ? "agent" : key == "2" ? "analysis" : "servers"; return nil
+                self.menuOpenSettings(); return nil
             }
             guard self.popover.isShown else { return event }
             if event.type == .keyDown {
@@ -131,7 +157,8 @@ import Combine
     }
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
-        if NSApp.currentEvent?.type == .rightMouseUp {
+        // Control-click is a right click on macOS: it opens the menu, not the panel.
+        if NSApp.currentEvent?.type == .rightMouseUp || NSApp.currentEvent?.modifierFlags.contains(.control) == true {
             popover.performClose(nil)
             let menu = NSMenu()
             menu.autoenablesItems = false
@@ -167,10 +194,12 @@ import Combine
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         model.setWindowVisible(true, window: "panel")
         NSApp.activate(ignoringOtherApps: true)
+        // Stays highlighted while its panel is open, like system menu bar extras; set after the click's own tracking.
+        DispatchQueue.main.async { [weak self] in if self?.popover.isShown == true { button.highlight(true) } }
     }
     private func dismissOutsidePanel() { if popover.isShown && !model.isPinned { popover.performClose(nil) } }
     @objc private func applicationDeactivated() { dismissOutsidePanel() }
-    func popoverDidClose(_ notification: Notification) { model.setWindowVisible(false, window: "panel") }
+    func popoverDidClose(_ notification: Notification) { statusItem.button?.highlight(false); model.setWindowVisible(false, window: "panel") }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         let windows = [detailWindow, panelAccountsWindow, quotaOrderWindow, samplingWindow].compactMap { $0 } + Array(estimateWindows.values)
         if let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first(where: { $0.isVisible || $0.isMiniaturized }) {
@@ -185,6 +214,9 @@ import Combine
         NSApp.activate(ignoringOtherApps: true)
     }
     @objc private func detailAction() { openDetail() }
+    func menuOpenSettings() { model.openSettings(.init(category: "general")) }
+    func menuShowPage(_ page: String) { openDetail(page: page) }
+    func menuRefresh() { Task { if model.detailPage == "servers" { await model.sampleHosts() } else { await model.scan() } } }
     @objc private func settingsAction() { model.openSettings(.init(category: "general")) }
     @objc private func updateAction() { AppUpdater.shared.check() }
     @objc private func togglePetAction() {
@@ -213,12 +245,9 @@ import Combine
                 window.title = quota.name + (key.hasSuffix(":credits") ? L(" · credit 价值") : L(" · 额度估值"))
             }
         }
-        for item in detailWindow?.toolbar?.items ?? [] {
-            if let button = item.view as? NSPopUpButton {
-                let labels = [L("刷新"), L("同步记录"), L("刷新额度"), L("同步价格"), L("刷新服务器")]
-                for (index, entry) in button.itemArray.enumerated() where index < labels.count { entry.title = labels[index] }
-                item.label = L("刷新"); button.setAccessibilityLabel(L("刷新选项"))
-            }
+        for case let item as NSMenuToolbarItem in detailWindow?.toolbar?.items ?? [] {
+            for entry in item.menu.items where entry.tag < refreshTitles().count { entry.title = refreshTitles()[entry.tag] }
+            item.label = L("刷新"); item.toolTip = L("刷新选项"); item.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: L("刷新选项"))
         }
     }
     private func updateTitle() {
@@ -246,7 +275,7 @@ import Combine
         else if detailWindow == nil, let saved = UserDefaults.standard.string(forKey: NativePanelKey.detailPage.rawValue), ["agent", "analysis", "servers", "settings"].contains(saved) { model.detailPage = saved }
         popover.performClose(nil)
         if detailWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 800), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
             let toolbar = NSToolbar(identifier: "AieyesDetailsToolbar"); toolbar.delegate = self; toolbar.displayMode = .iconOnly; window.toolbar = toolbar; window.toolbarStyle = .unified
             window.contentMinSize = NSSize(width: 760, height: 480)
             window.title = "Aieyes"; window.titlebarAppearsTransparent = true; window.isReleasedWhenClosed = false
@@ -259,15 +288,20 @@ import Combine
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, .init("refresh")] }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarAllowedItemIdentifiers(toolbar) }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        let item = NSToolbarItem(itemIdentifier: identifier)
-        if identifier.rawValue == "refresh" {
-            let button = NSPopUpButton(frame: .zero, pullsDown: true); button.addItem(withTitle: L("刷新"))
-            for (index, title) in [L("同步记录"), L("刷新额度"), L("同步价格"), L("刷新服务器")].enumerated() { let entry = NSMenuItem(title: title, action: #selector(toolbarRefresh(_:)), keyEquivalent: ""); entry.tag = index; entry.target = self; button.menu?.addItem(entry) }
-            button.setAccessibilityLabel(L("刷新选项")); item.view = button; item.label = L("刷新")
-        }
+        guard identifier.rawValue == "refresh" else { return NSToolbarItem(itemIdentifier: identifier) }
+        // A symbol with a menu, like other toolbars; each entry is disabled while its own refresh runs (validateMenuItem).
+        let item = NSMenuToolbarItem(itemIdentifier: identifier), menu = NSMenu()
+        for (index, title) in refreshTitles().enumerated() { let entry = NSMenuItem(title: title, action: #selector(toolbarRefresh(_:)), keyEquivalent: ""); entry.tag = index; entry.target = self; menu.addItem(entry) }
+        item.menu = menu; item.showsIndicator = true; item.label = L("刷新"); item.toolTip = L("刷新选项")
+        item.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: L("刷新选项"))
         return item
     }
+    private func refreshTitles() -> [String] { [L("同步记录"), L("刷新额度"), L("同步价格"), L("刷新服务器")] }
     @objc private func toolbarRefresh(_ sender: NSMenuItem) { Task { switch sender.tag { case 0: await model.scan(); case 1: await model.refreshQuotas(); case 2: await model.syncPrices(); default: await model.sampleHosts() } } }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(toolbarRefresh(_:)) else { return true }
+        switch item.tag { case 1: return !model.quotaBusy; case 3: return !model.serverBusy; default: return !model.busy }
+    }
     private func openSettings() {
         openDetail(page: "settings")
         model.settingsWindowVisible = true
@@ -633,6 +667,12 @@ import Combine
             }
             model.settingsTab = "prices"
             try await capture(SettingsView(model: model), size: NSSize(width: 620, height: 440), dark: false, to: root.appendingPathComponent("settings-prices-small.png"))
+            // Seven models: the ring shows the top five plus "其他"; each list row carries its swatch.
+            let rankedModels = (1...7).map { Aggregate(key: "model-\($0)", total: Double(8 - $0) * 10_000, cost: Double(8 - $0)) }
+            for dark in [false, true] {
+                try await capture(ModelChart(models: rankedModels, cost: false), size: NSSize(width: 560, height: 260), dark: dark, to: root.appendingPathComponent("model-chart-\(dark ? "dark" : "light").png"))
+                try await capture(WakeEditor(model: model, task: WakeTask(times: ["08:00", "21:30"]), deployed: false) { _ in }, size: NSSize(width: 560, height: 640), dark: dark, to: root.appendingPathComponent("wake-editor-\(dark ? "dark" : "light").png"))
+            }
             let savedSources = model.settings.sources, savedDashboard = model.dashboard
             model.settings.sources = []; model.settingsDraft = model.settings; model.dashboard = Dashboard()
             model.panelHeight = 540

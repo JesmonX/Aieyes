@@ -3,13 +3,17 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 use serde_json::Value;
 use std::cell::{Cell, RefCell};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use std::{ptr::null_mut, sync::mpsc, time::Duration};
 use tauri::{AppHandle, Emitter, Manager};
 use windows::{
     Win32::{
         Foundation::*,
         Graphics::{Gdi::*, GdiPlus::*},
-        System::LibraryLoader::GetModuleHandleW,
+        System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
         UI::{
             Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
             Controls::*,
@@ -26,6 +30,8 @@ use windows::Win32::Graphics::GdiPlus::Ok as GDI_OK;
 #[path = "pet_sprite.rs"]
 mod pet;
 const PET_TIMER: usize = 42;
+/// Polls whether a fullscreen game, video or presentation wants the desktop to itself.
+const QUIET_TIMER: usize = 43;
 const WAKE: u32 = WM_APP + 41;
 const RESTORE_TOPMOST: u32 = WM_APP + 42;
 pub const WIDTH: f64 = 144.0;
@@ -108,11 +114,13 @@ struct Surface {
     dragged: Cell<bool>,
     hover: Cell<bool>,
     dark: Cell<bool>,
+    /// Requested by the app (pet mode, not hidden); `quiet` overrides it while set.
+    wanted: Cell<bool>,
+    quiet: Cell<bool>,
     actions: mpsc::Sender<String>,
     tooltip: Cell<Option<HWND>>,
-    panel: Cell<Option<usize>>,
-    mouse_hook: Cell<Option<HHOOK>>,
-    menu_active: Cell<bool>,
+    outside: Arc<OutsideClick>,
+    hook_thread: Cell<Option<u32>>,
     tooltip_text: RefCell<Vec<u16>>,
     font: PetFont,
     pet_sprite: RefCell<pet::Sprite>,
@@ -171,11 +179,12 @@ impl NativePet {
                     dragged: Cell::new(false),
                     hover: Cell::new(false),
                     dark: Cell::new(false),
+                    wanted: Cell::new(false),
+                    quiet: Cell::new(false),
                     actions,
                     tooltip: Cell::new(None),
-                    panel: Cell::new(None),
-                    mouse_hook: Cell::new(None),
-                    menu_active: Cell::new(false),
+                    outside: Arc::default(),
+                    hook_thread: Cell::new(None),
                     tooltip_text: RefCell::new(Vec::new()),
                     font: PetFont::new(),
                     pet_sprite: RefCell::new(pet::Sprite::empty()),
@@ -230,8 +239,17 @@ impl NativePet {
                             crate::localization::label("Aieyes · 单击打开面板，右键菜单"),
                             true,
                         );
+                        let _ = SetTimer(Some(hwnd), QUIET_TIMER, 2000, None);
+                        surface
+                            .outside
+                            .pet
+                            .store(hwnd.0 as usize, Ordering::Relaxed);
+                        surface.hook_thread.set(start_outside_click(
+                            surface.outside.clone(),
+                            surface.actions.clone(),
+                            surface.app.clone(),
+                        ));
                         let _ = ready.send(Result::Ok(hwnd.0 as usize));
-                        HOOK_SURFACE.with(|slot| slot.set(&*surface));
                         let mut message = MSG::default();
                         while GetMessageW(&mut message, None, 0, 0).0 > 0 {
                             let _ = TranslateMessage(&message);
@@ -242,10 +260,9 @@ impl NativePet {
                         let _ = ready.send(Err(error.to_string()));
                     }
                 }
-                if let Some(hook) = surface.mouse_hook.take() {
-                    let _ = UnhookWindowsHookEx(hook);
+                if let Some(thread) = surface.hook_thread.get() {
+                    let _ = PostThreadMessageW(thread, WM_QUIT, WPARAM(0), LPARAM(0));
                 }
-                HOOK_SURFACE.with(|slot| slot.set(std::ptr::null()));
                 // Surface and all GDI+ resources belong to this thread.
                 drop(surface);
                 GdiplusShutdown(token);
@@ -293,12 +310,71 @@ impl NativePet {
         }
     }
 }
+/// What the outside-click hook needs from the pet thread. The hook runs on its own thread: Windows
+/// silently removes a low-level hook whose thread misses the hook timeout, and the pet thread also
+/// decodes and paints sprites.
+#[derive(Default)]
+struct OutsideClick {
+    /// The watched panel's HWND, 0 while no panel is open.
+    panel: AtomicUsize,
+    pet: AtomicUsize,
+    /// The pet's own menu is open; clicks on it are not outside clicks.
+    menu: AtomicBool,
+}
+/// Posted to the hook thread: WPARAM 1 installs the hook, 0 removes it.
+const HOOK_WATCH: u32 = WM_APP + 21;
 thread_local! {
-    static HOOK_SURFACE: Cell<*const Surface> = const { Cell::new(std::ptr::null()) };
+    static HOOK_TARGET: RefCell<Option<(Arc<OutsideClick>, mpsc::Sender<String>)>> = const { RefCell::new(None) };
 }
 
-// Runs on the pet message thread. Never wait for the renderer or consume
-// input here: the original click must still reach the other application.
+/// Starts the hook thread and returns its id. The hook is installed only while a panel is watched.
+fn start_outside_click(
+    state: Arc<OutsideClick>,
+    actions: mpsc::Sender<String>,
+    app: AppHandle,
+) -> Option<u32> {
+    let (ready, wait) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("aieyes-pet-hook".into())
+        .spawn(move || unsafe {
+            HOOK_TARGET.with(|slot| *slot.borrow_mut() = Some((state, actions)));
+            let mut message = MSG::default();
+            // Create the message queue before reporting the id, so posted messages are not lost.
+            let _ = PeekMessageW(&mut message, None, WM_USER, WM_USER, PM_NOREMOVE);
+            let _ = ready.send(GetCurrentThreadId());
+            let mut hook = None;
+            while GetMessageW(&mut message, None, 0, 0).0 > 0 {
+                if message.message != HOOK_WATCH {
+                    continue;
+                }
+                if message.wParam.0 == 0 {
+                    if let Some(installed) = hook.take() {
+                        let _ = UnhookWindowsHookEx(installed);
+                    }
+                } else if hook.is_none() {
+                    match SetWindowsHookExW(
+                        WH_MOUSE_LL,
+                        Some(outside_click),
+                        GetModuleHandleW(None).ok().map(Into::into),
+                        0,
+                    ) {
+                        Result::Ok(installed) => hook = Some(installed),
+                        Err(error) => {
+                            let _ = app.emit("desktop:error", &error.to_string());
+                        }
+                    }
+                }
+            }
+            if let Some(installed) = hook {
+                let _ = UnhookWindowsHookEx(installed);
+            }
+        })
+        .ok()?;
+    wait.recv().ok()
+}
+
+// Runs on the hook thread. Never block or consume input here: the original
+// click must still reach the other application.
 unsafe extern "system" fn outside_click(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0
         && matches!(
@@ -306,25 +382,22 @@ unsafe extern "system" fn outside_click(code: i32, wparam: WPARAM, lparam: LPARA
             WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
         )
     {
-        HOOK_SURFACE.with(|slot| {
-            if let Some(surface) = slot.get().as_ref()
-                && let Some(panel) = surface.panel.get()
-                && !surface.menu_active.get()
-            {
+        HOOK_TARGET.with(|slot| {
+            if let Some((state, actions)) = slot.borrow().as_ref() {
+                let panel = state.panel.load(Ordering::Relaxed);
+                if panel == 0 || state.menu.load(Ordering::Relaxed) {
+                    return;
+                }
                 let point = (*(lparam.0 as *const MSLLHOOKSTRUCT)).pt;
                 let target = WindowFromPoint(point);
                 let root = GetAncestor(target, GA_ROOT);
                 let owner = GetAncestor(target, GA_ROOTOWNER);
-                let pet = surface
-                    .app
-                    .try_state::<NativePet>()
-                    .map(|c| c.hwnd)
-                    .unwrap_or(0);
+                let pet = state.pet.load(Ordering::Relaxed);
                 if ![root.0 as usize, owner.0 as usize]
                     .iter()
                     .any(|h| *h == panel || *h == pet)
                 {
-                    dispatch(surface, "dismiss-panel");
+                    let _ = actions.send("dismiss-panel".to_owned());
                 }
             }
         });
@@ -425,6 +498,22 @@ unsafe fn pet_scale(hwnd: HWND) -> f64 {
 unsafe fn is_topmost(hwnd: HWND) -> bool {
     GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0
 }
+/// A fullscreen Direct3D app, presentation mode or another fullscreen app ("busy") is in front:
+/// the pet hides and session sounds stay silent until it ends.
+pub fn quiet_desktop() -> bool {
+    use windows::Win32::UI::Shell::{
+        QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+        SHQueryUserNotificationState,
+    };
+    unsafe { SHQueryUserNotificationState() }.is_ok_and(|state| {
+        [
+            QUNS_BUSY,
+            QUNS_RUNNING_D3D_FULL_SCREEN,
+            QUNS_PRESENTATION_MODE,
+        ]
+        .contains(&state)
+    })
+}
 unsafe fn raise_pet(hwnd: HWND, surface: &Surface, show: bool) {
     let mut flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
     if show {
@@ -519,7 +608,7 @@ unsafe fn native_menu(hwnd: HWND, surface: &Surface) {
     let mut point = POINT::default();
     let _ = GetCursorPos(&mut point);
     let _ = SetForegroundWindow(hwnd);
-    surface.menu_active.set(true);
+    surface.outside.menu.store(true, Ordering::Relaxed);
     let selected = TrackPopupMenu(
         menu,
         TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -530,7 +619,7 @@ unsafe fn native_menu(hwnd: HWND, surface: &Surface) {
         None,
     )
     .0;
-    surface.menu_active.set(false);
+    surface.outside.menu.store(false, Ordering::Relaxed);
     let _ = DestroyMenu(menu);
     let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
     crate::desktop::native_interaction(&surface.app, false);
@@ -607,7 +696,8 @@ unsafe extern "system" fn window_proc(
                         let _ = InvalidateRect(Some(hwnd), None, false);
                     }
                     Command::Visible(show) => {
-                        if show {
+                        surface.wanted.set(show);
+                        if show && !surface.quiet.get() {
                             raise_pet(hwnd, surface, true);
                         } else {
                             let _ = ShowWindow(hwnd, SW_HIDE);
@@ -620,23 +710,13 @@ unsafe extern "system" fn window_proc(
                         save_position(hwnd, surface);
                     }
                     Command::WatchPanel(panel) => {
-                        surface.panel.set(panel);
-                        if panel.is_some() && surface.mouse_hook.get().is_none() {
-                            match SetWindowsHookExW(
-                                WH_MOUSE_LL,
-                                Some(outside_click),
-                                GetModuleHandleW(None).ok().map(Into::into),
-                                0,
-                            ) {
-                                Result::Ok(hook) => surface.mouse_hook.set(Some(hook)),
-                                Err(error) => {
-                                    let _ = surface.app.emit("desktop:error", &error.to_string());
-                                }
-                            }
-                        } else if panel.is_none()
-                            && let Some(hook) = surface.mouse_hook.take()
-                        {
-                            let _ = UnhookWindowsHookEx(hook);
+                        surface
+                            .outside
+                            .panel
+                            .store(panel.unwrap_or(0), Ordering::Relaxed);
+                        if let Some(thread) = surface.hook_thread.get() {
+                            let watch = WPARAM(usize::from(panel.is_some()));
+                            let _ = PostThreadMessageW(thread, HOOK_WATCH, watch, LPARAM(0));
                         }
                     }
                     Command::Stop => {
@@ -661,6 +741,19 @@ unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
+        WM_TIMER if wparam.0 == QUIET_TIMER => {
+            // Step aside for fullscreen apps and presentations; come back only if still wanted.
+            let quiet = quiet_desktop();
+            if quiet != surface.quiet.replace(quiet) && surface.wanted.get() {
+                if quiet {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                } else {
+                    raise_pet(hwnd, surface, true);
+                }
+                animate(hwnd);
+            }
+            LRESULT(0)
+        }
         WM_TIMER if wparam.0 == PET_TIMER => {
             let _ = KillTimer(Some(hwnd), PET_TIMER);
             surface.timer_deadline.set(None);
@@ -680,6 +773,7 @@ unsafe extern "system" fn window_proc(
         WM_SETTINGCHANGE | WM_THEMECHANGED => {
             animate(hwnd);
             crate::desktop::refresh_materials(&surface.app);
+            crate::desktop::refresh_tray_icon(&surface.app);
             let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }

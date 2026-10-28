@@ -1,0 +1,13 @@
+@layer layout {
+/* Control rendering is centralized in controls.css. */
+/* --- Layout -------------------------------------------------------------- */
+.shell { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); min-height: 100vh; }
+main { width: 100%; max-width: 1500px; margin: 0 auto; padding: var(--content-padding); min-width: 0; }
+header { margin-bottom:var(--space-section); }
+/* Preserve the established sidebar typography independently of content emphasis. */
+aside {
+  position: sticky; top: 0; height: 100vh; padding: 24px 14px 16px;
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface-soft), transparent 46%); --weight-strong:600; --control-height:28px; line-height:1.5; }
+}

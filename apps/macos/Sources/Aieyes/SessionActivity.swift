@@ -8,7 +8,7 @@ enum SessionPhase: String {
     case idle = "空闲", working = "进行中", thinking = "思考中", tool = "执行工具", complete = "已完成", interrupted = "已中断", unknown = "状态待确认", needsInput = "等待输入", failed = "执行失败"
     var active: Bool { self == .working || self == .thinking || self == .tool || self == .needsInput }
     var color: Color {
-        switch self { case .idle: return .secondary; case .working: return Palette.accent; case .thinking: return Palette.accent; case .tool: return Palette.accent; case .complete: return Palette.ok; case .interrupted: return Palette.warn; case .needsInput: return Palette.warn; case .failed: return Palette.danger; case .unknown: return .secondary }
+        switch self { case .idle: return .secondary; case .working: return Palette.accent; case .thinking: return Palette.accent; case .tool: return Palette.accent; case .complete: return Palette.ok; case .interrupted: return .secondary; case .needsInput: return Palette.warn; case .failed: return Palette.danger; case .unknown: return .secondary }
     }
     var symbol: String {
         switch self { case .idle: return "circle.dotted"; case .working: return "waveform"; case .thinking: return "sparkles"; case .tool: return "gearshape.2"; case .complete: return "checkmark"; case .interrupted: return "pause.fill"; case .needsInput: return "hand.raised.fill"; case .failed: return "exclamationmark.triangle"; case .unknown: return "questionmark" }
@@ -118,7 +118,7 @@ final class MenuActivityImage: NSView {
     func stop() { requested = false; sync() }
 }
 struct MenuStatusSnapshot: Equatable {
-    var phase: SessionPhase?, count = 0, text = "", sampling = "", samplingCount = 0, attention = false, animationEnabled = true
+    var phase: SessionPhase?, text = "", animationEnabled = true
 }
 struct SessionStripSnapshot: Equatable {
     var sessions: [LiveSession] = []
@@ -146,7 +146,7 @@ struct SessionStripSnapshot: Equatable {
     private var subscriptions = Set<AnyCancellable>()
     private var pending = false
     private func refresh(_ model: AppModel) {
-        let value = MenuStatusSnapshot(phase: model.sessionPhase, count: model.activeSessions.count, text: model.menuText, sampling: model.samplingSummary, samplingCount: model.runningEstimates.count, attention: model.samplingNeedsAttention, animationEnabled: !model.installingUpdate)
+        let value = MenuStatusSnapshot(phase: model.sessionPhase, text: model.menuText, animationEnabled: !model.installingUpdate)
         if snapshot != value { snapshot = value }
     }
     private func schedule(_ model: AppModel) {
@@ -241,21 +241,14 @@ struct WindowNavigationSnapshot: Equatable {
 struct MenuActivityLabel: View {
     @ObservedObject private var status: MenuStatusStore
     init(model: AppModel) { status = model.menuStatus }
-    @AppStorage(NativePanelKey.showCount.rawValue) private var showCount = false
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
         let value = status.snapshot
         HStack(spacing: 5) {
-            BrandMark(template: true).frame(width: 22, height: 22)
-            MenuActivityIndicator(phase: value.phase, enabled: value.animationEnabled).frame(width: 22, height: 22)
-            if showCount && value.count > 0 { Text("\(value.count)").monospacedDigit().padding(.horizontal, 5).background(.quaternary, in: Capsule()).accessibilityLabel(L("{0} 个活跃会话" , value.count)) }
+            if value.phase == nil || value.phase == .idle { BrandMark(template: true).frame(width: 22, height: 22) }
+            else { MenuActivityIndicator(phase: value.phase, enabled: value.animationEnabled).frame(width: 22, height: 22) }
             if !value.text.isEmpty { Text(value.text).monospacedDigit() }
-            if value.samplingCount > 0 {
-                Image(systemName: value.attention ? "pause.circle.fill" : "record.circle")
-                    .foregroundStyle(value.attention ? Palette.warn : Palette.ok).accessibilityLabel(value.sampling)
-                if value.samplingCount > 1 { Text("\(value.samplingCount)").monospacedDigit() }
-            }
         }.font(.system(size: 14, weight: .medium)).padding(.horizontal, 5)
     }
 }

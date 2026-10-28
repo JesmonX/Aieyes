@@ -37,21 +37,31 @@
       const d = copy(this.data.dashboard),settings = this.data.settings;
       const sources = settings.sources.filter(s => (!params.provider || s.provider === params.provider) && (!params.sourceId || s.id === params.sourceId));
       const models = [this.data.prices[0]?.id || 'test-model', 'preview/fast-model'];
-      const summary = zero(),byModel = new Map(),days = [],dayModels = [],stamp = new Date(this.data.stamp * 1000);
-      for (let i = 0; i < 365; i++) {
-        const day = new Date(stamp);day.setDate(day.getDate() - (364 - i));
-        const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
-        const range = params.dateRange;
-        if (range?.kind === 'custom' ? key < range.start || key > range.end : range?.kind !== 'all' && i < 365 - (params.days || 1)) continue;
-        const total = zero();
+      const summary = zero(),byModel = new Map(),days = [],trendDays = [],heatmap = [],dayModels = [];
+      const stamp = new Date(this.data.stamp * 1000),range = params.dateRange;
+      const keyOf = day => `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+      const shifted = offset => {const day = new Date(stamp);day.setHours(12, 0, 0, 0);day.setDate(day.getDate() + offset);return keyOf(day);};
+      const start = range?.kind === 'custom' ? range.start : shifted(range?.kind === 'all' ? -364 : -(params.days || 1) + 1);
+      const end = range?.kind === 'custom' ? range.end : keyOf(stamp);
+      const explicit = range?.kind === 'custom' || range?.kind === 'all';
+      const trendStart = explicit ? start : [start, shifted(-6)].sort()[0];
+      const heatStart = explicit ? start : shifted(-364);
+      const earliest = [start, trendStart, heatStart].sort()[0];
+      const cursor = new Date(`${earliest}T12:00:00`);
+      for (let i = 0; keyOf(cursor) <= end && i < 3660; i++, cursor.setDate(cursor.getDate() + 1)) {
+        const key = keyOf(cursor),inHistory = key >= shifted(-364) && key <= keyOf(stamp),total = zero();
+        const historyIndex = (Date.parse(key) - Date.parse(shifted(-364))) / 86400000;
         for (const [j, model] of models.entries()) {
           if (params.model && model !== params.model) continue;
           const value = zero();
-          sources.forEach(s => add(value, scale(this.data.dashboard.summary, (settings.sources.indexOf(s) + 1) * (2 + i % 7) / (7 * (j + 1)))));
-          add(total, value);add(summary, value);byModel.set(model, add(byModel.get(model) || zero(), value));
-          if (sources.length) dayModels.push({ day: key, model, usage: value });
+          if (inHistory) sources.forEach(s => add(value, scale(this.data.dashboard.summary, (settings.sources.indexOf(s) + 1) * (2 + historyIndex % 7) / (7 * (j + 1)))));
+          add(total, value);
+          if (key >= start) {add(summary, value);byModel.set(model, add(byModel.get(model) || zero(), value));}
+          if (sources.length && inHistory && key >= trendStart) dayModels.push({ day: key, model, usage: value });
         }
-        days.push({ ...total, key });
+        if (key >= start) days.push({ ...copy(total), key });
+        if (key >= trendStart) trendDays.push({ ...copy(total), key });
+        if (key >= heatStart) heatmap.push({ ...copy(total), key });
       }
       const accountMatches = q => (!params.provider || q.provider === params.provider) && (!params.sourceId || sources.some(s => s.accountId === q.accountId && s.provider === q.provider));
       d.quotas = settings.accounts.filter(a => !a.archived && a.quotaEnabled).flatMap(a => {
@@ -60,7 +70,7 @@
       });
       const order = d.quotaOrder || [];d.quotas.sort((a, b) => {const rank = q => {const i = order.indexOf(`${q.provider}:${q.accountId}`);return i < 0 ? 10000 : i;};return rank(a) - rank(b);});d.quotaOrder = d.quotas.map(q => `${q.provider}:${q.accountId}`);
       d.quotaEstimates = (d.quotaEstimates || []).filter(e => d.quotaOrder.includes(e.accountKey));d.creditEstimates = (d.creditEstimates || []).filter(e => d.quotaOrder.includes(e.accountKey));
-      return { ...d, generatedAt: this.data.stamp, summary, models: [...byModel].filter(([, v]) => v.events).map(([key, v]) => ({ ...v, key })), modelOptions: models, trendDays: days, heatmap: days, dayModels, days, sources: sources.map(s => ({ ...s, status: { updatedAt: this.data.stamp, error: this.data.scenario === 'failure' ? '模拟采集失败' : null } })) };
+      return { ...d, generatedAt: this.data.stamp, summary, models: [...byModel].filter(([, v]) => v.events).map(([key, v]) => ({ ...v, key })), modelOptions: models, trendDays, heatmap, dayModels, days, sources: sources.map(s => ({ ...s, status: { updatedAt: this.data.stamp, error: this.data.scenario === 'failure' ? '模拟采集失败' : null } })) };
     }
     validateSettings(next) {
       for (const key of ['accounts', 'sources', 'hosts']) if (!Array.isArray(next[key])) throw new Error(`模拟配置缺少 ${key}`);
@@ -89,6 +99,13 @@
         case 'sources.remove': s.sources = s.sources.filter(v => v.id !== p.sourceId);return s;
         case 'sources.rebind': {const source = s.sources.find(v => v.id === p.sourceId);if (!source) throw new Error('目录不存在');source.hostId = p.machineId === 'local' ? null : p.machineId;return s;}
         case 'sources.scan': case 'sources.rescan': return s.sources.filter(v => !p.sourceId || v.id === p.sourceId).map(v => ({ id: v.id, events: 14, updatedAt: now, error: d.scenario === 'failure' ? '模拟采集失败' : null }));
+        case 'agents.manage': {
+          const ids = s.appearance.settingsAgentIds ?? [...new Set((s.agents || []).filter(a => a.enabled || a.machineIds.length).map(a => a.provider).concat(s.sources.map(a => a.provider),s.accounts.map(a => a.provider)))];
+          s.appearance.settingsAgentIds = ids.filter(id => id !== p.provider);
+          if (p.visible) s.appearance.settingsAgentIds.push(p.provider);
+          for (const a of s.agents || []) if (a.provider === p.provider) a.enabled = p.visible && a.machineIds.length > 0;
+          return s;
+        }
         case 'agents.set': {
           let agent = (s.agents ||= []).find(a => a.provider === p.provider);
           if (!agent) {agent = { provider: p.provider, enabled: false, machineIds: [] };s.agents.push(agent);}
@@ -185,8 +202,10 @@
         case 'desktop_panel_pin': this.desktop.panelPinned = p.pinned;this.emit('desktop:panel', this.desktop);return this.desktop;
         case 'desktop_panel_page': this.desktop.panelPage = p.page;return null;
         case 'desktop_panel_ready': return null;
+        case 'desktop_main_ready': return null;
         case 'desktop_mode': this.desktop.mode = p.mode;this.desktop.effectiveMode = p.mode;this.emit('desktop:status', this.desktop);return this.desktop;
         case 'desktop_pet_scale': this.desktop.petScale = p.scale;this.emit('desktop:status', this.desktop);return this.desktop;
+        case 'desktop_materials': this.desktop.materialPreferences = {main:p.main, floating:p.floating};this.desktop.materials = {main:p.main === 'default'?'mica':p.main, floating:p.floating === 'default'?'acrylic':p.floating};this.emit('desktop:status', this.desktop);return this.desktop;
         case 'desktop_appearance': this.emit('desktop:status', this.desktop);return null;
         case 'desktop_detail': this.hooks.navigate?.(p.view);return null;
         case 'desktop_action': {

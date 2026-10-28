@@ -28,26 +28,14 @@ struct Surface {
     state: PetState,
     frames: Vec<cairo::ImageSurface>,
     asset: String,
+    shapes: Vec<cairo::Region>,
+    shape_scale: f64,
+    shape_key: String,
     start: Instant,
     timer: Option<glib::SourceId>,
     visible: bool,
     press: Option<(f64, f64)>,
     dragged: bool,
-}
-
-/// Select the compatibility backend before GTK or worker threads start. Explicit
-/// user backend choices win, and an unavailable X server never prevents startup.
-pub fn configure_backend() {
-    if std::env::var_os("GDK_BACKEND").is_none()
-        && std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland")
-        && std::env::var_os("DISPLAY").is_some()
-        && x11rb::connect(None).is_ok()
-    {
-        // main calls this before creating the Tauri runtime or spawning threads.
-        unsafe {
-            std::env::set_var("GDK_BACKEND", "x11");
-        }
-    }
 }
 
 /// A user explicitly opened this window. Coordinate GTK activation with X11's
@@ -109,6 +97,7 @@ impl NativePet {
     pub fn start(app: AppHandle, position: Option<(i32, i32)>) -> Result<Self, String> {
         let application = app
             .get_webview_window("main")
+            .or_else(|| app.get_webview_window("floating"))
             .ok_or("主窗口不可用")?
             .gtk_window()
             .map_err(|e| e.to_string())?
@@ -150,6 +139,9 @@ impl NativePet {
             state: aieyes_core::pets::project(&Default::default()),
             frames: vec![],
             asset: String::new(),
+            shapes: vec![],
+            shape_scale: 0.0,
+            shape_key: String::new(),
             start: Instant::now(),
             timer: None,
             visible: false,
@@ -160,6 +152,7 @@ impl NativePet {
         let weak = Rc::downgrade(&surface);
         area.connect_draw(move |_, context| {
             if let Some(surface) = weak.upgrade() {
+                update_shape(&mut surface.borrow_mut());
                 let _ = paint(&surface.borrow(), context);
             }
             glib::Propagation::Stop
@@ -189,6 +182,38 @@ impl NativePet {
                         s.dragged = true;
                         s.window
                             .begin_move_drag(1, next_x as i32, next_y as i32, event.time());
+                        glib::timeout_add_local(Duration::from_millis(60), move || {
+                            with_surface(|surface| {
+                                let mut s = surface.borrow_mut();
+                                if s.press.is_none() || !s.dragged {
+                                    return glib::ControlFlow::Break;
+                                }
+                                let pressed = s
+                                    .window
+                                    .window()
+                                    .and_then(|window| {
+                                        window
+                                            .display()
+                                            .default_seat()
+                                            .and_then(|seat| seat.pointer())
+                                            .map(|pointer| {
+                                                window
+                                                    .device_position(&pointer)
+                                                    .3
+                                                    .contains(gdk::ModifierType::BUTTON1_MASK)
+                                            })
+                                    })
+                                    .unwrap_or(false);
+                                if pressed {
+                                    glib::ControlFlow::Continue
+                                } else {
+                                    s.press = None;
+                                    position_surface(&s, None, true);
+                                    glib::ControlFlow::Break
+                                }
+                            })
+                            .unwrap_or(glib::ControlFlow::Break)
+                        });
                     }
                 }
             });
@@ -262,6 +287,8 @@ impl NativePet {
                     if let Ok(frames) = decoded {
                         s.frames = frames;
                         s.asset = asset.into();
+                        s.shapes.clear();
+                        s.shape_key.clear();
                     }
                 }
                 s.info = info;
@@ -453,7 +480,7 @@ fn paint(s: &Surface, cr: &cairo::Context) -> Result<(), cairo::Error> {
             143.0 / f64::from(image.height()),
         );
         cr.set_source_surface(image, 0.0, 0.0)?;
-        cr.source().set_filter(cairo::Filter::Bilinear);
+        cr.source().set_filter(cairo::Filter::Best);
         cr.paint()?;
         cr.restore()?;
     }
@@ -605,4 +632,98 @@ fn watch_outside(app: AppHandle, stopped: Arc<AtomicBool>) {
             }
         }
     });
+}
+
+// Cache alpha regions per sprite/scale. Only frame selection and small label unions
+// run during animation; transparent pixels never intercept clicks on the desktop.
+fn update_shape(s: &mut Surface) {
+    let Some(window) = s.window.window() else {
+        return;
+    };
+    let scale = normalized_scale(s.info["petScale"].as_f64().unwrap_or(1.0));
+    if s.shapes.len() != s.frames.len() || s.shape_scale != scale {
+        s.shape_scale = scale;
+        s.shape_key.clear();
+        s.shapes = s
+            .frames
+            .iter()
+            .map(|image| {
+                let mut rectangles = Vec::new();
+                let width = (132.0 * scale).round() as i32;
+                let height = (143.0 * scale).round() as i32;
+                let _ = image.with_data(|bytes| {
+                    for y in 0..height {
+                        let mut start = None;
+                        for x in 0..=width {
+                            let opaque = x < width && {
+                                let sx = x * image.width() / width;
+                                let sy = y * image.height() / height;
+                                let offset = (sy * image.stride() + sx * 4) as usize;
+                                bytes
+                                    .get(
+                                        offset + if cfg!(target_endian = "little") { 3 } else { 0 },
+                                    )
+                                    .is_some_and(|alpha| *alpha >= 20)
+                            };
+                            if opaque && start.is_none() {
+                                start = Some(x)
+                            }
+                            if !opaque {
+                                if let Some(left) = start.take() {
+                                    rectangles.push(cairo::RectangleInt::new(
+                                        left + (6.0 * scale).round() as i32,
+                                        y,
+                                        x - left,
+                                        1,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                });
+                cairo::Region::create_rectangles(&rectangles)
+            })
+            .collect();
+    }
+    let frame = frame(&s.state, s.start.elapsed().as_millis() as u64, reduced()) as usize;
+    let composited =
+        gtk::prelude::WidgetExt::screen(&s.window).is_some_and(|screen| screen.is_composited());
+    let key = format!(
+        "{frame}:{composited}:{}:{}:{}",
+        s.state.label, s.info["showCount"], s.info["activeCount"]
+    );
+    if key == s.shape_key {
+        return;
+    }
+    s.shape_key = key;
+    let region = s
+        .shapes
+        .get(frame)
+        .map(cairo::Region::copy)
+        .unwrap_or_else(cairo::Region::create);
+    let label = s
+        .area
+        .create_pango_layout(Some(&crate::localization::text(&s.state.label)));
+    label.set_font_description(Some(&gtk::pango::FontDescription::from_string(
+        "HarmonyOS Sans SC 9",
+    )));
+    let (w, h) = label.pixel_size();
+    let w = f64::from(w + 24).min(140.0);
+    let h = f64::from(h + 6);
+    let _ = region.union_rectangle(&cairo::RectangleInt::new(
+        ((144.0 - w) / 2.0 * scale) as i32,
+        ((aieyes_core::pets::height(&s.state) - h - 4.0) * scale) as i32,
+        (w * scale).ceil() as i32,
+        (h * scale).ceil() as i32,
+    ));
+    if s.info["showCount"] == true && s.info["activeCount"].as_u64().is_some_and(|n| n > 0) {
+        let _ = region.union_rectangle(&cairo::RectangleInt::new(
+            (108.0 * scale) as i32,
+            (18.0 * scale) as i32,
+            (36.0 * scale) as i32,
+            (20.0 * scale) as i32,
+        ));
+    }
+    window.input_shape_combine_region(&region, 0, 0);
+    window.shape_combine_region(if composited { None } else { Some(&region) }, 0, 0);
 }

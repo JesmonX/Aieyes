@@ -52,14 +52,60 @@ fn request(app: &tauri::AppHandle) -> Result<(), String> {
     }
     Ok(())
 }
+/// Builds run from `target\` have no Start menu shortcut registering the AppUserModelID; like
+/// tauri-plugin-notification, they keep Windows' defaults.
+#[cfg(target_os = "windows")]
+fn installed() -> bool {
+    std::env::current_exe().ok().and_then(|exe| {
+        exe.parent()
+            .map(|dir| !dir.ends_with("target/debug") && !dir.ends_with("target/release"))
+    }) == Some(true)
+}
+/// Installed builds declare the shortcut's AppUserModelID (the bundle identifier) before any window
+/// exists: an updater relaunch then merges with the pinned taskbar icon, and toasts belong to Aieyes.
+#[cfg(target_os = "windows")]
+pub fn declare_app_id(identifier: &str) {
+    if installed() {
+        let id = windows::core::HSTRING::from(identifier);
+        let _ = unsafe { windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(&id) };
+    }
+}
 fn send(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
     if permission(app)? != "granted" {
         return Err("系统通知未授权，请在系统通知设置中允许 Aieyes".into());
     }
+    let (title, body) = (
+        crate::localization::text(title),
+        crate::localization::text(body),
+    );
+    // The plugin has no activation callback on Windows; clicking a toast opens the main window.
+    #[cfg(target_os = "windows")]
+    {
+        use tauri_winrt_notification::Toast;
+        let id = if installed() {
+            app.config().identifier.clone()
+        } else {
+            Toast::POWERSHELL_APP_ID.to_string()
+        };
+        let handle = app.clone();
+        Toast::new(&id)
+            .title(&title)
+            .text1(&body)
+            .on_activated(move |_| {
+                let main = handle.clone();
+                let _ = handle.run_on_main_thread(move || {
+                    let _ = crate::desktop::activate_main(&main);
+                });
+                Ok(())
+            })
+            .show()
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
     app.notification()
         .builder()
-        .title(crate::localization::text(title))
-        .body(crate::localization::text(body))
+        .title(title)
+        .body(body)
         .show()
         .map_err(|e| e.to_string())
 }

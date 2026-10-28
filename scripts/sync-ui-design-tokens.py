@@ -42,6 +42,14 @@ def outputs():
         assert target in table['dimensions'], f'Unknown alias target: {target}'
         css.append(f'  --{name}: var(--{target});')
         swift.append(f'    static let {camel(name)} = {camel(target)}')
+    # Platform geometry and font weights need not change the native macOS output.
+    web = table.get('web', {})
+    for name, value in web.get('dimensions', {}).items():
+        assert name in table['dimensions'] and isinstance(value, (int, float)) and value >= 0
+        css.append(f'  --{name}: {value}px;')
+    for name, value in web.get('weights', {}).items():
+        assert name in table['weights'] and value in (400, 500, 600, 700)
+        css.append(f'  --weight-{name}: {value};')
     for theme in ('light', 'dark'):
         if theme == 'dark':
             css.extend(['}', ':root[data-theme=dark] {'])
@@ -50,7 +58,8 @@ def outputs():
             assert re.fullmatch(r'[0-9a-f]{6}', color), f'Invalid color: {name}'
             css.append(f'  --{name}: #{color};')
             swift.append(f'    static let {camel(name)}{theme.title()}: UInt32 = 0x{color}')
-    css.extend(['}', END])
+    css.append('}')
+    css.append(END)
     swift.extend(['}', ''])
     path = ROOT / 'apps/desktop/web/tokens.css'
     old = path.read_text(encoding='utf-8')

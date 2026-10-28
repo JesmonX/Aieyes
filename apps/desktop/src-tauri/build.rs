@@ -35,7 +35,15 @@ fn main() {
             "Official releases require AIEYES_UPDATER_PUBLIC_KEY"
         );
     }
-    tauri_build::build()
+    // Windows 10+ compatibility: the Snap Layouts hit target over the maximize button is a layered child
+    // window (src/caption_hit.rs), which Windows only allows to applications that declare Windows 8 or later.
+    tauri_build::try_build(
+        tauri_build::Attributes::new().windows_attributes(
+            tauri_build::WindowsAttributes::new()
+                .app_manifest(include_str!("windows-app-manifest.xml")),
+        ),
+    )
+    .expect("failed to run tauri-build")
 }
 
 fn stage_web(source: &std::path::Path, destination: &std::path::Path) {

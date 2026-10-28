@@ -554,19 +554,19 @@ for line in sys.stdin:
         await model.saveAndReprice()
         precondition(model.mappingModel.isEmpty && model.mappingID.isEmpty && !model.settingsDirty)
         model.settingsDraft.refreshSeconds = 321
-        await model.toggleTheme(currentlyDark: false)
+        await model.setTheme("dark")
         precondition(model.settings.appearance?.theme == "dark" && model.settingsDraft.appearance?.theme == "dark")
         precondition(model.settingsDraft.refreshSeconds == 321 && model.settings.refreshSeconds != 321)
         let savedTheme = model.settings.appearance
         try Data().write(to: root.appendingPathComponent("fail-theme"))
-        await model.toggleTheme(currentlyDark: true)
+        await model.setTheme("light")
         precondition(model.settings.appearance == savedTheme && model.settingsDraft.appearance == savedTheme && !model.settingsSaving)
         try FileManager.default.removeItem(at: root.appendingPathComponent("fail-theme"))
-        await model.toggleTheme(currentlyDark: true)
+        await model.setTheme("light")
         precondition(model.settings.appearance?.theme == "light" && model.settingsDraft.refreshSeconds == 321)
         for flag in ["release-save", "save-started"] { try? FileManager.default.removeItem(at: root.appendingPathComponent(flag)) }
         try Data().write(to: root.appendingPathComponent("hold-save"))
-        let delayedTheme = Task { await model.toggleTheme(currentlyDark: false) }
+        let delayedTheme = Task { await model.setTheme("dark") }
         while !FileManager.default.fileExists(atPath: root.appendingPathComponent("save-started").path) { try await Task.sleep(for: .milliseconds(10)) }
         var newerAppearance = model.settingsDraft.appearance ?? AppearanceSettings(); newerAppearance.theme = "system"
         model.settingsDraft.appearance = newerAppearance

@@ -374,6 +374,68 @@ impl Engine {
         Ok(serde_json::to_value(saved)?)
     }
 
+    /// Entry visibility and collection gating share one settings transaction.
+    /// Source flags are retained so restoring an entry cannot enable paused directories.
+    pub(crate) fn manage_agent(&mut self, params: Value) -> Result<Value> {
+        let base = self.store.settings()?;
+        let mut next = base.clone();
+        let provider = params["provider"].as_str().context("请选择 Agent")?;
+        let definition = crate::contracts::provider(provider).context("不支持的 Agent")?;
+        let visible = params["visible"].as_bool().context("缺少显示状态")?;
+        let canonical = crate::contracts::PROVIDERS
+            .iter()
+            .find(|p| p.agent_id == definition.agent_id)
+            .unwrap()
+            .id;
+        let ids = next.appearance.settings_agent_ids.get_or_insert_with(|| {
+            let mut ids = Vec::new();
+            for row in crate::contracts::PROVIDERS {
+                let configured = base
+                    .agents
+                    .iter()
+                    .any(|a| a.provider == row.id && (a.enabled || !a.machine_ids.is_empty()))
+                    || base.sources.iter().any(|s| s.provider == row.id)
+                    || base.accounts.iter().any(|a| a.provider == row.id);
+                if configured {
+                    let id = crate::contracts::PROVIDERS
+                        .iter()
+                        .find(|p| p.agent_id == row.agent_id)
+                        .unwrap()
+                        .id
+                        .to_owned();
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+            ids
+        });
+        ids.retain(|id| {
+            crate::contracts::provider(id).is_some_and(|p| p.agent_id != definition.agent_id)
+        });
+        if visible {
+            ids.push(canonical.to_owned());
+        }
+        for agent in &mut next.agents {
+            if crate::contracts::provider(&agent.provider)
+                .is_some_and(|p| p.agent_id == definition.agent_id)
+            {
+                agent.enabled = visible && !agent.machine_ids.is_empty();
+            }
+        }
+        let saved = self.store.patch_settings(
+            &serde_json::to_value(base)?,
+            &serde_json::to_value(next)?,
+            false,
+        )?;
+        if definition.agent_id == "qoder" {
+            for issue in crate::qoder_env::sync(&saved) {
+                eprintln!("Qoder 环境配置: {issue}");
+            }
+        }
+        Ok(serde_json::to_value(saved)?)
+    }
+
     pub(crate) fn configure_agent(&mut self, params: Value) -> Result<Value> {
         let base = self.store.settings()?;
         let mut next = base.clone();
@@ -554,6 +616,89 @@ mod tests {
             })
             .unwrap();
         (root, engine)
+    }
+
+    #[test]
+    fn entry_removal_and_restore_preserve_sources_and_accounts() {
+        let (_root, mut engine) = fixture();
+        engine
+            .call(
+                "agents.set",
+                json!({"provider":"codex","enabled":true,"machineIds":["local","server"]}),
+            )
+            .unwrap();
+        let mut before = engine.store.settings().unwrap();
+        before.sources[0].enabled = false;
+        before.accounts.push(Account {
+            id: "retained".into(),
+            provider: "codex".into(),
+            name: "Retained".into(),
+            ..Default::default()
+        });
+        engine.store.save_settings(&before).unwrap();
+        let before = engine.store.settings().unwrap();
+        let removed = engine
+            .call("agents.manage", json!({"provider":"codex","visible":false}))
+            .unwrap();
+        assert_eq!(
+            removed["sources"],
+            serde_json::to_value(&before.sources).unwrap()
+        );
+        assert_eq!(
+            removed["accounts"],
+            serde_json::to_value(&before.accounts).unwrap()
+        );
+        assert!(
+            !engine
+                .store
+                .settings()
+                .unwrap()
+                .agents
+                .iter()
+                .any(|a| a.provider == "codex" && a.enabled)
+        );
+        let restored = engine
+            .call("agents.manage", json!({"provider":"codex","visible":true}))
+            .unwrap();
+        assert_eq!(
+            restored["sources"],
+            serde_json::to_value(&before.sources).unwrap()
+        );
+        assert_eq!(
+            restored["accounts"],
+            serde_json::to_value(&before.accounts).unwrap()
+        );
+        assert!(
+            engine
+                .store
+                .settings()
+                .unwrap()
+                .agents
+                .iter()
+                .any(|a| a.provider == "codex"
+                    && a.enabled
+                    && a.machine_ids == vec!["local", "server"])
+        );
+        engine
+            .call("agents.manage", json!({"provider":"claude","visible":true}))
+            .unwrap();
+        assert!(
+            !engine
+                .store
+                .settings()
+                .unwrap()
+                .agents
+                .iter()
+                .any(|a| a.provider == "claude" && a.enabled)
+        );
+        assert!(
+            engine
+                .call(
+                    "agents.manage",
+                    json!({"provider":"unsupported","visible":true})
+                )
+                .is_err()
+        );
     }
 
     #[test]

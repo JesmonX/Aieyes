@@ -5,16 +5,24 @@
   const escape = (value) => window.AieyesUI.escapeHTML(value);
   function update(info) {
     current = info;
+    window.AieyesI18n?.setHourCycle(info.hourCycle);
     window.AieyesAgentSettings?.updateSession(info);
     document.body.dataset.platform = info.platform;
     document.documentElement.dataset.platform = info.platform;
     document.documentElement.dataset.material = info.materials?.main || info.material || 'opaque';
+    document.documentElement.dataset.corners = info.windowCorners || 'round';
     window.AieyesTheme?.loadFonts?.();
     renderLiveSessions(info);
     const mode = document.querySelector('#desktop-mode');
     if (mode && document.activeElement !== mode) mode.value = info.mode;
     const scale = document.querySelector('#pet-scale');
     if (scale && document.activeElement !== scale && !scaleSaving && scalePending === null) showScale(info.petScale ?? 1);
+    for (const surface of ['main', 'floating']) {
+      const select = document.querySelector('#material-' + surface);
+      if (select && document.activeElement !== select) select.value = info.materialPreferences?.[surface] || 'default';
+      const actual = document.querySelector('#material-actual-' + surface);
+      if (actual) actual.textContent = AieyesI18n.t("当前生效：{0}", ({mica:'Mica', acrylic:'Acrylic', blur:AieyesI18n.t("模糊"), opaque:AieyesI18n.t("不透明")})[info.materials?.[surface]] || AieyesI18n.t("不透明"));
+    }
     const effective = document.querySelector('#desktop-effective');
     if (effective) effective.textContent = effectiveText(info);
     const count = document.querySelector('#desktop-count');if (count) count.checked = !!info.showCount;
@@ -62,61 +70,94 @@
     titlebar.hidden = false;
     const native = window.__TAURI__.window.getCurrentWindow();
     const maximize = document.querySelector('#window-maximize');
+    // Caption buttons are not Tab stops (Alt+Space, Win+arrows and Alt+F4 remain); the icon changes only with the state.
     async function updateMaximized() {
       const maximized = await native.isMaximized();
+      if (document.documentElement.dataset.maximized === String(maximized)) return;
       document.documentElement.dataset.maximized = String(maximized);
       const label = maximized ? AieyesI18n.t("还原") : AieyesI18n.t("最大化");
       maximize.setAttribute('aria-label', label);maximize.title = label;
       maximize.innerHTML = maximized ? '<svg viewBox="0 0 16 16"><path d="M6 3h7v7M3 6h7v7H3Z"/></svg>' : '<svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9"/></svg>';
     }
-    document.querySelector('#window-minimize').onclick = () => native.minimize().catch((e) => notify(String(e)));
+    document.querySelector('#window-minimize').onclick = () => native.minimize().catch((e) => notify(String(e), 'error'));
     // Tauri's drag-region handler owns double-click maximize; onResized updates the icon.
-    maximize.onclick = () => native.toggleMaximize().then(updateMaximized).catch((e) => notify(String(e)));
-    document.querySelector('#window-close').onclick = async () => {if (window.AieyesAgentSettings && !(await window.AieyesAgentSettings.flush())) return;await native.close().catch((e) => notify(String(e)));};
-    await native.onResized(() => updateMaximized().catch((e) => notify(String(e))));
+    maximize.onclick = () => native.toggleMaximize().then(updateMaximized).catch((e) => notify(String(e), 'error'));
+    document.querySelector('#window-close').onclick = async () => {if (window.AieyesAgentSettings && !(await window.AieyesAgentSettings.flush())) return;await native.close().catch((e) => notify(String(e), 'error'));};
+    // On Windows 11 an invisible native target over this button answers the system's hit test, so Snap Layouts
+    // open on hover (caption_hit.rs); the page no longer sees the mouse there and mirrors its hover and press.
+    await window.__TAURI__.event.listen('desktop:caption', (event) => {maximize.classList.toggle('hover', !!event.payload?.hover);maximize.classList.toggle('pressed', !!event.payload?.pressed);});
+    let resizeFrame = 0;
+    await native.onResized(() => {if (!resizeFrame) resizeFrame = requestAnimationFrame(() => {resizeFrame = 0;updateMaximized().catch((e) => notify(String(e), 'error'));});});
+    const active = () => {document.documentElement.dataset.windowActive = String(document.hasFocus());};
+    window.addEventListener('focus', active);window.addEventListener('blur', active);active();
     await updateMaximized();
   }
   window.AieyesDesktop = {
     settingsHTML() {
-      return `<div class="card"><h2>${AieyesI18n.t("桌面显示")}</h2><div class="form-row"><label for="desktop-mode">${AieyesI18n.t("显示方式")}</label><select id="desktop-mode"><option value="pet">${AieyesI18n.t("桌面宠物")}</option><option value="tray">${AieyesI18n.t("系统状态栏 / 托盘")}</option></select></div><div class="form-row pet-scale-control"><label for="pet-scale">${AieyesI18n.t("桌宠缩放")}</label><input id="pet-scale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="pet-scale-value" for="pet-scale">100%</output><button type="button" id="reset-pet-scale">${AieyesI18n.t("恢复 100%")}</button></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">${AieyesI18n.t("显示活跃会话数")}</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : AieyesI18n.t("正在检测桌面…"))}</p>${helpHTML(AieyesI18n.t("桌面显示"), AieyesI18n.t("单击打开面板，悬停查看状态，拖动松手后贴边。隐藏后可从托盘菜单恢复。"))}${window.AieyesPetLibrary?.html() ?? ''}<div class="between"><button type="button" id="reset-ball">${AieyesI18n.t("重置桌宠位置")}</button><button type="button" id="hide-ball">${AieyesI18n.t("暂时隐藏桌宠")}</button><button type="button" id="quit-app">${AieyesI18n.t("退出 Aieyes")}</button></div></div>`;
+      const materials = current?.platform === 'windows' ? ['main', 'floating'].map(surface => `<div class="form-row"><label for="material-${surface}">${AieyesI18n.t(surface === 'main' ? "主窗口材质" : "悬浮面板材质")}</label><div><select id="material-${surface}">${[['default',AieyesI18n.t("默认")],['mica','Mica'],['acrylic','Acrylic'],['opaque',AieyesI18n.t("不透明")]].map(([value,label]) => `<option value="${value}">${label}</option>`).join('')}</select><small class="muted" id="material-actual-${surface}"></small></div></div>`).join('') : '';
+      return `<div class="card"><h2>${AieyesI18n.t("桌面显示")}</h2><div class="form-row"><label for="desktop-mode">${AieyesI18n.t("显示方式")}</label><select id="desktop-mode"><option value="pet">${AieyesI18n.t("桌面宠物")}</option><option value="tray">${AieyesI18n.t("系统状态栏 / 托盘")}</option></select></div><div class="form-row pet-scale-control"><label for="pet-scale">${AieyesI18n.t("桌宠缩放")}</label><div class="pet-scale-fields"><input id="pet-scale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="pet-scale-value" for="pet-scale">100%</output><button type="button" id="reset-pet-scale">${AieyesI18n.t("恢复 100%")}</button></div></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">${AieyesI18n.t("显示活跃会话数")}</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : AieyesI18n.t("正在检测桌面…"))}</p>${helpHTML(AieyesI18n.t("桌面显示"), AieyesI18n.t("单击打开面板，悬停查看状态，拖动松手后贴边。隐藏后可从托盘菜单恢复。"))}${materials}${window.AieyesPetLibrary?.html() ?? ''}<div class="desktop-actions"><button type="button" id="reset-ball">${AieyesI18n.t("重置桌宠位置")}</button><button type="button" id="hide-ball">${AieyesI18n.t("暂时隐藏桌宠")}</button><button type="button" id="quit-app">${AieyesI18n.t("退出 Aieyes")}</button></div></div>`;
     },
     bindSettings() {
       window.AieyesPetLibrary?.bind();
       const select = document.querySelector('#desktop-mode');
       if (!select) return;
       select.value = current?.mode || 'pet';
+      for (const surface of ['main', 'floating']) {
+        const control = document.querySelector('#material-' + surface);
+        if (!control) continue;
+        control.value = current?.materialPreferences?.[surface] || 'default';
+        control.onchange = async () => {
+          const controls = ['main','floating'].map(key => document.querySelector('#material-' + key));
+          controls.forEach(el => el.disabled = true);
+          try {update(await invoke('desktop_materials', {main:controls[0].value, floating:controls[1].value}));}
+          catch (error) {control.value = current?.materialPreferences?.[surface] || 'default';notify(String(error),'error');}
+          finally {controls.forEach(el => el.disabled = false);}
+        };
+      }
+      if (current) update(current);
       const scale = document.querySelector('#pet-scale');showScale(current?.petScale ?? 1);
       scale.oninput = () => changeScale(Number(scale.value));
       scale.onchange = () => {clearTimeout(scaleTimer);void saveScale();};
       document.querySelector('#reset-pet-scale').onclick = () => {changeScale(1);clearTimeout(scaleTimer);void saveScale();};
-      const count = document.querySelector('#desktop-count');if (count) {count.checked = !!current?.showCount;count.onchange = async () => {count.disabled = true;try {await invoke('desktop_action', { action: 'toggle-count' });update(await invoke('desktop_info'));} catch (error) {count.checked = !!current?.showCount;notify(String(error));} finally {count.disabled = false;}};}
+      const count = document.querySelector('#desktop-count');if (count) {count.checked = !!current?.showCount;count.onchange = async () => {count.disabled = true;try {await invoke('desktop_action', { action: 'toggle-count' });update(await invoke('desktop_info'));} catch (error) {count.checked = !!current?.showCount;notify(String(error), 'error');} finally {count.disabled = false;}};}
       select.onchange = async () => {
         select.disabled = true;
         try {update(await invoke('desktop_mode', { mode: select.value }));}
-        catch (error) {select.value = current?.mode || 'pet';notify(String(error));} finally
+        catch (error) {select.value = current?.mode || 'pet';notify(String(error), 'error');} finally
         {select.disabled = false;}
       };
-      document.querySelector('#reset-ball').onclick = () => invoke('desktop_action', { action: 'reset-position' }).catch((e) => notify(String(e)));
+      document.querySelector('#reset-ball').onclick = () => invoke('desktop_action', { action: 'reset-position' }).catch((e) => notify(String(e), 'error'));
       const hide = document.querySelector('#hide-ball');
       if (hide) {
         hide.textContent = current?.hidden ? AieyesI18n.t("恢复显示桌宠") : AieyesI18n.t("暂时隐藏桌宠");
-        hide.onclick = () => invoke('desktop_action', { action: current?.hidden ? 'show-ball' : 'hide-ball' }).catch((e) => notify(String(e)));
+        hide.onclick = () => invoke('desktop_action', { action: current?.hidden ? 'show-ball' : 'hide-ball' }).catch((e) => notify(String(e), 'error'));
       }
-      document.querySelector('#quit-app').onclick = () => invoke('desktop_action', { action: 'quit' }).catch((e) => notify(String(e)));
+      document.querySelector('#quit-app').onclick = () => invoke('desktop_action', { action: 'quit' }).catch((e) => notify(String(e), 'error'));
     }
   };
   async function boot() {
     if (!window.__TAURI__) return;
+    // Windows: show the titlebar now and reveal the window once this laid-out shell has painted, not as an
+    // empty backdrop before the IPC round trips below. The first call shows the window cloaked (a frame painted
+    // while hidden is not reused); the second, after a frame painted in the shown window, puts it on screen.
+    // The native side reveals it after timeouts otherwise.
+    const titlebar = document.querySelector('#titlebar');
+    if (titlebar && document.documentElement.dataset.platform === 'windows') {
+      titlebar.hidden = false;
+      const ready = (painted) => invoke('desktop_main_ready', { painted }).catch(() => {});
+      // A hidden page gets animation frames slowly, so only one is awaited before showing the window.
+      requestAnimationFrame(() => setTimeout(async () => {await ready(false);requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => ready(true))));}));
+    }
     try {
       await window.__TAURI__.event.listen('desktop:quit-requested', async () => {
         if (document.querySelector('#editor')?.open) {await invoke('desktop_action', { action: 'settings' });notify(AieyesI18n.t("请先完成或放弃当前编辑，再退出应用"), 'error');return;}
         if (window.AieyesAgentSettings && !(await window.AieyesAgentSettings.flush())) return;
-        if (settingsFormsDirty()) {await invoke('desktop_action', { action: 'settings' });showEditor(AieyesI18n.t("退出前有未保存更改"), AieyesI18n.t("<p>通用配置或模型映射仍有草稿。可取消返回保存，或明确放弃后退出。</p>"), async () => {await invoke('desktop_action', { action: 'quit-confirmed' });});document.querySelector('#editor-form button[type=submit]').textContent = AieyesI18n.t("放弃更改并退出");document.querySelector('#cancel-editor').focus();} else await invoke('desktop_action', { action: 'quit-confirmed' });
+        if (settingsFormsDirty()) {await invoke('desktop_action', { action: 'settings' });confirmDestructive(AieyesI18n.t("退出前有未保存更改"), `<p>${AieyesI18n.t("通用配置或模型映射仍有草稿。可取消返回保存，或明确放弃后退出。")}</p>`, async () => {await invoke('desktop_action', { action: 'quit-confirmed' });}, AieyesI18n.t("放弃更改并退出"));} else await invoke('desktop_action', { action: 'quit-confirmed' });
       });
       await window.__TAURI__.event.listen('desktop:status', (event) => update(event.payload));
-      await window.__TAURI__.event.listen('desktop:error', (event) => notify(String(event.payload)));
+      await window.__TAURI__.event.listen('desktop:error', (event) => notify(String(event.payload), 'error'));
       await window.__TAURI__.event.listen('desktop:navigate', (event) => {
-        navigate(event.payload).catch((e) => notify(String(e)));
+        navigate(event.payload).catch((e) => notify(String(e), 'error'));
       });
       await window.__TAURI__.event.listen('desktop:detail-view', async (event) => {
         await window.AieyesApp?.ready;
@@ -128,7 +169,7 @@
       update(info);
       await bindTitlebar(info);
       if (info.page !== 'agent') await navigate(info.page);
-    } catch (error) {notify(String(error));}
+    } catch (error) {notify(String(error), 'error');}
   }
   boot();
 })();

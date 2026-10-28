@@ -71,6 +71,7 @@ dependencies = [
  "gdkx11",
  "gtk",
  "ksni",
+ "libc",
  "minisign-verify",
  "pangocairo",
  "png 0.18.1",
@@ -81,8 +82,11 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-notification",
+ "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tauri-winrt-notification",
  "tempfile",
+ "webview2-com",
  "windows",
  "x11rb",
 ]
@@ -4842,6 +4846,22 @@ dependencies = [
  "thiserror 2.0.20",
  "time",
  "url",
+ "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "561cd99484561bc39c954768e7b41a66cebbe1ac3d9d081c34361f740c489e2c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
  "zbus",
 ]
 

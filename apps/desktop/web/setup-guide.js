@@ -30,7 +30,7 @@
   const general = (section) => ({ category: 'general', section });
   let statusLabels = { configured: AieyesI18n.t("已配置"), pending: AieyesI18n.t("待验证"), missing: AieyesI18n.t("待配置"), paused: AieyesI18n.t("已暂停"), queryFailed: AieyesI18n.t("查询失败"), querySucceeded: AieyesI18n.t("查询成功"), collectionFailed: AieyesI18n.t("采集异常"), collected: AieyesI18n.t("采集成功"), unconfigured: AieyesI18n.t("未配置"), reconfirm: AieyesI18n.t("待确认"), custom: AieyesI18n.t("单独设置"), inherited: AieyesI18n.t("沿用全局"), archived: AieyesI18n.t("已归档"), selected: AieyesI18n.t("已选择"), excluded: AieyesI18n.t("未选择"), noTasks: AieyesI18n.t("无任务"), draft: AieyesI18n.t("未部署"), pendingRemoval: AieyesI18n.t("待移除"), pendingSync: AieyesI18n.t("待同步"), modified: AieyesI18n.t("待部署"), deployed: AieyesI18n.t("已部署"), stopped: AieyesI18n.t("已停用"), missingSource: AieyesI18n.t("目录变化"), priceMissing: AieyesI18n.t("缺少价格"), noPriceGaps: AieyesI18n.t("未报缺价"), sampled: AieyesI18n.t("采样成功") };window.addEventListener("aieyes:language", () => {statusLabels = { configured: AieyesI18n.t("已配置"), pending: AieyesI18n.t("待验证"), missing: AieyesI18n.t("待配置"), paused: AieyesI18n.t("已暂停"), queryFailed: AieyesI18n.t("查询失败"), querySucceeded: AieyesI18n.t("查询成功"), collectionFailed: AieyesI18n.t("采集异常"), collected: AieyesI18n.t("采集成功"), unconfigured: AieyesI18n.t("未配置"), reconfirm: AieyesI18n.t("待确认"), custom: AieyesI18n.t("单独设置"), inherited: AieyesI18n.t("沿用全局"), archived: AieyesI18n.t("已归档"), selected: AieyesI18n.t("已选择"), excluded: AieyesI18n.t("未选择"), noTasks: AieyesI18n.t("无任务"), draft: AieyesI18n.t("未部署"), pendingRemoval: AieyesI18n.t("待移除"), pendingSync: AieyesI18n.t("待同步"), modified: AieyesI18n.t("待部署"), deployed: AieyesI18n.t("已部署"), stopped: AieyesI18n.t("已停用"), missingSource: AieyesI18n.t("目录变化"), priceMissing: AieyesI18n.t("缺少价格"), noPriceGaps: AieyesI18n.t("未报缺价"), sampled: AieyesI18n.t("采样成功") };});
   const row = (label, text, target, level = 'info', status = 'configured', details = '', updatedAt = 0) => ({ label, text, target, level, status, details, updatedAt });
-  const stamp = (value) => new Date(value * 1000).toLocaleString();
+  const stamp = (value) => new Date(value * 1000).toLocaleString(AieyesI18n.locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', ...AieyesI18n.clock });
   const action = (label, target, id) => `<button type="button" ${id ? `data-guide-step="${e(id)}"` : ''} data-guide-target="${e(JSON.stringify(target))}">${e(label)}</button>`;
   function destinationLabel(target = {}) {
     if (target.accountKey) return AieyesI18n.t("管理账户");
@@ -69,7 +69,7 @@
     const rows = [];
     if (scene() !== 'ssh') {
       const modes = { system: AieyesI18n.t("跟随系统代理"), direct: AieyesI18n.t("直连"), custom: AieyesI18n.t("指定代理") };
-      rows.push(row(AieyesI18n.t("本机应用网络"), (modes[settings().proxy?.mode] ?? AieyesI18n.t("跟随系统代理")) + AieyesI18n.t(" · 可测试出站连接"), general('network')));
+      rows.push(row(AieyesI18n.t("本机应用网络"), AieyesI18n.t("{0} · 可测试出站连接", modes[settings().proxy?.mode] ?? AieyesI18n.t("跟随系统代理")), general('network')));
       for (const s of sources().filter((s) => !s.hostId && s.proxy && s.proxy.mode !== 'inherit')) rows.push(row((providers[s.provider] ?? s.provider) + ' · ' + s.name, AieyesI18n.t("此目录使用独立代理设置"), { provider: s.provider, section: 'machines' }, 'info', 'custom'));
     }
     if (scene() !== 'local') {
@@ -146,13 +146,14 @@
   [AieyesI18n.t("更新与关于"), AieyesI18n.t("查看版本、检查更新及更新设置。"), general('updates')]];
 
   function networkHelp() {
-    return (scene() !== 'ssh' ? `<p><strong>${AieyesI18n.t("本机：")}</strong>${AieyesI18n.t("检查应用代理及目录的独立代理。{0}", action(AieyesI18n.t("网络设置"), general('network')))}</p>` : '') + (scene() !== 'local' ? AieyesI18n.t("<p><strong>服务器：</strong>在下方选择账户与机器，按需配置前置命令。</p><details class=\"setup-help\" data-guide-help=\"network\"><summary>服务器代理配置示例</summary><p>设置服务器可访问的代理地址：</p><pre class=\"setup-command\"><code>export http_proxy=http://PROXY_HOST:PORT\nexport https_proxy=http://PROXY_HOST:PORT</code></pre><p>或加载已有代理脚本：</p><pre class=\"setup-command\"><code>source /path/to/proxy</code></pre><p>127.0.0.1 指服务器自身。应用代理不会自动传给远端；ProxyJump / ProxyCommand 仅用于 SSH 连接。前置命令用于账户授权、切换、额度查询和定时唤醒。</p></details>") : '');
+    return (scene() !== 'ssh' ? `<p><strong>${AieyesI18n.t("本机：")}</strong>${AieyesI18n.t("检查应用代理及目录的独立代理。{0}", action(AieyesI18n.t("网络设置"), general('network')))}</p>` : '') + (scene() !== 'local' ? `<p><strong>${AieyesI18n.t("服务器：")}</strong>${AieyesI18n.t("在下方选择账户与机器，按需配置前置命令。")}</p><details class="setup-help" data-guide-help="network"><summary>${AieyesI18n.t("服务器代理配置示例")}</summary><p>${AieyesI18n.t("设置服务器可访问的代理地址：")}</p><pre class="setup-command"><code>export http_proxy=http://PROXY_HOST:PORT
+export https_proxy=http://PROXY_HOST:PORT</code></pre><p>${AieyesI18n.t("或加载已有代理脚本：")}</p><pre class="setup-command"><code>source /path/to/proxy</code></pre><p>${AieyesI18n.t("127.0.0.1 指服务器自身。应用代理不会自动传给远端；ProxyJump / ProxyCommand 仅用于 SSH 连接。前置命令用于账户授权、切换、额度查询和定时唤醒。")}</p></details>` : '');
   }
   function render() {
     const previous = document.querySelector('.setup-guide') ? rememberView() : null;
     $('#title').textContent = AieyesI18n.t("配置向导");
     const visible = cards.filter((c) => c.id !== 'hosts' || scene() !== 'local');
-    $('#content').innerHTML = `<div class="setup-guide"><section class="card setup-intro"><h2>${AieyesI18n.t("你想用 Aieyes 做什么？")}</h2><div class="setup-toolbar"><label class="setup-scene">${AieyesI18n.t("使用场景")}<select id="setup-scene">${[['local', AieyesI18n.t("仅本机")], ['ssh', AieyesI18n.t("仅 SSH 服务器")], ['mixed', AieyesI18n.t("本机与 SSH")]].map(([v, t]) => option(v, t, scene())).join('')}</select></label><button type="button" data-guide-recheck ${loading ? 'disabled' : ''}>${loading ? AieyesI18n.t("正在读取状态…") : AieyesI18n.t("重新读取状态")}</button><button type="button" data-guide-finish>${AieyesI18n.t("返回总览")}</button></div>${readErrors.length ? AieyesI18n.t("<div class=\"setup-read-error\" role=\"status\">部分状态读取失败，请重试或打开对应设置。</div>") : ''}</section><div class="setup-goals">${visible.map((c) => {
+    $('#content').innerHTML = `<div class="setup-guide"><section class="card setup-intro"><h2>${AieyesI18n.t("你想用 Aieyes 做什么？")}</h2><div class="setup-toolbar"><label class="setup-scene">${AieyesI18n.t("使用场景")}<select id="setup-scene">${[['local', AieyesI18n.t("仅本机")], ['ssh', AieyesI18n.t("仅 SSH 服务器")], ['mixed', AieyesI18n.t("本机与 SSH")]].map(([v, t]) => option(v, t, scene())).join('')}</select></label><button type="button" data-guide-recheck ${loading ? 'disabled' : ''}>${loading ? AieyesI18n.t("正在读取状态…") : AieyesI18n.t("重新读取状态")}</button><button type="button" data-guide-finish>${AieyesI18n.t("返回总览")}</button></div>${readErrors.length ? `<div class="setup-read-error" role="status">${AieyesI18n.t("部分状态读取失败，请重试或打开对应设置。")}</div>` : ''}</section><div class="setup-goals">${visible.map((c) => {
       const rows = c.rows(),warn = rows.filter((r) => r.level === 'warn').length,pending = rows.filter((r) => r.level === 'pending').length;
       const summary = warn ? AieyesI18n.t("{0} 项需检查", warn) : pending ? AieyesI18n.t("{0} 项待配置或验证", pending) : AieyesI18n.t("查看当前状态");
       const expanded = progress.expanded?.[c.id] !== false;
@@ -179,7 +180,7 @@
     document.querySelector('#setup-return')?.remove();
     if (active && state.page === 'settings') {
       const bar = document.createElement('div');bar.id = 'setup-return';bar.className = 'setup-return';
-      bar.innerHTML = AieyesI18n.t("<button type=\"button\" data-guide-open>配置向导</button>");
+      bar.innerHTML = `<button type="button" data-guide-open>${AieyesI18n.t("配置向导")}</button>`;
       $('#content').before(bar);
     }
   }

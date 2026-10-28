@@ -1,0 +1,36 @@
+@layer components {
+.win-select { display:inline-grid; position:relative; min-width:0; max-width:100%; vertical-align:middle; align-self:center; }
+.win-select > select { grid-area:1 / 1; opacity:0; pointer-events:none; }
+.win-select-trigger {
+  position:absolute; inset:0; width:100%; height:100%; min-height:0; min-width:0;
+  justify-content:space-between; gap:8px; padding:2px var(--control-padding-x);
+  font-size:inherit; line-height:inherit; font-weight:var(--weight-regular); text-align:start;
+}
+.win-select-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.win-select-trigger::after { content:''; width:12px; height:12px; flex:0 0 12px; background:var(--control-chevron) center / contain no-repeat; transition:transform .22s var(--win-spring); }
+.win-select-trigger[aria-expanded=true]::after { transform:rotate(180deg); }
+.win-select-trigger[aria-invalid=true] { border-color:var(--danger); }
+.win-select-validation { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.form-row > .win-select,label > .win-select,.account-config > label > .win-select { width:100%; }
+.form-row > .win-select > select,label > .win-select > select { width:100%; }
+.filters > .win-select { flex:0 1 auto; width:auto; max-width:230px; }
+.filters .win-select-trigger,.range-controls .win-select-trigger { font-size:var(--font-secondary); line-height:var(--line-secondary); }
+.panel-body .filters > .win-select { max-width:calc((100% - var(--space-control)) / 2); }
+.panel-body .filters .win-select > select { max-width:100%; width:100%; }
+.win-select-menu {
+  position:fixed; inset:auto; margin:0; padding:4px; min-width:0;
+  border:1px solid var(--border); border-radius:var(--radius-overlay);
+  background:var(--solid); color:var(--ink); box-sizing:border-box;
+  overflow:auto; overscroll-behavior:contain; scrollbar-width:thin;
+  font-family:var(--font-ui); font-size:var(--font-secondary); line-height:var(--line-body);
+  max-height:234px; z-index:100; outline:none;
+}
+.win-select-option { display:flex; align-items:center; gap:8px; min-height:28px; padding:4px 8px; border-radius:var(--radius-control); cursor:pointer; }
+.win-select-option > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.win-select-option::before { content:''; width:12px; height:12px; flex:0 0 12px; }
+.win-select-option[data-selected=true]::before { background:var(--accent); mask:url("data:image/svg+xml,%3Csvg viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m2.5 6 2.25 2.5 4.75-5' fill='none' stroke='white' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; }
+.win-select-option[data-selected=true] { background:var(--control-tint); }
+.win-select-option[data-active=true] { background:var(--control-tint); box-shadow:none; }
+.win-select-option[aria-disabled=true] { color:var(--faint); opacity:.55; cursor:default; }
+.win-select-group { padding:6px 8px 2px; color:var(--muted); font-size:var(--font-caption); }
+}

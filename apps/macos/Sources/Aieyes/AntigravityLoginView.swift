@@ -28,7 +28,7 @@ struct AntigravityLoginView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 18) {
-            HStack { Text(L("Antigravity 登录")).font(AppFont.title); Spacer(); Button(L("完成")) { Task { if active { await call("cancel") }; dismiss() } }.disabled(sending) }
+            Text(L("Antigravity 登录")).font(AppFont.title)
             Text(source.name).font(AppFont.section)
             Text(L("读取机器现有登录，或通过浏览器授权。凭据保存在登录机器。")).font(AppFont.secondary).foregroundStyle(.secondary)
             HStack { if active { ProgressView().controlSize(.small) }; Text(L(status?.message ?? L("准备检查…"))).textSelection(.enabled) }
@@ -45,6 +45,9 @@ struct AntigravityLoginView: View {
                 if status != nil { Button(L("验证登录")) { Task { await call("verify") } }.disabled(sending || status?.phase == "verifying" || status?.phase == "checking") }
                 if !active || status == nil { Button(L("重新登录 / 检查")) { Task { await call("start") } }.disabled(sending) }
                 if active, status != nil { Button(L("取消授权")) { Task { await call("cancel") } }.disabled(sending) }
+                Spacer()
+                // Closing cancels an authorization still in progress, so it answers Esc but not Return.
+                Button(L("完成")) { Task { if active { await call("cancel") }; dismiss() } }.keyboardShortcut(.cancelAction).disabled(sending)
             }
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogAgyWidth).textFieldStyle(.aieyes).interactiveDismissDisabled(active || sending)
         .task {

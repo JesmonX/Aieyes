@@ -79,6 +79,7 @@ private struct NativeScanResult: Decodable {
     @State private var removing: String?
     @State private var error: String?
     @State private var expanded = false
+    @State private var confirmingRemoveAll = false
     private var rows: [NativeConnection] { (model.settings.nativeConnections ?? []).filter { CoreContract.sameAgent($0.provider, provider) && $0.kind == kind } }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
@@ -88,7 +89,11 @@ private struct NativeScanResult: Decodable {
                 HStack {
                     Text((kind == "api" ? L("原生 API 连接") : L("已发现的原生登录凭据")) + "（\(rows.count)）").font(AppFont.section)
                     Spacer()
-                    Button(L("取消全部引用")) { remove(rows.map(\.id)) }.disabled(removing != nil || scanner.busy)
+                    // Unlinking everything at once is confirmed first; it only forgets references, never files.
+                    Button(L("取消全部引用"), role: .destructive) { confirmingRemoveAll = true }.disabled(removing != nil || scanner.busy)
+                        .confirmationDialog(L("取消全部引用？"), isPresented: $confirmingRemoveAll) {
+                            Button(L("取消全部引用"), role: .destructive) { remove(rows.map(\.id)) }
+                        } message: { Text(L("将取消 {0} 个引用。凭据文件不会被删除，之后可以重新扫描。", rows.count)) }
                 }
                 DisclosureGroup(kind == "api" ? L("查看连接") : L("查看凭据"), isExpanded: $expanded) {
                 ForEach(rows) { row in

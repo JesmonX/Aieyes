@@ -45,7 +45,8 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     assert.match(await page.locator('.overview-usage').textContent(),/今日用量/);
     await page.evaluate(()=>{state.dashboard.summary.pricedTokens=1;render();});
     assert.equal(await page.locator('.overview-usage #repair-pricing').textContent(),'!');
-    await page.locator('#repair-pricing').focus();
+    // Hints follow keyboard focus (:focus-visible), not focus moved after a pointer click.
+    await page.keyboard.press('Shift');await page.locator('#repair-pricing').focus();
     await page.locator('#aieyes-tooltip').waitFor({state:'visible'});
     assert.match(await page.locator('#aieyes-tooltip').textContent(),/计价未完成/);
     await page.keyboard.press('Escape');
@@ -86,6 +87,20 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     assert.match(readings[0],/^0 Token · 1\.23 USD/);assert.match(readings[1],/^1\.2K Token/);assert.match(readings[2],/^1\.23M Token/);assert.match(readings[3],/^1\.23B Token/);
     await page.locator('#trend').focus();
     assert.match(await page.locator('#trend-reading').textContent(),/70\.0K Token · 1\.00 USD/);
+    // One spoken reading per move: the caption is not a live region, the canvas is an image tied to the table.
+    assert.deepEqual(await page.evaluate(()=>({live:document.querySelector('#trend-reading').getAttribute('aria-live'),role:document.querySelector('#trend').getAttribute('role'),
+      details:document.querySelector('#trend').getAttribute('aria-details'),table:!!document.getElementById('daily-usage'),heatTitle:document.querySelector('[data-heat-day]')?.hasAttribute('title')??false,
+      heatLive:document.querySelector('.heat-reading')?.getAttribute('aria-live')??null})),{live:null,role:'img',details:'daily-usage',table:true,heatTitle:false,heatLive:null});
+    // The model legend is shown by default. Disclosure choices (a collapsed legend, an opened year table)
+    // survive background renders and the Token/cost switch.
+    assert.equal(await page.locator('.model-legend').evaluate(el=>el.open),true,'Model legend is shown by default');
+    assert.equal(await page.locator('.legend .model .color').count()>0,true,'Model ring rows carry colour swatches');
+    await page.locator('.model-legend > summary').click();
+    const yearTable=await page.locator('.heat-table').count();if(yearTable)await page.locator('.heat-table > summary').first().click();
+    await page.evaluate(()=>{render();state.cost=!state.cost;render();});
+    assert.equal(await page.locator('.model-legend').evaluate(el=>el.open),false,'Collapsed model legend stays collapsed');
+    if(yearTable)assert.equal(await page.locator('.heat-table').first().evaluate(el=>el.open),true,'Year table stays open');
+    await page.evaluate(()=>{state.cost=!state.cost;render();});
     assert.match(await page.evaluate(()=>exactUsage({total:1234567,cost:1.234567,tokens:{}})),/1\.234567 USD/,'Exact details retain their precision');
     await page.evaluate(()=>changeFilters({model:'fixture',days:30}));
     await page.locator('[data-page=agent]').click();await page.waitForFunction(()=>!state.dashboardPending);
@@ -123,7 +138,7 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     await openGuide(page);
     await page.locator('aside [data-settings-tab=wakeups]').click();
     assert.equal(await page.locator('#setup-return').textContent(),'配置向导');
-    assert.equal(await page.locator('.wakeup-benefit').count(),0,'task controls replace the introductory paragraph');assert.match(await page.locator('.advanced > summary').textContent(),/执行规则/);
+    assert.equal(await page.locator('.wakeup-benefit').count(),0,'task controls replace the introductory paragraph');assert.equal(await page.locator('.help-note[data-help-title="执行规则"]').count(),1,'the rules live behind a help button beside the task actions');
     await page.locator('[data-page=agent]').click();await page.waitForFunction(()=>!state.dashboardPending);
     await page.locator('[data-overview-agent=""]').click();await page.waitForFunction(()=>!state.dashboardPending);
     await page.locator('[data-quota="codex:a0"] summary').first().click();
@@ -205,7 +220,7 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     for(const dark of [false,true]){
       await page.evaluate(dark=>{state.settings.appearance.theme=dark?'dark':'light';render();},dark);
       await page.locator('[data-page=agent]').click();await page.waitForFunction(()=>!state.dashboardPending);
-      await page.evaluate(()=>window.scrollTo(0,0));await snapshot(page,`overview-${dark?'dark':'light'}.png`);
+      await page.evaluate(()=>(window.pageScroller?.()??document.scrollingElement).scrollTo(0,0));await snapshot(page,`overview-${dark?'dark':'light'}.png`);
       overviewGeometry.push(await page.locator('aside,.brand,main,.overview-usage,.quota-card').evaluateAll(nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return [r.x,r.y,r.width,r.height];})));
       await panel.locator('[data-overview-agent=""]').click();await panel.waitForFunction(()=>!state.dashboardPending);
       await panel.evaluate(dark=>{state.settings.appearance.theme=dark?'dark':'light';render();},dark);

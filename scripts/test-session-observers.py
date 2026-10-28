@@ -5,6 +5,29 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('sessions',ROOT/'scripts/session_remote.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);m.SCRIPT=(ROOT/'scripts/session_remote.py').read_text()
 class ObserverTests(unittest.TestCase):
+    def test_claude_sources_survive_log_tail_incremental_cache_and_hook_environment(self):
+        for entrypoint in ('cli','sdk-cli','sdk-ts','sdk-py'):
+            with self.subTest(entrypoint=entrypoint), tempfile.TemporaryDirectory() as directory:
+                root=pathlib.Path(directory);path=root/'session.jsonl'
+                header=dict(type='user',sessionId='session',entrypoint=entrypoint,message=dict(content='PRIVATE'))
+                path.write_text(json.dumps(header)+'\n'+json.dumps(dict(type='ignored',text='PRIVATE_'*50000))+'\n'+json.dumps(dict(type='assistant',sessionId='session',message=dict(stop_reason='end_turn')))+'\n')
+                first=m.read_file(path,'claude',False,{})
+                self.assertEqual(first['events'][0]['sessionSource'],entrypoint)
+                self.assertEqual(first['events'][-1]['kind'],'complete')
+                self.assertNotIn('PRIVATE',json.dumps(first))
+                with path.open('a') as f:f.write(json.dumps(dict(type='user',sessionId='session',message=dict(content='PRIVATE')))+'\n')
+                second=m.read_file(path,'claude',False,first)
+                self.assertFalse(second['reset']);self.assertEqual(second['events'][0]['kind'],'start')
+                self.assertEqual(m.read_file(path,'claude',False,second)['events'],[])
+                if os.name=='nt':continue  # SSH hook helper uses POSIX file locks.
+                (root/'.aieyes/session-events').mkdir(parents=True)
+                helper=root/'observe.py';helper.write_text(m.SCRIPT)
+                env=dict(os.environ,CLAUDE_CODE_ENTRYPOINT=entrypoint)
+                subprocess.run([sys.executable,str(helper),m.MARKER,'claude','UserPromptSubmit',directory],input=json.dumps(dict(session_id='hook',entrypoint='cli',prompt='PRIVATE')),env=env,capture_output=True,text=True,check=True,timeout=3)
+                event=json.loads(next((root/'.aieyes/session-events').glob('*.jsonl')).read_text())
+                self.assertEqual(event['sessionSource'],entrypoint)
+                self.assertNotIn('PRIVATE',json.dumps(event))
+
     def test_codebuddy_nested_child_identity_and_intermediate_commentary(self):
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory);path=root/'parent/subagents/agent-worker.jsonl';path.parent.mkdir(parents=True)

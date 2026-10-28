@@ -54,7 +54,7 @@ function bridge(){window.setInterval=()=>0;window.__TAURI__={event:{async listen
     if(provider==='codebuddy'){await credits.locator('summary').click();assert.match(await credits.textContent(),/qfmodel-other/);}
     if(provider==='qoder'){assert.match(await page.locator('#content').innerText(),/Qwen3.8-Flash/);assert.equal(await page.locator('#model option[value="qfmodel"]').textContent(),'Qwen3.8-Flash');assert(!/qfmodel(?!-other)/.test(await page.locator('#content').innerText()));}
     await page.locator('details.daily > summary').click();await page.locator('[data-day-toggle]').first().click();if(provider==='codebuddy')assert.match(await page.locator('.daily-table').textContent(),/原生记录/);else assert(!/原生记录/.test(await page.locator('.daily-table').textContent()));
-    await page.evaluate(()=>window.scrollTo(0,0));await page.screenshot({path:path.join(out,'analysis.png'),fullPage:true});
+    await page.evaluate(()=>(window.pageScroller?.()??document.scrollingElement).scrollTo(0,0));await page.screenshot({path:path.join(out,'analysis.png'),fullPage:true});
     await page.locator('#model').selectOption('qfmodel-other');await page.waitForFunction(()=>state.appliedFilters.model==='qfmodel-other'&&!state.dashboardPending);assert.equal(await page.evaluate(provider=>state.dashboard.summary.nativeCredits[provider].credits,provider),.0625);
     await page.locator('#provider').selectOption('claude');await page.waitForFunction(()=>state.appliedFilters.provider==='claude'&&!state.dashboardPending);assert.equal(await page.locator('[data-native-credits]').count(),0);
     assert.deepEqual(errors,[]);console.log(provider+' native Credits: deduplication, cumulative-result exclusion, zero Token display, daily/model details and filters passed');

@@ -48,8 +48,83 @@ def decode(value):
 TOKEN = re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|r(?P<hashes>#+)\"[\s\S]*?\"(?P=hashes)|r\"[\s\S]*?\"|\"(?:\\[\s\S]|[^\"\\])*\"|\x27(?:\\[\s\S]|[^\x27\\\n])*\x27')
 
 
+def scan_js(text, location):
+    # Template HTML contains quotes that are not JavaScript string delimiters.
+    # Scan interpolation expressions recursively instead of matching through tags.
+    def quoted(i):
+        mark, start = text[i], i
+        i += 1
+        while i < len(text):
+            if text[i] == chr(92):
+                i += 2
+            elif text[i] == mark:
+                value = decode(text[start + 1:i])
+                if value not in ('简体中文', '中文'):
+                    add(value, f'{location}:{text.count(chr(10), 0, start) + 1}')
+                return i + 1
+            else:
+                i += 1
+        return i
+
+    def template(i):
+        i += 1
+        while i < len(text):
+            if text[i] == chr(92):
+                i += 2
+            elif text[i] == '`':
+                return i + 1
+            elif text.startswith('${', i):
+                i = code(i + 2, True)
+            else:
+                i += 1
+        return i
+
+    def code(i, expression=False):
+        depth = 1
+        while i < len(text):
+            if text.startswith('//', i):
+                end = text.find(chr(10), i)
+                i = len(text) if end < 0 else end
+            elif text.startswith('/*', i):
+                end = text.find('*/', i + 2)
+                i = len(text) if end < 0 else end + 2
+            elif text[i] == '/' and (not text[:i].rstrip() or text[:i].rstrip()[-1] in '=([{,:;!?&|' or text[:i].rstrip().endswith('return')):
+                j, character_class = i + 1, False
+                while j < len(text) and text[j] != chr(10):
+                    if text[j] == chr(92):
+                        j += 2
+                        continue
+                    if text[j] == '[':
+                        character_class = True
+                    elif text[j] == ']':
+                        character_class = False
+                    elif text[j] == '/' and not character_class:
+                        break
+                    j += 1
+                i = j + 1
+            elif text[i] in ('"', "'"):
+                i = quoted(i)
+            elif text[i] == '`':
+                i = template(i)
+            elif expression and text[i] == '{':
+                depth += 1
+                i += 1
+            elif expression and text[i] == '}':
+                depth -= 1
+                i += 1
+                if depth == 0:
+                    return i
+            else:
+                i += 1
+        return i
+    code(0)
+
+
 def scan_code(file):
     text = file.read_text(encoding='utf-8')
+    if file.suffix == '.js':
+        scan_js(text, str(file.relative_to(ROOT)))
+        return
     tokens = list(TOKEN.finditer(text))
     ignored = []
     if file.suffix == '.rs':
@@ -199,6 +274,28 @@ for name in ('docs/core-contracts.json', 'docs/chart-palettes.json'):
 for value, locations in references.items():
     if value not in catalog:
         errors.append(f'Missing exact message {value!r}: {", ".join(sorted(locations))}')
+
+# Web i18n rules (docs/ui-review-and-optimization-2026-10-26.md E-04): status attributes hold codes, translations
+# made once at module level must follow language changes, and fragments are not glued into sentences.
+# Existing concatenations are budgeted; lower the budget as they become whole-sentence templates with {0} slots.
+CONCATENATION_BUDGET = 0
+concatenations = []
+for file in sorted((ROOT / 'apps/desktop/web').glob('*')):
+    if file.suffix not in ('.js', '.html') or file.name in ('i18n-catalog.js', 'i18n.js'):
+        continue
+    lines = file.read_text(encoding='utf-8').splitlines()
+    wrapped = any(line.startswith(('(() => {', '(function')) for line in lines[:5])
+    for number, line in enumerate(lines, 1):
+        location = f'{file.relative_to(ROOT)}:{number}'
+        concatenations += [location] * len(re.findall(r'\+\s*AieyesI18n\.t\("', line))
+        if re.search(r'data-status="[^"$]*[㐀-鿿]', line):
+            errors.append(f'{location}: data-status holds display text; use a status code and translate the label')
+        if (re.match(r'(const|let|var)\s+\w+\s*=\s*AieyesI18n\.t\(', line)
+                or wrapped and re.match(r'  (const|let|var)\s+\w+\s*=\s*AieyesI18n\.t\(', line)) and 'aieyes:language' not in line:
+            errors.append(f'{location}: a translation kept at module level misses language changes; translate where it is rendered')
+if len(concatenations) > CONCATENATION_BUDGET:
+    errors.append(f'{len(concatenations)} concatenated translations exceed the budget of {CONCATENATION_BUDGET}; '
+                  f'use one whole-sentence template with {{0}} slots (latest: {concatenations[-1]})')
 if errors:
     raise SystemExit('\n'.join(errors))
 print(f'Localization coverage: {len(references)} exact source messages; {len(catalog)} translations and placeholders verified')

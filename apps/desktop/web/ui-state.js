@@ -169,7 +169,7 @@ window.AieyesUI = {
   },
   estimateHelp(quota, records = [], group = '') {
     const visible = this.estimateVisibility(quota, records, group);
-    if (this.canonicalEstimates(records)[0]?.samplingMode === 'rolling') return AieyesI18n.t("滚动估值：汇总最近 90 天的有效片段，权重每 7 天减半，按额度消耗量加权。") + (visible.five ? AieyesI18n.t("5h 按对应额度片段计算。") : '') + (visible.direct ? AieyesI18n.t("7d 按对应周额度片段计算。") : '') + (visible.ratio ? AieyesI18n.t("7d 容量推算为滚动 5h 价值乘近期容量倍率。") : '') + AieyesI18n.t("金额为 API 等价价值，不可兑换。");
+    if (this.canonicalEstimates(records)[0]?.samplingMode === 'rolling') return [AieyesI18n.t("滚动估值：汇总最近 90 天的有效片段，权重每 7 天减半，按额度消耗量加权。"), visible.five ? AieyesI18n.t("5h 按对应额度片段计算。") : '', visible.direct ? AieyesI18n.t("7d 按对应周额度片段计算。") : '', visible.ratio ? AieyesI18n.t("7d 容量推算为滚动 5h 价值乘近期容量倍率。") : '', AieyesI18n.t("金额为 API 等价价值，不可兑换。")].filter(Boolean).join(' ');
     if (visible.ratio && visible.direct) return AieyesI18n.t("7d 左值：5h 等价值 × 近期容量倍率；右值：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。");
     if (visible.ratio) return AieyesI18n.t("7d：5h 等价值 × 近期容量倍率；这些金额为 API 等价价值。");
     if (visible.direct) return AieyesI18n.t("7d：同一采样时段的 API 等价成本 ÷ 周额度消耗比例。旧记录显示整周估值；这些金额为 API 等价价值。");
@@ -237,9 +237,9 @@ window.AieyesUI = {
     const minutes = Math.ceil((target - now) / 60),parts = [];
     if (!Number.isSafeInteger(minutes) || minutes <= 0) return AieyesI18n.t("重置时间未知");
     if (minutes >= 1440) parts.push(AieyesI18n.t("{0} 天", Math.floor(minutes / 1440)));
-    if (minutes % 1440 >= 60) parts.push(Math.floor(minutes % 1440 / 60) + AieyesI18n.t(" 小时"));
-    if (minutes < 1440 && minutes % 60) parts.push(minutes % 60 + AieyesI18n.t(" 分"));
-    return parts.join(' ') + AieyesI18n.t("后重置");
+    if (minutes % 1440 >= 60) parts.push(AieyesI18n.t("{0} 小时", Math.floor(minutes % 1440 / 60)));
+    if (minutes < 1440 && minutes % 60) parts.push(AieyesI18n.t("{0} 分", minutes % 60));
+    return AieyesI18n.t("{0}后重置", parts.join(" "));
   },
   quotaReset(quotaWindow, now = Date.now() / 1000) {
     if (!(Number.isFinite(quotaWindow.resetsAt) && quotaWindow.resetsAt > 0) && quotaWindow.usedPercent === 0) {

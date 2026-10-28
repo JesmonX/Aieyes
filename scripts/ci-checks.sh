@@ -28,6 +28,8 @@ fi
 "$PYTHON" scripts/generate-session-sounds.py --check
 "$PYTHON" scripts/sync-localizations.py --check
 "$PYTHON" scripts/check-localizations.py
+npm --prefix apps/desktop run lint:css
+node scripts/test-css-rules.mjs
 for script in apps/desktop/web/*.js; do node --check "$script"; done
 node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs
 node scripts/test-reset-display.cjs

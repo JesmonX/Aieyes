@@ -38,3 +38,19 @@ async function openGuide(page) {
   await page.locator('aside [data-guide-open]').click();
 }
 module.exports={discardEditor,commitSettings,serveFont,openGeneralPage,revealControl,openGuide};
+// Exercise the common-entry / searchable picker layout at both window widths.
+module.exports.selectSettingsAgent = async function selectSettingsAgent(page, provider) {
+  const direct=page.locator(`[data-settings-agent="${provider}"]`);
+  if (await direct.isVisible()) {await direct.click();return;}
+  const choice=page.locator(`[data-agent-choice="${provider}"]`);
+  if (await choice.count()) {
+    const more=page.locator('.agent-more');
+    if (!await more.evaluate(el=>el.open)) await more.locator('summary').click();
+    await more.locator('[data-agent-search]').fill(provider);
+    await choice.click();return;
+  }
+  await page.locator('[data-manage-agents]').click();
+  await page.locator(`#agent-management-list [data-agent-manage="${provider}"]`).click();
+  await page.waitForFunction(provider=>state.settings.appearance.settingsAgentIds?.includes(provider)&&!state.settingsSaving,provider);
+  await page.locator('#quota-close').click();
+};

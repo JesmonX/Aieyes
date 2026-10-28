@@ -11,11 +11,16 @@ const output = path.resolve(__dirname, '../.local/desktop-preview');
 
 async function modelChecks() {
   const initial = seed('workspace', 'windows');let failStorage = false;
+  assert.equal(initial.dashboard.trendDays.length, 7);
+  assert.equal(initial.dashboard.heatmap.length, 365);
+  assert(initial.dashboard.trendDays.some(day => day.events === 0), 'Synthetic history includes zero-filled gaps');
+  assert.notStrictEqual(initial.dashboard.heatmap, initial.dashboard.trendDays);
   const model = new Model(initial, contract.methods, contract.providers, { save() {if (failStorage) throw new Error('Storage full');} });
   const call = (method, params = {}) => model.invoke('engine_call', { method, params });
   let a = 0,b = 0;const offA = model.listen('test', () => a++),offB = model.listen('test', () => b++);
   model.emit('test', {});offA();model.emit('test', {});offB();assert.deepEqual([a,b], [1,2]);assert.equal(model.listeners.has('test'), false);
   const one = await call('dashboard', { days: 1 }),week = await call('dashboard', { days: 7 });
+  assert.equal(one.days.length, 1);assert.equal(one.trendDays.length, 7);assert.equal(one.heatmap.length, 365);
   assert.equal(week.trendDays.length, 7);assert(week.summary.total > one.summary.total);
   const filtered = await call('dashboard', { provider: 'codex', days: 1 });assert(filtered.summary.total < one.summary.total);
   assert.equal((await call('dashboard', { provider: 'does-not-exist' })).summary.total, 0);

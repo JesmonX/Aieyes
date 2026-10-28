@@ -111,9 +111,14 @@ function browserFixture(){
     const mergedHost=(await rpc('settings.get')).hosts.find(h=>h.id==='server');
     assert.equal(mergedHost.name,'外部窗口更新');assert.equal(mergedHost.port,2222);assert.equal((await rpc('settings.get')).refreshSeconds,120);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='sources';render();});
-    assert.equal(await page.locator('[data-settings-agent]').count(),await page.evaluate(()=>AieyesContract.agentProviders.length));assert.equal(await page.locator('[data-agent-enable]').count(),1);
+    assert.equal(await page.locator('[data-settings-agent]').count(),1,'Only the configured Agent is a direct entry');assert.equal(await page.locator('[data-agent-enable]').count(),1);
     assert.equal(await page.locator('#settings-save-all').count(),0);
-    await page.locator('[data-settings-agent=claude]').click();await page.locator('[data-agent-enable="claude"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').enabled);
+    await page.locator('[data-manage-agents]').click();
+    await page.locator('#agent-management-search').fill('Claude');
+    await page.locator('[data-agent-manage=claude]').click();
+    await page.waitForFunction(()=>state.settings.appearance.settingsAgentIds?.includes('claude'));
+    await page.locator('#quota-close').click();
+await page.locator('[data-agent-enable="claude"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').enabled);
     await page.locator('#agent-section-machines > summary').click();
     await page.locator('[data-agent-machine="claude"][value="server"]').check();await page.waitForFunction(()=>state.settings.agents.find(a=>a.provider==='claude').machineIds.length===2);
     // Server switches are independent, and hidden selections survive edits and reloads.
@@ -248,7 +253,7 @@ function browserFixture(){
       assert.equal(await page.locator('#agent-section-valuation').count(),0,provider);
     }
     await page.evaluate(()=>{AieyesAgentSettings.navigate({provider:'deepseek-harness'});render();});
-    assert.equal(await page.locator('[data-settings-agent="deepseek"]').count(),1);
+    assert.equal(await page.locator('[data-settings-agent="deepseek"]').count(),0,'Deep links open hidden Agents without adding an entry');
     assert.equal(await page.locator('[data-settings-agent="deepseek-harness"]').count(),0);
     assert.equal(await page.locator('[data-agent-section]').getAttribute('data-agent-section'),'deepseek');
     assert.equal(await page.locator('#agent-section-api').count(),1);

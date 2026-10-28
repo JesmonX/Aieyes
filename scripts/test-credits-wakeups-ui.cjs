@@ -49,7 +49,15 @@ function fixture(){
    },remaining);
    assert.equal(result.color,'var(--'+tint+')');assert.equal(result.amount,remaining===null?null:String(remaining));
   }
-  assert.equal(await page.evaluate(()=>resourceColor(95)),'var(--resource-high)','High CPU load must still be red');
+  // Usage bars keep their category color; high load is a red value plus a named warning mark.
+  const high=await page.evaluate(()=>{
+    const holder=document.createElement('div'),danger=document.createElement('i');holder.innerHTML=resourceBlock('CPU',95,'','cpu');danger.style.color='var(--danger)';document.body.append(holder,danger);
+    const mark=holder.querySelector('.high-load-mark'),result={bar:holder.querySelector('.resource-bar > span').style.background,value:getComputedStyle(holder.querySelector('.resource-block > strong')).color,
+      mark:mark&&getComputedStyle(mark).color,label:mark?.getAttribute('aria-label'),role:mark?.getAttribute('role'),danger:getComputedStyle(danger).color,
+      calm:(()=>{const calm=document.createElement('div');calm.innerHTML=resourceBlock('CPU',89,'','cpu');return !calm.querySelector('.high-load-mark,.high-load');})()};
+    holder.remove();danger.remove();return result;
+  });
+  assert.deepEqual(high,{bar:'',value:high.danger,mark:high.danger,label:'高负载',role:'img',danger:high.danger,calm:true},'High CPU load must still be red');
   assert.equal(await page.evaluate(()=>creditValue({status:'pending',valuePer1000:200})),'待确认');
   if(await card().locator('.quota-disclosure').evaluate(el=>el.open))await card().locator('.quota-disclosure summary').click();
   await page.evaluate(()=>loadDashboard());
@@ -57,7 +65,7 @@ function fixture(){
   assert(await card().locator('.quota-collapsed-summary').isVisible());
   const titleBox=await card().locator('.quota-title h3').boundingBox(),balanceBox=await card().locator('.quota-collapsed-summary').boundingBox();
   assert(balanceBox.y>=titleBox.y+titleBox.height-1,'Collapsed credits and Bank Reset use their own row below the account');
-  assert.equal(await card().locator('.quota-collapsed-summary .credit-label').evaluate(el=>getComputedStyle(el).color),await page.evaluate(()=>{const probe=document.createElement('span');probe.style.color='var(--accent)';document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();return color;}));
+  assert.equal(await card().locator('.quota-collapsed-summary .credit-label').evaluate(el=>getComputedStyle(el).color),await page.evaluate(()=>{const probe=document.createElement('span');probe.style.color='var(--accent-text)';document.body.append(probe);const color=getComputedStyle(probe).color;probe.remove();return color;}));
   assert.equal(await card().locator('.quota-title .provider-mark img').evaluate(img=>img.complete&&img.naturalWidth>0),true,'Provider icon is bundled and loads');
   assert.equal(await card().locator('.subscription-badge').textContent(),'Pro');
   const edgeCases=await page.evaluate(()=>{
@@ -78,7 +86,7 @@ function fixture(){
   await page.waitForFunction(()=>document.querySelector('#content .credit-row')?.textContent.includes('≈'));assert.match(await card().locator('.credit-row').textContent(),/余额 1234.13 credits ≈ \$246.83 USD/);
   const previews=path.resolve(__dirname,'../.local/ui-previews');fs.mkdirSync(previews,{recursive:true});
   for(const colorScheme of ['light','dark']){
-   await page.emulateMedia({colorScheme});await page.evaluate(()=>{document.querySelector('.panel-body')?.scrollTo(0,0);window.scrollTo(0,0);});
+   await page.emulateMedia({colorScheme});await page.evaluate(()=>{document.querySelector('.panel-body')?.scrollTo(0,0);(window.pageScroller?.()??document.scrollingElement).scrollTo(0,0);});
    await page.screenshot({animations:'disabled',path:path.join(previews,'credit-'+surface+'-'+colorScheme+'.png')});
   }
   await page.emulateMedia({colorScheme:'light'});
@@ -91,7 +99,14 @@ function fixture(){
    assert.equal(await page.evaluate(()=>testFeature.calls.some(c=>c.method==='creditEstimates.start')),false,'Recreating the panel does not start another sample');
   }
   if(surface==='index.html'){
-   await page.evaluate(()=>{state.page='settings';state.settingsTab='wakeups';renderSettings();});await page.locator('#wake-add:not([disabled])').waitFor();await page.locator('#wake-add').click();await page.locator('#wake-probe').click();await page.waitForFunction(()=>document.querySelector('#wake-model')?.value==='cheap-model');assert.equal(await page.locator('#wake-effort').inputValue(),'low');await page.locator('#wake-add-time').click();await page.locator('[data-wake-time="1"]').fill('13:30');await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
+   await page.evaluate(()=>{state.page='settings';state.settingsTab='wakeups';renderSettings();});await page.locator('#wake-add:not([disabled])').waitFor();await page.locator('#wake-add').click();await page.locator('#wake-probe').click();await page.waitForFunction(()=>document.querySelector('#wake-model')?.value==='cheap-model');assert.equal(await page.locator('#wake-effort').inputValue(),'low');await page.locator('#wake-add-time').click();
+   // Adding a time focuses its field; removing one moves focus to the neighbouring remove button, then to Add.
+   assert.equal(await page.evaluate(()=>document.activeElement.dataset.wakeTime),'1','A new time takes focus');
+   await page.locator('#wake-add-time').click();await page.locator('[data-remove-time="2"]').click();
+   assert.equal(await page.evaluate(()=>document.activeElement.dataset.removeTime),'1','Removing the last time focuses the previous remove button');
+   await page.locator('[data-remove-time="1"]').click();await page.locator('#wake-add-time').click();
+   assert.deepEqual(await page.evaluate(()=>[...document.querySelectorAll('[data-wake-time]')].map(input=>input.getAttribute('aria-label'))),['目标时间 1','目标时间 2'],'Labels are whole sentences');
+   await page.locator('[data-wake-time="1"]').fill('13:30');await page.locator('#editor-form button[type=submit]').click();await page.waitForFunction(()=>!document.querySelector('#editor').open);
    assert.equal(await page.evaluate(()=>testFeature.calls.filter(c=>c.method==='wakeups.deploy').length),0,'saving does not deploy');await page.locator('[data-wake-action=deploy]').click();await page.locator('.wake-more summary').click();await page.locator('[data-wake-action=disable]').waitFor();await page.locator('[data-wake-action=disable]').click();await page.locator('.wake-more summary').click();await page.locator('[data-wake-action=enable]').waitFor();await page.locator('[data-wake-action=enable]').click();await page.locator('[data-wake-action=status]').click();await page.locator('#quota-dialog').getByText('已完成',{exact:true}).waitFor();await page.locator('#quota-close').click();
    await page.evaluate(()=>testFeature.failRemoval=true);await page.locator('.wake-more summary').click();await page.locator('.wake-more [data-wake-action=remove]').click();await page.locator('#editor-form button[type=submit]').click();await page.getByText('待移除',{exact:true}).waitFor();assert.match(await page.locator('#content').textContent(),/尚未确认移除/);await discardEditor(page);await page.evaluate(()=>testFeature.failRemoval=false);await page.locator('.wake-more summary').click();await page.locator('.wake-more [data-wake-action=remove]').click();await page.locator('#editor-form button[type=submit]').click();await page.locator('[data-wake-action=delete]').waitFor({state:'attached'});assert.doesNotMatch(await page.locator('#content').textContent(),/尚未确认移除/,'successful removal clears its own retained error');
    fs.mkdirSync(path.resolve(__dirname,'../.local/wakeup-review'),{recursive:true});await page.screenshot({path:path.resolve(__dirname,'../.local/wakeup-review/desktop.png')});

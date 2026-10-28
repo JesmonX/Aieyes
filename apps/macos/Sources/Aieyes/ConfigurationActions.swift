@@ -25,6 +25,22 @@ extension AppModel {
         }
         return groups
     }
+    var settingsAgentIDs: [String] {
+        settings.appearance?.settingsAgentIds ?? agentConfigurations.filter { agent in
+            agent.enabled || !agent.machineIds.isEmpty || settings.sources.contains { CoreContract.sameAgent($0.provider, agent.provider) } || settings.accounts.contains { CoreContract.sameAgent($0.provider, agent.provider) }
+        }.map(\.provider)
+    }
+    func manageAgent(_ provider: String, visible: Bool) async {
+        guard !settingsSaving else { return }
+        settingsSaving = true; settingsMessage = nil
+        defer { settingsSaving = false }
+        do {
+            let saved: Settings = try await engine.call("agents.manage", params: ["provider":provider, "visible":visible])
+            acceptConfiguration(saved)
+            if visible { settingsAgent = provider }
+            else if settingsAgent == provider { settingsAgent = settingsAgentIDs.first ?? "" }
+        } catch { settingsMessage = error.localizedDescription }
+    }
     var overviewAgentProviders: [String] {
         CoreContract.agentProviders.filter { provider in
             agentConfigurations.contains { CoreContract.sameAgent($0.provider, provider) && $0.enabled }

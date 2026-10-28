@@ -1,6 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#[cfg(target_os = "windows")]
+mod caption_hit;
 mod context_menu;
 mod desktop;
+mod desktop_clock;
+#[cfg(target_os = "linux")]
+mod linux_bridge;
 #[cfg(target_os = "linux")]
 mod linux_fonts;
 #[cfg(target_os = "linux")]
@@ -31,6 +36,7 @@ use tauri_plugin_dialog::DialogExt;
 #[tauri::command]
 async fn select_local_path(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     directory: bool,
     initial: String,
 ) -> Result<Option<String>, String> {
@@ -43,15 +49,17 @@ async fn select_local_path(
         } else {
             initial.parent().unwrap_or(std::path::Path::new("."))
         };
-        let dialog =
-            app.dialog()
-                .file()
-                .set_directory(folder)
-                .set_title(crate::localization::label(if directory {
-                    "选择数据目录"
-                } else {
-                    "选择本机文件"
-                }));
+        // Owned by the requesting window: stays above it and needs no taskbar button of its own.
+        let dialog = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_directory(folder)
+            .set_title(crate::localization::label(if directory {
+                "选择数据目录"
+            } else {
+                "选择本机文件"
+            }));
         let selected = if directory {
             dialog.blocking_pick_folder()
         } else {
@@ -355,13 +363,62 @@ fn default_data_dir(app: &tauri::AppHandle) -> tauri::Result<std::path::PathBuf>
     app.path().app_data_dir()
 }
 
+#[cfg(target_os = "linux")]
+mod linux_theme;
+
 fn main() {
     if aieyes_core::session_hooks::run_if_requested() {
         return;
     }
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
     #[cfg(target_os = "linux")]
-    native_pet::configure_backend();
-    let app = tauri::Builder::default()
+    if linux_bridge::child() {
+        context.config_mut().app.windows.clear();
+    }
+    #[cfg(target_os = "windows")]
+    notifications::declare_app_id(&context.config().identifier);
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "linux")]
+    let builder = if linux_bridge::child() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            let _ = desktop::activate_main(app);
+        }))
+    };
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        let _ = desktop::activate_main(app);
+    }));
+    let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
+        engine_call,
+        notifications::notifications_info,
+        session_sounds::session_sounds_preview,
+        notifications::notifications_test,
+        select_local_path,
+        check_local_path,
+        updates::updates_info,
+        updates::updates_check,
+        updates::updates_panel_check,
+        updates::updates_install,
+        updates::updates_download,
+        updates::updates_preferences,
+        updates::updates_later,
+        desktop::desktop_info,
+        desktop::desktop_appearance,
+        desktop::desktop_mode,
+        desktop::desktop_materials,
+        desktop::desktop_pet_scale,
+        desktop::desktop_panel,
+        desktop::desktop_panel_pin,
+        desktop::desktop_panel_page,
+        desktop::desktop_action,
+        desktop::desktop_panel_ready,
+        desktop::desktop_main_ready,
+        desktop::desktop_detail
+    ];
+    let app = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -370,9 +427,17 @@ fn main() {
             if let Err(error) = linux_fonts::setup(app.handle()) {
                 eprintln!("Could not load bundled HarmonyOS fonts: {error}");
             }
+            #[cfg(target_os = "linux")]
+            linux_theme::setup(app.handle());
             let root = std::env::var_os("AIEYES_DATA_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or(default_data_dir(app.handle())?);
+            #[cfg(target_os = "linux")]
+            if linux_bridge::child() {
+                linux_bridge::connect(app.handle())?;
+                desktop::setup(app, &root)?;
+                return Ok(());
+            }
             let runner = app
                 .path()
                 .resource_dir()?
@@ -408,35 +473,30 @@ fn main() {
             Ok(())
         })
         .on_window_event(desktop::on_window_event)
-        .invoke_handler(tauri::generate_handler![
-            engine_call,
-            notifications::notifications_info,
-            session_sounds::session_sounds_preview,
-            notifications::notifications_test,
-            select_local_path,
-            check_local_path,
-            updates::updates_info,
-            updates::updates_check,
-            updates::updates_panel_check,
-            updates::updates_install,
-            updates::updates_download,
-            updates::updates_preferences,
-            updates::updates_later,
-            desktop::desktop_info,
-            desktop::desktop_appearance,
-            desktop::desktop_mode,
-            desktop::desktop_pet_scale,
-            desktop::desktop_panel,
-            desktop::desktop_panel_pin,
-            desktop::desktop_panel_page,
-            desktop::desktop_action,
-            desktop::desktop_panel_ready,
-            desktop::desktop_detail
-        ])
-        .build(tauri::generate_context!())
+        .invoke_handler(move |invoke| {
+            #[cfg(target_os = "linux")]
+            let invoke = match linux_bridge::forward(invoke) {
+                Ok(()) => return true,
+                Err(invoke) => invoke,
+            };
+            handler(invoke)
+        })
+        .build(context)
         .expect("Aieyes startup failed");
     app.run(|app, event| {
+        // Recreating the helper's only WebView must not end its GTK pet process.
+        #[cfg(target_os = "linux")]
+        if linux_bridge::child() {
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = &event
+            {
+                api.prevent_exit();
+            }
+        }
         if matches!(event, tauri::RunEvent::Exit) {
+            #[cfg(target_os = "linux")]
+            linux_bridge::stop(app);
             if let Some(state) = app.try_state::<notifications::Notifications>() {
                 state.stop();
             }

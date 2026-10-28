@@ -38,7 +38,14 @@ function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++
   assert.equal(await credentials.getAttribute('open'),null,'scanned credentials are collapsed by default');
   await credentials.locator('summary').click();assert(await page.locator('[data-native-remove]').isVisible());
   await credentials.locator('summary').click();
-  await page.locator('[data-native-remove-all="opencode"]').click();await page.waitForFunction(()=>!state.settings.nativeConnections.some(r=>r.provider==='opencode'));
+  // Unlinking everything is confirmed first: danger confirm, focus on Cancel, files untouched.
+  await page.locator('[data-native-remove-all="opencode"]').click();
+  const confirm=page.locator('#editor-form button[type=submit]');await confirm.waitFor();
+  assert.equal(await page.locator('#editor-title').textContent(),'取消全部引用？');
+  assert(await confirm.evaluate(el=>el.classList.contains('danger')&&el.textContent==='取消全部引用'),'unlink-all confirms with a danger button');
+  assert.equal(await page.evaluate(()=>document.activeElement?.id),'cancel-editor','destructive confirmations start on Cancel');
+  assert(await page.evaluate(()=>state.settings.nativeConnections.some(r=>r.provider==='opencode')),'nothing is unlinked before confirming');
+  await confirm.click();await page.waitForFunction(()=>!state.settings.nativeConnections.some(r=>r.provider==='opencode'));
   assert.equal(JSON.parse(fs.readFileSync(path.join(home,'.local/share/opencode/auth.json'))).external.key,'PRIVATE-KEY-NEVER-RENDER');
   await rpc('prices.save',{prices:[{id:'anthropic/claude-sonnet-4.5',name:'Claude Sonnet 4.5',input:0.000003,output:0.000015},{id:'relay/Claude-4-5-Sonnet',name:'Claude Sonnet 4.5'}]});
   await page.evaluate(async()=>{state.settingsTab='prices';state.prices=await api('prices.list');renderSettings(false);});

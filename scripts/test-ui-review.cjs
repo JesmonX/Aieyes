@@ -1,3 +1,4 @@
+const {selectSettingsAgent}=require('./ui-test-helpers.cjs');
 const {discardEditor}=require('./ui-test-helpers.cjs');
 // Regression coverage for the cross-platform interaction review. Uses only in-memory IPC.
 const assert = require('node:assert/strict');
@@ -25,6 +26,7 @@ function fixture() {
     const r=window.review;r.calls.push(args.method);
     switch(args.method){
       case 'hello':return {version:'test'};
+      case 'agents.manage':r.settings.appearance={...r.settings.appearance,settingsAgentIds:[...(r.settings.appearance?.settingsAgentIds||[]),args.params.provider]};return structuredClone(r.settings);
       case 'settings.get':return structuredClone(r.settings);
       case 'settings.save':r.settings=structuredClone(args.params);r.saved.push(structuredClone(args.params));return {};
       case 'settings.patch':{
@@ -66,6 +68,21 @@ function fixture() {
     assert.equal(await page.locator('#trend').count(),0);
     const previews=path.resolve(__dirname,'../.local/ui-previews');fs.mkdirSync(previews,{recursive:true});
     await page.screenshot({animations:'disabled',path:path.join(previews,'onboarding-fixed.png')});
+    // Menus (§5.3): items are not tab stops; arrows and Home/End move; Esc returns to the button; Tab closes.
+    const help=page.locator('.workspace-help'),helpButton=help.locator('summary');
+    await helpButton.focus();await page.keyboard.press('ArrowDown');
+    assert.equal(await help.evaluate(el=>el.open),true);assert.equal(await helpButton.getAttribute('aria-expanded'),'true');
+    assert.deepEqual(await page.evaluate(()=>[document.activeElement.getAttribute('role'),document.activeElement.tabIndex,document.activeElement.parentElement.getAttribute('role')]),['menuitem',-1,'menu']);
+    await page.keyboard.press('Escape');
+    assert.equal(await help.evaluate(el=>el.open),false);assert.equal(await helpButton.getAttribute('aria-expanded'),'false');
+    assert.equal(await helpButton.evaluate(el=>el===document.activeElement),true,'Esc returns focus to the menu button');
+    await page.locator('#refresh').focus();await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(()=>document.activeElement.dataset.refresh),'scan');
+    assert.deepEqual(await page.locator('#refresh-menu button').evaluateAll(items=>[...new Set(items.map(item=>item.tabIndex))]),[-1],'refresh menu items are not tab stops');
+    await page.keyboard.press('End');assert.equal(await page.evaluate(()=>document.activeElement.dataset.refresh),'hosts');
+    await page.keyboard.press('Home');assert.equal(await page.evaluate(()=>document.activeElement.dataset.refresh),'scan');
+    await page.keyboard.press('Tab');assert.equal(await page.locator('#refresh-menu').evaluate(el=>el.hidden),true,'Tab leaves and closes the refresh menu');
+    assert.equal(await page.locator('#refresh').getAttribute('aria-expanded'),'false');
     // Critical small-text tokens and the primary action remain legible in both themes.
     for(const colorScheme of ['light','dark']){
       await page.emulateMedia({colorScheme});
@@ -87,7 +104,7 @@ function fixture() {
     await page.emulateMedia({colorScheme:'light'});
     await page.locator('#add-first-source').click();
     assert.equal(await page.locator('[data-settings-tab=integrations]').getAttribute('aria-current'),'page');
-    await page.locator('[data-settings-agent=deepseek]').click();
+    await selectSettingsAgent(page,'deepseek');
     assert.equal(await page.locator('[data-agent-enable=deepseek]').isChecked(),false);
     assert.equal(await page.locator('.agent-integration-header p').count(),0,'provider controls replace introductory copy');assert.equal(await page.locator('[data-account-add=deepseek]').count(),1);
     assert.equal(await page.locator('#editor[open]').count(),0);
@@ -132,10 +149,14 @@ function fixture() {
     await page.locator('[data-page=settings]').click();await page.locator('[data-settings-tab=prices]').click();await page.locator('#add-price').click();
     assert.equal(await page.locator('#field-id').count(),1);assert.deepEqual(await page.locator('#field-id').evaluate(el=>[...el.labels].map(label=>label.textContent)),['模型 ID']);
     await discardEditor(page);await page.locator('[data-settings-tab=prices]').focus();await page.keyboard.press('ArrowLeft');
+    // Arrows only move focus in the sidebar (a page can start SSH sampling); Enter opens it.
+    assert.equal(await page.evaluate(()=>document.activeElement?.dataset.settingsTab),'hosts');
+    assert.equal(await page.locator('[data-settings-tab=prices]').getAttribute('aria-current'),'page');
+    await page.keyboard.press('Enter');
     assert.equal(await page.locator('[data-settings-tab=hosts]').getAttribute('aria-current'),'page');
     await page.evaluate(()=>{state.settings.hosts=structuredClone(review.settings.hosts);state.settings.hosts=[{id:'host',name:'训练服务器',target:'gpu-lab',enabled:true,details:[]}];});
     await page.locator('[data-page=servers]').click();await page.waitForFunction(()=>!state.serverBusy);
-    await page.locator('.server-card > summary').click();
+    await page.locator('.server-card .server-more > summary').click();
     await page.locator('[data-metric="host:cpu"] > summary').click();await page.locator('[data-metric="host:cpu"] > summary').focus();await page.evaluate(()=>sample());
     assert.equal(await page.locator('[data-metric="host:cpu"] > summary').evaluate(el=>el===document.activeElement),true);
     assert.equal(await page.locator('[data-metric="host:cpu"]').evaluate(el=>el.open),true);
@@ -187,7 +208,7 @@ function fixture() {
     await panel.evaluate(async()=>{const rows=structuredClone(review.hosts);rows[0].sample.cpu[0].utilization=91;await reviewEmit('desktop:hosts',rows);});
     await panel.waitForFunction(()=>document.querySelector('.resource-block > strong')?.textContent==='91%');
     assert.equal(await panel.locator('.resource-block > strong').first().textContent(),'91%');
-    await panel.locator('.server-card > summary').click();await panel.locator('[data-metric="host:cpu"] > summary').focus();
+    await panel.locator('.server-card .server-more > summary').click();await panel.locator('[data-metric="host:cpu"] > summary').focus();
     await panel.evaluate(()=>{window.previousCard=document.querySelector('.server-card');state.serverBusy=true;state.hosts[0].sample.timestamp=Date.now()/1000-11;reviewTimers.find(timer=>timer.ms===1000).fn();});
     assert.equal(await panel.locator('.host-status').textContent(),'数据已延迟');
     assert.equal(await panel.locator('.server-card').evaluate(el=>el===window.previousCard),true,'Aging must not recreate the server card');
@@ -216,6 +237,21 @@ function fixture() {
     await discardEditor(page);await page.locator('[data-page=servers]').click();await page.waitForFunction(()=>!state.serverBusy);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.screenshot({animations:'disabled',path:path.join(previews,'servers-minimum-fixed.png')});
+    // Only fields and selected text keep a context menu; find, find-next and select-all stay out of the chrome.
+    const guards=await page.evaluate(()=>{
+      const fire=(target,type,init={})=>{
+        const event=type==='contextmenu'?new MouseEvent(type,{bubbles:true,cancelable:true,...init}):new KeyboardEvent(type,{bubbles:true,cancelable:true,...init});
+        target.dispatchEvent(event);return event.defaultPrevented;
+      };
+      const field=document.createElement('input'),note=document.createElement('p'),nav=document.querySelector('[data-page=servers]');
+      note.textContent='/srv/aieyes/logs';document.querySelector('#content').append(field,note);getSelection().selectAllChildren(note);
+      const result={chrome:fire(nav,'contextmenu'),field:fire(field,'contextmenu'),selection:fire(note,'contextmenu'),
+        find:fire(document.body,'keydown',{key:'f',ctrlKey:true}),findNext:fire(document.body,'keydown',{key:'F3'}),
+        selectAll:fire(document.body,'keydown',{key:'a',ctrlKey:true}),selectAllField:fire(field,'keydown',{key:'a',ctrlKey:true}),
+        navSelect:getComputedStyle(nav).userSelect,fieldSelect:getComputedStyle(field).userSelect,noteSelect:getComputedStyle(note).userSelect};
+      getSelection().removeAllRanges();field.remove();note.remove();return result;
+    });
+    assert.deepEqual(guards,{chrome:true,field:false,selection:false,find:true,findNext:true,selectAll:true,selectAllField:false,navSelect:'none',fieldSelect:'text',noteSelect:'auto'});
     await panel.close();assert.deepEqual(errors,[]);console.log('UI review interaction regressions passed');
   } finally {await browser?.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});

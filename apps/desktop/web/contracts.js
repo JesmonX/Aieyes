@@ -215,6 +215,16 @@
       "refreshKey": null,
       "updateBehavior": "finish"
     },
+    "agents.manage": {
+      "lane": "configuration",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
     "agyAuth.cancel": {
       "lane": "accounts",
       "invalidates": [],
@@ -1305,7 +1315,7 @@
       "darkAsset": "omp-dark"
     }
   },
-  "contractHash": "17519a23efea81767ec72e25d9b856aa25e12d7679eb4f0579eb4cdbfd6c0156",
+  "contractHash": "12be00f9aafb5cf3f9d457c4baa7685a16a1dea0ab13c8b0e98f9ec0e54177b1",
   "petFrameDurations": [
     [
       280,

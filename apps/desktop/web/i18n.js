@@ -65,26 +65,26 @@
     }
     captureBuiltins(window.AieyesContract); captureBuiltins(window.AieyesChartPalettes);
   }
+  // Renders call apply() often; only values that differ are written, so an unchanged language costs no
+  // DOM mutations (observers such as quota-card-layout.js react to them) and no storage writes.
   function applyStatic() {
-    document.documentElement.lang = language;
+    if (document.documentElement.lang !== language) document.documentElement.lang = language;
     for (const record of staticText) {
-      if (record.node.isConnected && record.node.nodeValue === record.previous) record.node.nodeValue = record.previous = t(record.source);
+      if (!record.node.isConnected || record.node.nodeValue !== record.previous) continue;
+      const next = t(record.source);if (next !== record.previous) record.node.nodeValue = record.previous = next;
     }
     for (const record of staticAttributes) {
-      if (record.element.isConnected && record.element.getAttribute(record.name) === record.previous) record.element.setAttribute(record.name, record.previous = t(record.source));
+      if (!record.element.isConnected || record.element.getAttribute(record.name) !== record.previous) continue;
+      const next = t(record.source);if (next !== record.previous) record.element.setAttribute(record.name, record.previous = next);
     }
     for (const record of builtinText) record.value[record.key] = t(record.source);
-    document.querySelectorAll('[data-language-toggle]').forEach(button => {
-      button.textContent = language === 'en' ? '中文' : 'English';
-      button.title = language === 'en' ? 'Switch to Chinese' : '切换到英文';
-      button.setAttribute('aria-label', language === 'en' ? 'Switch to Chinese' : '切换到英文');
-    });
   }
+  let storedLanguage = null;
   function apply(value) {
     const next = normalize(value), changed = next !== language;
     if (changed) cache.clear();
     language = next;
-    try { localStorage.setItem('aieyes.language', next); } catch (_) {}
+    if (storedLanguage !== next) {storedLanguage = next;try { localStorage.setItem('aieyes.language', next); } catch (_) {}}
     if (typeof NodeFilter !== 'undefined') applyStatic();
     if (changed && typeof window !== 'undefined' && window.dispatchEvent) window.dispatchEvent(new CustomEvent('aieyes:language', {detail: {language}}));
   }
@@ -134,7 +134,14 @@
     }
     window.AieyesSingleSelect?.refresh(root);
   }
-  globalThis.AieyesI18n = {t, message, apply, normalize, refreshControls, get language() {return language;}, get locale() {return language === 'en' ? 'en-US' : 'zh-CN';}, get missing() {return [...missing];}};
+  let nativeHourCycle = null;
+  const setHourCycle = value => {
+    value = ['h11','h12','h23','h24'].includes(value) ? value : null;
+    if (nativeHourCycle === value) return;
+    nativeHourCycle = value;
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event('aieyes:clock'));
+  };
+  globalThis.AieyesI18n = {setHourCycle,t, message, apply, normalize, refreshControls, get language() {return language;}, get locale() {return language === 'en' ? 'en-US' : 'zh-CN';}, get clock() {return { hourCycle: nativeHourCycle || new Intl.DateTimeFormat(undefined, {hour: 'numeric'}).resolvedOptions().hourCycle };}, get missing() {return [...missing];}};
   if (typeof window !== 'undefined') window.AieyesI18n = globalThis.AieyesI18n;
   if (typeof NodeFilter === 'undefined') return;
   document.documentElement.lang = language;

@@ -14,6 +14,8 @@ use std::{
 };
 #[cfg(not(target_os = "linux"))]
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+#[cfg(target_os = "windows")]
+use tauri::tray::MouseButtonState;
 #[cfg(not(target_os = "linux"))]
 use tauri::tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{
@@ -68,6 +70,10 @@ struct Preferences {
     show_count: bool,
     hidden: bool,
     pet_scale: f64,
+    main_material: String,
+    floating_material: String,
+    main_window: Option<MainWindowPreferences>,
+    background_hint_shown: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -77,8 +83,20 @@ impl Default for Preferences {
             show_count: false,
             hidden: false,
             pet_scale: 1.0,
+            main_material: "default".into(),
+            floating_material: "default".into(),
+            main_window: None,
+            background_hint_shown: false,
         }
     }
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MainWindowPreferences {
+    width: f64,
+    height: f64,
+    maximized: bool,
+    position: Option<Position>,
 }
 struct ShellState {
     accent: String,
@@ -161,7 +179,7 @@ pub(crate) fn outside_click(app: &AppHandle, x: i32, y: i32, generation: (u64, u
 struct WindowMaterial {
     kind: &'static str,
     #[cfg(target_os = "windows")]
-    applied: Option<(usize, bool, bool)>,
+    applied: Option<(usize, bool, bool, String)>,
 }
 impl Default for WindowMaterial {
     fn default() -> Self {
@@ -178,9 +196,31 @@ struct Materials {
     floating: WindowMaterial,
 }
 
+/// Windows notification-icon clicks open the panel like a system flyout.
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct TrayClicks {
+    /// Placement and activation for the next panel change; consumed by it.
+    anchor: Option<(i32, i32, u32, u32)>,
+    focus: bool,
+    /// Last known icon rect, for opening the panel from the tray menu.
+    icon: Option<(i32, i32, u32, u32)>,
+    /// The open panel came from the tray and holds keyboard focus.
+    activated: bool,
+    /// Pressing the icon dismisses an open panel through the outside-click hook
+    /// before the button is released; that release must not reopen it.
+    closed: Option<std::time::Instant>,
+    /// The trailing release of a double click must not reopen the panel.
+    double: Option<std::time::Instant>,
+}
+#[cfg(target_os = "windows")]
+const TRAY_CLICK_GRACE: Duration = Duration::from_millis(500);
+
 pub struct Desktop {
     path: PathBuf,
     state: Mutex<ShellState>,
+    #[cfg(target_os = "windows")]
+    tray_clicks: Mutex<TrayClicks>,
     #[cfg(not(target_os = "linux"))]
     menu: Mutex<Menu<tauri::Wry>>,
     menu_state: Mutex<Option<(bool, bool, bool)>>,
@@ -306,7 +346,7 @@ fn panel_size(scale: f64, work_height: Option<u32>) -> (u32, u32) {
 
 /// Work areas and positions use physical desktop coordinates; the user's size
 /// is logical so a 150% or 200% display must not be treated as a 1x desktop.
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 fn main_window_bounds(
     pos: Position,
     requested: (f64, f64),
@@ -322,6 +362,121 @@ fn main_window_bounds(
         y: pos.y.clamp(y, y.saturating_add((height - size.1) as i32)),
     };
     (pos, size)
+}
+
+#[cfg(target_os = "windows")]
+thread_local! {
+    /// The main window's move/size loop: (inside the loop, DPI changed during it).
+    static MAIN_SIZE_MOVE: std::cell::Cell<(bool, bool)> = const { std::cell::Cell::new((false, false)) };
+}
+
+/// Dragging across monitors changes DPI inside the move/size loop. Fitting the window to the new
+/// monitor there would pull it away from the cursor, so the fit waits for the loop to end.
+#[cfg(target_os = "windows")]
+fn fit_main_after_size_move(hwnd: windows::Win32::Foundation::HWND, app: AppHandle) {
+    use windows::Win32::{
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        UI::{
+            Shell::{DefSubclassProc, SetWindowSubclass},
+            WindowsAndMessaging::{WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE},
+        },
+    };
+    unsafe extern "system" fn subclass(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        data: usize,
+    ) -> LRESULT {
+        match msg {
+            WM_ENTERSIZEMOVE => MAIN_SIZE_MOVE.set((true, false)),
+            WM_EXITSIZEMOVE if MAIN_SIZE_MOVE.replace((false, false)).1 => {
+                // SAFETY: `data` is the AppHandle leaked below, alive for the process.
+                let app = unsafe { &*(data as *const AppHandle) };
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = fit_main_window(&main);
+                }
+            }
+            WM_EXITSIZEMOVE => MAIN_SIZE_MOVE.set((false, false)),
+            _ => {}
+        }
+        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
+    // The main window is hidden on close, never destroyed, so the handle lives as long as the app.
+    let data = Box::into_raw(Box::new(app)) as usize;
+    unsafe {
+        let _ = SetWindowSubclass(hwnd, Some(subclass), 1, data);
+    }
+}
+
+/// The page reveals the main window once its shell is laid out, instead of the window appearing
+/// as an empty frame while WebView2 loads. Only the first reveal counts: a later page reload must
+/// not reopen a window the user has closed.
+#[cfg(target_os = "windows")]
+static MAIN_REVEALED: AtomicBool = AtomicBool::new(false);
+/// A frame painted while the window was hidden is not reused once it shows, so the page's reveal
+/// shows the window cloaked (DWM composes it off screen) and the next painted frame uncloaks it.
+#[cfg(target_os = "windows")]
+static MAIN_CLOAKED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+fn reveal_main(app: &AppHandle, cloaked: bool) {
+    if MAIN_REVEALED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if cloaked && let Ok(hwnd) = window.hwnd() {
+        cloak(windows::Win32::Foundation::HWND(hwnd.0 as _), true);
+        MAIN_CLOAKED.store(true, Ordering::SeqCst);
+        // Uncloak even if the page never reports a painted frame.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || uncloak_main(&handle));
+        });
+    }
+    let _ = window.show();
+}
+
+#[cfg(target_os = "windows")]
+fn uncloak_main(app: &AppHandle) {
+    if MAIN_CLOAKED.swap(false, Ordering::SeqCst)
+        && let Some(hwnd) = app.get_webview_window("main").and_then(|w| w.hwnd().ok())
+    {
+        cloak(windows::Win32::Foundation::HWND(hwnd.0 as _), false);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn cloak(hwnd: windows::Win32::Foundation::HWND, cloaked: bool) {
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
+    let value = i32::from(cloaked);
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            (&value as *const i32).cast(),
+            size_of::<i32>() as u32,
+        );
+    }
+}
+
+/// `painted: false` once the page shell is laid out (shows the window, cloaked); `true` after a
+/// frame painted in the shown window (uncloaks it).
+#[tauri::command]
+pub fn desktop_main_ready(app: AppHandle, painted: bool) {
+    #[cfg(target_os = "windows")]
+    if painted {
+        uncloak_main(&app);
+    } else {
+        reveal_main(&app, true);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (app, painted);
 }
 
 #[cfg(target_os = "windows")]
@@ -375,7 +530,17 @@ fn apply_window_material(window: &tauri::WebviewWindow) -> bool {
     };
     let dark = window.theme().ok() == Some(tauri::Theme::Dark);
     let effects = crate::material::effects_enabled();
-    let identity = (hwnd.0 as usize, dark, effects);
+    let requested = {
+        let Ok(state) = desktop.state.lock() else {
+            return false;
+        };
+        if window.label() == "main" {
+            state.preferences.main_material.clone()
+        } else {
+            state.preferences.floating_material.clone()
+        }
+    };
+    let identity = (hwnd.0 as usize, dark, effects, requested.clone());
     {
         let Ok(materials) = desktop.materials.lock() else {
             return false;
@@ -385,11 +550,17 @@ fn apply_window_material(window: &tauri::WebviewWindow) -> bool {
         } else {
             &materials.floating
         };
-        if current.applied == Some(identity) {
+        if current.applied.as_ref() == Some(&identity) {
             return false;
         }
     }
-    let kind = crate::material::apply(windows::Win32::Foundation::HWND(hwnd.0 as _), dark, effects);
+    let kind = crate::material::apply(
+        windows::Win32::Foundation::HWND(hwnd.0 as _),
+        dark,
+        effects,
+        window.label() == "main",
+        &requested,
+    );
     if let Ok(mut materials) = desktop.materials.lock() {
         let current = if window.label() == "main" {
             &mut materials.main
@@ -421,15 +592,19 @@ pub(crate) fn refresh_materials(app: &AppHandle) {
 }
 
 pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let settings = std::fs::read(root.join("settings.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .unwrap_or(Value::Null);
-    crate::localization::set_language(
-        settings["appearance"]["language"]
-            .as_str()
-            .unwrap_or("zh-CN"),
-    );
+    // The tray menu and native pet are drawn before a page reports the appearance (desktop_appearance);
+    // start them in the saved language and theme instead of Chinese and the system theme.
+    if let Ok(settings) = Store::open(root).and_then(|store| store.settings()) {
+        crate::localization::set_language(&settings.appearance.language);
+        #[cfg(target_os = "linux")]
+        crate::linux_theme::apply(app.handle(), &settings.appearance.theme);
+        #[cfg(not(target_os = "linux"))]
+        match settings.appearance.theme.as_str() {
+            "dark" => app.handle().set_theme(Some(tauri::Theme::Dark)),
+            "light" => app.handle().set_theme(Some(tauri::Theme::Light)),
+            _ => {}
+        }
+    }
     let path = root.join("desktop.json");
     let preferences: Preferences = std::fs::read(&path)
         .ok()
@@ -440,7 +615,7 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     app.manage(Desktop {
         path,
         state: Mutex::new(ShellState {
-            accent: "indigo".into(),
+            accent: "system".into(),
             hidden: preferences.hidden,
             preferences,
             snapshot: Snapshot::default(),
@@ -458,6 +633,8 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
             panel_epoch: 0,
             recovery: String::new(),
         }),
+        #[cfg(target_os = "windows")]
+        tray_clicks: Mutex::default(),
         #[cfg(not(target_os = "linux"))]
         menu: Mutex::new(menu),
         menu_state: Mutex::new(None),
@@ -466,9 +643,79 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         materials: Mutex::new(Materials::default()),
         _tray: Mutex::new(None),
     });
-    create_floating(app.handle(), 0)?;
+    #[cfg(target_os = "linux")]
+    if !crate::linux_bridge::child() {
+        if let Some(window) = app.get_webview_window("main") {
+            let saved = app
+                .state::<Desktop>()
+                .state
+                .lock()
+                .ok()
+                .and_then(|s| s.preferences.main_window);
+            let monitors = window.available_monitors().unwrap_or_default();
+            let monitor = saved
+                .and_then(|p| p.position)
+                .and_then(|pos| {
+                    monitors
+                        .iter()
+                        .find(|m| {
+                            let a = m.work_area();
+                            pos.x >= a.position.x
+                                && pos.y >= a.position.y
+                                && pos.x < a.position.x + a.size.width as i32
+                                && pos.y < a.position.y + a.size.height as i32
+                        })
+                        .cloned()
+                })
+                .or_else(|| window.primary_monitor().ok().flatten())
+                .or_else(|| monitors.first().cloned());
+            if let Some(monitor) = monitor {
+                let area = monitor.work_area();
+                let scale = monitor.scale_factor();
+                let requested = saved
+                    .map(|s| (s.width.clamp(760.0, 3840.0), s.height.clamp(480.0, 2160.0)))
+                    .unwrap_or((1120.0, 800.0));
+                let position = saved.and_then(|s| s.position).unwrap_or(Position {
+                    x: area.position.x,
+                    y: area.position.y,
+                });
+                let (position, size) = main_window_bounds(
+                    position,
+                    requested,
+                    (
+                        area.position.x,
+                        area.position.y,
+                        area.size.width,
+                        area.size.height,
+                    ),
+                    scale,
+                );
+                let _ = window.set_min_size(Some(tauri::LogicalSize::new(
+                    760.0_f64.min(area.size.width as f64 / scale),
+                    480.0_f64.min(area.size.height as f64 / scale),
+                )));
+                let _ = window.set_size(PhysicalSize::new(size.0, size.1));
+                // Compositors own Wayland placement; an X11 position is never
+                // replayed into a Wayland session or outside a remaining monitor.
+                if std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland") && saved.is_some()
+                {
+                    let _ = window.set_position(PhysicalPosition::new(position.x, position.y));
+                }
+            }
+            if saved.is_some_and(|s| s.maximized) {
+                let _ = window.maximize();
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    let separate = crate::linux_bridge::needed();
+    #[cfg(not(target_os = "linux"))]
+    let separate = false;
+    if !separate {
+        create_floating(app.handle(), 0)?;
+    }
     #[cfg(any(target_os = "windows", target_os = "linux"))]
-    {
+    if !separate {
         let position = app
             .state::<Desktop>()
             .state
@@ -483,6 +730,14 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
         if let Some(main) = app.get_webview_window("main") {
             configure_webview(&main);
         }
+    }
+    #[cfg(target_os = "linux")]
+    if crate::linux_bridge::child() {
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
+    if separate {
+        crate::linux_bridge::start(app.handle())?;
     }
     let _ = restore_position(app.handle());
     apply_mode(app.handle()).map_err(std::io::Error::other)?;
@@ -572,7 +827,17 @@ pub fn setup(app: &mut tauri::App, root: &Path) -> Result<(), Box<dyn std::error
     #[cfg(target_os = "windows")]
     if let Some(window) = app.get_webview_window("main") {
         let _ = fit_main_window(&window);
-        window.show()?;
+        if let Ok(hwnd) = window.hwnd() {
+            let hwnd = windows::Win32::Foundation::HWND(hwnd.0 as _);
+            fit_main_after_size_move(hwnd, app.handle().clone());
+            crate::caption_hit::install(hwnd, app.handle().clone());
+        }
+        // desktop_main_ready normally reveals the window; this covers a page that never loads.
+        let app = app.handle().clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(3));
+            reveal_main(&app, false);
+        });
     }
     Ok(())
 }
@@ -641,16 +906,87 @@ fn create_floating(app: &AppHandle, generation: u64) -> tauri::Result<()> {
 fn configure_webview(_window: &tauri::WebviewWindow) {
     #[cfg(target_os = "windows")]
     let _ = _window.with_webview(|view| unsafe {
-        if let Ok(core) = view.controller().CoreWebView2()
-            && let Ok(settings) = core.Settings()
-        {
-            let _ = settings.SetAreDefaultContextMenusEnabled(false);
+        use webview2_com::{
+            ContextMenuRequestedEventHandler, Microsoft::Web::WebView2::Win32::ICoreWebView2_11,
+        };
+        use windows::core::Interface;
+        let Ok(core) = view.controller().CoreWebView2() else {
+            return;
+        };
+        if let Ok(settings) = core.Settings() {
             let _ = settings.SetIsStatusBarEnabled(false);
             let _ = settings.SetIsZoomControlEnabled(false);
             #[cfg(not(debug_assertions))]
             let _ = settings.SetAreDevToolsEnabled(false);
         }
+        // The page cancels `contextmenu` outside editable fields and selected text
+        // (webview-guards.js); the menus that remain keep only editing commands.
+        if let Ok(core) = core.cast::<ICoreWebView2_11>() {
+            let handler = ContextMenuRequestedEventHandler::create(Box::new(|_, args| {
+                args.map_or(Ok(()), |args| keep_edit_commands(&args))
+            }));
+            let mut token = 0;
+            let _ = core.add_ContextMenuRequested(&handler, &mut token);
+        }
     });
+}
+#[cfg(target_os = "windows")]
+fn keep_edit_commands(
+    args: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2ContextMenuRequestedEventArgs,
+) -> windows::core::Result<()> {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::{
+            COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR,
+        },
+        take_pwstr,
+    };
+    // Unlocalized WebView2 item names (the English label in lower camel case).
+    const EDIT: [&str; 10] = [
+        "undo",
+        "redo",
+        "cut",
+        "copy",
+        "paste",
+        "pasteAndMatchStyle",
+        "pasteAsPlainText",
+        "selectAll",
+        "emoji",
+        "spellCheck",
+    ];
+    unsafe {
+        let items = args.MenuItems()?;
+        let mut count = 0;
+        items.Count(&mut count)?;
+        // (index, separator) of the entries that stay; separators only between commands.
+        let mut kept: Vec<(u32, bool)> = Vec::new();
+        for index in 0..count {
+            let item = items.GetValueAtIndex(index)?;
+            let mut kind = COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND::default();
+            let mut name = windows::core::PWSTR::null();
+            item.Kind(&mut kind)?;
+            item.Name(&mut name)?;
+            let name = take_pwstr(name);
+            if kind == COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR {
+                if kept.last().is_some_and(|&(_, separator)| !separator) {
+                    kept.push((index, true));
+                }
+            } else if EDIT.contains(&name.as_str()) {
+                kept.push((index, false));
+            }
+        }
+        if kept.last().is_some_and(|&(_, separator)| separator) {
+            kept.pop();
+        }
+        for index in (0..count).rev() {
+            if !kept.iter().any(|&(kept, _)| kept == index) {
+                items.RemoveValueAtIndex(index)?;
+            }
+        }
+        if kept.is_empty() {
+            args.SetHandled(true)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -676,6 +1012,11 @@ impl Drop for DialogInteraction {
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) fn pet_moved(app: &AppHandle, x: i32, y: i32) {
+    #[cfg(target_os = "linux")]
+    if crate::linux_bridge::child() {
+        crate::linux_bridge::request(app, "helper_pet_moved", json!({"x":x,"y":y}));
+        return;
+    }
     let open = if let Ok(mut state) = app.state::<Desktop>().state.lock() {
         state.preferences.position = Some(Position { x, y });
         state.dirty = true;
@@ -723,6 +1064,15 @@ fn set_native_panel(app: &AppHandle, open: bool) -> Result<(), String> {
 }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn request_native_panel(app: &AppHandle, request: PanelRequest) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_bridge::child() && !matches!(request, PanelRequest::Restore(_)) {
+        crate::linux_bridge::request(
+            app,
+            "desktop_action",
+            json!({"action":match request {PanelRequest::Dismiss=>"dismiss-panel",PanelRequest::Toggle=>"toggle-panel",PanelRequest::Set(true)=>"open-panel",_=>"close-panel"}}),
+        );
+        return Ok(());
+    }
     let app = app.clone();
     let (send, receive) = std::sync::mpsc::sync_channel(1);
     let owner = app.clone();
@@ -754,6 +1104,21 @@ fn request_native_panel(app: &AppHandle, request: PanelRequest) -> Result<(), St
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
     #[cfg(target_os = "linux")]
+    if crate::linux_bridge::active(app) {
+        if !crate::linux_bridge::send(app, "panel", json!(open)) {
+            if open {
+                let _ = activate_main(app);
+            }
+            return Ok(());
+        }
+        if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+            state.panel = open;
+            state.panel_epoch = state.panel_epoch.wrapping_add(1);
+        }
+        emit_shell(app);
+        return Ok(());
+    }
+    #[cfg(target_os = "linux")]
     let was_open = app
         .state::<Desktop>()
         .state
@@ -775,20 +1140,69 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
         }
         return Err("面板不可用，可右键刷新悬浮窗".into());
     };
+    // Tray requests apply to this change only, so a later pet click is never
+    // placed at, or focused like, a stale tray click.
+    #[cfg(target_os = "windows")]
+    let (tray_anchor, tray_focus) = {
+        let desktop = app.state::<Desktop>();
+        let mut clicks = desktop
+            .tray_clicks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        (clicks.anchor.take(), std::mem::take(&mut clicks.focus))
+    };
+    #[cfg(target_os = "linux")]
+    let tray_anchor: Option<(i32, i32, u32, u32)> = if app
+        .state::<Desktop>()
+        .state
+        .lock()
+        .is_ok_and(|s| !s.visible)
+    {
+        window.primary_monitor().ok().flatten().map(|monitor| {
+            let area = monitor.work_area();
+            (
+                area.position.x + area.size.width as i32 - 24,
+                area.position.y + area.size.height as i32 - 24,
+                1,
+                1,
+            )
+        })
+    } else {
+        None
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    let tray_anchor: Option<(i32, i32, u32, u32)> = None;
     if open {
-        let pet_window = app
-            .try_state::<crate::native_pet::NativePet>()
-            .ok_or("悬浮入口不可用")?;
-        let (x, y, ball_width, ball_height, _pet_scale) = pet_window.geometry()?;
+        let (x, y, ball_width, ball_height) = match tray_anchor {
+            Some(anchor) => anchor,
+            None => {
+                let pet_window = app
+                    .try_state::<crate::native_pet::NativePet>()
+                    .ok_or("悬浮入口不可用")?;
+                let (x, y, width, height, _pet_scale) = pet_window.geometry()?;
+                (x, y, width, height)
+            }
+        };
         let monitors = window.available_monitors().map_err(|e| e.to_string())?;
         let monitor = monitors
             .into_iter()
             .find(|m| {
-                let a = m.work_area();
-                x >= a.position.x
-                    && y >= a.position.y
-                    && x < a.position.x + a.size.width as i32
-                    && y < a.position.y + a.size.height as i32
+                // The notification area lies outside the work area, on the taskbar.
+                let (position, size) = if tray_anchor.is_some() {
+                    (*m.position(), *m.size())
+                } else {
+                    let a = m.work_area();
+                    (a.position, a.size)
+                };
+                let (cx, cy) = if tray_anchor.is_some() {
+                    (x + ball_width as i32 / 2, y + ball_height as i32 / 2)
+                } else {
+                    (x, y)
+                };
+                cx >= position.x
+                    && cy >= position.y
+                    && cx < position.x + size.width as i32
+                    && cy < position.y + size.height as i32
             })
             .or(window.primary_monitor().map_err(|e| e.to_string())?)
             .ok_or("屏幕不可用")?;
@@ -824,6 +1238,19 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
         )?;
         if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
             pet_window.watch_panel(open.then_some(handle));
+        }
+        // A tray click grants this process foreground rights, so the panel takes
+        // keyboard focus like a system flyout; pet clicks keep it passive.
+        let activated = open && tray_focus && window.set_focus().is_ok();
+        let desktop = app.state::<Desktop>();
+        let was_open = desktop.state.lock().is_ok_and(|s| s.panel);
+        let mut clicks = desktop
+            .tray_clicks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        clicks.activated = activated;
+        if !open && was_open {
+            clicks.closed = Some(std::time::Instant::now());
         }
     }
     {
@@ -883,6 +1310,11 @@ fn set_native_panel_on_ui(app: &AppHandle, open: bool) -> Result<(), String> {
 /// Recreate the renderer, never the core or the native pet_window. The menu callback
 /// must return before Windows starts constructing another WebView2 controller.
 fn refresh_floating(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_bridge::active(app) {
+        crate::linux_bridge::send(app, "refresh", Value::Null);
+        return Ok(());
+    }
     let (generation, _open) = {
         let desktop = app.state::<Desktop>();
         let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
@@ -1066,11 +1498,97 @@ fn tray_set_icon(app: &AppHandle, phase: Option<Phase>, dark: bool) {
         }
     }
     #[cfg(not(target_os = "linux"))]
-    {
-        if let Some(tray) = app.tray_by_id(TRAY_ID) {
-            let _ = tray.set_icon(Some(icon(phase, dark)));
-        }
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        #[cfg(target_os = "windows")]
+        let image = {
+            let _ = dark;
+            windows_tray_icon(phase)
+        };
+        #[cfg(not(target_os = "windows"))]
+        let image = icon(phase, dark);
+        let _ = tray.set_icon(Some(image));
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn tray_event(app: &AppHandle, event: TrayIconEvent) {
+    match event {
+        #[cfg(target_os = "windows")]
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            rect,
+            ..
+        } => {
+            let desktop = app.state::<Desktop>();
+            let mut clicks = desktop
+                .tray_clicks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let icon = tray_rect(&rect);
+            clicks.icon = Some(icon);
+            let recent = |at: Option<std::time::Instant>| {
+                at.is_some_and(|at| at.elapsed() < TRAY_CLICK_GRACE)
+            };
+            if recent(clicks.double) || recent(clicks.closed) {
+                return;
+            }
+            clicks.anchor = Some(icon);
+            clicks.focus = true;
+            drop(clicks);
+            let _ = request_native_panel(app, PanelRequest::Toggle);
+        }
+        TrayIconEvent::DoubleClick {
+            button: MouseButton::Left,
+            ..
+        } => {
+            #[cfg(target_os = "windows")]
+            {
+                app.state::<Desktop>()
+                    .tray_clicks
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .double = Some(std::time::Instant::now());
+            }
+            let _ = show_main(app, "agent");
+        }
+        #[cfg(target_os = "windows")]
+        TrayIconEvent::Click { rect, .. } => {
+            app.state::<Desktop>()
+                .tray_clicks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .icon = Some(tray_rect(&rect));
+        }
+        _ => {}
+    }
+}
+#[cfg(target_os = "windows")]
+fn tray_rect(rect: &tauri::Rect) -> (i32, i32, u32, u32) {
+    // Notification-area geometry is already in physical pixels.
+    let position = rect.position.to_physical::<i32>(1.0);
+    let size = rect.size.to_physical::<u32>(1.0);
+    (
+        position.x,
+        position.y,
+        size.width.max(1),
+        size.height.max(1),
+    )
+}
+/// Opens the panel at the notification icon with keyboard focus (tray menu entry).
+#[cfg(target_os = "windows")]
+fn open_tray_panel(app: &AppHandle) -> Result<(), String> {
+    {
+        let desktop = app.state::<Desktop>();
+        let mut clicks = desktop
+            .tray_clicks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Without icon geometry yet, the panel follows the pet position.
+        clicks.anchor = clicks.icon;
+        clicks.focus = true;
+    }
+    request_native_panel(app, PanelRequest::Set(true))
 }
 
 fn create_tray(app: &AppHandle, desktop: &Desktop) -> Result<(), String> {
@@ -1102,21 +1620,19 @@ fn create_tray(app: &AppHandle, desktop: &Desktop) -> Result<(), String> {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let tray = TrayIconBuilder::with_id(TRAY_ID)
-            .icon(icon(None, false))
+            .icon({
+                #[cfg(target_os = "windows")]
+                let image = windows_tray_icon(None);
+                #[cfg(not(target_os = "windows"))]
+                let image = icon(None, false);
+                image
+            })
             .tooltip("Aieyes")
             .menu(&menu)
-            .show_menu_on_left_click(true)
-            .on_tray_icon_event(|tray, event| {
-                if matches!(
-                    event,
-                    TrayIconEvent::DoubleClick {
-                        button: MouseButton::Left,
-                        ..
-                    }
-                ) {
-                    let _ = show_main(tray.app_handle(), "agent");
-                }
-            })
+            // Windows opens notification-area flyouts on left click and menus on
+            // right click; the macOS menu bar shows the menu on any click.
+            .show_menu_on_left_click(cfg!(not(target_os = "windows")))
+            .on_tray_icon_event(|tray, event| tray_event(tray.app_handle(), event))
             .build(app)
             .map_err(|error| error.to_string())?;
         *desktop._tray.lock().unwrap_or_else(|e| e.into_inner()) = Some(tray);
@@ -1222,10 +1738,18 @@ fn apply_mode(app: &AppHandle) -> Result<(), String> {
     let (floating, hidden, changed) = {
         let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
         let floating = use_floating(state.preferences.mode, cfg!(windows), available);
+        #[cfg(target_os = "linux")]
+        let floating = floating && !crate::linux_bridge::failed(app);
         let hidden = state.hidden && available;
         let visible = floating && !hidden;
         let changed = visible != state.visible;
-        state.reason = if !available {
+        #[cfg(target_os = "linux")]
+        let helper_failed = crate::linux_bridge::failed(app);
+        #[cfg(not(target_os = "linux"))]
+        let helper_failed = false;
+        state.reason = if helper_failed {
+            "悬浮入口不可用，已返回主窗口".into()
+        } else if !available {
             "未检测到可用状态栏，已使用桌宠".into()
         } else if hidden {
             "桌宠已暂时隐藏".into()
@@ -1276,13 +1800,15 @@ pub fn desktop_appearance(
     accent: String,
     language: Option<String>,
 ) -> Result<(), String> {
-    let theme = match theme.as_str() {
+    #[cfg(target_os = "linux")]
+    let preference = theme.clone();
+    let resolved_theme = match theme.as_str() {
         "dark" => Some(tauri::Theme::Dark),
         "light" => Some(tauri::Theme::Light),
         "system" => None,
         _ => return Err("无效的主题".into()),
     };
-    if !["indigo", "blue", "teal", "purple"].contains(&accent.as_str()) {
+    if !["system", "indigo", "blue", "teal", "purple"].contains(&accent.as_str()) {
         return Err("无效的强调色".into());
     }
     app.state::<Desktop>()
@@ -1290,7 +1816,25 @@ pub fn desktop_appearance(
         .lock()
         .map_err(|_| "显示状态不可用")?
         .accent = accent;
-    app.set_theme(theme);
+    #[cfg(target_os = "linux")]
+    let theme = {
+        use gtk::prelude::*;
+        crate::linux_theme::apply(&app, &preference);
+        Some(
+            if gtk::Settings::default().is_some_and(|s| s.is_gtk_application_prefer_dark_theme()) {
+                tauri::Theme::Dark
+            } else {
+                tauri::Theme::Light
+            },
+        )
+    };
+    #[cfg(not(target_os = "linux"))]
+    let theme = {
+        app.set_theme(resolved_theme);
+        resolved_theme
+    };
+    #[cfg(target_os = "linux")]
+    let _ = resolved_theme;
     if let Some(language) = language
         && crate::localization::set_language(&language)
     {
@@ -1318,15 +1862,38 @@ pub fn desktop_appearance(
     emit_shell(&app);
     Ok(())
 }
+/// Windows 10 keeps square windows (material.rs); the web pane follows so no transparent corner shows.
+fn window_corners() -> &'static str {
+    #[cfg(target_os = "windows")]
+    if !crate::material::rounded_corners() {
+        return "square";
+    }
+    "round"
+}
 #[tauri::command]
 pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_bridge::child() {
+        if let Some(info) = crate::linux_bridge::cached(&app) {
+            return Ok(info);
+        }
+    }
     let desktop = app.state::<Desktop>();
+    #[cfg(target_os = "linux")]
+    let helper_failed = crate::linux_bridge::failed(&app);
+    #[cfg(not(target_os = "linux"))]
+    let helper_failed = false;
     let state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
     let materials = desktop.materials.lock().map_err(|_| "材质状态不可用")?;
     Ok(json!({
         "materials": {"main": materials.main.kind, "floating": materials.floating.kind},
+        "materialPreferences": {"main": state.preferences.main_material, "floating": state.preferences.floating_material},
         "platform": std::env::consts::OS, "material": materials.main.kind, "mode": state.preferences.mode,
-        "effectiveMode": if state.floating { "pet" } else { "tray" },
+        "windowCorners": window_corners(),
+        "hourCycle": crate::desktop_clock::hour_cycle(),
+        "language": crate::localization::language(),
+        "dark": app.get_webview_window("main").and_then(|w| w.theme().ok()) == Some(tauri::Theme::Dark),
+        "effectiveMode": if helper_failed { "main" } else if state.floating { "pet" } else { "tray" },
         "trayAvailable": desktop.tray_available.load(Ordering::Relaxed),
         "reason": crate::localization::text(&state.reason),
         "petEnabled": state.floating,
@@ -1340,6 +1907,37 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "recovery": state.recovery,
         "accent": state.accent,
     }))
+}
+#[tauri::command]
+pub fn desktop_materials(app: AppHandle, main: String, floating: String) -> Result<Value, String> {
+    if !cfg!(target_os = "windows") {
+        return Err("此系统不支持 Windows 窗口材质".into());
+    }
+    if [&main, &floating]
+        .iter()
+        .any(|v| !["default", "mica", "acrylic", "opaque"].contains(&v.as_str()))
+    {
+        return Err("不支持的窗口材质".into());
+    }
+    {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        let previous = state.preferences.clone();
+        state.preferences.main_material = main;
+        state.preferences.floating_material = floating;
+        if let Err(error) = write_preferences(&desktop.path, &state.preferences) {
+            state.preferences = previous;
+            return Err(format!("显示偏好保存失败：{error}"));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    for label in ["main", "floating"] {
+        if let Some(window) = app.get_webview_window(label) {
+            apply_window_material(&window);
+        }
+    }
+    emit_shell(&app);
+    desktop_info(app)
 }
 #[tauri::command]
 pub fn desktop_mode(app: AppHandle, mode: Mode) -> Result<Value, String> {
@@ -1483,6 +2081,10 @@ fn detail_view(view: &Value) -> Result<Value, String> {
 }
 
 pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_bridge::action(app, action) {
+        return Ok(());
+    }
     match action {
         value if value.starts_with("edit-account:") => show_main(app, value),
         value if value.starts_with("settings-target:") => {
@@ -1494,6 +2096,9 @@ pub(crate) fn action(app: &AppHandle, action: &str) -> Result<(), String> {
             show_main(app, value)
         }
         "focus-panel" => set_panel(app, true),
+        "close-panel" => set_panel(app, false),
+        #[cfg(target_os = "windows")]
+        "tray-panel" => open_tray_panel(app),
         "dismiss-panel" => {
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             return request_native_panel(app, PanelRequest::Dismiss);
@@ -1647,13 +2252,29 @@ fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
     if let Ok(mut state) = app.state::<Desktop>().state.lock() {
         state.page = page.into();
     }
+    let window = focus_main(app)?;
+    let _ = window.emit("desktop:navigate", page);
+    Ok(())
+}
+
+/// Brings the main window forward on its current page, keeping any open drafts.
+pub(crate) fn activate_main(app: &AppHandle) -> Result<(), String> {
+    let _ = set_panel(app, false);
+    focus_main(app).map(|_| ())
+}
+
+fn focus_main(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
     let window = app.get_webview_window("main").ok_or("主窗口不可用")?;
     window
         .show()
         .and_then(|_| window.unminimize())
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "windows")]
-    let _ = fit_main_window(&window);
+    {
+        MAIN_REVEALED.store(true, Ordering::SeqCst);
+        uncloak_main(app);
+        let _ = fit_main_window(&window);
+    }
     #[cfg(target_os = "linux")]
     {
         let focus = window.clone();
@@ -1669,8 +2290,7 @@ fn show_main(app: &AppHandle, page: &str) -> Result<(), String> {
     }
     #[cfg(not(target_os = "linux"))]
     window.set_focus().map_err(|e| e.to_string())?;
-    let _ = window.emit("desktop:navigate", page);
-    Ok(())
+    Ok(window)
 }
 
 #[cfg(any(not(any(target_os = "windows", target_os = "linux")), test))]
@@ -1692,6 +2312,17 @@ fn clamp_rect(
     }
 }
 fn restore_position(app: &AppHandle) -> tauri::Result<()> {
+    #[cfg(target_os = "linux")]
+    if crate::linux_bridge::active(app) {
+        let position = app
+            .state::<Desktop>()
+            .state
+            .lock()
+            .ok()
+            .and_then(|s| s.preferences.position);
+        crate::linux_bridge::send(app, "position", json!(position));
+        return Ok(());
+    }
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         if let Some(pet_window) = app.try_state::<crate::native_pet::NativePet>() {
@@ -1764,12 +2395,14 @@ fn build_context_menu(
     sampling: bool,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
-    #[cfg(target_os = "linux")]
+    // The pet menu opens the panel at the pet; the Windows tray menu opens it at
+    // the notification icon, like a left click.
+    #[cfg(target_os = "windows")]
     if !pet {
         menu.append(&MenuItem::with_id(
             app,
-            "open-panel",
-            "打开面板",
+            "tray-panel",
+            crate::localization::label("打开面板"),
             true,
             None::<&str>,
         )?)?;
@@ -1944,6 +2577,7 @@ fn snap_ball(app: &AppHandle) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
+        let _ = app;
         Ok(())
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
@@ -2017,6 +2651,53 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     {
         crate::material::reshape(windows::Win32::Foundation::HWND(hwnd.0 as _));
     }
+    #[cfg(target_os = "linux")]
+    if window.label() == "main"
+        && matches!(
+            event,
+            tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
+        )
+    {
+        if let Some(desktop) = window.app_handle().try_state::<Desktop>() {
+            if let Ok(mut state) = desktop.state.lock() {
+                let maximized = window.is_maximized().unwrap_or(false);
+                let previous = state.preferences.main_window;
+                let size = window
+                    .inner_size()
+                    .ok()
+                    .map(|size| size.to_logical::<f64>(window.scale_factor().unwrap_or(1.0)));
+                if let Some(size) = size {
+                    let (width, height) = if maximized {
+                        previous
+                            .map(|p| (p.width, p.height))
+                            .unwrap_or((1100.0, 760.0))
+                    } else {
+                        (size.width, size.height)
+                    };
+                    let position = if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland")
+                    {
+                        None
+                    } else if maximized {
+                        previous.and_then(|p| p.position)
+                    } else {
+                        window
+                            .outer_position()
+                            .ok()
+                            .map(|p| Position { x: p.x, y: p.y })
+                    };
+                    if width >= 760.0 && height >= 480.0 {
+                        state.preferences.main_window = Some(MainWindowPreferences {
+                            width,
+                            height,
+                            maximized,
+                            position,
+                        });
+                        state.dirty = true;
+                    }
+                }
+            }
+        }
+    }
     match event {
         tauri::WindowEvent::ThemeChanged(theme) if window.label() == "main" => {
             #[cfg(target_os = "windows")]
@@ -2033,7 +2714,10 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         }
         #[cfg(target_os = "windows")]
         tauri::WindowEvent::ScaleFactorChanged { .. } if window.label() == "main" => {
-            if let Some(main) = window.app_handle().get_webview_window("main") {
+            let (moving, _) = MAIN_SIZE_MOVE.get();
+            if moving {
+                MAIN_SIZE_MOVE.set((true, true));
+            } else if let Some(main) = window.app_handle().get_webview_window("main") {
                 let _ = fit_main_window(&main);
             }
         }
@@ -2042,6 +2726,19 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             if window.label() == "main" {
                 // Always make the fallback visible before hiding the details window.
                 let app = window.app_handle();
+                #[cfg(target_os = "linux")]
+                if crate::linux_bridge::active(app) {
+                    if crate::linux_bridge::connected(app)
+                        || app
+                            .state::<Desktop>()
+                            .tray_available
+                            .load(Ordering::Relaxed)
+                    {
+                        let _ = window.hide();
+                        background_hint(app);
+                    }
+                    return;
+                }
                 let ready = if let Some(_ball) = app.get_webview_window("floating") {
                     if app
                         .state::<Desktop>()
@@ -2071,6 +2768,8 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 };
                 if ready {
                     let _ = window.hide();
+                    #[cfg(target_os = "linux")]
+                    background_hint(app);
                 }
             } else if window.label() == "floating" {
                 let _ = set_panel(window.app_handle(), false);
@@ -2114,6 +2813,40 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 });
             });
         }
+        // A panel opened from the tray behaves like a system flyout and closes
+        // when it loses activation; pinning and native menus still keep it.
+        #[cfg(target_os = "windows")]
+        tauri::WindowEvent::Focused(false) if window.label() == "floating" => {
+            let app = window.app_handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(100));
+                let activated = app
+                    .state::<Desktop>()
+                    .tray_clicks
+                    .lock()
+                    .is_ok_and(|clicks| clicks.activated);
+                let focused = app
+                    .get_webview_window("floating")
+                    .is_some_and(|w| w.is_focused().unwrap_or(false));
+                if activated && !focused {
+                    let _ = request_native_panel(&app, PanelRequest::Dismiss);
+                } else if !focused {
+                    // A panel that stays open after losing activation keeps its Acrylic.
+                    let owner = app.clone();
+                    let _ = owner.run_on_main_thread(move || {
+                        if let Some(window) = app.get_webview_window("floating")
+                            && window.is_visible().unwrap_or(false)
+                            && !window.is_focused().unwrap_or(false)
+                            && let Ok(hwnd) = window.hwnd()
+                        {
+                            crate::passive_window::draw_active(windows::Win32::Foundation::HWND(
+                                hwnd.0 as *mut _,
+                            ));
+                        }
+                    });
+                }
+            });
+        }
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         tauri::WindowEvent::ScaleFactorChanged { .. } if window.label() == "floating" => {
             let _ = repair_panel_geometry(window.app_handle());
@@ -2132,10 +2865,43 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         _ => {}
     }
 }
+
+#[cfg(target_os = "linux")]
+fn background_hint(app: &AppHandle) {
+    use tauri_plugin_dialog::DialogExt;
+    use tauri_plugin_notification::NotificationExt;
+    let desktop = app.state::<Desktop>();
+    let first_close = desktop.state.lock().is_ok_and(|mut state| {
+        let first = !state.preferences.background_hint_shown;
+        if first {
+            state.preferences.background_hint_shown = true;
+            state.dirty = true;
+        }
+        first
+    });
+    if !first_close {
+        return;
+    }
+    let body = crate::localization::label("关闭窗口后会继续后台监测，可通过桌宠或托盘重新打开。");
+    if app
+        .notification()
+        .builder()
+        .title("Aieyes")
+        .body(body)
+        .show()
+        .is_err()
+    {
+        app.dialog().message(body).title("Aieyes").show(|_| {});
+    }
+}
 fn write_preferences(path: &Path, preferences: &Preferences) -> std::io::Result<()> {
     std::fs::write(path, serde_json::to_vec_pretty(preferences)?)
 }
 pub fn save(app: &AppHandle) {
+    #[cfg(target_os = "linux")]
+    if crate::linux_bridge::child() {
+        return;
+    }
     if let Some(desktop) = app.try_state::<Desktop>()
         && let Ok(mut state) = desktop.state.lock()
         && state.dirty
@@ -2144,7 +2910,14 @@ pub fn save(app: &AppHandle) {
         state.dirty = false;
     }
 }
+// Windows draws its tray icon at the notification area's size (windows_tray_icon).
+#[cfg(any(not(target_os = "windows"), test))]
 pub(crate) fn icon(phase: Option<Phase>, dark: bool) -> tauri::image::Image<'static> {
+    badged_icon(phase, dark, 32)
+}
+/// The 32 px brand at `size` physical pixels with the live state as a separate top-right badge (never
+/// a recoloring of the brand). The badge keeps a 3.5 px minimum radius so it reads at 16 px.
+fn badged_icon(phase: Option<Phase>, dark: bool, size: usize) -> tauri::image::Image<'static> {
     let key = match phase {
         Some(Phase::Working) => "working",
         Some(Phase::Thinking) => "thinking",
@@ -2158,25 +2931,92 @@ pub(crate) fn icon(phase: Option<Phase>, dark: bool) -> tauri::image::Image<'sta
     };
     let [r, g, b] = crate::phase_colors::rgb(key, dark);
     let color = [r, g, b, 255];
-    let mut rgba = include_bytes!("../icons/brand.rgba").to_vec();
-    // Live state is a separate top-right badge, not a recoloring of the brand.
+    let ring = if dark {
+        [236, 240, 248, 255]
+    } else {
+        [20, 30, 50, 255]
+    };
+    let mut rgba = scale_brand(include_bytes!("../icons/brand.rgba"), 32, size);
     if phase.is_some() {
-        for y in 0..12 {
-            for x in 20..32 {
-                let dx = x as f64 - 25.5;
-                let dy = y as f64 - 5.5;
-                if dx * dx + dy * dy <= 25.0 {
-                    let ink = if dx * dx + dy * dy > 16.0 {
-                        [20, 30, 50, 255]
+        let radius = (size as f64 * 5.0 / 32.0).max(3.5);
+        let (cx, cy) = (size as f64 - radius - 1.5, radius + 0.5);
+        for y in 0..size {
+            for x in 0..size {
+                let distance = (x as f64 - cx).powi(2) + (y as f64 - cy).powi(2);
+                if distance <= radius * radius {
+                    let ink = if distance > (radius - 1.0).powi(2) {
+                        ring
                     } else {
                         color
                     };
-                    rgba[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4].copy_from_slice(&ink);
+                    rgba[(y * size + x) * 4..(y * size + x) * 4 + 4].copy_from_slice(&ink);
                 }
             }
         }
     }
-    tauri::image::Image::new_owned(rgba, 32, 32)
+    tauri::image::Image::new_owned(rgba, size as u32, size as u32)
+}
+/// Area-averaged resize of straight-alpha RGBA, weighting colour by alpha so edges stay clean.
+fn scale_brand(source: &[u8], from: usize, to: usize) -> Vec<u8> {
+    if from == to {
+        return source.to_vec();
+    }
+    let ratio = from as f64 / to as f64;
+    let mut output = vec![0; to * to * 4];
+    for y in 0..to {
+        for x in 0..to {
+            let (x0, x1, y0, y1) = (
+                x as f64 * ratio,
+                (x + 1) as f64 * ratio,
+                y as f64 * ratio,
+                (y + 1) as f64 * ratio,
+            );
+            let (mut sum, mut alpha, mut area) = ([0.0; 3], 0.0, 0.0);
+            for sy in y0.floor() as usize..(y1.ceil() as usize).min(from) {
+                let wy = y1.min(sy as f64 + 1.0) - y0.max(sy as f64);
+                for sx in x0.floor() as usize..(x1.ceil() as usize).min(from) {
+                    let weight = (x1.min(sx as f64 + 1.0) - x0.max(sx as f64)) * wy;
+                    let pixel = &source[(sy * from + sx) * 4..(sy * from + sx) * 4 + 4];
+                    let a = f64::from(pixel[3]) / 255.0 * weight;
+                    for (channel, value) in sum.iter_mut().zip(pixel) {
+                        *channel += f64::from(*value) * a;
+                    }
+                    alpha += a;
+                    area += weight;
+                }
+            }
+            let target = &mut output[(y * to + x) * 4..(y * to + x) * 4 + 4];
+            if alpha > 0.0 {
+                for (channel, value) in target.iter_mut().zip(sum) {
+                    *channel = (value / alpha).round() as u8;
+                }
+            }
+            target[3] = (alpha / area * 255.0).round() as u8;
+        }
+    }
+    output
+}
+/// Windows: drawn at the notification area's physical size, coloured for the taskbar's own light or
+/// dark setting (Windows 10 defaults to a dark taskbar with light apps), not the app theme.
+#[cfg(target_os = "windows")]
+fn windows_tray_icon(phase: Option<Phase>) -> tauri::image::Image<'static> {
+    use windows::Win32::UI::{
+        HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi},
+        WindowsAndMessaging::SM_CXSMICON,
+    };
+    let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem()) }.clamp(16, 64);
+    badged_icon(phase, crate::material::taskbar_dark(), size as usize)
+}
+/// Taskbar theme changes arrive as WM_SETTINGCHANGE, which only the native pet window observes.
+#[cfg(target_os = "windows")]
+pub(crate) fn refresh_tray_icon(app: &AppHandle) {
+    let phase = app
+        .state::<Desktop>()
+        .state
+        .lock()
+        .ok()
+        .and_then(|state| state.snapshot.phase());
+    tray_set_icon(app, phase, false);
 }
 
 #[cfg(test)]
@@ -2273,6 +3113,21 @@ mod tests {
         assert_eq!(brand.rgba().len(), 4096);
         assert_eq!(&brand.rgba()[12 * 32 * 4..], &active.rgba()[12 * 32 * 4..]);
         assert_ne!(brand.rgba(), active.rgba());
+        // At 100 % (16 px) the badge stays at least 7 px across instead of shrinking to 2 px.
+        let small = badged_icon(Some(Phase::Working), false, 16);
+        assert_eq!(small.rgba().len(), 16 * 16 * 4);
+        let ink = crate::phase_colors::rgb("working", false);
+        let row = &small.rgba()[4 * 16 * 4..5 * 16 * 4];
+        let badge = row
+            .chunks(4)
+            .filter(|p| p[..3] == ink[..] || p[..3] == [20, 30, 50])
+            .count();
+        assert!(badge >= 7, "badge spans {badge} px at 16 px");
+        let plain = badged_icon(None, false, 16);
+        assert!(
+            plain.rgba().chunks(4).any(|p| p[3] > 200),
+            "scaled brand stays opaque inside"
+        );
     }
     #[test]
     fn platform_bundle_configurations_are_valid() {
@@ -2451,5 +3306,53 @@ mod tests {
         assert_eq!(size, (1600, 1000));
         let (_, size) = main_window_bounds(Position { x: -1700, y: 80 }, (800.0, 600.0), area, 1.0);
         assert_eq!(size, (800, 600));
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn helper_status(app: &AppHandle, info: Value) {
+    crate::linux_bridge::remember(app, &info);
+    if let Ok(mut state) = app.state::<Desktop>().state.lock() {
+        state.floating = info["petEnabled"] == true;
+        state.visible = state.floating && info["hidden"] != true;
+        state.hidden = info["hidden"] == true;
+        state.pin = info["panelPinned"] == true;
+        state.preferences.pet_scale = info["petScale"].as_f64().unwrap_or(1.0);
+        state.preferences.show_count = info["showCount"] == true;
+        state.pet_asset = json!({"pet":info["petAsset"]});
+        if let Some(page) = info["panelPage"].as_str() {
+            state.panel_page = page.into();
+        }
+    }
+    if let Some(language) = info["language"].as_str() {
+        crate::localization::set_language(language);
+    }
+    app.set_theme(Some(if info["dark"] == true {
+        tauri::Theme::Dark
+    } else {
+        tauri::Theme::Light
+    }));
+    if let Some(pet) = app.try_state::<crate::native_pet::NativePet>() {
+        pet.status(info.clone());
+        pet.visible(info["petEnabled"] == true && info["hidden"] != true);
+    }
+}
+#[cfg(target_os = "linux")]
+pub(crate) fn helper_control(app: &AppHandle, name: &str, payload: Value) {
+    match name {
+        "status" => helper_status(app, payload),
+        "panel" => {
+            let _ = set_native_panel_on_ui(app, payload == true);
+        }
+        "refresh" => {
+            let _ = refresh_floating(app);
+        }
+        "position" => {
+            if let Some(pet) = app.try_state::<crate::native_pet::NativePet>() {
+                let pos = serde_json::from_value::<Option<Position>>(payload).unwrap_or(None);
+                pet.position(pos.map(|p| (p.x, p.y)));
+            }
+        }
+        _ => {}
     }
 }

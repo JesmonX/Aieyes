@@ -1,4 +1,14 @@
-# Windows 外观与交互（2026-10-15）
+# Windows 外观与交互
+
+## 当前规格（2026-10-28）
+
+本节优先于后面的历史记录；实施与验收见 [本轮记录](ui-implementation-2026-10-28.md)。Windows/Linux Web 控件使用 4px 圆角，卡片与菜单容器使用 12px；普通按钮平底细边框，工具栏／行内轻操作无边框，主按钮实心。卡片与控件取消亮边、内阴影及重复外阴影，选中只用柔和底色，焦点保留单层轮廓。macOS 不套用这一套控件改造。
+
+文字菜单不透明；对话框和页面遮罩依照最终选择保持原来的透明参数。主窗口分区与新增按钮为 32px，行内辅助为 24px，面板保持紧凑。今日用量使用一行组合和更明显的数字层次，窄窗口分两行。
+
+主窗口与面板可分别选择默认、Mica、Acrylic、不透明；默认仍为 Mica／Acrylic。界面分开显示用户选择与实际生效材质；系统关闭透明或旧系统回退时不覆盖原偏好。Windows 11 25H2 已验证独立切换、保存、重启恢复与不透明回退。
+
+以下各节为历史记录，其中的 16px 卡片、26px 常规控件、控件阴影和高光描述不代表当前规格。
 
 ## 表面协调修正（2026-10-17）
 
@@ -88,17 +98,23 @@ node scripts/preview-windows-motion.cjs
 
 ## 原生材质
 
-| 系统与设置 | 请求的材质 |
-| --- | --- |
-| Windows 11 build ≥ 22621 | DWM Desktop Acrylic（`DWMSBT_TRANSIENTWINDOW`） |
-| Windows 10 build ≥ 17763、较早的 Windows 11 | 原生 Blur，带浅 / 深色底色 |
-| 不支持、原生调用失败、关闭系统透明效果或高对比度 | 不透明 |
+| 系统与设置 | 主窗口 | 悬浮面板 |
+| --- | --- | --- |
+| Windows 11 build ≥ 22621 | Mica（`DWMSBT_MAINWINDOW`） | Desktop Acrylic（`DWMSBT_TRANSIENTWINDOW`） |
+| Windows 10 build ≥ 17763、较早的 Windows 11 | 原生 Blur，带浅 / 深色底色 | 同主窗口 |
+| 不支持、原生调用失败、关闭系统透明效果或高对比度 | 不透明 | 不透明 |
 
 `desktop_info` 和 `desktop:status` 返回 `materials: {main, floating}`；原来的 `material` 保留为主窗口材质别名。悬浮面板不会根据主窗口的成功状态自行开启透明。主题和系统设置变化时重新计算两者；面板重建会清除旧 HWND 的材质缓存。
 
+Mica 只取样桌面壁纸，不透出后面的窗口；主窗口失去激活时由系统换成纯色，与其他 Windows 应用一致。DWM 对未激活窗口的 Acrylic 同样只画纯色回退，而单击桌宠打开的面板不抢键盘焦点，原本会一直显示为平涂的灰色。因此面板显示后用 `WM_NCACTIVATE` 把框架绘制为激活状态，不改变焦点，也不产生焦点事件；面板失去激活但仍打开时（例如 Alt+Tab）重新设置。
+
 浅色 / 深色主窗口网页底色 alpha 分别为 .18 / .28，面板为 .12 / .20；卡片保留轻微底色，菜单和输入控件使用较强底色。实际桌面透出程度由系统材质与网页底色共同决定。减少透明度和强制颜色模式在网页侧同样恢复不透明底色。
 
-Windows 11 使用系统圆角；Windows 10 使用按 DPI 缩放的窗口区域裁剪。最大化恢复方角。原生桌宠保留独立的点击、拖动与焦点逻辑。
+Windows 11 使用系统圆角；Windows 10 保留系统直角窗口及其阴影，网页通过 `data-corners=square` 去掉自身圆角，不再裁剪窗口区域。最大化恢复方角。原生桌宠保留独立的点击、拖动与焦点逻辑。
+
+标题栏由页面绘制，原生行为由两部分补齐。拖动区设置 `app-region: drag`，WebView2（wry 已开启非客户区支持）把它当作系统标题栏：拖动、贴靠、双击最大化/还原、右键系统菜单都由系统处理；不支持 `app-region` 的旧运行时仍走 Tauri 的拖动区。Windows 11 的 Snap Layouts 要求顶层窗口对最大化按钮返回 `HTMAXBUTTON`，而按钮位于 WebView2 子窗口内，顶层窗口收不到命中测试。因此 [caption_hit.rs](../apps/desktop/src-tauri/src/caption_hit.rs) 在最大化按钮上方放一个不绘制的分层子窗口（`WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP`），由它返回 `HTMAXBUTTON`，单击时发送 `SC_MAXIMIZE`/`SC_RESTORE`，并把悬停与按下状态发给页面（`desktop:caption`，按钮加 `.hover`/`.pressed`）。分层子窗口要求应用清单声明 Windows 8 及以上兼容，见 [windows-app-manifest.xml](../apps/desktop/src-tauri/windows-app-manifest.xml)。还原状态下，按钮顶部的缩放边框仍归 Tauri 的缩放窗口。Windows 10 没有 Snap Layouts，不创建这个子窗口，按钮保留页面自己的悬停和提示。
+
+主窗口以隐藏状态创建，避免透明窗口先显示一块只有材质的空白。网页外壳布局完成后调用 `desktop_main_ready`：窗口先以 DWM cloak 状态显示（系统照常合成，但不上屏），页面在显示后的窗口内再绘制一帧，然后解除 cloak。隐藏时绘制的帧在窗口显示后不会复用，直接显示仍会先露出约 0.14 s 空白。页面没有回报时，原生层 0.5 s 后自行解除 cloak，3 s 后直接显示窗口。
 
 ## 验证与复现
 
@@ -126,4 +142,6 @@ Windows / Linux 安装包及 Windows 原生面板交互由 Desktop 和 Release �
 ./scripts/test-windows-panel.ps1 -VerifyMaterials
 ```
 
-该选项交替显示两种纯色背景，分别采集主窗口与重建后的悬浮面板边缘像素，验证两者随桌面背景变化；截图和结果写入 `.local/windows-ui-sync/native/`。默认测试继续覆盖焦点保持、外部点击关闭、固定、重建及关闭后无残影。
+该选项交替显示两种纯色背景，在 DWM 可见边框内采集主窗口与悬浮面板的边缘像素；`GetWindowRect` 还包含不可见的缩放边框，那里总是透出桌面，不能用来判断材质。build ≥ 22621 时先读取 `DWMWA_SYSTEMBACKDROP_TYPE`：单击桌宠打开、未激活的面板（Acrylic）必须随背景变化；主窗口（Mica）只取样壁纸，必须不透出后面的窗口。更早的系统两者都按模糊验证。截图和结果写入 `.local/windows-ui-sync/native/`。默认测试继续覆盖焦点保持、外部点击关闭、固定、重建及关闭后无残影，并检查面板是工具窗口（不进任务栏和 Alt+Tab），以及全屏应用期间桌宠隐藏、结束后回到原位且不抢焦点。背景窗口只占工作区，因为覆盖整个屏幕的无边框窗口会被系统视为全屏应用。
+
+脚本是无 BOM 的 UTF-8，需用 PowerShell 7（`pwsh`）运行；Windows PowerShell 5.1 会按系统代码页读取中文菜单名，导致解析失败。

@@ -266,7 +266,7 @@ impl Store {
             "无效的外观主题"
         );
         anyhow::ensure!(
-            ["indigo", "blue", "teal", "purple"].contains(&s.appearance.accent.as_str()),
+            ["system", "indigo", "blue", "teal", "purple"].contains(&s.appearance.accent.as_str()),
             "无效的强调色"
         );
         anyhow::ensure!(

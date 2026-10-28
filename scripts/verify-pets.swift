@@ -102,6 +102,14 @@ import Darwin
             for (index, duration) in durations.enumerated() { cumulative += duration; precondition(abs(animation.keyTimes![index+1].doubleValue - Double(cumulative)/Double(durations.reduce(0,+))) < 1e-12) }
         }
         checkpoint("Pet frame timing and Core Animation keyframe configuration passed")
+        let maskContext = CGContext(data:nil,width:8,height:8,bitsPerComponent:8,bytesPerRow:32,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
+        maskContext.setFillColor(CGColor(gray:1,alpha:1)); maskContext.fill(CGRect(x:0,y:6,width:2,height:2))
+        let hitSprite = PetLayerImage(frame:NSRect(x:0,y:0,width:80,height:80))
+        hitSprite.configure(images:[maskContext.makeImage()!],state:.idle,identity:"alpha-corner",playing:false,reduced:true)
+        precondition(hitSprite.opaque(at:NSPoint(x:10,y:70)), "The visible upper-left pixels must accept input")
+        precondition(!hitSprite.opaque(at:NSPoint(x:10,y:10)) && !hitSprite.opaque(at:NSPoint(x:70,y:70)), "Transparent pixels must pass input through, without vertically mirroring the mask")
+        precondition(!hitSprite.opaque(at:NSPoint(x:-1,y:70)))
+        checkpoint("Pet alpha mask orientation and transparent pixel hit testing passed")
         let animationWindow = NSWindow(contentRect: NSRect(x:200,y:200,width:144,height:168), styleMask: [.titled], backing: .buffered, defer: false)
         animationWindow.isReleasedWhenClosed = false; animationWindow.level = .statusBar
         let sprite = PetLayerImage(); animationWindow.contentView = sprite
@@ -172,10 +180,12 @@ import Darwin
         let savedEnabled = defaults.object(forKey: "aieyes.pet.enabled")
         let savedPosition = defaults.object(forKey: "aieyes.pet.position")
         let savedScale = defaults.object(forKey: "aieyes.pet.scale")
+        let savedFullscreen = defaults.object(forKey: "aieyes.pet.hideInFullscreen")
         defer {
             defaults.set(savedEnabled, forKey: "aieyes.pet.enabled")
             defaults.set(savedPosition, forKey: "aieyes.pet.position")
             defaults.set(savedScale, forKey: "aieyes.pet.scale")
+            defaults.set(savedFullscreen, forKey: "aieyes.pet.hideInFullscreen")
         }
         defaults.set(false, forKey: "aieyes.pet.enabled")
         defaults.set(1.0, forKey: "aieyes.pet.scale")
@@ -197,7 +207,7 @@ import Darwin
         withExtendedLifetime(controller) {
             guard let panel = NSApplication.shared.windows.first(where: { $0.title == "Aieyes 宠物" }) else { fatalError("missing pet panel") }
             precondition(!panel.isVisible && !panel.canBecomeKey && !panel.isOpaque)
-            precondition(panel.frame.size == NSSize(width: 144, height: 168))
+            precondition(panel.frame.width == 144 && panel.frame.height >= 143 + 14, "The status label needs a readable line below the sprite")
             precondition(NSScreen.screens.isEmpty || NSScreen.screens.contains { $0.visibleFrame.contains(panel.frame) }, "The pet must be inside a display's work area")
             defaults.set(true, forKey: "aieyes.pet.enabled")
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
@@ -222,16 +232,38 @@ import Darwin
             for scale in [0.5, 1.0, 1.25, 1.5, 2.0] {
                 defaults.set(scale, forKey: "aieyes.pet.scale")
                 NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
-                precondition(panel.frame.width == 144 * scale && panel.frame.height == 168 * scale)
+                precondition(panel.frame.width == 144 * scale && panel.frame.height - 143 * scale >= 13, "The label keeps readable height even at 50% scale")
                 precondition(NSScreen.screens.isEmpty || NSScreen.screens.contains { $0.visibleFrame.contains(panel.frame) }, "Scaled pets must remain inside their display's work area")
             }
             var pet = PetState.idle; pet.label = "等待1 · 工作2\n思考1"
             model.live.pet = pet
-            precondition(panel.frame.height == 186 * 2)
+            precondition(panel.frame.height > 143 * 2 + 40, "Two status lines must expand the window")
             precondition(PetAppearance.scale(.nan) == 1 && PetAppearance.scale(0) == 0.5 && PetAppearance.scale(5) == 2)
             defaults.set(true, forKey: "aieyes.pet.enabled")
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
             RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+            if let screen = panel.screen ?? NSScreen.screens.first {
+                defaults.set(true, forKey: "aieyes.pet.hideInFullscreen")
+                NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
+                let cover = NSWindow(contentRect:screen.frame,styleMask:[.borderless],backing:.buffered,defer:false)
+                cover.isReleasedWhenClosed = false
+                cover.level = .normal
+                cover.orderFrontRegardless()
+                waitUntil("A fullscreen surface on the pet's display must hide it", condition:{ !panel.isVisible })
+                cover.orderOut(nil)
+                waitUntil("Leaving fullscreen restores the pet", condition:{ panel.isVisible })
+                cover.orderFrontRegardless()
+                waitUntil("Reentering fullscreen hides the pet", condition:{ !panel.isVisible })
+                defaults.set(false, forKey:"aieyes.pet.enabled")
+                NotificationCenter.default.post(name:UserDefaults.didChangeNotification,object:defaults)
+                cover.close()
+                pump(1.2)
+                precondition(!panel.isVisible, "Leaving fullscreen must not undo a manual disable")
+                defaults.set(true, forKey:"aieyes.pet.enabled")
+                NotificationCenter.default.post(name:UserDefaults.didChangeNotification,object:defaults)
+                waitUntil("Reenabling the pet restores it",condition:{panel.isVisible})
+                checkpoint("Pet fullscreen hide/restore and manual disable precedence passed")
+            }
             checkpoint("Pet window visibility, actions and scaled geometry passed; capturing sprite previews")
             let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath + "/.local/pets/native")
             try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -243,7 +275,7 @@ import Darwin
                     RunLoop.main.run(until: Date().addingTimeInterval(0.15))
                     let view = panel.contentView!
                     view.layoutSubtreeIfNeeded(); view.displayIfNeeded()
-                    precondition(panel.frame.size == NSSize(width: 144 * scale, height: 168 * scale))
+                    precondition(panel.frame.width == 144 * scale && panel.frame.height - 143 * scale >= 13)
                     precondition(view.bounds.size == panel.frame.size, "The click surface must follow the controller's scaled geometry")
                     let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
                     view.cacheDisplay(in: view.bounds, to: bitmap)

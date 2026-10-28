@@ -34,7 +34,15 @@
   function countsHTML(key) {const a = state.settings.accounts.find((a) => accountKey(a) === key);if (!a) return '';const c = deviceCounts(a);return `<span class="device-count-line" title="${c.pending ? AieyesI18n.t("部分机器状态待确认；离线时显示上次检查结果") : AieyesI18n.t("已登录：已保存凭据；使用中：机器当前选用的账户")}">${AieyesI18n.t("已登录 {0}/{1} · 使用中 {2}/{3}", c.logged, c.total, c.using, c.total)}</span>`;}
   let repaintPending = false;
   const updateText = (el, text) => {if (el.textContent !== text) el.textContent = text;};
-  const updateHTML = (el, html) => {if (el.innerHTML !== html) el.innerHTML = html;};
+  // Compare with the markup last written, not innerHTML: serialization rarely equals the template, so a
+  // direct comparison rebuilt these buttons on every repaint. First sight compares normalized markup.
+  const written = new WeakMap(),scratch = document.createElement('template');
+  const updateHTML = (el, html) => {
+    if (written.get(el) === html) return;
+    scratch.innerHTML = html;
+    if (el.innerHTML !== scratch.innerHTML) el.innerHTML = html;
+    written.set(el, html);
+  };
   const repaint = () => {
     if (repaintPending) return;repaintPending = true;
     requestAnimationFrame(() => {
@@ -44,8 +52,8 @@
       document.querySelectorAll('[data-account-identity]').forEach((el) => {const row = statusRows.find((r) => r.accountKey === el.dataset.accountIdentity && r.current === true && r.identity);updateText(el, row ? identityText(row) : '');el.hidden = !row;});
       document.querySelectorAll('[data-machine-current]').forEach((el) => {updateText(el, machineState(el.dataset.provider, el.dataset.machineCurrent).text);el.title = el.textContent;});
       document.querySelectorAll('[data-device-summary]').forEach((el) => {const a = state.settings.accounts.find((a) => accountKey(a) === el.dataset.account);if (a) updateText(el, statusText(statuses(a, el.dataset.deviceSummary)));});
-      document.querySelectorAll('[data-source-status]').forEach((el) => {const row = statusRows.find((r) => r.sourceId === el.dataset.sourceStatus && r.accountKey === el.dataset.account);const html = sourceStatusHTML(row);if (el.innerHTML !== html) el.innerHTML = html;});
-      document.querySelectorAll('[data-source-actions]').forEach((el) => {const source = state.settings.sources.find((s) => s.id === el.dataset.sourceActions),account = state.settings.accounts.find((a) => accountKey(a) === el.dataset.account);if (source && account) {const row = statusRows.find((r) => r.sourceId === source.id && r.accountKey === el.dataset.account),html = sourceActionsHTML(account, source, row);if (el.innerHTML !== html) el.innerHTML = html;}});
+      document.querySelectorAll('[data-source-status]').forEach((el) => {const row = statusRows.find((r) => r.sourceId === el.dataset.sourceStatus && r.accountKey === el.dataset.account);updateHTML(el, sourceStatusHTML(row));});
+      document.querySelectorAll('[data-source-actions]').forEach((el) => {const source = state.settings.sources.find((s) => s.id === el.dataset.sourceActions),account = state.settings.accounts.find((a) => accountKey(a) === el.dataset.account);if (source && account) {const row = statusRows.find((r) => r.sourceId === source.id && r.accountKey === el.dataset.account),html = sourceActionsHTML(account, source, row);updateHTML(el, html);}});
       const refresh = document.querySelector('#account-status-refresh');if (refresh) {refresh.disabled = statusLoading;refresh.textContent = statusLoading ? AieyesI18n.t("检查中…") : AieyesI18n.t("刷新设备状态");}
       document.querySelectorAll('[data-machine-account-refresh]').forEach((button) => {button.disabled = statusLoading || !rawConfigurations().find((a) => a.provider === button.dataset.machineAccountRefresh)?.enabled;button.textContent = statusLoading ? AieyesI18n.t("检查中…") : AieyesI18n.t("刷新账户状态");});
       bindStatusActions();
@@ -156,6 +164,8 @@
     return configKey({ accounts: settings.accounts.map((a) => pick(a, ['provider', 'id', 'identityKey', 'quotaProfileId', 'connections', 'deviceSettings'])), sources: settings.sources.map((s) => pick(s, ['id', 'provider', 'accountId', 'path', 'hostId', 'enabled', 'machineBinding', 'codexHomeId', 'codexBinary', 'agyBinary', 'quotaPreCommand', 'subscription', 'proxy'])), hosts: settings.hosts.map((h) => pick(h, ['id', 'target', 'port', 'username', 'identityFile', 'authMode', 'passwordRef', 'shell', 'preCommand', 'enabled'])), agents: settings.agents, localDeviceEnabled: settings.localDeviceEnabled, nativeConnections: (settings.nativeConnections ?? []).map((r) => pick(r, ['id', 'provider', 'machineId', 'machineFingerprint', 'sourceId', 'sourcePath', 'root', 'configPath', 'selector', 'kind', 'accountKey', 'identityKey', 'status', 'hasCredential'])), proxy: settings.sources.some((s) => s.provider !== 'codex') ? settings.proxy : null });
   }
   function accept(saved, submittedForms = null) {
+    // A shared refresh can deliver settings before boot assigns the first copy; there is nothing to compare yet.
+    if (!state.settings) {acceptSettings(saved, submittedForms);window.AieyesTheme?.apply(saved.appearance);return;}
     const quotaKey = (value) => configKey([value.accounts, value.sources, value.hosts, value.proxy, value.refreshSeconds, value.agents, value.localDeviceEnabled]);
     if (quotaKey(state.settings) !== quotaKey(saved)) state.lastQuota = 0;
     const changed = deviceConfig(state.settings) !== deviceConfig(saved);
@@ -198,7 +208,7 @@
   function openHooks(provider, machine) {
     const sources = hookSources(provider, machine).filter((s, i, a) => s.machineBinding !== 'unbound' && a.findIndex((v) => v.path === s.path) === i),dialog = document.createElement('dialog');
     dialog.id = 'session-hooks';dialog.setAttribute('aria-label', AieyesI18n.t("会话监测"));
-    dialog.innerHTML = `<div class="between"><h2>${AieyesI18n.t("会话监测 · {0}", e(deviceName(machine)))}</h2><button data-close>${AieyesI18n.t("完成")}</button></div><p class="muted">${['codex', 'kimi', 'deepseek-harness', 'grok', 'qoder', 'opencode', 'pi', 'omp'].includes(provider) ? AieyesI18n.t("从 ") + e(providers[provider]) + AieyesI18n.t(" 原生记录读取会话状态。") : provider === 'zcode' ? AieyesI18n.t("实时状态由 ZCode 原生监测提供；停用后仅显示已结算的状态。SSH 监测需要远端 Python 3。") : provider === 'cursor' ? AieyesI18n.t("从用户或项目的 .cursor/hooks.json 接收状态；停用后不再接收新状态。原生会话库的 Token 暂未接入，SSH 监测需要远端 Python 3。") : machine === 'local' ? AieyesI18n.t("采集时自动监测会话；停用实时监测后仍读取日志。") : AieyesI18n.t("通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。")}</p>` + sources.map((source) => `<section class="sampling-row" data-hook-row="${e(source.id)}"><code>${e(source.path)}</code>${['codex', 'kimi', 'deepseek-harness', 'grok', 'qoder', 'opencode', 'pi', 'omp'].includes(provider) ? '' : `<div class="between"><label><input type="checkbox" role="switch" data-hook-toggle ${hookState(source) === 'disabled' ? '' : 'checked'}>${AieyesI18n.t("实时监测")}</label><span data-hook-label>${e(hookLabels[hookState(source)] ?? AieyesI18n.t("等待监测安装"))}</span><button data-hook-repair>${AieyesI18n.t("修复监测")}</button></div>`}<div class="error" hidden></div></section>`).join('');
+    dialog.innerHTML = `<div class="between"><h2>${AieyesI18n.t("会话监测 · {0}", e(deviceName(machine)))}</h2><button data-close>${AieyesI18n.t("完成")}</button></div><p class="muted">${['codex', 'kimi', 'deepseek-harness', 'grok', 'qoder', 'opencode', 'pi', 'omp'].includes(provider) ? AieyesI18n.t("从 {0} 原生记录读取会话状态。", e(providers[provider])) : provider === 'zcode' ? AieyesI18n.t("实时状态由 ZCode 原生监测提供；停用后仅显示已结算的状态。SSH 监测需要远端 Python 3。") : provider === 'cursor' ? AieyesI18n.t("从用户或项目的 .cursor/hooks.json 接收状态；停用后不再接收新状态。原生会话库的 Token 暂未接入，SSH 监测需要远端 Python 3。") : machine === 'local' ? AieyesI18n.t("采集时自动监测会话；停用实时监测后仍读取日志。") : AieyesI18n.t("通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。")}</p>` + sources.map((source) => `<section class="sampling-row" data-hook-row="${e(source.id)}"><code>${e(source.path)}</code>${['codex', 'kimi', 'deepseek-harness', 'grok', 'qoder', 'opencode', 'pi', 'omp'].includes(provider) ? '' : `<div class="between"><label><input type="checkbox" role="switch" data-hook-toggle ${hookState(source) === 'disabled' ? '' : 'checked'}>${AieyesI18n.t("实时监测")}</label><span data-hook-label>${e(hookLabels[hookState(source)] ?? AieyesI18n.t("等待监测安装"))}</span><button data-hook-repair>${AieyesI18n.t("修复监测")}</button></div>`}<div class="error" hidden></div></section>`).join('');
     document.body.append(dialog);dialog.showModal();dialog.querySelector('[data-close]').onclick = () => dialog.close();dialog.onclose = () => window.AieyesMotion ? AieyesMotion.removeAfterExit(dialog) : dialog.remove();
     let busy = false;dialog.oncancel = (event) => {if (busy) event.preventDefault();};
     async function act(row, action) {
@@ -223,10 +233,48 @@
     detailKey = account ? accountKey(account) : '';showCodex = false;directorySelection = null;
     try {localStorage.setItem('aieyes.settings.agent', state.settingsAgent);} catch (_) {}
   }
+  function entryIds() {
+    return state.settings.appearance?.settingsAgentIds ?? configurations().filter(a => a.enabled || a.machineIds.length || state.settings.sources.some(s => AieyesUI.sameAgent(s.provider,a.provider)) || state.settings.accounts.some(row => AieyesUI.sameAgent(row.provider,a.provider))).map(a => a.provider);
+  }
+  function selectorHTML(agent) {
+    const entries = entryIds(), rows = configurations().filter(a => entries.includes(a.provider));
+    const button = a => `<button type="button" data-settings-agent="${e(a.provider)}" tabindex="${a.provider === (rows.slice(0,4).find(row => row.provider === agent?.provider) ?? rows[0])?.provider ? 0 : -1}" ${a.provider === agent?.provider ? 'class="active" aria-current="page"' : ''}>${providerMark(a.provider)}<span>${e(providers[a.provider] ?? a.provider)}</span></button>`;
+    return `<nav class="settings-agent-selector" aria-label="${AieyesI18n.t("选择 Agent")}"><div class="agent-common agent-selector">${rows.slice(0,4).map(button).join('')}</div><details class="agent-more"><summary aria-haspopup="dialog"><span class="agent-wide-label">${AieyesI18n.t("更多 Agent")}</span><span class="agent-narrow-label">${e(providers[agent?.provider] || AieyesI18n.t("选择 Agent"))}</span>${uiIcon('chevron')}</summary><div class="agent-picker-menu" role="dialog" aria-label="${AieyesI18n.t("选择 Agent")}"><input type="search" data-agent-search aria-label="${AieyesI18n.t("搜索 Agent")}" placeholder="${AieyesI18n.t("搜索 Agent")}"><div class="agent-picker-results">${rows.map(a => button(a).replace('data-settings-agent=', 'data-agent-choice=').replace(/ tabindex="-?\d+"/, '')).join('')}</div></div></details><button type="button" data-manage-agents>${AieyesI18n.t("管理 Agent")}</button></nav>`;
+  }
+  function manageEntries() {
+    const dialog = quotaDialog(AieyesI18n.t("管理 Agent"), `<p class="muted">${AieyesI18n.t("移出会暂停采集，保留目录、账户和历史。定时唤醒由任务开关独立控制。")}</p><input type="search" id="agent-management-search" aria-label="${AieyesI18n.t("搜索 Agent")}" placeholder="${AieyesI18n.t("搜索 Agent")}"><div id="agent-management-list"></div>`);
+    const search = dialog.querySelector('#agent-management-search'), list = dialog.querySelector('#agent-management-list');
+    const draw = () => {
+      list.innerHTML = configurations().filter(a => ((providers[a.provider] || a.provider) + ' ' + a.provider).toLowerCase().includes(search.value.toLowerCase())).map(a => `<div class="list-row"><span class="row-body">${e(providers[a.provider] || a.provider)}</span><button type="button" data-agent-manage="${e(a.provider)}" data-visible="${!entryIds().includes(a.provider)}">${AieyesI18n.t(entryIds().includes(a.provider) ? "移出并暂停采集" : "添加")}</button></div>`).join('');
+      list.querySelectorAll('[data-agent-manage]').forEach(button => button.onclick = async () => {
+        if (state.settingsSaving) return;
+        state.settingsSaving = true;list.querySelectorAll('button').forEach(el => el.disabled = true);
+        try {
+          const provider = button.dataset.agentManage, visible = button.dataset.visible === 'true';
+          accept(await api('agents.manage', {provider, visible}));markSaved();
+          if (visible) navigate({provider});else if (state.settingsAgent === provider) state.settingsAgent = entryIds()[0] || '';
+          renderSettings(false);draw();list.querySelector(`[data-agent-manage="${CSS.escape(provider)}"]`)?.focus();backgroundRefresh();
+        } catch (error) {notify(AieyesI18n.message(error.message || String(error)), 'error');draw();}
+        finally {state.settingsSaving = false;renderSettings(false);}
+      });
+    };
+    search.oninput = draw;draw();search.focus();
+  }
+  document.addEventListener('pointerdown', event => {document.querySelectorAll('.agent-more[open]').forEach(menu => {if (!menu.contains(event.target)) menu.open = false;});});
+  function bindSelector() {
+    document.querySelectorAll('[data-manage-agents]').forEach(button => button.onclick = manageEntries);
+    const more = document.querySelector('.agent-more');if (!more) return;
+    const search = more.querySelector('[data-agent-search]');
+    more.addEventListener('toggle', () => {if (more.open) search.focus();});
+    more.querySelectorAll('[data-agent-choice]').forEach(button => button.onclick = () => {navigate({provider:button.dataset.agentChoice});renderSettings();});
+    search.oninput = () => more.querySelectorAll('[data-agent-choice]').forEach(button => button.hidden = !(button.textContent + ' ' + button.dataset.agentChoice).toLowerCase().includes(search.value.toLowerCase()));
+    more.addEventListener('keydown', event => {if (event.key === 'Escape') {event.preventDefault();event.stopPropagation();more.open = false;more.querySelector('summary').focus();}});
+    more.addEventListener('focusout', () => setTimeout(() => {if (!more.contains(document.activeElement)) more.open = false;},0));
+  }
   function integrationsHTML() {
     state.settingsAgent = AieyesUI.agentProvider(state.settingsAgent);
     const agent = configurations().find((a) => a.provider === state.settingsAgent) ?? configurations()[0];
-    if (!agent) return AieyesI18n.t("<p>暂无 Agent 配置</p>");
+    if (!agent || (!entryIds().length && !detailKey)) return selectorHTML(null) + `<div class="empty">${AieyesI18n.t("添加要接入的 Agent")}</div>`;
     state.settingsAgent = agent.provider;
     let body;
     if (directorySelection) body = agentsHTML();else
@@ -235,19 +283,19 @@
       const section = (key, title, detail, content, opened = false) => `<details class="card settings-disclosure" id="agent-section-${key}" data-agent-detail="settings:${agent.provider}:${key}" data-persist-disclosure="settings:${agent.provider}:${key}" ${disclosureOpen('settings:' + agent.provider + ':' + key, opened) ? 'open' : ''}><summary><strong>${title}</strong><small>${e(detail)}</small></summary><div class="settings-section-body">${content}</div></details>`;
       body = `<section class="card agent-integration-header" data-provider="${e(agent.provider)}"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving ? 'disabled' : ''} ${agent.enabled ? 'checked' : ''}>${AieyesI18n.t("启用")}</label></div></section>`;
       if (['pi', 'omp'].includes(agent.provider)) body += helpHTML(AieyesI18n.t("额度"), AieyesI18n.t("额度由当前模型服务商提供；本地 Token 和预估费用不代表可用余额。"));
-      body += section('accounts', AieyesI18n.t("账户"), state.settings.accounts.filter((a) => AieyesUI.sameAgent(a.provider, agent.provider) && !a.archived).length + AieyesI18n.t(" 个账户"), accountsHTML(false), true);
+      body += section('accounts', AieyesI18n.t("账户"), AieyesI18n.t("{0} 个账户", state.settings.accounts.filter(a => AieyesUI.sameAgent(a.provider, agent.provider) && !a.archived).length), accountsHTML(false), true);
       const apiProvider = AieyesUI.featureProvider(agent.provider, 'api');
       if (apiProvider) {
         const nativeApiSources = state.settings.sources.filter((s) => s.provider === apiProvider && !s.hostId && !s.subscription && s.machineBinding !== 'unbound');
         const protocol = apiProvider === 'claude' ? 'Anthropic Messages' : 'Chat Completions';
-        body += section('api', AieyesI18n.t("API 连接"), apiProvider === 'codex' ? (state.settings.codexApis ?? []).length + AieyesI18n.t(" 个连接") : AieyesI18n.t("自定义模型"), apiProvider === 'codex' ? window.AieyesCodexAPI?.html() ?? '' : helpHTML(AieyesI18n.t("API 连接"), AieyesI18n.t("验证 {0} 端点后，保存到本机 {1} 配置并设为默认模型。已有配置会备份，Key 保存在原生配置文件中。", protocol, providers[apiProvider])) + nativeApiSources.map((s) => `<button type="button" data-native-api="${e(s.id)}">${AieyesI18n.t("{0} · 配置 API", e(s.name))}</button>`).join('') + (!nativeApiSources.length ? AieyesI18n.t("<p class=\"muted\">先在机器与目录中添加本机数据目录。</p>") : ''));
+        body += section('api', AieyesI18n.t("API 连接"), apiProvider === 'codex' ? AieyesI18n.t("{0} 个连接", (state.settings.codexApis ?? []).length) : AieyesI18n.t("自定义模型"), apiProvider === 'codex' ? window.AieyesCodexAPI?.html() ?? '' : helpHTML(AieyesI18n.t("API 连接"), AieyesI18n.t("验证 {0} 端点后，保存到本机 {1} 配置并设为默认模型。已有配置会备份，Key 保存在原生配置文件中。", protocol, providers[apiProvider])) + nativeApiSources.map((s) => `<button type="button" data-native-api="${e(s.id)}">${AieyesI18n.t("{0} · 配置 API", e(s.name))}</button>`).join('') + (!nativeApiSources.length ? `<p class="muted">${AieyesI18n.t("先在机器与目录中添加本机数据目录。")}</p>` : ''));
       }
       const nativeApis = window.AieyesAccountScan?.list(agent.provider, 'api') ?? '';
       if (nativeApis) body += section('native-api', AieyesI18n.t("原生 API 连接"), '', nativeApis);
-      if (AieyesUI.agentSupports(agent.provider, 'machines', state.settings)) body += section('machines', AieyesI18n.t("机器与目录"), agent.machineIds.length + AieyesI18n.t(" 台机器"), agentsHTML());
+      if (AieyesUI.agentSupports(agent.provider, 'machines', state.settings)) body += section('machines', AieyesI18n.t("机器与目录"), AieyesI18n.t("{0} 台机器", agent.machineIds.length), agentsHTML());
       if (AieyesUI.agentSupports(agent.provider, 'valuation', state.settings)) body += section('valuation', AieyesI18n.t("估值与采样"), '', `<button type="button" data-agent-estimates="${e(agent.provider)}">${AieyesI18n.t("管理估值与采样")}</button>`);
     }
-    return `<div class="settings-layout"><nav class="settings-agent-selector" aria-label="${AieyesI18n.t("选择 Agent")}">${configurations().map((a) => `<button type="button" data-settings-agent="${e(a.provider)}" ${a.provider === agent.provider ? 'class="active" aria-current="page"' : ''}>${providerMark(a.provider)}<span>${e(providers[a.provider] ?? a.provider)}</span></button>`).join('')}</nav><div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
+    return `<div class="settings-layout agent-settings-layout">${selectorHTML(agent)}<div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
   }
   function directoryLinks(provider, machine) {
     if (machine === 'local' || !state.settings.hosts.some((h) => h.id === machine)) return '';
@@ -264,17 +312,17 @@
       return `<section class="card agent-setup" id="agent-machines"><h2>${AieyesI18n.t("机器与目录")}</h2><fieldset class="agent-machines"><legend>${AieyesI18n.t("所在机器 · 可多选")}</legend>${hosts.map((h) => {
         const sources = directorySources(a.provider, h.id),current = machineState(a.provider, h.id);
         const actions = current.sources.map((source) => (a.provider === 'antigravity' ? `<button data-agy-login="${e(source.id)}" title="${e(source.path)}">${AieyesI18n.t("登录 / 检查 · {0}", e(source.name))}<small class="source-path">${e(AieyesUI.shortPath(source.path))}</small></button>` : '') + (a.provider === 'codex' ? `<button data-device-manage="${e(source.id)}" data-intent="login" title="${e(source.path)}">${AieyesI18n.t("登录 · {0}", e(source.name))}<small class="source-path">${e(AieyesUI.shortPath(source.path))}</small></button><button data-device-manage="${e(source.id)}" data-intent="switch" title="${e(source.path)}">${AieyesI18n.t("切换账户 · {0}", e(source.name))}<small class="source-path">${e(AieyesUI.shortPath(source.path))}</small></button>` : '')).join('');
-        return `<div class="agent-machine list-row"><label><input type="checkbox" data-agent-machine="${e(a.provider)}" ${state.settingsSaving || !a.enabled || h.unbound ? 'disabled' : ''} value="${e(h.id)}" ${!h.unbound && a.machineIds.includes(h.id) ? 'checked' : ''}>${e(h.name || h.target)}${h.unbound ? AieyesI18n.t(" · 机器未绑定") : h.enabled ? '' : AieyesI18n.t(" · 采集已暂停")}</label><span class="row-body tiny muted machine-current" data-machine-current="${e(h.id)}" data-provider="${e(a.provider)}" title="${e(current.text)}">${h.unbound ? '' : e(current.text)}</span><button data-machine-directories="${e(a.provider)}" data-machine="${e(h.id)}">${AieyesI18n.t("目录 {0}", sources.length)}</button>${h.unbound ? '' : hooksHTML(a.provider, h.id)}${automaticMachineHTML(a.provider, h.id)}${h.unbound ? '' : `<details class="machine-menu"><summary aria-label="${AieyesI18n.t("{0}操作", e(h.name || h.target))}">⋯</summary><div class="machine-menu-body">${actions || AieyesI18n.t("<p class=\"tiny muted\">请启用此机器的采集并配置日志目录。</p>")}<button data-device-enabled="${e(h.id)}" data-enabled="${!h.enabled}">${h.enabled ? AieyesI18n.t("暂停 Agent 采集") : AieyesI18n.t("恢复 Agent 采集")}</button></div></details>`}</div>`;
-      }).join('')}</fieldset>${!hosts.some((h) => !h.unbound && h.enabled) ? AieyesI18n.t("<p class=\"muted\">暂无可采集机器，请在服务器设置开启 Agent 采集。</p>") : a.machineIds.some((id) => hosts.some((h) => !h.unbound && h.id === id)) ? '' : AieyesI18n.t("<p class=\"muted\">未选择机器，暂不采集。</p>")}<button data-agent-host>${AieyesI18n.t("添加 SSH 主机")}</button>${a.provider === 'qoder' ? `<button data-machine-account-refresh="qoder" ${statusLoading || !a.enabled ? 'disabled' : ''}>${statusLoading ? AieyesI18n.t("检查中…") : AieyesI18n.t("刷新账户状态")}</button>` : ''}</section>`;
+        return `<div class="agent-machine list-row"><label><input type="checkbox" data-agent-machine="${e(a.provider)}" ${state.settingsSaving || !a.enabled || h.unbound ? 'disabled' : ''} value="${e(h.id)}" ${!h.unbound && a.machineIds.includes(h.id) ? 'checked' : ''}>${e(h.name || h.target)}${h.unbound ? AieyesI18n.t(" · 机器未绑定") : h.enabled ? '' : AieyesI18n.t(" · 采集已暂停")}</label><span class="row-body tiny muted machine-current" data-machine-current="${e(h.id)}" data-provider="${e(a.provider)}" title="${e(current.text)}">${h.unbound ? '' : e(current.text)}</span><button data-machine-directories="${e(a.provider)}" data-machine="${e(h.id)}">${AieyesI18n.t("目录 {0}", sources.length)}</button>${h.unbound ? '' : hooksHTML(a.provider, h.id)}${automaticMachineHTML(a.provider, h.id)}${h.unbound ? '' : `<details class="machine-menu"><summary aria-label="${AieyesI18n.t("{0}操作", e(h.name || h.target))}">⋯</summary><div class="machine-menu-body">${actions || `<p class="tiny muted">${AieyesI18n.t("请启用此机器的采集并配置日志目录。")}</p>`}<button data-device-enabled="${e(h.id)}" data-enabled="${!h.enabled}">${h.enabled ? AieyesI18n.t("暂停 Agent 采集") : AieyesI18n.t("恢复 Agent 采集")}</button></div></details>`}</div>`;
+      }).join('')}</fieldset>${!hosts.some((h) => !h.unbound && h.enabled) ? `<p class="muted">${AieyesI18n.t("暂无可采集机器，请在服务器设置开启 Agent 采集。")}</p>` : a.machineIds.some((id) => hosts.some((h) => !h.unbound && h.id === id)) ? '' : `<p class="muted">${AieyesI18n.t("未选择机器，暂不采集。")}</p>`}<button data-agent-host>${AieyesI18n.t("添加 SSH 主机")}</button>${a.provider === 'qoder' ? `<button data-machine-account-refresh="qoder" ${statusLoading || !a.enabled ? 'disabled' : ''}>${statusLoading ? AieyesI18n.t("检查中…") : AieyesI18n.t("刷新账户状态")}</button>` : ''}</section>`;
     }).join('');
   }
   function accountsHTML(includeAPI = true) {
-    if (showCodex) return AieyesI18n.t("<button id=\"accounts-back\">返回账户</button>") + window.AieyesCodexAuth.html();
+    if (showCodex) return `<button type="button" id="accounts-back" class="back-link">${uiIcon('back')}${AieyesI18n.t("返回账户")}</button>` + window.AieyesCodexAuth.html();
     const detail = state.settings.accounts.find((a) => accountKey(a) === detailKey);
     if (detail) return detailsHTML(detail);
     const row = (a) => `<div class="list-row"><div class="row-body"><strong>${e(a.name)}</strong><small data-account-summary="${e(accountKey(a))}">${e(counts(a))}</small><small data-account-identity="${e(accountKey(a))}" class="account-identity">${e(identityText(statusRows.find((r) => r.accountKey === accountKey(a) && r.current === true && r.identity)))}</small></div><button data-account-edit="${e(accountKey(a))}">${AieyesI18n.t("设置")}</button></div>`;
     const groups = configurations().filter((config) => config.provider === state.settingsAgent);
-    return syncHTML() + groups.map((config) => `<section class="card account-agent-group" id="agent-accounts"><div class="between">${window.AieyesAccountScan?.button(config.provider) ?? ''}<button data-account-add="${e(config.provider)}" class="primary" ${config.enabled ? '' : 'disabled'}>${AieyesI18n.t("添加账户")}</button></div>${window.AieyesAccountScan?.hint(config.provider) ?? ''}${state.settings.accounts.filter((a) => AieyesUI.sameAgent(a.provider, config.provider) && !a.archived).map(row).join('') || AieyesI18n.t("<p class=\"muted\">尚未添加账户</p>")}${window.AieyesAccountScan?.list(config.provider, 'login') ?? ''}</section>`).join('') + (
+    return syncHTML() + groups.map((config) => `<section class="card account-agent-group" id="agent-accounts"><div class="between">${window.AieyesAccountScan?.button(config.provider) ?? ''}<button data-account-add="${e(config.provider)}" class="tinted" ${config.enabled ? '' : 'disabled'}>${AieyesI18n.t("添加账户")}</button></div>${window.AieyesAccountScan?.hint(config.provider) ?? ''}${state.settings.accounts.filter((a) => AieyesUI.sameAgent(a.provider, config.provider) && !a.archived).map(row).join('') || `<p class="muted">${AieyesI18n.t("尚未添加账户")}</p>`}${window.AieyesAccountScan?.list(config.provider, 'login') ?? ''}</section>`).join('') + (
     includeAPI && state.settingsAgent === 'codex' ? window.AieyesCodexAPI?.html() ?? '' : '') + (
     state.settings.accounts.some((a) => a.archived && AieyesUI.sameAgent(a.provider, state.settingsAgent)) ? `<details class="card" data-agent-detail="archived-accounts"><summary>${AieyesI18n.t("已归档账户")}</summary>${state.settings.accounts.filter((a) => a.archived && AieyesUI.sameAgent(a.provider, state.settingsAgent)).map((a) => `<div class="list-row"><span class="row-body">${e(providers[a.provider])} · ${e(a.name)}</span><button data-account-restore="${e(accountKey(a))}">${AieyesI18n.t("恢复")}</button><button class="danger" data-account-delete="${e(accountKey(a))}">${AieyesI18n.t("删除账户")}</button></div>`).join('')}</details>` : '') + (
     cleanupRows.length ? `<details class="card" data-agent-detail="abandoned-tasks"><summary>${AieyesI18n.t("已解除管理的远端任务（可能仍在运行）")}</summary>${cleanupRows.map((r) => `<h3>${e(r.name)}</h3>${r.tasks.map((t) => `<p>${e(t.name)} · ${e(t.machine)} · <code>${e(t.root)}</code></p>`).join('')}`).join('')}</details>` : '');
@@ -317,7 +365,7 @@
     const active = AieyesUI.sourceEnabled(state.settings, s);
     if (a.provider === 'antigravity' && s.accountId === a.id) return `<button data-agy-login="${e(s.id)}" ${active ? '' : 'disabled'}>${AieyesI18n.t("登录 / 检查")}</button>`;
     if (a.provider !== 'codex') return '';
-    if (row?.current === true) return AieyesI18n.t("<span class=\"muted\">正在使用</span>");
+    if (row?.current === true) return `<span class="muted">${AieyesI18n.t("正在使用")}</span>`;
     return `<button data-account-login="${e(accountKey(a))}" data-source="${e(s.id)}" data-intent="${row?.credential ? 'switch' : 'login'}" ${active ? '' : 'disabled'}>${row?.credential ? AieyesI18n.t("切换账户") : AieyesI18n.t("登录")}</button>`;
   }
   function bindStatusActions() {
@@ -330,7 +378,7 @@
     const priority = `<label>${AieyesI18n.t("优先查询位置")}<select data-account-priority="${e(accountKey(a))}">${option('', AieyesI18n.t("自动 · 优先本机"), draftValue(a, 'quotaSourceId', a.quotaSourceId) || '')}${state.settings.sources.filter((s) => linked(a, s)).map((s) => option(s.id, deviceName(machineId(s)) + ' · ' + s.name + (s.enabled ? '' : AieyesI18n.t(" · 已暂停")), draftValue(a, 'quotaSourceId', a.quotaSourceId) || '')).join('')}</select></label>`;
     const interval = `<label>${AieyesI18n.t("查询间隔（秒）")}<input id="account-interval" data-account-field="quotaRefreshSeconds" data-account="${e(accountKey(a))}" type="number" min="5" max="86400" value="${e(draftValue(a, 'quotaRefreshSeconds', a.quotaRefreshSeconds ?? ''))}" placeholder="${AieyesI18n.t("沿用全局 · {0} 秒", state.settings.refreshSeconds)}"></label>`;
     const quota = state.dashboard?.quotas?.find((q) => q.provider === a.provider && q.accountId === a.id);
-    return `<div class="between"><button id="account-detail-back">${AieyesI18n.t("返回账户")}</button><button id="account-status-refresh" ${statusLoading ? 'disabled' : ''}>${statusLoading ? AieyesI18n.t("检查中…") : AieyesI18n.t("刷新设备状态")}</button></div>
+    return `<div class="between"><button type="button" id="account-detail-back" class="back-link">${uiIcon('back')}${AieyesI18n.t("返回账户")}</button><button id="account-status-refresh" ${statusLoading ? 'disabled' : ''}>${statusLoading ? AieyesI18n.t("检查中…") : AieyesI18n.t("刷新设备状态")}</button></div>
       <section class="card account-config"><h2>${providerMark(a.provider)} ${e(a.name)}</h2><p data-account-summary="${e(accountKey(a))}">${e(counts(a))}</p>
       <label>${AieyesI18n.t("账户名称")}<input id="account-name" data-account-field="name" data-account="${e(accountKey(a))}" value="${e(draftValue(a, 'name', a.name))}"></label>
       ${hasQuota && quota?.error ? `<div class="error">${AieyesUI.errorHTML(quota.error, AieyesI18n.t("额度查询失败"))}</div>` : ''}
@@ -341,17 +389,17 @@
     machines(a.provider, true).map((id) => {
       const sources = state.settings.sources.filter((s) => s.provider === a.provider && machineId(s) === id),active = machines(a.provider).includes(id),rows = statuses(a, id);
       const resetRequired = a.deviceSettings?.some((d) => d.machineId === id && d.preCommandResetRequired);
-      return `<section class="card"><h3>${e(deviceName(id))}${active ? '' : AieyesI18n.t(" · 已暂停")}</h3><p class="muted" data-device-summary="${e(id)}" data-account="${e(accountKey(a))}">${e(AieyesI18n.message(statusText(rows)))}</p>${sources.map((s) => {const r = rows.find((r) => r.sourceId === s.id);return `<div class="list-row"><div class="row-body">${e(s.name)}<small>${e(s.path || (s.subscription?.mode === 'cli' ? AieyesI18n.t("CLI 额度连接") : s.subscription ? AieyesI18n.t("订阅额度连接") : ''))}</small><span data-source-status="${e(s.id)}" data-account="${e(accountKey(a))}">${sourceStatusHTML(r)}</span></div><span data-source-actions="${e(s.id)}" data-account="${e(accountKey(a))}">${sourceActionsHTML(a, s, r)}</span></div>`;}).join('')}${id !== 'local' ? `<details data-agent-detail="command:${e(accountKey(a))}:${e(id)}"><summary>${AieyesI18n.t("前置命令")}</summary>${helpHTML(AieyesI18n.t("前置命令"), AieyesI18n.t("用于此账户的授权、切换、额度查询和定时唤醒；历史同步、监控不执行。清空后不执行。"))}${resetRequired ? AieyesI18n.t("<div class=\"error\">此机器的旧目录前置命令不一致，已清空，请重新设置。留空保存表示不执行前置命令。</div><button type=\"button\" data-command-confirm=\"") + e(id) + '" data-account="' + e(accountKey(a)) + AieyesI18n.t("\">确认当前命令</button>") : ''}<label class="command-field"><textarea aria-label="${AieyesI18n.t("前置命令")}" id="account-command-${e(id)}" data-command-field="${e(id)}" data-account="${e(accountKey(a))}">${e(draftValue(a, 'command:' + id, deviceCommand(a, id)))}</textarea></label></details>` : ''}</section>`;
+      return `<section class="card"><h3>${e(deviceName(id))}${active ? '' : AieyesI18n.t(" · 已暂停")}</h3><p class="muted" data-device-summary="${e(id)}" data-account="${e(accountKey(a))}">${e(AieyesI18n.message(statusText(rows)))}</p>${sources.map((s) => {const r = rows.find((r) => r.sourceId === s.id);return `<div class="list-row"><div class="row-body">${e(s.name)}<small>${e(s.path || (s.subscription?.mode === 'cli' ? AieyesI18n.t("CLI 额度连接") : s.subscription ? AieyesI18n.t("订阅额度连接") : ''))}</small><span data-source-status="${e(s.id)}" data-account="${e(accountKey(a))}">${sourceStatusHTML(r)}</span></div><span data-source-actions="${e(s.id)}" data-account="${e(accountKey(a))}">${sourceActionsHTML(a, s, r)}</span></div>`;}).join('')}${id !== 'local' ? `<details data-agent-detail="command:${e(accountKey(a))}:${e(id)}"><summary>${AieyesI18n.t("前置命令")}</summary>${helpHTML(AieyesI18n.t("前置命令"), AieyesI18n.t("用于此账户的授权、切换、额度查询和定时唤醒；历史同步、监控不执行。清空后不执行。"))}${resetRequired ? `<div class="error">${AieyesI18n.t("此机器的旧目录前置命令不一致，已清空，请重新设置。留空保存表示不执行前置命令。")}</div><button type="button" data-command-confirm="` + e(id) + '" data-account="' + e(accountKey(a)) + `">${AieyesI18n.t("确认当前命令")}</button>` : ''}<label class="command-field"><textarea aria-label="${AieyesI18n.t("前置命令")}" id="account-command-${e(id)}" data-command-field="${e(id)}" data-account="${e(accountKey(a))}">${e(draftValue(a, 'command:' + id, deviceCommand(a, id)))}</textarea></label></details>` : ''}</section>`;
     }).join('');
   }
   async function deleteAccount(a) {
     let preview;try {preview = await api('accounts.deletion.preview', { accountKey: accountKey(a) });} catch (error) {notify(String(error), 'error');return;}
     const tasks = preview.tasks ?? [];
-    showEditor(AieyesI18n.t("删除归档账户「") + a.name + '」', AieyesI18n.t("<p>删除账户配置和关联任务；历史记录及机器凭证保留，不退出 Agent。</p><ul>") + tasks.map((t) => `<li>${e(t.name)} · ${e(t.machine)}</li>`).join('') + '</ul>' + (tasks.length ? AieyesI18n.t("<label><input type=\"checkbox\" name=\"force\">强制删除（设备已弃用或无法连接）</label><div class=\"error\">强制删除无法保证远端任务停止。将解除本地管理，不再自动重试；未清理位置保留供查看。</div>") : '') + '<div id="account-delete-failures"></div>', async (f) => {
+    confirmDestructive(AieyesI18n.t("删除归档账户「") + a.name + '」', `<p>${AieyesI18n.t("删除账户配置和关联任务；历史记录及机器凭证保留，不退出 Agent。")}</p><ul>` + tasks.map((t) => `<li>${e(t.name)} · ${e(t.machine)}</li>`).join('') + '</ul>' + (tasks.length ? `<label><input type="checkbox" name="force">${AieyesI18n.t("强制删除（设备已弃用或无法连接）")}</label><div class="error">${AieyesI18n.t("强制删除无法保证远端任务停止。将解除本地管理，不再自动重试；未清理位置保留供查看。")}</div>` : '') + '<div id="account-delete-failures"></div>', async (f) => {
       const result = await api('accounts.delete', { accountKey: accountKey(a), force: f.has('force') });
       if (!result.deleted) {$('#account-delete-failures').innerHTML = (result.failedTasks ?? []).map((t) => `<div class="error">${e(t.name)} · ${e(AieyesI18n.message(t.error))}</div>`).join('');throw new Error(AieyesI18n.t("部分任务清理失败，账户仍保留；可重试或勾选强制删除。"));}
       accept(result.settings);cleanupRows = await api('accounts.cleanup.list');if (!Array.isArray(cleanupRows)) cleanupRows = [];repaint();backgroundRefresh();
-    }, 'confirmation');$('#editor-form button[type=submit]').textContent = AieyesI18n.t("确认删除");
+    }, AieyesI18n.t("确认删除"));
   }
   async function advanced(existing, provider) {
     const base = structuredClone(state.settings),item = structuredClone(existing ?? { id: crypto.randomUUID(), provider, name: providers[provider], accountId: '', path: window.AieyesContract.defaultPaths[provider] || '', hostId: directorySelection?.machine === 'local' ? null : directorySelection?.machine ?? null, enabled: true, codexBinary: window.AieyesContract.binaries.codex, agyBinary: window.AieyesContract.binaries.antigravity, quotaCommand: '', quotaPreCommand: '', proxy: null });
@@ -360,7 +408,7 @@
       try {item.path = (await api('sources.defaultPath', { provider: item.provider, hostId: item.hostId })).path;}
       catch (error) {item.path = '';defaultError = error.message ?? String(error);}
     }
-    showEditor(providers[item.provider] + AieyesI18n.t(" · 目录设置"), select('hostId', AieyesI18n.t("机器"), [['', AieyesI18n.t("本机")], ...base.hosts.map((h) => [h.id, h.name || h.target])], item.hostId || '') + (item.subscription ? AieyesI18n.t("<input type=\"hidden\" name=\"path\" value=\"\"><p class=\"muted\">此来源只查询订阅；历史请在机器与采集中添加独立目录。</p>") : field('path', item.provider === 'deepseek' ? AieyesI18n.t("API Key 文件") : AieyesI18n.t("数据目录"), item.path)) + (item.codexHomeId ? AieyesI18n.t("<p class=\"muted\">更换目录会解除旧账户连接，保留原文件和凭据。之后请读取新目录的登录。</p>") : '') + (item.provider === 'codex' ? field('codexBinary', AieyesI18n.t("Codex 程序"), item.codexBinary) : '') + (item.provider === 'antigravity' ? field('agyBinary', AieyesI18n.t("agy 程序"), item.agyBinary) : '') + (['custom', 'kimi', 'deepseek-harness', 'codebuddy'].includes(item.provider) || window.AieyesContract.subscriptions[item.provider] ? textarea('quotaCommand', AieyesI18n.t("额度查询命令"), item.quotaCommand || '') : '') + (item.hostId ? AieyesI18n.t("<p class=\"muted tiny\">远程账户的前置命令在账户设置中配置，同机目录共享。</p>") : proxyFields('source', item.proxy, true)), async (f) => {
+    showEditor(AieyesI18n.t("{0} · 目录设置", providers[item.provider]), select('hostId', AieyesI18n.t("机器"), [['', AieyesI18n.t("本机")], ...base.hosts.map((h) => [h.id, h.name || h.target])], item.hostId || '') + (item.subscription ? `<input type="hidden" name="path" value=""><p class="muted">${AieyesI18n.t("此来源只查询订阅；历史请在机器与采集中添加独立目录。")}</p>` : field('path', item.provider === 'deepseek' ? AieyesI18n.t("API Key 文件") : AieyesI18n.t("数据目录"), item.path)) + (item.codexHomeId ? `<p class="muted">${AieyesI18n.t("更换目录会解除旧账户连接，保留原文件和凭据。之后请读取新目录的登录。")}</p>` : '') + (item.provider === 'codex' ? field('codexBinary', AieyesI18n.t("Codex 程序"), item.codexBinary) : '') + (item.provider === 'antigravity' ? field('agyBinary', AieyesI18n.t("agy 程序"), item.agyBinary) : '') + (['custom', 'kimi', 'deepseek-harness', 'codebuddy'].includes(item.provider) || window.AieyesContract.subscriptions[item.provider] ? textarea('quotaCommand', AieyesI18n.t("额度查询命令"), item.quotaCommand || '') : '') + (item.hostId ? `<p class="muted tiny">${AieyesI18n.t("远程账户的前置命令在账户设置中配置，同机目录共享。")}</p>` : proxyFields('source', item.proxy, true)), async (f) => {
       if (defaultError && !item.subscription && !f.get('path').trim()) throw new Error(AieyesI18n.t("请选择实际的原生数据目录后保存"));
       item.path = f.get('path').trim();if (!['antigravity', 'deepseek'].includes(item.provider) && !window.AieyesContract.subscriptions[item.provider] && !item.path) throw new Error(AieyesI18n.t("请输入数据目录"));
       for (const key of ['codexBinary', 'agyBinary', 'quotaCommand']) if (f.has(key)) item[key] = f.get(key);
@@ -370,20 +418,20 @@
     if (defaultError) {$('#editor-error').textContent = AieyesI18n.message(defaultError);$('#editor-error').hidden = false;}
     $('#field-hostId').disabled = true;if (!item.hostId) bindProxy('source');bindPathSelection(true);
   }
-  function removeDirectory(source) {showEditor(AieyesI18n.t("移除目录配置"), AieyesI18n.t("<p>仅解除此目录的采集和账户连接；文件、登录凭证和历史记录保留。</p><code>") + e(source.path) + '</code>', async () => {accept(await api('sources.remove', { sourceId: source.id, baseSource: source }));markSaved();backgroundRefresh();renderSettings(false);}, 'confirmation');$('#editor-form button[type=submit]').textContent = AieyesI18n.t("移除配置");}
+  function removeDirectory(source) {confirmDestructive(AieyesI18n.t("移除目录配置"), `<p>${AieyesI18n.t("仅解除此目录的采集和账户连接；文件、登录凭证和历史记录保留。")}</p><code>` + e(source.path) + '</code>', async () => {accept(await api('sources.remove', { sourceId: source.id, baseSource: source }));markSaved();backgroundRefresh();renderSettings(false);}, AieyesI18n.t("移除配置"));}
   function editAccount(account) {state.settingsAgent = AieyesUI.agentProvider(account.provider);detailKey = accountKey(account);showCodex = false;renderSettings(false);}
   function subscriptionAccount(account, provider) {
     const spec = window.AieyesContract.subscriptions[provider];
     const existing = state.settings.sources.find((s) => s.provider === provider && s.accountId === account?.id && s.subscription);
     const config = existing?.subscription || {};
-    showEditor(providers[provider] + AieyesI18n.t(" · 连接订阅"),
-    '<p class="muted">' + e(spec.hint) + AieyesI18n.t("</p><button type=\"button\" id=\"subscription-login\">打开官方登录 / 用量页</button>") +
-    field('name', AieyesI18n.t("账户名称"), account?.name || providers[provider] + AieyesI18n.t(" 账户")) +
+    showEditor(AieyesI18n.t("{0} · 连接订阅", providers[provider]),
+    '<p class="muted">' + e(spec.hint) + `</p><button type="button" id="subscription-login">${AieyesI18n.t("打开官方登录 / 用量页")}</button>` +
+    field('name', AieyesI18n.t("账户名称"), account?.name || AieyesI18n.t("{0} 账户", providers[provider])) +
     select('mode', AieyesI18n.t("服务 / 地区"), Object.entries(spec.modes), config.mode || Object.keys(spec.modes)[0]) +
     field('workspaceId', AieyesI18n.t("Workspace / Team ID（仅 Console 或 xAI API）"), config.workspaceId || '') + (
     provider === 'qoder' ? field('nativeConfigDir', AieyesI18n.t("CLI 配置目录"), config.nativeConfigDir || '', AieyesI18n.t("留空跟随 CLI 默认目录")) : '') +
     field('secret', AieyesI18n.t("API Key / 登录令牌 / Cookie"), '', '', 'password') + (
-    ['grok', 'opencode'].includes(provider) ? AieyesI18n.t("<label><input type=\"checkbox\" name=\"useLocalLogin\">读取本机已登录凭据（仅 Grok 订阅 / OpenCode Go）</label>") : '') +
+    ['grok', 'opencode'].includes(provider) ? `<label><input type="checkbox" name="useLocalLogin">${AieyesI18n.t("读取本机已登录凭据（仅 Grok 订阅 / OpenCode Go）")}</label>` : '') +
     '<p class="muted tiny" id="subscription-storage-note"></p>', async (f) => {
       const result = await api('subscriptions.connect', { provider, accountId: account?.id || '', name: f.get('name'), secret: f.get('secret'), useLocalLogin: f.has('useLocalLogin'), subscription: { mode: f.get('mode'), workspaceId: (f.get('workspaceId') || '').trim(), nativeConfigDir: (f.get('nativeConfigDir') || '').trim() } });
       accept(result.settings);markSaved();backgroundRefresh();renderSettings(false);
@@ -417,7 +465,7 @@
     let secret = null,secretSourceId = crypto.randomUUID();
     showEditor(providers[initial] + ' · ' + (account ? initial === 'deepseek' ? AieyesI18n.t("更新 API Key") : AieyesI18n.t("连接机器") : AieyesI18n.t("添加账户")), `<input id="field-provider" type="hidden" name="provider" value="${e(initial)}">` + '<div id="account-connection-fields"></div>', async (f) => {
       const provider = f.get('provider') || account?.provider,accountId = account?.id || '';
-      const name = account?.name || providers[provider] + AieyesI18n.t(" 账户"),base = structuredClone(state.settings);
+      const name = account?.name || AieyesI18n.t("{0} 账户", providers[provider]),base = structuredClone(state.settings);
       if (provider === 'deepseek') {
         const key = f.get('apiKey')?.trim();if (!key) throw new Error(AieyesI18n.t("请输入 API Key"));
         const next = structuredClone(base),id = accountId || crypto.randomUUID();
@@ -432,10 +480,10 @@
     $('#editor').dataset.kind = 'account';
     const draw = () => {
       const provider = $('#field-provider').value;
-      $('#account-connection-fields').innerHTML = '<p class="muted">' + (provider === 'deepseek' ? AieyesI18n.t("添加账户的 API Key，之后可修改显示名称。") : AieyesI18n.t("读取所选机器上已有账户的登录。")) + '</p>' + (provider === 'deepseek' ? field('apiKey', 'API Key', '', '', 'password') : AieyesI18n.t("<fieldset id=\"account-source-options\"><legend>已有登录的机器 · 可多选</legend></fieldset>"));
+      $('#account-connection-fields').innerHTML = '<p class="muted">' + (provider === 'deepseek' ? AieyesI18n.t("添加账户的 API Key，之后可修改显示名称。") : AieyesI18n.t("读取所选机器上已有账户的登录。")) + '</p>' + (provider === 'deepseek' ? field('apiKey', 'API Key', '', '', 'password') : `<fieldset id="account-source-options"><legend>${AieyesI18n.t("已有登录的机器 · 可多选")}</legend></fieldset>`);
       const drawSources = () => {
         const id = account?.id || '';
-        if ($('#account-source-options')) $('#account-source-options').innerHTML = state.settings.sources.filter((s) => AieyesUI.sourceEnabled(state.settings, s) && s.provider === provider && (!s.accountId || s.accountId === id)).map((s) => `<label><input type="checkbox" name="sourceIds" value="${e(s.id)}">${e(s.name)} · ${e(machineName(s))}<small class="source-path" title="${e(s.path)}">${e(AieyesUI.shortPath(s.path))}</small></label>${provider === 'antigravity' ? `<button type="button" data-agy-login="${e(s.id)}">${AieyesI18n.t("登录 / 检查")}</button>` : ''}`).join('') || AieyesI18n.t("<p>请在“接入与账户”选择机器和采集目录。每个目录连接一个当前登录账户。</p>");
+        if ($('#account-source-options')) $('#account-source-options').innerHTML = state.settings.sources.filter((s) => AieyesUI.sourceEnabled(state.settings, s) && s.provider === provider && (!s.accountId || s.accountId === id)).map((s) => `<label><input type="checkbox" name="sourceIds" value="${e(s.id)}">${e(s.name)} · ${e(machineName(s))}<small class="source-path" title="${e(s.path)}">${e(AieyesUI.shortPath(s.path))}</small></label>${provider === 'antigravity' ? `<button type="button" data-agy-login="${e(s.id)}">${AieyesI18n.t("登录 / 检查")}</button>` : ''}`).join('') || `<p>${AieyesI18n.t("请在“接入与账户”选择机器和采集目录。每个目录连接一个当前登录账户。")}</p>`;
       };drawSources();
       $('#editor-form button[type=submit]').textContent = account ? provider === 'deepseek' ? AieyesI18n.t("更新 API Key") : AieyesI18n.t("保存连接") : AieyesI18n.t("添加账户");
     };draw();
@@ -447,11 +495,11 @@
       try {loaded = await api('agentApi.inspect', { sourceId });}
       catch (error) {initialError = error.message ?? String(error);loaded = await api('agentApi.inspect', { sourceId, locationOnly: true });}
       const capacity = ['kimi', 'deepseek-harness', 'zcode', 'grok', 'qoder', 'pi', 'omp'].includes(provider),output = ['deepseek-harness', 'zcode', 'grok', 'qoder', 'pi', 'omp'].includes(provider),reasoning = ['claude', 'zcode', 'codebuddy', 'pi', 'omp'].includes(provider);
-      showEditor(name + AieyesI18n.t(" · API 连接"), (provider === 'qoder' ? AieyesI18n.t("<p class=\"muted\">此配置目录需先完成 qodercli login；保存通过原生 CLI 的自定义模型管理接口。</p>") : '') + field('configPath', name + AieyesI18n.t(" 配置文件"), loaded.configPath) + AieyesI18n.t("<button type=\"button\" id=\"native-api-read\">读取此配置</button><p id=\"native-api-read-status\" role=\"status\"></p>") + field('baseUrl', provider === 'claude' ? AieyesI18n.t("API 根地址（不含 /v1）") : AieyesI18n.t("Base URL（含 /v1）"), loaded.baseUrl) + field('model', AieyesI18n.t("模型 ID"), loaded.model) + (provider === 'claude' ? select('authMode', AieyesI18n.t("认证方式"), [['api-key', 'API Key · X-Api-Key'], ['auth-token', 'Bearer Token']], loaded.authMode || 'api-key') : '') + '<details class="settings-details"><summary>' + AieyesI18n.t("模型选项") + '</summary>' + (capacity ? field('contextWindow', AieyesI18n.t("模型上下文窗口（Token）"), loaded.contextWindow ?? '', AieyesI18n.t("例如 261000"), 'number') : '') + (output ? field('maxOutputTokens', AieyesI18n.t("最大输出 Token"), loaded.maxOutputTokens ?? '', AieyesI18n.t("例如 2048"), 'number') : '') + (reasoning ? select('effort', AieyesI18n.t("推理强度"), [['codebuddy', 'pi', 'omp'].includes(provider) ? ['disabled', AieyesI18n.t("不发送推理强度")] : ['', provider === 'zcode' ? AieyesI18n.t("服务端默认") : AieyesI18n.t("客户端默认")], ...(provider === 'codebuddy' ? [['minimal', 'minimal']] : []), ['low', 'low'], ['medium', 'medium'], ['high', 'high'], ['xhigh', 'xhigh'], ['max', 'max']], loaded.effort || (['codebuddy', 'pi', 'omp'].includes(provider) ? 'low' : '')) : '') + (provider === 'codebuddy' ? AieyesI18n.t("<p class=\"muted\">新连接默认使用 low；模型不支持推理参数时，选择“不发送推理强度”。</p>") : '') + '</details>' + field('apiKey', provider === 'claude' ? AieyesI18n.t("API Key / Token（留空保留）") : AieyesI18n.t("API Key（留空保留已保存 Key）"), '', '', 'password') + `<label><input type="checkbox" name="noKey" ${loaded.noKey ? 'checked' : ''}>${AieyesI18n.t("服务无需 Key")}</label>${helpHTML(AieyesI18n.t("API 连接"), AieyesI18n.t("验证成功后保存并设为 {0} 默认模型。配置路径应与客户端实际使用的文件一致；客户端启动参数或环境变量可能覆盖文件设置。", name))}`, async (f) => {
+      showEditor(AieyesI18n.t("{0} · API 连接", name), (provider === 'qoder' ? `<p class="muted">${AieyesI18n.t("此配置目录需先完成 qodercli login；保存通过原生 CLI 的自定义模型管理接口。")}</p>` : '') + field('configPath', AieyesI18n.t("{0} 配置文件", name), loaded.configPath) + `<button type="button" id="native-api-read">${AieyesI18n.t("读取此配置")}</button><p id="native-api-read-status" role="status"></p>` + field('baseUrl', provider === 'claude' ? AieyesI18n.t("API 根地址（不含 /v1）") : AieyesI18n.t("Base URL（含 /v1）"), loaded.baseUrl) + field('model', AieyesI18n.t("模型 ID"), loaded.model) + (provider === 'claude' ? select('authMode', AieyesI18n.t("认证方式"), [['api-key', 'API Key · X-Api-Key'], ['auth-token', 'Bearer Token']], loaded.authMode || 'api-key') : '') + `<details class="settings-details"><summary>${AieyesI18n.t("模型选项")}</summary>` + (capacity ? field('contextWindow', AieyesI18n.t("模型上下文窗口（Token）"), loaded.contextWindow ?? '', AieyesI18n.t("例如 261000"), 'number') : '') + (output ? field('maxOutputTokens', AieyesI18n.t("最大输出 Token"), loaded.maxOutputTokens ?? '', AieyesI18n.t("例如 2048"), 'number') : '') + (reasoning ? select('effort', AieyesI18n.t("推理强度"), [['codebuddy', 'pi', 'omp'].includes(provider) ? ['disabled', AieyesI18n.t("不发送推理强度")] : ['', provider === 'zcode' ? AieyesI18n.t("服务端默认") : AieyesI18n.t("客户端默认")], ...(provider === 'codebuddy' ? [['minimal', 'minimal']] : []), ['low', 'low'], ['medium', 'medium'], ['high', 'high'], ['xhigh', 'xhigh'], ['max', 'max']], loaded.effort || (['codebuddy', 'pi', 'omp'].includes(provider) ? 'low' : '')) : '') + (provider === 'codebuddy' ? `<p class="muted">${AieyesI18n.t("新连接默认使用 low；模型不支持推理参数时，选择“不发送推理强度”。")}</p>` : '') + '</details>' + field('apiKey', provider === 'claude' ? AieyesI18n.t("API Key / Token（留空保留）") : AieyesI18n.t("API Key（留空保留已保存 Key）"), '', '', 'password') + `<label><input type="checkbox" name="noKey" ${loaded.noKey ? 'checked' : ''}>${AieyesI18n.t("服务无需 Key")}</label>${helpHTML(AieyesI18n.t("API 连接"), AieyesI18n.t("验证成功后保存并设为 {0} 默认模型。配置路径应与客户端实际使用的文件一致；客户端启动参数或环境变量可能覆盖文件设置。", name))}`, async (f) => {
         if (f.get('configPath') !== loaded.configPath) throw new Error(AieyesI18n.t("配置路径已改变，请先读取此配置"));
         if (!loaded.revision) throw new Error(AieyesI18n.t("请先读取有效配置后保存"));
         await api('agentApi.save', { sourceId, configPath: loaded.configPath, revision: loaded.revision, nativeRevision: loaded.nativeRevision, baseUrl: f.get('baseUrl'), model: f.get('model'), apiKey: f.get('apiKey'), noKey: f.get('noKey') === 'on', ...(capacity ? { contextWindow: Number(f.get('contextWindow')) } : {}), ...(output ? { maxOutputTokens: Number(f.get('maxOutputTokens')) } : {}), ...(reasoning ? { effort: f.get('effort') } : {}), ...(provider === 'claude' ? { authMode: f.get('authMode') } : {}) });
-        notify(AieyesI18n.t("API 已验证并保存，可重新打开 ") + name + AieyesI18n.t(" 使用。"));
+        notify(AieyesI18n.t("API 已验证并保存，可重新打开 {0} 使用。", name));
       });
       $('#native-api-read-status').textContent = initialError;
       $('#editor-form button[type=submit]').textContent = AieyesI18n.t("验证并设为默认");
@@ -472,6 +520,7 @@
     } catch (error) {run(() => Promise.reject(error));}
   }
   function bind() {
+    bindSelector();
     document.querySelectorAll('[data-native-api]').forEach((button) => button.onclick = () => nativeApiEditor(button.dataset.nativeApi));
     bindMachineMenus();
     bindStatusActions();
@@ -578,7 +627,7 @@ document.addEventListener('click', (event) => {const button = event.target.close
 async function openAntigravityLogin(sourceId) {
   if (document.querySelector('#agy-login')) return;
   const dialog = document.createElement('dialog');dialog.id = 'agy-login';dialog.setAttribute('aria-label', AieyesI18n.t("Antigravity 登录"));
-  dialog.innerHTML = AieyesI18n.t("<h2>Antigravity 登录</h2><p>读取机器现有登录，或通过浏览器授权。凭据保存在登录机器。</p><p id=\"agy-login-status\" role=\"status\"></p><p id=\"agy-login-identity\"></p><p id=\"agy-login-metadata\" class=\"muted\"></p><div id=\"agy-auth-url\" hidden><button type=\"button\" id=\"agy-open-url\">打开授权网页</button><button type=\"button\" id=\"agy-copy-url\">复制授权网址</button><label>浏览器返回的授权码<input id=\"agy-code\" type=\"password\" autocomplete=\"off\"></label><button type=\"button\" id=\"agy-submit-code\">提交授权码</button></div><div id=\"agy-login-error\" class=\"error\"></div><div class=\"actions\"><button id=\"agy-trust\" hidden>确认临时目录</button><button id=\"agy-verify\">验证登录</button><button id=\"agy-retry\" hidden>重新登录 / 检查</button><button id=\"agy-close\">完成</button></div>");
+  dialog.innerHTML = `<h2>${AieyesI18n.t("Antigravity 登录")}</h2><p>${AieyesI18n.t("读取机器现有登录，或通过浏览器授权。凭据保存在登录机器。")}</p><p id="agy-login-status" role="status"></p><p id="agy-login-identity"></p><p id="agy-login-metadata" class="muted"></p><div id="agy-auth-url" hidden><button type="button" id="agy-open-url">${AieyesI18n.t("打开授权网页")}</button><button type="button" id="agy-copy-url">${AieyesI18n.t("复制授权网址")}</button><label>${AieyesI18n.t("浏览器返回的授权码")}<input id="agy-code" type="password" autocomplete="off"></label><button type="button" id="agy-submit-code">${AieyesI18n.t("提交授权码")}</button></div><div id="agy-login-error" class="error"></div><div class="actions"><button id="agy-trust" hidden>${AieyesI18n.t("确认临时目录")}</button><button id="agy-verify">${AieyesI18n.t("验证登录")}</button><button id="agy-retry" hidden>${AieyesI18n.t("重新登录 / 检查")}</button><button id="agy-close">${AieyesI18n.t("完成")}</button></div>`;
   document.body.append(dialog);dialog.showModal();
   let session = null,sending = false,closed = false,refreshedSession = null;
   const active = () => !session || ['checking', 'starting', 'authorizing', 'verifying'].includes(session.phase);

@@ -37,8 +37,9 @@ function fixture(){
    const panel=surface==='floating.html',page=await browser.newPage({viewport:{width:panel?420:1120,height:800}}),errors=[];
    page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.evaluate(()=>AieyesApp.ready);
    await page.locator('[data-page=servers]').click();await page.waitForFunction(()=>!state.serverBusy);
-   const card=page.locator('.server-card'),summary=card.locator(':scope > summary');
-   assert.equal(await card.evaluate(el=>el.open),false);
+   const card=page.locator('.server-card'),summary=card.locator(':scope > .server-summary');
+   assert.equal(await card.locator('.server-more').evaluate(el=>el.open),false);
+   assert.equal(await card.locator('summary button').count(),0,'no control is nested inside a summary');
    assert.deepEqual(await summary.locator('.resource-block > strong').allTextContents(),['0%','25%']);
    assert.equal(await summary.locator('.resource-block:visible').count(),2);
    assert.match(await summary.locator('[data-gpu="0"]').textContent(),/NVIDIA RTX 4090.*0\/24 GiB/);
@@ -82,7 +83,7 @@ function fixture(){
      await page.screenshot({path:path.join(out,`${surface}-${width}-${theme}.png`),fullPage:true});
     }
    }
-   await summary.click();assert.equal(await card.evaluate(el=>el.open),true);
+   await card.locator('.server-more > summary').click();assert.equal(await card.locator('.server-more').evaluate(el=>el.open),true);
    assert.equal(await card.locator('.resource-block').count(),2,'Opening keeps exactly one resource overview');
    assert.equal(await card.locator('[data-metric="summary-host:gpu"] .resource-bar').count(),0);
    assert.equal(await card.locator('[data-metric="summary-host:cpu"] .resource-bar[aria-label="cpu"]').count(),0);
@@ -94,8 +95,8 @@ function fixture(){
    await card.locator('[data-metric="summary-host:network"] .metric-device').first().waitFor();
    assert.match(await card.locator('[data-metric="summary-host:network"] .metric-detail').textContent(),/错误 \/ 丢包— \/ —/,'Missing network counters are not zero');
    assert.match(await page.evaluate(()=>serverGroupContent('network',[{id:'zero',rxErrors:0,txErrors:0,rxDrops:0,txDrops:0}],serverFixture.host)),/0 \/ 0/,'Known zero counters remain zero');
-   await page.evaluate(()=>sample());assert(await card.evaluate(el=>el.open));assert(await card.locator('[data-metric="summary-host:cpu"]').evaluate(el=>el.open));
-   await summary.click();await page.evaluate(()=>sample());assert.equal(await card.evaluate(el=>el.open),false);
+   await page.evaluate(()=>sample());assert(await card.locator('.server-more').evaluate(el=>el.open));assert(await card.locator('[data-metric="summary-host:cpu"]').evaluate(el=>el.open));
+   await card.locator('.server-more > summary').click();await page.evaluate(()=>sample());assert.equal(await card.locator('.server-more').evaluate(el=>el.open),false);
    await page.evaluate(()=>{state.settings.hosts[0].devices=['gpu:1','network:ib0','cpu:__none__','filesystems:/data'];renderServers();});
    assert.deepEqual(await card.locator('[data-gpu]').evaluateAll(es=>es.map(e=>e.dataset.gpu)),['1']);
    assert.deepEqual(await card.locator('[data-filesystem]').evaluateAll(es=>es.map(e=>e.dataset.filesystem)),['/data']);

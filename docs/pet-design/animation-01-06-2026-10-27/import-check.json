@@ -1,0 +1,55 @@
+{
+  "isolatedDataDirectory": "/var/folders/qn/q0mts4d96cl3xxqz4hcc_vpc0000gn/T/aieyes-pet-01-06-zhS9E7",
+  "binary": "target/debug/aieyes-core",
+  "checkedAt": "2026-10-27T13:12:45.142Z",
+  "reports": [
+    {
+      "id": "01-folded-ear-scout",
+      "result": {
+        "error": null,
+        "pet": {
+          "cellHeight": 208,
+          "cellWidth": 192,
+          "columns": 8,
+          "contentHash": "ac26c4fdae6c34bb1d47dea084bbbd50482a968cfa32b8e6605e00b9ed3d2cf3",
+          "creator": null,
+          "description": "Aieyes 原创形象探索：9 行动作，57 个有效帧。2026-10-27。",
+          "displayName": "Aieyes · 折耳巡游兽",
+          "id": "aieyes-01-folded-ear-scout",
+          "importedAt": "2026-10-27T13:12:43.224Z",
+          "libraryId": "pet-ac26c4fdae6c34bb1d47dea084bbbd50482a968cfa32b8e6605e00b9ed3d2cf3",
+          "recovered": false,
+          "rows": 9,
+          "source": "/Users/2h3ngy4n/dev/Aieyes/docs/pet-design/animation-01-06-2026-10-27/01-folded-ear-scout.codex-pet.zip",
+          "spriteHash": "0bf1511ebd22d2d8b73fbd9ca031d7991175fa714c629bb528b667136e94f034",
+          "spritePath": "/var/folders/qn/q0mts4d96cl3xxqz4hcc_vpc0000gn/T/aieyes-pet-01-06-zhS9E7/pets/ac26c4fdae6c34bb1d47dea084bbbd50482a968cfa32b8e6605e00b9ed3d2cf3-1793106763224247000/spritesheet.png",
+          "spriteVersionNumber": 1
+        }
+      }
+    },
+    {
+      "id": "06-inkdrop-artisan",
+      "result": {
+        "error": null,
+        "pet": {
+          "cellHeight": 208,
+          "cellWidth": 192,
+          "columns": 8,
+          "contentHash": "d9f5b438c6c66b3a4ba26034c56b02d74e34327ac8b7d6d6eb1ef4cea0b72da7",
+          "creator": null,
+          "description": "Aieyes 原创形象探索：9 行动作，57 个有效帧。2026-10-27。",
+          "displayName": "Aieyes · 墨滴工匠",
+          "id": "aieyes-06-inkdrop-artisan",
+          "importedAt": "2026-10-27T13:12:45.053Z",
+          "libraryId": "pet-d9f5b438c6c66b3a4ba26034c56b02d74e34327ac8b7d6d6eb1ef4cea0b72da7",
+          "recovered": false,
+          "rows": 9,
+          "source": "/Users/2h3ngy4n/dev/Aieyes/docs/pet-design/animation-01-06-2026-10-27/06-inkdrop-artisan.codex-pet.zip",
+          "spriteHash": "1bc101f36c08fa31c737282d5e1f1593998c000c5313b58862985cbf9a859089",
+          "spritePath": "/var/folders/qn/q0mts4d96cl3xxqz4hcc_vpc0000gn/T/aieyes-pet-01-06-zhS9E7/pets/d9f5b438c6c66b3a4ba26034c56b02d74e34327ac8b7d6d6eb1ef4cea0b72da7-1793106765053364000/spritesheet.png",
+          "spriteVersionNumber": 1
+        }
+      }
+    }
+  ]
+}

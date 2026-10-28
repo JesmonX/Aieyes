@@ -4,6 +4,12 @@ import Combine
 
 enum PetAppearance {
     static func scale(_ value: Double) -> Double { value.isFinite ? min(2, max(0.5, value)) : 1 }
+    static func labelHeight(_ label:String, scale:Double) -> CGFloat {
+        let font = NSFont.systemFont(ofSize:max(11,12 * scale),weight:.medium)
+        return ceil((L(label) as NSString).boundingRect(with:NSSize(width:126 * scale,height:1000),options:[.usesLineFragmentOrigin,.usesFontLeading],attributes:[.font:font]).height) + 6 * scale
+    }
+    static func height(_ state:PetState, scale:Double) -> CGFloat { 143 * scale + labelHeight(state.label,scale:scale) }
+
 }
 struct PetScaleControl: View {
     @AppStorage("aieyes.pet.scale") private var savedScale = 1.0
@@ -64,6 +70,7 @@ private enum PetSprites {
 final class PetLayerImage: NSView {
     private var images: [CGImage] = []
     private var identity = "", imageIDs: [ObjectIdentifier] = []
+    private var masks: [[UInt8]] = []
     private var state = PetState.idle
     private var requested = false, reduced = false
     private var epoch = CACurrentMediaTime()
@@ -84,10 +91,34 @@ final class PetLayerImage: NSView {
         let ids = images.map(ObjectIdentifier.init)
         if self.identity != identity || imageIDs != ids {
             self.identity = identity; imageIDs = ids; self.images = images
+            masks = images.map { image in
+                var pixels = [UInt8](repeating:0,count:image.width * image.height * 4)
+                pixels.withUnsafeMutableBytes { bytes in
+                    if let context = CGContext(data:bytes.baseAddress,width:image.width,height:image.height,bitsPerComponent:8,bytesPerRow:image.width * 4,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue) { context.draw(image,in:CGRect(x:0,y:0,width:image.width,height:image.height)) }
+                }
+                return stride(from:3,to:pixels.count,by:4).map { pixels[$0] }
+            }
             epoch = CACurrentMediaTime(); layer?.removeAnimation(forKey: "pet.frames")
             CATransaction.begin(); CATransaction.setDisableActions(true); layer?.contents = images.first; CATransaction.commit()
         }
         self.state = state; requested = playing; self.reduced = reduced; sync()
+    }
+    func opaque(at point:NSPoint) -> Bool {
+        guard bounds.contains(point),!images.isEmpty,!masks.isEmpty,bounds.width > 0,bounds.height > 0 else { return false }
+        let durations = state.durations
+        var frame = 0
+        if requested && !reduced && !durations.isEmpty {
+            let total = durations.reduce(0,+)
+            if total > 0 {
+                var remaining = Int((CACurrentMediaTime()-epoch) * 1000) % total
+                for (index,duration) in durations.enumerated() { if remaining < duration { frame = index;break };remaining -= duration }
+            }
+        }
+        frame = min(frame,images.count-1)
+        let image = images[frame]
+        let x = min(image.width-1,max(0,Int(point.x / bounds.width * CGFloat(image.width))))
+        let y = min(image.height-1,max(0,Int((bounds.height-point.y) / bounds.height * CGFloat(image.height))))
+        return masks[frame][y * image.width + x] > 20
     }
     static func keyframes(images: [CGImage], durations: [Int]) -> CAKeyframeAnimation? {
         guard !durations.isEmpty, images.count >= durations.count else { return nil }
@@ -151,12 +182,12 @@ private struct PetView: View {
         let scale = PetAppearance.scale(savedScale)
         VStack(spacing: 0) {
             PetSpriteView(state: state, asset: live.asset, scale: scale, enabled: enabled && live.petVisible && !live.suspended)
-            Text(L(state.label)).font(.system(size: 12 * scale, weight: .medium))
+            Text(L(state.label)).font(.system(size: max(11,12 * scale), weight: .medium))
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 9 * scale).padding(.vertical, 3 * scale)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay * scale))
                 .overlay(RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay * scale).strokeBorder(Palette.cardBorder.opacity(DesignTokens.cardBorderOpacity)))
-        }.frame(width: 144 * scale, height: state.height * scale)
+        }.frame(width: 144 * scale, height: PetAppearance.height(state,scale:scale))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Aieyes · " + L(state.label)).accessibilityHint(L("单击打开面板，拖动移动，右键菜单"))
     }
@@ -167,7 +198,20 @@ private final class PetHost: NSHostingView<PetView> {
     var settings: (() -> Void)?
     var petSettings: (() -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(point) ? self : nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { opaque(at:point) || press != nil ? self : nil }
+    var dragging:Bool { press != nil }
+    func opaque(at point:NSPoint) -> Bool {
+        guard bounds.contains(point) else { return false }
+        func image(in view:NSView) -> PetLayerImage? { if let image = view as? PetLayerImage { return image };return view.subviews.compactMap { image(in:$0) }.first }
+        if let sprite = image(in:self) {
+            let local = sprite.convert(point,from:self)
+            if sprite.bounds.contains(local) { return sprite.opaque(at:local) }
+            // The measured status label is independently clickable.
+            let rect = sprite.convert(sprite.bounds,to:self)
+            return isFlipped ? point.y >= rect.maxY : point.y <= rect.minY
+        }
+        return true
+    }
     private var press: (point: NSPoint, origin: NSPoint)?
     private var dragged = false
     override func mouseDown(with event: NSEvent) {
@@ -222,12 +266,15 @@ private final class PetHost: NSHostingView<PetView> {
     private weak var model: AppModel?
     var window: NSWindow { panel }
     private var subscriptions = Set<AnyCancellable>()
-    private var stateHeight: CGFloat = 168
+    private var petState = PetState.idle
     private var appliedPreferences: Preferences?
-    private struct Preferences: Equatable { var enabled: Bool; var scale: Double }
+    private struct Preferences: Equatable { var enabled: Bool; var scale: Double; var language:String; var hideInFullscreen:Bool }
+    private var mouseLocal:Any?, mouseGlobal:Any?, hitTimer:Timer?
+    private var fullscreen = false
+
     init(model: AppModel, checkUpdates: @escaping () -> Void = {}, open: @escaping (NSView, Bool) -> Void) {
         self.model = model
-        UserDefaults.standard.register(defaults: ["aieyes.pet.enabled": true, "aieyes.pet.scale": 1.0])
+        UserDefaults.standard.register(defaults: ["aieyes.pet.enabled": true, "aieyes.pet.scale": 1.0,"aieyes.pet.hideInFullscreen":true])
         panel = PetPanel(contentRect: NSRect(x: 0,y: 0,width: 144,height: 168), styleMask: [.borderless,.nonactivatingPanel], backing: .buffered, defer: false)
         panel.title=L("Aieyes 宠物"); panel.isOpaque=false; panel.backgroundColor = .clear; panel.hasShadow=false
         panel.level = .floating; panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary]; panel.hidesOnDeactivate=false
@@ -240,19 +287,23 @@ private final class PetHost: NSHostingView<PetView> {
         else if let screen=NSScreen.main { panel.setFrameOrigin(NSPoint(x:screen.visibleFrame.maxX-168,y:screen.visibleFrame.midY)) }
         model.live.$pet.sink { [weak self] state in
             guard let self else { return }
-            self.stateHeight = state.height
+            self.petState = state
             self.resize()
         }.store(in: &subscriptions)
         NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: panel).sink { [weak self] _ in
             self?.publishVisibility()
         }.store(in: &subscriptions)
+        mouseLocal = NSEvent.addLocalMonitorForEvents(matching:[.mouseMoved,.leftMouseDragged,.leftMouseUp]) { [weak self] event in self?.updateHit();return event }
+        mouseGlobal = NSEvent.addGlobalMonitorForEvents(matching:[.mouseMoved,.leftMouseDragged,.leftMouseUp]) { [weak self] _ in DispatchQueue.main.async { self?.updateHit() } }
+        Timer.publish(every:1,on:.main,in:.common).autoconnect().sink { [weak self] _ in self?.updateFullscreen() }.store(in:&subscriptions)
+        NSWorkspace.shared.notificationCenter.publisher(for:NSWorkspace.activeSpaceDidChangeNotification).sink { [weak self] _ in self?.updateFullscreen() }.store(in:&subscriptions)
         Self.clamp(panel); sync()
         NotificationCenter.default.publisher(for:UserDefaults.didChangeNotification).sink { [weak self] _ in self?.sync() }.store(in:&subscriptions)
         NotificationCenter.default.publisher(for:NSApplication.didChangeScreenParametersNotification).sink { [weak self] _ in if let self { Self.clamp(self.panel) } }.store(in:&subscriptions)
     }
     private func resize() {
         let scale = PetAppearance.scale(UserDefaults.standard.double(forKey: "aieyes.pet.scale"))
-        let size = NSSize(width: 144 * scale, height: stateHeight * scale)
+        let size = NSSize(width: 144 * scale, height: PetAppearance.height(petState,scale:scale))
         guard panel.frame.size != size else { return }
         var frame = panel.frame
         frame.origin.y += frame.height - size.height
@@ -266,12 +317,44 @@ private final class PetHost: NSHostingView<PetView> {
     }
     private func sync() {
         let preferences = Preferences(enabled: UserDefaults.standard.bool(forKey: "aieyes.pet.enabled"),
-                                      scale: Double(PetAppearance.scale(UserDefaults.standard.double(forKey: "aieyes.pet.scale"))))
+                                      scale: Double(PetAppearance.scale(UserDefaults.standard.double(forKey: "aieyes.pet.scale"))),
+                                      language:UserDefaults.standard.string(forKey:"aieyes.language") ?? "zh-CN",
+                                      hideInFullscreen:UserDefaults.standard.bool(forKey:"aieyes.pet.hideInFullscreen"))
         guard appliedPreferences != preferences else { return }
         appliedPreferences = preferences
         resize()
-        if preferences.enabled && !panel.isVisible { panel.orderFrontRegardless() }
-        else if !preferences.enabled && panel.isVisible { panel.orderOut(nil) }
+        panel.title = L("Aieyes 宠物")
+        panel.contentView?.setAccessibilityLabel(L("Aieyes 宠物，单击打开面板"))
+        updateFullscreen()
+        if preferences.enabled && !fullscreen && !panel.isVisible { panel.orderFrontRegardless() }
+        else if (!preferences.enabled || fullscreen) && panel.isVisible { panel.orderOut(nil) }
+        publishVisibility()
+    }
+    private func updateHit() {
+        guard let host = panel.contentView as? PetHost,panel.isVisible else { hitTimer?.invalidate();hitTimer = nil;return }
+        let screenPoint = NSEvent.mouseLocation
+        let inside = panel.frame.contains(screenPoint)
+        let local = host.convert(panel.convertPoint(fromScreen:screenPoint),from:nil)
+        panel.ignoresMouseEvents = !host.dragging && (!inside || !host.opaque(at:local))
+        if inside && hitTimer == nil { hitTimer = Timer.scheduledTimer(withTimeInterval:0.05,repeats:true) { [weak self] _ in MainActor.assumeIsolated { self?.updateHit() } } }
+        else if !inside && !host.dragging { hitTimer?.invalidate();hitTimer = nil }
+    }
+    private func updateFullscreen() {
+        guard let prefs = appliedPreferences else { return }
+        var hidden = false
+        if prefs.enabled && prefs.hideInFullscreen, let screen = NSScreen.screens.first(where:{$0.frame.intersects(panel.frame)}), let display = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+            let area = CGDisplayBounds(display)
+            let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],kCGNullWindowID) as? [[String:Any]] ?? []
+            hidden = windows.contains { row in
+                guard (row[kCGWindowLayer as String] as? Int) == 0,
+                    let value = row[kCGWindowBounds as String] as? NSDictionary,
+                    let rect = CGRect(dictionaryRepresentation:value) else { return false }
+                return abs(rect.minX-area.minX) < 2 && abs(rect.minY-area.minY) < 2 && rect.width >= area.width-2 && rect.height >= area.height-2
+            }
+        }
+        fullscreen = hidden
+        if prefs.enabled && !hidden { if !panel.isVisible { panel.orderFrontRegardless() };updateHit() }
+        else { if panel.isVisible { panel.orderOut(nil) };hitTimer?.invalidate();hitTimer = nil }
         publishVisibility()
     }
     static func clamp(_ window: NSWindow, snap: Bool = false, preferredPoint: NSPoint? = nil) {

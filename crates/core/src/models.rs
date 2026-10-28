@@ -472,15 +472,17 @@ pub struct Appearance {
     pub accent: String,
     pub chart_palette: String,
     pub chart_contrast: String,
+    pub settings_agent_ids: Option<Vec<String>>,
 }
 impl Default for Appearance {
     fn default() -> Self {
         Self {
             language: "zh-CN".into(),
             theme: "system".into(),
-            accent: "indigo".into(),
+            accent: "system".into(),
             chart_palette: "classic".into(),
             chart_contrast: "high".into(),
+            settings_agent_ids: None,
         }
     }
 }

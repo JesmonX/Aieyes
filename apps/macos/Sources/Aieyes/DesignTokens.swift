@@ -12,7 +12,7 @@ enum DesignTokens {
     static let fontPanelTitle: CGFloat = 20
     static let fontPanelOverview: CGFloat = 17
     static let fontNumber: CGFloat = 24
-    static let fontHint: CGFloat = 11
+    static let fontHint: CGFloat = 12
     static let lineBody: CGFloat = 20
     static let lineSecondary: CGFloat = 18
     static let lineCaption: CGFloat = 16
@@ -23,6 +23,11 @@ enum DesignTokens {
     static let controlCompactHeight: CGFloat = 24
     static let inputHeight: CGFloat = 26
     static let controlPaddingX: CGFloat = 10
+    static let controlSm: CGFloat = 24
+    static let controlMd: CGFloat = 32
+    static let controlMdCompact: CGFloat = 28
+    static let controlLg: CGFloat = 40
+    static let hitTarget: CGFloat = 24
     static let iconButtonSize: CGFloat = 28
     static let iconSize: CGFloat = 14
     static let iconStroke: CGFloat = 1.5
@@ -54,14 +59,9 @@ enum DesignTokens {
     static let radiusControl: CGFloat = 8
     static let radiusAccountSwitch: CGFloat = 8
     static let radiusOverlay: CGFloat = 12
-    static let radiusBadge: CGFloat = 999
+    static let radiusBadge: CGFloat = 4
     static let borderWidth: CGFloat = 1
     static let progressHeight: CGFloat = 4
-    static let resourceRingSize: CGFloat = 72
-    static let resourceRingCompactSize: CGFloat = 48
-    static let resourceRingStroke: CGFloat = 5
-    static let resourceRingFont: CGFloat = 14
-    static let resourceRingCompactFont: CGFloat = 10
     static let chartHeight: CGFloat = 180
     static let chartSurfaceHeight: CGFloat = 230
     static let chartReadingHeight: CGFloat = 20
@@ -127,9 +127,10 @@ enum DesignTokens {
     static let fontPanelCaption = fontCaption
     static let fontPanelNumber = fontNumber
     static let inkLight: UInt32 = 0x252528
-    static let mutedLight: UInt32 = 0x6b6b73
-    static let faintLight: UInt32 = 0x62626b
+    static let mutedLight: UInt32 = 0x62626b
+    static let faintLight: UInt32 = 0x6b6b73
     static let accentLight: UInt32 = 0x5566d9
+    static let accentInkLight: UInt32 = 0xffffff
     static let accentBlueLight: UInt32 = 0x2166be
     static let accentTealLight: UInt32 = 0x16745f
     static let accentPurpleLight: UInt32 = 0x8054b7
@@ -152,12 +153,13 @@ enum DesignTokens {
     static let categoryCpuLight: UInt32 = 0x226dad
     static let categoryMemoryLight: UInt32 = 0x297b68
     static let categoryGpuLight: UInt32 = 0x8455b2
-    static let categoryStorageLight: UInt32 = 0x926314
+    static let categoryStorageLight: UInt32 = 0x76685c
     static let categoryNetworkLight: UInt32 = 0x326d83
     static let inkDark: UInt32 = 0xefeff2
     static let mutedDark: UInt32 = 0xb6b6c0
     static let faintDark: UInt32 = 0xa4a4ae
     static let accentDark: UInt32 = 0xa3b3ff
+    static let accentInkDark: UInt32 = 0x131a2a
     static let accentBlueDark: UInt32 = 0x8bbcff
     static let accentTealDark: UInt32 = 0x65ceae
     static let accentPurpleDark: UInt32 = 0xccabff
@@ -180,6 +182,6 @@ enum DesignTokens {
     static let categoryCpuDark: UInt32 = 0x87bef3
     static let categoryMemoryDark: UInt32 = 0x83d3bc
     static let categoryGpuDark: UInt32 = 0xc7a3ee
-    static let categoryStorageDark: UInt32 = 0xe7bf77
+    static let categoryStorageDark: UInt32 = 0xc2b2a3
     static let categoryNetworkDark: UInt32 = 0x84c6dd
 }

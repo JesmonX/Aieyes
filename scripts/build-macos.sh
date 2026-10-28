@@ -25,6 +25,8 @@ cp "$PROJECT_DIR/apps/macos/Resources/BrandTemplate.png" "$APP_DIR/Contents/Reso
 cp "$PROJECT_DIR"/apps/desktop/web/provider-*.png "$APP_DIR/Contents/Resources/"
 cp "$PROJECT_DIR"/apps/desktop/web/sounds/*.wav "$APP_DIR/Contents/Resources/"
 cp "$PROJECT_DIR/apps/macos/Info.plist" "$APP_DIR/Contents/Info.plist"
+# Declared localizations let AppKit localize the menus, panels and text menus it provides.
+for lproj in zh-Hans en; do mkdir -p "$APP_DIR/Contents/Resources/$lproj.lproj"; printf '"CFBundleDisplayName" = "Aieyes";\n' > "$APP_DIR/Contents/Resources/$lproj.lproj/InfoPlist.strings"; done
 if [ "$BUILD_MODE" = debug ]; then
   /usr/libexec/PlistBuddy -c "Add :AieyesDevelopmentDataDirectory string $PROJECT_DIR/.local/app" "$APP_DIR/Contents/Info.plist"
 fi

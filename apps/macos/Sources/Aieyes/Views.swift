@@ -238,13 +238,23 @@ struct RootView: View, Equatable {
         }
         sessionStrip
         Surface(spacing: 6, padding: 12) {
-            HStack { Text(L("今日用量")).font(AppFont.caption).foregroundStyle(.secondary); RefreshIndicator(model: model, key: "scan"); Spacer(); Button(L("查看分析"), systemImage: "arrow.up.right") { model.openAnalysis(from: scope) }.font(AppFont.caption); if usageDashboard.summary.pricedTokens < usageDashboard.summary.total { PricingWarning { model.openPricing() } } }
-            HStack { FloatingTokenCard(total: usageDashboard.summary.total, tokens: usageDashboard.summary.tokens, inline: true); Spacer(); Text(L("API 等价成本 ")).foregroundStyle(.secondary) + Text(usageDashboard.summary.costAvailable ? Format.money(usageDashboard.summary.cost) : "—").bold() }.font(AppFont.secondary).monospacedDigit()
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing:24) { todayHeading; todayMetrics; Spacer(minLength:8); analysisAction }
+                VStack(alignment:.leading,spacing:8) { HStack { todayHeading; Spacer(); analysisAction }; todayMetrics }
+            }
         }
         if usageDashboard.summary.hasDisplayCredits { NativeCreditsView(usage: usageDashboard.summary, compact: true) }
         quotaSection
         if !model.runningEstimates.isEmpty { Button(model.samplingSummary + L(" · 管理采样")) { model.showSampling?() }.font(AppFont.caption) }
     }
+    private var todayHeading: some View { HStack(spacing:6) { Text(L("今日用量")).font(AppFont.caption).foregroundStyle(.secondary); RefreshIndicator(model:model,key:"scan") }.fixedSize() }
+    private var todayMetrics: some View {
+        HStack(spacing:20) {
+            FloatingTokenCard(total:usageDashboard.summary.total,tokens:usageDashboard.summary.tokens,inline:true,valueSize:compact ? DesignTokens.fontPanelOverview : DesignTokens.fontNumber)
+            HStack(spacing:6) { Text(L("API 等价成本")).foregroundStyle(.secondary); Text(usageDashboard.summary.costAvailable ? Format.money(usageDashboard.summary.cost) : "—").font(.system(size:compact ? DesignTokens.fontPanelOverview : DesignTokens.fontNumber,weight:.semibold)) }
+        }.font(AppFont.secondary).monospacedDigit().fixedSize(horizontal:true,vertical:false)
+    }
+    private var analysisAction: some View { HStack { Button(L("查看分析"),systemImage:"arrow.up.right") { model.openAnalysis(from:scope) }.font(AppFont.caption).tint(.primary); if usageDashboard.summary.pricedTokens < usageDashboard.summary.total { PricingWarning { model.openPricing() } } }.fixedSize() }
     @ViewBuilder private var agentButtons: some View {
         agentButton("all", title: L("总览"))
         ForEach(model.overviewAgentProviders, id: \.self) { provider in agentButton(provider, title: Format.provider(provider)) }
@@ -330,7 +340,7 @@ struct RootView: View, Equatable {
         }
     }
     @ViewBuilder private var connectionButtons: some View {
-        Button(L("接入 Agent"), systemImage: "folder") { model.openSettings(.init(section: "machines")) }.buttonStyle(.aieyesPrimary)
+        Button(L("接入 Agent"), systemImage: "folder") { model.openSettings(.init(section: "machines")) }.buttonStyle(.aieyesPrimary).controlSize(.large)
         Button(L("配置向导"), systemImage: "checklist") { model.showDetailPage?("setup") }
     }
     @ViewBuilder private var activeFilters: some View {
@@ -490,7 +500,7 @@ private struct SurfaceHeader: View {
                 Button(model.refreshLabel("hosts")) { Task { await model.sampleHosts() } }.disabled(model.hostRefreshBusy())
             } label: {
                 Image(systemName: "arrow.clockwise").font(AppFont.secondary)
-            }.menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: DesignTokens.panelHeadIconSize, height: DesignTokens.panelHeadIconSize).help(L("刷新")).accessibilityLabel(L("刷新选项"))
+            }.menuStyle(.borderlessButton).menuIndicator(.hidden).tint(Color.primary).frame(width: DesignTokens.panelHeadIconSize, height: DesignTokens.panelHeadIconSize).help(L("刷新")).accessibilityLabel(L("刷新选项"))
         }.overlay {
             Picker(L("页面"), selection: Binding(get: { activePage }, set: { tab = $0 })) { Text("Agent").tag("agent"); Text(L("服务器")).tag("servers") }
                 .pickerStyle(.segmented).labelsHidden().frame(width: DesignTokens.panelTabsContainerWidth)
@@ -506,56 +516,50 @@ private struct SurfaceFooter: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: compact ? 3 : 8) {
-            Button { Task { if activePage == "servers" { await model.sampleHosts() } else { await model.scan() } } } label: {
-                HStack(spacing: 6) {
-                    Circle().fill(model.busy || model.quotaBusy || model.serverBusy ? Palette.accent : !model.actionFailures.isEmpty ? Palette.danger : (activePage == "servers" ? model.hasStaleHosts : model.hasStaleUsage) ? Palette.warn : Palette.ok).frame(width: 7, height: 7)
-                    Text(footerStatus).font(.system(size: compact ? DesignTokens.fontCaption : DesignTokens.fontSecondary)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }.accessibilityLabel(footerStatus + (activePage == "servers" ? L("，点击刷新服务器") : L("，点击同步记录")))
+            // Read-only status (M-15): refreshing has its own button, menu item and ⌘R.
+            HStack(spacing: 6) {
+                Circle().fill(model.busy || model.quotaBusy || model.serverBusy ? Palette.accent : !model.actionFailures.isEmpty ? Palette.danger : (activePage == "servers" ? model.hasStaleHosts : model.hasStaleUsage) ? Palette.warn : Palette.ok).frame(width: 7, height: 7)
+                Text(footerStatus).font(.system(size: compact ? DesignTokens.fontCaption : DesignTokens.fontSecondary)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+            }.frame(maxWidth: .infinity, alignment: .leading)
                 .help(footerStatus + L("\n应用出站测试不代表 SSH 或所有账户可用。\n") + (model.networkTest?.detail ?? L("可从更多菜单测试出站连接")))
-            HStack(spacing: 8) {
+                .accessibilityElement(children: .combine)
+            // The main window keeps global actions in the menu bar and toolbar; only the panel repeats them.
+            if compact { HStack(spacing: 8) {
                 Spacer(minLength: 0)
-                LanguageToggleButton(model: model)
-                ThemeToggleButton(model: model)
-                if compact {
-                    UpdateMenuButton()
-                    Button { model.showDetailPage?(activePage) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle()) }.help(L("打开详情")).accessibilityLabel(L("打开详情"))
-                }
+                ThemeMenuButton(model: model)
+                UpdateMenuButton()
+                Button { model.showDetailPage?(activePage) } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle()) }.help(L("打开详情")).accessibilityLabel(L("打开详情"))
                 Button { model.openSettings(.init(category: "general")) } label: { Image(systemName: "gearshape").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle()) }.help(L("设置")).accessibilityLabel(L("设置")).keyboardShortcut(",")
                 Menu {
-                    if compact { Button(L("面板显示账户…")) { model.showPanelAccounts?() }; Button(model.isPinned ? L("取消固定面板") : L("固定面板")) { model.isPinned.toggle() }; Divider() }
+                    Button(L("面板显示账户…")) { model.showPanelAccounts?() }; Button(model.isPinned ? L("取消固定面板") : L("固定面板")) { model.isPinned.toggle() }; Divider()
                     Button(model.networkBusy ? L("出站测试中…") : L("测试出站连接")) { Task { await model.testNetwork() } }.disabled(model.networkBusy)
-                    Text(L("关闭窗口后继续在菜单栏运行")); Divider(); Button(L("退出 Aieyes")) { NSApplication.shared.terminate(nil) }.keyboardShortcut("q")
-                } label: { Image(systemName: "ellipsis").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle()) }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel(L("更多操作")).help(L("面板账户、固定、出站测试与退出"))
-            }
+                    Divider()
+                    Button(L("退出 Aieyes")) { NSApplication.shared.terminate(nil) }.keyboardShortcut("q")
+                } label: { Image(systemName: "ellipsis").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle()) }.menuStyle(.borderlessButton).menuIndicator(.hidden).tint(Color.primary).fixedSize().accessibilityLabel(L("更多操作")).help(L("面板账户、固定、出站测试与退出"))
+            } }
             }.buttonStyle(.plain).padding(.horizontal, compact ? DesignTokens.panelChromeInset : 28).padding(.vertical, compact ? DesignTokens.panelFootPaddingY : 10)
     }
 }
 
-struct LanguageToggleButton: View {
-    @SurfaceModel var model: AppModel
-    @AppStorage("aieyes.language") private var language = "zh-CN"
-    var body: some View {
-        Button(language == "en" ? "中文" : "English") {
-            Task { await model.setLanguage(language == "en" ? "zh-CN" : "en") }
-        }.font(AppFont.caption).frame(width: 48, height: DesignTokens.iconButtonSize)
-            .disabled(model.settingsSaving || !model.settingsLoaded)
-            .help(language == "en" ? L("切换到中文") : L("切换到英文"))
-    }
-}
-
-struct ThemeToggleButton: View {
+/// Theme choices (§3.7): following the system stays one choice away instead of being lost to a two-state switch.
+struct ThemeMenuButton: View {
     @SurfaceModel var model: AppModel
     @Environment(\.colorScheme) private var colorScheme
-    private var dark: Bool { colorScheme == .dark }
-    private var label: String { dark ? L("切换到浅色模式") : L("切换到深色模式") }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    private var theme: String { model.settings.appearance?.theme ?? "system" }
+    private var names: [(String, String)] { [("system", L("跟随系统")), ("light", L("浅色")), ("dark", L("深色"))] }
     var body: some View {
         let _ = interfaceLanguage;
-        Button { Task { await model.toggleTheme(currentlyDark: dark) } } label: {
-            Image(systemName: dark ? "sun.max" : "moon")
+        let label = L("主题：{0}", names.first { $0.0 == theme }?.1 ?? L("跟随系统"))
+        Menu {
+            Picker(L("主题"), selection: Binding(get: { theme }, set: { value in Task { await model.setTheme(value) } })) {
+                ForEach(names, id: \.0) { Text($0.1).tag($0.0) }
+            }.pickerStyle(.inline).labelsHidden()
+        } label: {
+            Image(systemName: theme == "system" ? "circle.lefthalf.filled" : colorScheme == .dark ? "moon" : "sun.max")
                 .frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize).contentShape(Rectangle())
-        }.help(label).accessibilityLabel(label)
+        }.menuStyle(.borderlessButton).menuIndicator(.hidden).tint(Color.primary).fixedSize()
+            .help(label).accessibilityLabel(label)
             .disabled(!model.settingsLoaded || model.settingsSaving)
     }
 }
@@ -649,6 +653,7 @@ struct UsageChart: View, Equatable {
     var modelNames: [String: String] = [:]
     @State private var selected: String?
     @State private var hidden = Set<String>()
+    @AppStorage("analysis.modelLegendExpanded") private var legendExpanded = true
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.days == rhs.days && lhs.rows == rhs.rows && lhs.cost == rhs.cost && lhs.modelNames == rhs.modelNames
     }
@@ -664,7 +669,7 @@ struct UsageChart: View, Equatable {
         VStack(alignment: .leading, spacing: 8) {
             Chart {
                 ForEach(rows.filter { !hidden.contains($0.model) }) { row in
-                    BarMark(x: .value(L("日期"), row.day), y: .value(cost ? "USD" : "Token", cost ? row.usage.cost : row.usage.total)).foregroundStyle(by: .value(L("模型"), row.model)).accessibilityLabel(Text(modelNames[row.model] ?? row.model))
+                    BarMark(x: .value(L("日期"), row.day), y: .value(cost ? "USD" : "Token", cost ? row.usage.cost : row.usage.total)).foregroundStyle(by: .value(L("模型"), row.model)).accessibilityLabel(Text(modelNames[row.model] ?? row.model)).accessibilityValue(Text(row.day + " · " + (cost ? Format.money(row.usage.cost) + " USD" : Format.compact(row.usage.total) + " Token")))
                 }
                 if let selected { RuleMark(x: .value(L("所选日期"), selected)).foregroundStyle(Palette.accent).lineStyle(StrokeStyle(lineWidth: 1, dash: [3])) }
             }
@@ -674,13 +679,13 @@ struct UsageChart: View, Equatable {
             .chartXAxis { AxisMarks(values: data.axisDates) { value in AxisValueLabel { if let label = value.as(String.self) { Text(String(label.suffix(5))).font(AppFont.secondary) } } } }
             .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine().foregroundStyle(.primary.opacity(DesignTokens.chartGridOpacity)); AxisValueLabel { if let n = value.as(Double.self) { Text(cost ? Format.money(n) : Format.compact(n)).font(AppFont.secondary) } } } }
             .chartOverlay { proxy in GeometryReader { geometry in Color.clear.contentShape(Rectangle()).onContinuousHover { phase in if case .active(let point) = phase, let frame = proxy.plotFrame { let next = proxy.value(atX: point.x - geometry[frame].minX, as: String.self); if selected != next { selected = next } } } } }
-            .frame(height: DesignTokens.chartHeight).focusable().focusEffectDisabled().onKeyPress(.leftArrow) { move(-1); return .handled }.onKeyPress(.rightArrow) { move(1); return .handled }
-            .accessibilityLabel(L("每日用量，左右方向键选择日期，下方提供精确读数"))
+            .frame(height: DesignTokens.chartHeight).focusable().onKeyPress(.leftArrow) { move(-1); return .handled }.onKeyPress(.rightArrow) { move(1); return .handled }
+            .accessibilityElement(children: .contain).accessibilityLabel(L("每日用量")).accessibilityHint(L("左右方向键选择日期，下方提供精确读数"))
             Group { if let day = days.first(where: { $0.key == selected }) {
                 Text(day.key + " · " + (cost ? String(format: "%.2f USD", day.cost) : Format.compact(day.total) + " Token")).font(AppFont.secondary).monospacedDigit().textSelection(.enabled)
             }
             }.frame(height: DesignTokens.chartReadingHeight, alignment: .leading)
-            DisclosureGroup(L("模型图例")) {
+            DisclosureGroup(L("模型图例"), isExpanded: $legendExpanded) {
                 FlowLayout { ForEach(models, id: \.self) { name in Button { if hidden.contains(name) { hidden.remove(name) } else { hidden.insert(name) } } label: { HStack(spacing: 6) { Circle().fill(Palette.model(name, preset: chartPalette, contrast: chartContrast)).frame(width: DesignTokens.chartLegendDot, height: DesignTokens.chartLegendDot); Label(modelNames[name] ?? name, systemImage: hidden.contains(name) ? "eye.slash" : "eye").strikethrough(hidden.contains(name)) }.font(AppFont.secondary) }.buttonStyle(.plain).help(modelNames[name] ?? name).accessibilityLabel((hidden.contains(name) ? L("显示模型 ") : L("隐藏模型 ")) + (modelNames[name] ?? name)) } }
             }.font(AppFont.secondary)
         }
@@ -785,12 +790,18 @@ struct ModelChart: View, Equatable {
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
+        let ringKeys = Set(ranked.prefix(5).map(\.key))
         HStack(alignment: .top, spacing: 16) {
             Chart(slices) { item in SectorMark(angle: .value(cost ? "USD" : "Token", value(item)), innerRadius: .ratio(DesignTokens.modelChartInnerRatio), angularInset: DesignTokens.modelChartAngularInset).foregroundStyle(Palette.model(item.key, preset: chartPalette, contrast: chartContrast)).cornerRadius(DesignTokens.modelChartCorner).accessibilityLabel(Text(modelNames[item.key] ?? item.key)) }.frame(width: DesignTokens.modelChartSize, height: DesignTokens.modelChartHeight)
                 .chartBackground { _ in VStack { Text("\(models.count)").font(.title2); Text(L("模型")).font(AppFont.secondary) } }.accessibilityLabel(L("前五模型与其他；完整数值见列表"))
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(showAll ? ranked : Array(ranked.prefix(5))) { item in
-                    VStack(alignment: .leading, spacing: 3) { Text(modelNames[item.key] ?? item.key).font(AppFont.secondary).textSelection(.enabled).help(modelNames[item.key] ?? item.key); Text((cost ? Format.money(item.cost) + " USD" : Format.compact(item.total) + " Token") + " · " + Format.percent(total > 0 ? value(item) / total * 100 : 0)).font(AppFont.secondary).monospacedDigit().foregroundStyle(.secondary) }
+                    // Models past the top five appear in the ring as its "其他" slice.
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Circle().fill(Palette.model(ringKeys.contains(item.key) ? item.key : L("其他"), preset: chartPalette, contrast: chartContrast)).frame(width: DesignTokens.chartLegendDot, height: DesignTokens.chartLegendDot)
+                            .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + DesignTokens.fontSecondary * 0.35 }
+                        VStack(alignment: .leading, spacing: 3) { Text(modelNames[item.key] ?? item.key).font(AppFont.secondary).textSelection(.enabled).help(modelNames[item.key] ?? item.key); Text((cost ? Format.money(item.cost) + " USD" : Format.compact(item.total) + " Token") + " · " + Format.percent(total > 0 ? value(item) / total * 100 : 0)).font(AppFont.secondary).monospacedDigit().foregroundStyle(.secondary) }
+                    }
                         .contextMenu { Button(L("复制模型与精确数值")) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString((modelNames[item.key] ?? item.key) + "\t" + String(item.total) + " Token\t" + String(item.cost) + " USD", forType: .string) } }
                 }
                 if ranked.count > 5 { Button(showAll ? L("收起其他模型") : L("展开其他 {0} 个模型" , ranked.count - 5)) { showAll.toggle() }.font(AppFont.secondary) }
@@ -836,9 +847,9 @@ struct Heatmap: View, Equatable {
             GeometryReader { proxy in
                 let columns = max(1, (days.count + leading + 6) / 7), step = (proxy.size.width - 22) / CGFloat(columns), size = max(DesignTokens.heatCellMin, min(DesignTokens.heatCellMax, step - DesignTokens.heatCellGap))
                 VStack(alignment: .leading, spacing: 6) {
-                    ZStack(alignment: .topLeading) { ForEach(Array(days.enumerated().filter { $0.offset == 0 || $0.element.key.hasSuffix("-01") }), id: \.element.key) { index, day in Text(AieyesLocale.month(Int(day.key.dropFirst(5).prefix(2)) ?? 1)).font(.system(size: DesignTokens.fontHint)).offset(x: 22 + CGFloat((index + leading) / 7) * step) } }.frame(height: 15)
+                    ZStack(alignment: .topLeading) { ForEach(Array(days.enumerated().filter { $0.offset == 0 || $0.element.key.hasSuffix("-01") }), id: \.element.key) { index, day in Text(AieyesLocale.month(Int(day.key.dropFirst(5).prefix(2)) ?? 1)).font(.system(size: DesignTokens.fontHint)).offset(x: 22 + CGFloat((index + leading) / 7) * step) } }.frame(height: 15).accessibilityHidden(true)
                     HStack(alignment: .top, spacing: 3) {
-                        VStack(spacing: 3) { ForEach(0..<7) { row in Text([L("一"), "", L("三"), "", L("五"), "", L("日")][row]).font(.system(size: DesignTokens.fontHint)).frame(width: 16, height: size) } }
+                        VStack(spacing: 3) { ForEach(0..<7) { row in Text(row.isMultiple(of: 2) ? AieyesLocale.weekday(row) : "").font(.system(size: DesignTokens.fontHint)).frame(width: 16, height: size) } }.accessibilityHidden(true)
                         ForEach(0..<columns, id: \.self) { column in VStack(spacing: 3) {
                             ForEach(0..<7) { row in
                                 let index = column * 7 + row - leading
@@ -846,7 +857,7 @@ struct Heatmap: View, Equatable {
                                     let day = days[index], value = cost ? day.cost : day.total
                                     RoundedRectangle(cornerRadius: DesignTokens.heatCellRadius).fill(value == 0 ? Color.primary.opacity(DesignTokens.heatEmptyOpacity) : Palette.accent.opacity(0.25 + 0.75 * sqrt(value / maximum))).frame(width: size, height: size)
                                         .overlay { if selected == index { RoundedRectangle(cornerRadius: DesignTokens.heatCellRadius).strokeBorder(Color.primary, lineWidth: 1.5) } }
-                                        .help(cached.labels[day.key] ?? day.key).accessibilityLabel(cached.labels[day.key] ?? day.key).onTapGesture { selected = index; showDay = true }
+                                        .help(cached.labels[day.key] ?? day.key).accessibilityLabel(cached.labels[day.key] ?? day.key).accessibilityAddTraits(.isButton).accessibilityAction { selected = index; showDay = true }.onTapGesture { selected = index; showDay = true }
                                 } else { Color.clear.frame(width: size, height: size) }
                             }
                         }.frame(width: step - 3) }
@@ -856,7 +867,7 @@ struct Heatmap: View, Equatable {
                 .onKeyPress(.leftArrow) { move(-7); return .handled }.onKeyPress(.rightArrow) { move(7); return .handled }
                 .onKeyPress(.upArrow) { move(-1); return .handled }.onKeyPress(.downArrow) { move(1); return .handled }
                 .onKeyPress(.return) { showDay = true; return .handled }
-                .accessibilityLabel(L("年度用量，方向键选择日期，回车查看当天详情"))
+                .accessibilityElement(children: .contain).accessibilityLabel(L("年度用量")).accessibilityHint(L("方向键选择日期，回车查看当天详情"))
             if days.indices.contains(selected) { Text(label(days[selected])).font(AppFont.secondary).textSelection(.enabled) }
             HStack { Text(L("零")); ForEach(0..<5) { n in RoundedRectangle(cornerRadius: DesignTokens.heatCellRadius).fill(n == 0 ? Color.primary.opacity(DesignTokens.heatEmptyOpacity) : Palette.accent.opacity(0.25 + Double(n) * 0.1875)).frame(width: 12, height: 12) }; Text(L("多")) }.font(AppFont.secondary).foregroundStyle(.secondary)
             DisclosureGroup(L("年度数据表 · 精确值")) {
@@ -1173,9 +1184,10 @@ struct QuotaCard: View, Equatable {
             HStack(spacing: 8) {
                 ProviderMark(provider: quota.provider)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(quota.name).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled).help(quota.name)
+                    // Long names stop at two lines; the full text stays in the tooltip and the accessible name.
+                    Text(quota.name).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true).textSelection(.enabled).help(quota.name)
                     if let email = quota.identity?.email, email != quota.name {
-                        Text(email).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled).help(email)
+                        Text(email).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled).help(email)
                     }
                 }.frame(minWidth: 0, alignment: .leading)
                 if let plan = quota.plan, !Format.subscription(plan).isEmpty { SubscriptionBadge(plan: plan).frame(maxWidth: DesignTokens.quotaBadgeWidth) }
@@ -1457,7 +1469,7 @@ struct ServerResourceSummary: View {
                                 }
                             }
 
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(Palette.category("gpu").opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(Palette.category("gpu").opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                     }
                 }
             }
@@ -1468,13 +1480,13 @@ struct ServerResourceSummary: View {
                     BalancedGridLayout(minimumWidth: 290, spacing: 9) {
                         ForEach(filesystems) { fs in ResourceStrip(title: fs.id, percent: Format.capacityPercent(fs.used, fs.total), detail: Format.capacityPair(fs.used, fs.total), tint: Palette.category("storage")) }
                     }
-                }.padding(10).background(Palette.category("storage").opacity(0.12), in: RoundedRectangle(cornerRadius: 12)) }
+                }.padding(10).background(Palette.category("storage").opacity(0.08), in: RoundedRectangle(cornerRadius: 12)) }
             }
             if host.metrics.contains("network") {
                 let networks = host.selectedDevices("network", sample?.network)
                 BalancedGridLayout(minimumWidth: 290, spacing: 9) {
                     ForEach(networks) { net in
-                        HStack { Text(net.id).lineLimit(1); Spacer(); Text("↓ " + Format.speed(net.rxBytesPerSecond) + " · ↑ " + Format.speed(net.txBytesPerSecond)).monospacedDigit() }.font(AppFont.caption).padding(10).background(Palette.category("network").opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                        HStack { Text(net.id).lineLimit(1); Spacer(); Text("↓ " + Format.speed(net.rxBytesPerSecond) + " · ↑ " + Format.speed(net.txBytesPerSecond)).monospacedDigit() }.font(AppFont.caption).padding(10).background(Palette.category("network").opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                     }
                 }
             }
@@ -1516,12 +1528,12 @@ struct ResourceBlock: View {
                 Text(title).font(AppFont.caption)
                 if let value, value >= 90 { Image(systemName: "exclamationmark.triangle").font(AppFont.caption).foregroundStyle(Palette.danger).help(L("高负载")).accessibilityLabel(L("高负载")) }
                 Spacer(minLength: 4)
-                Text(value.map { String(format: "%.0f%%", $0) } ?? "—").font(.system(size: DesignTokens.fontPanelTitle, weight: DesignTokens.weightStrong)).monospacedDigit().foregroundStyle(Palette.category(category))
+                Text(value.map { String(format: "%.0f%%", $0) } ?? "—").font(.system(size: DesignTokens.fontPanelTitle, weight: DesignTokens.weightStrong)).monospacedDigit().foregroundStyle((value ?? 0) >= 90 ? Palette.danger : Palette.category(category))
             }
             ResourceBar(percent: value, tint: Palette.category(category))
             if !detail.isEmpty { Text(detail).font(AppFont.caption).foregroundStyle(.secondary).monospacedDigit() }
         }.padding(.horizontal, 10).padding(.vertical, 8).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Palette.category(category).opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+            .background(Palette.category(category).opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.category(category).opacity(0.23)))
             .accessibilityElement(children: .combine)
     }
@@ -1540,47 +1552,12 @@ struct ResourceStrip: View {
             HStack(spacing: 5) {
                 Text(title).font(AppFont.secondary).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 0)
+                if (value ?? 0) >= 90 { Image(systemName: "exclamationmark.triangle").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(Palette.danger) }
                 Text(label).font(.system(size: DesignTokens.fontCaption)).monospacedDigit().lineLimit(1).fixedSize().foregroundStyle((value ?? 0) >= 90 ? Palette.danger : Color.primary)
             }.frame(height: 17)
             ResourceBar(percent: value, tint: tint)
         }.frame(maxWidth: .infinity, alignment: .leading).help(title + " " + label)
-            .accessibilityElement(children: .ignore).accessibilityLabel(title + " " + label)
-    }
-}
-
-struct ResourceRing: View {
-    var title: String, percent: Double?
-    var compact = false
-    var detail = ""
-    private var value: Double? { percent.flatMap { $0.isFinite ? min(100, max(0, $0)) : nil } }
-    private var accessibilityText: String {
-        var text = title + " " + Format.percent(value)
-        if !detail.isEmpty { text += "，" + detail }
-        if let value, value >= 90 { text += L("，高负载") }
-        return text
-    }
-    private var ring: some View {
-        ZStack {
-            Circle().stroke(.primary.opacity(DesignTokens.progressTrackOpacity), lineWidth: DesignTokens.resourceRingStroke)
-            if let value, value > 0 {
-                Circle().trim(from: 0, to: value / 100)
-                    .stroke(value >= 90 ? Palette.danger : value >= 70 ? Palette.warn : Palette.accent, style: StrokeStyle(lineWidth: DesignTokens.resourceRingStroke, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-            }
-            Text(Format.percent(value)).font(.system(size: compact ? DesignTokens.resourceRingCompactFont : DesignTokens.resourceRingFont, weight: DesignTokens.weightStrong)).monospacedDigit()
-        }.frame(width: compact ? DesignTokens.resourceRingCompactSize : DesignTokens.resourceRingSize, height: compact ? DesignTokens.resourceRingCompactSize : DesignTokens.resourceRingSize)
-    }
-    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
-    var body: some View {
-        let _ = interfaceLanguage;
-        HStack(spacing: 8) {
-            ring
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(AppFont.secondary).fontWeight(.medium)
-                if !detail.isEmpty { Text(detail).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-                if let value, value >= 90 { Text(L("高负载")).font(AppFont.secondary).foregroundStyle(Palette.danger) }
-            }
-        }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .ignore).accessibilityLabel(accessibilityText)
+            .accessibilityElement(children: .ignore).accessibilityLabel(title + " " + label + ((value ?? 0) >= 90 ? L("，高负载") : ""))
     }
 }
 
@@ -1595,7 +1572,7 @@ struct ResourceBar: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(.primary.opacity(DesignTokens.progressTrackOpacity))
                 if let percent, percent.isFinite {
-                    Capsule().fill(tint ?? (percent >= 90 ? Palette.danger : percent >= 70 ? Palette.warn : Palette.accent))
+                    Capsule().fill(tint ?? Palette.accent)
                         .frame(width: proxy.size.width * min(1, max(0, percent / 100)))
                 }
             }
@@ -1621,8 +1598,7 @@ struct OverlayScrollStyle: NSViewRepresentable {
                     return view.subviews.lazy.compactMap(findScroll).first
                 }
                 guard let scroll = self.enclosingScrollView ?? self.superview.flatMap(findScroll) ?? self.superview?.superview.flatMap(findScroll) else { return }
-                if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
-                if !scroll.autohidesScrollers { scroll.autohidesScrollers = true }
+                // Scroller style and visibility follow System Settings ("Show scroll bars").
                 if scroll.drawsBackground { scroll.drawsBackground = false }
             }
         }
@@ -1638,7 +1614,7 @@ struct RefreshIndicator: View {
     private var failures: [ActionFailure] { model.actionFailures.filter { !$0.dismissed && ($0.action == key || (key == "scan" && $0.action == "prices")) } }
     private var hasError: Bool { model.actionFailures.contains { $0.action == key || (key == "scan" && $0.action == "prices") } || (key == "scan" && model.dashboardError != nil) }
     private var statusLabel: String {
-        model.refreshLabel(key) + L("状态 · ") + (model.refreshStates[key]?.busy == true ? L("进行中") : hasError ? L("部分失败") : model.refreshStates[key]?.succeededAt != nil ? L("已更新") : L("尚未刷新")) + L("；点击查看详情")
+        L("{0}状态 · {1}；点击查看详情", model.refreshLabel(key), model.refreshStates[key]?.busy == true ? L("进行中") : hasError ? L("部分失败") : model.refreshStates[key]?.succeededAt != nil ? L("已更新") : L("尚未刷新"))
     }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
@@ -1646,7 +1622,8 @@ struct RefreshIndicator: View {
         Button { showing.toggle() } label: {
             ZStack {
                 if model.refreshStates[key]?.busy == true || (key == "scan" && model.dashboardPending) { ProgressView().controlSize(.small).scaleEffect(0.7) }
-                else { Image(systemName: hasError ? "exclamationmark.circle" : model.refreshStates[key]?.succeededAt != nil ? "checkmark.circle" : "info.circle").foregroundStyle(hasError ? Palette.warn : Color.secondary) }
+                // A sync mark rather than a "verified" check; problems use the warning triangle (Web shares the rule).
+                else { Image(systemName: hasError ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath").foregroundStyle(hasError ? Palette.warn : Color.secondary).opacity(hasError || model.refreshStates[key]?.succeededAt != nil ? 1 : 0.6) }
             }.frame(width: 22, height: 22)
         }.buttonStyle(.plain).help(statusLabel).accessibilityLabel(statusLabel)
         .popover(isPresented: $showing) {

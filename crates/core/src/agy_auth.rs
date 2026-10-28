@@ -554,8 +554,7 @@ impl Engine {
                 #[cfg(all(unix, not(target_os = "macos")))]
                 let mut cmd = std::process::Command::new("xdg-open");
                 cmd.arg(&url);
-                process::run(cmd, vec![], Duration::from_secs(10))
-                    .context("无法打开授权网页，请复制网址")?;
+                process::open_external(cmd).context("无法打开授权网页，请复制网址")?;
             }
             "agyAuth.cancel" => finish(&session, "cancelled", "已取消此次授权，现有登录保留"),
             "agyAuth.verify" => {

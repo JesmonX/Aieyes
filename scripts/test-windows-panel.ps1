@@ -26,6 +26,8 @@ public static class PanelProbe {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags,uint x,uint y,uint data,UIntPtr extra);
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h,int attribute,out int value,int size);
+  [DllImport("dwmapi.dll",EntryPoint="DwmGetWindowAttribute")] public static extern int DwmGetFrameBounds(IntPtr h,int attribute,out Rect value,int size);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h,uint message,IntPtr w,IntPtr l);
   [DllImport("user32.dll")] public static extern bool GetMenuItemRect(IntPtr owner,IntPtr menu,uint item,out Rect rect);
@@ -114,6 +116,23 @@ function Verify-PetTopmost {
     }
     Screenshot 'pet-topmost-recovered'
 }
+function Verify-QuietDesktop {
+    # Windows reports a borderless window covering the monitor as a fullscreen app (QUNS_BUSY).
+    $before=Bounds $script:pet
+    $fullscreen=New-Object System.Windows.Forms.Form
+    $fullscreen.Text='Aieyes isolated fullscreen app';$fullscreen.FormBorderStyle='None';$fullscreen.WindowState='Maximized';$fullscreen.BackColor=[Drawing.Color]::FromArgb(20,24,31)
+    try {
+        $fullscreen.Show();$fullscreen.Activate();$null=[PanelProbe]::SetForegroundWindow($fullscreen.Handle)
+        Wait-For { -not [PanelProbe]::IsWindowVisible($script:pet) } 'pet steps aside for fullscreen app' 8
+        Assert-That (-not [PanelProbe]::IsWindowVisible($script:pet)) 'fullscreen app hides the pet'
+    } finally {$fullscreen.Close();$fullscreen.Dispose()}
+    $null=[PanelProbe]::SetForegroundWindow($background.Handle)
+    Wait-For { [PanelProbe]::IsWindowVisible($script:pet) } 'pet returns after fullscreen app' 8
+    Assert-That ((Pet-IsTopmost) -and (Pet-IsAboveBackground)) 'pet returns above ordinary windows'
+    Assert-That ([PanelProbe]::GetForegroundWindow() -eq $background.Handle) 'returning pet preserves keyboard focus'
+    $after=Bounds $script:pet
+    Assert-That ($before.Left -eq $after.Left -and $before.Top -eq $after.Top -and $before.Right -eq $after.Right -and $before.Bottom -eq $after.Bottom) 'returning pet preserves geometry'
+}
 function Pet-Click([bool]$Right=$false) {
     $r=Bounds $script:pet;Click-At ($r.Left+($r.Right-$r.Left)/2) ($r.Bottom-11*[PanelProbe]::GetDpiForWindow($script:pet)/96) $Right
 }
@@ -166,8 +185,17 @@ function Screenshot([string]$Name) {
 }
 # Opt-in on an interactive Windows desktop with transparency enabled. This checks
 # actual changing desktop pixels, which WebView screenshots cannot validate.
-function Verify-Backdrop([IntPtr]$Handle,[string]$Name) {
-    $rect=Bounds $Handle
+# Build 22621+ gives the panel Desktop Acrylic (DWMSBT_TRANSIENTWINDOW, 3), which blurs the windows behind it,
+# and the main window Mica (DWMSBT_MAINWINDOW, 2), which samples only the wallpaper. Older builds blur both.
+function Verify-Backdrop([IntPtr]$Handle,[string]$Name,[int]$BackdropType) {
+    $showsBehind=$true
+    if([Environment]::OSVersion.Version.Build -ge 22621) {
+        $actual=0;$null=[PanelProbe]::DwmGetWindowAttribute($Handle,38,[ref]$actual,4)
+        Assert-That ($actual -eq $BackdropType) "$Name requests DWM backdrop type $BackdropType"
+        $showsBehind=$BackdropType -ne 2
+    }
+    # The visible frame: GetWindowRect also covers the invisible resize border, where the desktop always shows.
+    $rect=New-Object PanelProbe+Rect;$null=[PanelProbe]::DwmGetFrameBounds($Handle,9,[ref]$rect,16)
     $width=$rect.Right-$rect.Left;$height=$rect.Bottom-$rect.Top
     $captures=@();$original=$background.BackColor
     try {
@@ -191,7 +219,8 @@ function Verify-Backdrop([IntPtr]$Handle,[string]$Name) {
             }
         }
         $result["$Name-backdrop"]=@{samples=$total;changed=$changed}
-        Assert-That ($total -gt 0 -and $changed/$total -gt .25) "$Name visibly responds to desktop background changes"
+        if($showsBehind){Assert-That ($total -gt 0 -and $changed/$total -gt .25) "$Name visibly responds to desktop background changes"}
+        else{Assert-That ($total -gt 0 -and $changed/$total -lt .05) "$Name keeps windows behind it out of the backdrop"}
     } finally {
         foreach($capture in $captures){$capture.Dispose()}
         $background.BackColor=$original;$background.Refresh();Pump 200
@@ -218,15 +247,20 @@ try {
     Wait-For { $r=Bounds $script:pet; [Math]::Abs(($r.Bottom-$r.Top)-$expectedHeight) -le 2 } 'DPI-scaled pet dimensions'
     Screenshot 'pet-startup'
     $background=New-Object System.Windows.Forms.Form
-    $background.Text='Aieyes isolated background input target';$background.FormBorderStyle='None';$background.WindowState='Maximized';$background.BackColor=[Drawing.Color]::FromArgb(49,67,83)
+    # An ordinary application filling the work area; covering the taskbar too would make it a fullscreen app the pet steps aside for.
+    $background.Text='Aieyes isolated background input target';$background.FormBorderStyle='None';$background.StartPosition='Manual';$background.Bounds=[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea;$background.BackColor=[Drawing.Color]::FromArgb(49,67,83)
     $background.Show();$background.Activate();Pump 300
     $null=[PanelProbe]::SetForegroundWindow($background.Handle)
     Click-At 25 200
     Wait-For { [PanelProbe]::GetForegroundWindow() -eq $background.Handle } 'background focus established before pet click'
     Verify-PetTopmost
+    Verify-QuietDesktop
     Pet-Click
     Wait-For {Panel-Visible} 'open panel'
     Assert-That ([PanelProbe]::GetForegroundWindow() -eq $background.Handle) 'opening preserves background keyboard focus'
+    $exStyle=[PanelProbe]::GetWindowLong($script:panel,-20)
+    # WS_EX_TOOLWINDOW (0x80) without WS_EX_APPWINDOW (0x40000): no taskbar button or Alt+Tab entry.
+    Assert-That ((($exStyle -band 0x80) -ne 0) -and (($exStyle -band 0x40000) -eq 0)) 'panel is a tool window outside the taskbar and Alt+Tab'
     Screenshot 'open'
     $former=Bounds $script:panel
     # Deliberate interaction can activate the panel (enabling text/keyboard input).
@@ -269,11 +303,13 @@ try {
     }
     if($VerifyMaterials) {
         Pet-Click;Wait-For {Panel-Visible} 'open for native material check'
-        Verify-Backdrop $script:panel 'floating'
+        # A pet click leaves keyboard focus in the background app; DWM would draw an inactive panel flat.
+        Assert-That (-not (Panel-HasFocus)) 'floating material check runs on the inactive panel'
+        Verify-Backdrop $script:panel 'floating' 3
         Pet-Click;Wait-For {-not (Panel-Visible)} 'close after native material check'
         Choose-MenuItem 1 '设置…'
         Wait-For { $script:main=[PanelProbe]::Find($app.Id,'Aieyes',$false);$script:main -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:main) } 'main window appears'
-        Verify-Backdrop $script:main 'main'
+        Verify-Backdrop $script:main 'main' 2
     }
     if($script:canHidePet) {
         Choose-MenuItem 5 '隐藏桌宠'

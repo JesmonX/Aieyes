@@ -265,8 +265,7 @@ impl Engine {
             #[cfg(all(unix, not(target_os = "macos")))]
             let mut cmd = std::process::Command::new("xdg-open");
             cmd.arg(url);
-            crate::process::run(cmd, vec![], std::time::Duration::from_secs(10))
-                .map_err(|_| anyhow::anyhow!("无法打开登录页面"))?;
+            crate::process::open_external(cmd).map_err(|_| anyhow::anyhow!("无法打开登录页面"))?;
             return Ok(json!({"opened":true}));
         }
         let mut settings = self.store.settings()?;

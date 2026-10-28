@@ -5,6 +5,34 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// External applications outlive the request and must never join its cancellation group.
+pub fn open_external(cmd: Command) -> Result<Vec<u8>> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = cmd;
+        cmd.env_remove("GDK_BACKEND")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn().context("启动命令失败")?;
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(Vec::new())
+    }
+    #[cfg(not(target_os = "linux"))]
+    run(cmd, vec![], Duration::from_secs(10))
+}
+
 pub fn run(mut cmd: Command, input: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -47,6 +47,8 @@ jobs:
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf libglib2.0-bin rpm libarchive-tools
+      - name: CSS check dependencies
+        run: npm ci --prefix apps/desktop --ignore-scripts
       - name: Shared checks
         shell: bash
         run: sh scripts/ci-checks.sh
@@ -56,14 +58,16 @@ jobs:
           node scripts/prepare-wakeup.cjs --debug
           npm ci --prefix apps/desktop
           cd apps/desktop
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps chromium webkit
           npm run test:ui
+          npm run test:webkit
           node ../../scripts/test-windows-ui.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: UI-previews-${{ runner.os }}
           path: |
+            .build/ui-webkit/*
             .local/ui-previews/*.png
             .local/i18n/*.png
             .local/pets/*.png

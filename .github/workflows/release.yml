@@ -104,6 +104,8 @@ jobs:
           for attempt in {1..5}; do
             cargo test -p aieyes-core --lib --locked initialization_preserves_home_paths_environment_arguments_and_stdin -- --nocapture
           done
+      - name: CSS check dependencies
+        run: npm ci --prefix apps/desktop --ignore-scripts
       - name: Shared checks
         shell: bash
         run: sh scripts/ci-checks.sh --rust
@@ -127,9 +129,17 @@ jobs:
         run: |
           npm ci --prefix apps/desktop
           cd apps/desktop
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps chromium webkit
           npm run test:ui
+          npm run test:webkit
           node ../../scripts/test-windows-ui.cjs
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os != 'macOS'
+        with:
+          name: webkit-ui-${{ matrix.platform }}-${{ matrix.arch }}
+          path: .build/ui-webkit/
+          include-hidden-files: true
+          if-no-files-found: ignore
       - name: Install Tauri CLI
         if: runner.os != 'macOS'
         run: npm install --global @tauri-apps/cli@2.12.1

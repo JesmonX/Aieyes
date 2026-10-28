@@ -6,6 +6,10 @@ struct CodexProfile: Decodable, Identifiable {
 }
 struct CodexProcess: Decodable, Identifiable { var pid: Int, name: String, canClose: Bool; var parentPid: Int?, blockingReason: String?; var id: Int { pid } }
 struct CodexInspection: Decodable { var profiles: [CodexProfile], processes: [CodexProcess], version: String?, storageMode: String; var storedIdentity: String?, selected: CodexSelectedConnection?; var cliAvailable: Bool?, resolvedBinary: String?, cliError: String?, cliErrorCode: String? }
+extension CodexInspection {
+    /// Codex's cli_auth_credentials_store value; other configured values are shown as written.
+    var storageLabel: String { switch storageMode { case "file": L("文件"); case "keyring": L("系统凭据库"); case "auto": L("自动"); default: storageMode } }
+}
 struct CodexOperation: Decodable, Identifiable {
     var operationId: String, status: String, authUrl: String?, userCode: String?, error: String?, message: String?, processes: [CodexProcess]?
     var accountArchived: Bool?, quotaEnabled: Bool?
@@ -70,7 +74,7 @@ struct CodexAccountsView: View {
                     Button(account == nil ? L("登录新账户") : L("登录此账户")) { reauthID = nil; loginSheet = true }
 
                 }.disabled(busy || source == nil || operation != nil) }
-                if let info { Text(L("{0} · 认证存储 {1} · {2} 个相关进程" , info.version ?? L("CLI 版本未知"), info.storageMode, info.processes.count)).font(AppFont.secondary).foregroundStyle(.secondary) }
+                if let info { Text(L("{0} · 认证存储 {1} · {2} 个相关进程" , info.version ?? L("CLI 版本未知"), info.storageLabel, info.processes.count)).font(AppFont.secondary).foregroundStyle(.secondary) }
                 if let info, info.cliAvailable == false {
                     Text(info.cliError ?? L("Codex CLI 暂不可用")).foregroundStyle(Palette.warn).textSelection(.enabled)
                     if let binary = info.resolvedBinary { Text(L("检查的程序：") + binary).font(AppFont.secondary).textSelection(.enabled) }

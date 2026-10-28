@@ -491,6 +491,7 @@ impl Engine {
                 false,
             )?)?),
             "agents.set" => self.configure_agent(params),
+            "agents.manage" => self.manage_agent(params),
             "sources.defaultPath" => {
                 let provider = params["provider"].as_str().context("请选择 Agent")?;
                 let remote = params["hostId"].as_str().is_some_and(|id| !id.is_empty());

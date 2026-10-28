@@ -978,8 +978,10 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             let status = dashboard.sources.first { $0.id == source.id }?.status
             return status?.failureReason != nil
         }
-        let prefix = dataTime > 0 ? L("记录同步于 ") + Format.time(dataTime) : usageSources.isEmpty ? L("未接入用量来源") : L("记录尚未全部同步")
-        return prefix + " · " + (busy ? L("同步中…") : failed || !actionFailures.isEmpty ? L("部分失败") : delayed > 0 ? L("{0} 个来源有延迟" , delayed) : usageSources.isEmpty ? L("等待接入") : L("记录已同步"))
+        let prefix = dataTime > 0 ? L("记录同步于 {0}", Format.time(dataTime)) : usageSources.isEmpty ? L("未接入用量来源") : L("记录尚未全部同步")
+        // The normal state is the time alone; a second part appears only for work or problems.
+        let detail = busy ? L("同步中…") : failed || !actionFailures.isEmpty ? L("部分失败") : delayed > 0 ? L("{0} 个来源有延迟" , delayed) : ""
+        return detail.isEmpty ? prefix : prefix + " · " + detail
     }
     var updatedHostCount: Int {
         settings.monitoredHosts.filter(\.enabled).filter { host in
@@ -1237,12 +1239,12 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             settingsDraft.appearance = draft
         }
     }
-    func toggleTheme(currentlyDark: Bool) async {
-        guard settingsLoaded else { return }
+    func setTheme(_ theme: String) async {
+        guard settingsLoaded, ["system", "light", "dark"].contains(theme), (settings.appearance?.theme ?? "system") != theme else { return }
         let draftTheme = settingsDraft.appearance?.theme ?? "system"
         var next = settings
         var appearance = next.appearance ?? AppearanceSettings()
-        appearance.theme = currentlyDark ? "light" : "dark"
+        appearance.theme = theme
         next.appearance = appearance
         guard await save(next, refreshDashboard: false) else { return }
         // Preserve unrelated edits in the settings window.

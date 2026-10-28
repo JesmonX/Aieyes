@@ -184,6 +184,7 @@ def observe(provider, kind, home):
         session = text((v.get('conversation_id') or v.get('session_id')) if provider=='cursor' else v.get('session_id') or v.get('conversationId') or v.get('sessionId'))
         if not session: return
         row = dict(kind=kind, at=at, session=session, turn=text(v.get('turn_id') or v.get('turnId') or v.get('prompt_id')), call=text(v.get('tool_use_id') or v.get('agent_id') or v.get('elicitation_id')), tool=text((v.get('toolCall') or {}).get('name') if provider == 'antigravity' else v.get('tool_name')), notification=text(v.get('notification_type')))
+        if provider=='claude':row['sessionSource']=text(os.environ.get('CLAUDE_CODE_ENTRYPOINT') or v.get('entrypoint'))
         row['parentSession']=text(v.get('parent_session_id') or v.get('parentSessionId'))
         if provider in ('claude','codebuddy') and kind not in ('SubagentStart','SubagentStop') and text(v.get('agent_id')):
             row['parentSession']=session
@@ -239,8 +240,10 @@ def metadata(v, provider, hook):
     rows = []; message = v.get('message') or {}; content = message.get('content')
     content = content if isinstance(content,list) else []
     base = dict(at=at,session=text(v.get('sessionId')),parentSession=text(v.get('parentSessionId') or v.get('parent_session_id')))
+    if provider=='claude' and text(v.get('entrypoint')):base['sessionSource']=text(v['entrypoint'])
     if v.get('isSidechain') is True and text(v.get('agentId')):
         base['parentSession']=base['session'];base['session']+=':'+text(v.get('agentId'))
+    if base.get('sessionSource'):rows.append(dict(base,kind='identity'))
     if v.get('type') == 'user':
         results = [p for p in content if isinstance(p,dict) and p.get('type')=='tool_result']
         if not results and not v.get('isMeta'): rows.append(dict(base,kind='start',turn=text(v.get('uuid'))))
@@ -370,7 +373,7 @@ def read_file(path, provider, hook, cursor):
                     offset=start
                     if target-offset>limit:raise ValueError('Session record exceeds 16 MiB; retry position retained')
                 f.seek(0)
-                for _ in range(2 if provider in ('codex','pi','omp') else 1):
+                for _ in range(2 if provider in ('codex','claude','pi','omp') and not hook else 1):
                     line=f.readline(limit+1)
                     if len(line)>limit:raise ValueError('Session record exceeds 16 MiB; retry position retained')
                     if not line.endswith(b'\n'):break

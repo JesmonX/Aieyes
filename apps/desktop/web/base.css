@@ -1,0 +1,10 @@
+@layer base {
+svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+[hidden] { display: none !important; }
+summary { cursor: pointer; }
+img { -webkit-user-drag: none; }
+p { line-height:var(--line-body); }
+/* --- Scrollbars --------------------------------------------------------- */
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--ink) 22%, transparent) transparent; }
+}

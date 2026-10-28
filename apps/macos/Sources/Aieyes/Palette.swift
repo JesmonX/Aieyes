@@ -43,10 +43,12 @@ enum Palette {
             return NSColor(srgbRed: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255, alpha: 1)
         })
     }
-    static var accent: Color { accent(named: UserDefaults.standard.string(forKey: "appearance.accent") ?? "indigo") }
+    static var accent: Color { accent(named: UserDefaults.standard.string(forKey: "appearance.accent") ?? "system") }
     static func accent(named name: String) -> Color {
         let pair: (UInt32, UInt32)
         switch name {
+        // The default follows System Settings, so Aieyes controls match the ones AppKit draws.
+        case "system": return Color(nsColor: .controlAccentColor)
         case "blue": pair = (DesignTokens.accentBlueLight, DesignTokens.accentBlueDark)
         case "teal": pair = (DesignTokens.accentTealLight, DesignTokens.accentTealDark)
         case "purple": pair = (DesignTokens.accentPurpleLight, DesignTokens.accentPurpleDark)
@@ -54,6 +56,8 @@ enum Palette {
         }
         return adaptive(pair.0, pair.1)
     }
+    /// Text and symbols on a solid accent fill. AppKit draws white on the system accent in both appearances.
+    static func accentInk(named name: String) -> Color { name == "system" ? .white : adaptive(DesignTokens.accentInkLight, DesignTokens.accentInkDark) }
     static func category(_ key: String) -> Color {
         switch key {
         case "codex": return adaptive(DesignTokens.categoryCodexLight, DesignTokens.categoryCodexDark)
@@ -110,7 +114,7 @@ enum Palette {
 
 /// Observe accent changes and share control finishes across windows and sheets.
 private struct AieyesAccent: ViewModifier {
-    @AppStorage("appearance.accent") private var name = "indigo"
+    @AppStorage("appearance.accent") private var name = "system"
     func body(content: Content) -> some View {
         content.tint(Palette.accent(named: name)).accentColor(Palette.accent(named: name))
             .buttonStyle(.aieyes)
@@ -121,6 +125,8 @@ private struct AieyesAccent: ViewModifier {
 /// Keep native Button/TextField semantics; only their painted surfaces change.
 private struct AieyesControlSurface: ViewModifier {
     var tint: Color? = nil
+    /// A solid fill replaces the glass finish (the primary action).
+    var fill: Color? = nil
     var field = false
     var hovered = false
     var pressed = false
@@ -133,40 +139,52 @@ private struct AieyesControlSurface: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: DesignTokens.radiusControl)
         content.background {
-            shape.fill(Color(nsColor: .controlBackgroundColor).opacity(opaque ? 1 : field ? DesignTokens.fieldFillOpacity : DesignTokens.controlFillOpacity))
-            if let tint { shape.fill(tint.opacity(DesignTokens.controlTintOpacity)) }
+            if let fill { shape.fill(fill) } else {
+                shape.fill(Color(nsColor: .controlBackgroundColor).opacity(opaque ? 1 : field ? DesignTokens.fieldFillOpacity : DesignTokens.controlFillOpacity))
+                if let tint { shape.fill(tint.opacity(DesignTokens.controlTintOpacity)) }
+            }
             if hovered || pressed { shape.fill(Color.primary.opacity(pressed ? DesignTokens.controlPressedOpacity : DesignTokens.controlHoverOpacity)) }
         }
         .overlay {
-            shape.strokeBorder(focused || editing ? Palette.accent : (tint ?? Color.primary).opacity(contrast == .increased ? 1 : DesignTokens.controlBorderOpacity), lineWidth: focused || editing || contrast == .increased ? 2 : DesignTokens.borderWidth)
+            shape.strokeBorder(focused || editing ? Palette.accent : (fill ?? tint ?? Color.primary).opacity(contrast == .increased ? 1 : DesignTokens.controlBorderOpacity), lineWidth: focused || editing || contrast == .increased ? 2 : DesignTokens.borderWidth)
                 .allowsHitTesting(false)
         }
     }
 }
 
+/// Button levels shared with the Web build (§5.2): one solid primary action per sheet or view, tinted for an
+/// emphasized secondary action, secondary for the rest; a destructive role always draws in the danger color.
 struct AieyesButtonStyle: ButtonStyle {
-    var emphasized = false
+    enum Level { case secondary, tinted, primary }
+    var level = Level.secondary
     func makeBody(configuration: Configuration) -> some View {
-        AieyesButtonBody(configuration: configuration, emphasized: emphasized)
+        AieyesButtonBody(configuration: configuration, level: level)
     }
 }
 
 private struct AieyesButtonBody: View {
     let configuration: ButtonStyle.Configuration
-    let emphasized: Bool
+    let level: AieyesButtonStyle.Level
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlSize) private var controlSize
+    @AppStorage("appearance.accent") private var accentName = "system"
     @State private var hovered = false
-    private var tint: Color? { configuration.role == .destructive ? Palette.danger : emphasized ? Palette.accent : nil }
+    private var destructive: Bool { configuration.role == .destructive }
+    // Size follows .controlSize like native buttons (§5.1): small 20pt, regular 24pt, large 32pt.
+    private var fontSize: CGFloat { switch controlSize { case .mini, .small: DesignTokens.fontCaption; case .large, .extraLarge: DesignTokens.fontBody; default: DesignTokens.fontSecondary } }
+    private var minHeight: CGFloat { switch controlSize { case .mini, .small: 20; case .large, .extraLarge: DesignTokens.controlMd; default: DesignTokens.controlHeight } }
+    private var solid: Bool { level == .primary && !destructive }
+    private var tint: Color? { destructive ? Palette.danger : level == .tinted ? Palette.accent(named: accentName) : nil }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
         configuration.label
-            .font(.system(size: DesignTokens.fontSecondary))
-            .foregroundStyle(configuration.role == .destructive ? Palette.danger : Color.primary)
+            .font(.system(size: fontSize, weight: solid ? DesignTokens.weightMedium : DesignTokens.weightRegular))
+            .foregroundStyle(destructive ? Palette.danger : solid ? Palette.accentInk(named: accentName) : Color.primary)
             .padding(.horizontal, DesignTokens.controlPaddingX).padding(.vertical, 2)
-            .frame(minHeight: DesignTokens.controlHeight)
-            .modifier(AieyesControlSurface(tint: tint, hovered: enabled && hovered, pressed: enabled && configuration.isPressed))
+            .frame(minHeight: minHeight)
+            .modifier(AieyesControlSurface(tint: tint, fill: solid ? Palette.accent(named: accentName) : nil, hovered: enabled && hovered, pressed: enabled && configuration.isPressed))
             .contentShape(RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
             .opacity(enabled ? 1 : 0.45)
             .onHover { hovered = $0 }
@@ -239,7 +257,8 @@ private final class FieldFocusView: NSView {
 
 extension ButtonStyle where Self == AieyesButtonStyle {
     static var aieyes: AieyesButtonStyle { AieyesButtonStyle() }
-    static var aieyesPrimary: AieyesButtonStyle { AieyesButtonStyle(emphasized: true) }
+    static var aieyesPrimary: AieyesButtonStyle { AieyesButtonStyle(level: .primary) }
+    static var aieyesTinted: AieyesButtonStyle { AieyesButtonStyle(level: .tinted) }
 }
 extension TextFieldStyle where Self == AieyesTextFieldStyle {
     static var aieyes: AieyesTextFieldStyle { AieyesTextFieldStyle() }

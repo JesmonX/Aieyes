@@ -65,7 +65,7 @@ function fixture(){
     assert(await card.evaluate(e=>e.getBoundingClientRect().right<=innerWidth),`${surface} ${width}: card extends beyond viewport`);
     if(panel)assert(await page.locator('.panel-body').evaluate(e=>e.scrollWidth<=e.clientWidth+1),'Panel content must fit without clipping');
     for(const entry of await entries.all())assert(await entry.locator('span').evaluate(e=>e.scrollWidth<=e.clientWidth+1),`${surface} ${width}: ${await entry.innerText()}`);
-    await page.evaluate(()=>{document.querySelector('.panel-body')?.scrollTo(0,0);window.scrollTo(0,0);});
+    await page.evaluate(()=>{document.querySelector('.panel-body')?.scrollTo(0,0);(window.pageScroller?.()??document.scrollingElement).scrollTo(0,0);});
     await page.mouse.move(2,2);
     await page.screenshot({path:path.join(out,`${surface}-${width}-${theme}.png`),fullPage:true});
   }

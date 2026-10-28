@@ -42,7 +42,7 @@ import Foundation
         precondition(AieyesLocale.language == "en" && L("读取失败") == "Read failed", "External preference changes must invalidate the cached language")
         AieyesLocale.apply("zh-CN")
         let date = Date(timeIntervalSince1970:1_792_800_000)
-        let reference = DateFormatter();reference.locale = Locale(identifier:"en_US_POSIX");reference.timeZone = .autoupdatingCurrent;reference.dateFormat = "MM/dd HH:mm"
+        let reference = DateFormatter();reference.locale = AieyesLocale.locale;reference.timeZone = .autoupdatingCurrent;reference.setLocalizedDateFormatFromTemplate(Format.usesTwelveHourClock ? "MMddhhmma" : "MMddHHmm")
         let expected = reference.string(from:date)
         DispatchQueue.concurrentPerform(iterations:200) { _ in
             precondition(L("读取失败") == "读取失败")

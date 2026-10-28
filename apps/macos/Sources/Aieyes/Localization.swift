@@ -24,6 +24,12 @@ enum AieyesLocale {
     private static let languageState = LanguageState()
     static var language: String { languageState.value }
     static var locale: Locale { Locale(identifier: language == "en" ? "en_US" : "zh_CN") }
+    /// Narrow weekday for a Monday-first row (0 = Monday), from the calendar rather than copy.
+    static func weekday(_ mondayIndex: Int) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        return calendar.veryShortWeekdaySymbols[(mondayIndex + 1) % 7]
+    }
     static func month(_ number: Int) -> String { language == "en" ? ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][min(11, max(0, number - 1))] : "\(number)月" }
     static func normalize(_ language: String?) -> String { language == "en" ? "en" : "zh-CN" }
     static func apply(_ language: String?) {
@@ -32,6 +38,14 @@ enum AieyesLocale {
             UserDefaults.standard.set(next, forKey: "aieyes.language")
         }
         languageState.refresh()
+        alignSystemLanguage()
+    }
+    /// Menus, text menus and panels that AppKit supplies follow this app's language from the next
+    /// launch on (they are loaded once). A language forced through the environment is never stored.
+    static func alignSystemLanguage() {
+        guard ProcessInfo.processInfo.environment["AIEYES_LANGUAGE"] == nil else { return }
+        let preferred = [language == "en" ? "en" : "zh-Hans"]
+        if UserDefaults.standard.stringArray(forKey: "AppleLanguages") != preferred { UserDefaults.standard.set(preferred, forKey: "AppleLanguages") }
     }
     private struct Pattern {
         let expression: NSRegularExpression

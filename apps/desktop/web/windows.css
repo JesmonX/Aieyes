@@ -1,3 +1,6 @@
+@import url("select.css");
+
+@layer platform {
 /* Windows finishes only. Shared colors, type, geometry and native backdrops remain
    owned by tokens.css. Glass is painted once per surface, never once per row. */
 html[data-platform=windows] {
@@ -7,7 +10,7 @@ html[data-platform=windows] {
   --window-edge:var(--win-edge); --highlight:var(--win-edge);
   --win-sheen:none;
   --win-control-sheen:none;
-  --win-card-shadow:0 2px 4px rgba(24,32,55,.025),0 8px 20px -16px rgba(24,32,55,.24);
+  --win-card-shadow:none;
   --win-overlay-fill:var(--solid);
   --win-overlay-shadow:0 4px 12px rgba(24,32,55,.08),0 20px 48px -16px rgba(24,32,55,.26);
   --win-selected:var(--control-tint);
@@ -17,7 +20,7 @@ html[data-platform=windows][data-theme=dark] {
   --window-edge:var(--win-edge); --highlight:var(--win-edge);
   --win-sheen:none;
   --win-control-sheen:none;
-  --win-card-shadow:0 2px 4px rgba(0,0,0,.12),0 10px 24px -16px rgba(0,0,0,.4);
+  --win-card-shadow:none;
   --win-overlay-fill:var(--solid);
   --win-overlay-shadow:0 4px 12px rgba(0,0,0,.24),0 20px 48px -16px rgba(0,0,0,.6);
   --win-selected:var(--control-tint);
@@ -27,91 +30,19 @@ html[data-platform=windows][data-theme=dark] {
 html[data-platform=windows][data-theme=light] {
   --detail-window:#f4f5f7;
   --detail-card:#ffffff;
-  --win-card-shadow:0 1px 3px rgba(24,32,55,.025),0 6px 18px -14px rgba(24,32,55,.18);
+  --win-card-shadow:none;
 }
 html[data-platform=windows][data-material=opaque] { --win-overlay-fill:var(--solid); }
-
 /* White edge highlights are independent of fill alpha and depth shadows.
    Only windows with a confirmed native material expose translucent overlays. */
-html[data-platform=windows]:is([data-material=acrylic],[data-material=blur]) {
+html[data-platform=windows]:is([data-material=mica],[data-material=acrylic],[data-material=blur]) {
   --win-overlay-fill:rgb(250 250 252 / var(--overlay-fill-opacity));
 }
-html[data-platform=windows][data-theme=dark]:is([data-material=acrylic],[data-material=blur]) {
+html[data-platform=windows][data-theme=dark]:is([data-material=mica],[data-material=acrylic],[data-material=blur]) {
   --win-overlay-fill:rgb(43 44 50 / var(--overlay-fill-opacity));
 }
-@media (prefers-reduced-transparency:reduce),(forced-colors:active) {
-  html[data-platform=windows]:is([data-theme=light],[data-theme=dark]):is([data-material=acrylic],[data-material=blur]) { --win-overlay-fill:var(--solid); }
-}
-
 /* The original select still owns its intrinsic width, form value and validity.
    Its proxy occupies exactly the same rectangle, including at fractional DPI. */
-.win-select { display:inline-grid; position:relative; min-width:0; max-width:100%; vertical-align:middle; align-self:center; }
-.win-select > select { grid-area:1 / 1; opacity:0; pointer-events:none; }
-.win-select-trigger {
-  position:absolute; inset:0; width:100%; height:100%; min-height:0; min-width:0;
-  justify-content:space-between; gap:8px; padding:2px var(--control-padding-x);
-  font-size:inherit; line-height:inherit; font-weight:var(--weight-regular); text-align:start;
-}
-.win-select-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.win-select-trigger::after { content:''; width:12px; height:12px; flex:0 0 12px; background:var(--control-chevron) center / contain no-repeat; transition:transform .22s var(--win-spring); }
-.win-select-trigger[aria-expanded=true]::after { transform:rotate(180deg); }
-.win-select-trigger[aria-invalid=true] { border-color:var(--danger); }
-.win-select-validation { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.form-row > .win-select,label > .win-select,.account-config > label > .win-select { width:100%; }
-.form-row > .win-select > select,label > .win-select > select { width:100%; }
-.filters > .win-select { flex:0 1 auto; width:auto; max-width:230px; }
-.filters .win-select-trigger,.range-controls .win-select-trigger { font-size:var(--font-secondary); line-height:var(--line-secondary); }
-.panel-body .filters > .win-select { max-width:calc((100% - var(--space-control)) / 2); }
-.panel-body .filters .win-select > select { max-width:100%; width:100%; }
-.win-select-menu {
-  position:fixed; inset:auto; margin:0; padding:4px; min-width:0;
-  border:1px solid var(--border); border-radius:var(--radius-overlay);
-  background:var(--solid); color:var(--ink); box-sizing:border-box;
-  overflow:auto; overscroll-behavior:contain; scrollbar-width:thin;
-  font-family:var(--font-ui); font-size:var(--font-secondary); line-height:var(--line-body);
-  max-height:234px; z-index:100; outline:none;
-}
-.win-select-option { display:flex; align-items:center; gap:8px; min-height:28px; padding:4px 8px; border-radius:var(--radius-control); cursor:pointer; }
-.win-select-option > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
-.win-select-option::before { content:''; width:12px; height:12px; flex:0 0 12px; }
-.win-select-option[data-selected=true]::before { background:var(--accent); mask:url("data:image/svg+xml,%3Csvg viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m2.5 6 2.25 2.5 4.75-5' fill='none' stroke='white' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; }
-.win-select-option[data-active=true] { background:var(--soft); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 24%,transparent); }
-.win-select-option[aria-disabled=true] { color:var(--faint); opacity:.55; cursor:default; }
-.win-select-group { padding:6px 8px 2px; color:var(--muted); font-size:var(--font-caption); }
-
-@media not (forced-colors:active) {
-  html[data-platform=windows] :is(.card,.stat):not(.card .card):not([data-provider]) {
-    background-image:var(--win-sheen);
-    box-shadow:inset 0 1px 0 var(--win-edge),var(--win-card-shadow);
-  }
-  html[data-platform=windows] .settings-block .card .card { background-image:none; box-shadow:none; }
-  html[data-platform=windows] :is(aside,.panel-head,.panel-foot) { background-image:linear-gradient(150deg,var(--surface-soft),transparent 75%); }
-  html[data-platform=windows] button { background-image:var(--win-control-sheen); }
-  html[data-platform=windows] button.primary { box-shadow:var(--control-shadow); }
-  html[data-platform=windows] button.primary:disabled { box-shadow:none; }
-  html[data-platform=windows] button.danger { border-color:color-mix(in srgb,var(--danger) 30%,var(--control-stroke)); }
-  html[data-platform=windows] :is(input:not([type=checkbox]):not([type=range]),textarea):focus-visible {
-    box-shadow:inset 0 -1px 0 var(--accent),0 0 0 3px color-mix(in srgb,var(--accent) 10%,transparent);
-  }
-  html[data-platform=windows] :is(nav button,.settings-tabs button,.metric-picker button) { position:relative; isolation:isolate; background-image:none; }
-  html[data-platform=windows] :is(nav button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true]) { background:transparent; box-shadow:none; }
-  html[data-platform=windows] :is(nav button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true])::before {
-    content:''; position:absolute; inset:0; z-index:-1; pointer-events:none; border-radius:inherit;
-    background:var(--win-selected); box-shadow:inset 0 1px 0 var(--win-edge),inset 0 0 0 1px color-mix(in srgb,var(--accent) 16%,var(--border)),var(--shadow-xs);
-  }
-  html[data-platform=windows] :is(.heading-refresh,.estimate-entry,#token-summary,#sidebar-toggle,.panel-actions > button,#panel-refresh,.window-controls button) { background-image:none; }
-  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) {
-    background-color:var(--win-overlay-fill); background-image:var(--win-sheen);
-    border-color:var(--border); box-shadow:inset 0 1px 0 var(--win-edge),var(--win-overlay-shadow);
-    backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
-  }
-  html[data-platform=windows] :is(.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body) button { background-image:none; }
-  html[data-platform=windows][data-material=opaque] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
-  html[data-platform=windows] #token-popover .card { background:transparent; box-shadow:none; }
-  html[data-platform=windows] #editor-backdrop,html[data-platform=windows] dialog::backdrop { background:rgb(12 18 32 / 20%); backdrop-filter:blur(3px); }
-  html[data-platform=windows] .win-select-trigger[aria-expanded=true] { border-color:var(--accent); box-shadow:inset 0 1px 0 var(--win-edge),0 0 0 2px var(--soft); }
-}
-
 /* Transitions keep logical close/focus synchronous. Discrete display/overlay
    transitions let native dialogs and popovers finish painting their exit. */
 html[data-platform=windows] dialog {
@@ -137,23 +68,6 @@ html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open
   html[data-platform=windows] :is(.win-select-menu,.multi-panel,#refresh-status-popover,#quota-failures-popover):popover-open,
   html[data-platform=windows] :is(.panel-menu,.refresh-menu):not([hidden]) { opacity:0; transform:translateY(var(--win-menu-offset,4px)) scale(.97); }
 }
-
-@media (prefers-reduced-motion:no-preference) and (forced-colors:none) {
-  html[data-platform=windows] button {
-    transition:background-color .13s ease,color .13s ease,border-color .13s ease,box-shadow .13s ease,transform .26s var(--win-spring);
-  }
-  html[data-platform=windows] button:enabled:hover { transform:translateY(-1px); }
-  html[data-platform=windows] button:enabled:active { transform:scale(.97); transition-duration:.08s; }
-  html[data-platform=windows] :is(nav button,.settings-tabs button,.metric-picker button,.win-select-trigger,.multi-trigger,.estimate-entry,#token-summary,.window-controls button):enabled:hover { transform:none; }
-  html[data-platform=windows] :is(.window-controls button,#token-summary):enabled:active { transform:none; }
-  html[data-platform=windows] :is(.panel-menu,.refresh-menu,.panel-more-menu,.machine-menu-body) button:enabled:hover { transform:none; }
-  html[data-platform=windows] input[type=checkbox]::after,html[data-platform=windows] .quota-chevron,html[data-platform=windows] .multi-trigger::after { transition:transform .22s var(--win-spring),opacity .14s ease; }
-  html[data-platform=windows] input[type=range]::-webkit-slider-thumb { transition:transform .22s var(--win-spring),box-shadow .13s ease; }
-  html[data-platform=windows] input[type=range]:enabled:active::-webkit-slider-thumb { transform:scale(1.12); box-shadow:0 0 0 4px var(--soft); }
-  html[data-platform=windows] [data-win-selection]::before { animation:win-selection .26s var(--win-spring) backwards; }
-  @keyframes win-selection { from { transform:translate(var(--win-selection-x,0px),var(--win-selection-y,0px)) scale(var(--win-selection-sx,1),var(--win-selection-sy,1)); } to { transform:none; } }
-}
-
 @supports selector(details::details-content) {
   html[data-platform=windows] :is(#panel-more,.machine-menu)::details-content { transition:content-visibility .12s allow-discrete; }
   /* Opening must expose focusable items immediately. Only closing retains the
@@ -171,7 +85,63 @@ html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open
     html[data-platform=windows] #panel-more[open] > .panel-more-menu { opacity:0; transform:translateY(4px) scale(.97); }
   }
 }
+}
 
+@layer overrides {
+@media (prefers-reduced-transparency:reduce),(forced-colors:active) {
+  html[data-platform=windows]:is([data-theme=light],[data-theme=dark]):is([data-material=mica],[data-material=acrylic],[data-material=blur]) { --win-overlay-fill:var(--solid); }
+}
+@media not (forced-colors:active) {
+  html[data-platform=windows] :is(.card,.stat):not(.card .card):not([data-provider]) {
+    background-image:var(--win-sheen);
+    box-shadow:none;
+  }
+  html[data-platform=windows] .settings-block .card .card { background-image:none; box-shadow:none; }
+  html[data-platform=windows] :is(aside,.panel-head,.panel-foot) { background-image:linear-gradient(150deg,var(--surface-soft),transparent 75%); }
+  html[data-platform=windows] button { background-image:var(--win-control-sheen); }
+  html[data-platform=windows] button:is(.primary,.tinted) { box-shadow:var(--control-shadow); }
+  html[data-platform=windows] button:is(.primary,.tinted):disabled { box-shadow:none; }
+  html[data-platform=windows] button.danger { border-color:color-mix(in srgb,var(--danger) 30%,var(--control-stroke)); }
+  html[data-platform=windows] :is(input:not([type=checkbox]):not([type=range]),textarea):focus-visible {
+    box-shadow:none;
+  }
+  html[data-platform=windows] :is(nav button,.settings-tabs button,.metric-picker button) { position:relative; isolation:isolate; background-image:none; }
+  html[data-platform=windows] :is(nav button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true]) { background:transparent; box-shadow:none; }
+  html[data-platform=windows] :is(nav button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true])::before {
+    content:''; position:absolute; inset:0; z-index:-1; pointer-events:none; border-radius:inherit;
+    background:var(--win-selected); box-shadow:none;
+  }
+  html[data-platform=windows] :is(.heading-refresh,.estimate-entry,#token-summary,#sidebar-toggle,.panel-actions > button,#panel-refresh,.window-controls button) { background-image:none; }
+  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) {
+    background-color:var(--win-overlay-fill); background-image:var(--win-sheen);
+    border-color:var(--border); box-shadow:var(--win-overlay-shadow);
+    backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
+  }
+  html[data-platform=windows] :is(.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body) button { background-image:none; }
+  html[data-platform=windows][data-material=opaque] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
+  html[data-platform=windows] #token-popover .card { background:transparent; box-shadow:none; }
+  html[data-platform=windows] #editor-backdrop,html[data-platform=windows] dialog::backdrop { background:rgb(12 18 32 / 20%); backdrop-filter:blur(3px); }
+  /* Opaque text menus are independent of the selected native window material.
+     Dialog fill and its backdrop deliberately keep the existing policy. */
+  html[data-platform=windows] :is(.win-select-menu,.multi-panel,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body,.agent-picker-menu) {
+    background:var(--solid); backdrop-filter:none; -webkit-backdrop-filter:none;
+  }
+}
+@media (prefers-reduced-motion:no-preference) and (forced-colors:none) {
+  html[data-platform=windows] button {
+    transition:background-color .13s ease,color .13s ease,border-color .13s ease,box-shadow .13s ease,transform .26s var(--win-spring);
+  }
+
+
+  html[data-platform=windows] :is(nav button,.settings-tabs button,.metric-picker button,.win-select-trigger,.multi-trigger,.estimate-entry,#token-summary,.window-controls button):enabled:hover { transform:none; }
+  html[data-platform=windows] :is(.window-controls button,#token-summary):enabled:active { transform:none; }
+  html[data-platform=windows] :is(.panel-menu,.refresh-menu,.panel-more-menu,.machine-menu-body) button:enabled:hover { transform:none; }
+  html[data-platform=windows] input[type=checkbox]::after,html[data-platform=windows] .multi-trigger::after { transition:transform .22s var(--win-spring),opacity .14s ease; }
+  html[data-platform=windows] input[type=range]::-webkit-slider-thumb { transition:transform .22s var(--win-spring),box-shadow .13s ease; }
+  html[data-platform=windows] input[type=range]:enabled:active::-webkit-slider-thumb { transform:scale(1.12); box-shadow:0 0 0 4px var(--soft); }
+  html[data-platform=windows] [data-win-selection]::before { animation:win-selection .26s var(--win-spring) backwards; }
+  @keyframes win-selection { from { transform:translate(var(--win-selection-x,0px),var(--win-selection-y,0px)) scale(var(--win-selection-sx,1),var(--win-selection-sy,1)); } to { transform:none; } }
+}
 @media (prefers-reduced-transparency:reduce) {
   html[data-platform=windows] { --win-overlay-fill:var(--solid); --win-sheen:none; --win-control-sheen:none; }
   html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint,#editor-backdrop) { backdrop-filter:none; -webkit-backdrop-filter:none; }
@@ -181,14 +151,13 @@ html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open
   html[data-platform=windows] *,html[data-platform=windows] *::before,html[data-platform=windows] *::after { animation:none !important; transition:none !important; }
   html[data-platform=windows] details::details-content { transition:none !important; }
 }
-
 /* Category tint changes hue without increasing the card's alpha. */
 @media not (forced-colors:active) {
   html[data-platform=windows] :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
     background:color-mix(in srgb,var(--category) 8%,var(--card-fill));
-    box-shadow:inset 0 1px 0 var(--win-edge),var(--win-card-shadow);
+    box-shadow:none;
   }
-  html[data-platform=windows]:is([data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
+  html[data-platform=windows]:is([data-material=mica],[data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
     background:rgb(from color-mix(in srgb,var(--category) 8%,var(--window-base)) r g b / .35);
   }
   /* Resource groups already sit inside a card; add tint, not a second pane. */
@@ -198,6 +167,7 @@ html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open
   html[data-platform=windows] button:enabled:hover,html[data-platform=windows] button:enabled:active { transform:none; }
 }
 @media (prefers-reduced-transparency:reduce) {
-  html[data-platform=windows]:is([data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) { background:var(--solid); }
+  html[data-platform=windows]:is([data-material=mica],[data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) { background:var(--solid); }
   html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
+}
 }

@@ -60,7 +60,7 @@ require('node:child_process').execFileSync(process.env.PYTHON||(process.platform
    applyHostSamples({rows:state.settings.hosts.map(host=>({id:host.id,sampleSession:'test',sampleVersion:1,sample:{timestamp:Date.now()/1000,cpu:Array.from({length:257},(_,i)=>({id:i?'cpu'+(i-1):'cpu',utilization:20})),load:[],errors:{}}}))});renderServers();
  });
  assert.equal(await page.locator('.server-card').count(),30);assert.equal(await page.locator('.metric-device').count(),0);
- await page.locator('.server-card').first().locator(':scope > summary').click();await page.locator('[data-metric="perf-0:cpu"] > summary').click();await page.locator('.metric-device').first().waitFor();
+ await page.locator('.server-card').first().locator('.server-more > summary').click();await page.locator('[data-metric="perf-0:cpu"] > summary').click();await page.locator('.metric-device').first().waitFor();
  assert((await page.locator('.metric-device').count())<40,'Only a viewport of 256 cores should be mounted');
  const retention=await page.evaluate(async()=>{
    const card=document.querySelector('.server-card'),summary=card.querySelector('[data-metric] > summary');summary.focus();const rows=state.hosts;
@@ -69,15 +69,15 @@ require('node:child_process').execFileSync(process.env.PYTHON||(process.platform
    return {card:card===document.querySelector('.server-card'),focus:summary===document.activeElement,open:summary.parentElement.open};
  });assert.deepEqual(retention,{card:true,focus:true,open:true});
  await page.evaluate(()=>{
-   const group=document.querySelector('[data-metric="perf-0:cpu"]');window.scrollBy(0,group.getBoundingClientRect().top+10000);
+   const group=document.querySelector('[data-metric="perf-0:cpu"]');(window.pageScroller?.()??document.scrollingElement).scrollBy(0,group.getBoundingClientRect().top+10000);
  });
  await page.waitForFunction(()=>[...document.querySelectorAll('.metric-device')].some(e=>Number(e.getAttribute('aria-posinset'))>80));
  assert((await page.locator('.metric-device').count())<40,'Scrolling must recycle device nodes');
- await page.evaluate(()=>{window.scrollTo(0,0);applyHostFailure('Synthetic transport failure','perf-0');});
+ await page.evaluate(()=>{(window.pageScroller?.()??document.scrollingElement).scrollTo(0,0);applyHostFailure('Synthetic transport failure','perf-0');});
  await page.waitForFunction(()=>state.hosts[0].error==='Synthetic transport failure');
  assert.equal(await page.evaluate(()=>state.hosts[0].sample.cpu[0].utilization),20,'Transport failures preserve previous samples despite version deduplication');
  await page.evaluate(()=>{state.page='agent';render();state.page='servers';render();});
- assert.equal(await page.locator('.server-card').first().evaluate(e=>e.open),true);
+ assert.equal(await page.locator('.server-card .server-more').first().evaluate(e=>e.open),true);
  await page.locator('[data-metric="perf-0:cpu"] > summary').waitFor();assert.equal(await page.locator('[data-metric="perf-0:cpu"]').evaluate(e=>e.open),true);
  assert.equal(await page.evaluate(()=>uiTimers.some(t=>t.ms===500)),false,'There must be no 500 ms background scan timer');
  // A thousand-model catalog keeps five visible rows and recycles offscreen entries.
@@ -89,6 +89,16 @@ require('node:child_process').execFileSync(process.env.PYTHON||(process.platform
  await page.locator('#price-search').fill('perf/model-999');assert.equal(await page.locator('[data-price="perf/model-999"]').count(),1);
  await page.locator('#price-search').fill('');await page.locator('.prices-list').evaluate(el=>el.scrollTop=el.scrollHeight);
  await page.waitForFunction(()=>document.querySelector('[data-price="perf/model-999"]'));
+ // Tab walks the virtual list without losing focus: rows are reused by id and the focused row is never dropped.
+ const frames=()=>page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
+ await page.locator('.prices-list').evaluate(el=>el.scrollTop=0);await page.waitForFunction(()=>document.querySelector('[data-price="perf/model-0"]'));
+ await page.locator('[data-price="perf/model-0"]').focus();
+ for(let i=0;i<24;i++){await page.keyboard.press('Tab');await frames();}
+ const walked=await page.evaluate(()=>document.activeElement.closest('[data-price-row]')?.dataset.priceRow);
+ assert.equal(walked,'perf/model-12','Twenty-four Tabs land on row 12 inside the list');
+ await page.locator('.prices-list').evaluate(el=>el.scrollTop=el.scrollHeight);await frames();
+ assert.equal(await page.evaluate(()=>document.activeElement.closest('[data-price-row]')?.dataset.priceRow),walked,'Scrolling away keeps the focused row');
+ assert.equal(await page.evaluate(()=>{const order=[...document.querySelectorAll('[data-price-row]')].map(row=>+row.dataset.priceIndex);return order.every((v,i)=>!i||order[i-1]<v);}),true,'Rows stay in list order for Tab');
  // Per-source responses update row projections while keeping the page and input nodes.
  const status=await page.evaluate(async()=>{
    while(AieyesAgentSettings.statusBusy)await new Promise(r=>setTimeout(r,5));

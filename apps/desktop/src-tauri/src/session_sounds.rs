@@ -33,6 +33,11 @@ pub fn update(app: &tauri::AppHandle, snapshot: &Snapshot, preferences: &Prefere
             )
         })
         .unwrap_or_default();
+    // The tracker still advances, so alerts silenced during a fullscreen app are not replayed later.
+    #[cfg(target_os = "windows")]
+    if crate::native_pet::quiet_desktop() {
+        return;
+    }
     if !alerts.is_empty() {
         let preferences = preferences.clone();
         std::thread::spawn(move || {

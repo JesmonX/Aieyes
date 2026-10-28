@@ -57,7 +57,7 @@ function fixture(){
    await page.evaluate(({theme,accent})=>{state.settings.appearance={theme,accent};render();},{theme,accent});
    assert.equal(await page.locator('html').getAttribute('data-theme'),theme);assert.equal(await page.locator('html').getAttribute('data-accent'),accent);
    assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-   if(accent==='indigo'){await page.evaluate(async()=>{window.scrollTo(0,0);const body=document.querySelector('.panel-body');if(body)body.scrollTop=0;await Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});await page.screenshot({path:path.join(out,`${surface}-${theme}.png`)});}
+   if(accent==='indigo'){await page.evaluate(async()=>{(window.pageScroller?.()??document.scrollingElement).scrollTo(0,0);const body=document.querySelector('.panel-body');if(body)body.scrollTop=0;await Promise.all(document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});await page.screenshot({path:path.join(out,`${surface}-${theme}.png`)});}
   }
   await page.emulateMedia({colorScheme:'light'});assert.equal(await page.locator('html').getAttribute('data-theme'),'dark','Explicit dark remains dark on a light system');
   if(surface==='index.html'){

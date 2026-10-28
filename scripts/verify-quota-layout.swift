@@ -31,7 +31,7 @@ private struct Fixture: View {
         let state = FixtureState()
         let raw = #"""
         [{"provider":"codex","accountId":"a","name":"Short","plan":"plus","windows":[{"id":"five","name":"5h","windowMinutes":300,"usedPercent":10}]},
-         {"provider":"codex","accountId":"b","name":"A long subscription name that needs several lines when the card gets narrower, with an extra balance and quota type","plan":"pro","credits":{"balance":"99999999.123456","hasCredits":true,"unlimited":false},"bankReset":{"availableCount":12},"windows":[{"id":"five","name":"5h","windowMinutes":300,"usedPercent":40},{"id":"week","name":"7d","windowMinutes":10080,"usedPercent":70}]},
+         {"provider":"codex","accountId":"b","name":"A long subscription name that needs several lines when the card gets narrower, with an extra balance and quota type","plan":"pro","identity":{"key":"b","email":"long-subscription@example.test"},"credits":{"balance":"99999999.123456","hasCredits":true,"unlimited":false},"bankReset":{"availableCount":12},"windows":[{"id":"five","name":"5h","windowMinutes":300,"usedPercent":40},{"id":"week","name":"7d","windowMinutes":10080,"usedPercent":70}]},
          {"provider":"codex","accountId":"c","name":"Error account","error":"Synthetic quota update failure","windows":[]}]
         """#
         var payload = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as! [[String:Any]]
@@ -56,7 +56,7 @@ private struct Fixture: View {
         let largest = state.heights.values.max()!
         state.quotas.remove(at: 1);try await settle()
         let shorter = Array(state.heights.values)
-        precondition(shorter.count == 2 && shorter.max()! - shorter.min()! <= 1 && shorter.max()! < largest, "Removing the tallest card must shrink the group")
+        precondition(shorter.count == 2 && shorter.max()! - shorter.min()! <= 1 && shorter.max()! < largest, "Removing the tallest card must shrink the group: \(largest) -> \(state.heights)")
         let model = AppModel(autostart:false)
         defer { model.stop() }
         let panel = PanelContainer(model:model)

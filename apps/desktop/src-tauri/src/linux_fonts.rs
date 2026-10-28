@@ -1,5 +1,5 @@
 //! Use the same embedded, unmodified fonts for WebKit and native GTK text.
-use gtk::{glib::translate::ToGlibPtr, prelude::*};
+use gtk::glib::translate::ToGlibPtr;
 use std::{ffi::CString, os::raw::c_void, os::unix::ffi::OsStrExt};
 use tauri::{AppHandle, Manager};
 
@@ -32,19 +32,37 @@ impl Drop for FontConfig {
     }
 }
 
-// Fontconfig opens files lazily, so retain them for the application's lifetime.
-struct FontFiles {
-    _directory: tempfile::TempDir,
-}
-
+// Cached files stay available for Fontconfig's lazy readers across restarts.
 pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempfile::Builder::new().prefix("aieyes-fonts-").tempdir()?;
-    for name in FONTS.into_iter().chain(["LICENSE.txt", "sources.json"]) {
-        let asset = app
-            .asset_resolver()
-            .get(format!("fonts/{name}"))
-            .ok_or_else(|| format!("Missing bundled font asset: {name}"))?;
-        std::fs::write(directory.path().join(name), asset.bytes)?;
+    use std::hash::{Hash, Hasher};
+    let assets: Vec<_> = FONTS
+        .into_iter()
+        .chain(["LICENSE.txt", "sources.json"])
+        .map(|name| {
+            app.asset_resolver()
+                .get(format!("fonts/{name}"))
+                .map(|asset| (name, asset.bytes))
+                .ok_or_else(|| format!("Missing bundled font asset: {name}"))
+        })
+        .collect::<Result<_, _>>()?;
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for (name, bytes) in &assets {
+        name.hash(&mut hash);
+        bytes.hash(&mut hash);
+    }
+    let directory = app
+        .path()
+        .app_cache_dir()?
+        .join("fonts")
+        .join(format!("{:016x}", hash.finish()));
+    std::fs::create_dir_all(&directory)?;
+    for (name, bytes) in assets {
+        let path = directory.join(name);
+        if !std::fs::read(&path).is_ok_and(|value| value == bytes) {
+            let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
+            std::io::Write::write_all(&mut temporary, &bytes)?;
+            temporary.persist(path)?;
+        }
     }
 
     // A private configuration retains system fallbacks without installing fonts
@@ -56,7 +74,7 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     }
     let config = FontConfig(pointer);
     for name in FONTS {
-        let path = CString::new(directory.path().join(name).as_os_str().as_bytes())?;
+        let path = CString::new(directory.join(name).as_os_str().as_bytes())?;
         // SAFETY: config is live and path is a NUL-terminated filename.
         if unsafe { FcConfigAppFontAddFile(config.0, path.as_ptr().cast()) } == 0 {
             return Err(format!("Could not register bundled font: {name}").into());
@@ -66,16 +84,5 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // SAFETY: Linux's PangoCairo map uses Fontconfig. set_config keeps its own
     // reference and invalidates caches, including those created during GTK init.
     unsafe { pango_fc_font_map_set_config(font_map.to_glib_none().0, config.0) };
-    app.manage(FontFiles {
-        _directory: directory,
-    });
-
-    if let Some(settings) = gtk::Settings::default() {
-        let existing = settings.gtk_font_name();
-        let mut font =
-            gtk::pango::FontDescription::from_string(existing.as_deref().unwrap_or("Sans 10"));
-        font.set_family("HarmonyOS Sans SC");
-        settings.set_gtk_font_name(Some(font.to_string().as_str()));
-    }
     Ok(())
 }

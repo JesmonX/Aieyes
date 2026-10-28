@@ -14,7 +14,7 @@ struct WakeupsView: View {
                     Text(L("保存草稿后需部署，修改后需更新部署。退出 Aieyes 后任务继续运行；本机 macOS / Windows 需保持用户登录。休眠、离线或错过时刻不补发。模型请求可能消耗额度。")).font(AppFont.secondary).foregroundStyle(.secondary)
                 }
                 HStack {
-                    Button(L("新建任务")) { editing = WakeTask() }.buttonStyle(.aieyesPrimary)
+                    Button(L("新建任务")) { editing = WakeTask() }.buttonStyle(.aieyesTinted)
                     Button(L("刷新列表")) { Task { await store.load() } }.disabled(store.loading)
                     if store.loading { ProgressView().controlSize(.small) }
                 }
@@ -45,7 +45,7 @@ struct WakeupsView: View {
             if let d = r.deployment { Text(d.target + " · " + (store.statuses[r.id]?.timezone ?? d.timezone) + (d.changed ? L(" · 草稿待部署") : "")).font(AppFont.secondary).foregroundStyle(.secondary) }
             HStack {
                 Button(L("编辑")) { editing = r.task }
-                Button(r.deployment == nil ? L("部署") : needsDeploy ? L("重新部署") : r.deployment?.changed == true ? L("更新部署") : L("查看运行结果")) { store.perform(needsDeploy || r.deployment?.changed == true ? "deploy" : "status", r.id) }.buttonStyle(.aieyesPrimary)
+                Button(r.deployment == nil ? L("部署") : needsDeploy ? L("重新部署") : r.deployment?.changed == true ? L("更新部署") : L("查看运行结果")) { store.perform(needsDeploy || r.deployment?.changed == true ? "deploy" : "status", r.id) }.buttonStyle(.aieyesTinted)
                 Menu(L("更多操作")) {
                     if let d = r.deployment, !needsDeploy {
                         Button(d.enabled ? L("停用") : L("启用")) { store.perform(d.enabled ? "disable" : "enable", r.id) }
@@ -96,7 +96,7 @@ struct WakeEditor: View {
             Text(task.id.isEmpty ? L("新建唤醒任务") : L("编辑唤醒任务")).font(AppFont.title)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    TextField(L("名称"), text: $task.name)
+                    LabeledContent(L("名称")) { TextField(L("名称"), text: $task.name).labelsHidden() }
                     Picker(L("账户"), selection: Binding(get: { selectedAccount }, set: { selectedAccount = $0; task.sourceId = ""; task.codexProfileId = nil; task.model = ""; capabilities = nil })) {
                         Text(L("请选择账户")).tag("")
                         ForEach(model.settings.accounts.filter { a in a.archived != true && targets.rows.contains { $0.accountKey == a.key && CoreContract.wakeupProviders.contains($0.provider) } }, id: \.key) { Text($0.name).tag($0.key) }
@@ -121,7 +121,7 @@ struct WakeEditor: View {
                     Button(L("重新检查登录")) { Task { await targets.load(model, includeUnavailable: true) } }.disabled(!targets.checking.isEmpty)
                     Text(L("离线时可先保存草稿。更换运行位置前请移除旧部署。")).font(AppFont.secondary).foregroundStyle(.secondary)
                     ForEach(task.times.indices, id: \.self) { index in
-                        HStack { Text(L("目标时刻")); TextField("HH:mm", text: $task.times[index]).frame(width: 80); Text(localTime(task.times[index])).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(L("移除")) { task.times.remove(at: index) }.accessibilityLabel(L("移除时刻 ") + task.times[index]) }
+                        HStack { DatePicker(L("目标时刻"), selection: wakeTime(index), displayedComponents: .hourAndMinute).environment(\.timeZone, WakeTimeOfDay.zone).fixedSize(); Text(localTime(task.times[index])).font(AppFont.secondary).foregroundStyle(.secondary); Spacer(); Button(L("移除")) { task.times.remove(at: index) }.accessibilityLabel(L("移除时刻 {0}", task.times[index])) }
                     }
                     Button(L("添加时刻")) { task.times.append("08:00") }
                     Text(L("跟随目标机器时区，错过时刻不补发。")).font(AppFont.secondary).foregroundStyle(.secondary)
@@ -135,7 +135,7 @@ struct WakeEditor: View {
                             }
                         }
                     }
-                    TextField(L("模型 ID"), text: $task.model)
+                    LabeledContent(L("模型 ID")) { TextField(L("模型 ID"), text: $task.model).labelsHidden() }
                     Picker(L("推理强度"), selection: $task.effort) { Text(L("模型默认")).tag(""); ForEach(efforts, id: \.self) { Text($0).tag($0) } }
                     Text(L("提示词")).font(AppFont.section)
                     TextEditor(text: $task.prompt).frame(height: 80).overlay(RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.2)))
@@ -160,6 +160,12 @@ struct WakeEditor: View {
         .onChange(of: task.binary) { _, _ in capabilities = nil; task.model = "" }
         .onChange(of: task.model) { _, _ in if !efforts.contains(task.effort) { task.effort = efforts.contains("low") ? "low" : "" } }
     }
+    /// Edits a stored "HH:mm" target time. Times are wall-clock values on the target machine, so the picker works in
+    /// UTC on a fixed day: the viewer's time zone and daylight-saving changes never shift the stored value.
+    private func wakeTime(_ index: Int) -> Binding<Date> {
+        Binding(get: { WakeTimeOfDay.date(task.times.indices.contains(index) ? task.times[index] : "") },
+                set: { if task.times.indices.contains(index) { task.times[index] = WakeTimeOfDay.text($0) } })
+    }
     private func localTime(_ time: String) -> String {
         WakeupTime.next(time, zone: capabilities?.timezone).label
     }
@@ -178,5 +184,20 @@ struct WakeEditor: View {
         busy = true; error = nil
         defer { busy = false }
         do { guard deployed || targets.rows.contains(where: { $0.accountKey == selectedAccount && $0.sourceId == task.sourceId && $0.profileId == task.codexProfileId && ($0.canDraft ?? $0.canWake) }) else { throw ClientError.message(L("此账户与所选目录的关联或身份尚未确认，请检查账户设置")) }; try await save(task); return true } catch { self.error = error.localizedDescription; return false }
+    }
+}
+
+private enum WakeTimeOfDay {
+    static let zone = TimeZone(identifier: "UTC")!
+    private static let calendar: Calendar = { var value = Calendar(identifier: .gregorian); value.timeZone = zone; return value }()
+    /// Unparseable text (older free-form drafts) shows as 08:00, the default for a new time.
+    static func date(_ text: String) -> Date {
+        let parts = text.split(separator: ":").compactMap { Int($0) }
+        let valid = parts.count == 2 && (0...23).contains(parts[0]) && (0...59).contains(parts[1])
+        return calendar.date(from: DateComponents(year: 2001, month: 1, day: 1, hour: valid ? parts[0] : 8, minute: valid ? parts[1] : 0)) ?? Date(timeIntervalSinceReferenceDate: 0)
+    }
+    static func text(_ date: Date) -> String {
+        let parts = calendar.dateComponents([.hour, .minute], from: date)
+        return String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
     }
 }

@@ -3,15 +3,17 @@ window.AieyesPetLibrary = (() => {
   const e = (value) => AieyesUI.escapeHTML(value ?? ''),reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const library = { pets: [], selectedLibraryId: null, warnings: [], loaded: false, input: '', status: '', error: '', busy: false, lastInput: '' };
   const assets = new Map(),previews = new Map();
-  let root = null,observer = null,removalObserver = null,timer = null,loading = null,retryAction = null,retryLabel = AieyesI18n.t("重试"),revision = 0;window.addEventListener("aieyes:language", () => {retryLabel = AieyesI18n.t("重试");});
+  let root = null,observer = null,removalObserver = null,timer = null,loading = null,retryAction = null,retryKind = '',revision = 0;
+  // The failed step is kept as a code so the label follows the current language.
+  const retryLabels = { list: "重试读取列表", import: "重试导入", select: "重试切换" };
   const label = (value) => typeof value === 'string' ? value : value?.name ?? value?.url ?? '';
-  const imported = (pet) => {const date = new Date(pet.importedAt);return Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';};
+  const imported = (pet) => {const date = new Date(pet.importedAt);return Number.isFinite(date.getTime()) ? date.toLocaleString(AieyesI18n.locale, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', ...AieyesI18n.clock }) : '';};
   function html() {return `<section class="pet-library" id="pet-library"><h3>${AieyesI18n.t("我的桌宠")}</h3><p id="current-pet" class="sr-only" role="status">${AieyesI18n.t("正在读取桌宠…")}</p><div id="pet-library-list" class="pet-library-grid"></div><div id="pet-library-warnings"></div><details class="settings-details" id="pet-import-options" ${!library.pets.length ? 'open' : ''}><summary>${AieyesI18n.t("导入桌宠")}</summary><form id="pet-import-form"><label for="pet-import-input">${AieyesI18n.t("链接、npx 命令或 npm 包名")}</label><input id="pet-import-input" type="text" value="${e(library.input)}" placeholder="https://… / npx … / @scope/package" autocomplete="off" spellcheck="false"><div class="actions"><button id="import-pet" type="submit">${AieyesI18n.t("导入并使用")}</button><button id="select-pet-file" type="button">${AieyesI18n.t("选择本地文件…")}</button>${helpHTML(AieyesI18n.t("桌宠资源"), AieyesI18n.t("支持 ZIP、pet.json、桌宠链接、npx 命令和 npm 包名。导入后立即使用，已有桌宠保留。"))}</div></form></details><p id="pet-import-status" role="status"></p><button id="pet-import-retry" type="button" hidden>${AieyesI18n.t("重试导入")}</button></section>`;}
 
   function status() {
     if (!root?.isConnected) return;
     const line = root.querySelector('#pet-import-status');if (library.error) AieyesUI.showError(line, library.error, AieyesI18n.t("桌宠操作失败"));else line.textContent = AieyesI18n.message(library.status);line.className = library.error ? 'error' : 'muted tiny';
-    const retry = root.querySelector('#pet-import-retry');retry.hidden = !library.error || !retryAction;retry.disabled = library.busy;retry.textContent = retryLabel;
+    const retry = root.querySelector('#pet-import-retry');retry.hidden = !library.error || !retryAction;retry.disabled = library.busy;retry.textContent = AieyesI18n.t(retryLabels[retryKind] ?? "重试");
     for (const id of ['import-pet', 'select-pet-file']) root.querySelector('#' + id).disabled = library.busy;
     root.querySelector('#import-pet').textContent = library.busy ? AieyesI18n.t("处理中…") : AieyesI18n.t("导入并使用");
     root.querySelectorAll('[data-pet-select]').forEach((button) => {const selected = button.dataset.petSelect === library.selectedLibraryId;button.disabled = library.busy || selected;button.textContent = selected ? AieyesI18n.t("使用中") : AieyesI18n.t("使用");button.setAttribute('aria-pressed', String(selected));});
@@ -26,7 +28,7 @@ window.AieyesPetLibrary = (() => {
       const duplicate = library.pets.filter((other) => other.displayName === pet.displayName).length > 1;
       const meta = [label(pet.creator), label(pet.source)].filter(Boolean).join(' · ');
       return `<article class="pet-library-card" data-pet-id="${e(pet.libraryId)}"><canvas width="88" height="96" aria-label="${AieyesI18n.t("{0}空闲动画预览", e(pet.displayName))}"></canvas><div class="pet-library-info"><strong title="${e(pet.displayName)}">${e(pet.displayName)}</strong>${meta ? `<small title="${e(meta)}">${e(meta)}</small>` : ''}${duplicate || pet.displayName.startsWith('历史桌宠') ? `<small>${e(imported(pet) || pet.libraryId.slice(0, 12))}</small>` : ''}<span class="pet-preview-error error" hidden></span></div><button type="button" data-pet-select="${e(pet.libraryId)}" aria-label="${AieyesI18n.t("使用 {0}", e(pet.displayName))}">${AieyesI18n.t("使用")}</button></article>`;
-    }).join('') || (library.loaded ? AieyesI18n.t("<p class=\"muted\">还没有桌宠。</p>") : AieyesI18n.t("<p class=\"muted\">正在读取列表…</p>"));
+    }).join('') || (library.loaded ? `<p class="muted">${AieyesI18n.t("还没有桌宠。")}</p>` : `<p class="muted">${AieyesI18n.t("正在读取列表…")}</p>`);
     root.querySelector('#pet-library-warnings').innerHTML = (library.warnings ?? []).map((w) => `<div class="error">${e(w.path)}：${e(AieyesI18n.message(w.error))}</div>`).join('');
     list.querySelectorAll('[data-pet-select]').forEach((button) => button.onclick = () => select(button.dataset.petSelect));
     observePreviews();status();
@@ -37,12 +39,12 @@ window.AieyesPetLibrary = (() => {
     loading = (async () => {
       try {
         const result = await api('pets.list');if (requested !== revision) return;
-        if (retryLabel === '重试读取列表') library.error = '';
+        if (retryKind === 'list') library.error = '';
         const changed = !library.loaded || JSON.stringify([library.pets, library.warnings]) !== JSON.stringify([result?.pets ?? [], result?.warnings ?? []]);
         if (library.loaded && !library.busy && library.selectedLibraryId !== result?.selectedLibraryId) library.status = '';
         library.pets = result?.pets ?? [];library.selectedLibraryId = result?.selectedLibraryId ?? null;library.warnings = result?.warnings ?? [];library.loaded = true;
         if (changed) renderList();else status();
-      } catch (error) {if (requested === revision) {library.error = AieyesI18n.t("桌宠列表读取失败：") + String(error.message ?? error);retryAction = refresh;retryLabel = AieyesI18n.t("重试读取列表");status();}} finally
+      } catch (error) {if (requested === revision) {library.error = AieyesI18n.t("桌宠列表读取失败：") + String(error.message ?? error);retryAction = refresh;retryKind = 'list';status();}} finally
       {loading = null;}
     })();return loading;
   }
@@ -57,7 +59,7 @@ window.AieyesPetLibrary = (() => {
       library.status = AieyesI18n.t("已导入并使用 ") + result.pet.displayName;
       if (library.input === input) {library.input = '';if (root?.isConnected) root.querySelector('#pet-import-input').value = '';}
       await refresh(true);
-    } catch (error) {library.error = String(error.message ?? error);library.status = '';retryAction = () => importPet(input);retryLabel = AieyesI18n.t("重试导入");} finally
+    } catch (error) {library.error = String(error.message ?? error);library.status = '';retryAction = () => importPet(input);retryKind = 'import';} finally
     {library.busy = false;status();}
   }
   async function select(libraryId) {
@@ -67,7 +69,7 @@ window.AieyesPetLibrary = (() => {
       if (!result.pet) throw new Error(AieyesI18n.t("此桌宠不可用，请重新导入。"));
       revision++;library.selectedLibraryId = result.pet.libraryId;library.status = AieyesI18n.t("正在使用 ") + result.pet.displayName;
       await refresh(true);
-    } catch (error) {library.error = String(error.message ?? error);library.status = '';retryAction = () => select(libraryId);retryLabel = AieyesI18n.t("重试切换");} finally
+    } catch (error) {library.error = String(error.message ?? error);library.status = '';retryAction = () => select(libraryId);retryKind = 'select';} finally
     {library.busy = false;status();}
   }
   function asset(pet) {

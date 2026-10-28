@@ -2,7 +2,8 @@
 """Synthetic RPC fixture for native --render. No files, credentials or network reads."""
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from copy import deepcopy
 import sys
 import time
 stamp = int(os.environ.get('AIEYES_UI_STAMP', time.time()))
@@ -33,11 +34,18 @@ if scenario:
     settings['sources'][0]['hostId'] = host['id']
     hosts = [dict(id=host['id'], name=host['name'], sample=dict(timestamp=stamp, uptime=3600, load=[0.1], errors={}, cpu=[dict(id='cpu', utilization=42)]))]
     dashboard['quotaEstimates'] = []; dashboard['creditEstimates'] = []
-    dashboard['trendDays'] = [dict(usage, key=(date(2026,10,1)+timedelta(days=i)).isoformat()) for i in range(7)]
-    dashboard['heatmap'] = dashboard['trendDays']
+    # Match usage_cache::date_bounds: at least seven trend days and 365 heatmap days,
+    # including explicit zero aggregates for dates with no events.
+    today = datetime.fromtimestamp(stamp).date()
+    zero = dict(tokens={key: 0 for key in tokens}, total=0, cost=0, pricedTokens=0, events=0)
+    def series(count):
+        return [dict(deepcopy(usage if offset in (0, 2, 6) else zero), key=(today-timedelta(days=offset)).isoformat()) for offset in range(count-1, -1, -1)]
+    dashboard['trendDays'] = series(7)
+    dashboard['days'] = deepcopy(dashboard['trendDays'])
+    dashboard['heatmap'] = series(365)
     dashboard['models'] = [dict(usage, key='test-model')]
     dashboard['modelOptions'] = ['test-model']
-    dashboard['dayModels'] = [dict(day=day['key'], model='test-model', usage=usage) for day in dashboard['trendDays']]
+    dashboard['dayModels'] = [dict(day=day['key'], model='test-model', usage=usage) for day in dashboard['trendDays'] if day['events']]
     if scenario in ['compact', 'workspace']:
         GiB = 1024**3
         host.update(metrics=['cpu','memory','gpu','filesystems'],details=['gpuMemory','gpuThermals','fsAvailable','fsType','inodes'])
@@ -63,8 +71,8 @@ if scenario:
         long_name = '团队账户与训练服务器的长名称示例' * 4
         quotas[0]['name'] = long_name; settings['sources'][0]['name'] = long_name; settings['accounts'][0]['name'] = long_name
         usage.update(total=2400000000,cost=100000.25,pricedTokens=2400000000,tokens=dict(input=1500000000,output=300000000,cacheRead=500000000,cacheWrite=100000000,reasoning=0))
-        dashboard['trendDays'] = [dict(usage,key=(date(2026,6,28)+timedelta(days=i)).isoformat()) for i in range(100)]
-        dashboard['heatmap'] = [dict(usage,key=(date(2025,10,7)+timedelta(days=i)).isoformat()) for i in range(365)]
+        dashboard['trendDays'] = [dict(usage,key=(today-timedelta(days=99-i)).isoformat()) for i in range(100)]
+        dashboard['heatmap'] = [dict(usage,key=(today-timedelta(days=364-i)).isoformat()) for i in range(365)]
         dashboard['models'] = [dict(usage,key='provider/long-model-identifier-'+str(i),total=usage['total']/(i+1),cost=i+1) for i in range(12)]
         dashboard['modelOptions'] = [m['key'] for m in dashboard['models']]
         dashboard['dayModels'] = [dict(day=day['key'],model=m['key'],usage=m) for day in dashboard['trendDays'] for m in dashboard['models']]

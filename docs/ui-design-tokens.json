@@ -12,7 +12,7 @@
     "font-panel-title": 20,
     "font-panel-overview": 17,
     "font-number": 24,
-    "font-hint": 11,
+    "font-hint": 12,
     "line-body": 20,
     "line-secondary": 18,
     "line-caption": 16,
@@ -23,6 +23,11 @@
     "control-compact-height": 24,
     "input-height": 26,
     "control-padding-x": 10,
+    "control-sm": 24,
+    "control-md": 32,
+    "control-md-compact": 28,
+    "control-lg": 40,
+    "hit-target": 24,
     "icon-button-size": 28,
     "icon-size": 14,
     "icon-stroke": 1.5,
@@ -54,14 +59,9 @@
     "radius-control": 8,
     "radius-account-switch": 8,
     "radius-overlay": 12,
-    "radius-badge": 999,
+    "radius-badge": 4,
     "border-width": 1,
     "progress-height": 4,
-    "resource-ring-size": 72,
-    "resource-ring-compact-size": 48,
-    "resource-ring-stroke": 5,
-    "resource-ring-font": 14,
-    "resource-ring-compact-font": 10,
     "chart-height": 180,
     "chart-surface-height": 230,
     "chart-reading-height": 20,
@@ -146,16 +146,20 @@
       "dark": "efeff2"
     },
     "muted": {
-      "light": "6b6b73",
+      "light": "62626b",
       "dark": "b6b6c0"
     },
     "faint": {
-      "light": "62626b",
+      "light": "6b6b73",
       "dark": "a4a4ae"
     },
     "accent": {
       "light": "5566d9",
       "dark": "a3b3ff"
+    },
+    "accent-ink": {
+      "light": "ffffff",
+      "dark": "131a2a"
     },
     "accent-blue": {
       "light": "2166be",
@@ -246,8 +250,8 @@
       "dark": "c7a3ee"
     },
     "category-storage": {
-      "light": "926314",
-      "dark": "e7bf77"
+      "light": "76685c",
+      "dark": "c2b2a3"
     },
     "category-network": {
       "light": "326d83",
@@ -258,5 +262,15 @@
     "font-panel-body": "font-body",
     "font-panel-caption": "font-caption",
     "font-panel-number": "font-number"
+  },
+  "web": {
+    "dimensions": {
+      "radius-control": 4,
+      "radius-account-switch": 4,
+      "radius-card": 12
+    },
+    "weights": {
+      "strong": 600
+    }
   }
 }

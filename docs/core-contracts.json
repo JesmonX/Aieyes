@@ -550,6 +550,17 @@
       "updateBehavior": "finish"
     },
     {
+      "name": "agents.manage",
+      "lane": "configuration",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
       "name": "agyAuth.cancel",
       "lane": "accounts",
       "invalidates": [],

@@ -38,37 +38,46 @@ function fixture(){
     await context.addInitScript(fixture);await context.exposeFunction('testRPC',invoke);
     const main=await context.newPage(),panel=await context.newPage();await main.setViewportSize({width:1120,height:820});await panel.setViewportSize({width:450,height:760});
     for(const [page,file] of [[main,'index.html'],[panel,'floating.html']]){page.on('pageerror',e=>errors.push(String(e)));await page.goto(`http://127.0.0.1:${server.address().port}/${file}`);await page.evaluate(()=>AieyesApp.ready);}
+    const pickTheme=async(page,theme)=>{await page.locator('[data-theme-menu] > summary').click();await page.locator(`[data-theme-choice=${theme}]`).click();};
     const expectTheme=async(theme)=>{for(const page of [main,panel]){await page.waitForFunction(t=>document.documentElement.dataset.theme===t,theme);assert.equal(await page.evaluate(()=>state.settings.appearance.theme),theme);}};
     await expectTheme('light');
     await main.evaluate(()=>{state.settingsDraft=structuredClone(state.settings);state.settingsDraft.modelMappings.unsaved='keep-this-draft';});
-    await main.locator('[data-theme-toggle]').click();await expectTheme('dark');assert.deepEqual((await rpc('settings.get')).appearance,{theme:'dark',accent:'teal',chartPalette:'classic',chartContrast:'high',language:'zh-CN'});
+    await pickTheme(main,'dark');await expectTheme('dark');assert.deepEqual((await rpc('settings.get')).appearance,{theme:'dark',accent:'teal',chartPalette:'classic',chartContrast:'high',language:'zh-CN',settingsAgentIds:null});
     assert.equal(await main.evaluate(()=>state.settingsDraft.modelMappings.unsaved),'keep-this-draft');assert.equal((await rpc('settings.get')).modelMappings.unsaved,undefined);
     await panel.evaluate(()=>render());await expectTheme('dark');await panel.evaluate(()=>loadDashboard());await expectTheme('dark');
-    await panel.locator('[data-theme-toggle]').click();await expectTheme('light');
+    await pickTheme(panel,'light');await expectTheme('light');
     await main.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
-    await panel.locator('[data-theme-toggle]').click();await expectTheme('dark');assert.equal(await main.locator('[name=appearanceTheme]').inputValue(),'dark');
+    await pickTheme(panel,'dark');await expectTheme('dark');assert.equal(await main.locator('[name=appearanceTheme]').inputValue(),'dark');
     await main.locator('[name=appearanceTheme]').selectOption('light');await main.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting);await expectTheme('light');
     await main.locator('[name=appearanceTheme]').selectOption('system');await main.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting);
     for(const page of [main,panel]){await page.emulateMedia({colorScheme:'dark'});await page.waitForFunction(()=>document.documentElement.dataset.theme==='dark');assert.equal(await page.evaluate(()=>state.settings.appearance.theme),'system');}
-    await panel.locator('[data-theme-toggle]').click();await expectTheme('light');
+    // Following the system stays one choice away instead of being lost to a two-state switch.
+    assert.equal(await panel.locator('[data-theme-choice=system]').getAttribute('aria-checked'),'true');
+    await pickTheme(panel,'light');await expectTheme('light');
     // A failed write does not broadcast or change either surface.
-    failSave=true;await panel.locator('[data-theme-toggle]').click();await panel.getByText('模拟主题保存失败',{exact:false}).waitFor();await panel.waitForFunction(()=>!state.themeSaving);await expectTheme('light');failSave=false;
-    await panel.locator('[data-theme-toggle]').click();await expectTheme('dark');await panel.waitForFunction(()=>!state.themeSaving);assert(await panel.locator('#message').isHidden());
+    failSave=true;await pickTheme(panel,'dark');await panel.getByText('模拟主题保存失败',{exact:false}).waitFor();await panel.waitForFunction(()=>!state.themeSaving);await expectTheme('light');failSave=false;
+    await pickTheme(panel,'dark');await expectTheme('dark');await panel.waitForFunction(()=>!state.themeSaving);assert(await panel.locator('#message').isHidden());
     await main.reload();await main.evaluate(()=>AieyesApp.ready);await expectTheme('dark');
+    // The native shell reads the saved settings at startup, so a page never pushes its cached appearance: a stale
+    // copy (localStorage commits late, so a crash loses recent changes) must not revert the tray and pet.
+    await main.evaluate(()=>localStorage.setItem('aieyes.appearance',JSON.stringify({theme:'light',accent:'teal',language:'en'})));
+    await main.reload();await main.evaluate(()=>AieyesApp.ready);await expectTheme('dark');
+    const pushed=await main.evaluate(()=>themeNative.map((a)=>`${a.theme}/${a.language}`));
+    assert(pushed.length&&pushed.every((p)=>p==='dark/zh-CN'),`Native appearance after a stale cache: ${pushed}`);
     // A sibling theme change also updates an inactive appearance page, preserving a failed local edit.
     await main.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
     failSave=true;await main.locator('[name=appearanceAccent]').selectOption('blue');
     await main.waitForFunction(()=>!state.generalSavePending&&state.saveError==='模拟主题保存失败');
     await openGeneralPage(main, 'network');failSave=false;
-    await panel.locator('[data-theme-toggle]').click();await expectTheme('light');
+    await pickTheme(panel,'light');await expectTheme('light');
     await openGeneralPage(main, 'appearance');
     assert.equal(await main.locator('[name=appearanceTheme]').inputValue(),'light','Inactive appearance page adopts the saved sibling theme');
     assert.equal(await main.locator('[name=appearanceAccent]').inputValue(),'blue','Failed local appearance edit is retained');
     await main.locator('#settings-retry-save').click();
     await main.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&!state.saveError);
-    assert.deepEqual((await rpc('settings.get')).appearance,{theme:'light',accent:'blue',chartPalette:'classic',chartContrast:'high',language:'zh-CN'});
+    assert.deepEqual((await rpc('settings.get')).appearance,{theme:'light',accent:'blue',chartPalette:'classic',chartContrast:'high',language:'zh-CN',settingsAgentIds:null});
     for(const page of [main,panel])await page.waitForFunction(()=>document.documentElement.dataset.accent==='blue');
-    await panel.locator('[data-theme-toggle]').click();await expectTheme('dark');
+    await pickTheme(panel,'dark');await expectTheme('dark');
     // Exercise the saved controls against the real core, including every theme/contrast combination.
     await main.evaluate(()=>{state.page='settings';state.settingsTab='general';render();});
     const analysis=await context.newPage();analysis.on('pageerror',e=>errors.push(String(e)));
@@ -108,7 +117,8 @@ function fixture(){
     await main.locator('[name=appearanceChartContrast]').selectOption('high');await main.waitForFunction(()=>!state.generalSavePending&&!state.settingsSaving&&!state.settingsCommitting&&state.settings.appearance.chartContrast==='high');
     await expectTheme('dark');
     for(const [page,name] of [[main,'main'],[panel,'panel']]){
-      assert.equal(await page.locator('[data-theme-toggle]').getAttribute('aria-label'),'切换到浅色模式');
+      assert.equal(await page.locator('[data-theme-menu] > summary').getAttribute('aria-label'),'主题：深色');
+      assert.equal(await page.locator('[data-theme-choice=dark]').getAttribute('aria-checked'),'true');
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
       await page.screenshot({path:path.join(out,name+'-dark.png'),fullPage:true});
       assert.equal(await page.evaluate(()=>themeNative.at(-1).theme),'dark');

@@ -105,7 +105,7 @@ struct AgentValuationView: View {
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 16) {
-            HStack { Text(Format.provider(provider) + L(" · 估值与采样")).font(AppFont.title); Spacer(); Button(L("完成")) { dismiss() }.disabled(model.automaticSaving) }
+            Text(Format.provider(provider) + L(" · 估值与采样")).font(AppFont.title)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     AutomaticValuationControls(model: model, sources: sources)
@@ -132,6 +132,7 @@ struct AgentValuationView: View {
                     if let error { HStack { ErrorNotice(message: error).foregroundStyle(Palette.warn); Button(L("重试读取")) { Task { await load() } } } }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
+            HStack { Spacer(); Button(L("完成")) { dismiss() }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(model.automaticSaving) }
         }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogValuationWidth, height: 650).aieyesAccent()
             .interactiveDismissDisabled(model.automaticSaving)
             .updateOperation(L("估值与采样"), active: model.automaticSaving)

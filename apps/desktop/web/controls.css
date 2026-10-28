@@ -1,9 +1,10 @@
+@layer components {
 /* Shared control roles. Geometry comes from ui-design-tokens.json; Web finishes live in tokens.css.
    Window chrome and page layout live in style.css; compact layout lives in panel.css. */
 button,input,select,textarea { font:inherit; color:inherit; border-radius:var(--radius-control); }
 button {
   display:inline-flex; align-items:center; justify-content:center; gap:6px;
-  min-height:var(--control-height); padding:2px var(--control-padding-x);
+  min-height:var(--control-sm); padding:2px var(--control-padding-x);
   font-size:var(--font-secondary); line-height:var(--line-secondary); font-weight:var(--weight-regular);
   border:1px solid var(--control-stroke); border-bottom-color:var(--control-bottom-stroke);
   background:var(--control-fill); box-shadow:var(--control-shadow); cursor:pointer;
@@ -12,23 +13,30 @@ button {
 button:where(:enabled):hover { transform:none; background-color:var(--control-hover); }
 button:where(:enabled):active { transform:none; background-color:var(--control-pressed); box-shadow:var(--control-pressed-shadow); }
 button:disabled { opacity:.45; cursor:default; transform:none; box-shadow:none; }
-.primary { background:var(--control-tint); color:var(--control-mark); border-color:color-mix(in srgb,var(--accent) 28%,transparent); }
-.primary:enabled:hover { background-color:var(--control-tint-hover); color:var(--control-mark); }
-.primary:enabled:active { background-color:var(--control-tint-pressed); }
+/* Button levels (§5.2). primary: the single solid default action of a dialog or view; tinted: an
+   emphasized secondary action (add account, deploy); subtle: toolbar and inline actions; danger:
+   destructive and always confirmed. Unclassed buttons are the secondary level. */
+button.primary { background:var(--accent); color:var(--accent-ink); border-color:color-mix(in srgb,var(--accent) 82%,var(--ink)); font-weight:var(--weight-medium); }
+button.primary:enabled:hover { background-color:color-mix(in srgb,var(--accent) 88%,var(--ink)); color:var(--accent-ink); }
+button.primary:enabled:active { background-color:color-mix(in srgb,var(--accent) 78%,var(--ink)); }
+.tinted { background:var(--control-tint); color:var(--control-mark); border-color:color-mix(in srgb,var(--accent) 28%,transparent); }
+.tinted:enabled:hover { background-color:var(--control-tint-hover); color:var(--control-mark); }
+.tinted:enabled:active { background-color:var(--control-tint-pressed); }
+button.subtle { background:transparent; border-color:transparent; box-shadow:none; }
 button.danger { color:var(--danger); background:color-mix(in srgb,var(--danger) 8%,transparent); border-color:color-mix(in srgb,var(--danger) 24%,transparent); }
 button.danger:enabled:hover { background-color:color-mix(in srgb,var(--danger) 14%,transparent); }
 button.danger:enabled:active { background-color:color-mix(in srgb,var(--danger) 20%,transparent); }
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 input,select,textarea {
-  min-width:0; min-height:var(--input-height); padding:2px var(--control-padding-x);
-  line-height:var(--line-body); background:var(--field-fill); border:1px solid var(--control-stroke); box-shadow:inset 0 1px 2px #00000004;
+  min-width:0; min-height:var(--control-md); padding:2px var(--control-padding-x);
+  line-height:var(--line-body); background:var(--field-fill); border:1px solid var(--control-stroke); box-shadow:none;
   transition:background-color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),box-shadow var(--t-fast) var(--ease);
 }
 input:enabled:hover,select:enabled:hover,textarea:enabled:hover { border-color:var(--checkbox-stroke); }
-input:focus-visible,select:focus-visible,textarea:focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent); box-shadow:none; }
+input:focus-visible,select:focus-visible,textarea:focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-color:var(--control-stroke); box-shadow:none; }
 input:disabled,select:disabled,textarea:disabled { opacity:.45; cursor:default; box-shadow:none; }
 select {
-  appearance:none; cursor:pointer; height:var(--input-height); padding-right:30px;
+  appearance:none; cursor:pointer; height:var(--control-md); padding-right:30px;
   text-align:start; text-overflow:ellipsis; vertical-align:middle;
   background-color:var(--control-fill); background-image:var(--control-chevron);
   background-repeat:no-repeat; background-position:right 9px center; background-size:12px 12px;
@@ -38,16 +46,16 @@ select:enabled:hover { background-color:var(--control-hover); }
 select:enabled:active { background-color:var(--control-pressed); }
 /* Options remain native, with an opaque backing when the host allows styling. */
 select option,select optgroup { background:var(--solid); color:var(--ink); }
-input[type=checkbox] { appearance:none; display:inline-grid; place-content:center; width:var(--checkbox-size); height:var(--checkbox-size); min-height:0; margin:0; padding:0; flex:0 0 var(--checkbox-size); accent-color:var(--accent); border:1px solid var(--checkbox-stroke); border-radius:4px; background:var(--control-fill); box-shadow:var(--control-shadow); vertical-align:middle; cursor:pointer; }
+input[type=checkbox] { appearance:none; display:inline-grid; place-content:center; width:var(--checkbox-size); height:var(--checkbox-size); min-height:0; margin:0; padding:0; flex:0 0 var(--checkbox-size); accent-color:var(--accent); border:1px solid var(--checkbox-stroke); border-radius:var(--radius-badge); background:var(--control-fill); box-shadow:var(--control-shadow); vertical-align:middle; cursor:pointer; }
 input[type=checkbox]:not([role=switch])::after { content:''; width:12px; height:12px; background:var(--control-mark); mask:url("data:image/svg+xml,%3Csvg viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m2.5 6 2.25 2.5 4.75-5' fill='none' stroke='white' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; opacity:0; transform:scale(.8); transition:opacity var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
 input[type=checkbox]:not([role=switch]):enabled:hover { border-color:var(--ink); background-color:var(--control-hover); }
 input[type=checkbox]:not([role=switch]):is(:checked,:indeterminate) { background:var(--control-tint); border-color:var(--control-mark); box-shadow:var(--control-shadow); }
 input[type=checkbox]:not([role=switch]):is(:checked,:indeterminate)::after { opacity:1; transform:none; }
-input[type=checkbox]:not([role=switch]):indeterminate::after { width:8px; height:2px; mask:none; border-radius:1px; }
+input[type=checkbox]:not([role=switch]):indeterminate::after { width:8px; height:2px; mask:none; border-radius:var(--radius-hairline); }
 input[type=checkbox]:not([role=switch]):is(:checked,:indeterminate):enabled:hover { background-color:var(--control-tint-hover); border-color:var(--control-mark); }
 input[type=checkbox]:not([role=switch]):enabled:active { box-shadow:var(--control-pressed-shadow); }
 input[type=checkbox]:not([role=switch]):enabled:active::after { transform:scale(.85); }
-input[type=checkbox][role=switch] { --switch-offset:0px; position:relative; width:var(--switch-width); height:var(--switch-height); flex-basis:var(--switch-width); border:1px solid var(--control-stroke); border-radius:var(--r-pill); background:var(--control-fill); box-shadow:inset 0 1px 2px #0000000a; }
+input[type=checkbox][role=switch] { --switch-offset:0px; position:relative; width:var(--switch-width); height:var(--switch-height); flex-basis:var(--switch-width); border:1px solid var(--control-stroke); border-radius:var(--radius-pill); background:var(--control-fill); box-shadow:inset 0 1px 2px #0000000a; }
 input[type=checkbox][role=switch]::after { content:''; position:absolute; top:1px; left:1px; width:var(--switch-thumb-size); height:var(--switch-thumb-size); border-radius:50%; background:#fff; box-shadow:0 1px 2px #0003; transform:translateX(var(--switch-offset)); transition:transform .18s var(--ease),background-color var(--t-fast) var(--ease); }
 input[type=checkbox][role=switch]:enabled:hover { background:var(--control-hover); }
 input[type=checkbox][role=switch]:checked { --switch-offset:calc(var(--switch-width) - var(--switch-height)); background:var(--control-tint); border-color:var(--control-mark); }
@@ -60,37 +68,34 @@ label:has(> input[type=checkbox]) { display:flex; align-items:flex-start; gap:va
 label > input[type=checkbox] { margin-top:calc((var(--line-body) - var(--checkbox-size)) / 2); }
 label > input[type=checkbox][role=switch] { margin-top:calc((var(--line-body) - var(--switch-height)) / 2); }
 label:has(> input[type=checkbox]:disabled) { color:var(--muted); cursor:default; }
-
 /* Segmented choices retain one outline and a quiet selected segment. */
 .panel-tabs,.settings-tabs,.metric-picker { display:flex; align-items:stretch; gap:0; padding:0; border:0; border-radius:var(--radius-control); background:var(--surface-sunken); }
 .panel-tabs button,.settings-tabs button,.metric-picker button { flex:1; min-width:0; min-height:var(--control-compact-height); padding:3px 8px; border:0; border-radius:var(--radius-control); font-size:var(--font-entry); line-height:var(--line-secondary); font-weight:var(--weight-regular); background:transparent; color:var(--ink); box-shadow:none; }
 .panel-tabs button:enabled:hover,.settings-tabs button:enabled:hover,.metric-picker button:enabled:hover { background:var(--surface-soft); color:var(--ink); transform:none; box-shadow:none; }
-.panel-tabs button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true] { background:var(--segment-selected); color:var(--ink); box-shadow:var(--control-shadow); }
+.panel-tabs button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true] { background:var(--control-tint); color:var(--ink); box-shadow:none; }
 .panel-tabs button:enabled:active,.settings-tabs button:enabled:active,.metric-picker button:enabled:active { background:var(--segment-selected); box-shadow:var(--control-pressed-shadow); }
 .settings-tabs { width:min(430px,100%); margin:0 auto var(--space-section); }
 .settings-tabs button { white-space:nowrap; }
 .settings-tabs button svg { display:none; }
 .metric-picker { width:230px; max-width:100%; }
-
 /* Shared inline controls and compact fields. */
 .filters { gap:var(--space-control); padding:0; border:0; }
 .filters select,#days { height:var(--control-compact-height); min-height:var(--control-compact-height); padding-top:2px; padding-bottom:2px; line-height:var(--line-secondary); font-size:var(--font-secondary); }
 .filters select { flex:0 1 auto; width:auto; max-width:230px; }
-.subscription-badge { display:inline-block; max-width:120px; padding:3px 6px; border-radius:var(--r-pill); background:var(--soft); color:var(--accent); font-size:var(--font-secondary); line-height:var(--line-secondary); font-weight:var(--weight-strong); white-space:nowrap; }
+.subscription-badge { display:inline-block; max-width:120px; padding:3px 6px; border-radius:var(--radius-pill); background:var(--surface-sunken); color:var(--ink); font-size:var(--font-secondary); line-height:var(--line-secondary); font-weight:var(--weight-strong); white-space:nowrap; }
 .quota-subscription { display:flex; justify-content:center; flex:0 1 var(--quota-badge-width); min-width:0; }
 .quota-subscription .subscription-badge { max-width:100%; }
 .estimate-summary { display:grid; gap:6px; font-size:var(--font-secondary); margin-top:6px; }
 .estimate-summary:empty { display:none; }
 .estimate-summary small { display:block; font-size:var(--font-caption); color:var(--muted); }
 .estimate-summary p { margin:0; }
-.estimate-amount { color:var(--accent); font-variant-numeric:tabular-nums; }
+.estimate-amount { color:var(--ink); font-weight:var(--weight-strong); font-variant-numeric:tabular-nums; }
 .panel-account-group legend button { margin-left:8px; font-size:var(--font-entry); }
-
 /* Settings sit on the window backdrop, using the floating panel's card finish. */
-.settings-layout { display:grid; grid-template-columns:var(--settings-sidebar-width) minmax(0,1fr); gap:var(--space-layout); align-items:start; }
+.settings-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:var(--space-layout); align-items:start; }
 .settings-sidebar { display:flex; flex-direction:column; gap:6px; position:sticky; top:12px; padding:7px; border-radius:var(--radius-overlay); background:transparent; }
-.settings-sidebar button { width:100%; min-height:36px; padding:8px 10px; text-align:left; justify-content:flex-start; border:0; box-shadow:none; background:transparent; font-size:var(--font-body); white-space:nowrap; }
-.settings-sidebar button.active { color:var(--accent); background:var(--soft); }
+.settings-sidebar button { width:100%; min-height:var(--control-md); padding:4px 10px; text-align:left; justify-content:flex-start; border:0; box-shadow:none; background:transparent; font-size:var(--font-body); white-space:nowrap; }
+.settings-sidebar button.active { color:var(--accent-text); background:var(--soft); }
 .settings-subpage { min-width:0; display:grid; gap:var(--settings-section-gap); container:settings-form / inline-size; }
 .settings-subpage > .card { margin:0; }
 .settings-block .card { background:var(--settings-card-fill); border-color:var(--card-border); }
@@ -113,15 +118,13 @@ label:has(> input[type=checkbox]:disabled) { color:var(--muted); cursor:default;
 .device-count-line { white-space:nowrap; }
 .settings-save-bar { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:12px; }
 .settings-save-bar[data-status=error] .settings-draft-label { color:var(--danger); }
-
 /* Overlays share their surface; their positioning stays with the owning component. */
 dialog,.panel-menu,.panel-more-menu,.refresh-menu,.multi-panel { border:1px solid var(--border); background:var(--solid); box-shadow:var(--shadow-overlay); }
-dialog { border-radius:var(--radius-overlay); }
+dialog { border-radius:var(--radius-overlay); --control-md:32px; }
 .panel-menu,.panel-more-menu,.refresh-menu,.multi-panel { border-radius:var(--radius-overlay); }
 .dialog-head,.dialog-foot { gap:var(--space-control); padding:16px var(--dialog-padding); }
 #editor-fields { padding:8px var(--dialog-padding) 20px; }
 #editor textarea { border-radius:var(--radius-control); background:var(--field-fill); }
-#quota-dialog { padding:var(--dialog-padding); border-radius:var(--radius-overlay); background:var(--solid); }
 /* Native sheet widths are preferred widths, capped by the current client area. */
 #editor { width:var(--dialog-source-width); }
 #editor[data-kind=host] { width:var(--dialog-host-width); }
@@ -130,7 +133,7 @@ dialog { border-radius:var(--radius-overlay); }
 #editor[data-kind=api] { width:var(--dialog-api-width); }
 #editor[data-kind=wakeup] { width:var(--dialog-wakeup-width); }
 #editor[data-kind=confirmation] { width:var(--dialog-confirmation-width); }
-#quota-dialog { width:var(--dialog-estimate-width); }
+#quota-dialog { padding:var(--dialog-padding); border-radius:var(--radius-overlay); background:var(--solid); width:var(--dialog-estimate-width); }
 #quota-dialog[data-layout=selection] { width:var(--dialog-selection-width); }
 #quota-dialog[data-layout=valuation] { width:var(--dialog-valuation-width); }
 #quota-dialog[data-layout=automatic] { width:var(--dialog-automatic-width); }
@@ -145,6 +148,12 @@ dialog { border-radius:var(--radius-overlay); }
 .dialog-head button { flex-shrink:0; width:var(--icon-button-size); height:var(--icon-button-size); border-radius:var(--radius-control); }
 .dialog-head button svg { width:var(--icon-size); height:var(--icon-size); }
 .dialog-foot { flex-wrap:wrap; }
+/* Dialog shell (§5.2): actions sit at the right, [Cancel][Primary] on macOS and Linux; Windows reads
+   [Primary][…][Cancel]. Markup lists other actions, then Cancel, then the primary action. */
+:is(.dialog-foot,.dialog-actions) { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+:is(.dialog-foot,.dialog-actions) > [role=status] { margin-inline-end:auto; }
+/* Empty states and onboarding give their one action the large size. */
+:is(.onboarding,.card.empty) button.primary { min-height:var(--control-lg); padding-inline:16px; }
 .multi-trigger { display:flex; justify-content:space-between; gap:var(--space-control); width:100%; min-width:0; min-height:32px; text-align:start; }
 .multi-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .multi-trigger::after { content:''; width:12px; height:12px; flex:0 0 12px; background:var(--control-chevron) center / contain no-repeat; transition:transform var(--t-fast) var(--ease); }
@@ -156,10 +165,8 @@ dialog { border-radius:var(--radius-overlay); }
 .multi-option:active { background:color-mix(in srgb,var(--accent) 16%,transparent); }
 .multi-list { display:flex; flex-direction:column; gap:2px; }
 .hint { border-radius:var(--radius-control); background:var(--solid); font-size:var(--font-caption); line-height:var(--line-caption); box-shadow:var(--shadow); }
-.quota-chevron { transition:transform .2s var(--ease); }
 dialog[open] { animation:control-reveal .18s var(--ease); }
 @keyframes control-reveal { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:none; } }
-
 .machine-list,.agent-machines { container-type:inline-size; }
 .machine-row.list-row { display:grid; grid-template-columns:minmax(130px,1fr) 112px 114px 104px; gap:16px; }
 .machine-info { min-width:0; }
@@ -174,7 +181,7 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
 .machine-menu > summary::-webkit-details-marker { display:none; }
 .machine-menu-body { max-width:min(300px,calc(100vw - 40px)); max-height:420px; overflow-y:auto; box-sizing:border-box; background:var(--solid); text-align:left; }
 .machine-menu-body button { min-width:0; text-align:left; white-space:normal; overflow-wrap:anywhere; }
-.machine-menu-body .source-path { max-width:100%; color:var(--muted); font-size:12px; }
+.machine-menu-body .source-path { max-width:100%; color:var(--muted); font-size:var(--font-caption); }
 .machine-menu-body p { margin:4px; max-width:240px; white-space:normal; }
 #auth-source,#wake-source,#wake-account { width:100%; max-width:100%; box-sizing:border-box; }
 .panel-account-group { max-height:320px; overflow:auto; scrollbar-gutter:stable; }
@@ -187,10 +194,10 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
 .pet-library-card canvas { display:block; width:88px; height:96px; grid-row:1 / 3; }
 .pet-library-info { min-width:0; display:grid; gap:4px; }
 .pet-library-info strong,.pet-library-info small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pet-library-info small { color:var(--muted); font-size:12px; }
+.pet-library-info small { color:var(--muted); font-size:var(--font-caption); }
 .pet-library-card > button { justify-self:start; }
-.pet-preview-error { font-size:12px; overflow-wrap:anywhere; }
-#pet-library-warnings .error { font-size:12px; overflow-wrap:anywhere; }
+.pet-preview-error { font-size:var(--font-caption); overflow-wrap:anywhere; }
+#pet-library-warnings .error { font-size:var(--font-caption); overflow-wrap:anywhere; }
 @container (max-width:600px) {
   .machine-row.list-row { grid-template-columns:minmax(0,1fr) minmax(0,1fr) 104px; gap:12px; }
   .machine-row .machine-info { grid-column:1 / 3; }
@@ -211,18 +218,90 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
   .machine-row .machine-actions { grid-column:2; grid-row:1; }
   .machine-row .machine-monitor,.machine-row .machine-collection { grid-column:1 / -1; }
 }
-@media(max-width:700px) { .settings-layout { grid-template-columns:116px minmax(0,1fr); gap:12px; } .settings-subpage .list-row { flex-wrap:wrap; } }
-
+@media(max-width:700px) { .settings-layout { grid-template-columns:minmax(0,1fr); gap:12px; } .settings-subpage .list-row { flex-wrap:wrap; } }
 .api-connection + .api-connection { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
-.api-price-row { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin: 12px 0; }
+.api-price-row { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 12px; margin: 12px 0; }
 .api-launch-command { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .billing-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .billing-grid > div { display: grid; gap: 5px; min-width: 0; }
-.billing-grid strong { font-size: 20px; overflow-wrap: anywhere; }
+.billing-grid strong { font-size: var(--font-panel-title); overflow-wrap: anywhere; }
 .billing-grid small, .billing-grid span { color: var(--muted); }
 @media (max-width: 700px) { .billing-grid { grid-template-columns: 1fr; } .billing-grid > div { grid-template-columns: 1fr auto; } .billing-grid small { grid-column: 1 / -1; } }
-
 @media(max-width:700px) { .form-row { grid-template-columns:1fr; gap:6px; } }
+.native-scan-dialog{width:min(760px,calc(100vw - 48px));max-height:85vh;overflow:auto}
+.native-connections .row-body{min-width:0;overflow-wrap:anywhere}
+.machine-info [data-native-scan-machine]{align-self:flex-start;margin-top:6px}
+.account-agent-group > .between{flex-wrap:wrap;gap:8px}
+.native-scan-dialog .source-path{overflow-wrap:anywhere}
+.agent-selector.server-selector{margin-bottom:12px;max-width:100%;overflow-x:auto;flex-wrap:nowrap}
+.server-selector button{flex:none;white-space:nowrap}
+/* Control sizes (docs/ui-review-and-optimization-2026-10-26.md §5.1). Buttons default to control-sm
+   (cards, rows, filters); page actions, forms, dialogs, menus and segmented selectors use control-md,
+   which the panel's compact density shrinks to 28px. Rows centre their controls so a taller
+   neighbour never stretches a button into another height. */
+.wake-toolbar { margin-bottom:16px; }
+.actions,.price-toolbar,.dialog-foot { align-items:center; }
+:is([data-add-quota],[data-source-add],[data-agent-host],[data-machine-account-refresh],#scan-accounts,#refresh-quota,#add-host,#wake-add,#wake-refresh,#ssh-import) { min-height:var(--control-md); }
+:is(.header-actions,.dialog-foot,.agent-selector,.settings-agent-selector,.settings-categories,.setup-toolbar,.server-toolbar,.price-toolbar,.wake-toolbar) button { min-height:var(--control-md); }
+:is(.settings-agent-selector,.settings-categories) button { padding-block:4px; }
+:is(.refresh-menu,.panel-menu,.panel-more-menu,.machine-menu-body,.workspace-help-menu) button { min-height:var(--control-md); }
+/* Filter bars stay small, including their fields. */
+:is(.filters,.range-controls,.price-toolbar,.section-head) :is(input:not([type=checkbox],[type=radio]),textarea,.multi-trigger) { min-height:var(--control-sm); }
+:is(.filters,.range-controls,.price-toolbar,.section-head) select { height:var(--control-sm); min-height:var(--control-sm); }
+/* Switches and checkboxes are hit through their label; keep that target at least 24px tall. Padding
+   centers a single line in it, and the control stays on the first line when the label wraps. */
+label:has(> input:is([type=checkbox],[type=radio])) { min-height:var(--hit-target); padding-block:calc((var(--hit-target) - var(--line-body)) / 2); }
+/* Disclosure (§5.3): one indicator for every <details> that is not a menu: a leading chevron that
+   points right when closed and down when open. It sits in the summary's own gutter, so existing
+   flex and grid summaries keep their columns, and the whole summary row stays the target. */
+details:not([data-menu],.machine-menu,.agent-more) > summary { position:relative; min-height:var(--hit-target); padding-inline-start:20px; list-style:none; }
+:where(details:not([data-menu],.machine-menu,.agent-more)) > :where(summary) { display:flex; align-items:center; flex-wrap:wrap; column-gap:6px; }
+details:not([data-menu],.machine-menu,.agent-more) > summary::-webkit-details-marker { display:none; }
+details:not([data-menu],.machine-menu,.agent-more) > summary::before {
+  content:''; position:absolute; left:6px; top:50%; width:6px; height:6px; margin-top:-3px; box-sizing:border-box;
+  border:solid currentColor; border-width:0 1.5px 1.5px 0; color:var(--muted); transform:rotate(-45deg);
+  transition:transform var(--t-base) var(--ease);
+}
+details[open]:not([data-menu],.machine-menu,.agent-more) > summary::before { transform:rotate(45deg); margin-top:-5px; }
+/* Menu buttons (§5.3, menu.js): a <details data-menu> whose summary opens a popup list. */
+details[data-menu] > summary { list-style:none; cursor:pointer; }
+details[data-menu] > summary::-webkit-details-marker { display:none; }
+.wake-more > summary {
+  display:inline-flex; align-items:center; gap:6px; min-height:var(--control-sm); padding:2px var(--control-padding-x);
+  border:1px solid var(--control-stroke); border-radius:var(--radius-control); background:var(--control-fill); box-shadow:var(--control-shadow);
+  font-size:var(--font-secondary); line-height:var(--line-secondary);
+}
+.wake-more > summary::after { content:''; width:12px; height:12px; background:var(--control-chevron) center / contain no-repeat; }
+.wake-more > summary:hover { background-color:var(--control-hover); }
+.wake-more-menu {
+  position:absolute; left:0; top:calc(100% + 4px); z-index:30; display:grid; gap:2px; min-width:180px; width:max-content; max-width:min(300px,calc(100vw - 40px));
+  padding:6px; border:1px solid var(--border); border-radius:var(--radius-overlay); background:var(--solid); box-shadow:var(--shadow-overlay);
+}
+.wake-more-menu button { justify-content:flex-start; width:100%; min-height:var(--control-md); border:0; background:transparent; box-shadow:none; text-align:left; }
+.wake-more-menu button:enabled:hover { background:var(--soft); }
+.wake-more-menu button.danger { background:transparent; }
+.wake-more-menu button.danger:enabled:hover { background:color-mix(in srgb,var(--danger) 10%,transparent); }
+/* SegmentedControl (§5.3): a single tab stop (app.js moves focus with arrows); aria-pressed marks the choice. */
+.segmented { display:inline-flex; align-items:center; gap:2px; padding:2px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface-soft); }
+.segmented > button { min-height:var(--control-sm); padding:2px 10px; border:0; border-radius:calc(var(--radius-control) - var(--radius-chart)); background:transparent; box-shadow:none; white-space:nowrap; }
+.segmented > button[aria-pressed=true] { color:var(--control-mark); background:var(--control-tint); box-shadow:var(--shadow-xs); }
+.server-toolbar { flex-wrap:wrap; gap:8px 12px; }
+.server-toolbar-start,.server-toolbar-end { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.server-toolbar-end { margin-inline-start:auto; }
+/* Back navigation inside a settings page: a leading chevron link at the start of the header (§5.2 link). */
+button.back-link { justify-content:flex-start; align-self:flex-start; justify-self:start; width:fit-content; gap:2px; padding:2px 8px 2px 2px; border-color:transparent; background:transparent; box-shadow:none; color:var(--accent-text); }
+button.back-link:enabled:hover { background:var(--soft); }
+button.back-link svg { width:16px; height:16px; }
+/* Summaries whose first row is taller than the rest line the chevron up with that row. */
+.quota-disclosure > .quota-title::before { top:calc(var(--provider-mark-size) / 2); }
+}
+
+@layer platform {
+html[data-platform=windows] :is(.dialog-foot,.dialog-actions) > .primary { order:-1; }
+html[data-platform=windows] :is(.dialog-foot,.dialog-actions) > [role=status] { order:-2; }
+}
+
+@layer overrides {
 @media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
 @media(forced-colors:active) {
   button.danger,button.danger:enabled:hover,button.danger:enabled:active { background:Canvas; color:ButtonText; border-color:ButtonText; }
@@ -244,9 +323,6 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
   label:has(> input[type=checkbox]:disabled) { color:GrayText; }
   .settings-block .card { background:Canvas; border-color:CanvasText; }
 }
-
-.native-scan-dialog{width:min(760px,calc(100vw - 48px));max-height:85vh;overflow:auto}.native-connections .row-body{min-width:0;overflow-wrap:anywhere}.machine-info [data-native-scan-machine]{align-self:flex-start;margin-top:6px}
-
-.account-agent-group > .between{flex-wrap:wrap;gap:8px}.native-scan-dialog .source-path{overflow-wrap:anywhere}
-
-.agent-selector.server-selector{margin-bottom:12px;max-width:100%;overflow-x:auto;flex-wrap:nowrap}.server-selector button{flex:none;white-space:nowrap}
+@media (forced-colors:active) { .wake-more-menu { background:Canvas; border-color:CanvasText; } }
+@media (forced-colors:active) { .segmented > button[aria-pressed=true] { forced-color-adjust:none; color:HighlightText; background:Highlight; } }
+}

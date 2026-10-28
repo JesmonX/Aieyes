@@ -13,7 +13,7 @@
     } catch (error) {if (target.isConnected) target.textContent = AieyesI18n.t("读取通知状态失败：") + String(error);}
   }
   window.AieyesNotifications = {
-    settingsHTML: () => AieyesI18n.t("<section class=\"card\"><h2>系统通知</h2><p id=\"notification-permission\" role=\"status\">正在读取通知权限…</p><button type=\"button\" id=\"notification-test\">发送测试通知</button><p id=\"notification-test-result\" role=\"status\"></p><div id=\"notification-error\" class=\"error\" role=\"status\"></div><p class=\"muted tiny\">通知显示和声音由系统通知及勿扰设置控制。</p></section>"),
+    settingsHTML: () => `<section class="card"><h2>${AieyesI18n.t("系统通知")}</h2><p id="notification-permission" role="status">${AieyesI18n.t("正在读取通知权限…")}</p><button type="button" id="notification-test">${AieyesI18n.t("发送测试通知")}</button><p id="notification-test-result" role="status"></p><div id="notification-error" class="error" role="status"></div><p class="muted tiny">${AieyesI18n.t("通知显示和声音由系统通知及勿扰设置控制。")}</p></section>`,
     bind() {
       const volume = document.querySelector('[name=soundVolume]');
       if (volume) volume.addEventListener('input', () => {const output = document.querySelector('[data-sound-volume]');if (output) output.textContent = volume.value + '%';});

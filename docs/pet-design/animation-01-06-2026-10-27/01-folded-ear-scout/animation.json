@@ -1,0 +1,1316 @@
+{
+  "pet": "01-folded-ear-scout",
+  "columns": 8,
+  "rows": [
+    {
+      "row": 0,
+      "action": "idle",
+      "label": "空闲 / 已中断",
+      "aieyes": "idle / interrupted",
+      "frames": 6,
+      "cycleMs": 1100,
+      "frameDurationsMs": [
+        280,
+        110,
+        110,
+        140,
+        140,
+        320
+      ],
+      "items": [
+        {
+          "column": 0,
+          "file": "frames/0-idle-0.png",
+          "durationMs": 280,
+          "source": "01-idle.png",
+          "sourceBounds": {
+            "x": 28,
+            "y": 121,
+            "w": 490,
+            "h": 390
+          },
+          "scale": 0.325,
+          "placement": {
+            "left": 17,
+            "top": 57,
+            "width": 159,
+            "height": 127
+          },
+          "sha256": "548ad488ca60496b58e431ad56a5fc02af0c6d05e5c68f54b759dc93d8a6f5b4"
+        },
+        {
+          "column": 1,
+          "file": "frames/0-idle-1.png",
+          "durationMs": 110,
+          "source": "01-idle.png",
+          "sourceBounds": {
+            "x": 534,
+            "y": 100,
+            "w": 487,
+            "h": 410
+          },
+          "scale": 0.325,
+          "placement": {
+            "left": 17,
+            "top": 51,
+            "width": 158,
+            "height": 133
+          },
+          "sha256": "3c655abbd40a8013c9cb8a0571e857c37c3aca95fd82ea9671066f8419dedf08"
+        },
+        {
+          "column": 2,
+          "file": "frames/0-idle-2.png",
+          "durationMs": 110,
+          "source": "01-idle.png",
+          "sourceBounds": {
+            "x": 1022,
+            "y": 101,
+            "w": 493,
+            "h": 409
+          },
+          "scale": 0.325,
+          "placement": {
+            "left": 16,
+            "top": 51,
+            "width": 160,
+            "height": 133
+          },
+          "sha256": "7282da6ecd8f226791f5e1797bc979f596053c544ef5140f335e5b3ce820110b"
+        },
+        {
+          "column": 3,
+          "file": "frames/0-idle-3.png",
+          "durationMs": 140,
+          "source": "01-idle.png",
+          "sourceBounds": {
+            "x": 35,
+            "y": 575,
+            "w": 489,
+            "h": 393
+          },
+          "scale": 0.325,
+          "placement": {
+            "left": 17,
+            "top": 56,
+            "width": 159,
+            "height": 128
+          },
+          "sha256": "836034da30b20f5f4d2b69be434d753d524dc0802e6e5feee880a5771094b1d1"
+        },
+        {
+          "column": 4,
+          "file": "frames/0-idle-4.png",
+          "durationMs": 140,
+          "source": "01-idle.png",
+          "sourceBounds": {
+            "x": 527,
+            "y": 576,
+            "w": 507,
+            "h": 393
+          },
+          "scale": 0.325,
+          "placement": {
+            "left": 14,
+            "top": 56,
+            "width": 165,
+            "height": 128
+          },
+          "sha256": "7e63ef4fb5be54bf26f7daacf24ef4c7dfe9c8ffb40e7413fa0b39c59ffe9957"
+        },
+        {
+          "column": 5,
+          "file": "frames/0-idle-5.png",
+          "durationMs": 320,
+          "source": "01-idle.png",
+          "sourceBounds": {
+            "x": 1024,
+            "y": 577,
+            "w": 501,
+            "h": 391
+          },
+          "scale": 0.325,
+          "placement": {
+            "left": 15,
+            "top": 57,
+            "width": 163,
+            "height": 127
+          },
+          "sha256": "2ba14deb255f5c499347e8098cd3235e79f1facd83b6471ba8000691d28e5bc2"
+        }
+      ]
+    },
+    {
+      "row": 1,
+      "action": "running-right",
+      "label": "进行中 · 右跑",
+      "aieyes": "working",
+      "frames": 8,
+      "cycleMs": 1060,
+      "frameDurationsMs": [
+        120,
+        120,
+        120,
+        120,
+        120,
+        120,
+        120,
+        220
+      ],
+      "items": [
+        {
+          "column": 0,
+          "file": "frames/1-running-right-0.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 8,
+            "y": 164,
+            "w": 157,
+            "h": 114
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 22,
+            "top": 77,
+            "width": 148,
+            "height": 107
+          },
+          "sha256": "9855775b831fbd4c8481582a3257aa7101e6720f5abbeffaa3dc0a4ccb023c6c"
+        },
+        {
+          "column": 1,
+          "file": "frames/1-running-right-1.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 154,
+            "y": 165,
+            "w": 154,
+            "h": 112
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 24,
+            "top": 79,
+            "width": 145,
+            "height": 105
+          },
+          "sha256": "435afff61e9d0af282fc0dcc2249362a9e64646d4b135280eb9eca2b8cbd07ca"
+        },
+        {
+          "column": 2,
+          "file": "frames/1-running-right-2.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 298,
+            "y": 170,
+            "w": 146,
+            "h": 107
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 28,
+            "top": 83,
+            "width": 137,
+            "height": 101
+          },
+          "sha256": "fd490274cc35ac67b57a234493952e7a06737248744423711cc5ccb9731dd70a"
+        },
+        {
+          "column": 3,
+          "file": "frames/1-running-right-3.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 436,
+            "y": 169,
+            "w": 146,
+            "h": 108
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 28,
+            "top": 82,
+            "width": 137,
+            "height": 102
+          },
+          "sha256": "0ff5dbd32c1561403baf811959eb92fffd938dde78afa6548a20644434b9441e"
+        },
+        {
+          "column": 4,
+          "file": "frames/1-running-right-4.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 574,
+            "y": 169,
+            "w": 141,
+            "h": 107
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 30,
+            "top": 83,
+            "width": 133,
+            "height": 101
+          },
+          "sha256": "4fe0f7a68cb681d03bc42e892badeebafffaebf7ff959b0a4a48678634f01239"
+        },
+        {
+          "column": 5,
+          "file": "frames/1-running-right-5.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 709,
+            "y": 170,
+            "w": 145,
+            "h": 108
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 28,
+            "top": 82,
+            "width": 136,
+            "height": 102
+          },
+          "sha256": "061053caaeafb57602c5c8e87c23937076bee033952ba859c9288432047ac497"
+        },
+        {
+          "column": 6,
+          "file": "frames/1-running-right-6.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 849,
+            "y": 167,
+            "w": 143,
+            "h": 110
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 29,
+            "top": 81,
+            "width": 134,
+            "height": 103
+          },
+          "sha256": "c9b0ca0f5184dd93036956c9533f21fd0918db892cdbc95820453ae453c367bd"
+        },
+        {
+          "column": 7,
+          "file": "frames/1-running-right-7.png",
+          "durationMs": 220,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 987,
+            "y": 164,
+            "w": 142,
+            "h": 112
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 30,
+            "top": 79,
+            "width": 133,
+            "height": 105
+          },
+          "sha256": "d71621359ddd4e42f168cb82087c81fd3792030fd31b571707ba1c51e2461fb6"
+        }
+      ]
+    },
+    {
+      "row": 2,
+      "action": "running-left",
+      "label": "左跑 · 完整兼容保留",
+      "aieyes": "reserved directional motion",
+      "frames": 8,
+      "cycleMs": 1060,
+      "frameDurationsMs": [
+        120,
+        120,
+        120,
+        120,
+        120,
+        120,
+        120,
+        220
+      ],
+      "items": [
+        {
+          "column": 0,
+          "file": "frames/2-running-left-0.png",
+          "durationMs": 120,
+          "source": "01-left-run.png",
+          "sourceBounds": {
+            "x": 26,
+            "y": 220,
+            "w": 383,
+            "h": 258
+          },
+          "scale": 0.36,
+          "placement": {
+            "left": 27,
+            "top": 91,
+            "width": 138,
+            "height": 93
+          },
+          "sha256": "d607f73243296558d65c95e840a1adbce92ed62b64f6555908769e1fd458df6c"
+        },
+        {
+          "column": 1,
+          "file": "frames/2-running-left-1.png",
+          "durationMs": 120,
+          "source": "01-left-run.png",
+          "sourceBounds": {
+            "x": 410,
+            "y": 219,
+            "w": 374,
+            "h": 260
+          },
+          "scale": 0.36,
+          "placement": {
+            "left": 29,
+            "top": 90,
+            "width": 135,
+            "height": 94
+          },
+          "sha256": "5bca8d46a96ef7c4364239531455827164907edf138d2b047f8e2b53c0eadcf6"
+        },
+        {
+          "column": 2,
+          "file": "frames/2-running-left-2.png",
+          "durationMs": 120,
+          "source": "01-left-run.png",
+          "sourceBounds": {
+            "x": 791,
+            "y": 222,
+            "w": 374,
+            "h": 255
+          },
+          "scale": 0.36,
+          "placement": {
+            "left": 29,
+            "top": 92,
+            "width": 135,
+            "height": 92
+          },
+          "sha256": "91e9438b4097f834569f4f54054862373e837d76d28fcec14d72124151fb23cb"
+        },
+        {
+          "column": 3,
+          "file": "frames/2-running-left-3.png",
+          "durationMs": 120,
+          "source": "01-left-run.png",
+          "sourceBounds": {
+            "x": 1173,
+            "y": 211,
+            "w": 363,
+            "h": 231
+          },
+          "scale": 0.36,
+          "placement": {
+            "left": 31,
+            "top": 101,
+            "width": 131,
+            "height": 83
+          },
+          "sha256": "760dc74f352406e26220fb6f0dcfc915d444d8fe16890d869148f501f131dd67"
+        },
+        {
+          "column": 4,
+          "file": "frames/2-running-left-4.png",
+          "durationMs": 120,
+          "source": "01-left-run.png",
+          "sourceBounds": {
+            "x": 13,
+            "y": 612,
+            "w": 397,
+            "h": 250
+          },
+          "scale": 0.36,
+          "placement": {
+            "left": 25,
+            "top": 94,
+            "width": 143,
+            "height": 90
+          },
+          "sha256": "960f6ac7cae37ec4c68ea3ee5ba2a266e4515d2ad1603aa46e3e84d6537303ec"
+        },
+        {
+          "column": 5,
+          "file": "frames/2-running-left-5.png",
+          "durationMs": 120,
+          "source": "01-left-run.png",
+          "sourceBounds": {
+            "x": 410,
+            "y": 608,
+            "w": 374,
+            "h": 259
+          },
+          "scale": 0.36,
+          "placement": {
+            "left": 29,
+            "top": 91,
+            "width": 135,
+            "height": 93
+          },
+          "sha256": "169c632ac1afb20b7581bd9f117177f373acc3c742c1c12804b926bafbd102fc"
+        },
+        {
+          "column": 6,
+          "file": "frames/2-running-left-6.png",
+          "durationMs": 120,
+          "source": "01-left-run.png",
+          "sourceBounds": {
+            "x": 788,
+            "y": 612,
+            "w": 377,
+            "h": 241
+          },
+          "scale": 0.36,
+          "placement": {
+            "left": 28,
+            "top": 97,
+            "width": 136,
+            "height": 87
+          },
+          "sha256": "abf0661d4caf89141878029cc8fb166e9e40de4587ca9756c6aafc77280795aa"
+        },
+        {
+          "column": 7,
+          "file": "frames/2-running-left-7.png",
+          "durationMs": 220,
+          "source": "01-left-run.png",
+          "sourceBounds": {
+            "x": 1149,
+            "y": 615,
+            "w": 387,
+            "h": 213
+          },
+          "scale": 0.36,
+          "placement": {
+            "left": 27,
+            "top": 107,
+            "width": 139,
+            "height": 77
+          },
+          "sha256": "e761f8c3f38286958b195e6926d2cb1b746796393c728c61449930696c693355"
+        }
+      ]
+    },
+    {
+      "row": 3,
+      "action": "waving",
+      "label": "等待输入 · 招手",
+      "aieyes": "needs_input",
+      "frames": 4,
+      "cycleMs": 700,
+      "frameDurationsMs": [
+        140,
+        140,
+        140,
+        280
+      ],
+      "items": [
+        {
+          "column": 0,
+          "file": "frames/3-waving-0.png",
+          "durationMs": 140,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 16,
+            "y": 416,
+            "w": 150,
+            "h": 137
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 26,
+            "top": 55,
+            "width": 141,
+            "height": 129
+          },
+          "sha256": "e18265255ed00326cdfcc6bf6c8ba282192eed33ccf6ecc29c0db0dad3e9ee23"
+        },
+        {
+          "column": 1,
+          "file": "frames/3-waving-1.png",
+          "durationMs": 140,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 174,
+            "y": 419,
+            "w": 149,
+            "h": 134
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 26,
+            "top": 58,
+            "width": 140,
+            "height": 126
+          },
+          "sha256": "7aa5c12efd02837fdadc12a327a11af5a4cf2ee03a32a14464dc4ce3f7c60e8c"
+        },
+        {
+          "column": 2,
+          "file": "frames/3-waving-2.png",
+          "durationMs": 140,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 326,
+            "y": 419,
+            "w": 150,
+            "h": 134
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 26,
+            "top": 58,
+            "width": 141,
+            "height": 126
+          },
+          "sha256": "b0bccbcebcea6e75f40a684ace208bf351ef315221053bd6b3651d79cf098586"
+        },
+        {
+          "column": 3,
+          "file": "frames/3-waving-3.png",
+          "durationMs": 280,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 480,
+            "y": 417,
+            "w": 154,
+            "h": 136
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 24,
+            "top": 56,
+            "width": 145,
+            "height": 128
+          },
+          "sha256": "225f27d35ce1775bba817689cc963b7f704a5fd507df35029b471dcdc975104f"
+        }
+      ]
+    },
+    {
+      "row": 4,
+      "action": "jumping",
+      "label": "已完成 · 庆祝",
+      "aieyes": "complete",
+      "frames": 5,
+      "cycleMs": 840,
+      "frameDurationsMs": [
+        140,
+        140,
+        140,
+        140,
+        280
+      ],
+      "items": [
+        {
+          "column": 0,
+          "file": "frames/4-jumping-0.png",
+          "durationMs": 140,
+          "source": "01-success.png",
+          "sourceBounds": {
+            "x": 50,
+            "y": 173,
+            "w": 436,
+            "h": 326
+          },
+          "scale": 0.345,
+          "placement": {
+            "left": 21,
+            "top": 72,
+            "width": 150,
+            "height": 112
+          },
+          "sha256": "4616aed3a7b970a381ca49ea7e6a74057597d12208d94270bc59dafafc16c6cf"
+        },
+        {
+          "column": 1,
+          "file": "frames/4-jumping-1.png",
+          "durationMs": 140,
+          "source": "01-success.png",
+          "sourceBounds": {
+            "x": 538,
+            "y": 85,
+            "w": 423,
+            "h": 420
+          },
+          "scale": 0.345,
+          "placement": {
+            "left": 23,
+            "top": 27,
+            "width": 146,
+            "height": 145
+          },
+          "sha256": "668239c68fad4011239f3b218f34225d1d02726f374995a23332ef1951053501"
+        },
+        {
+          "column": 2,
+          "file": "frames/4-jumping-2.png",
+          "durationMs": 140,
+          "source": "01-success.png",
+          "sourceBounds": {
+            "x": 1041,
+            "y": 61,
+            "w": 421,
+            "h": 375
+          },
+          "scale": 0.345,
+          "placement": {
+            "left": 24,
+            "top": 25,
+            "width": 145,
+            "height": 129
+          },
+          "sha256": "2f4b1b5fee079cf299a58fab99d71255b4b6f2fce7c813b09612d72252f603af"
+        },
+        {
+          "column": 3,
+          "file": "frames/4-jumping-3.png",
+          "durationMs": 140,
+          "source": "01-success.png",
+          "sourceBounds": {
+            "x": 52,
+            "y": 551,
+            "w": 443,
+            "h": 393
+          },
+          "scale": 0.345,
+          "placement": {
+            "left": 20,
+            "top": 33,
+            "width": 153,
+            "height": 136
+          },
+          "sha256": "5500d6ca6cbadb8dab64c24ce00fa9a63609084e7f6e6762767dd9f3bb6b13f3"
+        },
+        {
+          "column": 4,
+          "file": "frames/4-jumping-4.png",
+          "durationMs": 280,
+          "source": "01-success.png",
+          "sourceBounds": {
+            "x": 561,
+            "y": 628,
+            "w": 412,
+            "h": 327
+          },
+          "scale": 0.345,
+          "placement": {
+            "left": 25,
+            "top": 71,
+            "width": 142,
+            "height": 113
+          },
+          "sha256": "ba6b5884cd783afd742b8d5d8324f4e9303d8ed90ea5756c64f78d5f715fada4"
+        }
+      ]
+    },
+    {
+      "row": 5,
+      "action": "failed",
+      "label": "执行失败 · 受挫",
+      "aieyes": "failed",
+      "frames": 8,
+      "cycleMs": 1220,
+      "frameDurationsMs": [
+        140,
+        140,
+        140,
+        140,
+        140,
+        140,
+        140,
+        240
+      ],
+      "items": [
+        {
+          "column": 0,
+          "file": "frames/5-failed-0.png",
+          "durationMs": 140,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 10,
+            "y": 759,
+            "w": 148,
+            "h": 125
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 27,
+            "top": 66,
+            "width": 139,
+            "height": 118
+          },
+          "sha256": "085cefcfe15cf1ff8e818bdd281d4cc94c7e8d46c6a9905231e5197a8d18e0be"
+        },
+        {
+          "column": 1,
+          "file": "frames/5-failed-1.png",
+          "durationMs": 140,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 160,
+            "y": 759,
+            "w": 143,
+            "h": 125
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 29,
+            "top": 66,
+            "width": 134,
+            "height": 118
+          },
+          "sha256": "b6ac0573cf7a1a722298d640829b7be3eb2974fce8a73701bca316b9efb9650c"
+        },
+        {
+          "column": 2,
+          "file": "frames/5-failed-2.png",
+          "durationMs": 140,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 298,
+            "y": 758,
+            "w": 137,
+            "h": 126
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 32,
+            "top": 66,
+            "width": 129,
+            "height": 118
+          },
+          "sha256": "082e5589bb959948fe4fa238f232f1f161d5352acbb9db3faf281da8a00ec1ae"
+        },
+        {
+          "column": 3,
+          "file": "frames/5-failed-3.png",
+          "durationMs": 140,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 435,
+            "y": 758,
+            "w": 141,
+            "h": 126
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 30,
+            "top": 66,
+            "width": 133,
+            "height": 118
+          },
+          "sha256": "dd3b8ba76a154cc596d5f3b1e9a4e35f14bb514b0d38fb6a177321d8b5f270fd"
+        },
+        {
+          "column": 4,
+          "file": "frames/5-failed-4.png",
+          "durationMs": 140,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 573,
+            "y": 758,
+            "w": 141,
+            "h": 126
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 30,
+            "top": 66,
+            "width": 133,
+            "height": 118
+          },
+          "sha256": "9d1fdf4866037c909f6b32a26c690d19fca0fc0622f18f0312f30b13aea1220b"
+        },
+        {
+          "column": 5,
+          "file": "frames/5-failed-5.png",
+          "durationMs": 140,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 703,
+            "y": 760,
+            "w": 144,
+            "h": 124
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 29,
+            "top": 67,
+            "width": 135,
+            "height": 117
+          },
+          "sha256": "f95b80122302d09563276ae07944bddd020832eba1f2efc0775fb84c1936e5ca"
+        },
+        {
+          "column": 6,
+          "file": "frames/5-failed-6.png",
+          "durationMs": 140,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 841,
+            "y": 758,
+            "w": 146,
+            "h": 126
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 28,
+            "top": 66,
+            "width": 137,
+            "height": 118
+          },
+          "sha256": "2c6d5587e4e49d4dad2e5326456d8b75e446b423fd8c9f4c45504d3a41e905cf"
+        },
+        {
+          "column": 7,
+          "file": "frames/5-failed-7.png",
+          "durationMs": 240,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 985,
+            "y": 757,
+            "w": 140,
+            "h": 127
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 30,
+            "top": 65,
+            "width": 132,
+            "height": 119
+          },
+          "sha256": "644bac492218da3e1b7a975948f6d360f9dbbae3c7724e137cb8dd0ea805d2b0"
+        }
+      ]
+    },
+    {
+      "row": 6,
+      "action": "waiting",
+      "label": "状态待确认 · 张望",
+      "aieyes": "unknown / unavailable",
+      "frames": 6,
+      "cycleMs": 1010,
+      "frameDurationsMs": [
+        150,
+        150,
+        150,
+        150,
+        150,
+        260
+      ],
+      "items": [
+        {
+          "column": 0,
+          "file": "frames/6-waiting-0.png",
+          "durationMs": 150,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 15,
+            "y": 904,
+            "w": 155,
+            "h": 135
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 23,
+            "top": 57,
+            "width": 146,
+            "height": 127
+          },
+          "sha256": "f595b5dea40e99c36e00fbbe5f4d15f9c3e322dc68360b451134dbb30bd6ddd4"
+        },
+        {
+          "column": 1,
+          "file": "frames/6-waiting-1.png",
+          "durationMs": 150,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 168,
+            "y": 900,
+            "w": 151,
+            "h": 139
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 25,
+            "top": 53,
+            "width": 142,
+            "height": 131
+          },
+          "sha256": "3fd304f2f70f6862c78e43b812ae7e13460c3da44feb19f4e2cf8aa1f123e0f3"
+        },
+        {
+          "column": 2,
+          "file": "frames/6-waiting-2.png",
+          "durationMs": 150,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 315,
+            "y": 900,
+            "w": 157,
+            "h": 139
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 22,
+            "top": 53,
+            "width": 148,
+            "height": 131
+          },
+          "sha256": "f01b243f0f671e9d05252c91fac0a88e4bbd291c30b23e935ae81afde359d5ce"
+        },
+        {
+          "column": 3,
+          "file": "frames/6-waiting-3.png",
+          "durationMs": 150,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 470,
+            "y": 901,
+            "w": 147,
+            "h": 138
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 27,
+            "top": 54,
+            "width": 138,
+            "height": 130
+          },
+          "sha256": "21332c7fce4c5374c8097ed9b2b638aa6dbeb11717a23755a9add81d348acf60"
+        },
+        {
+          "column": 4,
+          "file": "frames/6-waiting-4.png",
+          "durationMs": 150,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 613,
+            "y": 905,
+            "w": 140,
+            "h": 134
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 30,
+            "top": 58,
+            "width": 132,
+            "height": 126
+          },
+          "sha256": "212465e4e4c33e4a7ef2a2023ba66bc39bc76d4bf12aa2be1580e639d58983d1"
+        },
+        {
+          "column": 5,
+          "file": "frames/6-waiting-5.png",
+          "durationMs": 260,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 752,
+            "y": 906,
+            "w": 147,
+            "h": 133
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 27,
+            "top": 59,
+            "width": 138,
+            "height": 125
+          },
+          "sha256": "e3448e083e8cc71ecc8fec8aaf61f97ebcdea7036de2e11592e6865ab5558f20"
+        }
+      ]
+    },
+    {
+      "row": 7,
+      "action": "running",
+      "label": "执行工具 · 工作",
+      "aieyes": "tool",
+      "frames": 6,
+      "cycleMs": 820,
+      "frameDurationsMs": [
+        120,
+        120,
+        120,
+        120,
+        120,
+        220
+      ],
+      "items": [
+        {
+          "column": 0,
+          "file": "frames/7-running-0.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 10,
+            "y": 1059,
+            "w": 179,
+            "h": 124
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 12,
+            "top": 67,
+            "width": 168,
+            "height": 117
+          },
+          "sha256": "e5d6b8cc9cc064ae85fb8331d7c972398dbf8a2595a725298b1388a19ec9b7e6"
+        },
+        {
+          "column": 1,
+          "file": "frames/7-running-1.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 190,
+            "y": 1058,
+            "w": 174,
+            "h": 125
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 14,
+            "top": 66,
+            "width": 164,
+            "height": 118
+          },
+          "sha256": "c76c02594424212bdef30b2d7c6e44e39786a26bce47ff19d24b0f3f1f7fe396"
+        },
+        {
+          "column": 2,
+          "file": "frames/7-running-2.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 374,
+            "y": 1058,
+            "w": 170,
+            "h": 125
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 16,
+            "top": 66,
+            "width": 160,
+            "height": 118
+          },
+          "sha256": "8fc2b69ae254b8904e31f14faf89f0907b2251fccd58a017f83510834bb9f855"
+        },
+        {
+          "column": 3,
+          "file": "frames/7-running-3.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 557,
+            "y": 1057,
+            "w": 175,
+            "h": 126
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 14,
+            "top": 66,
+            "width": 165,
+            "height": 118
+          },
+          "sha256": "109ef9752c266cc94100409098256d1b3999b830287ca1df6837982e94544c61"
+        },
+        {
+          "column": 4,
+          "file": "frames/7-running-4.png",
+          "durationMs": 120,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 745,
+            "y": 1054,
+            "w": 178,
+            "h": 129
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 13,
+            "top": 63,
+            "width": 167,
+            "height": 121
+          },
+          "sha256": "714cd508b740526c700d2237920ad41594c1e00b018f4e7aad9a787314fb7e67"
+        },
+        {
+          "column": 5,
+          "file": "frames/7-running-5.png",
+          "durationMs": 220,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 932,
+            "y": 1061,
+            "w": 180,
+            "h": 122
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 12,
+            "top": 69,
+            "width": 169,
+            "height": 115
+          },
+          "sha256": "bd2ab1472291d84b9d75c6275a82d5fdaa3615a65c3f84dedb0a9aae74cdd37b"
+        }
+      ]
+    },
+    {
+      "row": 8,
+      "action": "review",
+      "label": "思考中 · 审阅",
+      "aieyes": "thinking",
+      "frames": 6,
+      "cycleMs": 1030,
+      "frameDurationsMs": [
+        150,
+        150,
+        150,
+        150,
+        150,
+        280
+      ],
+      "items": [
+        {
+          "column": 0,
+          "file": "frames/8-review-0.png",
+          "durationMs": 150,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 16,
+            "y": 1198,
+            "w": 168,
+            "h": 171
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 17,
+            "top": 23,
+            "width": 158,
+            "height": 161
+          },
+          "sha256": "b3b01be6a326584071e4a56fc0769eacac407fde99eb575d938f4ca66966dc11"
+        },
+        {
+          "column": 1,
+          "file": "frames/8-review-1.png",
+          "durationMs": 150,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 193,
+            "y": 1198,
+            "w": 174,
+            "h": 171
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 14,
+            "top": 23,
+            "width": 164,
+            "height": 161
+          },
+          "sha256": "d1bb5a7d4a408ec5ce9d68dc7fe0e955cf79f67705cbea97fa6cd06820806a56"
+        },
+        {
+          "column": 2,
+          "file": "frames/8-review-2.png",
+          "durationMs": 150,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 378,
+            "y": 1200,
+            "w": 176,
+            "h": 169
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 14,
+            "top": 25,
+            "width": 165,
+            "height": 159
+          },
+          "sha256": "0128e7447fdc54599aecaa030088565161d9d87dc4ad8ebbe6de43bac00ceb9f"
+        },
+        {
+          "column": 3,
+          "file": "frames/8-review-3.png",
+          "durationMs": 150,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 577,
+            "y": 1200,
+            "w": 173,
+            "h": 169
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 15,
+            "top": 25,
+            "width": 163,
+            "height": 159
+          },
+          "sha256": "0b7c8e464eb8c7b792130c8c72d822f79ef85e528e12fcc2752316c72de05764"
+        },
+        {
+          "column": 4,
+          "file": "frames/8-review-4.png",
+          "durationMs": 150,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 760,
+            "y": 1201,
+            "w": 168,
+            "h": 167
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 17,
+            "top": 27,
+            "width": 158,
+            "height": 157
+          },
+          "sha256": "b90c607a5698037e1177e6bef24f4d6734ba15e62560f648b2cb50c4802cda47"
+        },
+        {
+          "column": 5,
+          "file": "frames/8-review-5.png",
+          "durationMs": 280,
+          "source": "01-all-actions.png",
+          "sourceBounds": {
+            "x": 946,
+            "y": 1202,
+            "w": 172,
+            "h": 167
+          },
+          "scale": 0.94,
+          "placement": {
+            "left": 15,
+            "top": 27,
+            "width": 162,
+            "height": 157
+          },
+          "sha256": "082bb7583f80943e3d777081556fc63b0063e1d8e5d115508406d876c6dd265a"
+        }
+      ]
+    }
+  ],
+  "cellWidth": 192,
+  "cellHeight": 208,
+  "width": 1536,
+  "height": 1872,
+  "version": 1
+}

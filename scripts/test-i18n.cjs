@@ -96,10 +96,11 @@ function populate() {
       assert.match(await page.locator('.quota-name').first().innerText(), /中文账户 token/);
       assert.match(await page.locator('.quota-identity-note').first().innerText(), /Read failed/);
       const width = await page.locator('.quota-card').first().evaluate(el => el.getBoundingClientRect().width);
-      await page.locator('[data-language-toggle]').click();await page.waitForFunction(() => AieyesI18n.language === 'zh-CN');
+      // Language lives in Settings › Appearance (U-23); switch it the way that page does.
+      await page.evaluate(() => setLanguage('zh-CN'));await page.waitForFunction(() => AieyesI18n.language === 'zh-CN');
       assert.match(await page.locator('#title').innerText(), /总览/);
       assert.match(await page.locator('.quota-identity-note').first().innerText(), /读取失败/);
-      await page.locator('[data-language-toggle]').click();await page.waitForFunction(() => AieyesI18n.language === 'en');
+      await page.evaluate(() => setLanguage('en'));await page.waitForFunction(() => AieyesI18n.language === 'en');
       assert(Math.abs(width - await page.locator('.quota-card').first().evaluate(el => el.getBoundingClientRect().width)) < 2);
       await audit('restored overview');
       for (const name of ['analysis', 'servers']) {await page.evaluate(name => AieyesApp.navigatePage(name), name);await audit(name);}
