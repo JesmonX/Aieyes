@@ -47,9 +47,9 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
           },{theme,material});
           const appearance=await page.locator('[data-general-section=appearance] select').evaluateAll(selects=>selects.map(select=>{
             const control=select.closest('.win-select')??select;
-            return {name:select.name,rect:control.getBoundingClientRect().toJSON(),row:select.closest('.form-row').getBoundingClientRect().toJSON()};
+            return {name:select.name||select.id,rect:control.getBoundingClientRect().toJSON(),row:select.closest('.form-row').getBoundingClientRect().toJSON()};
           }));
-          assert.deepEqual(appearance.map(choice=>choice.name),['appearanceLanguage','appearanceTheme','appearanceAccent','appearanceChartPalette','appearanceChartContrast']);
+          assert.deepEqual(appearance.map(choice=>choice.name),['appearanceLanguage','appearanceTheme','appearanceAccent',...(platform==='windows'?['material-main','material-floating']:[]),'appearanceChartPalette','appearanceChartContrast']);
           for(const {rect,row} of appearance) {
             assert(rect.width>=Math.min(160,row.right-rect.x)&&rect.right<=row.right,'appearance choices have a readable width and fit their form');
             assert.equal(rect.x,appearance[0].rect.x,'selected text starts in the same column');
@@ -88,10 +88,10 @@ module.exports=async function verifyControls({browser,url,data,installFixture,ou
             await page.locator('[data-general-section=appearance] .win-select-trigger').first().click();
             const menu=page.locator('.win-select-menu:popover-open');
             const finish=await menu.evaluate(el=>({fill:getComputedStyle(el).backgroundColor,blur:getComputedStyle(el).backdropFilter}));
-            if(material!=='opaque') {
-              assert(alpha(finish.fill)>=0.45&&alpha(finish.fill)<=0.75,'menus visibly transmit their backdrop while retaining a readable tint');
-              assert.notEqual(finish.blur,'none','transparent menus retain their blur');
-            } else assert.equal(alpha(finish.fill),1,'material fallback gives menus an opaque backing');
+            assert.equal(alpha(finish.fill),1,'text menus hide underlying content for every window material');
+            assert.equal(finish.blur,'none','opaque menus need no backdrop blur');
+            const dialog=await page.locator('#editor').evaluate(el=>({fill:getComputedStyle(el).backgroundColor,opacity:Number(getComputedStyle(document.documentElement).getPropertyValue('--overlay-fill-opacity'))}));
+            assert.equal(alpha(dialog.fill),material==='opaque'?1:dialog.opacity,'dialog fill retains its separately configured transparency');
             await capture(`menu-${theme}-${material}`);
             await page.keyboard.press('Escape');
           }

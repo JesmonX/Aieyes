@@ -25,6 +25,7 @@ main,.settings-block { max-width:none; }
 .form-row[data-field-size=choice] > .win-select > select { width:auto; max-width:100%; }
 /* Appearance choices share one right-aligned column, so every menu fills it to the same edge. */
 [data-general-section=appearance] .form-row[data-field-size=choice] > :is(select,.win-select) { width:100%; justify-self:stretch; }
+.material-actual { display:block; font-size:var(--font-caption); }
 .form-row[data-field-size=long] { min-width:0; }
 .form-row[data-field-size=long] > input { min-width:0; }
 .wakeup-benefit { padding:12px 14px; border-radius:var(--radius-control); background:var(--soft); border-left:3px solid var(--accent); color:var(--accent-text); font-weight:var(--weight-strong); }

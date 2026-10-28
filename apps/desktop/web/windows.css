@@ -112,7 +112,9 @@ html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open
     background:var(--win-selected); box-shadow:none;
   }
   html[data-platform=windows] :is(.heading-refresh,.estimate-entry,#token-summary,#sidebar-toggle,.panel-actions > button,#panel-refresh,.window-controls button) { background-image:none; }
-  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) {
+  /* Keep the shared finish at low specificity: IDs in :is() otherwise give
+     every menu an ID-level rule that defeats the opaque menu policy below. */
+  html[data-platform=windows] :where(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) {
     background-color:var(--win-overlay-fill); background-image:var(--win-sheen);
     border-color:var(--border); box-shadow:var(--win-overlay-shadow);
     backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);

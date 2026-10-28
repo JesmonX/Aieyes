@@ -52,7 +52,9 @@ async function modelChecks() {
     const html = await (await fetch(origin + '/app/index.html')).text();assert(html.indexOf('/preview/bridge.js') < html.indexOf('contracts.js'));
     assert(!(await (await fetch(origin + '/')).text()).includes('unsafe-eval'));
     browser = await chromium.launch();
-    const page = await browser.newPage({ viewport: { width: 1600, height: 1150 } }),errors = [],outside = [];
+    // Reproduce previewing Linux on a Windows host: the browser's initial
+    // platform guess must yield to desktop_info before the titlebar is used.
+    const page = await browser.newPage({ viewport: { width: 1600, height: 1150 }, userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36' }),errors = [],outside = [];
     page.on('pageerror', error => errors.push(String(error)));
     page.on('request', req => {if (/^https?:/.test(req.url()) && !req.url().startsWith(origin + '/')) outside.push(req.url());});
     async function ready() {

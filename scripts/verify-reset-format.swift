@@ -37,7 +37,13 @@ import Foundation
         var window = QuotaWindow(name: "5h", usedPercent: 35, windowMinutes: 300, resetsAt: old)
         precondition(Format.quotaReset(window, now: now) == "确认重置中")
         window.resetsAt = now.timeIntervalSince1970 + 120 * 60
-        precondition(Format.quotaReset(window, now: now).range(of: #"^2 小时后重置 · \d{2}/\d{2} \d{2}:\d{2}$"#, options: .regularExpression) != nil)
+        let nativeClock = DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: .current) ?? "HH"
+        let expectedDate = DateFormatter()
+        expectedDate.locale = AieyesLocale.locale
+        expectedDate.timeZone = .current
+        expectedDate.setLocalizedDateFormatFromTemplate("MMdd" + (nativeClock.contains("a") ? "hhmma" : "HHmm"))
+        let resetDate = expectedDate.string(from: Date(timeIntervalSince1970: window.resetsAt!))
+        precondition(Format.quotaReset(window, now: now) == "2 小时后重置 · " + resetDate, "Reset dates must follow the user's native clock and localized date format")
         precondition(Format.resetDisplayTime(window.resetsAt, now: now) == window.resetsAt)
         precondition(Format.subscription("plus") == "Plus" && Format.subscription(" pro ") == "Pro")
         precondition(Format.subscription("Special Plan") == "Special Plan")
@@ -70,6 +76,6 @@ import Foundation
         precondition(Format.resetDisplayTime(observed.resetsAt, now: observedNow) == 1_791_522_006)
         precondition(Format.quotaReset(observed, now: observedNow).hasPrefix("1 小时 4 分后重置 · "))
         precondition(Format.quotaReset(observed, now: observedNow.addingTimeInterval(60)).hasPrefix("1 小时 3 分后重置 · "))
-        print("Native reset durations, source dates, zero usage, expired/unknown times and refresh transitions passed")
+        print("Native reset durations, source dates, zero usage, expired/unknown times and refresh transitions passed (native clock: \(nativeClock))")
     }
 }
