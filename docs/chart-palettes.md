@@ -14,6 +14,6 @@
 
 明暗与对比度版本调整过原始色值，因此不声称保留原方案完整的色觉无障碍性质。分类色用来区分模型，数值大小由柱高表示。超过预置颜色数后复用颜色，需结合模型名及明细；年度热力图继续使用强调色表达数值强弱。
 
-旧配置兼容：缺失 `appearance.chartPalette` / `appearance.chartContrast` 时使用 `classic` / `high`。经典预置使用原有经典色列代替此前按模型名生成的任意色相。模型按名称哈希选择颜色槽，在色系未用满时避开已分配槽；筛选、隐藏模型、切换主题或对比度不改变已分配槽。
+旧配置兼容：缺失 `appearance.chartPalette` / `appearance.chartContrast` 时使用 `classic` / `high`。经典预置使用原有经典色列代替此前按模型名生成的任意色相。模型按名称哈希选择颜色槽，在色系未用满时避开已分配槽；筛选、隐藏模型、切换主题或对比度不改变已分配槽。趋势柱状图、模型环形图及其列表共用同一映射；环形图的“其他”汇总多个模型，使用中性 `faint` 色，不占模型颜色槽，被归入“其他”的模型在环形图列表中也使用该色。
 
 色值单源为 `docs/chart-palettes.json`。运行 `python3 scripts/sync-chart-palettes.py` 生成 Web 和 Swift 色表；CI 的 `--check` 防止副本漂移。验证入口：`node scripts/test-theme-sync-ui.cjs`、`cargo test --test chart_appearance --locked` 和 `scripts/verify-palette.swift`（由 `scripts/test-native.sh` 调用）。

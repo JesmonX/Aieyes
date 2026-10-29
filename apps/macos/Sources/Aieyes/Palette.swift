@@ -110,6 +110,8 @@ enum Palette {
         let slot = modelSlot(name, preset: family)
         return adaptive(family.colors(dark: false, contrast: level)[slot], family.colors(dark: true, contrast: level)[slot])
     }
+    /// "其他" folds several models, so it takes a neutral instead of a model slot and never repeats a model's color.
+    static let otherModels = adaptive(DesignTokens.faintLight, DesignTokens.faintDark)
 }
 
 /// Observe accent changes and share control finishes across windows and sheets.

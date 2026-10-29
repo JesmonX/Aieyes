@@ -3,6 +3,8 @@ const hiddenTrendModels = new Set();
 function modelName(key) {return state.dashboard?.modelDisplayNames?.[key] ?? key;}
 function exactUsage(day) {return AieyesI18n.t("{0} Token · {1} USD · 读取命中率 {2}", day.total.toLocaleString(AieyesI18n.locale), day.cost.toFixed(6), pct(cacheRate(day.tokens)));}
 function trendUsage(day) {return AieyesI18n.t("{0} Token · {1} USD · 读取命中率 {2}", compact(day.total), day.cost.toFixed(2), pct(cacheRate(day.tokens)));}
+// "其他" folds several models, so it takes a neutral instead of a model slot and never repeats a model's color.
+const otherModelsColor = 'var(--faint)';
 // Annular sectors keep the native chart's gap and small corner radius at every DPI.
 function modelRingSVG(slices, total) {
   const style = getComputedStyle(document.documentElement),metric = (name) => Number.parseFloat(style.getPropertyValue('--' + name));
@@ -22,7 +24,7 @@ function modelRingSVG(slices, total) {
       const corner = Math.min(rounding, (outer - inner) / 2, (end - start) * inner / 3),oa = corner / outer,ia = corner / inner;
       d = `M ${point(outer, start + oa)} A ${outer} ${outer} 0 ${end - start - 2 * oa > Math.PI ? 1 : 0} 1 ${point(outer, end - oa)} Q ${point(outer, end)} ${point(outer - corner, end)} L ${point(inner + corner, end)} Q ${point(inner, end)} ${point(inner, end - ia)} A ${inner} ${inner} 0 ${end - start - 2 * ia > Math.PI ? 1 : 0} 0 ${point(inner, start + ia)} Q ${point(inner, start)} ${point(inner + corner, start)} L ${point(outer - corner, start)} Q ${point(outer, start)} ${point(outer, start + oa)} Z`;
     }
-    return [`<path d="${d}" fill="${color(slice.key)}" fill-rule="evenodd"/>`];
+    return [`<path d="${d}" fill="${slice.fill ?? color(slice.key)}" fill-rule="evenodd"/>`];
   });
   const empty = `<circle cx="${outer}" cy="${outer}" r="${(outer + inner) / 2}" fill="none" stroke="var(--progress-track)" stroke-width="${outer - inner}"/>`;
   return `<svg viewBox="0 0 ${size} ${size}" aria-hidden="true">${paths.join('') || empty}</svg>`;
@@ -30,10 +32,10 @@ function modelRingSVG(slices, total) {
 function modelDistribution(models) {
   const ranked = [...models].sort((a, b) => (state.cost ? b.cost - a.cost : b.total - a.total) || a.key.localeCompare(b.key));
   const sum = ranked.reduce((n, m) => n + (state.cost ? m.cost : m.total), 0),top = ranked.slice(0, 5),other = ranked.slice(5);
-  const slices = [...top, ...(other.length ? [{ key: AieyesI18n.t("其他"), total: other.reduce((n, m) => n + m.total, 0), cost: other.reduce((n, m) => n + m.cost, 0) }] : [])];
+  const slices = [...top, ...(other.length ? [{ key: AieyesI18n.t("其他"), total: other.reduce((n, m) => n + m.total, 0), cost: other.reduce((n, m) => n + m.cost, 0), fill: otherModelsColor }] : [])];
   // Models past the top five appear in the ring as its "其他" slice.
   const row = (m, swatch) => `<div><span class="model" title="${escapeHTML(modelName(m.key))}"><i class="color" style="background:${swatch}"></i>${escapeHTML(modelName(m.key))}</span><strong title="${state.cost ? m.cost.toFixed(6) + ' USD' : m.total.toLocaleString(AieyesI18n.locale) + ' Token'}">${state.cost ? money(m.cost) + ' USD' : compact(m.total) + ' Token'} · ${pct(sum ? (state.cost ? m.cost : m.total) / sum * 100 : 0)}</strong></div>`;
-  return `<div class="pie-wrap"><div class="donut" role="img" aria-label="${AieyesI18n.t("前五模型与其他，精确数据见右侧列表")}">${modelRingSVG(slices, sum)}<div class="donut-inner">${models.length}<small>${AieyesI18n.t("模型")}</small></div></div><div class="legend">${top.map((m) => row(m, color(m.key))).join('')}${other.length ? `<details data-persist-disclosure="analysis:other-models" ${disclosureOpen('analysis:other-models', false) ? 'open' : ''}><summary>${AieyesI18n.t("其他 {0} 个模型 · {1} · {2}", other.length, state.cost ? money(other.reduce((n, m) => n + m.cost, 0)) : compact(other.reduce((n, m) => n + m.total, 0)), pct(sum ? other.reduce((n, m) => n + (state.cost ? m.cost : m.total), 0) / sum * 100 : 0))}</summary>${other.map((m) => row(m, color(AieyesI18n.t("其他")))).join('')}</details>` : ''}</div></div>`;
+  return `<div class="pie-wrap"><div class="donut" role="img" aria-label="${AieyesI18n.t("前五模型与其他，精确数据见右侧列表")}">${modelRingSVG(slices, sum)}<div class="donut-inner">${models.length}<small>${AieyesI18n.t("模型")}</small></div></div><div class="legend">${top.map((m) => row(m, color(m.key))).join('')}${other.length ? `<details data-persist-disclosure="analysis:other-models" ${disclosureOpen('analysis:other-models', false) ? 'open' : ''}><summary>${AieyesI18n.t("其他 {0} 个模型 · {1} · {2}", other.length, state.cost ? money(other.reduce((n, m) => n + m.cost, 0)) : compact(other.reduce((n, m) => n + m.total, 0)), pct(sum ? other.reduce((n, m) => n + (state.cost ? m.cost : m.total), 0) / sum * 100 : 0))}</summary>${other.map((m) => row(m, otherModelsColor)).join('')}</details>` : ''}</div></div>`;
 }
 function heatmapHTML(days, offset = 0) {
   const lead = days.length ? (new Date(days[0].key + 'T12:00:00').getDay() + 6) % 7 : 0,columns = Math.ceil((days.length + lead) / 7),max = Math.max(1, ...days.map((d) => state.cost ? d.cost : d.total));

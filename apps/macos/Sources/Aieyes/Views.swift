@@ -855,18 +855,20 @@ struct ModelChart: View, Equatable {
         guard !remainder.isEmpty else { return ranked }
         return Array(ranked.prefix(5)) + [Aggregate(key: L("其他"), total: remainder.reduce(0) { $0 + $1.total }, cost: remainder.reduce(0) { $0 + $1.cost })]
     }
+    /// Ring models keep the trend chart's colors; the "其他" slice and the models folded into it share its neutral.
+    private func color(_ key: String, ring: Set<String>) -> Color { ring.contains(key) ? Palette.model(key, preset: chartPalette, contrast: chartContrast) : Palette.otherModels }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
         let ringKeys = Set(ranked.prefix(5).map(\.key))
         HStack(alignment: .top, spacing: 16) {
-            Chart(slices) { item in SectorMark(angle: .value(cost ? "USD" : "Token", value(item)), innerRadius: .ratio(DesignTokens.modelChartInnerRatio), angularInset: DesignTokens.modelChartAngularInset).foregroundStyle(Palette.model(item.key, preset: chartPalette, contrast: chartContrast)).cornerRadius(DesignTokens.modelChartCorner).accessibilityLabel(Text(modelNames[item.key] ?? item.key)) }.frame(width: DesignTokens.modelChartSize, height: DesignTokens.modelChartHeight)
+            Chart(slices) { item in SectorMark(angle: .value(cost ? "USD" : "Token", value(item)), innerRadius: .ratio(DesignTokens.modelChartInnerRatio), angularInset: DesignTokens.modelChartAngularInset).foregroundStyle(color(item.key, ring: ringKeys)).cornerRadius(DesignTokens.modelChartCorner).accessibilityLabel(Text(modelNames[item.key] ?? item.key)) }.frame(width: DesignTokens.modelChartSize, height: DesignTokens.modelChartHeight)
                 .chartBackground { _ in VStack { Text("\(models.count)").font(.title2); Text(L("模型")).font(AppFont.secondary) } }.accessibilityLabel(L("前五模型与其他；完整数值见列表"))
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(showAll ? ranked : Array(ranked.prefix(5))) { item in
                     // Models past the top five appear in the ring as its "其他" slice.
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Circle().fill(Palette.model(ringKeys.contains(item.key) ? item.key : L("其他"), preset: chartPalette, contrast: chartContrast)).frame(width: DesignTokens.chartLegendDot, height: DesignTokens.chartLegendDot)
+                        Circle().fill(color(item.key, ring: ringKeys)).frame(width: DesignTokens.chartLegendDot, height: DesignTokens.chartLegendDot)
                             .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + DesignTokens.fontSecondary * 0.35 }
                         VStack(alignment: .leading, spacing: 3) { Text(modelNames[item.key] ?? item.key).font(AppFont.secondary).textSelection(.enabled).help(modelNames[item.key] ?? item.key); Text((cost ? Format.money(item.cost) + " USD" : Format.compact(item.total) + " Token") + " · " + Format.percent(total > 0 ? value(item) / total * 100 : 0)).font(AppFont.secondary).monospacedDigit().foregroundStyle(.secondary) }
                     }

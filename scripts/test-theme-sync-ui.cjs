@@ -97,15 +97,25 @@ function fixture(){
             state.settings.appearance.theme=theme;state.page='analysis';
             const names=['chart-a','chart-b','chart-c'];
             const usage={tokens:{input:100,output:20,cacheRead:0,cacheWrite:0},total:120,cost:1,pricedTokens:120,events:1};
-            state.dashboard.trendDays=[{...usage,key:'2026-10-11',total:360}];state.dashboard.dayModels=names.map(model=>({day:'2026-10-11',model,usage}));render();
+            state.dashboard.trendDays=[{...usage,key:'2026-10-11',total:360}];state.dashboard.dayModels=names.map(model=>({day:'2026-10-11',model,usage}));
+            // Seven models: the ring shows the top five plus "其他", the trend shares the first three.
+            const ranked=[...names,'chart-d','chart-e','chart-f','chart-g'];state.dashboard.models=ranked.map((key,i)=>({...usage,key,total:700-i*100}));render();
             const ctx=document.querySelector('#trend').getContext('2d'),paint=[],original=ctx.fillRect;
             ctx.fillRect=function(...args){paint.push(this.fillStyle);return original.apply(this,args);};
             try{drawTrend();}finally{ctx.fillRect=original;}
             const expected=names.map(name=>color(name)),slots=names.map(name=>modelSlots.get(document.documentElement.dataset.chartPalette).get(name));
-            return {paint,expected,slots,colors:chartColors()};
+            const probe=document.body.appendChild(document.createElement('i')),rgb=value=>{probe.style.color=value;return getComputedStyle(probe).color;};
+            const ring=[...document.querySelectorAll('.donut path')].map(path=>rgb(getComputedStyle(path).fill)),swatches=[...document.querySelectorAll('.pie-wrap .legend .color')].map(swatch=>rgb(getComputedStyle(swatch).backgroundColor));
+            const sync={ring,swatches,paint:paint.map(rgb),models:ranked.slice(0,5).map(name=>rgb(color(name))),palette:chartColors().map(rgb),otherSlot:modelSlots.get(document.documentElement.dataset.chartPalette).has(AieyesI18n.t('其他'))};probe.remove();
+            return {paint,expected,slots,colors:chartColors(),sync};
           },{theme});
           assert.deepEqual(result.paint,result.expected);assert.equal(new Set(result.slots).size,3);
           assert(result.expected.every(color=>result.colors.includes(color)));
+          // Bars, ring and list read one model mapping; "其他" is a neutral outside the model slots.
+          const {sync}=result,other=sync.ring[5];
+          assert.deepEqual(sync.ring.slice(0,3),sync.paint);assert.deepEqual(sync.ring.slice(0,5),sync.models);
+          assert(!sync.palette.includes(other)&&!sync.otherSlot,`"其他" must not take a model color: ${palette} ${contrast} ${theme}`);
+          assert.deepEqual(sync.swatches,[...sync.models,other,other]);
         }
       }
     }
