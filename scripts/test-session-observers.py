@@ -169,6 +169,25 @@ class ObserverTests(unittest.TestCase):
                 fallback=m.collect(source,cursors)
             self.assertEqual(len(fallback['files']),11)
 
+    def test_known_noninteractive_logs_do_not_use_the_recent_session_limit(self):
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            project=pathlib.Path(directory)/'projects'/'home';project.mkdir(parents=True);now=time.time()
+            def write(name,entrypoint,age):
+                path=project/(name+'.jsonl');path.write_text(json.dumps(dict(type='user',sessionId=name,entrypoint=entrypoint,message=dict(content='PRIVATE_PROMPT')))+'\n')
+                os.utime(path,(now-age,)*2);return path
+            for index in range(300):write('sdk-%03d'%index,'sdk-cli',60+index)
+            interactive=write('cli','cli',900);source=dict(id='s',provider='claude',path=directory)
+            cold=m.collect(source,{})
+            self.assertEqual((len(cold['files']),cold['ignored'],cold['overflow'],cold['error']),(256,[],45,None))
+            # The Rust reader flags classified cursors; unchanged ones skip the limit.
+            cursors={row['key']:dict(row,nonInteractive=True) for row in cold['files']}
+            warm=m.collect(source,cursors)
+            self.assertEqual((len(warm['files']),len(warm['ignored']),warm['overflow'],warm['error']),(45,256,0,None))
+            self.assertIn(str(interactive),{row['key'] for row in warm['files']})
+            changed=str(project/'sdk-000.jsonl');cursors[changed]['modified']-=1
+            self.assertIn(changed,{row['key'] for row in m.collect(source,cursors)['files']})
+
     def test_watched_append_new_file_and_rotation_refresh_cached_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory)/'sessions';root.mkdir();path=root/'one.jsonl';path.write_text('{}\n')

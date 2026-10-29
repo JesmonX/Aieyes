@@ -598,12 +598,13 @@ def recent_files(provider, roots):
     if key not in _DISCOVERY:
         if len(_DISCOVERY) >= 16: _DISCOVERY.pop(next(iter(_DISCOVERY))).watch.close()
         _DISCOVERY[key] = SessionDiscovery(provider, roots)
-    return _DISCOVERY[key].recent()
+    discovery = _DISCOVERY[key]
+    return discovery.recent(), discovery.overflow
 
 
 def collect_native(source,cursors,database_cache=False,harness_deadline=None):
     path=pathlib.Path(os.path.expanduser(source.get('path') or '~/.gemini/antigravity-cli'))
-    provider=source['provider']; result=dict(sourceId=source['id'],files=[],error=None)
+    provider=source['provider']; result=dict(sourceId=source['id'],files=[],error=None,ignored=[],overflow=0)
     try:
         if provider in ('opencode','zcode'):
             database=(path if path.is_file() else path/'opencode.db') if provider=='opencode' else next((p for p in ([path] if path.is_file() else [path/'cli/db/db.sqlite',path/'db/db.sqlite']) if p.is_file()),None)
@@ -641,9 +642,16 @@ def collect_native(source,cursors,database_cache=False,harness_deadline=None):
         roots=[] if provider=='cursor' else [(path / ('sessions' if provider in ('codex','kimi','grok','pi','omp') else 'projects' if provider in ('claude','codebuddy','qoder') else 'conversations'),False)]
         if roots and not roots[0][0].is_dir(): roots=[(path,False)]
         if provider in ('claude','antigravity','cursor','codebuddy'): roots.append((target(source)[0]/'.aieyes/session-events',True))
-        files=recent_files(provider,roots)
-        if len(files)>256: result['error']='Too many recent sessions; showing the most recent 256'
-        for _,f,hook in sorted(files,reverse=True)[:256]:
+        files,truncated=recent_files(provider,roots)
+        if truncated: result['error']='Too many recent sessions; showing the most recent 256'
+        selected=[]
+        for stamp,f,hook in files:
+            cursor=cursors.get(str(f),{})
+            # Known non-interactive transcripts use no read slot until they change.
+            if cursor.get('nonInteractive') and cursor.get('modified')==int(stamp): result['ignored'].append(str(f))
+            else: selected.append((f,hook))
+        result['overflow']=max(len(selected)-256,0)
+        for f,hook in selected[:256]:
             try: result['files'].append(read_db(f,cursors.get(str(f),{}) if database_cache else None) if not hook and provider=='antigravity' else read_file(f,provider,hook,cursors.get(str(f),{})))
             except Exception as error:
                 result['error']=str(error)
@@ -658,7 +666,7 @@ def collect(source,cursors,database_cache=False,harness_deadline=None):
     if source['provider']=='zcode':
         root=target(source)[0]/'.aieyes/session-events'
         if root.is_dir():
-            paths=[p for _,p,_ in recent_files('zcode',[(root,True)])]
+            paths=[p for _,p,_ in recent_files('zcode',[(root,True)])[0]]
             if len(paths)>256:result['error']='Too many recent ZCode state files; showing latest 256'
             for path in paths[:256]:
                 try:result['files'].append(read_file(path,'zcode',True,cursors.get(str(path),{})))

@@ -439,6 +439,10 @@ struct SourceBatch {
     source_id: String,
     files: Vec<FileBatch>,
     error: Option<String>,
+    // Unchanged non-interactive transcripts skipped before the read limit.
+    ignored: Vec<String>,
+    // Candidates left unread by the limit.
+    overflow: usize,
 }
 #[derive(Default)]
 struct Cursor {
@@ -450,6 +454,7 @@ struct Cursor {
     modified: u64,
     activity: Activity,
     continuation: Value,
+    non_interactive: bool,
 }
 // FSEvents registration/teardown can wait for its run loop. Keep both off the session lane.
 struct DirectoryWatch {
@@ -561,9 +566,22 @@ fn normalized_source(s: &Source) -> Source {
 fn wire_source(s: &Source) -> Value {
     json!({"id":s.id,"name":s.name,"provider":s.provider,"path":s.path,"hostId":s.host_id})
 }
+/// Creation sources that are never monitored. A transcript without a source
+/// stays a candidate: its metadata may not have been read yet.
+fn non_interactive(provider: &str, activity: &Activity) -> bool {
+    let source = activity.session_source.as_str();
+    match provider {
+        "claude" => matches!(
+            source,
+            "sdk-cli" | "sdk-ts" | "sdk-py" | "mcp" | "claude-code-github-action"
+        ),
+        "codex" => activity.parent_session.is_empty() && !matches!(source, "" | "cli" | "vscode"),
+        _ => false,
+    }
+}
 impl Reader {
     fn manifest(&self) -> Value {
-        Value::Object(self.cursors.iter().map(|(p,c)|(p.clone(),json!({"identity":c.identity,"signature":c.signature,"anchor":c.anchor,"size":c.size,"offset":c.offset,"modified":c.modified,"pid":c.activity.pid,"processStart":c.activity.process_start,"continuation":c.continuation}))).collect())
+        Value::Object(self.cursors.iter().map(|(p,c)|(p.clone(),json!({"identity":c.identity,"signature":c.signature,"anchor":c.anchor,"size":c.size,"offset":c.offset,"modified":c.modified,"pid":c.activity.pid,"processStart":c.activity.process_start,"continuation":c.continuation,"nonInteractive":c.non_interactive}))).collect())
     }
     fn consume(
         &mut self,
@@ -576,6 +594,25 @@ impl Reader {
     ) -> Snapshot {
         let mut out = Snapshot::default();
         let mut excluded = HashSet::new();
+        let exclusion = |session: &str| {
+            crate::models::hash(&format!(
+                "{}:{}:{session}",
+                source.host_id.as_deref().unwrap_or("local"),
+                source.provider
+            ))
+        };
+        // Skipped transcripts still suppress legacy hook duplicates of their sessions.
+        if source.provider == "claude" {
+            excluded.extend(
+                batch
+                    .ignored
+                    .iter()
+                    .filter_map(|key| self.cursors.get(key))
+                    .map(|c| exclusion(&c.activity.session)),
+            );
+        }
+        // Read slots spent on newly classified transcripts are free on the next poll.
+        let mut classified = 0;
         for f in batch.files {
             if f.hook && hook_state.as_deref() == Some("disabled") {
                 continue;
@@ -622,18 +659,10 @@ impl Reader {
                 cursor.anchor = f.anchor;
             }
             cursor.continuation = f.continuation;
-            if source.provider == "claude"
-                && matches!(
-                    cursor.activity.session_source.as_str(),
-                    "sdk-cli" | "sdk-ts" | "sdk-py" | "mcp" | "claude-code-github-action"
-                )
-            {
-                excluded.insert(crate::models::hash(&format!(
-                    "{}:{}:{}",
-                    source.host_id.as_deref().unwrap_or("local"),
-                    source.provider,
-                    cursor.activity.session
-                )));
+            cursor.non_interactive = non_interactive(&source.provider, &cursor.activity);
+            classified += usize::from(cursor.non_interactive);
+            if source.provider == "claude" && cursor.non_interactive {
+                excluded.insert(exclusion(&cursor.activity.session));
                 continue;
             }
             // Creation source is independent of the tools called in a normal
@@ -740,13 +769,18 @@ impl Reader {
             }
         }
         out.sessions.retain(|s| !excluded.contains(&s.id));
-        let error = batch.error.or_else(|| {
-            if source.provider == "cursor" {
-                return (hook_state.as_deref()!=Some("installed")).then(|| "Cursor 实时监测未启用或配置不可用；原生私有会话库不能替代状态事件，请在接入与账户中启用或修复监测".into());
-            }
-            (hook_state.as_deref() == Some("error"))
-                .then(|| "实时会话监测未就绪，暂从日志读取；可在接入与账户中修复监测".into())
-        });
+        let error = batch
+            .error
+            .or_else(|| {
+                (batch.overflow > classified).then(|| "近期会话过多，显示最近 256 个".into())
+            })
+            .or_else(|| {
+                if source.provider == "cursor" {
+                    return (hook_state.as_deref()!=Some("installed")).then(|| "Cursor 实时监测未启用或配置不可用；原生私有会话库不能替代状态事件，请在接入与账户中启用或修复监测".into());
+                }
+                (hook_state.as_deref() == Some("error"))
+                    .then(|| "实时会话监测未就绪，暂从日志读取；可在接入与账户中修复监测".into())
+            });
         if source.provider == "cursor" && error.is_some() {
             for session in &mut out.sessions {
                 if session.phase.active() {
@@ -910,6 +944,7 @@ impl Reader {
                             .get(&source.id)
                             .map(|(_, _, files, _)| files.clone())
                             .unwrap_or_default(),
+                        ..Default::default()
                     },
                 }
             };
@@ -995,7 +1030,6 @@ impl Reader {
             discovery
                 .paths
                 .sort_by_key(|(_, _, stamp)| std::cmp::Reverse(*stamp));
-            discovery.paths.truncate(256);
         }
         if self.discovery.get(&key).is_none_or(|d| {
             lost || now < d.at
@@ -1085,10 +1119,6 @@ impl Reader {
             }
             paths.sort_by_key(|(_, _, stamp)| std::cmp::Reverse(*stamp));
             paths.dedup();
-            if paths.len() > 256 {
-                paths.truncate(256);
-                error = Some("近期会话过多，显示最近 256 个".into());
-            }
             self.discovery.insert(
                 key.clone(),
                 Discovery {
@@ -1105,10 +1135,25 @@ impl Reader {
         let mut batch = SourceBatch {
             source_id: source.id.clone(),
             error: error.clone(),
-            files: Vec::new(),
+            ..Default::default()
         };
-        for (path, hook, _) in paths {
+        let mut reads = 0;
+        for (path, hook, stamp) in paths {
             let name = path.to_string_lossy().into_owned();
+            // Known non-interactive transcripts use no read slot until they change.
+            if self
+                .cursors
+                .get(&name)
+                .is_some_and(|c| c.non_interactive && c.modified == *stamp)
+            {
+                batch.ignored.push(name);
+                continue;
+            }
+            if reads == 256 {
+                batch.overflow += 1;
+                continue;
+            }
+            reads += 1;
             let result = if !hook
                 && matches!(source.provider.as_str(), "antigravity" | "deepseek-harness")
             {
@@ -1741,10 +1786,11 @@ fn collect_remote(
     let observed = seconds(SystemTime::now());
     let mut snapshot = Snapshot::default();
     let polls: Vec<SourceBatch> = serde_json::from_value(value["polls"].clone())?;
-    let complete = polls.len() == sources.len() && polls.iter().all(|p| p.error.is_none());
+    let complete =
+        polls.len() == sources.len() && polls.iter().all(|p| p.error.is_none() && p.overflow == 0);
     let retained: HashSet<_> = polls
         .iter()
-        .flat_map(|p| p.files.iter().map(|f| f.key.clone()))
+        .flat_map(|p| p.files.iter().map(|f| &f.key).chain(&p.ignored).cloned())
         .collect();
     for batch in polls {
         if let Some(source) = sources.iter().find(|s| s.id == batch.source_id) {
@@ -3161,6 +3207,58 @@ mod claude_source_tests {
             sounds.update(&Snapshot::default(), now, &prefs);
             assert!(sounds.update(&snapshot, now + 1, &prefs).is_empty());
         }
+    }
+
+    #[test]
+    fn known_noninteractive_logs_do_not_use_the_recent_session_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("projects/home");
+        fs::create_dir_all(&project).unwrap();
+        let started = SystemTime::now();
+        let write = |name: &str, entrypoint: &str, age: u64| {
+            let path = project.join(format!("{name}.jsonl"));
+            let record = json!({"type":"user","sessionId":name,"entrypoint":entrypoint,"message":{"content":"PRIVATE_PROMPT"}});
+            fs::write(&path, format!("{record}\n")).unwrap();
+            File::options()
+                .append(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(started - Duration::from_secs(age))
+                .unwrap();
+        };
+        for index in 0..300 {
+            write(&format!("sdk-{index:03}"), "sdk-cli", 60 + index);
+        }
+        // Older than every headless run, so a shared limit would drop it.
+        write("cli", "cli", 900);
+        let source = Source {
+            id: "s".into(),
+            provider: "claude".into(),
+            path: root.path().to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let mut reader = Reader::default();
+        let mut poll = |now: u64| {
+            let batch = reader.collect_logs_local(&source, now, false);
+            let counts = (batch.files.len(), batch.ignored.len(), batch.overflow);
+            let snapshot = reader.consume(&source, batch, now, now, "Fixture", None);
+            assert_eq!(snapshot.sources[0].state, "healthy", "{counts:?}");
+            (counts, snapshot.sessions.len())
+        };
+        let now = seconds(started);
+        // Slots spent classifying the newest transcripts cover the unread rest.
+        assert_eq!(poll(now), ((256, 0, 45), 0));
+        assert_eq!(poll(now), ((45, 256, 0), 1));
+        assert_eq!(poll(now), ((1, 300, 0), 1));
+        // Resuming a headless run interactively changes its file and source.
+        let resumed = project.join("sdk-000.jsonl");
+        let mut stream = fs::OpenOptions::new().append(true).open(&resumed).unwrap();
+        writeln!(stream,"{}",json!({"type":"user","sessionId":"sdk-000","entrypoint":"cli","message":{"content":"PRIVATE_PROMPT"}})).unwrap();
+        stream
+            .set_modified(started - Duration::from_secs(30))
+            .unwrap();
+        drop(stream);
+        assert_eq!(poll(now + 61), ((2, 299, 0), 2));
     }
 }
 
