@@ -3554,7 +3554,20 @@ enum LocalizationCatalog {
   "需要可采集 Token 的关联数据源及可靠的额度池映射。请检查数据目录、账户关联和模型映射。": "Requires linked Token sources and reliable quota pool mapping. Check directories, account links and model mappings.",
   "当前没有可用的额度快照；已有采样和历史仍可管理。": "No quota snapshot is available. Existing samples and history can still be managed.",
   "辅助进程请求过多，请稍后重试": "Too many helper requests. Please try again shortly.",
-  "关闭窗口后会继续后台监测，可通过桌宠或托盘重新打开。": "Monitoring continues after this window closes. Reopen Aieyes from the pet or tray."
+  "关闭窗口后会继续后台监测，可通过桌宠或托盘重新打开。": "Monitoring continues after this window closes. Reopen Aieyes from the pet or tray.",
+  "调试": "Debug",
+  "匀速动画（调试）": "Uniform animation (debug)",
+  "所有动作每帧 100ms，用于检查停顿": "Play every frame for 100 ms to inspect pauses",
+  "无法取得 Codex 账户锁：{0}": "Unable to acquire Codex account lock: {0}",
+  "额度修订计数溢出": "Quota observation revision overflow",
+  "已加入": "Added",
+  "未加入": "Not added",
+  "上移 Agent": "Move Agent up",
+  "下移 Agent": "Move Agent down",
+  "排序与添加移出不能同时操作": "Ordering and adding or removing cannot be combined",
+  "Agent 顺序必须是列表": "Agent order must be a list",
+  "只能排序已加入的 Agent": "Only added Agents can be ordered",
+  "Agent 顺序不能重复": "Agent order cannot contain duplicates"
 }
 """#.utf8))) ?? [:]
 }

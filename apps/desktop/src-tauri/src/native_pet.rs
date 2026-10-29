@@ -707,10 +707,10 @@ unsafe extern "system" fn window_proc(
                         surface
                             .dark
                             .set(info["dark"].as_bool().unwrap_or(surface.dark.get()));
-                        let changed = surface.info.borrow()["pet"]["key"] != info["pet"]["key"];
-                        if surface.info.borrow()["petAsset"]["spritePath"]
-                            != info["petAsset"]["spritePath"]
-                        {
+
+                        let asset_changed = surface.info.borrow()["petAsset"]["spritePath"]
+                            != info["petAsset"]["spritePath"];
+                        if asset_changed {
                             surface.pet_sprite.replace(
                                 pet::Sprite::load(&info["petAsset"])
                                     .unwrap_or_else(pet::Sprite::empty),
@@ -720,6 +720,11 @@ unsafe extern "system" fn window_proc(
                         let previous_scale = pet_scale(hwnd);
                         let state = serde_json::from_value(info["pet"].clone())
                             .unwrap_or_else(|_| aieyes_core::pets::project(&Default::default()));
+                        let changed = asset_changed
+                            || !aieyes_core::pets::same_animation(
+                                &surface.pet_state.borrow(),
+                                &state,
+                            );
                         surface.pet_state.replace(state);
                         surface.info.replace(info);
                         if pet_height(hwnd) != previous_height || pet_scale(hwnd) != previous_scale

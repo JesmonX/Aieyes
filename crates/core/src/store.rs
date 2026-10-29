@@ -1139,6 +1139,11 @@ impl Store {
         {
             return Ok(());
         }
+        let tx = if self.db.is_autocommit() {
+            Some(self.write_transaction()?)
+        } else {
+            None
+        };
         let key = format!("{}:{}", q.provider, q.account_id);
         let prior: Option<String> = self
             .db
@@ -1148,10 +1153,23 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?;
-        // Shared in-flight reads can be delivered to more than one caller.
-        if prior.as_deref() == Some(serde_json::to_string(q)?.as_str()) {
-            return Ok(());
-        }
+        // Compare observations without their storage-assigned revision.
+        let old_revision = if let Some(raw) = &prior {
+            let mut old: QuotaSnapshot = serde_json::from_str(raw)?;
+            let revision = old.observation_revision;
+            if q.observation_revision > 0 && q.observation_revision < revision {
+                return Ok(());
+            }
+            old.observation_revision = 0;
+            let mut sample = q.clone();
+            sample.observation_revision = 0;
+            if serde_json::to_value(&old)? == serde_json::to_value(&sample)? {
+                return Ok(());
+            }
+            revision
+        } else {
+            0
+        };
         let mut next = q.clone();
         if q.provider == "antigravity" && q.error.is_none() {
             let settings = self.settings()?;
@@ -1166,8 +1184,8 @@ impl Store {
                 );
             }
         }
-        if let Some(raw) = prior {
-            let old: QuotaSnapshot = serde_json::from_str(&raw)?;
+        if let Some(raw) = &prior {
+            let old: QuotaSnapshot = serde_json::from_str(raw)?;
             if q.error.is_none() && q.provider == "antigravity" {
                 // A metadata failure must not throw away newly fetched quota windows.
                 // Retain a failed subscription query only for a confirmed matching identity.
@@ -1184,7 +1202,11 @@ impl Store {
             if q.error.is_some() {
                 next = old;
                 next.error = q.error.clone();
-            } else if old.updated_at > q.updated_at {
+            } else if old.updated_at > q.updated_at
+                && !(matches!(q.origin.as_str(), "live" | "command")
+                    && old.updated_at > now()
+                    && q.updated_at <= now())
+            {
                 return Ok(());
             } else if q.origin == "log" {
                 if old.bank_reset.is_some() {
@@ -1198,6 +1220,16 @@ impl Store {
                 }
             }
         }
+        // A failed read retains the previous data. Replaying that same failure
+        // must not publish another observation just because its raw time differs.
+        if let Some(raw) = &prior {
+            let old: QuotaSnapshot = serde_json::from_str(raw)?;
+            next.observation_revision = old.observation_revision;
+            if serde_json::to_value(&next)? == serde_json::to_value(&old)? {
+                return Ok(());
+            }
+        }
+        next.observation_revision = old_revision.checked_add(1).context("额度修订计数溢出")?;
         let observed = if q.provider == "antigravity" {
             &next
         } else {
@@ -1212,6 +1244,9 @@ impl Store {
             )?;
         }
         self.db.execute("INSERT INTO quotas VALUES(?1,?2) ON CONFLICT(account_key) DO UPDATE SET payload=excluded.payload",params![key,serde_json::to_string(&next)?])?;
+        if let Some(tx) = tx {
+            tx.commit()?;
+        }
         Ok(())
     }
     pub fn source_status(&self, id: &str, status: &Value) -> Result<()> {

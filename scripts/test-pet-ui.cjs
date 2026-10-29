@@ -29,13 +29,14 @@ print(base64.b64encode(png).decode())
 }
 function fixture(data){
   const interval=window.setInterval;window.setInterval=(fn,ms)=>ms===100?interval(fn,ms):0;
-  const listeners=new Map(),info={platform:'linux',page:'agent',mode:'pet',effectiveMode:'pet',nativePet:false,petEnabled:true,petScale:Number(localStorage.getItem('fixture.petScale')||1),panelOpen:false,panelPinned:false,sessions:[],summary:'空闲',activeCount:0,petAsset:data.pet.pet,pet:{key:'idle',behavior:'idle',label:'空闲',row:0,frames:6,frameMs:100,frameDurationsMs:data.frameDurations[0]}};
+  const listeners=new Map(),info={platform:'linux',page:'agent',mode:'pet',effectiveMode:'pet',nativePet:false,petEnabled:true,petScale:Number(localStorage.getItem('fixture.petScale')||1),petUniformTiming:localStorage.getItem('fixture.petUniformTiming')==='true',panelOpen:false,panelPinned:false,sessions:[],summary:'空闲',activeCount:0,petAsset:data.pet.pet,pet:{key:'idle',behavior:'idle',label:'空闲',row:0,frames:6,frameMs:100,frameDurationsMs:data.frameDurations[0]}};
   const pets=Array.from({length:18},(_,i)=>({...data.pet.pet,libraryId:i===0?data.pet.pet.libraryId:'fixture-'+i,spritePath:'/fixture/pet-'+i+'.png',displayName:i<2?'同名桌宠':'桌宠 '+i,creator:'测试作者',source:'https://example.invalid/pets/'+i,importedAt:'2026-10-'+String(i+1).padStart(2,'0')+'T08:00:00Z'}));
   window.petTest={info,pets,selection:data.pet,calls:[],emit(pet){info.pet=pet;for(const f of listeners.get('desktop:status')||[])f({payload:{...info}});}};
   window.__TAURI__={event:{async listen(name,fn){listeners.set(name,[...(listeners.get(name)||[]),fn]);return()=>{};}},window:{getCurrentWindow:()=>({async startDragging(){window.petTest.dragged=true;},async isMaximized(){return false;},async onResized(){return()=>{};}})},core:{async invoke(name,args={}){
     petTest.calls.push({name,args});
     if(name==='desktop_info')return {...info};
     if(name==='desktop_panel'){info.panelOpen=args.open;return {...info};}
+    if(name==='desktop_pet_uniform_timing'){if(petTest.failTiming)throw new Error('模拟调试保存失败');info.petUniformTiming=args.enabled;localStorage.setItem('fixture.petUniformTiming',String(args.enabled));return {...info};}
     if(name==='desktop_pet_scale'){if(petTest.failScale)throw new Error('模拟缩放保存失败');info.petScale=args.scale;localStorage.setItem('fixture.petScale',String(args.scale));return {...info};}
     if(name==='desktop_mode'){info.mode=args.mode;info.petEnabled=args.mode==='pet';return {...info};}
     if(name==='select_local_path')return '/fixture/import.zip';
@@ -93,6 +94,14 @@ function fixture(data){
       assert.deepEqual(await page.evaluate(({state,samples})=>samples.map(s=>AieyesPet.frame(state,s.elapsed,false)),{state,samples}),samples.map(s=>s.expected),'per-frame boundaries and continuing loops match the agreed timing');
       await page.locator('#ball').screenshot({path:path.join(out,name+'.png')});
     }
+    await page.emulateMedia({reducedMotion:'no-preference'});
+    const continuity=new Set();
+    for(let turn=0;turn<16;turn++) {
+      await page.evaluate(turn=>petTest.emit({behavior:'idle',label:'Idle',row:0,frames:6,frameMs:40,frameDurationsMs:Array(6).fill(40),key:'session-'+turn}),turn);
+      await page.waitForTimeout(30);continuity.add(await page.locator('#pet-sprite').getAttribute('data-frame'));
+    }
+    assert(continuity.size>=4,'Session changes do not hold the animation on its first frame');
+    assert.deepEqual(await page.evaluate(()=>{AieyesPetAnimation.setUniform(true);const result=AieyesPetAnimation.durations(AieyesPetAnimation.idle());AieyesPetAnimation.setUniform(false);return result;}),Array(6).fill(100),'Uniform debug clock uses 100ms frames');
     assert.deepEqual(await page.evaluate(()=>AieyesPetAnimation.idle().frameDurationsMs),frameDurations[0],'library idle and the live player share the generated timing');
     assert.equal(await page.evaluate(()=>AieyesPet.frame({row:2,frames:8,frameDurationsMs:[120,120,120,120,120,120,120,220]},1059)),23,'running-left uses its eight-frame row');
     assert.equal(await page.evaluate(()=>AieyesPet.frame({row:2,frames:8,frameDurationsMs:[120,120,120,120,120,120,120,220]},1060)),16);
@@ -192,6 +201,20 @@ function fixture(data){
     await page.waitForFunction(()=>document.querySelector('#pet-scale').value==='1.25');
     await page.evaluate(()=>{petTest.failScale=false;});
     await page.locator('#reset-pet-scale').click();await page.waitForFunction(()=>petTest.info.petScale===1);
+    await page.locator('details:has(#pet-uniform) > summary').click();
+    await page.locator('#pet-uniform').check();
+    await page.waitForFunction(()=>petTest.info.petUniformTiming===true);
+    assert.deepEqual(await page.evaluate(()=>AieyesPetAnimation.durations(AieyesPetAnimation.idle())),Array(6).fill(100),'Settings toggle updates the preview clock');
+    await page.reload();await page.evaluate(()=>AieyesApp.ready);
+    await page.evaluate(()=>{state.page='settings';state.settingsTab='general';state.generalTab='desktop';render();});
+    await page.locator('details:has(#pet-uniform) > summary').click();
+    assert(await page.locator('#pet-uniform').isChecked(),'Debug preference survives reopening');
+    await page.evaluate(()=>petTest.failTiming=true);await page.locator('#pet-uniform').click();
+    await page.waitForFunction(()=>!document.querySelector('#pet-uniform').disabled);
+    assert(await page.locator('#pet-uniform').isChecked(),'Failed preference save restores the toggle');
+    await page.evaluate(()=>petTest.failTiming=false);await page.locator('#pet-uniform').uncheck();
+    await page.waitForFunction(()=>petTest.info.petUniformTiming===false);
+    assert.deepEqual(await page.evaluate(()=>AieyesPetAnimation.durations(AieyesPetAnimation.idle())),frameDurations[0]);
     await page.locator('#pet-library-list').scrollIntoViewIfNeeded();
     await page.waitForFunction(()=>document.querySelectorAll('.pet-library-card canvas[data-frame]').length>0);
     assert.equal(await page.locator('[data-pet-select]').count(),18,'library metadata loads independently of sprite sheets');

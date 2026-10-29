@@ -94,7 +94,7 @@ import Darwin
         let images = (0..<8).map { frame -> CGImage in context.setFillColor(CGColor(gray: Double(frame)/8, alpha: 1)); context.fill(CGRect(x:0,y:0,width:8,height:8)); return context.makeImage()! }
         for durations in CoreContract.petFrameDurations {
             let animation = PetLayerImage.keyframes(images: images, durations: durations)!
-            precondition(animation.calculationMode == .discrete && animation.values?.count == durations.count+1)
+            precondition(animation.calculationMode == .discrete && animation.values?.count == durations.count)
             precondition(animation.duration == Double(durations.reduce(0,+))/1000 && animation.repeatCount == .infinity)
             var point = [Float](repeating:0,count:2)
             for index in [1,2] { animation.timingFunction!.getControlPoint(at:index,values:&point);precondition(abs(point[0]-point[1])<1e-6,"Global timing must remain linear so frame durations are exact") }
@@ -120,7 +120,21 @@ import Darwin
         precondition(starts > 0)
         for count in 0..<30 { clockState.activeCount = count; configure() }
         precondition(sprite.animationStarts == starts, "Unrelated state updates must not restart keyframes")
-        clockState.key = "a-new-turn"; configure(); precondition(sprite.animationStarts == starts+1)
+        clockState.key = "a-new-turn"; configure(); precondition(sprite.animationStarts == starts)
+        for timings in [CoreContract.petFrameDurations[0], Array(repeating: 100, count: 6)] {
+            clockState.frameDurationsMs = timings
+            let began = CACurrentMediaTime(); configure()
+            var boundary = 0.0
+            for (index, duration) in timings.enumerated() {
+                let midpoint = began + (boundary + Double(duration) / 2) / 1000
+                while CACurrentMediaTime() < midpoint { pump(0.003) }
+                guard let contents = sprite.layer?.presentation()?.contents else { preconditionFailure("Visible sprite has no presentation image") }
+                let displayed = contents as! CGImage
+                precondition(displayed.dataProvider?.data == images[index].dataProvider?.data, "Presentation image must match the variable frame timing, including the last frame")
+                boundary += Double(duration)
+            }
+        }
+        checkpoint("Pet presentation images match normal and uniform frame timing")
         sprite.configure(images: images, state: clockState, identity: clockState.animationIdentity, playing: true, reduced: true)
         precondition(sprite.layer?.animation(forKey:"pet.frames") == nil, "Reduced motion retains the first frame")
         configure(); animationWindow.orderOut(nil)

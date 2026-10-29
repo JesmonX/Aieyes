@@ -316,6 +316,7 @@ struct AccountIdentity: Codable, Equatable {
     var summary: String { displayName + (subscription.map { " · " + $0 } ?? L(" · 订阅未知")) + (stale == true ? L(" · 订阅待更新") : "") }
 }
 struct Quota: Codable, Equatable, Identifiable {
+    var observationRevision: UInt64? = nil
     var identity: AccountIdentity? = nil
     var metadataError: String? = nil
     var extraUsage: ExtraUsageWallet? = nil

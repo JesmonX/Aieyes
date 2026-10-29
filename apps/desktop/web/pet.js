@@ -2,7 +2,7 @@
 (() => {
   const sprite = document.querySelector('#pet-sprite'),ball = document.querySelector('#ball');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-  let state = null,start = 0,timer = null,enabled = false,frames = [],assetKey = null,loading = null,scale = 1,painted = null;
+  let state = null,start = 0,timer = null,enabled = false,frames = [],assetKey = null,loading = null,scale = 1,painted = null,animationSignature = '';
   const context = sprite?.getContext('2d', { alpha: true });
   const frame = window.AieyesPetAnimation.frame;
   function paint(force = true) {
@@ -61,7 +61,11 @@
     scale = Number.isFinite(info.petScale) ? Math.min(2, Math.max(0.5, info.petScale)) : 1;
     ball.style.setProperty('--pet-scale', String(scale));
     document.body.dataset.pet = String(!!info.petEnabled);
-    if (info.pet) {if (!state || state.key !== info.pet.key || AieyesPetAnimation.signature(state) !== AieyesPetAnimation.signature(info.pet)) start = performance.now();state = info.pet;}
+    if (info.pet) {
+      const signature = AieyesPetAnimation.signature(info.pet);
+      if (!state || animationSignature !== signature) start = performance.now();
+      animationSignature = signature;state = info.pet;
+    }
     if (state && info.petEnabled) {
       document.body.dataset.petBehavior = state.behavior;
       const phase = { attention: 'needsInput', blocked: 'failed', success: 'complete', rest: 'interrupted', running: 'working', working: 'tool', thinking: 'thinking', unknown: 'unknown', idle: 'idle' }[state.behavior] || 'unknown';

@@ -59,3 +59,5 @@ SSH 上 Codex 只读会话日志，无需部署 hook。Claude / AGY 在采集时
 验证入口：`cargo test --workspace --locked`、`scripts/ci-checks.sh`、`npm run test:ui --prefix apps/desktop`、`scripts/test-native.sh`、Windows `scripts/test-windows-panel.ps1`。真实桌面输入测试会记录运行或跳过原因，不把无交互桌面的结果当作鼠标/焦点验证。
 
 实现参考了 [clawd-on-desk](https://github.com/rullerzhou-afk/clawd-on-desk) 的观察器管理和后台任务处理思路；实现代码由 Aieyes 独立编写，未复制其 AGPL 代码或素材。协议依据 [Claude hooks](https://code.claude.com/docs/en/hooks)、[AGY hooks](https://antigravity.google/docs/hooks) 和 [Petdex 图集定义](https://github.com/crafter-station/petdex/blob/main/src/lib/sprite-atlas.ts)。默认资源及原始校验值见 `crates/core/assets/README.md`。
+
+2026-10-29：会话、轮次、标签与数量变化不再重播同一动作；只在素材、动作行、帧数或实际时长变化时重播。桌面设置新增匀速调试开关（每帧 100ms），默认关闭、按设备保留，同时作用于库预览。

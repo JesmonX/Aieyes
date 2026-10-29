@@ -77,6 +77,31 @@ pub fn project(snapshot: &Snapshot) -> PetState {
         phase_counts: snapshot.phase_counts(),
     }
 }
+pub fn same_animation(a: &PetState, b: &PetState) -> bool {
+    a.row == b.row && a.frames == b.frames && effective_durations(a) == effective_durations(b)
+}
+fn effective_durations(state: &PetState) -> Vec<u64> {
+    let values = if state.frame_durations_ms.is_empty() {
+        PET_FRAME_DURATIONS
+            .get(state.row as usize)
+            .copied()
+            .unwrap_or(&[])
+    } else {
+        &state.frame_durations_ms
+    };
+    if values.len() == usize::from(state.frames)
+        && values.iter().all(|v| *v > 0)
+        && values
+            .iter()
+            .try_fold(0u64, |a, b| a.checked_add(*b))
+            .is_some()
+        && !values.is_empty()
+    {
+        values.to_vec()
+    } else {
+        vec![state.frame_ms.max(1); usize::from(state.frames.max(1))]
+    }
+}
 pub fn height(state: &PetState) -> f64 {
     168.0 + state.label.lines().count().saturating_sub(1) as f64 * 18.0
 }
@@ -126,6 +151,21 @@ fn frame_timing(state: &PetState, elapsed_ms: u64) -> (u32, u64) {
 mod tests {
     use super::*;
     use crate::sessions::LiveSession;
+    #[test]
+    fn animation_identity_ignores_sessions_and_uses_effective_timing() {
+        let a = project(&Snapshot::default());
+        let mut b = a.clone();
+        b.key = "another-session:another-turn".into();
+        b.label = "Changed".into();
+        assert!(same_animation(&a, &b));
+        b.frame_durations_ms.clear();
+        assert!(same_animation(&a, &b));
+        b.frame_durations_ms = vec![100; 6];
+        assert!(!same_animation(&a, &b));
+        b = a.clone();
+        b.row = 1;
+        assert!(!same_animation(&a, &b));
+    }
     #[test]
     fn timers_land_on_frame_boundaries_and_stop_for_static_states() {
         let mut state = project(&Snapshot::default());

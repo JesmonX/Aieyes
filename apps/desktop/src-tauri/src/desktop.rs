@@ -70,6 +70,7 @@ struct Preferences {
     show_count: bool,
     hidden: bool,
     pet_scale: f64,
+    pet_uniform_timing: bool,
     main_material: String,
     floating_material: String,
     main_window: Option<MainWindowPreferences>,
@@ -83,6 +84,7 @@ impl Default for Preferences {
             show_count: false,
             hidden: false,
             pet_scale: 1.0,
+            pet_uniform_timing: false,
             main_material: "default".into(),
             floating_material: "default".into(),
             main_window: None,
@@ -1884,6 +1886,10 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
     let helper_failed = false;
     let state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
     let materials = desktop.materials.lock().map_err(|_| "材质状态不可用")?;
+    let mut pet = aieyes_core::pets::project(&state.snapshot);
+    if state.preferences.pet_uniform_timing {
+        pet.frame_durations_ms = vec![100; usize::from(pet.frames)];
+    }
     Ok(json!({
         "materials": {"main": materials.main.kind, "floating": materials.floating.kind},
         "materialPreferences": {"main": state.preferences.main_material, "floating": state.preferences.floating_material},
@@ -1898,7 +1904,8 @@ pub fn desktop_info(app: AppHandle) -> Result<Value, String> {
         "petEnabled": state.floating,
         "petScale": aieyes_core::pets::normalized_scale(state.preferences.pet_scale),
         "petAsset": state.pet_asset["pet"], "petError": state.pet_asset["error"],
-        "pet": aieyes_core::pets::project(&state.snapshot),
+        "petUniformTiming": state.preferences.pet_uniform_timing,
+        "pet": pet,
         "summary": crate::localization::text(&state.snapshot.summary()), "phase": state.snapshot.phase(), "activeCount": state.snapshot.active_count(),
         "sources": state.snapshot.sources, "sessions": state.snapshot.sessions, "unavailable": state.snapshot.unavailable, "page": state.page,
         "hidden": state.hidden, "panelOpen": state.panel, "panelPinned": state.pin,
@@ -1969,6 +1976,21 @@ pub fn desktop_mode(app: AppHandle, mode: Mode) -> Result<Value, String> {
     }
     let _ = app.emit("desktop:status", &info);
     Ok(info)
+}
+#[tauri::command]
+pub fn desktop_pet_uniform_timing(app: AppHandle, enabled: bool) -> Result<Value, String> {
+    {
+        let desktop = app.state::<Desktop>();
+        let mut state = desktop.state.lock().map_err(|_| "显示状态不可用")?;
+        let previous = state.preferences.pet_uniform_timing;
+        state.preferences.pet_uniform_timing = enabled;
+        if let Err(error) = write_preferences(&desktop.path, &state.preferences) {
+            state.preferences.pet_uniform_timing = previous;
+            return Err(error.to_string());
+        }
+    }
+    emit_shell(&app);
+    desktop_info(app)
 }
 #[tauri::command]
 pub fn desktop_pet_scale(app: AppHandle, scale: f64) -> Result<Value, String> {
@@ -3024,6 +3046,7 @@ pub(crate) fn helper_status(app: &AppHandle, info: Value) {
         state.hidden = info["hidden"] == true;
         state.pin = info["panelPinned"] == true;
         state.preferences.pet_scale = info["petScale"].as_f64().unwrap_or(1.0);
+        state.preferences.pet_uniform_timing = info["petUniformTiming"] == true;
         state.preferences.show_count = info["showCount"] == true;
         state.pet_asset = json!({"pet":info["petAsset"]});
         if let Some(page) = info["panelPage"].as_str() {

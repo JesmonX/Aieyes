@@ -50,7 +50,7 @@ const {serveFont}=require('./ui-test-helpers.cjs');
     await page.locator('[data-guide-provider=cursor]').click();
     assert.equal(await page.evaluate(()=>state.settingsAgent),'cursor');
     assert.equal(await page.locator('[data-agent-section]').getAttribute('data-agent-section'),'cursor');
-    assert(await page.locator('[data-settings-agent]').count()<=4);
+    assert(await page.locator('[data-settings-agent]').count()>4, 'All added Agents remain direct entries');
     await page.locator('#setup-return [data-guide-open]').click();
     await page.locator('[data-guide-card=network]').evaluate(el => el.open = true);
     await page.locator('[data-guide-card=network] .setup-checks button').first().click();

@@ -410,6 +410,7 @@ fn main() {
         desktop::desktop_mode,
         desktop::desktop_materials,
         desktop::desktop_pet_scale,
+        desktop::desktop_pet_uniform_timing,
         desktop::desktop_panel,
         desktop::desktop_panel_pin,
         desktop::desktop_panel_page,

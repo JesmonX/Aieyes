@@ -73,10 +73,10 @@ h3 { margin:0; font-size:var(--font-card-title); line-height:var(--line-body); f
 .track { height:var(--progress-height); border-radius:var(--radius-pill); background:var(--progress-track); box-shadow:none; margin:6px 0; overflow:hidden; }
 .track > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--t-slow) var(--ease-soft); }
 .bank { border-top: 1px solid var(--border); padding-top: 13px; margin-top: 16px; }
-.bank summary { color: var(--accent-text); font-size: var(--font-secondary); }
+.bank summary { color: var(--ink); font-size: var(--font-secondary); }
 strong,b { font-weight:var(--weight-strong); }
 aside nav button { justify-content:flex-start; font-size:var(--font-body); line-height:20px; font-weight:500; }
-.sidebar-collapsed aside nav button { justify-content:center; }
+.sidebar-collapsed aside nav button { justify-content:center; padding:10px; }
 aside nav button.active { color:var(--accent-text); background:var(--control-selected); box-shadow:var(--shadow-xs); }
 /* --- Charts -------------------------------------------------------------- */
 @container (max-width:818px) { .chart-row { grid-template-columns:1fr; } }
@@ -427,8 +427,7 @@ body[data-view=panel] #background-task { bottom:60px; right:12px; font-size:var(
 .sidebar-collapsed .brand { padding:12px 7px; }
 .sidebar-collapsed .brand > div,.sidebar-collapsed .aside-foot { display:none; }
 /* Collapsed labels stay in the accessibility tree: they are the buttons' names. */
-.sidebar-collapsed nav button > span:not([data-ui-icon]) { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.sidebar-collapsed nav button { justify-content:center; padding:10px; }
+.sidebar-collapsed aside nav button > span:not([data-ui-icon]) { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 #sidebar-toggle { align-self:flex-end; background:none; border:0; box-shadow:none; min-width:32px; }
 aside nav { display:flex; flex-direction:column; flex:1; }
 nav [data-page=settings] { border-top:1px solid var(--border); margin-top:auto; }
@@ -532,7 +531,7 @@ html[data-theme=dark] .provider-mark .provider-dark { display:block; }
 }
 .provider-identity,.order-account { display:inline-flex; align-items:center; gap:6px; min-width:0; }
 .quota-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.subscription-badge { display:inline-block; max-width:70px; padding:2px 6px; border-radius:var(--radius-pill); background:var(--soft); color:var(--accent-text); font-size:var(--font-caption); font-weight:var(--weight-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+.subscription-badge { display:inline-block; max-width:70px; padding:2px 6px; border-radius:var(--radius-pill); background:var(--surface-sunken); color:var(--ink); font-size:var(--font-caption); font-weight:var(--weight-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
 .quota-credit-summary { flex-shrink:0; max-width:55%; font-size:var(--font-secondary); }
 .quota-disclosure[open] .quota-credit-summary { display:none; }
 .credit-label { display:inline-flex; align-items:center; gap:4px; color:var(--accent-text); white-space:nowrap; }
@@ -617,8 +616,8 @@ details:has([data-command-field]) > label { display:grid; gap:8px; margin:12px 0
 .device-count-line { font-size:var(--font-secondary); line-height:var(--line-secondary); color:var(--muted); }
 .account-device-counts { display:block; white-space:nowrap; font-size:var(--font-caption); line-height:1.5; color:var(--muted); font-variant-numeric:tabular-nums; }
 .account-device-counts small { font-size:inherit; }
-.quota-card .account-switch-entry { display:inline-flex; align-items:center; gap:6px; min-height:30px; padding:5px 9px; border-radius:var(--radius-account-switch); font-size:var(--font-secondary); font-weight:var(--weight-medium); color:var(--accent-text); background:color-mix(in srgb,var(--accent) 10%,transparent); border-color:color-mix(in srgb,var(--accent) 30%,transparent); box-shadow:none; }
-.quota-card .account-switch-entry:hover { background:color-mix(in srgb,var(--accent) 16%,transparent); border-color:color-mix(in srgb,var(--accent) 45%,transparent); }
+.quota-card .account-switch-entry { display:inline-flex; align-items:center; gap:6px; min-height:30px; padding:5px 9px; border-radius:var(--radius-account-switch); font-size:var(--font-secondary); font-weight:var(--weight-medium); color:var(--ink); background:var(--control-fill); border-color:var(--control-stroke); box-shadow:none; }
+.quota-card .account-switch-entry:hover { background:var(--control-hover); border-color:var(--control-stroke); }
 .account-switch-entry .ui-icon { width:16px; height:16px; }
 .agent-machines > .agent-machine { border-top:1px solid var(--border); padding:8px 4px; }
 .agent-machine > .list-row { border:0; min-height:40px; padding:4px 0; gap:16px; }

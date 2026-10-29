@@ -24,35 +24,79 @@ private struct AgentEntrySelector: View {
     @SurfaceModel var model: AppModel
     @State private var selecting = false
     @State private var managing = false
-    @State private var search = ""
+    @State private var pickerSearch = ""
+    @State private var managementSearch = ""
     private var entries: [AgentConfiguration] { model.settingsAgentIDs.compactMap { id in model.agentConfigurations.first { $0.provider == id } } }
+    private func matches(_ agent: AgentConfiguration, _ query: String) -> Bool {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty || Format.provider(agent.provider).localizedCaseInsensitiveContains(text) || agent.provider.localizedCaseInsensitiveContains(text)
+    }
+    private func move(_ provider: String, by offset: Int) {
+        var ids = model.settingsAgentIDs
+        guard let index = ids.firstIndex(of: provider), ids.indices.contains(index + offset) else { return }
+        ids.swapAt(index, index + offset)
+        Task { await model.orderAgents(ids) }
+    }
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) {
-                ForEach(entries.prefix(4)) { agent in
-                    Button { model.settingsAgent = agent.provider } label: { Label { Text(Format.provider(agent.provider)) } icon: { ProviderMark(provider:agent.provider,size:20) } }
+        VStack(alignment: .leading, spacing: 8) {
+            FlowLayout(spacing: 6) {
+                ForEach(entries) { agent in
+                    Button { model.settingsAgent = agent.provider } label: { Label { Text(Format.provider(agent.provider)) } icon: { ProviderMark(provider: agent.provider, size: 20) } }
                         .buttonStyle(.plain).padding(6).background(model.settingsAgent == agent.provider ? Palette.accent.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
                 }
-                Spacer(minLength:8)
-                Button(L("更多 Agent")) { selecting = true }
-                Button(L("管理 Agent")) { managing = true }
             }
-            HStack { Button(Format.provider(model.settingsAgent), systemImage:"chevron.down") { selecting = true }; Spacer(); Button(L("管理 Agent")) { managing = true } }
+            HStack { Spacer(); Button(L("更多 Agent")) { selecting = true }; Button(L("管理 Agent")) { managing = true } }
         }
-        .popover(isPresented:$selecting) {
-            VStack { TextField(L("搜索 Agent"),text:$search); ScrollView { VStack(alignment:.leading) { ForEach(entries.filter { search.isEmpty || Format.provider($0.provider).localizedCaseInsensitiveContains(search) }) { agent in Button(Format.provider(agent.provider)) { model.settingsAgent = agent.provider; selecting = false }.buttonStyle(.plain).padding(6) } } } }.padding().frame(width:280,height:300)
-        }
-        .sheet(isPresented:$managing) {
-            VStack(alignment:.leading,spacing:12) {
-                Text(L("管理 Agent")).font(AppFont.title)
-                Text(L("移出会暂停采集，保留目录、账户和历史。定时唤醒由任务开关独立控制。")).font(AppFont.secondary).foregroundStyle(.secondary)
-                TextField(L("搜索 Agent"),text:$search)
-                List(model.agentConfigurations.filter { search.isEmpty || Format.provider($0.provider).localizedCaseInsensitiveContains(search) }) { agent in
-                    HStack { Text(Format.provider(agent.provider)); Spacer(); Button(L(model.settingsAgentIDs.contains(agent.provider) ? "移出并暂停采集" : "添加")) { Task { await model.manageAgent(agent.provider,visible:!model.settingsAgentIDs.contains(agent.provider)) } }.disabled(model.settingsSaving) }
+        .popover(isPresented: $selecting) {
+            VStack(alignment: .leading) {
+                TextField(L("搜索 Agent"), text: $pickerSearch)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach([true, false], id: \.self) { joined in
+                            Text(L(joined ? "已加入" : "未加入")).foregroundStyle(.secondary)
+                            ForEach((joined ? entries : model.agentConfigurations.filter { !model.settingsAgentIDs.contains($0.provider) }).filter { matches($0, pickerSearch) }) { agent in
+                                Button { Task { if !joined { await model.manageAgent(agent.provider, visible: true) }; if model.settingsAgentIDs.contains(agent.provider) { model.settingsAgent = agent.provider; selecting = false } } } label: {
+                                    HStack { Text(Format.provider(agent.provider)); Spacer(); if !joined { Text(L("添加")).foregroundStyle(.secondary) } }
+                                }.buttonStyle(.plain).padding(6).disabled(model.settingsSaving)
+                            }
+                        }
+                        if !model.agentConfigurations.contains(where: { matches($0, pickerSearch) }) { Text(L("没有匹配项")).foregroundStyle(.secondary) }
+                    }
                 }
                 if let message = model.settingsMessage { Text(message).foregroundStyle(Palette.danger) }
+            }.padding().frame(width: 280, height: 320)
+        }
+        .sheet(isPresented: $managing) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(L("管理 Agent")).font(AppFont.title)
+                Text(L("移出会暂停采集，保留目录、账户和历史。定时唤醒由任务开关独立控制。")).font(AppFont.secondary).foregroundStyle(.secondary)
+                TextField(L("搜索 Agent"), text: $managementSearch)
+                List {
+                    Section(L("已加入")) {
+                        ForEach(entries.filter { matches($0, managementSearch) }) { agent in
+                            HStack {
+                                Text(Format.provider(agent.provider)); Spacer()
+                                if managementSearch.isEmpty {
+                                    Button { move(agent.provider, by: -1) } label: { Image(systemName: "chevron.up") }.accessibilityLabel(L("上移 Agent")).disabled(model.settingsAgentIDs.first == agent.provider)
+                                    Button { move(agent.provider, by: 1) } label: { Image(systemName: "chevron.down") }.accessibilityLabel(L("下移 Agent")).disabled(model.settingsAgentIDs.last == agent.provider)
+                                }
+                                Button(L("移出并暂停采集")) { Task { await model.manageAgent(agent.provider, visible: false) } }
+                            }
+                        }.onMove { source, destination in
+                            guard managementSearch.isEmpty else { return }
+                            var ids = model.settingsAgentIDs; ids.move(fromOffsets: source, toOffset: destination)
+                            Task { await model.orderAgents(ids) }
+                        }.moveDisabled(!managementSearch.isEmpty || model.settingsSaving)
+                    }
+                    Section(L("未加入")) {
+                        ForEach(model.agentConfigurations.filter { !model.settingsAgentIDs.contains($0.provider) && matches($0, managementSearch) }) { agent in
+                            HStack { Text(Format.provider(agent.provider)); Spacer(); Button(L("添加")) { Task { await model.manageAgent(agent.provider, visible: true) } } }
+                        }
+                    }
+                }.disabled(model.settingsSaving)
+                if let message = model.settingsMessage { Text(message).foregroundStyle(Palette.danger) }
                 HStack { Spacer(); Button(L("完成")) { managing = false }.keyboardShortcut(.defaultAction) }
-            }.padding(20).frame(width:520,height:480)
+            }.padding(20).frame(width: 560, height: 480)
         }
     }
 }

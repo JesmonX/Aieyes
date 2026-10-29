@@ -304,7 +304,7 @@ struct PetState: Decodable, Equatable {
         if frameDurationsMs?.isEmpty != false, CoreContract.petFrameDurations.indices.contains(row), CoreContract.petFrameDurations[row].count == frames { return CoreContract.petFrameDurations[row] }
         return Array(repeating: max(1, Int(frameMs.isFinite ? frameMs : 100)), count: max(1, frames))
     }
-    var animationIdentity: String { "\(key):\(row):" + durations.map(String.init).joined(separator: ",") }
+    var animationIdentity: String { "\(row):\(frames):" + durations.map(String.init).joined(separator: ",") }
     func frame(elapsed: TimeInterval, reduced: Bool) -> Int {
         if reduced { return row * 8 }
         let values = durations, cycle = values.reduce(0, +)

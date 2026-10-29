@@ -5,6 +5,8 @@
   const escape = (value) => window.AieyesUI.escapeHTML(value);
   function update(info) {
     current = info;
+    window.AieyesPetAnimation?.setUniform(info.petUniformTiming);
+    const timing = document.querySelector("#pet-uniform"); if(timing) timing.checked = !!info.petUniformTiming;
     window.AieyesI18n?.setHourCycle(info.hourCycle);
     window.AieyesAgentSettings?.updateSession(info);
     document.body.dataset.platform = info.platform;
@@ -99,7 +101,7 @@
       return current?.platform === 'windows' ? ['main', 'floating'].map(surface => `<div class="form-row" data-field-size="choice"><label for="material-${surface}">${AieyesI18n.t(surface === 'main' ? "主窗口材质" : "悬浮面板材质")}<small class="material-actual muted" id="material-actual-${surface}"></small></label><select id="material-${surface}">${[['default',AieyesI18n.t("默认")],['mica','Mica'],['acrylic','Acrylic'],['opaque',AieyesI18n.t("不透明")]].map(([value,label]) => `<option value="${value}">${label}</option>`).join('')}</select></div>`).join('') : '';
     },
     settingsHTML() {
-      return `<div class="card"><h2>${AieyesI18n.t("桌面显示")}</h2><div class="form-row"><label for="desktop-mode">${AieyesI18n.t("显示方式")}</label><select id="desktop-mode"><option value="pet">${AieyesI18n.t("桌面宠物")}</option><option value="tray">${AieyesI18n.t("系统状态栏 / 托盘")}</option></select></div><div class="form-row pet-scale-control"><label for="pet-scale">${AieyesI18n.t("桌宠缩放")}</label><div class="pet-scale-fields"><input id="pet-scale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="pet-scale-value" for="pet-scale">100%</output><button type="button" id="reset-pet-scale">${AieyesI18n.t("恢复 100%")}</button></div></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">${AieyesI18n.t("显示活跃会话数")}</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : AieyesI18n.t("正在检测桌面…"))}</p>${helpHTML(AieyesI18n.t("桌面显示"), AieyesI18n.t("单击打开面板，悬停查看状态，拖动松手后贴边。隐藏后可从托盘菜单恢复。"))}${window.AieyesPetLibrary?.html() ?? ''}<div class="desktop-actions"><button type="button" id="reset-ball">${AieyesI18n.t("重置桌宠位置")}</button><button type="button" id="hide-ball">${AieyesI18n.t("暂时隐藏桌宠")}</button><button type="button" id="quit-app">${AieyesI18n.t("退出 Aieyes")}</button></div></div>`;
+      return `<div class="card"><h2>${AieyesI18n.t("桌面显示")}</h2><div class="form-row"><label for="desktop-mode">${AieyesI18n.t("显示方式")}</label><select id="desktop-mode"><option value="pet">${AieyesI18n.t("桌面宠物")}</option><option value="tray">${AieyesI18n.t("系统状态栏 / 托盘")}</option></select></div><div class="form-row pet-scale-control"><label for="pet-scale">${AieyesI18n.t("桌宠缩放")}</label><div class="pet-scale-fields"><input id="pet-scale" type="range" min="0.5" max="2" step="0.05" value="1"><output id="pet-scale-value" for="pet-scale">100%</output><button type="button" id="reset-pet-scale">${AieyesI18n.t("恢复 100%")}</button></div></div><label class="quota-confirm"><input type="checkbox" role="switch" id="desktop-count">${AieyesI18n.t("显示活跃会话数")}</label><p class="muted tiny" id="desktop-effective">${escape(current ? effectiveText(current) : AieyesI18n.t("正在检测桌面…"))}</p>${helpHTML(AieyesI18n.t("桌面显示"), AieyesI18n.t("单击打开面板，悬停查看状态，拖动松手后贴边。隐藏后可从托盘菜单恢复。"))}<details class="settings-details"><summary>${AieyesI18n.t("调试")}</summary><label><input type="checkbox" id="pet-uniform">${AieyesI18n.t("匀速动画（调试）")}</label><p class="muted tiny">${AieyesI18n.t("所有动作每帧 100ms，用于检查停顿")}</p></details>${window.AieyesPetLibrary?.html() ?? ''}<div class="desktop-actions"><button type="button" id="reset-ball">${AieyesI18n.t("重置桌宠位置")}</button><button type="button" id="hide-ball">${AieyesI18n.t("暂时隐藏桌宠")}</button><button type="button" id="quit-app">${AieyesI18n.t("退出 Aieyes")}</button></div></div>`;
     },
     bindSettings() {
       window.AieyesPetLibrary?.bind();
@@ -116,6 +118,8 @@
         };
       }
       if (current) update(current);
+      const timing = document.querySelector('#pet-uniform');
+      if(timing) timing.onchange = async () => { timing.disabled=true; try { update(await invoke('desktop_pet_uniform_timing',{enabled:timing.checked})); } catch(error) { timing.checked=!!current?.petUniformTiming; notify(String(error),'error'); } finally { timing.disabled=false; } };
       const select = document.querySelector('#desktop-mode');
       if (!select) return;
       select.value = current?.mode || 'pet';

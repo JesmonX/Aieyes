@@ -1,7 +1,9 @@
 /* Timing is generated from core-contracts.json; both pet and library use this clock. */
 window.AieyesPetAnimation=(()=>{
+  let uniform = false;
   function durations(state){
     const count=Math.max(1,Math.min(8,Math.trunc(Number(state.frames))||1));
+    if(uniform)return Array(count).fill(100);
     const supplied=state.frameDurationsMs;
     const values=supplied==null||Array.isArray(supplied)&&!supplied.length?window.AieyesContract.petFrameDurations?.[state.row]:supplied;
     if(Array.isArray(values)&&values.length===count&&values.every(ms=>Number.isFinite(ms)&&ms>0)&&Number.isFinite(values.reduce((sum,ms)=>sum+ms,0)))return values;
@@ -16,5 +18,5 @@ window.AieyesPetAnimation=(()=>{
     return row*8;
   }
   function idle(){const timing=window.AieyesContract.petFrameDurations?.[0];return {row:0,frames:timing?.length??6,frameDurationsMs:timing,frameMs:100};}
-  return {durations,frame,idle,signature:state=>[state.row,...durations(state)].join(':')};
+  return {setUniform:value=>{uniform=!!value;},durations,frame,idle,signature:state=>[state.row,...durations(state)].join(':')};
 })();

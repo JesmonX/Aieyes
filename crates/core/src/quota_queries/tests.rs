@@ -313,3 +313,62 @@ fn pausing_a_machine_discards_its_in_flight_result() {
     );
     assert!(finished(&engine.store, "custom:a0").unwrap().is_some());
 }
+
+#[test]
+fn future_error_cache_is_replaced_once_by_a_successful_observation() {
+    for origin in ["live", "command"] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).unwrap();
+        let mut old = QuotaSnapshot {
+            provider: "codex".into(),
+            account_id: "clock".into(),
+            origin: origin.into(),
+            updated_at: now() + 18000,
+            bank_reset: Some(json!({"availableCount":0})),
+            error: Some("busy".into()),
+            ..Default::default()
+        };
+        store
+            .db
+            .execute(
+                "INSERT INTO quotas VALUES('codex:clock',?1)",
+                [serde_json::to_string(&old).unwrap()],
+            )
+            .unwrap();
+        old.updated_at = now();
+        old.error = None;
+        store.quota(&old).unwrap();
+        let read = || -> QuotaSnapshot {
+            serde_json::from_str(
+                &store
+                    .db
+                    .query_row::<String, _, _>(
+                        "SELECT payload FROM quotas WHERE account_key='codex:clock'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let accepted = read();
+        assert!(accepted.error.is_none());
+        assert_eq!(accepted.observation_revision, 1);
+        store.quota(&old).unwrap();
+        assert_eq!(read().observation_revision, 1);
+        old.updated_at -= 60;
+        store.quota(&old).unwrap();
+        assert_eq!(read().updated_at, accepted.updated_at);
+        old.updated_at = now();
+        old.error = Some("temporary".into());
+        store.quota(&old).unwrap();
+        assert_eq!(read().observation_revision, 2);
+        store.quota(&old).unwrap();
+        assert_eq!(read().observation_revision, 2);
+        old.error = None;
+        old.updated_at += 1;
+        store.quota(&old).unwrap();
+        assert!(read().error.is_none());
+        assert_eq!(read().observation_revision, 3);
+    }
+}

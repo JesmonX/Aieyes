@@ -849,6 +849,8 @@ pub struct AccountIdentity {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct QuotaSnapshot {
+    #[serde(default, skip_serializing_if = "is_zero_observation_revision")]
+    pub observation_revision: u64,
     pub identity: Option<AccountIdentity>,
     pub metadata_error: Option<String>,
     pub credits: Option<CreditsSnapshot>,
@@ -869,6 +871,10 @@ pub struct QuotaSnapshot {
     pub bank_updated_at: Option<i64>,
     pub plan: Option<String>,
     pub error: Option<String>,
+}
+
+fn is_zero_observation_revision(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

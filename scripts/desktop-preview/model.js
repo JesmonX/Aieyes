@@ -101,6 +101,10 @@
         case 'sources.scan': case 'sources.rescan': return s.sources.filter(v => !p.sourceId || v.id === p.sourceId).map(v => ({ id: v.id, events: 14, updatedAt: now, error: d.scenario === 'failure' ? '模拟采集失败' : null }));
         case 'agents.manage': {
           const ids = s.appearance.settingsAgentIds ?? [...new Set((s.agents || []).filter(a => a.enabled || a.machineIds.length).map(a => a.provider).concat(s.sources.map(a => a.provider),s.accounts.map(a => a.provider)))];
+          if(p.order) {
+            if(p.provider !== undefined || p.visible !== undefined || !Array.isArray(p.order) || new Set(p.order).size !== p.order.length || p.order.some(id=>!ids.includes(id))) throw Error('只能排序已加入的 Agent');
+            s.appearance.settingsAgentIds = [...p.order,...ids.filter(id=>!p.order.includes(id))];return s;
+          }
           s.appearance.settingsAgentIds = ids.filter(id => id !== p.provider);
           if (p.visible) s.appearance.settingsAgentIds.push(p.provider);
           for (const a of s.agents || []) if (a.provider === p.provider) a.enabled = p.visible && a.machineIds.length > 0;
@@ -204,6 +208,7 @@
         case 'desktop_panel_ready': return null;
         case 'desktop_main_ready': return null;
         case 'desktop_mode': this.desktop.mode = p.mode;this.desktop.effectiveMode = p.mode;this.emit('desktop:status', this.desktop);return this.desktop;
+        case 'desktop_pet_uniform_timing': this.desktop.petUniformTiming = p.enabled;this.emit('desktop:status', this.desktop);return this.desktop;
         case 'desktop_pet_scale': this.desktop.petScale = p.scale;this.emit('desktop:status', this.desktop);return this.desktop;
         case 'desktop_materials': this.desktop.materialPreferences = {main:p.main, floating:p.floating};this.desktop.materials = {main:p.main === 'default'?'mica':p.main, floating:p.floating === 'default'?'acrylic':p.floating};this.emit('desktop:status', this.desktop);return this.desktop;
         case 'desktop_appearance': this.emit('desktop:status', this.desktop);return null;
@@ -238,10 +243,10 @@
         const mutation = command === 'engine_call' && this.methods[method]?.invalidates.length > 0;
         if (this.fail === 'save' && mutation && !/^(sources\.(scan|rescan)|quotas\.refresh|hosts\.)/.test(method)) throw new Error('模拟保存失败：数据未写入，输入已保留');
         if (this.fail === 'query' && /^(dashboard|quotas\.refresh|hosts\.(sample|monitor\.refresh)|network\.test)/.test(method)) throw new Error('模拟查询失败：连接不可用，请重试');
-        const desktopChange = ['desktop_mode', 'desktop_pet_scale', 'desktop_panel_pin', 'desktop_action'].includes(command);
+        const desktopChange = ['desktop_mode', 'desktop_pet_scale', 'desktop_pet_uniform_timing', 'desktop_panel_pin', 'desktop_action'].includes(command);
         if (mutation || desktopChange) before = copy(this.data);
         const result = copy(command === 'engine_call' ? this.engine(method, p) : this.native(command, p));
-        if (desktopChange) {this.data.desktop = Object.fromEntries(['mode','effectiveMode','petScale','hidden','showCount','panelPinned'].map(k => [k, this.desktop[k]]));this.persist();}
+        if (desktopChange) {this.data.desktop = Object.fromEntries(['mode','effectiveMode','petScale','petUniformTiming','hidden','showCount','panelPinned'].map(k => [k, this.desktop[k]]));this.persist();}
         if (mutation) {
           this.persist();
           const revisions = this.methods[method].invalidates;for (const key of revisions) this.revisions[key] = (this.revisions[key] || 0) + 1;

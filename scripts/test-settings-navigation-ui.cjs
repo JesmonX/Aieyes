@@ -28,7 +28,7 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
       await page.locator('[data-settings-tab=integrations]').click();
       assert.deepEqual(await page.locator('[data-settings-tab]').allTextContents(), ['接入与账户','机器与采集','模型价格','定时唤醒','设置']);
       assert.equal(await page.locator('aside nav button').count(), 8, 'only eight primary navigation entries');
-      assert.equal(await page.locator('[data-settings-agent]').count(), 4);
+      assert.equal(await page.locator('[data-settings-agent]').count(), 5);
       assert.equal(await page.locator('[data-agent-enable]').count(), 1);
       await page.locator('#account-status-error').waitFor();
       const failedStatusCalls = await page.evaluate(() => navigationFixture.calls.filter(c => c.args?.method === 'accounts.status.get').length);

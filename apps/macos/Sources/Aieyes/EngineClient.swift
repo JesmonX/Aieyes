@@ -1089,8 +1089,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             for var row in rows {
                 guard settings.accounts.contains(where: { $0.key == row.id && $0.archived != true }) else { continue }
                 if let index = result.firstIndex(where: { $0.id == row.id }) {
-                    if let error = row.error { row = result[index]; row.error = error }
-                    else if result[index].updatedAt > row.updatedAt { continue }
+                    let previous = result[index]
+                    if previous.observationRevision != nil || row.observationRevision != nil {
+                        if (previous.observationRevision ?? 0) > (row.observationRevision ?? 0) { continue }
+                    } else if previous.updatedAt > row.updatedAt { continue }
+                    if let error = row.error, row.observationRevision == nil { row = previous; row.error = error }
                     if result[index] != row { result[index] = row }
                 } else { result.append(row) }
             }

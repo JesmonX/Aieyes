@@ -139,8 +139,8 @@ body:not(:has(#panel)) .quota-group[data-single-account=true] > .quotas { grid-t
 .overview-usage { margin-top:14px; padding:12px 14px; container:usage / inline-size; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px 24px; }
 .usage-heading { display:contents; }
 .usage-title { display:flex; align-items:center; gap:6px; white-space:nowrap; }
-.overview-usage .analysis-link { grid-column:3; grid-row:1; border:0; background:transparent; box-shadow:none; }
-.overview-usage .usage-heading > span:last-child { grid-column:3; grid-row:2; }
+.overview-usage .analysis-link { grid-column:3; grid-row:1; margin-right:28px; border:0; background:transparent; box-shadow:none; }
+.overview-usage .usage-heading > span:last-child { grid-column:3; grid-row:1; justify-self:end; }
 .overview-usage .usage-heading > span:last-child:empty { display:none; }
 .overview-usage > .native-credits { grid-column:1 / -1; }
 .usage-inline { grid-column:2; grid-row:1; display:flex; align-items:center; flex-wrap:wrap; gap:8px 24px; font-size:var(--font-secondary); font-variant-numeric:tabular-nums; }
@@ -208,8 +208,8 @@ body:not(:has(#panel)) .quota-group[data-single-account=true] > .quotas { grid-t
 .quota-meta > span:empty { display:none; }
 .overview-usage > .between { align-items:center; }
 .settings-subpage :is(p,[role=status]):empty { display:none; }
-.settings-agent-selector { display:flex; flex-wrap:nowrap; align-items:center; gap:8px; margin-bottom:14px; }
-.agent-common { display:flex; gap:4px; min-width:0; }
+.settings-agent-selector { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:14px; }
+.settings-agent-selector .agent-common { display:flex; flex-wrap:wrap; flex-basis:100%; gap:4px; min-width:0; margin:0; }
 .agent-more { position:relative; margin-left:auto; }
 .agent-more > summary { display:flex; align-items:center; gap:6px; min-height:var(--control-md); padding:4px 8px; border-radius:var(--radius-control); cursor:pointer; list-style:none; }
 .agent-more > summary::before { display:none; }
@@ -221,7 +221,7 @@ body:not(:has(#panel)) .quota-group[data-single-account=true] > .quotas { grid-t
 .agent-picker-results button { justify-content:flex-start; }
 .agent-narrow-label { display:none; }
 @container agent-settings (max-width:720px) {
-  .agent-common,.agent-wide-label { display:none; }
+  .agent-wide-label { display:none; }
   .agent-narrow-label { display:inline; }
   .agent-more { margin-left:0; flex:1; }
   .agent-more > summary { justify-content:space-between; border:1px solid var(--control-stroke); background:var(--control-fill); }
@@ -286,4 +286,29 @@ html:not(:has(#panel,body[data-platform=windows])) { scrollbar-gutter:stable; }
   .agent-selector button[aria-pressed=true] { forced-color-adjust:none; color:HighlightText; background:Highlight; }
   .resource-block > strong { color:CanvasText; }
 }
+
+.quota-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 12px; }
+.quota-disclosure:not([open]) + .quota-content .quota-footer { display:none; }
+.bank summary { display:flex; align-items:center; gap:6px; color:var(--ink); }
+.bank summary > svg { color:var(--muted); width:16px; height:16px; }
+.bank-count { margin-left:auto; }
+html[data-platform=windows] .agent-settings-group { padding:4px var(--space-card); }
+html[data-platform=windows] .agent-settings-group .settings-disclosure { background:transparent; border-radius:0; }
+html[data-platform=windows] .agent-settings-group .settings-disclosure:last-child { border-bottom:0; }
+html[data-platform=windows] .agent-integration-header h2 { margin:0; }
+html[data-platform=windows] .agent-machines > .list-row { width:auto; padding:8px 12px; }
+html[data-platform=windows] .agent-settings-group fieldset { min-width:0; }
+html[data-platform=windows] .agent-settings-group .list-row { min-width:0; overflow-wrap:anywhere; }
+html[data-platform=windows] .agent-settings-group .row-body { min-width:0; }
+.agent-picker-results h4 { color:var(--muted); margin:8px 4px 4px; }
+.agent-picker-results button { width:100%; }
+.agent-order-row { display:flex; align-items:center; gap:6px; }
+.agent-order-row > .row-body { flex:1; }
+.agent-drag-handle { display:inline-flex; color:var(--muted); cursor:grab; flex:none; }
+.agent-order-row.drop-target { outline:1px solid var(--accent); }
+html[data-platform=windows] .account-settings-group { padding:var(--space-card); }
+html[data-platform=windows] .account-settings-group > .card { padding:12px 0; margin:0; border:0; }
+html[data-platform=windows] .account-settings-group > .card + .card { border-top:1px solid var(--border); }
+html[data-platform=windows] .account-settings-group :is(input,select,textarea) { max-width:100%; }
+html[data-platform=windows] .account-settings-group .list-row { min-width:0; overflow-wrap:anywhere; }
 }

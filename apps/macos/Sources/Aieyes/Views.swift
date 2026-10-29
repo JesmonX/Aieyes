@@ -254,7 +254,7 @@ struct RootView: View, Equatable {
             HStack(spacing:6) { Text(L("API 等价成本")).foregroundStyle(.secondary); Text(usageDashboard.summary.costAvailable ? Format.money(usageDashboard.summary.cost) : "—").font(.system(size:compact ? DesignTokens.fontPanelOverview : DesignTokens.fontNumber,weight:.semibold)) }
         }.font(AppFont.secondary).monospacedDigit().fixedSize(horizontal:true,vertical:false)
     }
-    private var analysisAction: some View { HStack { Button(L("查看分析"),systemImage:"arrow.up.right") { model.openAnalysis(from:scope) }.font(AppFont.caption).tint(.primary); if usageDashboard.summary.pricedTokens < usageDashboard.summary.total { PricingWarning { model.openPricing() } } }.fixedSize() }
+    private var analysisAction: some View { HStack { Button(L("查看分析"),systemImage:"arrow.up.right") { model.openAnalysis(from:scope) }.font(AppFont.caption).tint(.primary); PricingWarning { model.openPricing() }.opacity(usageDashboard.summary.pricedTokens < usageDashboard.summary.total ? 1 : 0).allowsHitTesting(usageDashboard.summary.pricedTokens < usageDashboard.summary.total).disabled(usageDashboard.summary.pricedTokens >= usageDashboard.summary.total).accessibilityHidden(usageDashboard.summary.pricedTokens >= usageDashboard.summary.total) }.fixedSize() }
     @ViewBuilder private var agentButtons: some View {
         agentButton("all", title: L("总览"))
         ForEach(model.overviewAgentProviders, id: \.self) { provider in agentButton(provider, title: Format.provider(provider)) }
@@ -1264,28 +1264,45 @@ struct QuotaCard: View, Equatable {
             }.contentShape(Rectangle())
             }.buttonStyle(.plain).help(collapsible ? (expanded ? L("折叠额度") : L("展开额度")) : quota.name)
                 .accessibilityLabel(headerAccessibility)
-            if expanded, let onSwitch {
-                FlowLayout(spacing: 8) {
-                    Button(action: onSwitch) {
-                        Label(L("切换账户"), systemImage: "arrow.left.arrow.right")
-                            .font(AppFont.secondary.weight(.medium)).foregroundStyle(Palette.accent)
-                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
-                            .frame(minWidth: 124)
-                            .padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: DesignTokens.radiusAccountSwitch))
-                            .overlay { RoundedRectangle(cornerRadius: DesignTokens.radiusAccountSwitch).strokeBorder(Palette.accent.opacity(0.30), lineWidth: 1) }
-                            .contentShape(RoundedRectangle(cornerRadius: DesignTokens.radiusAccountSwitch))
-                    }.buttonStyle(.plain)
-                    if let deviceCounts {
-                        Text(deviceCounts.inlineSummary).font(AppFont.secondary).foregroundStyle(.secondary)
-                            .monospacedDigit().lineLimit(1).fixedSize(horizontal: true, vertical: false).help(deviceCounts.summary)
+            if expanded, onSwitch != nil {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 8) {
+                        switchAccountButton
+                        deviceSummary.fixedSize(horizontal: true, vertical: false)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        switchAccountButton
+                        deviceSummary.fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
             if expanded {
-                HStack { Spacer(); if quota.updatedAt > 0 { Text("\(quota.origin == "log" ? L("记录") : L("更新")) \(Format.date(quota.updatedAt))") } }.font(AppFont.secondary).foregroundStyle(.secondary)
                 if let note = quota.metadataError { Text(L(note) + (quota.identity?.stale == true && quota.plan != nil ? L(" · 显示上次订阅") : "")).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled) }
             }
+    }
+    private var switchAccountButton: some View {
+        Button { onSwitch?() } label: {
+            Label(L("切换账户"), systemImage: "arrow.left.arrow.right")
+                .font(AppFont.secondary.weight(.medium)).foregroundStyle(Color.primary)
+                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 124)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: DesignTokens.radiusAccountSwitch))
+                .overlay { RoundedRectangle(cornerRadius: DesignTokens.radiusAccountSwitch).strokeBorder(Palette.cardBorder, lineWidth: 1) }
+                .contentShape(RoundedRectangle(cornerRadius: DesignTokens.radiusAccountSwitch))
+        }.buttonStyle(.plain)
+    }
+    @ViewBuilder private var deviceSummary: some View {
+        if let deviceCounts {
+            Text(deviceCounts.inlineSummary).font(AppFont.secondary).foregroundStyle(.secondary)
+                .monospacedDigit().help(deviceCounts.summary)
+        }
+    }
+    @ViewBuilder private var quotaTimestamp: some View {
+        if quota.updatedAt > 0 { Text("\(quota.origin == "log" ? L("记录") : L("更新")) \(Format.date(quota.updatedAt))").font(AppFont.caption).foregroundStyle(.secondary) }
+    }
+    @ViewBuilder private var analysisButton: some View {
+        if let onAnalysis { Button(L("查看分析"), systemImage: "arrow.up.right", action: onAnalysis).font(AppFont.caption).tint(.primary) }
     }
     private var fullCard: some View {
         Surface(spacing: compact ? 9 : 14, padding: compact ? 12 : 16, tint: Palette.category(quota.provider), minimumHeight: !isMeasurement && collapsible && !expanded ? collapsedHeight : nil) {
@@ -1348,13 +1365,18 @@ struct QuotaCard: View, Equatable {
                     } }
                     if let updated = quota.bankUpdatedAt { Text("\(Format.date(updated))").font(AppFont.secondary).foregroundStyle(.secondary) }
                 } label: {
-                    HStack { Image(systemName: "rectangle.stack").foregroundStyle(Palette.accent); Text("Bank Reset"); Spacer(); Text(L("{0} 次可用" , bank.availableCount)).foregroundStyle(Palette.accent) }.font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium))
-                }
+                    HStack { Image(systemName: "rectangle.stack").foregroundStyle(.secondary); Text("Bank Reset"); Spacer(); Text(L("{0} 次可用" , bank.availableCount)).foregroundStyle(Color.primary) }.font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium))
+                }.tint(.primary)
             }
             if let error = quota.error {
                 if expanded { HStack(alignment: .top) { ErrorNotice(message: error, context: L("额度查询失败")); if let onRetry { Button(L("重试"), action: onRetry) } } }
             }
-            if let onAnalysis { Button(L("查看分析"), systemImage: "arrow.up.right", action: onAnalysis).font(AppFont.caption) }
+            if quota.updatedAt > 0 || onAnalysis != nil {
+                ViewThatFits(in: .horizontal) {
+                    HStack { quotaTimestamp; Spacer(minLength: 8); analysisButton }
+                    VStack(alignment: .leading, spacing: 4) { quotaTimestamp; analysisButton }
+                }
+            }
             if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.extraUsage == nil && quota.error == nil && quota.credits == nil { Text(L("暂无额度数据")).font(AppFont.secondary).foregroundStyle(.secondary) }
             }
         }

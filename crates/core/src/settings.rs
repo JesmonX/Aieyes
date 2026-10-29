@@ -379,14 +379,6 @@ impl Engine {
     pub(crate) fn manage_agent(&mut self, params: Value) -> Result<Value> {
         let base = self.store.settings()?;
         let mut next = base.clone();
-        let provider = params["provider"].as_str().context("请选择 Agent")?;
-        let definition = crate::contracts::provider(provider).context("不支持的 Agent")?;
-        let visible = params["visible"].as_bool().context("缺少显示状态")?;
-        let canonical = crate::contracts::PROVIDERS
-            .iter()
-            .find(|p| p.agent_id == definition.agent_id)
-            .unwrap()
-            .id;
         let ids = next.appearance.settings_agent_ids.get_or_insert_with(|| {
             let mut ids = Vec::new();
             for row in crate::contracts::PROVIDERS {
@@ -410,6 +402,46 @@ impl Engine {
             }
             ids
         });
+        if let Some(order) = params.get("order") {
+            ensure!(
+                params.get("provider").is_none() && params.get("visible").is_none(),
+                "排序与添加移出不能同时操作"
+            );
+            let mut sorted = Vec::new();
+            for value in order.as_array().context("Agent 顺序必须是列表")? {
+                let definition =
+                    crate::contracts::provider(value.as_str().context("不支持的 Agent")?)
+                        .context("不支持的 Agent")?;
+                let canonical = crate::contracts::PROVIDERS
+                    .iter()
+                    .find(|p| p.agent_id == definition.agent_id)
+                    .unwrap()
+                    .id
+                    .to_owned();
+                ensure!(ids.contains(&canonical), "只能排序已加入的 Agent");
+                ensure!(!sorted.contains(&canonical), "Agent 顺序不能重复");
+                sorted.push(canonical);
+            }
+            for id in ids.iter() {
+                if !sorted.contains(id) {
+                    sorted.push(id.clone());
+                }
+            }
+            *ids = sorted;
+            return Ok(serde_json::to_value(self.store.patch_settings(
+                &serde_json::to_value(base)?,
+                &serde_json::to_value(next)?,
+                false,
+            )?)?);
+        }
+        let provider = params["provider"].as_str().context("请选择 Agent")?;
+        let definition = crate::contracts::provider(provider).context("不支持的 Agent")?;
+        let visible = params["visible"].as_bool().context("缺少显示状态")?;
+        let canonical = crate::contracts::PROVIDERS
+            .iter()
+            .find(|p| p.agent_id == definition.agent_id)
+            .unwrap()
+            .id;
         ids.retain(|id| {
             crate::contracts::provider(id).is_some_and(|p| p.agent_id != definition.agent_id)
         });
@@ -600,6 +632,96 @@ impl Engine {
 mod tests {
     use super::*;
 
+    #[test]
+    fn agent_order_is_validated_and_does_not_enable_collection() {
+        let (_root, mut engine) = fixture();
+        engine
+            .call("agents.manage", json!({"provider":"codex","visible":true}))
+            .unwrap();
+        engine
+            .call("agents.manage", json!({"provider":"claude","visible":true}))
+            .unwrap();
+        let before = engine.store.settings().unwrap();
+        let saved = engine
+            .call("agents.manage", json!({"order":["claude","codex"]}))
+            .unwrap();
+        assert_eq!(
+            &saved["appearance"]["settingsAgentIds"].as_array().unwrap()[..2],
+            &[json!("claude"), json!("codex")]
+        );
+        assert_eq!(
+            saved["agents"],
+            serde_json::to_value(&before.agents).unwrap()
+        );
+        for order in [json!(["codex", "codex"]), json!(["nonexistent"])] {
+            assert!(
+                engine
+                    .call("agents.manage", json!({"order":order}))
+                    .is_err()
+            );
+        }
+    }
+    #[test]
+    fn agent_order_keeps_missing_entries_and_explicit_empty_list() {
+        let (_root, mut engine) = fixture();
+        engine
+            .call("agents.manage", json!({"provider":"codex","visible":true}))
+            .unwrap();
+        engine
+            .call("agents.manage", json!({"provider":"claude","visible":true}))
+            .unwrap();
+        let saved = engine
+            .call("agents.manage", json!({"order":["claude"]}))
+            .unwrap();
+        assert_eq!(
+            saved["appearance"]["settingsAgentIds"],
+            json!(["claude", "codex"])
+        );
+        for order in [json!(["deepseek"]), json!(["claude", "claude"])] {
+            assert!(
+                engine
+                    .call("agents.manage", json!({"order":order}))
+                    .is_err()
+            );
+        }
+        assert!(
+            engine
+                .call("agents.manage", json!({"order":[],"visible":true}))
+                .is_err()
+        );
+        let mut settings = engine.store.settings().unwrap();
+        settings.appearance.settings_agent_ids = Some(vec![]);
+        engine.store.save_settings(&settings).unwrap();
+        assert!(
+            engine
+                .call("agents.manage", json!({"order":["codex"]}))
+                .is_err()
+        );
+        assert_eq!(
+            engine.call("agents.manage", json!({"order":[]})).unwrap()["appearance"]["settingsAgentIds"],
+            json!([])
+        );
+        settings.appearance.settings_agent_ids = None;
+        for provider in ["codex", "claude"] {
+            settings.accounts.push(Account {
+                id: format!("inferred-{provider}"),
+                name: format!("Inferred {provider}"),
+                provider: provider.into(),
+                ..Default::default()
+            });
+        }
+        engine.store.save_settings(&settings).unwrap();
+        let saved = engine
+            .call("agents.manage", json!({"order":["claude"]}))
+            .unwrap();
+        assert_eq!(saved["appearance"]["settingsAgentIds"][0], "claude");
+        assert!(
+            saved["appearance"]["settingsAgentIds"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("codex"))
+        );
+    }
     fn fixture() -> (tempfile::TempDir, Engine) {
         let root = tempfile::tempdir().unwrap();
         let engine = Engine::open(root.path()).unwrap();

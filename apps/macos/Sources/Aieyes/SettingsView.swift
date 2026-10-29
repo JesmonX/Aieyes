@@ -316,6 +316,7 @@ struct SettingsView: View {
                 HStack { Toggle(L("显示桌宠"), isOn: $petEnabled); HelpNote(title: L("桌面显示"), text: L("桌宠展示本机和 SSH 会话。单击打开面板，拖动移动。")) }
                 Toggle(L("全屏时隐藏"), isOn: $hidePetInFullscreen)
                 PetScaleControl()
+                PetTimingControl()
                 PetLibraryView(model: model)
             }
             Section(L("菜单栏")) {

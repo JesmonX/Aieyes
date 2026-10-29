@@ -83,7 +83,7 @@ struct SubscriptionBadge: View {
         let _ = interfaceLanguage;
         Text(Format.subscription(plan)).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).lineLimit(1)
             .padding(.horizontal, 6).padding(.vertical, 3)
-            .foregroundStyle(Palette.accent).background(Palette.accent.opacity(0.12), in: Capsule())
+            .foregroundStyle(Color.primary).background(Color.primary.opacity(0.06), in: Capsule())
             .help(plan).accessibilityLabel(L("订阅 ") + Format.subscription(plan))
     }
 }

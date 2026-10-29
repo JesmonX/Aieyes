@@ -34,10 +34,12 @@ function fixture(){
  try{browser=await chromium.launch({headless:true});
  for(const surface of ['index.html','floating.html']){
   const page=await browser.newPage({viewport:{width:surface==='index.html'?1120:450,height:850}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
-  assert.equal(await page.getByText('1234.13 credits',{exact:true}).count(),1);assert.equal(await page.getByText('Bank Reset · 2 次可用',{exact:true}).count(),1);
+  assert.equal(await page.getByText('1234.13 credits',{exact:true}).count(),1);assert.equal(await page.locator('.bank .bank-count').filter({hasText:'2 次可用'}).count(),1);
   const card=()=>page.locator('#content .quota-card');
   await card().locator('.quota-title').click();
   assert.equal(await card().locator('[data-credit-estimate]').textContent(),'credits 估值');
+  assert.equal(await card().locator('.bank summary .ui-icon').count(),1);
+  assert(await card().evaluate(card=>!!(card.querySelector('.credit-row').compareDocumentPosition(card.querySelector('.bank'))&Node.DOCUMENT_POSITION_FOLLOWING)));
   const expandedBalanceBox=await card().locator('.credit-row').boundingBox(),entryBox=await card().locator('[data-credit-estimate]').boundingBox();assert(entryBox.y>=expandedBalanceBox.y+expandedBalanceBox.height,'Credits estimate is on its own line below the balance');
   const decimals=[['1234.125','1234.13'],['1.005','1.01'],['10','10.00'],['0','0.00'],['-0.004','0.00'],['-1.005','-1.01'],['1e-3','0.00'],['9.999','10.00'],[null,'—'],['','—'],['NaN','—'],['12bad','—'],['Infinity','—']];
   for(const [input,expected] of decimals)assert.equal(await page.evaluate(v=>creditAmount(v),input),expected);

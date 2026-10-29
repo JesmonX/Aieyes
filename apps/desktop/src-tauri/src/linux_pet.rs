@@ -258,9 +258,7 @@ impl NativePet {
             with_surface(|surface| {
                 let mut s = surface.borrow_mut();
                 if let Ok(next) = serde_json::from_value::<PetState>(info["pet"].clone()) {
-                    if s.state.key != next.key
-                        || s.state.frame_durations_ms != next.frame_durations_ms
-                    {
+                    if !aieyes_core::pets::same_animation(&s.state, &next) {
                         s.start = Instant::now();
                     }
                     s.state = next;
@@ -269,6 +267,7 @@ impl NativePet {
                 if asset != s.asset
                     && let Some(sprite) = crate::pet_frames::Sprite::load(&info["petAsset"])
                 {
+                    s.start = Instant::now();
                     let width = sprite.cell_width as i32;
                     let height = sprite.cell_height as i32;
                     let decoded = sprite

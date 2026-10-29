@@ -374,7 +374,7 @@ impl Engine {
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let rows = self.read_quotas_unlocked(&selected)?;
+                let mut rows = self.read_quotas_unlocked(&selected)?;
                 // Finish the sampling boundary before Store::quota advances any
                 // estimate. Keep the account/home locks through this tail sync.
                 if !sampling_ids.is_empty() {
@@ -423,8 +423,20 @@ impl Engine {
                         "查询期间登录已变化，结果已丢弃"
                     );
                 }
-                for row in &rows {
+                for row in &mut rows {
                     self.store.quota(row)?;
+                    let raw: Option<String> = self
+                        .store
+                        .db
+                        .query_row(
+                            "SELECT payload FROM quotas WHERE account_key=?1",
+                            [format!("{}:{}", row.provider, row.account_id)],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
+                    if let Some(raw) = raw {
+                        *row = serde_json::from_str(&raw)?;
+                    }
                     self.store
                         .observe_quota_reset(row, &current, &final_signature)?;
                 }

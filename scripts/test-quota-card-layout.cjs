@@ -25,6 +25,10 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
    });
    await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);
    await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
+   await page.evaluate(()=>{state.dashboard.summary.pricedTokens=state.dashboard.summary.total;renderOverview();});
+   const usageHeight=(await page.locator('.overview-usage').boundingBox()).height;
+   await page.evaluate(()=>{state.dashboard.summary.pricedTokens=0;renderOverview();});
+   assert.equal((await page.locator('.overview-usage').boundingBox()).height,usageHeight,'Missing-price warning does not add a row');
    const cards=page.locator('.quota-card[data-provider=codex]:visible');await cards.first().waitFor();
    await page.evaluate(()=>document.querySelectorAll('#content .quota-disclosure').forEach(node=>node.open=false));
    const equal=()=>page.waitForFunction(()=>{
@@ -48,6 +52,15 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
    await page.waitForFunction(()=>document.querySelector('#content .quota-card[data-provider=codex] .quota-disclosure').open);
    assert.equal(await cards.first().locator('.quota-disclosure').evaluate(x=>x.open),true);
    await page.evaluate(()=>document.querySelector('#content .quota-card[data-provider=codex]').remove());await equal();
+   await page.evaluate(()=>{
+    const old=state.dashboard.quotas.find(q=>state.settings.accounts.some(a=>a.provider===q.provider&&a.id===q.accountId));
+    old.updatedAt=Date.now()/1000+18000;old.error='busy';
+    const fresh={...old,updatedAt:Math.floor(Date.now()/1000),error:null,observationRevision:1};
+    applyQuotaSamples([fresh]);
+    if(state.dashboard.quotas.find(q=>q.accountId===old.accountId).error)throw Error('Future cache blocked success');
+    applyQuotaSamples([{...fresh,observationRevision:0,error:'obsolete'}]);
+    if(state.dashboard.quotas.find(q=>q.accountId===old.accountId).error)throw Error('Old revision replaced success');
+   });
    assert.deepEqual(errors,[]);await page.close();
   }
   console.log('Quota card layout: matching collapsed heights across subscriptions, font changes, resize, expansion and removal; first panel width passed.');

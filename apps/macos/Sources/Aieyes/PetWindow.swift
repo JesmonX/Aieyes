@@ -26,6 +26,10 @@ struct PetScaleControl: View {
     }
 }
 
+struct PetTimingControl: View {
+    @AppStorage("aieyes.pet.uniformTiming") private var enabled = false
+    var body: some View { DisclosureGroup(L("调试")) { Toggle(L("匀速动画（调试）"), isOn: $enabled).help(L("所有动作每帧 100ms，用于检查停顿")) } }
+}
 private enum PetSprites {
     private final class Atlas {
         let image: CGImage, frames: [[CGImage]]
@@ -54,15 +58,17 @@ private enum PetSprites {
 }
 @MainActor private final class PetFrameStore: ObservableObject {
     @Published private(set) var images: [CGImage] = []
+    private(set) var row = 0
+    private(set) var assetIdentity = ""
     private var requested = ""
     func load(_ asset: ImportedPet?, row: Int) {
         let key = (asset?.contentHash ?? "") + ":" + String(row) + ":" + (asset?.spritePath ?? "")
         guard key != requested else { return }; requested = key
         guard let asset else { images = []; return }
-        if let known = PetSprites.cached(asset, row: row) { images = known; return }
+        if let known = PetSprites.cached(asset, row: row) { self.row = row; assetIdentity = asset.contentHash; images = known; return }
         PetSprites.queue.async { [weak self] in
             let next = PetSprites.frames(for: asset, row: row)
-            DispatchQueue.main.async { [weak self] in guard let self, self.requested == key else { return }; if !next.isEmpty { self.images = next } }
+            DispatchQueue.main.async { [weak self] in guard let self, self.requested == key else { return }; if !next.isEmpty { self.row = row; self.assetIdentity = asset.contentHash; self.images = next } }
         }
     }
 }
@@ -125,7 +131,7 @@ final class PetLayerImage: NSView {
         let total = Double(durations.reduce(0,+))
         guard total > 0 else { return nil }
         let animation = CAKeyframeAnimation(keyPath: "contents")
-        animation.values = Array(images.prefix(durations.count)) + [images[0]]
+        animation.values = Array(images.prefix(durations.count))
         var cumulative = 0.0
         animation.keyTimes = [0] + durations.map { cumulative += Double($0); return NSNumber(value: cumulative / total) }
         animation.duration = total / 1000; animation.calculationMode = .discrete
@@ -155,13 +161,24 @@ private struct PetSpriteView: View {
     let enabled: Bool
     @Environment(\.accessibilityReduceMotion) private var reduced
     @StateObject private var frames = PetFrameStore()
+    @AppStorage("aieyes.pet.uniformTiming") private var uniformTiming = false
+    private var displayedState: PetState {
+        var value = state
+        if value.row != frames.row {
+            value.row = frames.row
+            value.frames = CoreContract.petFrameDurations[frames.row].count
+            value.frameDurationsMs = CoreContract.petFrameDurations[frames.row]
+        }
+        if uniformTiming { value.frameDurationsMs = Array(repeating: 100, count: value.frames) }
+        return value
+    }
     private func configure() { frames.load(asset, row: state.row) }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
         Group {
             if !frames.images.isEmpty {
-                PetLayerSprite(images: frames.images, state: state, identity: (asset?.contentHash ?? "") + ":" + state.animationIdentity, playing: enabled, reduced: reduced)
+                PetLayerSprite(images: frames.images, state: displayedState, identity: frames.assetIdentity + ":" + displayedState.animationIdentity, playing: enabled, reduced: reduced)
             } else if asset == nil { Text(L("请导入桌宠")).font(.system(size: 13 * scale)) } else { Color.clear }
         }.frame(width: 132 * scale, height: 143 * scale)
             .onAppear { configure() }

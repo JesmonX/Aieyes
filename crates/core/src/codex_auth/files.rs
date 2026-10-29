@@ -159,8 +159,12 @@ pub fn lock_named(root: &Path, name: &str) -> Result<crate::file_lock::FileLock>
         options.mode(0o600);
     }
     let f = options.open(path)?;
-    let guard = crate::file_lock::FileLock::try_exclusive(f)
-        .map_err(|_| anyhow::anyhow!("此 Codex 目录有正在执行的账户操作，请稍后重试"))?;
+    let guard = crate::file_lock::FileLock::try_exclusive(f).map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => {
+            anyhow::anyhow!("此 Codex 目录有正在执行的账户操作，请稍后重试")
+        }
+        other => anyhow::anyhow!("无法取得 Codex 账户锁：{other}"),
+    })?;
     atomic(
         &state.join("coordinator-operation.json"),
         &json!({"name":name}),

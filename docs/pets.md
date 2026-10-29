@@ -41,3 +41,5 @@ Aieyes 只解析输入并下载素材，不执行 npx、安装器或包脚本，
 - `pets.asset({libraryId})` 按需读取图集；`pets.current({includeImage})` 继续兼容当前桌宠读取。
 - `libraryId` 独立于作者的 manifest ID，记录保留原始 ID、内容指纹、导入时间及已知来源／作者。
 - `PetState.frameDurationsMs` 提供每帧时长，旧 `frameMs` 字段保留兼容。共享定义以 `core-contracts.json` 为规范源。
+
+动画仅在素材、动作行、帧数或实际时长变化时重启；会话与轮次标识变化不影响同一动作的时钟。桌面显示设置的“匀速动画（调试）”默认关闭，开启后桌宠及库预览每帧均为 100ms，关闭即恢复标准节奏；系统减少动态效果仍优先。

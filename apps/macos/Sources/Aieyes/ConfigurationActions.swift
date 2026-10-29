@@ -30,6 +30,13 @@ extension AppModel {
             agent.enabled || !agent.machineIds.isEmpty || settings.sources.contains { CoreContract.sameAgent($0.provider, agent.provider) } || settings.accounts.contains { CoreContract.sameAgent($0.provider, agent.provider) }
         }.map(\.provider)
     }
+    func orderAgents(_ ids: [String]) async {
+        guard !settingsSaving else { return }
+        settingsSaving = true; settingsMessage = nil
+        defer { settingsSaving = false }
+        do { let saved: Settings = try await engine.call("agents.manage", params: ["order": ids]); acceptConfiguration(saved) }
+        catch { settingsMessage = error.localizedDescription }
+    }
     func manageAgent(_ provider: String, visible: Bool) async {
         guard !settingsSaving else { return }
         settingsSaving = true; settingsMessage = nil
