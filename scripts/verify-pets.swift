@@ -124,7 +124,10 @@ import Darwin
         clockState.key = "a-new-turn"; configure(); precondition(sprite.animationStarts == starts)
         for timings in [CoreContract.petFrameDurations[0], Array(repeating: 100, count: 6)] {
             clockState.frameDurationsMs = timings
-            let began = CACurrentMediaTime(); configure()
+            configure()
+            // Frames are phased from the sprite's epoch, set after its hit masks are built; sample from the committed animation.
+            guard let layer = sprite.layer, let frames = layer.animation(forKey: "pet.frames") else { preconditionFailure("Playing sprite has no frame animation") }
+            let began = layer.convertTime(frames.beginTime, to: nil)
             var boundary = 0.0
             for (index, duration) in timings.enumerated() {
                 let midpoint = began + (boundary + Double(duration) / 2) / 1000
