@@ -31,7 +31,7 @@ fi
 npm --prefix apps/desktop run lint:css
 node scripts/test-css-rules.mjs
 for script in apps/desktop/web/*.js; do node --check "$script"; done
-node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs
+node --test scripts/test-desktop.mjs scripts/test-multiselect.mjs scripts/test-release-publish.mjs scripts/test-release-ci-baseline.mjs
 node scripts/test-reset-display.cjs
 case "${1:-}" in
   '') ;;

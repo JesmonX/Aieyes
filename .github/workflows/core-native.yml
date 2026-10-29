@@ -6,8 +6,13 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: core-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   core:
+    # Same-repository PR commits are already tested by their branch push.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -39,9 +44,15 @@ jobs:
           for attempt in {1..5}; do
             cargo test -p aieyes-core --lib --locked initialization_preserves_home_paths_environment_arguments_and_stdin -- --nocapture
           done
-      - run: cargo test --workspace --locked
-      - name: Build macOS client and verify native contracts
-        if: runner.os == 'macOS'
+      - name: Linux process identification regression
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          swift build --package-path apps/macos --scratch-path .build/swift --disable-sandbox
-          sh scripts/test-native.sh
+          for attempt in {1..10}; do
+            cargo test -p aieyes-core --lib --locked native_profile_switch_preserves_api_fixture_and_closes_login_fixture
+          done
+      - run: cargo test --workspace --locked
+      # Native contracts are architecture-neutral; Intel still builds and verifies its own release DMG.
+      - name: Build macOS client and verify native contracts
+        if: matrix.os == 'macos-15'
+        run: sh scripts/test-native.sh

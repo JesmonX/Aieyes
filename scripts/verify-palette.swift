@@ -1,4 +1,5 @@
 import SwiftUI
+@testable import Aieyes
 
 @main struct VerifyPalette {
     static func luminance(_ color: NSColor) -> Double {

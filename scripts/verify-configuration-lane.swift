@@ -1,4 +1,5 @@
 import Foundation
+@testable import Aieyes
 
 @main struct VerifyConfigurationLane {
     @MainActor static func main() async throws {

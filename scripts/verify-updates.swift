@@ -1,6 +1,7 @@
 import Foundation
 import Sparkle
 import Combine
+@testable import Aieyes
 
 @main struct VerifyUpdates {
     @MainActor static func main() async {

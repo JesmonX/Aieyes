@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Metal
 import Darwin
+@testable import Aieyes
 @main struct VerifyPets {
     static func checkpoint(_ message: String) {
         FileHandle.standardOutput.write(Data((message + "\n").utf8))

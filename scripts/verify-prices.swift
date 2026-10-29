@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+@testable import Aieyes
 
 @MainActor final class PriceReadGate {
     var calls = 0

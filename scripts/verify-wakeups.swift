@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+@testable import Aieyes
 
 @main struct VerifyWakeups {
     @MainActor static func main() async throws {

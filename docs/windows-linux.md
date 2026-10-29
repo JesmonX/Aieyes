@@ -131,7 +131,7 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --l
 # Windows/macOS 直接 Cargo 构建时增加 --features native-tray
 ```
 
-`.github/workflows/desktop.yml` 在 main 更新或 PR 时构建 Windows / Ubuntu 安装包，生成 CI artifacts。默认执行 JavaScript 语法、交互、版本与发布校验，并在 Linux 运行浏览器集成测试及截图；Rust 直接进行一次 release 构建。使用 Rust 依赖缓存、npm 预编译 Tauri CLI、取消同分支过期任务及免压缩上传来加快构建。需要完整 Rust 测试时，可手动运行工作流并勾选 `full_checks`。
+`.github/workflows/desktop.yml` 在 main 更新或 PR 时构建 Windows / Ubuntu 安装包，生成 CI artifacts。默认执行 JavaScript 语法、交互、版本与发布校验，并在 Linux 运行 Chromium/WebKit 浏览器集成测试及截图，Windows 只运行与平台相关的交互和字体检查；Rust 直接进行一次 release 构建。使用 Rust 依赖缓存、npm 预编译 Tauri CLI、取消同分支过期任务及免压缩上传来加快构建。需要完整 Rust 测试时，可手动运行工作流并勾选 `full_checks`。
 
 2026-10-03 [首次原生构建](https://github.com/JesmonX/Aieyes/actions/runs/37125369069) 已通过：Windows 生成 NSIS 安装包，Ubuntu 22.04 生成 deb 和 AppImage，两个平台的 JavaScript 语法与 4 项交互测试均通过。产物在运行页面的 Artifacts，保留 14 天。
 

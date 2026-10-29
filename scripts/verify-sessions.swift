@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+@testable import Aieyes
 
 @main struct VerifySessions {
     static func event(_ type: String) -> String { "{\"type\":\"event_msg\",\"payload\":{\"type\":\"\(type)\"}}\n" }

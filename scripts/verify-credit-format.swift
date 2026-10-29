@@ -1,4 +1,5 @@
 import Foundation
+@testable import Aieyes
 @main struct VerifyCreditFormat {
     static func main() {
         let cases: [(String?,String)] = [

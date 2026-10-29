@@ -1,4 +1,6 @@
 import Foundation
+@testable import Aieyes
+typealias Host = Aieyes.Host
 
 @main struct VerifyServerFormat {
     static func main() throws {

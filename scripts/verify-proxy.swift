@@ -1,4 +1,5 @@
 import Foundation
+@testable import Aieyes
 
 @main struct VerifyProxy {
     static func main() {

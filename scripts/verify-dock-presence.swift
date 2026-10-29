@@ -1,4 +1,5 @@
 import AppKit
+@testable import Aieyes
 
 @MainActor final class RefuseClose: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool { false }

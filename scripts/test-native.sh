@@ -2,53 +2,30 @@
 set -eu
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$PROJECT_DIR"
-mkdir -p .build/swift-module-cache
 export PATH="$HOME/.cargo/bin:$PATH"
+. scripts/native-verifiers.sh
 cargo build --workspace --locked
+build_native_app
 MODEL_FIXTURE=$(mktemp -d "$PROJECT_DIR/.build/model-fixture.XXXXXX")
 trap 'rm -rf "$MODEL_FIXTURE"' EXIT HUP INT TERM
 target/debug/aieyes-core --data-dir "$MODEL_FIXTURE" --call settings.save '{"version":6,"sources":[],"accounts":[],"hosts":[]}' > /dev/null
 target/debug/aieyes-core --data-dir "$MODEL_FIXTURE" --call settings.get > "$MODEL_FIXTURE/settings.json"
 target/debug/aieyes-core --data-dir "$MODEL_FIXTURE" --call dashboard > "$MODEL_FIXTURE/dashboard.json"
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift scripts/verify-models.swift -o .build/verify-models
+build_native_verifier models
 .build/verify-models "$MODEL_FIXTURE/dashboard.json" "$MODEL_FIXTURE/settings.json"
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift scripts/verify-localization.swift -o .build/verify-localization
-.build/verify-localization
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/DockPresence.swift scripts/verify-dock-presence.swift -o .build/verify-dock-presence
-.build/verify-dock-presence
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/Palette.swift scripts/verify-palette.swift -o .build/verify-palette
-.build/verify-palette
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/WakeupTime.swift scripts/verify-selection.swift -o .build/verify-selection
-.build/verify-selection
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/ProviderPresentation.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/QuotaNotifications.swift apps/macos/Sources/Aieyes/ConfigurationActions.swift apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-sessions.swift -o .build/verify-sessions
-.build/verify-sessions
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift scripts/verify-proxy.swift -o .build/verify-proxy
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/ProviderPresentation.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/QuotaNotifications.swift apps/macos/Sources/Aieyes/ConfigurationActions.swift apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-prices.swift -o .build/verify-prices
+for verifier in localization dock-presence palette selection sessions proxy; do
+  build_native_verifier "$verifier"
+  ".build/verify-$verifier"
+done
+build_native_verifier prices
 AIEYES_CORE_PATH="$PROJECT_DIR/scripts/pricing-test-core.py" AIEYES_PRICING_ISOLATION=1 .build/verify-prices
-.build/verify-proxy
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/ProviderPresentation.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/QuotaNotifications.swift apps/macos/Sources/Aieyes/ConfigurationActions.swift apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-macos-ui.swift -o .build/verify-macos-ui
-.build/verify-macos-ui
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/ProviderPresentation.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/QuotaNotifications.swift apps/macos/Sources/Aieyes/ConfigurationActions.swift apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-configuration.swift -o .build/verify-configuration
-.build/verify-configuration
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/ProviderPresentation.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/QuotaNotifications.swift apps/macos/Sources/Aieyes/ConfigurationActions.swift apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift apps/macos/Sources/Aieyes/WakeupsStore.swift scripts/verify-wakeups.swift -o .build/verify-wakeups
-.build/verify-wakeups
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/ProviderPresentation.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/QuotaNotifications.swift apps/macos/Sources/Aieyes/ConfigurationActions.swift apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift apps/macos/Sources/Aieyes/WakeupsStore.swift apps/macos/Sources/Aieyes/SetupGuide.swift scripts/verify-setup-guide.swift -o .build/verify-setup-guide
-.build/verify-setup-guide
-SPARKLE_FRAMEWORK="$PROJECT_DIR/.build/swift/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64"
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache -F "$SPARKLE_FRAMEWORK" -framework Sparkle -Xlinker -rpath -Xlinker "$SPARKLE_FRAMEWORK" apps/macos/Sources/Aieyes/Typography.swift apps/macos/Sources/Aieyes/UpdateTransport.swift apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/CopyNotice.swift apps/macos/Sources/Aieyes/AppUpdater.swift scripts/verify-updates.swift -o .build/verify-updates
-.build/verify-updates
+for verifier in macos-ui configuration wakeups setup-guide updates credit-format reset-format server-format configuration-lane; do
+  build_native_verifier "$verifier"
+  ".build/verify-$verifier"
+done
 
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift scripts/verify-credit-format.swift -o .build/verify-credit-format
-.build/verify-credit-format
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift scripts/verify-reset-format.swift -o .build/verify-reset-format
-.build/verify-reset-format
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift scripts/verify-server-format.swift -o .build/verify-server-format
-.build/verify-server-format
-swiftc apps/macos/Sources/Aieyes/Localization.swift apps/macos/Sources/Aieyes/LocalizationCatalog.swift -module-cache-path .build/swift-module-cache apps/macos/Sources/Aieyes/MonitorSelection.swift apps/macos/Sources/Aieyes/Models.swift apps/macos/Sources/Aieyes/ProviderPresentation.swift apps/macos/Sources/Aieyes/EngineClient.swift apps/macos/Sources/Aieyes/QuotaNotifications.swift apps/macos/Sources/Aieyes/ConfigurationActions.swift apps/macos/Sources/Aieyes/DesignTokens.swift apps/macos/Sources/Aieyes/Palette.swift apps/macos/Sources/Aieyes/SessionActivity.swift scripts/verify-configuration-lane.swift -o .build/verify-configuration-lane
-.build/verify-configuration-lane
-
-sh scripts/test-native-pets.sh
+AIEYES_SKIP_BUILD=1 sh scripts/test-native-pets.sh
 python3 scripts/test-dashboard-cache.py
 
-sh scripts/test-native-quota-layout.sh
+AIEYES_SKIP_BUILD=1 sh scripts/test-native-quota-layout.sh
 AIEYES_SKIP_BUILD=1 sh scripts/test-cpu-optimization.sh

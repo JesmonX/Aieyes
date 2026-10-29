@@ -1,4 +1,5 @@
 import Foundation
+@testable import Aieyes
 
 @main struct VerifyMacUI {
     struct SemanticsFixture: Decodable {

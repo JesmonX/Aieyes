@@ -9,7 +9,7 @@
 
 从 [GitHub Releases](https://github.com/JesmonX/Aieyes/releases) 下载正式版本：macOS 提供 Intel x64、Apple Silicon arm64 两个 DMG（macOS 14+），Windows 提供 x64 NSIS EXE，Linux 提供 x64 DEB、Fedora RPM 和 AppImage。发布页的 `SHA256SUMS` 包含全部安装包校验值。
 
-[Release 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/release.yml) 在推送 `v主版本.次版本.修订版本` 标签后构建，所有平台测试和打包成功后自动发布。默认 macOS 使用 ad-hoc 签名，Windows 暂未证书签名；发布前需要配置应用内更新签名密钥，详见 [发布说明](releases.md)。首次运行新工作流前，仍可从 [Desktop 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/desktop.yml) 下载保留 14 天的开发构建。
+[Release 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/release.yml) 在推送 `v主版本.次版本.修订版本` 标签后构建，四个平台打包、签名和附件核验成功后自动发布；main 上的分支 CI 已覆盖的测试不再重复执行，详见 [发布说明](releases.md)。默认 macOS 使用 ad-hoc 签名，Windows 暂未证书签名；发布前需要配置应用内更新签名密钥，详见 [发布说明](releases.md)。首次运行新工作流前，仍可从 [Desktop 工作流](https://github.com/JesmonX/Aieyes/actions/workflows/desktop.yml) 下载保留 14 天的开发构建。
 
 发布维护与验证方式见 [发布说明](releases.md)。
 

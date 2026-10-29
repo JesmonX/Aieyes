@@ -1,4 +1,6 @@
 import Foundation
+@testable import Aieyes
+typealias Host = Aieyes.Host
 
 @main struct VerifySetupGuide {
     @MainActor static func main() throws {

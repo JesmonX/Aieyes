@@ -28,7 +28,7 @@ Tauri 宿主测试先运行 `node scripts/prepare-wakeup.cjs --debug`，再运�
 
 测试输出放在 `.local/`；历史快照与过期安装包放在 `.local/archive/YYYY-MM-DD/`。这些文件不代表当前源码或可发布产物。
 
-桌宠图形可单独执行 `sh scripts/test-native-pets.sh`，也已配置 Intel / Apple Silicon 快速 CI。窗口显示与隐藏检查按就绪状态等待，最多 5 秒，避免固定延迟误判。
+桌宠图形可单独执行 `sh scripts/test-native-pets.sh`，也随 `sh scripts/test-native.sh` 在 Core/macOS 工作流的 Apple Silicon 任务中运行。原生验证脚本通过 `scripts/native-verifiers.sh` 复用一次 debug 构建的 App 对象，以 `@testable import Aieyes` 链接，不再逐个重新编译源码；与 Foundation 同名的类型（如 `Host`）需在验证脚本中用 `typealias` 指明。窗口显示与隐藏检查按就绪状态等待，最多 5 秒，避免固定延迟误判。
 
 `verify-pets` 的菜单 symbol effect、SwiftUI 窗口与截图集成测试在独立子进程运行。仅当 Intel CI 使用空设备或 Apple Paravirtual GPU，且子进程收到 SIGABRT 并输出 MTLLoader 的 `Target device architecture is nil` 驱动断言时，明确标记该环境不支持 SwiftUI 渲染；其他失败均使测试失败。关键帧时序、纯几何和 Core Animation 窗口生命周期仍验证，菜单 symbol effect 在有 Metal 设备时验证。真实图形验收运行 `.build/verify-pets --require-metal-device`，禁止以上降级；`.build/verify-pets --without-metal-device` 可验证无 GPU 分支。Intel 与 Apple Silicon 均纳入原生 CI，物理 GPU 和支持渲染的 Apple Silicon 环境执行完整窗口与截图检查。
 

@@ -12,6 +12,10 @@ on:
         description: 'Publish after all builds succeed (off = build validation only)'
         type: boolean
         default: false
+      full_tests:
+        description: 'Run every test even when branch CI already verified this source'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -22,6 +26,11 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      full_tests: ${{ steps.baseline.outputs.full_tests }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,6 +44,16 @@ jobs:
           python scripts/release.py check --tag "$RELEASE_TAG"
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
           python scripts/test-release.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # Tests already passed on main are skipped; packaging, signing and artifact checks always run.
+      - name: Decide whether branch CI covers this release
+        id: baseline
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await require('./scripts/release-ci-baseline.cjs')({github, context, core, force: ${{ inputs.full_tests == true }}});
   build:
     needs: validate
     strategy:
@@ -77,6 +96,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -98,43 +119,50 @@ jobs:
             git log -15 --pretty=format:'%s' > dist/release-notes.txt
           fi
       - name: Windows CLI stdin forwarding regression
-        if: runner.os == 'Windows'
+        if: needs.validate.outputs.full_tests == 'true' && runner.os == 'Windows'
         shell: bash
         run: |
           for attempt in {1..5}; do
             cargo test -p aieyes-core --lib --locked initialization_preserves_home_paths_environment_arguments_and_stdin -- --nocapture
           done
-      - name: CSS check dependencies
-        run: npm ci --prefix apps/desktop --ignore-scripts
+      - name: Desktop npm dependencies
+        if: needs.validate.outputs.full_tests == 'true'
+        run: npm ci --prefix apps/desktop
       - name: Shared checks
+        if: needs.validate.outputs.full_tests == 'true'
         shell: bash
         run: sh scripts/ci-checks.sh --rust
       - name: Linux process identification regression
-        if: runner.os == 'Linux'
+        if: needs.validate.outputs.full_tests == 'true' && runner.os == 'Linux'
         shell: bash
         run: |
           for attempt in {1..10}; do
             cargo test -p aieyes-core --lib --locked native_profile_switch_preserves_api_fixture_and_closes_login_fixture
           done
       - name: Prepare bundled core for desktop tests
-        if: runner.os != 'macOS'
+        if: needs.validate.outputs.full_tests == 'true' && runner.os != 'macOS'
         run: node scripts/prepare-wakeup.cjs --debug
       - name: Desktop Rust tests
-        if: runner.os != 'macOS'
+        if: needs.validate.outputs.full_tests == 'true' && runner.os != 'macOS'
         shell: bash
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --no-default-features --features "${{ runner.os == 'Linux' && 'custom-protocol' || 'custom-protocol,native-tray' }}"
       - name: Browser integration
-        if: runner.os != 'macOS'
+        if: needs.validate.outputs.full_tests == 'true' && runner.os != 'macOS'
         shell: bash
         run: |
-          npm ci --prefix apps/desktop
           cd apps/desktop
-          npx playwright install --with-deps chromium webkit
-          npm run test:ui
-          npm run test:webkit
+          if [ "$RUNNER_OS" = Windows ]; then
+            # The Chromium suite is platform-neutral and runs on Linux; Windows keeps its interaction and font checks.
+            npx playwright install --with-deps chromium
+            npm run test:windows-interactions
+          else
+            npx playwright install --with-deps chromium webkit
+            npm run test:ui
+            npm run test:webkit
+          fi
           node ../../scripts/test-windows-ui.cjs
       - uses: actions/upload-artifact@v4
-        if: always() && runner.os != 'macOS'
+        if: always() && needs.validate.outputs.full_tests == 'true' && runner.os != 'macOS'
         with:
           name: webkit-ui-${{ matrix.platform }}-${{ matrix.arch }}
           path: .build/ui-webkit/
@@ -143,9 +171,6 @@ jobs:
       - name: Install Tauri CLI
         if: runner.os != 'macOS'
         run: npm install --global @tauri-apps/cli@2.12.1
-      - name: Update signature tampering tests
-        if: runner.os != 'macOS'
-        run: python scripts/test-update-signatures.py
       - name: Optional Developer ID signing setup
         if: runner.os == 'macOS'
         env:
@@ -156,11 +181,15 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: python3 scripts/setup-macos-signing.py
-      - name: macOS DMG and native checks
+      - name: macOS DMG
+        if: runner.os == 'macOS'
+        run: sh scripts/build-macos.sh release --dmg
+      - name: macOS native checks
+        if: needs.validate.outputs.full_tests == 'true' && runner.os == 'macOS'
+        run: sh scripts/test-native.sh
+      - name: macOS package checks
         if: runner.os == 'macOS'
         run: |
-          sh scripts/build-macos.sh release --dmg
-          sh scripts/test-native.sh
           codesign --verify --deep --strict dist/Aieyes.app
           EXPECTED_ARCH=$(uname -m)
           test "$(lipo -archs dist/Aieyes.app/Contents/MacOS/Aieyes)" = "$EXPECTED_ARCH"
@@ -171,11 +200,11 @@ jobs:
         shell: pwsh
         run: ./scripts/build-desktop.ps1 release
       - name: Windows native panel interaction
-        if: runner.os == 'Windows'
+        if: needs.validate.outputs.full_tests == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/test-windows-panel.ps1
       - uses: actions/upload-artifact@v4
-        if: always() && runner.os == 'Windows'
+        if: always() && needs.validate.outputs.full_tests == 'true' && runner.os == 'Windows'
         with:
           name: windows-ui-evidence
           path: .local/windows-ui-sync/
@@ -186,6 +215,10 @@ jobs:
         run: |
           sh scripts/build-desktop.sh release
           python3 scripts/check-linux-package-size.py
+      # Runs after packaging, which bundles the core binary the desktop crate requires.
+      - name: Update signature tampering tests
+        if: runner.os != 'macOS'
+        run: python scripts/test-update-signatures.py
       - name: Collect packages
         shell: bash
         run: python scripts/release.py collect --tag "$RELEASE_TAG" --platform '${{ matrix.platform }}' --arch '${{ matrix.arch }}'
