@@ -6,8 +6,8 @@
 <key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
 <key>CFBundleLocalizations</key><array><string>zh-Hans</string><string>en</string></array>
 <key>CFBundleIdentifier</key><string>app.aieyes.desktop</string>
-<key>CFBundleVersion</key><string>65</string>
-<key>CFBundleShortVersionString</key><string>0.1.64</string>
+<key>CFBundleVersion</key><string>66</string>
+<key>CFBundleShortVersionString</key><string>0.1.65</string>
 <key>CFBundleExecutable</key><string>Aieyes</string>
 <key>CFBundleIconFile</key><string>AppIcon.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
