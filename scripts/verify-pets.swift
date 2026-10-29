@@ -125,18 +125,20 @@ import Darwin
         for timings in [CoreContract.petFrameDurations[0], Array(repeating: 100, count: 6)] {
             clockState.frameDurationsMs = timings
             configure()
-            // Frames are phased from the sprite's epoch, set after its hit masks are built; sample from the committed animation.
+            // Pause the layer clock at each frame midpoint: Core Animation still evaluates the presented keyframes,
+            // including the last frame, without depending on how promptly a loaded machine runs the sampler.
             guard let layer = sprite.layer, let frames = layer.animation(forKey: "pet.frames") else { preconditionFailure("Playing sprite has no frame animation") }
-            let began = layer.convertTime(frames.beginTime, to: nil)
+            let (speed, offset) = (layer.speed, layer.timeOffset)
             var boundary = 0.0
             for (index, duration) in timings.enumerated() {
-                let midpoint = began + (boundary + Double(duration) / 2) / 1000
-                while CACurrentMediaTime() < midpoint { pump(0.003) }
-                guard let contents = sprite.layer?.presentation()?.contents else { preconditionFailure("Visible sprite has no presentation image") }
-                let displayed = contents as! CGImage
-                precondition(displayed.dataProvider?.data == images[index].dataProvider?.data, "Presentation image must match the variable frame timing, including the last frame")
+                // A presentation copy reflects committed layer timing, so commit the paused clock before sampling it.
+                layer.speed = 0; layer.timeOffset = frames.beginTime + (boundary + Double(duration) / 2) / 1000; CATransaction.flush()
+                guard let contents = layer.presentation()?.contents else { preconditionFailure("Visible sprite has no presentation image") }
+                let displayed = (contents as! CGImage).dataProvider?.data
+                precondition(displayed == images[index].dataProvider?.data, "Presentation image must match the variable frame timing, including the last frame: frame \(index) of \(timings) showed \(images.firstIndex { $0.dataProvider?.data == displayed }.map(String.init) ?? "an unknown image")")
                 boundary += Double(duration)
             }
+            layer.speed = speed; layer.timeOffset = offset; CATransaction.flush()
         }
         checkpoint("Pet presentation images match normal and uniform frame timing")
         sprite.configure(images: images, state: clockState, identity: clockState.animationIdentity, playing: true, reduced: true)
