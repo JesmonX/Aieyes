@@ -259,6 +259,11 @@ try {
     $expectedHeight=168*$result.dpi/96
     Wait-For { $r=Bounds $script:pet; [Math]::Abs(($r.Bottom-$r.Top)-$expectedHeight) -le 2 } 'DPI-scaled pet dimensions'
     Screenshot 'pet-startup'
+    # The hidden main window is revealed once its page lays out, or by the native fallback 3 s after setup.
+    # Either may land after the pet appears; close it first so it cannot take the background fixture's focus.
+    Wait-For { $script:main=[PanelProbe]::Find($app.Id,'Aieyes',$false);$script:main -ne [IntPtr]::Zero -and [PanelProbe]::IsWindowVisible($script:main) } 'main window startup reveal'
+    $null=[PanelProbe]::SendMessage($script:main,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
+    Wait-For { -not [PanelProbe]::IsWindowVisible($script:main) } 'closing the startup window retains background app'
     $background=New-Object System.Windows.Forms.Form
     # An ordinary application filling the work area; covering the taskbar too would make it a fullscreen app the pet steps aside for.
     $background.Text='Aieyes isolated background input target';$background.FormBorderStyle='None';$background.StartPosition='Manual';$background.Bounds=[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea;$background.BackColor=[Drawing.Color]::FromArgb(49,67,83)
