@@ -56,6 +56,9 @@ jobs:
       - name: Shared checks
         shell: bash
         run: sh scripts/ci-checks.sh
+      - name: Prepare desktop sidecar
+        shell: bash
+        run: node scripts/prepare-wakeup.cjs --debug
       - name: Desktop shell tests
         run: |
           cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --no-default-features --features "${{ matrix.features }}" -- -D warnings
@@ -63,7 +66,6 @@ jobs:
       - name: Browser integration
         shell: bash
         run: |
-          node scripts/prepare-wakeup.cjs --debug
           cd apps/desktop
           if [ "$RUNNER_OS" = Windows ]; then
             # The Chromium suite is platform-neutral and runs on Linux; Windows keeps its interaction and font checks.
