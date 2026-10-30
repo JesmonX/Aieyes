@@ -4,11 +4,11 @@ use windows::Win32::{
     UI::{
         Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::{
-            GWL_EXSTYLE, GetWindowLongPtrW, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
-            IsWindowVisible, SW_HIDE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-            SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
-            ShowWindow, WINDOWPOS, WM_NCACTIVATE, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING,
-            WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+            GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, IsWindowVisible, SW_HIDE, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW,
+            SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOWPOS, WM_NCACTIVATE,
+            WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         },
     },
 };
@@ -59,23 +59,18 @@ pub fn set_visible(hwnd: HWND, open: bool) -> Result<(), String> {
 /// # Safety
 /// `lparam` must contain a valid WINDOWPOS pointer from WM_WINDOWPOSCHANGING.
 pub unsafe fn preserve_topmost(hwnd: HWND, lparam: LPARAM) {
-    if lparam.0 == 0 || !unsafe { IsWindowVisible(hwnd).as_bool() } {
+    if lparam.0 == 0
+        || !unsafe { IsWindowVisible(hwnd).as_bool() }
+        || unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 == 0 }
+    {
         return;
     }
+    // Win32 normalizes TOPMOST/NOTOPMOST into sibling handles before dispatch.
+    // Classifying hwndInsertAfter therefore also blocked our own promotion.
+    // Preserve an existing topmost window's order; let non-topmost promotions
+    // proceed normally, including synchronous recovery in CHANGED below.
     let position = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
-    if position.flags.contains(SWP_NOZORDER) {
-        return;
-    }
-    let after = position.hwndInsertAfter;
-    let target_topmost = after != HWND_BOTTOM
-        && after != HWND_NOTOPMOST
-        && !after.is_invalid()
-        && unsafe { GetWindowLongPtrW(after, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0 };
-    if after != HWND_TOPMOST && !target_topmost {
-        // Cancel the z-order operation itself. Replacing hwndInsertAfter alone
-        // does not reliably cancel HWND_NOTOPMOST on Windows.
-        position.flags |= SWP_NOZORDER;
-    }
+    position.flags |= SWP_NOZORDER;
 }
 
 #[cfg(test)]
