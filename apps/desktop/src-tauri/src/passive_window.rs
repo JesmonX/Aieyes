@@ -78,6 +78,11 @@ pub unsafe fn preserve_topmost(hwnd: HWND, lparam: LPARAM) {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static POSITION_EVENTS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 unsafe extern "system" fn overlay_proc(
     hwnd: HWND,
     message: u32,
@@ -86,6 +91,19 @@ unsafe extern "system" fn overlay_proc(
     _: usize,
     _: usize,
 ) -> LRESULT {
+    #[cfg(test)]
+    if matches!(message, WM_WINDOWPOSCHANGING | WM_WINDOWPOSCHANGED) && lparam.0 != 0 {
+        let position = unsafe { &*(lparam.0 as *const WINDOWPOS) };
+        POSITION_EVENTS.with(|events| {
+            events.borrow_mut().push(format!(
+                "msg={message:x} visible={} style={:x} after={:?} flags={:?}",
+                unsafe { IsWindowVisible(hwnd).as_bool() },
+                unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) },
+                position.hwndInsertAfter,
+                position.flags
+            ))
+        });
+    }
     if message == WM_WINDOWPOSCHANGING {
         unsafe {
             preserve_topmost(hwnd, lparam);
@@ -164,12 +182,18 @@ mod tests {
             );
             let foreground = GetForegroundWindow();
             set_visible(hwnd, true).unwrap();
+            assert_ne!(
+                GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0,
+                0,
+                "Showing the overlay must establish the topmost band first"
+            );
             for (after, extra_flags) in [
                 (HWND_NOTOPMOST, SET_WINDOW_POS_FLAGS(0)),
                 (HWND_BOTTOM, SET_WINDOW_POS_FLAGS(0)),
                 (HWND_NOTOPMOST, SWP_NOSENDCHANGING),
                 (HWND_BOTTOM, SWP_NOSENDCHANGING),
             ] {
+                POSITION_EVENTS.with(|events| events.borrow_mut().clear());
                 SetWindowPos(
                     hwnd,
                     Some(after),
@@ -183,7 +207,8 @@ mod tests {
                 assert_ne!(
                     GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0,
                     0,
-                    "Topmost must survive synchronously, before a later message or repaint"
+                    "Topmost must survive synchronously: after={after:?}, flags={extra_flags:?}, events={:?}",
+                    POSITION_EVENTS.with(|events| events.borrow().clone())
                 );
                 assert_eq!(GetForegroundWindow(), foreground);
             }

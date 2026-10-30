@@ -1,0 +1,9 @@
+[package]
+name = "aieyes-overlay-check"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[lib]
+path = "../../../apps/desktop/src-tauri/src/passive_window.rs"
+[dependencies]
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
