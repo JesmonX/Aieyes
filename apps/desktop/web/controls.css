@@ -180,11 +180,18 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
 .machine-menu > summary:hover { background:var(--soft); }
 .machine-menu > summary::-webkit-details-marker { display:none; }
 .machine-menu-body { max-width:min(300px,calc(100vw - 40px)); max-height:420px; overflow-y:auto; box-sizing:border-box; background:var(--solid); text-align:left; }
-.machine-menu-body button { min-width:0; text-align:left; white-space:normal; overflow-wrap:anywhere; }
+.machine-menu-body button { display:block; width:100%; min-width:0; padding:4px 10px; border:0; background:transparent; box-shadow:none; color:var(--ink); font-size:var(--font-secondary); font-weight:var(--weight-regular); text-align:left; white-space:normal; overflow-wrap:anywhere; }
+.machine-menu-body button:enabled:hover { background:var(--soft); transform:none; }
+.machine-menu-body button:focus-visible { outline-offset:-2px; }
+.panel-account-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:8px; color:var(--muted); font-size:var(--font-secondary); }
+.panel-account-toolbar button { margin-inline-start:auto; }
+.panel-account-group legend { padding-inline:4px; }
+#quota-dialog .panel-account-group label { display:flex; align-items:flex-start; }
+.panel-account-group label > span { min-width:0; overflow-wrap:anywhere; }
 .machine-menu-body .source-path { max-width:100%; color:var(--muted); font-size:var(--font-caption); }
 .machine-menu-body p { margin:4px; max-width:240px; white-space:normal; }
 #auth-source,#wake-source,#wake-account { width:100%; max-width:100%; box-sizing:border-box; }
-.panel-account-group { max-height:320px; overflow:auto; scrollbar-gutter:stable; }
+.panel-account-group { min-width:0; }
 .pet-library { margin:20px 0; padding-top:16px; border-top:1px solid var(--border); }
 #pet-import-form { display:grid; gap:8px; }
 #pet-import-form label { margin:0; }

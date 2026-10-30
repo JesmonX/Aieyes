@@ -276,7 +276,8 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
         await page.screenshot({path:path.join(out,platform+'-hosts-narrow-'+theme+'.png')});
         await page.evaluate(()=>{state.settingsTab='integrations';AieyesAgentSettings.navigate({provider:'codex'});renderSettings(false);});
         await localMenu.locator('summary').click();
-        const paths=await localMenu.locator('[data-device-manage][data-intent=login] .source-path').allTextContents();assert(paths[0].includes('account-0')&&paths[1].includes('account-1'),'shortened duplicate directory paths preserve the distinguishing suffix');
+        assert.deepEqual(await localMenu.locator('[data-device-manage]').allTextContents(), ['登录', '切换账户'], 'machine menu uses one concise action per intent; directory choice stays in the sign-in flow');
+        assert.equal(await localMenu.locator('.source-path').count(), 0);
         const menuBox=await localMenu.locator('.machine-menu-body').boundingBox();assert(menuBox.y>=0&&menuBox.y+menuBox.height<=440,'long directory menus stay within the viewport and scroll');
         await page.screenshot({path:path.join(out,platform+'-menu-narrow-'+theme+'.png')});await page.keyboard.press('Escape');
         await panel.evaluate(theme=>{state.settings.appearance.theme=theme;render();},theme);
@@ -288,6 +289,8 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
         await panel.evaluate(()=>{localStorage.setItem('aieyes.panel.accounts.v2',navigationFixture.previousPanelPreference);render();});
       }
       await localMenu.locator('summary').click();await localMenu.locator('[data-device-manage][data-intent=login]').first().click();await page.locator('#auth-source').waitFor();
+      const locations=await page.locator('#auth-source option').allTextContents();
+      for(const suffix of ['account-0','account-1'])assert(locations.some(text=>text.includes(suffix)), 'the sign-in flow preserves every directory choice');
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'long directory labels in the login location selector fit the narrow window');
       await page.screenshot({path:path.join(out,platform+'-login-long-path.png')});
       assert.deepEqual(errors, []); await context.close();

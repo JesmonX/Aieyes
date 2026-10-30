@@ -781,6 +781,12 @@ unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
+        WM_WINDOWPOSCHANGING => {
+            if surface.wanted.get() && !surface.quiet.get() {
+                crate::passive_window::preserve_topmost(hwnd, lparam);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_WINDOWPOSCHANGED => {
             // A shell/window-management operation can demote the pet after
             // creation. Defer recovery until that operation has completed.

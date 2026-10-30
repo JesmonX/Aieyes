@@ -38,7 +38,7 @@ struct AieyesCommands: Commands {
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSWindowDelegate, NSToolbarDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private var statusLabel: NSHostingView<MenuActivityLabel>?
-    private let popover = NSPopover()
+    private let popover = PanelPopover()
     private var petWindow: PetWindowController?
     private let dockPresence = DockPresence()
     private var appearanceController: AppAppearanceController?
@@ -199,6 +199,12 @@ struct AieyesCommands: Commands {
     }
     private func dismissOutsidePanel() { if popover.isShown && !model.isPinned { popover.performClose(nil) } }
     @objc private func applicationDeactivated() { dismissOutsidePanel() }
+    func popoverDidShow(_ notification: Notification) {
+        if let window = popover.contentViewController?.view.window {
+            PanelContainer.keepAboveApplications(window)
+            window.orderFrontRegardless()
+        }
+    }
     func popoverDidClose(_ notification: Notification) { statusItem.button?.highlight(false); model.setWindowVisible(false, window: "panel") }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         let windows = [detailWindow, panelAccountsWindow, quotaOrderWindow, samplingWindow].compactMap { $0 } + Array(estimateWindows.values)
@@ -547,6 +553,16 @@ struct AieyesCommands: Commands {
                         }
                     }
                     try await capture(RootView(model: model), size: NSSize(width: 450, height: 720), dark: dark, to: root.appendingPathComponent("overview-panel-\(theme).png"))
+                }
+                for dark in [false, true] {
+                    let theme = dark ? "dark" : "light"
+                    for width in [450, 760, 1080] {
+                        try await capture(Heatmap(days: model.dashboard.heatmap, cost: false).padding(16), size: NSSize(width: width, height: 260), dark: dark, to: root.appendingPathComponent("heat-\(width)-\(theme).png"))
+                        try await capture(Heatmap(days: Array(model.dashboard.heatmap.prefix(14)), cost: false).padding(16), size: NSSize(width: width, height: 260), dark: dark, to: root.appendingPathComponent("heat-short-\(width)-\(theme).png"))
+                        try await capture(AnnualUsageTable(days: model.dashboard.heatmap).padding(16), size: NSSize(width: width, height: 300), dark: dark, to: root.appendingPathComponent("annual-\(width)-\(theme).png"))
+                        try await capture(DailyUsage(days: model.dashboard.trendDays, rows: model.dashboard.dayModels, compact: false).padding(16), size: NSSize(width: width, height: 440), dark: dark, to: root.appendingPathComponent("daily-\(width)-\(theme).png"))
+                    }
+                    try await capture(PanelAccountsView(model: model, onClose: {}), size: NSSize(width: 488, height: 528), dark: dark, to: root.appendingPathComponent("panel-accounts-\(theme).png"))
                 }
                 model.stop(); NSApp.terminate(nil); return
             }

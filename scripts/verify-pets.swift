@@ -232,6 +232,20 @@ import Darwin
             defaults.set(true, forKey: "aieyes.pet.enabled")
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
             precondition(panel.isVisible)
+            panel.level = .normal
+            NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+            precondition(panel.level == .floating && panel.isVisible, "Application switches restore pet ordering synchronously")
+            let popover = PanelPopover()
+            popover.behavior = .applicationDefined
+            popover.animates = false
+            popover.contentViewController = PanelContainer(model: model)
+            (popover.contentViewController as? PanelContainer)?.prepare(size: NSSize(width: 450, height: 540))
+            popover.show(relativeTo: panel.contentView!.bounds, of: panel.contentView!, preferredEdge: .minY)
+            pump(0.1)
+            let overlay = popover.contentViewController!.view.window!
+            precondition(overlay.level == .statusBar && !overlay.hidesOnDeactivate, "Pet-anchored panel remains above applications")
+            precondition(overlay.collectionBehavior.contains(.canJoinAllSpaces))
+            popover.performClose(nil)
             precondition(panel.contentView?.accessibilityPerformPress() == true && opens == 1)
             let event = NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 30, y: 30), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
             let menu = panel.contentView!.menu(for: event)!
