@@ -7,7 +7,7 @@ The repair covers the shared Windows/Linux UI and the native macOS client. No st
 - Machine menus contain one “登录” and one “切换账户” action for Codex, and “登录” for Antigravity. Current/credentialed directories take priority as the initial location; the Codex flow retains all directory choices. Windows/Linux menu items use the same plain item treatment as other app menus.
 - Panel account selection puts provider identity, selection count and reset action on separate rows. Long account names wrap, and the outer dialog scrolls instead of clipping or compressing account groups. The native picker uses checkboxes aligned to their labels.
 - GPU utilization remains an ordinary category-colored measurement at 100%; memory/storage capacity warnings remain intact.
-- Windows pets and panels preserve the topmost band during `WM_WINDOWPOSCHANGING`, before a demoted frame can be painted. Panels explicitly enter the topmost band when shown, without activating the foreground window. Hidden overlays remain hidden.
+- Windows pets and panels cancel attempted z-order demotion during `WM_WINDOWPOSCHANGING`. Operations that bypass that message are repaired synchronously in `WM_WINDOWPOSCHANGED`, without posting recovery to a later frame. Panels explicitly enter the topmost band when shown, without activating the foreground window. Hidden overlays remain hidden.
 - macOS pets refresh ordering on application activation. Pet and menu-bar popovers set their overlay level after AppKit assigns the anchor level, and remain visible on deactivation when pinned. Outside dismissal and fullscreen pet suppression retain their existing behavior.
 
 ## Verification

@@ -5,10 +5,10 @@ use windows::Win32::{
         Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::{
             GWL_EXSTYLE, GetWindowLongPtrW, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
-            IsWindowVisible, SW_HIDE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOWPOS,
-            WM_NCACTIVATE, WM_WINDOWPOSCHANGING, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+            IsWindowVisible, SW_HIDE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+            SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+            ShowWindow, WINDOWPOS, WM_NCACTIVATE, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING,
+            WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
         },
     },
 };
@@ -54,7 +54,7 @@ pub fn set_visible(hwnd: HWND, open: bool) -> Result<(), String> {
 }
 
 /// Keep a visible overlay in the topmost band before Windows commits a z-order change.
-/// Repairing it in WM_WINDOWPOSCHANGED leaves a composited frame behind the active app.
+/// Posting recovery from WM_WINDOWPOSCHANGED leaves the repair until a later frame.
 ///
 /// # Safety
 /// `lparam` must contain a valid WINDOWPOS pointer from WM_WINDOWPOSCHANGING.
@@ -72,8 +72,9 @@ pub unsafe fn preserve_topmost(hwnd: HWND, lparam: LPARAM) {
         && !after.is_invalid()
         && unsafe { GetWindowLongPtrW(after, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0 };
     if after != HWND_TOPMOST && !target_topmost {
-        position.hwndInsertAfter = HWND_TOPMOST;
-        position.flags |= SWP_NOACTIVATE;
+        // Cancel the z-order operation itself. Replacing hwndInsertAfter alone
+        // does not reliably cancel HWND_NOTOPMOST on Windows.
+        position.flags |= SWP_NOZORDER;
     }
 }
 
@@ -88,6 +89,24 @@ unsafe extern "system" fn overlay_proc(
     if message == WM_WINDOWPOSCHANGING {
         unsafe {
             preserve_topmost(hwnd, lparam);
+        }
+    }
+    if message == WM_WINDOWPOSCHANGED
+        && unsafe { IsWindowVisible(hwnd).as_bool() }
+        && unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 == 0 }
+    {
+        // SWP_NOSENDCHANGING can bypass the prevention above. Recover in this
+        // same message dispatch rather than posting work to a later frame.
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+            );
         }
     }
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
@@ -105,7 +124,10 @@ pub fn draw_active(hwnd: HWND) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::{Win32::UI::WindowsAndMessaging::*, core::w};
+    use windows::{
+        Win32::UI::{Shell::GetWindowSubclass, WindowsAndMessaging::*},
+        core::w,
+    };
 
     #[test]
     fn overlay_retains_topmost_without_focus_and_hidden_window_stays_hidden() {
@@ -135,9 +157,19 @@ mod tests {
             }
             let _cleanup = Cleanup(hwnd);
             configure(hwnd);
+            let mut subclass_data = 0;
+            assert!(
+                GetWindowSubclass(hwnd, Some(overlay_proc), 1, Some(&mut subclass_data)).as_bool(),
+                "The test must exercise the production window subclass"
+            );
             let foreground = GetForegroundWindow();
             set_visible(hwnd, true).unwrap();
-            for after in [HWND_NOTOPMOST, HWND_BOTTOM] {
+            for (after, extra_flags) in [
+                (HWND_NOTOPMOST, SET_WINDOW_POS_FLAGS(0)),
+                (HWND_BOTTOM, SET_WINDOW_POS_FLAGS(0)),
+                (HWND_NOTOPMOST, SWP_NOSENDCHANGING),
+                (HWND_BOTTOM, SWP_NOSENDCHANGING),
+            ] {
                 SetWindowPos(
                     hwnd,
                     Some(after),
@@ -145,7 +177,7 @@ mod tests {
                     0,
                     0,
                     0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | extra_flags,
                 )
                 .unwrap();
                 assert_ne!(
