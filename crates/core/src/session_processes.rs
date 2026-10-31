@@ -197,6 +197,7 @@ fn root(provider: &str, argv: &[String], env: &HashMap<String, String>) -> (Path
         "kimi" => "KIMI_CODE_HOME",
         "codebuddy" => "CODEBUDDY_CONFIG_DIR",
         "qoder" => "QODER_CONFIG_DIR",
+        "qoder-cn" => "QODERCN_CONFIG_DIR",
         "grok" => "GROK_HOME",
         "deepseek-harness" => "DSH_HOME",
         "pi" | "omp" => "PI_CODING_AGENT_DIR",

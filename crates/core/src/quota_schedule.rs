@@ -14,7 +14,7 @@ use std::{
 /// Providers whose quota backends rate-limit or bill per query poll no faster than this.
 pub(crate) fn floor(provider: &str) -> u64 {
     match provider {
-        "qoder" | "trae" | "trae-cn" => 600,
+        "qoder" | "qoder-cn" | "trae" | "trae-cn" => 600,
         "copilot" | "kiro" | "workbuddy" | "codebuddy" => 300,
         _ => 5,
     }

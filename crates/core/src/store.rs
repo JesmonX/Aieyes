@@ -1011,7 +1011,7 @@ impl Store {
             // Parser 9 splits Qoder's inclusive first-party prompt count into
             // ordinary input plus cached input. A v8 row still has input == raw
             // input, so the normal max would preserve the old double count.
-            let qoder_legacy_inclusive = next.provider == "qoder"
+            let qoder_legacy_inclusive = crate::qoder_family::is_qoder(&next.provider)
                 && next.raw_tokens.as_ref().is_some_and(|raw| {
                     prior.raw_tokens.is_none() && prior.tokens.input == raw.input
                 });

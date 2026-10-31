@@ -50,6 +50,9 @@ pub(crate) fn refresh(
     now: u64,
 ) -> Result<(State, Vec<Activity>)> {
     state.error = None;
+    if crate::qoder_family::is_qoder(provider) {
+        return Ok((state, crate::qoder_desktop::activity(path, now)?));
+    }
     #[cfg(test)]
     {
         state.scanned = 0;

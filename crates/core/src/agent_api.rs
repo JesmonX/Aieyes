@@ -91,11 +91,13 @@ fn path(source: &Source, params: &Value, validate: bool) -> Result<PathBuf> {
                     .unwrap_or_else(crate::store::home)
                     .join(".zcode/v2/provider_config.json")
             })
-    } else if source.provider == "qoder" {
-        std::env::var_os("QODER_CONFIG_DIR")
+    } else if crate::qoder_family::is_qoder(&source.provider) {
+        std::env::var_os(crate::qoder_family::spec(&source.provider).config_env)
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
-            .unwrap_or_else(|| crate::store::home().join(".qoder"))
+            .unwrap_or_else(|| {
+                crate::store::expand(crate::qoder_family::spec(&source.provider).root)
+            })
             .join("settings.json")
     } else if source.provider == "codebuddy" {
         std::env::var_os("CODEBUDDY_CONFIG_DIR")
@@ -125,7 +127,7 @@ fn path(source: &Source, params: &Value, validate: bool) -> Result<PathBuf> {
         "请选择原生配置的绝对 .{extension} 路径"
     );
     files::safe(&path)?;
-    if matches!(source.provider.as_str(), "qoder" | "codebuddy") {
+    if matches!(source.provider.as_str(), "qoder" | "qoder-cn" | "codebuddy") {
         ensure!(
             path.file_name().is_some_and(|n| n == "settings.json"),
             "请选择客户端配置目录中的 settings.json"
@@ -188,7 +190,7 @@ fn read(path: &std::path::Path) -> Result<(Value, String)> {
 }
 
 fn public(agent: &str, path: &std::path::Path, config: &Value, revision: &str) -> Value {
-    if agent == "qoder" {
+    if crate::qoder_family::is_qoder(agent) {
         return qoder::public(path, config, revision);
     }
     if agent == "claude" {
@@ -484,6 +486,7 @@ impl Engine {
                     | "zcode"
                     | "grok"
                     | "qoder"
+                    | "qoder-cn"
                     | "pi"
                     | "omp"
             ) && source.subscription.is_none(),
@@ -585,7 +588,7 @@ impl Engine {
                 (Document::Toml(next), base, model, key, no_key)
             }
             Document::Json(old) => {
-                if source.provider == "qoder" {
+                if crate::qoder_family::is_qoder(&source.provider) {
                     let prepared = qoder::prepare(&old, &params)?;
                     let connection = (
                         Document::Json(old),
@@ -636,7 +639,11 @@ impl Engine {
             &verify_options,
         )?;
         if let Some(qoder) = &qoder {
-            qoder.validate(&path, source.proxy.as_ref().unwrap_or(&settings.proxy))?;
+            qoder.validate(
+                &source.provider,
+                &path,
+                source.proxy.as_ref().unwrap_or(&settings.proxy),
+            )?;
         }
         if let Some(native) = &native {
             ensure!(
@@ -683,6 +690,7 @@ impl Engine {
                 unreachable!()
             };
             config = Document::Json(qoder.save(
+                &source.provider,
                 &path,
                 old,
                 source.proxy.as_ref().unwrap_or(&settings.proxy),

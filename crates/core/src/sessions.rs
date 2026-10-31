@@ -988,7 +988,9 @@ impl Reader {
         }
         if matches!(
             source.provider.as_str(),
-            "zcode"
+            "qoder"
+                | "qoder-cn"
+                | "zcode"
                 | "opencode"
                 | "kilo"
                 | "workbuddy"
@@ -1000,6 +1002,7 @@ impl Reader {
                 | "codebuddy"
         ) && let Some(path) = match source.provider.as_str() {
             "trae" | "trae-cn" => crate::native_sessions::trae_directory(&source.path),
+            "qoder" | "qoder-cn" => crate::qoder_desktop::database(&source.path),
             "zcode" => crate::zcode::database(&source.path),
             "workbuddy" => workbuddy_database(&source.path),
             "cline" => cline_database(&source.path)
@@ -1231,7 +1234,7 @@ impl Reader {
             }
             let nested = root.join(match source.provider.as_str() {
                 "codex" | "kimi" | "deepseek-harness" | "grok" | "pi" | "omp" => "sessions",
-                "claude" | "codebuddy" | "qoder" | "workbuddy" => "projects",
+                "claude" | "codebuddy" | "qoder" | "qoder-cn" | "workbuddy" => "projects",
                 "copilot" => "session-state",
                 _ => "conversations",
             });
@@ -2119,6 +2122,7 @@ impl SessionMonitor {
                             | "roo"
                             | "kiro"
                             | "qoder"
+                            | "qoder-cn"
                             | "pi"
                             | "omp"
                             | "cursor"

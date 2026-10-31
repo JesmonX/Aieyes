@@ -13,6 +13,7 @@ pub fn default_name(provider: &str) -> String {
         "deepseek" => "DeepSeek 账户",
         "zcode" => "ZCode 账户",
         "qoder" => "Qoder 账户",
+        "qoder-cn" => "Qoder CN 账户",
         "grok" => "Grok 账户",
         "cursor" => "Cursor 账户",
         "opencode" => "OpenCode 账户",
@@ -111,7 +112,7 @@ fn fingerprint(settings: &Settings, account: &Account, source: &Source) -> u64 {
         account.identity_key,
         account.profile_refs(),
         // Invalidate pre-CLI observations and follow the effective native root.
-        (source.provider == "qoder").then(|| (
+        (crate::qoder_family::is_qoder(&source.provider)).then(|| (
             1,
             crate::subscriptions::qoder::config_dir(source, source.subscription.as_ref()).ok()
         )),
@@ -346,7 +347,7 @@ impl Engine {
     ) -> Result<String> {
         // A native quota connection and a history directory can point at the
         // same Qoder login. Query that root once, then project it onto accounts.
-        let location = if source.provider == "qoder"
+        let location = if crate::qoder_family::is_qoder(&source.provider)
             && source
                 .subscription
                 .as_ref()
@@ -832,12 +833,20 @@ impl Engine {
                 json!({"current":current,"credential":credential,"profileCredentials":profile_credentials,"checkedAt":now(),"note": if identity.is_none() { "尚未验证账户身份，请读取当前登录或授权" } else { "" }}),
             );
         }
-        if source.provider == "qoder"
+        if crate::qoder_family::is_qoder(&source.provider)
             && source
                 .subscription
                 .as_ref()
                 .is_none_or(|c| crate::subscriptions::native_cli(&source.provider, c))
         {
+            if source.host_id.is_none()
+                && source.subscription.is_none()
+                && crate::qoder_desktop::database(&source.path).is_some()
+            {
+                return Ok(
+                    json!({"current":null,"credential":null,"checkedAt":now(),"note":"账户身份待确认"}),
+                );
+            }
             let observation = self.status_observation_key(settings, account, source)?;
             let cached = self
                 .status_observations
@@ -1436,6 +1445,30 @@ mod tests {
         assert_eq!(settings.accounts[0].device_settings.len(), 1);
     }
     #[test]
+    fn qoder_desktop_history_does_not_probe_a_cli_login() {
+        let (dir, engine) = fixture();
+        std::fs::write(dir.path().join("main.sqlite"), []).unwrap();
+        for provider in ["qoder", "qoder-cn"] {
+            let row = engine
+                .inspect_account_device(
+                    &Settings::default(),
+                    &Account {
+                        provider: provider.into(),
+                        ..Default::default()
+                    },
+                    &Source {
+                        provider: provider.into(),
+                        path: dir.path().to_string_lossy().into_owned(),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            assert!(row["current"].is_null());
+            assert!(row["credential"].is_null());
+            assert!(row["identity"].is_null());
+        }
+    }
+    #[test]
     fn batch_projects_one_context_keeps_identity_and_only_rechecks_due_or_changed_devices() {
         use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
         use std::sync::{
@@ -1463,7 +1496,16 @@ mod tests {
         e.store.save_auth_settings(&settings).unwrap();
         let reads = Arc::new(AtomicUsize::new(0));
         e.status_observation_reads = Some(reads.clone());
-        let rows = e.refresh_account_status_batch(&json!({})).unwrap();
+        // The batch projects these explicit accounts/directories. Automatic native
+        // discovery may add references, which have their own observation tests.
+        let selection = |due_only| {
+            json!({
+                "accountKeys": (0..10).map(|i| format!("codex:a{i}")).collect::<Vec<_>>(),
+                "sourceIds": (0..30).map(|i| format!("s{i}")).collect::<Vec<_>>(),
+                "dueOnly": due_only,
+            })
+        };
+        let rows = e.refresh_account_status_batch(&selection(false)).unwrap();
         assert_eq!(rows.as_array().unwrap().len(), 300);
         assert_eq!(reads.swap(0, Ordering::Relaxed), 1);
         assert_eq!(
@@ -1482,29 +1524,23 @@ mod tests {
         );
         assert!(!rows.to_string().contains("FIXTURE"));
         assert_eq!(
-            e.refresh_account_status_batch(&json!({"dueOnly":true}))
-                .unwrap(),
+            e.refresh_account_status_batch(&selection(true)).unwrap(),
             json!([])
         );
         settings.menu_metric = "cost".into();
         e.store.save_settings(&settings).unwrap();
         assert_eq!(
-            e.refresh_account_status_batch(&json!({"dueOnly":true}))
-                .unwrap(),
+            e.refresh_account_status_batch(&selection(true)).unwrap(),
             json!([])
         );
         assert_eq!(reads.load(Ordering::Relaxed), 0);
         e.store.db.execute("UPDATE kv SET value=json_set(value,'$.attemptedAt',?1) WHERE key LIKE 'account-status:%'",[now()-500]).unwrap();
-        let due = e
-            .refresh_account_status_batch(&json!({"dueOnly":true}))
-            .unwrap();
+        let due = e.refresh_account_status_batch(&selection(true)).unwrap();
         assert_eq!(due.as_array().unwrap().len(), 270);
         assert_eq!(reads.swap(0, Ordering::Relaxed), 1);
         settings.sources[1].quota_pre_command = "export CHANGED_CONTEXT=1".into();
         e.store.save_settings(&settings).unwrap();
-        let changed = e
-            .refresh_account_status_batch(&json!({"dueOnly":true}))
-            .unwrap();
+        let changed = e.refresh_account_status_batch(&selection(true)).unwrap();
         assert_eq!(changed.as_array().unwrap().len(), 10);
         assert_eq!(reads.swap(0, Ordering::Relaxed), 1);
         let a = &settings.accounts[0];

@@ -66,7 +66,11 @@ fn programs(provider: &str) -> (&'static [&'static str], &'static [&'static str]
         "opencode" => (&["opencode"], &["opencode-ai", "@opencode/cli"]),
         "codebuddy" => (&["codebuddy"], &["@tencent-ai/codebuddy-code"]),
         "antigravity" => (&["agy"], &[]),
-        "qoder" => (&["qodercli"], &["@qoder-ai/qodercli"]),
+        "qoder" => (&["qodercli", "qoder"], &["@qoder-ai/qodercli"]),
+        "qoder-cn" => (
+            &["qoderclicn", "qodercn", "qoder-cn"],
+            &["@qoder-ai/qoderclicn"],
+        ),
         "zcode" => (&["zcode"], &[]),
         "grok" => (&["grok"], &[]),
         "pi" => (
@@ -195,7 +199,7 @@ pub(crate) fn cli_args<'a>(provider: &str, argv: &'a [String]) -> Option<CliArgs
                 | "--port"
                 | "--trajectory-file"
         ) || (arg == "-p" && !matches!(provider, "pi" | "omp"))
-            || (arg == "-o" && provider == "qoder")
+            || (arg == "-o" && crate::qoder_family::is_qoder(provider))
             || (arg == "-i" && provider == "antigravity")
             || (arg == "-t" && matches!(provider, "trae" | "trae-cn"));
         let value = takes_value
@@ -259,7 +263,7 @@ pub fn headless_argv(provider: &str, argv: &[String]) -> Option<&'static str> {
                 None
             }
         }
-        "qoder" => verdict(has(&[
+        "qoder" | "qoder-cn" => verdict(has(&[
             "-p",
             "--print",
             "-o",

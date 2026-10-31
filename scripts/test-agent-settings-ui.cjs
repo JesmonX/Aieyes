@@ -26,6 +26,10 @@ let authDone=false,authCancelled=false,unknown=false,failSave=false,loggedIn=tru
 async function invoke(method,params){
   calls.push({method,params});
   if(method==='hello')return {...await rpc(method,params),chatgptWorkInstalled:true};
+  if(method==='qoderCli.status'){
+    const cn=params.provider==='qoder-cn',binary=cn?'qoderclicn':'qodercli';
+    return {provider:params.provider,apps:[cn?'Qoder CN':'Qoder'],cli:true,account:false,offerInstall:true,command:binary+' login',message:'CLI fixture'};
+  }
   // Keep the operating-system credential store outside this disposable UI test.
   if(method==='hosts.credentials.save'){const passwordRef='ssh-fixture-'+(++secretId);secrets.set(passwordRef,params.password);return {passwordRef};}
   if(method==='hosts.credentials.delete'){assert(secrets.delete(params.passwordRef));return {};}
@@ -270,9 +274,20 @@ await page.locator('[data-agent-enable="claude"]').check();await page.waitForFun
       await page.evaluate(provider=>{state.page='settings';state.settingsTab='integrations';AieyesAgentSettings.navigate({provider});render();},provider);
       assert.equal(await page.locator('#agent-section-api').count(),0,provider);
     }
-    for(const provider of ['deepseek','qoder','grok','cursor','codebuddy','pi','omp']){
+    for(const provider of ['deepseek','qoder','qoder-cn','grok','cursor','codebuddy','pi','omp']){
       await page.evaluate(provider=>{AieyesAgentSettings.navigate({provider});render();},provider);
       assert.equal(await page.locator('#agent-section-valuation').count(),0,provider);
+    }
+    // Each product keeps its own CLI status and dialog commands, including
+    // reopening the first product after the other was inspected.
+    for(const provider of ['qoder','qoder-cn','qoder']){
+      await page.evaluate(provider=>{state.settings.agents.find(a=>a.provider===provider).enabled=true;AieyesAgentSettings.navigate({provider});render();},provider);
+      await page.locator(`[data-qoder-cli="${provider}"]`).click();
+      const command=(provider==='qoder-cn'?'qoderclicn':'qodercli')+' login';
+      await page.waitForFunction(command=>document.querySelector('#qoder-cli-command')?.textContent===command,command);
+      await page.locator('#qoder-cli-copy').click();assert.equal(await page.evaluate(()=>window.copied),command);
+      assert.equal(calls.filter(c=>c.method==='qoderCli.status').at(-1).params.provider,provider);
+      await page.locator('#qoder-cli-close').click();
     }
     await page.evaluate(()=>{AieyesAgentSettings.navigate({provider:'deepseek-harness'});render();});
     assert.equal(await page.locator('[data-settings-agent="deepseek"]').count(),0,'Deep links open hidden Agents without adding an entry');

@@ -22,7 +22,7 @@ pub(super) fn request(
         Request::new("GET", url)
     }
     .header("Accept", "application/json");
-    if source.provider == "qoder" || config.mode == "console" {
+    if crate::qoder_family::is_qoder(&source.provider) || config.mode == "console" {
         let cookie = secret.strip_prefix("Cookie:").unwrap_or(secret).trim();
         ensure!(
             cookie.contains('='),
@@ -55,7 +55,7 @@ pub(super) fn request(
         );
         request = request.header("x-xai-token-auth", "xai-grok-cli");
     }
-    if source.provider == "qoder" {
+    if crate::qoder_family::is_qoder(&source.provider) {
         let origin = if config.mode == "global" {
             "https://qoder.com"
         } else {

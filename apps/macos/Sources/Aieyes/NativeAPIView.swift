@@ -63,15 +63,15 @@ private struct NativeAPIEditor: View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 14) {
             Text(name + L(" · API 连接")).font(AppFont.title)
-            if source.provider == "qoder" { Text(L("此配置目录需先完成 qodercli login；保存通过原生 CLI 的自定义模型管理接口。")).font(AppFont.secondary).foregroundStyle(.secondary) }
+            if ["qoder", "qoder-cn"].contains(source.provider) { Text(L("此配置目录需先完成 {0} login；保存通过原生 CLI 的自定义模型管理接口。", source.provider == "qoder-cn" ? "qoderclicn" : "qodercli")).font(AppFont.secondary).foregroundStyle(.secondary) }
             TextField(name + L(" 配置文件"), text: $configPath)
             Button(L("读取此配置")) { Task { await read() } }
             TextField(source.provider == "claude" ? L("API 根地址（不含 /v1）") : L("Base URL（含 /v1）"), text: $baseUrl)
             TextField(L("模型 ID"), text: $modelID)
             if source.provider == "claude" { Picker(L("认证方式"), selection: $authMode) { Text("API Key · X-Api-Key").tag("api-key"); Text("Bearer Token").tag("auth-token") } }
             DisclosureGroup(L("模型选项")) {
-            if ["kimi", "deepseek-harness", "zcode", "grok", "qoder", "pi", "omp"].contains(source.provider) { TextField(L("模型上下文窗口（Token）"), text: $contextWindow) }
-            if ["deepseek-harness", "zcode", "grok", "qoder", "pi", "omp"].contains(source.provider) { TextField(L("最大输出 Token"), text: $maxOutputTokens) }
+            if ["kimi", "deepseek-harness", "zcode", "grok", "qoder", "qoder-cn", "pi", "omp"].contains(source.provider) { TextField(L("模型上下文窗口（Token）"), text: $contextWindow) }
+            if ["deepseek-harness", "zcode", "grok", "qoder", "qoder-cn", "pi", "omp"].contains(source.provider) { TextField(L("最大输出 Token"), text: $maxOutputTokens) }
             if ["claude", "zcode", "codebuddy", "pi", "omp"].contains(source.provider) { Picker(L("推理强度"), selection: $effort) { if ["codebuddy", "pi", "omp"].contains(source.provider) { Text(L("不发送推理强度")).tag("disabled") } else { Text(source.provider == "zcode" ? L("服务端默认") : L("客户端默认")).tag("") }; ForEach(source.provider == "codebuddy" ? ["minimal", "low", "medium", "high", "xhigh", "max"] : ["low", "medium", "high", "xhigh", "max"], id: \.self) { Text($0).tag($0) } } }
             if source.provider == "codebuddy" { Text(L("新连接默认使用 low；模型不支持推理参数时，选择不发送推理强度。")).font(AppFont.secondary).foregroundStyle(.secondary) }
             }
@@ -110,11 +110,11 @@ private struct NativeAPIEditor: View {
         busy = true; error = nil; defer { busy = false }
         do {
             var params: [String: Any] = ["sourceId": source.id, "configPath": configPath, "revision": loaded.revision, "baseUrl": baseUrl, "model": modelID, "apiKey": apiKey, "noKey": noKey]
-            if ["kimi", "deepseek-harness", "zcode", "grok", "qoder", "pi", "omp"].contains(source.provider) {
+            if ["kimi", "deepseek-harness", "zcode", "grok", "qoder", "qoder-cn", "pi", "omp"].contains(source.provider) {
                 guard let context = Int(contextWindow), (1024...16_777_216).contains(context) else { throw ClientError.message(L("请输入有效的模型上下文窗口大小")) }
                 params["contextWindow"] = context
             }
-            if ["deepseek-harness", "zcode", "grok", "qoder", "pi", "omp"].contains(source.provider) {
+            if ["deepseek-harness", "zcode", "grok", "qoder", "qoder-cn", "pi", "omp"].contains(source.provider) {
                 guard let output = Int(maxOutputTokens), output > 0 else { throw ClientError.message(L("请输入有效的最大输出 Token 数")) }
                 params["maxOutputTokens"] = output
             }

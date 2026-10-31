@@ -39,6 +39,10 @@ pub struct NativeConnection {
     pub config_path: String,
     pub selector: String,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_method: Option<String>,
     pub account_key: Option<String>,
     pub identity_key: Option<String>,
     pub email: String,
@@ -153,9 +157,9 @@ fn spec(provider: &str) -> (&'static str, Vec<&'static str>) {
             "XDG_DATA_HOME",
             vec!["auth.json", "opencode.json", "opencode.jsonc"],
         ),
-        "qoder" => (
-            "QODER_CONFIG_DIR",
-            vec!["settings.json", "auth.json", "credentials.json"],
+        "qoder" | "qoder-cn" => (
+            crate::qoder_family::spec(provider).config_env,
+            vec!["settings.json", "state.json", ".qoder-app-status.json"],
         ),
         "codebuddy" => (
             "CODEBUDDY_CONFIG_DIR",
@@ -1846,6 +1850,25 @@ fn cursor_plan(membership: &str) -> String {
     }
 }
 fn extract(provider: &str, machine: &str, doc: &Document) -> Result<Vec<Candidate>> {
+    if crate::qoder_family::is_qoder(provider) && doc.path.ends_with(".qoder-app-status.json") {
+        let v = parse(doc)?;
+        let product = if provider == "qoder-cn" {
+            "qodercn"
+        } else {
+            "qoder"
+        };
+        if v["schema_version"] != 1 || v["product"] != product || v["logged_in"] != true {
+            return Ok(vec![]);
+        }
+        let mut row = candidate(provider, machine, doc, "", "login", "");
+        row.connection.client_kind = Some("desktop".into());
+        row.connection.has_credential = true;
+        row.connection.email = public_text(v["email"].as_str().unwrap_or(""));
+        row.connection.status = "observed".into();
+        row.connection.note =
+            "桌面客户端记录为已登录；未确认与 CLI 是同一账户，额度单独通过 CLI 查询".into();
+        return Ok(vec![row]);
+    }
     let mut rows = extract_rows(provider, machine, doc)?;
     for row in &mut rows {
         upstream(provider, doc, row);
@@ -2599,7 +2622,7 @@ impl Engine {
             let tx = self.store.write_transaction()?;
             let mut settings = self.store.settings()?;
             let mut changed = false;
-            for provider in ["cline", "kilo", "roo"] {
+            for provider in ["cline", "kilo", "roo", "qoder", "qoder-cn"] {
                 if !machine_enabled(&settings, "local")
                     || !agent_enabled(&settings, provider)
                     || !selected(&settings, provider, "local")
@@ -2749,7 +2772,7 @@ impl Engine {
                 });
             }
             remote::probe_scan_identities(&self.store, &before, &mut candidates);
-            if matches!(provider.as_str(), "qoder" | "antigravity") {
+            if matches!(provider.as_str(), "qoder" | "qoder-cn" | "antigravity") {
                 let mut identity_roots: Vec<_> = loaded
                     .roots
                     .iter()
@@ -2767,13 +2790,18 @@ impl Engine {
                     }
                 }
                 for root in &identity_roots {
+                    if crate::qoder_family::is_qoder(&provider)
+                        && Path::new(root).join("main.sqlite").is_file()
+                    {
+                        continue;
+                    }
                     let source = Source {
                         provider: provider.clone(),
                         path: root.clone(),
                         host_id: (machine != "local").then(|| machine.clone()),
                         ..Default::default()
                     };
-                    let identity = if provider == "qoder" {
+                    let identity = if crate::qoder_family::is_qoder(&provider) {
                         crate::subscriptions::qoder::inspect(&source, &before, "").ok()
                     } else {
                         crate::agy_identity::read(&source, &before).identity
@@ -2788,6 +2816,13 @@ impl Engine {
                             candidate(&provider, &machine, &doc, "", "login", &identity.key);
                         if provider == "antigravity" {
                             row.connection.upstream_identity = Some(identity.key.clone());
+                        }
+                        if crate::qoder_family::is_qoder(&provider) {
+                            row.connection.client_kind = Some("cli".into());
+                            if machine == "local" {
+                                row.connection.auth_method =
+                                    crate::qoder_family::auth_method(Path::new(root));
+                            }
                         }
                         row.connection.identity_key = Some(identity.key);
                         row.connection.email = public_text(&identity.email);
@@ -3147,10 +3182,11 @@ pub(crate) fn quota_sources(settings: &Settings, account: &Account) -> Vec<Sourc
             r.account_key.as_deref() == Some(&accounts::key(account))
                 && available(settings, r)
                 && r.status == "observed"
+                && r.client_kind.as_deref() != Some("desktop")
                 && (r.kind == "login"
                     && matches!(
                         r.provider.as_str(),
-                        "codex" | "claude" | "antigravity" | "qoder"
+                        "codex" | "claude" | "antigravity" | "qoder" | "qoder-cn"
                     )
                     || native_subscription(r).is_some()
                     || upstream_kind(r).is_some())
@@ -3175,7 +3211,7 @@ pub(crate) fn quota_sources(settings: &Settings, account: &Account) -> Vec<Sourc
             source.host_id = (r.machine_id != "local").then(|| r.machine_id.clone());
             source.codex_home_id = None;
             source.quota_command.clear();
-            source.subscription = if r.provider == "qoder" {
+            source.subscription = if crate::qoder_family::is_qoder(&r.provider) {
                 Some(crate::subscriptions::SubscriptionConfig {
                     mode: "cli".into(),
                     native_config_dir: r.root.clone(),
@@ -3530,15 +3566,17 @@ fn read_native_quota_inner(
                 && r.account_key.as_deref() == Some(&accounts::key(account))
         })
         .context("原生连接已移除")?;
-    if row.machine_id != "local" && !matches!(row.provider.as_str(), "qoder" | "antigravity") {
+    if row.machine_id != "local"
+        && !matches!(row.provider.as_str(), "qoder" | "qoder-cn" | "antigravity")
+    {
         return remote::read(store, settings, account, source, row);
     }
     let mut secret = String::new();
     let mut expired = false;
     let mut plan = String::new();
     let mut upstream_auth = None;
-    if row.provider == "qoder" || row.provider == "antigravity" {
-        let identity = if row.provider == "qoder" {
+    if crate::qoder_family::is_qoder(&row.provider) || row.provider == "antigravity" {
+        let identity = if crate::qoder_family::is_qoder(&row.provider) {
             crate::subscriptions::qoder::inspect(
                 source,
                 settings,
@@ -3612,7 +3650,7 @@ fn read_native_quota_inner(
         );
     }
     // The public identity read guards attribution without storing or switching auth.
-    if row.provider == "qoder" || row.provider == "antigravity" {
+    if crate::qoder_family::is_qoder(&row.provider) || row.provider == "antigravity" {
         let identity = snapshot
             .identity
             .as_ref()
@@ -4064,6 +4102,9 @@ fn watched_files(provider: &str, settings: &Settings) -> Vec<PathBuf> {
         .collect();
     for root in roots {
         let root = Path::new(&root);
+        if crate::qoder_family::is_qoder(provider) {
+            paths.push(root.join(".auth/user"));
+        }
         for pattern in spec(provider).1 {
             paths.extend(patterns(root, pattern));
         }
@@ -4292,7 +4333,7 @@ impl Engine {
                     host_id: (row.machine_id != "local").then(|| row.machine_id.clone()),
                     ..Default::default()
                 };
-                let identity = if row.provider == "qoder" {
+                let identity = if crate::qoder_family::is_qoder(&row.provider) {
                     crate::subscriptions::qoder::inspect(&source, &settings, "")
                 } else {
                     crate::agy_identity::read(&source, &settings)
@@ -4444,6 +4485,29 @@ fn source_root_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn qoder_desktop_summary_never_infers_a_cli_identity() {
+        for (provider, product) in [("qoder", "qoder"), ("qoder-cn", "qodercn")] {
+            let doc = Document {
+                root: "/fixture/native".into(),
+                path: "/fixture/native/.qoder-app-status.json".into(),
+                bytes: serde_json::to_vec(&json!({"schema_version":1,"product":product,"logged_in":true,"email":"same@example.test"})).unwrap(),
+            };
+            let rows = extract(provider, "local", &doc).unwrap();
+            assert_eq!(rows.len(), 1);
+            let row = &rows[0];
+            assert_eq!(row.connection.client_kind.as_deref(), Some("desktop"));
+            assert!(row.connection.identity_key.is_none());
+            assert!(row.connection.account_key.is_none());
+            assert!(row.secret.is_empty());
+            let other = if provider == "qoder" {
+                "qoder-cn"
+            } else {
+                "qoder"
+            };
+            assert!(extract(other, "local", &doc).unwrap().is_empty());
+        }
+    }
     #[test]
     fn native_targets_follow_source_pause_location_and_transport_settings() {
         let account = Account {

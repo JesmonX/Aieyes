@@ -27,7 +27,7 @@ pub(crate) fn sync(settings: &Settings) -> Vec<String> {
     for source in settings
         .sources
         .iter()
-        .filter(|source| source.provider == "qoder" && source.enabled)
+        .filter(|source| crate::qoder_family::is_qoder(&source.provider) && source.enabled)
     {
         match &source.host_id {
             None => local = true,
@@ -76,7 +76,9 @@ fn local_sync() -> Vec<String> {
     }
     #[cfg(target_os = "macos")]
     {
-        if let Err(error) = macos_launch_agent(&home) {
+        if let Err(error) = macos_launch_agent(&home, ENV_NAME, "qoder")
+            .and_then(|_| macos_launch_agent(&home, "QODERCN_EXPOSE_TOKEN_USAGE", "qoder-cn"))
+        {
             issues.push(format!("launchd: {error}"));
         }
     }
@@ -138,7 +140,9 @@ fn merge_file(path: &Path) -> std::io::Result<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error),
     };
-    let block = format!("{START}\nexport {ENV_NAME}={ENV_VALUE}\n{END}\n");
+    let block = format!(
+        "{START}\nexport {ENV_NAME}={ENV_VALUE}\nexport QODERCN_EXPOSE_TOKEN_USAGE={ENV_VALUE}\n{END}\n"
+    );
     let next = if let Some(start) = old.find(START) {
         if let Some(relative) = old[start + START.len()..].find(END) {
             let end = start + START.len() + relative + END.len();
@@ -199,23 +203,23 @@ fn atomic_write(path: &Path, content: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_launch_agent(home: &Path) -> Result<()> {
+fn macos_launch_agent(home: &Path, env_name: &str, provider: &str) -> Result<()> {
     let uid = unsafe { libc::getuid() };
     let dir = home.join("Library/LaunchAgents");
     fs::create_dir_all(&dir)?;
-    let path = dir.join("com.aieyes.qoder-token-usage.plist");
+    let path = dir.join(format!("com.aieyes.{provider}-token-usage.plist"));
     let plist = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.aieyes.qoder-token-usage</string>
+  <string>com.aieyes.{provider}-token-usage</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/launchctl</string>
     <string>setenv</string>
-    <string>{ENV_NAME}</string>
+    <string>{env_name}</string>
     <string>{ENV_VALUE}</string>
   </array>
   <key>RunAtLoad</key>
@@ -231,12 +235,12 @@ fn macos_launch_agent(home: &Path) -> Result<()> {
     if fs::read_to_string(&path).ok().as_deref() != Some(&plist) {
         atomic_write(&path, plist.as_bytes())?;
     }
-    let _ = runtime_command(Command::new("/bin/launchctl").args(["setenv", ENV_NAME, ENV_VALUE]));
+    let _ = runtime_command(Command::new("/bin/launchctl").args(["setenv", env_name, ENV_VALUE]));
     let domain = format!("gui/{uid}");
     let _ = runtime_command(Command::new("/bin/launchctl").args([
         "bootout",
         &domain,
-        "com.aieyes.qoder-token-usage",
+        &format!("com.aieyes.{provider}-token-usage"),
     ]));
     let status = runtime_command(Command::new("/bin/launchctl").args([
         "bootstrap",
@@ -259,7 +263,7 @@ fn linux_user_environment(home: &Path) -> Result<()> {
     let dir = home.join(".config/environment.d");
     fs::create_dir_all(&dir)?;
     let path = dir.join("50-aieyes-qoder.conf");
-    let content = format!("{ENV_NAME}={ENV_VALUE}\n");
+    let content = format!("{ENV_NAME}={ENV_VALUE}\nQODERCN_EXPOSE_TOKEN_USAGE={ENV_VALUE}\n");
     if fs::read_to_string(&path).ok().as_deref() != Some(&content) {
         atomic_write(&path, content.as_bytes())?;
     }
@@ -267,6 +271,7 @@ fn linux_user_environment(home: &Path) -> Result<()> {
         "--user",
         "set-environment",
         &format!("{ENV_NAME}={ENV_VALUE}"),
+        &format!("QODERCN_EXPOSE_TOKEN_USAGE={ENV_VALUE}"),
     ]));
     Ok(())
 }

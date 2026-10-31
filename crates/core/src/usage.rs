@@ -16,7 +16,7 @@ pub fn parser_version(provider: &str) -> u32 {
     if crate::opencode::family(provider) {
         return 8;
     }
-    if provider == "qoder" {
+    if crate::qoder_family::is_qoder(provider) {
         return 11;
     }
     if provider == "deepseek-harness" {
@@ -116,8 +116,10 @@ pub fn parse(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usage
     state.counter_correction = None;
     match source.provider.as_str() {
         "codex" => parse_codex(source, state, v),
-        "qoder" | "pi" | "omp" if v["tokens"].is_object() => parse_normalized(source, state, v),
-        "claude" | "qoder" => parse_claude(source, state, v),
+        "qoder" | "qoder-cn" | "pi" | "omp" if v["tokens"].is_object() => {
+            parse_normalized(source, state, v)
+        }
+        "claude" | "qoder" | "qoder-cn" => parse_claude(source, state, v),
         "pi" | "omp" => crate::pi_history::parse(source, state, v),
         "kimi" | "codebuddy" | "copilot" => crate::native_agents::parse(source, state, v),
         "deepseek-harness" if v["type"].is_string() => {
@@ -308,7 +310,7 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
     if model.starts_with('<') {
         return None;
     }
-    if source.provider == "qoder" {
+    if crate::qoder_family::is_qoder(&source.provider) {
         if let Some(id) = v["sessionId"].as_str() {
             if state.session_id != id {
                 state.qoder_main_model.clear();
@@ -324,7 +326,7 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         return None;
     }
     let stamp = timestamp(&v["timestamp"])?;
-    if source.provider != "qoder"
+    if !crate::qoder_family::is_qoder(&source.provider)
         && let Some(id) = v["sessionId"].as_str()
     {
         state.session_id = id.into();
@@ -339,13 +341,15 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
     // Qoder's first-party counters use an inclusive prompt count. Custom
     // Anthropic-compatible providers keep their original usage semantics.
     let mut tokens = raw_tokens.clone();
-    if source.provider == "qoder" && v["modelSource"].as_str() != Some("custom") {
+    if crate::qoder_family::is_qoder(&source.provider)
+        && v["modelSource"].as_str() != Some("custom")
+    {
         tokens.input = tokens
             .input
             .checked_sub(tokens.cache_read)?
             .checked_sub(tokens.cache_write)?;
     }
-    let native_credits = if source.provider == "qoder" {
+    let native_credits = if crate::qoder_family::is_qoder(&source.provider) {
         u["credits"].as_f64().and_then(|credits| {
             let value = NativeCredits {
                 credits,
@@ -372,7 +376,7 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         source,
         state,
         stamp,
-        if source.provider == "qoder"
+        if crate::qoder_family::is_qoder(&source.provider)
             && v["isSidechain"] == true
             && !state.qoder_main_model.is_empty()
         {
@@ -396,7 +400,7 @@ fn parse_claude(source: &Source, state: &mut ParseState, v: &Value) -> Option<Us
         ),
         inherited: false,
     });
-    if source.provider == "qoder" {
+    if crate::qoder_family::is_qoder(&source.provider) {
         parsed.raw_tokens = Some(raw_tokens);
     }
     Some(parsed)
@@ -411,12 +415,12 @@ pub(crate) fn parse_normalized(
     let stamp = timestamp(&v["timestamp"])?;
     let id = v["id"].as_str()?;
     let session = v["sessionId"].as_str().unwrap_or("import");
-    if source.provider == "qoder" && state.session_id != session {
+    if crate::qoder_family::is_qoder(&source.provider) && state.session_id != session {
         state.qoder_main_model.clear();
     }
     state.session_id = session.into();
     let model = v["model"].as_str()?.to_string();
-    if source.provider == "qoder" && state.qoder_main_model.is_empty() {
+    if crate::qoder_family::is_qoder(&source.provider) && state.qoder_main_model.is_empty() {
         state.qoder_main_model = model.clone();
     }
     let mut parsed = event(
@@ -446,7 +450,7 @@ pub(crate) fn parse_normalized(
         .filter(|proof| !proof.origin.trim().is_empty() && proof.origin.len() <= 4096);
     if matches!(
         source.provider.as_str(),
-        "qoder" | "codebuddy" | "workbuddy"
+        "qoder" | "qoder-cn" | "codebuddy" | "workbuddy"
     ) {
         parsed.native_credits = serde_json::from_value::<NativeCredits>(v["nativeCredits"].clone())
             .ok()

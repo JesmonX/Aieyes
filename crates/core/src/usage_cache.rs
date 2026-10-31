@@ -494,9 +494,12 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
         .collect();
     d.models.sort_by_key(|a| std::cmp::Reverse(a.total));
     d.model_options = options.into_iter().collect();
-    if f.provider.as_deref().is_none_or(|p| p == "qoder") {
+    if f.provider
+        .as_deref()
+        .is_none_or(crate::qoder_family::is_qoder)
+    {
         let mut query = store.db.prepare_cached(
-            "SELECT DISTINCT model FROM events WHERE provider='qoder' AND model IN ('dfmodel','qfmodel','Qoder')",
+            "SELECT DISTINCT model FROM events WHERE provider IN ('qoder','qoder-cn') AND model IN ('dfmodel','qfmodel','Qoder')",
         )?;
         for row in query.query_map([], |r| r.get::<_, String>(0))? {
             let model = row?;

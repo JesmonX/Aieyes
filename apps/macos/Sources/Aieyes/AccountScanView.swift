@@ -29,6 +29,7 @@ import SwiftUI
                         VStack(alignment: .leading, spacing: 4) {
                             Text(row.displayName)
                             Text(model.machineName(row.machineId) + " · " + row.statusLabel + (row.accountKey == nil ? "" : L(" · 已关联账户"))).font(AppFont.secondary).foregroundStyle(.secondary)
+                            if !row.clientLabel.isEmpty { Text(row.clientLabel).font(AppFont.secondary).foregroundStyle(.secondary) }
                             if !row.models.isEmpty { Text(row.models.joined(separator: "、")).font(AppFont.secondary) }
                             Text(row.configPath).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled)
                             Text(L(row.note)).font(AppFont.secondary).foregroundStyle(.secondary)

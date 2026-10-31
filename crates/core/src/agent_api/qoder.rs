@@ -58,50 +58,17 @@ pub(super) fn prepare(old: &Value, params: &Value) -> Result<Prepared> {
     })
 }
 
-fn control(path: &std::path::Path, request: Value, proxy: &ProxyConfig) -> Result<Value> {
+fn control(
+    provider: &str,
+    path: &std::path::Path,
+    request: Value,
+    proxy: &ProxyConfig,
+) -> Result<Value> {
     let root = path.parent().context("Qoder 配置目录无效")?;
-    let args = [
-        "--print",
-        "--output-format",
-        "stream-json",
-        "--input-format",
-        "stream-json",
-        "--no-session-persistence",
-        "--setting-sources",
-        "user",
-        "--tools",
-        "",
-        "--strict-mcp-config",
-        "--mcp-config",
-        "{\"mcpServers\":{}}",
-        "--config-dir",
-        root.to_str().context("Qoder 配置目录编码无效")?,
-    ];
-    let mut command = crate::process::cli_command_with_pre_command(
-        "qodercli",
-        &args,
-        if cfg!(unix) { ":" } else { "" },
-        "",
-    );
-    command.current_dir(crate::store::home());
-    network::apply_env(&mut command, proxy);
-    let mut request = request;
-    request["subtype"] = request["type"].clone();
-    let input = format!(
-        "{}\n{}\n",
-        json!({"type":"control_request","request_id":"aieyes-init","request":{"type":"initialize","subtype":"initialize"}}),
-        json!({"type":"control_request","request_id":"aieyes-byok","request":request})
-    );
-    let bytes = crate::process::run(command, input.into_bytes(), Duration::from_secs(45)).map_err(
-        |_| {
-            anyhow::anyhow!(
-                "Qoder CLI API 操作失败；请先在该配置目录完成 qodercli login，并检查网络"
-            )
-        },
-    )?;
-    response(&bytes)
+    crate::subscriptions::qoder::native_byok(provider, root, request, proxy)
 }
 
+#[cfg(test)]
 fn response(bytes: &[u8]) -> Result<Value> {
     ensure!(bytes.len() <= 2 * 1024 * 1024, "Qoder API 响应过大");
     let mut supported = false;
@@ -148,9 +115,15 @@ fn unrelated(mut value: Value) -> Value {
 }
 
 impl Prepared {
-    pub fn validate(&self, path: &std::path::Path, proxy: &ProxyConfig) -> Result<()> {
+    pub fn validate(
+        &self,
+        provider: &str,
+        path: &std::path::Path,
+        proxy: &ProxyConfig,
+    ) -> Result<()> {
         ensure!(
             control(
+                provider,
                 path,
                 json!({"type":"check_byok_config","config":self.input}),
                 proxy
@@ -160,8 +133,15 @@ impl Prepared {
         );
         Ok(())
     }
-    pub fn save(&self, path: &std::path::Path, old: &Value, proxy: &ProxyConfig) -> Result<Value> {
+    pub fn save(
+        &self,
+        provider: &str,
+        path: &std::path::Path,
+        old: &Value,
+        proxy: &ProxyConfig,
+    ) -> Result<Value> {
         control(
+            provider,
             path,
             json!({"type":if self.existing {"update_byok_config"} else {"create_byok_config"},"config":self.input}),
             proxy,

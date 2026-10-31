@@ -7,6 +7,7 @@
     "deepseek": "DeepSeek",
     "zcode": "ZCode",
     "qoder": "Qoder",
+    "qoder-cn": "Qoder CN",
     "grok": "Grok",
     "cursor": "Cursor",
     "opencode": "OpenCode",
@@ -38,6 +39,7 @@
     "deepseek": "",
     "zcode": "~/.zcode",
     "qoder": "~/.qoder",
+    "qoder-cn": "~/.qoder-cn",
     "grok": "~/.grok",
     "cursor": "~/.cursor",
     "opencode": "~/.local/share/opencode",
@@ -64,6 +66,7 @@
     "deepseek": "",
     "zcode": "zcode",
     "qoder": "qodercli",
+    "qoder-cn": "qoderclicn",
     "grok": "grok",
     "cursor": "agent",
     "opencode": "",
@@ -1184,6 +1187,13 @@
       },
       "loginUrl": "https://qoder.com/account/usage"
     },
+    "qoder-cn": {
+      "hint": "复用 Qoder CN 原生 CLI 的 PAT 或浏览器登录；请先运行 qoderclicn login。",
+      "modes": {
+        "cli": "本机 Qoder CN CLI 登录"
+      },
+      "loginUrl": "https://qoder.cn/account/usage"
+    },
     "grok": {
       "hint": "订阅：运行 grok login，从 ~/.grok/auth.json 复制账户 key。API 余额：填写 Management API Key 和 Team ID。",
       "modes": {
@@ -1261,6 +1271,7 @@
     "deepseek",
     "zcode",
     "qoder",
+    "qoder-cn",
     "grok",
     "cursor",
     "opencode",
@@ -1314,6 +1325,13 @@
       "valuation"
     ],
     "qoder": [
+      "accounts",
+      "api",
+      "machines",
+      "quota",
+      "quotaReset"
+    ],
+    "qoder-cn": [
       "accounts",
       "api",
       "machines",
@@ -1452,6 +1470,10 @@
       "asset": "qoder",
       "monochrome": true
     },
+    "qoder-cn": {
+      "asset": "qoder",
+      "monochrome": true
+    },
     "grok": {
       "asset": "grok",
       "monochrome": true
@@ -1524,7 +1546,7 @@
       "monochrome": false
     }
   },
-  "contractHash": "c814ad683b58ef1615b324497cd5aa39a837882a1e0468e747ac537a3e6357ba",
+  "contractHash": "87c48550dabe4e44a6a6a10b942139d00d65a27c7e650c2ada1300ea41618e07",
   "petFrameDurations": [
     [
       280,

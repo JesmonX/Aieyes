@@ -24,6 +24,7 @@ pub const SERVICE: &str = "Claude Code-credentials";
 /// A token that Claude has since replaced is re-read at most this often.
 pub const RETRY_SECONDS: i64 = 24 * 60 * 60;
 /// How long the user has to answer the system dialog.
+#[cfg(target_os = "macos")]
 const DIALOG_SECONDS: u64 = 120;
 const EXPIRED: &str = "Claude Code 登录已过期，打开 Claude Code 一次即可刷新";
 
@@ -131,6 +132,7 @@ fn stamp(home: &Path) -> i64 {
     .unwrap_or(0)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn token(data: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(data).ok()?.trim();
     // `security -w` prints data it considers unprintable as hex.
@@ -155,6 +157,7 @@ fn token(data: &[u8]) -> Option<String> {
 /// `security` exits with the low byte of the OSStatus: 44 item not found,
 /// 36 user interaction not allowed. Timeouts and cancellations carry no code.
 /// `error` is a `process::run` failure, which ends in "（{code}）" for an exit code.
+#[cfg(any(target_os = "macos", test))]
 fn classify(error: &str) -> Read {
     let code = error
         .rsplit_once('（')

@@ -102,7 +102,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         .map(|raw| serde_json::from_str(&raw))
         .transpose()?
         .unwrap_or(Value::Null);
-    let qoder_state_cursors = if source.provider == "qoder" {
+    let qoder_state_cursors = if crate::qoder_family::is_qoder(&source.provider) {
         crate::qoder_state::remote_cursors(&store, source)?
     } else {
         Value::Null
@@ -168,7 +168,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
                 qoder_issues.extend(report.issues);
             }
             Some("done") => {
-                if source.provider == "qoder" {
+                if crate::qoder_family::is_qoder(&source.provider) {
                     let report = crate::qoder_state::reconcile(&store, source, &prices, settings)?;
                     qoder_issues.extend(report.issues);
                 }

@@ -25,7 +25,7 @@ pub struct SubscriptionConfig {
 }
 
 pub fn native_cli(provider: &str, config: &SubscriptionConfig) -> bool {
-    provider == "qoder" && config.mode == "cli"
+    crate::qoder_family::is_qoder(provider) && config.mode == "cli"
 }
 
 pub fn supported(provider: &str) -> bool {
@@ -35,6 +35,7 @@ pub fn supported(provider: &str) -> bool {
             | "workbuddy"
             | "codebuddy"
             | "qoder"
+            | "qoder-cn"
             | "grok"
             | "cursor"
             | "opencode"
@@ -49,6 +50,7 @@ pub fn login_url(provider: &str, mode: &str) -> Result<&'static str> {
         ("zcode", "global") => Ok("https://z.ai/manage-apikey/coding-plan/personal/my-plan"),
         ("zcode", "cn") => Ok("https://bigmodel.cn/coding-plan/personal/usage"),
         ("qoder", "global") => Ok("https://qoder.com/account/usage"),
+        ("qoder-cn", "cli") => Ok("https://qoder.cn/account/usage"),
         ("qoder", "cli") => Ok("https://docs.qoder.com/cli/using-cli"),
         ("qoder", "cn-legacy") => Ok("https://qoder.com.cn/account/usage"),
         ("kimi", "cn" | "global") => Ok("https://www.kimi.com/code/console"),
@@ -637,9 +639,9 @@ pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<
                 );
             }
         }
-        "qoder" => {
+        "qoder" | "qoder-cn" => {
             if native_cli(&source.provider, config) {
-                qoder::apply(&mut q, v)?;
+                qoder::apply_for(&source.provider, &mut q, v)?;
                 return Ok(q);
             }
             let mut used = 0.;

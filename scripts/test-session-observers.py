@@ -245,18 +245,18 @@ class ObserverTests(unittest.TestCase):
                 if index<990:os.utime(path,(time.time()-172800,)*2)
             source=dict(id='s',provider='codex',path=directory)
             with patch.object(m.FileWatch,'LIMIT',32):
-                cold=m.collect(source,{})
+                cold=m.collect(source,{},processes=[])
             self.assertEqual(len(cold['files']),10)
             cursors={row['key']:row for row in cold['files']}
             calls=[];stat=pathlib.Path.stat
             def tracked(path,*args,**kwargs):calls.append(path);return stat(path,*args,**kwargs)
             with patch.object(pathlib.Path,'stat',tracked),patch.object(pathlib.Path,'open',side_effect=AssertionError('unchanged file opened')):
-                warm=m.collect(source,cursors)
+                warm=m.collect(source,cursors,processes=[])
             self.assertEqual(len(warm['files']),10);self.assertLess(len(calls),25)
             discovery=next(iter(m._DISCOVERY.values()));discovery.watch.close()
             added=root/'new.jsonl';added.write_text('{}\n')
             with patch.object(m.time,'monotonic',return_value=discovery.scanned+5.1):
-                fallback=m.collect(source,cursors)
+                fallback=m.collect(source,cursors,processes=[])
             self.assertEqual(len(fallback['files']),11)
 
     def test_known_noninteractive_logs_do_not_use_the_recent_session_limit(self):

@@ -120,7 +120,7 @@ struct AgentMachinesSection: View {
             ForEach(unboundMachines, id: \.self) { id in
                 machine(id, name: (model.settings.sources.first { $0.hostId == id }?.lastMachineName ?? id) + L(" · 机器未绑定"), available: false, unbound: true)
             }
-            if agent.provider == "qoder" {
+            if ["qoder", "qoder-cn"].contains(agent.provider) {
                 Button(model.accountStatusBusy ? L("检查中…") : L("刷新账户状态")) { Task { await model.loadAccountStatuses(refresh: true, provider: agent.provider) } }.disabled(model.accountStatusBusy || !agent.enabled)
             }
             if model.settings.localDeviceEnabled == false && !model.settings.hosts.contains(where: \.enabled) {
@@ -144,7 +144,7 @@ struct AgentMachinesSection: View {
                     var ids = agent.machineIds.filter { $0 != id }; if selected { ids.append(id) }
                     Task { await model.configureAgent(agent.provider, enabled: true, machines: ids) }
                 })).toggleStyle(.checkbox).disabled(!agent.enabled || unbound || !available).lineLimit(2).help(name)
-                if agent.provider == "qoder" && !unbound {
+                if ["qoder", "qoder-cn"].contains(agent.provider) && !unbound {
                     MachineAccountStatus(model: model, provider: agent.provider, machine: id)
                 }
             }
@@ -201,7 +201,7 @@ private struct MachineSessionStatus: View {
         if sources.isEmpty { return L("会话监测未启用") }
         if !collecting { return L("采集已暂停") }
         let rows = live.sources.filter { row in sources.contains { $0.id == row.sourceId } }
-        if ["codex", "kimi", "deepseek-harness", "grok", "qoder", "opencode", "pi", "omp", "workbuddy"].contains(provider) { return rows.count == sources.count && rows.allSatisfy { $0.state == "healthy" } ? L("日志接入") : L("日志待确认") }
+        if ["codex", "kimi", "deepseek-harness", "grok", "qoder", "qoder-cn", "opencode", "pi", "omp", "workbuddy"].contains(provider) { return rows.count == sources.count && rows.allSatisfy { $0.state == "healthy" } ? L("日志接入") : L("日志待确认") }
         if rows.contains(where: { $0.hooks == "error" }) { return L("接入失败") }
         if rows.contains(where: { $0.hooks == "disabled" }) { return L("实时监测已停用") }
         return rows.count == sources.count && rows.allSatisfy { $0.hooks == "installed" } ? L("会话监测已启用") : L("等待监测安装")
@@ -209,7 +209,7 @@ private struct MachineSessionStatus: View {
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        if ["codex", "claude", "antigravity", "cursor", "kimi", "codebuddy", "deepseek-harness", "grok", "zcode", "qoder", "opencode", "pi", "omp", "workbuddy"].contains(provider) { Button(label, action: open).disabled(sources.isEmpty).font(AppFont.secondary).lineLimit(1).help(label) }
+        if ["codex", "claude", "antigravity", "cursor", "kimi", "codebuddy", "deepseek-harness", "grok", "zcode", "qoder", "qoder-cn", "opencode", "pi", "omp", "workbuddy"].contains(provider) { Button(label, action: open).disabled(sources.isEmpty).font(AppFont.secondary).lineLimit(1).help(label) }
     }
 }
 private struct MachineSessionHooksView: View {
@@ -221,7 +221,7 @@ private struct MachineSessionHooksView: View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 14) {
             Text(L("会话监测 · ") + model.machineName(machine)).font(AppFont.title)
-            if ["codex", "kimi", "deepseek-harness", "grok", "qoder", "opencode", "pi", "omp", "workbuddy"].contains(provider) {
+            if ["codex", "kimi", "deepseek-harness", "grok", "qoder", "qoder-cn", "opencode", "pi", "omp", "workbuddy"].contains(provider) {
                 Text(L("从 Agent 原生记录读取会话状态。")).foregroundStyle(.secondary)
             } else {
                 Text(provider == "zcode" ? L("实时状态由 ZCode 原生监测提供；停用后仅显示已结算的状态。SSH 监测需要远端 Python 3。") : provider == "cursor" ? L("从用户或项目的 .cursor/hooks.json 接收状态；停用后不再接收新状态。原生会话库的 Token 暂未接入，SSH 监测需要远端 Python 3。") : machine == "local" ? L("采集时自动监测会话；停用实时监测后仍读取日志。") : L("通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。")).foregroundStyle(.secondary)
@@ -359,7 +359,8 @@ struct AccountsSettingsView: View {
     @State private var agySource: AgentSource?
     @State private var copilotAuth = false
     @State private var copilotDeviceFlow = false
-    @State private var qoderCLI: QoderCLIStatus?
+    @State private var qoderCLI: [String: QoderCLIStatus] = [:]
+    @State private var qoderProvider = "qoder"
     @State private var qoderInstall = false
 
     @State private var buddyAuth = false
@@ -424,12 +425,12 @@ struct AccountsSettingsView: View {
         .sheet(isPresented: $showingValuation) { if let provider { AgentValuationView(model: model, provider: provider) } }
         .task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? []; await model.loadAccountStatuses() }
         .task { if visibleAgents.contains(where: { $0.provider == "copilot" }) { let status = try? await model.engine.call("copilotAuth.status", as: CopilotAuthState.self); copilotDeviceFlow = status?.deviceFlow == true } }
-        .task { if visibleAgents.contains(where: { $0.provider == "qoder" }) { qoderCLI = try? await model.engine.call("qoderCli.status", as: QoderCLIStatus.self) } }
+        .task { for agent in visibleAgents where ["qoder", "qoder-cn"].contains(agent.provider) { qoderCLI[agent.provider] = try? await model.engine.call("qoderCli.status", params: ["provider": agent.provider], as: QoderCLIStatus.self) } }
         .sheet(item: $adding, onDismiss: { Task { await model.loadAccountStatuses(refresh: true, dueOnly: true) } }) { agent in AccountConnectionView(model: model, initialProvider: agent.provider) }
         .sheet(item: $selectedAccount) { account in AccountDevicesView(model: model, account: account) }
         .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
         .sheet(isPresented: $copilotAuth) { CopilotAuthView(model: model) }
-        .sheet(isPresented: $qoderInstall) { QoderCLIInstallView(model: model) { qoderCLI = $0 } }
+        .sheet(isPresented: $qoderInstall) { QoderCLIInstallView(model: model, provider: qoderProvider) { qoderCLI[qoderProvider] = $0 } }
 
         .sheet(isPresented: $buddyAuth) { BuddyAuthView(model: model, provider: buddyProvider) }
         .sheet(item: $sourceToManage, onDismiss: { Task { await model.loadAccountStatuses(refresh: true, dueOnly: true) } }) { source in AccountConnectionView(model: model, initialSourceID: source.id, intent: authIntent) }
@@ -455,7 +456,7 @@ struct AccountsSettingsView: View {
             if accounts.isEmpty { Text(L("尚未添加账户")).foregroundStyle(.secondary) }
             if agent.provider == "claude" { claudeKeychainRow }
             if agent.provider == "copilot" { copilotAuthRow(enabled: agent.enabled) }
-            if agent.provider == "qoder", let qoderCLI { QoderCLIRow(model: model, status: qoderCLI, enabled: agent.enabled) { qoderInstall = true } }
+            if ["qoder", "qoder-cn"].contains(agent.provider), let status = qoderCLI[agent.provider] { QoderCLIRow(model: model, status: status, enabled: agent.enabled, provider: agent.provider) { qoderProvider = agent.provider; qoderInstall = true } }
             ForEach(CoreContract.subscriptionModes.keys.sorted().filter { CoreContract.sameAgent($0, agent.provider) && CoreContract.subscriptionModes[$0]?.isEmpty == true }, id: \.self) { edition in
                 if let raw = CoreContract.subscriptionLoginURLs[edition], let url = URL(string: raw) {
                     Text(L(CoreContract.subscriptionHints[edition] ?? "")).font(AppFont.secondary).foregroundStyle(.secondary)
@@ -633,7 +634,7 @@ struct AccountDevicesView: View {
                     LabeledContent { TextField(L("查询间隔（秒）"), text: $intervalText, prompt: Text(L("沿用全局 · {0} 秒", model.settings.refreshSeconds))).labelsHidden().frame(width: DesignTokens.fieldHintWidth).focused($focusedField, equals: "interval") } label: {
                         HStack(spacing: 4) { Text(L("查询间隔（秒）")); HelpNote(title: L("查询间隔"), text: L("留空沿用全局间隔；自定义范围 5–86400 秒。")) }
                     }.help(L("留空沿用全局 · {0} 秒" , model.settings.refreshSeconds))
-                    if account.provider == "qoder" { Text(L("Qoder 额度查询会启动 qodercli，最少每 10 分钟一次")).font(AppFont.secondary).foregroundStyle(.secondary) }
+                    if ["qoder", "qoder-cn"].contains(account.provider) { Text(L("Qoder 系列额度查询会启动对应 CLI，最少每 10 分钟一次")).font(AppFont.secondary).foregroundStyle(.secondary) }
                     }
                     }
                     LabeledContent(L("账户名称")) { TextField(L("账户名称"), text: $account.name).labelsHidden().focused($focusedField, equals: "name") }
@@ -866,11 +867,11 @@ struct AccountConnectionView: View {
                 Form {
                     if usesSubscription, let modes = CoreContract.subscriptionModes[provider] {
                         Text(L(CoreContract.subscriptionHints[provider] ?? "")).foregroundStyle(.secondary)
-                        if !(provider == "qoder" && subscriptionMode == "cli") {
+                        if !(["qoder", "qoder-cn"].contains(provider) && subscriptionMode == "cli") {
                             Button(L("打开官方登录 / 用量页")) { Task { do { let _: [String: Bool] = try await model.engine.call("subscriptions.openLogin", params: ["provider": provider, "mode": subscriptionMode]) } catch { self.error = error.localizedDescription } } }
                         }
                         if modes.count > 1 { Picker(L("服务 / 地区"), selection: $subscriptionMode) { ForEach(modes.keys.sorted(), id: \.self) { key in Text(L(modes[key] ?? key)).tag(key) } } }
-                        if provider == "qoder" && subscriptionMode == "cli" {
+                        if ["qoder", "qoder-cn"].contains(provider) && subscriptionMode == "cli" {
                             LabeledContent(L("CLI 配置目录（留空跟随客户端）")) { TextField(L("CLI 配置目录（留空跟随客户端）"), text: $nativeConfigDir).labelsHidden() }
                             Text(L("读取 CLI 当前登录并绑定账户身份，无需填写密钥。CLI 切换账号后请切回原账户或另建账户。")).foregroundStyle(.secondary)
                         } else {
@@ -878,7 +879,7 @@ struct AccountConnectionView: View {
                             if !supportsLocalLogin || !useLocalLogin { LabeledContent(L("API Key / 登录令牌 / Cookie")) { SecureField(L("API Key / 登录令牌 / Cookie"), text: $apiKey).labelsHidden() } }
                         }
                         if supportsLocalLogin { Toggle(L("读取本机已登录凭据"), isOn: $useLocalLogin) }
-                        if !(provider == "qoder" && subscriptionMode == "cli") { Text(L("验证成功后保存到系统凭据库；不会切换客户端账户。")).foregroundStyle(.secondary) }
+                        if !(["qoder", "qoder-cn"].contains(provider) && subscriptionMode == "cli") { Text(L("验证成功后保存到系统凭据库；不会切换客户端账户。")).foregroundStyle(.secondary) }
                     } else if provider == "deepseek" {
                         LabeledContent("API Key") { SecureField("API Key", text: $apiKey).labelsHidden() }
                         Text(L("Key 保存在本机，只用于查询账户余额。")).foregroundStyle(.secondary)
@@ -909,7 +910,7 @@ struct AccountConnectionView: View {
         .onChange(of: provider) { _, _ in
             selection = []; error = nil
             let existing = model.settings.sources.first { $0.provider == provider && $0.accountId == account?.id && $0.subscription != nil }?.subscription
-            subscriptionMode = existing?.mode ?? (provider == "qoder" ? "cli" : CoreContract.subscriptionModes[provider]?["global"] != nil ? "global" : provider == "grok" ? "subscription" : provider == "opencode" ? "go" : CoreContract.subscriptionModes[provider]?.keys.sorted().first ?? "")
+            subscriptionMode = existing?.mode ?? (["qoder", "qoder-cn"].contains(provider) ? "cli" : CoreContract.subscriptionModes[provider]?["global"] != nil ? "global" : provider == "grok" ? "subscription" : provider == "opencode" ? "go" : CoreContract.subscriptionModes[provider]?.keys.sorted().first ?? "")
             workspaceID = existing?.workspaceId ?? ""
             nativeConfigDir = existing?.nativeConfigDir ?? ""
         }
@@ -921,7 +922,7 @@ struct AccountConnectionView: View {
             let name = account?.name ?? Format.provider(provider) + L(" 账户")
             if usesSubscription {
                 struct Result: Decodable { var settings: Settings }
-                let result: Result = try await model.engine.call("subscriptions.connect", params: ["provider": provider, "accountId": target, "name": name, "secret": apiKey, "useLocalLogin": supportsLocalLogin && useLocalLogin, "subscription": ["mode": subscriptionMode, "workspaceId": needsWorkspace ? workspaceID : "", "nativeConfigDir": provider == "qoder" && subscriptionMode == "cli" ? nativeConfigDir : ""]])
+                let result: Result = try await model.engine.call("subscriptions.connect", params: ["provider": provider, "accountId": target, "name": name, "secret": apiKey, "useLocalLogin": supportsLocalLogin && useLocalLogin, "subscription": ["mode": subscriptionMode, "workspaceId": needsWorkspace ? workspaceID : "", "nativeConfigDir": ["qoder", "qoder-cn"].contains(provider) && subscriptionMode == "cli" ? nativeConfigDir : ""]])
                 model.acceptConfiguration(result.settings)
             } else if provider == "deepseek" {
                 guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ClientError.message(L("请输入 API Key")) }

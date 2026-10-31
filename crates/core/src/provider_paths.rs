@@ -84,6 +84,7 @@ fn resolve(
         "deepseek-harness" => Some("DSH_HOME"),
         "codebuddy" => Some("CODEBUDDY_CONFIG_DIR"),
         "qoder" => Some("QODER_CONFIG_DIR"),
+        "qoder-cn" => Some("QODERCN_CONFIG_DIR"),
         "grok" => Some("GROK_HOME"),
         "opencode" | "kilo" => Some("XDG_DATA_HOME"),
         "copilot" => Some("COPILOT_HOME"),
@@ -116,6 +117,12 @@ fn resolve(
 /// editor roots by their on-disk extension ID, including non-default editors.
 pub(crate) fn discovery_paths(provider: &str) -> Result<Vec<String>> {
     let mut paths = vec![default_path(provider, false)?];
+    if crate::qoder_family::is_qoder(provider) {
+        let desktop = crate::qoder_family::desktop_root(provider);
+        if desktop.join("main.sqlite").is_file() {
+            paths.push(desktop.to_string_lossy().into_owned());
+        }
+    }
     let extension = match provider {
         "cline" => "saoudrizwan.claude-dev",
         "roo" => "rooveterinaryinc.roo-cline",

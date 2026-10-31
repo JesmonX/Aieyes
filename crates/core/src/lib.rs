@@ -46,7 +46,9 @@ pub mod pricing;
 pub mod process;
 mod provider_paths;
 pub mod providers;
+mod qoder_desktop;
 mod qoder_env;
+mod qoder_family;
 mod qoder_state;
 pub mod quota;
 pub mod quota_notifications;
@@ -447,7 +449,9 @@ impl Engine {
             "accounts.status.refreshBatch" => self.refresh_account_status_batch(&params),
             "subscriptions.openLogin" => subscriptions::open_login(&params),
             "subscriptions.connect" => self.connect_subscription(params),
-            "qoderCli.status" => self.qoder_cli_status(),
+            "qoderCli.status" => {
+                self.qoder_cli_status(params["provider"].as_str().unwrap_or("qoder"))
+            }
             "accounts.create"
             | "accounts.status.get"
             | "accounts.status.refresh"

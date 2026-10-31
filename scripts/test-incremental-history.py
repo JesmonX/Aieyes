@@ -360,7 +360,8 @@ class IncrementalHistory(unittest.TestCase):
             root=pathlib.Path(directory)
             parent=json.dumps(dict(type='session_meta',payload=dict(id='parent',originator='codex_work_desktop')))+'\n'
             parent+=json.dumps(dict(type='event_msg',payload=dict(type='token_count',info=dict(total_token_usage=dict(input_tokens=900)))))+'\n'
-            (root/'parent.jsonl').write_text(parent)
+            # The native offset is a byte boundary, independent of host newline translation.
+            (root/'parent.jsonl').write_bytes(parent.encode())
             child=dict(type='session_meta',payload=dict(id='child',history_base=dict(thread_id='parent',end_byte_offset=len(parent.encode()))))
             (root/'child.jsonl').write_text(json.dumps(child)+'\n')
             result=collect(root,'codex',precise=False)

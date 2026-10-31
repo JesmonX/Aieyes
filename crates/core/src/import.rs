@@ -109,7 +109,7 @@ pub fn paths(source: &Source) -> Result<Vec<PathBuf>> {
                 .filter(|p| p.exists())
                 .collect()
         }
-        "claude" | "codebuddy" | "qoder" if root.join("projects").exists() => {
+        "claude" | "codebuddy" | "qoder" | "qoder-cn" if root.join("projects").exists() => {
             vec![root.join("projects")]
         }
         "kimi" | "grok" | "pi" | "omp" if root.join("sessions").exists() => {
@@ -211,6 +211,11 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     if source.provider == "deepseek-harness" {
         return crate::native_agents::scan_dsh(store, settings, source, full);
     }
+    if crate::qoder_family::is_qoder(&source.provider)
+        && let Some(path) = crate::qoder_desktop::database(&source.path)
+    {
+        return crate::qoder_desktop::scan(store, settings, source, &path, full);
+    }
     let prices = store.prices()?;
     let files = paths(source)?;
     if source.provider == "codex" {
@@ -261,7 +266,7 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
         malformed += m;
     }
     let mut qoder_issues = Vec::new();
-    if source.provider == "qoder" {
+    if crate::qoder_family::is_qoder(&source.provider) {
         let report = crate::qoder_state::sync_local(store, settings, source, &prices)?;
         qoder_issues = report.issues;
     }

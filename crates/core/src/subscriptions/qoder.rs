@@ -28,12 +28,14 @@ pub(crate) fn inspect(
     settings: &Settings,
     pre_command: &str,
 ) -> Result<AccountIdentity> {
-    identity(&query(
-        source,
-        settings,
-        source.subscription.as_ref(),
-        pre_command,
-    )?)
+    let value = exchange_for(
+        &source.provider,
+        true,
+        command(source, settings, source.subscription.as_ref(), pre_command)?,
+        std::time::Instant::now() + std::time::Duration::from_secs(45),
+    )
+    .map_err(|e| anyhow::anyhow!(product_message(&source.provider, e.message)))?;
+    identity_for(&source.provider, &value)
 }
 
 pub(crate) fn config_dir(source: &Source, config: Option<&SubscriptionConfig>) -> Result<String> {
@@ -43,7 +45,7 @@ pub(crate) fn config_dir(source: &Source, config: Option<&SubscriptionConfig>) -
             "此来源不是 Qoder CLI 登录"
         );
         if config.native_config_dir.trim().is_empty() {
-            crate::provider_paths::default_path("qoder", source.host_id.is_some())?
+            crate::provider_paths::default_path(&source.provider, source.host_id.is_some())?
         } else {
             config.native_config_dir.clone()
         }
@@ -69,23 +71,29 @@ pub(crate) fn config_dir(source: &Source, config: Option<&SubscriptionConfig>) -
     }
 }
 
-const ARGS: &[&str] = &[
-    "--print",
-    "--output-format",
-    "stream-json",
-    "--input-format",
-    "stream-json",
-    "--no-session-persistence",
-    "--setting-sources",
-    "user",
-    "--tools",
-    "",
-    "--strict-mcp-config",
-    "--mcp-config",
-    "{\"mcpServers\":{}}",
-];
-
+#[cfg(test)]
 fn remote_script(root: &str) -> String {
+    remote_script_for("qoder", root)
+}
+fn protocol_args(_provider: &str) -> Vec<&'static str> {
+    // Both products expose SDK v2. Print-only flags are rejected in SDK mode;
+    // these control requests never create a model session.
+    vec!["--sdk"]
+}
+fn frame_for(_provider: &str, kind: &str, id: &str) -> Vec<u8> {
+    let kind = format!("daemon.{kind}");
+    let mut request = json!({"type":kind,"subtype":kind});
+    if kind == "daemon.initialize" {
+        request["daemon_protocol_version"] = json!(2);
+        request["sdk_version"] = json!("aieyes");
+        request["capabilities"] = json!(["multi_session_v2"]);
+        request["auth"] = json!({"type":"qodercli"});
+    }
+    serde_json::to_vec(&json!({"type":"control_request","request_id":id,"request":request}))
+        .unwrap()
+}
+fn remote_script_for(provider: &str, root: &str) -> String {
+    let binary = crate::qoder_family::spec(provider).binary;
     use crate::process::quote;
     // Expand only a leading ~/ on the remote machine; the rest remains literal.
     let root = if root == "~" {
@@ -96,9 +104,13 @@ fn remote_script(root: &str) -> String {
         quote(root)
     };
     format!(
-        "export AIEYES_INTERNAL=1\ncd \"$HOME\"\nif ! command -v qodercli >/dev/null 2>&1; then\n{}fi\ntest -d {root}\nexec qodercli {} --config-dir {root}",
+        "export AIEYES_INTERNAL=1\ncd \"$HOME\"\nif ! command -v {binary} >/dev/null 2>&1; then\n{}fi\ntest -d {root}\nexec {binary} {} --config-dir {root}",
         crate::ssh::PATH_FALLBACK,
-        ARGS.iter().map(|s| quote(s)).collect::<Vec<_>>().join(" ")
+        protocol_args(provider)
+            .iter()
+            .map(|s| quote(s))
+            .collect::<Vec<_>>()
+            .join(" ")
     )
 }
 
@@ -117,17 +129,21 @@ fn command(
             .context("Qoder 所在的 SSH 机器已移除")?
             .clone();
         host.pre_command = pre_command.into();
-        crate::ssh::account_command(&host, &remote_script(&root))?
+        crate::ssh::account_command(&host, &remote_script_for(&source.provider, &root))?
     } else {
         ensure!(
             std::path::Path::new(&root).is_dir(),
-            "Qoder 配置目录不存在，请先运行 qodercli login 或选择已有配置目录"
+            "{}",
+            product_message(
+                &source.provider,
+                "Qoder 配置目录不存在，请先运行 qodercli login 或选择已有配置目录"
+            )
         );
-        let mut args = ARGS.to_vec();
+        let mut args = protocol_args(&source.provider);
         args.extend(["--config-dir", root.as_str()]);
         // The GUI's PATH may omit ~/.local/bin. Keep the existing shell fallback.
         let mut command = crate::process::cli_command_with_pre_command(
-            "qodercli",
+            crate::qoder_family::spec(&source.provider).binary,
             &args,
             if pre_command.trim().is_empty() && cfg!(unix) {
                 ":"
@@ -138,7 +154,7 @@ fn command(
         );
         // An Aieyes-owned cwd keeps qodercli's per-directory logs of these runs out
         // of the user's projects; `record_internal` also records it as internal.
-        let probe = probe_dir();
+        let probe = probe_dir_for(&source.provider);
         command.current_dir(if std::fs::create_dir_all(&probe).is_ok() {
             probe
         } else {
@@ -157,8 +173,14 @@ fn command(
 }
 
 /// Working directory of local quota checks, recorded as an internal session cwd.
-pub(crate) fn probe_dir() -> std::path::PathBuf {
-    crate::store::home().join(".aieyes").join("qoder-probe")
+#[cfg(test)]
+fn probe_dir() -> std::path::PathBuf {
+    probe_dir_for("qoder")
+}
+fn probe_dir_for(provider: &str) -> std::path::PathBuf {
+    crate::store::home()
+        .join(".aieyes")
+        .join(format!("{provider}-probe"))
 }
 
 /// Control-session ids seen by this process, drained by `record_internal`.
@@ -207,62 +229,19 @@ pub(crate) fn record_internal(store: &crate::store::Store) -> Result<()> {
 }
 
 fn persist_internal(store: &crate::store::Store, ids: &[String]) -> Result<()> {
-    store.mark_internal_session("qoder", &probe_dir().to_string_lossy())?;
-    for id in ids {
-        store.mark_internal_session("qoder", id)?;
+    for marked in ids {
+        let (provider, id) = marked.split_once('/').unwrap_or(("qoder", marked));
+        if !crate::qoder_family::is_qoder(provider) {
+            continue;
+        }
+        store.mark_internal_session(provider, &probe_dir_for(provider).to_string_lossy())?;
+        store.mark_internal_session(provider, id)?;
     }
-    store.db.execute(
-        "DELETE FROM kv WHERE key LIKE 'internal-session:qoder:%' AND CAST(value AS INTEGER)<?1",
-        [now() - INTERNAL_RETENTION],
-    )?;
+    store.db.execute("DELETE FROM kv WHERE (key LIKE 'internal-session:qoder:%' OR key LIKE 'internal-session:qoder-cn:%') AND CAST(value AS INTEGER)<?1", [now() - INTERNAL_RETENTION])?;
     Ok(())
 }
 
-/// Bundles that share Qoder accounts but keep their logins encrypted
-/// (`auth.v1.dat`, safeStorage). Their credentials are never read.
-const APPS: &[(&str, &str)] = &[
-    ("Qoder.app", "Qoder"),
-    ("Qoder IDE.app", "Qoder IDE"),
-    ("QoderWork.app", "QoderWork"),
-];
-/// The official installer links `~/.local/bin/qodercli`, which local checks
-/// reach without a login shell; a global npm install under nvm is not on that
-/// PATH. The full path also works before the new shell PATH takes effect.
-const INSTALL: &str = "curl -fsSL https://qoder.com/install | bash && ~/.local/bin/qodercli login";
-
-fn installed_apps() -> Vec<&'static str> {
-    if !cfg!(target_os = "macos") {
-        return vec![];
-    }
-    let roots = [
-        std::path::PathBuf::from("/Applications"),
-        crate::store::home().join("Applications"),
-    ];
-    APPS.iter()
-        .filter(|(bundle, _)| roots.iter().any(|root| root.join(bundle).is_dir()))
-        .map(|(_, name)| *name)
-        .collect()
-}
-
-/// Whether `qodercli` resolves on the PATH local checks use: the inherited PATH
-/// plus `ssh::PATH_FALLBACK`'s user and Homebrew directories.
-fn cli_installed() -> bool {
-    let home = crate::store::home();
-    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).collect())
-        .unwrap_or_default();
-    dirs.extend([
-        home.join(".local/bin"),
-        home.join("bin"),
-        "/opt/homebrew/bin".into(),
-        "/usr/local/bin".into(),
-    ]);
-    if let Some(appdata) = std::env::var_os("APPDATA").filter(|_| cfg!(windows)) {
-        dirs.push(std::path::PathBuf::from(appdata).join("npm"));
-    }
-    cli_in(&dirs)
-}
-
+#[cfg(test)]
 fn cli_in(dirs: &[std::path::PathBuf]) -> bool {
     let names: &[&str] = if cfg!(windows) {
         &["qodercli.exe", "qodercli.cmd"]
@@ -286,41 +265,39 @@ fn cli_in(dirs: &[std::path::PathBuf]) -> bool {
         })
 }
 
-/// A Qoder account or detected login already exists; the install prompt is moot.
-fn known_login(settings: &Settings) -> bool {
-    settings
-        .accounts
-        .iter()
-        .any(|a| a.provider == "qoder" && !a.archived)
-        || settings
-            .native_connections
-            .iter()
-            .any(|r| r.provider == "qoder" && r.identity_key.is_some())
-}
-
 impl crate::Engine {
     /// `qoderCli.status`: users with only the desktop, IDE or QoderWork app get
     /// one prompt to install the CLI that quota checks borrow. The UI re-detects
     /// the login with `accounts.autoScan` after the user ran the command.
-    pub(crate) fn qoder_cli_status(&self) -> Result<Value> {
-        let cli = cli_installed();
-        let account = known_login(&self.store.settings()?);
-        let apps = installed_apps();
-        let message = if account {
-            "已识别 Qoder 登录"
-        } else if cli {
-            "已找到 qodercli；在终端完成 qodercli login 后重新检测"
+    pub(crate) fn qoder_cli_status(&self, provider: &str) -> Result<Value> {
+        ensure!(crate::qoder_family::is_qoder(provider), "不支持的 Agent");
+        let spec = crate::qoder_family::spec(provider);
+        let cli = crate::qoder_family::cli_path(provider).is_some();
+        let settings = self.store.settings()?;
+        let account = settings
+            .accounts
+            .iter()
+            .any(|a| a.provider == provider && !a.archived)
+            || settings.native_connections.iter().any(|r| {
+                r.provider == provider && r.identity_key.is_some() && r.status != "remembered"
+            });
+        let apps = crate::qoder_family::installed_apps(provider);
+        let command = if cli {
+            format!("{} login", spec.binary)
         } else {
-            "未找到 qodercli；在终端运行安装命令后重新检测"
+            format!(
+                "curl -fsSL {}/install | bash && ~/.local/bin/{} login",
+                spec.site, spec.binary
+            )
         };
-        Ok(json!({
-            "apps": apps,
-            "cli": cli,
-            "account": account,
-            "offerInstall": !apps.is_empty() && !account,
-            "command": INSTALL,
-            "message": message,
-        }))
+        let message = if account {
+            format!("已识别 {} 登录", spec.name)
+        } else {
+            format!("请在终端完成 {} login 后重新检测", spec.binary)
+        };
+        Ok(
+            json!({"provider":provider,"apps":apps,"cli":cli,"account":account,"offerInstall":!apps.is_empty()&&!account,"command":command,"message":message,"loginUrl":format!("{}/account/integrations",spec.site)}),
+        )
     }
 }
 
@@ -330,16 +307,20 @@ struct QueryFailure {
     retry: bool,
 }
 
-const SIGNED_OUT: &str = "Qoder CLI 未登录，请在终端运行 qodercli login";
-
-fn control_frame(kind: &str, id: &str) -> Vec<u8> {
-    serde_json::to_vec(
-        &json!({"type":"control_request","request_id":id,"request":{"type":kind,"subtype":kind}}),
-    )
-    .unwrap()
+fn product_message(provider: &str, message: &str) -> String {
+    if provider == "qoder-cn" {
+        message
+            .replace("qodercli", "qoderclicn")
+            .replace("Qoder", "Qoder CN")
+    } else {
+        message.into()
+    }
 }
 
+const SIGNED_OUT: &str = "Qoder CLI 未登录，请在终端运行 qodercli login";
+
 fn await_response(
+    provider: &str,
     process: &crate::process::LineProcess,
     id: &str,
     deadline: std::time::Instant,
@@ -371,7 +352,7 @@ fn await_response(
         if let Some(id) = session_id(&frame)
             && let Ok(mut ids) = INTERNAL.lock()
         {
-            remember(&mut ids, id);
+            remember(&mut ids, &format!("{provider}/{id}"));
         }
         // Signed out, qodercli answers with an error turn and exits; retrying is futile.
         if frame["type"] == "assistant" && frame["error"] == "authentication_failed" {
@@ -402,7 +383,9 @@ fn await_response(
     }
 }
 
-fn exchange(
+fn exchange_for(
+    provider: &str,
+    identity_only: bool,
     command: std::process::Command,
     deadline: std::time::Instant,
 ) -> std::result::Result<Value, QueryFailure> {
@@ -412,19 +395,34 @@ fn exchange(
     })?;
     let mut size = 0;
     process
-        .send(control_frame("initialize", "aieyes-init"))
+        .send(frame_for(provider, "initialize", "aieyes-init"))
         .map_err(|_| QueryFailure {
             message: "Qoder CLI 初始化连接中断",
             retry: true,
         })?;
-    await_response(&process, "aieyes-init", deadline, &mut size)?;
+    let initialized = await_response(provider, &process, "aieyes-init", deadline, &mut size)?;
+    if identity_only {
+        if initialized["account"]["userId"].is_string() {
+            return Ok(initialized["account"].clone());
+        }
+        process
+            .send(frame_for(provider, "account_info", "aieyes-account"))
+            .map_err(|_| QueryFailure {
+                message: "账户查询连接中断",
+                retry: true,
+            })?;
+        return Ok(
+            await_response(provider, &process, "aieyes-account", deadline, &mut size)?["account"]
+                .clone(),
+        );
+    }
     process
-        .send(control_frame("get_usage_info", "aieyes-usage"))
+        .send(frame_for(provider, "get_usage_info", "aieyes-usage"))
         .map_err(|_| QueryFailure {
             message: "Qoder CLI 额度查询连接中断",
             retry: true,
         })?;
-    let result = await_response(&process, "aieyes-usage", deadline, &mut size)?;
+    let result = await_response(provider, &process, "aieyes-usage", deadline, &mut size)?;
     let usage = &result["usage"];
     if usage.is_null() {
         return Err(QueryFailure {
@@ -457,10 +455,15 @@ fn query_with_budget(
     pre_command: &str,
     budget: std::time::Duration,
 ) -> Result<Value> {
-    query_attempts(|| command(source, settings, config, pre_command), budget)
+    query_attempts_for(
+        &source.provider,
+        || command(source, settings, config, pre_command),
+        budget,
+    )
 }
 
-fn query_attempts(
+fn query_attempts_for(
+    provider: &str,
     mut command: impl FnMut() -> Result<std::process::Command>,
     budget: std::time::Duration,
 ) -> Result<Value> {
@@ -474,10 +477,10 @@ fn query_attempts(
         } else {
             deadline
         };
-        match exchange(command, until) {
+        match exchange_for(provider, false, command, until) {
             Ok(value) => return Ok(value),
             Err(error) if !error.retry || attempt == 1 || std::time::Instant::now() >= deadline => {
-                anyhow::bail!(error.message)
+                anyhow::bail!(product_message(provider, error.message))
             }
             Err(_) => {}
         }
@@ -528,22 +531,40 @@ pub(super) fn check_identity(
     Ok(())
 }
 
+#[cfg(test)]
 fn identity(v: &Value) -> Result<AccountIdentity> {
+    identity_for("qoder", v)
+}
+fn identity_for(provider: &str, v: &Value) -> Result<AccountIdentity> {
     let user = v["userId"]
         .as_str()
         .filter(|s| !s.trim().is_empty() && s.len() <= 512 && !s.chars().any(char::is_control))
         .context("Qoder 未返回账户身份；会话 Credits 不能代替账户额度")?;
     Ok(AccountIdentity {
-        key: format!("qoder:{:x}", Sha256::digest(user.as_bytes())),
-        subscription: label(&v["userType"]),
+        key: format!("{provider}:{:x}", Sha256::digest(user.as_bytes())),
+        email: v["email"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(256)
+            .collect(),
+        subscription: label(if v["userType"].is_null() {
+            &v["subscriptionType"]
+        } else {
+            &v["userType"]
+        }),
         checked_at: now(),
         subscription_checked_at: Some(now()),
         ..Default::default()
     })
 }
 
-pub(super) fn apply(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
-    let identity = identity(v)?;
+#[cfg(test)]
+fn apply(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
+    apply_for("qoder", q, v)
+}
+pub(super) fn apply_for(provider: &str, q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
+    let identity = identity_for(provider, v)?;
     q.plan = identity.subscription.clone();
     let mut any_remaining = false;
     for (field, total_field, name) in [
@@ -705,7 +726,7 @@ sys.exit(1)
         assert!(cli_in(std::slice::from_ref(&bin)));
         assert!(!cli_in(&[root.path().to_owned()]));
         let engine = Engine::open(&root.path().join("data")).unwrap();
-        let before = engine.qoder_cli_status().unwrap();
+        let before = engine.qoder_cli_status("qoder").unwrap();
         assert_eq!(before["account"], false);
         assert_eq!(
             before["offerInstall"],
@@ -726,13 +747,13 @@ sys.exit(1)
             ..Default::default()
         });
         engine.store.save_settings(&settings).unwrap();
-        let after = engine.qoder_cli_status().unwrap();
+        let after = engine.qoder_cli_status("qoder").unwrap();
         assert_eq!(after["account"], true);
         assert_eq!(after["offerInstall"], false);
         assert_eq!(after["message"], "已识别 Qoder 登录");
         settings.accounts[0].archived = true;
         engine.store.save_settings(&settings).unwrap();
-        assert_eq!(engine.qoder_cli_status().unwrap()["account"], false);
+        assert_eq!(engine.qoder_cli_status("qoder").unwrap()["account"], false);
     }
 
     #[cfg(unix)]
@@ -741,12 +762,12 @@ sys.exit(1)
         command.args(["-u", "-c", &format!(r#"
 import json,sys,time,select
 init=json.loads(sys.stdin.readline())
-assert init['request']['type']=='initialize'
+assert init['request']['type']=='daemon.initialize'
 # A request before the initialization response is a protocol violation.
 assert not select.select([sys.stdin],[],[],.04)[0]
 print(json.dumps(dict(type='control_response',response=dict(request_id='aieyes-init',subtype='success',response={{}}))))
 request=json.loads(sys.stdin.readline())
-assert request['request']['type']=='get_usage_info'
+assert request['request']['type']=='daemon.get_usage_info'
 {tail}
 "#)]);
         command
@@ -912,7 +933,10 @@ IFS= read -r usage
 printf '%s\n' "$usage" >> "$config/requests.jsonl"
 printf '%s\n' "$@" > "$config/args.txt"
 printf 'query\n' >> "$config/queries.txt"
-cat "$config/response.jsonl"
+case "$usage" in
+    *aieyes-account*) sed 's/aieyes-usage/aieyes-account/g;s/"usage":/"account":/g' "$config/response.jsonl" ;;
+    *) cat "$config/response.jsonl" ;;
+esac
 "#,
         )
         .unwrap();
@@ -1033,11 +1057,12 @@ cat "$config/response.jsonl"
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0]["request"]["type"], "initialize");
-        assert_eq!(requests[1]["request"]["type"], "get_usage_info");
+        assert_eq!(requests[0]["request"]["type"], "daemon.initialize");
+        assert_eq!(requests[1]["request"]["type"], "daemon.account_info");
         let args = std::fs::read_to_string(config_root.join("args.txt")).unwrap();
-        assert!(args.contains("--no-session-persistence\n"));
-        assert!(args.contains("--tools\n\n--strict-mcp-config\n"));
+        assert!(args.starts_with("--sdk\n"));
+        assert!(!args.contains("--print"));
+        assert_eq!(requests[0]["request"]["auth"]["type"], "qodercli");
         assert!(args.ends_with(&format!("--config-dir\n{}\n", config_root.display())));
         for shell in ["/bin/sh", "/bin/bash"] {
             let mut command = std::process::Command::new(shell);
@@ -1045,9 +1070,16 @@ cat "$config/response.jsonl"
                 "-c",
                 &format!("set -e\n{pre_command}\n{}", remote_script(&source.path)),
             ]);
-            let output =
-                crate::process::run(command, frames.clone(), std::time::Duration::from_secs(5))
-                    .unwrap();
+            let output = crate::process::run(
+                command,
+                String::from_utf8(frames.clone())
+                    .unwrap()
+                    .replace("aieyes-account", "aieyes-usage")
+                    .replace("account_info", "get_usage_info")
+                    .into_bytes(),
+                std::time::Duration::from_secs(5),
+            )
+            .unwrap();
             assert_eq!(
                 identity(&response(&output).unwrap()).unwrap().key,
                 local.key
@@ -1145,7 +1177,11 @@ cat "$config/response.jsonl"
         engine.store.save_auth_settings(&settings).unwrap();
         let reads = Arc::new(AtomicUsize::new(0));
         engine.status_observation_reads = Some(reads.clone());
-        let rows = engine.refresh_account_status_batch(&json!({})).unwrap();
+        let rows = engine
+            .refresh_account_status_batch(
+                &json!({"sourceIds":["local","same-profile","other-profile","quota-profile"]}),
+            )
+            .unwrap();
         assert_eq!(reads.load(Ordering::Relaxed), 2);
         assert_eq!(rows.as_array().unwrap().len(), 12);
         for row in rows.as_array().unwrap() {
@@ -1236,4 +1272,80 @@ cat "$config/response.jsonl"
         assert!(apply(&mut QuotaSnapshot::default(), &usage).is_err());
         assert!(response(b"{\"type\":\"control_response\",\"response\":{\"request_id\":\"aieyes-usage\",\"subtype\":\"error\",\"error\":\"PRIVATE_TOKEN\"}}\n").unwrap_err().to_string().find("PRIVATE_TOKEN").is_none());
     }
+}
+
+#[cfg(test)]
+fn query_attempts(
+    command: impl FnMut() -> Result<std::process::Command>,
+    budget: std::time::Duration,
+) -> Result<Value> {
+    query_attempts_for("qoder", command, budget)
+}
+#[cfg(test)]
+fn exchange(
+    command: std::process::Command,
+    deadline: std::time::Instant,
+) -> std::result::Result<Value, QueryFailure> {
+    exchange_for("qoder", false, command, deadline)
+}
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+    #[test]
+    fn same_server_id_never_merges_regions_and_cn_uses_its_cli() {
+        let value = json!({"userId":"same-id","userType":"personal_standard","userQuota":{"unit":"credits","total":100,"used":20,"remaining":80}});
+        let mut global = QuotaSnapshot::default();
+        let mut cn = QuotaSnapshot::default();
+        apply_for("qoder", &mut global, &value).unwrap();
+        apply_for("qoder-cn", &mut cn, &value).unwrap();
+        assert_ne!(global.identity.unwrap().key, cn.identity.unwrap().key);
+        let cmd = remote_script_for("qoder-cn", "~/profile with spaces");
+        assert!(cmd.contains("exec qoderclicn "));
+        assert!(!cmd.contains("exec qodercli "));
+        let engine = Engine::open(tempfile::tempdir().unwrap().path()).unwrap();
+        assert!(engine.qoder_cli_status("unknown").is_err());
+        assert!(
+            engine.qoder_cli_status("qoder-cn").unwrap()["command"]
+                .as_str()
+                .unwrap()
+                .contains("qoderclicn")
+        );
+    }
+}
+/// SDK v2 uses the client's credential strategy; no native login secret crosses this API.
+pub(crate) fn native_byok(
+    provider: &str,
+    root: &std::path::Path,
+    request: Value,
+    proxy: &ProxyConfig,
+) -> Result<Value> {
+    let source = Source {
+        provider: provider.into(),
+        path: root.to_string_lossy().into_owned(),
+        proxy: Some(proxy.clone()),
+        ..Default::default()
+    };
+    let process =
+        crate::process::LineProcess::spawn(command(&source, &Settings::default(), None, "")?)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+    let mut size = 0;
+    process.send(frame_for(provider, "initialize", "aieyes-init"))?;
+    let initialized = await_response(provider, &process, "aieyes-init", deadline, &mut size)
+        .map_err(|e| anyhow::anyhow!(product_message(provider, e.message)))?;
+    ensure!(
+        initialized["daemon_protocol_version"] == 2,
+        "当前 CLI 未确认 SDK 管理能力"
+    );
+    let mut request = request;
+    let kind = format!(
+        "daemon.{}",
+        request["type"].as_str().context("API 操作类型缺失")?
+    );
+    request["type"] = json!(kind);
+    request["subtype"] = json!(kind);
+    process.send(serde_json::to_vec(
+        &json!({"type":"control_request","request_id":"aieyes-byok","request":request}),
+    )?)?;
+    await_response(provider, &process, "aieyes-byok", deadline, &mut size)
+        .map_err(|e| anyhow::anyhow!(product_message(provider, e.message)))
 }

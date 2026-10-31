@@ -150,6 +150,33 @@
       }
     },
     {
+      "id": "qoder-cn",
+      "name": "Qoder CN",
+      "defaultPath": "~/.qoder-cn",
+      "binary": "qoderclicn",
+      "requiresPath": false,
+      "wakeup": false,
+      "discoverLocal": true,
+      "subscription": {
+        "hint": "复用 Qoder CN 原生 CLI 的 PAT 或浏览器登录；请先运行 qoderclicn login。",
+        "modes": {
+          "cli": "本机 Qoder CN CLI 登录"
+        },
+        "loginUrl": "https://qoder.cn/account/usage"
+      },
+      "capabilities": [
+        "accounts",
+        "api",
+        "machines",
+        "quota",
+        "quotaReset"
+      ],
+      "icon": {
+        "asset": "qoder",
+        "monochrome": true
+      }
+    },
+    {
       "id": "grok",
       "name": "Grok",
       "defaultPath": "~/.grok",

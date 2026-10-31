@@ -313,6 +313,8 @@ def collect(request):
     for root in roots:
         if codebuddy is not None and codebuddy['user_id'](root):
             paths.add((root, root))
+        if request.get('fingerprint') and provider in ('qoder', 'qoder-cn'):
+            paths.add((root, str(pathlib.Path(root) / '.auth/user')))
         patterns = [] if provider == 'cline' and 'pathsOnly' not in request and os.environ.get('CLINE_PROVIDER_SETTINGS_PATH') else request['patterns']
         for pattern in patterns:
             for path in sorted(glob.glob(str(pathlib.Path(root) / pattern)))[:MAX_FILES]:

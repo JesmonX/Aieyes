@@ -21,6 +21,8 @@ class QoderEnvironmentTests(unittest.TestCase):
             self.assertTrue(env._merge(str(path)))
             self.assertFalse(env._merge(str(path)))
             self.assertTrue(path.read_bytes().startswith(original))
+            self.assertEqual(path.read_bytes().count(b'export QODER_EXPOSE_TOKEN_USAGE=true'), 1)
+            self.assertEqual(path.read_bytes().count(b'export QODERCN_EXPOSE_TOKEN_USAGE=true'), 1)
             if os.name != 'nt':
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 

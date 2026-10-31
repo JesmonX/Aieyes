@@ -11,9 +11,9 @@ struct QoderCLIStatus: Decodable, Equatable {
     var command: String
     var message: String
     /// A Qoder account or an identified CLI login makes the install prompt moot.
-    static func signedIn(_ settings: Settings) -> Bool {
-        settings.accounts.contains { $0.provider == "qoder" && $0.archived != true }
-            || (settings.nativeConnections ?? []).contains { $0.provider == "qoder" && $0.identityKey != nil }
+    static func signedIn(_ settings: Settings, provider: String = "qoder") -> Bool {
+        settings.accounts.contains { $0.provider == provider && $0.archived != true }
+            || (settings.nativeConnections ?? []).contains { $0.provider == provider && $0.identityKey != nil }
     }
 }
 
@@ -23,15 +23,17 @@ struct QoderCLIRow: View {
     @ObservedObject var model: AppModel
     let status: QoderCLIStatus
     let enabled: Bool
+    var provider = "qoder"
     var open: () -> Void
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    private func productText(_ text: String) -> String { provider == "qoder-cn" ? text.replacingOccurrences(of: "qodercli", with: "qoderclicn") : text }
     var body: some View {
         let _ = interfaceLanguage;
-        if !status.apps.isEmpty && !QoderCLIStatus.signedIn(model.settings) {
+        if !status.apps.isEmpty && !QoderCLIStatus.signedIn(model.settings, provider: provider) {
             HStack {
-                Text(L("已安装 {0}；额度通过 qodercli 查询，安装并登录后显示", status.apps.joined(separator: " / "))).font(AppFont.secondary).foregroundStyle(.secondary)
+                Text(productText(L("已安装 {0}；额度通过 qodercli 查询，安装并登录后显示", status.apps.joined(separator: " / ")))).font(AppFont.secondary).foregroundStyle(.secondary)
                 Spacer()
-                Button(status.cli ? L("登录 qodercli") : L("安装 qodercli 并登录"), action: open).disabled(!enabled)
+                Button(productText(status.cli ? L("登录 qodercli") : L("安装 qodercli 并登录")), action: open).disabled(!enabled)
             }
         }
     }
@@ -41,6 +43,7 @@ struct QoderCLIRow: View {
 /// quota checks find it without a login shell. Re-detect reads the new local CLI login.
 struct QoderCLIInstallView: View {
     @ObservedObject var model: AppModel
+    var provider = "qoder"
     var changed: (QoderCLIStatus) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var engine = EngineClient(configurationOnly: true)
@@ -49,22 +52,23 @@ struct QoderCLIInstallView: View {
     @State private var sending = false
     @State private var copied: String?
     private struct Scan: Decodable {}
-    private var signedIn: Bool { QoderCLIStatus.signedIn(model.settings) }
+    private var signedIn: Bool { QoderCLIStatus.signedIn(model.settings, provider: provider) }
     private func run(_ work: () async throws -> Void) async {
         guard !sending else { return }
         sending = true; defer { sending = false }; error = nil
         do { try await work() } catch { self.error = L(error.localizedDescription) }
     }
     private func load() async throws {
-        let value: QoderCLIStatus = try await engine.call("qoderCli.status")
+        let value: QoderCLIStatus = try await engine.call("qoderCli.status", params: ["provider": provider])
         status = value; changed(value)
     }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    private func productText(_ text: String) -> String { provider == "qoder-cn" ? text.replacingOccurrences(of: "qodercli", with: "qoderclicn") : text }
     var body: some View {
         let _ = interfaceLanguage;
         VStack(alignment: .leading, spacing: 14) {
-            Text(L("安装 qodercli 并登录")).font(AppFont.title)
-            HStack { if sending { ProgressView().controlSize(.small) }; Text(signedIn ? L("已识别 Qoder 登录") : L(status?.message ?? "正在检查 qodercli…")).textSelection(.enabled) }
+            Text(productText(L("安装 qodercli 并登录"))).font(AppFont.title)
+            HStack { if sending { ProgressView().controlSize(.small) }; Text(signedIn ? L("已识别 {0} 登录", CoreContract.providerNames[provider] ?? provider) : L(status?.message ?? "正在检查 qodercli…")).textSelection(.enabled) }
             Text(L("在终端运行：")).font(AppFont.secondary).foregroundStyle(.secondary)
             Text(status?.command ?? "").font(.system(.body, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -74,13 +78,13 @@ struct QoderCLIInstallView: View {
                 }.disabled(status == nil)
                 if let copied { Text(copied).font(AppFont.secondary).foregroundStyle(.secondary) }
             }
-            Text(L("登录时也可选择 Personal Access Token，在 {0} 生成后粘贴。", "https://qoder.com/account/integrations")).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text(L("登录时也可选择 Personal Access Token，在 {0} 生成后粘贴。", provider == "qoder-cn" ? "https://qoder.cn/account/integrations" : "https://qoder.com/account/integrations")).font(AppFont.secondary).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             if let error { ErrorNotice(message: error) }
             HStack {
                 Button(sending ? L("检查中…") : L("重新检测")) {
                     Task {
                         await run {
-                            let _: Scan = try await engine.call("accounts.autoScan", params: ["targets": [["qoder", "local"]]])
+                            let _: Scan = try await engine.call("accounts.autoScan", params: ["targets": [[provider, "local"]]])
                             await model.refreshIdentitySettings()
                             try await load()
                             if signedIn { await model.refreshQuotas() }

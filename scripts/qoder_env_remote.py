@@ -45,7 +45,7 @@ def _atomic(path, data, mode=None):
 
 
 def _block():
-    return (f"{START}\nexport {ENV_NAME}={ENV_VALUE}\n{END}\n").encode("utf-8")
+    return (f"{START}\nexport {ENV_NAME}={ENV_VALUE}\nexport QODERCN_EXPOSE_TOKEN_USAGE={ENV_VALUE}\n{END}\n").encode("utf-8")
 
 
 def _merge(path):
@@ -92,7 +92,7 @@ def _macos(home):
     path = os.path.join(directory, LABEL + ".plist")
     payload = plistlib.dumps({
         "Label": LABEL,
-        "ProgramArguments": ["/bin/launchctl", "setenv", ENV_NAME, ENV_VALUE],
+        "ProgramArguments": ["/bin/sh", "-c", "launchctl setenv QODER_EXPOSE_TOKEN_USAGE true; launchctl setenv QODERCN_EXPOSE_TOKEN_USAGE true"],
         "RunAtLoad": True,
         "StandardOutPath": "/dev/null",
         "StandardErrorPath": "/dev/null",
@@ -104,7 +104,7 @@ def _macos(home):
         same = False
     if not same:
         _atomic(path, payload, 0o644)
-    if not _run("/bin/launchctl", "setenv", ENV_NAME, ENV_VALUE):
+    if not (_run("/bin/launchctl", "setenv", ENV_NAME, ENV_VALUE) and _run("/bin/launchctl", "setenv", "QODERCN_EXPOSE_TOKEN_USAGE", ENV_VALUE)):
         return ["launchctl setenv 未能更新当前图形会话"]
     uid = os.getuid()
     domain = "gui/%d" % uid
@@ -118,7 +118,7 @@ def _macos(home):
 def _linux(home):
     directory = os.path.join(home, ".config", "environment.d")
     path = os.path.join(directory, "50-aieyes-qoder.conf")
-    content = f"{ENV_NAME}={ENV_VALUE}\n".encode("utf-8")
+    content = f"{ENV_NAME}={ENV_VALUE}\nQODERCN_EXPOSE_TOKEN_USAGE={ENV_VALUE}\n".encode("utf-8")
     try:
         with open(path, "rb") as stream:
             same = stream.read() == content
@@ -127,7 +127,7 @@ def _linux(home):
     if not same:
         _atomic(path, content, 0o644)
     # Best effort for the current user manager; environment.d covers next login.
-    _run("systemctl", "--user", "set-environment", f"{ENV_NAME}={ENV_VALUE}")
+    _run("systemctl", "--user", "set-environment", f"{ENV_NAME}={ENV_VALUE}", f"QODERCN_EXPOSE_TOKEN_USAGE={ENV_VALUE}")
     return []
 
 

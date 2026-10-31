@@ -1,10 +1,5 @@
 use crate::contracts::{FIVE_HOUR_MINUTES, WEEK_MINUTES};
-use crate::{
-    models::*,
-    network, process, ssh,
-    store::{expand, home},
-    usage,
-};
+use crate::{models::*, network, process, ssh, store::expand, usage};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -354,8 +349,8 @@ pub(crate) fn resolve_codex(configured: &str) -> String {
     }
     #[cfg(unix)]
     for p in [
-        home().join(".local/bin/codex"),
-        home().join(".codex/packages/standalone/current/bin/codex"),
+        crate::store::home().join(".local/bin/codex"),
+        crate::store::home().join(".codex/packages/standalone/current/bin/codex"),
         "/opt/homebrew/bin/codex".into(),
         "/usr/local/bin/codex".into(),
     ] {

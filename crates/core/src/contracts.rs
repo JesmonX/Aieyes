@@ -176,6 +176,7 @@ pub const PROVIDERS: &[Provider] = &[
     Provider { id: "deepseek", name: "DeepSeek", default_path: "", binary: "", requires_path: false, wakeup: false, discover_local: false, agent_id: "deepseek", machines: false },
     Provider { id: "zcode", name: "ZCode", default_path: "~/.zcode", binary: "zcode", requires_path: false, wakeup: false, discover_local: true, agent_id: "zcode", machines: true },
     Provider { id: "qoder", name: "Qoder", default_path: "~/.qoder", binary: "qodercli", requires_path: false, wakeup: false, discover_local: true, agent_id: "qoder", machines: true },
+    Provider { id: "qoder-cn", name: "Qoder CN", default_path: "~/.qoder-cn", binary: "qoderclicn", requires_path: false, wakeup: false, discover_local: true, agent_id: "qoder-cn", machines: true },
     Provider { id: "grok", name: "Grok", default_path: "~/.grok", binary: "grok", requires_path: false, wakeup: false, discover_local: true, agent_id: "grok", machines: true },
     Provider { id: "cursor", name: "Cursor", default_path: "~/.cursor", binary: "agent", requires_path: false, wakeup: false, discover_local: true, agent_id: "cursor", machines: true },
     Provider { id: "opencode", name: "OpenCode", default_path: "~/.local/share/opencode", binary: "", requires_path: false, wakeup: false, discover_local: true, agent_id: "opencode", machines: true },
@@ -196,7 +197,7 @@ pub const PROVIDERS: &[Provider] = &[
     Provider { id: "custom", name: "自定义", default_path: "~/.aieyes", binary: "", requires_path: true, wakeup: false, discover_local: false, agent_id: "custom", machines: true },
 ];
 #[rustfmt::skip]
-pub const PROVIDER_IDS: &[&str] = &["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "kimi", "deepseek-harness", "codebuddy", "pi", "omp", "chatgpt-work", "workbuddy", "copilot", "cline", "kilo", "roo", "kiro", "trae", "trae-cn", "custom"];
+pub const PROVIDER_IDS: &[&str] = &["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "qoder-cn", "grok", "cursor", "opencode", "kimi", "deepseek-harness", "codebuddy", "pi", "omp", "chatgpt-work", "workbuddy", "copilot", "cline", "kilo", "roo", "kiro", "trae", "trae-cn", "custom"];
 #[rustfmt::skip]
 pub const EXCLUDED_FS_TYPES: &[&str] = &["tmpfs", "devtmpfs", "squashfs", "overlay", "proc", "procfs", "sysfs", "devfs", "autofs", "cgroup", "cgroup2"];
 #[rustfmt::skip]
@@ -224,7 +225,7 @@ pub const SESSION_SOUND_TONES: &[(&str, &str, &str)] = &[
     ("droplet", "水滴", "droplet"),
     ("pulse", "电子", "pulse"),
 ];
-pub const CONTRACT_HASH: &str = "c814ad683b58ef1615b324497cd5aa39a837882a1e0468e747ac537a3e6357ba";
+pub const CONTRACT_HASH: &str = "87c48550dabe4e44a6a6a10b942139d00d65a27c7e650c2ada1300ea41618e07";
 pub fn method(name: &str) -> Option<&'static Method> {
     METHODS.iter().find(|m| m.name == name)
 }

@@ -215,7 +215,7 @@ def process_info(pid):
         return name, int(fields[1]), boot + int(fields[19]) // os.sysconf('SC_CLK_TCK')
     except (OSError, ValueError, StopIteration): return None
 
-PROGRAMS = {'claude':(['claude'],['@anthropic-ai/claude-code']),'codex':(['codex'],['@openai/codex']),'deepseek-harness':(['dsh'],['@deepseek-ai/dsh']),'kimi':(['kimi','kimi-cli','kimi-code'],['@moonshot-ai/kimi-code']),'cursor':(['cursor-agent','agent'],[]),'opencode':(['opencode'],['opencode-ai','@opencode/cli']),'codebuddy':(['codebuddy'],['@tencent-ai/codebuddy-code']),'antigravity':(['agy'],[]),'qoder':(['qodercli'],['@qoder-ai/qodercli']),'zcode':(['zcode'],[]),'grok':(['grok'],[]),'pi':(['pi'],['@mariozechner/pi-coding-agent','@earendil-works/pi-coding-agent']),'omp':(['omp'],['@oh-my-pi/pi-coding-agent']),'copilot':(['copilot'],['@github/copilot']),'kiro':(['kiro-cli'],[]),'cline':(['cline'],['cline','@cline/cli']),'kilo':(['kilo','kilocode'],['@kilocode/cli']),'trae':(['trae-cli','trae_agent.cli'],[]),'trae-cn':(['trae-cli','trae_agent.cli'],[])}
+PROGRAMS = {'claude':(['claude'],['@anthropic-ai/claude-code']),'codex':(['codex'],['@openai/codex']),'deepseek-harness':(['dsh'],['@deepseek-ai/dsh']),'kimi':(['kimi','kimi-cli','kimi-code'],['@moonshot-ai/kimi-code']),'cursor':(['cursor-agent','agent'],[]),'opencode':(['opencode'],['opencode-ai','@opencode/cli']),'codebuddy':(['codebuddy'],['@tencent-ai/codebuddy-code']),'antigravity':(['agy'],[]),'qoder':(['qodercli'],['@qoder-ai/qodercli']),'qoder-cn':(['qoderclicn','qodercn','qoder-cn'],['@qoder-ai/qoderclicn']),'zcode':(['zcode'],[]),'grok':(['grok'],[]),'pi':(['pi'],['@mariozechner/pi-coding-agent','@earendil-works/pi-coding-agent']),'omp':(['omp'],['@oh-my-pi/pi-coding-agent']),'copilot':(['copilot'],['@github/copilot']),'kiro':(['kiro-cli'],[]),'cline':(['cline'],['cline','@cline/cli']),'kilo':(['kilo','kilocode'],['@kilocode/cli']),'trae':(['trae-cli','trae_agent.cli'],[]),'trae-cn':(['trae-cli','trae_agent.cli'],[])}
 
 def cli_args(provider, argv):
     names, packages = PROGRAMS.get(provider, ([], []))
@@ -238,7 +238,7 @@ def cli_args(provider, argv):
         if '=' in arg:
             options.append(tuple(arg.split('=', 1))); continue
         takes_value = (arg in valued or arg == '-p' and provider not in ('pi','omp')
-                       or arg == '-o' and provider == 'qoder' or arg == '-i' and provider == 'antigravity'
+                       or arg == '-o' and provider in ('qoder','qoder-cn') or arg == '-i' and provider == 'antigravity'
                        or arg == '-t' and provider in ('trae','trae-cn'))
         value = args[i] if takes_value and i < len(args) else None
         if value is not None: i += 1
@@ -269,7 +269,7 @@ def headless_argv(provider, argv):
     if provider == 'antigravity':
         if has('-i', '--prompt-interactive'): return I
         return H if has('-p', '--print', '--prompt', '--output-format', '--input-format', '--print-timeout', '--json-schema') or command in ('remote-control', 'mic-serve') else None
-    if provider == 'qoder': return verdict(has('-p', '--print', '-o', '--output-format', '--remote-control'))
+    if provider in ('qoder','qoder-cn'): return verdict(has('-p', '--print', '-o', '--output-format', '--remote-control'))
     if provider == 'zcode': return H if has('-p', '--prompt', '--target') or command == 'app-server' else None
     if provider == 'grok': return H if has('-p', '--single', '--output-format', '--json-schema') else None
     if provider in ('pi', 'omp'): return H if has('-p', '--print') or value('--mode') in ('json', 'rpc') else None
@@ -899,7 +899,7 @@ def collect_native(source,cursors,database_cache=False,harness_deadline=None):
                         result['files'].append(dict(key=str(file),identity=cursor.get('identity',''),signature=cursor['signature'],size=cursor.get('size',0),offset=cursor.get('offset',0),modified=cursor.get('modified',0),reset=False,events=[],hook=False,continuation=cursor.get('continuation')))
             return result
         if not path.exists(): raise FileNotFoundError('Agent data directory does not exist')
-        roots=[] if provider=='cursor' else [(path / ('sessions' if provider in ('codex','kimi','grok','pi','omp') else 'session-state' if provider=='copilot' else 'projects' if provider in ('claude','codebuddy','qoder') else 'conversations'),False)]
+        roots=[] if provider=='cursor' else [(path / ('sessions' if provider in ('codex','kimi','grok','pi','omp') else 'session-state' if provider=='copilot' else 'projects' if provider in ('claude','codebuddy','qoder','qoder-cn') else 'conversations'),False)]
         if roots and not roots[0][0].is_dir(): roots=[(path,False)]
         if provider in ('claude','antigravity','cursor','codebuddy'): roots.append((target(source)[0]/'.aieyes/session-events',True))
         files,truncated=recent_files(provider,roots)
@@ -986,10 +986,10 @@ def _process_root(provider, options, env):
     value = lambda *keys: next((v for k, v in options if k in keys), None)
     if provider in ('pi','omp') and _absolute(value('--session-dir')): return _absolute(value('--session-dir')), True
     if _absolute(value('--config-dir')): return _absolute(value('--config-dir')), True
-    variable = {'codex':'CODEX_HOME','claude':'CLAUDE_CONFIG_DIR','kimi':'KIMI_CODE_HOME','codebuddy':'CODEBUDDY_CONFIG_DIR','qoder':'QODER_CONFIG_DIR','grok':'GROK_HOME','deepseek-harness':'DSH_HOME','pi':'PI_CODING_AGENT_DIR','omp':'PI_CODING_AGENT_DIR'}.get(provider)
+    variable = {'codex':'CODEX_HOME','claude':'CLAUDE_CONFIG_DIR','kimi':'KIMI_CODE_HOME','codebuddy':'CODEBUDDY_CONFIG_DIR','qoder':'QODER_CONFIG_DIR','qoder-cn':'QODERCN_CONFIG_DIR','grok':'GROK_HOME','deepseek-harness':'DSH_HOME','pi':'PI_CODING_AGENT_DIR','omp':'PI_CODING_AGENT_DIR'}.get(provider)
     if _absolute(env.get(variable)): return _absolute(env[variable]), True
     if provider in ('opencode','kilo') and _absolute(env.get('XDG_DATA_HOME')): return os.path.join(_absolute(env['XDG_DATA_HOME']), provider), True
-    default = {'codex':'~/.codex','claude':'~/.claude','kimi':'~/.kimi-code','codebuddy':'~/.codebuddy','qoder':'~/.qoder','grok':'~/.grok','deepseek-harness':'~/.dsh','pi':'~/.pi/agent','omp':'~/.omp/agent','opencode':'~/.local/share/opencode','kilo':'~/.local/share/kilo','antigravity':'~/.gemini/antigravity-cli'}.get(provider)
+    default = {'codex':'~/.codex','claude':'~/.claude','kimi':'~/.kimi-code','codebuddy':'~/.codebuddy','qoder':'~/.qoder','qoder-cn':'~/.qoder-cn','grok':'~/.grok','deepseek-harness':'~/.dsh','pi':'~/.pi/agent','omp':'~/.omp/agent','opencode':'~/.local/share/opencode','kilo':'~/.local/share/kilo','antigravity':'~/.gemini/antigravity-cli'}.get(provider)
     return (os.path.realpath(os.path.expanduser(default)) if default else None), False
 
 _NATIVE_PROCESS_CACHE = {}

@@ -561,7 +561,7 @@ pub(crate) fn reconcile(
                     import_identity: Some(identity),
                     source_id: source.id.clone(),
                     account_id: source.account_id.clone(),
-                    provider: "qoder".into(),
+                    provider: source.provider.clone(),
                     session_id: session_id.clone(),
                     model: main_models
                         .get(&session_id)
@@ -616,7 +616,7 @@ fn residual_id(source: &Source, session_id: &str) -> String {
     // connecting or switching accounts must update the same row instead of
     // leaving an orphaned copy behind.
     crate::usage::event_id(
-        "qoder",
+        &source.provider,
         &source.id,
         "",
         &format!("qoder-state:{session_id}"),
@@ -712,45 +712,7 @@ fn extract_candidate_keys(paths: Vec<PathBuf>) -> Vec<Vec<u8>> {
 }
 
 fn key_candidates(source: &Source) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Some(path) = std::env::var_os("QODER_CLI_PATH") {
-        paths.push(PathBuf::from(path));
-    }
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join(if cfg!(windows) {
-                "qodercli.exe"
-            } else {
-                "qodercli"
-            });
-            if candidate.is_file() {
-                paths.push(candidate);
-            }
-        }
-    }
-    let home = crate::store::home();
-    for candidate in [
-        home.join(".local/bin/qodercli"),
-        home.join("bin/qodercli"),
-        PathBuf::from("/usr/local/bin/qodercli"),
-        PathBuf::from("/opt/homebrew/bin/qodercli"),
-    ] {
-        if candidate.is_file() {
-            paths.push(candidate);
-        }
-    }
-    let config = expand(&source.path);
-    let bin = config.join("bin/qodercli");
-    if let Ok(rows) = fs::read_dir(&bin) {
-        for row in rows.flatten() {
-            if row.file_type().is_ok_and(|kind| kind.is_file()) {
-                paths.push(row.path());
-            }
-        }
-    }
-    paths.sort();
-    paths.dedup();
-    paths
+    crate::qoder_family::cli_candidates(&source.provider, &expand(&source.path))
 }
 
 fn keys_from_file(path: &Path) -> Vec<Vec<u8>> {

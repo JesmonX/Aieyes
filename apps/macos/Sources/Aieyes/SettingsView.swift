@@ -326,7 +326,7 @@ struct SettingsView: View {
             if model.generalPage == "refresh" {
             Section(L("刷新")) {
                 refreshInterval(L("额度查询"), value: $model.settingsDraft.refreshSeconds, field: "quota")
-                if model.agentConfigurations.contains(where: { $0.provider == "qoder" && $0.enabled }) { Text(L("Qoder 额度查询会启动 qodercli，最少每 10 分钟一次")).font(AppFont.secondary).foregroundStyle(.secondary) }
+                if model.agentConfigurations.contains(where: { ["qoder", "qoder-cn"].contains($0.provider) && $0.enabled }) { Text(L("Qoder 系列额度查询会启动对应 CLI，最少每 10 分钟一次")).font(AppFont.secondary).foregroundStyle(.secondary) }
                 refreshInterval(L("日志同步"), value: $model.settingsDraft.historyInterval, field: "history")
                 refreshInterval(L("服务器前台"), value: $model.settingsDraft.foregroundInterval, field: "foreground")
                 refreshInterval(L("服务器后台"), value: $model.settingsDraft.serverRefreshSeconds, field: "background")

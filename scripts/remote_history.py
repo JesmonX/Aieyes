@@ -491,11 +491,11 @@ def _usage_problem(value,provider):
 
 
 def _project(value, provider):
-    if provider in ('kimi','codebuddy','grok','qoder','pi','omp') and isinstance(value.get('tokens'),dict):
+    if provider in ('kimi','codebuddy','grok','qoder','qoder-cn','pi','omp') and isinstance(value.get('tokens'),dict):
         event={k:value.get(k) for k in ('id','sessionId','timestamp','model','tokens','billing','intervalStart','intervalEvidence')}
         if isinstance(value.get('inheritance'),dict):
             event['inheritance']={k:value['inheritance'].get(k) for k in ('origin','inherited')}
-        if provider in ('qoder','codebuddy') and isinstance(value.get('nativeCredits'),dict):
+        if provider in ('qoder','qoder-cn','codebuddy') and isinstance(value.get('nativeCredits'),dict):
             event['nativeCredits']={k:value['nativeCredits'].get(k) for k in ('credits','originalCredits','billable')}
         return event
     event = None
@@ -569,13 +569,13 @@ def _project(value, provider):
             models=(update.get('usage') or {}).get('modelUsage') or {}
             usage={model:{k:counts.get(k) for k in ('inputTokens','outputTokens','cachedReadTokens','cacheCreationTokens','reasoningTokens','totalTokens')} for model,counts in models.items() if isinstance(counts,dict)}
             event=dict(method=value['method'],params=dict(sessionId=p.get('sessionId'),update=dict(sessionUpdate='turn_completed',prompt_id=update.get('prompt_id'),usage=dict(modelUsage=usage)),_meta={k:meta.get(k) for k in ('eventId','agentTimestampMs')}))
-    elif provider in ("claude","qoder"):
+    elif provider in ("claude","qoder","qoder-cn"):
         message = value.get("message") or {}
-        if value.get("type") == "assistant" and (message.get("usage") or provider == 'qoder' and isinstance(message.get('model'), str)):
+        if value.get("type") == "assistant" and (message.get("usage") or provider in ('qoder','qoder-cn') and isinstance(message.get('model'), str)):
             event = {k: value.get(k) for k in ("type", "timestamp", "sessionId", "requestId", "uuid", "isApiErrorMessage")}
             usage=message.get('usage') or {}
             keys=['input_tokens','output_tokens','cache_read_input_tokens','cache_creation_input_tokens']
-            if provider=='qoder':
+            if provider in ('qoder','qoder-cn'):
                 keys+=['credits','original_credits','billable']
                 event['modelSource']=value.get('modelSource')
                 event['isSidechain']=value.get('isSidechain') is True
@@ -661,26 +661,27 @@ def _cursor_private_history(root):
         dirs[:]=[] if len(os.path.relpath(directory,base).split(os.sep))>=2 else [d for d in dirs if not os.path.islink(os.path.join(directory,d))]
     return False
 
-def _qoder_keys(root):
+def _qoder_keys(root, provider="qoder"):
     """Read the embedded state key only for the lifetime of this collector."""
+    binary = "qoderclicn" if provider == "qoder-cn" else "qodercli"
     import base64
     import re
     import shutil
     candidates = []
-    configured = os.environ.get('QODER_CLI_PATH')
+    configured = os.environ.get('QODERCN_CLI_PATH' if provider == 'qoder-cn' else 'QODER_CLI_PATH')
     if configured:
         candidates.append(configured)
-    found = shutil.which('qodercli')
+    found = shutil.which(binary)
     if found:
         candidates.append(found)
     home = os.path.expanduser('~')
     candidates.extend([
-        os.path.join(home, '.local', 'bin', 'qodercli'),
-        os.path.join(home, 'bin', 'qodercli'),
-        '/usr/local/bin/qodercli',
-        '/opt/homebrew/bin/qodercli',
+        os.path.join(home, '.local', 'bin', binary),
+        os.path.join(home, 'bin', binary),
+        '/usr/local/bin/' + binary,
+        '/opt/homebrew/bin/' + binary,
     ])
-    directory = os.path.join(root, 'bin', 'qodercli')
+    directory = os.path.join(root, 'bin', binary)
     if os.path.isdir(directory):
         try:
             candidates.extend(os.path.join(directory, name) for name in sorted(os.listdir(directory)))
@@ -762,7 +763,7 @@ def _qoder_project_hashes(path, value, session_id):
 def _qoder_states(root, request, emit, issue):
     import hashlib
     provider = request.get('provider')
-    if provider != 'qoder':
+    if provider not in ('qoder','qoder-cn'):
         return
     projects = os.path.join(root, 'projects') if os.path.isdir(os.path.join(root, 'projects')) else root
     if not os.path.isdir(projects):
@@ -816,7 +817,7 @@ def _qoder_states(root, request, emit, issue):
             issue(path, '无法确定 Qoder 会话项目路径，历史总量暂未补足', 'qoderStateRead')
             continue
         if keys is None:
-            keys = _qoder_keys(root)
+            keys = _qoder_keys(root, provider)
         if not keys:
             issue(path, '未找到可读取的 qodercli 状态密钥，历史 Token 总量暂未补足', 'qoderStateKey')
             return
@@ -1079,7 +1080,7 @@ def _incremental(request):
                 # Do not walk encrypted IDE storage. CLI trajectories use the
                 # bounded whole-file importer below.
                 roots = []
-            elif provider in ('claude','codebuddy','qoder') and os.path.isdir(os.path.join(root, 'projects')):
+            elif provider in ('claude','codebuddy','qoder','qoder-cn') and os.path.isdir(os.path.join(root, 'projects')):
                 roots = [os.path.join(root, 'projects')]
             elif provider in ('kimi','grok','pi','omp') and os.path.isdir(os.path.join(root,'sessions')):
                 roots = [os.path.join(root,'sessions')]
