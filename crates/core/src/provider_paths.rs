@@ -504,7 +504,7 @@ mod tests {
                 ]
             )
             .unwrap(),
-            root.join("kilo/channel.db").to_string_lossy()
+            root.join("kilo").join("channel.db").to_string_lossy()
         );
         assert!(
             resolve_with(
