@@ -518,7 +518,19 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_live_headless_run_stays_hidden_after_its_process_exits() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::{
+            io::{BufRead, BufReader},
+            os::unix::fs::PermissionsExt,
+            process::{Child, Stdio},
+            time::{Duration, Instant},
+        };
+        struct Guard(Child);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
         let temp = tempfile::tempdir().unwrap();
         let sessions = temp.path().join("sessions");
         for id in ["run", "plain"] {
@@ -529,17 +541,32 @@ mod tests {
         }
         // A script named kiro-cli: the shell keeps `sh <dir>/kiro-cli chat --no-interactive …`.
         let program = temp.path().join("kiro-cli");
-        std::fs::write(&program, "#!/bin/sh\nwhile :; do sleep 1; done\n").unwrap();
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nprintf 'ready\\n'\nIFS= read -r stop\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let mut child = std::process::Command::new("/bin/sh")
-            .arg(&program)
-            .args(["chat", "--no-interactive", "summarize"])
-            .spawn()
+        let mut child = Guard(
+            std::process::Command::new("/bin/sh")
+                .arg(&program)
+                .args(["chat", "--no-interactive", "summarize"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        // spawn() alone does not mean the child has exec'd its CLI argv yet.
+        // Keep it alive on stdin, with no orphanable sleep subprocesses.
+        let mut ready = String::new();
+        BufReader::new(child.0.stdout.take().unwrap())
+            .read_line(&mut ready)
             .unwrap();
+        assert_eq!(ready.trim(), "ready");
         let started = chrono::Utc::now().to_rfc3339();
         write(
             &sessions.join("cli/run.lock"),
-            json!({"pid":child.id(),"started_at":started}),
+            json!({"pid":child.0.id(),"started_at":started}),
         );
         // The lock of a process that is not kiro-cli carries no signal.
         write(
@@ -556,9 +583,27 @@ mod tests {
             ids.sort();
             ids
         };
-        assert_eq!(ids(&mut verdicts), ["plain"]);
-        child.kill().unwrap();
-        child.wait().unwrap();
+        // Process metadata can briefly lag readiness on macOS. Exercise the
+        // real reader until it observes the live argv, without weakening the
+        // classification or post-exit persistence assertions.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let observed = ids(&mut verdicts);
+            if observed == ["plain"] {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "live fixture was not classified headless: {observed:?}"
+            );
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "fixture exited before observation"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
         std::fs::remove_file(sessions.join("cli/run.lock")).unwrap();
         assert_eq!(
             ids(&mut verdicts),

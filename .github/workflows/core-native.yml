@@ -51,6 +51,13 @@ jobs:
           for attempt in {1..10}; do
             cargo test -p aieyes-core --lib --locked native_profile_switch_preserves_api_fixture_and_closes_login_fixture
           done
+      - name: Unix Kiro process readiness regression
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          for attempt in {1..10}; do
+            cargo test -p aieyes-core --lib --locked native_sessions::kiro::tests::a_live_headless_run_stays_hidden_after_its_process_exits -- --exact
+          done
       - run: cargo test --workspace --locked
       # Native contracts are architecture-neutral; Intel still builds and verifies its own release DMG.
       - name: Build macOS client and verify native contracts
