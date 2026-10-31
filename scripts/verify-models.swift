@@ -35,11 +35,28 @@ typealias Host = Aieyes.Host
         let rememberedRoundTrip = try JSONDecoder().decode(NativeConnection.self, from: JSONEncoder().encode(remembered))
         precondition(rememberedRoundTrip == remembered, "Saving settings must preserve native discovery and expiry metadata")
         let qoderIdentity = try JSONDecoder().decode(AccountIdentity.self, from: Data(#"{"key":"qoder:aaaaaaaaaaaa0123456789","email":"","subscription":"personal_standard"}"#.utf8))
-        precondition(qoderIdentity.displayName == "Qoder · aaaaaaaaaaaa")
-        precondition(qoderIdentity.summary == "Qoder · aaaaaaaaaaaa · personal_standard")
-        let qoderStatus = try JSONDecoder().decode(AccountDeviceStatus.self, from: Data(#"{"accountKey":"qoder:local","sourceId":"remote","machineId":"144","current":false,"credential":false,"authenticated":true,"identityConfirmed":true,"identity":{"key":"qoder:bbbbbbbbbbbb0123456789","email":"","subscription":"personal_standard"}}"#.utf8))
-        precondition(qoderStatus.identitySummary?.hasPrefix("身份不一致 · 当前登录 Qoder · bbbbbbbbbbbb") == true)
-        precondition(qoderStatus.machineIdentitySummary == "当前登录 Qoder · bbbbbbbbbbbb · personal_standard")
+        precondition(qoderIdentity.displayName == "身份已确认")
+        precondition(qoderIdentity.summary == "身份已确认 · personal_standard")
+        let qoderStatus = try JSONDecoder().decode(AccountDeviceStatus.self, from: Data(#"{"accountKey":"qoder:local","sourceId":"remote","machineId":"144","current":false,"credential":false,"authenticated":true,"identityConfirmed":true,"identity":{"key":"qoder:bbbbbbbbbbbb0123456789","email":"","providerAccountId":"remote-user","subscription":"personal_standard"}}"#.utf8))
+        precondition(qoderStatus.identitySummary?.hasPrefix("身份不一致 · 当前登录 账户 ID remote-user") == true)
+        precondition(qoderStatus.machineIdentitySummary == "当前登录 账户 ID remote-user · personal_standard")
+        for provider in ["qoder", "qoder-cn"] {
+            var identity = qoderIdentity
+            identity.key = provider + ":aaaaaaaaaaaa0123456789"
+            precondition(identity.displayName == "身份已确认", "Legacy identities must not expose their hash as an account ID")
+            identity.providerAccountId = "public-user"
+            precondition(identity.displayName == "账户 ID public-user")
+            let roundTrip = try JSONDecoder().decode(AccountIdentity.self, from: JSONEncoder().encode(identity))
+            precondition(roundTrip == identity && roundTrip.providerAccountId == "public-user")
+            identity.email = "account@example.test"
+            precondition(identity.displayName == "account@example.test", "Email takes priority over the public account ID")
+            var connection = remembered
+            connection.provider = provider
+            connection.providerAccountId = "public-user"
+            precondition(connection.displayName == "账户 ID public-user")
+            let connectionRoundTrip = try JSONDecoder().decode(NativeConnection.self, from: JSONEncoder().encode(connection))
+            precondition(connectionRoundTrip == connection && connectionRoundTrip.providerAccountId == "public-user")
+        }
         var directory = AgentSource(provider: "qoder", path: "~/.qoder")
         precondition(directory.isDirectorySource)
         directory.path = "  "
