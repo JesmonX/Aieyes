@@ -320,7 +320,7 @@ class NativeQuotaTest(unittest.TestCase):
                 self.send(self.request(ref, url))
     def test_sqlite_cursor_and_opencode_projection_do_not_write_database(self):
         path = self.root / 'state.vscdb'
-        with sqlite3.connect(path) as db:
+        with contextlib.closing(sqlite3.connect(path)) as db, db:
             db.execute('CREATE TABLE ItemTable(key TEXT, value TEXT)')
             db.executemany('INSERT INTO ItemTable VALUES(?,?)', [('cursorAuth/accessToken', TOKEN), ('cursorAuth/stripeMembershipType', 'pro')])
         before = path.read_bytes()
@@ -328,7 +328,7 @@ class NativeQuotaTest(unittest.TestCase):
         self.assert_private(remote.resolve(ref)['public'])
         self.assertEqual(path.read_bytes(), before)
         path = self.root / 'opencode.db'
-        with sqlite3.connect(path) as db:
+        with contextlib.closing(sqlite3.connect(path)) as db, db:
             db.execute('CREATE TABLE credential(id TEXT, integration_id TEXT, value TEXT, active INTEGER, time_created INTEGER)')
             db.execute('INSERT INTO credential VALUES(?,?,?,?,?)', ('1', 'opencode-go', json.dumps({'type': 'api', 'key': TOKEN}), 1, 9))
         before = path.read_bytes()
@@ -397,7 +397,7 @@ class NativeQuotaTest(unittest.TestCase):
     def test_kiro_active_selector_and_stable_profile_fingerprint(self):
         path = self.root / 'data.sqlite3'
         future = int(time.time()) + 3600
-        with sqlite3.connect(path) as db:
+        with contextlib.closing(sqlite3.connect(path)) as db, db:
             db.execute('CREATE TABLE auth_kv(key TEXT, value TEXT)')
             db.execute('CREATE TABLE state(key TEXT, value TEXT)')
             db.execute('INSERT INTO state VALUES(?,?)', ('api.codewhisperer.profile', json.dumps({'arn': 'arn:aws:codewhisperer:us-east-1:1:profile/a'})))
@@ -409,7 +409,7 @@ class NativeQuotaTest(unittest.TestCase):
         self.assert_private(result['public'])
         ref['selector'] = '/auth_kv/odic'
         self.assertEqual(remote.main({'reference': ref})['errorCode'], 'changed')
-        with sqlite3.connect(path) as db:
+        with contextlib.closing(sqlite3.connect(path)) as db, db:
             db.execute('UPDATE auth_kv SET value=? WHERE key=?',
                        (json.dumps({'access_token': 'oidc-native-fixture', 'expires_at': future}), 'kirocli:odic:token'))
         # The equal maximum is social, matching Rust's max_by_key traversal.
@@ -460,6 +460,7 @@ class NativeQuotaTest(unittest.TestCase):
             self.assert_private(remote.main({'reference': ref}))
         with mock.patch.dict(os.environ, {'ZCODE_CREDENTIAL_SECRET': 'wrong-fixture-secret'}):
             self.assertEqual(remote.main({'reference': ref})['errorCode'], 'format')
+    @unittest.skipIf(os.name == 'nt', 'SSH Codex fixture requires POSIX executable permissions')
     def test_codex_uses_ephemeral_rpc_and_defers_refresh(self):
         claims = {'https://api.openai.com/auth': {'chatgpt_user_id': 'user-1', 'chatgpt_account_id': 'default-team'}}
         token = 'fixture.' + remote.base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip('=') + '.signature'

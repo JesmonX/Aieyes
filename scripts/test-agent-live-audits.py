@@ -79,6 +79,7 @@ class LiveAuditTests(unittest.TestCase):
             project = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], cwd=workspace, text=True).strip()
             self.assertEqual(pathlib.Path(project).resolve(), workspace.resolve())
 
+    @unittest.skipUnless(hasattr(live.os, 'killpg'), 'POSIX process-group cleanup')
     def test_cleanup_escalates_when_the_native_process_ignores_term(self):
         process = mock.Mock(pid=98765)
         process.poll.return_value = None
@@ -86,6 +87,15 @@ class LiveAuditTests(unittest.TestCase):
         with mock.patch.object(live.os, 'killpg') as killpg:
             live.stop_process(process, group=True)
         self.assertEqual(killpg.call_args_list, [mock.call(98765, live.signal.SIGTERM), mock.call(98765, live.signal.SIGKILL)])
+        self.assertEqual(process.wait.call_count, 2)
+
+    def test_cleanup_escalates_for_an_individual_process(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired('isolated-native', 5), 0]
+        live.stop_process(process)
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
         self.assertEqual(process.wait.call_count, 2)
 
     def test_detection_and_unsupported_surfaces_are_never_claimed_live_verified(self):

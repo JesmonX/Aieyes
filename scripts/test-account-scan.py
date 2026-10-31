@@ -1,5 +1,6 @@
 """Read-only SSH config transport, using temporary fixtures only."""
 import base64
+import contextlib
 import importlib.util
 import json
 import sqlite3
@@ -81,7 +82,7 @@ class NativeTransport(unittest.TestCase):
             home = pathlib.Path(directory)
             data = home / 'data/omp/profiles/work'
             data.mkdir(parents=True)
-            with sqlite3.connect(data / 'agent.db') as db:
+            with contextlib.closing(sqlite3.connect(data / 'agent.db')) as db, db:
                 db.executescript((pathlib.Path(__file__).parent.parent / 'crates/core/tests/fixtures/omp-auth.sql').read_text())
             request = dict(provider='omp', roots=[], env='PI_CODING_AGENT_DIR', patterns=['agent.db'], primary='~/.omp/agent')
             with patch.dict(os.environ, {'HOME': directory, 'USERPROFILE': directory, 'XDG_DATA_HOME': str(home / 'data'), 'OMP_PROFILE': 'work'}, clear=True), patch.object(scan.sys, 'platform', 'linux'):
@@ -250,15 +251,19 @@ class NativeTransport(unittest.TestCase):
             data = home / 'Library/Application Support' if scan.sys.platform == 'darwin' else home / '.local/share'
             path = data / 'kiro-cli/data.sqlite3'
             path.parent.mkdir(parents=True)
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 db.execute('CREATE TABLE auth_kv(key TEXT, value TEXT)')
                 db.execute('CREATE TABLE state(key TEXT, value TEXT)')
                 db.execute('INSERT INTO auth_kv VALUES(?, ?)', ('kirocli:odic:token', json.dumps(dict(access_token='ACCESS_FIXTURE', refresh_token='PRIVATE_REFRESH', expires_at='2100-01-01T00:00:00Z'))))
                 db.execute('INSERT INTO auth_kv VALUES(?, ?)', ('kirocli:odic:device-registration', '{"client_secret":"PRIVATE_SECRET"}'))
                 db.execute('INSERT INTO state VALUES(?, ?)', ('api.codewhisperer.profile', '{"arn":"profile"}'))
             before = path.read_bytes()
-            with patch.dict(os.environ, {'HOME': str(home), 'USERPROFILE': str(home), 'XDG_DATA_HOME': str(data)}):
+            reader = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)
+            with patch.dict(os.environ, {'HOME': str(home), 'USERPROFILE': str(home), 'XDG_DATA_HOME': str(data)}), \
+                    patch.object(sqlite3, 'connect', return_value=reader):
                 result = scan.collect(dict(provider='kiro', roots=[], env='', patterns=[], primary='~/.kiro'))
+            with self.assertRaises(sqlite3.ProgrammingError):
+                reader.execute('SELECT 1')
             self.assertFalse(result['errors'])
             self.assertEqual(len(result['documents']), 1)
             raw = base64.b64decode(result['documents'][0]['data']).decode()
@@ -321,7 +326,7 @@ class NativeTransport(unittest.TestCase):
         fixture = pathlib.Path(__file__).resolve().parents[1] / 'crates/core/tests/fixtures/workbuddy/workbuddy.sql'
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
-            with sqlite3.connect(root / 'workbuddy.db') as db:
+            with contextlib.closing(sqlite3.connect(root / 'workbuddy.db')) as db, db:
                 db.executescript(fixture.read_text())
             request = dict(provider='workbuddy', roots=[directory], env='', patterns=['storage/skeleton/account-snapshot.json', 'workbuddy.db'])
             result = scan.collect(request)

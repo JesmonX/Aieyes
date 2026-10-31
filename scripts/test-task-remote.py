@@ -47,6 +47,24 @@ def cursor(frames):
 
 
 class TaskTests(unittest.TestCase):
+    def test_cline_database_readers_close_on_success_and_error(self):
+        for valid in (False, True):
+            with self.subTest(valid=valid), tempfile.TemporaryDirectory() as directory:
+                database = pathlib.Path(directory) / 'sessions.db'
+                with contextlib.closing(sqlite3.connect(database)) as db, db:
+                    if valid:
+                        db.execute('CREATE TABLE sessions(session_id TEXT,messages_path TEXT,status TEXT,updated_at TEXT,parent_session_id TEXT,interactive INTEGER,source TEXT)')
+                for read in (lambda: tasks.files('cline', database),
+                             lambda: tasks.sessions(database, 'cline', {}, int(time.time()))):
+                    reader = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)
+                    with mock.patch.object(sqlite3, 'connect', return_value=reader):
+                        try:
+                            read()
+                        except sqlite3.OperationalError:
+                            self.assertFalse(valid)
+                    with self.assertRaises(sqlite3.ProgrammingError):
+                        reader.execute('SELECT 1')
+
     def test_cline_root_subagent_and_override_paths_import_incrementally(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -65,7 +83,7 @@ class TaskTests(unittest.TestCase):
             db.parent.mkdir()
             external = root / 'separate/root.messages.json'
             write(external, CURRENT)
-            with sqlite3.connect(db) as connection:
+            with contextlib.closing(sqlite3.connect(db)) as connection, connection:
                 connection.execute('CREATE TABLE sessions(session_id TEXT,messages_path TEXT)')
                 connection.execute('INSERT INTO sessions VALUES(?,?)', ('external', str(external)))
             before = db.read_bytes()
@@ -153,7 +171,7 @@ class TaskTests(unittest.TestCase):
             db.parent.mkdir()
             now = int(time.time())
             stamp = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat()
-            with sqlite3.connect(db) as connection:
+            with contextlib.closing(sqlite3.connect(db)) as connection, connection:
                 connection.execute('CREATE TABLE sessions(session_id TEXT,status TEXT,updated_at TEXT,parent_session_id TEXT,interactive INTEGER,source TEXT)')
                 for identity, parent, interactive, status in [('lead', '', 1, 'idle'), ('child', 'lead', 0, 'running'), ('grandchild', 'child', 0, 'pending'), ('run', '', 0, 'running'), ('run-child', 'run', 0, 'running'), ('unknown', '', 1, 'new-status'), ('orphan', 'missing', 0, 'running')]:
                     connection.execute('INSERT INTO sessions VALUES(?,?,?,?,?,?)', (identity, status, stamp, parent, interactive, 'cli'))

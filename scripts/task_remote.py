@@ -3,6 +3,7 @@
 Only counters, native identifiers, timestamps and lifecycle flags leave this
 module. Prompt text and provider credentials never appear in its output.
 """
+import contextlib
 import datetime
 import hashlib
 import json
@@ -34,7 +35,7 @@ def files(provider, root):
     database = cline_database(root) if provider == 'cline' else None
     if database:
         try:
-            with sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=.2) as db:
+            with contextlib.closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=.2)) as db:
                 found.extend(pathlib.Path(row[0]) for row in db.execute('SELECT messages_path FROM sessions WHERE messages_path IS NOT NULL LIMIT 20000')
                              if isinstance(row[0], str) and pathlib.Path(row[0]).is_absolute() and pathlib.Path(row[0]).is_file() and supported(pathlib.Path(row[0])))
         except sqlite3.Error:
@@ -399,7 +400,7 @@ def sessions(root, provider, cursors, now):
     indexed, descriptors, errors = {}, {}, []
     if database:
         signature = 'cline-db:' + hashlib.sha256(json.dumps([stat(database), stat(str(database) + '-wal')]).encode()).hexdigest()
-        with sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=.2) as db:
+        with contextlib.closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=.2)) as db:
             since = datetime.datetime.fromtimestamp(now - 86400, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
             columns = "session_id,status,updated_at,COALESCE(parent_session_id,''),interactive,source"
 

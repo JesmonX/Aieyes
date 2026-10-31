@@ -1,4 +1,5 @@
 """Native session metadata -> SSH process association; no model/account calls."""
+import contextlib
 import importlib.util
 import json
 import pathlib
@@ -20,16 +21,15 @@ class ProcessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory).resolve(); proc=root/'proc'; pid=proc/'4321'; pid.mkdir(parents=True)
             data=root/'data';data.mkdir();workspace=root/'project';workspace.mkdir()
-            fields=['0']*20;fields[0]='S';fields[1]='1';fields[19]=str(100*os.sysconf('SC_CLK_TCK'))
+            fields=['0']*20;fields[0]='S';fields[1]='1';fields[19]='10000'
             (pid/'stat').write_text('4321 (pi) '+' '.join(fields));(proc/'stat').write_text('btime 0\n')
             (pid/'cmdline').write_bytes(b'pi\0-p\0PRIVATE_PROMPT\0')
             (pid/'environ').write_bytes(('PI_CODING_AGENT_DIR='+str(data)+'\0AIEYES_INTERNAL=1\0PRIVATE_TOKEN=PRIVATE_SECRET\0').encode())
-            (pid/'cwd').symlink_to(workspace)
-            real_path=type(root);real_readlink=os.readlink
+            real_path=type(root)
             def translated(value):
                 value=str(value)
                 return str(proc)+value[len('/proc'):] if value=='/proc' or value.startswith('/proc/') else value
-            with patch.object(m.pathlib,'Path',side_effect=lambda value:real_path(translated(value))),patch.object(m.os,'readlink',side_effect=lambda value,*a,**kw:real_readlink(translated(value),*a,**kw)),patch.object(m.time,'monotonic',return_value=10) as clock:
+            with patch.object(m.pathlib,'Path',side_effect=lambda value:real_path(translated(value))),patch.object(m.os,'readlink',return_value=str(workspace)),patch.object(m.os,'sysconf',return_value=100,create=True),patch.object(m.time,'monotonic',return_value=10) as clock:
                 first=m.native_processes({'pi'})
                 self.assertEqual((first[0]['classification'],first[0]['internal'],first[0]['root']),('headless',True,str(data)))
                 (pid/'cmdline').write_bytes(b'pi\0PRIVATE_TOKEN=PRIVATE_SECRET\0');(pid/'environ').write_bytes(b'')
@@ -127,7 +127,7 @@ class ProcessTests(unittest.TestCase):
             context=m._session_context('kimi',str(path),'session_abc:main')
             self.assertEqual((context['session'],context['workspace'],context['created']),('session_abc',directory,101000000))
             database=root/'opencode.db'
-            with sqlite3.connect(database) as db:
+            with contextlib.closing(sqlite3.connect(database)) as db, db:
                 db.execute('CREATE TABLE session_v2(id TEXT,directory TEXT,time_created INTEGER)')
                 db.execute('INSERT INTO session_v2 VALUES(?,?,?)',('abc',directory,101000000000))
             context=m._session_context('opencode',str(database)+'#abc','abc')

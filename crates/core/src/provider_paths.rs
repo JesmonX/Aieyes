@@ -477,7 +477,7 @@ mod tests {
         };
         assert_eq!(
             resolve_with("cline", vec![("CLINE_DIR", root.join("config"))]).unwrap(),
-            root.join("config/data").to_string_lossy()
+            root.join("config").join("data").to_string_lossy()
         );
         assert_eq!(
             resolve_with(

@@ -14,7 +14,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class Core:
     def __init__(self, directory, binary):
-        self.process = subprocess.Popen([str(binary)], env={**os.environ, 'AIEYES_DATA_DIR':str(directory)}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # Synthetic snapshots must not race discovery or sampling of real clients.
+        self.process = subprocess.Popen([str(binary)], env={**os.environ, 'AIEYES_DATA_DIR':str(directory), 'AIEYES_AUTO_SCAN':'off'}, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.sequence = 0
     def call(self, method, params=None):
         self.sequence += 1

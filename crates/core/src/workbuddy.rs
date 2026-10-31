@@ -410,7 +410,7 @@ mod tests {
         let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts");
         let request = json!({"protocol":2,"path":home,"provider":"workbuddy","cursors":{}});
         let output = std::process::Command::new("python3")
-            .args(["-c", "import json,pathlib,sys;p=pathlib.Path(sys.argv[1]);exec(compile((p/'remote_history.py').read_text(),'<embedded-history>','exec'),{'__name__':'__main__','REQUEST':json.loads(sys.argv[2]),'NATIVE_DATABASE_SCRIPT':(p/'native_database_remote.py').read_text()})"])
+            .args(["-c", "import json,pathlib,sys;p=pathlib.Path(sys.argv[1]);exec(compile((p/'remote_history.py').read_text(encoding='utf-8'),'<embedded-history>','exec'),{'__name__':'__main__','REQUEST':json.loads(sys.argv[2]),'NATIVE_DATABASE_SCRIPT':(p/'native_database_remote.py').read_text(encoding='utf-8')})"])
             .arg(scripts).arg(request.to_string()).output().unwrap();
         assert!(
             output.status.success(),

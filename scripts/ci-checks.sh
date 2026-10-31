@@ -4,6 +4,8 @@ set -eu
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$PROJECT_DIR"
 export PATH="$HOME/.cargo/bin:$PATH"
+# Source files and fixtures are UTF-8 on every runner, including Windows.
+export PYTHONUTF8=1
 case "${1:-}" in
   ''|--rust) ;;
   *) echo 'Usage: scripts/ci-checks.sh [--rust]' >&2; exit 2 ;;

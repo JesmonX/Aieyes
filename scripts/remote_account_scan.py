@@ -83,7 +83,7 @@ def zcode_projection(raw):
 def kiro_credentials(path):
     """Project only Kiro's active auth metadata from its read-only SQLite DB."""
     import sqlite3
-    with sqlite3.connect(pathlib.Path(path).resolve().as_uri() + '?mode=ro', uri=True, timeout=2) as db:
+    with contextlib.closing(sqlite3.connect(pathlib.Path(path).resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as db:
         db.execute('PRAGMA query_only=1')
         db.execute('BEGIN')
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
