@@ -234,17 +234,18 @@ struct PanelAccountsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(Set(model.quotaAccounts.map { CoreContract.agentProvider($0.provider) })).sorted(), id: \.self) { provider in
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack { ProviderIdentity(provider: provider); Text(L("· {0} 个" , members(provider).reduce(0) { $0 + (selected[$1]?.count ?? 0) })); Spacer(); Button(members(provider).allSatisfy { automatic.contains($0) } ? L("自动选择") : L("恢复自动选择")) {
+                            ProviderIdentity(provider: provider).font(AppFont.section)
+                            HStack { Text(L("· {0} 个" , members(provider).reduce(0) { $0 + (selected[$1]?.count ?? 0) })).foregroundStyle(.secondary); Spacer(); Button(members(provider).allSatisfy { automatic.contains($0) } ? L("自动选择") : L("恢复自动选择")) {
                                 let defaults = PanelAccountPreference.selections("{}", accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])
                                 for member in members(provider) { automatic.insert(member); selected[member] = defaults[member] }
-                            }.font(AppFont.secondary) }.font(AppFont.section)
+                            }.font(AppFont.secondary) }.font(AppFont.secondary)
                             ForEach(model.quotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }, id: \.key) { account in
                                 Toggle(account.name, isOn: Binding(get: { selected[account.provider]?.contains(account.key) == true }, set: { enabled in
                                     for member in members(provider) { automatic.remove(member) }
                                     var keys = selected[account.provider] ?? []
                                     if enabled && !keys.contains(account.key) { keys.append(account.key) } else if !enabled { keys.removeAll { $0 == account.key } }
                                     selected[account.provider] = keys
-                                }))
+                                })).toggleStyle(.checkbox).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                     }

@@ -36,7 +36,6 @@ const PET_TIMER: usize = 42;
 /// Polls whether a fullscreen game, video or presentation wants the desktop to itself.
 const QUIET_TIMER: usize = 43;
 const WAKE: u32 = WM_APP + 41;
-const RESTORE_TOPMOST: u32 = WM_APP + 42;
 pub const WIDTH: f64 = 144.0;
 pub const HEIGHT: f64 = 168.0;
 enum Command {
@@ -781,20 +780,19 @@ unsafe extern "system" fn window_proc(
             }
             LRESULT(0)
         }
-        WM_WINDOWPOSCHANGED => {
-            // A shell/window-management operation can demote the pet after
-            // creation. Defer recovery until that operation has completed.
-            // Do not raise hidden pets or reorder already-topmost peers.
-            if IsWindowVisible(hwnd).as_bool() && !is_topmost(hwnd) {
-                let _ = PostMessageW(Some(hwnd), RESTORE_TOPMOST, WPARAM(0), LPARAM(0));
+        WM_WINDOWPOSCHANGING => {
+            if surface.wanted.get() && !surface.quiet.get() {
+                crate::passive_window::preserve_topmost(hwnd, lparam);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
-        RESTORE_TOPMOST => {
+        WM_WINDOWPOSCHANGED => {
+            // Recover synchronously if a window manager bypassed CHANGING with
+            // SWP_NOSENDCHANGING. A posted repair leaves the pet behind for a frame.
             if IsWindowVisible(hwnd).as_bool() && !is_topmost(hwnd) {
                 raise_pet(hwnd, surface, false);
             }
-            LRESULT(0)
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_TIMER if wparam.0 == QUIET_TIMER => {
             // Step aside for fullscreen apps and presentations; come back only if still wanted.

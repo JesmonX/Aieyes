@@ -48,6 +48,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Windows overlay dispatch regression
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path scripts/fixtures/windows-overlay-probe/Cargo.toml --locked -- --nocapture
       - name: Linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf libglib2.0-bin rpm libarchive-tools
@@ -56,10 +59,16 @@ jobs:
       - name: Shared checks
         shell: bash
         run: sh scripts/ci-checks.sh
+      - name: Prepare desktop sidecar
+        shell: bash
+        run: node scripts/prepare-wakeup.cjs --debug
+      - name: Desktop shell tests
+        run: |
+          cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --no-default-features --features "${{ matrix.features }}" -- -D warnings
+          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --no-default-features --features "${{ matrix.features }}"
       - name: Browser integration
         shell: bash
         run: |
-          node scripts/prepare-wakeup.cjs --debug
           cd apps/desktop
           if [ "$RUNNER_OS" = Windows ]; then
             # The Chromium suite is platform-neutral and runs on Linux; Windows keeps its interaction and font checks.
@@ -83,12 +92,9 @@ jobs:
             .local/windows-ui-sync/browser/*
             .local/windows-ui-sync/interactions/*.png
             .local/ui-redesign-*/web/*.png
+            .local/ui-desktop-layout/*.png
           include-hidden-files: true
           if-no-files-found: ignore
-      - name: Desktop shell tests
-        run: |
-          cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --locked --no-default-features --features "${{ matrix.features }}" -- -D warnings
-          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --no-default-features --features "${{ matrix.features }}"
       - name: Optional Rust tests
         if: inputs.full_checks == true
         shell: bash

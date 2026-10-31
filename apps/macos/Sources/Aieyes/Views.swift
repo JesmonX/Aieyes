@@ -882,6 +882,12 @@ struct ModelChart: View, Equatable {
 
 @MainActor private final class HeatmapLayout {
     let days: [Aggregate], cost: Bool, leading: Int, maximum: Double, labels: [String: String]
+    var monthStarts: [Int] {
+        let starts = days.indices.filter { $0 == 0 || days[$0].key.hasSuffix("-01") }
+        return starts.enumerated().compactMap { offset, index in
+            offset + 1 == starts.count || (starts[offset + 1] + leading) / 7 - (index + leading) / 7 >= 3 ? index : nil
+        }
+    }
     private static let cache: NSCache<NSString, HeatmapLayout> = { let value = NSCache<NSString, HeatmapLayout>(); value.totalCostLimit = 4 * 1024 * 1024; value.countLimit = 12; return value }()
     static func get(days: [Aggregate], cost: Bool) -> HeatmapLayout {
         var hash = Hasher(); hash.combine(cost); hash.combine(TimeZone.current.identifier); hash.combine(Locale.current.identifier)
@@ -915,9 +921,9 @@ struct Heatmap: View, Equatable {
         let leading = cached.leading, maximum = cached.maximum
         VStack(alignment: .leading, spacing: 10) {
             GeometryReader { proxy in
-                let columns = max(1, (days.count + leading + 6) / 7), step = (proxy.size.width - 22) / CGFloat(columns), size = max(DesignTokens.heatCellMin, min(DesignTokens.heatCellMax, step - DesignTokens.heatCellGap))
+                let columns = max(1, (days.count + leading + 6) / 7), size = max(DesignTokens.heatCellMin, min(DesignTokens.heatCellMax, (proxy.size.width - 22) / CGFloat(columns) - DesignTokens.heatCellGap)), step = size + DesignTokens.heatCellGap
                 VStack(alignment: .leading, spacing: 6) {
-                    ZStack(alignment: .topLeading) { ForEach(Array(days.enumerated().filter { $0.offset == 0 || $0.element.key.hasSuffix("-01") }), id: \.element.key) { index, day in Text(AieyesLocale.month(Int(day.key.dropFirst(5).prefix(2)) ?? 1)).font(.system(size: DesignTokens.fontHint)).offset(x: 22 + CGFloat((index + leading) / 7) * step) } }.frame(height: 15).accessibilityHidden(true)
+                    ZStack(alignment: .topLeading) { ForEach(cached.monthStarts, id: \.self) { index in Text(AieyesLocale.month(Int(days[index].key.dropFirst(5).prefix(2)) ?? 1)).font(.system(size: DesignTokens.fontHint)).offset(x: 19 + CGFloat((index + leading) / 7) * step) } }.frame(height: 15).accessibilityHidden(true)
                     HStack(alignment: .top, spacing: 3) {
                         VStack(spacing: 3) { ForEach(0..<7) { row in Text(row.isMultiple(of: 2) ? AieyesLocale.weekday(row) : "").font(.system(size: DesignTokens.fontHint)).frame(width: 16, height: size) } }.accessibilityHidden(true)
                         ForEach(0..<columns, id: \.self) { column in VStack(spacing: 3) {
@@ -930,7 +936,7 @@ struct Heatmap: View, Equatable {
                                         .help(cached.labels[day.key] ?? day.key).accessibilityLabel(cached.labels[day.key] ?? day.key).accessibilityAddTraits(.isButton).accessibilityAction { selected = index; showDay = true }.onTapGesture { selected = index; showDay = true }
                                 } else { Color.clear.frame(width: size, height: size) }
                             }
-                        }.frame(width: step - 3) }
+                        }.frame(width: size) }
                     }
                 }
             }.frame(height: 130).focusable()
@@ -941,15 +947,44 @@ struct Heatmap: View, Equatable {
             if days.indices.contains(selected) { Text(label(days[selected])).font(AppFont.secondary).textSelection(.enabled) }
             HStack { Text(L("零")); ForEach(0..<5) { n in RoundedRectangle(cornerRadius: DesignTokens.heatCellRadius).fill(n == 0 ? Color.primary.opacity(DesignTokens.heatEmptyOpacity) : Palette.accent.opacity(0.25 + Double(n) * 0.1875)).frame(width: 12, height: 12) }; Text(L("多")) }.font(AppFont.secondary).foregroundStyle(.secondary)
             DisclosureGroup(L("年度数据表 · 精确值")) {
-                Table(days) {
-                    TableColumn(L("日期"), value: \.key)
-                    TableColumn("Token") { day in Text(Format.compact(day.total)).help(String(format: "%.0f Token", day.total)).textSelection(.enabled) }
-                    TableColumn(L("API 等价成本 USD")) { day in Text(String(format: "%.6f", day.cost)).textSelection(.enabled) }
-                }.frame(height: 260)
+                AnnualUsageTable(days: days)
             }.font(AppFont.secondary)
         }.sheet(isPresented: $showDay) { if days.indices.contains(selected) { let day = days[selected]; VStack(alignment: .leading, spacing: 14) { Text(day.key).font(AppFont.title); Text(label(day)).textSelection(.enabled); CacheSummaryCard(tokens: day.tokens); Button(L("关闭")) { showDay = false }.keyboardShortcut(.cancelAction) }.padding(DesignTokens.dialogPadding).frame(width: 520) } }
     }
     private func move(_ offset: Int) { selected = min(max(0, days.count - 1), max(0, selected + offset)) }
+}
+
+
+struct AnnualUsageTable: View {
+    var days: [Aggregate]
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    var body: some View {
+        let _ = interfaceLanguage
+        ScrollView {
+            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                Section {
+                    ForEach(days) { day in
+                        annualRow(day.key, Format.compact(day.total), String(format: "%.6f", day.cost))
+                            .help(String(format: "%.0f Token · %.6f USD", day.total, day.cost)).textSelection(.enabled)
+                            .accessibilityElement(children: .combine)
+                        Divider().opacity(0.5)
+                    }
+                } header: {
+                    annualRow(L("日期"), "Token", L("API 等价成本 USD"))
+                        .fontWeight(.medium).foregroundStyle(.secondary)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                }
+            }
+        }.font(AppFont.secondary).frame(height: 260)
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
+    }
+    private func annualRow(_ date: String, _ tokens: String, _ cost: String) -> some View {
+        HStack(spacing: 12) {
+            Text(date).frame(maxWidth: .infinity, alignment: .leading)
+            Text(tokens).frame(maxWidth: .infinity, alignment: .trailing)
+            Text(cost).frame(maxWidth: .infinity, alignment: .trailing)
+        }.monospacedDigit().padding(.horizontal, 10).padding(.vertical, 9)
+    }
 }
 
 private struct QuotaRefreshButton: View {
@@ -1569,7 +1604,7 @@ struct ServerResourceSummary: View {
                                 Text(gpu.name ?? "—").foregroundStyle(.secondary).lineLimit(1).help(gpu.name ?? "—")
                             }.font(AppFont.secondary)
                             HStack(alignment: .top, spacing: 12) {
-                                ResourceStrip(title: L("利用率"), percent: gpu.utilization, tint: Palette.category("gpu")).frame(width: host.shows("gpuMemory") ? 86 : nil)
+                                ResourceStrip(title: L("利用率"), percent: gpu.utilization, tint: Palette.category("gpu"), warnHigh: false).frame(width: host.shows("gpuMemory") ? 86 : nil)
                                 if host.shows("gpuMemory") {
                                     ResourceStrip(title: L("显存"), percent: Format.capacityPercent(gpu.memoryUsedMiB, gpu.memoryTotalMiB),
                                                   detail: Format.capacityPair(gpu.memoryUsedMiB.map { $0 * 1048576 }, gpu.memoryTotalMiB.map { $0 * 1048576 }), tint: Palette.category("gpu"))
@@ -1650,6 +1685,8 @@ struct ResourceStrip: View {
     var title: String, percent: Double?
     var detail = ""
     var tint: Color = Palette.accent
+    var warnHigh = true
+    private var highLoad: Bool { warnHigh && (value ?? 0) >= 90 }
     private var value: Double? { percent.flatMap { $0.isFinite ? min(100, max(0, $0)) : nil } }
     private var label: String { (detail.isEmpty ? "" : detail + " · ") + (value.map { String(format: "%.0f%%", $0) } ?? "—") }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
@@ -1659,12 +1696,12 @@ struct ResourceStrip: View {
             HStack(spacing: 5) {
                 Text(title).font(AppFont.secondary).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 0)
-                if (value ?? 0) >= 90 { Image(systemName: "exclamationmark.triangle").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(Palette.danger) }
-                Text(label).font(.system(size: DesignTokens.fontCaption)).monospacedDigit().lineLimit(1).fixedSize().foregroundStyle((value ?? 0) >= 90 ? Palette.danger : Color.primary)
+                if highLoad { Image(systemName: "exclamationmark.triangle").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(Palette.danger) }
+                Text(label).font(.system(size: DesignTokens.fontCaption)).monospacedDigit().lineLimit(1).fixedSize().foregroundStyle(highLoad ? Palette.danger : Color.primary)
             }.frame(height: 17)
             ResourceBar(percent: value, tint: tint)
         }.frame(maxWidth: .infinity, alignment: .leading).help(title + " " + label)
-            .accessibilityElement(children: .ignore).accessibilityLabel(title + " " + label + ((value ?? 0) >= 90 ? L("，高负载") : ""))
+            .accessibilityElement(children: .ignore).accessibilityLabel(title + " " + label + (highLoad ? L("，高负载") : ""))
     }
 }
 

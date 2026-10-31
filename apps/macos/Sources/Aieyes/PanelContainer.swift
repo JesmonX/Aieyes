@@ -1,6 +1,17 @@
 import AppKit
 import SwiftUI
 
+@MainActor final class PanelPopover: NSPopover {
+    override func show(relativeTo positioningRect: NSRect, of positioningView: NSView, preferredEdge: NSRectEdge) {
+        super.show(relativeTo: positioningRect, of: positioningView, preferredEdge: preferredEdge)
+        // AppKit assigns the anchor's window level during show, after viewDidAppear.
+        if let window = contentViewController?.view.window {
+            PanelContainer.keepAboveApplications(window)
+            window.orderFrontRegardless()
+        }
+    }
+}
+
 /// Keep the full-panel tint outside SwiftUI's hover/content damage regions.
 /// NSPopover supplies the single system material behind this transparent container.
 @MainActor final class PanelContainer: NSViewController {
@@ -16,6 +27,12 @@ import SwiftUI
         for child in view.subviews { child.frame = view.bounds }
         view.needsLayout = true
         view.layoutSubtreeIfNeeded()
+    }
+    // Popovers anchored to a nonactivating pet otherwise inherit its low window level.
+    static func keepAboveApplications(_ window: NSWindow) {
+        window.level = .statusBar
+        window.hidesOnDeactivate = false
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     }
     override func loadView() {
         let container = NSView(frame: NSRect(x: 0, y: 0, width: model.panelWidth, height: model.panelHeight))

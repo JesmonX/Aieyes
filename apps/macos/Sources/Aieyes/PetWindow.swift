@@ -314,6 +314,15 @@ private final class PetHost: NSHostingView<PetView> {
         mouseGlobal = NSEvent.addGlobalMonitorForEvents(matching:[.mouseMoved,.leftMouseDragged,.leftMouseUp]) { [weak self] _ in DispatchQueue.main.async { self?.updateHit() } }
         Timer.publish(every:1,on:.main,in:.common).autoconnect().sink { [weak self] _ in self?.updateFullscreen() }.store(in:&subscriptions)
         NSWorkspace.shared.notificationCenter.publisher(for:NSWorkspace.activeSpaceDidChangeNotification).sink { [weak self] _ in self?.updateFullscreen() }.store(in:&subscriptions)
+        // Respond to application switches immediately, rather than waiting for the fullscreen timer.
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification).sink { [weak self] _ in
+            guard let self else { return }
+            self.updateFullscreen()
+            if self.panel.isVisible {
+                self.panel.level = .floating
+                self.panel.orderFrontRegardless()
+            }
+        }.store(in: &subscriptions)
         Self.clamp(panel); sync()
         NotificationCenter.default.publisher(for:UserDefaults.didChangeNotification).sink { [weak self] _ in self?.sync() }.store(in:&subscriptions)
         NotificationCenter.default.publisher(for:NSApplication.didChangeScreenParametersNotification).sink { [weak self] _ in if let self { Self.clamp(self.panel) } }.store(in:&subscriptions)

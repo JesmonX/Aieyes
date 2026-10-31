@@ -156,12 +156,12 @@ struct AgentMachinesSection: View {
             }
             if !unbound {
                 Menu {
-                    ForEach(sources.filter { model.settings.sourceEnabled($0) }) { source in
+                    if let source = sources.first(where: { source in model.settings.sourceEnabled(source) && model.accountStatuses.contains { $0.sourceId == source.id && ($0.current == true || $0.credential == true) } }) ?? sources.first(where: { model.settings.sourceEnabled($0) }) {
                         if agent.provider == "codex" {
-                            Button(L("登录 · ") + source.displayLocation) { authIntent = "login"; sourceToManage = source }.help(source.path)
-                            Button(L("切换账户 · ") + source.displayLocation) { authIntent = "switch"; sourceToManage = source }.help(source.path)
+                            Button(L("登录")) { authIntent = "login"; sourceToManage = source }.help(source.path)
+                            Button(L("切换账户")) { authIntent = "switch"; sourceToManage = source }.help(source.path)
                         }
-                        if agent.provider == "antigravity" { Button(L("登录 / 检查 · ") + source.displayLocation) { agySource = source }.help(source.path) }
+                        if agent.provider == "antigravity" { Button(L("登录")) { agySource = source }.help(source.path) }
                     }
                     if !sources.contains(where: { model.settings.sourceEnabled($0) }) { Text(L("登录与切换需要启用 Agent、选择机器并开启目录采集")) }
                     Button(L("机器与采集设置")) { model.openSettings(.init(category: "servers")) }

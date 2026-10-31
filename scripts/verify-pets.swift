@@ -128,16 +128,21 @@ import Darwin
         clockState.key = "a-new-turn"; configure(); precondition(sprite.animationStarts == starts)
         for timings in [CoreContract.petFrameDurations[0], Array(repeating: 100, count: 6)] {
             clockState.frameDurationsMs = timings
-            let began = CACurrentMediaTime(); configure()
+            configure()
+            // Pause the layer clock at each frame midpoint: Core Animation still evaluates the presented keyframes,
+            // including the last frame, without depending on how promptly a loaded machine runs the sampler.
+            guard let layer = sprite.layer, let frames = layer.animation(forKey: "pet.frames") else { preconditionFailure("Playing sprite has no frame animation") }
+            let (speed, offset) = (layer.speed, layer.timeOffset)
             var boundary = 0.0
             for (index, duration) in timings.enumerated() {
-                let midpoint = began + (boundary + Double(duration) / 2) / 1000
-                while CACurrentMediaTime() < midpoint { pump(0.003) }
-                guard let contents = sprite.layer?.presentation()?.contents else { preconditionFailure("Visible sprite has no presentation image") }
-                let displayed = contents as! CGImage
-                precondition(displayed.dataProvider?.data == images[index].dataProvider?.data, "Presentation image must match the variable frame timing, including the last frame")
+                // A presentation copy reflects committed layer timing, so commit the paused clock before sampling it.
+                layer.speed = 0; layer.timeOffset = frames.beginTime + (boundary + Double(duration) / 2) / 1000; CATransaction.flush()
+                guard let contents = layer.presentation()?.contents else { preconditionFailure("Visible sprite has no presentation image") }
+                let displayed = (contents as! CGImage).dataProvider?.data
+                precondition(displayed == images[index].dataProvider?.data, "Presentation image must match the variable frame timing, including the last frame: frame \(index) of \(timings) showed \(images.firstIndex { $0.dataProvider?.data == displayed }.map(String.init) ?? "an unknown image")")
                 boundary += Double(duration)
             }
+            layer.speed = speed; layer.timeOffset = offset; CATransaction.flush()
         }
         checkpoint("Pet presentation images match normal and uniform frame timing")
         sprite.configure(images: images, state: clockState, identity: clockState.animationIdentity, playing: true, reduced: true)
@@ -231,6 +236,20 @@ import Darwin
             defaults.set(true, forKey: "aieyes.pet.enabled")
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: defaults)
             precondition(panel.isVisible)
+            panel.level = .normal
+            NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
+            precondition(panel.level == .floating && panel.isVisible, "Application switches restore pet ordering synchronously")
+            let popover = PanelPopover()
+            popover.behavior = .applicationDefined
+            popover.animates = false
+            popover.contentViewController = PanelContainer(model: model)
+            (popover.contentViewController as? PanelContainer)?.prepare(size: NSSize(width: 450, height: 540))
+            popover.show(relativeTo: panel.contentView!.bounds, of: panel.contentView!, preferredEdge: .minY)
+            pump(0.1)
+            let overlay = popover.contentViewController!.view.window!
+            precondition(overlay.level == .statusBar && !overlay.hidesOnDeactivate, "Pet-anchored panel remains above applications")
+            precondition(overlay.collectionBehavior.contains(.canJoinAllSpaces))
+            popover.performClose(nil)
             precondition(panel.contentView?.accessibilityPerformPress() == true && opens == 1)
             let event = NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: 30, y: 30), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)!
             let menu = panel.contentView!.menu(for: event)!

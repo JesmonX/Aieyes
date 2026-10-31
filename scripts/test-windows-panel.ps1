@@ -109,7 +109,7 @@ function Verify-PetTopmost {
         # HWND_NOTOPMOST / HWND_BOTTOM reproduce losing the topmost band.
         # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE preserves input/geometry.
         Assert-That ([PanelProbe]::SetWindowPos($script:pet,[IntPtr]::new($after),0,0,0,0,0x13)) "simulate pet demotion ($after)"
-        Wait-For { Pet-IsTopmost } "pet recovers topmost after demotion ($after)"
+        Assert-That (Pet-IsTopmost) "pet prevents demotion before the next painted frame ($after)"
         Assert-That (Pet-IsAboveBackground) "pet remains above ordinary windows ($after)"
         Assert-That ([PanelProbe]::GetForegroundWindow() -eq $background.Handle) "topmost recovery preserves keyboard focus ($after)"
         $afterRect=Bounds $script:pet
@@ -279,6 +279,12 @@ try {
     $exStyle=[PanelProbe]::GetWindowLong($script:panel,-20)
     # WS_EX_TOOLWINDOW (0x80) without WS_EX_APPWINDOW (0x40000): no taskbar button or Alt+Tab entry.
     Assert-That ((($exStyle -band 0x80) -ne 0) -and (($exStyle -band 0x40000) -eq 0)) 'panel is a tool window outside the taskbar and Alt+Tab'
+    Assert-That (([PanelProbe]::GetWindowLong($script:panel,-20) -band 8) -ne 0) 'pet panel opens topmost'
+    foreach($after in @(-2,1)) {
+        Assert-That ([PanelProbe]::SetWindowPos($script:panel,[IntPtr]::new($after),0,0,0,0,0x13)) "simulate panel demotion ($after)"
+        Assert-That (([PanelProbe]::GetWindowLong($script:panel,-20) -band 8) -ne 0) "panel prevents demotion before repaint ($after)"
+        Assert-That ([PanelProbe]::GetForegroundWindow() -eq $background.Handle) "panel topmost protection preserves keyboard focus ($after)"
+    }
     Screenshot 'open'
     $former=Bounds $script:panel
     # Deliberate interaction can activate the panel (enabling text/keyboard input).

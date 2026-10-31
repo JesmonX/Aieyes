@@ -2,11 +2,11 @@
 
 2026-10-31，继续 Claude 会话 `325887cd-cbd5-4e59-af4b-572929ffde04`。WP0–WP16 的代码、脚本、独立审查和最终验收已完成，G1–G5 已关闭；真实账户限制仍按计划保留。
 
-## 范围与流程
+## 功能分支验收阶段的范围与流程
 
 继续执行 [实施计划](agent-expansion-implementation-plan.md) 的 WP0–WP16，以及调研文档 (f)(g)(h) 的用户决定。单账号自动识别优先；记住历史账号及额度；无头与 Aieyes 内部运行不计会话；保留已批准的 Claude 钥匙串、Qoder 后台查询和 Buddy 可选登录方案。
 
-工作目录为 `../Aieyes-agents`，分支 `feat/agent-auth-quota`。沿用分组实现、独立验证、合并和总门禁；不提交或推送，不改动另有工作的 main 工作目录。
+功能分支验收在 `../Aieyes-agents` / `feat/agent-auth-quota` 完成。该阶段沿用分组实现、独立验证、合并和总门禁，没有提交或推送，也未改动当时另有工作的 main 工作目录；随后用户授权的本地合并见文末。
 
 原 Claude parallel workflow 最终 `result=null`，包含实现、验证、合并及总门禁的 429 失败，不能视为完成。7 个 WP worktree 的基线树相同，改动全部保留，续接从实际文件开始。
 
@@ -33,7 +33,7 @@
 - 最终真实 Trae 工具调用发现轨迹重写时丢失无头判定，已修复。两项先红回归验证同任务写空／截断、writer 退出、新任务及删除重建；19 项相关测试与最终真实普通／工具调用通过。未知新会话仍计入，未放宽 live 断言。
 - 合并前备份、逐文件合并记录和日志保存在 `.local/codex-resume/`；完整恢复审计保存在 `.local/codex-workflow-audit.md`。
 
-## 最终验证
+## 功能分支合并前最终验证
 
 日志集中在 `.local/codex-resume/final/resumed-20261031/`。
 最终 [summary.json](../.local/codex-resume/final/resumed-20261031/summary.json)
@@ -70,4 +70,20 @@ G5 最终记录均已关闭。[完成审计](../.local/codex-resume/final/comple
 
 指定自建 Qwen 端点用于隔离的客户端、落盘、用量和会话验证。真实 Google/GitHub 等订阅账号、Buddy 成功登录及付费余额仍按批准计划标为“未实测”；CLI 需要原生登录、缺少原生 resume 能力或取消后没有持久化 usage 的场景单独记明。脚本总退出码为 0 也不代表每个 provider/case 都已实测。
 
-工作仍限定在 `Aieyes-agents`，保留继承的暂存内容，不提交或推送，不改动原 `Aieyes` 工作树。
+上述验收保留了当时继承的暂存内容。用户随后明确授权将 Agent 扩展及 `Aieyes` 中的现有改动一并合入 `main`。
+
+## 本地 main 合并完成
+
+最新主分支 v0.1.67、宣传脚本／workday 作品和 Agent 扩展已合入 `Aieyes/main`。
+原有八个改动文件保存于 `56df664`，Agent 功能保存于 `079e5a2`，合并保留双方内容。
+测试清单与同名调研文档的两处文本冲突已处理；主分支独有 31 个文件逐字节保留。
+
+合并源码重新通过格式、严格 Clippy、Rust 755/0/4、构建、CI、完整 Web 与 Native。
+首次 Native 焦点等待失败后，未改源码或断言，单项和完整序列复跑均通过。
+宣传脚本通过语法／五时段样例检查，原生渲染生成 25 张截图；完整视频未重制。
+合并后的文案计数为 3,509 条源码消息与 3,863 条翻译，契约为 130 RPC。
+
+上述合并前验收与真实调用报告继续作为历史证据，不重写其当时的 SHA、计数或范围。
+本次[合并检查](../.local/merge-main-20261031/checks.json)及
+[最终合并记录](../.local/merge-main-20261031/result.json)单独保存。
+这是本地合并，未推送；真实服务商登录与付费额度等未实测边界继续保留。
