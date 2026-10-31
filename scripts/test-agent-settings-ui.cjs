@@ -74,7 +74,7 @@ function browserFixture(){
   const server=http.createServer((req,res)=>{if(require('./ui-test-helpers.cjs').serveFont(req,res))return;const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html','.png':'image/png'})[path.extname(file)]||'text/plain');res.end(fs.readFileSync(file));});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
   try {
-    browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1180,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.exposeFunction('testRPC',invoke);await page.addInitScript(browserFixture);await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
+    browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1180,height:900},reducedMotion:'no-preference'}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.exposeFunction('testRPC',invoke);await page.addInitScript(browserFixture);await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
     assert.equal(await page.locator('#account').count(),0,'Usage surfaces offer no account filter');
     const historyTotal=await page.evaluate(()=>state.dashboard.summary.total);assert.equal(historyTotal,100);
     await page.evaluate(()=>changeFilters({accountKey:'codex:history'}));await page.waitForFunction(()=>!state.dashboardPending);

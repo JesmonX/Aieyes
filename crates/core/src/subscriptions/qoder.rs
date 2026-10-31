@@ -1274,14 +1274,14 @@ esac
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn query_attempts(
     command: impl FnMut() -> Result<std::process::Command>,
     budget: std::time::Duration,
 ) -> Result<Value> {
     query_attempts_for("qoder", command, budget)
 }
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn exchange(
     command: std::process::Command,
     deadline: std::time::Instant,

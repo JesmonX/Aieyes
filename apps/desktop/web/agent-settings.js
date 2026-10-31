@@ -718,7 +718,9 @@ async function loadQoderCli(provider) {
 document.addEventListener('click', (event) => {const button = event.target.closest('[data-qoder-cli]');if (button) openQoderCli(button.dataset.qoderCli);});
 async function openQoderCli(provider) {
   const qoderCliState = qoderState(provider);
-  if (document.querySelector('#qoder-cli')) return;
+  const previous = document.querySelector('#qoder-cli');
+  if (previous?.open) return;
+  previous?.remove(); // A closed dialog may still be waiting for its exit animation.
   const dialog = document.createElement('dialog');dialog.id = 'qoder-cli';dialog.setAttribute('aria-label', AieyesI18n.t("安装 qodercli 并登录"));
   dialog.innerHTML = `<h2>${AieyesI18n.t("安装 qodercli 并登录")}</h2><p id="qoder-cli-status" role="status"></p><p>${AieyesI18n.t("在终端运行：")}</p><pre class="setup-command"><code id="qoder-cli-command"></code></pre><div class="actions"><button type="button" id="qoder-cli-copy">${AieyesI18n.t("复制命令")}</button><span id="qoder-cli-copied" class="muted tiny" role="status"></span></div><p class="muted">${AieyesI18n.t("登录时也可选择 Personal Access Token，在 {0} 生成后粘贴。", '<code>' + (provider === 'qoder-cn' ? 'https://qoder.cn' : 'https://qoder.com') + '/account/integrations</code>')}</p><div id="qoder-cli-error" class="error" role="alert"></div><div class="dialog-actions"><button type="button" id="qoder-cli-detect">${AieyesI18n.t("重新检测")}</button><button type="button" id="qoder-cli-close">${AieyesI18n.t("完成")}</button></div>`;
   if (provider === 'qoder-cn') { dialog.innerHTML = dialog.innerHTML.replaceAll('qodercli', 'qoderclicn'); dialog.setAttribute('aria-label', dialog.getAttribute('aria-label').replaceAll('qodercli', 'qoderclicn')); }

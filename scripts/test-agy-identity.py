@@ -66,7 +66,7 @@ class IdentityTests(unittest.TestCase):
     def test_ide_proto_and_legacy_json_are_read_without_writes_or_refresh_tokens(self):
         for legacy in (False, True):
             with tempfile.TemporaryDirectory() as root, \
-                    patch.dict(os.environ, {'HOME': root}, clear=True), \
+                    patch.dict(os.environ, {'HOME': root, 'USERPROFILE': root}, clear=True), \
                     patch.object(agy.sys, 'platform', 'linux'):
                 path = ide_store(root, ide_topic(legacy))
                 before = path.read_bytes()
@@ -82,7 +82,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_cli_presence_never_falls_through_to_another_ide_account(self):
         with tempfile.TemporaryDirectory() as root, \
-                patch.dict(os.environ, {'HOME': root, 'SSH_CONNECTION': 'fixture'}, clear=True), \
+                patch.dict(os.environ, {'HOME': root, 'USERPROFILE': root, 'SSH_CONNECTION': 'fixture'}, clear=True), \
                 patch.object(agy, 'read_ide_credential', side_effect=AssertionError('CLI owns this login')) as ide_reader, \
                 patch.object(agy, 'request_json', side_effect=AssertionError('must not make an HTTP request')):
             folder = pathlib.Path(root) / '.gemini'
@@ -100,7 +100,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_ide_only_identity_requires_userinfo_and_expiry_does_not_refresh(self):
         with tempfile.TemporaryDirectory() as root, \
-                patch.dict(os.environ, {'HOME': root}, clear=True), \
+                patch.dict(os.environ, {'HOME': root, 'USERPROFILE': root}, clear=True), \
                 patch.object(agy.sys, 'platform', 'linux'), \
                 patch.object(agy.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, b'')):
             ide_store(root, ide_topic())
@@ -118,7 +118,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_signed_out_current_ide_does_not_reuse_legacy_ide_login(self):
         with tempfile.TemporaryDirectory() as root, \
-                patch.dict(os.environ, {'HOME': root}, clear=True), \
+                patch.dict(os.environ, {'HOME': root, 'USERPROFILE': root}, clear=True), \
                 patch.object(agy.sys, 'platform', 'linux'):
             ide_store(root, None)
             ide_store(root, ide_topic(), 'Antigravity')

@@ -45,7 +45,7 @@ class NativeTransport(unittest.TestCase):
                 db.close()
 
     def test_omp_database_projects_only_supported_enabled_pool_and_watches_wal(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'HOME': directory}, clear=True):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'HOME': directory, 'USERPROFILE': directory}, clear=True):
             root = pathlib.Path(directory)
             path = root / 'agent.db'
             db = sqlite3.connect(path)
@@ -84,7 +84,7 @@ class NativeTransport(unittest.TestCase):
             with sqlite3.connect(data / 'agent.db') as db:
                 db.executescript((pathlib.Path(__file__).parent.parent / 'crates/core/tests/fixtures/omp-auth.sql').read_text())
             request = dict(provider='omp', roots=[], env='PI_CODING_AGENT_DIR', patterns=['agent.db'], primary='~/.omp/agent')
-            with patch.dict(os.environ, {'HOME': directory, 'XDG_DATA_HOME': str(home / 'data'), 'OMP_PROFILE': 'work'}, clear=True), patch.object(scan.sys, 'platform', 'linux'):
+            with patch.dict(os.environ, {'HOME': directory, 'USERPROFILE': directory, 'XDG_DATA_HOME': str(home / 'data'), 'OMP_PROFILE': 'work'}, clear=True), patch.object(scan.sys, 'platform', 'linux'):
                 result = scan.collect(request)
             self.assertEqual(len(result['documents']), 1)
             self.assertEqual(result['documents'][0]['path'], str((data / 'agent.db').resolve()))
@@ -102,7 +102,7 @@ class NativeTransport(unittest.TestCase):
                 ('GH_TOKEN', {'COPILOT_GITHUB_TOKEN': ' ', 'GH_TOKEN': 'gho_PRIVATE_MIDDLE', 'GITHUB_TOKEN': 'gho_PRIVATE_LOW'}),
                 ('GITHUB_TOKEN', {'GITHUB_TOKEN': 'gho_PRIVATE_LOW'}),
             ):
-                with self.subTest(selected=selected), patch.dict(os.environ, dict(HOME=str(home), **tokens), clear=True):
+                with self.subTest(selected=selected), patch.dict(os.environ, dict(HOME=str(home), USERPROFILE=str(home), **tokens), clear=True):
                     result = scan.collect(request)
                     self.assertEqual(result['documents'][0]['path'], 'env:' + selected)
                     value = json.loads(base64.b64decode(result['documents'][0]['data']))
@@ -119,7 +119,7 @@ class NativeTransport(unittest.TestCase):
             home = pathlib.Path(directory)
             native = home / '.copilot'
             request = dict(provider='copilot', roots=[], env='', patterns=['config.json'], primary=str(native), fingerprint=True)
-            with patch.dict(os.environ, {'HOME': str(home)}, clear=True), \
+            with patch.dict(os.environ, {'HOME': str(home), 'USERPROFILE': str(home)}, clear=True), \
                     patch('builtins.open', side_effect=AssertionError('metadata only')), \
                     patch.object(pathlib.Path, 'open', side_effect=AssertionError('metadata only')):
                 empty = scan.collect(request)
@@ -176,7 +176,7 @@ class NativeTransport(unittest.TestCase):
         for platform, configured in [('darwin', False), ('win32', False), ('win32', True), ('linux', False), ('linux', True)]:
             with self.subTest(platform=platform, configured=configured), tempfile.TemporaryDirectory() as directory:
                 home = pathlib.Path(directory)
-                environment = {'HOME': directory}
+                environment = {'HOME': directory, 'USERPROFILE': directory}
                 if platform == 'darwin':
                     base = home / 'Library/Application Support'
                 elif platform == 'win32':
@@ -236,7 +236,7 @@ class NativeTransport(unittest.TestCase):
         for platform, variable in [('win32', 'APPDATA'), ('linux', 'XDG_CONFIG_HOME')]:
             with self.subTest(platform=platform), tempfile.TemporaryDirectory() as directory:
                 request = dict(provider='antigravity', roots=[], env='', patterns=[], primary=directory, fingerprint=True)
-                with patch.dict(os.environ, {'HOME': directory, variable: 'relative-config'}, clear=True), \
+                with patch.dict(os.environ, {'HOME': directory, 'USERPROFILE': directory, variable: 'relative-config'}, clear=True), \
                         patch.object(scan.sys, 'platform', platform), patch.object(scan.os, 'stat', side_effect=FileNotFoundError) as metadata:
                     result = scan.collect(request)
                 self.assertIn('fingerprint', result)
@@ -257,7 +257,7 @@ class NativeTransport(unittest.TestCase):
                 db.execute('INSERT INTO auth_kv VALUES(?, ?)', ('kirocli:odic:device-registration', '{"client_secret":"PRIVATE_SECRET"}'))
                 db.execute('INSERT INTO state VALUES(?, ?)', ('api.codewhisperer.profile', '{"arn":"profile"}'))
             before = path.read_bytes()
-            with patch.dict(os.environ, {'HOME': str(home), 'XDG_DATA_HOME': str(data)}):
+            with patch.dict(os.environ, {'HOME': str(home), 'USERPROFILE': str(home), 'XDG_DATA_HOME': str(data)}):
                 result = scan.collect(dict(provider='kiro', roots=[], env='', patterns=[], primary='~/.kiro'))
             self.assertFalse(result['errors'])
             self.assertEqual(len(result['documents']), 1)
@@ -275,7 +275,7 @@ class NativeTransport(unittest.TestCase):
             (root / 'auth.json').write_text('{"token":"PRIVATE"}')
             (root / 'settings.json').write_text('{"key":"OTHER-PRIVATE"}')
             request = dict(provider='codex', roots=[], env='CODEX_HOME', patterns=['auth.json', 'settings.json'], primary='~/.codex')
-            with patch.dict(os.environ, {'HOME': str(home), 'CODEX_HOME': str(root)}):
+            with patch.dict(os.environ, {'HOME': str(home), 'USERPROFILE': str(home), 'CODEX_HOME': str(root)}):
                 result = scan.collect(request)
                 self.assertEqual(len(result['documents']), 2)
                 self.assertEqual(result['roots'], [str(root.resolve())])
@@ -349,7 +349,7 @@ class NativeTransport(unittest.TestCase):
                 db.execute('INSERT INTO credential VALUES(?,?,?,?,?)', row)
             db.commit()
             before = (root / 'opencode.db').read_bytes()
-            with patch.dict(os.environ, {'HOME': str(home)}):
+            with patch.dict(os.environ, {'HOME': str(home), 'USERPROFILE': str(home)}):
                 request = dict(provider='opencode', roots=[str(root)], env='', patterns=['auth.json'], primary=str(root))
                 result = scan.collect(request)
                 self.assertEqual(result['errors'], [])
@@ -387,7 +387,7 @@ class NativeTransport(unittest.TestCase):
             native.write_text('{"credentials":{"kimiWeb":{"userId":"fixture"}}}')
             kernel = share / 'daimon/runtime/kimi-code/home'
             kernel.mkdir(parents=True)
-            with patch.dict(os.environ, {'HOME':str(home), 'KIMI_SHARE_DIR':''}), patch.object(scan.sys, 'platform', 'darwin'):
+            with patch.dict(os.environ, {'HOME':str(home), 'USERPROFILE':str(home), 'KIMI_SHARE_DIR':''}), patch.object(scan.sys, 'platform', 'darwin'):
                 result = scan.collect(dict(provider='kimi', roots=[], env='', patterns=['config.toml'], primary='~/.kimi-code'))
             self.assertEqual(result['errors'], [])
             self.assertIn(str(kernel.resolve()), result['roots'])
@@ -400,7 +400,7 @@ class NativeTransport(unittest.TestCase):
             history = home / 'Library/Application Support/CodeBuddyExtension/Data/u1/CodeBuddy/u1/history'
             history.mkdir(parents=True)
             (history / 'PRIVATE').write_text('PRIVATE-CONTENT')
-            with patch.dict(os.environ, {'HOME':str(home)}), patch.object(scan.sys, 'platform', 'darwin'):
+            with patch.dict(os.environ, {'HOME':str(home), 'USERPROFILE':str(home)}), patch.object(scan.sys, 'platform', 'darwin'):
                 result = scan.collect(dict(provider='codebuddy', roots=[], env='', patterns=[], primary='~/.codebuddy'))
             self.assertEqual(result['errors'], [])
             self.assertEqual(len(result['documents']), 1)
