@@ -55,12 +55,13 @@ class ProcessTests(unittest.TestCase):
         self.assertNotIn('argv',rewritten)
 
     def test_harness_lock_belongs_only_to_its_exact_native_session(self):
-        path='/data/dsh/session-a/session.v4.jsonl.zstd'
+        root=pathlib.Path('/data/dsh')
+        path=str(root/'session-a/session.v4.jsonl.zstd')
         context=dict(path=path,session='a',workspace=None,created=0)
         process=dict(provider='deepseek-harness',pid=10,start=100,classification='headless',selectedSession=None,
-                     root='/data/dsh',workspace='/workspace',files={'/data/dsh/session-a/session.lock'},internal=False,alive=False)
+                     root=str(root),workspace='/workspace',files={str(root/'session-a/session.lock')},internal=False,alive=False)
         a=(path,context,{})
-        other='/data/dsh/session-b/session.v4.jsonl.zstd';b=(other,dict(context,path=other,session='b'),{})
+        other=str(root/'session-b/session.v4.jsonl.zstd');b=(other,dict(context,path=other,session='b'),{})
         result=m.associate_native_processes('deepseek-harness',[a,b],[process])
         self.assertEqual(set(result),{path})
         self.assertEqual(result[path]['classification'],'headless')
@@ -105,10 +106,11 @@ class ProcessTests(unittest.TestCase):
             self.assertFalse(any(e.get('classification') for row in other['files'] for e in row['events']))
 
     def test_ambiguous_workspace_is_unknown_but_exact_session_and_pid_are_safe(self):
+        root = str(pathlib.Path('/data/pi'))
         activity = dict(phase='working',turnStartedAt=101000)
         def session(identity):
-            return ('/data/pi/'+identity+'.jsonl',dict(path='/data/pi/'+identity+'.jsonl',session=identity,workspace='/workspace',created=101),dict(activity,session=identity))
-        process = dict(pid=10,start=100,provider='pi',argv=['pi','-p','fixture'],workspace='/workspace',root='/data/pi',internal=False,files=set())
+            return (str(pathlib.Path(root)/(identity+'.jsonl')),dict(path=str(pathlib.Path(root)/(identity+'.jsonl')),session=identity,workspace='/workspace',created=101),dict(activity,session=identity))
+        process = dict(pid=10,start=100,provider='pi',argv=['pi','-p','fixture'],workspace='/workspace',root=root,internal=False,files=set())
         sessions = [session('a'),session('b')]
         self.assertEqual(m.associate_native_processes('pi',sessions,[process]),{})
         process['argv'] = ['pi','--session-id','a','-p','fixture']

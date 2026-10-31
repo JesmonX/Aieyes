@@ -310,7 +310,7 @@ class NativeTransport(unittest.TestCase):
 
             def growing(target, *args, **kwargs):
                 result = real(target, *args, **kwargs)
-                if str(target).endswith('/auth.json'):
+                if pathlib.Path(target).name == 'auth.json':
                     return os.stat_result((result.st_mode,) + tuple(result)[1:6] + (result.st_size + 7,) + tuple(result)[7:])
                 return result
             request = dict(provider='codex', roots=[directory], env='', patterns=['auth.json'])
@@ -346,7 +346,7 @@ class NativeTransport(unittest.TestCase):
     def test_database_projection_reads_wal_and_omits_unrelated_private_state(self):
         with tempfile.TemporaryDirectory() as directory:
             home = pathlib.Path(directory)
-            root = home / '账户?#' / 'opencode'
+            root = home / ('账户#%' if os.name == 'nt' else '账户?#%') / 'opencode'
             root.mkdir(parents=True)
             db = sqlite3.connect(root / 'opencode.db')
             db.executescript("PRAGMA journal_mode=WAL;CREATE TABLE credential(id text,integration_id text,value text,active integer,time_created integer);CREATE TABLE messages(body text);INSERT INTO messages VALUES('PRIVATE-CHAT');")
