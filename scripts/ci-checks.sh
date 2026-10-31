@@ -14,9 +14,14 @@ if [ -z "${PYTHON:-}" ]; then
   if command -v python3 >/dev/null 2>&1; then PYTHON=python3; else PYTHON=python; fi
 fi
 "$PYTHON" scripts/release.py check
+python_failures=''
 for script in test-release.py test-collectors.py test-wakeups.py test-incremental-history.py test-qoder-env.py test-codex-estimate-diagnostics.py test-legacy-account-history.py test-agy-identity.py test-native-wp8.py test-task-remote.py test-session-observers.py test-session-processes.py test-harness-remote.py test-native-database-remote.py test-account-scan.py test-remote-native-quota.py test-codebuddy-ide.py test-agent-live-audits.py test-profile-release-interactions.py; do
-  "$PYTHON" "scripts/$script"
+  if ! "$PYTHON" "scripts/$script"; then python_failures="$python_failures $script"; fi
 done
+if [ -n "$python_failures" ]; then
+  echo "Failed Python checks:$python_failures" >&2
+  exit 1
+fi
 if "$PYTHON" -c 'import os, sys; sys.exit(os.name == "nt")'; then
   "$PYTHON" scripts/test-codex-auth.py
   "$PYTHON" scripts/test-codex-api.py

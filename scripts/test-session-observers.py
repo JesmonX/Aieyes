@@ -647,7 +647,8 @@ class WorkForkTests(unittest.TestCase):
             parent=header('parent','codex_work_desktop','vscode')
             middle=header('middle',base=('parent',len(parent.encode())))
             rows=dict(parent=parent,middle=middle,child=header('child',base=('middle',len(middle.encode()))),explicit=header('explicit','codex_cli_rs',base=('parent',len(parent.encode()))),headless=header('headless',source='exec',base=('parent',len(parent.encode()))))
-            for identity,value in rows.items():(root/(identity+'.jsonl')).write_text(value+json.dumps(dict(type='event_msg',payload=dict(type='task_started',private='PRIVATE_PROMPT')))+'\n')
+            # Fork offsets refer to bytes; text mode would insert CRLF on Windows.
+            for identity,value in rows.items():(root/(identity+'.jsonl')).write_bytes((value+json.dumps(dict(type='event_msg',payload=dict(type='task_started',private='PRIVATE_PROMPT')))+'\n').encode())
             with contextlib.redirect_stdout(io.StringIO()) as output:
                 result=scope['collect'](dict(provider='codex',id='codex',path=str(root)),{},processes=[])
             self.assertEqual(output.getvalue(),'','loading the history resolver must not execute its CLI')
