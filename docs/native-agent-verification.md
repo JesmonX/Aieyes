@@ -1,8 +1,31 @@
 # 原生 Agent 验收记录
 
+2026-10-31 的扩展实现、逐 Agent 零配置/额度/兜底矩阵及当前树门禁记录见
+[实施结果](agent-expansion-implementation-results.md)。本轮安装包、未登录行为、
+Qwen BYOK 与协议 fixture 分别记录；没有新增服务账号，不把 fixture 记为付费额度实测。
+
 核实日期：2026-10-19。验收对象为现有非 Codex 客户端及新增 Kimi Code、DeepSeek Harness、Pi、Oh My Pi、CodeBuddy。以下区分真实客户端调用、协议回归和缺少服务凭据的项目。
 
 2026-10-22 的核查、修复和新实测见[后续验收报告](agent-integration-audit-2026-10-22.md)。下文的版本、调用数字及开发包信息保留为此前验收证据。
+
+2026-10-31 的 WP9 补充以 OpenCode 2.1.0、Cursor 3.27.22、Kimi 3.2.23 与 CodeBuddy IDE 4.12.1/4.12.2 安装包为依据。新增 OpenCode/Pi 上游凭据、Cursor 原生 api2、Kimi Work 私有内核来源与 CodeBuddy IDE JSON 请求聚合；详情及账户验收边界见[零配置补缺](agent-subscriptions.md#零配置补缺opencodepicursorkimicodebuddy2026-10-31)。本轮安装包核对与协议样本不替代下文的真实模型调用记录，尚无真实 Work/CodeBuddy IDE 登录会话或新增付费额度验收。新回归包括 `scripts/test-account-scan.py`、`scripts/test-codebuddy-ide.py` 及 Rust 的只读、复制去重、累计更新和本机/SSH投影一致性用例。
+
+2026-10-31 的 ZCode、DSH、Grok 凭据格式及 Antigravity CLI / IDE 只读账户适配见[原生账户审计](native-account-audit-2026-10-31.md)。该报告区分发行包源码核查、隔离回归和真实登录验证，不改变下文历史验收口径。
+
+本轮实测脚本可先用 `--list` 查看安装与配方覆盖，不启动客户端或核心：
+
+```sh
+python3 scripts/verify-agent-integration-live.py --list
+python3 scripts/verify-agent-lifecycle-live.py --list
+```
+
+运行时明确传入 `--endpoint`、`--model`，可用 `--providers` 限定客户端，
+`--binary PROVIDER=/absolute/path` 指定隔离安装，`--core` 选择待验核心。
+核心和客户端均使用全新 HOME，关闭自动账户发现，临时工作目录有独立 Git 边界。
+未安装记为 `skipped`；已安装但没有无需登录的运行配方，或原生权限、子任务、
+取消、用量证据不足，记为 `unverified`。默认允许这些有明确原因的未验证项；
+需要所选场景全部真实通过时加 `--require-live`。退出码 0 本身不代表全部客户端
+已完成真实验收，应以报告中的逐场景结果为准。
 
 ## 安装与真实调用
 
@@ -74,7 +97,7 @@ API 验证成功才保存。两文件配置分别检查版本、备份，写入�
 - Kimi 已接入中国 / 国际官方 usages 及 `boosterWallet`。钱包定点单位、普通分、十进制金额、零/负/缺失余额、月度上限、错误缓存、Web/Swift 展示均通过协议回归；尚缺真实付费凭据进行钱包联网验收。
 - Harness 已接入 DeepSeek 官方 API 余额：总余额、赠送/充值余额、币种和可调用状态。它属于模型后端，不能代表自建模型或 Harness 的所有服务；尚缺对应官方 Key 和身份信息进行真实联网验收。
 - CodeBuddy 已接入请求 Credits；该部分包含协议样本验证。当前官方公开资料中未找到可核实的服务账户剩余额度入口，不能把请求 Credits、本地 Gateway 密码状态或自建模型 Token 充当余额。
-- Pi/OMP 没有统一客户端余额；额度属于实际模型服务商。其他订阅账户、Antigravity 独立 Gemini Key 的联网验收仍缺相应有效凭据。Cursor 登录及依赖账号的调用按用户要求排除。
+- Pi/OMP 没有统一客户端余额；额度属于实际模型服务商。Pi/OMP 与 OpenCode 中保存的 Anthropic、ChatGPT、Copilot 订阅登录复用对应适配器；Pi/OMP 还支持 Gemini CLI OAuth，按 Google 用户和项目共享，独立于 Antigravity（见[订阅接入](agent-subscriptions.md)）。本机/SSH 的发现、身份、请求和异常处理已有 fixture 集成验证，真实上游订阅额度未实测。其他订阅账户、Antigravity 独立 Gemini Key 的联网验收仍缺相应有效凭据。Cursor 登录及依赖账号的调用按用户要求排除；IDE 键名与 api2 字段已用 3.27.22 安装包核对。
 
 这些缺口没有被标记为真实付费账户验收通过。自建服务成功与付费额度成功分别记录。
 
@@ -113,3 +136,11 @@ SQLite 状态冷启动读取元数据，之后只读取新增行和最多 256 �
 包内核心 SHA-256：`eaa3b5f146d16a879e9f3696c3949017d2ee846f1926d9a4e5534f4e2caa0dbb`。包验证报告、全部哈希及截图位置见 `final-native-bundle/report.json`；日志为 `acceptance-native-bundle-final.log`，最终汇总为 `final-acceptance-report.json`，均位于 `.local/agent-integration/`。
 
 资料：[Pi 会话格式](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session.md)、[Pi 模型配置](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models-config.md)、[OMP 会话格式](https://github.com/can1357/oh-my-pi/blob/main/docs/session.md)、[OMP 路径规则](https://github.com/can1357/oh-my-pi/blob/main/packages/utils/src/dirs.ts)、[Harness 持久化格式](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/session/session-persistence-jsonl/README.md)、[Qoder 额度协议](https://docs.qoder.com/cli/sdk/cost-usage)、[Kimi 钱包协议](https://github.com/MoonshotAI/kimi-code/blob/main/packages/oauth/src/managed-usage.ts)、[DeepSeek 余额协议](https://api-docs.deepseek.com/api/get-user-balance/)。此前逐步排查记录保留在 `.local/agent-integration/native-agent-verification-before-final.md`。
+
+## 2026-10-31 Agent 扩展最终验收
+
+本轮冻结源码、Core/Web/Native 检查、Work 截图和指定 Qwen 端点的两组真实调用结果
+统一记录在[Agent 扩展实施结果](agent-expansion-implementation-results.md)。
+Trae 普通／工具调用在轨迹重写修复后用量一致，最大可见无头会话为 0。
+历史阶段结果保留原有范围；真实账户额度、原生登录依赖和取消后缺失 usage 的场景
+以该结果表的未实测说明为准，不能从脚本总退出码推断所有场景均通过。

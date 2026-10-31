@@ -549,9 +549,46 @@ fn normalized(
     Some(event)
 }
 
+/// Copilot CLI `session.usage_record`: one model call each. BYOK calls are local
+/// tokens too; `inputTokens` is taken to include cache reads and writes.
+pub fn copilot(source: &Source, state: &mut ParseState, row: &Value) -> Option<UsageEvent> {
+    if row["type"] != "session.usage_record" {
+        return None;
+    }
+    let u = &row["data"]["usage"];
+    let cache_read = u["cacheReadTokens"].as_u64().unwrap_or(0);
+    let cache_write = u["cacheWriteTokens"].as_u64().unwrap_or(0);
+    let tokens = Tokens {
+        input: u["inputTokens"]
+            .as_u64()?
+            .saturating_sub(cache_read.saturating_add(cache_write)),
+        output: u["outputTokens"].as_u64()?,
+        cache_read,
+        cache_write,
+        reasoning: u["reasoningTokens"].as_u64().unwrap_or(0),
+    };
+    let id = u["accounting"]["usageId"]
+        .as_str()
+        .or(u["apiCallId"].as_str())
+        .or(row["id"].as_str())
+        .filter(|s| !s.is_empty())?;
+    let stamp = row["timestamp"]
+        .as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())?
+        .timestamp();
+    let model = u["model"].as_str().filter(|m| !m.is_empty())?;
+    normalized(source, state, format!("call:{id}"), stamp, model, tokens)
+}
+
 pub fn parse(source: &Source, state: &mut ParseState, row: &Value) -> Option<UsageEvent> {
+    if source.provider == "codebuddy" && row["type"] == "ide-request-usage" {
+        return crate::codebuddy_ide::parse(source, state, row);
+    }
     if row["tokens"].is_object() {
         return usage::parse_normalized(source, state, row);
+    }
+    if source.provider == "copilot" {
+        return copilot(source, state, row);
     }
     if source.provider == "codebuddy" {
         return codebuddy(source, state, row);

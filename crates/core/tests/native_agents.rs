@@ -905,3 +905,68 @@ fn codebuddy_tool_request_usage_is_counted_once_for_parallel_tool_calls() {
     assert_eq!(event.kind, "output");
     assert!(!event.call.is_empty());
 }
+
+#[test]
+fn copilot_cli_session_state_imports_usage_and_prompt_mode_is_headless() {
+    // Recorded with Copilot CLI 1.0.105 `copilot -p` against a BYOK endpoint; text trimmed.
+    let fixture = include_str!("fixtures/native-agents/copilot-events.jsonl");
+    let temp = tempfile::tempdir().unwrap();
+    let (engine, source, settings) = setup(temp.path(), "copilot");
+    let path = temp
+        .path()
+        .join("client/session-state/9b009a56-0bf5-4830-8d65-8da8fe5fc299/events.jsonl");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, fixture).unwrap();
+    // Sibling state that is not a transcript is never imported.
+    fs::write(path.with_file_name("workspace.yaml"), "id: fixture\n").unwrap();
+    assert_eq!(
+        import::scan(&engine.store, &settings, &source).unwrap()["newEvents"],
+        1
+    );
+    assert_eq!(
+        import::scan(&engine.store, &settings, &source).unwrap()["newEvents"],
+        0
+    );
+    let raw: String = engine
+        .store
+        .db
+        .query_row("SELECT payload FROM events", [], |r| r.get(0))
+        .unwrap();
+    let event: UsageEvent = serde_json::from_str(&raw).unwrap();
+    assert_eq!(event.model, "Qwen3.8-27B");
+    assert_eq!((event.tokens.input, event.tokens.output), (13654, 32));
+    assert!(!raw.contains("trimmed"));
+
+    let rows: Vec<Value> = fixture
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let events: Vec<_> = rows
+        .iter()
+        .filter_map(|r| session_events::native("copilot", r))
+        .collect();
+    let kinds: Vec<_> = events.iter().map(|e| e.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        ["identity", "start", "identity", "thinking", "complete"]
+    );
+    assert_eq!(events[0].session, "9b009a56-0bf5-4830-8d65-8da8fe5fc299");
+    assert_eq!(events[2].classification, session_events::HEADLESS);
+    let tool = session_events::native(
+        "copilot",
+        &json!({"type":"tool.execution_start","timestamp":"2026-10-29T22:56:40.000Z","data":{"toolCallId":"call-1","toolName":"bash","turnId":"0"}}),
+    )
+    .unwrap();
+    assert_eq!(
+        (tool.kind.as_str(), tool.call.as_str(), tool.tool.as_str()),
+        ("tool", "call-1", "bash")
+    );
+    let pending = session_events::native(
+        "copilot",
+        &json!({"type":"assistant.message","data":{"toolRequests":[{"toolCallId":"call-1"}]}}),
+    );
+    assert!(
+        pending.is_none(),
+        "a reply that requests tools does not end the turn"
+    );
+}

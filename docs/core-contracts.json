@@ -191,13 +191,6 @@
       "requiresPath": false,
       "wakeup": false,
       "discoverLocal": true,
-      "subscription": {
-        "hint": "从 Cursor 用量页复制含 WorkosCursorSessionToken 的请求 Cookie。",
-        "modes": {
-          "session": "Cursor 会话 Cookie"
-        },
-        "loginUrl": "https://cursor.com/dashboard"
-      },
       "capabilities": [
         "accounts",
         "machines",
@@ -307,7 +300,8 @@
       "capabilities": [
         "accounts",
         "api",
-        "machines"
+        "machines",
+        "quota"
       ],
       "icon": {
         "asset": "codebuddy",
@@ -330,7 +324,9 @@
       "capabilities": [
         "accounts",
         "api",
-        "machines"
+        "machines",
+        "quota",
+        "quotaReset"
       ],
       "icon": {
         "asset": "pi",
@@ -353,12 +349,190 @@
       "capabilities": [
         "accounts",
         "api",
-        "machines"
+        "machines",
+        "quota",
+        "quotaReset"
       ],
       "icon": {
         "asset": "omp",
         "monochrome": false,
         "darkAsset": "omp-dark"
+      }
+    },
+    {
+      "id": "chatgpt-work",
+      "name": "ChatGPT Work",
+      "defaultPath": "~/.codex",
+      "binary": "",
+      "requiresPath": false,
+      "wakeup": false,
+      "discoverLocal": false,
+      "capabilities": [
+        "quota",
+        "quotaReset"
+      ],
+      "agent": "codex",
+      "icon": {
+        "asset": "chatgpt-work",
+        "monochrome": true
+      }
+    },
+    {
+      "id": "workbuddy",
+      "name": "WorkBuddy",
+      "defaultPath": "~/.workbuddy",
+      "binary": "",
+      "requiresPath": false,
+      "wakeup": false,
+      "discoverLocal": true,
+      "capabilities": [
+        "accounts",
+        "machines",
+        "quota"
+      ],
+      "icon": {
+        "asset": "workbuddy",
+        "monochrome": false
+      }
+    },
+    {
+      "id": "copilot",
+      "name": "GitHub Copilot",
+      "defaultPath": "~/.copilot",
+      "binary": "copilot",
+      "requiresPath": false,
+      "wakeup": false,
+      "discoverLocal": true,
+      "capabilities": [
+        "accounts",
+        "machines",
+        "quota",
+        "quotaReset"
+      ],
+      "icon": {
+        "asset": "copilot",
+        "monochrome": true
+      }
+    },
+    {
+      "id": "cline",
+      "name": "Cline",
+      "defaultPath": "~/.cline/data",
+      "binary": "cline",
+      "requiresPath": false,
+      "wakeup": false,
+      "discoverLocal": true,
+      "capabilities": [
+        "accounts",
+        "machines",
+        "quota"
+      ],
+      "icon": {
+        "asset": "cline",
+        "monochrome": true
+      }
+    },
+    {
+      "id": "kilo",
+      "name": "Kilo Code",
+      "defaultPath": "~/.local/share/kilo",
+      "binary": "kilo",
+      "requiresPath": false,
+      "wakeup": false,
+      "discoverLocal": true,
+      "capabilities": [
+        "accounts",
+        "machines",
+        "quota"
+      ],
+      "icon": {
+        "asset": "kilo",
+        "monochrome": true
+      }
+    },
+    {
+      "id": "roo",
+      "name": "Roo Code",
+      "defaultPath": "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline",
+      "binary": "",
+      "requiresPath": false,
+      "wakeup": false,
+      "discoverLocal": true,
+      "capabilities": [
+        "accounts",
+        "machines"
+      ],
+      "icon": {
+        "asset": "roo",
+        "monochrome": true
+      }
+    },
+    {
+      "id": "kiro",
+      "name": "Kiro",
+      "defaultPath": "~/.kiro",
+      "binary": "kiro-cli",
+      "requiresPath": false,
+      "wakeup": false,
+      "discoverLocal": true,
+      "capabilities": [
+        "accounts",
+        "machines",
+        "quota",
+        "quotaReset"
+      ],
+      "icon": {
+        "asset": "kiro",
+        "monochrome": false
+      }
+    },
+    {
+      "id": "trae",
+      "name": "Trae",
+      "defaultPath": "~/Library/Application Support/Trae",
+      "binary": "trae-cli",
+      "requiresPath": false,
+      "wakeup": false,
+      "discoverLocal": true,
+      "subscription": {
+        "hint": "Trae 把登录加密保存在 IDE 中，Aieyes 不读取也不粘贴令牌；额度请在官方用量页查看。",
+        "modes": {},
+        "loginUrl": "https://www.trae.ai/account-setting#usage"
+      },
+      "capabilities": [
+        "accounts",
+        "machines",
+        "quota",
+        "quotaReset"
+      ],
+      "icon": {
+        "asset": "trae",
+        "monochrome": false
+      }
+    },
+    {
+      "id": "trae-cn",
+      "name": "Trae CN",
+      "defaultPath": "~/Library/Application Support/Trae CN",
+      "binary": "",
+      "requiresPath": false,
+      "wakeup": false,
+      "discoverLocal": true,
+      "subscription": {
+        "hint": "Trae 把登录加密保存在 IDE 中，Aieyes 不读取也不粘贴令牌；额度请在官方用量页查看。",
+        "modes": {},
+        "loginUrl": "https://www.trae.cn/account-setting#usage"
+      },
+      "capabilities": [
+        "accounts",
+        "machines",
+        "quota",
+        "quotaReset"
+      ],
+      "agent": "trae",
+      "icon": {
+        "asset": "trae",
+        "monochrome": false
       }
     },
     {
@@ -478,17 +652,6 @@
       "invalidateOnFailure": true,
       "refreshKey": null,
       "updateBehavior": "finish"
-    },
-    {
-      "name": "accounts.scan",
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": true,
-      "refreshKey": null,
-      "updateBehavior": "cancel"
     },
     {
       "name": "accounts.status.get",
@@ -1363,6 +1526,14 @@
       "updateBehavior": "finish"
     },
     {
+      "name": "qoderCli.status",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
+    {
       "name": "wakeups.delete",
       "lane": "wakeups",
       "invalidates": [
@@ -1487,6 +1658,101 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null
+    },
+    {
+      "name": "accounts.autoScan",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
+      "name": "claudeAuth.keychain",
+      "lane": "quotas",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "claudeAuth.status",
+      "lane": "quotas",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    {
+      "name": "copilotAuth.start",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "copilotAuth.status",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    {
+      "name": "copilotAuth.cancel",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    {
+      "name": "buddyAuth.start",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    {
+      "name": "buddyAuth.status",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    {
+      "name": "buddyAuth.cancel",
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    {
+      "name": "buddyAuth.logout",
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
     }
   ],
   "petFrameDurations": [

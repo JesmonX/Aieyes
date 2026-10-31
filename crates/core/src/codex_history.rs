@@ -20,6 +20,10 @@ pub struct InheritedHistory {
     pub end_byte_offset: u64,
     pub tokens: Option<Tokens>,
     pub timestamp: Option<i64>,
+    /// Display identity inherited from the bounded parent rollout. Billing
+    /// stays in the Codex namespace regardless of this value.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub originator: String,
     pub proof: String,
     pub issue: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -334,6 +338,7 @@ impl Resolver {
     ) -> Result<InheritedHistory> {
         let (mut reader, compressed) = reader(&candidate.path)?;
         let (mut offset, mut last, mut stamp, mut parent) = (0u64, None, None, None);
+        let mut originator = String::new();
         let mut digest = Sha256::new();
         while offset < limit {
             crate::operations::check()?;
@@ -379,6 +384,7 @@ impl Resolver {
                     .get("history_base")
                     .filter(|b| b.is_object())
                     .cloned();
+                originator = payload["originator"].as_str().unwrap_or("").into();
             } else if row["type"] == "event_msg"
                 && payload["type"] == "token_count"
                 && payload["info"]["total_token_usage"].is_object()
@@ -415,7 +421,7 @@ impl Resolver {
                 }
             }
         }
-        if last.is_none()
+        if (last.is_none() || originator.is_empty())
             && let Some(parent) = parent
         {
             let inherited = self.resolve(
@@ -427,19 +433,33 @@ impl Resolver {
                     .ok_or_else(|| failure("boundaryInvalid", "继承历史字节边界缺失"))?,
                 ancestors,
             );
-            let inherited = inherited?;
-            let prefix = format!("{:x}", digest.finalize());
-            digest = Sha256::new();
-            digest.update(prefix.as_bytes());
-            digest.update(inherited.proof.as_bytes());
-            last = inherited.tokens;
-            stamp = inherited.timestamp;
+            // Missing display metadata must not invalidate a usable counter.
+            // A metadata-only fork still needs its parent's counter proof.
+            let inherited = if last.is_none() {
+                Some(inherited?)
+            } else {
+                inherited.ok()
+            };
+            if let Some(inherited) = inherited {
+                let prefix = format!("{:x}", digest.finalize());
+                digest = Sha256::new();
+                digest.update(prefix.as_bytes());
+                digest.update(inherited.proof.as_bytes());
+                if last.is_none() {
+                    last = inherited.tokens;
+                    stamp = inherited.timestamp;
+                }
+                if originator.is_empty() {
+                    originator = inherited.originator;
+                }
+            }
         }
         let result = InheritedHistory {
             parent_thread: thread.into(),
             end_byte_offset: limit,
             tokens: Some(last.unwrap_or_default()),
             timestamp: stamp,
+            originator,
             proof: format!("{:x}", digest.finalize()),
             issue: String::new(),
             issue_code: String::new(),
@@ -449,8 +469,13 @@ impl Resolver {
 }
 
 pub fn seed(state: &mut ParseState, history: InheritedHistory) {
-    state.last_cumulative = history.tokens.clone();
-    state.last_timestamp = history.timestamp.unwrap_or(0);
+    if state.originator.is_empty() {
+        state.originator.clone_from(&history.originator);
+    }
+    if state.precise_counting != Some(false) {
+        state.last_cumulative = history.tokens.clone();
+        state.last_timestamp = history.timestamp.unwrap_or(0);
+    }
     state.inherited_history = Some(history);
     state.first_inherited_count = true;
 }

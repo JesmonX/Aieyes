@@ -134,7 +134,8 @@
           else for (const source of s.sources.filter(v => p.sourceIds?.includes(v.id))) source.accountId = id;
           return { settings: s, account };
         }
-        case 'accounts.scan': return { results: [{ provider: p.provider || 'codex', machineId: p.machineId || 'local', status: 'skipped', message: '预览模式：未扫描本机或远程凭据。' }], addedAccounts: 0, addedConnections: 0, settings: s };
+        case 'accounts.autoScan': return { results: [], addedAccounts: 0, addedConnections: 0, settings: s };
+        case 'qoderCli.status': return { apps: [], cli: false, account: false, offerInstall: false, command: 'curl -fsSL https://qoder.com/install | bash && ~/.local/bin/qodercli login', message: '' };
         case 'accounts.deployments.sync': return { settings: s, failedTasks: [] };
         case 'credentials.save': return { path: `preview-credentials/${p.sourceId}.key` };
         case 'hosts.credentials.save': return { passwordRef: `preview-${crypto.randomUUID()}` };

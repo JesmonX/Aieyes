@@ -4,8 +4,36 @@ typealias Host = Aieyes.Host
 
 @main struct VerifyModels {
     static func main() throws {
+        var workFilter = DashboardFilterPreference(provider: "chatgpt-work", days: 30)
+        workFilter.reconcile(settings: Settings())
+        precondition(workFilter.provider == "chatgpt-work")
+        precondition(workFilter.parameters(settings: Settings())["provider"] as? String == "chatgpt-work")
+        for scope in ["overview", "panel", "analysis"] {
+            precondition(workFilter.normalized(for: scope).provider == "chatgpt-work", "Work usage selection must survive normalization")
+        }
+        let workDefaultsName = "aieyes-verify-work-filter-" + UUID().uuidString
+        let workDefaults = UserDefaults(suiteName: workDefaultsName)!
+        defer { workDefaults.removePersistentDomain(forName: workDefaultsName) }
+        workFilter.save(scope: "overview", defaults: workDefaults)
+        precondition(DashboardFilterPreference.read(scope: "overview", defaults: workDefaults).provider == "chatgpt-work")
+        precondition(CoreContract.usageProviders.filter { $0 == "chatgpt-work" }.count == 1)
+        precondition(!CoreContract.agentProviders.contains("chatgpt-work") && CoreContract.sameAgent("codex", "chatgpt-work"))
+        precondition(CoreContract.quotaProviderName("codex") == "Codex · ChatGPT Work")
+        precondition(CoreContract.quotaProviderName("claude") == "Claude Code")
+        let accountJSON = #"{"id":"auto","name":"Account","provider":"copilot","quotaEnabled":true,"upstreamIdentity":"github:fixture","pendingName":true}"#
+        let autoAccount = try JSONDecoder().decode(AgentAccount.self, from: Data(accountJSON.utf8))
+        let accountRoundTrip = try JSONSerialization.jsonObject(with: JSONEncoder().encode(autoAccount)) as! [String: Any]
+        precondition(accountRoundTrip["upstreamIdentity"] as? String == "github:fixture" && accountRoundTrip["pendingName"] as? Bool == true, "Saving native settings must preserve upstream account attribution")
         let native = try JSONDecoder().decode(NativeConnection.self, from: Data(#"{"id":"native","provider":"qoder","machineId":"local","root":"/native","configPath":"/native/auth.json","selector":"","kind":"login","email":"","identityKey":"qoder:aaaaaaaaaaaa0123456789","baseUrl":"","models":[],"hasCredential":true,"status":"pending","note":"待验证","checkedAt":1}"#.utf8))
-        precondition(native.statusLabel == "待验证" && native.displayName == "Qoder · aaaaaaaaaaaa")
+        precondition(native.statusLabel == "已识别账户" && native.displayName == "Qoder · aaaaaaaaaaaa")
+        var remembered = native
+        remembered.upstreamIdentity = "qoder:fixture"
+        remembered.tokenExpiredAt = 123
+        remembered.machineFingerprint = "machine"
+        remembered.sourceId = "source"
+        remembered.sourcePath = "/native"
+        let rememberedRoundTrip = try JSONDecoder().decode(NativeConnection.self, from: JSONEncoder().encode(remembered))
+        precondition(rememberedRoundTrip == remembered, "Saving settings must preserve native discovery and expiry metadata")
         let qoderIdentity = try JSONDecoder().decode(AccountIdentity.self, from: Data(#"{"key":"qoder:aaaaaaaaaaaa0123456789","email":"","subscription":"personal_standard"}"#.utf8))
         precondition(qoderIdentity.displayName == "Qoder · aaaaaaaaaaaa")
         precondition(qoderIdentity.summary == "Qoder · aaaaaaaaaaaa · personal_standard")
@@ -28,6 +56,36 @@ typealias Host = Aieyes.Host
         oldQuota.removeValue(forKey: "extraUsage")
         let legacyQuota = try JSONDecoder().decode(Quota.self, from: JSONSerialization.data(withJSONObject: oldQuota))
         precondition(legacyQuota.extraUsage == nil)
+        precondition(legacyQuota.meters == nil && legacyQuota.notice == nil && legacyQuota.snapshotAge == 1 && !legacyQuota.isStale)
+        let meterJSON = #"{"sourceId":"wb","accountId":"m","provider":"workbuddy","name":"WorkBuddy","updatedAt":10,"origin":"live","windows":[],"meters":[{"id":"month","group":"month","label":"本月已用","used":120,"total":500,"remaining":380,"overage":null,"unit":"credits","resetsAt":2000,"estimated":false},{"id":"req","group":"","label":"Requests","used":3,"total":null,"remaining":null,"overage":2,"unit":"requests","resetsAt":null,"estimated":true}],"snapshotAt":5,"staleSince":8,"notice":" Open WorkBuddy once to refresh "}"#
+        let meterQuota = try JSONDecoder().decode(Quota.self, from: Data(meterJSON.utf8))
+        precondition(meterQuota.visibleMeters.count == 2 && meterQuota.hasQuotaContent)
+        precondition(meterQuota.visibleMeters[0].fraction == 0.24 && meterQuota.visibleMeters[0].resetsAt == 2000)
+        precondition(meterQuota.visibleMeters[1].fraction == nil && meterQuota.visibleMeters[1].summary.contains("2"))
+        let balanceMeterJSON = #"{"id":"gemini-credits:google_one_ai","label":"AI Credits","used":0,"usedKnown":false,"total":1000,"remaining":250,"unit":"credits"}"#
+        var balanceMeter = try JSONDecoder().decode(QuotaMeter.self, from: Data(balanceMeterJSON.utf8))
+        precondition(balanceMeter.summary == L("剩余 ") + "250 " + L("积分") && balanceMeter.fraction == nil, "A reported balance must not imply zero usage")
+        let balanceRoundTrip = try JSONDecoder().decode(QuotaMeter.self, from: JSONEncoder().encode(balanceMeter))
+        precondition(balanceRoundTrip.usedKnown == false && balanceRoundTrip.remaining == 250)
+        balanceMeter.remaining = 0
+        precondition(balanceMeter.summary == L("剩余 ") + "0 " + L("积分"))
+        balanceMeter.remaining = -0.0
+        precondition(balanceMeter.summary == L("剩余 ") + "0 " + L("积分"))
+        balanceMeter.remaining = nil
+        precondition(balanceMeter.summary == "—")
+        balanceMeter.remaining = Double(Int64.max)
+        precondition(balanceMeter.summary == L("剩余 ") + "9223372036854775808 " + L("积分"), "A legal int64 credit balance rounded into Double must not trap during formatting")
+        precondition(meterQuota.visibleMeters[0].usedKnown == nil, "Legacy meters preserve measured usage")
+        precondition(meterQuota.snapshotAge == 5 && meterQuota.isStale && meterQuota.visibleNotice == "Open WorkBuddy once to refresh")
+        var oldSnapshot = meterQuota
+        oldSnapshot.snapshotAt = nil
+        oldSnapshot.updatedAt = 100
+        oldSnapshot.staleSince = 172900
+        precondition(oldSnapshot.snapshotAge == 100 && oldSnapshot.isStale, "A newly stale observation must keep the age of its data")
+        oldSnapshot.snapshotAt = 0
+        precondition(oldSnapshot.snapshotAge == 100)
+        oldSnapshot.updatedAt = 0
+        precondition(oldSnapshot.snapshotAge == nil && oldSnapshot.isStale, "The staleness marker is not a data timestamp")
         let missingWallet = try JSONDecoder().decode(ExtraUsageWallet.self, from: Data(#"{"currency":"USD","total":"12.34"}"#.utf8))
         precondition(missingWallet.amount(missingWallet.balance) == "未提供" && missingWallet.monthlyLimitLabel == "月度上限状态未提供")
         let creditUsage = try JSONDecoder().decode(Aggregate.self, from: Data(#"{"key":"qfmodel","tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"total":0,"cost":0,"pricedTokens":0,"nativeCredits":{"qoder":{"credits":0.25,"originalCredits":0.5,"originalCreditsRequests":1,"billable":0,"billableRequests":0,"nonBillable":0.25,"nonBillableRequests":1,"unknownBillability":0,"unknownBillabilityRequests":0,"requests":1}}}"#.utf8))
@@ -92,6 +150,11 @@ typealias Host = Aieyes.Host
         let paused = AccountDeviceCounts(accountKey: "codex:a", machines: ["local"], rows: deviceRows)
         precondition(paused.summary == "已登录设备 1/1 · 使用中设备 1/1")
         precondition(AccountDeviceCounts(accountKey: "codex:a", machines: [], rows: deviceRows).summary == "已登录设备 0/0 · 使用中设备 0/0")
+        // Claude Keychain consent: older records have no `result`; it is derived from `granted`.
+        let consents = try JSONDecoder().decode([ClaudeKeychainConsent].self, from: Data(#"[{"askedAt":7,"granted":true,"result":"granted"},{"askedAt":7,"granted":false,"result":"missing"},{"askedAt":7,"granted":false}]"#.utf8))
+        precondition(consents.map(\.state) == ["granted", "missing", "denied"])
+        let keychainStatus = try JSONDecoder().decode(ClaudeKeychainStatus.self, from: Data(#"{"supported":true,"asked":true,"askedAt":7,"granted":false,"result":"denied","available":false}"#.utf8))
+        precondition(keychainStatus.result == "denied" && keychainStatus.available == false)
         let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
         let dashboard = try JSONDecoder().decode(Dashboard.self, from: data)
         var labeledDashboard = dashboard

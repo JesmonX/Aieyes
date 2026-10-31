@@ -41,22 +41,28 @@ GPU 使用可用的 `nvidia-smi`，否则显示不可用原因。某些平台没
 无法确认的模型使用 `antigravity-unknown-<ID>`，保留真实 Token，保持未定价，并允许之后修正模型而不重复计数。
 缺文件或损坏记录会暂停相关估值采样，保留已确认的区间。
 
-账户和连接机器界面提供“登录 / 检查”：先用 `/usage` 验证已有登录；需要授权时通过受控终端运行 agy 自身的浏览器登录流程，支持授权网址、授权码、验证、取消和超时。
-此操作仅提交 `/usage`，不提交模型推理请求。CLI 使用原机器的凭据存储，授权码和终端输出不写入 Aieyes 数据库。
+账户和连接机器界面提供“登录 / 检查”：先只读验证已有登录；需要授权时通过受控终端运行 agy 自身的浏览器登录流程，支持授权网址、授权码、验证、取消和超时。
+普通身份及额度检查不提交模型请求，不启动 CLI、不刷新 OAuth。显式登录流程由 CLI 使用原机器的凭据存储；授权码和终端输出不写入 Aieyes 数据库。
 取消仅结束本次授权进程。现有登录不会注销。
-额度继续来自 `/usage`；身份适配器读取 agy 自己保存的 Google 登录摘要，支持 macOS Keychain 的 `gemini` / `antigravity` 条目（`go-keyring-base64:` 包装或 JSON）和 SSH 用户主目录中的 CLI 凭据文件。它不从历史采集目录推断认证位置。
-订阅使用当前 CLI 的 `GET https://aicode.googleapis.com/v1:fetchLicenses`，取第一项许可的 `tierDisplayName` / `userTier`。空许可显示未知，不推断为 Free，也不使用另一套 `loadCodeAssist` 权益降级订阅。
+额度查询使用 `POST https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` 与 `retrieveUserQuotaSummary`；前者读取套餐 / AI Credits 和 project，后者读取模型组窗口。适配器使用现有 access token，已知过期时零 HTTP 请求。`loadCodeAssist` 失败仍可保留有效模型组额度，并显示 Credits 不可用。
+
+身份适配器优先读取 agy 保存的 Google 登录，支持 macOS Keychain 的 `gemini` / `antigravity` 条目（`go-keyring-base64:` 包装或 JSON）和用户主目录中的 CLI 凭据文件。新 CLI 只有 `id_token_email` 时，邮箱不作为身份；通过 `GET https://www.googleapis.com/oauth2/v2/userinfo` 的已验证 Google ID 建立稳定标识。旧 ID token 仍支持。
+
+没有 CLI 凭据时，只读默认 `Antigravity IDE/User/globalStorage/state.vscdb` 的 `antigravityUnifiedStateSync.oauthToken`，兼容当前 protobuf 与旧迁移 JSON；当前 IDE 存储不存在才检查旧 `Antigravity` 目录。只投影 access token、有效期和登录类型，不使用 refresh token。现有 CLI 凭据过期、为空、损坏或彼此身份不一致时，不回退到另一个 IDE 账户。纯 IDE 安装先验证本地存储再进行身份请求；无凭据时不发额度 / 身份 HTTP 请求，不创建 CLI 目录，也不把 IDE 认证库当作历史来源。自定义 IDE `--user-data-dir` 尚未自动发现。
+
+订阅使用 `GET https://aicode.googleapis.com/v1:fetchLicenses`，取第一项许可的 `tierDisplayName` / `userTier`。空许可显示未知，不推断为 Free。快照可保留 `loadCodeAssist` 返回的套餐标签，可靠的许可标签优先。
 
 `agyAuth.*`、`accounts.status.*` 和额度快照提供可选 `identity`（稳定 key、邮箱、订阅、检查时间、stale）和 `metadataError`；额度仍填入 `plan`。首次可靠识别绑定现有账户，默认名称替换成邮箱，自定义名称、账户 ID、历史与连接均保留。之后发现其他身份时显示实际邮箱和冲突，不把该身份额度写入原账户。不会自动合并账户或切换凭据。
 
-订阅查询失败不影响额度刷新；仅当身份一致时保留上次订阅并标记待更新。未知身份不继承旧身份摘要。
+仅订阅查询失败不影响额度刷新；身份一致时保留上次订阅并标记待更新。已绑定账户的身份无法再次确认时，拒绝更新额度并保留上次成功快照，避免混入另一登录。查询前后均检查凭据归属。
 
 登录会话返回成功前，将已验证的公开身份写入对应账户设备缓存，并通过 `accountStatus` 返回该状态；首次身份绑定与缓存写入在同一事务完成。成功提交同时更新认证版本，授权期间启动的旧查询不能覆盖新状态。界面直接接收该状态，再独立刷新设置和额度；关闭登录窗口不取消后续刷新，额度查询失败保留已确认身份并显示可重试的错误。`agyAuth.inspect` 仍只读取现有登录，不写入状态。
 
 `workspaceConfirmationRequired` 明确表示 CLI 正在等待临时目录确认。终端提示增量解析，支持跨读取边界的控制字符与提示文本；提交确认后消费旧提示，同一临时目录的终端重绘不再请求确认。写入失败保留待确认状态，取消清除该状态。不会用一般的工具执行提示触发目录确认。现有轮询负责后续刷新。
 
-适配器在凭据所在机器运行，需要 Python 3 与 curl；SSH Linux 的系统凭据读取可使用 `secret-tool`，无图形会话优先使用 CLI 文件存储。凭据、授权头与原始 API 响应不写入 Aieyes 配置、日志、数据库或 RPC；curl 的授权头通过标准输入传递。macOS 本机和配置中的 SSH 已只读验证邮箱与 Google AI Pro；其他登录模式、凭据存储或无法确定的多个身份明确显示未知。Windows 的本机凭据适配尚未验证。
-本机实测既有登录有效；在隔离数据目录中读取到 17 条记录，无同步警告。
+适配器在凭据所在机器运行，需要 Python 3 与 curl；SSH Linux 的系统凭据读取可使用 `secret-tool`，无图形会话优先使用 CLI 文件存储。凭据、授权头与原始 API 响应不写入 Aieyes 配置、日志、数据库或 RPC；curl 的授权头通过标准输入传递。其他登录模式和无法确定的多个身份显示未知。Windows 的系统凭据适配及 IDE 实机登录尚未验证。
+
+此前 macOS / SSH 的邮箱、Google AI Pro 和 17 条历史读取是历史验收记录。2026-10-31 本机现有 CLI access token 已过期；本轮只核实字段和发行包源码，没有刷新令牌或取得新的付费登录。IDE 2.6.0 的存储已按官方安装包源码接入并通过隔离回归，未启动 IDE 登录，详见[原生账户审计](native-account-audit-2026-10-31.md)。
 
 ## SSH Python 兼容
 

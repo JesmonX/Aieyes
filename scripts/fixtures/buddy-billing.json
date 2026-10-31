@@ -1,0 +1,5 @@
+{
+  "summary": {"IsPaidUser": true, "SubscriptionPackageCode": "fixture-paid", "Packages": [{"PackageCode": "fixture-paid", "PackageName": "Fixture plan", "CycleTotalCapacity": "4000", "CycleRemainCapacity": "3500", "CycleUsedCapacity": "500"}, {"PackageCode": "fixture-free", "CycleTotalCapacity": 200, "CycleRemainCapacity": 125, "CycleUsedCapacity": 75}]},
+  "paid": [{"ResourceId": "fixture-resource-paid", "PackageName": "Paid credits", "CycleCapacitySizePrecise": "4000", "CycleCapacityRemainPrecise": "3500", "CycleEndTime": "2026-11-30T00:00:00Z"}],
+  "free": [{"ResourceId": "fixture-resource-free", "PackageName": "Free credits", "CapacityType": 4, "CycleCapacitySizePrecise": 200, "CycleCapacityRemainPrecise": 125, "CycleEndTime": "2026-11-01T00:00:00Z"}]
+}

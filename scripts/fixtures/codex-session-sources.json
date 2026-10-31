@@ -9,5 +9,8 @@
   {"name":"unknown","metadata":{"source":"future-source"},"source":"future-source","visible":false},
   {"name":"missing","metadata":{"originator":"codex_vscode"},"source":"","visible":false},
   {"name":"null","metadata":{"source":null},"source":"","visible":false},
-  {"name":"uppercase","metadata":{"source":"CLI"},"source":"CLI","visible":false}
+  {"name":"uppercase","metadata":{"source":"CLI"},"source":"CLI","visible":false},
+  {"name":"chatgpt-work","metadata":{"source":"vscode","originator":"codex_work_desktop"},"source":"vscode","visible":true,"expectedProvider":"chatgpt-work"},
+  {"name":"codex-desktop","metadata":{"source":"vscode","originator":"Codex Desktop"},"source":"vscode","visible":true,"expectedProvider":"codex"},
+  {"name":"guardian-review","metadata":{"source":"guardian_review","originator":"codex_work_desktop"},"source":"guardian_review","visible":false}
 ]

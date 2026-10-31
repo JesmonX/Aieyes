@@ -32,7 +32,10 @@ private struct Fixture: View {
         let raw = #"""
         [{"provider":"codex","accountId":"a","name":"Short","plan":"plus","windows":[{"id":"five","name":"5h","windowMinutes":300,"usedPercent":10}]},
          {"provider":"codex","accountId":"b","name":"A long subscription name that needs several lines when the card gets narrower, with an extra balance and quota type","plan":"pro","identity":{"key":"b","email":"long-subscription@example.test"},"credits":{"balance":"99999999.123456","hasCredits":true,"unlimited":false},"bankReset":{"availableCount":12},"windows":[{"id":"five","name":"5h","windowMinutes":300,"usedPercent":40},{"id":"week","name":"7d","windowMinutes":10080,"usedPercent":70}]},
-         {"provider":"codex","accountId":"c","name":"Error account","error":"Synthetic quota update failure","windows":[]}]
+         {"provider":"codex","accountId":"c","name":"Error account","error":"Synthetic quota update failure","windows":[]},
+         {"provider":"workbuddy","accountId":"d","name":"Meters only","windows":[],"meters":[{"id":"month","label":"本月已用","used":120.5,"total":500,"unit":"credits"},{"id":"over","label":"Overage","used":0,"overage":3,"unit":"usd","estimated":true}],"notice":"Open WorkBuddy once to refresh"},
+         {"provider":"claude","accountId":"e","name":"Stale grouped","staleSince":1,"snapshotAt":1,"windows":[{"id":"s5","groupName":"Sonnet","name":"Sonnet · 5h","windowMinutes":300,"usedPercent":30},{"id":"s7","groupName":"Sonnet","name":"Sonnet · 7d","windowMinutes":10080,"usedPercent":60}]},
+         {"provider":"deepseek","accountId":"f","name":"Non-codex","windows":[],"balances":[{"currency":"CNY","total":"10.00","granted":"0.00","toppedUp":"10.00"}]}]
         """#
         var payload = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as! [[String:Any]]
         for index in payload.indices { payload[index]["sourceId"] = "fixture";payload[index]["updatedAt"] = 1;payload[index]["origin"] = "live" }
@@ -51,10 +54,13 @@ private struct Fixture: View {
         for width: CGFloat in [414, 320, 600] {
             state.width = width;try await settle()
             let heights = Array(state.heights.values)
-            precondition(heights.count == 3 && heights.max()! - heights.min()! <= 1, "Collapsed native cards differ: \(state.heights)")
+            precondition(heights.count == 6 && heights.max()! - heights.min()! <= 1, "Collapsed native cards differ: \(state.heights)")
         }
         let largest = state.heights.values.max()!
-        state.quotas.remove(at: 1);try await settle()
+        let extras = state.quotas[3...]
+        precondition(extras[3].visibleMeters.count == 2 && extras[3].hasQuotaContent && extras[3].visibleNotice != nil)
+        precondition(extras[4].groupsWindows && extras[4].isStale && !state.quotas[0].groupsWindows)
+        state.quotas = [state.quotas[0], state.quotas[2]];try await settle()
         let shorter = Array(state.heights.values)
         precondition(shorter.count == 2 && shorter.max()! - shorter.min()! <= 1 && shorter.max()! < largest, "Removing the tallest card must shrink the group: \(largest) -> \(state.heights)")
         let model = AppModel(autostart:false)
@@ -65,6 +71,6 @@ private struct Fixture: View {
             precondition(abs(panel.view.frame.width-width)<1)
             precondition(panel.view.subviews.allSatisfy { abs($0.frame.width-width)<1 }, "Every first-layout panel layer fills its container: \(panel.view.subviews.map { $0.frame })")
         }
-        print("Native quota layout: collapsed heights match for multiple subscriptions, long text, errors and widths; group shrinks; initial panel layers fill their width")
+        print("Native quota layout: collapsed heights match for multiple subscriptions, long text, errors, meters, stale and non-Codex cards and widths; group shrinks; initial panel layers fill their width")
     }
 }

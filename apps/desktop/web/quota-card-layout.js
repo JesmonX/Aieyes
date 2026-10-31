@@ -1,6 +1,8 @@
 // Measure the collapsed counterpart at its real width, even while the visible card is open.
 (() => {
   let frame = 0;
+  // Cards that share a layout family settle on one collapsed height.
+  const PROVIDER_ALIAS = { agy: 'antigravity', 'chatgpt-work': 'codex' };
   const content = document.querySelector('#content');
   if (!content) return;
   const layer = document.createElement('div');
@@ -13,7 +15,7 @@
     const cards = [...content.querySelectorAll('.quota-card[data-provider],.quota-placeholder[data-provider]')].filter(card => card.getBoundingClientRect().width > 0);
     const maxima = new Map();
     for (const card of cards) {
-      const width = card.getBoundingClientRect().width, key = width + '|' + card.textContent, provider = card.dataset.provider === 'agy' ? 'antigravity' : card.dataset.provider;
+      const width = card.getBoundingClientRect().width, key = width + '|' + card.textContent, provider = (PROVIDER_ALIAS[card.dataset.provider] ?? card.dataset.provider);
       const cached = measured.get(card);
       if (cached?.key === key) {maxima.set(provider, Math.max(maxima.get(provider) || 0, cached.height));continue;}
       const clone = card.cloneNode(true);
@@ -30,7 +32,7 @@
     }
     layer.replaceChildren();
     for (const card of cards) {
-      const provider = card.dataset.provider === 'agy' ? 'antigravity' : card.dataset.provider;
+      const provider = (PROVIDER_ALIAS[card.dataset.provider] ?? card.dataset.provider);
       const height = maxima.get(provider) + 'px';
       if (card.style.getPropertyValue('--quota-collapsed-min') !== height) card.style.setProperty('--quota-collapsed-min', height);
     }

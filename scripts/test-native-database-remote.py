@@ -5,6 +5,8 @@ import json
 import os
 import pathlib
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -268,6 +270,20 @@ class NativeDatabaseTests(unittest.TestCase):
                     self.assertEqual(scanned, 1)
                     self.assertEqual(files[0]['events'][-1]['kind'], 'complete')
 
+    def test_kilo_run_sessions_are_headless_and_tui_sessions_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'kilo.db'
+            create(path, 'opencode')
+            run = json.dumps([{'permission': 'question', 'pattern': '*', 'action': 'deny'}])
+            with write_database(path) as db:
+                db.execute('CREATE TABLE session(id TEXT PRIMARY KEY,parent_id TEXT,permission TEXT)')
+                db.execute('INSERT INTO session VALUES(?,?,?),(?,?,?)', ('run', None, run, 'tui', None, None))
+                add(db, 'opencode', 1, session='run')
+                add(db, 'opencode', 2, session='tui')
+            files, _ = m.sessions(path, 'kilo', {}, int(time.time()))
+            keys = [f['key'].rsplit('#', 1)[-1] for f in files if f['key'].count('#')]
+            self.assertEqual(keys, ['tui'])
+
     def test_visible_session_cursor_never_exceeds_256_rows(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / 'native.db'
@@ -284,6 +300,92 @@ class NativeDatabaseTests(unittest.TestCase):
             self.assertEqual(scanned, 257)
             self.assertEqual(len(files), 257)
             self.assertTrue(any(f['key'].endswith('#new') for f in files))
+
+    def test_workbuddy_history_keeps_requests_and_rechecks_same_timestamp_updates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'workbuddy.db'
+            with write_database(path) as db:
+                db.executescript((ROOT / 'crates/core/tests/fixtures/workbuddy/workbuddy.sql').read_text())
+            original = path.read_bytes()
+            frames = []
+            emit = lambda kind, **values: frames.append(dict(kind=kind, **values))
+            result = m.workbuddy_history(path, {}, emit)
+            rows = [row for frame in frames for row in frame['events']]
+            self.assertEqual(len(rows), 6)
+            self.assertAlmostEqual(sum(row['nativeCredits']['credits'] for row in rows), 104.375)
+            self.assertTrue(all(row['model'] == 'unknown' and row['tokens'] == {} for row in rows))
+            self.assertNotIn('PRIVATE', json.dumps(frames))
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(result['scannedRecords'], 6)
+            cursor = frames[-1]['cursor']
+            with patch.object(m, 'connect', side_effect=AssertionError('unchanged WorkBuddy database reopened')):
+                self.assertEqual(m.workbuddy_history(path, cursor, emit), dict(readBytes=0, scannedRecords=0))
+            with write_database(path) as db:
+                db.execute("UPDATE session_usage SET credit_json=? WHERE session_id='background'", ('{"req-4":3,"req-new":0.25}',))
+                db.execute('INSERT INTO session_usage VALUES(?,?,?,?,?)', ('a-new', 0, 0, cursor['offset'], '{"req-same-time":0.5}'))
+                db.execute("UPDATE sessions SET model='PRIVATE_CURRENT_MODEL'")
+            frames.clear()
+            m.workbuddy_history(path, cursor, emit)
+            changed = {row['id']: row for frame in frames for row in frame['events']}
+            self.assertEqual(set(changed), {'req-4', 'req-new', 'req-same-time'})
+            previous = next(row for row in rows if row['id'] == 'req-4')
+            self.assertEqual(changed['req-4']['inheritance'], previous['inheritance'])
+            self.assertEqual(changed['req-4']['nativeCredits']['credits'], 3)
+            self.assertNotIn('PRIVATE', json.dumps(frames))
+
+    def test_workbuddy_history_pages_many_sessions_and_survives_database_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'workbuddy.db'
+            with write_database(path) as db:
+                db.execute('CREATE TABLE session_usage(session_id TEXT PRIMARY KEY,updated_at INTEGER,credit_json TEXT)')
+                db.executemany('INSERT INTO session_usage VALUES(?,?,?)', [(f'session-{n:04}', 2000, json.dumps({f'request-{n}': .5})) for n in range(600)])
+            frames = []
+            emit = lambda kind, **values: frames.append(dict(kind=kind, **values))
+            result = m.workbuddy_history(path, {}, emit)
+            self.assertEqual(result['scannedRecords'], 600)
+            self.assertEqual(sum(len(frame['events']) for frame in frames), 600)
+            self.assertTrue(all(len(json.dumps(frame).encode()) < 1024 * 1024 for frame in frames))
+            cursor = frames[-1]['cursor']
+            path.rename(path.with_suffix('.previous'))
+            with write_database(path) as db:
+                db.execute('CREATE TABLE session_usage(session_id TEXT PRIMARY KEY,updated_at INTEGER,credit_json TEXT)')
+                db.execute('INSERT INTO session_usage VALUES(?,?,?)', ('replacement', 1000, '{"replacement-request":1}'))
+            frames.clear()
+            m.workbuddy_history(path, cursor, emit)
+            self.assertEqual([row['id'] for frame in frames for row in frame['events']], ['replacement-request'])
+
+    def test_workbuddy_credits_travel_through_the_embedded_history_protocol(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'workbuddy.db'
+            with write_database(path) as db:
+                db.executescript((ROOT / 'crates/core/tests/fixtures/workbuddy/workbuddy.sql').read_text())
+            request = json.dumps(dict(protocol=2, path=directory, provider='workbuddy', cursors={}))
+            driver = "import json,pathlib,sys;p=pathlib.Path(sys.argv[1]);exec(compile((p/'remote_history.py').read_text(),'<embedded-history>','exec'),{'__name__':'__main__','REQUEST':json.loads(sys.argv[2]),'NATIVE_DATABASE_SCRIPT':(p/'native_database_remote.py').read_text()})"
+            output = subprocess.run([sys.executable, '-c', driver, str(ROOT / 'scripts'), request], capture_output=True, text=True, check=True)
+            self.assertNotIn('PRIVATE', output.stdout)
+            frames = [json.loads(line) for line in output.stdout.splitlines()]
+            self.assertEqual(frames[-1]['kind'], 'done')
+            self.assertFalse(frames[-1]['partial'])
+            self.assertEqual(sum(len(frame.get('events', [])) for frame in frames), 6)
+
+    def test_workbuddy_sessions_skip_automation_and_cache_unchanged_files(self):
+        fixture = ROOT / 'crates/core/tests/fixtures/workbuddy/workbuddy.sql'
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'workbuddy.db'
+            with write_database(path) as db:
+                db.executescript(fixture.read_text())
+            now = int(time.time())
+            files, scanned = m.sessions(path, 'workbuddy', {}, now)
+            kinds = sorted((f['key'].rsplit('#', 1)[-1], f['events'][-1]['kind']) for f in files if '#' in f['key'])
+            # Same rows and phases as Rust `workbuddy_lists_recent_user_sessions_and_skips_automation`.
+            self.assertEqual(kinds, [('earlier-user', 'complete'), ('user-chat', 'complete'), ('user-live', 'start'), ('user-waiting', 'PermissionRequest')])
+            self.assertEqual(scanned, 4)
+            self.assertNotIn('PRIVATE', json.dumps(files))
+            with patch.object(m, 'connect', side_effect=AssertionError('unchanged file opened SQLite')):
+                cached, scanned = m.sessions(path, 'workbuddy', files[-1], now)
+            self.assertEqual(scanned, 0)
+            self.assertEqual(len(cached), 5)
+            self.assertEqual(m.workbuddy_phase('Tool-Executing'), 'tool')
 
 
 if __name__ == '__main__':

@@ -5,6 +5,95 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('sessions',ROOT/'scripts/session_remote.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);m.SCRIPT=(ROOT/'scripts/session_remote.py').read_text()
 class ObserverTests(unittest.TestCase):
+    def test_kiro_cli_and_ide_metadata_keep_parent_and_headless_classification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            def write(path, value):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(value))
+            cli = root / 'sessions/cli/work.json'
+            write(cli, dict(session_id='work', cwd='/work', private='PRIVATE', session_state=dict(conversation_metadata=dict(user_turn_metadatas=[dict(end_reason='UserTurnEnd')]))))
+            write(cli.with_suffix('.lock'), dict(pid=123))
+            write(root / 'sessions/space/sess_child/session.json', dict(id='child', status='completed', createdReason='subagent', parentSessionId='work', title='PRIVATE'))
+            write(root / 'extensions/ignored/session.json', dict(id='ignored'))
+            with patch.object(m, 'kiro_process_classification', return_value='headless'):
+                rows, overflow = m.collect_kiro(root, {})
+            self.assertEqual(overflow, 0)
+            self.assertEqual(len(rows), 2)
+            work = next(row for row in rows if row['identity'] == 'work')
+            child = next(row for row in rows if row['identity'] == 'child')
+            self.assertEqual(work['events'][-1]['kind'], 'complete')
+            self.assertEqual(work['events'][0]['classification'], 'headless')
+            self.assertEqual(child['events'][0]['parentSession'], 'work')
+            self.assertNotIn('PRIVATE', json.dumps(rows))
+            cli.with_suffix('.lock').unlink()
+            rows, _ = m.collect_kiro(root, {work['key']: work})
+            self.assertEqual(next(r for r in rows if r['identity'] == 'work')['events'][0]['classification'], 'headless')
+            self.assertEqual(m.collect_kiro(root / 'empty', {}), ([], 0))
+
+    def test_trae_remote_sessions_match_projects_and_keep_task_verdicts(self):
+        helper = m.trae_helper()
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory); trajectories = root / 'trajectories'; trajectories.mkdir()
+            path = trajectories / 'result.json'
+            value = dict(task='PRIVATE_PROMPT', start_time='2026-10-31T01:00:00.000001', end_time='', llm_interactions=[], success=False)
+            path.write_text(json.dumps(value))
+            source = dict(id='trae', provider='trae', path=directory)
+            wrong = (1, ['trae-cli', 'run', '-t', '/another-project/trajectories/result.json'], root, False)
+            with patch.dict(helper, processes=lambda: [wrong]):
+                first = m.collect(source, {})
+            row = first['files'][0]
+            self.assertEqual(row['events'][-1]['classification'], 'unknown')
+            self.assertEqual(row['events'][-1]['kind'], 'start')
+            self.assertNotIn('PRIVATE', json.dumps(first))
+            process = (1, ['trae-cli', 'run', '-t', './trajectories/result.json'], root, False)
+            with patch.dict(helper, processes=lambda: [process]):
+                headless = m.collect(source, {})['files'][0]
+            self.assertEqual(headless['events'][0]['classification'], 'headless')
+            with patch.dict(helper, processes=lambda: []):
+                repeat = m.collect(source, {str(path): headless})['files'][0]
+                self.assertEqual(repeat['continuation']['classification'], 'headless')
+                value['start_time'] = '2026-10-31T02:00:00.000001'
+                path.write_text(json.dumps(value))
+                next_task = m.collect(source, {str(path): repeat})['files'][0]
+                self.assertEqual(next_task['events'][0]['classification'], 'unknown')
+                path.write_text('{}')
+                invalid = m.collect(source, {})
+                self.assertEqual(invalid['files'], [])
+                self.assertIn('metadata', invalid['error'])
+                fallback = m.collect(source, {str(path): next_task})
+                self.assertEqual(fallback['files'][0]['events'], [])
+                self.assertFalse(fallback['files'][0]['reset'])
+
+    def test_trae_ide_process_status_has_no_synthetic_conversations(self):
+        helper = m.trae_helper()
+        for provider, executable in [('trae', '/Applications/Trae.app/Contents/MacOS/Electron'), ('trae-cn', '/Applications/Trae CN.app/Contents/MacOS/Electron'), ('trae', r'C:\Apps\Trae\Trae.exe'), ('trae-cn', '/opt/trae-cn/trae-cn')]:
+            self.assertTrue(helper['ide_process'](provider, executable, []))
+            self.assertFalse(helper['ide_process'](provider, executable, ['--type=renderer']))
+            self.assertFalse(helper['ide_process']('trae-cn' if provider == 'trae' else 'trae', executable, []))
+        with tempfile.TemporaryDirectory() as directory:
+            (pathlib.Path(directory) / 'chat.db').write_bytes(b'PRIVATE_ENCRYPTED')
+            for running in (False, True):
+                with patch.dict(helper, ide_running=lambda _: running):
+                    result = m.collect(dict(id='trae', provider='trae-cn', path=directory), {})
+                self.assertEqual(result['files'], [])
+                self.assertEqual(result['processRunning'], running)
+                self.assertIsNone(result['error'])
+
+    def test_trae_default_writer_requires_the_initial_project_and_internal_runs_exclude(self):
+        import datetime
+        helper = m.trae_helper()
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            path = root / 'trajectories/trajectory_20261031_012437.json'
+            at = int(datetime.datetime(2026, 10, 31, 1, 24, 37).timestamp())
+            process = (at, ['python3', '-m', 'trae_agent.cli', 'interactive'], root, False)
+            self.assertEqual(helper['writer'](path, [process], m.headless_argv), 'interactive')
+            wrong = (*process[:2], root / 'other-project', False)
+            self.assertIsNone(helper['writer'](path, [wrong], m.headless_argv))
+            self.assertIsNone(helper['writer'](path, [process, process], m.headless_argv))
+            self.assertEqual(helper['writer'](path, [(*process[:3], True)], m.headless_argv), 'internal')
+
     def test_claude_sources_survive_log_tail_incremental_cache_and_hook_environment(self):
         for entrypoint in ('cli','sdk-cli','sdk-ts','sdk-py'):
             with self.subTest(entrypoint=entrypoint), tempfile.TemporaryDirectory() as directory:
@@ -101,6 +190,7 @@ class ObserverTests(unittest.TestCase):
             with self.subTest(case=case['name']):
                 event=m.metadata(dict(type='session_meta',payload=case['metadata']),'codex',False)[0]
                 self.assertEqual(event['sessionSource'],case['source'])
+                self.assertEqual(event.get('originator',''),(case['metadata'].get('originator') or '') if isinstance(case['metadata'].get('originator'),str) else '')
                 self.assertEqual(event['kind'],'identity')
                 self.assertNotIn('PRIVATE_',json.dumps(event))
                 self.assertTrue(set(event)<=m.EVENT_KEYS)
@@ -335,6 +425,18 @@ class ObserverTests(unittest.TestCase):
                 data['finish']='stop';db.execute('UPDATE message SET data=?',(json.dumps(data),))
             self.assertEqual(m.collect(source,{})['files'][0]['events'][-1]['kind'],'complete')
 
+    def test_workbuddy_database_is_found_under_its_data_directory(self):
+        fixture=pathlib.Path(__file__).resolve().parents[1]/'crates/core/tests/fixtures/workbuddy/workbuddy.sql'
+        with tempfile.TemporaryDirectory() as directory:
+            with contextlib.closing(sqlite3.connect(pathlib.Path(directory)/'workbuddy.db')) as db, db:
+                db.executescript(fixture.read_text())
+            (pathlib.Path(directory)/'logs').mkdir();(pathlib.Path(directory)/'logs/startup.jsonl').write_text('{"PRIVATE":1}\n')
+            poll=m.collect(dict(id='w',provider='workbuddy',path=directory),{})
+            self.assertIsNone(poll['error'])
+            sessions=sorted(f['key'].rsplit('#',1)[-1] for f in poll['files'] if '#' in f['key'])
+            self.assertEqual(sessions,['earlier-user','user-chat','user-live','user-waiting'])
+            self.assertNotIn('PRIVATE',json.dumps(poll))
+
     def test_zcode_sqlite_status_uses_turn_and_request_tables_without_messages(self):
         import time
         with tempfile.TemporaryDirectory() as directory:
@@ -368,6 +470,32 @@ class ObserverTests(unittest.TestCase):
                 self.assertIsNone(first['error'])
                 self.assertEqual(first['files'][0]['events'][-1]['kind'],'complete')
                 self.assertNotIn('PRIVATE_PROMPT',json.dumps(first))
+
+    def test_copilot_session_state_matches_rust_lifecycle_and_prompt_mode_is_headless(self):
+        # Same fixture and expectations as native_agents.rs (Copilot CLI 1.0.105 `copilot -p`).
+        fixture=ROOT/'crates/core/tests/fixtures/native-agents/copilot-events.jsonl'
+        rows=[json.loads(line) for line in fixture.read_text().splitlines()]
+        for row in rows:
+            if row['type']=='user.message':row['data']['content']='PRIVATE_PROMPT'
+            if row['type']=='assistant.message':row['data']['content']='PRIVATE_ANSWER'
+        with tempfile.TemporaryDirectory() as directory:
+            session=pathlib.Path(directory)/'session-state'/'9b009a56-0bf5-4830-8d65-8da8fe5fc299'
+            session.mkdir(parents=True)
+            (session/'events.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows))
+            (session/'workspace.yaml').write_text('cwd: PRIVATE_CWD\n')
+            result=m.collect(dict(id='s',provider='copilot',path=directory),{})
+            self.assertIsNone(result['error'])
+            self.assertEqual([pathlib.Path(f['key']).name for f in result['files']],['events.jsonl'])
+            events=result['files'][0]['events']
+            # The reader re-reads the header for identity on a fresh file, so identity rows may repeat.
+            self.assertEqual([e['kind'] for e in events if e['kind']!='identity'],['start','thinking','complete'])
+            self.assertEqual(events[0]['session'],'9b009a56-0bf5-4830-8d65-8da8fe5fc299')
+            self.assertEqual([e['kind'] for e in events if e.get('classification')=='headless'],['identity'])
+            self.assertNotIn('PRIVATE_',json.dumps(result))
+            self.assertNotIn('non-interactive mode',json.dumps(result))
+        tool=m.native_metadata({'type':'tool.execution_start','timestamp':'2026-10-29T22:56:40.000Z','data':{'toolCallId':'call-1','toolName':'bash','arguments':'PRIVATE'}},'copilot')[0]
+        self.assertEqual((tool['kind'],tool['call'],tool['tool']),('tool','call-1','bash'))
+        self.assertEqual(m.native_metadata({'type':'assistant.message','data':{'toolRequests':[{'toolCallId':'call-1'}]}},'copilot'),[])
 
     @unittest.skipIf(os.name=='nt','SSH observer installs on POSIX machines; local Windows uses Rust')
     def test_merge_preserves_unrelated_config_and_explicit_disables(self):
@@ -477,4 +605,56 @@ class ObserverTests(unittest.TestCase):
             reader=sqlite3.connect(p.resolve().as_uri()+'?mode=ro',uri=True)
             with patch.object(sqlite3,'connect',return_value=reader),self.assertRaises(sqlite3.OperationalError):m.read_db(p)
             with self.assertRaises(sqlite3.ProgrammingError):reader.execute('SELECT 1')
+    def test_headless_argv_table_matches_the_shared_fixture(self):
+        for case in json.loads((ROOT/'scripts/fixtures/headless-argv.json').read_text()):
+            with self.subTest(**case):self.assertEqual(m.headless_argv(case['provider'],case['argv']),case['expected'])
+    def test_hook_records_argv_verdict_and_aieyes_internal_runs(self):
+        if os.name=='nt':return  # SSH hook helper uses POSIX file locks.
+        def run(env):
+            with tempfile.TemporaryDirectory() as directory:
+                root=pathlib.Path(directory);(root/'.aieyes/session-events').mkdir(parents=True)
+                helper=root/'observe.py';helper.write_text(m.SCRIPT)
+                subprocess.run([sys.executable,str(helper),m.MARKER,'kimi','UserPromptSubmit',directory],input=json.dumps(dict(session_id='s',prompt='PRIVATE')),env=env,capture_output=True,text=True,check=True,timeout=3)
+                return json.loads(next((root/'.aieyes/session-events').glob('*.jsonl')).read_text())
+        base={k:v for k,v in os.environ.items() if k!='AIEYES_INTERNAL'}
+        self.assertNotIn('classification',run(base))
+        internal=run(dict(base,AIEYES_INTERNAL='1'))
+        self.assertEqual((internal['classification'],internal['sessionSource']),('internal','aieyes-internal'))
+        self.assertNotIn('PRIVATE',json.dumps(internal))
+        with patch.object(m,'process_info',side_effect=lambda pid:('kimi',0,1) if pid==7 else None),patch.object(m,'cmdline',return_value=['kimi','-p','hi']),patch.object(m.os,'getppid',return_value=7):
+            self.assertEqual(m.ancestor('kimi'),(0,0,'headless'))
+        with patch.object(m,'process_info',return_value=('sh',0,1)),patch.object(m,'cmdline',return_value=['sh','-c','observe.py '+m.MARKER+' kimi']),patch.object(m.os,'getppid',return_value=7):
+            self.assertEqual(m.ancestor('kimi'),(0,0,None))
+        with patch.object(m,'process_info',side_effect=lambda pid:('node',0,1) if pid==7 else None),patch.object(m,'cmdline',return_value=['cursor-agent','-p']),patch.object(m.os,'getppid',return_value=7):
+            self.assertEqual(m.ancestor('cursor'),(0,0,'headless'))
+class WorkForkTests(unittest.TestCase):
+    def tearDown(self):
+        for discovery in m._DISCOVERY.values(): discovery.watch.close()
+        m._DISCOVERY.clear(); m._PROCESS_CONTEXTS.clear()
+
+    def test_embedded_ssh_forks_inherit_work_without_changing_explicit_origin_or_source(self):
+        import contextlib, io
+        scripts = pathlib.Path(__file__).resolve().parent
+        scope = dict(__name__='aieyes_embedded',HISTORY_SCRIPT=(scripts/'remote_history.py').read_text(),HARNESS_SCRIPT=(scripts/'harness_remote.py').read_text())
+        exec(compile((scripts/'session_remote.py').read_text(),'<aieyes-embedded-sessions>','exec'),scope)
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory).resolve()
+            def header(identity,origin='',source='cli',base=None):
+                payload=dict(id=identity,source=source)
+                if origin:payload['originator']=origin
+                if base:payload['history_base']=dict(thread_id=base[0],end_byte_offset=base[1])
+                return json.dumps(dict(type='session_meta',payload=payload))+'\n'
+            parent=header('parent','codex_work_desktop','vscode')
+            middle=header('middle',base=('parent',len(parent.encode())))
+            rows=dict(parent=parent,middle=middle,child=header('child',base=('middle',len(middle.encode()))),explicit=header('explicit','codex_cli_rs',base=('parent',len(parent.encode()))),headless=header('headless',source='exec',base=('parent',len(parent.encode()))))
+            for identity,value in rows.items():(root/(identity+'.jsonl')).write_text(value+json.dumps(dict(type='event_msg',payload=dict(type='task_started',private='PRIVATE_PROMPT')))+'\n')
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                result=scope['collect'](dict(provider='codex',id='codex',path=str(root)),{},processes=[])
+            self.assertEqual(output.getvalue(),'','loading the history resolver must not execute its CLI')
+            origins={pathlib.Path(row['key']).stem:next(event for event in row['events'] if event['kind']=='identity') for row in result['files']}
+            self.assertEqual({key:value.get('originator') for key,value in origins.items()},dict(parent='codex_work_desktop',middle='codex_work_desktop',child='codex_work_desktop',explicit='codex_cli_rs',headless='codex_work_desktop'))
+            self.assertEqual(origins['headless']['sessionSource'],'exec')
+            self.assertNotIn('PRIVATE_',json.dumps(result))
+        for discovery in scope['_DISCOVERY'].values():discovery.watch.close()
+
 if __name__=='__main__':unittest.main()

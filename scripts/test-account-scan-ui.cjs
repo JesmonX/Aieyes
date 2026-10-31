@@ -17,17 +17,24 @@ function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++
  let browser,server;
  try{
   const settings=await rpc('settings.get');for(const a of settings.agents){a.enabled=['codex','opencode'].includes(a.provider);a.machineIds=[];}settings.hosts=[{id:'paused',name:'暂停服务器',target:'fixture.invalid',enabled:false}];await rpc('settings.save',settings);
+  // The engine detects native logins at launch; run that pass once for the saved configuration.
+  const detected=await rpc('accounts.autoScan');assert.equal(detected.addedAccounts,1);assert.equal(detected.addedConnections,2);assert(!JSON.stringify(detected).includes('PRIVATE-KEY'));
+  assert.equal((await rpc('accounts.autoScan')).addedAccounts,0,'detecting again does not duplicate accounts');
   const web=path.join(project,'apps/desktop/web');server=http.createServer((req,res)=>{if(require('./ui-test-helpers.cjs').serveFont(req,res))return;const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html','.png':'image/png'})[path.extname(file)]||'application/octet-stream');res.end(fs.readFileSync(file));});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(String(e)));
   await page.exposeFunction('scanRPC',async(method,params)=>{calls.push({method,params});if(['quotas.refresh','sources.scan','hosts.sample','wakeups.list','accounts.status.refreshBatch'].includes(method))return [];if(method==='sessions.list')return {sessions:[],warnings:[]};if(method.startsWith('network.'))return {};return rpc(method,params);});
   await page.addInitScript(()=>{window.setInterval=()=>0;window.__TAURI__={event:{async listen(){return()=>{};}},window:{getCurrentWindow:()=>({async isMaximized(){return false;},async onResized(){return()=>{};}})},core:{async invoke(command,args){if(command==='desktop_info')return {page:'agent',platform:'windows',mode:'floating',sessions:[]};if(command==='engine_call')return window.scanRPC(args.method,args.params??{});return {};}}};});
   await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>typeof state!=='undefined'&&state.settings&&!state.busy);
+  // No scan UI anywhere: the machine list and the Agent account section carry no scan buttons.
   await page.evaluate(()=>{state.page='settings';state.settingsTab='hosts';render();});
-  assert.equal(await page.locator('[data-native-scan-machine]').count(),1);await page.locator('[data-native-scan-machine="local"]').click();
-  await page.getByRole('status').filter({hasText:'新增 1 个账户、2 个连接'}).waitFor();assert.equal((await rpc('settings.get')).accounts.length,1);
-  assert(!await page.locator('.native-scan-dialog').textContent().then(s=>s.includes('PRIVATE-KEY')));await page.locator('[data-scan-close]').click();
-  await page.evaluate(()=>{state.page='settings';state.settingsTab='integrations';state.settingsAgent='codex';render();});await page.locator('[data-native-scan-agent="codex"]').waitFor();
-  await page.locator('[data-native-scan-agent="codex"]').click();await page.getByRole('status').filter({hasText:'新增 0 个账户、0 个连接'}).waitFor();await page.locator('[data-scan-close]').click();
+  assert.equal(await page.locator('[data-native-scan-machine],[data-native-scan-agent],.native-scan-dialog').count(),0);
+  assert(!(await page.locator('main').textContent()).includes('扫描'),'machine settings do not mention scanning');
+  await page.evaluate(()=>{state.page='settings';state.settingsTab='integrations';state.settingsAgent='codex';render();});
+  await page.locator('#agent-accounts').getByText('scan@example.test').first().waitFor();
+  assert.equal(await page.locator('[data-native-scan-agent],[data-native-scan-machine]').count(),0,'no scan buttons on the Agent page');
+  const login=page.locator('[data-agent-detail="native-connections-codex-login"]');await login.locator('summary').click();
+  assert.match(await login.textContent(),/已识别账户/);assert(!/待验证|需重新扫描|重新扫描/.test(await page.locator('main').textContent()),'no pending or rescan wording');
+  await login.locator('summary').click();
   await page.evaluate(()=>{state.settingsAgent='opencode';renderSettings(false);});await page.locator('#agent-section-native-api > summary').click();const preview=path.join(project,'.local/account-scan');fs.mkdirSync(preview,{recursive:true});await page.evaluate(()=>document.fonts.ready);await page.screenshot({path:path.join(preview,'connections.png'),fullPage:true});
   assert.equal(await page.locator('[data-native-remove]').count(),1);assert(!(await page.locator('main').textContent()).includes('PRIVATE-KEY'));
   await page.waitForFunction(()=>!AieyesAgentSettings.statusBusy);
@@ -57,7 +64,7 @@ function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++
   assert(!emptyLabels.quota.includes('≈ —'));assert(!emptyLabels.credits.includes('≈ —'));
   assert(emptyLabels.quota.includes('data-estimate='));assert(emptyLabels.credits.includes('data-credit-estimate='));
   await page.screenshot({path:path.join(preview,'pricing-references.png'),fullPage:true});
-  assert.deepEqual(errors,[]);assert(calls.some(c=>c.method==='accounts.scan'&&c.params.scope==='machine'));assert(calls.some(c=>c.method==='accounts.scan'&&c.params.scope==='agent'));
-  console.log('Account discovery UI: machine/Agent scopes, collapsed credentials, bulk removal, smart price references and empty estimate labels passed.');
+  assert.deepEqual(errors,[]);assert(!calls.some(c=>c.method.startsWith('accounts.scan')||c.method==='accounts.autoScan'),'the UI never triggers detection itself');
+  console.log('Account discovery UI: automatic detection without scan buttons, collapsed credentials, bulk removal, smart price references and empty estimate labels passed.');
  }finally{if(browser)await browser.close();if(server)await new Promise(resolve=>server.close(resolve));core.kill();await coreClosed;fs.rmSync(root,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exitCode=1;});

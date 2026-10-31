@@ -182,6 +182,50 @@ pub fn read_quota_at(
     }
     Err(last)
 }
+/// Rate limits of a ChatGPT login that another client keeps (OpenCode, Pi). The
+/// tokens reach an app-server in memory only (ephemeral credential store in the
+/// private `dir`); its refresh requests are deferred, so only the owning client
+/// ever refreshes them.
+pub(crate) fn external_quota(
+    dir: &std::path::Path,
+    proxy: &ProxyConfig,
+    auth: &Value,
+) -> Result<Value> {
+    let shell = crate::ssh::DEFAULT_SHELL;
+    let probe = rpc::inspect_cli("codex", dir, proxy, "", shell);
+    ensure!(
+        probe["cliAvailable"] == true,
+        "{}",
+        probe["cliError"].as_str().unwrap_or("Codex CLI 暂不可用")
+    );
+    let binary = probe["resolvedBinary"].as_str().unwrap_or("codex");
+    let mut command = crate::process::cli_command_with_pre_command(
+        binary,
+        &[
+            "-c",
+            "cli_auth_credentials_store=\"ephemeral\"",
+            "app-server",
+        ],
+        "",
+        shell,
+    );
+    command
+        .env("CODEX_HOME", dir)
+        .env("AIEYES_INTERNAL", "1")
+        .current_dir(dir);
+    for key in [
+        "OPENAI_API_KEY",
+        "CODEX_API_KEY",
+        "CODEX_ACCESS_TOKEN",
+        "CHATGPT_ACCESS_TOKEN",
+    ] {
+        command.env_remove(key);
+    }
+    crate::network::apply_env(&mut command, proxy);
+    let mut rpc = rpc::Rpc::command(command)?;
+    rpc.login_external(auth)?;
+    rpc.quota(auth, &mut || Ok(auth.clone()))
+}
 pub fn validate_settings(s: &Settings) -> Result<()> {
     let mut homes = std::collections::HashSet::new();
     for source in &s.sources {

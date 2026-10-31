@@ -10,13 +10,31 @@ Codex 限额通过 `codex app-server`（默认 stdio）的 `account/rateLimits/r
 
 Claude Code 使用 `assistant.message.usage`，按会话、请求与消息 ID 合并流式响应；普通输入、缓存读取和缓存写入分别计数。错误消息和 synthetic 模型不计入用量。
 
-Claude Code 实时查询读取来源目录下的 `.credentials.json`；默认 macOS 配置也可以读取 `Claude Code-credentials` Keychain 项目。HTTP 读取尚未在当前环境完成联网验证。
+## Claude Code 官方额度
+
+额度读自 `GET https://api.anthropic.com/api/oauth/usage`（Bearer，`anthropic-beta: oauth-2025-04-20`）：`five_hour`、`seven_day`，以及 `seven_day_sonnet`／`seven_day_opus`／`seven_day_oauth_apps` 的 `utilization`（0–100）。以下两项按社区实现解析，本机没有账户，只用 `scripts/fixtures/claude-oauth-usage.json` 单测覆盖，尚未实测：
+
+- `extra_usage`：`used_credits`、`monthly_limit` 按美分换算为 USD，显示为额外用量钱包（本月扣费、月度上限、余额＝上限－已用）。未启用且未扣费时不显示。
+- `limits[]`：`kind == "weekly_scoped"` 的条目按 `scope.model.display_name` 显示为该模型的 7d 窗口（`percent`，缺失时用 `utilization`）；与 `seven_day_opus` 等同名窗口重复时只保留一个，其他 `kind` 忽略。
+
+SSH 来源由 `scripts/remote_quota.py` 在远端读取 `.credentials.json`，只回传上述字段，解析与本机相同。Linux、Windows 以及 macOS 上有 `.credentials.json` 的目录直接读取该文件，不碰钥匙串。令牌返回 401 时 Aieyes 不刷新令牌，显示上次额度并提示“打开 Claude Code 一次即可刷新”。
+
+macOS 默认目录 `~/.claude` 的登录保存在钥匙串 `Claude Code-credentials` 项目中（设置 `CLAUDE_CONFIG_DIR` 时 Claude 使用带后缀的项目名，Aieyes 不读取）：
+
+- 账户由 `~/.claude.json` 的 `oauthAccount` 识别，不读取任何凭据；没有该字段时显示“未登录或使用 API key”。
+- 首次启动后询问一次，通过 `/usr/bin/security find-generic-password -s "Claude Code-credentials" -w` 读取。系统对话框里的“始终允许”授予的是 `security`，不是 Aieyes，所以 ad-hoc 签名的构建（未设置 `MACOS_SIGNING_IDENTITY`，以及 Tauri 版的 `signingIdentity "-"`）更新后仍然有效；请选“始终允许”，只选“允许”时之后每次启动都会再问。读取前先只查条目属性（不会弹窗）；条目不存在时记为“未登录或使用 API key”，下次启动再查。
+- 设置只保存 `claudeKeychain {askedAt, granted, result}`，令牌只在核心进程内存中。界面保存设置不能改写这条记录。拒绝后不再自动询问，可在 Claude 账户区点“重新授权”；两分钟内未作答不算拒绝，下次启动再问。
+- macOS 原生界面每个通道一个核心进程，所以 `claudeAuth.keychain`、`claudeAuth.status` 走额度通道，与 `quotas.refresh` 在同一进程；对话框打开期间，额度查询会等待。其他进程（采样估值、自动估值，以及重启后的核心）只在已记录同意时自行读取一次，读取失败后要等 Claude 改写 `~/.claude/.credentials.json` 或 `~/.claude.json`，且距上次重读满 24 小时才再读。
+- 401 后先等 Claude 自己刷新：Claude 已改写上述文件且距上次重读满 24 小时，就重读一次并重试本次查询，否则只给出上面的提示。Claude 刷新令牌会重写钥匙串条目，系统可能因此再弹一次窗（尽力而为）。
+- 没有令牌时额度卡片说明原因（未授权、已拒绝或未登录），用量统计照常来自本地记录。
+
+`cargo test -p aieyes-core claude_keychain` 用注入的读取函数覆盖“只问一次、拒绝后不再问、401 后按 24 小时节流重读”；`cargo test -p aieyes-core --test claude_keychain` 覆盖账户识别、未同意时不读钥匙串、伪造同意无效，以及 `AIEYES_AUTO_SCAN=off`（界面测试默认设置）时启动不读钥匙串；`node scripts/test-claude-quota-ui.cjs` 覆盖两种窗口的额度卡片和设置中的授权状态。测试都不读取真实钥匙串。系统弹窗只出现一次需要在有 Claude 登录的 Mac 上手工确认，尚未验证。
 
 ## Antigravity 与自定义用量
 
 在添加数据源时选择「Antigravity」，agy 是它的 CLI 接入方式。默认从 `~/.gemini/antigravity-cli/conversations` 的 SQLite 会话数据库读取调用时间、实际模型、输入、输出和缓存 Token；本机及 SSH 均支持，只回传统计字段。IDE 原生历史采集尚未实现。也可指定标准 JSONL 目录或使用自定义限额命令。
 
-额度继续通过 agy `/usage` 读取。Gemini 与 Claude/GPT 组按实际模型分别计价和学习容量倍率；未知组或模型、缺失价格、跨采样边界会阻止输出不可靠的估值，并说明原因。每个账户同时保留一段额度采样。旧 `agy` 配置、账户、用量、排序和唤醒关联自动迁移为 `antigravity`，冲突账户保留为独立身份。
+额度使用登录机器上现有 access token 只读查询 Antigravity 原生 REST 接口；默认刷新不启动 agy，也不刷新令牌。Gemini 与 Claude/GPT 组按实际模型分别计价和学习容量倍率；未知组或模型、缺失价格、跨采样边界会阻止输出不可靠的估值，并说明原因。每个账户同时保留一段额度采样。旧 `agy` 配置、账户、用量、排序和唤醒关联自动迁移为 `antigravity`，冲突账户保留为独立身份。
 
 每行一个事件；`id` 必须在同一会话内稳定。时间支持 Unix 秒或 RFC 3339：
 
@@ -76,7 +94,7 @@ OpenRouter 请求路径为 `/api/v1/models`；读取 `pricing.prompt`、`complet
 
 ## Antigravity 与 DeepSeek
 
-`provider: "antigravity"` 使用 `agy --print /usage --output-format json --print-timeout 30s`，读取 `command.data.groups[].buckets[]` 的 `remaining_fraction`、`window` 和 `reset_time`。实测返回 Gemini 与 Claude/GPT 两组的 5h、7d 窗口，`num_turns` 和 Token 用量均为 0。可指定 `agyBinary`，支持 SSH 及限额查询前置命令。CLI 查询使用该位置当前登录身份，不根据数据目录切换账户；不同远程用户可配置为不同位置。
+`provider: "antigravity"` 通过 Python 3 / curl 调用 `loadCodeAssist` 和 `retrieveUserQuotaSummary`，投影模型组窗口、重置时间和实际返回的 AI Credits。仅使用现有 access token，已知过期时不发 HTTP 请求；不执行 `/usage`，避免 CLI 自行刷新 OAuth。支持 SSH 和限额查询前置命令；`agyBinary` 继续用于显式登录流程。查询优先使用该机器的 CLI 登录；没有 CLI 凭据时读取默认 Antigravity IDE 的只读 SQLite 登录存储，纯 IDE 安装无需创建 CLI 历史目录。已有 CLI 凭据过期、为空或损坏时不会改查其他 IDE 账户；数据目录不用于切换身份。存储格式和验证边界见[原生账户审计](native-account-audit-2026-10-31.md)。
 
 `provider: "deepseek"` 通过官方 [Get User Balance](https://api-docs.deepseek.com/api/get-user-balance) 的 `GET https://api.deepseek.com/user/balance` 查询，使用 Bearer API Key。`balances` 保存币种、总额、赠送余额和充值余额，金额以原始十进制字符串保留，`isAvailable` 反映 API 可用状态。余额不换算为百分比，不跨币种合计。
 
@@ -104,7 +122,7 @@ OpenRouter 请求路径为 `/api/v1/models`；读取 `pricing.prompt`、`complet
 
 同一 home 可启用共享历史和独立账号额度。在「设置 → Agent 接入 → Codex」登录、关联和切换；详情与兼容要求见 [Codex 账号管理](codex-accounts.md)。
 
-Antigravity 身份元数据由 `scripts/agy_identity.py` 在登录机器上读取，订阅来自当前 CLI 使用的 `aicode.googleapis.com/v1:fetchLicenses`，与 `/usage` 的额度解析独立。身份绑定、错误降级和测试入口见 [刷新、监控与 Antigravity](refresh-monitoring-antigravity.md)。
+Antigravity 身份元数据由 `scripts/agy_identity.py` 在登录机器上读取。旧 ID token 取经过字段校验的 Google subject；新版仅保存邮箱提示时，通过 Google userinfo 的已验证 ID 确认身份。订阅优先使用 `aicode.googleapis.com/v1:fetchLicenses`，与模型组额度查询独立。身份绑定、错误降级和测试入口见 [刷新、监控与 Antigravity](refresh-monitoring-antigravity.md)。
 
 ## 更多 Agent
 

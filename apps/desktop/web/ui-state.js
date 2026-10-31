@@ -37,6 +37,9 @@ window.AieyesUI = {
   },
   canonicalProvider(provider) {return provider === 'agy' ? 'antigravity' : provider;},
   agentProvider(provider) {return window.AieyesContract.agentAliases?.[provider] ?? this.canonicalProvider(provider);},
+  usageProvider(provider) {return provider === 'chatgpt-work' ? provider : this.agentProvider(provider);},
+  usageProviders() {return window.AieyesContract.agentProviders.flatMap((provider) => provider === 'codex' ? [provider, 'chatgpt-work'] : [provider]);},
+  quotaProviderName(provider) {return this.agentProvider(provider) === 'codex' ? 'Codex · ChatGPT Work' : window.AieyesContract.providers[provider] ?? provider;},
   sameAgent(left, right) {return this.agentProvider(left) === this.agentProvider(right);},
   supports(provider, feature, settings) {
     if (window.AieyesContract.providerCapabilities?.[provider]?.includes(feature)) return true;
@@ -60,7 +63,7 @@ window.AieyesUI = {
   },
   overviewAgentProviders(settings) {
     const rows = this.agentConfigurations(settings?.agents ?? []);
-    return window.AieyesContract.agentProviders.filter((provider) => rows.some((a) => a.provider === provider && a.enabled) ||
+    return this.usageProviders().filter((provider) => rows.some((a) => this.sameAgent(a.provider, provider) && a.enabled) ||
     !settings?.agents && ((settings?.sources ?? []).some((s) => this.sameAgent(s.provider, provider) && s.enabled) || (settings?.accounts ?? []).some((a) => this.sameAgent(a.provider, provider) && !a.archived)));
   },
   balancedColumns(width, count, minimum = 290, gap = 10) {

@@ -1,5 +1,6 @@
 import Foundation
 
+struct CoreInfo: Decodable { var contractHash: String?; var hostMonitoring: Bool?; var chatgptWorkInstalled: Bool? }
 struct UpdateOperations: Decodable { var preparing: Bool; var protected: [String]; var active: Int }
 final class EngineClient: @unchecked Sendable {
     static let runtimeChanged = Notification.Name("AieyesRuntimeChanged")
@@ -341,12 +342,23 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         catch { settingsMessage = error.localizedDescription; return }
         guard refresh else { return }
         let accounts = settings.accounts.filter { $0.archived != true && (provider == nil || $0.provider == provider) }
-        guard !accounts.isEmpty else { return }
         do {
             let rows: [AccountDeviceStatus] = try await accountEngine.call("accounts.status.refreshBatch", params: ["accountKeys": accounts.map(\.key), "dueOnly": dueOnly], onAccountSample: { [weak self] row in Task { @MainActor in guard let self, self.accountStatusRevision == revision else { return }; self.accountStatusStore.upsert(row) } })
             if revision == accountStatusRevision { for row in rows { accountStatusStore.upsert(row) } }
         } catch { if !dueOnly { settingsMessage = L("设备状态检查失败：") + L(error.localizedDescription) } }
         await refreshIdentitySettings()
+    }
+    @Published var claudeKeychainError: String?
+    /// Quotas lane: the token stays in the memory of the core process that runs `quotas.refresh`.
+    func requestClaudeKeychain(startup: Bool = false) async {
+        // A new grant shows the official quota now; a silent re-read at launch serves the regular refresh.
+        let alreadyGranted = startup && settings.claudeKeychain?.granted == true
+        do {
+            let status: ClaudeKeychainStatus = try await engine.call("claudeAuth.keychain", params: startup ? ["startup": true] : [:])
+            claudeKeychainError = nil
+            await refreshIdentitySettings()
+            if status.available == true && !alreadyGranted { await refreshQuotas() }
+        } catch { if !startup { claudeKeychainError = L(error.localizedDescription) } }
     }
     func refreshIdentitySettings(reportFailure: Bool = false) async {
         let before = settings
@@ -569,7 +581,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var sessionSummary: String {
         if let summary = coreSessionSummary { return L(summary) }
         if sessionsUnavailable { return L("会话状态不可用") }
-        if !settings.sources.contains(where: { settings.sourceEnabled($0) && ["codex", "claude", "antigravity", "kimi", "codebuddy", "deepseek-harness", "grok", "zcode", "qoder", "opencode"].contains($0.provider) }) { return L("未接入会话状态") }
+        if !settings.sources.contains(where: { settings.sourceEnabled($0) && ["codex", "claude", "antigravity", "kimi", "codebuddy", "deepseek-harness", "grok", "zcode", "qoder", "opencode", "workbuddy"].contains($0.provider) }) { return L("未接入会话状态") }
         return activeSessions.isEmpty ? L("无活跃会话") : L("{0} 个活跃会话" , activeSessions.count)
     }
     func manageSessionHooks(sourceID: String, action: String) async throws -> [SessionHookStatus] {
@@ -613,6 +625,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     } }
     @Published var settingsDraft = Settings()
     @Published var settingsLoaded = false
+    @Published private(set) var chatgptWorkInstalled = false
     @Published var settingsWindowVisible = false
     @Published var settingsSaving = false { didSet { scheduleRefreshes() } }
     private var configurationSaveTask: Task<Bool, Never>?
@@ -796,12 +809,15 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         startAutomatic()
         Task { await bootstrap(); scheduleRefreshes() }
     }
+    func acceptCoreInfo(_ info: CoreInfo) throws {
+        if let hash = info.contractHash, hash != CoreContract.contractHash { throw ClientError.message(L("应用资源与核心版本不一致，请重新安装同一版本")) }
+        hostMonitoringSupported = info.hostMonitoring == true
+        chatgptWorkInstalled = info.chatgptWorkInstalled == true
+    }
     func bootstrap() async {
         do {
-            struct CoreInfo: Decodable { var contractHash: String?; var hostMonitoring: Bool? }
             let info: CoreInfo = try await engine.call("hello")
-            if let hash = info.contractHash, hash != CoreContract.contractHash { throw ClientError.message(L("应用资源与核心版本不一致，请重新安装同一版本")) }
-            hostMonitoringSupported = info.hostMonitoring == true
+            try acceptCoreInfo(info)
             if hostMonitoringSupported {
                 hostMonitorObserver = NotificationCenter.default.addObserver(forName: EngineClient.hostsChanged, object: metricsEngine, queue: .main) { [weak self] note in
                     guard let snapshot = note.userInfo?["state"] as? HostMonitorState else { return }
@@ -815,6 +831,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
             synchronizeAccountDeployments()
             reconcileDashboardFilters()
             Task { await loadAccountStatuses(refresh: true, dueOnly: true) }
+            // Core asks the Keychain for Claude's login at most once (settings.claudeKeychain.askedAt).
+            Task { await requestClaudeKeychain(startup: true) }
             await reload(); await scan(); await refreshQuotas()
         }
         catch { message = error.localizedDescription }

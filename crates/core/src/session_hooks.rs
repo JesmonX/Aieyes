@@ -433,7 +433,12 @@ pub fn local(source: &Source, action: &str) -> HookStatus {
         error: None,
     };
     let result = (|| -> Result<String> {
-        ensure!(supported(&source.provider), "此 Agent 不需要 hooks");
+        ensure!(
+            supported(&source.provider)
+                && !(source.provider == "codebuddy"
+                    && crate::codebuddy_ide::is_path(&expand(&source.path))),
+            "此 Agent 不需要 hooks"
+        );
         let state_dir = t.home.join(".aieyes");
         let disabled_path = state_dir.join("session-hooks-disabled");
         if disabled_path.exists() && action != "repair" && action != "remove" {
@@ -541,6 +546,7 @@ pub fn call(settings: &Settings, method: &str, params: &Value) -> Result<Value> 
     for source in settings.sources.iter().filter(|s| {
         s.subscription.is_none()
             && supported(&s.provider)
+            && !(s.provider == "codebuddy" && crate::codebuddy_ide::is_path(Path::new(&s.path)))
             && params["sourceId"].as_str().is_none_or(|id| s.id == id)
     }) {
         if !seen.insert(key(source)) {
@@ -575,36 +581,48 @@ pub fn call(settings: &Settings, method: &str, params: &Value) -> Result<Value> 
     }
     Ok(Value::Array(rows))
 }
-fn ancestry(provider: &str) -> (u32, u64) {
-    // Cursor and ZCode commonly run as Node; do not attribute an arbitrary Node ancestor.
-    if matches!(provider, "cursor" | "zcode" | "codebuddy") {
-        return (0, 0);
-    }
+/// The agent process (pid, start) and the argv verdict of the nearest
+/// ancestor that is the provider's own CLI.
+fn ancestry(provider: &str) -> (u32, u64, Option<&'static str>) {
+    // Cursor, ZCode and CodeBuddy commonly run as Node; do not bind an arbitrary
+    // Node ancestor's pid. Their argv is still matched by program name.
+    let bind = !matches!(provider, "cursor" | "zcode" | "codebuddy");
     let mut system = sysinfo::System::new();
     let mut pid = sysinfo::Pid::from_u32(std::process::id());
+    let mut verdict = None;
     for _ in 0..8 {
-        // Only identity and ancestry are needed. CPU, disk and executable
+        // Only identity, ancestry and argv are needed. CPU, disk and executable
         // collection can exhaust the observer's short deadline under load.
         system.refresh_processes_specifics(
             sysinfo::ProcessesToUpdate::Some(&[pid]),
             true,
-            sysinfo::ProcessRefreshKind::nothing(),
+            sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::Always),
         );
         let Some(process) = system.process(pid) else {
             break;
         };
+        let argv: Vec<String> = process
+            .cmd()
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        // The observer and the shell that launched it name the provider too.
+        if verdict.is_none() && !argv.iter().any(|a| a.contains(MARKER)) {
+            verdict = session_events::headless_argv(provider, &argv);
+        }
         let name = process.name().to_string_lossy().to_lowercase();
-        if (provider == "claude" && name.starts_with("claude"))
-            || (provider == "antigravity" && (name == "agy" || name == "agy.exe"))
+        if bind
+            && ((provider == "claude" && name.starts_with("claude"))
+                || (provider == "antigravity" && (name == "agy" || name == "agy.exe")))
         {
-            return (pid.as_u32(), process.start_time());
+            return (pid.as_u32(), process.start_time(), verdict);
         }
         let Some(parent) = process.parent() else {
             break;
         };
         pid = parent;
     }
-    (0, 0)
+    (0, 0, verdict)
 }
 /// Called before any GUI, SQLite, keychain or updater initialization, including from a copied helper.
 pub fn run_if_requested() -> bool {
@@ -642,7 +660,16 @@ pub fn run_if_requested() -> bool {
                 event.session_source = entrypoint.chars().take(256).collect();
             }
             ensure!(!event.session.is_empty(), "missing session");
-            (event.pid, event.process_start) = ancestry(&provider);
+            let verdict;
+            (event.pid, event.process_start, verdict) = ancestry(&provider);
+            if std::env::var_os("AIEYES_INTERNAL").is_some_and(|v| !v.is_empty()) {
+                event.session_source = session_events::INTERNAL_SOURCE.into();
+                event.classification = session_events::INTERNAL.into();
+            } else if event.classification.is_empty()
+                && let Some(verdict) = verdict
+            {
+                event.classification = verdict.into();
+            }
             let root = home.context("missing home")?.join(".aieyes");
             if root.join("session-hooks-disabled").exists() {
                 return Ok(());

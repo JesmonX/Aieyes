@@ -5,7 +5,7 @@ use serde_json::Value;
 pub const PARSER_VERSION: u32 = 6;
 pub fn parser_version(provider: &str) -> u32 {
     if provider == "codex" {
-        return 8;
+        return 10;
     }
     if provider == "codebuddy" {
         return 11;
@@ -13,7 +13,7 @@ pub fn parser_version(provider: &str) -> u32 {
     if provider == "kimi" {
         return 9;
     }
-    if provider == "opencode" {
+    if crate::opencode::family(provider) {
         return 8;
     }
     if provider == "qoder" {
@@ -26,6 +26,9 @@ pub fn parser_version(provider: &str) -> u32 {
         return 8;
     }
     if provider == "claude" {
+        return 7;
+    }
+    if provider == "workbuddy" {
         return 7;
     }
     if provider == "grok" {
@@ -52,6 +55,15 @@ pub fn codex_tokens(v: &Value) -> Option<Tokens> {
         cache_write,
         reasoning: count(v, "reasoning_output_tokens"),
     })
+}
+
+/// ChatGPT Work shares Codex metering; only the displayed agent differs.
+fn codex_agent(state: &ParseState) -> String {
+    match state.originator.as_str() {
+        crate::session_events::CODEX_WORK_ORIGINATOR => "chatgpt-work".into(),
+        "" => String::new(),
+        _ => "codex".into(),
+    }
 }
 
 fn event(
@@ -85,6 +97,7 @@ fn event(
         inheritance: None,
         interval_start: None,
         interval_evidence: String::new(),
+        agent: codex_agent(state),
     }
 }
 
@@ -106,7 +119,7 @@ pub fn parse(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usage
         "qoder" | "pi" | "omp" if v["tokens"].is_object() => parse_normalized(source, state, v),
         "claude" | "qoder" => parse_claude(source, state, v),
         "pi" | "omp" => crate::pi_history::parse(source, state, v),
-        "kimi" | "codebuddy" => crate::native_agents::parse(source, state, v),
+        "kimi" | "codebuddy" | "copilot" => crate::native_agents::parse(source, state, v),
         "deepseek-harness" if v["type"].is_string() => {
             crate::native_agents::parse_dsh(source, state, v)
         }
@@ -141,6 +154,9 @@ fn parse_codex(source: &Source, state: &mut ParseState, v: &Value) -> Option<Usa
             state.session_started_at =
                 timestamp(&payload["timestamp"]).or_else(|| timestamp(&v["timestamp"]));
             state.model_provider = payload["model_provider"].as_str().unwrap_or("").into();
+            if let Some(originator) = payload["originator"].as_str().filter(|s| !s.is_empty()) {
+                state.originator = originator.into();
+            }
             if let Some(id) = payload["id"].as_str().or(payload["session_id"].as_str()) {
                 state.session_id = id.into();
             }
@@ -412,6 +428,15 @@ pub(crate) fn parse_normalized(
         format!("{}:{id}", state.session_id),
         "import",
     );
+    // This marker belongs only to a Cline legacy task's canonical cumulative
+    // row. Version 3 removes an ambiguous child aggregate when independent,
+    // explicitly related child records appear after an earlier import.
+    if source.provider == "cline"
+        && id == format!("task:{session}")
+        && let Some(version @ (2 | 3)) = v["clineTaskUsageVersion"].as_u64()
+    {
+        parsed.usage_version = version as u32;
+    }
     parsed.interval_start = timestamp(&v["intervalStart"]);
     parsed.interval_evidence = v["intervalEvidence"].as_str().unwrap_or("").into();
     // Standard exports may explicitly name the original request. Absent that
@@ -419,7 +444,10 @@ pub(crate) fn parse_normalized(
     parsed.inheritance = serde_json::from_value::<UsageInheritance>(v["inheritance"].clone())
         .ok()
         .filter(|proof| !proof.origin.trim().is_empty() && proof.origin.len() <= 4096);
-    if matches!(source.provider.as_str(), "qoder" | "codebuddy") {
+    if matches!(
+        source.provider.as_str(),
+        "qoder" | "codebuddy" | "workbuddy"
+    ) {
         parsed.native_credits = serde_json::from_value::<NativeCredits>(v["nativeCredits"].clone())
             .ok()
             .filter(NativeCredits::valid);
@@ -427,6 +455,10 @@ pub(crate) fn parse_normalized(
             c.aliases.clear();
             c.mirror_of = None;
             c.mirrored_by = None;
+        }
+        if source.provider == "workbuddy" && parsed.native_credits.is_some() {
+            parsed.usage_version = parser_version(&source.provider);
+            parsed.attribution = "workbuddy-credit".into();
         }
     }
     if let Some(category @ ("api" | "subscription")) = v["billing"]["category"].as_str() {

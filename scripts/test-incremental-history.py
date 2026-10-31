@@ -116,6 +116,53 @@ def record(number, model='fixture'):
 
 
 class IncrementalHistory(unittest.TestCase):
+    def test_trae_history_is_projected_incremental_and_preserves_rewritten_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory); folder = root / 'trajectories'; folder.mkdir()
+            path = folder / 'trajectory.json'
+            call = dict(timestamp='2026-10-31T01:00:00.123456', model='fixture', input_messages=['PRIVATE_PROMPT'], response=dict(content='PRIVATE_REPLY', usage=dict(input_tokens=12, output_tokens=3, cache_read_input_tokens=4)))
+            value = dict(task='PRIVATE_TASK', start_time='2026-10-31T01:00:00.000001', llm_interactions=[call], end_time='', success=False)
+            path.write_text(json.dumps(value))
+            for provider in ('trae', 'trae-cn'):
+                first = collect(root, provider)
+                self.assertEqual(first[-1]['files'], 1)
+                self.assertFalse(first[-1]['partial'])
+                row = events(first)[0]
+                self.assertEqual(row['tokens'], dict(input=12, output=3, cacheRead=4, cacheWrite=0, reasoning=0))
+                self.assertEqual(row['sessionId'], 'trae:' + value['start_time'])
+                self.assertNotIn('PRIVATE', json.dumps(first))
+                repeat = collect(root, provider, cursors(first))
+                self.assertEqual(events(repeat), [])
+                self.assertEqual(repeat[-1]['readBytes'], 0)
+            first = collect(root, 'trae')
+            value['start_time'] = '2026-10-31T02:00:00.000001'
+            value['llm_interactions'] = [dict(call, timestamp='2026-10-31T02:00:00.%06d' % i) for i in range(300)]
+            path.write_text(json.dumps(value))
+            rewritten = collect(folder, 'trae', cursors(first))
+            batches = [frame for frame in rewritten if frame['kind'] == 'batch']
+            self.assertEqual([len(frame['events']) for frame in batches], [256, 44])
+            self.assertFalse(any(frame['reset'] for frame in batches))
+            self.assertIsNone(batches[0]['cursor'])
+            self.assertTrue(batches[-1]['cursor'])
+            self.assertTrue(all(row['sessionId'] == 'trae:' + value['start_time'] for row in events(rewritten)))
+            self.assertEqual(events(collect(root, 'trae', cursors(rewritten))), [])
+
+    def test_trae_invalid_files_do_not_block_valid_history_or_read_encrypted_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / 'chat.db').write_bytes(b'PRIVATE_ENCRYPTED')
+            empty = collect(root, 'trae')
+            self.assertEqual(empty[-1]['files'], 0)
+            self.assertEqual(events(empty), [])
+            folder = root / 'trajectories'; folder.mkdir()
+            (folder / 'bad.json').write_text('{"start_time":"PRIVATE_INVALID","llm_interactions":[]}')
+            (folder / 'good.json').write_text(json.dumps(dict(start_time='2026-10-31T01:00:00', llm_interactions=[dict(timestamp='2026-10-31T01:00:01', model='fixture', response=dict(usage=dict(input_tokens=5)))])))
+            first = collect(root, 'trae')
+            self.assertTrue(first[-1]['partial'])
+            self.assertEqual(first[-1]['failedFiles'], 1)
+            self.assertEqual(len(events(first)), 1)
+            self.assertNotIn('PRIVATE', json.dumps(first))
+
     def test_codebuddy_credit_and_usage_sidecars_keep_identifiers_without_private_content(self):
         with tempfile.TemporaryDirectory() as directory:
             path=pathlib.Path(directory)/'session.jsonl'
@@ -202,6 +249,14 @@ class IncrementalHistory(unittest.TestCase):
                 self.assertNotIn('PRIVATE_',json.dumps(first));self.assertEqual(before,path.read_bytes())
                 self.assertEqual(collect(root,'opencode',cursors(first))[-1]['readBytes'],0)
 
+    def test_codex_projection_keeps_only_the_originator_label(self):
+        with patch('sys.argv', ['collector', '/nonexistent', 'codex']), contextlib.redirect_stdout(io.StringIO()):
+            module = runpy.run_path(str(SCRIPT))
+        meta=dict(type='session_meta',timestamp=1,payload=dict(id='s',originator='codex_work_desktop',cwd='PRIVATE_CWD',base_instructions='PRIVATE_PROMPT'))
+        event=module['_project'](meta,'codex')
+        self.assertEqual(event['payload']['originator'],'codex_work_desktop');self.assertNotIn('PRIVATE_',json.dumps(event))
+        self.assertNotIn('originator',module['_project'](dict(type='session_meta',payload=dict(id='s')),'codex')['payload'])
+
     def test_native_clients_project_statistics_without_prompts_or_headers(self):
         fixtures=SCRIPT.parents[1]/'crates/core/tests/fixtures/native-agents'
         for provider,name,relative in [('kimi','kimi.jsonl','sessions/s/agents/main/wire.jsonl'),('codebuddy','codebuddy.jsonl','projects/p/s.jsonl'),('grok','grok-updates.jsonl','sessions/p/s/updates.jsonl')]:
@@ -217,6 +272,27 @@ class IncrementalHistory(unittest.TestCase):
                 self.assertNotIn('PRIVATE_',json.dumps(first))
                 second=collect(root,provider,cursors(first))
                 self.assertEqual(events(second),[])
+
+    def test_copilot_session_state_projects_only_usage_records(self):
+        fixture=SCRIPT.parents[1]/'crates/core/tests/fixtures/native-agents/copilot-events.jsonl'
+        rows=[json.loads(line) for line in fixture.read_text().splitlines()]
+        for row in rows:
+            row['data']['content']='PRIVATE_PROMPT'
+            if row['type']=='session.usage_record':row['data']['usage']['apiEndpoint']='PRIVATE_ENDPOINT'
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory);session=root/'session-state/9b009a56-0bf5-4830-8d65-8da8fe5fc299'
+            session.mkdir(parents=True)
+            (session/'events.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows))
+            (session/'workspace.yaml').write_text('cwd: PRIVATE_CWD\n')
+            first=collect(root,'copilot')
+            self.assertEqual(first[-1]['kind'],'done')
+            projected=events(first)
+            self.assertEqual([e['type'] for e in projected],['session.usage_record'])
+            usage=projected[0]['data']['usage']
+            self.assertEqual((usage['model'],usage['inputTokens'],usage['outputTokens']),('Qwen3.8-27B',13654,32))
+            self.assertEqual(usage['accounting'],{'usageId':'chatcmpl-ba19d2686638f3c6'})
+            self.assertNotIn('PRIVATE_',json.dumps(first))
+            self.assertEqual(events(collect(root,'copilot',cursors(first))),[])
 
     def test_kimi_remote_fork_preserves_reversible_inheritance_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -259,7 +335,7 @@ class IncrementalHistory(unittest.TestCase):
                 path=pathlib.Path(directory)/'export.jsonl';path.write_text(record(10))
                 self.assertEqual(events(collect(path,provider))[0]['tokens']['input'],10)
 
-    def test_disabled_precision_skips_parent_resolution_and_mode_change_replays(self):
+    def test_disabled_precision_hides_fork_counter_diagnostics_and_mode_change_replays(self):
         with tempfile.TemporaryDirectory() as root:
             home = pathlib.Path(root)
             child = dict(type='session_meta', payload=dict(id='child', history_base=dict(thread_id='missing', end_byte_offset=999999)))
@@ -267,7 +343,7 @@ class IncrementalHistory(unittest.TestCase):
             first = collect(home, 'codex', precise=False)
             self.assertFalse(first[-1]['partial'])
             self.assertEqual(first[-1]['forkHistoryIssues'], [])
-            self.assertNotIn('inheritedHistory', events(first)[0])
+            self.assertEqual(events(first)[0]['inheritedHistory']['issueCode'], 'parentNotFound')
             self.assertEqual(collect(home, 'codex', cursors(first), precise=False)[-1]['readBytes'], 0)
             exact = collect(home, 'codex', cursors(first), precise=True)
             self.assertTrue(next(f for f in exact if f['kind'] == 'batch')['reset'])
@@ -276,8 +352,22 @@ class IncrementalHistory(unittest.TestCase):
             self.assertEqual(exact[-1]['issues'], [])
             normal = collect(home, 'codex', cursors(exact), precise=False)
             self.assertTrue(next(f for f in normal if f['kind'] == 'batch')['reset'])
-            self.assertNotIn('inheritedHistory', events(normal)[0])
+            self.assertEqual(events(normal)[0]['inheritedHistory']['issueCode'], 'parentNotFound')
             self.assertEqual(normal[-1]['forkHistoryIssues'], [])
+
+    def test_work_originator_is_resolved_when_counter_precision_is_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory)
+            parent=json.dumps(dict(type='session_meta',payload=dict(id='parent',originator='codex_work_desktop')))+'\n'
+            parent+=json.dumps(dict(type='event_msg',payload=dict(type='token_count',info=dict(total_token_usage=dict(input_tokens=900)))))+'\n'
+            (root/'parent.jsonl').write_text(parent)
+            child=dict(type='session_meta',payload=dict(id='child',history_base=dict(thread_id='parent',end_byte_offset=len(parent.encode()))))
+            (root/'child.jsonl').write_text(json.dumps(child)+'\n')
+            result=collect(root,'codex',precise=False)
+            inherited=next(event['inheritedHistory'] for event in events(result) if event.get('payload',{}).get('id')=='child')
+            self.assertEqual(inherited['originator'],'codex_work_desktop')
+            self.assertEqual(result[-1]['forkHistoryIssues'],[])
+            self.assertFalse(result[-1]['partial'])
 
     def test_renamed_parent_uses_metadata_and_recovers_existing_cursor(self):
         parent_id = '01a12393-1534-7750-8dbc-21bebb00678e'

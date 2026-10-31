@@ -4,6 +4,15 @@ import json
 import os
 import sys
 
+def trae_helper():
+    if '_TRAE' not in globals():
+        from pathlib import Path
+        source = globals().get('TRAE_SCRIPT')
+        if source is None: source = Path(__file__).with_name('trae_remote.py').read_text(encoding='utf-8')
+        scope = {}; exec(compile(source, '<aieyes-trae>', 'exec'), scope); globals()['_TRAE'] = scope
+    return globals()['_TRAE']
+
+
 def _kimi_inherited_prefix_end(stream):
     """Only complete fork boundaries prove that the preceding usage was copied."""
     position, boundary = stream.tell(), 0
@@ -40,10 +49,28 @@ def _native_database():
         scope={};exec(compile(source,'<aieyes-native-database>','exec'),scope);globals()['_NATIVE_DATABASE']=scope
     return globals()['_NATIVE_DATABASE']
 
-def _opencode_database(root):
+def _codebuddy_ide():
+    if '_CODEBUDDY_IDE' not in globals():
+        from pathlib import Path
+        source=globals().get('CODEBUDDY_IDE_SCRIPT')
+        if source is None:source=Path(__file__).with_name('codebuddy_ide_remote.py').read_text(encoding='utf-8')
+        scope={};exec(compile(source,'<aieyes-codebuddy-ide>','exec'),scope);globals()['_CODEBUDDY_IDE']=scope
+    return globals()['_CODEBUDDY_IDE']
+
+def _tasks():
+    if '_TASKS' not in globals():
+        from pathlib import Path
+        source=globals().get('TASK_SCRIPT')
+        if source is None:source=Path(__file__).with_name('task_remote.py').read_text(encoding='utf-8')
+        scope={};exec(compile(source,'<aieyes-tasks>','exec'),scope);globals()['_TASKS']=scope
+    return globals()['_TASKS']
+
+def _opencode_database(root, required=True):
     if os.path.isfile(root) and not root.endswith('.db'):return None
-    path=root if os.path.isfile(root) else os.path.join(root,'opencode.db')
-    if not os.path.isfile(path):raise FileNotFoundError('OpenCode native history database not found')
+    path=root if os.path.isfile(root) else next((p for p in (os.path.join(root,'opencode.db'),os.path.join(root,'kilo.db')) if os.path.isfile(p)),os.path.join(root,'opencode.db'))
+    if not os.path.isfile(path):
+        if required:raise FileNotFoundError('OpenCode native history database not found')
+        return None
     return path
 
 def _zcode_database(root):
@@ -328,7 +355,7 @@ class _CodexHistory:
         path = self._representation(path)
         if path is None:
             raise _CodexHistoryError('parentNotFound')
-        tokens, stamp, parent = None, None, None
+        tokens, stamp, parent, originator = None, None, None, ''
         if path.endswith('.zst'):
             value = _harness()['codex_prefix'](path, end)
             if value.get('reason'):
@@ -336,6 +363,7 @@ class _CodexHistory:
             if end and value.get('thread') != identity:
                 raise _CodexHistoryError('identityMismatch')
             tokens, stamp, parent, proof = (value.get(k) for k in ('tokens', 'timestamp', 'parent', 'proof'))
+            originator = value.get('originator') or ''
         else:
             digest, offset = hashlib.sha256(), 0
             with open(path, 'rb') as stream:
@@ -358,6 +386,7 @@ class _CodexHistory:
                             raise _CodexHistoryError('identityMismatch')
                         base = payload.get('history_base')
                         parent = base if isinstance(base, dict) else None
+                        originator = payload.get('originator') if isinstance(payload.get('originator'), str) else ''
                     if row.get('type') == 'event_msg' and payload.get('type') == 'token_count':
                         if not isinstance(payload.get('info'), dict):
                             continue
@@ -377,13 +406,24 @@ class _CodexHistory:
                 stamp = None
         elif type(stamp) is not int or not -(2**63) <= stamp < 2**63:
             stamp = None
-        if tokens is None and parent:
-            inherited = self._resolve(parent.get('thread_id'), parent.get('end_byte_offset'), ancestors)
-            proof = hashlib.sha256((proof + inherited['proof']).encode()).hexdigest()
-            tokens, stamp = inherited['tokens'], inherited['timestamp']
-        return dict(parentThread=thread, endByteOffset=end,
+        if (tokens is None or not originator) and parent:
+            try:
+                inherited = self._resolve(parent.get('thread_id'), parent.get('end_byte_offset'), ancestors)
+            except (OSError, ValueError, TypeError, KeyError):
+                if tokens is None:
+                    raise
+                inherited = None
+            if inherited:
+                proof = hashlib.sha256((proof + inherited['proof']).encode()).hexdigest()
+                if tokens is None:
+                    tokens, stamp = inherited['tokens'], inherited['timestamp']
+                originator = originator or inherited.get('originator', '')
+        result = dict(parentThread=thread, endByteOffset=end,
                     tokens=tokens if tokens is not None else dict(input=0, output=0, cacheRead=0, cacheWrite=0, reasoning=0),
                     timestamp=stamp, proof=proof, issue='')
+        if originator:
+            result['originator'] = originator
+        return result
 
 
 def _usage_problem(value,provider):
@@ -464,6 +504,8 @@ def _project(value, provider):
         kind = value.get("type")
         if kind == "session_meta":
             event = {"type": kind, "timestamp": value.get("timestamp"), "payload": {"timestamp": payload.get("timestamp"), "id": payload.get("id", payload.get("session_id")), "model_provider": payload.get("model_provider")}}
+            if isinstance(payload.get("originator"), str) and payload["originator"]:
+                event["payload"]["originator"] = payload["originator"]
             user, account = payload.get('creator_user_id'), payload.get('creator_account_id')
             if isinstance(user, str) and user and isinstance(account, str) and account:
                 event['payload']['creator_identity_key'] = hashlib.sha256((user + '\0' + account).encode()).hexdigest()
@@ -489,6 +531,13 @@ def _project(value, provider):
                 if isinstance(data.get('usage'),dict):fields['usage']={k:data['usage'][k] for k in ('input','output','cacheRead','cacheWrite','reasoning','totalTokens') if k in data['usage']}
                 if kind=='message':event['message']=fields
                 else:event.update(fields)
+    elif provider == 'copilot':
+        if value.get('type') == 'session.usage_record':
+            usage = (value.get('data') or {}).get('usage') or {}
+            fields = {k: usage[k] for k in ('model', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens', 'apiCallId') if k in usage}
+            if isinstance(usage.get('accounting'), dict) and 'usageId' in usage['accounting']:
+                fields['accounting'] = {'usageId': usage['accounting']['usageId']}
+            event = {'type': 'session.usage_record', 'id': value.get('id'), 'timestamp': value.get('timestamp'), 'data': {'usage': fields}}
     elif provider == "kimi":
         if value.get('type') in ('metadata','llm.request','turn.prompt','usage.record'):
             event={k:value[k] for k in ('type','model','provider','time','turnId') if k in value}
@@ -792,7 +841,7 @@ def _incremental(request):
     cursors = request.get('cursors', {})
     precise = bool(request.get('preciseCounting', request.get('codexPreciseCounting', True)))
     counting_generation = request.get('countingGeneration', 0)
-    history = _CodexHistory(root) if provider == 'codex' and precise else None
+    history = _CodexHistory(root) if provider == 'codex' else None
     fork_issues = []
     issues, failed, invalid_records, read_bytes, file_count, scanned_records = [], 0, 0, 0, 0, 0
 
@@ -834,7 +883,7 @@ def _incremental(request):
         inherited = old.get('inheritedHistory')
         if inherited and history:
             refreshed = history.resolve(dict(thread_id=inherited['parentThread'], end_byte_offset=inherited['endByteOffset']))
-            if any(refreshed.get(k) != inherited.get(k) for k in ('tokens', 'proof', 'issue', 'issueCode')):
+            if any(refreshed.get(k) != inherited.get(k) for k in ('tokens', 'proof', 'issue', 'issueCode', 'originator')):
                 old = {}
                 inherited = refreshed
         with open(path, 'rb') as stream:
@@ -922,7 +971,7 @@ def _incremental(request):
                     flush()
             if offset != last_commit or reset:
                 flush()
-            if inherited and history and inherited.get('tokens') is None:
+            if precise and inherited and history and inherited.get('tokens') is None:
                 issue(path, inherited.get('issue') or '继承历史尚未确认；首段累计暂不计入', 'missingHistoryBase', inherited)
 
     try:
@@ -930,9 +979,15 @@ def _incremental(request):
             raise FileNotFoundError('数据目录不存在')
         native = root if os.path.basename(root) == 'conversations' else os.path.join(root, 'conversations')
         zcode_db = _zcode_database(root) if provider=='zcode' else None
-        opencode_db = _opencode_database(root) if provider=='opencode' else None
+        task_files = _tasks()['files'](provider, root) if provider in ('cline','roo','kilo') else []
+        opencode_db = _opencode_database(root,required=not task_files) if provider in ('opencode','kilo') else None
+        if opencode_db:task_files=[]
         harness_paths,discovery_issues=_harness()['discover'](root) if provider=='deepseek-harness' else ([],[])
-        if harness_paths or discovery_issues:
+        if provider == 'codebuddy' and _codebuddy_ide()['is_path'](root):
+            stats = _codebuddy_ide()['history'](root, cursors, emit, issue)
+            file_count += stats['files']; read_bytes += stats['readBytes']; scanned_records += stats['scannedRecords']
+            failed += stats['failedFiles']
+        elif harness_paths or discovery_issues:
             for item in discovery_issues:
                 failed+=1;issue(item['path'],item['message'],item['code'])
             for path in harness_paths:
@@ -956,6 +1011,10 @@ def _incremental(request):
                     emit('batch',path=path,reset=True,events=batch,cursor=checkpoint)
                 except Exception as error:
                     failed+=1;issue(path,error)
+        elif task_files:
+            stats=_tasks()['history'](root,provider,cursors,emit,issue,precise,counting_generation)
+            file_count+=stats['files'];failed+=stats['failedFiles']
+            read_bytes+=stats['readBytes'];scanned_records+=stats['scannedRecords']
         elif zcode_db or opencode_db:
             path=zcode_db or opencode_db;file_count+=1
             if os.path.islink(path):raise ValueError('Select the actual native database rather than a symbolic link')
@@ -1002,14 +1061,30 @@ def _incremental(request):
                         emit('batch', path=path, reset=True, events=events, cursor=None)
                     failed += 1
                     issue(path, error)
+        elif provider == 'workbuddy':
+            path = root if os.path.isfile(root) and os.path.basename(root) == 'workbuddy.db' else os.path.join(root, 'workbuddy.db')
+            if os.path.isfile(path):
+                file_count += 1
+                try:
+                    stats = _native_database()['workbuddy_history'](path, cursors.get(path, {}), emit)
+                    read_bytes += stats['readBytes']; scanned_records += stats['scannedRecords']
+                except Exception:
+                    failed += 1
+                    issue(path, 'WorkBuddy usage metadata could not be read', 'fileRead')
         else:
             roots = [root]
             if provider == 'codex' and os.path.isdir(root) and any(os.path.exists(os.path.join(root, p)) for p in ('sessions', 'archived_sessions', 'auth.json', 'config.toml', '.aieyes')) and os.path.basename(root) not in ('sessions', 'archived_sessions'):
                 roots = [os.path.join(root, p) for p in ('sessions', 'archived_sessions')]
+            elif provider in ('trae', 'trae-cn'):
+                # Do not walk encrypted IDE storage. CLI trajectories use the
+                # bounded whole-file importer below.
+                roots = []
             elif provider in ('claude','codebuddy','qoder') and os.path.isdir(os.path.join(root, 'projects')):
                 roots = [os.path.join(root, 'projects')]
             elif provider in ('kimi','grok','pi','omp') and os.path.isdir(os.path.join(root,'sessions')):
                 roots = [os.path.join(root,'sessions')]
+            elif provider == 'copilot' and os.path.isdir(os.path.join(root,'session-state')):
+                roots = [os.path.join(root,'session-state')]
             for folder in roots:
                 if folder != root and not os.path.exists(folder):
                     continue
@@ -1024,7 +1099,7 @@ def _incremental(request):
                         for directory, directories, names in os.walk(folder, followlinks=False, onerror=walk_error):
                             directories[:] = sorted(n for n in directories if n != '.aieyes' and not (cursor_native and directory==folder and n in ('chats','acp-sessions','projects')))
                             for name in sorted(names):
-                                if name.endswith('.jsonl') and (provider!='kimi' or name=='wire.jsonl') and (not grok_native or name=='updates.jsonl'):
+                                if name.endswith('.jsonl') and (provider!='kimi' or name=='wire.jsonl') and (provider!='copilot' or name=='events.jsonl') and (not grok_native or name=='updates.jsonl'):
                                     yield os.path.join(directory, name)
                     paths = walk()
                 for path in paths:
@@ -1034,6 +1109,35 @@ def _incremental(request):
                     except Exception as error:
                         failed += 1
                         issue(path, error)
+        if provider in ('trae', 'trae-cn'):
+            helper = trae_helper()
+            for file in helper['files'](root):
+                path = str(file)
+                file_count += 1
+                try:
+                    signature = stat(path)
+                    if signature is not None and cursors.get(path, {}).get('trajectory') == signature:
+                        continue
+                    value, amount = helper['read'](file)
+                    read_bytes += amount
+                    rows = list(helper['history'](value))
+                    unchanged = signature == stat(path)
+                    if not unchanged:
+                        failed += 1
+                        issue(path, 'Trae trajectory changed while reading')
+                        continue
+                    # A rewritten interactive trajectory represents a new task;
+                    # preserve earlier imported tasks just like the local reader.
+                    if not rows:
+                        emit('batch', path=path, reset=False, events=[], cursor=dict(trajectory=signature))
+                    for offset in range(0, len(rows), 256):
+                        part = rows[offset:offset + 256]
+                        scanned_records += len(part)
+                        emit('batch', path=path, reset=False, events=part,
+                             cursor=dict(trajectory=signature) if offset + 256 >= len(rows) else None)
+                except (OSError, ValueError, TypeError):
+                    failed += 1
+                    issue(path, 'Trae trajectory metadata is unavailable')
         if provider == 'codex':
             _native_routes(root, request.get('routeCursor') or {}, emit)
         _qoder_states(root, request, emit, issue)
@@ -1047,78 +1151,79 @@ def _incremental(request):
         emit('error', error='远程记录读取失败：' + str(error)[:400])
 
 
-if 'REQUEST' in globals():
-    _incremental(REQUEST)
-    raise SystemExit(0)
-
-try:
-    root = os.path.expanduser(sys.argv[1])
-    provider = sys.argv[2]
-    if not os.path.exists(root):
-        raise FileNotFoundError("data directory")
-    native = root if os.path.basename(os.path.normpath(root)) == 'conversations' else os.path.join(root, 'conversations')
-    if provider in ('antigravity', 'agy') and os.path.isdir(native):
-        result, issues = [], []
-        size, failed = 0, 0
-        for name in sorted(os.listdir(native)):
-            path = os.path.join(native, name)
-            if not name.endswith('.db') or os.path.islink(path) or not os.path.isfile(path):
-                continue
-            try:
-                data = _agy_database_detailed(path)
-            except Exception as error:
-                failed += 1
-                issues.append(dict(path=name, code='fileRead', message=str(error)))
-                continue
-            events = data['events']
-            issues.extend(dict(issue, path=name) for issue in data['issues'])
-            size += len(json.dumps(events))
-            if size > 48 * 1024 * 1024:
-                raise ValueError('远程记录超过单批大小，请缩小数据目录范围')
-            result.append(dict(path=path, events=events))
-        response = dict(files=result, issues=issues,
-                        partial=any(row['code'] != 'unknownModel' for row in issues), failedFiles=failed)
-        if failed and not result:
-            response['error'] = 'Antigravity 会话文件读取失败：' + '；'.join(issue['path'] + ' · ' + issue['message'] for issue in issues[:3])
-        print(json.dumps(response, separators=(',', ':')))
+if not globals().get('AIEYES_HISTORY_LIBRARY', False):
+    if 'REQUEST' in globals():
+        _incremental(REQUEST)
         raise SystemExit(0)
 
-    roots = [root]
-    if provider == "codex" and os.path.isdir(root) and (os.path.basename(root) == ".codex" or any(os.path.exists(os.path.join(root, name)) for name in ("sessions", "archived_sessions", "auth.json", "config.toml", ".aieyes"))) and os.path.basename(os.path.normpath(root)) not in ("sessions", "archived_sessions"):
-        roots = [os.path.join(root, part) for part in ("sessions", "archived_sessions")]
-    elif provider == "claude" and os.path.isdir(os.path.join(root, "projects")):
-        roots = [os.path.join(root, "projects")]
-
-    files = []
-    for folder in roots:
-        if os.path.isfile(folder):
-            files.append(folder)
-        else:
-            for directory, directories, names in os.walk(folder, followlinks=False):
-                directories[:] = [n for n in directories if n != '.aieyes']
-                files.extend(os.path.join(directory, n) for n in names if n.endswith(".jsonl"))
-
-    result = []
-    size = 0
-    for path in sorted(files):
-        events = []
-        with open(path, "rb") as stream:
-            inherited_prefix_end = _kimi_inherited_prefix_end(stream) if provider == 'kimi' else 0
-            for line in stream:
-                if not line.endswith(b"\n"):
+    try:
+        root = os.path.expanduser(sys.argv[1])
+        provider = sys.argv[2]
+        if not os.path.exists(root):
+            raise FileNotFoundError("data directory")
+        native = root if os.path.basename(os.path.normpath(root)) == 'conversations' else os.path.join(root, 'conversations')
+        if provider in ('antigravity', 'agy') and os.path.isdir(native):
+            result, issues = [], []
+            size, failed = 0, 0
+            for name in sorted(os.listdir(native)):
+                path = os.path.join(native, name)
+                if not name.endswith('.db') or os.path.islink(path) or not os.path.isfile(path):
                     continue
                 try:
-                    value = json.loads(line)
-                except (ValueError, UnicodeDecodeError):
+                    data = _agy_database_detailed(path)
+                except Exception as error:
+                    failed += 1
+                    issues.append(dict(path=name, code='fileRead', message=str(error)))
                     continue
-                event = _project(value, provider)
-                if event and provider == 'kimi': event['_aieyesInherited'] = stream.tell() <= inherited_prefix_end
-                if event:
-                    size += len(json.dumps(event))
-                    if size > 48 * 1024 * 1024:
-                        raise ValueError("history exceeds batch size")
-                    events.append(event)
-        result.append({"path": path, "events": events})
-    print(json.dumps({"files": result}, separators=(",", ":")))
-except Exception as error:
-    print(json.dumps(dict(error='远程记录读取失败：' + str(error)[:400]), separators=(',', ':')))
+                events = data['events']
+                issues.extend(dict(issue, path=name) for issue in data['issues'])
+                size += len(json.dumps(events))
+                if size > 48 * 1024 * 1024:
+                    raise ValueError('远程记录超过单批大小，请缩小数据目录范围')
+                result.append(dict(path=path, events=events))
+            response = dict(files=result, issues=issues,
+                            partial=any(row['code'] != 'unknownModel' for row in issues), failedFiles=failed)
+            if failed and not result:
+                response['error'] = 'Antigravity 会话文件读取失败：' + '；'.join(issue['path'] + ' · ' + issue['message'] for issue in issues[:3])
+            print(json.dumps(response, separators=(',', ':')))
+            raise SystemExit(0)
+
+        roots = [root]
+        if provider == "codex" and os.path.isdir(root) and (os.path.basename(root) == ".codex" or any(os.path.exists(os.path.join(root, name)) for name in ("sessions", "archived_sessions", "auth.json", "config.toml", ".aieyes"))) and os.path.basename(os.path.normpath(root)) not in ("sessions", "archived_sessions"):
+            roots = [os.path.join(root, part) for part in ("sessions", "archived_sessions")]
+        elif provider == "claude" and os.path.isdir(os.path.join(root, "projects")):
+            roots = [os.path.join(root, "projects")]
+
+        files = []
+        for folder in roots:
+            if os.path.isfile(folder):
+                files.append(folder)
+            else:
+                for directory, directories, names in os.walk(folder, followlinks=False):
+                    directories[:] = [n for n in directories if n != '.aieyes']
+                    files.extend(os.path.join(directory, n) for n in names if n.endswith(".jsonl"))
+
+        result = []
+        size = 0
+        for path in sorted(files):
+            events = []
+            with open(path, "rb") as stream:
+                inherited_prefix_end = _kimi_inherited_prefix_end(stream) if provider == 'kimi' else 0
+                for line in stream:
+                    if not line.endswith(b"\n"):
+                        continue
+                    try:
+                        value = json.loads(line)
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+                    event = _project(value, provider)
+                    if event and provider == 'kimi': event['_aieyesInherited'] = stream.tell() <= inherited_prefix_end
+                    if event:
+                        size += len(json.dumps(event))
+                        if size > 48 * 1024 * 1024:
+                            raise ValueError("history exceeds batch size")
+                        events.append(event)
+            result.append({"path": path, "events": events})
+        print(json.dumps({"files": result}, separators=(",", ":")))
+    except Exception as error:
+        print(json.dumps(dict(error='远程记录读取失败：' + str(error)[:400]), separators=(',', ':')))

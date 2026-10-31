@@ -115,6 +115,9 @@ pub fn paths(source: &Source) -> Result<Vec<PathBuf>> {
         "kimi" | "grok" | "pi" | "omp" if root.join("sessions").exists() => {
             vec![root.join("sessions")]
         }
+        "copilot" if root.join("session-state").exists() => {
+            vec![root.join("session-state")]
+        }
         _ => vec![root],
     };
     let mut files = Vec::new();
@@ -135,6 +138,7 @@ pub fn paths(source: &Source) -> Result<Vec<PathBuf>> {
             if e.file_type().is_file()
                 && e.path().extension().is_some_and(|s| s == "jsonl")
                 && (source.provider != "kimi" || e.file_name() == "wire.jsonl")
+                && (source.provider != "copilot" || e.file_name() == "events.jsonl")
                 && (!grok_native || e.file_name() == "updates.jsonl")
             {
                 files.push(e.path().to_path_buf());
@@ -181,13 +185,27 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
             crate::zcode::scan(store, settings, source, &path)
         };
     }
-    if source.provider == "opencode"
+    if crate::opencode::family(&source.provider)
         && let Some(path) = crate::opencode::database(&source.path)
     {
         return if full {
             crate::opencode::rescan(store, settings, source, &path)
         } else {
             crate::opencode::scan(store, settings, source, &path)
+        };
+    }
+    // WorkBuddy Credits live in workbuddy.db; its transcripts carry no usage.
+    if source.provider == "workbuddy" {
+        return crate::workbuddy::scan(store, settings, source, full);
+    }
+    if source.provider == "codebuddy" && crate::codebuddy_ide::directory(&source.path).is_some() {
+        return crate::codebuddy_ide::scan(store, settings, source, full);
+    }
+    if crate::task_history::applies(source) {
+        return if full {
+            crate::task_history::rescan(store, settings, source)
+        } else {
+            crate::task_history::scan(store, settings, source)
         };
     }
     if source.provider == "deepseek-harness" {
@@ -198,7 +216,7 @@ fn scan_mode(store: &Store, settings: &Settings, source: &Source, full: bool) ->
     if source.provider == "codex" {
         store.prepare_history_corrections()?;
     }
-    let mut history = if source.provider == "codex" && settings.precise_counting {
+    let mut history = if source.provider == "codex" {
         Some(crate::codex_history::Resolver::new(source, &files))
     } else {
         None
@@ -395,19 +413,19 @@ fn scan_file(
     if !valid_file {
         cursor = None;
     }
-    let parent_changed = settings.precise_counting
-        && cursor
-            .as_ref()
-            .and_then(|(_, _, state)| state.inherited_history.as_ref())
-            .is_some_and(|old| {
-                history.as_deref_mut().is_some_and(|r| {
-                    let fresh = r.refresh(old);
-                    fresh.proof != old.proof
-                        || fresh.tokens != old.tokens
-                        || fresh.issue != old.issue
-                        || fresh.issue_code != old.issue_code
-                })
-            });
+    let parent_changed = cursor
+        .as_ref()
+        .and_then(|(_, _, state)| state.inherited_history.as_ref())
+        .is_some_and(|old| {
+            history.as_deref_mut().is_some_and(|r| {
+                let fresh = r.refresh(old);
+                fresh.proof != old.proof
+                    || fresh.tokens != old.tokens
+                    || fresh.issue != old.issue
+                    || fresh.issue_code != old.issue_code
+                    || fresh.originator != old.originator
+            })
+        });
     let (offset, mut state) = match cursor {
         Some((s, o, p))
             if s == signature
@@ -422,7 +440,7 @@ fn scan_file(
         _ => (
             0,
             ParseState {
-                session_id: if source.provider == "kimi" {
+                session_id: if matches!(source.provider.as_str(), "kimi" | "copilot") {
                     crate::native_agents::session_id(path)
                 } else {
                     format!("{}:{}", source.id, hash(&key))

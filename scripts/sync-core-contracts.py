@@ -52,6 +52,8 @@ pub struct Provider {
     pub wakeup: bool,
     pub discover_local: bool,
     pub agent_id: &'static str,
+    /// Per-machine history sources ("machines" capability); balance-only ids have none.
+    pub machines: bool,
 }
 '''
 rust += '#[rustfmt::skip]\npub const METHODS: &[Method] = &[\n'
@@ -63,6 +65,7 @@ for p in providers:
     fields = ', '.join(f'{k}: {q(p[v])}' for k, v in [('id','id'),('name','name'),('default_path','defaultPath'),('binary','binary')])
     fields += ', ' + ', '.join(f'{k}: {str(p[v]).lower()}' for k, v in [('requires_path','requiresPath'),('wakeup','wakeup'),('discover_local','discoverLocal')])
     fields += f', agent_id: {q(p.get("agent", p["id"]))}'
+    fields += f', machines: {str("machines" in p.get("capabilities", [])).lower()}'
     rust += f'    Provider {{ {fields} }},\n'
 rust += '];\n'
 for name, values in [('PROVIDER_IDS',[p['id'] for p in providers]),('EXCLUDED_FS_TYPES',table['filesystems']['excludedTypes']),('EXCLUDED_FS_PATHS',table['filesystems']['excludedPaths'])]:
@@ -112,7 +115,8 @@ for name, key in [('providerNames','name'),('defaultPaths','defaultPath'),('bina
     swift += f'    static let {name}: [String: String] = [' + ', '.join(f'{q(p["id"])}: {q(p[key])}' for p in providers) + ']\n'
 for name, key in [('subscriptionHints', 'hint'), ('subscriptionLoginURLs', 'loginUrl')]:
     swift += f'    static let {name}: [String: String] = [' + ', '.join(f'{q(p["id"])}: {q(p["subscription"][key])}' for p in providers if 'subscription' in p) + ']\n'
-swift += '    static let subscriptionModes: [String: [String: String]] = [' + ', '.join(q(p['id']) + ': [' + ', '.join(q(k) + ': ' + q(v) for k, v in p['subscription']['modes'].items()) + ']' for p in providers if 'subscription' in p) + ']\n'
+# Empty modes mark a link-only subscription: nothing to paste, only loginUrl (`[:]` in Swift).
+swift += '    static let subscriptionModes: [String: [String: String]] = [' + ', '.join(q(p['id']) + ': [' + (', '.join(q(k) + ': ' + q(v) for k, v in p['subscription']['modes'].items()) or ':') + ']' for p in providers if 'subscription' in p) + ']\n'
 swift += '    static let apiGuidance: [String: [String: String]] = [' + ', '.join(q(p['id']) + ': [' + ', '.join(q(k) + ': ' + q(v) for k, v in p['apiGuidance'].items()) + ']' for p in providers if 'apiGuidance' in p) + ']\n'
 swift += f'    static let fiveHourMinutes = {table["windows"]["fiveHour"]}\n    static let weekMinutes = {table["windows"]["week"]}\n'
 swift += f'    static let excludedFilesystemTypes: Set<String> = {array(table["filesystems"]["excludedTypes"])}\n    static let excludedFilesystemPaths = {array(table["filesystems"]["excludedPaths"])}\n'

@@ -140,8 +140,8 @@ dialog { border-radius:var(--radius-overlay); --control-md:32px; }
 #quota-dialog[data-layout=api],#codex-switch { width:var(--dialog-api-width); }
 #account-targets { width:var(--dialog-targets-width); }
 #session-hooks { width:var(--dialog-hooks-width); }
-#agy-login { width:var(--dialog-agy-width); }
-#session-hooks,#agy-login { padding:var(--dialog-padding); overflow:auto; }
+#agy-login,#qoder-cli { width:var(--dialog-agy-width); }
+#session-hooks,#agy-login,#qoder-cli { padding:var(--dialog-padding); overflow:auto; }
 #account-targets[open] { display:flex; flex-direction:column; overflow:hidden; }
 .account-target-body { min-height:0; max-height:none; padding:8px var(--dialog-padding) 20px; }
 .dialog-head h2 { min-width:0; overflow-wrap:anywhere; }
@@ -228,11 +228,8 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
 .billing-grid small, .billing-grid span { color: var(--muted); }
 @media (max-width: 700px) { .billing-grid { grid-template-columns: 1fr; } .billing-grid > div { grid-template-columns: 1fr auto; } .billing-grid small { grid-column: 1 / -1; } }
 @media(max-width:700px) { .form-row { grid-template-columns:1fr; gap:6px; } }
-.native-scan-dialog{width:min(760px,calc(100vw - 48px));max-height:85vh;overflow:auto}
 .native-connections .row-body{min-width:0;overflow-wrap:anywhere}
-.machine-info [data-native-scan-machine]{align-self:flex-start;margin-top:6px}
 .account-agent-group > .between{flex-wrap:wrap;gap:8px}
-.native-scan-dialog .source-path{overflow-wrap:anywhere}
 .agent-selector.server-selector{margin-bottom:12px;max-width:100%;overflow-x:auto;flex-wrap:nowrap}
 .server-selector button{flex:none;white-space:nowrap}
 /* Control sizes (docs/ui-review-and-optimization-2026-10-26.md §5.1). Buttons default to control-sm

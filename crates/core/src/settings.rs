@@ -498,6 +498,9 @@ impl Engine {
                     true
                 }
             });
+            // Balance-only providers (no path or no machine sources) never get a Source.
+            let sourceless = crate::contracts::provider(provider)
+                .is_some_and(|p| p.default_path.is_empty() || !p.machines);
             let agent = next
                 .agents
                 .iter_mut()
@@ -507,7 +510,7 @@ impl Engine {
                 agent.enabled = enabled;
             }
             if let Some(ids) = params.get("machineIds") {
-                agent.machine_ids = if grouped && provider == "deepseek" {
+                agent.machine_ids = if grouped && sourceless {
                     vec!["local".into()]
                 } else {
                     serde_json::from_value(ids.clone())?
@@ -522,13 +525,13 @@ impl Engine {
                     "机器已删除，请重新选择"
                 );
                 ensure!(
-                    provider != "deepseek" || id == "local",
+                    !sourceless || id == "local",
                     "DeepSeek 余额使用本机 API Key 查询"
                 );
             }
             agent.machine_ids.sort();
             agent.machine_ids.dedup();
-            for machine in agent.machine_ids.iter().filter(|_| provider != "deepseek") {
+            for machine in agent.machine_ids.iter().filter(|_| !sourceless) {
                 if !next.sources.iter().any(|s| {
                     s.provider == provider && s.host_id.as_deref().unwrap_or("local") == machine
                 }) {

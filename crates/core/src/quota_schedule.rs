@@ -11,11 +11,19 @@ use std::{
     sync::{Mutex, mpsc},
 };
 
-fn interval(account: &Account, global: u64) -> i64 {
+/// Providers whose quota backends rate-limit or bill per query poll no faster than this.
+pub(crate) fn floor(provider: &str) -> u64 {
+    match provider {
+        "qoder" | "trae" | "trae-cn" => 600,
+        "copilot" | "kiro" | "workbuddy" | "codebuddy" => 300,
+        _ => 5,
+    }
+}
+pub(crate) fn interval(account: &Account, global: u64) -> i64 {
     account
         .quota_refresh_seconds
         .unwrap_or(global)
-        .clamp(5, 86400) as i64
+        .clamp(floor(&account.provider), 86400) as i64
 }
 fn due(last: Option<i64>, now: i64, seconds: i64) -> bool {
     last.is_none_or(|last| now < last || now - last >= seconds)
@@ -514,5 +522,74 @@ mod tests {
         assert!(due(Some(200), 160, 300));
         assert!(!due(Some(160), 161, 60));
         assert!(due(Some(100), 400, interval(&b, 300)));
+    }
+
+    #[test]
+    fn provider_floor_limits_fast_polling() {
+        let account = |provider: &str| Account {
+            provider: provider.into(),
+            quota_refresh_seconds: Some(60),
+            ..Default::default()
+        };
+        assert_eq!(interval(&account("qoder"), 300), 600);
+        assert_eq!(interval(&account("trae-cn"), 300), 600);
+        assert_eq!(interval(&account("copilot"), 300), 300);
+        assert_eq!(interval(&account("kiro"), 300), 300);
+        assert_eq!(interval(&account("codex"), 300), 60);
+        assert_eq!(
+            interval(
+                &Account {
+                    provider: "qoder".into(),
+                    ..Default::default()
+                },
+                3600
+            ),
+            3600
+        );
+    }
+
+    /// Background polling (Tauri `Poller`, native schedule) runs whether or not a
+    /// panel is open; Qoder's ten-minute floor must hold there too.
+    #[test]
+    fn background_schedule_waits_the_qoder_floor() {
+        use crate::models::{Settings, Source};
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::open(dir.path()).unwrap();
+        engine
+            .store
+            .save_settings(&Settings {
+                refresh_seconds: 60,
+                accounts: vec![Account {
+                    id: "q".into(),
+                    name: "Qoder".into(),
+                    provider: "qoder".into(),
+                    quota_enabled: true,
+                    quota_refresh_seconds: Some(30),
+                    ..Default::default()
+                }],
+                sources: vec![Source {
+                    id: "s".into(),
+                    provider: "qoder".into(),
+                    account_id: "q".into(),
+                    path: dir.path().to_string_lossy().into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        engine
+            .store
+            .db
+            .execute("INSERT INTO kv VALUES('quota-attempt:qoder:q','1000')", [])
+            .unwrap();
+        let schedule = engine.quota_schedule_at(1300).unwrap();
+        assert_eq!(schedule["accounts"][0]["intervalSeconds"], 600);
+        assert_eq!(schedule["nextDueAt"], 1600);
+        let mut poller = Poller::default();
+        let early = poller.wait_plan_at(&engine, 1599).unwrap();
+        assert!(early.query.is_none());
+        assert_eq!(early.next_wake, Some(1600));
+        let due = poller.wait_plan_at(&engine, 1600).unwrap();
+        assert_eq!(due.query, Some(json!({"dueOnly":true})));
     }
 }

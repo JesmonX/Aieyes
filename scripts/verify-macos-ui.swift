@@ -189,6 +189,7 @@ for line in sys.stdin:
         deadline=time.monotonic()+10
         while os.path.exists(root+'/hold-account-status') and not os.path.exists(root+'/release-account-status') and time.monotonic()<deadline: time.sleep(.01)
         response['result']=json.load(open(root+'/account-status.json')) if os.path.exists(root+'/account-status.json') else []
+    elif method=='accounts.status.refreshBatch': response['result']=[]
     elif method=='runtime.revisions': response['result']={'usage':1} if os.path.exists(root+'/enable-revisions') else {}
     elif method=='accounts.status.refresh': response['error']=dict(message='不应再次检查已确认的登录')
     elif method=='accounts.deployments.sync':
@@ -238,6 +239,32 @@ for line in sys.stdin:
         defer { model.stop() }
         await model.bootstrap()
         precondition(model.settings == settings && model.settingsDraft == settings && !model.settingsDirty)
+        precondition(!model.chatgptWorkInstalled, "Older hello fixtures without installation metadata remain compatible")
+        let workNotice = L("本机已安装 ChatGPT Work，会话与用量单独显示，账户和额度与 Codex 共用。")
+        for (hello, expected) in [
+            (#"{"chatgptWorkInstalled":true}"#, true),
+            (#"{"chatgptWorkInstalled":false}"#, false),
+            (#"{"chatgptWorkInstalled":true}"#, true),
+            (#"{"chatgptWorkInstalled":null}"#, false),
+            (#"{"chatgptWorkInstalled":true}"#, true),
+            (#"{}"#, false)
+        ] {
+            let info = try JSONDecoder().decode(CoreInfo.self, from: Data(hello.utf8))
+            try model.acceptCoreInfo(info)
+            precondition(model.chatgptWorkInstalled == expected, "Runtime installation state must follow hello and clear when absent")
+            let codexHeader = AccountsSettingsView(model: model, provider: "codex", editAccount: { _ in })
+            precondition(codexHeader.chatgptWorkInstallationNotice == (expected ? workNotice : nil))
+            for provider in [nil, "claude", "chatgpt-work"] as [String?] {
+                precondition(AccountsSettingsView(model: model, provider: provider, editAccount: { _ in }).chatgptWorkInstallationNotice == nil, "The installation notice belongs only to the Codex settings header")
+            }
+            precondition(model.settings == settings && model.settingsDraft == settings && !model.settingsDirty, "Installation detection must not persist configuration or create accounts or sources")
+            precondition(CoreContract.usageProviders.contains("chatgpt-work"))
+            for scope in ["overview", "analysis"] {
+                var workFilter = DashboardFilterPreference(provider: "chatgpt-work")
+                workFilter.reconcile(settings: model.settings)
+                precondition(workFilter.normalized(for: scope).provider == "chatgpt-work", "Work history remains selectable even when Work is not installed")
+            }
+        }
         var settingsOpens = 0
         model.showSettings = { settingsOpens += 1 }
         model.settingsAgent = "claude"; model.settingsTab = "prices"
@@ -276,6 +303,13 @@ for line in sys.stdin:
                 return row["method"] as? String == method && (owner == nil || row["fixtureOwner"] as? String == owner)
             }.count
         }
+        let emptyAccountModel = AppModel(autostart: false)
+        precondition(emptyAccountModel.settings.accounts.isEmpty)
+        let discoveryChecks = try calls("accounts.status.refreshBatch")
+        await emptyAccountModel.loadAccountStatuses(refresh: true, dueOnly: true)
+        emptyAccountModel.stop()
+        let refreshedDiscoveryChecks = try calls("accounts.status.refreshBatch")
+        precondition(refreshedDiscoveryChecks > discoveryChecks, "An empty account list must still check for the first native login")
         let startupQueries = try calls("quotas.refresh")
         precondition(startupQueries == 1, "Bootstrap must attempt quotas without a manual click")
         model.tick()

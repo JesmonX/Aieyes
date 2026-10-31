@@ -88,6 +88,7 @@ fn run() -> anyhow::Result<()> {
         );
         return Ok(());
     }
+    Engine::spawn_auto_scan(&root);
     engine.set_host_event_sink(|state| {
         let mut out = io::stdout().lock();
         let _ = serde_json::to_writer(

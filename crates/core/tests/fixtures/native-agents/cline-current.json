@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "updated_at": "2026-10-31T01:27:08.053Z",
+  "agent": "lead",
+  "sessionId": "cline-live-fixture",
+  "origin": {"source": "cli", "mode": "user", "sessionId": "cline-live-fixture", "version": "3.0.74"},
+  "messages": [
+    {"id": "user-fixture", "role": "user", "content": [{"type": "text", "text": "PRIVATE"}], "ts": 1793410025003},
+    {"id": "msg-live-fixture", "role": "assistant", "content": [{"type": "text", "text": "PRIVATE"}], "ts": 1793410028044,
+     "modelInfo": {"id": "Qwen3.8-27B", "provider": "openai-compatible"},
+     "metrics": {"inputTokens": 4689, "outputTokens": 23, "cacheReadTokens": 0, "cacheWriteTokens": 0}}
+  ]
+}

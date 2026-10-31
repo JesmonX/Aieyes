@@ -1,0 +1,885 @@
+[
+  {
+    "provider": "claude",
+    "argv": [
+      "claude",
+      "-p",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "claude",
+    "argv": [
+      "/usr/local/bin/node",
+      "/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+      "--print"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "claude",
+    "argv": [
+      "claude",
+      "--resume"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "codex",
+    "argv": [
+      "codex",
+      "exec",
+      "task"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "codex",
+    "argv": [
+      "codex",
+      "mcp-server"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "codex",
+    "argv": [
+      "codex"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "deepseek-harness",
+    "argv": [
+      "dsh",
+      "headless"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "deepseek-harness",
+    "argv": [
+      "dsh",
+      "--profile",
+      "sdk"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "deepseek-harness",
+    "argv": [
+      "dsh",
+      "--profile=acp"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "deepseek-harness",
+    "argv": [
+      "dsh",
+      "tui"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "deepseek-harness",
+    "argv": [
+      "dsh",
+      "web"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "kimi",
+    "argv": [
+      "kimi",
+      "-p",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kimi",
+    "argv": [
+      "kimi",
+      "--prompt",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kimi",
+    "argv": [
+      "kimi",
+      "acp"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kimi",
+    "argv": [
+      "kimi",
+      "web"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kimi",
+    "argv": [
+      "kimi",
+      "rc"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kimi",
+    "argv": [
+      "kimi",
+      "remote"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kimi",
+    "argv": [
+      "kimi"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "cursor",
+    "argv": [
+      "cursor-agent",
+      "-p",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "cursor",
+    "argv": [
+      "agent",
+      "--print",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "cursor",
+    "argv": [
+      "cursor-agent"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "cursor",
+    "argv": [
+      "node",
+      "/opt/app/index.js",
+      "-p"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "opencode",
+    "argv": [
+      "opencode",
+      "run",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "opencode",
+    "argv": [
+      "opencode",
+      "acp"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "opencode",
+    "argv": [
+      "opencode",
+      "api",
+      "get"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "opencode",
+    "argv": [
+      "opencode",
+      "serve"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "opencode",
+    "argv": [
+      "opencode",
+      "serve",
+      "--service"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "opencode",
+    "argv": [
+      "opencode"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "antigravity",
+    "argv": [
+      "agy",
+      "-p",
+      "/usage"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "antigravity",
+    "argv": [
+      "agy",
+      "--output-format",
+      "json"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "antigravity",
+    "argv": [
+      "agy",
+      "--input-format",
+      "stream-json"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "antigravity",
+    "argv": [
+      "agy",
+      "--print-timeout=30s"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "antigravity",
+    "argv": [
+      "agy",
+      "--json-schema",
+      "{}"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "antigravity",
+    "argv": [
+      "agy",
+      "remote-control",
+      "start"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "antigravity",
+    "argv": [
+      "agy",
+      "mic-serve"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "antigravity",
+    "argv": [
+      "agy",
+      "-i",
+      "hi"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "antigravity",
+    "argv": [
+      "agy",
+      "--prompt-interactive",
+      "hi"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "antigravity",
+    "argv": [
+      "agy"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "qoder",
+    "argv": [
+      "qodercli",
+      "-p",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "qoder",
+    "argv": [
+      "qodercli",
+      "--output-format",
+      "stream-json"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "qoder",
+    "argv": [
+      "qodercli",
+      "-o",
+      "json"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "qoder",
+    "argv": [
+      "qodercli"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "zcode",
+    "argv": [
+      "zcode",
+      "-p",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "zcode",
+    "argv": [
+      "zcode",
+      "--target",
+      "goal"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "zcode",
+    "argv": [
+      "zcode",
+      "app-server"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "zcode",
+    "argv": [
+      "zcode"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "grok",
+    "argv": [
+      "grok",
+      "-p",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "grok",
+    "argv": [
+      "grok"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "pi",
+    "argv": [
+      "pi",
+      "-p",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "pi",
+    "argv": [
+      "pi",
+      "--mode",
+      "json"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "omp",
+    "argv": [
+      "omp",
+      "--mode=rpc"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "omp",
+    "argv": [
+      "omp"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "copilot",
+    "argv": [
+      "copilot",
+      "-p",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "copilot",
+    "argv": [
+      "node",
+      "/usr/lib/node_modules/@github/copilot/npm-loader.js",
+      "--acp"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "copilot",
+    "argv": [
+      "copilot"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "kiro",
+    "argv": [
+      "kiro-cli",
+      "chat",
+      "--no-interactive",
+      "/usage"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kiro",
+    "argv": [
+      "kiro-cli",
+      "chat"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "kiro",
+    "argv": [
+      "/Users/u/.local/bin/kiro-cli",
+      "chat",
+      "--v2",
+      "--no-interactive",
+      "/usage"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kiro",
+    "argv": [
+      "kiro-cli",
+      "chat",
+      "--output-format",
+      "stream-json",
+      "fix it"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kiro",
+    "argv": [
+      "kiro-cli",
+      "chat",
+      "--output-format=stream-json",
+      "fix it"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kiro",
+    "argv": [
+      "kiro-cli",
+      "chat",
+      "--output-format",
+      "text",
+      "fix it"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "kiro",
+    "argv": [
+      "kiro-cli",
+      "acp",
+      "--agent-engine=v2"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "kiro",
+    "argv": [
+      "kiro-cli",
+      "--tui"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "cline",
+    "argv": [
+      "cline",
+      "fix the bug"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "cline",
+    "argv": [
+      "cline",
+      "--json"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "cline",
+    "argv": [
+      "cline",
+      "-z"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "cline",
+    "argv": [
+      "cline",
+      "schedule",
+      "list"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "cline",
+    "argv": [
+      "cline",
+      "-y"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "cline",
+    "argv": [
+      "cline",
+      "-i",
+      "fix"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "cline",
+    "argv": [
+      "cline",
+      "--tui"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "cline",
+    "argv": [
+      "cline"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "kilo",
+    "argv": [
+      "kilo",
+      "run",
+      "hi"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kilo",
+    "argv": [
+      "kilo",
+      "--auto"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kilo",
+    "argv": [
+      "kilo",
+      "--format",
+      "json"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kilo",
+    "argv": [
+      "kilo",
+      "serve"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "kilo",
+    "argv": [
+      "kilo"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "trae",
+    "argv": [
+      "trae-cli",
+      "run",
+      "task"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "trae",
+    "argv": [
+      "trae-cli",
+      "interactive"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "trae",
+    "argv": [
+      "trae-cli",
+      "--must-patch"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "trae-cn",
+    "argv": [
+      "trae-cli",
+      "run"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "trae",
+    "argv": [
+      "/Users/u/.local/share/uv/tools/trae-agent/bin/python",
+      "/Users/u/.local/bin/trae-cli",
+      "run",
+      "Create hello.txt",
+      "--working-dir",
+      "/tmp/work"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "trae",
+    "argv": [
+      "python3",
+      "-m",
+      "trae_agent.cli",
+      "interactive"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "trae",
+    "argv": [
+      "python3",
+      "-m",
+      "trae_agent.cli",
+      "show-config"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "qoder",
+    "argv": [
+      "claude",
+      "-p"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "codebuddy",
+    "argv": [
+      "codebuddy",
+      "-p"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "kimi",
+    "argv": [
+      "node",
+      "/opt/node_modules/@moonshot-ai/kimi-code/dist/main.mjs",
+      "--model",
+      "fixture",
+      "acp"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "opencode",
+    "argv": [
+      "opencode",
+      "--log-level",
+      "error",
+      "run",
+      "fixture"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "codex",
+    "argv": [
+      "codex",
+      "-C",
+      "/tmp",
+      "exec",
+      "fixture"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "cline",
+    "argv": [
+      "cline",
+      "--model",
+      "fixture"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "pi",
+    "argv": [
+      "pi",
+      "--",
+      "--print"
+    ],
+    "expected": null
+  },
+  {
+    "provider": "kimi",
+    "argv": [
+      "kimi",
+      "--model",
+      "acp"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "qoder",
+    "argv": [
+      "qodercli",
+      "stream-json"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "codebuddy",
+    "argv": [
+      "node",
+      "/opt/node_modules/@tencent-ai/codebuddy-code/bin/codebuddy",
+      "--print",
+      "fixture"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "codebuddy",
+    "argv": [
+      "codebuddy"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "codebuddy",
+    "argv": [
+      "codebuddy",
+      "--acp"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "codebuddy",
+    "argv": [
+      "node",
+      "/opt/node_modules/@tencent-ai/codebuddy-code/bin/codebuddy",
+      "--setting-sources",
+      "user",
+      "--acp",
+      "--agents",
+      "{}"
+    ],
+    "expected": "headless"
+  },
+  {
+    "provider": "codebuddy",
+    "argv": [
+      "codebuddy",
+      "--model",
+      "--acp"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "codebuddy",
+    "argv": [
+      "codebuddy",
+      "--system-prompt",
+      "--acp"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "codebuddy",
+    "argv": [
+      "codebuddy",
+      "--",
+      "--acp"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "codebuddy",
+    "argv": [
+      "codebuddy",
+      "acp"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "claude",
+    "argv": [
+      "claude",
+      "--acp"
+    ],
+    "expected": "interactive"
+  },
+  {
+    "provider": "deepseek-harness",
+    "argv": [
+      "node",
+      "/root/node_modules/@deepseek-ai/dsh/lib/bin.js",
+      "headless",
+      "fixture"
+    ],
+    "expected": "headless"
+  }
+]

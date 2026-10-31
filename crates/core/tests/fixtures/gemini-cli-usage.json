@@ -1,0 +1,23 @@
+{
+  "userinfo": {"id": "123456789012345678901", "email": "person@example.test"},
+  "freeAssist": {
+    "cloudaicompanionProject": {"id": "project-one"},
+    "currentTier": {"id": "free-tier", "name": "Free"}
+  },
+  "paidAssist": {
+    "cloudaicompanionProject": "project-one",
+    "currentTier": {"id": "standard-tier", "name": "Standard"},
+    "paidTier": {
+      "id": "g1-pro-tier",
+      "name": "Google AI Pro",
+      "availableCredits": [{"creditType": "GOOGLE_ONE_AI", "creditAmount": "1234"}]
+    }
+  },
+  "quota": {
+    "buckets": [
+      {"modelId": "gemini-pro", "tokenType": "INPUT", "remainingFraction": 0.25, "remainingAmount": "10", "resetTime": "2030-01-02T03:04:05Z"},
+      {"modelId": "gemini-pro", "tokenType": "OUTPUT", "remainingFraction": 0.5},
+      {"modelId": "gemini-flash", "tokenType": "INPUT", "remainingFraction": 0.0}
+    ]
+  }
+}

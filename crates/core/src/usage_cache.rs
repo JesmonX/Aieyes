@@ -230,7 +230,7 @@ pub(crate) fn date_bounds(store: &Store, f: &Filter, summary: bool) -> Result<Da
                     .map(|s| &s.id)
                     .collect::<Vec<_>>(),
             )?;
-            let first: Option<i64> = store.db.query_row("SELECT MIN(stamp) FROM events e WHERE stamp<=?1 AND (?2 IS NULL OR provider=?2 OR provider=?7) AND (?3 IS NULL OR (?3='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?3 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6))))) AND (?4 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?4)) AND (?5 IS NULL OR model=?5)", params![now(), f.provider, f.account_id, f.source_id, f.model, shared, f.provider_alias()], |r| r.get(0))?;
+            let first: Option<i64> = store.db.query_row("SELECT MIN(stamp) FROM events e WHERE stamp<=?1 AND (?2 IS NULL OR (CASE WHEN provider='codex' AND json_extract(payload,'$.agent')='chatgpt-work' THEN 'chatgpt-work' ELSE provider END)=?2 OR provider=?7) AND (?3 IS NULL OR (?3='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?3 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6))))) AND (?4 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?4)) AND (?5 IS NULL OR model=?5)", params![now(), f.provider, f.account_id, f.source_id, f.model, shared, f.usage_provider_alias()], |r| r.get(0))?;
             (
                 first
                     .and_then(|stamp| Local.timestamp_opt(stamp, 0).single())
@@ -288,7 +288,7 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
     shared.sort();
     let shared_json = serde_json::to_string(&shared)?;
     let scope = hash(&serde_json::to_string(&(
-        "usage-v4-agent-groups",
+        "usage-v5-display-agents",
         &f.provider,
         &f.account_id,
         &f.source_id,
@@ -359,7 +359,7 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
             )
         } else {
             let mut data = Day::new();
-            let mut query=store.db.prepare_cached("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<?2 AND stamp<=?3 AND (?4 IS NULL OR provider=?4 OR provider=?8) AND (?5 IS NULL OR (?5='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7)))) OR (account_id=?5 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7))))) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
+            let mut query=store.db.prepare_cached("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<?2 AND stamp<=?3 AND (?4 IS NULL OR (CASE WHEN provider='codex' AND json_extract(payload,'$.agent')='chatgpt-work' THEN 'chatgpt-work' ELSE provider END)=?4 OR provider=?8) AND (?5 IS NULL OR (?5='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7)))) OR (account_id=?5 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7))))) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
             let mut rows = query.query(params![
                 from,
                 end,
@@ -368,7 +368,7 @@ pub(crate) fn read(store: &Store, f: &Filter, summary: bool) -> Result<(Dashboar
                 f.account_id,
                 f.source_id,
                 shared_json,
-                f.provider_alias()
+                f.usage_provider_alias()
             ])?;
             while let Some(row) = rows.next()? {
                 let mut e: UsageEvent = serde_json::from_str(&row.get::<_, String>(0)?)?;
@@ -642,6 +642,56 @@ mod tests {
         assert!(
             read(store, filter, false).unwrap().1.is_empty(),
             "second read must use cache, not fallback"
+        );
+    }
+    #[test]
+    fn codex_and_work_filters_partition_usage_in_cached_and_reference_queries() {
+        let (_root, store, mut settings) = fixture();
+        let mut rows = Vec::new();
+        for (id, agent) in [("work", "chatgpt-work"), ("codex", "codex"), ("legacy", "")] {
+            let mut row = event(&settings.sources[0], id, now() - 10);
+            row.provider = "codex".into();
+            row.agent = agent.into();
+            rows.push(row);
+        }
+        for source in &mut settings.sources {
+            source.provider = "codex".into();
+        }
+        store.save_settings(&settings).unwrap();
+        for row in rows {
+            store.put_event(&row, &[], &settings).unwrap();
+        }
+        for days in [None, Some(1)] {
+            for (provider, expected) in [
+                (None, 360),
+                (Some("codex"), 240),
+                (Some("chatgpt-work"), 120),
+            ] {
+                let filter = Filter {
+                    provider: provider.map(str::to_owned),
+                    days,
+                    ..Default::default()
+                };
+                parity(&store, &filter);
+                assert_eq!(
+                    store.dashboard(&filter).unwrap().summary.tokens.total(),
+                    expected
+                );
+            }
+        }
+        let work = Filter {
+            provider: Some("chatgpt-work".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            work.provider_alias(),
+            Some("codex"),
+            "billing keeps the shared pool"
+        );
+        assert_eq!(
+            work.usage_provider_alias(),
+            None,
+            "usage has its own display identity"
         );
     }
     #[test]

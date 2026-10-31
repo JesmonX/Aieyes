@@ -1,4 +1,4 @@
-"""Read-only, bounded SQLite projections for OpenCode and ZCode.
+"""Read-only, bounded SQLite projections for OpenCode, ZCode and WorkBuddy.
 
 The first read enumerates metadata. Later reads follow rowids and a bounded
 set of in-flight rows. Cursors and pending queues live in Aieyes, not in the
@@ -7,6 +7,7 @@ client database or a remote sidecar. No transcript fields leave SQLite.
 import contextlib
 import hashlib
 import json
+import math
 import pathlib
 import sqlite3
 
@@ -66,7 +67,7 @@ def tables(db,provider):
 
 
 def history_all(path,provider,cursors,emit):
-    if provider!='opencode':return history(path,provider,cursors.get(str(path),{}),emit)
+    if provider not in ('opencode','kilo'):return history(path,provider,cursors.get(str(path),{}),emit)
     with connect(path) as db:names=tables(db,provider)
     total=dict(readBytes=0,scannedRecords=0)
     for name in names:
@@ -75,9 +76,102 @@ def history_all(path,provider,cursors,emit):
     return total
 
 
+def kilo_headless(db, session):
+    """Use the lead session: subagents can deny questions under an interactive lead."""
+    seen = set()
+    for _ in range(32):
+        if session in seen:
+            return False
+        seen.add(session)
+        try:
+            found = db.execute('SELECT parent_id,permission FROM session WHERE id=?', (session,)).fetchone()
+            if not found:
+                return False
+            if found[0]:
+                session = found[0]
+                continue
+            rules = json.loads(found[1]) if found[1] else []
+        except (sqlite3.Error, ValueError, TypeError):
+            return False
+        return isinstance(rules, list) and any(isinstance(r, dict) and r.get('permission') == 'question' and r.get('pattern') == '*' and r.get('action') == 'deny' for r in rules)
+    return False
+
+
 def identity(path):
     stat = pathlib.Path(path).stat()
     return '%s:%s' % (stat.st_dev, stat.st_ino)
+
+
+def workbuddy_credit_rows(session, stamp, raw):
+    """The desktop's request-id -> Credits map contains no per-request model."""
+    if not isinstance(session, str) or not session or len(session) > 256 or type(stamp) is not int:
+        raise ValueError('Invalid WorkBuddy usage identity')
+    if raw is None:
+        return []
+    if not isinstance(raw, str) or len(raw.encode()) > 16 * 1024 * 1024:
+        raise ValueError('WorkBuddy usage metadata exceeds its limit')
+    try:
+        values = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(values, dict):
+        return []
+    rows = []
+    for request, credits in sorted(values.items()):
+        if not request or len(request) > 256 or type(credits) not in (int, float):
+            continue
+        try:
+            credits = float(credits)
+        except (ValueError, OverflowError):
+            continue
+        if not math.isfinite(credits) or credits < 0:
+            continue
+        origin = hashlib.sha256(json.dumps([session, request], ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+        rows.append(dict(id=request, sessionId=session, timestamp=max(0, stamp) // 1000, model='unknown',
+                         tokens={}, nativeCredits=dict(credits=credits),
+                         inheritance=dict(origin='workbuddy-credit:' + origin, inherited=False)))
+    return rows
+
+
+def workbuddy_history(path, old, emit):
+    """Inclusive high-water mark: rewrites at the last timestamp are read again."""
+    before = fingerprint(path)
+    if old.get('workbuddyVersion') == 1 and old.get('database') == before:
+        return dict(readBytes=0, scannedRecords=0)
+    current_identity = identity(path)
+    offset = old.get('offset', 0)
+    if old.get('workbuddyVersion') != 1 or old.get('identity') != current_identity or type(offset) is not int or offset < 0:
+        offset = 0
+    checkpoint = dict(workbuddyVersion=1, identity=current_identity, offset=offset, database=None)
+    scanned, amount = 0, 0
+    with connect(path) as db:
+        exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_usage'").fetchone()
+        after = (offset, '')
+        while exists:
+            page = db.execute('SELECT session_id,updated_at,credit_json FROM session_usage WHERE updated_at>? OR (updated_at=? AND session_id>?) ORDER BY updated_at,session_id LIMIT ?',
+                              (after[0], after[0], after[1], LIMIT)).fetchall()
+            if not page:
+                break
+            batch, size = [], 0
+            for session, stamp, raw in page:
+                for row in workbuddy_credit_rows(session, stamp, raw):
+                    encoded = len(json.dumps(row).encode())
+                    if size + encoded > 768 * 1024:
+                        emit('batch', path=str(path), reset=True, events=batch, cursor=None)
+                        batch, size = [], 0
+                    batch.append(row)
+                    size += encoded
+                amount += len(raw.encode()) if isinstance(raw, str) else 0
+                scanned += 1
+                checkpoint['offset'] = max(checkpoint['offset'], stamp)
+            after = (page[-1][1], page[-1][0])
+            emit('batch', path=str(path), reset=True, events=batch, cursor=dict(checkpoint))
+            if len(page) < LIMIT:
+                break
+    if before == fingerprint(path):
+        checkpoint['database'] = before
+    emit('batch', path=str(path), reset=True, events=[], cursor=checkpoint)
+    return dict(readBytes=amount, scannedRecords=scanned)
 
 
 def history(path, provider, old, emit, selected=None):
@@ -193,16 +287,50 @@ def cached_sessions(path, cursor, now):
     return files
 
 
+WORKBUDDY_PHASES = {
+    **dict.fromkeys(('completed', 'complete', 'done', 'pending', 'idle', 'await_input', 'awaitinput', 'waiting_input', 'waiting_user_input', 'connected', 'archived'), 'complete'),
+    **dict.fromkeys(('waiting_permission', 'waiting_question'), 'PermissionRequest'),
+    **dict.fromkeys(('failed', 'error'), 'failed'),
+    **dict.fromkeys(('cancelled', 'canceled', 'aborted', 'interrupted', 'terminated'), 'interrupted'),
+    **dict.fromkeys(('tool_start', 'tool_end', 'tool_executing'), 'tool'),
+    **dict.fromkeys(('planning', 'preparing', 'connecting', 'working', 'running', 'in_progress', 'streaming', 'processing', 'handoff', 'summarizing', 'waiting_team_members', 'model_requesting', 'model_streaming', 'model_done'), 'start'),
+}
+
+
+def workbuddy_phase(status):
+    """Same table as Rust `native_sessions::workbuddy_phase`."""
+    key = str(status or '').strip().lower().replace(' ', '_').replace('-', '_')
+    return WORKBUDDY_PHASES.get(key, 'unknown')
+
+
+def workbuddy_sessions(path, now):
+    """WorkBuddy keeps one `sessions` row per session, updated in place. Background
+    automations, playground runs and deleted rows are not user sessions."""
+    with connect(path) as db:
+        names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        runs = " AND id NOT IN (SELECT thread_id FROM automation_runs)" if 'automation_runs' in names else ''
+        rows = db.execute("SELECT id,CAST(COALESCE(last_activity_at,updated_at) AS TEXT),status,COALESCE(last_activity_at,updated_at) AS at FROM sessions WHERE deleted_at IS NULL AND COALESCE(is_background_automation,0)=0 AND COALESCE(is_playground,0)=0 AND COALESCE(source_mode,'')<>'background'" + runs + " AND COALESCE(last_activity_at,updated_at)>? ORDER BY at DESC LIMIT ?", ((now - 86400) * 1000, LIMIT)).fetchall()
+    return [[0, row[0], row[1], row[3], row[3], {'status': workbuddy_phase(row[2])}] for row in rows if isinstance(row[0], str) and len(row[0]) <= 256]
+
+
 def sessions(path, provider, cursor, now):
     before=fingerprint(path);old=cursor.get('continuation') or {}
     if old.get('nativeVersion')==VERSION and cursor.get('signature')==before:
         return cached_sessions(path,cursor,now),0
+    if provider=='workbuddy':
+        rows=workbuddy_sessions(path,now);files=[]
+        for row in rows:
+            base=dict(session=row[1],turn=row[2],at=row[4],parentSession='')
+            files.append(dict(key=str(path)+'#'+row[1],modified=row[4]//1000,reset=True,database=True,events=[dict(base,kind='start'),dict(base,kind=row[5]['status'])]))
+        signature=before if before==fingerprint(path) else ''
+        files.append(dict(key=str(path),modified=int(pathlib.Path(path).stat().st_mtime),signature=signature,database=True,reset=True,events=[],continuation=dict(nativeVersion=VERSION,identity=identity(path),rows=rows)))
+        return files,len(rows)
     scanned=0
     with connect(path) as db:
         current_identity=identity(path)
         if old.get('nativeVersion')!=VERSION or old.get('identity')!=current_identity:old={}
         state=dict(nativeVersion=VERSION,identity=current_identity,tables={})
-        selected=tables(db,provider) if provider=='opencode' else ['turn_usage']
+        selected=tables(db,provider) if provider in ('opencode','kilo') else ['turn_usage']
         latest={}
         for name in selected:
             table,columns=schema(db,provider,False,name)
@@ -228,10 +356,11 @@ def sessions(path, provider, cursor, now):
             for row in rows.values():
                 prior=latest.get(row[1])
                 if prior is None or (row[3],row[2],table)>=(prior[0][3],prior[0][2],prior[1]):latest[row[1]]=(row,table)
-        has_parts=provider=='opencode' and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='part'").fetchone() is not None
-        parents=provider=='opencode' and 'parent_id' in {r[1] for r in db.execute('PRAGMA table_info(session)')}
+        has_parts=provider in ('opencode','kilo') and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='part'").fetchone() is not None
+        parents=provider in ('opencode','kilo') and 'parent_id' in {r[1] for r in db.execute('PRAGMA table_info(session)')}
         files=[];visible=[]
         for row,table in sorted(latest.values(),key=lambda pair:pair[0][4],reverse=True)[:LIMIT]:
+            if provider=='kilo' and kilo_headless(db,row[1]):continue
             parent=db.execute('SELECT parent_id FROM session WHERE id=?',(row[1],)).fetchone() if parents else None
             base=dict(session=row[1],turn=row[2],at=row[4],parentSession=parent[0] if parent and isinstance(parent[0],str) else '')
             files.append(dict(key=str(path)+'#'+row[1],modified=row[4]//1000,reset=True,database=True,events=[dict(base,kind='start'),dict(base,kind=_phase(row,db,has_parts and table=='message'))]))

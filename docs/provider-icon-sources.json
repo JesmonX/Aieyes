@@ -13,7 +13,15 @@
     "kimi": "https://kimi.com",
     "codebuddy": "https://codebuddy-1328495429.cos.accelerate.myqcloud.com/web/ide/logo.svg",
     "pi": "https://pi.dev/logo-auto.svg",
-    "omp": "https://github.com/can1357/oh-my-pi/blob/main/assets/icon.svg"
+    "omp": "https://github.com/can1357/oh-my-pi/blob/main/assets/icon.svg",
+    "chatgpt-work": "https://cdn.openai.com/brand/OpenAI-Logos-2025.zip",
+    "copilot": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/copilot.svg",
+    "cline": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/cline.svg",
+    "kilo": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/kilocode.svg",
+    "roo": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/roocode.svg",
+    "kiro": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/kiro-color.svg",
+    "trae": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/trae-color.svg",
+    "workbuddy": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/workbuddy-color.svg"
   },
   "standaloneMarks": {
     "zcode": "Navigation logo SVG, viewBox 0 0 256 218",
@@ -24,7 +32,15 @@
     "kimi": "Official homepage CSS --sidebar-logo PNG; isolate the K and blue accent from the black tile, with light/dark foreground variants",
     "codebuddy": "Official SVG robot outline and eye shapes; remove the tile, decorative background circles and clipping, render the intact mark in brand violet",
     "pi": "Official multicolor standalone mark",
-    "omp": "Official pi/connector mark; dark text variant for light surfaces, original white/orange for dark surfaces"
+    "omp": "Official pi/connector mark; dark text variant for light surfaces, original white/orange for dark surfaces",
+    "chatgpt-work": "Same asset as codex (ChatGPT Work shares the OpenAI Blossom)",
+    "copilot": "LobeHub static SVG mark; official GitHub artwork pending review",
+    "cline": "LobeHub static SVG mark; official artwork pending review",
+    "kilo": "LobeHub static SVG mark; official artwork pending review",
+    "roo": "LobeHub static SVG mark; official artwork pending review",
+    "kiro": "LobeHub color SVG, rounded violet tile kept; official artwork pending review",
+    "trae": "LobeHub color SVG, shared by Trae and Trae CN; official artwork pending review",
+    "workbuddy": "LobeHub color SVG; official artwork pending review"
   },
   "opticalLongSide": {
     "codex": 0.84,
@@ -39,6 +55,14 @@
     "opencode": 0.72,
     "pi": 0.85,
     "omp": 0.91,
-    "kimi": 0.84
+    "kimi": 0.84,
+    "copilot": 0.78,
+    "cline": 0.78,
+    "kilo": 0.78,
+    "roo": 0.78,
+    "kiro": 0.78,
+    "trae": 0.78,
+    "workbuddy": 0.78,
+    "chatgpt-work": 0.84
   }
 }

@@ -70,6 +70,10 @@ pub struct UsageEvent {
     pub interval_start: Option<i64>,
     #[serde(default)]
     pub interval_evidence: String,
+    /// Agent shown for this usage when it differs from the metering provider,
+    /// e.g. `chatgpt-work` on the shared Codex pool.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent: String,
 }
 
 fn is_zero_revision(value: &u32) -> bool {
@@ -221,6 +225,9 @@ pub struct Account {
     pub quota_refresh_seconds: Option<u64>,
     pub device_settings: Vec<AccountDeviceSettings>,
     pub identity_key: Option<String>,
+    /// Hashed server identity shared by every source of this login (see NativeConnection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_identity: Option<String>,
     pub connections: Vec<AccountConnection>,
     pub quota_profile_id: Option<String>,
     pub id: String,
@@ -238,6 +245,7 @@ impl Default for Account {
             quota_refresh_seconds: None,
             device_settings: vec![],
             identity_key: None,
+            upstream_identity: None,
             connections: vec![],
             quota_profile_id: None,
             id: String::new(),
@@ -400,6 +408,9 @@ impl LocalMonitor {
 pub struct Settings {
     pub session_sounds: crate::session_sounds::Preferences,
     pub native_connections: Vec<crate::account_scan::NativeConnection>,
+    /// macOS Keychain consent for Claude Code. Never holds the token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claude_keychain: Option<crate::claude_keychain::Consent>,
     pub quota_reset_notifications: crate::quota_notifications::Preferences,
     pub codex_apis: Vec<crate::codex_api::Connection>,
     #[serde(skip_deserializing)]
@@ -433,6 +444,7 @@ impl Default for Settings {
         Self {
             session_sounds: Default::default(),
             native_connections: vec![],
+            claude_keychain: None,
             quota_reset_notifications: Default::default(),
             codex_apis: vec![],
             configuration_issues: vec![],
@@ -664,8 +676,17 @@ impl Settings {
                     .any(|a| crate::accounts::key(a) == *key)
             }) {
                 connection.account_key = None;
-                connection.status = "pending".into();
-                connection.note = "账户关联已解除，可重新扫描或在原生客户端管理".into();
+                connection.status = "observed".into();
+                connection.note = "账户关联已解除，可在原生客户端管理".into();
+            }
+            // Older builds used `pending`, `expired` and `unavailable`.
+            match connection.status.as_str() {
+                "pending" | "expired" => connection.status = "observed".into(),
+                "unavailable" => {
+                    connection.status = "remembered".into();
+                    connection.note = "历史账号；原生配置已移除或已切换账户".into();
+                }
+                _ => {}
             }
         }
         self.version = self.version.max(11);
@@ -748,6 +769,8 @@ pub struct ParseState {
     pub cumulative_segment: u64,
     pub last_timestamp: i64,
     pub model_provider: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub originator: String,
     pub session_started_at: Option<i64>,
     pub inherited_history: Option<crate::codex_history::InheritedHistory>,
     pub first_inherited_count: bool,
@@ -803,6 +826,44 @@ pub struct QuotaWindow {
     pub window_minutes: Option<i64>,
     pub resets_at: Option<i64>,
 }
+
+/// A generic quota counter for pools that are not percentage windows: credit
+/// pools, monthly usage, request counts and overage. `total` and `remaining`
+/// stay optional because many providers only report one side.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct QuotaMeter {
+    pub id: String,
+    pub group: String,
+    pub label: String,
+    pub used: f64,
+    /// False when the service reports only a balance. None preserves the
+    /// measured-usage semantics of older snapshots and adapters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used_known: Option<bool>,
+    pub total: Option<f64>,
+    pub remaining: Option<f64>,
+    pub overage: Option<f64>,
+    /// One of `credits`, `requests`, `usd`, `cny` or `points`.
+    pub unit: String,
+    pub resets_at: Option<i64>,
+    pub estimated: bool,
+}
+
+impl QuotaMeter {
+    pub fn valid(&self) -> bool {
+        let finite = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v >= 0.0);
+        !self.id.is_empty()
+            && QUOTA_METER_UNITS.contains(&self.unit.as_str())
+            && self.used.is_finite()
+            && self.used >= 0.0
+            && finite(self.total)
+            && finite(self.remaining)
+            && finite(self.overage)
+    }
+}
+
+pub const QUOTA_METER_UNITS: [&str; 5] = ["credits", "requests", "usd", "cny", "points"];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -863,6 +924,18 @@ pub struct QuotaSnapshot {
     pub updated_at: i64,
     pub origin: String,
     pub windows: Vec<QuotaWindow>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub meters: Vec<QuotaMeter>,
+    /// When the provider produced the data, if it differs from `updated_at`
+    /// (for example a cache file another app wrote).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_at: Option<i64>,
+    /// Set when the shown data is known to be old; not an error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stale_since: Option<i64>,
+    /// A non-error hint such as "open X once to refresh" or "local estimate".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
     pub balances: Vec<Balance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_usage: Option<ExtraUsageWallet>,
@@ -871,6 +944,17 @@ pub struct QuotaSnapshot {
     pub bank_updated_at: Option<i64>,
     pub plan: Option<String>,
     pub error: Option<String>,
+}
+
+impl QuotaSnapshot {
+    pub(crate) fn has_values(&self) -> bool {
+        !self.windows.is_empty()
+            || !self.meters.is_empty()
+            || !self.balances.is_empty()
+            || self.extra_usage.is_some()
+            || self.credits.is_some()
+            || self.bank_reset.is_some()
+    }
 }
 
 fn is_zero_observation_revision(value: &u64) -> bool {
@@ -1023,6 +1107,13 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// Billing adapters can share an Agent in settings while keeping distinct
+    /// usage identities. Work uses Codex credentials, but never its usage filter.
+    pub(crate) fn usage_provider_alias(&self) -> Option<&str> {
+        self.provider_alias()
+            .filter(|alias| !matches!(*alias, "codex" | "chatgpt-work"))
+    }
+
     pub(crate) fn provider_alias(&self) -> Option<&str> {
         // Account keys remain adapter-specific, including when legacy accounts
         // happen to share an ID. Only the agent-wide view combines adapters.

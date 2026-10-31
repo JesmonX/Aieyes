@@ -372,3 +372,50 @@ fn future_error_cache_is_replaced_once_by_a_successful_observation() {
         assert_eq!(read().observation_revision, 3);
     }
 }
+
+#[test]
+fn due_only_queries_keep_the_qoder_floor() {
+    // Each Qoder check starts qodercli: a 30 s account interval still waits 10 minutes.
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(root.path()).unwrap();
+    engine
+        .store
+        .save_settings(&Settings {
+            refresh_seconds: 60,
+            accounts: vec![Account {
+                id: "q".into(),
+                name: "Qoder".into(),
+                provider: "qoder".into(),
+                quota_enabled: true,
+                quota_refresh_seconds: Some(30),
+                ..Default::default()
+            }],
+            sources: vec![Source {
+                id: "s".into(),
+                name: "Qoder".into(),
+                provider: "qoder".into(),
+                account_id: "q".into(),
+                path: root.path().display().to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    let last = now() - 300;
+    engine
+        .store
+        .db
+        .execute(
+            "INSERT INTO kv VALUES('quota-attempt:qoder:q',?1)",
+            [last.to_string()],
+        )
+        .unwrap();
+    let rows = engine
+        .call("quotas.refresh", json!({"dueOnly":true}))
+        .unwrap();
+    assert_eq!(rows, json!([]));
+    assert_eq!(finished(&engine.store, "qoder:q").unwrap(), Some(last));
+    let schedule = engine.call("quotas.schedule", json!({})).unwrap();
+    assert_eq!(schedule["accounts"][0]["intervalSeconds"], 600);
+    assert_eq!(schedule["nextDueAt"], last + 600);
+}

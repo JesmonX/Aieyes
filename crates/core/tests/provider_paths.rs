@@ -12,6 +12,9 @@ const ROOTS: &[(&str, &str)] = &[
     ("grok", "GROK_HOME"),
     ("qoder", "QODER_CONFIG_DIR"),
     ("opencode", "XDG_DATA_HOME"),
+    ("copilot", "COPILOT_HOME"),
+    ("cline", "CLINE_DATA_DIR"),
+    ("kiro", "KIRO_HOME"),
 ];
 
 fn call(root: &Path, method: &str, params: Value, invalid_kimi: bool) -> std::process::Output {
@@ -132,6 +135,25 @@ fn discovery_and_directory_defaults_use_each_clients_effective_root() {
         } else {
             expected
         };
+        if !aieyes_core::contracts::provider(provider)
+            .unwrap()
+            .discover_local
+        {
+            // Registered ahead of their history adapters: no discovered source yet.
+            assert!(
+                !settings["sources"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|s| s["provider"] == *provider),
+                "{provider}"
+            );
+            assert_eq!(
+                rpc(root, "sources.defaultPath", json!({"provider":provider}))["path"],
+                expected.to_str().unwrap()
+            );
+            continue;
+        }
         let source = settings["sources"]
             .as_array()
             .unwrap()

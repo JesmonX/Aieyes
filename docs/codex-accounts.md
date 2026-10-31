@@ -1,5 +1,15 @@
 # Codex 多账号管理
 
+启动时及原生凭据变化后，Aieyes 自动识别当前 Codex 登录并记住出现过的账号；
+没有可用查询位置的历史账号保留最后额度快照。ChatGPT Work 使用同一账户和额度，
+卡片统一显示“Codex · ChatGPT Work”，不会重复查询。会话与用量按
+`originator=codex_work_desktop` 单独归入 ChatGPT Work；fork 缺少该字段时继承可核实
+的父会话来源，明确写出的来源优先。是否为无头会话仍按 `source` 和进程证据判断。
+
+macOS 启动时只读检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app`，
+在 Codex 设置页显示检测到的 ChatGPT Work 形态；检测不依赖 Codex CLI。
+安装状态只用于提示，已有 Work 历史在应用卸载后仍可筛选，也不会增加账户或额度请求。
+
 ## 使用方式
 
 在「设置 → Agent 接入 → Codex」启用 Codex，在「机器与目录」选择机器，再进入同页的「添加账户」或已有账户的「设置 → 设备」。首次添加登录会建立托管来源；建立前，同一个 Codex home 只能保留一个历史来源，已有唤醒部署需要先移除。

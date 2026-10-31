@@ -11,6 +11,14 @@ pub struct Event {
     pub session: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub session_source: String,
+    /// `interactive`, `headless` or `internal` from process argv, hook payload
+    /// or `AIEYES_INTERNAL`. Empty means no signal.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub classification: String,
+    /// Codex `session_meta.originator`; only `codex_work_desktop` changes the
+    /// displayed provider. Headless rules still read `session_source` only.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub originator: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub parent_session: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -37,6 +45,306 @@ fn field(v: &Value, names: &[&str]) -> String {
         .take(256)
         .collect()
 }
+pub const HEADLESS: &str = "headless";
+pub const INTERACTIVE: &str = "interactive";
+pub const INTERNAL: &str = "internal";
+pub const UNKNOWN: &str = "unknown";
+/// Session source of processes Aieyes spawns itself (`AIEYES_INTERNAL=1`).
+pub const INTERNAL_SOURCE: &str = "aieyes-internal";
+
+/// Executable basenames and npm package directories that identify a provider CLI.
+fn programs(provider: &str) -> (&'static [&'static str], &'static [&'static str]) {
+    match provider {
+        "claude" => (&["claude"], &["@anthropic-ai/claude-code"]),
+        "codex" => (&["codex"], &["@openai/codex"]),
+        "deepseek-harness" => (&["dsh"], &["@deepseek-ai/dsh"]),
+        "kimi" => (
+            &["kimi", "kimi-cli", "kimi-code"],
+            &["@moonshot-ai/kimi-code"],
+        ),
+        "cursor" => (&["cursor-agent", "agent"], &[]),
+        "opencode" => (&["opencode"], &["opencode-ai", "@opencode/cli"]),
+        "codebuddy" => (&["codebuddy"], &["@tencent-ai/codebuddy-code"]),
+        "antigravity" => (&["agy"], &[]),
+        "qoder" => (&["qodercli"], &["@qoder-ai/qodercli"]),
+        "zcode" => (&["zcode"], &[]),
+        "grok" => (&["grok"], &[]),
+        "pi" => (
+            &["pi"],
+            &[
+                "@mariozechner/pi-coding-agent",
+                "@earendil-works/pi-coding-agent",
+            ],
+        ),
+        "omp" => (&["omp"], &["@oh-my-pi/pi-coding-agent"]),
+        "copilot" => (&["copilot"], &["@github/copilot"]),
+        "kiro" => (&["kiro-cli"], &[]),
+        "cline" => (&["cline"], &["cline", "@cline/cli"]),
+        "kilo" => (&["kilo", "kilocode"], &["@kilocode/cli"]),
+        // The `trae-agent` console script, or `python -m trae_agent.cli`.
+        "trae" | "trae-cn" => (&["trae-cli", "trae_agent.cli"], &[]),
+        _ => (&[], &[]),
+    }
+}
+fn program_index(provider: &str, argv: &[String]) -> Option<usize> {
+    let (names, packages) = programs(provider);
+    // Interpreters (node, bun, python, uv) precede the script within a few tokens.
+    argv.iter().take(4).position(|token| {
+        let token = token.replace('\\', "/");
+        let base = token.rsplit('/').next().unwrap_or("").to_lowercase();
+        let base = [".exe", ".cmd", ".js", ".mjs", ".cjs"]
+            .iter()
+            .find_map(|x| base.strip_suffix(x))
+            .unwrap_or(&base);
+        names.contains(&base)
+            || packages
+                .iter()
+                .any(|p| token.contains(&format!("node_modules/{p}/")))
+    })
+}
+/// Whether `argv` runs the provider's own CLI (its rule table applies).
+pub(crate) fn is_program(provider: &str, argv: &[String]) -> bool {
+    program_index(provider, argv).is_some()
+}
+
+/// Parse only CLI option tokens. Prompt text and values such as a model named
+/// `acp` must never become flags or subcommands themselves.
+pub(crate) struct CliArgs<'a> {
+    options: Vec<(&'a str, Option<&'a str>)>,
+    pub(crate) positional: Vec<&'a str>,
+}
+impl<'a> CliArgs<'a> {
+    pub(crate) fn value(&self, flags: &[&str]) -> Option<&'a str> {
+        self.options
+            .iter()
+            .find_map(|(key, value)| flags.contains(key).then_some(*value).flatten())
+    }
+    pub(crate) fn has(&self, flags: &[&str]) -> bool {
+        self.options.iter().any(|(key, _)| flags.contains(key))
+    }
+}
+pub(crate) fn cli_args<'a>(provider: &str, argv: &'a [String]) -> Option<CliArgs<'a>> {
+    let args = &argv[program_index(provider, argv)? + 1..];
+    let mut parsed = CliArgs {
+        options: Vec::new(),
+        positional: Vec::new(),
+    };
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        index += 1;
+        if arg == "--" {
+            parsed
+                .positional
+                .extend(args[index..].iter().map(String::as_str));
+            break;
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            parsed.positional.push(arg);
+            continue;
+        }
+        if let Some((key, value)) = arg.split_once('=') {
+            parsed.options.push((key, Some(value)));
+            continue;
+        }
+        let takes_value = matches!(
+            arg,
+            "--model"
+                | "-m"
+                | "--provider"
+                | "--api-key"
+                | "--config"
+                | "--config-file"
+                | "--config-dir"
+                | "--cwd"
+                | "--directory"
+                | "--workdir"
+                | "--work-dir"
+                | "-C"
+                | "--profile"
+                | "--output-format"
+                | "--input-format"
+                | "--format"
+                | "--mode"
+                | "--session"
+                | "--session-id"
+                | "--session-dir"
+                | "--resume"
+                | "-S"
+                | "--log-level"
+                | "--log-file"
+                | "--agent"
+                | "--agent-file"
+                | "--add-dir"
+                | "--tools"
+                | "--allowed-tools"
+                | "--allowedTools"
+                | "--system-prompt"
+                | "--append-system-prompt"
+                | "--prompt"
+                | "--prompt-interactive"
+                | "--target"
+                | "--print-timeout"
+                | "--json-schema"
+                | "--max-turns"
+                | "--setting-sources"
+                | "--thinking"
+                | "--theme"
+                | "--title"
+                | "--hostname"
+                | "--port"
+                | "--trajectory-file"
+        ) || (arg == "-p" && !matches!(provider, "pi" | "omp"))
+            || (arg == "-o" && provider == "qoder")
+            || (arg == "-i" && provider == "antigravity")
+            || (arg == "-t" && matches!(provider, "trae" | "trae-cn"));
+        let value = takes_value
+            .then(|| args.get(index).map(String::as_str))
+            .flatten();
+        if value.is_some() {
+            index += 1;
+        }
+        parsed.options.push((arg, value));
+    }
+    Some(parsed)
+}
+/// The headless rule table (research doc (c)). `None` means the argv carries no
+/// signal; the session is then counted as `unknown`.
+pub fn headless_argv(provider: &str, argv: &[String]) -> Option<&'static str> {
+    let args = cli_args(provider, argv)?;
+    let has = |flags: &[&str]| args.has(flags);
+    let value = |flag: &str| args.value(&[flag]);
+    let command = args.positional.first().copied();
+    let verdict = |headless: bool| Some(if headless { HEADLESS } else { INTERACTIVE });
+    match provider {
+        "claude" => verdict(has(&["-p", "--print"])),
+        "codebuddy" => verdict(has(&["-p", "--print", "--acp"])),
+        "codex" => matches!(command, Some("exec" | "e" | "mcp-server")).then_some(HEADLESS),
+        "deepseek-harness" => {
+            let profile = value("--profile").or(command);
+            match profile {
+                Some("headless" | "sdk" | "acp") => Some(HEADLESS),
+                Some("tui" | "web" | "desktop") => Some(INTERACTIVE),
+                _ => None,
+            }
+        }
+        "kimi" => verdict(
+            has(&["-p", "--prompt"])
+                || matches!(command, Some("acp" | "web" | "server" | "rc" | "remote")),
+        ),
+        "cursor" => verdict(has(&["-p", "--print"])),
+        "opencode" => match command {
+            Some("run" | "acp" | "api") => Some(HEADLESS),
+            // The TUI's background service hosts TUI sessions; the TUI client classifies them.
+            Some("serve") if has(&["--service"]) => None,
+            Some("serve") => Some(HEADLESS),
+            None => Some(INTERACTIVE),
+            _ => None,
+        },
+        "antigravity" => {
+            if has(&["-i", "--prompt-interactive"]) {
+                Some(INTERACTIVE)
+            } else if has(&[
+                "-p",
+                "--print",
+                "--prompt",
+                "--output-format",
+                "--input-format",
+                "--print-timeout",
+                "--json-schema",
+            ]) || matches!(command, Some("remote-control" | "mic-serve"))
+            {
+                Some(HEADLESS)
+            } else {
+                None
+            }
+        }
+        "qoder" => verdict(has(&[
+            "-p",
+            "--print",
+            "-o",
+            "--output-format",
+            "--remote-control",
+        ])),
+        "zcode" => (has(&["-p", "--prompt", "--target"]) || command == Some("app-server"))
+            .then_some(HEADLESS),
+        "grok" => has(&["-p", "--single", "--output-format", "--json-schema"]).then_some(HEADLESS),
+        "pi" | "omp" => (has(&["-p", "--print"])
+            || matches!(value("--mode"), Some("json" | "rpc")))
+        .then_some(HEADLESS),
+        "copilot" => has(&["-p", "--prompt", "--acp"]).then_some(HEADLESS),
+        // kiro-cli 2.36: `--output-format stream-json` implies `--no-interactive`.
+        "kiro" => (command == Some("chat")
+            && (has(&["--no-interactive", "--non-interactive"])
+                || value("--output-format") == Some("stream-json")))
+        .then_some(HEADLESS),
+        "cline" => {
+            if has(&["-i", "--tui"]) {
+                Some(INTERACTIVE)
+            } else if has(&["--json", "-z", "--zen", "--oneshot", "-y", "--yolo"])
+                || command.is_some()
+            {
+                // A positional prompt without -i, or `schedule`, runs unattended.
+                Some(HEADLESS)
+            } else {
+                None
+            }
+        }
+        "kilo" => {
+            if matches!(command, Some("run" | "acp"))
+                || has(&["--auto"])
+                || value("--format") == Some("json")
+            {
+                Some(HEADLESS)
+            } else {
+                None
+            }
+        }
+        "trae" | "trae-cn" => match command {
+            Some("run") => Some(HEADLESS),
+            Some("interactive") => Some(INTERACTIVE),
+            _ => args
+                .options
+                .iter()
+                .any(|(a, _)| a.starts_with("--docker-") || *a == "--must-patch")
+                .then_some(HEADLESS),
+        },
+        _ => None,
+    }
+}
+/// Creation class of a session: `internal` (Aieyes spawned it) and `headless`
+/// are not monitored; `unknown` (no signal) is counted.
+pub fn classify(provider: &str, activity: &Activity) -> &'static str {
+    let source = activity.session_source.as_str();
+    if source == INTERNAL_SOURCE || activity.classification == INTERNAL {
+        return INTERNAL;
+    }
+    // Explicit log fields outrank process argv.
+    match provider {
+        "claude"
+            if matches!(
+                source,
+                "sdk-cli" | "sdk-ts" | "sdk-py" | "mcp" | "claude-code-github-action"
+            ) =>
+        {
+            return HEADLESS;
+        }
+        "claude" if !source.is_empty() => return INTERACTIVE,
+        "codex"
+            if activity.parent_session.is_empty() && !matches!(source, "" | "cli" | "vscode") =>
+        {
+            return HEADLESS;
+        }
+        "codex" if matches!(source, "cli" | "vscode") => return INTERACTIVE,
+        _ => {}
+    }
+    match activity.classification.as_str() {
+        HEADLESS => HEADLESS,
+        INTERACTIVE => INTERACTIVE,
+        _ => UNKNOWN,
+    }
+}
+
 pub fn hook(provider: &str, kind: &str, input: &Value, at: u64) -> Event {
     if provider == "cursor" {
         let terminal = |status: &str| match status {
@@ -60,6 +368,12 @@ pub fn hook(provider: &str, kind: &str, input: &Value, at: u64) -> Event {
         return Event {
             kind: kind.into(),
             at,
+            // Cloud background agents are not local conversations.
+            classification: if input["is_background_agent"] == true {
+                HEADLESS.into()
+            } else {
+                String::new()
+            },
             session: field(input, &["conversation_id", "session_id"]),
             turn: field(input, &["generation_id"]),
             call: field(input, &["tool_use_id", "tool_call_id"]),
@@ -120,6 +434,18 @@ pub fn hook(provider: &str, kind: &str, input: &Value, at: u64) -> Event {
     event
 }
 
+/// ChatGPT Work threads share Codex logs, account and quota pool.
+pub const CODEX_WORK_ORIGINATOR: &str = "codex_work_desktop";
+
+/// Provider shown for a session. Identity and parent hashes keep the log provider.
+pub fn display_provider<'a>(provider: &'a str, activity: &Activity) -> &'a str {
+    if provider == "codex" && activity.originator == CODEX_WORK_ORIGINATOR {
+        "chatgpt-work"
+    } else {
+        provider
+    }
+}
+
 pub fn codex(row: &Value) -> Option<Event> {
     let p = &row["payload"];
     let kind = match (row["type"].as_str()?, p["type"].as_str().unwrap_or("")) {
@@ -142,6 +468,11 @@ pub fn codex(row: &Value) -> Option<Event> {
         },
         session_source: if kind == "identity" {
             field(p, &["source"])
+        } else {
+            String::new()
+        },
+        originator: if kind == "identity" {
+            field(p, &["originator"])
         } else {
             String::new()
         },
@@ -320,6 +651,44 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
                 _ => return None,
             }
         }
+        // Copilot CLI `session-state/<id>/events.jsonl`. `assistant.turn_end` closes one
+        // model call, not the user's turn; a reply without tool requests does.
+        "copilot" => {
+            let data = &row["data"];
+            event.at = row["timestamp"]
+                .as_str()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|t| t.timestamp_millis().max(0) as u64)
+                .unwrap_or(0);
+            event.turn = field(data, &["interactionId"]);
+            match row["type"].as_str()? {
+                "session.start" | "session.resume" => {
+                    event.session = field(data, &["sessionId"]);
+                    "identity"
+                }
+                // `copilot -p` writes this fixed system prompt (observed in 1.0.105).
+                "system.message"
+                    if data["content"]
+                        .as_str()
+                        .is_some_and(|c| c.contains("You are running in non-interactive mode")) =>
+                {
+                    event.classification = HEADLESS.into();
+                    "identity"
+                }
+                "user.message" => "start",
+                "assistant.turn_start" => "thinking",
+                "assistant.message"
+                    if data["toolRequests"].as_array().is_none_or(|a| a.is_empty()) =>
+                {
+                    "complete"
+                }
+                "tool.execution_start" => "tool",
+                "tool.execution_complete" => "output",
+                "abort" | "session.abort" | "assistant.abort" => "interrupted",
+                "session.error" => "failed",
+                _ => return None,
+            }
+        }
         "deepseek-harness" => {
             event.at = row["time"].as_u64().unwrap_or(0);
             event.turn = row["data"]["turn"]
@@ -350,7 +719,7 @@ pub fn native(provider: &str, row: &Value) -> Option<Event> {
     if kind == "tool" || kind == "output" {
         let p = if provider == "kimi" {
             &row["event"]
-        } else if provider == "deepseek-harness" {
+        } else if matches!(provider, "deepseek-harness" | "copilot") {
             &row["data"]
         } else {
             row
@@ -564,6 +933,8 @@ pub struct Activity {
     pub phase: Option<Phase>,
     pub session: String,
     pub session_source: String,
+    pub classification: String,
+    pub originator: String,
     pub parent_session: String,
     pub parent_session_path: String,
     pub turn: String,
@@ -620,15 +991,23 @@ impl Activity {
         if !e.session_source.is_empty() {
             self.session_source = e.session_source.clone();
         }
+        if !e.originator.is_empty() {
+            self.originator = e.originator.clone();
+        }
+        // Events without a signal keep the last one. An Aieyes-internal run stays
+        // internal; otherwise the newest process (e.g. an interactive resume) wins.
+        if !e.classification.is_empty() && self.classification != INTERNAL {
+            self.classification = e.classification.clone();
+        }
+        if e.pid > 0 {
+            self.pid = e.pid;
+            self.process_start = e.process_start;
+        }
         if e.kind == "identity" {
             return;
         }
         if e.at > 0 && e.at < self.at.max(self.turn_started) {
             return;
-        }
-        if e.pid > 0 {
-            self.pid = e.pid;
-            self.process_start = e.process_start;
         }
         let starting = matches!(e.kind.as_str(), "start" | "UserPromptSubmit");
         if starting {
@@ -825,6 +1204,64 @@ pub fn agy_steps(rows: &[(i64, i64, i64)]) -> (Option<Phase>, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn headless_argv_table_matches_fixture() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../../scripts/fixtures/headless-argv.json"))
+                .unwrap();
+        assert!(cases.len() > 60);
+        for case in cases {
+            let argv: Vec<String> = serde_json::from_value(case["argv"].clone()).unwrap();
+            let provider = case["provider"].as_str().unwrap();
+            assert_eq!(
+                headless_argv(provider, &argv),
+                case["expected"].as_str(),
+                "{provider} {argv:?}"
+            );
+        }
+    }
+    #[test]
+    fn classification_is_sticky_for_internal_runs_and_unknown_without_signal() {
+        let tagged = |classification: &str| Event {
+            kind: "start".into(),
+            classification: classification.into(),
+            ..Event::default()
+        };
+        let mut a = Activity::default();
+        assert_eq!(classify("kimi", &a), UNKNOWN);
+        a.apply(tagged(HEADLESS));
+        a.apply(tagged(""));
+        assert_eq!(classify("kimi", &a), HEADLESS);
+        // An interactive resume of the same session replaces a headless verdict.
+        a.apply(tagged(INTERACTIVE));
+        assert_eq!(classify("kimi", &a), INTERACTIVE);
+        a.apply(tagged(INTERNAL));
+        a.apply(tagged(INTERACTIVE));
+        assert_eq!(classify("kimi", &a), INTERNAL);
+        // Explicit log fields outrank argv.
+        let mut claude = Activity {
+            classification: INTERACTIVE.into(),
+            session_source: "sdk-cli".into(),
+            ..Activity::default()
+        };
+        assert_eq!(classify("claude", &claude), HEADLESS);
+        claude.session_source = INTERNAL_SOURCE.into();
+        assert_eq!(classify("codex", &claude), INTERNAL);
+        let cursor = hook(
+            "cursor",
+            "sessionStart",
+            &serde_json::json!({"conversation_id":"c","is_background_agent":true}),
+            1,
+        );
+        assert_eq!(cursor.classification, HEADLESS);
+        let local = hook(
+            "cursor",
+            "sessionStart",
+            &serde_json::json!({"conversation_id":"c","is_background_agent":false}),
+            1,
+        );
+        assert!(local.classification.is_empty());
+    }
     fn event(kind: &str, call: &str, at: u64) -> Event {
         Event {
             kind: kind.into(),

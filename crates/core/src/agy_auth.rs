@@ -262,7 +262,7 @@ fn command(source: &Source, settings: &Settings) -> Result<CommandBuilder> {
         ssh::account_command(
             &host,
             &format!(
-                "export AGY_CLI_DISABLE_AUTO_UPDATE=true\naieyes_auth_dir=$(mktemp -d) || exit 1\ntrap 'rmdir \"$aieyes_auth_dir\" 2>/dev/null' EXIT\ncd \"$aieyes_auth_dir\" || exit 1\n{} --log-file /dev/null --prompt-interactive /usage",
+                "export AGY_CLI_DISABLE_AUTO_UPDATE=true AIEYES_INTERNAL=1\naieyes_auth_dir=$(mktemp -d) || exit 1\ntrap 'rmdir \"$aieyes_auth_dir\" 2>/dev/null' EXIT\ncd \"$aieyes_auth_dir\" || exit 1\n{} --log-file /dev/null --prompt-interactive /usage",
                 process::quote(binary)
             ),
         )?
@@ -296,6 +296,8 @@ fn command(source: &Source, settings: &Settings) -> Result<CommandBuilder> {
         cmd
     };
     cmd.env("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
+    // Login is not a session.
+    cmd.env("AIEYES_INTERNAL", "1");
     let mut builder = CommandBuilder::new(cmd.get_program());
     for arg in cmd.get_args() {
         builder.arg(if arg == "-T" {

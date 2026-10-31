@@ -6,13 +6,17 @@ pub mod agy_auth;
 mod agy_identity;
 pub mod antigravity;
 pub mod automatic;
+mod buddy_auth;
 pub mod capacity;
+pub mod claude_keychain;
+mod codebuddy_ide;
 pub mod codex_api;
 mod codex_attribution;
 pub mod codex_auth;
 pub mod codex_history;
 mod codex_routes;
 pub mod contracts;
+mod copilot_auth;
 pub mod credentials;
 pub mod estimates;
 pub mod file_lock;
@@ -22,6 +26,7 @@ mod history_counting;
 mod host_monitor;
 mod host_sampling;
 pub mod import;
+mod kimi_work;
 pub mod localization;
 pub mod metrics;
 pub mod models;
@@ -29,6 +34,7 @@ pub mod monitoring;
 pub mod native_agents;
 mod native_credits;
 mod native_db;
+mod native_quota_transport;
 mod native_sessions;
 pub mod network;
 pub mod opencode;
@@ -51,18 +57,24 @@ pub mod rolling_estimates;
 pub mod runtime;
 pub mod session_events;
 pub mod session_hooks;
+mod session_processes;
 pub mod session_sounds;
 pub mod sessions;
 pub mod settings;
+mod sqlite_ro;
 pub mod ssh;
 mod ssh_config;
 pub mod store;
 pub mod subscriptions;
+mod task_history;
 pub mod update_transport;
+mod upstream;
 pub mod usage;
 mod usage_cache;
 pub mod wakeups;
+mod workbuddy;
 pub mod zcode;
+mod zcode_credentials;
 
 use anyhow::{Context, Result};
 use models::*;
@@ -108,6 +120,23 @@ impl Engine {
             #[cfg(test)]
             status_observation_reads: None,
         })
+    }
+    /// Detect native accounts once in the background after the engine starts.
+    /// Uses its own connection; scans are serialized by per-target file locks.
+    /// `AIEYES_AUTO_SCAN=off` disables it so UI fixtures never read the developer's real logins.
+    pub fn spawn_auto_scan(root: &Path) {
+        if std::env::var("AIEYES_AUTO_SCAN").is_ok_and(|v| v == "off") {
+            return;
+        }
+        let root = root.to_path_buf();
+        let _ = std::thread::Builder::new()
+            .name("aieyes-auto-scan".into())
+            .spawn(move || {
+                if let Ok(mut engine) = Engine::open(&root) {
+                    let _ =
+                        engine.call_with_progress("accounts.autoScan", json!({}), Box::new(|_| {}));
+                }
+            });
     }
     pub fn set_host_event_sink(&mut self, sink: impl Fn(Value) + Send + Sync + 'static) {
         self.host_monitor.set_sink(std::sync::Arc::new(sink));
@@ -212,12 +241,37 @@ impl Engine {
                         last = Some(q);
                         break;
                     }
+                    Err(e)
+                        if matches!(source.provider.as_str(), "workbuddy" | "codebuddy")
+                            && source.subscription.as_ref().is_some_and(|c| {
+                                matches!(c.mode.as_str(), "buddy-cn" | "buddy-global")
+                            }) =>
+                    {
+                        last = Some(
+                            account_scan::last_snapshot(&self.store, account)
+                                .filter(|q| q.source_id == source.id)
+                                .map(|mut q| {
+                                    q.stale_since = q.stale_since.or(Some(now()));
+                                    q.notice = Some(e.to_string());
+                                    q
+                                })
+                                .unwrap_or_else(|| QuotaSnapshot {
+                                    source_id: source.id.clone(),
+                                    account_id: account.id.clone(),
+                                    provider: account.provider.clone(),
+                                    name: account.name.clone(),
+                                    error: Some(e.to_string()),
+                                    ..Default::default()
+                                }),
+                        );
+                    }
                     Err(e) => {
                         last = Some(QuotaSnapshot {
                             source_id: source.id.clone(),
                             account_id: account.id.clone(),
                             provider: account.provider.clone(),
                             name: account.name.clone(),
+                            notice: claude_keychain::quota_notice(&e),
                             error: Some(e.to_string()),
                             ..Default::default()
                         })
@@ -244,17 +298,79 @@ impl Engine {
                             break;
                         }
                         Err(error) => {
-                            last = Some(QuotaSnapshot {
-                                source_id: source.id,
-                                account_id: account.id.clone(),
-                                provider: account.provider.clone(),
-                                name: account.name.clone(),
-                                error: Some(error.to_string()),
-                                ..Default::default()
-                            })
+                            // Unreadable or half-written native files fall back to the
+                            // last good snapshot, marked stale rather than failed.
+                            last = Some(
+                                account_scan::last_snapshot(&self.store, account)
+                                    .map(|mut q| {
+                                        q.stale_since = q.stale_since.or(Some(now()));
+                                        // e.g. "在 dsh 中重新登录": a hint, not a failed card.
+                                        q.notice = Some(error.to_string());
+                                        q
+                                    })
+                                    .unwrap_or_else(|| QuotaSnapshot {
+                                        source_id: source.id,
+                                        account_id: account.id.clone(),
+                                        provider: account.provider.clone(),
+                                        name: account.name.clone(),
+                                        notice: claude_keychain::quota_notice(&error),
+                                        error: Some(error.to_string()),
+                                        ..Default::default()
+                                    }),
+                            )
                         }
                     }
                 }
+            }
+            // Try all configured locations before presenting an optional local
+            // Keychain refusal. Keep real cached values without inventing a
+            // remaining-quota estimate from transcript tokens.
+            if account.provider == "claude"
+                && let Some(q) = last.as_mut()
+                && q.error.is_some()
+                && let Some(notice) = q.notice.take()
+            {
+                if let Some(cached) = account_scan::last_snapshot(&self.store, account) {
+                    *q = cached;
+                    q.stale_since = q.stale_since.or(Some(now()));
+                } else {
+                    q.error = None;
+                    q.updated_at = now();
+                    q.origin = "local".into();
+                }
+                q.notice = Some(notice);
+            }
+            // Another client's copy of a login read natively elsewhere: say where, not "no data".
+            if last.is_none()
+                && let Some(notice) = account_scan::shadow_notice(&settings, account)
+            {
+                last = Some(QuotaSnapshot {
+                    account_id: account.id.clone(),
+                    provider: account.provider.clone(),
+                    name: account.name.clone(),
+                    updated_at: now(),
+                    origin: "local".into(),
+                    notice: Some(notice),
+                    ..Default::default()
+                });
+            }
+            // Locally counted monthly credits keep the card visible without a server read.
+            if quota::local_credits(&account.provider)
+                && let Some(meter) = quota::local_credits_meter(&self.store, &settings, account)?
+            {
+                let q = last.get_or_insert_with(|| QuotaSnapshot {
+                    account_id: account.id.clone(),
+                    provider: account.provider.clone(),
+                    name: account.name.clone(),
+                    updated_at: now(),
+                    origin: "local".into(),
+                    ..Default::default()
+                });
+                if q.error.is_some() && q.windows.is_empty() && q.balances.is_empty() {
+                    q.notice = q.error.take();
+                }
+                q.meters.retain(|m| m.id != meter.id);
+                q.meters.push(meter);
             }
             if let Some(q) = last {
                 result.push(q);
@@ -262,7 +378,14 @@ impl Engine {
         }
         Ok(result)
     }
-    pub fn call(&mut self, method: &str, mut params: Value) -> Result<Value> {
+    pub fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+        let result = self.dispatch(method, params);
+        // Quota and identity checks may have run qodercli in this process (any lane);
+        // mark those control sessions as Aieyes' own before the next session read.
+        let _ = crate::subscriptions::qoder::record_internal(&self.store);
+        result
+    }
+    fn dispatch(&mut self, method: &str, mut params: Value) -> Result<Value> {
         match method {
             "operations.prepareUpdate" => return Ok(operations::prepare()),
             "operations.resume" => return Ok(operations::resume()),
@@ -283,6 +406,8 @@ impl Engine {
                 params["codexApis"] = serde_json::to_value(self.store.settings()?.codex_apis)?;
                 params["nativeConnections"] =
                     serde_json::to_value(self.store.settings()?.native_connections)?;
+                params["claudeKeychain"] =
+                    serde_json::to_value(self.store.settings()?.claude_keychain)?;
             }
             providers::normalize_value(&mut params, &aliases);
             if method == "quotas.order.set"
@@ -317,11 +442,12 @@ impl Engine {
                 )
             }
             "accounts.targets" => self.account_targets(&params),
-            "accounts.scan" => self.scan_accounts(params),
+            "accounts.autoScan" => self.auto_scan(params),
             "accounts.native.remove" => self.remove_native_connection(params),
             "accounts.status.refreshBatch" => self.refresh_account_status_batch(&params),
             "subscriptions.openLogin" => subscriptions::open_login(&params),
             "subscriptions.connect" => self.connect_subscription(params),
+            "qoderCli.status" => self.qoder_cli_status(),
             "accounts.create"
             | "accounts.status.get"
             | "accounts.status.refresh"
@@ -329,7 +455,10 @@ impl Engine {
             | "accounts.delete"
             | "accounts.cleanup.list"
             | "accounts.deployments.sync" => self.account_call(method, params),
+            name if name.starts_with("claudeAuth.") => self.claude_auth_call(name, params),
             name if name.starts_with("agyAuth.") => self.agy_auth_call(name, params),
+            name if name.starts_with("copilotAuth.") => self.copilot_auth_call(name, params),
+            name if name.starts_with("buddyAuth.") => self.buddy_auth_call(name, params),
             name if name.starts_with("codexApi.") => self.codex_api_call(name, params),
             name if name.starts_with("agentApi.") => self.agent_api_call(name, params),
             name if name.starts_with("codexAuth.") => self.codex_auth_call(name, params),
@@ -342,6 +471,7 @@ impl Engine {
                     .set_quota_order(serde_json::from_value(params["keys"].clone())?)?,
             )?),
             "sessions.list" => {
+                self.sessions.set_internal(self.store.internal_sessions()?);
                 let snapshot = self
                     .sessions
                     .read(&self.store.settings()?, std::time::SystemTime::now());
@@ -379,7 +509,7 @@ impl Engine {
                 pet_import::current(&self.store, false)
             }
             "hello" => Ok(
-                json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"runtimeInvalidations":true,"hostMonitoring":true,"dashboardStatus":true,"contractHash":contracts::CONTRACT_HASH}),
+                json!({"name":"Aieyes","version":env!("CARGO_PKG_VERSION"),"protocolVersion":1,"runtimeInvalidations":true,"hostMonitoring":true,"dashboardStatus":true,"chatgptWorkInstalled":provider_paths::chatgpt_work_installed(),"contractHash":contracts::CONTRACT_HASH}),
             ),
             "hosts.credentials.save" => Ok(
                 json!({"passwordRef": credentials::save(params["password"].as_str().context("请输入服务器密码")?)?}),

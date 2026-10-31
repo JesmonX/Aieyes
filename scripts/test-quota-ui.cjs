@@ -213,6 +213,35 @@ function fixture(){
    await page.waitForFunction(()=>JSON.parse(document.querySelector('#quota-dialog').dataset.estimateLiveRevision)[0][0].checkpointAt===3);
    await page.locator('#quota-close').click();
    await page.evaluate(()=>{quotaFixture.rolling=[];quotaFixture.automaticStatus=null;state.page='agent';render();});
+   const meterCard=await page.evaluate(()=>{
+    const now=Math.floor(Date.now()/1000),host=document.createElement('div');
+    host.innerHTML=quotaCard({provider:'workbuddy',accountId:'m',name:'Meters',sourceId:'m',updatedAt:now,origin:'live',windows:[],meters:[{id:'month',label:'本月已用',used:120.5,total:500,remaining:379.5,unit:'credits',estimated:false},{id:'over',label:'Overage',used:0,overage:3,unit:'usd',estimated:true}],snapshotAt:now-7200,staleSince:now-3600,notice:'打开 WorkBuddy 一次即可刷新'});
+    const grouped=quotaGroupsWindows({provider:'claude',windows:[{groupName:'Sonnet'},{groupName:'Sonnet'}]}),single=quotaGroupsWindows({provider:'codex',windows:[{groupName:'5h'},{groupName:'7d'}]});
+    return {meters:host.querySelectorAll('.quota-meter').length,bars:host.querySelectorAll('.quota-meter .resource-bar,.quota-meter [role=progressbar],.quota-meter progress').length,text:host.textContent,stale:!!host.querySelector('.quota-age.stale'),notice:!!host.querySelector('[data-quota-notice]'),attention:quotaNeedsAttention({notice:'x',staleSince:1}),grouped,single};
+   });
+   assert.equal(meterCard.meters,2);assert.match(meterCard.text,/120\.50 \/ 500/);assert.match(meterCard.text,/\$3/);
+   assert(meterCard.stale&&meterCard.notice,'Stale age and notice render');assert.equal(meterCard.attention,false,'Notice and stale data are not errors');
+   assert.equal(meterCard.grouped,true);assert.equal(meterCard.single,false);
+   const balanceOnly=await page.evaluate(()=>{
+    const meter={id:'gemini-credits:google_one_ai',label:'AI Credits',used:0,usedKnown:false,total:1000,remaining:250,unit:'credits'},host=document.createElement('div');
+    host.innerHTML=quotaMetersHTML({meters:[meter]});
+    return {summary:quotaMeterSummary(meter),bars:host.querySelectorAll('[role=progressbar]').length,zero:quotaMeterSummary({...meter,remaining:0}),unknown:quotaMeterSummary({...meter,remaining:null}),legacy:quotaMeterSummary({...meter,usedKnown:undefined,used:750}),explicit:quotaMeterSummary({...meter,usedKnown:true,used:750})};
+   });
+   assert.equal(balanceOnly.summary,'剩余 250 积分');assert.equal(balanceOnly.zero,'剩余 0 积分');assert.equal(balanceOnly.unknown,'—');
+   assert.equal(balanceOnly.bars,0,'A balance alone must not imply zero usage or an unused quota window');
+   assert.equal(balanceOnly.legacy,balanceOnly.explicit);assert.match(balanceOnly.legacy,/750 \/ 1000/);
+   const ages=await page.evaluate(()=>{
+    const now=Math.floor(Date.now()/1000),read=q=>{const node=document.createElement('div');node.innerHTML=quotaAgeHTML(q);return {title:node.firstElementChild?.title,stale:!!node.querySelector('.quota-age.stale')};};
+    return {
+     provider:read({snapshotAt:now-172800,updatedAt:now-86400,staleSince:now}),
+     legacy:read({updatedAt:now-86400,staleSince:now}),
+     missing:quotaAgeHTML({updatedAt:0,staleSince:now}),
+     providerDate:date(now-172800),legacyDate:date(now-86400)
+    };
+   });
+   assert.equal(ages.provider.title,ages.providerDate,'Newly stale data retains its provider snapshot age');
+   assert.equal(ages.legacy.title,ages.legacyDate,'Legacy data uses its last successful update time');
+   assert(ages.provider.stale&&ages.legacy.stale);assert.equal(ages.missing,'','Staleness alone does not supply a data timestamp');
    for(const colorScheme of ['light','dark']){await page.emulateMedia({colorScheme});await page.screenshot({path:path.join(output,surface+'-'+colorScheme+'.png')});}
    assert.deepEqual(errors,[]);await page.close();
   }

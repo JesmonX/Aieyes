@@ -361,19 +361,75 @@ fn qoder_sums_shared_credits_and_zero_quota_has_no_headroom() {
 
 #[test]
 fn cursor_keeps_usage_pools_separate_and_does_not_scale_fractional_percent() {
-    let q = parse("cursor", "session", json!({"membershipType":"ultra","individualUsage":{"plan":{"autoPercentUsed":0.36,"apiPercentUsed":50.5}}})).unwrap();
+    let q = parse(
+        "cursor",
+        "api2",
+        json!({"planUsage":{"autoPercentUsed":0.36,"apiPercentUsed":50.5}}),
+    )
+    .unwrap();
     assert_eq!(q.windows.len(), 2);
     assert_eq!(q.windows[0].used_percent, 0.36);
     assert_eq!(q.windows[1].used_percent, 50.5);
     assert!(q.windows[0].resets_at.is_none());
     let q = parse(
         "cursor",
-        "session",
-        json!({"individualUsage":{"overall":{"used":10,"limit":100}}}),
+        "api2",
+        json!({"planUsage":{"totalSpend":1000,"limit":2000}}),
     )
     .unwrap();
-    assert_eq!(q.windows[0].id, "personal-cap");
-    assert_eq!(q.windows[0].used_percent, 10.);
+    assert_eq!(q.windows[0].id, "plan");
+    assert_eq!(q.windows[0].used_percent, 50.);
+}
+
+#[test]
+fn cursor_api2_on_demand_and_team_pool_meters() {
+    let q = parse(
+        "cursor",
+        "api2",
+        json!({"billingCycleEnd":"4102444800000","planUsage":{"totalPercentUsed":12},
+            "spendLimitUsage":{"limitType":"user","individualUsed":250,"individualLimit":1000}}),
+    )
+    .unwrap();
+    assert_eq!(q.windows[0].id, "plan");
+    assert_eq!(q.windows[0].resets_at, Some(4102444800));
+    assert_eq!(q.meters[0].id, "on-demand");
+    assert_eq!(q.meters[0].unit, "usd");
+    assert_eq!(q.meters[0].used, 2.5);
+    assert_eq!(q.meters[0].remaining, Some(7.5));
+    // Members of one team share a meter id, so the pool is shown once.
+    let team = |t| {
+        parse(
+            "cursor",
+            "api2",
+            json!({"spendLimitUsage":{"limitType":"team","teamId":t,"pooledUsed":100,"pooledLimit":500}}),
+        )
+        .unwrap()
+    };
+    assert_eq!(team(json!(42)).meters[0].id, "team-pool:42");
+    assert_eq!(team(json!(42)).meters[0].id, team(json!("42")).meters[0].id);
+    assert!(
+        subscriptions::endpoint(
+            "cursor",
+            &SubscriptionConfig {
+                mode: "session".into(),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn moonshot_key_in_kimi_config_reads_open_platform_balance() {
+    let body = json!({"code":0,"status":true,"data":{"available_balance":12.5,"voucher_balance":0,"cash_balance":12.5}});
+    let q = parse("kimi", "moonshot-cn", body.clone()).unwrap();
+    assert_eq!(q.balances[0].currency, "CNY");
+    assert_eq!(q.balances[0].total, "12.50");
+    assert_eq!(
+        parse("kimi", "moonshot-global", body).unwrap().balances[0].currency,
+        "USD"
+    );
+    assert!(parse("kimi", "moonshot-cn", json!({"code":1,"status":false})).is_err());
 }
 
 #[test]
@@ -418,7 +474,7 @@ fn missing_invalid_and_unknown_shapes_never_mean_zero_usage() {
     for (p, mode) in [
         ("zcode", "global"),
         ("qoder", "global"),
-        ("cursor", "session"),
+        ("cursor", "api2"),
         ("grok", "subscription"),
         ("grok", "api"),
         ("opencode", "go"),
@@ -516,10 +572,111 @@ fn explicit_native_login_import_is_scoped_and_rejects_expiry_or_ambiguity() {
     assert!(subscriptions::local_secret("grok", "subscription", &expired).is_err());
     let mut ambiguous = auth;
     ambiguous["https://auth.x.ai::other"] = json!({"key":"other"});
-    assert!(subscriptions::local_secret("grok", "subscription", &ambiguous).is_err());
+    assert!(subscriptions::local_secret("grok", "subscription", &ambiguous).is_ok());
     assert_eq!(
         subscriptions::login_url("zcode", "cn").unwrap(),
         "https://bigmodel.cn/coding-plan/personal/usage"
     );
     assert!(subscriptions::login_url("https://evil.invalid", "global").is_err());
+}
+
+#[test]
+fn grok_with_several_logins_uses_the_most_recently_used_valid_entry() {
+    let auth = json!({
+        "https://auth.x.ai::old":{"key":"fixture-old","last_used":"2026-01-01T00:00:00Z"},
+        "https://auth.x.ai::new":{"key":"fixture-new","last_used":"2026-10-01T00:00:00Z","expires_at":"2099-01-01T00:00:00Z"},
+        "https://auth.x.ai::gone":{"key":"fixture-gone","last_used":"2026-10-20T00:00:00Z","expires_at":"2020-01-01T00:00:00Z"}
+    });
+    assert_eq!(
+        subscriptions::local_secret("grok", "subscription", &auth).unwrap(),
+        "fixture-new"
+    );
+    // Equal recency is still ambiguous: the manual token field decides.
+    let tie = json!({
+        "https://auth.x.ai::a":{"key":"a","last_used":1700000000},
+        "https://auth.x.ai::b":{"key":"b","last_used":1700000000}
+    });
+    assert_eq!(
+        subscriptions::local_secret("grok", "subscription", &tie).unwrap(),
+        "b"
+    );
+}
+
+#[test]
+fn grok_current_native_expiry_selects_a_valid_login_without_last_used() {
+    let auth = json!({
+        "https://auth.x.ai::old":{"key":"old-native","expires_at":"2098-01-01T00:00:00Z"},
+        "https://auth.x.ai::new":{"key":"new-native","expires_at":"2099-01-01T00:00:00Z"}
+    });
+    assert_eq!(
+        subscriptions::local_secret("grok", "subscription", &auth).unwrap(),
+        "new-native"
+    );
+}
+
+#[test]
+fn zcode_quota_parses_the_same_body_for_a_login_jwt_or_coding_plan_key() {
+    let body = json!({"code":200,"success":true,"data":{"planName":"Pro","limits":[
+        {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":40,"nextResetTime":4102444800000_i64},
+        {"type":"TIME_LIMIT","unit":5,"number":1,"usage":100,"currentValue":10}
+    ]}});
+    for mode in ["global", "cn"] {
+        let q = parse("zcode", mode, body.clone()).unwrap();
+        assert_eq!(q.plan.as_deref(), Some("Pro"));
+        assert_eq!(q.windows.len(), 2);
+        assert_eq!(q.windows[0].used_percent, 40.0);
+        assert_eq!(q.windows[0].window_minutes, Some(300));
+    }
+    assert!(
+        subscriptions::endpoint(
+            "zcode",
+            &SubscriptionConfig {
+                mode: "eu".into(),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn deepseek_account_summary_reads_wallets_and_asks_to_relogin_in_dsh() {
+    let config = SubscriptionConfig {
+        mode: "account".into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        subscriptions::endpoint("deepseek-harness", &config).unwrap(),
+        "https://platform.deepseek.com/api/v0/users/get_user_summary"
+    );
+    // The account endpoint belongs to dsh logins only, never to the API-key provider.
+    assert!(subscriptions::endpoint("deepseek", &config).is_err());
+    let q = parse(
+        "deepseek-harness",
+        "account",
+        json!({"code":0,"data":{"biz_code":0,"biz_data":{
+            "email":"PRIVATE@example.test",
+            "normal_wallets":[{"currency":"CNY","balance":"12.50","token_estimation":"1"}],
+            "bonus_wallets":[{"currency":"CNY","balance":"2.25"}]
+        }}}),
+    )
+    .unwrap();
+    assert_eq!(q.balances.len(), 1);
+    assert_eq!(q.balances[0].currency, "CNY");
+    assert_eq!(q.balances[0].total, "14.75");
+    assert_eq!(q.balances[0].granted, "2.25");
+    assert_eq!(q.balances[0].topped_up, "12.5");
+    assert!(!serde_json::to_string(&q).unwrap().contains("PRIVATE"));
+    let expired = parse(
+        "deepseek-harness",
+        "account",
+        json!({"code":0,"data":{"biz_code":40003}}),
+    );
+    assert!(
+        expired
+            .unwrap_err()
+            .to_string()
+            .contains("在 dsh 中重新登录")
+    );
+    assert!(parse("deepseek-harness", "account", json!({"code":0,"data":{"biz_code":0,"biz_data":{"normal_wallets":[{"currency":"EUR","balance":"1"}]}}})).is_err());
 }
