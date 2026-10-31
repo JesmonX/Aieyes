@@ -528,6 +528,8 @@ struct AieyesCommands: Commands {
     }
     private func renderSnapshots(to directory: String) async {
         do {
+            let info: CoreInfo = try await model.engine.call("hello")
+            try model.acceptCoreInfo(info)
             model.settings = try await model.engine.call("settings.get"); model.settingsDraft = model.settings; model.settingsLoaded = true
             await model.loadAccountStatuses()
             await model.reload()

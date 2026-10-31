@@ -151,8 +151,8 @@ mod tests {
         assert_eq!(label("en", "本机"), "Local");
         assert_eq!(label("zh-CN", "本机"), "本机");
         assert_eq!(
-            translate("en", "新增 2 个账户、3 个连接"),
-            "Added 2 accounts and 3 connections"
+            translate("en", "其他 2 个模型 · 甲 · 乙"),
+            "2 other models · 甲 · 乙"
         );
         assert_eq!(
             translate("en", "切换为此账户 · 用户中文名称"),

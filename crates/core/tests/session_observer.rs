@@ -102,3 +102,66 @@ fn a_provider_that_never_closes_stdin_cannot_hang_the_observer() {
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }
+#[cfg(unix)]
+fn observer_under(program: &str, args: &[&str], internal: bool) -> Value {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir_all(root.path().join(".aieyes/session-events")).unwrap();
+    // A shell named like the agent CLI stands in for the agent process.
+    let agent = root.path().join(program);
+    std::os::unix::fs::symlink("/bin/sh", &agent).unwrap();
+    // The hook command line lives in a script so only the observer names the marker.
+    let script = root.path().join("hook.sh");
+    fs::write(
+        &script,
+        format!(
+            "{} --aieyes-session-hook kimi UserPromptSubmit {}\ntrue\n",
+            env!("CARGO_BIN_EXE_aieyes-core"),
+            root.path().to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let mut command = Command::new(&agent);
+    command.arg(&script).args(args);
+    command.env_remove("AIEYES_INTERNAL");
+    if internal {
+        command.env("AIEYES_INTERNAL", "1");
+    }
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"session_id":"s","prompt":"SECRET"}"#)
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    let rows: String = fs::read_dir(root.path().join(".aieyes/session-events"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
+        .map(|e| fs::read_to_string(e.path()).unwrap())
+        .collect();
+    assert!(!rows.contains("SECRET"));
+    serde_json::from_str(rows.trim()).unwrap()
+}
+#[cfg(unix)]
+#[test]
+fn observer_classifies_the_agent_argv_and_aieyes_internal_runs() {
+    assert_eq!(
+        observer_under("kimi", &["-p", "hi"], false)["classification"],
+        "headless"
+    );
+    assert_eq!(
+        observer_under("kimi", &[], false)["classification"],
+        "interactive"
+    );
+    let internal = observer_under("kimi", &[], true);
+    assert_eq!(internal["classification"], "internal");
+    assert_eq!(internal["sessionSource"], "aieyes-internal");
+    // Without the provider's CLI in the ancestry there is no signal.
+    let (_, rows) = observer("kimi", "UserPromptSubmit", &json!({"session_id":"s"}));
+    assert!(!rows.contains("classification"));
+}

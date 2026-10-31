@@ -579,6 +579,7 @@ pub(crate) fn reconcile(
                     inheritance: None,
                     interval_start: Some(created_at),
                     interval_evidence: "qoder-state-v1".into(),
+                    agent: String::new(),
                 };
                 report.changed += u64::from(put_residual(store, &event, prices, settings)?);
             }
@@ -1304,8 +1305,11 @@ mod tests {
             ..Default::default()
         };
         let mut settings = save_source(&store, &source);
+        // Both transcripts contain a copy of the same request. Reading the
+        // clock per insert could cross a second and create different evidence.
+        let stamp = now();
         for session in ["parent", "child"] {
-            let row = json!({"type":"assistant","timestamp":now(),"sessionId":session,"requestId":"original","message":{"id":"response","model":"fixture","usage":{"input_tokens":100,"output_tokens":20,"credits":0.5}}});
+            let row = json!({"type":"assistant","timestamp":stamp,"sessionId":session,"requestId":"original","message":{"id":"response","model":"fixture","usage":{"input_tokens":100,"output_tokens":20,"credits":0.5}}});
             let event = crate::usage::parse(&source, &mut ParseState::default(), &row).unwrap();
             store.put_event(&event, &[], &settings).unwrap();
             store
@@ -1315,7 +1319,7 @@ mod tests {
                     params![
                         source.id,
                         session,
-                        now(),
+                        stamp,
                         serde_json::to_string(&Tokens {
                             input: 100,
                             output: 20,

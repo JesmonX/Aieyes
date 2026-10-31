@@ -142,6 +142,37 @@ fn agy_groups_have_independent_windows_and_reset_times() {
 }
 
 #[test]
+fn agy_load_code_assist_credits_become_meters_and_plan() {
+    let payload = json!({"status":"SUCCESS","command":{"name":"usage","data":{
+        "groups":[{"name":"Gemini Models","buckets":[{"window":"5h","remaining_fraction":0.5}]}],
+        "loadCodeAssist":{"currentTier":{"id":"standard-tier","name":"Gemini Code Assist"},
+            "paidTier":{"id":"g1-pro-tier","name":"Google AI Pro","availableCredits":[
+                {"creditType":"GOOGLE_ONE_AI","creditAmount":"1000","minimumCreditAmountForUsage":"50"}]}}
+    }}});
+    let q = quota::normalize(&query_source("agy"), &payload, "live").unwrap();
+    assert_eq!(q.windows.len(), 1);
+    assert_eq!(q.plan.as_deref(), Some("Google AI Pro"));
+    assert_eq!(q.meters.len(), 1);
+    assert_eq!(q.meters[0].id, "credits:google_one_ai");
+    assert_eq!(q.meters[0].unit, "credits");
+    assert_eq!(q.meters[0].remaining, Some(1000.0));
+    assert_eq!(q.meters[0].used_known, Some(false));
+    assert!(q.meters[0].total.is_none());
+    assert_eq!(
+        serde_json::to_value(&q).unwrap()["meters"][0]["usedKnown"],
+        false
+    );
+    // Without loadCodeAssist the card keeps windows only.
+    let mut bare = payload;
+    bare["command"]["data"]
+        .as_object_mut()
+        .unwrap()
+        .remove("loadCodeAssist");
+    let q = quota::normalize(&query_source("agy"), &bare, "live").unwrap();
+    assert!(q.meters.is_empty() && q.plan.is_none());
+}
+
+#[test]
 fn deepseek_balances_preserve_currency_precision_and_unavailability() {
     let payload = json!({"is_available":false,"balance_infos":[
         {"currency":"CNY","total_balance":"0.000001","granted_balance":"0.000001","topped_up_balance":"0.00"},
@@ -156,6 +187,68 @@ fn deepseek_balances_preserve_currency_precision_and_unavailability() {
     let mut malformed = payload;
     malformed["balance_infos"][0]["total_balance"] = json!("NaN");
     assert!(quota::normalize(&query_source("deepseek"), &malformed, "live").is_err());
+}
+
+#[test]
+fn quota_normalize_accepts_meter_only_snapshots_with_notice_and_age() {
+    let payload = json!({
+        "meters":[
+            {"id":"credits","group":"month","label":"Credits","used":120.5,"total":500,"remaining":379.5,"unit":"credits","resetsAt":1_900_000_000,"estimated":false},
+            {"id":"overage","label":"Overage","used":0,"overage":3,"unit":"usd","estimated":true}
+        ],
+        "snapshotAt":1_800_000_000,
+        "staleSince":1_800_000_100,
+        "notice":"  Open WorkBuddy once to refresh  "
+    });
+    let q = quota::normalize(&query_source("workbuddy"), &payload, "live").unwrap();
+    assert!(q.windows.is_empty());
+    assert_eq!(q.meters.len(), 2);
+    assert_eq!(q.meters[0].total, Some(500.0));
+    assert_eq!(q.meters[0].resets_at, Some(1_900_000_000));
+    assert!(q.meters[1].estimated);
+    assert_eq!(q.snapshot_at, Some(1_800_000_000));
+    assert_eq!(q.stale_since, Some(1_800_000_100));
+    assert_eq!(q.notice.as_deref(), Some("Open WorkBuddy once to refresh"));
+    let mut bad_unit = payload.clone();
+    bad_unit["meters"][0]["unit"] = json!("tokens");
+    assert!(quota::normalize(&query_source("workbuddy"), &bad_unit, "live").is_err());
+    let mut negative = payload.clone();
+    negative["meters"][0]["used"] = json!(-1);
+    assert!(quota::normalize(&query_source("workbuddy"), &negative, "live").is_err());
+    assert!(quota::normalize(&query_source("workbuddy"), &json!({"meters":[]}), "live").is_err());
+}
+
+#[test]
+fn quota_meters_are_persisted_and_old_payloads_omit_new_fields() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open(temp.path()).unwrap();
+    let source = query_source("copilot");
+    store
+        .save_settings(&Settings {
+            version: 2,
+            sources: vec![source.clone()],
+            accounts: vec![Account {
+                id: source.account_id.clone(),
+                provider: source.provider.clone(),
+                name: "Copilot".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    let payload = json!({"meters":[{"id":"month","label":"Month","used":4,"unit":"requests"}]});
+    let q = quota::normalize(&source, &payload, "live").unwrap();
+    store.quota(&q).unwrap();
+    let saved = store.dashboard(&Filter::default()).unwrap().quotas;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].meters[0].unit, "requests");
+    let plain = serde_json::to_value(QuotaSnapshot::default()).unwrap();
+    for key in ["meters", "snapshotAt", "staleSince", "notice"] {
+        assert!(
+            plain.get(key).is_none(),
+            "{key} should be omitted when empty"
+        );
+    }
 }
 
 #[test]

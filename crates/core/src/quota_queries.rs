@@ -283,10 +283,7 @@ impl Engine {
                     continue;
                 }
             }
-            let interval = account
-                .quota_refresh_seconds
-                .unwrap_or(settings.refresh_seconds)
-                .clamp(5, 86400) as i64;
+            let interval = crate::quota_schedule::interval(account, settings.refresh_seconds);
             if due_only
                 && finished(&self.store, &key)?
                     .is_some_and(|last| now() >= last && now() - last < interval)

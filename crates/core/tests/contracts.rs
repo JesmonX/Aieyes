@@ -6,10 +6,20 @@ fn manifest_matches_routing_and_read_methods_do_not_invalidate() {
     let root = tempfile::tempdir().unwrap();
     let mut engine = Engine::open(root.path()).unwrap();
     let manifest = engine.call("methods.manifest", json!({})).unwrap();
-    assert_eq!(
-        engine.call("hello", json!({})).unwrap()["contractHash"],
-        contracts::CONTRACT_HASH
-    );
+    let settings = engine.call("settings.get", json!({})).unwrap();
+    let hello = engine.call("hello", json!({})).unwrap();
+    assert_eq!(hello["contractHash"], contracts::CONTRACT_HASH);
+    assert!(hello["chatgptWorkInstalled"].is_boolean());
+    assert_eq!(engine.call("settings.get", json!({})).unwrap(), settings);
+    for key in ["accounts", "sources"] {
+        assert!(
+            settings[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["provider"] != "chatgpt-work")
+        );
+    }
     assert_eq!(manifest, serde_json::to_value(contracts::METHODS).unwrap());
     assert_eq!(
         contracts::method("accounts.create").unwrap().lane,

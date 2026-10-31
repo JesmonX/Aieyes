@@ -20,7 +20,8 @@
     if (!summary || !list || !warning) return;
     const active = info.sessions.filter((s) => s.phase !== 'idle');
     const failures = (info.sources || []).filter((s) => s.state !== 'healthy' && (!state.provider || AieyesUI.sameAgent(s.provider, state.provider)));
-    summary.textContent = active.length ? AieyesI18n.t("{0} 个会话", active.length) : info.unavailable ? AieyesI18n.t("会话状态待确认") : AieyesI18n.t("暂无活跃会话");
+    const processSources = [...new Map((info.sources || []).filter((s) => typeof s.processRunning === 'boolean' && (!state.provider || AieyesUI.sameAgent(s.provider, state.provider))).map((s) => [s.provider + ':' + s.machineId, s])).values()];
+    summary.textContent = active.length ? AieyesI18n.t("{0} 个会话", active.length) : info.unavailable ? AieyesI18n.t("会话状态待确认") : processSources.length ? AieyesI18n.t("IDE 运行状态") : AieyesI18n.t("暂无活跃会话");
     let counts = container.querySelector('.session-counts');if (!counts) {counts = document.createElement('span');counts.className = 'session-counts';container.querySelector('summary > .muted')?.remove();container.querySelector('summary').append(counts);}
     counts.innerHTML = Object.keys(phases).filter((key) => active.some((s) => s.phase === key)).map((key) => `<span data-phase="${key}" data-attention="${['needsInput', 'failed'].includes(key)}">${phaseLabel(key)} ${active.filter((s) => s.phase === key).length}</span>`).join('');
     if (!container.dataset.persisted) {container.dataset.persisted = 'true';const key = 'aieyes.sessions.' + (PANEL ? 'panel' : 'overview');try {container.open = localStorage.getItem(key) === 'true';} catch (_) {}container.addEventListener('toggle', () => {try {localStorage.setItem(key, String(container.open));} catch (_) {}});}
@@ -31,9 +32,13 @@
     const rows = active.map((s) => {
       const symbol = uiIcon(phaseKey(s.phase)),label = phaseLabel(s.phase);
       return `<div class="live-row" data-phase="${escape(s.phase)}"><span class="phase-mark" data-phase="${escape(s.phase)}" aria-hidden="true">${symbol}</span><div><strong>${escape(({ codex: 'Codex', claude: 'Claude Code', antigravity: 'Antigravity' }[s.provider] || s.source || 'Agent') + ' · ' + (s.machine || AieyesI18n.t("本机")))}</strong><small>${AieyesI18n.t("最后更新 {0}", Number.isFinite(s.updatedAt) ? escape(new Date(s.updatedAt * 1000).toLocaleTimeString(AieyesI18n.locale, { hour: '2-digit', minute: '2-digit', ...AieyesI18n.clock })) : '—')}</small></div><span>${label}</span></div>`;
+    }).join('') + processSources.map((s) => {
+      const provider = { trae: 'Trae', 'trae-cn': 'Trae CN' }[s.provider] || s.provider;
+      const machine = s.machineId === 'local' ? AieyesI18n.t("本机") : state.settings?.hosts?.find((h) => h.id === s.machineId)?.name || s.machineId;
+      return `<div class="live-row" data-process-provider="${escape(s.provider)}" data-process-running="${s.processRunning}"><span class="phase-mark" aria-hidden="true">${uiIcon('idle')}</span><div><strong>${escape(provider + ' · ' + machine)}</strong><small>${AieyesI18n.t("对话存储已加密，会话数量未知")}</small></div><span>${AieyesI18n.t(s.processRunning ? "IDE 正在运行" : "IDE 未运行")}</span></div>`;
     }).join('') || `<p class="muted">${AieyesI18n.t("暂无活跃会话")}</p>`;
     if (list._rows !== rows) {list.innerHTML = rows;list._rows = rows;}
-    container.hidden = state.page !== 'agent' || !active.length && !failures.length && !info.unavailable;
+    container.hidden = state.page !== 'agent' || !active.length && !processSources.length && !failures.length && !info.unavailable;
     if (failures.length) summary.textContent = AieyesI18n.t("{0} · {1} 个来源异常", summary.textContent, failures.length);
     warning.hidden = !failures.length;
     warning.textContent = failures.map((s) => `${s.provider} · ${s.machineId === 'local' ? AieyesI18n.t("本机") : s.machineId}: ${AieyesI18n.message(s.error) || AieyesI18n.t("正在连接")}`).join('; ');

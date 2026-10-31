@@ -22,6 +22,10 @@ import Darwin
     @MainActor static func waitUntil(_ message: String, condition: () -> Bool) {
         let deadline = Date().addingTimeInterval(5)
         while !condition() && Date() < deadline { pump(0.05) }
+        if !condition() {
+            checkpoint("Window diagnostic: active=\(NSApp.isActive), hidden=\(NSApp.isHidden), policy=\(NSApp.activationPolicy().rawValue), screens=\(NSScreen.screens.map(\.frame))")
+            for window in NSApp.windows { checkpoint("Window diagnostic: visible=\(window.isVisible), occlusion=\(window.occlusionState.rawValue), frame=\(window.frame), screen=\(String(describing: window.screen?.frame))") }
+        }
         precondition(condition(), message)
     }
     @MainActor static func show(_ window: NSWindow) {

@@ -1,52 +1,19 @@
-/* Native credentials stay in their original configuration, including over SSH. */
+/* Native credentials stay in their original configuration, including over SSH.
+   Core detects them at launch and when their files change; there is no scan UI. */
 (() => {
   let busy = false;
   const e = (value) => escapeHTML(value ?? '');
   const same = (a, b) => AieyesUI.sameAgent(a, b);
   const machine = (id) => id === 'local' ? AieyesI18n.t("本机") : state.settings.hosts.find((h) => h.id === id)?.name || id;
-  function targets(provider) {return (state.settings.agents ?? []).filter((a) => same(a.provider, provider) && !['deepseek', 'custom'].includes(a.provider)).flatMap((a) => a.machineIds ?? []).filter((id) => id === 'local' ? state.settings.localDeviceEnabled !== false : state.settings.hosts.some((h) => h.id === id && h.enabled));}
-  function button(provider) {if (provider === 'custom') return '';const enabled = (state.settings.agents ?? []).some((a) => same(a.provider, provider) && a.enabled),available = enabled && targets(provider).length > 0;return `<button type="button" data-native-scan-agent="${e(provider)}" ${busy || !available ? 'disabled' : ''} title="${available ? AieyesI18n.t("读取已选择且开启 Agent 采集的机器") : AieyesI18n.t("先启用 Agent、选择机器并开启 Agent 采集")}">${AieyesI18n.t("扫描已启用机器")}</button>`;}
-  function hint(provider) {return provider !== 'custom' && !targets(provider).length ? `<p class="muted tiny">${AieyesI18n.t("先启用 Agent、选择机器并开启 Agent 采集。")}</p>` : '';}
+  // Legacy "pending"/"unavailable" rows read as identified/past accounts; detection is automatic now.
+  function status(r) {return r.status === 'stale' ? AieyesI18n.t("打开 {0} 一次即可刷新", providers[r.provider] ?? r.provider) : ['remembered', 'unavailable'].includes(r.status) ? AieyesI18n.t("历史账号") : r.status === 'expired' ? AieyesI18n.t("已过期") : AieyesI18n.t("已识别账户");}
   function list(provider, kind) {
     const rows = (state.settings.nativeConnections ?? []).filter((r) => same(r.provider, provider) && r.kind === kind);
     if (!rows.length) return '';
-    return `<div class="native-connections"><div class="between"><h3>${kind === 'api' ? AieyesI18n.t("原生 API 连接") : AieyesI18n.t("已发现的原生登录凭据")}（${rows.length}）</h3><button type="button" class="danger" data-native-remove-all="${e(provider)}" data-native-kind="${e(kind)}" ${busy ? 'disabled' : ''}>${AieyesI18n.t("取消全部引用")}</button></div><details data-agent-detail="native-connections-${e(provider)}-${e(kind)}"><summary>${AieyesI18n.t("查看{0}", kind === 'api' ? AieyesI18n.t("连接") : AieyesI18n.t("凭据"))}</summary>${rows.map((r) => `<div class="list-row"><div class="row-body"><strong>${e(r.email || (r.kind === 'api' ? r.baseUrl || AieyesI18n.t("原生 API") : r.identityKey ? r.identityKey.startsWith('qoder:') ? 'Qoder · ' + r.identityKey.slice(6, 18) : AieyesI18n.t("{0} 账户", providers[r.provider] ?? r.provider) : AieyesI18n.t("账户身份待确认")))}</strong><small>${e(machine(r.machineId))} · ${e({ pending: AieyesI18n.t("待验证"), expired: AieyesI18n.t("已过期"), unavailable: AieyesI18n.t("需重新扫描"), observed: AieyesI18n.t("已识别账户") }[r.status] || AieyesI18n.t("待验证"))}${r.accountKey ? AieyesI18n.t(" · 已关联账户") : ''}</small>${r.models?.length ? `<small>${e(r.models.join('、'))}</small>` : ''}<small class="source-path" title="${e(r.configPath)}">${e(r.configPath)}</small><small>${e(AieyesI18n.message(r.note))}</small></div><button type="button" data-native-remove="${e(r.id)}" ${busy ? 'disabled' : ''}>${AieyesI18n.t("取消引用")}</button></div>`).join('')}<p class="muted tiny">${AieyesI18n.t("凭据保留在原机器的 Agent 配置中；取消引用不会删除原文件。")}</p></details></div>`;
-  }
-  async function scan(params) {
-    if (busy) return;
-    if (!(await window.AieyesAgentSettings.flush())) return;
-    busy = true;
-    const dialog = document.createElement('dialog');dialog.className = 'native-scan-dialog';dialog.setAttribute('aria-label', AieyesI18n.t("扫描账户与凭据"));
-    dialog.innerHTML = `<h2>${AieyesI18n.t("扫描账户与凭据")}</h2><p role="status" data-scan-progress>${AieyesI18n.t("正在读取原生配置…")}</p><div data-scan-results></div><div class="actions"><button type="button" data-scan-retry hidden>${AieyesI18n.t("重新扫描")}</button><button type="button" data-scan-close>${AieyesI18n.t("关闭，后台继续")}</button></div>`;
-    document.body.append(dialog);dialog.showModal();
-    let unlisten,closed = false;
-    const close = () => {closed = true;dialog.close();dialog.remove();};
-    dialog.querySelector('[data-scan-close]').onclick = close;dialog.oncancel = (event) => {event.preventDefault();close();};
-    const operationId = crypto.randomUUID();
-    try {
-      unlisten = await window.__TAURI__?.event?.listen('operations:progress', ({ payload }) => {if (payload.operationId === operationId && payload.stage && !closed) dialog.querySelector('[data-scan-progress]').textContent = AieyesI18n.message(payload.stage);});
-      const result = await api('accounts.scan', { ...params, operationId });
-      window.AieyesAgentSettings.accept(result.settings);state.lastQuota = 0;
-      const failed = result.results.filter((r) => r.status === 'failed').length;
-      const summary = AieyesI18n.t("新增 {0} 个账户、{1} 个连接{2}", result.addedAccounts, result.addedConnections, failed ? AieyesI18n.t("；{0} 项读取失败", failed) : '');
-      if (!closed) {dialog.querySelector('[data-scan-progress]').textContent = summary;dialog.querySelector('[data-scan-results]').innerHTML = result.results.map((r) => `<div class="list-row"><div class="row-body"><strong>${e(providers[r.provider] ?? r.provider)} · ${e(machine(r.machineId))}</strong><small>${e(AieyesI18n.message(r.message))}</small>${r.configPath ? `<small class="source-path">${e(r.configPath)}</small>` : ''}</div><span>${e({ added: AieyesI18n.t("已添加"), existing: AieyesI18n.t("已存在"), failed: AieyesI18n.t("失败"), empty: AieyesI18n.t("未发现"), skipped: AieyesI18n.t("已跳过") }[r.status] ?? r.status)}</span></div>`).join('');} else
-      notify(summary, failed ? 'error' : 'success');
-    } catch (error) {
-      // Partial imports are committed independently. Read them back even if an
-      // update/disconnection interrupted the last item.
-      try {window.AieyesAgentSettings.accept(await api('settings.get'));} catch {}
-      if (!closed) dialog.querySelector('[data-scan-progress]').textContent = AieyesI18n.message(String(error));else notify(String(error), 'error');
-    } finally {
-      busy = false;if (unlisten) unlisten();
-      if (!closed) {dialog.querySelector('[data-scan-close]').textContent = AieyesI18n.t("完成");dialog.querySelector('[data-scan-retry]').hidden = false;dialog.querySelector('[data-scan-retry]').onclick = () => {close();void scan(params);};}
-      if (state.page === 'settings') renderSettings(false);
-      void loadDashboard().catch(() => {});
-    }
+    return `<div class="native-connections"><div class="between"><h3>${kind === 'api' ? AieyesI18n.t("原生 API 连接") : AieyesI18n.t("已发现的原生登录凭据")}（${rows.length}）</h3><button type="button" class="danger" data-native-remove-all="${e(provider)}" data-native-kind="${e(kind)}" ${busy ? 'disabled' : ''}>${AieyesI18n.t("取消全部引用")}</button></div><details data-agent-detail="native-connections-${e(provider)}-${e(kind)}"><summary>${AieyesI18n.t("查看{0}", kind === 'api' ? AieyesI18n.t("连接") : AieyesI18n.t("凭据"))}</summary>${rows.map((r) => `<div class="list-row"><div class="row-body"><strong>${e(r.email || (r.kind === 'api' ? r.baseUrl || AieyesI18n.t("原生 API") : r.identityKey ? r.identityKey.startsWith('qoder:') ? 'Qoder · ' + r.identityKey.slice(6, 18) : AieyesI18n.t("{0} 账户", providers[r.provider] ?? r.provider) : AieyesI18n.t("账户身份待确认")))}</strong><small>${e(machine(r.machineId))} · ${e(status(r))}${r.accountKey ? AieyesI18n.t(" · 已关联账户") : ''}</small>${r.models?.length ? `<small>${e(r.models.join('、'))}</small>` : ''}<small class="source-path" title="${e(r.configPath)}">${e(r.configPath)}</small><small>${e(AieyesI18n.message(r.note))}</small></div><button type="button" data-native-remove="${e(r.id)}" ${busy ? 'disabled' : ''}>${AieyesI18n.t("取消引用")}</button></div>`).join('')}<p class="muted tiny">${AieyesI18n.t("凭据保留在原机器的 Agent 配置中；取消引用不会删除原文件。")}</p></details></div>`;
   }
   document.addEventListener('click', async (event) => {
-    const agent = event.target.closest('[data-native-scan-agent]'),host = event.target.closest('[data-native-scan-machine]'),remove = event.target.closest('[data-native-remove]'),removeAll = event.target.closest('[data-native-remove-all]');
-    if (agent && !agent.disabled) void scan({ scope: 'agent', provider: agent.dataset.nativeScanAgent });
-    if (host && !host.disabled) void scan({ scope: 'machine', machineId: host.dataset.nativeScanMachine });
+    const remove = event.target.closest('[data-native-remove]'),removeAll = event.target.closest('[data-native-remove-all]');
     const button = remove || removeAll;
     if (button && !button.disabled && !busy) {
       if (!(await window.AieyesAgentSettings.flush())) return;
@@ -60,9 +27,9 @@
         {busy = false;renderSettings(false);}
       };
       // Unlinking everything at once is confirmed first; it only forgets references, never files.
-      if (removeAll) confirmDestructive(AieyesI18n.t("取消全部引用？"), `<p>${AieyesI18n.t("将取消 {0} 个引用。凭据文件不会被删除，之后可以重新扫描。", connectionIds.length)}</p>`, unlink, AieyesI18n.t("取消全部引用"));
+      if (removeAll) confirmDestructive(AieyesI18n.t("取消全部引用？"), `<p>${AieyesI18n.t("将取消 {0} 个引用。凭据文件不会被删除；之后在 Agent 中重新登录会自动识别。", connectionIds.length)}</p>`, unlink, AieyesI18n.t("取消全部引用"));
       else await unlink();
     }
   });
-  window.AieyesAccountScan = { button, hint, list, scan, get busy() {return busy;} };
+  window.AieyesAccountScan = { list, status, get busy() {return busy;} };
 })();

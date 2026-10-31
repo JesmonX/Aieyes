@@ -9,6 +9,7 @@ import runpy
 import tempfile
 import types
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 SCRIPTS = pathlib.Path(__file__).resolve().parent
@@ -47,10 +48,19 @@ class Collectors(unittest.TestCase):
             (pathlib.Path(directory) / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "fixture-token"}}))
             with patch("sys.argv", ["quota", directory]), patch("urllib.request.urlopen", return_value=io.StringIO(json.dumps({"five_hour": {"utilization": 20}, "extra": "private"}))):
                 self.assertEqual(module["main"](), {"five_hour": {"utilization": 20}})
+            fixture = json.loads((SCRIPTS / "fixtures/claude-oauth-usage.json").read_text())
+            with patch("sys.argv", ["quota", directory]), patch("urllib.request.urlopen", return_value=io.StringIO(json.dumps(fixture))):
+                result = module["main"]()
+                self.assertEqual(result["extra_usage"], fixture["extra_usage"])
+                self.assertEqual(result["limits"], fixture["limits"])
+                self.assertNotIn("private", result)
             with patch("sys.argv", ["quota", directory]), patch("urllib.request.urlopen", side_effect=OSError("fixture-token")):
                 response = module["main"]()
                 self.assertIn("error", response)
                 self.assertNotIn("fixture-token", json.dumps(response))
+            expired = urllib.error.HTTPError("https://api.anthropic.com/api/oauth/usage", 401, "fixture-token", {}, None)
+            with patch("sys.argv", ["quota", directory]), patch("urllib.request.urlopen", side_effect=expired):
+                self.assertEqual(module["main"](), {"error": "Claude Code 登录已过期，打开 Claude Code 一次即可刷新"})
 
     def test_linux_units_guest_cpu_and_multiple_gpus(self):
         files = {

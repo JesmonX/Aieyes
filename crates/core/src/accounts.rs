@@ -21,6 +21,15 @@ pub fn default_name(provider: &str) -> String {
         "codebuddy" => "CodeBuddy 账户",
         "pi" => "Pi 账户",
         "omp" => "Oh My Pi 账户",
+        "chatgpt-work" => "ChatGPT Work 账户",
+        "workbuddy" => "WorkBuddy 账户",
+        "copilot" => "GitHub Copilot 账户",
+        "cline" => "Cline 账户",
+        "kilo" => "Kilo Code 账户",
+        "roo" => "Roo Code 账户",
+        "kiro" => "Kiro 账户",
+        "trae" => "Trae 账户",
+        "trae-cn" => "Trae CN 账户",
         _ => "自定义 Agent 账户",
     }
     .into()
@@ -398,7 +407,9 @@ impl Engine {
                         < account
                             .quota_refresh_seconds
                             .unwrap_or(settings.refresh_seconds)
-                            .max(300) as i64
+                            .max(300)
+                            .max(crate::quota_schedule::floor(&account.provider))
+                            as i64
                 {
                     continue;
                 }
@@ -487,6 +498,7 @@ impl Engine {
                                         < a.quota_refresh_seconds
                                             .unwrap_or(s.refresh_seconds)
                                             .max(300)
+                                            .max(crate::quota_schedule::floor(&a.provider))
                                             as i64
                                 {
                                     continue;

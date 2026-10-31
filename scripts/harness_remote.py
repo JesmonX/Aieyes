@@ -55,7 +55,7 @@ async function codexPrefix(options){
  if(typeof z.createZstdDecompress!=='function')reject('decoderUnavailable');
  const metadataOnly=options.limit===undefined,limit=metadataOnly?null:options.limit;
  if(!metadataOnly&&(!Number.isSafeInteger(limit)||limit<0))reject('boundaryInvalid');
- let pieces=[],lineBytes=0,offset=0,total=0,first=true,thread=null,parent=null,tokens=null,timestamp=null;
+ let pieces=[],lineBytes=0,offset=0,total=0,first=true,thread=null,parent=null,tokens=null,timestamp=null,originator='';
  const digest=require('node:crypto').createHash('sha256');
  function row(raw){
   let v;try{v=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw));}catch{reject('invalidRecord');}
@@ -63,6 +63,7 @@ async function codexPrefix(options){
   if(first){
    first=false;thread=p.id||p.session_id;
    if(v?.type!=='session_meta'||typeof thread!=='string'||!thread||thread.length>4096)reject('identityMismatch');
+   originator=typeof p.originator==='string'?text(p.originator):'';
    if(p.history_base&&typeof p.history_base==='object'&&!Array.isArray(p.history_base)){
     parent={thread_id:typeof p.history_base.thread_id==='string'?text(p.history_base.thread_id):null,end_byte_offset:p.history_base.end_byte_offset};
    }
@@ -93,7 +94,7 @@ async function codexPrefix(options){
  try{
   try{await decodeZstd(file,consume);}catch(error){reject(error.reason||'invalidCompressedHistory');}
   if(metadataOnly?first:offset!==limit||lineBytes||limit>0&&first)reject('boundaryInvalid');
-  await emit({codexPrefix:'complete',thread,parent,tokens,timestamp,proof:digest.digest('hex')});
+  await emit({codexPrefix:'complete',thread,parent,tokens,timestamp,originator,proof:digest.digest('hex')});
  }finally{file.destroy();}
 }
 async function main(){

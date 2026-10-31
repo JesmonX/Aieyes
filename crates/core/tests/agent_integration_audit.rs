@@ -57,6 +57,156 @@ fn stamp(millis: i64) -> String {
 }
 
 #[test]
+fn contract_providers_have_names_roots_and_reach_the_session_monitor() {
+    let root = tempfile::tempdir().unwrap();
+    let mut engine = Engine::open(&root.path().join("app")).unwrap();
+    let mut settings = Settings {
+        sources: vec![],
+        ..Default::default()
+    };
+    settings.agents = aieyes_core::contracts::PROVIDERS
+        .iter()
+        .map(|p| AgentConfiguration {
+            provider: p.id.into(),
+            enabled: true,
+            machine_ids: vec!["local".into()],
+        })
+        .collect();
+    for provider in aieyes_core::contracts::PROVIDERS {
+        let name = aieyes_core::accounts::default_name(provider.id);
+        assert!(!name.is_empty());
+        if provider.id != "custom" {
+            assert_ne!(
+                name, "自定义 Agent 账户",
+                "{} has no account name",
+                provider.id
+            );
+        }
+        let remote = engine
+            .call(
+                "sources.defaultPath",
+                json!({"provider":provider.id,"hostId":"uncontacted-fixture"}),
+            )
+            .unwrap();
+        assert_eq!(
+            remote["path"].as_str().unwrap().is_empty(),
+            provider.default_path.is_empty(),
+            "{} has no source root",
+            provider.id
+        );
+        let path = root.path().join(provider.id);
+        fs::create_dir_all(&path).unwrap();
+        settings.sources.push(Source {
+            id: provider.id.into(),
+            provider: provider.id.into(),
+            path: path.to_string_lossy().into(),
+            ..Default::default()
+        });
+    }
+    let snapshot = SessionMonitor::default().read(&settings, SystemTime::now());
+    let actual: std::collections::BTreeSet<_> = snapshot
+        .sources
+        .iter()
+        .map(|s| s.provider.as_str())
+        .collect();
+    let expected: std::collections::BTreeSet<_> = aieyes_core::contracts::PROVIDERS
+        .iter()
+        .filter(|p| p.machines && p.id != "custom")
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "registered history providers must reach the public session dispatcher"
+    );
+    assert!(
+        snapshot.sessions.is_empty(),
+        "empty native roots must not fabricate sessions"
+    );
+    assert!(
+        !actual.contains("chatgpt-work"),
+        "Work sessions arrive through their Codex originator"
+    );
+}
+
+#[test]
+fn contract_native_account_adapters_participate_in_automatic_discovery() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let rpc = |method: &str, params: Value| -> Value {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_aieyes-core"));
+        command
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+        for key in ["SystemRoot", "WINDIR", "TMPDIR", "TEMP", "TMP"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        for (key, suffix) in [
+            ("HOME", ""),
+            ("USERPROFILE", ""),
+            ("XDG_CONFIG_HOME", ".config"),
+            ("XDG_DATA_HOME", ".local/share"),
+            ("APPDATA", "AppData/Roaming"),
+        ] {
+            command.env(key, home.join(suffix));
+        }
+        let output = command
+            .env("AIEYES_AUTO_SCAN", "off")
+            .args([
+                "--data-dir",
+                root.path().join("app").to_str().unwrap(),
+                "--call",
+                method,
+                &params.to_string(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{method}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    let mut settings = rpc("settings.get", json!({}));
+    settings["sources"] = json!([]);
+    settings["accounts"] = json!([]);
+    settings["nativeConnections"] = json!([]);
+    settings["hosts"] = json!([]);
+    for agent in settings["agents"].as_array_mut().unwrap() {
+        agent["enabled"] = json!(true);
+        agent["machineIds"] = json!(["local"]);
+    }
+    rpc("settings.save", settings);
+    let result = rpc("accounts.autoScan", json!({}));
+    let rows = result["results"].as_array().unwrap();
+    let actual: std::collections::BTreeSet<_> = rows
+        .iter()
+        .map(|r| r["provider"].as_str().unwrap())
+        .collect();
+    // Roo's SecretStorage is deliberately excluded; it has a history adapter.
+    // Work shares Codex identity, DeepSeek API and custom sources are explicit.
+    let expected: std::collections::BTreeSet<_> = aieyes_core::contracts::PROVIDERS
+        .iter()
+        .filter(|p| p.machines && !["custom", "roo"].contains(&p.id))
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "a registered native agent needs credential discovery or an explicit exemption"
+    );
+    assert!(
+        rows.iter().all(|r| r["status"] == "empty"),
+        "empty client directories must be a normal unsigned-in state: {rows:?}"
+    );
+    assert_eq!(result["addedAccounts"], 0);
+    assert_eq!(result["settings"]["accounts"], json!([]));
+}
+
+#[test]
 fn harness_unsupported_or_corrupt_sessions_do_not_hide_healthy_siblings() {
     let root = tempfile::tempdir().unwrap();
     let (engine, source, settings) = setup(root.path(), "deepseek-harness");

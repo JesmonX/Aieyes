@@ -1,0 +1,14 @@
+{
+  "five_hour": {"utilization": 12.5, "resets_at": "2026-10-30T05:00:00Z"},
+  "seven_day": {"utilization": 40, "resets_at": "2026-11-03T00:00:00Z"},
+  "seven_day_opus": {"utilization": 55, "resets_at": "2026-11-03T00:00:00Z"},
+  "seven_day_sonnet": null,
+  "extra_usage": {"is_enabled": true, "utilization": 25.0, "used_credits": 1234, "monthly_limit": 5000},
+  "limits": [
+    {"kind": "weekly_scoped", "percent": 55, "resets_at": "2026-11-03T00:00:00Z", "scope": {"model": {"display_name": "Opus"}}},
+    {"kind": "weekly_scoped", "percent": 30, "resets_at": "2026-11-03T00:00:00Z", "scope": {"model": {"display_name": "Sonnet"}}},
+    {"kind": "weekly_scoped", "scope": {"model": {"display_name": "Haiku"}}},
+    {"kind": "session", "percent": 12.5}
+  ],
+  "private": "dropped"
+}

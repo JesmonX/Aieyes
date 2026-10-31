@@ -19,5 +19,13 @@ The shared container is 36 × 36 points/pixels, with smaller containers in selec
 | CodeBuddy | [Official SVG](https://codebuddy-1328495429.cos.accelerate.myqcloud.com/web/ide/logo.svg), foreground robot and eyes in brand violet; background and clipping removed |
 | Pi | [Official multicolor mark](https://pi.dev/logo-auto.svg) |
 | Oh My Pi | [Official connector mark](https://github.com/can1357/oh-my-pi/blob/main/assets/icon.svg), light/dark foreground variants |
+| ChatGPT Work | Same OpenAI Blossom asset as Codex |
+| GitHub Copilot | [LobeHub mark](https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/copilot.svg), interim until official artwork is reviewed |
+| Cline | [LobeHub mark](https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/cline.svg), interim |
+| Kilo Code | [LobeHub mark](https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/kilocode.svg), interim |
+| Roo Code | [LobeHub mark](https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/roocode.svg), interim |
+| Kiro | [LobeHub color mark](https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/kiro-color.svg), tile kept, interim |
+| Trae / Trae CN | [LobeHub color mark](https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/trae-color.svg), interim |
+| WorkBuddy | [LobeHub color mark](https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/workbuddy-color.svg), interim |
 
-Codex, Cursor, Grok, ZCode and Qoder follow the light/dark foreground color. Kimi, OpenCode and Oh My Pi have separate light/dark PNGs to preserve their colored accents or tonal detail. Claude, Antigravity, DeepSeek, CodeBuddy and Pi retain their brand colors. Custom or unknown providers use the shared terminal fallback. Marks belong to their respective owners.
+Codex, ChatGPT Work, Cursor, Grok, ZCode, Qoder, Copilot, Cline, Kilo Code and Roo Code follow the light/dark foreground color. Kimi, OpenCode and Oh My Pi have separate light/dark PNGs to preserve their colored accents or tonal detail. Claude, Antigravity, DeepSeek, CodeBuddy, WorkBuddy, Kiro, Trae and Pi retain their brand colors. Custom or unknown providers use the shared terminal fallback. Marks belong to their respective owners.

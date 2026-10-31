@@ -13,6 +13,9 @@ target/debug/aieyes-core --data-dir "$MODEL_FIXTURE" --call settings.get > "$MOD
 target/debug/aieyes-core --data-dir "$MODEL_FIXTURE" --call dashboard > "$MODEL_FIXTURE/dashboard.json"
 build_native_verifier models
 .build/verify-models "$MODEL_FIXTURE/dashboard.json" "$MODEL_FIXTURE/settings.json"
+target/debug/aieyes-core --data-dir "$MODEL_FIXTURE" --call qoderCli.status > "$MODEL_FIXTURE/qoder-cli.json"
+build_native_verifier qoder-cli
+.build/verify-qoder-cli "$MODEL_FIXTURE/qoder-cli.json" "$MODEL_FIXTURE/settings.json"
 for verifier in localization dock-presence palette selection sessions proxy; do
   build_native_verifier "$verifier"
   ".build/verify-$verifier"

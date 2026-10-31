@@ -132,6 +132,25 @@ impl Store {
             }
         }
     }
+    /// Records a session Aieyes spawned itself (Qoder/Kiro quota checks) so the
+    /// session monitor never counts it. `key` is the session id or cwd.
+    pub fn mark_internal_session(&self, provider: &str, key: &str) -> Result<()> {
+        self.db.execute(
+            "INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![
+                crate::sessions::internal_session_key(provider, key),
+                crate::models::now().to_string()
+            ],
+        )?;
+        Ok(())
+    }
+    pub fn internal_sessions(&self) -> Result<std::collections::HashSet<String>> {
+        let mut query = self
+            .db
+            .prepare_cached("SELECT key FROM kv WHERE key LIKE 'internal-session:%'")?;
+        let keys = query.query_map([], |r| r.get(0))?;
+        Ok(keys.collect::<rusqlite::Result<_>>()?)
+    }
     pub fn settings(&self) -> Result<Settings> {
         // Keep the configuration and its revision in one snapshot. An external
         // commit between those reads must not label old settings as current.
@@ -224,21 +243,51 @@ impl Store {
                     .filter(|p| p.discover_local)
                 {
                     let provider = entry.id;
-                    let Ok(path) = crate::provider_paths::default_path(provider, false) else {
+                    let Ok(paths) = crate::provider_paths::discovery_paths(provider) else {
                         continue;
                     };
-                    let root = expand(&path);
-                    if root.is_dir() {
-                        settings.sources.push(Source {
-                            id: format!("local-{provider}"),
-                            name: format!("{} · 本机", entry.name),
-                            provider: provider.into(),
-                            // Discover history directories only. Explicit account
-                            // actions own account creation and identity-based naming.
-                            path: root.to_string_lossy().into(),
-                            ..Default::default()
-                        });
+                    for (index, path) in paths.into_iter().enumerate() {
+                        let root = expand(&path);
+                        if root.is_dir() || root.is_file() {
+                            settings.sources.push(Source {
+                                id: if index == 0 {
+                                    format!("local-{provider}")
+                                } else {
+                                    format!("local-{provider}-{}", &hash(&path)[..12])
+                                },
+                                name: format!("{} · 本机", entry.name),
+                                provider: provider.into(),
+                                // Discover history directories only. Explicit account
+                                // actions own account creation and identity-based naming.
+                                path: root.to_string_lossy().into(),
+                                ..Default::default()
+                            });
+                        }
                     }
+                }
+                for (root, _) in crate::kimi_work::paths()
+                    .into_iter()
+                    .filter(|(root, _)| root.is_dir())
+                {
+                    settings.sources.push(Source {
+                        id: format!("local-kimi-work-{}", &hash(&root.to_string_lossy())[..16]),
+                        provider: "kimi".into(),
+                        name: "Kimi Work · 本机".into(),
+                        path: root.to_string_lossy().into(),
+                        ..Default::default()
+                    });
+                }
+                for root in crate::codebuddy_ide::paths() {
+                    settings.sources.push(Source {
+                        id: format!(
+                            "local-codebuddy-ide-{}",
+                            &hash(&root.to_string_lossy())[..16]
+                        ),
+                        provider: "codebuddy".into(),
+                        name: "CodeBuddy IDE · 本机".into(),
+                        path: root.to_string_lossy().into(),
+                        ..Default::default()
+                    });
                 }
                 crate::providers::normalize_settings(&mut settings);
                 // Fresh installations offer every named Agent, without importing logins
@@ -910,6 +959,11 @@ impl Store {
         });
         if let Some((old, _)) = &old {
             let prior: UsageEvent = serde_json::from_str(old)?;
+            // A second copy/older parser without originator cannot erase the
+            // display identity. An explicit Codex originator can replace Work.
+            if next.agent.is_empty() {
+                next.agent.clone_from(&prior.agent);
+            }
             match (&mut next.native_credits, prior.native_credits) {
                 (Some(next), Some(prior)) => {
                     next.original_credits = next.original_credits.or(prior.original_credits);
@@ -1130,13 +1184,7 @@ impl Store {
         Ok(())
     }
     pub fn quota(&self, q: &QuotaSnapshot) -> Result<()> {
-        if q.account_id.is_empty()
-            || (q.error.is_none()
-                && q.windows.is_empty()
-                && q.balances.is_empty()
-                && q.extra_usage.is_none()
-                && q.bank_reset.is_none())
-        {
+        if q.account_id.is_empty() || (q.error.is_none() && !q.has_values() && q.notice.is_none()) {
             return Ok(());
         }
         let tx = if self.db.is_autocommit() {
@@ -1350,23 +1398,36 @@ impl Store {
                 .iter()
                 .filter(|s| s.enabled && account.uses_source(s))
                 .collect();
-            if linked.is_empty() {
-                continue;
-            }
-            if f.source_id
-                .as_ref()
-                .is_some_and(|id| !linked.iter().any(|s| &s.id == id))
-            {
-                continue;
-            }
+            // Automatic logins need no history binding. Remembered accounts
+            // also retain their last snapshot after the client switches users.
+            let account_key = crate::accounts::key(account);
+            let native: Vec<_> = settings
+                .native_connections
+                .iter()
+                .filter(|r| r.account_key.as_deref() == Some(&account_key))
+                .collect();
             let raw: Option<String> = self
                 .db
                 .query_row(
                     "SELECT payload FROM quotas WHERE account_key=?1",
-                    [format!("{}:{}", account.provider, account.id)],
+                    [&account_key],
                     |r| r.get(0),
                 )
                 .optional()?;
+            if linked.is_empty() && native.is_empty() && raw.is_none() {
+                continue;
+            }
+            if f.source_id.as_ref().is_some_and(|id| {
+                !linked.iter().any(|s| &s.id == id)
+                    && !native.iter().any(|r| {
+                        r.source_id.as_ref() == Some(id) || format!("native-{}", r.id) == *id
+                    })
+            }) {
+                continue;
+            }
+            let remembered = raw.is_some()
+                && !linked.iter().any(|s| settings.source_enabled(s))
+                && crate::account_scan::quota_sources(settings, account).is_empty();
             let mut quota: QuotaSnapshot = raw
                 .map(|r| serde_json::from_str(&r))
                 .transpose()?
@@ -1374,7 +1435,7 @@ impl Store {
                     provider: account.provider.clone(),
                     account_id: account.id.clone(),
                     error: Some(
-                        if linked.is_empty() {
+                        if linked.is_empty() && native.is_empty() {
                             "关联数据源后可读取额度"
                         } else {
                             "尚未读取额度"
@@ -1383,6 +1444,15 @@ impl Store {
                     ),
                     ..Default::default()
                 });
+            if remembered {
+                quota.stale_since = quota.stale_since.or(Some(quota.updated_at));
+            }
+            if !quota.has_values()
+                && let Some(notice) = crate::account_scan::shadow_notice(settings, account)
+            {
+                quota.error = None;
+                quota.notice = Some(notice);
+            }
             quota.name = account.name.clone();
             if quota.error.as_deref() == Some("设置额度查询命令") {
                 quota.error = Some("请刷新额度；远程代理可在数据源中设置".into());
@@ -1425,6 +1495,8 @@ impl Store {
             .into_iter()
             .filter(|e| !matches!(e, crate::estimates::Estimate::Credit(_)))
             .collect();
+        dedup_cursor_team_meters(&mut d.quotas);
+        crate::buddy_auth::dedup_balances(settings, &mut d.quotas);
         d.quotas.sort_by(|a, b| {
             let rank = |q: &QuotaSnapshot| {
                 d.quota_order
@@ -1433,10 +1505,8 @@ impl Store {
                     .unwrap_or(usize::MAX)
             };
             rank(a).cmp(&rank(b)).then_with(|| {
-                a.windows
-                    .is_empty()
-                    .cmp(&b.windows.is_empty())
-                    .then(a.name.cmp(&b.name))
+                let empty = |q: &QuotaSnapshot| q.windows.is_empty() && q.meters.is_empty();
+                empty(a).cmp(&empty(b)).then(a.name.cmp(&b.name))
             })
         });
         if include_sources {
@@ -1501,7 +1571,7 @@ impl Store {
                 .map(|s| &s.id)
                 .collect::<Vec<_>>(),
         )?;
-        let mut query=self.db.prepare("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<=?2 AND (?3 IS NULL OR provider=?3 OR provider=?8) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7))))) AND (?5 IS NULL OR model=?5) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
+        let mut query=self.db.prepare("SELECT payload,cost,priced_tokens,price FROM events e WHERE stamp>=?1 AND stamp<=?2 AND (?3 IS NULL OR (CASE WHEN provider='codex' AND json_extract(payload,'$.agent')='chatgpt-work' THEN 'chatgpt-work' ELSE provider END)=?3 OR provider=?8) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?7))))) AND (?5 IS NULL OR model=?5) AND (?6 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?6)) ORDER BY stamp")?;
         let mut rows = query.query(params![
             from,
             until,
@@ -1510,7 +1580,7 @@ impl Store {
             f.model,
             f.source_id,
             shared,
-            f.provider_alias()
+            f.usage_provider_alias()
         ])?;
         let mut d = Dashboard {
             generated_at: now(),
@@ -1523,7 +1593,7 @@ impl Store {
             .unwrap_or(from);
         let mut options = self.db.prepare(
             "SELECT payload FROM events e WHERE stamp>=?1 AND stamp<=?2
-             AND (?3 IS NULL OR provider=?3 OR provider=?7) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))))
+             AND (?3 IS NULL OR (CASE WHEN provider='codex' AND json_extract(payload,'$.agent')='chatgpt-work' THEN 'chatgpt-work' ELSE provider END)=?3 OR provider=?7) AND (?4 IS NULL OR (?4='' AND EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))) OR (account_id=?4 AND NOT EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id IN (SELECT value FROM json_each(?6)))))
              AND (?5 IS NULL OR EXISTS(SELECT 1 FROM event_sources es WHERE es.event_id=e.id AND es.source_id=?5))
              ORDER BY model",
         )?;
@@ -1536,7 +1606,7 @@ impl Store {
                     f.account_id,
                     f.source_id,
                     shared,
-                    f.provider_alias()
+                    f.usage_provider_alias()
                 ],
                 |row| row.get::<_, String>(0),
             )?
@@ -1710,9 +1780,116 @@ pub fn expand(path: &str) -> PathBuf {
     }
 }
 
+/// Each Cursor team has one shared on-demand pool. Keep the freshest snapshot
+/// of that pool while retaining every member's personal plan windows.
+fn dedup_cursor_team_meters(quotas: &mut [QuotaSnapshot]) {
+    let mut owner = std::collections::HashMap::new();
+    for (index, q) in quotas
+        .iter()
+        .enumerate()
+        .filter(|(_, q)| q.provider == "cursor")
+    {
+        for meter in q.meters.iter().filter(|m| m.id.starts_with("team-pool:")) {
+            let rank = (q.error.is_none(), q.snapshot_at.unwrap_or(q.updated_at));
+            let saved = owner.entry(meter.id.clone()).or_insert((index, rank));
+            if rank > saved.1 {
+                *saved = (index, rank);
+            }
+        }
+    }
+    for (index, q) in quotas
+        .iter_mut()
+        .enumerate()
+        .filter(|(_, q)| q.provider == "cursor")
+    {
+        q.meters
+            .retain(|m| owner.get(&m.id).is_none_or(|(chosen, _)| *chosen == index));
+    }
+}
+
 #[cfg(test)]
 mod discovery_tests {
     use super::*;
+    #[test]
+    fn native_only_and_remembered_accounts_keep_quota_cards_and_shadow_notices() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::open(temp.path()).unwrap();
+        let account = Account {
+            id: "native".into(),
+            provider: "pi".into(),
+            quota_enabled: true,
+            ..Default::default()
+        };
+        let mut settings = Settings {
+            accounts: vec![account],
+            native_connections: vec![crate::account_scan::NativeConnection {
+                id: "ref".into(),
+                account_key: Some("pi:native".into()),
+                provider: "pi".into(),
+                machine_id: "local".into(),
+                status: "observed".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        store
+            .quota(&QuotaSnapshot {
+                account_id: "native".into(),
+                provider: "pi".into(),
+                notice: Some("Shared with Claude".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        for status in ["observed", "remembered"] {
+            settings.native_connections[0].status = status.into();
+            let mut dashboard = Dashboard::default();
+            store
+                .fill_dashboard_status(&mut dashboard, &Filter::default(), &settings, false)
+                .unwrap();
+            assert_eq!(dashboard.quotas.len(), 1);
+            assert_eq!(
+                dashboard.quotas[0].notice.as_deref(),
+                Some("Shared with Claude")
+            );
+        }
+        let mut dashboard = Dashboard::default();
+        store
+            .fill_dashboard_status(
+                &mut dashboard,
+                &Filter {
+                    source_id: Some("other".into()),
+                    ..Default::default()
+                },
+                &settings,
+                false,
+            )
+            .unwrap();
+        assert!(dashboard.quotas.is_empty());
+    }
+    #[test]
+    fn cursor_team_pool_is_shown_once_without_removing_personal_windows() {
+        let quota = |at, team: &str| QuotaSnapshot {
+            provider: "cursor".into(),
+            updated_at: at,
+            windows: vec![QuotaWindow {
+                id: "plan".into(),
+                ..Default::default()
+            }],
+            meters: vec![QuotaMeter {
+                id: format!("team-pool:{team}"),
+                used: at as f64,
+                unit: "usd".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut rows = vec![quota(1, "7"), quota(2, "7"), quota(1, "8")];
+        dedup_cursor_team_meters(&mut rows);
+        assert!(rows[0].meters.is_empty());
+        assert_eq!(rows[1].meters[0].used, 2.);
+        assert_eq!(rows[2].meters.len(), 1);
+        assert!(rows.iter().all(|q| q.windows.len() == 1));
+    }
     #[test]
     fn home_paths_keep_platform_separators_and_literal_names() {
         assert_eq!(expand("~"), home());

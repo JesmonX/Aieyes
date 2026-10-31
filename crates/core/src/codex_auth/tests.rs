@@ -753,6 +753,7 @@ fn shared_history_totals_survive_and_profile_quotas_stay_visible() {
         inheritance: None,
         interval_start: None,
         interval_evidence: String::new(),
+        agent: String::new(),
     };
     store.put_event(&event, &[], &settings).unwrap();
     let before = store.dashboard(&Filter::default()).unwrap().summary.total;

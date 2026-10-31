@@ -6,7 +6,7 @@ use crate::{
     usage,
 };
 use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -15,9 +15,18 @@ pub fn database(path: &str) -> Option<PathBuf> {
     let file = if root.is_file() {
         root
     } else {
-        root.join("opencode.db")
+        // Kilo CLI is an OpenCode fork with the same schema in kilo.db.
+        ["opencode.db", "kilo.db"]
+            .iter()
+            .map(|name| root.join(name))
+            .find(|p| p.is_file())?
     };
     (file.is_file() && file.extension().is_some_and(|e| e == "db")).then_some(file)
+}
+
+/// Providers whose history is the OpenCode session/message SQLite schema.
+pub(crate) fn family(provider: &str) -> bool {
+    matches!(provider, "opencode" | "kilo")
 }
 
 pub(crate) fn table_exists(db: &Connection, table: &str) -> Result<bool> {
@@ -73,8 +82,8 @@ pub fn event(source: &Source, id: &str, session: &str, data: &Value) -> Result<U
         "tokens":{"input":input,"output":output,"reasoning":reasoning,"cacheRead":read,"cacheWrite":write}});
     let mut parsed = usage::parse(source, &mut ParseState::default(), &normalized)
         .context("OpenCode 用量格式无效")?;
-    parsed.attribution = "opencode-local".into();
-    parsed.usage_version = usage::parser_version("opencode");
+    parsed.attribution = format!("{}-local", source.provider);
+    parsed.usage_version = usage::parser_version(&source.provider);
     parsed.billing.evidence = data["provider"].as_str().unwrap_or("").into();
     parsed.inheritance = Some(UsageInheritance {
         origin: format!("message:{id}:{}", data["completed"]),
@@ -102,7 +111,7 @@ fn scan_mode(
     path: &Path,
     full: bool,
 ) -> Result<Value> {
-    let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let db = crate::sqlite_ro::open_ro(path)?;
     let tables = schemas(&db)?;
     drop(db);
     let mut result = json!({"updatedAt":now(),"files":1,"newEvents":0,"scannedRecords":0,"malformedRecords":0,"partial":false,"format":"opencode-native","issues":[]});

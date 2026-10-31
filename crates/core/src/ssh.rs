@@ -131,10 +131,10 @@ pub fn python(host: &Host, script: &str, args: &[String]) -> Result<serde_json::
 }
 /// Bounded observer transport, independent of account pre-commands. Payload goes over stdin.
 pub fn session_request(host: &Host, request: serde_json::Value) -> Result<serde_json::Value> {
-    let loader = "import json,sys;p=json.load(sys.stdin);exec(compile(p['script'],'<aieyes-sessions>','exec'),{'__name__':'__main__','REQUEST':p['request'],'SCRIPT':p['script'],'HARNESS_SCRIPT':p['harnessScript'],'NATIVE_DATABASE_SCRIPT':p['nativeDatabaseScript']})";
+    let loader = "import json,sys;p=json.load(sys.stdin);exec(compile(p['script'],'<aieyes-sessions>','exec'),{'__name__':'__main__','REQUEST':p['request'],'SCRIPT':p['script'],'HISTORY_SCRIPT':p['historyScript'],'HARNESS_SCRIPT':p['harnessScript'],'NATIVE_DATABASE_SCRIPT':p['nativeDatabaseScript'],'TASK_SCRIPT':p['taskScript'],'CODEBUDDY_IDE_SCRIPT':p['codebuddyIdeScript'],'TRAE_SCRIPT':p['traeScript']})";
     let cmd = command(host, &format!("exec python3 -c {}", quote(loader)))?;
     let payload = serde_json::to_vec(
-        &serde_json::json!({"script":crate::session_hooks::REMOTE,"harnessScript":HARNESS_SCRIPT,"nativeDatabaseScript":NATIVE_DATABASE_SCRIPT,"request":request}),
+        &serde_json::json!({"script":crate::session_hooks::REMOTE,"historyScript":HISTORY_SCRIPT,"harnessScript":HARNESS_SCRIPT,"nativeDatabaseScript":NATIVE_DATABASE_SCRIPT,"taskScript":TASK_SCRIPT,"codebuddyIdeScript":CODEBUDDY_IDE_SCRIPT,"traeScript":TRAE_SCRIPT,"request":request}),
     )?;
     let output = process::run(cmd, payload, Duration::from_secs(12))?;
     let line = output
@@ -174,12 +174,12 @@ impl SessionObserver {
     }
     fn exchange(&mut self, host: &Host, request: &serde_json::Value) -> Result<serde_json::Value> {
         let payload = if self.child.is_none() {
-            let loader = "import json,sys;p=json.loads(sys.stdin.readline());n={'__name__':'aieyes_observer','SCRIPT':p['script'],'HARNESS_SCRIPT':p['harnessScript'],'NATIVE_DATABASE_SCRIPT':p['nativeDatabaseScript']};exec(compile(p['script'],'<aieyes-sessions>','exec'),n);n['serve'](p['request'])";
+            let loader = "import json,sys;p=json.loads(sys.stdin.readline());n={'__name__':'aieyes_observer','SCRIPT':p['script'],'HISTORY_SCRIPT':p['historyScript'],'HARNESS_SCRIPT':p['harnessScript'],'NATIVE_DATABASE_SCRIPT':p['nativeDatabaseScript'],'TASK_SCRIPT':p['taskScript'],'CODEBUDDY_IDE_SCRIPT':p['codebuddyIdeScript'],'TRAE_SCRIPT':p['traeScript']};exec(compile(p['script'],'<aieyes-sessions>','exec'),n);n['serve'](p['request'])";
             self.child = Some(process::LineProcess::spawn(command(
                 host,
                 &format!("exec python3 -u -c {}", quote(loader)),
             )?)?);
-            serde_json::json!({"script":crate::session_hooks::REMOTE,"harnessScript":HARNESS_SCRIPT,"nativeDatabaseScript":NATIVE_DATABASE_SCRIPT,"request":request})
+            serde_json::json!({"script":crate::session_hooks::REMOTE,"historyScript":HISTORY_SCRIPT,"harnessScript":HARNESS_SCRIPT,"nativeDatabaseScript":NATIVE_DATABASE_SCRIPT,"taskScript":TASK_SCRIPT,"codebuddyIdeScript":CODEBUDDY_IDE_SCRIPT,"traeScript":TRAE_SCRIPT,"request":request})
         } else {
             request.clone()
         };
@@ -235,7 +235,10 @@ fn python_inner(
 
 pub const HISTORY_SCRIPT: &str = include_str!("../../../scripts/remote_history.py");
 pub const HARNESS_SCRIPT: &str = include_str!("../../../scripts/harness_remote.py");
+pub const TRAE_SCRIPT: &str = include_str!("../../../scripts/trae_remote.py");
+pub const TASK_SCRIPT: &str = include_str!("../../../scripts/task_remote.py");
 pub const NATIVE_DATABASE_SCRIPT: &str = include_str!("../../../scripts/native_database_remote.py");
+pub const CODEBUDDY_IDE_SCRIPT: &str = include_str!("../../../scripts/codebuddy_ide_remote.py");
 pub const METRICS_SCRIPT: &str = include_str!("../../../scripts/linux_metrics.py");
 
 /// Send both the bundled collector and its cursor manifest over stdin, not argv.
@@ -244,10 +247,10 @@ pub(crate) fn history_stream(
     request: serde_json::Value,
     receive: impl FnMut(&[u8]) -> Result<()>,
 ) -> Result<()> {
-    let loader = "import json,sys; p=json.load(sys.stdin); print('',flush=True); exec(compile(p['script'],'<aieyes-history>','exec'),{'__name__':'__main__','REQUEST':p['request'],'HARNESS_SCRIPT':p['harnessScript'],'NATIVE_DATABASE_SCRIPT':p['nativeDatabaseScript']})";
+    let loader = "import json,sys; p=json.load(sys.stdin); print('',flush=True); exec(compile(p['script'],'<aieyes-history>','exec'),{'__name__':'__main__','REQUEST':p['request'],'HARNESS_SCRIPT':p['harnessScript'],'NATIVE_DATABASE_SCRIPT':p['nativeDatabaseScript'],'TASK_SCRIPT':p['taskScript'],'CODEBUDDY_IDE_SCRIPT':p['codebuddyIdeScript'],'TRAE_SCRIPT':p['traeScript']})";
     let command = command_inner(host, &format!("exec python3 -c {}", quote(loader)), true)?;
     let payload = serde_json::to_vec(
-        &serde_json::json!({"script":HISTORY_SCRIPT,"harnessScript":HARNESS_SCRIPT,"nativeDatabaseScript":NATIVE_DATABASE_SCRIPT,"request":request}),
+        &serde_json::json!({"script":HISTORY_SCRIPT,"harnessScript":HARNESS_SCRIPT,"nativeDatabaseScript":NATIVE_DATABASE_SCRIPT,"taskScript":TASK_SCRIPT,"codebuddyIdeScript":CODEBUDDY_IDE_SCRIPT,"traeScript":TRAE_SCRIPT,"request":request}),
     )?;
     anyhow::ensure!(
         payload.len() <= 16 * 1024 * 1024,

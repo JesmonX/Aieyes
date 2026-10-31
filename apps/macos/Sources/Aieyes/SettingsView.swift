@@ -183,7 +183,6 @@ struct SettingsView: View {
         let information = VStack(alignment: .leading, spacing: 5) {
             Text(name).font(AppFont.section).lineLimit(2).help(name)
             if !local && name != host.target { Text(host.target).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(host.target) }
-            if local ? model.settings.localDeviceEnabled != false : host.enabled { NativeScanButton(model: model, machine: host.id) }
         }.frame(maxWidth: .infinity, alignment: .leading)
         // Switches take their labels' width and wrap below each other before they
         // could overlap the buttons (English labels are wider than Chinese ones).
@@ -327,6 +326,7 @@ struct SettingsView: View {
             if model.generalPage == "refresh" {
             Section(L("刷新")) {
                 refreshInterval(L("额度查询"), value: $model.settingsDraft.refreshSeconds, field: "quota")
+                if model.agentConfigurations.contains(where: { $0.provider == "qoder" && $0.enabled }) { Text(L("Qoder 额度查询会启动 qodercli，最少每 10 分钟一次")).font(AppFont.secondary).foregroundStyle(.secondary) }
                 refreshInterval(L("日志同步"), value: $model.settingsDraft.historyInterval, field: "history")
                 refreshInterval(L("服务器前台"), value: $model.settingsDraft.foregroundInterval, field: "foreground")
                 refreshInterval(L("服务器后台"), value: $model.settingsDraft.serverRefreshSeconds, field: "background")

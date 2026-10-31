@@ -335,6 +335,10 @@ body.editor-open { overflow: hidden; }
 .quota-disclosure:not([open]) + .quota-content .quota-windows { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .quota-disclosure:not([open]) + .quota-content .quota-window { gap:4px; }
 .quota-window .between { flex-wrap:wrap; gap:4px 8px; }
+.quota-content > .quota-meters { display:grid; gap:var(--space-card-content); }
+.quota-notice { margin:0; }
+.quota-age { margin-left:8px; }
+.quota-age.stale { color:var(--warn); }
 /* Components shared by details and compact panels. */
 .ui-icon[data-icon=sparkle] { fill:currentColor; stroke:none; }
 .ui-icon[data-icon=ellipsis] { stroke-width:2; }

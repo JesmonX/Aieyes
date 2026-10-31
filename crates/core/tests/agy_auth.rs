@@ -40,12 +40,31 @@ else:
     )
     .unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::create_dir(root.path().join(".gemini")).unwrap();
+    std::fs::write(root.path().join(".gemini/antigravity-oauth-token"),
+        r#"{"auth_method":"consumer","id_token_email":"fixture@example.test","token":{"access_token":"fixture-access","expiry":"2099-01-01T00:00:00Z"}}"#).unwrap();
+    let curl = root.path().join("curl");
+    std::fs::write(
+        &curl,
+        r#"#!/usr/bin/env python3
+import json, pathlib, sys
+sys.stdin.read()
+if not pathlib.Path(__file__).with_name('agy-fixture.authenticated').exists(): sys.exit(1)
+print(json.dumps({'groups': [], 'licenses': []}))
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut engine = Engine::open(&root.path().join("data")).unwrap();
     let source = Source {
         id: "agy-auth-test".into(),
         provider: "antigravity".into(),
         agy_binary: binary.to_string_lossy().into(),
-        quota_pre_command: "export GEMINI_API_KEY=fixture".into(),
+        quota_pre_command: format!(
+            "export HOME={}\nexport SSH_CONNECTION=fixture\nexport PATH={}:$PATH\nunset GEMINI_API_KEY AGY_ADC_AUTH AGY_LLM_GATEWAY_API_KEY",
+            aieyes_core::process::quote(&root.path().to_string_lossy()),
+            aieyes_core::process::quote(&root.path().to_string_lossy())
+        ),
         path: root.path().to_string_lossy().into(),
         ..Default::default()
     };
@@ -104,7 +123,19 @@ fn identity_fixture() -> (tempfile::TempDir, Engine, Source) {
     let binary = dir.join("agy-fixture");
     std::fs::write(&binary, "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"SUCCESS\",\"command\":{\"name\":\"usage\",\"data\":{\"groups\":[{\"name\":\"Gemini\",\"buckets\":[{\"remaining_fraction\":0.7,\"window\":\"5h\"}]}]}}}'\n").unwrap();
     let curl = dir.join("curl");
-    std::fs::write(&curl, "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"licenses\":[{\"tierDisplayName\":\"Google AI Pro\"}]}'\n").unwrap();
+    std::fs::write(
+        &curl,
+        r#"#!/usr/bin/env python3
+import json, sys
+sys.stdin.read()
+print(json.dumps({
+ 'licenses':[{'tierDisplayName':'Google AI Pro'}],
+ 'groups':[{'displayName':'Gemini','buckets':[{'remainingFraction':0.7,'window':'5h'}]}],
+ 'paidTier':{'id':'g1-pro-tier','name':'Google AI Pro'}
+}))
+"#,
+    )
+    .unwrap();
     for path in [&binary, &curl] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -165,8 +196,8 @@ fn login_persists_identity_before_success_and_retains_it_on_later_query_failure(
         "another connection sees the committed login"
     );
 
-    // Status polling must reuse the verified observation instead of running the CLI again.
-    std::fs::write(root.path().join("agy-fixture"), "#!/bin/sh\nexit 1\n").unwrap();
+    // Status polling reuses the observation when later read-only requests fail.
+    std::fs::write(root.path().join("curl"), "#!/bin/sh\nexit 1\n").unwrap();
     assert_eq!(
         engine
             .call("agyAuth.status", json!({"sourceId":source.id,"id":id}))
@@ -260,6 +291,21 @@ else:
     )
     .unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::create_dir(root.path().join(".gemini")).unwrap();
+    std::fs::write(root.path().join(".gemini/antigravity-oauth-token"),
+        r#"{"auth_method":"consumer","id_token_email":"fixture@example.test","token":{"access_token":"fixture-access","expiry":"2099-01-01T00:00:00Z"}}"#).unwrap();
+    let curl = root.path().join("curl");
+    std::fs::write(
+        &curl,
+        r#"#!/usr/bin/env python3
+import json, pathlib, sys
+sys.stdin.read()
+if not pathlib.Path(__file__).with_name('agy-trust-fixture.authenticated').exists(): sys.exit(1)
+print(json.dumps({'groups': [], 'licenses': []}))
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o700)).unwrap();
     let source = Source {
         id: format!(
             "agy-trust-{}",
@@ -268,7 +314,11 @@ else:
         provider: "antigravity".into(),
         account_id: "a".into(),
         agy_binary: binary.to_string_lossy().into(),
-        quota_pre_command: "export GEMINI_API_KEY=fixture".into(),
+        quota_pre_command: format!(
+            "export HOME={}\nexport SSH_CONNECTION=fixture\nexport PATH={}:$PATH\nunset GEMINI_API_KEY AGY_ADC_AUTH AGY_LLM_GATEWAY_API_KEY",
+            aieyes_core::process::quote(&root.path().to_string_lossy()),
+            aieyes_core::process::quote(&root.path().to_string_lossy())
+        ),
         ..Default::default()
     };
     let mut engine = Engine::open(&root.path().join("data")).unwrap();
@@ -462,12 +512,16 @@ fn metadata_failure_preserves_new_quota_and_only_same_identity_subscription() {
         engine.store.settings().unwrap().accounts[0].name,
         "Custom account"
     );
-    std::fs::write(root.path().join("curl"), "#!/bin/sh\nexit 22\n").unwrap();
-    let binary = root.path().join("agy-fixture");
-    let usage = std::fs::read_to_string(&binary)
-        .unwrap()
-        .replace("0.7", "0.4");
-    std::fs::write(binary, usage).unwrap();
+    std::fs::write(
+        root.path().join("curl"),
+        r#"#!/usr/bin/env python3
+import json, sys
+sys.stdin.read()
+if not sys.argv[-1].endswith(':retrieveUserQuotaSummary'): sys.exit(22)
+print(json.dumps({'groups':[{'displayName':'Gemini','buckets':[{'remainingFraction':0.4,'window':'5h'}]}]}))
+"#,
+    )
+    .unwrap();
 
     let rows = engine.call("quotas.refresh", json!({})).unwrap();
     assert!(rows[0]["error"].is_null(), "{rows}");
@@ -513,4 +567,36 @@ fn metadata_failure_preserves_new_quota_and_only_same_identity_subscription() {
         "unidentified refresh must not reuse another login's metadata"
     );
     assert_eq!(engine.store.settings().unwrap().sources[0].id, source.id);
+}
+
+#[test]
+fn bound_account_does_not_accept_quota_without_a_confirmed_identity() {
+    let (root, mut engine, _) = identity_fixture();
+    let initial = engine.call("quotas.refresh", json!({})).unwrap();
+    assert!(initial[0]["error"].is_null(), "{initial}");
+    assert!(
+        engine.store.settings().unwrap().accounts[0]
+            .identity_key
+            .is_some()
+    );
+    std::fs::write(
+        root.path().join(".gemini/antigravity-oauth-token"),
+        r#"{"auth_method":"consumer","id_token_email":"other@example.test","token":{"access_token":"other-private-access","expiry":"2099-01-01T00:00:00Z"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.path().join("curl"),
+        r#"#!/usr/bin/env python3
+import json, sys
+sys.stdin.read()
+if not sys.argv[-1].endswith(':retrieveUserQuotaSummary'): sys.exit(22)
+print(json.dumps({'groups':[{'displayName':'Gemini','buckets':[{'remainingFraction':0.1,'window':'5h'}]}]}))
+"#,
+    )
+    .unwrap();
+    let failed = engine.call("quotas.refresh", json!({})).unwrap();
+    assert!(failed[0]["error"].as_str().unwrap().contains("无法确认"));
+    assert_eq!(failed[0]["windows"], initial[0]["windows"]);
+    assert_eq!(failed[0]["identity"], initial[0]["identity"]);
+    assert!(!failed.to_string().contains("other-private-access"));
 }

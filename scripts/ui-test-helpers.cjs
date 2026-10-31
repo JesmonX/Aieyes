@@ -1,3 +1,5 @@
+// Spawned cores inherit this: launch-time account detection must not read the real HOME.
+process.env.AIEYES_AUTO_SCAN ??= 'off';
 async function discardEditor(page) {
   await page.locator('#cancel-editor').click();
   if(await page.locator('#editor-confirm-discard').isVisible())await page.locator('#editor-confirm-discard').click();

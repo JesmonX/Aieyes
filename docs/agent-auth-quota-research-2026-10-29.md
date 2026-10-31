@@ -18,6 +18,29 @@
 
 ## (a) 各 Agent 现状与缺口
 
+> 2026-10-31 实施回填：下方逐项表格保留 10-29 的调研基线，不能作为当前支持状态。
+> 当前行为与验收边界以[实施结果](agent-expansion-implementation-results.md)、
+> [订阅接入](agent-subscriptions.md)和[Headless规则](headless-rules.md)为准。
+> 已安装客户端和发行包的核对不代表已完成真实登录或付费额度验收。
+
+| 本轮核对对象 | 装机 / 发行包证据 | 修正后的实现口径 |
+|---|---|---|
+| Codex / ChatGPT Work | 沿用已安装客户端与既有 rollout 格式；本轮不安装新的 ChatGPT | Work 按 originator 分组，父记录可补足 fork 来源；source 白名单与共享额度保持 |
+| Claude Code | 沿用已安装 CLI；钥匙串缺失/拒绝和官方响应以隔离回归验证 | macOS 首次请求授权；token 只在内存，extra_usage / limits[] 已接入 |
+| Antigravity | 现有CLI token格式与IDE2.6.0发行包的Topic/Row/OAuthTokenInfo描述符 | 日常额度只读REST；纯IDE可自动发现，CLI文件存在时不偷偷切换IDE账号，不读取refresh token |
+| ZCode | Desktop3.15.3 / CLI0.16.9发行包、原生AES-GCM凭据编码 | `oauth:active_provider`、`zcodejwttoken`和地区profile；Authorization原样发送，Key兜底要求已证实同一身份 |
+| DeepSeek Harness | npm0.2.1-rc.2的grant schema与Node parseEnv行为 | 只读官方issuer的default v1 grant；账号专用头和API Key余额分开 |
+| Grok | CLI1.0.62发行包的OIDC键、expiry与实际Qwen请求 | 未过期优先，按已有元数据/JWT iat/原生expires_at稳定选择；不虚构逐条mtime |
+| Qoder | qodercli 1.1.79 与 npm 1.1.81 的 help、未登录控制帧、日志目录 | 官方安装器入口可被 GUI 找到；无会话持久化的内部查询，后台至少600秒 |
+| Cursor | Cursor 3.27.22 安装包的登录键名与 api2 请求 | 可读 token 使用 Bearer；不构造 Cookie；私有会话库上下文 Token 不当作请求用量 |
+| OpenCode | 2.1.0 本机 SQLite 列名与源码的 credential 值格式 | 当前 integration 凭据、account_state 和上游身份；空 v2 message 表不遮住实际 v1 数据 |
+| Kimi / Kimi Work | Kimi 3.2.23 安装包，`daimon-storage.json` / `daimon-share` 与内嵌 Code 内核 | Work 重定位和 wire 日志使用 kimi provider；只用 userId 共享已确认的 Code 账号 |
+| CodeBuddy | Code 2.168.2，真实 TUI 曾自更新到2.179.0；IDE 4.12.1/4.12.2 发行包 | 后续探测禁用自动更新；IDE 按内层 uid 和 index.json 请求聚合，不假定存在积分查询 CLI |
+| Pi / Oh My Pi | 已安装 CLI 的 help 与实际 Qwen调用 | 原生上游凭据只读；标题改写按PID/启动时间保留分类，OMP退出落盘也能关联 |
+
+ZCode、DSH、Antigravity、Grok 的字段与版本证据详见
+[原生账户审计](native-account-audit-2026-10-31.md)。
+
 ### 1. Codex（基准）
 | 维度 | 内容 |
 |---|---|
@@ -129,6 +152,8 @@
 | Headless | `-p`、`--mode json|rpc`、SDK；`--no-session` 时不写文件 [未验证] |
 | 缺口 | headless、身份、复用上游额度 |
 
+2026-10-31 实施回填：已从安装版 OMP 18.12.2 的内嵌源码核实 `agent.db.auth_credentials`；启用 OAuth 行按池管理，没有单一 current 标记。新增只读数据库/WAL 识别，保留旧 JSON 兼容，并为 Pi/OMP 接入 Gemini CLI 的 userinfo、loadCodeAssist、retrieveUserQuota 及 AI Credits。身份由 Google 用户字符串 ID 与项目共同确定，与 Antigravity 分池；来源、协议和无刷新规则见[订阅接入](agent-subscriptions.md)。这些是安装源码和协议 fixture 证据，真实上游账号及付费额度仍未实测。
+
 ### 12. CodeBuddy
 | 维度 | 内容 |
 |---|---|
@@ -141,7 +166,20 @@
 
 ---
 
-## (a2) 新增 Agent（尚未支持）
+## (a2) 新增 Agent（原始调研与实施回填）
+
+2026-10-31 装机核对如下。下文各产品原始调研保留当时的“未验证”标记；本表只记录
+这次实际取得的客户端或源码证据，接口响应的合成 fixture 不提升为真实账户验收。
+
+| Agent | 本轮核对 | 已确认与仍未实测 |
+|---|---|---|
+| Copilot | npm CLI 1.0.105；隔离 BYOK 的headless与PTY交互 | session-state/events.jsonl、usage_record与headless固定消息；host_type是仓库托管方，不能用于无头分类。GitHub账户、device flow和付费额度未实测 |
+| WorkBuddy | macOS 5.5.6 的 app.asar、只读SQLite schema与未登录行为 | credit_json按请求保存，但缺每请求时间/模型；登录使用官方state/token轮询协议。真实登录、国际版端点与账单未实测 |
+| Cline | CLI3.0.74/core0.2.0发行包、旧扩展task源码、Qwen真实交互/无头调用 | 新/旧task与父子元数据、WorkOS和组织查询字段；个人/组织余额未实测 |
+| Kilo | CLI7.8.18发行包与Qwen真实模型调用 | auth/profile字段、message与预建空session_message表；组织ID不是用户ID，真实余额未实测 |
+| Roo | 历史task格式与parentTaskId的本机/SSH回归 | 只读历史和父子关系，不读取SecretStorage；本轮没有真实登录 |
+| Kiro | CLI2.36.0实际安装、help和无登录/usage；IDE1.4.62发行包 | CLI DB auth_kv/state、两代会话布局、IDE SSO；过期CLI兜底加--v2避免变成模型提示。真实账户/额度未实测 |
+| Trae / Trae CN | macOS3.6.4 / 3.4.11应用包与未登录目录；trae-agent源码 | 明文/加密认证分支、不同官方用量页、完整轨迹路径关联；加密IDE仅报告进程，真实账户和模型调用未实测 |
 
 ### 13. GitHub Copilot（VS Code 扩展 / Copilot CLI / SDK）
 > 本机只读检查：已装 VS Code 的 `github.copilot-chat`，存在 `~/.copilot`；PATH 中没有 `copilot` 和 `gh`。

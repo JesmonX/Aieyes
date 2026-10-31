@@ -1,6 +1,7 @@
 //! Qoder's SDK control protocol, without an Agent prompt or copied login secret.
 use super::*;
 use sha2::{Digest, Sha256};
+use std::sync::Mutex;
 
 pub(super) fn read(
     source: &Source,
@@ -95,7 +96,7 @@ fn remote_script(root: &str) -> String {
         quote(root)
     };
     format!(
-        "cd \"$HOME\"\nif ! command -v qodercli >/dev/null 2>&1; then\n{}fi\ntest -d {root}\nexec qodercli {} --config-dir {root}",
+        "export AIEYES_INTERNAL=1\ncd \"$HOME\"\nif ! command -v qodercli >/dev/null 2>&1; then\n{}fi\ntest -d {root}\nexec qodercli {} --config-dir {root}",
         crate::ssh::PATH_FALLBACK,
         ARGS.iter().map(|s| quote(s)).collect::<Vec<_>>().join(" ")
     )
@@ -135,14 +136,192 @@ fn command(
             },
             "",
         );
-        command.current_dir(crate::store::home());
+        // An Aieyes-owned cwd keeps qodercli's per-directory logs of these runs out
+        // of the user's projects; `record_internal` also records it as internal.
+        let probe = probe_dir();
+        command.current_dir(if std::fs::create_dir_all(&probe).is_ok() {
+            probe
+        } else {
+            crate::store::home()
+        });
         network::apply_env(
             &mut command,
             source.proxy.as_ref().unwrap_or(&settings.proxy),
         );
         command
     };
+    let mut command = command;
+    // The session monitor never counts runs Aieyes spawned itself.
+    command.env("AIEYES_INTERNAL", "1");
     Ok(command)
+}
+
+/// Working directory of local quota checks, recorded as an internal session cwd.
+pub(crate) fn probe_dir() -> std::path::PathBuf {
+    crate::store::home().join(".aieyes").join("qoder-probe")
+}
+
+/// Control-session ids seen by this process, drained by `record_internal`.
+/// Quota checks run in worker threads of several lane processes, so the engine
+/// drains the list after every call instead of waiting for a session read.
+static INTERNAL: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Marks outlive the one-day window in which transcripts count as live.
+const INTERNAL_RETENTION: i64 = 2 * 86400;
+
+/// `system/init`, `assistant` and `result` frames carry the run's session id.
+fn session_id(frame: &Value) -> Option<&str> {
+    frame["session_id"]
+        .as_str()
+        .filter(|id| !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control))
+}
+
+fn remember(ids: &mut Vec<String>, id: &str) {
+    if !ids.iter().any(|known| known == id) {
+        if ids.len() >= 64 {
+            ids.remove(0);
+        }
+        ids.push(id.to_owned());
+    }
+}
+
+/// Marks the control sessions seen since the last call, and the probe cwd, as
+/// Aieyes' own so the session monitor never counts them. A failed write keeps
+/// the ids for the next call.
+pub(crate) fn record_internal(store: &crate::store::Store) -> Result<()> {
+    let ids = INTERNAL
+        .lock()
+        .map(|mut ids| std::mem::take(&mut *ids))
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let saved = persist_internal(store, &ids);
+    if saved.is_err()
+        && let Ok(mut pending) = INTERNAL.lock()
+    {
+        for id in &ids {
+            remember(&mut pending, id);
+        }
+    }
+    saved
+}
+
+fn persist_internal(store: &crate::store::Store, ids: &[String]) -> Result<()> {
+    store.mark_internal_session("qoder", &probe_dir().to_string_lossy())?;
+    for id in ids {
+        store.mark_internal_session("qoder", id)?;
+    }
+    store.db.execute(
+        "DELETE FROM kv WHERE key LIKE 'internal-session:qoder:%' AND CAST(value AS INTEGER)<?1",
+        [now() - INTERNAL_RETENTION],
+    )?;
+    Ok(())
+}
+
+/// Bundles that share Qoder accounts but keep their logins encrypted
+/// (`auth.v1.dat`, safeStorage). Their credentials are never read.
+const APPS: &[(&str, &str)] = &[
+    ("Qoder.app", "Qoder"),
+    ("Qoder IDE.app", "Qoder IDE"),
+    ("QoderWork.app", "QoderWork"),
+];
+/// The official installer links `~/.local/bin/qodercli`, which local checks
+/// reach without a login shell; a global npm install under nvm is not on that
+/// PATH. The full path also works before the new shell PATH takes effect.
+const INSTALL: &str = "curl -fsSL https://qoder.com/install | bash && ~/.local/bin/qodercli login";
+
+fn installed_apps() -> Vec<&'static str> {
+    if !cfg!(target_os = "macos") {
+        return vec![];
+    }
+    let roots = [
+        std::path::PathBuf::from("/Applications"),
+        crate::store::home().join("Applications"),
+    ];
+    APPS.iter()
+        .filter(|(bundle, _)| roots.iter().any(|root| root.join(bundle).is_dir()))
+        .map(|(_, name)| *name)
+        .collect()
+}
+
+/// Whether `qodercli` resolves on the PATH local checks use: the inherited PATH
+/// plus `ssh::PATH_FALLBACK`'s user and Homebrew directories.
+fn cli_installed() -> bool {
+    let home = crate::store::home();
+    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    dirs.extend([
+        home.join(".local/bin"),
+        home.join("bin"),
+        "/opt/homebrew/bin".into(),
+        "/usr/local/bin".into(),
+    ]);
+    if let Some(appdata) = std::env::var_os("APPDATA").filter(|_| cfg!(windows)) {
+        dirs.push(std::path::PathBuf::from(appdata).join("npm"));
+    }
+    cli_in(&dirs)
+}
+
+fn cli_in(dirs: &[std::path::PathBuf]) -> bool {
+    let names: &[&str] = if cfg!(windows) {
+        &["qodercli.exe", "qodercli.cmd"]
+    } else {
+        &["qodercli"]
+    };
+    dirs.iter()
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+        .any(|path| {
+            std::fs::metadata(path).is_ok_and(|meta| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    meta.is_file() && meta.permissions().mode() & 0o111 != 0
+                }
+                #[cfg(not(unix))]
+                {
+                    meta.is_file()
+                }
+            })
+        })
+}
+
+/// A Qoder account or detected login already exists; the install prompt is moot.
+fn known_login(settings: &Settings) -> bool {
+    settings
+        .accounts
+        .iter()
+        .any(|a| a.provider == "qoder" && !a.archived)
+        || settings
+            .native_connections
+            .iter()
+            .any(|r| r.provider == "qoder" && r.identity_key.is_some())
+}
+
+impl crate::Engine {
+    /// `qoderCli.status`: users with only the desktop, IDE or QoderWork app get
+    /// one prompt to install the CLI that quota checks borrow. The UI re-detects
+    /// the login with `accounts.autoScan` after the user ran the command.
+    pub(crate) fn qoder_cli_status(&self) -> Result<Value> {
+        let cli = cli_installed();
+        let account = known_login(&self.store.settings()?);
+        let apps = installed_apps();
+        let message = if account {
+            "已识别 Qoder 登录"
+        } else if cli {
+            "已找到 qodercli；在终端完成 qodercli login 后重新检测"
+        } else {
+            "未找到 qodercli；在终端运行安装命令后重新检测"
+        };
+        Ok(json!({
+            "apps": apps,
+            "cli": cli,
+            "account": account,
+            "offerInstall": !apps.is_empty() && !account,
+            "command": INSTALL,
+            "message": message,
+        }))
+    }
 }
 
 #[derive(Debug)]
@@ -150,6 +329,8 @@ struct QueryFailure {
     message: &'static str,
     retry: bool,
 }
+
+const SIGNED_OUT: &str = "Qoder CLI 未登录，请在终端运行 qodercli login";
 
 fn control_frame(kind: &str, id: &str) -> Vec<u8> {
     serde_json::to_vec(
@@ -187,6 +368,18 @@ fn await_response(
         let Ok(frame) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
+        if let Some(id) = session_id(&frame)
+            && let Ok(mut ids) = INTERNAL.lock()
+        {
+            remember(&mut ids, id);
+        }
+        // Signed out, qodercli answers with an error turn and exits; retrying is futile.
+        if frame["type"] == "assistant" && frame["error"] == "authentication_failed" {
+            return Err(QueryFailure {
+                message: SIGNED_OUT,
+                retry: false,
+            });
+        }
         if frame["type"] != "control_response" || frame["response"]["request_id"] != id {
             continue;
         }
@@ -405,6 +598,142 @@ pub(super) fn apply(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_and_local_runs_are_marked_internal() {
+        assert!(remote_script("~/.qoder").starts_with("export AIEYES_INTERNAL=1\n"));
+        let root = tempfile::tempdir().unwrap();
+        let source = Source {
+            provider: "qoder".into(),
+            path: root.path().to_string_lossy().into(),
+            ..Default::default()
+        };
+        let local = command(&source, &Settings::default(), None, "").unwrap();
+        assert!(
+            local
+                .get_envs()
+                .any(|(k, v)| k == "AIEYES_INTERNAL" && v == Some(std::ffi::OsStr::new("1")))
+        );
+        assert_eq!(local.get_current_dir(), Some(probe_dir().as_path()));
+    }
+
+    #[test]
+    fn control_session_ids_are_bounded_and_marked_with_the_probe_cwd() {
+        let init = json!({"type":"system","subtype":"init","session_id":"qoder-ctl-1"});
+        assert_eq!(session_id(&init), Some("qoder-ctl-1"));
+        for frame in [
+            json!({"type":"system","session_id":"x".repeat(200)}),
+            json!({"type":"result","session_id":"bad\nid"}),
+            json!({"type":"control_response","response":{"request_id":"aieyes-init"}}),
+        ] {
+            assert_eq!(session_id(&frame), None);
+        }
+        let mut ids = vec![];
+        for index in 0..70 {
+            remember(&mut ids, &format!("run-{index}"));
+        }
+        remember(&mut ids, "run-69");
+        assert_eq!(ids.len(), 64);
+        assert_eq!(ids[0], "run-6");
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::open(root.path()).unwrap();
+        store.mark_internal_session("qoder", "expired").unwrap();
+        store
+            .db
+            .execute(
+                "UPDATE kv SET value=?1 WHERE key='internal-session:qoder:expired'",
+                [(now() - INTERNAL_RETENTION - 1).to_string()],
+            )
+            .unwrap();
+        store.mark_internal_session("kiro", "unrelated").unwrap();
+        persist_internal(&store, &ids[..2]).unwrap();
+        let keys = store.internal_sessions().unwrap();
+        for key in ["run-6", "run-7", &probe_dir().to_string_lossy()] {
+            assert!(
+                keys.contains(&format!("internal-session:qoder:{key}")),
+                "{key}"
+            );
+        }
+        assert!(!keys.contains("internal-session:qoder:expired"));
+        assert!(keys.contains("internal-session:kiro:unrelated"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signed_out_cli_fails_once_with_a_login_hint() {
+        // Recorded from qodercli 1.1.79 with an empty config directory.
+        let mut attempts = 0;
+        let error = query_attempts(
+            || {
+                attempts += 1;
+                let mut command = std::process::Command::new("python3");
+                command.args(["-u", "-c", r#"
+import json,sys
+print(json.dumps(dict(type='system',subtype='init',session_id='signed-out',apiKeySource='none')))
+sys.stdin.readline()
+print(json.dumps(dict(type='assistant',session_id='signed-out',error='authentication_failed',message=dict(content=[dict(type='text',text='PRIVATE')]))))
+print(json.dumps(dict(type='result',subtype='success',is_error=True,result='Not logged in',session_id='signed-out')))
+sys.exit(1)
+"#]);
+                Ok(command)
+            },
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert_eq!(error.to_string(), SIGNED_OUT);
+    }
+
+    #[test]
+    fn install_prompt_needs_a_desktop_app_without_a_known_login() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let name = if cfg!(windows) {
+            "qodercli.cmd"
+        } else {
+            "qodercli"
+        };
+        std::fs::write(bin.join(name), "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert!(!cli_in(std::slice::from_ref(&bin)), "not executable");
+            std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        assert!(cli_in(std::slice::from_ref(&bin)));
+        assert!(!cli_in(&[root.path().to_owned()]));
+        let engine = Engine::open(&root.path().join("data")).unwrap();
+        let before = engine.qoder_cli_status().unwrap();
+        assert_eq!(before["account"], false);
+        assert_eq!(
+            before["offerInstall"],
+            !before["apps"].as_array().unwrap().is_empty()
+        );
+        assert!(
+            before["command"]
+                .as_str()
+                .unwrap()
+                .ends_with("qodercli login")
+        );
+        assert!(before["message"].as_str().unwrap().contains("qodercli"));
+        let mut settings = engine.store.settings().unwrap();
+        settings.accounts.push(Account {
+            id: "a".into(),
+            provider: "qoder".into(),
+            name: "Qoder".into(),
+            ..Default::default()
+        });
+        engine.store.save_settings(&settings).unwrap();
+        let after = engine.qoder_cli_status().unwrap();
+        assert_eq!(after["account"], true);
+        assert_eq!(after["offerInstall"], false);
+        assert_eq!(after["message"], "已识别 Qoder 登录");
+        settings.accounts[0].archived = true;
+        engine.store.save_settings(&settings).unwrap();
+        assert_eq!(engine.qoder_cli_status().unwrap()["account"], false);
+    }
 
     #[cfg(unix)]
     fn scripted_cli(tail: &str) -> std::process::Command {
@@ -849,6 +1178,28 @@ cat "$config/response.jsonl"
                 .unwrap(),
             json!([])
         );
+        // Background status checks also start qodercli: 5 minutes is not yet due.
+        let age = |engine: &Engine, seconds: i64| {
+            engine.store.db.execute(
+                "UPDATE kv SET value=json_set(value,'$.attemptedAt',?1) WHERE key LIKE 'account-status:qoder:%'",
+                [now() - seconds],
+            )
+            .unwrap()
+        };
+        age(&engine, 400);
+        assert_eq!(
+            engine
+                .refresh_account_status_batch(&json!({"dueOnly":true}))
+                .unwrap(),
+            json!([])
+        );
+        assert_eq!(reads.load(Ordering::Relaxed), 2);
+        age(&engine, 700);
+        let due = engine
+            .refresh_account_status_batch(&json!({"dueOnly":true}))
+            .unwrap();
+        assert_eq!(due.as_array().unwrap().len(), 12);
+        assert_eq!(reads.load(Ordering::Relaxed), 4);
         // Switching a native login updates observations, never the bound account.
         fixture_response(&profile_a, "account-b");
         let switched = engine

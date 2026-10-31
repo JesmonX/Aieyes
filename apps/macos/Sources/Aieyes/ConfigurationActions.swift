@@ -49,7 +49,7 @@ extension AppModel {
         } catch { settingsMessage = error.localizedDescription }
     }
     var overviewAgentProviders: [String] {
-        CoreContract.agentProviders.filter { provider in
+        CoreContract.usageProviders.filter { provider in
             agentConfigurations.contains { CoreContract.sameAgent($0.provider, provider) && $0.enabled }
             || (settings.agents == nil && settings.accounts.contains { CoreContract.sameAgent($0.provider, provider) && $0.archived != true })
         }

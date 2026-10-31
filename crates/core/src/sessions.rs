@@ -110,6 +110,9 @@ pub struct SourceHealth {
     pub error: Option<String>,
     pub checked_at: u64,
     pub hooks: Option<String>,
+    /// Encrypted IDE storage exposes app activity, not conversation counts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_running: Option<bool>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -253,8 +256,18 @@ impl Snapshot {
                 session.id = id.clone();
             }
         }
+        // Codex hooks carry no originator; the native log decides ChatGPT Work.
+        let work: HashSet<String> = self
+            .sessions
+            .iter()
+            .filter(|s| s.provider == "chatgpt-work")
+            .map(|s| s.id.clone())
+            .collect();
         let mut unique: HashMap<String, LiveSession> = HashMap::new();
-        for s in self.sessions.drain(..) {
+        for mut s in self.sessions.drain(..) {
+            if s.provider == "codex" && work.contains(&s.id) {
+                s.provider = "chatgpt-work".into();
+            }
             unique
                 .entry(s.id.clone())
                 .and_modify(|old| {
@@ -372,7 +385,9 @@ impl Snapshot {
             if seen.contains(&root.id) {
                 root = session;
             }
-            if session.provider == "codex" && !root.parent_id.is_empty() {
+            if matches!(session.provider.as_str(), "codex" | "chatgpt-work")
+                && !root.parent_id.is_empty()
+            {
                 continue;
             }
             roots
@@ -439,6 +454,7 @@ struct SourceBatch {
     source_id: String,
     files: Vec<FileBatch>,
     error: Option<String>,
+    process_running: Option<bool>,
     // Unchanged non-interactive transcripts skipped before the read limit.
     ignored: Vec<String>,
     // Candidates left unread by the limit.
@@ -542,6 +558,10 @@ struct Reader {
     #[cfg(test)]
     database_reads: usize,
     processes: HashMap<(u32, u64), bool>,
+    process_snapshot: crate::session_processes::Snapshot,
+    process_contexts: HashMap<String, (String, crate::session_processes::Context)>,
+    // `internal-session:{provider}:{id|cwd}` keys written by Aieyes' own spawns.
+    internal: HashSet<String>,
 }
 fn seconds(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
@@ -551,7 +571,18 @@ fn seconds(time: SystemTime) -> u64 {
 fn local_session_path(path: &Path) -> PathBuf {
     // WalkDir and watcher backends may disagree on Windows' verbatim prefix or
     // symlink/relative components. Use one identity for discovery and events.
-    dunce::canonicalize(path).unwrap_or_else(|_| dunce::simplified(path).to_owned())
+    path.ancestors()
+        .find_map(|parent| {
+            dunce::canonicalize(parent).ok().map(|base| {
+                let suffix = path.strip_prefix(parent).unwrap_or(Path::new(""));
+                if suffix.as_os_str().is_empty() {
+                    base
+                } else {
+                    base.join(suffix)
+                }
+            })
+        })
+        .unwrap_or_else(|| dunce::simplified(path).to_owned())
 }
 fn normalized_source(s: &Source) -> Source {
     let mut s = s.clone();
@@ -567,21 +598,21 @@ fn wire_source(s: &Source) -> Value {
     json!({"id":s.id,"name":s.name,"provider":s.provider,"path":s.path,"hostId":s.host_id})
 }
 /// Creation sources that are never monitored. A transcript without a source
-/// stays a candidate: its metadata may not have been read yet.
+/// stays a candidate: its metadata may not have been read yet, and sessions
+/// with no signal at all are counted as `unknown`.
 fn non_interactive(provider: &str, activity: &Activity) -> bool {
-    let source = activity.session_source.as_str();
-    match provider {
-        "claude" => matches!(
-            source,
-            "sdk-cli" | "sdk-ts" | "sdk-py" | "mcp" | "claude-code-github-action"
-        ),
-        "codex" => activity.parent_session.is_empty() && !matches!(source, "" | "cli" | "vscode"),
-        _ => false,
-    }
+    matches!(
+        session_events::classify(provider, activity),
+        session_events::INTERNAL | session_events::HEADLESS
+    )
+}
+/// kv key marking a session Aieyes ran itself (quota or login checks).
+pub fn internal_session_key(provider: &str, session: &str) -> String {
+    format!("internal-session:{provider}:{session}")
 }
 impl Reader {
     fn manifest(&self) -> Value {
-        Value::Object(self.cursors.iter().map(|(p,c)|(p.clone(),json!({"identity":c.identity,"signature":c.signature,"anchor":c.anchor,"size":c.size,"offset":c.offset,"modified":c.modified,"pid":c.activity.pid,"processStart":c.activity.process_start,"continuation":c.continuation,"nonInteractive":c.non_interactive}))).collect())
+        Value::Object(self.cursors.iter().map(|(p,c)|(p.clone(),json!({"identity":c.identity,"signature":c.signature,"anchor":c.anchor,"size":c.size,"offset":c.offset,"modified":c.modified,"pid":c.activity.pid,"processStart":c.activity.process_start,"session":c.activity.session,"at":c.activity.at,"turnStartedAt":c.activity.turn_started_at(),"phase":c.activity.phase,"continuation":c.continuation,"nonInteractive":c.non_interactive}))).collect())
     }
     fn consume(
         &mut self,
@@ -593,6 +624,54 @@ impl Reader {
         hook_state: Option<String>,
     ) -> Snapshot {
         let mut out = Snapshot::default();
+        let evidence = if source.host_id.is_none() {
+            let candidates: Vec<_> = batch
+                .files
+                .iter()
+                .filter(|f| !f.hook)
+                .map(|f| {
+                    let mut activity = if f.reset {
+                        Activity::default()
+                    } else {
+                        self.cursors
+                            .get(&f.key)
+                            .map(|c| c.activity.clone())
+                            .unwrap_or_default()
+                    };
+                    for event in &f.events {
+                        activity.apply(event.clone());
+                    }
+                    let context = self
+                        .process_contexts
+                        .entry(f.key.clone())
+                        .or_insert_with(|| {
+                            (
+                                f.identity.clone(),
+                                crate::session_processes::context(
+                                    &source.provider,
+                                    &f.key,
+                                    &activity.session,
+                                ),
+                            )
+                        });
+                    if context.0 != f.identity || f.reset {
+                        *context = (
+                            f.identity.clone(),
+                            crate::session_processes::context(
+                                &source.provider,
+                                &f.key,
+                                &activity.session,
+                            ),
+                        );
+                    }
+                    (f.key.clone(), context.1.clone(), activity)
+                })
+                .collect();
+            self.process_snapshot
+                .associate(&source.provider, &candidates)
+        } else {
+            HashMap::new()
+        };
         let mut excluded = HashSet::new();
         let exclusion = |session: &str| {
             crate::models::hash(&format!(
@@ -602,7 +681,7 @@ impl Reader {
             ))
         };
         // Skipped transcripts still suppress legacy hook duplicates of their sessions.
-        if source.provider == "claude" {
+        if source.provider != "codex" {
             excluded.extend(
                 batch
                     .ignored
@@ -621,19 +700,24 @@ impl Reader {
                 continue;
             }
             let cursor = self.cursors.entry(f.key.clone()).or_default();
+            let prior = (
+                cursor.activity.session.clone(),
+                cursor.activity.classification.clone(),
+            );
             if f.reset {
                 cursor.activity = Activity::default();
             }
             if cursor.activity.session.is_empty() {
-                cursor.activity.session = if matches!(source.provider.as_str(), "kimi" | "grok") {
-                    crate::native_agents::session_id(Path::new(&f.key))
-                } else {
-                    Path::new(&f.key)
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
-                };
+                cursor.activity.session =
+                    if matches!(source.provider.as_str(), "kimi" | "grok" | "copilot") {
+                        crate::native_agents::session_id(Path::new(&f.key))
+                    } else {
+                        Path::new(&f.key)
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned()
+                    };
             }
             let database = f.database || f.steps.is_some();
             if let Some(steps) = f.steps {
@@ -659,10 +743,40 @@ impl Reader {
                 cursor.anchor = f.anchor;
             }
             cursor.continuation = f.continuation;
-            cursor.non_interactive = non_interactive(&source.provider, &cursor.activity);
+            if cursor.activity.classification.is_empty() && cursor.activity.session == prior.0 {
+                cursor.activity.classification = prior.1;
+            }
+            if let Some(process) = evidence.get(&f.key) {
+                cursor.activity.pid = process.pid;
+                cursor.activity.process_start = process.start;
+                if cursor.activity.classification != session_events::INTERNAL
+                    && let Some(classification) = process.classification
+                {
+                    cursor.activity.classification = classification.into();
+                }
+            }
+            cursor.non_interactive = non_interactive(&source.provider, &cursor.activity)
+                || self.internal.contains(&internal_session_key(
+                    &source.provider,
+                    &cursor.activity.session,
+                ))
+                || (source.host_id.is_none()
+                    && self
+                        .process_contexts
+                        .get(&f.key)
+                        .and_then(|(_, context)| context.workspace.as_ref())
+                        .is_some_and(|cwd| {
+                            self.internal.contains(&internal_session_key(
+                                &source.provider,
+                                &cwd.to_string_lossy(),
+                            ))
+                        }));
             classified += usize::from(cursor.non_interactive);
-            if source.provider == "claude" && cursor.non_interactive {
-                excluded.insert(exclusion(&cursor.activity.session));
+            if cursor.non_interactive {
+                // Codex keeps subagents of an excluded parent; their own source decides.
+                if source.provider != "codex" {
+                    excluded.insert(exclusion(&cursor.activity.session));
+                }
                 continue;
             }
             // Creation source is independent of the tools called in a normal
@@ -724,7 +838,8 @@ impl Reader {
                 )),
                 source: source.name.clone(),
                 source_id: source.id.clone(),
-                provider: source.provider.clone(),
+                provider: session_events::display_provider(&source.provider, &cursor.activity)
+                    .into(),
                 machine_id: source.host_id.clone().unwrap_or_else(|| "local".into()),
                 machine: machine.into(),
                 turn_id: cursor.activity.turn.clone(),
@@ -801,11 +916,13 @@ impl Reader {
             error,
             checked_at: now,
             hooks: hook_state,
+            process_running: batch.process_running,
         });
         out
     }
     fn local(&mut self, sources: &[Source], now: u64) -> Snapshot {
         self.processes.clear();
+        self.process_snapshot.refresh(sources);
         let keys: HashSet<_> = sources
             .iter()
             .flat_map(|s| {
@@ -819,7 +936,10 @@ impl Reader {
         let mut out = Snapshot::default();
         let mut retained = HashSet::new();
         for source in sources {
-            let hook = if session_hooks::supported(&source.provider) {
+            let hook = if session_hooks::supported(&source.provider)
+                && !(source.provider == "codebuddy"
+                    && crate::codebuddy_ide::is_path(&expand(&source.path)))
+            {
                 let key = session_hooks::key(source);
                 if self
                     .hooks
@@ -851,17 +971,64 @@ impl Reader {
             .retain(|id, _| sources.iter().any(|s| s.id == *id));
         self.cursors
             .retain(|path, _| retained.contains(Path::new(path)));
+        self.process_contexts
+            .retain(|path, _| retained.contains(Path::new(path)));
         out
     }
     fn collect_local(&mut self, source: &Source, now: u64) -> SourceBatch {
-        if matches!(source.provider.as_str(), "zcode" | "opencode")
-            && let Some(path) = if source.provider == "zcode" {
-                crate::zcode::database(&source.path)
-            } else {
-                crate::opencode::database(&source.path)
-            }
-        {
-            let before = database_fingerprint(&path);
+        let trae = crate::subscriptions::trae::family(&source.provider);
+        // Trae IDE chats are in an encrypted database: a Trae source reads only
+        // trae-cli trajectories and never walks the IDE's data folder.
+        if trae && crate::native_sessions::trae_directory(&source.path).is_none() {
+            return SourceBatch {
+                source_id: source.id.clone(),
+                process_running: crate::native_sessions::trae_ide_running(&source.provider),
+                ..Default::default()
+            };
+        }
+        if matches!(
+            source.provider.as_str(),
+            "zcode"
+                | "opencode"
+                | "kilo"
+                | "workbuddy"
+                | "cline"
+                | "roo"
+                | "trae"
+                | "trae-cn"
+                | "kiro"
+                | "codebuddy"
+        ) && let Some(path) = match source.provider.as_str() {
+            "trae" | "trae-cn" => crate::native_sessions::trae_directory(&source.path),
+            "zcode" => crate::zcode::database(&source.path),
+            "workbuddy" => workbuddy_database(&source.path),
+            "cline" => cline_database(&source.path)
+                .or_else(|| crate::native_sessions::tasks::directory("cline", &source.path)),
+            "kilo" => crate::opencode::database(&source.path)
+                .or_else(|| crate::native_sessions::tasks::directory("kilo", &source.path)),
+            "roo" => crate::native_sessions::roo_directory(&source.path),
+            "kiro" => crate::native_sessions::kiro::directory(&source.path),
+            "codebuddy" => crate::codebuddy_ide::directory(&source.path),
+            _ => crate::opencode::database(&source.path),
+        } {
+            let fingerprint = |path: &Path| {
+                if trae {
+                    crate::native_sessions::trae_fingerprint(path)
+                } else if source.provider == "roo" {
+                    crate::native_sessions::roo_fingerprint(path)
+                } else if matches!(source.provider.as_str(), "cline" | "kilo")
+                    && (path.is_dir() || path.extension().is_some_and(|e| e == "json"))
+                {
+                    crate::native_sessions::tasks::fingerprint(&source.provider, path)
+                } else if source.provider == "kiro" {
+                    crate::native_sessions::kiro::fingerprint(path)
+                } else if source.provider == "codebuddy" {
+                    crate::codebuddy_ide::fingerprint(path)
+                } else {
+                    database_fingerprint(path)
+                }
+            };
+            let before = fingerprint(&path);
             let cached = self
                 .native_databases
                 .get(&source.id)
@@ -885,7 +1052,8 @@ impl Reader {
                     .unwrap_or_default();
                 match crate::native_sessions::refresh(&source.provider, &path, prior, now) {
                     Ok((state, rows)) => {
-                        let files: Vec<_> = rows
+                        let error = state.error.clone();
+                        let mut files: Vec<_> = rows
                             .into_iter()
                             .map(|(session, turn, kind, at, parent_session)| FileBatch {
                                 key: format!("{}#{session}", path.display()),
@@ -912,6 +1080,15 @@ impl Reader {
                                 ..Default::default()
                             })
                             .collect();
+                        if error.is_some()
+                            && let Some((_, _, prior, _)) = self.native_databases.get(&source.id)
+                        {
+                            for file in prior {
+                                if !files.iter().any(|current| current.key == file.key) {
+                                    files.push(file.clone());
+                                }
+                            }
+                        }
                         let mut cached = files.clone();
                         for file in &mut cached {
                             file.reset = false;
@@ -921,7 +1098,7 @@ impl Reader {
                             source.id.clone(),
                             (
                                 path.clone(),
-                                if before == database_fingerprint(&path) {
+                                if error.is_none() && before == fingerprint(&path) {
                                     before
                                 } else {
                                     String::new()
@@ -933,6 +1110,7 @@ impl Reader {
                         SourceBatch {
                             source_id: source.id.clone(),
                             files,
+                            error,
                             ..Default::default()
                         }
                     }
@@ -959,6 +1137,14 @@ impl Reader {
                 }
             }
             return batch;
+        }
+        if source.provider == "kiro" {
+            // No session yet. The Kiro home also holds IDE extensions; never walk it for logs.
+            return SourceBatch {
+                source_id: source.id.clone(),
+                error: (!expand(&source.path).exists()).then(|| "Agent 数据目录不存在".into()),
+                ..Default::default()
+            };
         }
         self.collect_logs_local(source, now, false)
     }
@@ -1045,7 +1231,8 @@ impl Reader {
             }
             let nested = root.join(match source.provider.as_str() {
                 "codex" | "kimi" | "deepseek-harness" | "grok" | "pi" | "omp" => "sessions",
-                "claude" | "codebuddy" | "qoder" => "projects",
+                "claude" | "codebuddy" | "qoder" | "workbuddy" => "projects",
+                "copilot" => "session-state",
                 _ => "conversations",
             });
             let scan_root = if nested.is_dir() { nested } else { root };
@@ -1056,9 +1243,10 @@ impl Reader {
             };
             if session_hooks::supported(&source.provider) {
                 let events = session_hooks::event_root(source);
-                if events.is_dir() {
-                    roots.push((local_session_path(&events), true));
-                }
+                // The first hook creates this directory after monitoring has
+                // started. Keep its identity in the watcher routing table so
+                // the first event is not lost until the next full scan.
+                roots.push((local_session_path(&events), true));
             }
             // Reconciliation reuses the watcher; a failed backend retries on the five-second fallback.
             let watch = self
@@ -1069,6 +1257,9 @@ impl Reader {
                 .unwrap_or_else(|| DirectoryWatch::new(expand(&source.path)));
             for (root, hook) in &roots {
                 let hook = *hook;
+                if hook && !root.exists() {
+                    continue;
+                }
                 if !hook && source.provider == "deepseek-harness" {
                     match crate::harness_history::discover(root) {
                         Ok((files, issues)) => {
@@ -1205,7 +1396,66 @@ impl Reader {
                 }
             }
         }
+        if source.provider == "codex" {
+            inherit_codex_originators(source, &mut batch.files);
+        }
         batch
+    }
+}
+
+/// Usage and live sessions resolve the same immutable history base. Build its
+/// index only for a cold fork whose own metadata has no display identity.
+fn inherit_codex_originators(source: &Source, files: &mut [FileBatch]) {
+    use std::io::{BufRead, BufReader, Read};
+    let mut history = None;
+    for file in files.iter_mut().filter(|file| {
+        file.reset && !file.hook && !file.events.iter().any(|event| !event.originator.is_empty())
+    }) {
+        let Ok(input) = fs::File::open(&file.key) else {
+            continue;
+        };
+        let mut reader = BufReader::new(input);
+        for _ in 0..2 {
+            let mut bytes = Vec::new();
+            if reader
+                .by_ref()
+                .take(65537)
+                .read_until(b'\n', &mut bytes)
+                .is_err()
+                || bytes.len() > 65536
+                || bytes.last() != Some(&b'\n')
+            {
+                break;
+            }
+            let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
+            if value["type"] != "session_meta" {
+                continue;
+            }
+            if value["payload"]["originator"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty())
+                || !value["payload"]["history_base"].is_object()
+            {
+                break;
+            }
+            let resolver =
+                history.get_or_insert_with(|| crate::codex_history::Resolver::new(source, &[]));
+            if let Some(inherited) = resolver
+                .metadata(&value)
+                .filter(|h| !h.originator.is_empty())
+            {
+                for event in file
+                    .events
+                    .iter_mut()
+                    .filter(|event| event.kind == "identity" && event.originator.is_empty())
+                {
+                    event.originator.clone_from(&inherited.originator);
+                }
+            }
+            break;
+        }
     }
 }
 fn native_log_path(path: &Path, provider: &str, hook: bool, extension: &str) -> bool {
@@ -1217,6 +1467,9 @@ fn native_log_path(path: &Path, provider: &str, hook: bool, extension: &str) -> 
     }
     if !hook && provider == "kimi" {
         return path.file_name().is_some_and(|n| n == "wire.jsonl");
+    }
+    if !hook && provider == "copilot" {
+        return path.file_name().is_some_and(|n| n == "events.jsonl");
     }
     if !hook && provider == "deepseek-harness" {
         return crate::native_agents::is_dsh_log(path);
@@ -1509,7 +1762,7 @@ fn read_file(
                 if let Ok(event) = serde_json::from_value(value) {
                     events.push(event);
                 }
-            } else if matches!(provider, "kimi" | "codebuddy" | "grok") {
+            } else if matches!(provider, "kimi" | "codebuddy" | "grok" | "copilot") {
                 if provider == "kimi" && value["type"] == "forked" {
                     events.retain(|e| e.kind == "identity" && !e.parent_session.is_empty());
                 }
@@ -1549,6 +1802,25 @@ fn read_file(
     })
 }
 
+/// WorkBuddy keeps session state in `<root>/workbuddy.db` (or the file itself).
+/// Cline CLI / new extension session index (`<data>/db/sessions.db`).
+pub(crate) fn cline_database(path: &str) -> Option<PathBuf> {
+    let root = expand(path);
+    if root.is_file() {
+        return (root.file_name().is_some_and(|n| n == "sessions.db")).then_some(root);
+    }
+    ["sessions.db", "db/sessions.db", "data/db/sessions.db"]
+        .iter()
+        .map(|name| root.join(name))
+        .find(|p| p.is_file())
+}
+pub(crate) fn workbuddy_database(path: &str) -> Option<PathBuf> {
+    let root = expand(path);
+    if root.is_file() {
+        return (root.file_name().is_some_and(|n| n == "workbuddy.db")).then_some(root);
+    }
+    Some(root.join("workbuddy.db")).filter(|p| p.is_file())
+}
 fn codebuddy_parent_path(path: &Path) -> Option<PathBuf> {
     let directory = path.parent()?;
     if directory.file_name()? != "subagents" || !path.file_stem()?.to_str()?.starts_with("agent-") {
@@ -1816,6 +2088,10 @@ pub struct SessionMonitor {
     remote: HashMap<String, RemoteWorker>,
 }
 impl SessionMonitor {
+    /// Sessions Aieyes started itself, as `internal-session:` kv keys.
+    pub fn set_internal(&mut self, keys: HashSet<String>) {
+        self.local.internal = keys;
+    }
     pub fn read(&mut self, settings: &Settings, now: SystemTime) -> Snapshot {
         let now = seconds(now);
         let mut seen = HashSet::new();
@@ -1832,14 +2108,22 @@ impl SessionMonitor {
                             | "antigravity"
                             | "kimi"
                             | "codebuddy"
+                            | "workbuddy"
                             | "deepseek-harness"
                             | "grok"
+                            | "copilot"
                             | "zcode"
                             | "opencode"
+                            | "kilo"
+                            | "cline"
+                            | "roo"
+                            | "kiro"
                             | "qoder"
                             | "pi"
                             | "omp"
                             | "cursor"
+                            | "trae"
+                            | "trae-cn"
                     )
             })
             .map(normalized_source)
@@ -2359,6 +2643,30 @@ mod adapter_tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn trae_ide_process_status_does_not_create_sessions_or_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = source(temp.path(), "trae-cn");
+        let mut reader = Reader::default();
+        for running in [true, false] {
+            let batch: SourceBatch =
+                serde_json::from_value(json!({"sourceId":source.id,"processRunning":running}))
+                    .unwrap();
+            let snapshot = reader.consume(&source, batch, 100, 100, "local", None);
+            assert!(snapshot.sessions.is_empty());
+            assert_eq!(snapshot.active_count(), 0);
+            assert_eq!(snapshot.sources[0].state, "healthy");
+            assert_eq!(snapshot.sources[0].process_running, Some(running));
+            assert_eq!(
+                serde_json::to_value(&snapshot).unwrap()["sources"][0]["processRunning"],
+                running
+            );
+        }
+        let batch = reader.collect_local(&source, crate::models::now() as u64);
+        assert!(batch.files.is_empty());
+        assert!(batch.error.is_none());
+        assert!(batch.process_running.is_some());
+    }
     fn hooks_only(root: &Path) {
         fs::create_dir_all(root.join(".aieyes/session-events")).unwrap();
         fs::write(root.join(".aieyes/session-hooks-disabled"), b"disabled").unwrap();
@@ -2566,6 +2874,79 @@ mod adapter_tests {
         assert!(batch.files.iter().any(|file| {
             Path::new(&file.key) == local_session_path(&new_session) && file.database
         }));
+    }
+    #[test]
+    fn first_hook_directory_is_observed_and_headless_exclusion_survives_unchanged_polls() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicU8},
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let native = temp.path().join("projects/workspace/native.jsonl");
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        let at = seconds(SystemTime::now());
+        fs::write(
+            &native,
+            format!(
+                "{}\n",
+                json!({"type":"message","sessionId":"same-session","id":"turn","timestamp":at * 1000,"role":"user","content":"PRIVATE_CONTENT"})
+            ),
+        )
+        .unwrap();
+        let source = source(temp.path(), "codebuddy");
+        let mut reader = Reader::default();
+        let first = reader.collect_local(&source, at);
+        assert!(first.error.is_none());
+        assert_eq!(
+            reader
+                .consume(&source, first, at, at, "Fixture", Some("installed".into()))
+                .sessions
+                .len(),
+            1
+        );
+        let (events, changes) = mpsc::channel();
+        let (stop, _stopped) = mpsc::channel();
+        reader.discovery.values_mut().next().unwrap().watch = DirectoryWatch {
+            state: Arc::new(AtomicU8::new(1)),
+            stop,
+            changes,
+            overflow: Arc::new(AtomicBool::new(false)),
+        };
+        let hook = session_hooks::event_root(&source).join("first.jsonl");
+        fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        fs::write(
+            &hook,
+            format!(
+                "{}\n",
+                json!({"kind":"UserPromptSubmit","session":"same-session","classification":"headless","at":at * 1000})
+            ),
+        )
+        .unwrap();
+        events
+            .send(Ok(notify::Event::new(notify::EventKind::Modify(
+                notify::event::ModifyKind::Any,
+            ))
+            .add_path(local_session_path(&hook))))
+            .unwrap();
+        for elapsed in 1..=3 {
+            let batch = reader.collect_local(&source, at + elapsed);
+            if elapsed == 1 {
+                assert!(batch.files.iter().any(|file| file.hook));
+            }
+            let state = reader.consume(
+                &source,
+                batch,
+                at + elapsed,
+                at + elapsed,
+                "Fixture",
+                Some("installed".into()),
+            );
+            assert!(
+                state.sessions.is_empty(),
+                "native duplicate must stay excluded"
+            );
+            assert!(!serde_json::to_string(&state).unwrap().contains("PRIVATE_"));
+        }
     }
     #[test]
     fn failed_database_refresh_keeps_last_successful_activity_with_degraded_health() {
@@ -3210,6 +3591,185 @@ mod claude_source_tests {
     }
 
     #[test]
+    fn codebuddy_acp_hook_excludes_its_native_session_and_children_in_every_phase() {
+        let now = seconds(SystemTime::now());
+        let source = Source {
+            id: "codebuddy".into(),
+            provider: "codebuddy".into(),
+            ..Default::default()
+        };
+        let argv = ["codebuddy", "--acp", "--setting-sources", "user"].map(str::to_string);
+        for kind in [
+            "UserPromptSubmit",
+            "PermissionRequest",
+            "Stop",
+            "StopFailure",
+        ] {
+            let mut reader = Reader::default();
+            // Native CodeBuddy ACP hooks have no bound Node PID. Their nearest
+            // CLI ancestor's argv verdict must exclude the matching transcript.
+            let mut hook = session_events::hook(
+                "codebuddy",
+                kind,
+                &json!({"session_id":"acp-root"}),
+                now * 1000,
+            );
+            hook.classification = session_events::headless_argv("codebuddy", &argv)
+                .unwrap()
+                .into();
+            let file = |key: &str, session: &str, parent: &str| FileBatch {
+                key: key.into(),
+                reset: true,
+                modified: now,
+                events: vec![Event {
+                    kind: kind.into(),
+                    session: session.into(),
+                    parent_session: parent.into(),
+                    at: now * 1000,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let mut batch = SourceBatch {
+                files: vec![
+                    file("native-root", "acp-root", ""),
+                    file("native-child", "acp-child", "acp-root"),
+                    file("interactive", "interactive", ""),
+                    FileBatch {
+                        key: "acp-hook".into(),
+                        hook: true,
+                        reset: true,
+                        modified: now,
+                        events: vec![hook],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            };
+            for _ in 0..2 {
+                let snapshot = reader.consume(
+                    &source,
+                    SourceBatch {
+                        files: batch.files.clone(),
+                        ..Default::default()
+                    },
+                    now,
+                    now,
+                    "Fixture",
+                    None,
+                );
+                assert_eq!(snapshot.sessions.len(), 1, "{kind}");
+                assert_eq!(snapshot.sessions[0].path, "interactive", "{kind}");
+                // Quiet polls must retain the hook classification too.
+                for file in &mut batch.files {
+                    file.reset = false;
+                    file.events.clear();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kiro_sessions_are_listed_but_aieyes_usage_checks_and_extension_folders_are_not() {
+        let temp = tempfile::tempdir().unwrap();
+        let cli = temp.path().join("sessions/cli");
+        fs::create_dir_all(&cli).unwrap();
+        // An IDE-only Kiro home: extensions must never be walked for transcripts.
+        let extensions = temp.path().join("extensions/x");
+        fs::create_dir_all(&extensions).unwrap();
+        fs::write(extensions.join("log.jsonl"), "{}\n").unwrap();
+        let turn = json!({"end_reason":"UserTurnEnd","result":{"Ok":{}}});
+        for id in ["work", "check"] {
+            let session = json!({"session_id":id,"cwd":"/work",
+                "session_state":{"conversation_metadata":{"user_turn_metadatas":[turn]}}});
+            fs::write(cli.join(format!("{id}.json")), session.to_string()).unwrap();
+        }
+        let source = Source {
+            id: "kiro".into(),
+            provider: "kiro".into(),
+            path: temp.path().to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let mut reader = Reader::default();
+        // Written by the `kiro-cli /usage` fallback (account_scan).
+        reader
+            .internal
+            .insert(internal_session_key("kiro", "check"));
+        let now = seconds(SystemTime::now());
+        let batch = reader.collect_local(&source, now);
+        assert_eq!(batch.files.len(), 2);
+        let snapshot = reader.consume(&source, batch, now, now, "本机", None);
+        let kept: Vec<_> = snapshot
+            .sessions
+            .iter()
+            .map(|s| (s.path.rsplit('#').next().unwrap(), s.phase))
+            .collect();
+        assert_eq!(kept, [("work", Phase::Complete)]);
+        assert_eq!(reader.database_reads, 1);
+        reader.collect_local(&source, now + 1);
+        assert_eq!(
+            reader.database_reads, 1,
+            "unchanged sessions are not re-read"
+        );
+
+        fs::remove_dir_all(temp.path().join("sessions")).unwrap();
+        let batch = reader.collect_local(&source, now + 2);
+        assert!(batch.files.is_empty() && batch.error.is_none());
+        assert!(reader.discovery.is_empty(), "no log walk of the Kiro home");
+        let missing = Source {
+            path: temp.path().join("missing").to_string_lossy().into_owned(),
+            ..source.clone()
+        };
+        assert!(reader.collect_local(&missing, now).error.is_some());
+    }
+
+    #[test]
+    fn argv_and_internal_runs_are_excluded_but_sessions_without_signal_count() {
+        let now = seconds(SystemTime::now());
+        for provider in ["kimi", "cursor", "claude", "copilot"] {
+            let source = Source {
+                id: "s".into(),
+                provider: provider.into(),
+                ..Default::default()
+            };
+            let file = |key: &str, classification: &str, session_source: &str| FileBatch {
+                key: key.into(),
+                reset: true,
+                modified: now,
+                events: vec![Event {
+                    kind: "UserPromptSubmit".into(),
+                    session: key.into(),
+                    classification: classification.into(),
+                    session_source: session_source.into(),
+                    at: now * 1000,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let mut reader = Reader::default();
+            reader
+                .internal
+                .insert(internal_session_key(provider, "quota-check"));
+            let batch = SourceBatch {
+                files: vec![
+                    file("print", "headless", ""),
+                    file("spawned", "internal", "aieyes-internal"),
+                    file("quota-check", "", ""),
+                    file("unknown", "", ""),
+                    file("tui", "interactive", ""),
+                ],
+                ..Default::default()
+            };
+            let snapshot = reader.consume(&source, batch, now, now, "Fixture", None);
+            let mut kept: Vec<_> = snapshot.sessions.iter().map(|s| s.path.as_str()).collect();
+            kept.sort();
+            assert_eq!(kept, ["tui", "unknown"], "{provider}");
+            assert!(reader.cursors["print"].non_interactive);
+            assert!(!reader.cursors["unknown"].non_interactive);
+        }
+    }
+
+    #[test]
     fn known_noninteractive_logs_do_not_use_the_recent_session_limit() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("projects/home");
@@ -3327,6 +3887,25 @@ mod codex_source_tests {
         );
         assert_eq!(snapshot.sessions.len(), visible);
         assert_eq!(snapshot.active_count(), visible);
+        let work = cases
+            .iter()
+            .filter(|c| c["expectedProvider"] == "chatgpt-work")
+            .count();
+        assert!(work > 0);
+        assert_eq!(
+            snapshot
+                .sessions
+                .iter()
+                .filter(|s| s.provider == "chatgpt-work")
+                .count(),
+            work
+        );
+        assert!(
+            snapshot
+                .sessions
+                .iter()
+                .all(|s| matches!(s.provider.as_str(), "codex" | "chatgpt-work"))
+        );
         assert_eq!(snapshot.phase(), Some(Phase::Tool));
         assert_eq!(snapshot.phase_counts().len(), 1);
         assert_eq!(crate::pets::project(&snapshot).behavior, "working");
@@ -3335,9 +3914,148 @@ mod codex_source_tests {
         let wire = serde_json::to_string(&snapshot).unwrap();
         assert!(!wire.contains("PRIVATE_"));
         assert!(
-            !wire.contains("sessionSource"),
+            !wire.contains("sessionSource") && !wire.contains("originator"),
             "Creation metadata stays internal"
         );
+    }
+    #[test]
+    fn chatgpt_work_keeps_codex_identity_for_hooks_and_subagents() {
+        let root = tempfile::tempdir().unwrap();
+        let started = json!({"type":"event_msg","payload":{"type":"task_started"}}).to_string();
+        let tool = json!({"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c"}}).to_string();
+        let parent = json!({"type":"session_meta","payload":{"id":"work","source":"vscode","originator":"codex_work_desktop"}}).to_string();
+        let child = json!({"type":"session_meta","payload":{"id":"child","source":{"subagent":{"thread_spawn":{"parent_thread_id":"work"}}}}}).to_string();
+        fs::write(
+            root.path().join("work.jsonl"),
+            format!("{parent}\n{started}\n"),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("child.jsonl"),
+            format!("{child}\n{started}\n{tool}\n"),
+        )
+        .unwrap();
+        let source = Source {
+            id: "s".into(),
+            path: root.path().to_string_lossy().into(),
+            ..Default::default()
+        };
+        let snapshot = SessionMonitor::default().read(
+            &Settings {
+                sources: vec![source],
+                ..Default::default()
+            },
+            SystemTime::now(),
+        );
+        assert_eq!(
+            snapshot.sessions.len(),
+            1,
+            "The worker folds into its Work parent"
+        );
+        let work = &snapshot.sessions[0];
+        assert_eq!(work.provider, "chatgpt-work");
+        assert_eq!(work.id, crate::models::hash("local:codex:work"));
+        assert_eq!(work.phase, Phase::Tool);
+        // A Codex hook for the same thread has no originator; the log decides.
+        let mut monitor = Snapshot {
+            sessions: vec![
+                LiveSession {
+                    evidence: "hook".into(),
+                    provider: "codex".into(),
+                    ..work.clone()
+                },
+                work.clone(),
+            ],
+            ..Default::default()
+        };
+        monitor.finish();
+        assert_eq!(monitor.sessions.len(), 1);
+        assert_eq!(monitor.sessions[0].provider, "chatgpt-work");
+    }
+    #[test]
+    fn work_live_forks_inherit_originator_without_changing_whitelist_or_codex_ids() {
+        for compressed in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let header = |id: &str, originator: &str, source: &str, base: Option<(&str, usize)>| {
+                let mut payload = json!({"id":id,"source":source});
+                if !originator.is_empty() {
+                    payload["originator"] = originator.into();
+                }
+                if let Some((parent, limit)) = base {
+                    payload["history_base"] = json!({"thread_id":parent,"end_byte_offset":limit});
+                }
+                format!("{}\n", json!({"type":"session_meta","payload":payload}))
+            };
+            let parent = header("parent", "codex_work_desktop", "vscode", None);
+            let started = format!(
+                "{}\n",
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"turn"}})
+            );
+            if compressed {
+                fs::write(
+                    root.path().join("parent.jsonl.zst"),
+                    zstd::stream::encode_all(parent.as_bytes(), 1).unwrap(),
+                )
+                .unwrap();
+            } else {
+                fs::write(root.path().join("parent.jsonl"), &parent).unwrap();
+            }
+            let middle = header("middle", "", "cli", Some(("parent", parent.len()))) + &started;
+            fs::write(root.path().join("middle.jsonl"), &middle).unwrap();
+            fs::write(
+                root.path().join("child.jsonl"),
+                header("child", "", "vscode", Some(("middle", middle.len()))) + &started,
+            )
+            .unwrap();
+            fs::write(
+                root.path().join("explicit.jsonl"),
+                header(
+                    "explicit",
+                    "codex_cli_rs",
+                    "cli",
+                    Some(("parent", parent.len())),
+                ) + &started,
+            )
+            .unwrap();
+            fs::write(
+                root.path().join("headless.jsonl"),
+                header("headless", "", "exec", Some(("parent", parent.len()))) + &started,
+            )
+            .unwrap();
+            let settings = Settings {
+                sources: vec![Source {
+                    id: "codex".into(),
+                    provider: "codex".into(),
+                    path: root.path().to_string_lossy().into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let mut monitor = SessionMonitor::default();
+            for _ in 0..2 {
+                let snapshot = monitor.read(&settings, SystemTime::now());
+                assert_eq!(snapshot.sessions.len(), 3);
+                for session in snapshot.sessions {
+                    let id = Path::new(&session.path)
+                        .file_stem()
+                        .unwrap()
+                        .to_str()
+                        .unwrap();
+                    assert_eq!(
+                        session.provider,
+                        if id == "explicit" {
+                            "codex"
+                        } else {
+                            "chatgpt-work"
+                        }
+                    );
+                    assert_eq!(
+                        session.id,
+                        crate::models::hash(&format!("local:codex:{id}"))
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn first_large_log_incremental_events_and_replacements_retain_only_confirmed_creation_source() {

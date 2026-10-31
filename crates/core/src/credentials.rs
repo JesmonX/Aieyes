@@ -1,4 +1,6 @@
-//! SSH secrets live in the operating system's credential store, never in settings.
+//! SSH secrets and the few agent tokens Aieyes itself obtains (for example a
+//! Copilot device-code login) live in the operating system's credential store,
+//! never in settings.
 use anyhow::{Context, Result, ensure};
 use std::{path::PathBuf, sync::OnceLock};
 
@@ -17,7 +19,17 @@ pub fn helper() -> Result<PathBuf> {
 type SecretEntry = keyring::Entry;
 #[cfg(test)]
 type SecretEntry = keyring_core::Entry;
+#[cfg(not(test))]
+use keyring::Error as SecretError;
+#[cfg(test)]
+use keyring_core::Error as SecretError;
+const SSH: &str = "app.aieyes.ssh";
+/// Tokens Aieyes was granted directly; agent-owned credentials are never copied here.
+pub const AGENTS: &str = "app.aieyes.agents";
 fn entry(reference: &str) -> Result<SecretEntry> {
+    entry_in(SSH, reference)
+}
+fn entry_in(service: &str, reference: &str) -> Result<SecretEntry> {
     #[cfg(test)]
     {
         static MOCK: std::sync::Once = std::sync::Once::new();
@@ -32,7 +44,8 @@ fn entry(reference: &str) -> Result<SecretEntry> {
                 .all(|c| c.is_ascii_alphanumeric() || c == b'-'),
         "密码引用无效"
     );
-    SecretEntry::new("app.aieyes.ssh", reference).context("系统凭据库不可用")
+    ensure!(matches!(service, SSH | AGENTS), "凭据服务无效");
+    SecretEntry::new(service, reference).context("系统凭据库不可用")
 }
 
 pub fn save(password: &str) -> Result<String> {
@@ -58,6 +71,29 @@ pub fn delete(reference: &str) -> Result<()> {
     entry(reference)?
         .delete_credential()
         .context("无法清理服务器密码")
+}
+/// Agent token under a fixed reference such as `copilot-github`; replacing it
+/// overwrites the previous login (no concurrent accounts per agent).
+pub fn save_agent(reference: &str, token: &str) -> Result<()> {
+    ensure!(
+        !token.is_empty() && token.len() <= 4096 && !token.contains(['\n', '\r', '\0']),
+        "登录凭据格式无效"
+    );
+    entry_in(AGENTS, reference)?
+        .set_password(token)
+        .context("无法保存登录凭据，请检查系统凭据库是否已解锁")
+}
+pub fn read_agent(reference: &str) -> Result<String> {
+    entry_in(AGENTS, reference)?
+        .get_password()
+        .context("无法读取登录凭据，请重新授权或解锁系统凭据库")
+}
+pub fn delete_agent(reference: &str) -> Result<()> {
+    match entry_in(AGENTS, reference)?.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(SecretError::NoEntry) => Ok(()),
+        Err(error) => Err(error).context("无法清理登录凭据"),
+    }
 }
 /// Runs before opening SQLite. OpenSSH passes only its prompt; the environment
 /// contains an opaque keyring reference, not the password.
@@ -117,5 +153,21 @@ mod tests {
         delete(&replacement).unwrap();
         assert!(save("bad\npassword").is_err());
         assert!(read("../invalid").is_err());
+    }
+    #[test]
+    fn agent_tokens_use_their_own_service_and_never_mix_with_ssh_passwords() {
+        save_agent("copilot-github", "gho_fixture").unwrap();
+        assert_eq!(read_agent("copilot-github").unwrap(), "gho_fixture");
+        assert!(
+            read("copilot-github").is_err(),
+            "SSH service must not see agent tokens"
+        );
+        save_agent("copilot-github", "gho_replaced").unwrap();
+        assert_eq!(read_agent("copilot-github").unwrap(), "gho_replaced");
+        assert!(save_agent("copilot-github", "bad\ntoken").is_err());
+        assert!(save_agent("../escape", "gho_fixture").is_err());
+        assert!(entry_in("com.example.other", "copilot-github").is_err());
+        delete_agent("copilot-github").unwrap();
+        assert!(read_agent("copilot-github").is_err());
     }
 }

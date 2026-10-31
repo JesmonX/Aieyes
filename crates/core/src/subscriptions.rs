@@ -5,8 +5,14 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::io::Read;
+mod buddy;
+pub(crate) mod gemini;
 mod kimi;
+pub(crate) mod kiro;
+mod prepaid;
 pub(crate) mod qoder;
+pub(crate) mod trae;
+mod transport;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
@@ -26,6 +32,8 @@ pub fn supported(provider: &str) -> bool {
     matches!(
         provider,
         "zcode"
+            | "workbuddy"
+            | "codebuddy"
             | "qoder"
             | "grok"
             | "cursor"
@@ -45,10 +53,14 @@ pub fn login_url(provider: &str, mode: &str) -> Result<&'static str> {
         ("qoder", "cn-legacy") => Ok("https://qoder.com.cn/account/usage"),
         ("kimi", "cn" | "global") => Ok("https://www.kimi.com/code/console"),
         ("deepseek" | "deepseek-harness", "api") => Ok("https://platform.deepseek.com/usage"),
-        ("cursor", "session") => Ok("https://cursor.com/dashboard"),
+        ("cursor", "api2") => Ok("https://cursor.com/dashboard"),
         ("grok", "subscription") => Ok("https://grok.com"),
         ("grok", "api") => Ok("https://console.x.ai"),
         ("opencode", "go" | "console") => Ok("https://opencode.ai/console"),
+        // Official usage pages (`bootConfig.doc.accountUsageUrl`). Trae has nothing
+        // to paste: its login is encrypted, so this page is the only fallback.
+        ("trae", _) => Ok("https://www.trae.ai/account-setting#usage"),
+        ("trae-cn", _) => Ok("https://www.trae.cn/account-setting#usage"),
         _ => bail!("不支持的登录类型"),
     }
 }
@@ -97,11 +109,7 @@ pub fn local_secret(provider: &str, mode: &str, value: &Value) -> Result<String>
             let entry = if oidc.is_empty() {
                 &value["https://accounts.x.ai/sign-in"]
             } else {
-                ensure!(
-                    oidc.len() == 1,
-                    "Grok 有多个登录，请手动填写要监测账户的令牌"
-                );
-                oidc[0]
+                grok_latest(&oidc).context("Grok 有多个登录，请手动填写要监测账户的令牌")?
             };
             if !entry["expires_at"].is_null() {
                 ensure!(
@@ -117,6 +125,51 @@ pub fn local_secret(provider: &str, mode: &str, value: &Value) -> Result<String>
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .context("未找到有效的本机登录")
+}
+
+/// Several `grok login` entries: the most recently used one that is still valid.
+/// A manually entered token still overrides this choice.
+pub(crate) fn grok_latest<'a>(entries: &[&'a Value]) -> Option<&'a Value> {
+    // Grok 1.0.62 stores expiry, but no last_used auth field. Token issuance
+    // and expiry preserve recency when explicit usage metadata is absent.
+    let used = |e: &Value| {
+        let explicit = [
+            "last_used",
+            "lastUsed",
+            "last_used_at",
+            "updated_at",
+            "created_at",
+        ]
+        .iter()
+        .find_map(|k| stamp(&e[*k]));
+        use base64::Engine as _;
+        let issued = e["key"]
+            .as_str()
+            .and_then(|s| s.split('.').nth(1))
+            .and_then(|s| {
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .decode(s.trim_end_matches('='))
+                    .ok()
+            })
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|v| stamp(&v["iat"]));
+        (explicit, issued, stamp(&e["expires_at"]))
+    };
+    let valid = |e: &Value| {
+        e["expires_at"].is_null() || stamp(&e["expires_at"]).is_some_and(|t| t > now() + 60)
+    };
+    let ranked: Vec<_> = entries.iter().copied().filter(|e| valid(e)).collect();
+    if ranked.is_empty() {
+        // All expired: the expiry error below names the newest one.
+        return entries.iter().copied().max_by_key(|e| used(e));
+    }
+    // Deterministic ties do not turn an otherwise valid saved login into an
+    // error. Explicitly supplied credentials still bypass this selection.
+    ranked.into_iter().max_by_key(|e| used(e))
+}
+
+pub(crate) fn grok_expiry(entry: &Value) -> Option<i64> {
+    stamp(&entry["expires_at"])
 }
 
 fn import_local(provider: &str, mode: &str) -> Result<String> {
@@ -153,10 +206,19 @@ pub fn endpoint(provider: &str, config: &SubscriptionConfig) -> Result<String> {
         ("zcode", "cn") => "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
         ("qoder", "global") => "https://qoder.com/api/v2/me/usages/big_model_credits",
         ("qoder", "cn-legacy") => "https://qoder.com.cn/api/v2/me/usages/big_model_credits",
-        ("cursor", "session") => "https://cursor.com/api/usage-summary",
+        // The IDE / CLI login token (state.vscdb or cli-config.json), read at query time.
+        ("cursor", "api2") => {
+            "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
+        }
+        ("kimi", "moonshot-cn") => "https://api.moonshot.cn/v1/users/me/balance",
+        ("kimi", "moonshot-global") => "https://api.moonshot.ai/v1/users/me/balance",
         ("kimi", "cn") => "https://api.kimi.com/coding/v1/usages",
         ("kimi", "global") => "https://api.kimi.ai/coding/v1/usages",
         ("deepseek" | "deepseek-harness", "api") => "https://api.deepseek.com/user/balance",
+        // Account login read from dsh's .credentials.yaml (native connections only).
+        ("deepseek-harness", "account") => {
+            "https://platform.deepseek.com/api/v0/users/get_user_summary"
+        }
         ("grok", "subscription") => "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
         ("grok", "api") => {
             scope(&config.workspace_id)?;
@@ -166,6 +228,23 @@ pub fn endpoint(provider: &str, config: &SubscriptionConfig) -> Result<String> {
             ));
         }
         ("opencode", "go") => "https://opencode.ai/zen/go/v1/usage",
+        // A plain-text Trae IDE login (native connections only); the login's own
+        // API host may replace the origin.
+        ("trae" | "trae-cn", "usage") => trae::default_url(provider),
+        // GitHub token found in env / apps.json or granted to Aieyes (native connections only).
+        ("copilot", "github") => COPILOT_USER,
+        // Prepaid wallets read with the client's own login (native connections only).
+        ("cline", "account") => return Ok(format!("{}/users/me", prepaid::CLINE_API)),
+        ("kilo", "profile") => return Ok(format!("{}/profile", prepaid::KILO_API)),
+        ("cline" | "kilo", "openrouter") => prepaid::OPENROUTER_KEY,
+        // Kiro login token; the region comes from the profile ARN at query time.
+        ("kiro", "usage") => "https://codewhisperer.us-east-1.amazonaws.com/",
+        ("workbuddy" | "codebuddy", "buddy-cn") => {
+            "https://copilot.tencent.com/billing/meter/get-user-resource-summary"
+        }
+        ("workbuddy" | "codebuddy", "buddy-global") => {
+            "https://www.codebuddy.ai/billing/meter/get-user-resource-summary"
+        }
         ("opencode", "console") => {
             scope(&config.workspace_id)?;
             "https://opencode.ai/console/api/go/status"
@@ -194,65 +273,23 @@ fn request(
     secret: &str,
     url: &str,
 ) -> Result<Value> {
-    ensure!(
-        !secret.is_empty() && secret.len() <= 32768 && !secret.contains(['\r', '\n', '\0']),
-        "登录凭据格式无效"
-    );
-    let client = network::client_with_policy(
-        source.proxy.as_ref().unwrap_or(&settings.proxy),
-        network::ClientPolicy {
-            redirects: 0,
-            ..Default::default()
-        },
+    request_with(source, settings, config, secret, url, &[])
+}
+
+fn request_with(
+    source: &Source,
+    settings: &Settings,
+    config: &SubscriptionConfig,
+    secret: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+) -> Result<Value> {
+    let request = transport::request(source, config, secret, url, headers)?;
+    transport::response(
+        source,
+        config,
+        request.send(source.proxy.as_ref().unwrap_or(&settings.proxy))?,
     )
-    .context("无法创建订阅查询连接")?;
-    let mut request = client.get(url).header("Accept", "application/json");
-    if matches!(source.provider.as_str(), "qoder" | "cursor") || config.mode == "console" {
-        let cookie = secret.strip_prefix("Cookie:").unwrap_or(secret).trim();
-        ensure!(
-            cookie.contains('='),
-            "请输入完整 Cookie 请求头，不是密码或 API Key"
-        );
-        request = request.header("Cookie", cookie);
-    } else {
-        request = request.bearer_auth(secret);
-    }
-    if source.provider == "grok" && config.mode == "subscription" {
-        ensure!(
-            !secret.starts_with("xai-"),
-            "Grok 订阅需要登录令牌；API 管理密钥请选择 API 余额"
-        );
-        request = request.header("x-xai-token-auth", "xai-grok-cli");
-    }
-    if source.provider == "qoder" {
-        let origin = if config.mode == "global" {
-            "https://qoder.com"
-        } else {
-            "https://qoder.com.cn"
-        };
-        request = request
-            .header("Origin", origin)
-            .header("Referer", format!("{origin}/account/usage"));
-    }
-    if config.mode == "console" {
-        request = request.header("x-org-id", &config.workspace_id);
-    }
-    let response = request
-        .send()
-        .map_err(|_| anyhow::anyhow!("订阅连接失败，请检查网络或代理"))?;
-    let status = response.status();
-    ensure!(
-        status.is_success(),
-        "订阅查询失败（HTTP {}）；401/403 请重新登录或检查权限",
-        status.as_u16()
-    );
-    let mut bytes = Vec::new();
-    response
-        .take(2 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)
-        .context("订阅响应读取失败")?;
-    ensure!(bytes.len() <= 2 * 1024 * 1024, "订阅响应过大");
-    serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("订阅响应格式无效，请检查登录状态"))
 }
 
 pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
@@ -274,9 +311,41 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
         "此订阅凭据仅在本机查询；原生 CLI 连接可在远端查询"
     );
     let url = endpoint(&source.provider, config)?;
-    let secret = credentials::read(&config.credential_ref)
-        .context("无法读取订阅凭据，请解锁系统凭据库或重新连接")?;
+    let secret = if matches!(source.provider.as_str(), "workbuddy" | "codebuddy") {
+        credentials::read_agent(&config.credential_ref)
+    } else {
+        credentials::read(&config.credential_ref)
+    }
+    .context("无法读取订阅凭据，请解锁系统凭据库或重新连接")?;
     fetch(source, settings, config, &secret, &url)
+}
+
+const COPILOT_USER: &str = "https://api.github.com/copilot_internal/user";
+const COPILOT_AGENT: &str = concat!("Aieyes/", env!("CARGO_PKG_VERSION"));
+const COPILOT_EDITOR: &str = concat!("aieyes/", env!("CARGO_PKG_VERSION"));
+const DSH_RELOGIN: &str = "DeepSeek 登录已失效，在 dsh 中重新登录";
+
+pub(crate) fn prepaid_identity(
+    provider: &str,
+    settings: &Settings,
+    secret: &str,
+) -> Result<AccountIdentity> {
+    prepaid::inspect_identity(provider, settings, secret)
+}
+
+/// A native connection's credential read at query time from the client's file.
+pub(crate) fn read_native(
+    source: &Source,
+    settings: &Settings,
+    secret: &str,
+) -> Result<QuotaSnapshot> {
+    let config = source
+        .subscription
+        .as_ref()
+        .context("请在账户中连接订阅登录")?;
+    ensure!(source.host_id.is_none(), "此订阅凭据仅在本机查询");
+    let url = endpoint(&source.provider, config)?;
+    fetch(source, settings, config, secret, &url)
 }
 
 fn fetch(
@@ -289,27 +358,49 @@ fn fetch(
     if native_cli(&source.provider, config) {
         return qoder::read(source, settings, config);
     }
-    let body = request(source, settings, config, secret, url)?;
-    let mut snapshot = parse(source, config, &body)?;
-    if source.provider == "opencode" && config.mode == "console" {
-        // A balance failure must not discard independently valid Go quota.
-        let balance = request(
-            source,
-            settings,
-            config,
-            secret,
-            "https://opencode.ai/console/api/billing/status",
-        )
-        .and_then(|v| zen_balance(&v));
-        match balance {
-            Ok(balance) => snapshot.balances.push(balance),
-            Err(_) if !snapshot.windows.is_empty() => {
-                snapshot.metadata_error = Some("Zen 余额暂不可用；Go 额度已更新".into())
-            }
-            Err(e) => return Err(e),
-        }
+    if matches!(source.provider.as_str(), "workbuddy" | "codebuddy")
+        && matches!(config.mode.as_str(), "buddy-cn" | "buddy-global")
+    {
+        return parse(source, config, &buddy::fetch(source, settings, secret)?);
     }
-    Ok(snapshot)
+    transport::fetch_using(source, config, secret, url, |request| {
+        request.send(source.proxy.as_ref().unwrap_or(&settings.proxy))
+    })
+}
+
+/// Shared native request/response adapters; SSH passes an identity-only token
+/// stub and resolves the real credential on the source host.
+pub(crate) fn read_native_using(
+    source: &Source,
+    secret: &str,
+    send: impl FnMut(
+        crate::native_quota_transport::Request,
+    ) -> Result<crate::native_quota_transport::Response>,
+) -> Result<QuotaSnapshot> {
+    let config = source
+        .subscription
+        .as_ref()
+        .context("此 Agent 暂未接入自动额度查询")?;
+    let url = endpoint(&source.provider, config)?;
+    transport::fetch_using(source, config, secret, &url, send)
+}
+
+pub(crate) fn prepaid_identity_using(
+    provider: &str,
+    secret: &str,
+    mut send: impl FnMut(
+        crate::native_quota_transport::Request,
+    ) -> Result<crate::native_quota_transport::Response>,
+) -> Result<AccountIdentity> {
+    let source = Source {
+        provider: provider.into(),
+        ..Default::default()
+    };
+    let config = SubscriptionConfig::default();
+    prepaid::inspect_identity_using(provider, secret, |token, url| {
+        let request = transport::request(&source, &config, token, url, &[])?;
+        transport::response(&source, &config, send(request)?)
+    })
 }
 
 fn number(value: &Value) -> Result<f64> {
@@ -332,7 +423,13 @@ fn ratio(used: &Value, limit: &Value) -> Result<f64> {
     Ok((100. * used / limit).clamp(0., 100.))
 }
 fn stamp(v: &Value) -> Option<i64> {
+    // Connect/proto JSON writes int64 milliseconds as digit strings.
     v.as_i64()
+        .or_else(|| {
+            v.as_str()
+                .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|s| s.parse().ok())
+        })
         .filter(|n| *n > 0)
         .map(|n| if n > 100_000_000_000 { n / 1000 } else { n })
         .or_else(|| {
@@ -379,6 +476,51 @@ fn zen_balance(v: &Value) -> Result<Balance> {
     })
 }
 
+/// `get_user_summary`: wallets per currency (normal = topped up, bonus = granted).
+fn deepseek_summary(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
+    let data = &v["data"];
+    ensure!(
+        !(v["code"] == 40003 || data["biz_code"] == 40003),
+        DSH_RELOGIN
+    );
+    ensure!(
+        v["code"] == 0 && data["biz_code"] == 0,
+        "DeepSeek 账户查询被拒绝"
+    );
+    let biz = &data["biz_data"];
+    let mut wallets: std::collections::BTreeMap<String, (f64, f64)> = Default::default();
+    for (key, bonus) in [("normal_wallets", false), ("bonus_wallets", true)] {
+        for w in biz[key].as_array().context("DeepSeek 账户余额字段缺失")? {
+            let currency = text(&w["currency"]).to_ascii_uppercase();
+            ensure!(matches!(currency.as_str(), "CNY" | "USD"), "余额币种不支持");
+            let amount = number(&w["balance"])?;
+            let entry = wallets.entry(currency).or_default();
+            if bonus {
+                entry.1 += amount;
+            } else {
+                entry.0 += amount;
+            }
+        }
+    }
+    ensure!(!wallets.is_empty(), "DeepSeek 账户余额字段缺失");
+    let decimal = |n: f64| {
+        let s = format!("{n:.8}");
+        s.trim_end_matches('0').trim_end_matches('.').to_owned()
+    };
+    for (currency, (topped_up, granted)) in wallets {
+        q.balances.push(Balance {
+            currency,
+            total: decimal(topped_up + granted),
+            granted: decimal(granted),
+            topped_up: decimal(topped_up),
+        });
+    }
+    Ok(())
+}
+fn text(v: &Value) -> &str {
+    v.as_str().unwrap_or("")
+}
+
 pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<QuotaSnapshot> {
     if !native_cli(&source.provider, config) {
         endpoint(&source.provider, config)?;
@@ -393,6 +535,9 @@ pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<
         ..Default::default()
     };
     match source.provider.as_str() {
+        "deepseek-harness" if config.mode == "account" => {
+            deepseek_summary(&mut q, v)?;
+        }
         "deepseek" | "deepseek-harness" => {
             // This is the selected DeepSeek backend's API wallet, not a
             // Harness subscription or a quota inferred from local Tokens.
@@ -408,6 +553,24 @@ pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<
             );
             snapshot.provider = source.provider.clone();
             return Ok(snapshot);
+        }
+        "kimi" if config.mode.starts_with("moonshot-") => {
+            ensure!(
+                v["status"] != false && (v["code"].is_null() || v["code"] == 0),
+                "Moonshot 余额查询被拒绝"
+            );
+            let data = &v["data"];
+            let currency = if config.mode == "moonshot-cn" {
+                "CNY"
+            } else {
+                "USD"
+            };
+            q.balances.push(Balance {
+                currency: currency.into(),
+                total: format!("{:.2}", number(&data["available_balance"])?),
+                ..Default::default()
+            });
+            q.plan = Some("Moonshot 开放平台余额（独立于 Kimi Code 订阅）".into());
         }
         "kimi" => {
             kimi::apply(&mut q, v)?;
@@ -509,50 +672,13 @@ pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<
             );
             q.plan = label(&v["planName"]);
         }
-        "cursor" => {
-            q.plan = label(&v["membershipType"]);
-            let plan = &v["individualUsage"]["plan"];
-            let minutes = duration(&v["billingCycleStart"], &v["billingCycleEnd"]);
-            let reset = stamp(&v["billingCycleEnd"]);
-            for (key, id, name) in [
-                ("autoPercentUsed", "cursor-models", "Cursor 模型"),
-                ("apiPercentUsed", "other-models", "其他模型"),
-            ] {
-                if !plan[key].is_null() {
-                    window(&mut q, id, name, percent(&plan[key])?, minutes, reset);
-                }
-            }
-            if q.windows.is_empty() {
-                if !plan["totalPercentUsed"].is_null() {
-                    window(
-                        &mut q,
-                        "plan",
-                        "套餐额度",
-                        percent(&plan["totalPercentUsed"])?,
-                        minutes,
-                        reset,
-                    );
-                } else {
-                    for (item, id, name) in [
-                        (plan, "plan", "套餐额度"),
-                        (&v["individualUsage"]["overall"], "personal-cap", "个人上限"),
-                        (&v["teamUsage"]["pooled"], "team-pool", "团队共享额度"),
-                    ] {
-                        if item.is_object() && number(&item["limit"]).is_ok_and(|n| n > 0.) {
-                            window(
-                                &mut q,
-                                id,
-                                name,
-                                ratio(&item["used"], &item["limit"])?,
-                                minutes,
-                                reset,
-                            );
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        "trae" | "trae-cn" => trae::parse(&mut q, v)?,
+        "cursor" => cursor_usage(&mut q, v)?,
+        "copilot" => copilot_usage(&mut q, v)?,
+        "cline" | "kilo" if config.mode == "openrouter" => prepaid::openrouter(&mut q, v)?,
+        "cline" | "kilo" => prepaid::wallets(&mut q, &source.provider, v)?,
+        "kiro" => kiro::parse(&mut q, v)?,
+        "workbuddy" | "codebuddy" => buddy::parse(&mut q, v)?,
         "grok" if config.mode == "api" => {
             let amount = number(&v["total"]["val"])? / 100.;
             q.balances.push(Balance {
@@ -639,8 +765,10 @@ pub fn parse(source: &Source, config: &SubscriptionConfig, v: &Value) -> Result<
     }
     ensure!(
         !q.windows.is_empty()
+            || !q.meters.is_empty()
             || !q.balances.is_empty()
             || q.extra_usage.is_some()
+            || q.notice.is_some()
             || source.provider == "opencode"
                 && config.mode == "console"
                 && (v.is_null() || v["access"].is_null()),
@@ -661,6 +789,10 @@ impl Engine {
     ) -> Result<Value> {
         let base = self.store.settings()?;
         let provider = params["provider"].as_str().context("请选择 Agent")?;
+        ensure!(
+            !matches!(provider, "workbuddy" | "codebuddy"),
+            "请使用可选的 Buddy 登录查看余额"
+        );
         ensure!(
             supported(provider)
                 && base.agents.iter().any(|a| {
@@ -788,6 +920,205 @@ impl Engine {
         // Old references are retained for concurrent readers; no credential is copied to SSH.
         Ok(json!({"settings":saved,"accountId":id,"quota":snapshot}))
     }
+}
+
+/// `GetCurrentPeriodUsage`: plan pools as percent windows, on-demand spend
+/// (cents) as meters. A team pool is keyed by its team so members share one meter.
+fn cursor_usage(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
+    let plan = &v["planUsage"];
+    ensure!(
+        plan.is_object() || v["spendLimitUsage"].is_object(),
+        "Cursor 用量响应格式不支持"
+    );
+    let minutes = duration(&v["billingCycleStart"], &v["billingCycleEnd"]);
+    let reset = stamp(&v["billingCycleEnd"]);
+    for (key, id, name) in [
+        ("autoPercentUsed", "cursor-models", "Cursor 模型"),
+        ("apiPercentUsed", "other-models", "其他模型"),
+    ] {
+        if !plan[key].is_null() {
+            window(q, id, name, percent(&plan[key])?, minutes, reset);
+        }
+    }
+    if q.windows.is_empty() {
+        if !plan["totalPercentUsed"].is_null() {
+            let used = percent(&plan["totalPercentUsed"])?;
+            window(q, "plan", "套餐额度", used, minutes, reset);
+        } else if number(&plan["limit"]).is_ok_and(|n| n > 0.) {
+            let used = ratio(&plan["totalSpend"], &plan["limit"])?;
+            window(q, "plan", "套餐额度", used, minutes, reset);
+        }
+    }
+    let spend = &v["spendLimitUsage"];
+    let cents = |key: &str| number(&spend[key]).ok().map(|n| n / 100.);
+    let team = text(&spend["limitType"]) == "team";
+    let (used, limit, id, label) = if team {
+        let team_id = spend["teamId"]
+            .as_i64()
+            .map(|n| n.to_string())
+            .or_else(|| label(&spend["teamId"]));
+        (
+            cents("pooledUsed"),
+            cents("pooledLimit"),
+            team_id.map_or("team-pool".into(), |t| format!("team-pool:{t}")),
+            "团队共享额度",
+        )
+    } else {
+        (
+            cents("individualUsed"),
+            cents("individualLimit"),
+            "on-demand".into(),
+            "按需用量",
+        )
+    };
+    if let Some(used) = used.filter(|u| *u >= 0.) {
+        let total = limit.filter(|l| *l > 0.);
+        q.meters.push(QuotaMeter {
+            id,
+            label: label.into(),
+            used,
+            total,
+            remaining: total.map(|t| (t - used).max(0.)),
+            unit: "usd".into(),
+            resets_at: reset,
+            ..Default::default()
+        });
+    }
+    ensure!(
+        !q.windows.is_empty() || !q.meters.is_empty(),
+        "Cursor 用量响应格式不支持"
+    );
+    Ok(())
+}
+
+/// `copilot_internal/user` (unpublished; see docs/agent-subscriptions.md). Limited
+/// pools become meters, unlimited ones are omitted unless usage-based billing
+/// reports `credits_used`. `remaining` may be negative once paid overage is used.
+/// With `token_based_billing` the premium pool is GitHub AI Credits, not requests.
+fn copilot_usage(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
+    ensure!(v.is_object(), "Copilot 用量响应格式不支持");
+    let reset = stamp(&v["quota_reset_date_utc"])
+        .or_else(|| stamp(&v["quota_reset_date"]))
+        .or_else(|| stamp(&v["limited_user_reset_date"]))
+        .or_else(|| {
+            [&v["quota_reset_date"], &v["limited_user_reset_date"]]
+                .into_iter()
+                .find_map(|d| chrono::NaiveDate::parse_from_str(d.as_str()?, "%Y-%m-%d").ok())
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .map(|t| t.and_utc().timestamp())
+        });
+    let names = [
+        ("premium_interactions", "Premium 请求"),
+        ("chat", "Chat 消息"),
+        ("completions", "代码补全"),
+    ];
+    let credits = v["token_based_billing"] == true;
+    let snapshots = &v["quota_snapshots"];
+    for (key, label) in names {
+        let s = &snapshots[key];
+        if !s.is_object() {
+            continue;
+        }
+        let premium = key == "premium_interactions";
+        let (label, unit) = if premium && credits {
+            ("AI Credits", "credits")
+        } else {
+            (label, "requests")
+        };
+        if s["unlimited"] == true {
+            // No allowance to compare against; only what usage-based billing spent.
+            if premium && let Ok(used) = number(&s["credits_used"]) {
+                ensure!(used >= 0., "Copilot 额度格式无效");
+                q.meters.push(QuotaMeter {
+                    id: key.replace('_', "-"),
+                    label: "AI Credits".into(),
+                    used,
+                    unit: "credits".into(),
+                    resets_at: reset,
+                    ..Default::default()
+                });
+            }
+            continue;
+        }
+        let total = number(&s["entitlement"])?;
+        // `quota_remaining` keeps the fraction left by request multipliers; either
+        // field going negative is paid overage.
+        let precise = number(&s["quota_remaining"]).ok();
+        let signed = number(&s["remaining"]).ok();
+        let remaining = precise.or(signed).context("额度数值缺失或格式不支持")?;
+        ensure!(total >= 0., "Copilot 额度格式无效");
+        if total == 0. && remaining == 0. && s["overage_count"].is_null() {
+            continue;
+        }
+        let overage = [precise, signed]
+            .into_iter()
+            .flatten()
+            .fold(number(&s["overage_count"]).unwrap_or(0.), |o, r| o.max(-r))
+            .max(0.);
+        q.meters.push(QuotaMeter {
+            id: key.replace('_', "-"),
+            label: label.into(),
+            used: (total - remaining.max(0.)).max(0.),
+            total: Some(total),
+            remaining: Some(remaining.max(0.)),
+            overage: (overage > 0.).then_some(overage),
+            unit: unit.into(),
+            resets_at: reset,
+            ..Default::default()
+        });
+    }
+    // Copilot Free (older responses): monthly allowance and what is left of it.
+    if q.meters.is_empty() {
+        for (key, label) in names {
+            let (Ok(total), Ok(left)) = (
+                number(&v["monthly_quotas"][key]),
+                number(&v["limited_user_quotas"][key]),
+            ) else {
+                continue;
+            };
+            ensure!(total >= 0. && left >= 0., "Copilot 额度格式无效");
+            q.meters.push(QuotaMeter {
+                id: key.replace('_', "-"),
+                label: label.into(),
+                used: (total - left).max(0.),
+                total: Some(total),
+                remaining: Some(left.min(total)),
+                unit: "requests".into(),
+                resets_at: reset,
+                ..Default::default()
+            });
+        }
+    }
+    q.plan = match text(&v["copilot_plan"]) {
+        "free" => Some("Copilot Free".into()),
+        "individual" | "individual_pro" => Some("Copilot Pro".into()),
+        "individual_pro_plus" | "pro_plus" => Some("Copilot Pro+".into()),
+        "business" => Some("Copilot Business".into()),
+        "enterprise" => Some("Copilot Enterprise".into()),
+        other => label(&json!(other)).or_else(|| label(&v["access_type_sku"])),
+    };
+    if let Some(login) = label(&v["login"]) {
+        q.identity = Some(AccountIdentity {
+            key: copilot_identity(&login),
+            email: login,
+            checked_at: now(),
+            ..Default::default()
+        });
+    }
+    if q.meters.is_empty() && v["quota_snapshots"].is_object() {
+        // Every pool unlimited (e.g. Business without premium metering).
+        q.notice = Some("当前套餐无计量额度".into());
+    }
+    ensure!(
+        !q.meters.is_empty() || q.notice.is_some(),
+        "Copilot 用量响应格式不支持"
+    );
+    Ok(())
+}
+/// Legacy/offline quota projection only. Live quota reads bind `/user`'s numeric
+/// subject in `transport`; usernames are not stable across renames or reuse.
+pub(crate) fn copilot_identity(login: &str) -> String {
+    format!("copilot:{}", hash(&login.to_ascii_lowercase()))
 }
 
 #[cfg(test)]
@@ -930,6 +1261,60 @@ mod tests {
     };
 
     #[test]
+    fn cline_account_uses_bearer_auth_and_dsh_keeps_its_native_header() {
+        for provider in ["cline", "deepseek-harness"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/account", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(socket.try_clone().unwrap());
+                let mut headers = String::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line.is_empty() || line == "\r\n" {
+                        break;
+                    }
+                    headers.push_str(&line.to_lowercase());
+                }
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+                )
+                .unwrap();
+                headers
+            });
+            let source = Source {
+                provider: provider.into(),
+                ..Default::default()
+            };
+            let settings = Settings {
+                proxy: ProxyConfig {
+                    mode: "direct".into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let config = SubscriptionConfig {
+                mode: "account".into(),
+                ..Default::default()
+            };
+            request(&source, &settings, &config, "workos:fixture", &url).unwrap();
+            let headers = server.join().unwrap();
+            if provider == "cline" {
+                assert!(headers.contains("authorization: bearer workos:fixture"));
+                assert!(!headers.contains("x-dsh-auth-token"));
+            } else {
+                assert!(headers.contains("x-dsh-auth-token: workos:fixture"));
+                assert!(!headers.contains("authorization:"));
+            }
+        }
+    }
+
+    #[test]
     fn validated_connection_persists_only_secret_reference_and_rotation_is_atomic() {
         let root = tempfile::tempdir().unwrap();
         let mut engine = Engine::open(root.path()).unwrap();
@@ -1067,6 +1452,248 @@ mod tests {
             }
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn copilot_pro_free_and_overage_become_request_meters() {
+        let source = Source {
+            provider: "copilot".into(),
+            ..Default::default()
+        };
+        let config = SubscriptionConfig {
+            mode: "github".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            endpoint("copilot", &config).unwrap(),
+            "https://api.github.com/copilot_internal/user"
+        );
+        // Pro: chat/completions unlimited, premium metered.
+        let pro = parse(&source, &config, &json!({
+            "login":"Octo-Fixture","copilot_plan":"individual_pro","access_type_sku":"plus_monthly_subscriber_quota",
+            "quota_reset_date_utc":"2026-11-01T00:00:00.000Z",
+            "quota_snapshots":{
+                "chat":{"entitlement":0,"remaining":0,"unlimited":true},
+                "completions":{"entitlement":0,"remaining":0,"unlimited":true},
+                "premium_interactions":{"entitlement":300,"remaining":250,"percent_remaining":83.3,"unlimited":false,"overage_count":0,"overage_permitted":true}}
+        })).unwrap();
+        assert_eq!(pro.plan.as_deref(), Some("Copilot Pro"));
+        assert_eq!(pro.meters.len(), 1);
+        let m = &pro.meters[0];
+        assert_eq!(
+            (m.id.as_str(), m.unit.as_str()),
+            ("premium-interactions", "requests")
+        );
+        assert_eq!(
+            (m.used, m.total, m.remaining, m.overage),
+            (50., Some(300.), Some(250.), None)
+        );
+        assert_eq!(m.resets_at, Some(1793491200));
+        assert!(m.valid());
+        let identity = pro.identity.unwrap();
+        assert_eq!(identity.key, copilot_identity("octo-fixture"));
+        // Overage: remaining goes negative once paid requests are used.
+        let over = parse(&source, &config, &json!({
+            "copilot_plan":"individual_pro","quota_reset_date":"2026-11-01",
+            "quota_snapshots":{"premium_interactions":{"entitlement":300,"remaining":-12,"unlimited":false,"overage_count":12,"overage_permitted":true}}
+        })).unwrap();
+        let m = &over.meters[0];
+        assert_eq!(
+            (m.used, m.remaining, m.overage),
+            (300., Some(0.), Some(12.))
+        );
+        assert_eq!(m.resets_at, Some(1793491200));
+        // Free, older response shape: monthly allowance and what is left.
+        let free = parse(
+            &source,
+            &config,
+            &json!({
+                "copilot_plan":"free","limited_user_reset_date":"2026-11-01",
+                "monthly_quotas":{"chat":50,"completions":2000},
+                "limited_user_quotas":{"chat":45,"completions":1990}
+            }),
+        )
+        .unwrap();
+        assert_eq!(free.plan.as_deref(), Some("Copilot Free"));
+        let ids: Vec<_> = free
+            .meters
+            .iter()
+            .map(|m| (m.id.as_str(), m.used))
+            .collect();
+        assert_eq!(ids, [("chat", 5.), ("completions", 10.)]);
+        // Everything unlimited is a notice, not an error.
+        let business = parse(&source, &config, &json!({
+            "copilot_plan":"business",
+            "quota_snapshots":{"chat":{"unlimited":true},"premium_interactions":{"unlimited":true}}
+        })).unwrap();
+        assert!(business.meters.is_empty() && business.notice.is_some());
+        assert!(parse(&source, &config, &json!({"message":"Not Found"})).is_err());
+    }
+
+    #[test]
+    fn copilot_usage_based_billing_reports_ai_credits() {
+        // Field shapes from community reports of `copilot_internal/user`; not yet seen live.
+        let source = Source {
+            provider: "copilot".into(),
+            ..Default::default()
+        };
+        let config = SubscriptionConfig {
+            mode: "github".into(),
+            ..Default::default()
+        };
+        // Token-based billing: the premium pool is AI Credits; the fractional
+        // `quota_remaining` is preferred over the rounded `remaining`.
+        let pro = parse(&source, &config, &json!({
+            "copilot_plan":"individual_pro","token_based_billing":true,"quota_reset_date_utc":"2026-11-01T00:00:00.000Z",
+            "quota_snapshots":{"chat":{"unlimited":true},"completions":{"unlimited":true},
+                "premium_interactions":{"entitlement":1000,"remaining":746,"quota_remaining":746.5,"unlimited":false,"overage_permitted":false}}
+        })).unwrap();
+        let m = &pro.meters[0];
+        assert_eq!(
+            (m.label.as_str(), m.unit.as_str()),
+            ("AI Credits", "credits")
+        );
+        assert_eq!(
+            (m.used, m.total, m.remaining),
+            (253.5, Some(1000.), Some(746.5))
+        );
+        assert!(m.valid());
+        // A clamped `quota_remaining` does not hide overage that `remaining` reports.
+        let over = parse(&source, &config, &json!({
+            "token_based_billing":true,
+            "quota_snapshots":{"premium_interactions":{"entitlement":1000,"remaining":-40,"quota_remaining":0,"unlimited":false}}
+        })).unwrap();
+        let m = &over.meters[0];
+        assert_eq!(
+            (m.used, m.remaining, m.overage),
+            (1000., Some(0.), Some(40.))
+        );
+        // An unlimited pool has no allowance; usage-based billing still reports spend.
+        let business = parse(
+            &source,
+            &config,
+            &json!({
+                "copilot_plan":"business","token_based_billing":true,
+                "quota_snapshots":{"premium_interactions":{"unlimited":true,"credits_used":42.25}}
+            }),
+        )
+        .unwrap();
+        let m = &business.meters[0];
+        assert_eq!(
+            (m.used, m.total, m.remaining, m.unit.as_str()),
+            (42.25, None, None, "credits")
+        );
+        assert!(business.notice.is_none());
+        assert!(
+            parse(
+                &source,
+                &config,
+                &json!({
+                    "quota_snapshots":{"premium_interactions":{"unlimited":true,"credits_used":-1}}
+                })
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn copilot_request_uses_token_header_and_refuses_classic_tokens() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/copilot_internal/user",
+            listener.local_addr().unwrap()
+        );
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            let mut headers = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                headers.push_str(&line.to_lowercase());
+            }
+            assert!(headers.contains("authorization: token gho_fixture"));
+            assert!(headers.contains("editor-version: aieyes/"));
+            let body = "{}";
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let settings = Settings {
+            proxy: ProxyConfig {
+                mode: "direct".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let source = Source {
+            provider: "copilot".into(),
+            ..Default::default()
+        };
+        let config = SubscriptionConfig {
+            mode: "github".into(),
+            ..Default::default()
+        };
+        assert!(request(&source, &settings, &config, "gho_fixture", &url).is_ok());
+        server.join().unwrap();
+        let error = request(&source, &settings, &config, "ghp_classic", &url)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("ghp_") && !error.contains("ghp_classic"));
+    }
+
+    #[test]
+    fn zcode_quota_header_matches_desktop_native_authorization() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/api/monitor/usage/quota/limit",
+            listener.local_addr().unwrap()
+        );
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            let mut authorization = Vec::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                if line.to_lowercase().starts_with("authorization:") {
+                    authorization.push(line.trim().to_owned());
+                }
+            }
+            assert_eq!(authorization.len(), 1);
+            assert!(authorization[0].ends_with(": fixture-coding-plan-key"));
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            )
+            .unwrap();
+        });
+        let settings = Settings {
+            proxy: ProxyConfig {
+                mode: "direct".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let source = Source {
+            provider: "zcode".into(),
+            ..Default::default()
+        };
+        let config = SubscriptionConfig {
+            mode: "global".into(),
+            ..Default::default()
+        };
+        assert!(request(&source, &settings, &config, "fixture-coding-plan-key", &url).is_ok());
+        server.join().unwrap();
     }
 
     #[test]

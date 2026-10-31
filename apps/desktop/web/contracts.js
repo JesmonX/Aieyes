@@ -15,6 +15,15 @@
     "codebuddy": "CodeBuddy",
     "pi": "Pi",
     "omp": "Oh My Pi",
+    "chatgpt-work": "ChatGPT Work",
+    "workbuddy": "WorkBuddy",
+    "copilot": "GitHub Copilot",
+    "cline": "Cline",
+    "kilo": "Kilo Code",
+    "roo": "Roo Code",
+    "kiro": "Kiro",
+    "trae": "Trae",
+    "trae-cn": "Trae CN",
     "custom": "自定义"
   },
   "wakeupProviders": [
@@ -37,6 +46,15 @@
     "codebuddy": "~/.codebuddy",
     "pi": "~/.pi/agent",
     "omp": "~/.omp/agent",
+    "chatgpt-work": "~/.codex",
+    "workbuddy": "~/.workbuddy",
+    "copilot": "~/.copilot",
+    "cline": "~/.cline/data",
+    "kilo": "~/.local/share/kilo",
+    "roo": "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline",
+    "kiro": "~/.kiro",
+    "trae": "~/Library/Application Support/Trae",
+    "trae-cn": "~/Library/Application Support/Trae CN",
     "custom": "~/.aieyes"
   },
   "binaries": {
@@ -54,6 +72,15 @@
     "codebuddy": "codebuddy",
     "pi": "pi",
     "omp": "omp",
+    "chatgpt-work": "",
+    "workbuddy": "",
+    "copilot": "copilot",
+    "cline": "cline",
+    "kilo": "kilo",
+    "roo": "",
+    "kiro": "kiro-cli",
+    "trae": "trae-cli",
+    "trae-cn": "",
     "custom": ""
   },
   "windows": {
@@ -152,16 +179,6 @@
       "invalidateOnFailure": true,
       "refreshKey": null,
       "updateBehavior": "finish"
-    },
-    "accounts.scan": {
-      "lane": "accounts",
-      "invalidates": [
-        "settings",
-        "data"
-      ],
-      "invalidateOnFailure": true,
-      "refreshKey": null,
-      "updateBehavior": "cancel"
     },
     "accounts.status.get": {
       "lane": "configuration",
@@ -937,6 +954,13 @@
       "refreshKey": null,
       "updateBehavior": "finish"
     },
+    "qoderCli.status": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "observe"
+    },
     "wakeups.delete": {
       "lane": "wakeups",
       "invalidates": [
@@ -1048,6 +1072,91 @@
       "invalidates": [],
       "invalidateOnFailure": false,
       "refreshKey": null
+    },
+    "accounts.autoScan": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": true,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    "claudeAuth.keychain": {
+      "lane": "quotas",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "claudeAuth.status": {
+      "lane": "quotas",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "cancel"
+    },
+    "copilotAuth.start": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "copilotAuth.status": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    "copilotAuth.cancel": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    "buddyAuth.start": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
+    },
+    "buddyAuth.status": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    "buddyAuth.cancel": {
+      "lane": "accounts",
+      "invalidates": [],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "complete"
+    },
+    "buddyAuth.logout": {
+      "lane": "accounts",
+      "invalidates": [
+        "settings",
+        "data"
+      ],
+      "invalidateOnFailure": false,
+      "refreshKey": null,
+      "updateBehavior": "finish"
     }
   },
   "subscriptions": {
@@ -1083,13 +1192,6 @@
       },
       "loginUrl": "https://grok.com"
     },
-    "cursor": {
-      "hint": "从 Cursor 用量页复制含 WorkosCursorSessionToken 的请求 Cookie。",
-      "modes": {
-        "session": "Cursor 会话 Cookie"
-      },
-      "loginUrl": "https://cursor.com/dashboard"
-    },
     "opencode": {
       "hint": "Go 使用 API Key，或 Console Cookie 与 Workspace ID 查询 Go / Zen 余额。外部订阅请连接对应服务商。",
       "modes": {
@@ -1112,6 +1214,16 @@
         "api": "DeepSeek 官方 API 余额"
       },
       "loginUrl": "https://platform.deepseek.com/usage"
+    },
+    "trae": {
+      "hint": "Trae 把登录加密保存在 IDE 中，Aieyes 不读取也不粘贴令牌；额度请在官方用量页查看。",
+      "modes": {},
+      "loginUrl": "https://www.trae.ai/account-setting#usage"
+    },
+    "trae-cn": {
+      "hint": "Trae 把登录加密保存在 IDE 中，Aieyes 不读取也不粘贴令牌；额度请在官方用量页查看。",
+      "modes": {},
+      "loginUrl": "https://www.trae.cn/account-setting#usage"
     }
   },
   "apiGuidance": {
@@ -1138,7 +1250,9 @@
     }
   },
   "agentAliases": {
-    "deepseek-harness": "deepseek"
+    "deepseek-harness": "deepseek",
+    "chatgpt-work": "codex",
+    "trae-cn": "trae"
   },
   "agentProviders": [
     "codex",
@@ -1154,6 +1268,13 @@
     "codebuddy",
     "pi",
     "omp",
+    "workbuddy",
+    "copilot",
+    "cline",
+    "kilo",
+    "roo",
+    "kiro",
+    "trae",
     "custom"
   ],
   "providerCapabilities": {
@@ -1237,17 +1358,69 @@
     "codebuddy": [
       "accounts",
       "api",
-      "machines"
+      "machines",
+      "quota"
     ],
     "pi": [
       "accounts",
       "api",
-      "machines"
+      "machines",
+      "quota",
+      "quotaReset"
     ],
     "omp": [
       "accounts",
       "api",
+      "machines",
+      "quota",
+      "quotaReset"
+    ],
+    "chatgpt-work": [
+      "quota",
+      "quotaReset"
+    ],
+    "workbuddy": [
+      "accounts",
+      "machines",
+      "quota"
+    ],
+    "copilot": [
+      "accounts",
+      "machines",
+      "quota",
+      "quotaReset"
+    ],
+    "cline": [
+      "accounts",
+      "machines",
+      "quota"
+    ],
+    "kilo": [
+      "accounts",
+      "machines",
+      "quota"
+    ],
+    "roo": [
+      "accounts",
       "machines"
+    ],
+    "kiro": [
+      "accounts",
+      "machines",
+      "quota",
+      "quotaReset"
+    ],
+    "trae": [
+      "accounts",
+      "machines",
+      "quota",
+      "quotaReset"
+    ],
+    "trae-cn": [
+      "accounts",
+      "machines",
+      "quota",
+      "quotaReset"
     ],
     "custom": [
       "accounts",
@@ -1313,9 +1486,45 @@
       "asset": "omp",
       "monochrome": false,
       "darkAsset": "omp-dark"
+    },
+    "chatgpt-work": {
+      "asset": "chatgpt-work",
+      "monochrome": true
+    },
+    "workbuddy": {
+      "asset": "workbuddy",
+      "monochrome": false
+    },
+    "copilot": {
+      "asset": "copilot",
+      "monochrome": true
+    },
+    "cline": {
+      "asset": "cline",
+      "monochrome": true
+    },
+    "kilo": {
+      "asset": "kilo",
+      "monochrome": true
+    },
+    "roo": {
+      "asset": "roo",
+      "monochrome": true
+    },
+    "kiro": {
+      "asset": "kiro",
+      "monochrome": false
+    },
+    "trae": {
+      "asset": "trae",
+      "monochrome": false
+    },
+    "trae-cn": {
+      "asset": "trae",
+      "monochrome": false
     }
   },
-  "contractHash": "12be00f9aafb5cf3f9d457c4baa7685a16a1dea0ab13c8b0e98f9ec0e54177b1",
+  "contractHash": "c814ad683b58ef1615b324497cd5aa39a837882a1e0468e747ac537a3e6357ba",
   "petFrameDurations": [
     [
       280,

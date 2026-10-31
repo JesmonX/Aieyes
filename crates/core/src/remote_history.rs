@@ -76,7 +76,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
         drop(q);
         cursors
     };
-    if matches!(source.provider.as_str(), "opencode" | "zcode") {
+    if matches!(source.provider.as_str(), "opencode" | "kilo" | "zcode") {
         for (path, cursor) in &mut cursors {
             let pending = |after: i64| -> Result<Vec<i64>> {
                 Ok(store.db.prepare("SELECT row_id FROM native_pending WHERE source_id=?1 AND path=?2 AND row_id>?3 ORDER BY row_id LIMIT 257")?
@@ -197,7 +197,7 @@ fn scan_mode(root: &Path, settings: &Settings, source: &Source, full: bool) -> R
             .unwrap()
             .extend(qoder_issues);
     }
-    if matches!(source.provider.as_str(), "opencode" | "zcode") {
+    if matches!(source.provider.as_str(), "opencode" | "kilo" | "zcode") {
         let states = store
             .db
             .prepare("SELECT state FROM remote_cursors WHERE source_id=?1 AND configuration=?2")?
@@ -246,7 +246,7 @@ fn apply_batch(
         .map(|s| serde_json::from_str::<ParseState>(&s))
         .transpose()?
         .unwrap_or_else(|| ParseState {
-            session_id: if source.provider == "kimi" {
+            session_id: if matches!(source.provider.as_str(), "kimi" | "copilot") {
                 crate::native_agents::session_id(Path::new(path))
             } else {
                 format!("{}:{}", source.id, path)
@@ -258,7 +258,7 @@ fn apply_batch(
     let mut count = 0;
     if let Some(rows) = frame["nativeRows"].as_array() {
         ensure!(
-            matches!(source.provider.as_str(), "opencode" | "zcode"),
+            matches!(source.provider.as_str(), "opencode" | "kilo" | "zcode"),
             "原生统计来源类型不一致"
         );
         ensure!(rows.len() <= 256, "原生统计批次过大");
@@ -287,7 +287,7 @@ fn apply_batch(
                 .context("原生统计行号无效")?;
             let record = if row["data"]["invalidMetadata"] == true {
                 Err(anyhow::anyhow!("原生统计元数据无效"))
-            } else if source.provider == "opencode" {
+            } else if crate::opencode::family(&source.provider) {
                 crate::opencode::record(source, row["id"].as_str().unwrap_or(""), &row["data"])
             } else {
                 crate::zcode::record(source, row["id"].as_str().unwrap_or(""), &row["data"])
@@ -319,7 +319,7 @@ fn apply_batch(
         if source.provider == "deepseek-harness" {
             crate::harness_history::prepare(store, source, row)?;
         }
-        if source.provider == "opencode" && row["opencode"].is_object() {
+        if crate::opencode::family(&source.provider) && row["opencode"].is_object() {
             let row = &row["opencode"];
             let event = crate::opencode::event(
                 source,
@@ -345,10 +345,7 @@ fn apply_batch(
         }
         let parsed = usage::parse(source, &mut state, row);
         store.record_codex_history(source, &state, row, parsed.as_ref())?;
-        if settings.precise_counting
-            && state.first_inherited_count
-            && row["inheritedHistory"].is_object()
-        {
+        if state.first_inherited_count && row["inheritedHistory"].is_object() {
             crate::codex_history::seed(
                 &mut state,
                 serde_json::from_value(row["inheritedHistory"].clone())?,

@@ -294,3 +294,147 @@ fn pending_queue_finishes_a_bounded_sweep_even_after_native_writes_stop() {
         0
     );
 }
+
+/// `aieyes-core --call` with a disposable HOME, so detection reads only the fixture.
+fn call(root: &std::path::Path, method: &str, params: serde_json::Value) -> serde_json::Value {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_aieyes-core"))
+        .args([
+            "--data-dir",
+            root.join("data").to_str().unwrap(),
+            "--call",
+            method,
+            &params.to_string(),
+        ])
+        .env("HOME", root.join("home"))
+        .env("USERPROFILE", root.join("home"))
+        .env("XDG_DATA_HOME", root.join("home/.local/share"))
+        .env("XDG_CONFIG_HOME", root.join("home/.config"))
+        .env_remove("OPENCODE_CONFIG")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{method}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+#[test]
+fn credential_table_logins_are_detected_read_only_with_opencodes_own_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("home/.local/share/opencode");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("opencode.db");
+    let claims = json!({"sub":"auth0|fixture","https://api.openai.com/auth":{"chatgpt_account_id":"ws-fixture","chatgpt_user_id":"user-fixture"}});
+    let access = format!(
+        "e30.{}.sig",
+        base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            claims.to_string()
+        )
+    );
+    {
+        // OpenCode 2.1 schema (verified against the installed v2.1.0 database).
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE credential(id text PRIMARY KEY, integration_id text, label text NOT NULL, value text NOT NULL, connector_id text, method_id text, active integer, time_created integer NOT NULL, time_updated integer NOT NULL); CREATE TABLE account_state(id integer PRIMARY KEY, active_account_id text, active_org_id text);").unwrap();
+        for (id, integration, value, active, created) in [
+            (
+                "cred_1",
+                "openai",
+                json!({"type":"oauth","methodID":"chatgpt-browser","access":access,"refresh":"PRIVATE-REFRESH","expires":4102444800000i64,"metadata":{"accountID":"ws-fixture"}}),
+                Some(1),
+                2,
+            ),
+            (
+                "cred_2",
+                "openai",
+                json!({"type":"key","key":"PRIVATE-OLD-KEY"}),
+                Some(0),
+                9,
+            ),
+            (
+                "cred_3",
+                "opencode-go",
+                json!({"type":"key","key":"PRIVATE-GO-KEY"}),
+                None,
+                1,
+            ),
+            (
+                "cred_4",
+                "claude-agent",
+                json!({"type":"external","methodID":"claude-login"}),
+                Some(1),
+                1,
+            ),
+            // GitHub Enterprise is listed but never sent to api.github.com.
+            (
+                "cred_5",
+                "github-copilot",
+                json!({"type":"oauth","methodID":"device","access":"gho_PRIVATE","refresh":"gho_PRIVATE","expires":0,"metadata":{"enterpriseUrl":"company.ghe.com"}}),
+                Some(1),
+                1,
+            ),
+        ] {
+            db.execute(
+                "INSERT INTO credential VALUES(?1,?2,'OAuth',?3,NULL,NULL,?4,?5,?5)",
+                params![id, integration, value.to_string(), active, created],
+            )
+            .unwrap();
+        }
+    }
+    let before = std::fs::read(&path).unwrap();
+    let mut settings = call(root.path(), "settings.get", json!({}));
+    for agent in settings["agents"].as_array_mut().unwrap() {
+        let on = agent["provider"] == "opencode";
+        agent["enabled"] = json!(on);
+        agent["machineIds"] = json!(if on { json!(["local"]) } else { json!([]) });
+    }
+    call(root.path(), "settings.save", settings);
+    let result = call(root.path(), "accounts.autoScan", json!({}));
+    let text = result.to_string();
+    assert!(!text.contains("PRIVATE") && !text.contains("gho_") && !text.contains(&access));
+    let rows: Vec<_> = result["settings"]["nativeConnections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| {
+            r["provider"] == "opencode"
+                && r["configPath"].as_str().unwrap().ends_with("opencode.db")
+        })
+        .collect();
+    let by = |selector: &str| rows.iter().find(|r| r["selector"] == selector).copied();
+    let openai = by("/openai").expect("active ChatGPT login");
+    assert_eq!(openai["kind"], "login");
+    assert_eq!(openai["status"], "observed");
+    assert!(
+        openai["upstreamIdentity"]
+            .as_str()
+            .unwrap()
+            .starts_with("openai:")
+    );
+    assert!(
+        openai["accountKey"]
+            .as_str()
+            .unwrap()
+            .starts_with("opencode:")
+    );
+    assert_eq!(by("/opencode-go").unwrap()["kind"], "api");
+    let enterprise = by("/github-copilot").unwrap();
+    assert_eq!(enterprise["hasCredential"], false);
+    assert!(by("/claude-agent").is_none());
+    assert_eq!(rows.len(), 3);
+    let account = result["settings"]["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["provider"] == "opencode")
+        .unwrap();
+    assert_eq!(account["upstreamIdentity"], openai["upstreamIdentity"]);
+    // Read-only: the database is unchanged and a second detection is idempotent.
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let again = call(root.path(), "accounts.autoScan", json!({}));
+    assert_eq!(again["addedAccounts"], 0);
+    assert_eq!(again["addedConnections"], 0);
+}

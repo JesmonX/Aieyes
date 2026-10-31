@@ -7,7 +7,18 @@
   let statusRevision = 0,statusRefreshAgain = false;
   const sourceStatusRequests = new Map(),sourceStatusTasks = new Map();
   const antigravityRefreshTasks = new Map();
+  let copilotDeviceFlow = null,copilotCapabilityLoading = false;
+  async function loadCopilotCapability() {
+    if (copilotCapabilityLoading) return;
+    copilotCapabilityLoading = true;
+    try {copilotDeviceFlow = (await api('copilotAuth.status'))?.deviceFlow === true;} catch {copilotDeviceFlow = false;}
+    finally {copilotCapabilityLoading = false;}
+    if (state.page === 'settings' && state.settingsAgent === 'copilot') renderSettings(false);
+  }
   const accountKey = (a) => a.provider + ':' + a.id;
+  // A subscription without modes has nothing to paste: only its official usage page (Trae).
+  const linkOnly = (provider) => {const spec = window.AieyesContract.subscriptions[provider];return !!spec && !Object.keys(spec.modes ?? {}).length;};
+  const usagePages = (provider) => Object.keys(window.AieyesContract.subscriptions).filter((p) => linkOnly(p) && AieyesUI.sameAgent(p, provider));
   const machineId = (s) => s.hostId || 'local';
   const deviceName = (id) => id === 'local' ? AieyesI18n.t("本机") : state.settings.hosts.find((h) => h.id === id)?.name || state.settings.hosts.find((h) => h.id === id)?.target || AieyesI18n.t("已移除设备");
   function machines(provider, paused = false) {
@@ -199,16 +210,16 @@
   function hookLabel(provider, machine) {
     const sources = hookSources(provider, machine);if (!sources.length) return AieyesI18n.t("会话监测未启用");
     const active = sources.filter((s) => AieyesUI.sourceEnabled(state.settings, s));if (!active.length) return AieyesI18n.t("采集已暂停");
-    if (['codex', 'kimi', 'deepseek-harness', 'grok', 'qoder', 'opencode', 'pi', 'omp'].includes(provider)) return active.every((s) => sessionSnapshot.sources?.some((row) => row.sourceId === s.id && row.state === 'healthy')) ? AieyesI18n.t("日志接入") : AieyesI18n.t("日志待确认");
+    if (['codex', 'kimi', 'deepseek-harness', 'grok', 'qoder', 'opencode', 'pi', 'omp', 'workbuddy'].includes(provider)) return active.every((s) => sessionSnapshot.sources?.some((row) => row.sourceId === s.id && row.state === 'healthy')) ? AieyesI18n.t("日志接入") : AieyesI18n.t("日志待确认");
     const values = active.map(hookState);return values.includes('error') ? AieyesI18n.t("接入失败") : values.includes('disabled') ? AieyesI18n.t("实时监测已停用") : values.every((v) => v === 'installed') ? AieyesI18n.t("会话监测已启用") : AieyesI18n.t("等待监测安装");
   }
-  function hooksHTML(provider, machine) {return ['codex', 'claude', 'antigravity', 'cursor', 'kimi', 'codebuddy', 'deepseek-harness', 'grok', 'zcode', 'qoder', 'opencode', 'pi', 'omp'].includes(provider) ? `<button type="button" class="tiny" data-machine-hooks="${e(provider)}" data-machine="${e(machine)}" ${hookSources(provider, machine).length ? '' : 'disabled'}>${e(hookLabel(provider, machine))}</button>` : '';}
+  function hooksHTML(provider, machine) {return ['codex', 'claude', 'antigravity', 'cursor', 'kimi', 'codebuddy', 'deepseek-harness', 'grok', 'zcode', 'qoder', 'opencode', 'pi', 'omp', 'workbuddy'].includes(provider) ? `<button type="button" class="tiny" data-machine-hooks="${e(provider)}" data-machine="${e(machine)}" ${hookSources(provider, machine).length ? '' : 'disabled'}>${e(hookLabel(provider, machine))}</button>` : '';}
   function paintHooks() {document.querySelectorAll('[data-machine-hooks]').forEach((el) => updateText(el, hookLabel(el.dataset.machineHooks, el.dataset.machine)));}
   function updateSession(value) {sessionSnapshot = value ?? { sources: [] };paintHooks();}
   function openHooks(provider, machine) {
     const sources = hookSources(provider, machine).filter((s, i, a) => s.machineBinding !== 'unbound' && a.findIndex((v) => v.path === s.path) === i),dialog = document.createElement('dialog');
     dialog.id = 'session-hooks';dialog.setAttribute('aria-label', AieyesI18n.t("会话监测"));
-    dialog.innerHTML = `<div class="between"><h2>${AieyesI18n.t("会话监测 · {0}", e(deviceName(machine)))}</h2><button data-close>${AieyesI18n.t("完成")}</button></div><p class="muted">${['codex', 'kimi', 'deepseek-harness', 'grok', 'qoder', 'opencode', 'pi', 'omp'].includes(provider) ? AieyesI18n.t("从 {0} 原生记录读取会话状态。", e(providers[provider])) : provider === 'zcode' ? AieyesI18n.t("实时状态由 ZCode 原生监测提供；停用后仅显示已结算的状态。SSH 监测需要远端 Python 3。") : provider === 'cursor' ? AieyesI18n.t("从用户或项目的 .cursor/hooks.json 接收状态；停用后不再接收新状态。原生会话库的 Token 暂未接入，SSH 监测需要远端 Python 3。") : machine === 'local' ? AieyesI18n.t("采集时自动监测会话；停用实时监测后仍读取日志。") : AieyesI18n.t("通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。")}</p>` + sources.map((source) => `<section class="sampling-row" data-hook-row="${e(source.id)}"><code>${e(source.path)}</code>${['codex', 'kimi', 'deepseek-harness', 'grok', 'qoder', 'opencode', 'pi', 'omp'].includes(provider) ? '' : `<div class="between"><label><input type="checkbox" role="switch" data-hook-toggle ${hookState(source) === 'disabled' ? '' : 'checked'}>${AieyesI18n.t("实时监测")}</label><span data-hook-label>${e(hookLabels[hookState(source)] ?? AieyesI18n.t("等待监测安装"))}</span><button data-hook-repair>${AieyesI18n.t("修复监测")}</button></div>`}<div class="error" hidden></div></section>`).join('');
+    dialog.innerHTML = `<div class="between"><h2>${AieyesI18n.t("会话监测 · {0}", e(deviceName(machine)))}</h2><button data-close>${AieyesI18n.t("完成")}</button></div><p class="muted">${['codex', 'kimi', 'deepseek-harness', 'grok', 'qoder', 'opencode', 'pi', 'omp', 'workbuddy'].includes(provider) ? AieyesI18n.t("从 {0} 原生记录读取会话状态。", e(providers[provider])) : provider === 'zcode' ? AieyesI18n.t("实时状态由 ZCode 原生监测提供；停用后仅显示已结算的状态。SSH 监测需要远端 Python 3。") : provider === 'cursor' ? AieyesI18n.t("从用户或项目的 .cursor/hooks.json 接收状态；停用后不再接收新状态。原生会话库的 Token 暂未接入，SSH 监测需要远端 Python 3。") : machine === 'local' ? AieyesI18n.t("采集时自动监测会话；停用实时监测后仍读取日志。") : AieyesI18n.t("通过 SSH 监测会话，需要远端 Python 3。停用实时监测后仍读取日志。")}</p>` + sources.map((source) => `<section class="sampling-row" data-hook-row="${e(source.id)}"><code>${e(source.path)}</code>${['codex', 'kimi', 'deepseek-harness', 'grok', 'qoder', 'opencode', 'pi', 'omp', 'workbuddy'].includes(provider) ? '' : `<div class="between"><label><input type="checkbox" role="switch" data-hook-toggle ${hookState(source) === 'disabled' ? '' : 'checked'}>${AieyesI18n.t("实时监测")}</label><span data-hook-label>${e(hookLabels[hookState(source)] ?? AieyesI18n.t("等待监测安装"))}</span><button data-hook-repair>${AieyesI18n.t("修复监测")}</button></div>`}<div class="error" hidden></div></section>`).join('');
     document.body.append(dialog);dialog.showModal();dialog.querySelector('[data-close]').onclick = () => dialog.close();dialog.onclose = () => window.AieyesMotion ? AieyesMotion.removeAfterExit(dialog) : dialog.remove();
     let busy = false;dialog.oncancel = (event) => {if (busy) event.preventDefault();};
     async function act(row, action) {
@@ -284,8 +295,9 @@
     if (showCodex || state.settings.accounts.some((a) => accountKey(a) === detailKey)) body = accountsHTML();else
     {
       const section = (key, title, detail, content, opened = false) => `<details class="${document.documentElement.dataset.platform === 'windows' ? '' : 'card '}settings-disclosure" id="agent-section-${key}" data-agent-detail="settings:${agent.provider}:${key}" data-persist-disclosure="settings:${agent.provider}:${key}" ${disclosureOpen('settings:' + agent.provider + ':' + key, opened) ? 'open' : ''}><summary><strong>${title}</strong><small>${e(detail)}</small></summary><div class="settings-section-body">${content}</div></details>`;
-      body = `<section class="card agent-integration-header" data-provider="${e(agent.provider)}"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving ? 'disabled' : ''} ${agent.enabled ? 'checked' : ''}>${AieyesI18n.t("启用")}</label></div></section>`;
+      body = `<section class="card agent-integration-header" data-provider="${e(agent.provider)}"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving ? 'disabled' : ''} ${agent.enabled ? 'checked' : ''}>${AieyesI18n.t("启用")}</label></div>${agent.provider === 'codex' && state.chatgptWorkInstalled ? `<p class="muted tiny" data-work-installed>${AieyesI18n.t("本机已安装 ChatGPT Work，会话与用量单独显示，账户和额度与 Codex 共用。")}</p>` : ''}</section>`;
       if (['pi', 'omp'].includes(agent.provider)) body += helpHTML(AieyesI18n.t("额度"), AieyesI18n.t("额度由当前模型服务商提供；本地 Token 和预估费用不代表可用余额。"));
+      if (agent.provider === 'trae') body += helpHTML(AieyesI18n.t("Trae 会话"), AieyesI18n.t("Trae IDE 的对话保存在加密数据库中，不会读取。trae-cli 的会话和 Token 用量来自所添加目录中的 trajectories 文件夹。"));
       const grouped = document.documentElement.dataset.platform === 'windows';
       if(grouped) body += '<section class="card agent-settings-group">';
       body += section('accounts', AieyesI18n.t("账户"), AieyesI18n.t("{0} 个账户", state.settings.accounts.filter(a => AieyesUI.sameAgent(a.provider, agent.provider) && !a.archived).length), accountsHTML(false), true);
@@ -329,10 +341,29 @@
     if (detail) return detailsHTML(detail);
     const row = (a) => `<div class="list-row"><div class="row-body"><strong>${e(a.name)}</strong><small data-account-summary="${e(accountKey(a))}">${e(counts(a))}</small><small data-account-identity="${e(accountKey(a))}" class="account-identity">${e(identityText(statusRows.find((r) => r.accountKey === accountKey(a) && r.current === true && r.identity)))}</small></div><button data-account-edit="${e(accountKey(a))}">${AieyesI18n.t("设置")}</button></div>`;
     const groups = configurations().filter((config) => config.provider === state.settingsAgent);
-    return syncHTML() + groups.map((config) => `<section class="card account-agent-group" id="agent-accounts"><div class="between">${window.AieyesAccountScan?.button(config.provider) ?? ''}<button data-account-add="${e(config.provider)}" class="tinted" ${config.enabled ? '' : 'disabled'}>${AieyesI18n.t("添加账户")}</button></div>${window.AieyesAccountScan?.hint(config.provider) ?? ''}${state.settings.accounts.filter((a) => AieyesUI.sameAgent(a.provider, config.provider) && !a.archived).map(row).join('') || `<p class="muted">${AieyesI18n.t("尚未添加账户")}</p>`}${window.AieyesAccountScan?.list(config.provider, 'login') ?? ''}</section>`).join('') + (
+    return syncHTML() + groups.map((config) => `<section class="card account-agent-group" id="agent-accounts"><div class="between"><span></span>${linkOnly(config.provider) ? '' : `<button data-account-add="${e(config.provider)}" class="tinted" ${config.enabled ? '' : 'disabled'}>${AieyesI18n.t("添加账户")}</button>`}</div>${state.settings.accounts.filter((a) => AieyesUI.sameAgent(a.provider, config.provider) && !a.archived).map(row).join('') || `<p class="muted">${AieyesI18n.t("尚未添加账户")}</p>`}${config.provider === 'claude' ? claudeKeychainHTML() : ''}${config.provider === 'copilot' ? copilotAuthHTML(config.enabled) : ''}${config.provider === 'qoder' ? qoderCliHTML(config.enabled) : ''}${usagePagesHTML(config.provider)}${['workbuddy', 'codebuddy'].includes(config.provider) ? `<details class="settings-details"><summary>${AieyesI18n.t("登录查看余额（可选）")}</summary><p class="muted">${AieyesI18n.t("可选登录，使用非公开接口；可随时退出登录。仅用于查看余额。")}</p><button data-buddy-login="${e(config.provider)}" ${config.enabled ? '' : 'disabled'}>${AieyesI18n.t("登录查看余额")}</button></details>` : ''}${window.AieyesAccountScan?.list(config.provider, 'login') ?? ''}</section>`).join('') + (
     includeAPI && state.settingsAgent === 'codex' ? window.AieyesCodexAPI?.html() ?? '' : '') + (
     state.settings.accounts.some((a) => a.archived && AieyesUI.sameAgent(a.provider, state.settingsAgent)) ? `<details class="card" data-agent-detail="archived-accounts"><summary>${AieyesI18n.t("已归档账户")}</summary>${state.settings.accounts.filter((a) => a.archived && AieyesUI.sameAgent(a.provider, state.settingsAgent)).map((a) => `<div class="list-row"><span class="row-body">${e(providers[a.provider])} · ${e(a.name)}</span><button data-account-restore="${e(accountKey(a))}">${AieyesI18n.t("恢复")}</button><button class="danger" data-account-delete="${e(accountKey(a))}">${AieyesI18n.t("删除账户")}</button></div>`).join('')}</details>` : '') + (
     cleanupRows.length ? `<details class="card" data-agent-detail="abandoned-tasks"><summary>${AieyesI18n.t("已解除管理的远端任务（可能仍在运行）")}</summary>${cleanupRows.map((r) => `<h3>${e(r.name)}</h3>${r.tasks.map((t) => `<p>${e(t.name)} · ${e(t.machine)} · <code>${e(t.root)}</code></p>`).join('')}`).join('')}</details>` : '');
+  }
+  // Copilot: offered until a GitHub token from a file, the environment or a grant is attributed to an account.
+  function copilotAuthHTML(enabled) {
+    if ((state.settings.nativeConnections ?? []).some((r) => r.provider === 'copilot' && r.machineId === 'local' && r.hasCredential && r.status === 'observed' && r.accountKey)) return '';
+    if (copilotDeviceFlow === null) {void loadCopilotCapability();return '';}
+    return `<div class="list-row" data-copilot-auth-row><div class="row-body"><small>${AieyesI18n.t(copilotDeviceFlow ? "未找到 GitHub 登录，授权后显示 Copilot 额度" : "在 Copilot 中登录后自动显示额度")}</small></div><button type="button" data-copilot-auth ${enabled ? '' : 'disabled'}>${copilotDeviceFlow ? AieyesI18n.t("GitHub 授权") : AieyesI18n.t("GitHub 登录说明")}</button></div>`;
+  }
+  // Trae keeps its login encrypted in the IDE: one button per edition opens the official usage page.
+  function usagePagesHTML(provider) {
+    const pages = usagePages(provider);
+    if (!pages.length) return '';
+    return `<div class="list-row" data-usage-pages><div class="row-body"><small>${e(window.AieyesContract.subscriptions[pages[0]].hint)}</small></div>${pages.map((p) => `<button type="button" data-usage-page="${e(p)}">${AieyesI18n.t("{0} 官方用量页", e(providers[p]))}</button>`).join('')}</div>`;
+  }
+  // macOS only: core records the one-time Keychain answer; the token itself stays in core memory.
+  function claudeKeychainHTML() {
+    const k = state.settings.claudeKeychain;
+    if (!k?.askedAt) return '';
+    const text = k.granted ? AieyesI18n.t("钥匙串已获授权，显示官方额度") : k.result === 'missing' ? AieyesI18n.t("未登录或使用 API key，仍可查看本地用量") : AieyesI18n.t("已拒绝钥匙串授权，仍可查看本地用量");
+    return `<div class="list-row" data-claude-keychain-status="${e(k.result || (k.granted ? 'granted' : 'denied'))}"><div class="row-body"><small>${text}</small></div>${k.granted ? '' : `<button type="button" data-claude-keychain>${AieyesI18n.t("重新授权")}</button>`}</div><p class="error" data-claude-keychain-error role="alert" hidden></p>`;
   }
   function syncContent() {return (statusError ? `<div class="error" id="account-status-error" role="alert">${e(statusError)} <button data-account-retry-status>${AieyesI18n.t("重试读取")}</button></div>` : '') + (syncMessage ? `<div class="error">${e(syncMessage)} <button data-deployment-sync>${AieyesI18n.t("重试同步")}</button></div>` : '');}
   function syncHTML() {return `<div data-account-sync>${syncContent()}</div>`;}
@@ -383,13 +414,13 @@
     const selected = AieyesUI.panelAccounts(state.settings, state.dashboard?.quotaOrder ?? []),isSelected = selected[a.provider]?.includes(accountKey(a));
     const hasQuota = AieyesUI.supports(a.provider, 'quota', state.settings);
     const priority = `<label>${AieyesI18n.t("优先查询位置")}<select data-account-priority="${e(accountKey(a))}">${option('', AieyesI18n.t("自动 · 优先本机"), draftValue(a, 'quotaSourceId', a.quotaSourceId) || '')}${state.settings.sources.filter((s) => linked(a, s)).map((s) => option(s.id, deviceName(machineId(s)) + ' · ' + s.name + (s.enabled ? '' : AieyesI18n.t(" · 已暂停")), draftValue(a, 'quotaSourceId', a.quotaSourceId) || '')).join('')}</select></label>`;
-    const interval = `<label>${AieyesI18n.t("查询间隔（秒）")}<input id="account-interval" data-account-field="quotaRefreshSeconds" data-account="${e(accountKey(a))}" type="number" min="5" max="86400" value="${e(draftValue(a, 'quotaRefreshSeconds', a.quotaRefreshSeconds ?? ''))}" placeholder="${AieyesI18n.t("沿用全局 · {0} 秒", state.settings.refreshSeconds)}"></label>`;
+    const interval = `<label>${AieyesI18n.t("查询间隔（秒）")}<input id="account-interval" data-account-field="quotaRefreshSeconds" data-account="${e(accountKey(a))}" type="number" min="5" max="86400" value="${e(draftValue(a, 'quotaRefreshSeconds', a.quotaRefreshSeconds ?? ''))}" placeholder="${AieyesI18n.t("沿用全局 · {0} 秒", state.settings.refreshSeconds)}"></label>${a.provider === 'qoder' ? `<p class="muted tiny" data-quota-floor>${AieyesI18n.t("Qoder 额度查询会启动 qodercli，最少每 10 分钟一次")}</p>` : ''}`;
     const quota = state.dashboard?.quotas?.find((q) => q.provider === a.provider && q.accountId === a.id);
     const content = `<div class="between"><button type="button" id="account-detail-back" class="back-link">${uiIcon('back')}${AieyesI18n.t("返回账户")}</button><button id="account-status-refresh" ${statusLoading ? 'disabled' : ''}>${statusLoading ? AieyesI18n.t("检查中…") : AieyesI18n.t("刷新设备状态")}</button></div>
       <section class="card account-config"><h2>${providerMark(a.provider)} ${e(a.name)}</h2><p data-account-summary="${e(accountKey(a))}">${e(counts(a))}</p>
       <label>${AieyesI18n.t("账户名称")}<input id="account-name" data-account-field="name" data-account="${e(accountKey(a))}" value="${e(draftValue(a, 'name', a.name))}"></label>
       ${hasQuota && quota?.error ? `<div class="error">${AieyesUI.errorHTML(quota.error, AieyesI18n.t("额度查询失败"))}</div>` : ''}
-      <div class="actions">${hasQuota ? `<label><input type="checkbox" role="switch" data-account-quota="${e(accountKey(a))}" ${draftValue(a, 'quotaEnabled', a.quotaEnabled) ? 'checked' : ''}>${AieyesI18n.t("显示并查询额度")}</label><label><input type="checkbox" role="switch" data-account-panel="${e(accountKey(a))}" ${isSelected ? 'checked' : ''} ${!a.quotaEnabled ? 'disabled' : ''}>${AieyesI18n.t("在面板显示")}</label><button data-account-panel-manage>${AieyesI18n.t("调整面板选择")}</button>` : ''}${a.provider !== 'codex' ? `<button data-account-connect="${e(accountKey(a))}">${a.provider === 'deepseek' ? AieyesI18n.t("更新 API Key") : window.AieyesContract.subscriptions[a.provider] ? AieyesI18n.t("更新额度凭据") : AieyesI18n.t("连接机器")}</button>` : ''}</div>
+      <div class="actions">${hasQuota ? `<label><input type="checkbox" role="switch" data-account-quota="${e(accountKey(a))}" ${draftValue(a, 'quotaEnabled', a.quotaEnabled) ? 'checked' : ''}>${AieyesI18n.t("显示并查询额度")}</label><label><input type="checkbox" role="switch" data-account-panel="${e(accountKey(a))}" ${isSelected ? 'checked' : ''} ${!a.quotaEnabled ? 'disabled' : ''}>${AieyesI18n.t("在面板显示")}</label><button data-account-panel-manage>${AieyesI18n.t("调整面板选择")}</button>` : ''}${linkOnly(a.provider) ? `<button type="button" data-usage-page="${e(a.provider)}">${AieyesI18n.t("打开官方用量页")}</button>` : a.provider !== 'codex' ? `<button data-account-connect="${e(accountKey(a))}">${a.provider === 'deepseek' ? AieyesI18n.t("更新 API Key") : window.AieyesContract.subscriptions[a.provider] ? AieyesI18n.t("更新额度凭据") : AieyesI18n.t("连接机器")}</button>` : ''}</div>
       ${hasQuota ? `<div class="between"><span class="tiny muted" role="status">${AieyesI18n.t("已选 {0} 个账户", selected[a.provider]?.length ?? 0)}</span>${helpHTML(AieyesI18n.t("面板账户"), AieyesI18n.t("自动模式显示每类前 5 个账户。手动模式可留空；新增账户默认加入面板，可随时取消。"))}</div><details class="settings-details" data-agent-detail="query:${e(accountKey(a))}" data-persist-disclosure="query:${e(accountKey(a))}" ${disclosureOpen('query:' + accountKey(a), false) ? 'open' : ''}><summary>${AieyesI18n.t("查询与提醒")}</summary>${priority}${interval}${resetPreferencesHTML(a)}</details>` : ''}
       <label><input type="checkbox" role="switch" data-account-archive="${e(accountKey(a))}" ${draftValue(a, 'archived', a.archived) ? 'checked' : ''}>${AieyesI18n.t("归档账户")}</label><p class="muted tiny">${pendingSaves ? AieyesI18n.t("正在保存…") : ''}</p>
       <div data-account-save-errors="${e(accountKey(a))}">${[...accountErrors].filter(([key]) => key.startsWith(accountKey(a) + ':')).map(([key, message]) => `<div class="error">${AieyesUI.errorHTML(message, AieyesI18n.t("保存失败，输入已保留"))} <button data-account-retry="${e(key)}">${AieyesI18n.t("重试保存")}</button></div>`).join('')}</div>${syncHTML()}</section>` +
@@ -468,6 +499,8 @@
     const enabled = configurations().filter((a) => a.enabled),initial = account?.provider || selectedProvider || state.settingsAgent || enabled[0]?.provider;
     if (!initial) return;
     const legacyBalance = account && initial === 'deepseek' && state.settings.sources.some((s) => linked(account, s) && !s.subscription);
+    // Nothing to paste for a link-only agent: its accounts come from detection.
+    if (linkOnly(initial)) {void run(() => api('subscriptions.openLogin', { provider: initial, mode: '' }));return;}
     if (window.AieyesContract.subscriptions[initial] && !legacyBalance) {subscriptionAccount(account, initial);return;}
     if (initial === 'codex') {detailKey = account ? accountKey(account) : '';showCodex = true;window.AieyesCodexAuth.open(account?.id || '');renderSettings(false);return;}
     let secret = null,secretSourceId = crypto.randomUUID();
@@ -564,6 +597,8 @@
     document.querySelectorAll('[data-deployment-sync]').forEach((b) => b.onclick = syncDeployments);
     if (state.settingsTab === 'integrations' && !showCodex) void ensureStatuses();
     document.querySelectorAll('[data-account-add]').forEach((b) => b.onclick = () => addAccount(null, b.dataset.accountAdd));
+    document.querySelectorAll('[data-usage-page]').forEach((b) => b.onclick = () => run(() => api('subscriptions.openLogin', { provider: b.dataset.usagePage, mode: '' })));
+    document.querySelectorAll('[data-claude-keychain]').forEach((b) => b.onclick = async () => {b.disabled = true;const error = document.querySelector('[data-claude-keychain-error]');try {const status = await api('claudeAuth.keychain', {});accept(await api('settings.get'));renderSettings(false);if (status?.available) void quotas();} catch (err) {if (error) {error.textContent = AieyesI18n.message(String(err));error.hidden = false;}} finally {b.disabled = false;}});
     const account = (key) => state.settings.accounts.find((a) => a.provider + ':' + a.id === key);
     document.querySelectorAll('[data-account-edit]').forEach((b) => b.onclick = () => {detailKey = b.dataset.accountEdit;renderSettings(false);});
     document.querySelectorAll('[data-account-options]').forEach((b) => b.onclick = () => editAccount(account(b.dataset.accountOptions)));
@@ -629,6 +664,80 @@
   void window.AieyesApp.ready.then(() => ensureStatuses('codex'));
 })();
 
+// Copilot sign-in. With Aieyes' own GitHub OAuth App this is the device flow; without
+// one the dialog guides `copilot login` / `gh auth login` and re-detects. No token reaches the page.
+document.addEventListener('click', (event) => {if (event.target.closest('[data-copilot-auth]')) openCopilotAuth();});
+async function openCopilotAuth() {
+  if (document.querySelector('#copilot-auth')) return;
+  const dialog = document.createElement('dialog');dialog.id = 'copilot-auth';dialog.setAttribute('aria-label', AieyesI18n.t("GitHub 授权"));
+  dialog.innerHTML = `<h2>${AieyesI18n.t("GitHub 授权")}</h2><p id="copilot-auth-status" role="status"></p><div id="copilot-auth-code" hidden><p>${AieyesI18n.t("在 GitHub 页面输入授权码")}</p><code id="copilot-user-code" class="auth-code"></code><p class="muted"><code id="copilot-verify-url"></code></p><button type="button" id="copilot-copy-code">${AieyesI18n.t("复制授权码")}</button></div><div id="copilot-auth-commands" hidden><pre><code>copilot login</code></pre><pre><code>gh auth login</code></pre></div><div id="copilot-auth-error" class="error" role="alert"></div><div class="actions"><button type="button" id="copilot-auth-detect" hidden>${AieyesI18n.t("重新检测")}</button><button type="button" id="copilot-auth-close">${AieyesI18n.t("完成")}</button></div>`;
+  document.body.append(dialog);dialog.showModal();
+  let session = null,sending = false,closed = false;
+  const waiting = () => ['waiting', 'authorized'].includes(session?.phase);
+  function draw() {
+    dialog.querySelector('#copilot-auth-status').textContent = AieyesI18n.message(session?.message || AieyesI18n.t("正在检查 GitHub 登录…"));
+    dialog.querySelector('#copilot-auth-code').hidden = session?.phase !== 'waiting';
+    dialog.querySelector('#copilot-user-code').textContent = session?.userCode ?? '';
+    dialog.querySelector('#copilot-verify-url').textContent = session?.verificationUri ?? '';
+    dialog.querySelector('#copilot-auth-commands').hidden = session?.phase !== 'external';
+    dialog.querySelector('#copilot-auth-detect').hidden = session?.phase !== 'external';
+    dialog.querySelector('#copilot-auth-detect').disabled = sending;
+    dialog.querySelector('#copilot-auth-close').textContent = waiting() ? AieyesI18n.t("取消授权") : AieyesI18n.t("完成");
+  }
+  async function call(method) {
+    if (sending) return;sending = true;draw();
+    try {session = await api('copilotAuth.' + method, {});dialog.querySelector('#copilot-auth-error').textContent = '';if (['detected', 'authorized'].includes(session?.phase)) {state.settings = await api('settings.get');}} catch (error) {dialog.querySelector('#copilot-auth-error').textContent = AieyesI18n.message(String(error));} finally {sending = false;draw();}
+  }
+  async function close() {if (sending) return;if (waiting() && session?.phase === 'waiting') await call('cancel');closed = true;dialog.close();if (window.AieyesMotion) AieyesMotion.removeAfterExit(dialog);else dialog.remove();if (['detected', 'authorized'].includes(session?.phase)) renderSettings(false);}
+  dialog.oncancel = (e) => {e.preventDefault();close();};dialog.querySelector('#copilot-auth-close').onclick = close;
+  dialog.querySelector('#copilot-auth-detect').onclick = () => call('status');
+  dialog.querySelector('#copilot-copy-code').onclick = async () => {try {await navigator.clipboard.writeText(session.userCode);} catch (error) {dialog.querySelector('#copilot-auth-error').textContent = AieyesI18n.t("复制失败：") + String(error);}};
+  draw();await call('start');
+  while (!closed && waiting()) {await new Promise((resolve) => setTimeout(resolve, 2000));if (!closed && !sending) await call('status');}
+}
+
+// Qoder desktop, IDE and QoderWork keep their logins encrypted and are never read; quota borrows
+// qodercli. Users with only a desktop app get one prompt to install it, then re-detect the login.
+const qoderCliState = { status: null, loading: false };
+function qoderSignedIn() {return state.settings.accounts.some((a) => a.provider === 'qoder' && !a.archived) || (state.settings.nativeConnections ?? []).some((r) => r.provider === 'qoder' && r.identityKey);}
+function qoderCliHTML(enabled) {
+  const status = qoderCliState.status;
+  if (!status) {void loadQoderCli();return '';}
+  if (!status.apps?.length || qoderSignedIn()) return '';
+  return `<div class="list-row" data-qoder-cli-row><div class="row-body"><small>${AieyesI18n.t("已安装 {0}；额度通过 qodercli 查询，安装并登录后显示", escapeHTML(status.apps.join(' / ')))}</small></div><button type="button" data-qoder-cli ${enabled ? '' : 'disabled'}>${status.cli ? AieyesI18n.t("登录 qodercli") : AieyesI18n.t("安装 qodercli 并登录")}</button></div>`;
+}
+async function loadQoderCli() {
+  if (qoderCliState.loading) return;qoderCliState.loading = true;
+  try {qoderCliState.status = await api('qoderCli.status');} catch {qoderCliState.status = { apps: [] };} finally {qoderCliState.loading = false;}
+  if (state.page === 'settings' && state.settingsAgent === 'qoder' && !document.querySelector('#qoder-cli')) renderSettings(false);
+}
+document.addEventListener('click', (event) => {if (event.target.closest('[data-qoder-cli]')) openQoderCli();});
+async function openQoderCli() {
+  if (document.querySelector('#qoder-cli')) return;
+  const dialog = document.createElement('dialog');dialog.id = 'qoder-cli';dialog.setAttribute('aria-label', AieyesI18n.t("安装 qodercli 并登录"));
+  dialog.innerHTML = `<h2>${AieyesI18n.t("安装 qodercli 并登录")}</h2><p id="qoder-cli-status" role="status"></p><p>${AieyesI18n.t("在终端运行：")}</p><pre class="setup-command"><code id="qoder-cli-command"></code></pre><div class="actions"><button type="button" id="qoder-cli-copy">${AieyesI18n.t("复制命令")}</button><span id="qoder-cli-copied" class="muted tiny" role="status"></span></div><p class="muted">${AieyesI18n.t("登录时也可选择 Personal Access Token，在 {0} 生成后粘贴。", '<code>https://qoder.com/account/integrations</code>')}</p><div id="qoder-cli-error" class="error" role="alert"></div><div class="dialog-actions"><button type="button" id="qoder-cli-detect">${AieyesI18n.t("重新检测")}</button><button type="button" id="qoder-cli-close">${AieyesI18n.t("完成")}</button></div>`;
+  document.body.append(dialog);dialog.showModal();
+  let sending = false;
+  const draw = () => {
+    const status = qoderCliState.status;
+    dialog.querySelector('#qoder-cli-status').textContent = AieyesI18n.message(qoderSignedIn() ? "已识别 Qoder 登录" : status?.message || "正在检查 qodercli…");
+    dialog.querySelector('#qoder-cli-command').textContent = status?.command ?? '';
+    dialog.querySelector('#qoder-cli-copy').disabled = !status?.command;
+    const detect = dialog.querySelector('#qoder-cli-detect');detect.disabled = sending;detect.textContent = sending ? AieyesI18n.t("检查中…") : AieyesI18n.t("重新检测");
+    dialog.querySelector('#qoder-cli-close').disabled = sending;
+  };
+  async function run(work) {
+    if (sending) return;sending = true;draw();
+    try {await work();dialog.querySelector('#qoder-cli-error').textContent = '';} catch (error) {dialog.querySelector('#qoder-cli-error').textContent = AieyesI18n.message(String(error));} finally {sending = false;draw();}
+  }
+  const close = () => {if (sending) return;dialog.close();if (window.AieyesMotion) AieyesMotion.removeAfterExit(dialog);else dialog.remove();renderSettings(false);};
+  dialog.oncancel = (e) => {e.preventDefault();close();};dialog.querySelector('#qoder-cli-close').onclick = close;
+  dialog.querySelector('#qoder-cli-copy').onclick = async () => {const copied = dialog.querySelector('#qoder-cli-copied');try {await navigator.clipboard.writeText(qoderCliState.status.command);copied.textContent = AieyesI18n.t("已复制");} catch (error) {copied.textContent = AieyesI18n.t("复制失败：") + String(error);}};
+  // After `qodercli login` in a terminal: read the new local CLI login, then the prompt's state.
+  dialog.querySelector('#qoder-cli-detect').onclick = () => run(async () => {await api('accounts.autoScan', { targets: [['qoder', 'local']] });state.settings = await api('settings.get');qoderCliState.status = await api('qoderCli.status');});
+  draw();await run(async () => {qoderCliState.status = await api('qoderCli.status');});
+}
+
 // A separate modal keeps the connection form intact during the CLI's authorization flow.
 window.AieyesAgyAuth = { busy: false };
 document.addEventListener('click', (event) => {const button = event.target.closest('[data-agy-login]');if (button) openAntigravityLogin(button.dataset.agyLogin);});
@@ -649,4 +758,38 @@ async function openAntigravityLogin(sourceId) {
   dialog.querySelector('#agy-copy-url').onclick = async () => {try {await navigator.clipboard.writeText(session.authUrl);} catch (error) {dialog.querySelector('#agy-login-error').textContent = AieyesI18n.t("复制失败：") + String(error);}};
   draw();await call('start');
   while (!closed) {await new Promise((resolve) => setTimeout(resolve, 1000));if (!closed && !sending && session && (active() || session.authenticated && refreshedSession !== session.id)) await call('status');}
+}
+
+
+// No automatic authorization: the user opts in from the account's optional section.
+document.addEventListener('click', (event) => {const button = event.target.closest('[data-buddy-login]');if (button) openBuddyLogin(button.dataset.buddyLogin);});
+async function openBuddyLogin(provider) {
+  if (document.querySelector('#buddy-login')) return;
+  const dialog = document.createElement('dialog');dialog.id = 'buddy-login';dialog.setAttribute('aria-label', AieyesI18n.t("登录查看余额"));
+  dialog.innerHTML = `<h2>${AieyesI18n.t("登录查看余额")}</h2><p>${AieyesI18n.t("可选登录，使用非公开接口；可随时退出登录。仅用于查看余额。")}</p><label>${AieyesI18n.t("登录地区")}<select id="buddy-region"><option value="cn">${AieyesI18n.t("中国大陆")}</option><option value="global">${AieyesI18n.t("国际版")}</option></select></label><p id="buddy-status" role="status"></p><a id="buddy-url" target="_blank" rel="noopener noreferrer" hidden>${AieyesI18n.t("打开授权网页")}</a><p id="buddy-error" class="error"></p><div class="actions"><button id="buddy-start">${AieyesI18n.t("登录查看余额")}</button><button id="buddy-logout" hidden>${AieyesI18n.t("退出所有余额登录")}</button><button id="buddy-close">${AieyesI18n.t("完成")}</button></div>`;
+  document.body.append(dialog);dialog.showModal();
+  let session = null,sending = false,closed = false;
+  const waiting = () => ['waiting', 'authorized'].includes(session?.phase);
+  function draw() {
+    dialog.querySelector('#buddy-status').textContent = AieyesI18n.message(session?.message || '');
+    const link = dialog.querySelector('#buddy-url');link.hidden = !session?.authUrl;
+    if (session?.authUrl) link.href = session.authUrl;else link.removeAttribute('href');
+    dialog.querySelector('#buddy-start').disabled = sending || waiting();
+    dialog.querySelector('#buddy-region').disabled = sending || waiting();
+    dialog.querySelector('#buddy-logout').hidden = !session?.connected;
+    dialog.querySelector('#buddy-logout').disabled = sending;
+    dialog.querySelector('#buddy-close').disabled = sending;
+    dialog.querySelector('#buddy-close').textContent = waiting() ? AieyesI18n.t("取消授权") : AieyesI18n.t("完成");
+  }
+  async function call(method) {
+    if (sending) return;sending = true;draw();
+    try {session = await api('buddyAuth.' + method, {provider, region: dialog.querySelector('#buddy-region').value, id: session?.id});dialog.querySelector('#buddy-error').textContent = '';if (session?.connected || method === 'logout') state.settings = await api('settings.get');}
+    catch (error) {dialog.querySelector('#buddy-error').textContent = AieyesI18n.message(String(error));}
+    finally {sending = false;draw();}
+  }
+  async function close() {if (sending) return;if (waiting()) await call('cancel');closed = true;dialog.close();dialog.remove();renderSettings(false);}
+  dialog.oncancel = (event) => {event.preventDefault();close();};dialog.querySelector('#buddy-close').onclick = close;
+  dialog.querySelector('#buddy-start').onclick = () => call('start');dialog.querySelector('#buddy-logout').onclick = () => call('logout');
+  await call('status');
+  while (!closed) {await new Promise((resolve) => setTimeout(resolve, 2000));if (!closed && !sending && waiting()) await call('status');}
 }

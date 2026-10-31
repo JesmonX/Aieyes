@@ -267,7 +267,7 @@ struct RootView: View, Equatable {
         FlowLayout(spacing: 8) {
             Picker("Agent", selection: filterBinding(\.provider)) {
                 Text(L("全部 Agent")).tag("all")
-                ForEach(CoreContract.agentProviders, id: \.self) { Text(Format.provider($0)).tag($0) }
+                ForEach(CoreContract.usageProviders, id: \.self) { Text(Format.provider($0)).tag($0) }
             }.labelsHidden()
 
             if !compact {
@@ -1062,12 +1062,12 @@ private struct QuotaGroupSection<Content: View>: View {
                     HStack(spacing: 7) {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right").font(AppFont.caption)
                         Circle().fill(Palette.category(provider)).frame(width: 7, height: 7)
-                        Text(Format.provider(provider)).font(AppFont.secondary.weight(.medium))
+                        Text(CoreContract.quotaProviderName(provider)).font(AppFont.secondary.weight(.medium))
                         Spacer(minLength: 0)
                         Text(L("{0} 个账户" , accountCount)).font(AppFont.caption).foregroundStyle(.secondary)
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain).focused($headerFocused)
-                    .accessibilityLabel(Format.provider(provider) + L("，{0} 个账户，" , accountCount) + (expanded ? L("折叠") : L("展开")))
+                    .accessibilityLabel(CoreContract.quotaProviderName(provider) + L("，{0} 个账户，" , accountCount) + (expanded ? L("折叠") : L("展开")))
                 if !failures.isEmpty || showingFailures {
                     Button { openingSettings = false; showingFailures.toggle() } label: {
                         Label(L("{0} 个账户查询失败" , failures.count), systemImage: "exclamationmark.triangle").font(AppFont.caption).foregroundStyle(Palette.warn)
@@ -1247,6 +1247,17 @@ struct QuotaCard: View, Equatable {
             }
         } }
         if quota.isAvailable == false { Text(L("余额不足")).font(AppFont.secondary).foregroundStyle(Palette.warn) }
+        ForEach(expanded ? quota.visibleMeters : Array(quota.visibleMeters.prefix(2))) { meter in
+            VStack(alignment: .leading, spacing: 5) {
+                ViewThatFits(in: .horizontal) {
+                    HStack { Text(L(meter.label)).foregroundStyle(.secondary).fixedSize(); Spacer(minLength: 6); Text(meter.summary).monospacedDigit().fixedSize() }
+                    VStack(alignment: .leading, spacing: 3) { Text(L(meter.label)).foregroundStyle(.secondary); Text(meter.summary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
+                }.font(AppFont.secondary)
+                if let fraction = meter.fraction { ResourceBar(percent: 100 - fraction * 100, tint: Palette.quota(fraction * 100)) }
+                if expanded, let reset = meter.resetsAt, reset > 0 { Text(L("重置 ") + Format.date(reset)).font(AppFont.caption).foregroundStyle(.secondary) }
+            }.accessibilityElement(children: .combine).accessibilityLabel(L(meter.label) + "，" + meter.summary)
+        }
+        if let notice = quota.visibleNotice { Label(L(notice), systemImage: "info.circle").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
     }
     private var agyGroups: [String] {
         quota.windows.reduce(into: [String]()) { result, w in
@@ -1280,6 +1291,8 @@ struct QuotaCard: View, Equatable {
         var text = Format.provider(quota.provider) + "，" + quota.name
         if let email = quota.identity?.email, email != quota.name { text += "，" + email }
         if let plan = quota.plan { text += L("，订阅 ") + Format.subscription(plan) }
+        if !expanded, let meter = quota.visibleMeters.first { text += "，" + L(meter.label) + " " + meter.summary }
+        if let age = quota.snapshotAge { text += "，" + staleLabel(age) }
         if !expanded && quota.provider == "codex" { text += "，" + Format.creditBalance(quota.credits, estimate: bestCredit) + "，Bank Reset " + (quota.bankReset.map { String($0.availableCount) } ?? L("未知")) + L(" 次可用") }
         text += expanded ? L("，折叠额度") : L("，展开额度")
         return text
@@ -1335,8 +1348,10 @@ struct QuotaCard: View, Equatable {
                 .monospacedDigit().help(deviceCounts.summary)
         }
     }
+    private func staleLabel(_ stamp: Double) -> String { L("上次 {0}", Format.relative(Date(timeIntervalSince1970: stamp))) }
     @ViewBuilder private var quotaTimestamp: some View {
         if quota.updatedAt > 0 { Text("\(quota.origin == "log" ? L("记录") : L("更新")) \(Format.date(quota.updatedAt))").font(AppFont.caption).foregroundStyle(.secondary) }
+        if let age = quota.snapshotAge { Text(staleLabel(age)).font(AppFont.caption).foregroundStyle(quota.isStale ? Palette.warn : .secondary).help(Format.date(age)) }
     }
     @ViewBuilder private var analysisButton: some View {
         if let onAnalysis { Button(L("查看分析"), systemImage: "arrow.up.right", action: onAnalysis).font(AppFont.caption).tint(.primary) }
@@ -1352,9 +1367,9 @@ struct QuotaCard: View, Equatable {
                     }
                 }
                 balanceContent
-                if quota.provider == "antigravity" { agyWindows }
+                if quota.groupsWindows { agyWindows }
                 else { BalancedGridLayout(minimumWidth: 150, spacing: 12, maximumColumns: 2) {
-                    ForEach(quota.provider == "antigravity" ? quota.windows : Array(quota.windows.prefix(2))) { window in
+                    ForEach(Array(quota.windows.prefix(2))) { window in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
                                 Text(window.windowMinutes == CoreContract.fiveHourMinutes ? "5h" : window.windowMinutes == CoreContract.weekMinutes ? "7d" : L(window.name)).lineLimit(2)
@@ -1371,7 +1386,7 @@ struct QuotaCard: View, Equatable {
             }
             if expanded {
             balanceContent
-            if quota.provider == "antigravity" { agyWindows }
+            if quota.groupsWindows { agyWindows }
             else if !quota.windows.isEmpty { LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: expanded ? 1 : 2), alignment: .leading, spacing: expanded ? 14 : 8) {
             ForEach(quota.windows) { window in
                 VStack(spacing: 6) {
@@ -1385,7 +1400,7 @@ struct QuotaCard: View, Equatable {
             }
             }
             }
-            if let onEstimate, quota.provider != "antigravity", quota.windows.contains(where: { $0.windowMinutes == CoreContract.fiveHourMinutes || $0.windowMinutes == CoreContract.weekMinutes }) || estimate != nil {
+            if let onEstimate, !quota.groupsWindows, quota.windows.contains(where: { $0.windowMinutes == CoreContract.fiveHourMinutes || $0.windowMinutes == CoreContract.weekMinutes }) || estimate != nil {
                 EstimateEntry(records: quotaHistory.isEmpty ? [estimate].compactMap { $0 } : quotaHistory, quota: quota) { onEstimate(nil) }
             }
             if expanded && !sourceName.isEmpty { Text(sourceName).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
@@ -1414,7 +1429,7 @@ struct QuotaCard: View, Equatable {
                     VStack(alignment: .leading, spacing: 4) { quotaTimestamp; analysisButton }
                 }
             }
-            if quota.windows.isEmpty && (quota.balances ?? []).isEmpty && quota.extraUsage == nil && quota.error == nil && quota.credits == nil { Text(L("暂无额度数据")).font(AppFont.secondary).foregroundStyle(.secondary) }
+            if !quota.hasQuotaContent && quota.error == nil { Text(L("暂无额度数据")).font(AppFont.secondary).foregroundStyle(.secondary) }
             }
         }
     }
@@ -1782,6 +1797,10 @@ private struct SessionStrip: View {
     var provider = "all"
     private var sessions: [LiveSession] { status.snapshot.sessions.filter { (provider == "all" || CoreContract.sameAgent($0.provider, provider)) && $0.phase != .idle }.sorted { rank($0.phase) < rank($1.phase) } }
     private var failures: [SessionSourceHealth] { status.snapshot.sources.filter { $0.state != "healthy" && (provider == "all" || CoreContract.sameAgent($0.provider, provider)) } }
+    private var processSources: [SessionSourceHealth] {
+        var seen = Set<String>()
+        return status.snapshot.sources.filter { $0.processRunning != nil && (provider == "all" || CoreContract.sameAgent($0.provider, provider)) && seen.insert($0.machineId + ":" + $0.provider).inserted }
+    }
     private func rank(_ phase: SessionPhase) -> Int { phase == .needsInput ? 0 : phase == .failed ? 1 : phase == .unknown ? 2 : 3 }
     private var counts: String {
         let phases: [SessionPhase] = [.needsInput, .failed, .working, .thinking, .tool, .unknown, .complete, .interrupted]
@@ -1790,13 +1809,14 @@ private struct SessionStrip: View {
     private var summary: String {
         if status.snapshot.unavailable { return L("会话读取失败") }
         if !failures.isEmpty { return L("{0} 个来源异常" , failures.count) }
+        if sessions.isEmpty && !processSources.isEmpty { return L("IDE 运行状态") }
         return L("{0} 个会话" , sessions.count)
     }
     private var phase: SessionPhase { status.snapshot.unavailable || !failures.isEmpty ? .unknown : sessions.first?.phase ?? .idle }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        if !sessions.isEmpty || !failures.isEmpty || status.snapshot.unavailable {
+        if !sessions.isEmpty || !processSources.isEmpty || !failures.isEmpty || status.snapshot.unavailable {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(spacing: 12) {
                 ForEach(sessions) { session in
@@ -1812,7 +1832,19 @@ private struct SessionStrip: View {
                         Text(session.phase.label).foregroundStyle(session.phase.color)
                     }
                 }
-                if sessions.isEmpty { Text(status.snapshot.unavailable ? L("读取失败") : L("暂无会话动态")).foregroundStyle(.secondary) }
+                ForEach(processSources) { source in
+                    let machine = source.machineId == "local" ? L("本机") : model.settings.hosts.first(where: { $0.id == source.machineId })?.name ?? source.machineId
+                    HStack(spacing: 10) {
+                        Image(systemName: "desktopcomputer").foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(Format.provider(source.provider) + " · " + machine)
+                            Text(L("对话存储已加密，会话数量未知")).font(AppFont.secondary).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(source.processRunning == true ? L("IDE 正在运行") : L("IDE 未运行")).foregroundStyle(.secondary)
+                    }
+                }
+                if sessions.isEmpty && processSources.isEmpty { Text(status.snapshot.unavailable ? L("读取失败") : L("暂无会话动态")).foregroundStyle(.secondary) }
                 ForEach(failures) { source in
                     let machine = source.machineId == "local" ? L("本机") : model.settings.hosts.first(where: { $0.id == source.machineId })?.name ?? source.machineId
                     Text(Format.provider(source.provider) + " · " + machine + ": " + L(source.message))

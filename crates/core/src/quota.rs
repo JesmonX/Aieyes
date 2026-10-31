@@ -67,8 +67,14 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
     match source.provider.as_str() {
         "agy" | "antigravity" => {
             let before = crate::agy_identity::read_key(source, settings);
-            let mut q = normalize(source, &agy(source, settings)?, "live")?;
+            let value = agy(source, settings)?;
+            let mut q = normalize(source, &value, "live")?;
             let observation = crate::agy_identity::read(source, settings);
+            anyhow::ensure!(
+                observation.identity.is_some()
+                    || (before.is_none() && account.is_none_or(|a| a.identity_key.is_none())),
+                "无法确认此设备的 Antigravity 账户身份；未更新额度"
+            );
             if let Some(identity) = &observation.identity {
                 anyhow::ensure!(
                     before.as_ref().is_none_or(|key| key == &identity.key),
@@ -79,10 +85,12 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
                     "此设备当前登录 {}，与此账户身份不一致；未更新额度",
                     identity.email
                 );
-                q.plan = identity.subscription.clone();
+                q.plan = identity.subscription.clone().or(q.plan.take());
             }
             q.identity = observation.identity;
-            q.metadata_error = observation.metadata_error;
+            q.metadata_error = observation
+                .metadata_error
+                .or_else(|| value["metadataError"].as_str().map(str::to_owned));
             Ok(q)
         }
         "deepseek" if source.subscription.is_none() => deepseek(source, settings),
@@ -110,41 +118,43 @@ pub fn read(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
         "claude" => {
             let root = expand(&source.path);
             let credentials = root.join(".credentials.json");
-            let data = if credentials.exists() {
-                std::fs::read(credentials)?
+            let keychain = !credentials.exists();
+            let token = if !keychain {
+                let credentials: Value = serde_json::from_slice(&std::fs::read(&credentials)?)
+                    .context("读取 Claude Code 登录信息失败")?;
+                credentials["claudeAiOauth"]["accessToken"]
+                    .as_str()
+                    .context("未找到 Claude Code 登录信息")?
+                    .to_string()
             } else {
-                #[cfg(target_os = "macos")]
-                {
-                    anyhow::ensure!(
-                        root == home().join(".claude"),
-                        "未找到此目录的 Claude Code 登录信息"
-                    );
-                    let mut cmd = Command::new("/usr/bin/security");
-                    cmd.args([
-                        "find-generic-password",
-                        "-s",
-                        "Claude Code-credentials",
-                        "-w",
-                    ]);
-                    process::run(cmd, vec![], Duration::from_secs(5))
-                        .context("未找到 Claude Code 登录信息")?
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    anyhow::bail!("未找到 Claude Code 登录信息");
-                }
+                // macOS keeps the login in the Keychain, read only after the one-time
+                // consent (claude_keychain); the token stays in this process's memory.
+                anyhow::ensure!(
+                    cfg!(target_os = "macos") && crate::claude_keychain::default_dir(&root),
+                    "未找到 Claude Code 登录信息"
+                );
+                crate::claude_keychain::query_token(settings.claude_keychain.as_ref())?
             };
-            let credentials: Value =
-                serde_json::from_slice(&data).context("读取 Claude Code 登录信息失败")?;
-            let token = credentials["claudeAiOauth"]["accessToken"]
-                .as_str()
-                .context("未找到 Claude Code 登录信息")?;
-            let response = network::client(source.proxy.as_ref().unwrap_or(&settings.proxy))?
-                .get("https://api.anthropic.com/api/oauth/usage")
-                .bearer_auth(token)
-                .header("anthropic-beta", "oauth-2025-04-20")
-                .send()
-                .map_err(|_| anyhow::anyhow!("额度查询连接失败"))?;
+            let client = network::client(source.proxy.as_ref().unwrap_or(&settings.proxy))?;
+            let send = |token: &str| {
+                client
+                    .get("https://api.anthropic.com/api/oauth/usage")
+                    .bearer_auth(token)
+                    .header("anthropic-beta", "oauth-2025-04-20")
+                    .send()
+                    .map_err(|_| anyhow::anyhow!("额度查询连接失败"))
+            };
+            let mut response = send(&token)?;
+            if response.status().as_u16() == 401 && keychain {
+                // Wait for Claude to refresh its own login; never refresh it here.
+                if let Some(refreshed) = crate::claude_keychain::unauthorized(&token) {
+                    response = send(&refreshed)?;
+                }
+            }
+            anyhow::ensure!(
+                response.status().as_u16() != 401,
+                "Claude Code 登录已过期，打开 Claude Code 一次即可刷新"
+            );
             anyhow::ensure!(
                 response.status().is_success(),
                 "额度查询失败（HTTP {}）",
@@ -241,12 +251,27 @@ pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapsh
                 });
             }
         }
+        parse_claude_limits(&mut q, v);
+        q.extra_usage = claude_extra_usage(&v["extra_usage"]);
     }
+    if let Some(meters) = v.get("meters").filter(|v| v.is_array()) {
+        q.meters = serde_json::from_value(meters.clone())?;
+        anyhow::ensure!(q.meters.iter().all(|m| m.valid()), "计量项格式不正确");
+    }
+    q.snapshot_at = timestamp(&v["snapshotAt"]);
+    q.stale_since = timestamp(&v["staleSince"]);
+    q.notice = v["notice"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(Into::into);
     q.bank_updated_at = q.bank_reset.as_ref().map(|_| now());
     anyhow::ensure!(
         !q.windows.is_empty()
+            || !q.meters.is_empty()
             || !q.balances.is_empty()
             || q.bank_reset.is_some()
+            || q.extra_usage.is_some()
             || q.credits.is_some(),
         "查询结果中没有额度数据"
     );
@@ -257,6 +282,70 @@ pub fn normalize(source: &Source, v: &Value, origin: &str) -> Result<QuotaSnapsh
         "限额数值格式不正确"
     );
     Ok(q)
+}
+
+/// `limits[]` entries with `kind=="weekly_scoped"` carry per-model weekly limits.
+/// Models already reported by `seven_day_opus`/`seven_day_sonnet` are not repeated.
+fn parse_claude_limits(q: &mut QuotaSnapshot, v: &Value) {
+    for limit in v["limits"].as_array().into_iter().flatten() {
+        if limit["kind"] != "weekly_scoped" {
+            continue;
+        }
+        let Some(model) = limit["scope"]["model"]["display_name"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let Some(used) = limit["percent"]
+            .as_f64()
+            .or_else(|| limit["utilization"].as_f64())
+        else {
+            continue;
+        };
+        let name = format!("{model} · 7d");
+        if q.windows.iter().any(|w| w.name.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
+        q.windows.push(QuotaWindow {
+            id: format!("limits:{}", model.to_ascii_lowercase()),
+            group_id: format!("limits:{}", model.to_ascii_lowercase()),
+            group_name: name.clone(),
+            name,
+            used_percent: used,
+            window_minutes: Some(WEEK_MINUTES),
+            resets_at: timestamp(&limit["resets_at"]),
+        });
+    }
+}
+
+/// `extra_usage` amounts are in US cents. A disabled wallet with nothing spent is omitted.
+fn claude_extra_usage(v: &Value) -> Option<crate::models::ExtraUsageWallet> {
+    if !v.is_object() {
+        return None;
+    }
+    let cents = |key: &str| {
+        v[key]
+            .as_f64()
+            .filter(|n| n.is_finite() && *n >= 0.0)
+            .map(|n| n / 100.0)
+    };
+    let enabled = v["is_enabled"].as_bool();
+    let used = cents("used_credits");
+    let limit = cents("monthly_limit");
+    if enabled != Some(true) && used.is_none_or(|n| n == 0.0) {
+        return None;
+    }
+    let money = |n: f64| format!("{n:.2}");
+    Some(crate::models::ExtraUsageWallet {
+        currency: "USD".into(),
+        total: money(limit.or(used).unwrap_or(0.0)),
+        balance: limit.zip(used).map(|(l, u)| money((l - u).max(0.0))),
+        monthly_limit_enabled: enabled.map(|e| e && limit.is_some()),
+        monthly_limit: limit.map(money),
+        monthly_used: used.map(money),
+    })
 }
 
 pub(crate) fn resolve_codex(configured: &str) -> String {
@@ -314,7 +403,7 @@ pub fn codex_rpc(
         ssh::account_command(
             &quota_host(host, source),
             &format!(
-                "export CODEX_HOME={}\nexec {} app-server",
+                "export AIEYES_INTERNAL=1\nexport CODEX_HOME={}\nexec {} app-server",
                 home_expr,
                 process::quote(if source.codex_binary.is_empty() {
                     "codex"
@@ -345,6 +434,7 @@ pub fn codex_rpc(
             root
         };
         c.env("CODEX_HOME", root);
+        c.env("AIEYES_INTERNAL", "1");
         network::apply_env(&mut c, source.proxy.as_ref().unwrap_or(&settings.proxy));
         c
     };
@@ -613,61 +703,7 @@ fn codex_rpc_result(reply: Value) -> Result<Value> {
 }
 
 pub(crate) fn agy(source: &Source, settings: &Settings) -> Result<Value> {
-    let binary = if source.agy_binary.is_empty() {
-        "agy"
-    } else {
-        &source.agy_binary
-    };
-    let mut cmd = if let Some(id) = &source.host_id {
-        let host = settings
-            .hosts
-            .iter()
-            .find(|h| &h.id == id)
-            .context("主机不存在")?;
-        ssh::account_command(
-            &quota_host(host, source),
-            &format!(
-                "export AGY_CLI_DISABLE_AUTO_UPDATE=true\nexec {} --print /usage --output-format json --print-timeout 30s --log-file /dev/null",
-                process::quote(binary)
-            ),
-        )?
-    } else {
-        let local = home().join(".local/bin/agy");
-        let resolved = if binary == "agy" && local.is_file() {
-            local
-        } else {
-            expand(binary)
-        };
-        let args = [
-            "--print",
-            "/usage",
-            "--output-format",
-            "json",
-            "--print-timeout",
-            "30s",
-            "--log-file",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        ];
-        let mut c = process::cli_command_with_pre_command(
-            &resolved.to_string_lossy(),
-            &args,
-            &source.quota_pre_command,
-            ssh::DEFAULT_SHELL,
-        );
-        c.current_dir(std::env::temp_dir());
-        network::apply_env(&mut c, source.proxy.as_ref().unwrap_or(&settings.proxy));
-        c
-    };
-    cmd.env("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
-    cmd.stderr(Stdio::null());
-    let bytes = process::run(cmd, vec![], Duration::from_secs(40))
-        .context("agy 查询失败，请确认已安装并登录 agy")?;
-    let line = bytes
-        .split(|b| *b == b'\n')
-        .rev()
-        .find(|l| !l.is_empty())
-        .context("agy 没有返回数据")?;
-    serde_json::from_slice(line).context("agy 返回格式不正确，请更新 agy")
+    crate::agy_identity::quota(source, settings)
 }
 
 fn parse_agy(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
@@ -720,7 +756,63 @@ fn parse_agy(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
             }
         }
     }
+    agy_credits(q, &v["command"]["data"]);
     Ok(())
+}
+
+/// `loadCodeAssist` tier and Google One AI credits, when agy includes them.
+/// Only the saved access token is used; Aieyes never refreshes it.
+fn agy_credits(q: &mut QuotaSnapshot, data: &Value) {
+    let assist = ["loadCodeAssist", "load_code_assist"]
+        .iter()
+        .map(|k| &data[*k])
+        .find(|v| v.is_object())
+        .unwrap_or(data);
+    let tiers = ["paidTier", "paid_tier", "currentTier", "current_tier"].map(|k| &assist[k]);
+    let tier = tiers.iter().find(|t| t.is_object());
+    let Some(tier) = tier else {
+        return;
+    };
+    if q.plan.is_none() {
+        q.plan = tier["name"]
+            .as_str()
+            .or(tier["id"].as_str())
+            .filter(|s| !s.is_empty() && s.len() <= 128)
+            .map(str::to_owned);
+    }
+    for credit in tiers
+        .iter()
+        .find_map(|t| {
+            t["availableCredits"]
+                .as_array()
+                .or(t["available_credits"].as_array())
+        })
+        .into_iter()
+        .flatten()
+    {
+        let amount = credit["creditAmount"]
+            .as_f64()
+            .or(credit["creditAmount"].as_str().and_then(|s| s.parse().ok()))
+            .or(credit["credit_amount"].as_f64());
+        let kind = credit["creditType"]
+            .as_str()
+            .or(credit["credit_type"].as_str())
+            .unwrap_or("credits");
+        let Some(amount) = amount.filter(|n| n.is_finite() && *n >= 0.0) else {
+            continue;
+        };
+        let meter = QuotaMeter {
+            id: format!("credits:{}", kind.to_ascii_lowercase()),
+            label: "AI Credits".into(),
+            used_known: Some(false),
+            remaining: Some(amount),
+            unit: "credits".into(),
+            ..Default::default()
+        };
+        if meter.valid() {
+            q.meters.push(meter);
+        }
+    }
 }
 
 fn deepseek(source: &Source, settings: &Settings) -> Result<QuotaSnapshot> {
@@ -926,5 +1018,280 @@ mod codex_rpc_tests {
             assert!(error.contains(expected), "{error}");
             assert!(!error.contains("secret-token"));
         }
+    }
+}
+
+/// Providers whose card shows this month's locally counted credits as a meter.
+pub(crate) fn local_credits(provider: &str) -> bool {
+    matches!(provider, "codebuddy" | "workbuddy")
+}
+
+/// This month's credits counted from local session usage (`nativeCredits`).
+/// An estimate: the server balance is not read; mirrored rows are counted once.
+pub(crate) fn local_credits_meter(
+    store: &crate::store::Store,
+    settings: &Settings,
+    account: &Account,
+) -> Result<Option<QuotaMeter>> {
+    use chrono::{Datelike, Local, TimeZone};
+    let today = Local::now();
+    let start = Local
+        .with_ymd_and_hms(today.year(), today.month(), 1, 0, 0, 0)
+        .earliest()
+        .map_or(0, |t| t.timestamp());
+    let (next_year, next_month) = if today.month() == 12 {
+        (today.year() + 1, 1)
+    } else {
+        (today.year(), today.month() + 1)
+    };
+    let reset = Local
+        .with_ymd_and_hms(next_year, next_month, 1, 0, 0, 0)
+        .earliest()
+        .map(|t| t.timestamp());
+    let (used, requests): (Option<f64>, i64) = if account.provider == "workbuddy" {
+        workbuddy_month_credits(settings, account, start)?
+    } else {
+        store.db.query_row(
+        "SELECT SUM(json_extract(payload,'$.nativeCredits.credits')),COUNT(json_extract(payload,'$.nativeCredits.credits')) FROM events WHERE provider=?1 AND account_id=?2 AND stamp>=?3 AND json_extract(payload,'$.nativeCredits.mirrorOf') IS NULL",
+        rusqlite::params![account.provider, account.id, start],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?
+    };
+    if requests == 0 {
+        return Ok(None);
+    }
+    let meter = QuotaMeter {
+        id: "month-credits".into(),
+        label: "本月已用".into(),
+        used: used.unwrap_or(0.).max(0.),
+        unit: "credits".into(),
+        resets_at: reset,
+        estimated: true,
+        ..Default::default()
+    };
+    Ok(meter.valid().then_some(meter))
+}
+
+/// This month's WorkBuddy Credits of the account, read from each local
+/// `workbuddy.db` it is known in: the native login of the account (zero
+/// configuration, also for a remembered earlier login) and directories linked
+/// to it. With a native identity only that user's sessions count.
+fn workbuddy_month_credits(
+    settings: &Settings,
+    account: &Account,
+    start: i64,
+) -> Result<(Option<f64>, i64)> {
+    let key = crate::accounts::key(account);
+    let roots = settings
+        .native_connections
+        .iter()
+        .filter(|r| {
+            r.provider == "workbuddy"
+                && r.machine_id == "local"
+                && r.account_key.as_deref() == Some(key.as_str())
+        })
+        .map(|r| r.root.clone())
+        .chain(
+            settings
+                .sources
+                .iter()
+                .filter(|s| {
+                    s.provider == "workbuddy"
+                        && s.account_id == account.id
+                        && s.subscription.is_none()
+                        && s.host_id.as_deref().is_none_or(str::is_empty)
+                })
+                .map(|s| s.path.clone()),
+        );
+    let identity = account
+        .identity_key
+        .as_deref()
+        .filter(|k| k.starts_with("workbuddy:"));
+    let mut seen = std::collections::HashSet::new();
+    let (mut used, mut requests) = (None::<f64>, 0);
+    for root in roots {
+        let Some(path) = crate::sessions::workbuddy_database(&root) else {
+            continue;
+        };
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        // An unreadable or half-written database only hides its own share.
+        let Ok((credits, count)) = crate::workbuddy::month_credits(&path, start * 1000, identity)
+        else {
+            continue;
+        };
+        if count > 0 {
+            *used.get_or_insert(0.) += credits;
+            requests += count;
+        }
+    }
+    Ok((used, requests))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claude() -> Source {
+        Source {
+            id: "claude-source".into(),
+            account_id: "claude-account".into(),
+            provider: "claude".into(),
+            name: "Claude".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn claude_normalize_reads_windows_limits_and_extra_usage() {
+        let raw: Value = serde_json::from_str(include_str!(
+            "../../../scripts/fixtures/claude-oauth-usage.json"
+        ))
+        .unwrap();
+        let q = normalize(&claude(), &raw, "live").unwrap();
+        let names: Vec<_> = q.windows.iter().map(|w| w.name.as_str()).collect();
+        // Opus from limits[] repeats seven_day_opus; Haiku has no percent; session is not weekly_scoped.
+        assert_eq!(names, ["5h", "7d", "Opus · 7d", "Sonnet · 7d"]);
+        let sonnet = &q.windows[3];
+        assert_eq!(sonnet.used_percent, 30.0);
+        assert_eq!(sonnet.window_minutes, Some(WEEK_MINUTES));
+        assert!(sonnet.resets_at.is_some());
+        // Every window keeps its own group, so the card does not switch to the grouped layout.
+        let groups: std::collections::BTreeSet<_> =
+            q.windows.iter().map(|w| w.group_name.as_str()).collect();
+        assert_eq!(groups.len(), q.windows.len());
+        let wallet = q.extra_usage.unwrap();
+        assert_eq!(wallet.currency, "USD");
+        assert_eq!(wallet.monthly_used.as_deref(), Some("12.34"));
+        assert_eq!(wallet.monthly_limit.as_deref(), Some("50.00"));
+        assert_eq!(wallet.balance.as_deref(), Some("37.66"));
+        assert_eq!(wallet.total, "50.00");
+        assert_eq!(wallet.monthly_limit_enabled, Some(true));
+    }
+
+    #[test]
+    fn claude_extra_usage_is_optional() {
+        let q = normalize(
+            &claude(),
+            &json!({"five_hour":{"utilization":1},"extra_usage":{"is_enabled":false,"used_credits":0}}),
+            "live",
+        )
+        .unwrap();
+        assert!(q.extra_usage.is_none());
+        let q = normalize(
+            &claude(),
+            &json!({"extra_usage":{"is_enabled":true,"used_credits":250,"monthly_limit":null}}),
+            "live",
+        )
+        .unwrap();
+        let wallet = q.extra_usage.unwrap();
+        assert_eq!(wallet.monthly_used.as_deref(), Some("2.50"));
+        assert_eq!(wallet.balance, None);
+        assert_eq!(wallet.monthly_limit_enabled, Some(false));
+        assert!(normalize(&claude(), &json!({"limits":"bad"}), "live").is_err());
+    }
+}
+
+#[cfg(test)]
+mod local_credit_tests {
+    use super::*;
+
+    #[test]
+    fn workbuddy_month_credits_sum_local_session_usage() {
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::open(root.path()).unwrap();
+        let home = root.path().join("wb");
+        std::fs::create_dir(&home).unwrap();
+        rusqlite::Connection::open(home.join("workbuddy.db"))
+            .unwrap()
+            .execute_batch(include_str!("../tests/fixtures/workbuddy/workbuddy.sql"))
+            .unwrap();
+        let mut account = Account {
+            provider: "workbuddy".into(),
+            id: "w".into(),
+            ..Default::default()
+        };
+        let mut settings = Settings::default();
+        assert!(
+            local_credits_meter(&store, &settings, &account)
+                .unwrap()
+                .is_none()
+        );
+        // A directory linked by hand: every session of this month counts.
+        settings.sources.push(Source {
+            id: "s".into(),
+            provider: "workbuddy".into(),
+            account_id: "w".into(),
+            path: home.to_string_lossy().into(),
+            ..Default::default()
+        });
+        let meter = local_credits_meter(&store, &settings, &account)
+            .unwrap()
+            .unwrap();
+        assert!((meter.used - 4.375).abs() < 1e-9, "{}", meter.used);
+        assert!(meter.estimated);
+        assert!(local_credits("workbuddy"));
+        // Zero configuration: the detected login finds its database by itself, and
+        // only that user's sessions count (an earlier login keeps its own total).
+        settings.sources.clear();
+        account.identity_key = Some(format!("workbuddy:{}", hash("fixture-user")));
+        settings
+            .native_connections
+            .push(crate::account_scan::NativeConnection {
+                id: "n".into(),
+                provider: "workbuddy".into(),
+                machine_id: "local".into(),
+                root: home.to_string_lossy().into(),
+                account_key: Some(crate::accounts::key(&account)),
+                status: "remembered".into(),
+                ..Default::default()
+            });
+        let meter = local_credits_meter(&store, &settings, &account)
+            .unwrap()
+            .unwrap();
+        assert!((meter.used - 4.25).abs() < 1e-9, "{}", meter.used);
+        account.identity_key = Some(format!("workbuddy:{}", hash("someone-else")));
+        settings.native_connections[0].account_key = Some(crate::accounts::key(&account));
+        assert!(
+            local_credits_meter(&store, &settings, &account)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn codebuddy_month_credits_become_an_estimated_meter() {
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::open(root.path()).unwrap();
+        let account = Account {
+            provider: "codebuddy".into(),
+            id: "a".into(),
+            ..Default::default()
+        };
+        assert!(
+            local_credits_meter(&store, &Settings::default(), &account)
+                .unwrap()
+                .is_none()
+        );
+        let put = |id: &str, stamp: i64, credits: Value| {
+            store.db.execute(
+                "INSERT INTO events(id,provider,account_id,model,stamp,payload,cost,priced_tokens) VALUES(?1,'codebuddy','a','m',?2,?3,0,0)",
+                rusqlite::params![id, stamp, json!({"nativeCredits":credits}).to_string()],
+            ).unwrap();
+        };
+        put("1", now(), json!({"credits":1.5}));
+        put("2", now(), json!({"credits":2.0}));
+        put("3", now(), json!({"credits":2.0,"mirrorOf":"2"}));
+        put("4", 1, json!({"credits":99.0}));
+        let meter = local_credits_meter(&store, &Settings::default(), &account)
+            .unwrap()
+            .unwrap();
+        assert_eq!(meter.used, 3.5);
+        assert!(meter.estimated);
+        assert_eq!(meter.label, "本月已用");
+        assert!(meter.resets_at.unwrap() > now());
+        assert!(!local_credits("qoder"));
     }
 }

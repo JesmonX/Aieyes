@@ -122,7 +122,7 @@ struct DashboardFilterPreference: Codable, Equatable {
     func normalized(for scope: String?) -> Self {
         var value = self
         value.account = "all"
-        value.provider = CoreContract.agentProvider(value.provider)
+        value.provider = CoreContract.usageProvider(value.provider)
         if scope == "overview" || scope == "panel" { value.days = 1; value.dateRange = nil; value.source = "all"; value.model = "all" }
         return value
     }
@@ -154,11 +154,17 @@ struct DashboardFilterPreference: Codable, Equatable {
         return params
     }
     mutating func reconcile(settings: Settings) {
-        provider = CoreContract.agentProvider(provider)
+        provider = CoreContract.usageProvider(provider)
         account = settings.accountAliases?[account] ?? (account.hasPrefix("agy:") ? "antigravity:" + account.dropFirst(4) : account)
         if account != "all", account != "none", !settings.filterAccounts.contains(where: { $0.key == account }) { account = "all" }
         if source != "all", !settings.sources.contains(where: { $0.id == source }) { source = "all" }
     }
+}
+
+extension CoreContract {
+    static var usageProviders: [String] { agentProviders.flatMap { $0 == "codex" ? [$0, "chatgpt-work"] : [$0] } }
+    static func usageProvider(_ provider: String) -> String { provider == "chatgpt-work" ? provider : agentProvider(provider) }
+    static func quotaProviderName(_ provider: String) -> String { agentProvider(provider) == "codex" ? "Codex · ChatGPT Work" : Format.provider(provider) }
 }
 
 enum PanelAccountPreference {
@@ -315,6 +321,51 @@ struct AccountIdentity: Codable, Equatable {
     }
     var summary: String { displayName + (subscription.map { " · " + $0 } ?? L(" · 订阅未知")) + (stale == true ? L(" · 订阅待更新") : "") }
 }
+struct QuotaMeter: Codable, Equatable, Identifiable {
+    var id: String
+    var group: String? = nil
+    var label: String
+    var used: Double
+    var usedKnown: Bool? = nil
+    var total: Double? = nil, remaining: Double? = nil, overage: Double? = nil
+    var unit: String
+    var resetsAt: Double? = nil
+    var estimated: Bool? = nil
+    var unitLabel: String {
+        switch unit {
+        case "usd": return "$"
+        case "cny": return "¥"
+        case "requests": return L("次")
+        case "points": return L("点")
+        default: return L("积分")
+        }
+    }
+    private func amount(_ value: Double) -> String {
+        guard value.isFinite else { return "—" }
+        let text = String(format: value.rounded() == value ? "%.0f" : "%.2f", value == 0 ? 0.0 : value)
+        switch unit {
+        case "usd", "cny": return unitLabel + text
+        default: return text
+        }
+    }
+    var summary: String {
+        let suffix = unit == "usd" || unit == "cny" ? "" : " " + unitLabel
+        var text: String
+        if usedKnown == false {
+            text = remaining.map { L("剩余 ") + amount($0) + suffix } ?? "—"
+        } else {
+            text = total.map { amount(used) + " / " + amount($0) + suffix } ?? amount(used) + suffix
+            if let remaining { text += L(" · 剩余 ") + amount(remaining) }
+        }
+        if let overage, overage > 0 { text += L(" · 超额 ") + amount(overage) }
+        if estimated == true { text += L(" · 估算") }
+        return text
+    }
+    var fraction: Double? {
+        guard usedKnown != false, let total, total > 0 else { return nil }
+        return min(max(used / total, 0), 1)
+    }
+}
 struct Quota: Codable, Equatable, Identifiable {
     var observationRevision: UInt64? = nil
     var identity: AccountIdentity? = nil
@@ -324,7 +375,31 @@ struct Quota: Codable, Equatable, Identifiable {
     var sourceId: String, accountId: String, provider: String, name: String, updatedAt: Double, origin: String
     var balances: [Balance]?, isAvailable: Bool?
     var windows: [QuotaWindow], bankReset: BankReset?, bankUpdatedAt: Double?, plan: String?, error: String?
+    var meters: [QuotaMeter]? = nil
+    var snapshotAt: Double? = nil, staleSince: Double? = nil
+    var notice: String? = nil
     var id: String { provider + ":" + accountId }
+    var visibleMeters: [QuotaMeter] { meters ?? [] }
+    /// Shown data age: the provider's own snapshot time when it reports one.
+    var snapshotAge: Double? {
+        if let snapshotAt, snapshotAt > 0 { return snapshotAt }
+        return updatedAt > 0 ? updatedAt : nil
+    }
+    var isStale: Bool { (staleSince ?? 0) > 0 }
+    /// Any provider whose windows share a group name is shown grouped, like Antigravity models.
+    var groupsWindows: Bool {
+        if provider == "antigravity" { return true }
+        var counts: [String: Int] = [:]
+        for window in windows where !(window.groupName ?? "").isEmpty { counts[window.groupLabel, default: 0] += 1 }
+        return counts.values.contains { $0 > 1 }
+    }
+    var hasQuotaContent: Bool {
+        !windows.isEmpty || !visibleMeters.isEmpty || !(balances ?? []).isEmpty || extraUsage != nil || credits != nil
+    }
+    var visibleNotice: String? {
+        guard let text = notice?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
+    }
     var queryFailure: String? {
         guard let reason = error?.trimmingCharacters(in: .whitespacesAndNewlines), !reason.isEmpty else { return nil }
         return reason
@@ -421,6 +496,8 @@ struct QuotaResetNotificationSettings: Codable, Equatable {
 }
 
 struct AgentAccount: Codable, Equatable, Identifiable {
+    var upstreamIdentity: String?
+    var pendingName: Bool?
     var quotaResetNotifications: QuotaResetNotificationSettings?
     var quotaRefreshSeconds: Int?
     var deviceSettings: [AccountDeviceSettings]?
@@ -545,11 +622,21 @@ struct LocalMonitor: Codable, Equatable {
     init(_ h: Host) { enabled = h.enabled; metrics = h.metrics; devices = h.devices; details = h.details }
 }
 struct NativeConnection: Codable, Equatable, Identifiable {
+    var upstreamIdentity: String?, tokenExpiredAt: Double?
+    var machineFingerprint: String?, sourceId: String?, sourcePath: String?
     var id: String, provider: String, machineId: String, root: String, configPath: String, selector: String, kind: String
     var accountKey: String?, identityKey: String?
     var email: String, baseUrl: String, models: [String], hasCredential: Bool, status: String, note: String, checkedAt: Double
     var displayName: String { !email.isEmpty ? email : kind == "api" ? (baseUrl.isEmpty ? L("原生 API") : baseUrl) : identityKey.map { $0.hasPrefix("qoder:") ? "Qoder · " + $0.dropFirst(6).prefix(12) : (CoreContract.providerNames[provider] ?? provider) + L(" 账户") } ?? L("账户身份待确认") }
-    var statusLabel: String { ["pending":L("待验证"), "expired":L("已过期"), "unavailable":L("需重新扫描"), "observed":L("已识别账户")][status] ?? L("待验证") }
+    // Legacy "pending"/"unavailable" rows read as identified/past accounts; detection is automatic now.
+    var statusLabel: String {
+        switch status {
+        case "stale": return L("打开 {0} 一次即可刷新", CoreContract.providerNames[provider] ?? provider)
+        case "remembered", "unavailable": return L("历史账号")
+        case "expired": return L("已过期")
+        default: return L("已识别账户")
+        }
+    }
 }
 struct SessionSoundSettings: Codable, Equatable {
     var needsInput: Bool? = true
@@ -572,6 +659,8 @@ struct Settings: Codable, Equatable {
     var sessionSounds: SessionSoundSettings?
     var quotaResetNotifications: QuotaResetNotificationSettings?
     var nativeConnections: [NativeConnection]?
+    /// Core-owned macOS Keychain consent for Claude Code; never holds the token.
+    var claudeKeychain: ClaudeKeychainConsent?
     var codexApis: [CodexAPIConnection]?
     var deletedAccounts: [AgentAccount]?
     var historicalAccounts: [AgentAccount] { accounts + (deletedAccounts ?? []) }
@@ -607,6 +696,11 @@ struct Settings: Codable, Equatable {
     var modelMappings: [String: String] = [:]
     var proxyTestUrls: [String]?
 }
+struct ClaudeKeychainConsent: Codable, Equatable {
+    var askedAt: Double = 0, granted = false, result: String?
+    var state: String { result ?? (granted ? "granted" : "denied") }
+}
+struct ClaudeKeychainStatus: Decodable { var granted: Bool?, result: String?, available: Bool? }
 struct ModelPrice: Codable, Equatable, Identifiable {
     var id = "", name = "", input: Double?, output: Double?, cacheRead: Double?, cacheWrite: Double?, fetchedAt: Double = 0
 }
@@ -973,25 +1067,25 @@ struct AccountCleanupRecord: Decodable, Identifiable { var accountKey: String, n
 // BEGIN GENERATED CORE CONTRACT
 // Generated by scripts/sync-core-contracts.py; edit docs/core-contracts.json.
 enum CoreContract {
-    static let contractHash = "12be00f9aafb5cf3f9d457c4baa7685a16a1dea0ab13c8b0e98f9ec0e54177b1"
-    static let providers = ["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "kimi", "deepseek-harness", "codebuddy", "pi", "omp", "custom"]
+    static let contractHash = "c814ad683b58ef1615b324497cd5aa39a837882a1e0468e747ac537a3e6357ba"
+    static let providers = ["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "kimi", "deepseek-harness", "codebuddy", "pi", "omp", "chatgpt-work", "workbuddy", "copilot", "cline", "kilo", "roo", "kiro", "trae", "trae-cn", "custom"]
     static let wakeupProviders = ["codex", "claude", "antigravity"]
-    static let agentProviders = ["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "kimi", "codebuddy", "pi", "omp", "custom"]
-    static let agentAliases: [String: String] = ["deepseek-harness": "deepseek"]
-    static let providerCapabilities: [String: Set<String>] = ["codex": ["accounts", "api", "machines", "quota", "quotaReset", "valuation"], "claude": ["accounts", "api", "machines", "quota", "quotaReset", "valuation"], "antigravity": ["accounts", "machines", "quota", "quotaReset", "valuation"], "deepseek": ["accounts", "quota"], "zcode": ["accounts", "api", "machines", "quota", "quotaReset", "valuation"], "qoder": ["accounts", "api", "machines", "quota", "quotaReset"], "grok": ["accounts", "api", "machines", "quota", "quotaReset"], "cursor": ["accounts", "machines", "quota", "quotaReset"], "opencode": ["accounts", "api", "machines", "quota", "quotaReset", "valuation"], "kimi": ["accounts", "api", "machines", "quota", "quotaReset", "valuation"], "deepseek-harness": ["accounts", "api", "machines", "quota"], "codebuddy": ["accounts", "api", "machines"], "pi": ["accounts", "api", "machines"], "omp": ["accounts", "api", "machines"], "custom": ["accounts", "machines"]]
-    static let providerIcons: [String: String] = ["codex": "codex", "claude": "claude", "antigravity": "antigravity", "deepseek": "deepseek", "zcode": "zcode", "qoder": "qoder", "grok": "grok", "cursor": "cursor", "opencode": "opencode", "kimi": "kimi", "deepseek-harness": "deepseek", "codebuddy": "codebuddy", "pi": "pi", "omp": "omp"]
+    static let agentProviders = ["codex", "claude", "antigravity", "deepseek", "zcode", "qoder", "grok", "cursor", "opencode", "kimi", "codebuddy", "pi", "omp", "workbuddy", "copilot", "cline", "kilo", "roo", "kiro", "trae", "custom"]
+    static let agentAliases: [String: String] = ["deepseek-harness": "deepseek", "chatgpt-work": "codex", "trae-cn": "trae"]
+    static let providerCapabilities: [String: Set<String>] = ["codex": ["accounts", "api", "machines", "quota", "quotaReset", "valuation"], "claude": ["accounts", "api", "machines", "quota", "quotaReset", "valuation"], "antigravity": ["accounts", "machines", "quota", "quotaReset", "valuation"], "deepseek": ["accounts", "quota"], "zcode": ["accounts", "api", "machines", "quota", "quotaReset", "valuation"], "qoder": ["accounts", "api", "machines", "quota", "quotaReset"], "grok": ["accounts", "api", "machines", "quota", "quotaReset"], "cursor": ["accounts", "machines", "quota", "quotaReset"], "opencode": ["accounts", "api", "machines", "quota", "quotaReset", "valuation"], "kimi": ["accounts", "api", "machines", "quota", "quotaReset", "valuation"], "deepseek-harness": ["accounts", "api", "machines", "quota"], "codebuddy": ["accounts", "api", "machines", "quota"], "pi": ["accounts", "api", "machines", "quota", "quotaReset"], "omp": ["accounts", "api", "machines", "quota", "quotaReset"], "chatgpt-work": ["quota", "quotaReset"], "workbuddy": ["accounts", "machines", "quota"], "copilot": ["accounts", "machines", "quota", "quotaReset"], "cline": ["accounts", "machines", "quota"], "kilo": ["accounts", "machines", "quota"], "roo": ["accounts", "machines"], "kiro": ["accounts", "machines", "quota", "quotaReset"], "trae": ["accounts", "machines", "quota", "quotaReset"], "trae-cn": ["accounts", "machines", "quota", "quotaReset"], "custom": ["accounts", "machines"]]
+    static let providerIcons: [String: String] = ["codex": "codex", "claude": "claude", "antigravity": "antigravity", "deepseek": "deepseek", "zcode": "zcode", "qoder": "qoder", "grok": "grok", "cursor": "cursor", "opencode": "opencode", "kimi": "kimi", "deepseek-harness": "deepseek", "codebuddy": "codebuddy", "pi": "pi", "omp": "omp", "chatgpt-work": "chatgpt-work", "workbuddy": "workbuddy", "copilot": "copilot", "cline": "cline", "kilo": "kilo", "roo": "roo", "kiro": "kiro", "trae": "trae", "trae-cn": "trae"]
     static let providerDarkIcons: [String: String] = ["opencode": "opencode-dark", "kimi": "kimi-dark", "omp": "omp-dark"]
-    static let monochromeIcons: Set<String> = ["codex", "zcode", "qoder", "grok", "cursor"]
+    static let monochromeIcons: Set<String> = ["codex", "zcode", "qoder", "grok", "cursor", "chatgpt-work", "copilot", "cline", "kilo", "roo"]
     static func agentProvider(_ provider: String) -> String { agentAliases[provider] ?? provider }
     static func sameAgent(_ lhs: String, _ rhs: String) -> Bool { agentProvider(lhs) == agentProvider(rhs) }
     static func supports(_ provider: String, _ feature: String) -> Bool { providerCapabilities[provider]?.contains(feature) == true }
     static func featureProvider(_ provider: String, _ feature: String) -> String? { providers.first { sameAgent($0, provider) && supports($0, feature) } }
-    static let providerNames: [String: String] = ["codex": "Codex", "claude": "Claude Code", "antigravity": "Antigravity", "deepseek": "DeepSeek", "zcode": "ZCode", "qoder": "Qoder", "grok": "Grok", "cursor": "Cursor", "opencode": "OpenCode", "kimi": "Kimi Code", "deepseek-harness": "DeepSeek", "codebuddy": "CodeBuddy", "pi": "Pi", "omp": "Oh My Pi", "custom": "自定义"]
-    static let defaultPaths: [String: String] = ["codex": "~/.codex", "claude": "~/.claude", "antigravity": "~/.gemini/antigravity-cli", "deepseek": "", "zcode": "~/.zcode", "qoder": "~/.qoder", "grok": "~/.grok", "cursor": "~/.cursor", "opencode": "~/.local/share/opencode", "kimi": "~/.kimi-code", "deepseek-harness": "~/.dsh", "codebuddy": "~/.codebuddy", "pi": "~/.pi/agent", "omp": "~/.omp/agent", "custom": "~/.aieyes"]
-    static let binaries: [String: String] = ["codex": "codex", "claude": "claude", "antigravity": "agy", "deepseek": "", "zcode": "zcode", "qoder": "qodercli", "grok": "grok", "cursor": "agent", "opencode": "", "kimi": "kimi", "deepseek-harness": "dsh", "codebuddy": "codebuddy", "pi": "pi", "omp": "omp", "custom": ""]
-    static let subscriptionHints: [String: String] = ["deepseek": "输入 DeepSeek 官方 API Key 查询账户余额。第三方模型的额度请在对应服务商管理。", "zcode": "从对应地区的 Z.ai / 智谱账户获取 Coding Plan API Key。", "qoder": "CLI 登录直接查询当前账户 Credits，无需复制令牌；请先运行 qodercli login。也可使用对应站点 Cookie，旧中国站与 qoder.cn 新账户不互通。", "grok": "订阅：运行 grok login，从 ~/.grok/auth.json 复制账户 key。API 余额：填写 Management API Key 和 Team ID。", "cursor": "从 Cursor 用量页复制含 WorkosCursorSessionToken 的请求 Cookie。", "opencode": "Go 使用 API Key，或 Console Cookie 与 Workspace ID 查询 Go / Zen 余额。外部订阅请连接对应服务商。", "kimi": "使用 Kimi Code 订阅的 API Key 或有效访问令牌；Moonshot 开放平台 Key 与自建模型不提供此订阅限额。请选择凭据对应地区。", "deepseek-harness": "仅用于 Harness 的 DeepSeek 官方 API 后端：输入该后端的 API Key 查询余额。自建及其他第三方模型不共用此余额。"]
-    static let subscriptionLoginURLs: [String: String] = ["deepseek": "https://platform.deepseek.com/usage", "zcode": "https://zcode.z.ai/en/docs/configuration", "qoder": "https://qoder.com/account/usage", "grok": "https://grok.com", "cursor": "https://cursor.com/dashboard", "opencode": "https://opencode.ai/console", "kimi": "https://www.kimi.com/code/console", "deepseek-harness": "https://platform.deepseek.com/usage"]
-    static let subscriptionModes: [String: [String: String]] = ["deepseek": ["api": "DeepSeek 官方 API 余额"], "zcode": ["global": "Z.ai 国际版 API Key", "cn": "智谱中国版 API Key"], "qoder": ["cli": "本机 Qoder CLI 登录", "global": "qoder.com Cookie", "cn-legacy": "qoder.com.cn 旧站点 Cookie"], "grok": ["subscription": "Grok 订阅登录令牌", "api": "xAI API 余额"], "cursor": ["session": "Cursor 会话 Cookie"], "opencode": ["go": "Go API Key", "console": "Console Cookie / Workspace"], "kimi": ["cn": "Kimi Code 中国版 API Key / 访问令牌", "global": "Kimi Code 国际版 API Key / 访问令牌"], "deepseek-harness": ["api": "DeepSeek 官方 API 余额"]]
+    static let providerNames: [String: String] = ["codex": "Codex", "claude": "Claude Code", "antigravity": "Antigravity", "deepseek": "DeepSeek", "zcode": "ZCode", "qoder": "Qoder", "grok": "Grok", "cursor": "Cursor", "opencode": "OpenCode", "kimi": "Kimi Code", "deepseek-harness": "DeepSeek", "codebuddy": "CodeBuddy", "pi": "Pi", "omp": "Oh My Pi", "chatgpt-work": "ChatGPT Work", "workbuddy": "WorkBuddy", "copilot": "GitHub Copilot", "cline": "Cline", "kilo": "Kilo Code", "roo": "Roo Code", "kiro": "Kiro", "trae": "Trae", "trae-cn": "Trae CN", "custom": "自定义"]
+    static let defaultPaths: [String: String] = ["codex": "~/.codex", "claude": "~/.claude", "antigravity": "~/.gemini/antigravity-cli", "deepseek": "", "zcode": "~/.zcode", "qoder": "~/.qoder", "grok": "~/.grok", "cursor": "~/.cursor", "opencode": "~/.local/share/opencode", "kimi": "~/.kimi-code", "deepseek-harness": "~/.dsh", "codebuddy": "~/.codebuddy", "pi": "~/.pi/agent", "omp": "~/.omp/agent", "chatgpt-work": "~/.codex", "workbuddy": "~/.workbuddy", "copilot": "~/.copilot", "cline": "~/.cline/data", "kilo": "~/.local/share/kilo", "roo": "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline", "kiro": "~/.kiro", "trae": "~/Library/Application Support/Trae", "trae-cn": "~/Library/Application Support/Trae CN", "custom": "~/.aieyes"]
+    static let binaries: [String: String] = ["codex": "codex", "claude": "claude", "antigravity": "agy", "deepseek": "", "zcode": "zcode", "qoder": "qodercli", "grok": "grok", "cursor": "agent", "opencode": "", "kimi": "kimi", "deepseek-harness": "dsh", "codebuddy": "codebuddy", "pi": "pi", "omp": "omp", "chatgpt-work": "", "workbuddy": "", "copilot": "copilot", "cline": "cline", "kilo": "kilo", "roo": "", "kiro": "kiro-cli", "trae": "trae-cli", "trae-cn": "", "custom": ""]
+    static let subscriptionHints: [String: String] = ["deepseek": "输入 DeepSeek 官方 API Key 查询账户余额。第三方模型的额度请在对应服务商管理。", "zcode": "从对应地区的 Z.ai / 智谱账户获取 Coding Plan API Key。", "qoder": "CLI 登录直接查询当前账户 Credits，无需复制令牌；请先运行 qodercli login。也可使用对应站点 Cookie，旧中国站与 qoder.cn 新账户不互通。", "grok": "订阅：运行 grok login，从 ~/.grok/auth.json 复制账户 key。API 余额：填写 Management API Key 和 Team ID。", "opencode": "Go 使用 API Key，或 Console Cookie 与 Workspace ID 查询 Go / Zen 余额。外部订阅请连接对应服务商。", "kimi": "使用 Kimi Code 订阅的 API Key 或有效访问令牌；Moonshot 开放平台 Key 与自建模型不提供此订阅限额。请选择凭据对应地区。", "deepseek-harness": "仅用于 Harness 的 DeepSeek 官方 API 后端：输入该后端的 API Key 查询余额。自建及其他第三方模型不共用此余额。", "trae": "Trae 把登录加密保存在 IDE 中，Aieyes 不读取也不粘贴令牌；额度请在官方用量页查看。", "trae-cn": "Trae 把登录加密保存在 IDE 中，Aieyes 不读取也不粘贴令牌；额度请在官方用量页查看。"]
+    static let subscriptionLoginURLs: [String: String] = ["deepseek": "https://platform.deepseek.com/usage", "zcode": "https://zcode.z.ai/en/docs/configuration", "qoder": "https://qoder.com/account/usage", "grok": "https://grok.com", "opencode": "https://opencode.ai/console", "kimi": "https://www.kimi.com/code/console", "deepseek-harness": "https://platform.deepseek.com/usage", "trae": "https://www.trae.ai/account-setting#usage", "trae-cn": "https://www.trae.cn/account-setting#usage"]
+    static let subscriptionModes: [String: [String: String]] = ["deepseek": ["api": "DeepSeek 官方 API 余额"], "zcode": ["global": "Z.ai 国际版 API Key", "cn": "智谱中国版 API Key"], "qoder": ["cli": "本机 Qoder CLI 登录", "global": "qoder.com Cookie", "cn-legacy": "qoder.com.cn 旧站点 Cookie"], "grok": ["subscription": "Grok 订阅登录令牌", "api": "xAI API 余额"], "opencode": ["go": "Go API Key", "console": "Console Cookie / Workspace"], "kimi": ["cn": "Kimi Code 中国版 API Key / 访问令牌", "global": "Kimi Code 国际版 API Key / 访问令牌"], "deepseek-harness": ["api": "DeepSeek 官方 API 余额"], "trae": [:], "trae-cn": [:]]
     static let apiGuidance: [String: [String: String]] = ["antigravity": ["hint": "agy 自定义端点使用 Gemini 协议：在 CLI settings.json 设置 modelProvider=gemini，并在启动环境提供 GEMINI_API_KEY 和 GOOGLE_GEMINI_BASE_URL。OpenAI 兼容服务可通过官方 Python SDK 的 LocalOpenAIAgentConfig 使用。", "url": "https://www.antigravity.google/docs/install?tab=cli", "sdkUrl": "https://www.antigravity.google/docs/sdk/local-models"], "cursor": ["hint": "Cursor CLI 的 CURSOR_API_KEY 使用 Cursor 账户生成的用户 API Key。--endpoint / CURSOR_API_ENDPOINT 指向兼容 Cursor 服务协议的端点，包含账户密钥交换；普通 OpenAI 兼容模型地址无法直接替代。模型请通过 /model 选择。", "label": "CLI 登录与 API Key 说明", "url": "https://cursor.com/docs/cli/reference/authentication", "configurationUrl": "https://cursor.com/docs/cli/reference/configuration"], "pi": ["url": "https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md", "hint": "配置 Pi 原生 API 模型。Pi 不提供统一订阅余额；额度由所选模型服务商提供。", "label": "Pi 模型与额度"], "omp": ["url": "https://github.com/can1357/oh-my-pi/blob/main/docs/models.md", "hint": "配置 Oh My Pi 原生 API 模型。额度属于所选模型服务商，不能由本地 Token 或预估费用推算余额。", "label": "Oh My Pi 模型与额度"]]
     static let fiveHourMinutes = 300
     static let weekMinutes = 10080
@@ -1007,7 +1101,6 @@ enum CoreContract {
         "accounts.deletion.preview": "configuration",
         "accounts.deployments.sync": "accounts",
         "accounts.native.remove": "accounts",
-        "accounts.scan": "accounts",
         "accounts.status.get": "configuration",
         "accounts.status.refresh": "accounts",
         "accounts.status.refreshBatch": "accounts",
@@ -1106,6 +1199,7 @@ enum CoreContract {
         "sources.scan": "main",
         "subscriptions.connect": "accounts",
         "subscriptions.openLogin": "accounts",
+        "qoderCli.status": "accounts",
         "wakeups.delete": "wakeups",
         "wakeups.deploy": "wakeups",
         "wakeups.disable": "wakeups",
@@ -1120,8 +1214,18 @@ enum CoreContract {
         "dashboard.status": "dashboard",
         "hosts.monitor.configure": "hosts",
         "hosts.monitor.refresh": "hosts",
+        "accounts.autoScan": "accounts",
+        "claudeAuth.keychain": "quotas",
+        "claudeAuth.status": "quotas",
+        "copilotAuth.start": "accounts",
+        "copilotAuth.status": "accounts",
+        "copilotAuth.cancel": "accounts",
+        "buddyAuth.start": "accounts",
+        "buddyAuth.status": "accounts",
+        "buddyAuth.cancel": "accounts",
+        "buddyAuth.logout": "accounts",
     ]
-    static let updateBehaviors: [String: String] = ["accounts.cleanup.list": "observe", "accounts.connect": "finish", "accounts.create": "finish", "accounts.delete": "finish", "accounts.deletion.preview": "finish", "accounts.deployments.sync": "finish", "accounts.native.remove": "finish", "accounts.scan": "cancel", "accounts.status.get": "observe", "accounts.status.refresh": "cancel", "accounts.status.refreshBatch": "cancel", "accounts.targets": "observe", "agentApi.inspect": "observe", "agentApi.save": "finish", "agents.set": "finish", "agents.manage": "finish", "agyAuth.cancel": "complete", "agyAuth.confirmWorkspace": "complete", "agyAuth.inspect": "finish", "agyAuth.openUrl": "complete", "agyAuth.start": "finish", "agyAuth.status": "complete", "agyAuth.submitCode": "complete", "agyAuth.verify": "complete", "autoEstimates.configure": "finish", "autoEstimates.tick": "cancel", "autoEstimates.rebuild": "cancel", "codexApi.list": "observe", "codexApi.probe": "cancel", "codexApi.remove": "finish", "codexApi.save": "finish", "codexApi.status": "observe", "codexAuth.adopt": "finish", "codexAuth.enable": "finish", "codexAuth.inspect": "finish", "codexAuth.list": "observe", "codexAuth.login.cancel": "complete", "codexAuth.login.start": "finish", "codexAuth.login.status": "complete", "codexAuth.model.list": "cancel", "codexAuth.openUrl": "complete", "codexAuth.profiles.bind": "finish", "codexAuth.profiles.list": "observe", "codexAuth.profiles.remove": "finish", "codexAuth.quota": "cancel", "codexAuth.reconcile": "cancel", "codexAuth.status": "cancel", "codexAuth.switch.commit": "complete", "codexAuth.switch.prepare": "finish", "credentials.save": "finish", "creditEstimates.get": "cancel", "creditEstimates.list": "observe", "creditEstimates.repair": "finish", "creditEstimates.restart": "finish", "creditEstimates.start": "finish", "creditEstimates.stop": "finish", "dashboard": "cancel", "dashboard.summary": "cancel", "hello": "observe", "hosts.credentials.delete": "finish", "hosts.credentials.save": "finish", "hosts.discover": "cancel", "hosts.sample": "cancel", "hosts.sshConfig.read": "cancel", "methods.manifest": "observe", "network.status": "finish", "network.test": "cancel", "operations.prepareUpdate": "observe", "operations.resume": "observe", "operations.status": "observe", "pets.asset": "observe", "pets.current": "observe", "pets.import": "cancel", "pets.list": "observe", "pets.select": "finish", "prices.list": "observe", "prices.reference": "finish", "prices.recalculate": "finish", "prices.save": "finish", "prices.sync": "cancel", "quotaEstimates.get": "cancel", "quotaEstimates.list": "observe", "quotaEstimates.repair": "finish", "quotaEstimates.restart": "finish", "quotaEstimates.start": "finish", "quotaEstimates.stop": "finish", "quotaResetNotifications.take": "complete", "quotas.order.set": "finish", "quotas.refresh": "cancel", "quotas.schedule": "cancel", "runtime.revisions": "observe", "sessions.hooks.remove": "finish", "sessions.hooks.repair": "finish", "sessions.hooks.status": "observe", "sessions.list": "cancel", "settings.get": "observe", "settings.patch": "finish", "settings.save": "finish", "sources.defaultPath": "complete", "sources.configure": "finish", "sources.rebind": "finish", "sources.remove": "finish", "sources.rescan": "cancel", "sources.scan": "cancel", "subscriptions.connect": "finish", "subscriptions.openLogin": "finish", "wakeups.delete": "finish", "wakeups.deploy": "finish", "wakeups.disable": "finish", "wakeups.enable": "finish", "wakeups.history": "cancel", "wakeups.list": "observe", "wakeups.probe": "cancel", "wakeups.remove": "finish", "wakeups.run": "finish", "wakeups.save": "finish", "wakeups.status": "cancel", "dashboard.status": "cancel", "hosts.monitor.configure": "observe", "hosts.monitor.refresh": "cancel"]
+    static let updateBehaviors: [String: String] = ["accounts.cleanup.list": "observe", "accounts.connect": "finish", "accounts.create": "finish", "accounts.delete": "finish", "accounts.deletion.preview": "finish", "accounts.deployments.sync": "finish", "accounts.native.remove": "finish", "accounts.status.get": "observe", "accounts.status.refresh": "cancel", "accounts.status.refreshBatch": "cancel", "accounts.targets": "observe", "agentApi.inspect": "observe", "agentApi.save": "finish", "agents.set": "finish", "agents.manage": "finish", "agyAuth.cancel": "complete", "agyAuth.confirmWorkspace": "complete", "agyAuth.inspect": "finish", "agyAuth.openUrl": "complete", "agyAuth.start": "finish", "agyAuth.status": "complete", "agyAuth.submitCode": "complete", "agyAuth.verify": "complete", "autoEstimates.configure": "finish", "autoEstimates.tick": "cancel", "autoEstimates.rebuild": "cancel", "codexApi.list": "observe", "codexApi.probe": "cancel", "codexApi.remove": "finish", "codexApi.save": "finish", "codexApi.status": "observe", "codexAuth.adopt": "finish", "codexAuth.enable": "finish", "codexAuth.inspect": "finish", "codexAuth.list": "observe", "codexAuth.login.cancel": "complete", "codexAuth.login.start": "finish", "codexAuth.login.status": "complete", "codexAuth.model.list": "cancel", "codexAuth.openUrl": "complete", "codexAuth.profiles.bind": "finish", "codexAuth.profiles.list": "observe", "codexAuth.profiles.remove": "finish", "codexAuth.quota": "cancel", "codexAuth.reconcile": "cancel", "codexAuth.status": "cancel", "codexAuth.switch.commit": "complete", "codexAuth.switch.prepare": "finish", "credentials.save": "finish", "creditEstimates.get": "cancel", "creditEstimates.list": "observe", "creditEstimates.repair": "finish", "creditEstimates.restart": "finish", "creditEstimates.start": "finish", "creditEstimates.stop": "finish", "dashboard": "cancel", "dashboard.summary": "cancel", "hello": "observe", "hosts.credentials.delete": "finish", "hosts.credentials.save": "finish", "hosts.discover": "cancel", "hosts.sample": "cancel", "hosts.sshConfig.read": "cancel", "methods.manifest": "observe", "network.status": "finish", "network.test": "cancel", "operations.prepareUpdate": "observe", "operations.resume": "observe", "operations.status": "observe", "pets.asset": "observe", "pets.current": "observe", "pets.import": "cancel", "pets.list": "observe", "pets.select": "finish", "prices.list": "observe", "prices.reference": "finish", "prices.recalculate": "finish", "prices.save": "finish", "prices.sync": "cancel", "quotaEstimates.get": "cancel", "quotaEstimates.list": "observe", "quotaEstimates.repair": "finish", "quotaEstimates.restart": "finish", "quotaEstimates.start": "finish", "quotaEstimates.stop": "finish", "quotaResetNotifications.take": "complete", "quotas.order.set": "finish", "quotas.refresh": "cancel", "quotas.schedule": "cancel", "runtime.revisions": "observe", "sessions.hooks.remove": "finish", "sessions.hooks.repair": "finish", "sessions.hooks.status": "observe", "sessions.list": "cancel", "settings.get": "observe", "settings.patch": "finish", "settings.save": "finish", "sources.defaultPath": "complete", "sources.configure": "finish", "sources.rebind": "finish", "sources.remove": "finish", "sources.rescan": "cancel", "sources.scan": "cancel", "subscriptions.connect": "finish", "subscriptions.openLogin": "finish", "qoderCli.status": "observe", "wakeups.delete": "finish", "wakeups.deploy": "finish", "wakeups.disable": "finish", "wakeups.enable": "finish", "wakeups.history": "cancel", "wakeups.list": "observe", "wakeups.probe": "cancel", "wakeups.remove": "finish", "wakeups.run": "finish", "wakeups.save": "finish", "wakeups.status": "cancel", "dashboard.status": "cancel", "hosts.monitor.configure": "observe", "hosts.monitor.refresh": "cancel", "accounts.autoScan": "cancel", "claudeAuth.keychain": "finish", "claudeAuth.status": "cancel", "copilotAuth.start": "finish", "copilotAuth.status": "complete", "copilotAuth.cancel": "complete", "buddyAuth.start": "finish", "buddyAuth.status": "complete", "buddyAuth.cancel": "complete", "buddyAuth.logout": "finish"]
     static let configurationMethods = Set(methodLanes.filter { $0.value == "configuration" }.keys)
 }
 // END GENERATED CORE CONTRACT

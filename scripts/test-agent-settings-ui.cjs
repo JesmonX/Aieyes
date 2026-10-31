@@ -25,6 +25,7 @@ const profile=id=>({id,name:id==='one'?'个人 Codex':'工作 Codex',current:id=
 let authDone=false,authCancelled=false,unknown=false,failSave=false,loggedIn=true,authFailed=false;const calls=[],secrets=new Map();let secretId=0,saveDelay=0;
 async function invoke(method,params){
   calls.push({method,params});
+  if(method==='hello')return {...await rpc(method,params),chatgptWorkInstalled:true};
   // Keep the operating-system credential store outside this disposable UI test.
   if(method==='hosts.credentials.save'){const passwordRef='ssh-fixture-'+(++secretId);secrets.set(passwordRef,params.password);return {passwordRef};}
   if(method==='hosts.credentials.delete'){assert(secrets.delete(params.passwordRef));return {};}
@@ -112,6 +113,15 @@ function browserFixture(){
     assert.equal(mergedHost.name,'外部窗口更新');assert.equal(mergedHost.port,2222);assert.equal((await rpc('settings.get')).refreshSeconds,120);
     await page.evaluate(()=>{state.page='settings';state.settingsTab='sources';render();});
     assert.equal(await page.locator('[data-settings-agent]').count(),1,'Only the configured Agent is a direct entry');assert.equal(await page.locator('[data-agent-enable]').count(),1);
+    assert.equal(await page.evaluate(()=>state.chatgptWorkInstalled),true,'Startup uses the core installation signal');
+    assert.equal(await page.locator('[data-work-installed]').textContent(),'本机已安装 ChatGPT Work，会话与用量单独显示，账户和额度与 Codex 共用。');
+    await page.screenshot({path:path.join(out,'work-installed.png'),animations:'disabled',fullPage:true});
+    const beforeWorkSignal=await rpc('settings.get');
+    await page.evaluate(()=>{state.chatgptWorkInstalled=false;renderSettings(false);});
+    assert.equal(await page.locator('[data-work-installed]').count(),0,'No installed-app notice without an installation');
+    assert.equal(await page.evaluate(()=>AieyesUI.overviewAgentProviders(state.settings).includes('chatgpt-work')),true,'Work history remains available after the app is removed');
+    assert.deepEqual(await rpc('settings.get'),beforeWorkSignal,'Installation metadata does not create accounts or sources');
+    await page.evaluate(()=>{state.chatgptWorkInstalled=true;renderSettings(false);});
     assert.equal(await page.locator('#settings-save-all').count(),0);
     await page.locator('[data-manage-agents]').click();
     await page.locator('#agent-management-search').fill('Claude');
@@ -277,7 +287,7 @@ await page.locator('[data-agent-enable="claude"]').check();await page.waitForFun
     await page.evaluate(()=>{AieyesAgentSettings.navigate({provider:'cursor'});render();});
     // Native Cursor observers use flat hooks.json entries and keep user hooks.
     const cursorHome=path.join(root,'.cursor');fs.mkdirSync(cursorHome);fs.writeFileSync(path.join(cursorHome,'hooks.json'),JSON.stringify({version:1,hooks:{preToolUse:[{command:'other-guard'}]}}));
-    const cursorSettings=await rpc('settings.get');cursorSettings.sources.push({id:'cursor-quota-ui',provider:'cursor',name:'Cursor quota',path:'',enabled:true,subscription:{mode:'session',credentialRef:'fixture-credential'}});const cursorAgent=cursorSettings.agents.find(a=>a.provider==='cursor');cursorAgent.enabled=true;cursorAgent.machineIds=['local'];await rpc('settings.save',cursorSettings);
+    const cursorSettings=await rpc('settings.get');cursorSettings.sources.push({id:'cursor-quota-ui',provider:'cursor',name:'Cursor quota',path:'',enabled:true,subscription:{mode:'api2',credentialRef:'fixture-credential'}});const cursorAgent=cursorSettings.agents.find(a=>a.provider==='cursor');cursorAgent.enabled=true;cursorAgent.machineIds=['local'];await rpc('settings.save',cursorSettings);
     await page.evaluate(async()=>{state.settings=await window.testRPC('settings.get');render();});
     assert.equal(await page.locator('[data-machine-hooks="cursor"][data-machine="local"]').isDisabled(),true);
     cursorSettings.sources.push({id:'cursor-ui',provider:'cursor',name:'Cursor UI',path:cursorHome,enabled:true});await rpc('settings.save',cursorSettings);

@@ -40,6 +40,7 @@ struct SessionSourceHealth: Decodable, Identifiable, Equatable {
     var sourceId: String, provider: String, machineId: String, state: String
     var error: String?
     var hooks: String?
+    var processRunning: Bool? = nil
     var id: String { machineId + ":" + sourceId }
     var message: String { error ?? (state == "connecting" ? L("正在连接…") : L("状态暂不可用")) }
 }

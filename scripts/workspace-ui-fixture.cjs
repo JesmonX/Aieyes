@@ -21,7 +21,8 @@ function fixture({platform, failStatus = false}) {
   }
   function dashboard(params = {}) {
     const day = new Date().toISOString().slice(0, 10);
-    return {generatedAt: Date.now() / 1000, summary: usage, quotas: quotas.filter(q => (!params.provider || q.provider === params.provider) && (!params.accountId || q.accountId === params.accountId)), quotaOrder: accounts.map(a => a.provider + ':' + a.id), quotaEstimates: copy(nav.records), creditEstimates: [], models: [{...usage, key: 'fixture'}], modelOptions: ['fixture'], trendDays: [{...usage, key: day}], heatmap: [{...usage, key: day}], dayModels: [{day, model: 'fixture', usage}], pricingGaps: [], sources: sources.map(s => ({...s, status: {updatedAt: stamp}}))};
+    const quotaProvider = params.provider === 'chatgpt-work' ? 'codex' : params.provider;
+    return {generatedAt: Date.now() / 1000, summary: usage, quotas: quotas.filter(q => (!quotaProvider || q.provider === quotaProvider) && (!params.accountId || q.accountId === params.accountId)), quotaOrder: accounts.map(a => a.provider + ':' + a.id), quotaEstimates: copy(nav.records), creditEstimates: [], models: [{...usage, key: 'fixture'}], modelOptions: ['fixture'], trendDays: [{...usage, key: day}], heatmap: [{...usage, key: day}], dayModels: [{day, model: 'fixture', usage}], pricingGaps: [], sources: sources.map(s => ({...s, status: {updatedAt: stamp}}))};
   }
   window.__TAURI__ = {
     event: {async listen(name, fn) {(nav.listeners[name] ||= []).push(fn); return () => {}; }},

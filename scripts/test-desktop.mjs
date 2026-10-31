@@ -71,7 +71,7 @@ test('wakeup previews follow shared timezone and DST fixtures', () => {
   }
 });
 test('provider icons are bundled as PNG assets', () => {
-  for (const provider of ['codex','claude','antigravity','deepseek']) {
+  for (const provider of ['codex','claude','antigravity','deepseek','chatgpt-work','workbuddy','copilot','cline','kilo','roo','kiro','trae']) {
     const png = readFileSync(new URL(`../apps/desktop/web/provider-${provider}.png`, import.meta.url));
     assert.equal(png.subarray(0,8).toString('hex'), '89504e470d0a1a0a');
   }
@@ -505,14 +505,32 @@ test('each surface uses its own material and follows accessibility fallback stat
 
 
 test('overview hides disabled Agents while retaining historical configuration', () => {
-  const window = {AieyesContract:{agentProviders:['codex','zcode'],agentAliases:{},providerCapabilities:{}}};
+  const window = {AieyesContract:{agentProviders:['codex','zcode'],agentAliases:{'chatgpt-work':'codex'},providerCapabilities:{}}};
   vm.runInNewContext(readFileSync(new URL('../apps/desktop/web/ui-state.js', import.meta.url),'utf8'),{window});
   const settings={agents:[{provider:'codex',enabled:true,machineIds:['local']},{provider:'zcode',enabled:false,machineIds:['local']}],sources:[{provider:'zcode',enabled:false}],accounts:[{provider:'zcode',id:'old'}]};
-  assert.deepEqual([...window.AieyesUI.overviewAgentProviders(settings)],['codex']);
+  assert.deepEqual([...window.AieyesUI.overviewAgentProviders(settings)],['codex','chatgpt-work']);
   assert.equal(settings.accounts.length,1);
   for(const n of [1,2,3,4,6,8])assert(window.AieyesUI.balancedColumns(900,n)<=n);
   assert.equal(window.AieyesUI.balancedColumns(900,4),2);
   assert.equal(window.AieyesUI.balancedColumns(420,4),1);
+});
+
+
+test('Work has independent usage filters and shares Codex account settings and quota labels', () => {
+  const window={};
+  vm.runInNewContext(read('contracts.js'),{window});
+  vm.runInNewContext(read('ui-state.js'),{window});
+  const ui=window.AieyesUI;
+  assert.equal(ui.usageProvider('chatgpt-work'),'chatgpt-work');
+  assert.equal(ui.usageProvider('codex'),'codex');
+  assert.equal(ui.agentProvider('chatgpt-work'),'codex');
+  assert.equal(ui.sameAgent('chatgpt-work','codex'),true);
+  assert.equal(ui.usageProviders().filter(provider=>provider==='chatgpt-work').length,1);
+  assert.equal(window.AieyesContract.agentProviders.includes('chatgpt-work'),false);
+  assert.equal(ui.quotaProviderName('chatgpt-work'),'Codex · ChatGPT Work');
+  assert.equal(ui.quotaProviderName('codex'),'Codex · ChatGPT Work');
+  assert.equal(ui.quotaProviderName('claude'),'Claude Code');
+  assert.equal(ui.quotaProviderName('unlisted'),'unlisted');
 });
 
 

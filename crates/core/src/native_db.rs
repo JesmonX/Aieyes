@@ -4,7 +4,7 @@
 //! completed history size. Explicit rescan replays settled historical edits.
 use crate::{models::*, store::Store, usage};
 use anyhow::Result;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -27,12 +27,8 @@ pub(crate) fn scan(
     project: impl FnOnce(&Connection) -> Result<Projection>,
     parse: impl Fn(&Source, &str, &Value) -> Result<Record>,
 ) -> Result<Value> {
-    let db = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    db.busy_timeout(std::time::Duration::from_millis(500))?;
-    db.execute_batch("PRAGMA query_only=ON;BEGIN")?;
+    let db = crate::sqlite_ro::open_ro(path)?;
+    db.execute_batch("BEGIN")?;
     let projection = project(&db)?;
     let key = if source.provider == "opencode" {
         format!("{}#{}", path.display(), projection.table)

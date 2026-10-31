@@ -49,6 +49,107 @@ fn usage_for(store: &Store, session: &str) -> u64 {
         })
         .sum()
 }
+
+#[test]
+fn work_usage_and_nested_forks_are_separate_from_the_shared_codex_billing_pool() {
+    for precise in [true, false] {
+        for compressed in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let stamp = now() - 100;
+            let with_originator = |text: String, originator: &str| {
+                let mut value: Value = serde_json::from_str(text.trim()).unwrap();
+                value["payload"]["originator"] = json!(originator);
+                line(value)
+            };
+            let parent = with_originator(meta("work", stamp - 40, None), "codex_work_desktop")
+                + &count(stamp - 30, 100, 100);
+            let middle = meta("middle", stamp - 25, Some(("work", parent.len())))
+                + &count(stamp - 20, 150, 50);
+            let child = meta("child", stamp - 15, Some(("middle", middle.len())))
+                + &count(stamp - 10, 175, 25);
+            let explicit = with_originator(
+                meta("explicit-codex", stamp - 5, Some(("work", parent.len()))),
+                "codex_cli_rs",
+            ) + &count(stamp, 105, 5);
+            if compressed {
+                std::fs::write(
+                    temp.path().join("parent.jsonl.zst"),
+                    packed(parent.as_bytes()),
+                )
+                .unwrap();
+            } else {
+                std::fs::write(temp.path().join("parent.jsonl"), parent).unwrap();
+            }
+            std::fs::write(temp.path().join("middle.jsonl"), middle).unwrap();
+            std::fs::write(temp.path().join("child.jsonl"), &child).unwrap();
+            std::fs::write(temp.path().join("explicit.jsonl"), explicit).unwrap();
+            let (store, mut settings, source) = setup(temp.path());
+            settings.precise_counting = precise;
+            store.save_settings(&settings).unwrap();
+            import::scan(&store, &settings, &source).unwrap();
+            let totals = |provider: Option<&str>| {
+                let filter = Filter {
+                    provider: provider.map(str::to_owned),
+                    ..Default::default()
+                };
+                let detail = store.dashboard(&filter).unwrap();
+                assert_eq!(
+                    detail.summary.tokens.total(),
+                    store
+                        .dashboard_summary(&filter)
+                        .unwrap()
+                        .summary
+                        .tokens
+                        .total()
+                );
+                detail.summary.tokens.total()
+            };
+            let (work, codex) = if precise {
+                (if compressed { 75 } else { 175 }, 5)
+            } else {
+                (if compressed { 325 } else { 425 }, 105)
+            };
+            assert_eq!(totals(Some("chatgpt-work")), work);
+            assert_eq!(totals(Some("codex")), codex);
+            assert_eq!(totals(None), work + codex);
+            for id in ["work", "middle", "child", "explicit-codex"]
+                .into_iter()
+                .filter(|id| !compressed || *id != "work")
+            {
+                let payload: String = store
+                    .db
+                    .query_row(
+                        "SELECT payload FROM events WHERE json_extract(payload,'$.sessionId')=?1",
+                        [id],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                let mut event: UsageEvent = serde_json::from_str(&payload).unwrap();
+                assert_eq!(event.provider, "codex", "billing identity is stable");
+                assert_eq!(
+                    event.agent,
+                    if id == "explicit-codex" {
+                        "codex"
+                    } else {
+                        "chatgpt-work"
+                    }
+                );
+                event.agent.clear();
+                store.put_event(&event, &[], &settings).unwrap();
+            }
+            assert_eq!(
+                totals(Some("chatgpt-work")),
+                work,
+                "a poorer duplicate keeps known originator"
+            );
+            import::rescan(&store, &settings, &source).unwrap();
+            assert_eq!(totals(Some("chatgpt-work")), work);
+            assert_eq!(totals(Some("codex")), codex);
+            assert_eq!(totals(None), work + codex);
+            compare_remote_baseline(&source, &child);
+        }
+    }
+}
 fn legacy(source: &Source, session: &str, stamp: i64, total: u64) -> UsageEvent {
     let tokens = Tokens {
         input: total,
@@ -828,4 +929,53 @@ fn cached_fork_warnings_are_settings_diagnostics_but_real_failures_remain_visibl
     );
     assert_eq!(failed["partial"], true);
     assert_eq!(failed["error"], "连接失败");
+}
+
+#[test]
+fn chatgpt_work_fork_keeps_codex_metering_and_its_own_agent() {
+    let temp = tempfile::tempdir().unwrap();
+    let stamp = now() - 100;
+    let work = |line: String| {
+        line.replace(
+            "\"model_provider\"",
+            "\"originator\":\"codex_work_desktop\",\"model_provider\"",
+        )
+    };
+    let prefix = work(meta("parent", stamp - 100, None)) + &count(stamp - 90, 1_000, 1_000);
+    let child =
+        work(meta("child", stamp - 10, Some(("parent", prefix.len())))) + &count(stamp, 1_200, 200);
+    std::fs::write(temp.path().join("parent.jsonl"), prefix).unwrap();
+    std::fs::write(temp.path().join("child.jsonl"), child).unwrap();
+    std::fs::write(
+        temp.path().join("plain.jsonl"),
+        meta("plain", stamp - 5, None) + &count(stamp, 300, 300),
+    )
+    .unwrap();
+    let (store, settings, source) = setup(temp.path());
+    import::scan(&store, &settings, &source).unwrap();
+    assert_eq!(usage_for(&store, "child"), 200);
+    let agents = |session: &str| -> Vec<(String, String)> {
+        let mut query = store
+            .db
+            .prepare("SELECT payload FROM events WHERE json_extract(payload,'$.sessionId')=?1")
+            .unwrap();
+        query
+            .query_map([session], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| {
+                let e = serde_json::from_str::<UsageEvent>(&r.unwrap()).unwrap();
+                (e.provider, e.agent)
+            })
+            .collect()
+    };
+    for session in ["parent", "child"] {
+        let rows = agents(session);
+        assert!(!rows.is_empty());
+        assert!(
+            rows.iter()
+                .all(|(p, a)| p == "codex" && a == "chatgpt-work"),
+            "{session}: {rows:?}"
+        );
+    }
+    assert_eq!(agents("plain"), vec![("codex".into(), String::new())]);
 }

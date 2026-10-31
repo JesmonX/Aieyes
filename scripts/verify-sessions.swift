@@ -47,6 +47,9 @@ import Combine
         let snapshot = try JSONDecoder().decode(SessionSnapshot.self, from: Data(#"{"sessions":[{"id":"s","source":"Codex","phase":"tool","updatedAt":1791640000}],"unavailable":false}"#.utf8))
         precondition(snapshot.sessions[0].phase == .tool)
         precondition(snapshot.sessions[0].updatedAt.timeIntervalSince1970 == 1791640000)
+        let encrypted = try JSONDecoder().decode(SessionSnapshot.self, from: Data(#"{"sessions":[],"unavailable":false,"sources":[{"sourceId":"trae-ide","provider":"trae","machineId":"local","state":"healthy","processRunning":true},{"sourceId":"cn-ide","provider":"trae-cn","machineId":"local","state":"healthy","processRunning":false},{"sourceId":"legacy","provider":"codex","machineId":"local","state":"healthy"}]}"#.utf8))
+        precondition(encrypted.sessions.isEmpty && !encrypted.unavailable)
+        precondition(encrypted.sources!.map(\.processRunning) == [true, false, nil])
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -115,6 +118,13 @@ import Combine
         }
         let navigation = WindowNavigationStore(model:model)
         let surface = SurfaceObservation(model:model,compact:false,page:"analysis")
+        let sessions = SessionStripStore(model: model)
+        model.sessionSources = [SessionSourceHealth(sourceId: "trae-ide", provider: "trae", machineId: "local", state: "healthy", processRunning: true)]
+        await flushPublications()
+        precondition(sessions.snapshot.sessions.isEmpty && sessions.snapshot.sources.first?.processRunning == true)
+        model.sessionSources[0].processRunning = false
+        await flushPublications()
+        precondition(sessions.snapshot.sources.first?.processRunning == false)
         var navigationChanges = 0, surfaceChanges = 0
         let nav = navigation.objectWillChange.sink { navigationChanges += 1 }
         let page = surface.objectWillChange.sink { surfaceChanges += 1 }

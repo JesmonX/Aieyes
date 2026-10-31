@@ -460,6 +460,8 @@ fn main() {
                 root.clone(),
                 Arc::new(Mutex::new(Engine::open(&root)?)),
             ));
+            // Zero-config native account detection; settings revisions refresh the UI.
+            Engine::spawn_auto_scan(&root);
             updates::setup(app.handle(), &root);
             app.manage(session_sounds::Sounds::default());
             notifications::start(app.handle(), &root);

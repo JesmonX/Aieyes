@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 
@@ -12,9 +13,18 @@ AGY = ['SessionStart', 'PreInvocation', 'PostToolUse', 'PostInvocation', 'Stop']
 ZCODE = ['SessionStart','UserPromptSubmit','PreToolUse','PermissionRequest','PostToolUse','PostToolUseFailure','Stop']
 CODEBUDDY = CLAUDE + ['PermissionDenied']
 CURSOR = ['sessionStart','beforeSubmitPrompt','preToolUse','postToolUse','postToolUseFailure','afterAgentThought','stop','sessionEnd']
+def trae_helper():
+    if '_TRAE' not in globals():
+        from pathlib import Path
+        source = globals().get('TRAE_SCRIPT')
+        if source is None: source = Path(__file__).with_name('trae_remote.py').read_text(encoding='utf-8')
+        scope = {}; exec(compile(source, '<aieyes-trae>', 'exec'), scope); globals()['_TRAE'] = scope
+    return globals()['_TRAE']
+
+
 def hook_names(provider):
     return CODEBUDDY if provider=='codebuddy' else CLAUDE if provider=='claude' else CURSOR if provider=='cursor' else ZCODE if provider=='zcode' else AGY
-EVENT_KEYS = {'kind', 'session', 'sessionSource', 'parentSession', 'parentSessionPath', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification'}
+EVENT_KEYS = {'kind', 'session', 'sessionSource', 'classification', 'originator', 'parentSession', 'parentSessionPath', 'turn', 'record', 'parent', 'call', 'tool', 'at', 'pid', 'processStart', 'fullyIdle', 'failed', 'interrupted', 'notification'}
 
 def text(value):
     return value[:256] if isinstance(value, str) else ''
@@ -32,6 +42,54 @@ def native_database():
         if source is None:source=pathlib.Path(__file__).with_name('native_database_remote.py').read_text(encoding='utf-8')
         scope={};exec(compile(source,'<aieyes-native-database>','exec'),scope);globals()['_NATIVE_DATABASE']=scope
     return globals()['_NATIVE_DATABASE']
+
+def codebuddy_ide():
+    if '_CODEBUDDY_IDE' not in globals():
+        source=globals().get('CODEBUDDY_IDE_SCRIPT')
+        if source is None:source=pathlib.Path(__file__).with_name('codebuddy_ide_remote.py').read_text(encoding='utf-8')
+        scope={};exec(compile(source,'<aieyes-codebuddy-ide>','exec'),scope);globals()['_CODEBUDDY_IDE']=scope
+    return globals()['_CODEBUDDY_IDE']
+
+def codex_history():
+    if '_CODEX_HISTORY' not in globals():
+        source = globals().get('HISTORY_SCRIPT')
+        if source is None: source = pathlib.Path(__file__).with_name('remote_history.py').read_text(encoding='utf-8')
+        scope = dict(AIEYES_HISTORY_LIBRARY=True)
+        if 'HARNESS_SCRIPT' in globals(): scope['HARNESS_SCRIPT'] = globals()['HARNESS_SCRIPT']
+        else: scope['HARNESS_SCRIPT'] = pathlib.Path(__file__).with_name('harness_remote.py').read_text(encoding='utf-8')
+        exec(compile(source, '<aieyes-codex-history>', 'exec'), scope)
+        globals()['_CODEX_HISTORY'] = scope
+    return globals()['_CODEX_HISTORY']
+
+def inherit_codex_originators(source, result):
+    history = None
+    for row in result.get('files', []):
+        if not row.get('reset') or row.get('hook') or any(event.get('originator') for event in row.get('events', [])): continue
+        try:
+            with open(row['key'], 'rb') as stream:
+                for _ in range(2):
+                    line = stream.readline(65537)
+                    if len(line) > 65536 or not line.endswith(b'\n'): break
+                    try: value = json.loads(line)
+                    except ValueError: continue
+                    if value.get('type') != 'session_meta': continue
+                    payload = value.get('payload') or {}
+                    if payload.get('originator') or not isinstance(payload.get('history_base'), dict): break
+                    if history is None: history = codex_history()['_CodexHistory'](os.path.expanduser(source.get('path') or '~/.codex'))
+                    originator = history.resolve(payload['history_base']).get('originator')
+                    if originator:
+                        for event in row.get('events', []):
+                            if event.get('kind') == 'identity' and not event.get('originator'): event['originator'] = originator
+                    break
+        except (OSError, ValueError): pass
+    return result
+
+def tasks():
+    if '_TASKS' not in globals():
+        source=globals().get('TASK_SCRIPT')
+        if source is None:source=pathlib.Path(__file__).with_name('task_remote.py').read_text(encoding='utf-8')
+        scope={};exec(compile(source,'<aieyes-tasks>','exec'),scope);globals()['_TASKS']=scope
+    return globals()['_TASKS']
 
 def target(source):
     path = pathlib.Path(os.path.expanduser(source.get('path') or ('~/.gemini/antigravity-cli' if source['provider'] == 'antigravity' else '~/.cursor' if source['provider']=='cursor' else '~/.zcode' if source['provider']=='zcode' else '~/.codebuddy' if source['provider']=='codebuddy' else '~/.claude')))
@@ -157,15 +215,92 @@ def process_info(pid):
         return name, int(fields[1]), boot + int(fields[19]) // os.sysconf('SC_CLK_TCK')
     except (OSError, ValueError, StopIteration): return None
 
+PROGRAMS = {'claude':(['claude'],['@anthropic-ai/claude-code']),'codex':(['codex'],['@openai/codex']),'deepseek-harness':(['dsh'],['@deepseek-ai/dsh']),'kimi':(['kimi','kimi-cli','kimi-code'],['@moonshot-ai/kimi-code']),'cursor':(['cursor-agent','agent'],[]),'opencode':(['opencode'],['opencode-ai','@opencode/cli']),'codebuddy':(['codebuddy'],['@tencent-ai/codebuddy-code']),'antigravity':(['agy'],[]),'qoder':(['qodercli'],['@qoder-ai/qodercli']),'zcode':(['zcode'],[]),'grok':(['grok'],[]),'pi':(['pi'],['@mariozechner/pi-coding-agent','@earendil-works/pi-coding-agent']),'omp':(['omp'],['@oh-my-pi/pi-coding-agent']),'copilot':(['copilot'],['@github/copilot']),'kiro':(['kiro-cli'],[]),'cline':(['cline'],['cline','@cline/cli']),'kilo':(['kilo','kilocode'],['@kilocode/cli']),'trae':(['trae-cli','trae_agent.cli'],[]),'trae-cn':(['trae-cli','trae_agent.cli'],[])}
+
+def cli_args(provider, argv):
+    names, packages = PROGRAMS.get(provider, ([], []))
+    index = None
+    for i, token in enumerate(argv[:4]):
+        token = token.replace('\\', '/'); base = token.rsplit('/', 1)[-1].lower()
+        for x in ('.exe', '.cmd', '.js', '.mjs', '.cjs'):
+            if base.endswith(x): base = base[:-len(x)]; break
+        if base in names or any('node_modules/%s/' % p in token for p in packages): index = i; break
+    if index is None: return None
+    args, options, positional = argv[index+1:], [], []
+    valued = {'--model','-m','--provider','--api-key','--config','--config-file','--config-dir','--cwd','--directory','--workdir','--work-dir','-C','--profile','--output-format','--input-format','--format','--mode','--session','--session-id','--session-dir','--resume','-S','--log-level','--log-file','--agent','--agent-file','--add-dir','--tools','--allowed-tools','--allowedTools','--system-prompt','--append-system-prompt','--prompt','--prompt-interactive','--target','--print-timeout','--json-schema','--max-turns','--setting-sources','--thinking','--theme','--title','--hostname','--port','--trajectory-file'}
+    i = 0
+    while i < len(args):
+        arg = args[i]; i += 1
+        if arg == '--':
+            positional.extend(args[i:]); break
+        if not arg.startswith('-') or arg == '-':
+            positional.append(arg); continue
+        if '=' in arg:
+            options.append(tuple(arg.split('=', 1))); continue
+        takes_value = (arg in valued or arg == '-p' and provider not in ('pi','omp')
+                       or arg == '-o' and provider == 'qoder' or arg == '-i' and provider == 'antigravity'
+                       or arg == '-t' and provider in ('trae','trae-cn'))
+        value = args[i] if takes_value and i < len(args) else None
+        if value is not None: i += 1
+        options.append((arg, value))
+    return options, positional
+
+def headless_argv(provider, argv):
+    """Mirror of session_events::headless_argv; the shared fixture checks parity."""
+    parsed = cli_args(provider, argv)
+    if parsed is None: return None
+    options, positional = parsed
+    has = lambda *flags: any(key in flags for key, _ in options)
+    value = lambda flag: next((val for key, val in options if key == flag), None)
+    command = next(iter(positional), None)
+    H, I = 'headless', 'interactive'
+    verdict = lambda headless: H if headless else I
+    if provider in ('claude', 'cursor'): return verdict(has('-p', '--print'))
+    if provider == 'codebuddy': return verdict(has('-p', '--print', '--acp'))
+    if provider == 'codex': return H if command in ('exec', 'e', 'mcp-server') else None
+    if provider == 'deepseek-harness':
+        profile = value('--profile') or command
+        return H if profile in ('headless', 'sdk', 'acp') else I if profile in ('tui', 'web', 'desktop') else None
+    if provider == 'kimi': return verdict(has('-p', '--prompt') or command in ('acp', 'web', 'server', 'rc', 'remote'))
+    if provider == 'opencode':
+        if command in ('run', 'acp', 'api'): return H
+        if command == 'serve': return None if has('--service') else H
+        return I if command is None else None
+    if provider == 'antigravity':
+        if has('-i', '--prompt-interactive'): return I
+        return H if has('-p', '--print', '--prompt', '--output-format', '--input-format', '--print-timeout', '--json-schema') or command in ('remote-control', 'mic-serve') else None
+    if provider == 'qoder': return verdict(has('-p', '--print', '-o', '--output-format', '--remote-control'))
+    if provider == 'zcode': return H if has('-p', '--prompt', '--target') or command == 'app-server' else None
+    if provider == 'grok': return H if has('-p', '--single', '--output-format', '--json-schema') else None
+    if provider in ('pi', 'omp'): return H if has('-p', '--print') or value('--mode') in ('json', 'rpc') else None
+    if provider == 'copilot': return H if has('-p', '--prompt', '--acp') else None
+    if provider == 'kiro': return H if command == 'chat' and (has('--no-interactive', '--non-interactive') or value('--output-format') == 'stream-json') else None
+    if provider == 'cline':
+        if has('-i', '--tui'): return I
+        return H if has('--json', '-z', '--zen', '--oneshot', '-y', '--yolo') or command is not None else None
+    if provider == 'kilo': return H if command in ('run', 'acp') or has('--auto') or value('--format') == 'json' else None
+    if provider in ('trae', 'trae-cn'):
+        if command == 'run': return H
+        if command == 'interactive': return I
+        return H if any(a.startswith('--docker-') or a == '--must-patch' for a, _ in options) else None
+    return None
+
+def cmdline(pid):
+    try: return [a.decode('utf-8', 'replace') for a in pathlib.Path('/proc/%d/cmdline' % pid).read_bytes().split(b'\0') if a]
+    except OSError: return []
+
 def ancestor(provider):
-    if provider in ('cursor','zcode','codebuddy'):return 0,0
-    pid = os.getppid()
+    """(pid, start, argv verdict). Node-hosted CLIs are matched by argv only, never pid-bound."""
+    bind = provider not in ('cursor','zcode','codebuddy')
+    pid = os.getppid(); verdict = None
     for _ in range(8):
         p = process_info(pid)
         if not p: break
-        if (provider == 'claude' and p[0].startswith('claude')) or (provider == 'antigravity' and p[0] == 'agy'): return pid, p[2]
+        argv = cmdline(pid)
+        if verdict is None and not any(MARKER in a for a in argv): verdict = headless_argv(provider, argv)
+        if bind and ((provider == 'claude' and p[0].startswith('claude')) or (provider == 'antigravity' and p[0] == 'agy')): return pid, p[2], verdict
         pid = p[1]
-    return 0, 0
+    return 0, 0, verdict
 
 def observe(provider, kind, home):
     import threading
@@ -200,9 +335,12 @@ def observe(provider, kind, home):
             if kind in ('stop','sessionEnd'):event=terminal(v.get('status' if kind=='stop' else 'reason'))
             row.update(kind=event,session=text(v.get('conversation_id') or v.get('session_id')),turn=text(v.get('generation_id')),call=text(v.get('tool_use_id') or v.get('tool_call_id')),tool='ask_question' if v.get('tool_name')=='AskQuestion' else text(v.get('tool_name')),failed=False,interrupted=False)
             row.pop('fullyIdle',None);row['notification']=''
+            if v.get('is_background_agent') is True:row['classification']='headless'
             session=row['session']
             if not session:return
-        row['pid'], row['processStart'] = ancestor(provider)
+        row['pid'], row['processStart'], verdict = ancestor(provider)
+        if os.environ.get('AIEYES_INTERNAL'): row.update(sessionSource='aieyes-internal', classification='internal')
+        elif verdict and not row.get('classification'): row['classification'] = verdict
         root = pathlib.Path(home) / '.aieyes'
         if (root / 'session-hooks-disabled').exists(): return
         path = root / 'session-events' / (hashlib.sha256(session.encode()).hexdigest() + '.jsonl')
@@ -223,7 +361,7 @@ def milliseconds(value):
 def metadata(v, provider, hook):
     if hook: return [{k: value for k, value in v.items() if k in EVENT_KEYS}]
     if provider in ('pi','omp'):return pi_metadata(v)
-    if provider in ('kimi','codebuddy','deepseek-harness','grok'):
+    if provider in ('kimi','codebuddy','deepseek-harness','grok','copilot'):
         return native_metadata(v,provider)
     at = milliseconds(v.get('timestamp'))
     if provider == 'codex':
@@ -234,6 +372,7 @@ def metadata(v, provider, hook):
         row=dict(kind=kind,at=at,session=text(p.get('id')) if kind=='identity' else '',turn=text(p.get('turn_id')),call=text(p.get('call_id')),tool=text(p.get('name')))
         if kind=='identity':
             row['sessionSource']=text(p.get('source'))
+            if text(p.get('originator')):row['originator']=text(p['originator'])
             source=p.get('source')
             if isinstance(source,dict):row['parentSession']=text(((source.get('subagent') or {}).get('thread_spawn') or {}).get('parent_thread_id'))
         return [row]
@@ -300,6 +439,15 @@ def native_metadata(v, provider):
         if v.get('type')=='phase_changed' and v.get('phase')=='tool_execution':kind='tool_phase'
         if v.get('type')=='phase_changed' and v.get('phase')=='waiting_for_model':kind='thinking'
         if v.get('type')=='turn_ended':kind={'completed':'complete','cancelled':'interrupted','interrupted':'interrupted','failed':'failed','error':'failed'}.get(v.get('outcome'))
+    elif provider=='copilot':
+        data=v.get('data') or {}
+        row=dict(at=milliseconds(v.get('timestamp')),turn=text(data.get('interactionId')))
+        t=v.get('type')
+        kind={'user.message':'start','assistant.turn_start':'thinking','tool.execution_start':'tool','tool.execution_complete':'output','abort':'interrupted','session.abort':'interrupted','assistant.abort':'interrupted','session.error':'failed'}.get(t)
+        if t in ('session.start','session.resume'):kind='identity';row['session']=text(data.get('sessionId'))
+        if t=='system.message' and isinstance(data.get('content'),str) and 'You are running in non-interactive mode' in data['content']:kind='identity';row['classification']='headless'
+        if t=='assistant.message' and not data.get('toolRequests'):kind='complete'
+        if kind in ('tool','output'):row.update(call=text(data.get('toolCallId')),tool=text(data.get('toolName')))
     elif provider=='codebuddy':
         p=v.get('providerData') or {}
         row=dict(at=v.get('timestamp',0),session=text(v.get('sessionId')),turn=text(p.get('conversationRequestId')),record=text(v.get('id')),parent=text(v.get('parentId')))
@@ -544,7 +692,7 @@ class SessionDiscovery:
         if path.suffix != ('.db' if self.provider == 'antigravity' and not hook else '.jsonl'): return False
         if not hook and '.aieyes' in path.parts: return False
         return not ((self.provider == 'kimi' and not hook and path.name != 'wire.jsonl') or
-                    (self.provider == 'grok' and not hook and path.name != 'events.jsonl'))
+                    (self.provider in ('grok','copilot') and not hook and path.name != 'events.jsonl'))
 
     def update(self, path, hook, now):
         self.files.pop(path, None)
@@ -561,7 +709,12 @@ class SessionDiscovery:
     def scan(self, now):
         self.watch.close(); self.watch = FileWatch(); self.files.clear(); self.overflow = False
         for root, hook in self.roots:
-            if not root.exists(): continue
+            if not root.exists():
+                # A first-run hook creates its event directory after collection
+                # starts. Watch the closest existing parent to discover it.
+                parent = next((p for p in root.parents if p.is_dir()), None)
+                if parent is not None: self.watch.add(parent, True)
+                continue
             if root.is_file(): self.update(root, hook, now); continue
             pending = [root]
             while pending:
@@ -602,12 +755,119 @@ def recent_files(provider, roots):
     return discovery.recent(), discovery.overflow
 
 
+def kiro_process_classification(lock):
+    """Inspect Kiro's lock-holder ancestry; never return argv or environment values."""
+    pid = lock.get('pid')
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    verdict, tui, keyed = None, False, False
+    for depth in range(6):
+        process = process_info(pid)
+        if not process:
+            break
+        if depth == 0 and lock.get('started_at'):
+            try:
+                from datetime import datetime
+                started = datetime.fromisoformat(lock['started_at'].replace('Z', '+00:00')).timestamp()
+                if abs(process[2] - started) > 120:
+                    return None
+            except (ValueError, TypeError):
+                pass
+        argv = cmdline(pid)
+        verdict = verdict or headless_argv('kiro', argv)
+        tui = tui or any(a.replace('\\', '/').endswith('/tui.js') and 'kiro' in a for a in argv[:4])
+        try:
+            variables = pathlib.Path('/proc/%d/environ' % pid).read_bytes().split(b'\0')
+            if any(v.startswith(b'AIEYES_INTERNAL=') and v != b'AIEYES_INTERNAL=' for v in variables):
+                return 'internal'
+            keyed = keyed or any(v.startswith(b'KIRO_API_KEY=') and v != b'KIRO_API_KEY=' for v in variables)
+        except OSError:
+            pass
+        pid = process[1]
+    return verdict or ('interactive' if tui else 'headless' if keyed else None)
+
+
+def collect_kiro(path, cursors):
+    """Kiro V2 CLI and V3/IDE session metadata only; no message JSONL is read."""
+    root = path.parent if path.name == 'cli' and path.parent.name == 'sessions' else path if path.name == 'sessions' else path / 'sessions'
+    if not root.is_dir():
+        return [], 0
+    files = list((root / 'cli').glob('*.json')) + list(root.glob('*/sess_*/session.json'))
+    recent = []
+    for file in files:
+        try:
+            stamp = file.stat().st_mtime
+            if file.name == 'session.json' and (file.parent / 'messages.jsonl').is_file():
+                stamp = max(stamp, (file.parent / 'messages.jsonl').stat().st_mtime)
+            if time.time() - stamp < 86400:
+                recent.append((stamp, file))
+        except OSError:
+            continue
+    recent.sort(reverse=True)
+    result = []
+    for stamp, file in recent[:256]:
+        if file.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError('Kiro session metadata exceeds 16 MiB')
+        value = json.loads(file.read_text())
+        v3 = file.name == 'session.json'
+        session = text(value.get('session_id') or value.get('id') or (file.parent.name if v3 else file.stem))
+        cursor = cursors.get(str(file), {})
+        classification = (cursor.get('continuation') or {}).get('classification', 'unknown')
+        if classification not in ('headless', 'internal'):
+            cwd = value.get('cwd') or next(iter(value.get('workspacePaths') or value.get('rootPaths') or []), '')
+            if cwd and pathlib.Path(cwd).resolve() == (pathlib.Path.home() / '.aieyes/kiro-probe').resolve():
+                classification = 'internal'
+            elif not v3:
+                lock = file.with_suffix('.lock')
+                try:
+                    if lock.stat().st_size <= 4096:
+                        classification = kiro_process_classification(json.loads(lock.read_text())) or classification
+                except (OSError, ValueError):
+                    pass
+        parent = text(value.get('parentSessionId')) if v3 and value.get('createdReason') == 'subagent' else ''
+        if v3:
+            kind = {'in_progress': 'start', 'provisioning': 'start', 'waiting_on_user': 'PermissionRequest', 'completed': 'complete', 'idle': 'complete', 'failed': 'failed'}.get(value.get('status'), 'unknown')
+        else:
+            metadata = (value.get('session_state') or {}).get('conversation_metadata') or {}
+            last = (metadata.get('user_turn_metadatas') or [{}])[-1]
+            kind = 'start' if metadata.get('user_turn_start_request') is not None else 'failed' if 'Err' in (last.get('result') or {}) else {'UserTurnEnd': 'complete', 'ToolUseRejected': 'interrupted', 'DidNotRun': 'interrupted'}.get(last.get('end_reason'), 'unknown')
+        event = dict(session=session, turn=session, at=int(stamp * 1000), classification=classification)
+        result.append(dict(key=str(file), identity=session, signature='kiro:' + str(stamp), modified=int(stamp), reset=True, database=True,
+                           events=[dict(event, kind='start', parentSession=parent), dict(event, kind=kind)], continuation=dict(classification=classification)))
+    return result, max(len(recent) - 256, 0)
+
+
 def collect_native(source,cursors,database_cache=False,harness_deadline=None):
     path=pathlib.Path(os.path.expanduser(source.get('path') or '~/.gemini/antigravity-cli'))
     provider=source['provider']; result=dict(sourceId=source['id'],files=[],error=None,ignored=[],overflow=0)
     try:
-        if provider in ('opencode','zcode'):
-            database=(path if path.is_file() else path/'opencode.db') if provider=='opencode' else next((p for p in ([path] if path.is_file() else [path/'cli/db/db.sqlite',path/'db/db.sqlite']) if p.is_file()),None)
+        if provider == 'codebuddy' and codebuddy_ide()['is_path'](path):
+            result.update(codebuddy_ide()['sessions'](path, cursors, int(time.time())))
+            return result
+        # Only CLI trajectory metadata is readable; encrypted IDE sources expose
+        # a main-process status without synthesizing conversations.
+        if provider in ('trae','trae-cn'):
+            helper = trae_helper()
+            result['files'], result['overflow'], errors = helper['sessions'](path, cursors, headless_argv)
+            if errors: result['error'] = errors[0]
+            if not (path if path.name == 'trajectories' else path / 'trajectories').is_dir():
+                result['processRunning'] = helper['ide_running'](provider)
+            return result
+        if provider == 'kiro':
+            if not path.exists():
+                raise FileNotFoundError('Agent data directory does not exist')
+            result['files'], result['overflow'] = collect_kiro(path, cursors)
+            if result['overflow']:
+                result['error'] = 'Too many recent Kiro sessions; showing the most recent 256'
+            return result
+        if provider in ('cline','roo') or (provider=='kilo' and tasks()['files'](provider,path)
+            and not any((path/name).is_file() for name in ('opencode.db','kilo.db'))):
+            if not path.exists():raise FileNotFoundError('Agent data directory does not exist')
+            result['files'],errors=tasks()['sessions'](path,provider,cursors,int(time.time()))
+            if errors:result['error']=errors[0]
+            return result
+        if provider in ('opencode','kilo','zcode','workbuddy'):
+            database=(path if path.is_file() else next((p for p in (path/'opencode.db',path/'kilo.db') if p.is_file()),path/'opencode.db')) if provider in ('opencode','kilo') else (path if path.is_file() else path/'workbuddy.db') if provider=='workbuddy' else next((p for p in ([path] if path.is_file() else [path/'cli/db/db.sqlite',path/'db/db.sqlite']) if p.is_file()),None)
             if database is None or not database.is_file():raise FileNotFoundError('Native session database not found')
             cursor=cursors.get(str(database),{}) if database_cache else {}
             try:
@@ -639,7 +899,7 @@ def collect_native(source,cursors,database_cache=False,harness_deadline=None):
                         result['files'].append(dict(key=str(file),identity=cursor.get('identity',''),signature=cursor['signature'],size=cursor.get('size',0),offset=cursor.get('offset',0),modified=cursor.get('modified',0),reset=False,events=[],hook=False,continuation=cursor.get('continuation')))
             return result
         if not path.exists(): raise FileNotFoundError('Agent data directory does not exist')
-        roots=[] if provider=='cursor' else [(path / ('sessions' if provider in ('codex','kimi','grok','pi','omp') else 'projects' if provider in ('claude','codebuddy','qoder') else 'conversations'),False)]
+        roots=[] if provider=='cursor' else [(path / ('sessions' if provider in ('codex','kimi','grok','pi','omp') else 'session-state' if provider=='copilot' else 'projects' if provider in ('claude','codebuddy','qoder') else 'conversations'),False)]
         if roots and not roots[0][0].is_dir(): roots=[(path,False)]
         if provider in ('claude','antigravity','cursor','codebuddy'): roots.append((target(source)[0]/'.aieyes/session-events',True))
         files,truncated=recent_files(provider,roots)
@@ -661,7 +921,210 @@ def collect_native(source,cursors,database_cache=False,harness_deadline=None):
     except Exception as error: result['error']=str(error)
     return result
 
-def collect(source,cursors,database_cache=False,harness_deadline=None):
+# Native CLI association mirrors session_processes.rs. No argv/environment data
+# is returned to the UI; only a proved process identity and its classification.
+_PROCESS_CONTEXTS = {}
+
+def _absolute(value):
+    return os.path.realpath(value) if isinstance(value, str) and 0 < len(value) <= 4096 and os.path.isabs(value) else None
+
+def _seconds(value):
+    if isinstance(value, str):
+        return milliseconds(value) // 1000
+    if type(value) is int and value > 0:
+        return value // 1000 if value > 10000000000 else value
+    return 0
+
+def _session_context(provider, key, session):
+    base, sep, native_id = key.rpartition('#')
+    database = bool(sep and os.path.isfile(base))
+    path = os.path.realpath(base if database else key)
+    result = dict(path=path, session=session or key, workspace=None, created=0)
+    def metadata(value):
+        if not isinstance(value, dict): return
+        if value.get('type') == 'session_meta': value = value.get('payload') or {}
+        if not isinstance(value, dict): return
+        result['workspace'] = next((_absolute(value.get(k)) for k in ('cwd','workingDirectory','working_directory','workspace','directory') if _absolute(value.get(k))), result['workspace'])
+        if not result['created']:
+            result['created'] = next((_seconds(value.get(k)) for k in ('createdAt','created_at','timestamp','time') if _seconds(value.get(k))), 0)
+    if database:
+        result['session'] = native_id
+        if provider in ('opencode', 'kilo'):
+            import contextlib, sqlite3
+            try:
+                with contextlib.closing(sqlite3.connect(pathlib.Path(path).as_uri() + '?mode=ro', uri=True, timeout=.2)) as db:
+                    for table in ('session_v2', 'session'):
+                        try:
+                            row = db.execute('SELECT directory,time_created FROM ' + table + ' WHERE id=?', (native_id,)).fetchone()
+                        except sqlite3.Error: continue
+                        if row:
+                            result.update(workspace=_absolute(row[0]), created=_seconds(row[1])); break
+            except (OSError, sqlite3.Error): pass
+        return result
+    if provider == 'kimi':
+        root = next((p for p in pathlib.Path(path).parents if p.name.startswith('session_')), None)
+        if root:
+            result['session'] = root.name
+            try:
+                with (root/'state.json').open('rb') as f: raw = f.read(1024*1024+1)
+                value = json.loads(raw) if len(raw) <= 1024*1024 else {}
+                if value.get('id') == root.name: metadata(value)
+            except (OSError, ValueError, AttributeError): pass
+    if not result['workspace']:
+        try:
+            with open(path, 'rb') as f:
+                for _ in range(4):
+                    row = f.readline(65537)
+                    if not row or len(row) > 65536: break
+                    try: metadata(json.loads(row))
+                    except ValueError: pass
+                    if result['workspace']: break
+        except OSError: pass
+    return result
+
+def _process_root(provider, options, env):
+    value = lambda *keys: next((v for k, v in options if k in keys), None)
+    if provider in ('pi','omp') and _absolute(value('--session-dir')): return _absolute(value('--session-dir')), True
+    if _absolute(value('--config-dir')): return _absolute(value('--config-dir')), True
+    variable = {'codex':'CODEX_HOME','claude':'CLAUDE_CONFIG_DIR','kimi':'KIMI_CODE_HOME','codebuddy':'CODEBUDDY_CONFIG_DIR','qoder':'QODER_CONFIG_DIR','grok':'GROK_HOME','deepseek-harness':'DSH_HOME','pi':'PI_CODING_AGENT_DIR','omp':'PI_CODING_AGENT_DIR'}.get(provider)
+    if _absolute(env.get(variable)): return _absolute(env[variable]), True
+    if provider in ('opencode','kilo') and _absolute(env.get('XDG_DATA_HOME')): return os.path.join(_absolute(env['XDG_DATA_HOME']), provider), True
+    default = {'codex':'~/.codex','claude':'~/.claude','kimi':'~/.kimi-code','codebuddy':'~/.codebuddy','qoder':'~/.qoder','grok':'~/.grok','deepseek-harness':'~/.dsh','pi':'~/.pi/agent','omp':'~/.omp/agent','opencode':'~/.local/share/opencode','kilo':'~/.local/share/kilo','antigravity':'~/.gemini/antigravity-cli'}.get(provider)
+    return (os.path.realpath(os.path.expanduser(default)) if default else None), False
+
+_NATIVE_PROCESS_CACHE = {}
+
+def retain_launch_evidence(process, previous):
+    if not previous or any(process[key] != previous[key] for key in ('provider','pid','start')): return
+    process['internal'] = process['internal'] or previous['internal']
+    if previous.get('classification') == 'headless' or process.get('classification') is None:
+        process['classification'] = previous.get('classification')
+    if not process['rootObserved'] and previous['rootObserved']:
+        process.update(root=previous['root'],rootObserved=True)
+    if not process.get('selectedSession'): process['selectedSession'] = previous.get('selectedSession')
+    if not process.get('workspace'): process['workspace'] = previous.get('workspace')
+
+def native_processes(providers):
+    result = []
+    try: pids = [int(p.name) for p in pathlib.Path('/proc').iterdir() if p.name.isdigit()]
+    except OSError: return []
+    for pid in pids:
+        argv = cmdline(pid)
+        if not argv or any(MARKER in a for a in argv): continue
+        matched = [(provider, cli_args(provider, argv)) for provider in providers]
+        matched = [(p, args) for p, args in matched if args is not None or any(key[:2] == (p,pid) for key in _NATIVE_PROCESS_CACHE)]
+        if not matched: continue
+        info = process_info(pid)
+        if not info: continue
+        try: cwd = _absolute(os.readlink('/proc/%d/cwd' % pid))
+        except OSError: cwd = None
+        env = {}
+        try:
+            for item in pathlib.Path('/proc/%d/environ' % pid).read_bytes().split(b'\0'):
+                key, sep, value = item.partition(b'=')
+                if sep and key in (b'AIEYES_INTERNAL', b'CODEX_HOME', b'CLAUDE_CONFIG_DIR', b'KIMI_CODE_HOME', b'CODEBUDDY_CONFIG_DIR', b'QODER_CONFIG_DIR', b'GROK_HOME', b'DSH_HOME', b'PI_CODING_AGENT_DIR', b'XDG_DATA_HOME'):
+                    env[key.decode()] = value.decode('utf-8', 'replace')
+        except OSError: pass
+        for provider, parsed in matched:
+            previous = _NATIVE_PROCESS_CACHE.get((provider,pid,info[2]))
+            if parsed is None and previous is None: continue
+            options, positional = parsed or ([], [])
+            if (provider == 'opencode' and positional[:1] == ['serve'] and any(k == '--service' for k, _ in options)) or (provider == 'kilo' and positional[:1] == ['serve']): continue
+            workspace = next((_absolute(v) for k, v in options if k in ('--cwd','--directory','--workdir','--work-dir','-C') and _absolute(v)), cwd)
+            files = set()
+            if provider in ('deepseek-harness','grok'):
+                try:
+                    for fd in list(pathlib.Path('/proc/%d/fd' % pid).iterdir())[:512]:
+                        try:
+                            path = _absolute(os.readlink(fd))
+                            if path: files.add(path)
+                        except OSError: pass
+                except OSError: pass
+            root, root_observed = _process_root(provider,options,env)
+            verdict = headless_argv(provider,argv)
+            if verdict is None and parsed is not None and provider in ('pi','omp'): verdict = 'interactive'
+            # process.title may overwrite argv, leaving environment entries in
+            # the old argument slots. That title cannot prove interactive mode.
+            if verdict != 'headless' and any('=' in arg and re.fullmatch(r'[A-Z0-9_]+',arg.split('=',1)[0]) for arg in argv[1:]): verdict = None
+            process = dict(pid=pid,start=info[2],provider=provider,classification=verdict,observedAt=time.monotonic(),alive=True,
+                           selectedSession=next((v for k,v in options if k in ('--session','--session-id','--resume','-S')),None),
+                           workspace=workspace,root=root,rootObserved=root_observed,internal=bool(env.get('AIEYES_INTERNAL')),files=files)
+            retain_launch_evidence(process,previous)
+            result.append(process)
+        if len(result) >= 256: break
+    present = {(p['provider'],p['pid'],p['start']) for p in result}
+    for identity, previous in _NATIVE_PROCESS_CACHE.items():
+        if len(result) >= 256: break
+        if identity not in present and previous['provider'] in providers and time.monotonic()-previous['observedAt'] <= 15:
+            result.append(dict(previous,alive=False))
+    _NATIVE_PROCESS_CACHE.clear()
+    _NATIVE_PROCESS_CACHE.update({(p['provider'],p['pid'],p['start']):p.copy() for p in result})
+    return result
+
+def associate_native_processes(provider, sessions, processes):
+    matches, result = [], {}
+    for si, (_, context, activity) in enumerate(sessions):
+        for pi, p in enumerate(processes):
+            if p['provider'] != provider: continue
+            exact_pid = activity.get('pid') == p['pid'] and activity.get('processStart', 0) > 0 and activity['processStart'] == p['start']
+            transcript = '#' not in sessions[si][0] and (context['path'] in p['files'] or provider == 'deepseek-harness' and str(pathlib.Path(context['path']).parent/'session.lock') in p['files'])
+            root = p['root']
+            in_root = bool(root and (context['path'] == root or context['path'].startswith(root + os.sep)))
+            options, _ = cli_args(provider, p['argv']) if 'argv' in p else ([], [])
+            selected = p.get('selectedSession') or next((v for k, v in options if k in ('--session','--session-id','--resume','-S')), None)
+            explicit = bool(selected and (selected in (context['session'], activity.get('session')) or _absolute(selected) == context['path']))
+            same_workspace = context['workspace'] is not None and context['workspace'] == p['workspace']
+            started = p['start'] <= context['created'] <= p['start'] + 120
+            turn = activity.get('turnStartedAt', 0) // 1000
+            resumed = activity.get('phase') in ('working','thinking','tool','needsInput') and p['start'] <= turn <= p['start'] + 120
+            strength = 3 if exact_pid or transcript else 2 if in_root and explicit else 1 if in_root and same_workspace and (started or resumed) else 0
+            if strength: matches.append((si,pi,strength))
+    for si, (key, _, _) in enumerate(sessions):
+        best = max((strength for s, _, strength in matches if s == si), default=0)
+        candidates = [(pi,strength) for s,pi,strength in matches if s == si and strength == best]
+        if len(candidates) != 1: continue
+        pi, strength = candidates[0]
+        if strength == 1 and len({sessions[s][1]['session'] for s,p,_ in matches if p == pi}) != 1: continue
+        p = processes[pi]
+        verdict = 'internal' if p['internal'] else p['classification'] if 'classification' in p else headless_argv(provider, p['argv'])
+        if verdict is None and 'classification' not in p and provider in ('pi','omp'): verdict = 'interactive'
+        result[key] = dict(kind='identity',pid=p['pid'],processStart=p['start'])
+        if verdict: result[key]['classification'] = verdict
+    return result
+
+def apply_process_evidence(source, result, cursors, processes):
+    sessions = []
+    for row in result.get('files', []):
+        if row.get('hook'): continue
+        key = row['key']
+        activity = dict(cursors.get(key, {})) if not row.get('reset') else {}
+        for event in row.get('events', []):
+            if event.get('session'): activity['session'] = event['session']
+            if event.get('pid'): activity.update(pid=event['pid'], processStart=event.get('processStart', 0))
+            kind = event.get('kind')
+            if kind in ('start','UserPromptSubmit'):
+                activity.update(phase='working',turnStartedAt=event.get('at',0))
+            elif kind in ('thinking','tool','complete','failed','interrupted'):
+                activity['phase'] = kind
+        cached = _PROCESS_CONTEXTS.get(key)
+        if cached is None or cached[0] != row.get('identity') or row.get('reset'):
+            cached = (row.get('identity'), _session_context(source['provider'], key, activity.get('session','')))
+            _PROCESS_CONTEXTS[key] = cached
+        sessions.append((key, cached[1], activity))
+    evidence = associate_native_processes(source['provider'], sessions, processes)
+    for row in result.get('files', []):
+        if row['key'] in evidence:
+            event = evidence[row['key']]
+            row.setdefault('events', []).append(event)
+            row['alive'] = any(p['pid'] == event['pid'] and p['start'] == event['processStart'] and p.get('alive', True) for p in processes)
+    if len(_PROCESS_CONTEXTS) > 4096:
+        keep = {row['key'] for row in result.get('files', [])}
+        for key in list(_PROCESS_CONTEXTS):
+            if key not in keep: _PROCESS_CONTEXTS.pop(key, None)
+    return result
+
+
+def collect(source,cursors,database_cache=False,harness_deadline=None,processes=None):
     result=collect_native(source,cursors,database_cache,harness_deadline)
     if source['provider']=='zcode':
         root=target(source)[0]/'.aieyes/session-events'
@@ -671,18 +1134,21 @@ def collect(source,cursors,database_cache=False,harness_deadline=None):
             for path in paths[:256]:
                 try:result['files'].append(read_file(path,'zcode',True,cursors.get(str(path),{})))
                 except Exception as error:result['error']=str(error)
-    return result
+    if source['provider'] == 'codex': inherit_codex_originators(source,result)
+    return apply_process_evidence(source,result,cursors,native_processes([source["provider"]]) if processes is None else processes)
 
 def main(request):
     action=request.get('action','collect'); sources=request.get('sources',[])
     hooks=[]; seen=set()
     for s in sources:
         if s['provider'] not in ('claude','antigravity','cursor','zcode','codebuddy'): continue
+        if s['provider'] == 'codebuddy' and codebuddy_ide()['is_path'](s.get('path', '')): continue
         key=(s['provider'],str(target(s)[0]))
         if key in seen: continue
         seen.add(key); hooks.append(manage(s,'ensure' if action=='collect' else action))
     deadline=time.monotonic()+8
-    polls=[collect(s,request.get('cursors',{}),request.get('databaseCache') is True,harness_deadline=deadline) for s in sources] if action=='collect' else []
+    processes=native_processes({s["provider"] for s in sources}) if action=="collect" else []
+    polls=[collect(s,request.get('cursors',{}),request.get('databaseCache') is True,harness_deadline=deadline,processes=processes) for s in sources] if action=='collect' else []
     return dict(hooks=hooks,polls=polls,now=int(time.time()))
 
 def serve(request):
