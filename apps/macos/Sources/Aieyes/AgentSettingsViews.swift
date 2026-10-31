@@ -824,9 +824,9 @@ struct DeleteArchivedAccountView: View {
     private func remove() {
         busy = true; error = nil
         Task { defer { busy = false }; do {
-            let result: AccountCleanupResult = try await model.accountEngine.call("accounts.delete", params: ["accountKey":account.key,"force":force])
+            let result: AccountCleanupResult = try await model.accountEngine.call("accounts.delete", params: ["accountKey":account.key,"force":force,"archiveFirst":true])
             if result.deleted == true, let saved = result.settings { model.acceptConfiguration(saved); dismiss() }
-            else { failed = result.failedTasks ?? []; error = L("部分任务未清理，账户仍保留。可重试，或确认强制删除。") }
+            else { if let saved = result.settings { model.acceptConfiguration(saved) }; failed = result.failedTasks ?? []; error = L("部分任务未清理，账户仍保留。可重试，或确认强制删除。") }
         } catch { self.error = error.localizedDescription } }
     }
 }

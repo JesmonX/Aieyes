@@ -541,6 +541,7 @@ fn identity_for(provider: &str, v: &Value) -> Result<AccountIdentity> {
         .filter(|s| !s.trim().is_empty() && s.len() <= 512 && !s.chars().any(char::is_control))
         .context("Qoder 未返回账户身份；会话 Credits 不能代替账户额度")?;
     Ok(AccountIdentity {
+        provider_account_id: Some(user.into()),
         key: format!("{provider}:{:x}", Sha256::digest(user.as_bytes())),
         email: v["email"]
             .as_str()
@@ -591,24 +592,25 @@ pub(super) fn apply_for(provider: &str, q: &mut QuotaSnapshot, v: &Value) -> Res
             total >= 0. && used >= 0. && remaining >= 0.,
             "Qoder Credits 数值无效"
         );
-        let usage = if total == 0. {
+        let _usage = if total == 0. {
             ensure!(used == 0. && remaining == 0., "Qoder 零上限额度不一致");
             100.
         } else {
             ratio(&bucket["used"], &bucket[total_field])?
         };
         any_remaining |= remaining > 0. && bucket["available"] != false;
-        window(
-            q,
-            field,
-            &format!("{name} Credits · {used} / {total} · 剩余 {remaining}"),
-            usage,
-            None,
-            None,
-        );
+        q.meters.push(QuotaMeter {
+            id: field.into(),
+            label: format!("{name} Credits"),
+            unit: "credits".into(),
+            used,
+            total: Some(total),
+            remaining: Some(remaining),
+            ..Default::default()
+        });
     }
     ensure!(
-        !q.windows.is_empty(),
+        !q.meters.is_empty(),
         "Qoder 未返回账户额度；会话 Credits 不能代替账户额度"
     );
     q.is_available = Some(v["isQuotaExceeded"] != true && any_remaining);
@@ -616,10 +618,85 @@ pub(super) fn apply_for(provider: &str, q: &mut QuotaSnapshot, v: &Value) -> Res
     Ok(())
 }
 
+/// Project the exact legacy bucket encoding without rewriting saved snapshots.
+pub(crate) fn project_legacy_meters(q: &mut QuotaSnapshot) {
+    if !crate::qoder_family::is_qoder(&q.provider) || !q.meters.is_empty() {
+        return;
+    }
+    q.windows.retain(|window| {
+        if !["userQuota", "addOnQuota", "orgResourcePackage"].contains(&window.id.as_str()) {
+            return true;
+        }
+        let parts: Vec<_> = window.name.split(" · ").collect();
+        if parts.len() != 3 || !parts[0].ends_with(" Credits") {
+            return true;
+        }
+        let Some((used, total)) = parts[1].split_once(" / ") else {
+            return true;
+        };
+        let Some(remaining) = parts[2].strip_prefix("剩余 ") else {
+            return true;
+        };
+        let (Ok(used), Ok(total), Ok(remaining)) = (
+            used.parse::<f64>(),
+            total.parse::<f64>(),
+            remaining.parse::<f64>(),
+        ) else {
+            return true;
+        };
+        let meter = QuotaMeter {
+            id: window.id.clone(),
+            label: parts[0].into(),
+            unit: "credits".into(),
+            used,
+            total: Some(total),
+            remaining: Some(remaining),
+            ..Default::default()
+        };
+        if !meter.valid() {
+            return true;
+        }
+        q.meters.push(meter);
+        false
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn credit_buckets_and_public_identity_are_structured_for_both_products() {
+        for provider in ["qoder", "qoder-cn"] {
+            let mut q = QuotaSnapshot {
+                provider: provider.into(),
+                ..Default::default()
+            };
+            apply_for(provider, &mut q, &json!({"userId":"public-user", "userQuota":{"unit":"credits","total":2000,"used":0,"remaining":2000}})).unwrap();
+            assert!(q.windows.is_empty());
+            assert_eq!(q.meters[0].remaining, Some(2000.));
+            assert!(!q.meters[0].label.contains('·'));
+            assert_eq!(
+                q.identity.unwrap().provider_account_id.as_deref(),
+                Some("public-user")
+            );
+            let mut legacy = QuotaSnapshot {
+                provider: provider.into(),
+                ..Default::default()
+            };
+            window(
+                &mut legacy,
+                "userQuota",
+                "套餐 Credits · 0 / 2000 · 剩余 2000",
+                0.,
+                None,
+                None,
+            );
+            project_legacy_meters(&mut legacy);
+            assert!(legacy.windows.is_empty());
+            assert_eq!(legacy.meters[0].total, Some(2000.));
+        }
+    }
     #[test]
     fn remote_and_local_runs_are_marked_internal() {
         assert!(remote_script("~/.qoder").starts_with("export AIEYES_INTERNAL=1\n"));
@@ -793,7 +870,7 @@ assert request['request']['type']=='daemon.get_usage_info'
         let mut snapshot = QuotaSnapshot::default();
         apply(&mut snapshot, &result).unwrap();
         assert_eq!(snapshot.is_available, Some(false));
-        assert_eq!(snapshot.windows.len(), 1);
+        assert_eq!(snapshot.meters.len(), 1);
     }
 
     #[cfg(unix)]
@@ -1002,7 +1079,7 @@ esac
             .remove(0);
         assert!(before.error.is_none());
         assert!(before.updated_at > 0);
-        assert_eq!(before.windows.len(), 1);
+        assert_eq!(before.meters.len(), 1);
         let failure = json!({"type":"control_response","response":{"request_id":"aieyes-usage","subtype":"error","error":{"code":"unauthorized","message":"PRIVATE_CREDENTIAL"}}});
         std::fs::write(profile.join("response.jsonl"), format!("{failure}\n")).unwrap();
         engine.call("quotas.refresh", params).unwrap();
@@ -1015,8 +1092,8 @@ esac
         assert!(after.error.is_some());
         assert_eq!(after.updated_at, before.updated_at);
         assert_eq!(
-            serde_json::to_value(&after.windows).unwrap(),
-            serde_json::to_value(&before.windows).unwrap()
+            serde_json::to_value(&after.meters).unwrap(),
+            serde_json::to_value(&before.meters).unwrap()
         );
         assert_eq!(
             serde_json::to_value(&after.balances).unwrap(),

@@ -413,8 +413,10 @@ struct RootView: View, Equatable {
             quotas: displayedQuotas.filter { quota in CoreContract.sameAgent(quota.provider, provider) && accounts.contains { $0.key == quota.id } }) {
             BalancedGridLayout(minimumWidth: 1, spacing: 14, maximumColumns: min(quotaColumns, max(1, accounts.count))) {
                 ForEach(accounts, id: \.key) { account in
+                    Group {
                     if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
                     else { QuotaAwaitingCard(model: model, account: account, provider: provider) }
+                    }.modifier(AccountCardActions(model: model, account: account))
                 }
             }
         }
@@ -1250,8 +1252,8 @@ struct QuotaCard: View, Equatable {
         ForEach(expanded ? quota.visibleMeters : Array(quota.visibleMeters.prefix(2))) { meter in
             VStack(alignment: .leading, spacing: 5) {
                 ViewThatFits(in: .horizontal) {
-                    HStack { Text(L(meter.label)).foregroundStyle(.secondary).fixedSize(); Spacer(minLength: 6); Text(meter.summary).monospacedDigit().fixedSize() }
-                    VStack(alignment: .leading, spacing: 3) { Text(L(meter.label)).foregroundStyle(.secondary); Text(meter.summary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
+                    HStack { Text(L(meter.label)).foregroundStyle(.secondary).fixedSize(); Spacer(minLength: 6); Text(["qoder", "qoder-cn"].contains(quota.provider) ? meter.summary.replacingOccurrences(of: " · ", with: "\n") : meter.summary).monospacedDigit().fixedSize() }
+                    VStack(alignment: .leading, spacing: 3) { Text(L(meter.label)).foregroundStyle(.secondary); Text(["qoder", "qoder-cn"].contains(quota.provider) ? meter.summary.replacingOccurrences(of: " · ", with: "\n") : meter.summary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
                 }.font(AppFont.secondary)
                 if let fraction = meter.fraction { ResourceBar(percent: 100 - fraction * 100, tint: Palette.quota(fraction * 100)) }
                 if expanded, let reset = meter.resetsAt, reset > 0 { Text(L("重置 ") + Format.date(reset)).font(AppFont.caption).foregroundStyle(.secondary) }
@@ -1304,7 +1306,7 @@ struct QuotaCard: View, Equatable {
                 VStack(alignment: .leading, spacing: 2) {
                     // Long names stop at two lines; the full text stays in the tooltip and the accessible name.
                     Text(quota.name).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true).textSelection(.enabled).help(quota.name)
-                    if let email = quota.identity?.email, email != quota.name {
+                    if let email = quota.identity?.displayName, email != quota.name {
                         Text(email).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled).help(email)
                     }
                 }.frame(minWidth: 0, alignment: .leading)
@@ -1415,7 +1417,6 @@ struct QuotaCard: View, Equatable {
                     if let credits = bank.credits { ForEach(credits) { credit in
                         HStack { VStack(alignment: .leading, spacing: 3) { Text(credit.title ?? "Reset Credit").font(AppFont.secondary); Text(["available":L("可用"), "redeeming":L("处理中"), "redeemed":L("已使用"), "unknown":L("未知状态")][credit.status] ?? credit.status).font(AppFont.secondary).foregroundStyle(.secondary) }; Spacer(); Text(credit.expiresAt.map { L("到期 {0}" , Format.date($0)) } ?? L("无到期时间")).font(AppFont.secondary).foregroundStyle(.secondary) }
                     } }
-                    if let updated = quota.bankUpdatedAt { Text("\(Format.date(updated))").font(AppFont.secondary).foregroundStyle(.secondary) }
                 } label: {
                     HStack { Image(systemName: "rectangle.stack").foregroundStyle(.secondary); Text("Bank Reset"); Spacer(); Text(L("{0} 次可用" , bank.availableCount)).foregroundStyle(Color.primary) }.font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium))
                 }.tint(.primary)
@@ -1861,5 +1862,33 @@ private struct SessionStrip: View {
         }
         .padding(compact ? 8 : 14).modifier(NeutralCard())
         }
+    }
+}
+
+
+private struct AccountCardActions: ViewModifier {
+    @SurfaceModel var model: AppModel
+    let account: AgentAccount
+    @State private var deleting = false
+    @State private var failure: String?
+    func body(content: Content) -> some View {
+        content.contextMenu {
+            Button(L("不再显示")) { update(archive: false) }
+            Button(L("归档账户")) { update(archive: true) }
+            Button(L("删除账户"), role: .destructive) { deleting = true }
+        }.sheet(isPresented: $deleting) { DeleteArchivedAccountView(model: model, account: account) }
+        .alert(L("保存失败"), isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            Button(L("关闭")) { failure = nil }
+        } message: { Text(failure ?? "") }
+    }
+    private func update(archive: Bool) {
+        Task { do {
+            let base = model.settings
+            var next = base
+            guard let i = next.accounts.firstIndex(where: { $0.key == account.key }) else { return }
+            if archive { next.accounts[i].archived = true } else { next.accounts[i].quotaEnabled = false }
+            let saved: Settings = try await model.accountEngine.call("settings.patch", params: ["base":base, "settings":next])
+            model.acceptConfiguration(saved)
+        } catch { failure = error.localizedDescription } }
     }
 }

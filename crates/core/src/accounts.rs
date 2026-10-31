@@ -739,9 +739,23 @@ impl Engine {
             );
         }
         ensure!(method == "accounts.delete", "未知账户操作");
-        ensure!(account.archived, "请先归档账户再删除");
-        // Serialize deletion against new deployments, without holding a SQL lock over SSH.
+        ensure!(
+            account.archived || params["archiveFirst"] == true,
+            "请先归档账户再删除"
+        );
+        // Take the task lock before changing the active account's state.
         let _task_lock = lock_tasks(&self.store)?;
+        if !account.archived {
+            let tx = self.store.write_transaction()?;
+            let mut next = self.store.settings()?;
+            next.accounts
+                .iter_mut()
+                .find(|a| key(a) == account_key)
+                .context("账户已删除")?
+                .archived = true;
+            self.store.save_auth_settings(&next)?;
+            tx.commit()?;
+        }
         let marker = format!("account-deleting:{account_key}");
         put(&self.store, &marker, &json!({"startedAt":now()}))?;
         let result =
@@ -950,7 +964,9 @@ impl Engine {
             }
         }
         if !failed.is_empty() {
-            return Ok(json!({"deleted":false,"failedTasks":failed,"canForce":true}));
+            return Ok(
+                json!({"deleted":false,"failedTasks":failed,"canForce":true,"settings":self.store.settings()?}),
+            );
         }
         let tx = self.store.write_transaction()?;
         let base = self.store.settings()?;
@@ -983,7 +999,7 @@ impl Engine {
         put(
             &self.store,
             &format!("deleted-account:{}", key(account)),
-            &json!({"id":account.id,"provider":account.provider,"name":account.name,"deletedAt":now()}),
+            &json!({"id":account.id,"provider":account.provider,"name":account.name,"identityKey":account.identity_key,"deletedAt":now()}),
         )?;
         if !abandoned.is_empty() {
             put(

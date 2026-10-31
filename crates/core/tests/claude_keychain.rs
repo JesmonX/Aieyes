@@ -104,6 +104,30 @@ fn keychain_login_is_identified_without_secrets_and_never_read_without_consent()
             .unwrap()
             .ends_with(".claude.json")
     );
+    // A profile alone is diagnostic, not evidence of a usable login.
+    assert!(
+        settings["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["provider"] != "claude")
+    );
+    assert!(row["accountKey"].is_null());
+    // An explicitly configured existing account still gets the consent notices.
+    let mut manual = settings.clone();
+    manual["accounts"].as_array_mut().unwrap().push(json!({
+        "id":"manual", "provider":"claude", "name":"claude@example.test",
+        "identityKey":row["identityKey"], "quotaEnabled":true
+    }));
+    rpc(p, "settings.save", manual);
+    rpc(
+        p,
+        "accounts.autoScan",
+        json!({"targets":[["claude","local"]]}),
+    );
+    let settings = rpc(p, "settings.get", json!({}));
+    let rows = claude_rows(&settings);
+    let row = &rows[0];
     let account = settings["accounts"]
         .as_array()
         .unwrap()

@@ -22,3 +22,5 @@
 `QODER_EXPOSE_TOKEN_USAGE=true`、`QODERCN_EXPOSE_TOKEN_USAGE=true` 分别作用于两地客户端，只影响带此环境变量启动的新进程，不会改写旧日志。macOS/Linux 的环境配置同时维护两个变量；Windows 需在系统环境变量中设置。历史累计量仍通过状态恢复。
 
 本机验证（2026-10-31）：Qoder CLI 1.1.79 的 PAT 登录、Qoder CN CLI 1.1.81 的浏览器登录均完成原生身份和额度查询；Qoder App 0.4.8、Qoder CN App 0.5.1 各完成一轮最小会话。两地历史导入均未报告解密缺失。其他版本若未提供 SDK v2 或已改变本地数据库结构，会保留明确的查询/采集错误；Windows/Linux 桌面路径未进行本机实测。
+
+账户展示补充：原生 userId 通过可选 providerAccountId 保留为公开展示元数据；邮箱缺失时展示账户 ID，不使用身份哈希冒充 ID。生成的默认名称可补全邮箱，自定义名称保留。两地 Credits 额度使用结构化 meters，显示套餐、加购或组织额度的已用、总额和剩余数量；旧快照在读取时兼容转换，不改写历史。macOS 与 Web 均隐藏两地会话原生 Credits 卡片，正常展示日志 Token。

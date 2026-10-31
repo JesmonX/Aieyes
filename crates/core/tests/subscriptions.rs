@@ -219,17 +219,19 @@ fn qoder_native_zero_account_quota_does_not_report_unused_capacity_or_session_cr
         "userQuota":{"total":0,"used":0,"remaining":0,"percentage":0,"unit":"credits"},
         "session":{"total_credits":999}});
     let q = parse("qoder", "cli", v.clone()).unwrap();
-    assert_eq!(q.windows.len(), 1);
-    assert_eq!(q.windows[0].used_percent, 100.);
-    assert!(q.windows[0].name.contains("剩余 0"));
+    assert!(q.windows.is_empty());
+    assert_eq!(q.meters.len(), 1);
+    assert_eq!(q.meters[0].total, Some(0.));
+    assert_eq!(q.meters[0].remaining, Some(0.));
     assert_eq!(q.is_available, Some(false));
     assert!(!q.identity.as_ref().unwrap().key.contains("fixture-user"));
     assert!(q.balances.is_empty());
     let multiple = json!({"userId":"fixture-user", "userType":"pro", "userQuota":{"total":100,"used":25,"remaining":75,"unit":"credits"},"addOnQuota":{"total":20,"used":5,"remaining":15,"unit":"credits"},"orgResourcePackage":{"cap":500,"used":300,"remaining":200,"unit":"credits","available":false}});
     let q = parse("qoder", "cli", multiple).unwrap();
-    assert_eq!(q.windows.len(), 3);
-    assert_eq!(q.windows[0].used_percent, 25.);
-    assert_eq!(q.windows[2].used_percent, 60.);
+    assert_eq!(q.meters.len(), 3);
+    assert_eq!(q.meters[0].used, 25.);
+    assert_eq!(q.meters[2].used, 300.);
+    assert_eq!(q.meters[2].total, Some(500.));
     assert_eq!(q.is_available, Some(true));
     for body in [
         json!({"session":{"total_credits":0}}),

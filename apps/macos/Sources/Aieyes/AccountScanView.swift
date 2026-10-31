@@ -8,7 +8,7 @@ import SwiftUI
     @State private var error: String?
     @State private var expanded = false
     @State private var confirmingRemoveAll = false
-    private var rows: [NativeConnection] { (model.settings.nativeConnections ?? []).filter { CoreContract.sameAgent($0.provider, provider) && $0.kind == kind } }
+    private var rows: [NativeConnection] { (model.settings.nativeConnections ?? []).filter { row in CoreContract.sameAgent(row.provider, provider) && row.kind == kind && !model.settings.accounts.contains(where: { a in a.key == row.accountKey && a.archived == true }) } }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;

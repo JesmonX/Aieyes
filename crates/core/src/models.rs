@@ -899,6 +899,8 @@ pub struct CreditsSnapshot {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AccountIdentity {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_account_id: Option<String>,
     pub key: String,
     pub email: String,
     pub subscription: Option<String>,

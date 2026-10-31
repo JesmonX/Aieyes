@@ -419,7 +419,7 @@ impl Engine {
                 settings.accounts.iter().position(|a| {
                     a.provider == "codex"
                         && if requested.is_empty() {
-                            !a.archived && a.identity_key.as_deref() == Some(identity)
+                            a.identity_key.as_deref() == Some(identity)
                         } else {
                             a.id == requested
                         }

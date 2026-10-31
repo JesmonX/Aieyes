@@ -29,6 +29,8 @@ const MAX_FILES: usize = 128;
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct NativeConnection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_account_id: Option<String>,
     pub id: String,
     pub provider: String,
     pub machine_id: String,
@@ -1721,18 +1723,9 @@ fn login(
     selector: &str,
     value: &Value,
 ) {
-    let token = [
-        "access_token",
-        "accessToken",
-        "access",
-        "token",
-        "key",
-        "refresh_token",
-        "refreshToken",
-        "refresh",
-    ]
-    .into_iter()
-    .find_map(|k| value[k].as_str().filter(|s| !s.is_empty()));
+    let token = ["access_token", "accessToken", "access", "token", "key"]
+        .into_iter()
+        .find_map(|k| value[k].as_str().filter(|s| !s.is_empty()));
     let Some(token) = token else {
         return;
     };
@@ -2610,7 +2603,77 @@ fn host_signature(settings: &Settings, machine: &str) -> Value {
 }
 
 impl Engine {
+    fn migrate_invalid_discovered_accounts(&self) -> Result<()> {
+        const MARKER: &str = "native-invalid-accounts-v1";
+        if self.store.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM kv WHERE key=?1)",
+            [MARKER],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Ok(());
+        }
+        let settings = self.store.settings()?;
+        let invalid = |settings: &Settings, account: &Account| {
+            let key = accounts::key(account);
+            let rows: Vec<_> = settings
+                .native_connections
+                .iter()
+                .filter(|r| r.account_key.as_deref() == Some(&key))
+                .collect();
+            account.id.starts_with("scan-")
+                && !account.archived
+                && !rows.is_empty()
+                && account.connections.is_empty()
+                && account.quota_profile_id.is_none()
+                && rows.iter().all(|r| r.token_expired_at.is_some())
+        };
+        if !settings.accounts.iter().any(|a| invalid(&settings, a)) {
+            self.store
+                .db
+                .execute("INSERT OR IGNORE INTO kv VALUES(?1,'none')", [MARKER])?;
+            return Ok(());
+        }
+        let folder = self.store.root.join("history-backups");
+        std::fs::create_dir_all(&folder)?;
+        let backup = folder.join(format!(
+            "native-accounts-v1-{}-{}.sqlite",
+            now(),
+            std::process::id()
+        ));
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        drop(options.open(&backup)?);
+        self.store
+            .db
+            .execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
+        let tx = self.store.write_transaction()?;
+        let mut latest = self.store.settings()?;
+        let keys: Vec<_> = latest
+            .accounts
+            .iter()
+            .filter(|a| invalid(&latest, a))
+            .map(accounts::key)
+            .collect();
+        for account in &mut latest.accounts {
+            if keys.contains(&accounts::key(account)) {
+                account.archived = true;
+            }
+        }
+        self.store.save_auth_settings(&latest)?;
+        self.store.db.execute(
+            "INSERT OR IGNORE INTO kv VALUES(?1,?2)",
+            rusqlite::params![MARKER, backup.to_string_lossy()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
     pub(crate) fn scan_accounts(&mut self, params: Value) -> Result<Value> {
+        self.migrate_invalid_discovered_accounts()?;
         let only: Option<BTreeSet<(String, String)>> = params["targets"].as_array().map(|rows| {
             rows.iter()
                 .filter_map(|r| Some((r[0].as_str()?.to_owned(), r[1].as_str()?.to_owned())))
@@ -2824,6 +2887,7 @@ impl Engine {
                                     crate::qoder_family::auth_method(Path::new(root));
                             }
                         }
+                        row.connection.provider_account_id = identity.provider_account_id;
                         row.connection.identity_key = Some(identity.key);
                         row.connection.email = public_text(&identity.email);
                         row.connection.status = "observed".into();
@@ -2937,11 +3001,33 @@ impl Engine {
                     let index = if let Some(i) = account {
                         i
                     } else {
+                        // Discovery is not authorization: expired/profile-only logins stay diagnostic.
+                        let deleted: bool = self.store.db.query_row(
+                            "SELECT EXISTS(SELECT 1 FROM kv WHERE key LIKE 'deleted-account:%' AND json_extract(value,'$.provider')=?1 AND json_extract(value,'$.identityKey')=?2)",
+                            rusqlite::params![provider, identity], |r| r.get(0))?;
+                        if deleted
+                            || !row.has_credential
+                            || row.token_expired_at.is_some()
+                            || row.status != "observed"
+                        {
+                            row.account_key = None;
+                            latest.native_connections.retain(|r| r.id != row.id);
+                            latest.native_connections.push(row);
+                            continue;
+                        }
                         let id = format!("scan-{}", crate::codex_auth::files::new_id());
                         latest.accounts.push(Account {
                             id,
                             name: if row.email.is_empty() {
-                                accounts::default_name(&provider)
+                                row.provider_account_id
+                                    .as_ref()
+                                    .map(|id| {
+                                        format!(
+                                            "{} ({id})",
+                                            crate::providers::display_name(&provider)
+                                        )
+                                    })
+                                    .unwrap_or_else(|| accounts::default_name(&provider))
                             } else {
                                 row.email.clone()
                             },
@@ -2958,7 +3044,9 @@ impl Engine {
                     if row.upstream_identity.is_some() {
                         account.upstream_identity = row.upstream_identity.clone();
                     }
-                    if account.pending_name && !row.email.is_empty() {
+                    if (account.pending_name || account.name == accounts::default_name(&provider))
+                        && !row.email.is_empty()
+                    {
                         account.name = row.email.clone();
                         account.pending_name = false;
                     }

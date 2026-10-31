@@ -256,7 +256,7 @@ struct Aggregate: Codable, Identifiable, Equatable {
     var nativeCredits: [String: NativeCreditsTotal]?
     var displayCredits: Aggregate {
         var value = self
-        value.nativeCredits = nativeCredits?.filter { $0.key != "qoder" }
+        value.nativeCredits = nativeCredits?.filter { !["qoder", "qoder-cn"].contains($0.key) }
         return value
     }
     var hasNativeCredits: Bool { nativeCredits?.values.contains { $0.requests > 0 } == true }
@@ -264,7 +264,7 @@ struct Aggregate: Codable, Identifiable, Equatable {
     var costAvailable: Bool { pricedTokens > 0 || (total == 0 && !hasNativeCredits) }
     var nativeCreditText: String {
         (nativeCredits ?? [:]).keys.sorted().compactMap { provider in
-            guard provider != "qoder", let row = nativeCredits?[provider], row.requests > 0 else { return nil }
+            guard !["qoder", "qoder-cn"].contains(provider), let row = nativeCredits?[provider], row.requests > 0 else { return nil }
             return Format.provider(provider) + L(" 原生记录 ") + row.amount(row.credits) + " Credits · " + String(row.requests) + (provider == "codebuddy" ? L(" 条计量") : L(" 次请求"))
         }.joined(separator: "；")
     }
@@ -313,10 +313,12 @@ struct ExtraUsageWallet: Codable, Equatable {
 struct CreditsBalance: Codable, Equatable { var hasCredits: Bool, unlimited: Bool, balance: String? }
 struct AccountIdentity: Codable, Equatable {
     var key: String, email: String
+    var providerAccountId: String? = nil
     var subscription: String?, checkedAt: Double?, stale: Bool?
     var displayName: String {
         if !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return email }
-        if key.hasPrefix("qoder:") { return "Qoder · " + key.dropFirst(6).prefix(12) }
+        if let providerAccountId { return L("账户 ID") + " " + providerAccountId }
+        if key.hasPrefix("qoder:") || key.hasPrefix("qoder-cn:") { return L("身份已确认") }
         return key.isEmpty ? L("身份已确认") : key
     }
     var summary: String { displayName + (subscription.map { " · " + $0 } ?? L(" · 订阅未知")) + (stale == true ? L(" · 订阅待更新") : "") }
@@ -388,6 +390,7 @@ struct Quota: Codable, Equatable, Identifiable {
     var isStale: Bool { (staleSince ?? 0) > 0 }
     /// Any provider whose windows share a group name is shown grouped, like Antigravity models.
     var groupsWindows: Bool {
+        if provider == "codex" { return false }
         if provider == "antigravity" { return true }
         var counts: [String: Int] = [:]
         for window in windows where !(window.groupName ?? "").isEmpty { counts[window.groupLabel, default: 0] += 1 }
@@ -622,13 +625,14 @@ struct LocalMonitor: Codable, Equatable {
     init(_ h: Host) { enabled = h.enabled; metrics = h.metrics; devices = h.devices; details = h.details }
 }
 struct NativeConnection: Codable, Equatable, Identifiable {
+    var providerAccountId: String? = nil
     var clientKind: String?, authMethod: String?
     var upstreamIdentity: String?, tokenExpiredAt: Double?
     var machineFingerprint: String?, sourceId: String?, sourcePath: String?
     var id: String, provider: String, machineId: String, root: String, configPath: String, selector: String, kind: String
     var accountKey: String?, identityKey: String?
     var email: String, baseUrl: String, models: [String], hasCredential: Bool, status: String, note: String, checkedAt: Double
-    var displayName: String { !email.isEmpty ? email : kind == "api" ? (baseUrl.isEmpty ? L("原生 API") : baseUrl) : identityKey.map { ["qoder", "qoder-cn"].contains(provider) ? (CoreContract.providerNames[provider] ?? provider) + " · " + $0.dropFirst(provider.count + 1).prefix(12) : (CoreContract.providerNames[provider] ?? provider) + L(" 账户") } ?? L("账户身份待确认") }
+    var displayName: String { !email.isEmpty ? email : providerAccountId.map { L("账户 ID") + " " + $0 } ?? (kind == "api" ? (baseUrl.isEmpty ? L("原生 API") : baseUrl) : identityKey.map { ["qoder", "qoder-cn"].contains(provider) ? (CoreContract.providerNames[provider] ?? provider) + " · " + $0.dropFirst(provider.count + 1).prefix(12) : (CoreContract.providerNames[provider] ?? provider) + L(" 账户") } ?? L("账户身份待确认")) }
     var clientLabel: String {
         if clientKind == "desktop" { return L("桌面客户端") }
         guard clientKind == "cli" else { return "" }

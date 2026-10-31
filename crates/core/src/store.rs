@@ -1444,6 +1444,7 @@ impl Store {
                     ),
                     ..Default::default()
                 });
+            crate::subscriptions::qoder::project_legacy_meters(&mut quota);
             if remembered {
                 quota.stale_since = quota.stale_since.or(Some(quota.updated_at));
             }

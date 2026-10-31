@@ -435,8 +435,8 @@
     let preview;try {preview = await api('accounts.deletion.preview', { accountKey: accountKey(a) });} catch (error) {notify(String(error), 'error');return;}
     const tasks = preview.tasks ?? [];
     confirmDestructive(AieyesI18n.t("删除归档账户「") + a.name + '」', `<p>${AieyesI18n.t("删除账户配置和关联任务；历史记录及机器凭证保留，不退出 Agent。")}</p><ul>` + tasks.map((t) => `<li>${e(t.name)} · ${e(t.machine)}</li>`).join('') + '</ul>' + (tasks.length ? `<label><input type="checkbox" name="force">${AieyesI18n.t("强制删除（设备已弃用或无法连接）")}</label><div class="error">${AieyesI18n.t("强制删除无法保证远端任务停止。将解除本地管理，不再自动重试；未清理位置保留供查看。")}</div>` : '') + '<div id="account-delete-failures"></div>', async (f) => {
-      const result = await api('accounts.delete', { accountKey: accountKey(a), force: f.has('force') });
-      if (!result.deleted) {$('#account-delete-failures').innerHTML = (result.failedTasks ?? []).map((t) => `<div class="error">${e(t.name)} · ${e(AieyesI18n.message(t.error))}</div>`).join('');throw new Error(AieyesI18n.t("部分任务清理失败，账户仍保留；可重试或勾选强制删除。"));}
+      const result = await api('accounts.delete', { accountKey: accountKey(a), archiveFirst: true, force: f.has('force') });
+      if (!result.deleted) {if (result.settings) accept(result.settings);$('#account-delete-failures').innerHTML = (result.failedTasks ?? []).map((t) => `<div class="error">${e(t.name)} · ${e(AieyesI18n.message(t.error))}</div>`).join('');throw new Error(AieyesI18n.t("部分任务清理失败，账户仍保留；可重试或勾选强制删除。"));}
       accept(result.settings);cleanupRows = await api('accounts.cleanup.list');if (!Array.isArray(cleanupRows)) cleanupRows = [];repaint();backgroundRefresh();
     }, AieyesI18n.t("确认删除"));
   }
@@ -660,7 +660,7 @@
     if (event.key === 'Escape' && document.querySelector('.machine-menu[open]')) {event.preventDefault();event.stopImmediatePropagation();closeMachineMenus(null, true);} else
     if (event.key === 'Tab') closeMachineMenus();
   }, true);
-  window.AieyesAgentSettings = { flush, navigate, integrationsHTML, agentsHTML, accountsHTML, bind, commit, accept, advanced, editAccount, addAccount, profiles, linked, deviceCounts, countsHTML, ensureStatuses, refreshStatuses, refreshCodexSource, refreshAntigravitySource, syncIdentitySettings, syncDeployments, updateSession, get statusLoaded() {return statusLoaded;}, get statusBusy() {return statusLoading;}, get antigravityRefreshing() {return antigravityRefreshTasks.size > 0;}, openDetails(a) {return openSettings({ provider: a.provider, accountKey: accountKey(a) });} };
+  window.AieyesAgentSettings = { deleteAccount, flush, navigate, integrationsHTML, agentsHTML, accountsHTML, bind, commit, accept, advanced, editAccount, addAccount, profiles, linked, deviceCounts, countsHTML, ensureStatuses, refreshStatuses, refreshCodexSource, refreshAntigravitySource, syncIdentitySettings, syncDeployments, updateSession, get statusLoaded() {return statusLoaded;}, get statusBusy() {return statusLoading;}, get antigravityRefreshing() {return antigravityRefreshTasks.size > 0;}, openDetails(a) {return openSettings({ provider: a.provider, accountKey: accountKey(a) });} };
   void window.AieyesApp.ready.then(() => ensureStatuses('codex'));
 })();
 

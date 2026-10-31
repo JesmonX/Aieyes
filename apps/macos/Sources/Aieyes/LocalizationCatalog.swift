@@ -3885,7 +3885,9 @@ enum LocalizationCatalog {
   "已登录，账户身份待确认": "Signed in; account identity unconfirmed",
   "桌面客户端记录为已登录；未确认与 CLI 是同一账户，额度单独通过 CLI 查询": "The desktop app reports a login; its identity has not been matched to the CLI. Quota is queried separately through the CLI.",
   "CLI · 凭据登录（PAT）": "CLI · Personal access token (PAT)",
-  "CLI · 浏览器认证登录": "CLI · Browser authentication"
+  "CLI · 浏览器认证登录": "CLI · Browser authentication",
+  "不再显示": "Hide account",
+  "账户 ID": "Account ID"
 }
 """#.utf8))) ?? [:]
 }

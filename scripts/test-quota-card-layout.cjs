@@ -61,6 +61,25 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
     applyQuotaSamples([{...fresh,observationRevision:0,error:'obsolete'}]);
     if(state.dashboard.quotas.find(q=>q.accountId===old.accountId).error)throw Error('Old revision replaced success');
    });
+   const key = await page.locator('.quota-card:visible').first().getAttribute('data-quota');
+   await page.locator('.quota-card:visible').first().click({button:'right'});
+   await page.locator('#account-context [role=menuitem]').first().waitFor();
+   assert.equal(await page.locator('#account-context [role=menuitem]').count(),3);
+   await page.keyboard.press('Escape');
+   assert.equal(await page.locator('#account-context').count(),0);
+   await page.locator('.quota-card:visible').first().click({button:'right'});
+   await page.locator('#account-context [role=menuitem]').first().click();
+   await page.waitForFunction(key=>state.settings.accounts.find(a=>a.provider+':'+a.id===key)?.quotaEnabled===false,key);
+   assert.equal(await page.locator(`[data-quota="${key}"]`).count(),0);
+   const meter = await page.evaluate(() => {
+     const probe = document.createElement('div');probe.style.width='320px';
+     probe.innerHTML = quotaCard({provider:'qoder-cn',accountId:'probe',name:'Qoder CN',windows:[],identity:{email:'',providerAccountId:'public-user'},meters:[{id:'userQuota',label:'套餐 Credits',unit:'credits',used:0,total:2000,remaining:2000}],updatedAt:1});
+     document.getElementById('content').append(probe);
+     const value=probe.querySelector('[data-meter] strong');
+     return {text:value.textContent,scroll:[value.scrollWidth,value.scrollHeight],client:[value.clientWidth,value.clientHeight],whiteSpace:getComputedStyle(value).whiteSpace,clipped:value.scrollWidth>value.clientWidth+1 || value.scrollHeight>value.clientHeight+1};
+   });
+   assert(meter.text.includes('2000') && meter.text.includes('剩余') && !meter.text.includes('·'));
+   assert.equal(meter.clipped,false,'Qoder CN remaining credits must wrap without clipping: '+JSON.stringify(meter));
    assert.deepEqual(errors,[]);await page.close();
   }
   console.log('Quota card layout: matching collapsed heights across subscriptions, font changes, resize, expansion and removal; first panel width passed.');

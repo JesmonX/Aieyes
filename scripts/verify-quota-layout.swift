@@ -28,6 +28,12 @@ private struct Fixture: View {
 @main struct VerifyQuotaLayout {
     @MainActor static func main() async throws {
         _ = NSApplication.shared
+        let cn = try JSONDecoder().decode(Aggregate.self, from: Data(#"{"key":"test","tokens":{"input":100,"output":0,"cacheRead":0,"cacheWrite":0},"total":100,"cost":1,"pricedTokens":100,"nativeCredits":{"qoder-cn":{"credits":10,"billable":0,"nonBillable":0,"unknownBillability":10,"requests":1}}}"#.utf8))
+        precondition(!cn.hasDisplayCredits && cn.nativeCreditText.isEmpty && cn.total == 100)
+        let identity = try JSONDecoder().decode(AccountIdentity.self, from: Data(#"{"key":"qoder-cn:hash","email":"","providerAccountId":"public-id"}"#.utf8))
+        precondition(identity.displayName.contains("public-id") && !identity.displayName.contains("hash"))
+        let groupedCodex = try JSONDecoder().decode(Quota.self, from: Data(#"{"provider":"codex","sourceId":"fixture","updatedAt":1,"origin":"live","accountId":"test","name":"test","windows":[{"name":"5h","groupName":"codex","windowMinutes":300,"usedPercent":0},{"name":"7d","groupName":"codex","windowMinutes":10080,"usedPercent":0}]}"#.utf8))
+        precondition(!groupedCodex.groupsWindows)
         let state = FixtureState()
         let raw = #"""
         [{"provider":"codex","accountId":"a","name":"Short","plan":"plus","windows":[{"id":"five","name":"5h","windowMinutes":300,"usedPercent":10}]},

@@ -732,3 +732,42 @@ fn generic_github_token_variables_count_for_copilot_only_where_copilot_has_run()
         );
     }
 }
+
+#[test]
+fn archived_hidden_deleted_and_expired_accounts_do_not_return_on_discovery() {
+    let root = setup();
+    let p = root.path();
+    save(p, rpc(p, "settings.get", json!({})));
+    write(p, "home/.codex/auth.json", &auth("user", "personal"));
+    let scan = rpc(p, "accounts.autoScan", json!({}));
+    let mut settings = scan["settings"].clone();
+    let id = settings["accounts"][0]["id"].as_str().unwrap().to_owned();
+    settings["accounts"][0]["archived"] = json!(true);
+    rpc(p, "settings.save", settings);
+    let again = rpc(p, "accounts.autoScan", json!({}));
+    assert_eq!(again["addedAccounts"], 0);
+    assert_eq!(again["settings"]["accounts"][0]["archived"], true);
+    let deleted = rpc(
+        p,
+        "accounts.delete",
+        json!({"accountKey":format!("codex:{id}")}),
+    );
+    assert_eq!(deleted["deleted"], true);
+    assert_eq!(
+        rpc(p, "accounts.autoScan", json!({}))["settings"]["accounts"],
+        json!([])
+    );
+    let mut expired = auth("other", "personal");
+    expired["tokens"]["access_token"] = json!(jwt(
+        json!({"exp":1,"https://api.openai.com/auth":{"chatgpt_user_id":"other","chatgpt_account_id":"personal"}})
+    ));
+    write(p, "home/.codex/auth.json", &expired);
+    let scan = rpc(p, "accounts.autoScan", json!({}));
+    assert_eq!(scan["settings"]["accounts"], json!([]));
+    assert!(
+        !scan["settings"]["nativeConnections"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
