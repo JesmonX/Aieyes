@@ -1,17 +1,21 @@
 // Render the promo composition frame by frame and pipe it into the AVFoundation encoder.
 //   node scripts/promo/capture.cjs --lang zh-CN --out video.mp4 [--fps 30]
 //   node scripts/promo/capture.cjs --lang en --stills 3,15.5,40   (review PNGs in .local/promo/stills)
+//   --composition workday renders scripts/promo/workday instead of scripts/promo/composition.
+//   node scripts/promo/capture.cjs --composition workday --cues cues.json   (write its soundtrack cue sheet)
 const http = require('http'), fs = require('fs'), path = require('path'), { spawn } = require('child_process');
 const ROOT = path.resolve(__dirname, '../..');
 const { chromium } = require(path.join(ROOT, 'apps/desktop/node_modules/playwright'));
 const arg = (name, fallback) => { const i = process.argv.indexOf('--' + name); return i > 0 ? process.argv[i + 1] : fallback; };
-const lang = arg('lang', 'zh-CN'), font = arg('font', 'brand'), theme = arg('theme', 'dark'), fps = Number(arg('fps', 30)), stills = arg('stills'), out = arg('out');
+const lang = arg('lang', 'zh-CN'), font = arg('font', 'brand'), theme = arg('theme', 'dark'), fps = Number(arg('fps', 30)), stills = arg('stills'), out = arg('out'), cues = arg('cues');
+const composition = arg('composition', 'composition');
+if (!/^[a-z]+$/.test(composition) || !fs.existsSync(path.join(__dirname, composition, 'index.html'))) throw new Error('Unknown composition ' + composition);
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.png': 'image/png', '.webp': 'image/webp', '.ttf': 'font/ttf' };
 
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent(req.url.split('?')[0]);
-  if (url === '/' ) url = '/scripts/promo/composition/index.html';
-  if (url === '/app.js') url = '/scripts/promo/composition/app.js';
+  if (url === '/' ) url = `/scripts/promo/${composition}/index.html`;
+  if (url === '/app.js') url = `/scripts/promo/${composition}/app.js`;
   const file = path.join(ROOT, url);
   if (!file.startsWith(ROOT) || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { 'content-type': types[path.extname(file)] || 'application/octet-stream' });
@@ -26,11 +30,13 @@ const server = http.createServer((req, res) => {
   await page.goto(`http://127.0.0.1:${server.address().port}/?lang=${lang}&font=${font}&theme=${theme}`);
   await page.evaluate(() => window.ready);
   const duration = await page.evaluate(() => window.DURATION);
-  if (stills) {
+  if (cues) {
+    fs.writeFileSync(cues, JSON.stringify(await page.evaluate(() => window.CUES)));
+  } else if (stills) {
     const dir = path.join(ROOT, '.local/promo/stills'); fs.mkdirSync(dir, { recursive: true });
     for (const t of stills.split(',').map(Number)) {
       await page.evaluate(t => window.renderAt(t), t);
-      await page.screenshot({ path: path.join(dir, `${lang}-${font}-${theme}-${String(t).padStart(5, '0')}.png`) });
+      await page.screenshot({ path: path.join(dir, `${composition === 'composition' ? '' : composition + '-'}${lang}-${font}-${theme}-${String(t).padStart(5, '0')}.png`) });
     }
     console.log('stills in', dir);
   } else {

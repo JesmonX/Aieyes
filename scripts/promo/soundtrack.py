@@ -2,8 +2,11 @@
 """Generate the promo soundtrack: an original ambient bed plus the app's own session chimes.
 
 Pure standard library. Writes a 48 kHz stereo WAV; scripts/promo/build.sh converts it to AAC.
-Usage: python3 scripts/promo/soundtrack.py out.wav
+Usage: python3 scripts/promo/soundtrack.py out.wav [cues.json]
+Without cues it scores the overview video. A composition exports its cue sheet with
+node scripts/promo/capture.cjs --composition <name> --cues cues.json.
 """
+import json
 import math
 from pathlib import Path
 import random
@@ -12,7 +15,14 @@ import sys
 import wave
 
 ROOT = Path(__file__).resolve().parents[2]
-RATE, DURATION, BPM = 48000, 99.0, 96
+# Cue sheet: arpeggio, louder arpeggio and rhythm spans, half-time spans, scene cuts,
+# app sounds [time, file, gain], pointer clicks, key presses and notification pops.
+CUES = dict(duration=99.0, arpeggio=[8.6, 95], bright=[14, 92], rhythm=[14, 91.5], sparse=[[48, 71]],
+            cuts=[8.5, 14, 27, 37, 48, 71, 84, 92], sounds=[[48 + 3.2, "needs-input.wav", 0.75], [48 + 22.0, "complete.wav", 0.65]],
+            clicks=[48 + c for c in [7, 12.4, 14.4, 16.4, 18.6, 19.2, 20.8]], keys=[], pops=[])
+if len(sys.argv) > 2:
+    CUES.update(json.loads(Path(sys.argv[2]).read_text()))
+RATE, DURATION, BPM = 48000, float(CUES["duration"]), 96
 BEAT = 60 / BPM
 N = int(RATE * DURATION)
 left, right = [0.0] * N, [0.0] * N
@@ -85,6 +95,17 @@ def swell(length=1.4):
     return out
 
 
+def key(seed):
+    """A soft keyboard tick: a short band-limited noise burst with a little body."""
+    rnd = random.Random(seed)
+    n, lp, out = int(0.028 * RATE), 0.0, []
+    pitch = 1700 + rnd.uniform(-250, 250)
+    for k in range(n):
+        lp += (rnd.uniform(-1, 1) - lp) * 0.35
+        out.append((lp * 0.8 + 0.5 * math.sin(2 * math.pi * pitch * k / RATE)) * math.exp(-k / RATE * 180))
+    return out
+
+
 def load_wav(name):
     with wave.open(str(ROOT / "apps/desktop/web/sounds" / name)) as w:
         rate, width, channels = w.getframerate(), w.getsampwidth(), w.getnchannels()
@@ -108,32 +129,37 @@ while t < DURATION:
 # Arpeggio from the reveal onward; rhythm from the first feature through server monitoring.
 scale = [62, 64, 66, 69, 71, 74, 76, 78]
 step = BEAT / 2
-for k in range(int(8.6 / step), int(95 / step)):
+for k in range(int(CUES["arpeggio"][0] / step), int(CUES["arpeggio"][1] / step)):
     start = k * step
     chord = chords[int(start / (bar * 2)) % 4]
     notes = sorted({(m % 12) for m in chord})
     pick = [n for n in scale if n % 12 in notes] or scale
     note = pick[(k * 3) % len(pick)]
-    gain = 0.13 if 14 <= start < 92 else 0.08
+    gain = 0.13 if CUES["bright"][0] <= start < CUES["bright"][1] else 0.08
     add(start, pluck(hz(note + (12 if k % 8 == 7 else 0))), gain, -0.45 if k % 2 else 0.45)
-for b in range(int(14 / BEAT), int(91.5 / BEAT)):
+for b in range(int(CUES["rhythm"][0] / BEAT), int(CUES["rhythm"][1] / BEAT)):
     start = b * BEAT
-    if 48 <= start < 71 and b % 2:  # lighter during the everyday-use desktop scene
+    if b % 2 and any(a <= start < z for a, z in CUES["sparse"]):  # lighter during desktop scenes
         continue
     add(start, kick(), 0.30)
     add(start + BEAT / 2, hat(), 0.05, 0.3)
 
 # Transition swells, and a soft low hit on each scene cut.
-for cut in [8.5, 14, 27, 37, 48, 71, 84, 92]:
+for cut in CUES["cuts"]:
     add(cut - 1.4, swell(), 0.10)
     add(cut, pluck(hz(38), 1.8, 2.2), 0.35)
 
 # Product sounds: the app's own session tones at the pet's state changes.
-add(48 + 3.2, load_wav("needs-input.wav"), 0.75)
-add(48 + 22.0, load_wav("complete.wav"), 0.65)
-# Pointer clicks in the everyday-use scene (the last one is a right-click).
-for click in [7, 12.4, 14.4, 16.4, 18.6, 19.2, 20.8]:
-    add(48 + click, [math.exp(-k / RATE * 900) * math.sin(2 * math.pi * 2300 * k / RATE) for k in range(int(0.03 * RATE))], 0.18)
+for start, name, gain in CUES["sounds"]:
+    add(start, load_wav(name), gain)
+# Pointer clicks, typing and notification banners.
+for click in CUES["clicks"]:
+    add(click, [math.exp(-k / RATE * 900) * math.sin(2 * math.pi * 2300 * k / RATE) for k in range(int(0.03 * RATE))], 0.18)
+for index, start in enumerate(CUES["keys"]):
+    add(start, key(index), 0.07, -0.15)
+for start in CUES["pops"]:
+    add(start, pluck(hz(88), 0.5, 9), 0.16, 0.5)
+    add(start + 0.09, pluck(hz(93), 0.7, 7), 0.14, 0.5)
 
 # Fade in and out, gentle glue compression, normalize.
 peak = 0.0
