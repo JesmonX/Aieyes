@@ -78,7 +78,7 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
      const value=probe.querySelector('[data-meter] strong');
      return {text:value.textContent,scroll:[value.scrollWidth,value.scrollHeight],client:[value.clientWidth,value.clientHeight],whiteSpace:getComputedStyle(value).whiteSpace,clipped:value.scrollWidth>value.clientWidth+1 || value.scrollHeight>value.clientHeight+1};
    });
-   assert(meter.text.includes('2000') && meter.text.includes('剩余') && !meter.text.includes('·'));
+   assert.equal(meter.text, '2000 / 2000 Credits');
    assert.equal(meter.clipped,false,'Qoder CN remaining credits must wrap without clipping: '+JSON.stringify(meter));
    assert.deepEqual(errors,[]);await page.close();
   }

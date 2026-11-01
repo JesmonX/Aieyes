@@ -1252,12 +1252,12 @@ struct QuotaCard: View, Equatable {
         ForEach(expanded ? quota.visibleMeters : Array(quota.visibleMeters.prefix(2))) { meter in
             VStack(alignment: .leading, spacing: 5) {
                 ViewThatFits(in: .horizontal) {
-                    HStack { Text(L(meter.label)).foregroundStyle(.secondary).fixedSize(); Spacer(minLength: 6); Text(["qoder", "qoder-cn"].contains(quota.provider) ? meter.summary.replacingOccurrences(of: " · ", with: "\n") : meter.summary).monospacedDigit().fixedSize() }
-                    VStack(alignment: .leading, spacing: 3) { Text(L(meter.label)).foregroundStyle(.secondary); Text(["qoder", "qoder-cn"].contains(quota.provider) ? meter.summary.replacingOccurrences(of: " · ", with: "\n") : meter.summary).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
+                    HStack { Text(L(meter.label)).foregroundStyle(.secondary).fixedSize(); Spacer(minLength: 6); Text(quota.meterSummary(meter)).monospacedDigit().fixedSize() }
+                    VStack(alignment: .leading, spacing: 3) { Text(L(meter.label)).foregroundStyle(.secondary); Text(quota.meterSummary(meter)).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
                 }.font(AppFont.secondary)
                 if let fraction = meter.fraction { ResourceBar(percent: 100 - fraction * 100, tint: Palette.quota(fraction * 100)) }
                 if expanded, let reset = meter.resetsAt, reset > 0 { Text(L("重置 ") + Format.date(reset)).font(AppFont.caption).foregroundStyle(.secondary) }
-            }.accessibilityElement(children: .combine).accessibilityLabel(L(meter.label) + "，" + meter.summary)
+            }.accessibilityElement(children: .combine).accessibilityLabel(L(meter.label) + "，" + quota.meterSummary(meter))
         }
         if let notice = quota.visibleNotice { Label(L(notice), systemImage: "info.circle").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
     }
@@ -1293,7 +1293,7 @@ struct QuotaCard: View, Equatable {
         var text = Format.provider(quota.provider) + "，" + quota.name
         if let email = quota.identity?.email, email != quota.name { text += "，" + email }
         if let plan = quota.plan { text += L("，订阅 ") + Format.subscription(plan) }
-        if !expanded, let meter = quota.visibleMeters.first { text += "，" + L(meter.label) + " " + meter.summary }
+        if !expanded, let meter = quota.visibleMeters.first { text += "，" + L(meter.label) + " " + quota.meterSummary(meter) }
         if let age = quota.snapshotAge { text += "，" + staleLabel(age) }
         if !expanded && quota.provider == "codex" { text += "，" + Format.creditBalance(quota.credits, estimate: bestCredit) + "，Bank Reset " + (quota.bankReset.map { String($0.availableCount) } ?? L("未知")) + L(" 次可用") }
         text += expanded ? L("，折叠额度") : L("，展开额度")
@@ -1306,7 +1306,7 @@ struct QuotaCard: View, Equatable {
                 VStack(alignment: .leading, spacing: 2) {
                     // Long names stop at two lines; the full text stays in the tooltip and the accessible name.
                     Text(quota.name).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true).textSelection(.enabled).help(quota.name)
-                    if let email = quota.identity?.displayName, email != quota.name {
+                    if let email = quota.cardIdentity, email != quota.name {
                         Text(email).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled).help(email)
                     }
                 }.frame(minWidth: 0, alignment: .leading)

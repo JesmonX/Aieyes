@@ -110,7 +110,9 @@ pub fn group_for_model(model: &str) -> Option<&'static str> {
         .next()
         .unwrap_or(model)
         .to_ascii_lowercase();
-    if name.starts_with("gemini-") {
+    if name == "gemini-4-argon" || name.starts_with("gemini-4-argon-") {
+        Some("gemini-4-argon")
+    } else if name.starts_with("gemini-") {
         Some("gemini")
     } else if name.starts_with("claude-")
         || name.starts_with("gpt-")
@@ -126,6 +128,7 @@ pub fn group_for_model(model: &str) -> Option<&'static str> {
 pub fn group_kind(group: &str) -> Option<&'static str> {
     match group.to_ascii_lowercase().as_str() {
         "gemini" | "gemini models" => Some("gemini"),
+        "gemini-4-argon" | "gemini 4 argon" => Some("gemini-4-argon"),
         "claude-gpt" | "claude and gpt models" => Some("claude-gpt"),
         _ => None,
     }

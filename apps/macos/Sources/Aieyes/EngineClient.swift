@@ -188,8 +188,8 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
         loaded = true; error = nil
     }
     private func filter() {
-        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let next = term.isEmpty ? prices : prices.filter { $0.id.localizedCaseInsensitiveContains(term) || $0.name.localizedCaseInsensitiveContains(term) }
+        let terms = ModelSearch.terms(query)
+        let next = terms.isEmpty ? prices : prices.filter { ModelSearch.matches($0, terms: terms) }
         if filtered != next { filtered = next }
     }
     func load(force: Bool = false) async {

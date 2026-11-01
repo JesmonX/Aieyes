@@ -257,7 +257,25 @@ window.AieyesUI = {
   },
   subscription(plan) {
     const name = String(plan ?? '').trim();
+    const qoder = { personal_standard: 'Free', personal_professional: 'Pro', personal_professional_plus: 'Pro+', personal_ultra: 'Ultra' }[name.toLowerCase()];
+    if (qoder) return qoder;
     return { plus: 'Plus', pro: 'Pro', free: 'Free', max: 'Max', team: 'Team', business: 'Business', enterprise: 'Enterprise', api: 'API' }[name.toLowerCase()] ?? (name ? name[0].toLocaleUpperCase() + name.slice(1) : '');
+  },
+  modelSearchText(value) {
+    return String(value ?? '').normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '').replace(/([a-z])([0-9])/g, '$1 $2').replace(/([0-9])([a-z])/g, '$1 $2').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  },
+  modelSearch(price, query) {
+    const text = this.modelSearchText(price.id + ' ' + (price.name ?? ''));
+    return this.modelSearchText(query).split(' ').filter(Boolean).every((term) => text.includes(term));
+  },
+  pricingGapResolved(gap, prices, mappings) {
+    let price;
+    if (Object.hasOwn(mappings, gap.model)) price = prices.find((p) => p.id === mappings[gap.model]);
+    else {
+      price = prices.find((p) => p.id === gap.model);
+      if (!price) {const matches = prices.filter((p) => p.id.slice(p.id.indexOf('/') + 1) === gap.model);if (matches.length === 1) price = matches[0];}
+    }
+    return !!price && !gap.model.startsWith('antigravity-unknown-') && ['input', 'output', 'cacheRead', 'cacheWrite'].every((key) => !(gap.tokens?.[key] > 0) || Number.isFinite(price[key]) && price[key] >= 0);
   },
   compactMoney(value) {
     if (!Number.isFinite(value)) return '—';
@@ -268,7 +286,7 @@ window.AieyesUI = {
     const windows = q.windows ?? [];
     if (q.provider === 'antigravity') {
       const groups = [...new Set(windows.map((w) => w.groupId || w.groupName || ''))];
-      return groups.filter((g) => ['gemini', 'gemini models', 'claude-gpt', 'claude and gpt models'].includes(g.toLowerCase())).flatMap((g) => {
+      return groups.filter((g) => ['gemini', 'gemini models', 'gemini-4-argon', 'gemini 4 argon', 'claude-gpt', 'claude and gpt models'].includes(g.toLowerCase())).flatMap((g) => {
         const rows = windows.filter((w) => (w.groupId || w.groupName) === g);
         const five = rows.filter((w) => w.windowMinutes === window.AieyesContract.windows.fiveHour),week = rows.filter((w) => w.windowMinutes === window.AieyesContract.windows.week);
         return five.length === 1 ? five : !five.length && week.length === 1 ? week : [];

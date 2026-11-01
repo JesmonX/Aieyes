@@ -34,6 +34,12 @@ private struct Fixture: View {
         precondition(identity.displayName.contains("public-id") && !identity.displayName.contains("hash"))
         let groupedCodex = try JSONDecoder().decode(Quota.self, from: Data(#"{"provider":"codex","sourceId":"fixture","updatedAt":1,"origin":"live","accountId":"test","name":"test","windows":[{"name":"5h","groupName":"codex","windowMinutes":300,"usedPercent":0},{"name":"7d","groupName":"codex","windowMinutes":10080,"usedPercent":0}]}"#.utf8))
         precondition(!groupedCodex.groupsWindows)
+        var qoder = groupedCodex
+        qoder.provider = "qoder-cn"; qoder.identity = identity
+        precondition(qoder.cardIdentity == nil)
+        let creditMeter = QuotaMeter(id: "credits", label: "加购 Credits", used: 3, total: 100, remaining: 97, unit: "credits")
+        precondition(qoder.meterSummary(creditMeter) == "97 / 100 Credits")
+        precondition(Format.subscription("personal_professional") == "Pro")
         let state = FixtureState()
         let raw = #"""
         [{"provider":"codex","accountId":"a","name":"Short","plan":"plus","windows":[{"id":"five","name":"5h","windowMinutes":300,"usedPercent":10}]},

@@ -214,8 +214,11 @@ struct SettingsView: View {
         return true
     }
     private func openGapPrice(_ gap: PricingGap) {
-        let id = gap.priceId ?? gap.model
+        let id = model.settings.modelMappings[gap.model] ?? gap.priceId ?? gap.model
         priceEditor = model.prices.first(where: { $0.id == id }) ?? ModelPrice(id: id, name: gap.model)
+    }
+    private var unresolvedPricingGaps: [PricingGap] {
+        model.dashboard.pricingGaps.filter { !$0.resolved(prices: model.prices, mappings: model.settings.modelMappings) }
     }
     private var prices: some View {
         ScrollViewReader { reader in ScrollView { LazyVStack(alignment: .leading, spacing: 14) {
@@ -231,15 +234,15 @@ struct SettingsView: View {
                 HelpNote(title: L("智能引用与重算"), text: L("智能引用按 ID、名称和版本匹配，未知供应商优先官方价格；无版本可匹配 latest，未标注 batch 不引用 batch，仅供估值。“保存并重算”更新历史成本。"))
                 Button(model.repricing ? L("重算中…") : L("保存并重算")) { Task { await model.saveAndReprice() } }.disabled(model.settingsSaving || model.repricing).accessibilityIdentifier("save-and-reprice")
             }
-            if !model.dashboard.pricingGaps.isEmpty {
+            if !unresolvedPricingGaps.isEmpty {
                 Section(L("待计价模型")) {
                     VStack(alignment: .leading, spacing: 10) {
-                        ForEach(model.dashboard.pricingGaps) { gap in
+                        ForEach(unresolvedPricingGaps) { gap in
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) { Text(gap.model).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)); Text(L("缺少{0} · {1} Token" , gap.missing, Format.compact(gap.unpricedTokens))).font(AppFont.secondary).foregroundStyle(.secondary) }
                                 Spacer()
                                 Button(L("智能引用")) { Task { await model.referencePrices(model: gap.model) } }.disabled(model.busy || model.settingsSaving)
-                                Button(L("映射")) { mappingSectionExpanded = true; mappingModel = gap.model; mappingID = gap.priceId ?? ""; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }
+                                Button(L("映射")) { mappingSectionExpanded = true; mappingModel = gap.model; mappingID = model.settings.modelMappings[gap.model] ?? gap.priceId ?? ""; reader.scrollTo("model-mapping", anchor: .top); mappingFocused = true }
                                 Button(L("补充价格")) { openGapPrice(gap) }
                             }
                         }

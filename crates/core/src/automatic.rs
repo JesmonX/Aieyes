@@ -2622,6 +2622,90 @@ mod tests {
         }
     }
     #[test]
+    fn agy_argon_weekly_pool_is_separate_and_legacy_automatic_costs_are_repaired() {
+        let (root, e, mut q) = agy_fixture();
+        e.store
+            .save_prices(&[ModelPrice {
+                id: "gemini-4-argon-trial".into(),
+                input: Some(0.01),
+                ..Default::default()
+            }])
+            .unwrap();
+        q.windows.push(QuotaWindow {
+            id: "Gemini 4 Argon:weekly".into(),
+            group_id: "Gemini 4 Argon".into(),
+            group_name: "Gemini 4 Argon".into(),
+            name: "Gemini 4 Argon · 7d".into(),
+            used_percent: 0.0,
+            window_minutes: Some(10080),
+            resets_at: Some(now() + 604800),
+        });
+        observe(&e, &q);
+        agy_event(&e, &q, "generic");
+        let settings = e.store.settings().unwrap();
+        let argon = crate::usage::parse(&settings.sources[0], &mut ParseState::default(), &json!({
+            "id":"argon", "timestamp":q.updated_at+5, "intervalStart":q.updated_at,
+            "intervalEvidence":"antigravity-step-v1", "model":"gemini-4-argon-trial", "tokens":{"input":9000}
+        })).unwrap();
+        e.store
+            .put_event(&argon, &e.store.prices().unwrap(), &settings)
+            .unwrap();
+        q.updated_at += 30;
+        q.windows[0].used_percent += 1.0;
+        q.windows[1].used_percent += 0.2;
+        q.windows[4].used_percent += 5.0;
+        observe(&e, &q);
+        let records = e.store.estimates().unwrap();
+        let generic = records
+            .iter()
+            .find(|r| r.quota().unwrap().group_id.as_deref() == Some("gemini"))
+            .unwrap();
+        let argon = records
+            .iter()
+            .find(|r| r.quota().unwrap().group_id.as_deref() == Some("Gemini 4 Argon"))
+            .unwrap();
+        assert_eq!((generic.cost, generic.total_tokens), (10.0, 1000));
+        assert_eq!((argon.cost, argon.total_tokens), (90.0, 9000));
+        assert_eq!(argon.quota().unwrap().five_hour_value, None);
+        assert_eq!(argon.quota().unwrap().weekly_value, Some(1800.0));
+
+        let mut legacy = generic.clone();
+        for segment in &mut legacy.automatic_segments {
+            segment.cost = 100.0;
+            segment.weekly_cost = 100.0;
+            segment.tokens = 10000;
+            segment.priced_tokens = 10000;
+        }
+        recalculate(&mut legacy);
+        e.store.save_estimate(&legacy).unwrap();
+        e.store
+            .db
+            .execute(
+                "DELETE FROM kv WHERE key='history-correction-antigravity-argon-v1'",
+                [],
+            )
+            .unwrap();
+        drop(e);
+        let e = Engine::open(root.path()).unwrap();
+        let repaired = e
+            .store
+            .estimates()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.original_estimate_id.as_deref() == Some(&legacy.id))
+            .unwrap();
+        assert_eq!((repaired.cost, repaired.total_tokens), (10.0, 1000));
+        let summaries = e.store.automatic_estimate_summaries(q.updated_at).unwrap();
+        let summary = summaries
+            .iter()
+            .find(|r| r.estimate.quota().unwrap().group_id.as_deref() == Some("gemini"))
+            .unwrap();
+        assert_eq!(
+            summary.estimate.quota().unwrap().five_hour_value,
+            Some(1000.0)
+        );
+    }
+    #[test]
     fn agy_idle_group_and_independent_five_hour_reset_do_not_veto_weekly_samples() {
         let (_root, e, mut q) = agy_fixture();
         observe(&e, &q);

@@ -13,6 +13,42 @@ pub(crate) fn setup(db: &rusqlite::Connection) -> Result<()> {
 }
 
 impl Store {
+    /// Replay the affected spans with their original prices; retain the old
+    /// estimates as audit records instead of relabelling a mixed model pool.
+    pub(crate) fn prepare_antigravity_group_corrections(&self) -> Result<()> {
+        let key = "history-correction-antigravity-argon-v1";
+        if self
+            .db
+            .query_row("SELECT EXISTS(SELECT 1 FROM kv WHERE key=?1)", [key], |r| {
+                r.get::<_, bool>(0)
+            })?
+        {
+            return Ok(());
+        }
+        let tx = self.write_transaction()?;
+        let mut query = self.db.prepare("SELECT id,stamp,model FROM events WHERE provider='antigravity' AND lower(model) LIKE '%argon%'")?;
+        let rows = query
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (id, stamp, model) in rows {
+            if crate::antigravity::group_for_model(&model) == Some("gemini-4-argon") {
+                self.db.execute("INSERT INTO kv VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    params![format!("history-correction-pending:{id}"), json!({"eventId":id,"timestamp":stamp}).to_string()])?;
+            }
+        }
+        // A baseline may hold pre-fix model-group cost evidence.
+        self.db.execute("DELETE FROM kv WHERE key LIKE 'automatic-baseline:antigravity:%' OR key LIKE 'automatic-replay-baseline:antigravity:%'", [])?;
+        self.db
+            .execute("INSERT OR IGNORE INTO kv VALUES(?1,'true')", [key])?;
+        tx.commit()?;
+        Ok(())
+    }
     pub(crate) fn repair_history_estimates(&self) -> Result<()> {
         use crate::estimates::Estimate;
         let pending: Vec<(String, String)> = self

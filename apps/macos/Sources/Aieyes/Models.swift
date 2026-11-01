@@ -363,6 +363,11 @@ struct QuotaMeter: Codable, Equatable, Identifiable {
         if estimated == true { text += L(" · 估算") }
         return text
     }
+    var remainingSummary: String {
+        let balance = remaining ?? total.flatMap { usedKnown == false ? nil : max(0, $0 - used) }
+        let suffix = unit == "credits" ? " Credits" : " " + unitLabel
+        return (balance.map(amount) ?? "—") + (total.map { " / " + amount($0) } ?? "") + suffix
+    }
     var fraction: Double? {
         guard usedKnown != false, let total, total > 0 else { return nil }
         return min(max(used / total, 0), 1)
@@ -382,6 +387,15 @@ struct Quota: Codable, Equatable, Identifiable {
     var notice: String? = nil
     var id: String { provider + ":" + accountId }
     var visibleMeters: [QuotaMeter] { meters ?? [] }
+    var cardIdentity: String? {
+        if ["qoder", "qoder-cn"].contains(provider) {
+            return identity?.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? identity?.email : nil
+        }
+        return identity?.displayName
+    }
+    func meterSummary(_ meter: QuotaMeter) -> String {
+        ["qoder", "qoder-cn"].contains(provider) ? meter.remainingSummary : meter.summary
+    }
     /// Shown data age: the provider's own snapshot time when it reports one.
     var snapshotAge: Double? {
         if let snapshotAt, snapshotAt > 0 { return snapshotAt }
@@ -431,6 +445,17 @@ struct DayModel: Codable, Identifiable, Equatable {
 struct PricingGap: Codable, Identifiable, Equatable {
     var model: String, priceId: String?, tokens: Tokens, unpricedTokens: Double
     var id: String { model }
+    func resolved(prices: [ModelPrice], mappings: [String: String]) -> Bool {
+        let price: ModelPrice?
+        if let mapped = mappings[model] { price = prices.first { $0.id == mapped } }
+        else if let exact = prices.first(where: { $0.id == model }) { price = exact }
+        else {
+            let matches = prices.filter { $0.id.split(separator: "/", maxSplits: 1).dropFirst().first.map(String.init) == model }
+            price = matches.count == 1 ? matches.first : nil
+        }
+        guard let price, !model.hasPrefix("antigravity-unknown-") else { return false }
+        return [(tokens.input, price.input), (tokens.output, price.output), (tokens.cacheRead, price.cacheRead), (tokens.cacheWrite, price.cacheWrite)].allSatisfy { $0.0 == 0 || ($0.1.map { $0.isFinite && $0 >= 0 } ?? false) }
+    }
     var missing: String { [(L("输入"), tokens.input), (L("输出"), tokens.output), (L("缓存读取"), tokens.cacheRead), (L("缓存写入"), tokens.cacheWrite)].filter { $0.1 > 0 }.map { $0.0 }.joined(separator: "、") }
 }
 struct AccountConnection: Codable, Equatable { var sourceId: String; var profileId: String? }
@@ -711,6 +736,19 @@ struct ClaudeKeychainConsent: Codable, Equatable {
     var state: String { result ?? (granted ? "granted" : "denied") }
 }
 struct ClaudeKeychainStatus: Decodable { var granted: Bool?, result: String?, available: Bool? }
+enum ModelSearch {
+    static func normalized(_ value: String) -> String {
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .replacingOccurrences(of: "([a-z])([0-9])", with: "$1 $2", options: .regularExpression)
+            .replacingOccurrences(of: "([0-9])([a-z])", with: "$1 $2", options: .regularExpression)
+            .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+    static func terms(_ query: String) -> [String] { normalized(query).split(separator: " ").map(String.init) }
+    static func matches(_ price: ModelPrice, terms: [String]) -> Bool {
+        let text = normalized(price.id + " " + price.name)
+        return terms.allSatisfy { text.contains($0) }
+    }
+}
 struct ModelPrice: Codable, Equatable, Identifiable {
     var id = "", name = "", input: Double?, output: Double?, cacheRead: Double?, cacheWrite: Double?, fetchedAt: Double = 0
 }
@@ -833,6 +871,8 @@ enum Format {
     }
     static func subscription(_ plan: String) -> String {
         let name = plan.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Qoder API codes -> public product tiers: docs.qoder.cn/product-overview/account-and-subscription
+        if let label = ["personal_standard":"Free", "personal_professional":"Pro", "personal_professional_plus":"Pro+", "personal_ultra":"Ultra"][name.lowercased()] { return label }
         return ["plus":"Plus", "pro":"Pro", "free":"Free", "max":"Max", "team":"Team", "business":"Business", "enterprise":"Enterprise", "api":"API"][name.lowercased()] ?? (name.prefix(1).uppercased() + name.dropFirst())
     }
     static func creditPrimary(_ balance: CreditsBalance?) -> String {
@@ -1016,7 +1056,7 @@ enum EstimatePresentation {
             return quota.windows.compactMap { window in
                 let key = group(window)
                 guard groups.insert(key).inserted,
-                      ["gemini", "gemini models", "claude-gpt", "claude and gpt models"].contains(key.lowercased()) else { return nil }
+                      ["gemini", "gemini models", "gemini-4-argon", "gemini 4 argon", "claude-gpt", "claude and gpt models"].contains(key.lowercased()) else { return nil }
                 let rows = quota.windows.filter { group($0) == key }
                 let five = rows.filter { $0.windowMinutes == CoreContract.fiveHourMinutes }
                 let week = rows.filter { $0.windowMinutes == CoreContract.weekMinutes }

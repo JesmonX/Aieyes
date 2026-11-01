@@ -2,13 +2,13 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const {chromium}=require('../apps/desktop/node_modules/playwright');
 function fixture(){
   window.setInterval=()=>0;
-  const at=Date.now()/1000,groups=['Gemini Models','Claude and GPT Models','Future Models'];
-  const q={provider:'antigravity',accountId:'legacy-shared',sourceId:'agy-source',name:'Antigravity',identity:{key:'google:fixture',email:'a.very.long.account.name.for.layout.verification@example.test',subscription:'Google AI Ultra',checkedAt:at,stale:false},plan:'Google AI Ultra',updatedAt:at,origin:'live',windows:groups.flatMap(group=>[300,10080].map(minutes=>({id:group+':'+minutes,name:group+' · '+(minutes===300?'5h':'7d'),groupId:group,groupName:group,windowMinutes:minutes,usedPercent:20,resetsAt:at+minutes*60})))};
+  const at=Date.now()/1000,groups=['Gemini Models','Claude and GPT Models','Future Models','Gemini 4 Argon'];
+  const q={provider:'antigravity',accountId:'legacy-shared',sourceId:'agy-source',name:'Antigravity',identity:{key:'google:fixture',email:'a.very.long.account.name.for.layout.verification@example.test',subscription:'Google AI Ultra',checkedAt:at,stale:false},plan:'Google AI Ultra',updatedAt:at,origin:'live',windows:groups.flatMap(group=>(group==='Gemini 4 Argon'?[10080]:[300,10080]).map(minutes=>({id:group+':'+minutes,name:group+' · '+(minutes===300?'5h':'7d'),groupId:group,groupName:group,windowMinutes:minutes,usedPercent:20,resetsAt:at+minutes*60})))};
   const codex={...q,provider:'codex',accountId:'c',sourceId:'c',name:'Codex',plan:'pro',windows:[],credits:{hasCredits:true,unlimited:false,balance:'1000'}};
   const record=(group,value)=>({id:group,accountKey:'antigravity:legacy-shared',groupId:group,windowId:group+':300',windowName:group+' · 5h',valuationMode:'fiveHour',status:'completed',sourceIds:['agy-source'],sourceNames:['CLI'],startedAt:at-100,checkpointAt:at,consumedPercent:10,cost:1,totalTokens:100,pricedTokens:100,fiveHourValue:value,weeklyValue:value*6,weeklyDirectValue:value*6,weeklyRatioValue:value*5,calculationNote:'分组估值',prices:[]});
   const settings={version:2,accountAliases:{'agy:shared':'antigravity:legacy-shared'},accounts:[q,codex].map(q=>({id:q.accountId,name:q.name,provider:q.provider,quotaEnabled:true})),sources:[q,codex].map(q=>({id:q.sourceId,provider:q.provider,accountId:q.accountId,name:q.name,path:'/fixture',enabled:true})),hosts:[],modelMappings:{},proxy:{mode:'direct',url:''},refreshSeconds:300,serverRefreshSeconds:10};
   const empty={tokens:{input:0,output:0,cacheRead:0,cacheWrite:0},total:0,cost:0,pricedTokens:0,events:0};
-  window.agyFixture={settings,q,records:[record(groups[0],10),record(groups[1],100)],calls:[]};
+  window.agyFixture={settings,q,records:[record(groups[0],10),record(groups[1],100),record(groups[3],777)],calls:[]};
   localStorage.setItem('aieyes.panel.accounts.v2',JSON.stringify({version:2,providers:{agy:{mode:'custom',keys:['agy:shared']}}}));
   localStorage.setItem('quota.expanded.v2.panel.agy:shared','false');
   localStorage.setItem('aieyes.panel.view',JSON.stringify({provider:'agy',accountKey:'agy:shared'}));
@@ -39,7 +39,9 @@ function fixture(){
   if(panel){assert.equal(await page.evaluate(()=>state.accountKey),'','Panel clears legacy account filters');assert.equal(await page.evaluate(()=>state.provider),'antigravity');assert.equal(await card.locator('details').evaluate(e=>e.open),false);await card.locator('.quota-title').click();}
   if(!await card.locator('.quota-disclosure').evaluate(el=>el.open))await card.locator('.quota-title').click();
   assert(await card.evaluate(el=>Math.abs(el.getBoundingClientRect().width-el.closest('.quota-group').getBoundingClientRect().width)<1),'Expanded AGY card fills its single-account provider group');
-  const entries=card.locator('[data-estimate]');assert.equal(await entries.count(),3);
+  const entries=card.locator('[data-estimate]');assert.equal(await entries.count(),4);
+  assert.equal(await entries.nth(3).innerText(),'7d ≈ $4.66K');
+  await entries.nth(3).click();assert.equal(await page.locator('#estimate-window').inputValue(),'Gemini 4 Argon:10080');await page.locator('#quota-close').click();
   assert.equal(await entries.nth(0).innerText(),'5h ≈ $10.00 7d ≈ $50.00/$60.00');assert.equal(await entries.nth(1).innerText(),'5h ≈ $100.00 7d ≈ $500.00/$600.00');
   await page.evaluate(()=>{agyFixture.records.push({...agyFixture.records[0],id:'legacy',groupId:null,valuationMode:'weekly',fiveHourValue:null,weeklyRatioValue:null});state.dashboard.quotaEstimates=agyFixture.records;render();});
   await entries.nth(1).click();assert.equal(await page.locator('#estimate-window').inputValue(),'Claude and GPT Models:300');assert.equal(await page.locator('#quota-dialog .estimate-result').count(),2);

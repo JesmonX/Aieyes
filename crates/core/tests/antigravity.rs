@@ -577,7 +577,12 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
         })
         .unwrap();
     store
-        .save_prices(&[price("gemini-test"), price("claude-test"), price("unknown")])
+        .save_prices(&[
+            price("gemini-test"),
+            price("gemini-4-argon-trial"),
+            price("claude-test"),
+            price("unknown"),
+        ])
         .unwrap();
     let at = now() - 100;
     let mut q = QuotaSnapshot {
@@ -588,8 +593,11 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
         updated_at: at,
         ..Default::default()
     };
-    for group in ["gemini", "claude-gpt"] {
+    for group in ["gemini", "claude-gpt", "Gemini 4 Argon"] {
         for minutes in [300, 10080] {
+            if group == "Gemini 4 Argon" && minutes == 300 {
+                continue;
+            }
             q.windows.push(QuotaWindow {
                 id: format!("{group}:{minutes}"),
                 group_id: group.into(),
@@ -614,14 +622,18 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
             .begin_estimate(&q, "claude-gpt:300", vec![source.id.clone()], None)
             .is_err()
     );
-    for (model, tokens) in [("gemini-test", 100), ("claude-test", 900)] {
+    for (model, tokens) in [
+        ("gemini-test", 100),
+        ("claude-test", 900),
+        ("gemini-4-argon-trial", 500),
+    ] {
         let e=usage::parse(&source,&mut ParseState::default(),&json!({"id":model,"timestamp":at+10,"intervalStart":at+1,"intervalEvidence":"antigravity-step-v1","model":model,"tokens":{"input":tokens}})).unwrap();
         store
             .put_event(&e, &store.prices().unwrap(), &store.settings().unwrap())
             .unwrap();
     }
     q.updated_at += 50;
-    for (w, delta) in q.windows.iter_mut().zip([10.0, 2.0, 20.0, 2.0]) {
+    for (w, delta) in q.windows.iter_mut().zip([10.0, 2.0, 20.0, 2.0, 5.0]) {
         w.used_percent += delta;
     }
     store.quota(&q).unwrap();
@@ -629,6 +641,21 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
     assert_eq!(done.total_tokens, 100);
     assert_eq!(done.cost, 1.0);
     assert_eq!(done.quota().unwrap().five_hour_value, Some(10.0));
+    let isolated_id = done.id.clone();
+    let mut legacy = serde_json::to_value(&done).unwrap();
+    legacy["cost"] = json!(6.0);
+    legacy["totalTokens"] = json!(600);
+    legacy["pricedTokens"] = json!(600);
+    if let Some(segments) = legacy["segments"].as_array_mut() {
+        for segment in segments {
+            segment["cost"] = json!(6.0);
+        }
+    }
+
+    assert!(
+        aieyes_core::estimates::eligible(&q, q.windows.last().unwrap()),
+        "Argon supports its own weekly valuation"
+    );
     assert_eq!(
         store
             .capacity_for_group("antigravity:account", "gemini", now())
@@ -643,6 +670,26 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
             .ratio,
         Some(10.0)
     );
+    let argon = store
+        .begin_estimate(&q, "Gemini 4 Argon:10080", vec![source.id.clone()], None)
+        .unwrap();
+    assert_eq!(
+        argon.quota().unwrap().group_id.as_deref(),
+        Some("Gemini 4 Argon")
+    );
+    for (model, tokens) in [("gemini-test", 100), ("gemini-4-argon-trial", 500)] {
+        let event = usage::parse(&source, &mut ParseState::default(), &json!({"id":format!("argon-window-{model}"),"timestamp":q.updated_at+5,"intervalStart":q.updated_at+1,"intervalEvidence":"antigravity-step-v1","model":model,"tokens":{"input":tokens}})).unwrap();
+        store
+            .put_event(&event, &store.prices().unwrap(), &store.settings().unwrap())
+            .unwrap();
+    }
+    q.updated_at += 10;
+    q.windows.last_mut().unwrap().used_percent += 5.0;
+    store.quota(&q).unwrap();
+    let argon = store.finish_estimate_for(&argon.id, false).unwrap();
+    assert_eq!(argon.total_tokens, 500);
+    assert_eq!(argon.cost, 5.0);
+    assert_eq!(argon.quota().unwrap().weekly_value, Some(100.0));
     let e = store
         .begin_estimate(&q, "gemini:300", vec![source.id.clone()], None)
         .unwrap();
@@ -660,4 +707,37 @@ fn group_estimates_isolate_cost_capacity_and_reject_unknown_models() {
     let done = store.finish_estimate_for(&e.id, false).unwrap();
     assert_eq!(done.calculation_status, "unmappedGroup");
     assert_eq!(done.quota().unwrap().five_hour_value, None);
+    // Simulate an estimate written before Argon was separated from Gemini.
+    store
+        .db
+        .execute(
+            "UPDATE estimates SET payload=?1 WHERE id=?2",
+            rusqlite::params![legacy.to_string(), isolated_id],
+        )
+        .unwrap();
+    store
+        .db
+        .execute(
+            "DELETE FROM kv WHERE key='history-correction-antigravity-argon-v1'",
+            [],
+        )
+        .unwrap();
+    drop(store);
+    let store = Store::open(temp.path()).unwrap();
+    let repaired = store
+        .estimates()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.original_estimate_id.as_deref() == Some(&isolated_id))
+        .unwrap();
+    assert_eq!(repaired.cost, 1.0);
+    assert_eq!(repaired.total_tokens, 100);
+    assert_eq!(repaired.quota().unwrap().five_hour_value, Some(10.0));
+    let count = store.estimates().unwrap().len();
+    drop(store);
+    assert_eq!(
+        Store::open(temp.path()).unwrap().estimates().unwrap().len(),
+        count,
+        "Migration is idempotent"
+    );
 }

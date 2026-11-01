@@ -40,6 +40,18 @@ import Combine
         catalog.query = " SECOND \n"; precondition(catalog.filtered == [new])
         catalog.query = "missing"; precondition(catalog.filtered.isEmpty)
         catalog.query = "VENDOR/NEW"; precondition(catalog.filtered == [new])
+        let qwen = ModelPrice(id: "qwen/qwen3.8-flash", name: "Qwen: Qwen3.8 Flash", input: 1e-6)
+        catalog.replace([qwen, old, new])
+        for query in ["qwen flash", "FLASH qwen", "qwen3.8 flash", "QWEN_3.8-FLASH", "qwen/flash"] {
+            catalog.query = query; precondition(catalog.filtered == [qwen], query)
+        }
+        catalog.query = "qwen missing"; precondition(catalog.filtered.isEmpty)
+        let gap = PricingGap(model: "alias", priceId: nil, tokens: Tokens(input: 100, cacheRead: 50), unpricedTokens: 150)
+        precondition(!gap.resolved(prices: [qwen], mappings: ["alias":qwen.id]), "Missing cache pricing remains visible")
+        var complete = qwen; complete.cacheRead = 1e-7
+        precondition(gap.resolved(prices: [complete], mappings: ["alias":qwen.id]))
+        precondition(!gap.resolved(prices: [complete], mappings: ["alias":"missing"]))
+        catalog.replace([new])
         let failure = Task { await catalog.load(force: true) }
         await gate.wait(3); gate.finish(.failure(ClientError.message("Read failed"))); await failure.value
         precondition(catalog.prices == [new] && catalog.error == "Read failed" && !catalog.loaded)

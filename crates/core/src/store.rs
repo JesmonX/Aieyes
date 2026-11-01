@@ -100,6 +100,7 @@ impl Store {
         store.migrate_antigravity()?;
         store.migrate_usage_ids()?;
         store.bootstrap_capacity()?;
+        store.prepare_antigravity_group_corrections()?;
         store.repair_history_estimates()?;
         store.migrate_account_commands()?;
         Ok(store)
