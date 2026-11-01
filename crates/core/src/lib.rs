@@ -97,6 +97,9 @@ pub struct Engine {
     runtime_change: Option<Value>,
     #[cfg(test)]
     status_observation_reads: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    /// Test-only `AIEYES_AUTO_SCAN=off` without mutating the process environment.
+    #[cfg(test)]
+    native_discovery_off: bool,
 }
 impl Engine {
     pub fn open(root: &Path) -> Result<Self> {
@@ -121,6 +124,8 @@ impl Engine {
             runtime_change: None,
             #[cfg(test)]
             status_observation_reads: None,
+            #[cfg(test)]
+            native_discovery_off: false,
         })
     }
     /// Detect native accounts once in the background after the engine starts.

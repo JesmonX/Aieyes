@@ -1,6 +1,6 @@
 # Headless 与 Aieyes 内部会话排除规则
 
-依据：`docs/agent-auth-quota-research-2026-10-29.md` (c) 与 (h)。实现：`crates/core/src/session_events.rs` 的 `headless_argv` 与 `classify`、`session_processes.rs` 的原生进程关联，以及 `sessions.rs` 的 `non_interactive`。SSH 观察器 `scripts/session_remote.py` 使用相同规则，由共享用例 `scripts/fixtures/headless-argv.json` 保证 argv 两边一致。
+实现：`crates/core/src/session_events.rs` 的 `headless_argv` 与 `classify`、`session_processes.rs` 的原生进程关联，以及 `sessions.rs` 的 `non_interactive`。SSH 观察器 `scripts/session_remote.py` 使用相同规则，由共享用例 `scripts/fixtures/headless-argv.json` 保证 argv 两边一致。
 
 ## 分类
 

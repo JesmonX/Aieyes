@@ -4,7 +4,7 @@ const {chromium}=require('../apps/desktop/node_modules/playwright');
 const {fixture}=require('./workspace-ui-fixture.cjs');
 const {serveFont}=require('./ui-test-helpers.cjs');
 const root=path.resolve(__dirname,'..'),web=path.join(root,'apps/desktop/web'),out=path.join(root,'.local/bilingual-layout');
-const selectors=['nav button','.settings-sidebar button','.stat-label > span','.stat-value','.account-switch-entry','.metric-picker button','.panel-tabs button','.resource-strip-heading > strong','.quota-window .between > strong'];
+const selectors=['nav button','.stat-label > span','.stat-value','.account-switch-entry','.metric-picker button','.panel-tabs button','.resource-strip-heading > strong','.quota-window .between > strong'];
 function measure(selectors){
   const rows=[];
   for(const selector of selectors)document.querySelectorAll(selector).forEach((el,index)=>{
@@ -22,7 +22,7 @@ function measure(selectors){
 }
 (async()=>{
   fs.mkdirSync(out,{recursive:true});
-  const server=http.createServer((req,res)=>{if(serveFont(req,res))return;const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html'})[path.extname(file)]||'application/octet-stream');res.end(fs.readFileSync(file));});
+  const server=http.createServer(require('./ui-test-helpers.cjs').serveWebRoot(web,'index.html','application/octet-stream'));
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin=`http://127.0.0.1:${server.address().port}`,browser=await chromium.launch(),reports=[],failures=[];
   try{
     for(const platform of ['windows','linux'])for(const theme of ['light','dark']){

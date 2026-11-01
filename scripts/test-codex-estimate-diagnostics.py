@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 import hashlib
-import importlib.util
 import json
 import pathlib
 import sqlite3
 import tempfile
 import time
 import unittest
+from script_loader import load_script
 
-spec = importlib.util.spec_from_file_location('diagnostics', pathlib.Path(__file__).with_name('diagnose-codex-estimates.py'))
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+module = load_script('diagnostics', 'diagnose-codex-estimates.py')
 
 
 class DiagnosticsTests(unittest.TestCase):

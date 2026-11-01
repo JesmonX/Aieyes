@@ -56,3 +56,16 @@ module.exports.selectSettingsAgent = async function selectSettingsAgent(page, pr
   await page.waitForFunction(provider=>state.settings.appearance.settingsAgentIds?.includes(provider)&&!state.settingsSaving,provider);
   await page.locator('#quota-close').click();
 };
+// Static handler shared by the Playwright fixtures: fonts keep their nested path, everything else
+// is flattened to a basename inside `root` (as the packaged WebView sees it).
+const WEB_TYPES={'.js':'text/javascript','.css':'text/css','.html':'text/html','.png':'image/png'};
+module.exports.serveWebRoot = function serveWebRoot(root, index='index.html', fallbackType='text/plain') {
+  const fs=require('node:fs'),path=require('node:path');
+  return (req,res)=>{
+    if(serveFont(req,res))return;
+    const file=path.join(root,path.basename(new URL(req.url,'http://localhost').pathname)||index);
+    if(!fs.existsSync(file)){res.writeHead(404);res.end();return;}
+    res.setHeader('content-type',WEB_TYPES[path.extname(file)]||fallbackType);
+    res.end(fs.readFileSync(file));
+  };
+};

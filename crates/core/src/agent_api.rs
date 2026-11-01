@@ -142,15 +142,29 @@ fn path(source: &Source, params: &Value, validate: bool) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn read_document(path: &std::path::Path) -> Result<(Document, String, Option<Vec<u8>>)> {
-    let bytes = match std::fs::File::open(path) {
+/// A native config file of at most 1 MiB, or None when it does not exist.
+fn read_config(
+    path: &std::path::Path,
+    too_large: &'static str,
+    unreadable: &'static str,
+) -> Result<Option<Vec<u8>>> {
+    match std::fs::File::open(path) {
         Ok(file) => {
             let mut bytes = Vec::new();
             file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
-            ensure!(bytes.len() <= 1024 * 1024, "原生配置文件过大");
-            bytes
+            ensure!(bytes.len() <= 1024 * 1024, too_large);
+            Ok(Some(bytes))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => anyhow::bail!(unreadable),
+    }
+}
+
+fn read_document(path: &std::path::Path) -> Result<(Document, String, Option<Vec<u8>>)> {
+    let bytes = match read_config(path, "原生配置文件过大", "无法读取原生配置文件")?
+    {
+        Some(bytes) => bytes,
+        None => {
             let empty = if path.extension().is_some_and(|e| e == "yml") {
                 Document::Yaml(serde_yaml_ng::Value::Sequence(vec![]))
             } else if path.extension().is_some_and(|e| e == "toml") {
@@ -160,7 +174,6 @@ fn read_document(path: &std::path::Path) -> Result<(Document, String, Option<Vec
             };
             return Ok((empty, "missing".into(), None));
         }
-        Err(_) => anyhow::bail!("无法读取原生配置文件"),
     };
     let revision = digest(&bytes);
     if path.extension().is_some_and(|e| e == "yml") {

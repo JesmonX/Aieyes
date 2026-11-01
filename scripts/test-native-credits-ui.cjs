@@ -56,7 +56,7 @@ function bridge(){window.setInterval=()=>0;window.__TAURI__={event:{async listen
       assert.deepEqual(d.modelOptions,['unknown']);assert.deepEqual(d.models.map(row=>row.key),['unknown']);
     }
     const web=path.join(project,'apps/desktop/web'),out=path.join(project,'.local/native-credits',provider);fs.mkdirSync(out,{recursive:true});
-    server=http.createServer((req,res)=>{if(serveFont(req,res))return;const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html','.png':'image/png'})[path.extname(file)]||'application/octet-stream');res.end(fs.readFileSync(file));});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    server=http.createServer(require('./ui-test-helpers.cjs').serveWebRoot(web,'index.html','application/octet-stream'));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1180,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.exposeFunction('testRPC',invoke);await page.addInitScript(bridge);await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
     if(isQoder)assert.equal(await page.locator('[data-native-credits]').count(),0);
     else await page.locator('[data-native-credits]').getByText(expected.text).waitFor();

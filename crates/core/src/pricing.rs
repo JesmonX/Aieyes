@@ -227,7 +227,7 @@ fn inferred_owner(identity: &ModelIdentity) -> Option<&'static str> {
 
 /// Explicit estimation helper. Ordinary billing keeps exact/manual mappings;
 /// callers persist the chosen reference so users can inspect and replace it.
-pub fn smart_reference<'a>(
+fn smart_reference<'a>(
     model: &str,
     name: &str,
     prices: &'a [ModelPrice],

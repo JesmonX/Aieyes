@@ -863,7 +863,7 @@ impl QuotaMeter {
     }
 }
 
-pub const QUOTA_METER_UNITS: [&str; 5] = ["credits", "requests", "usd", "cny", "points"];
+const QUOTA_METER_UNITS: [&str; 5] = ["credits", "requests", "usd", "cny", "points"];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -1143,6 +1143,19 @@ pub fn now() -> i64 {
 pub fn hash(value: &str) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+/// Epoch seconds from a value that may be in seconds or milliseconds.
+pub fn epoch_seconds(n: i64) -> i64 {
+    if n > 10_000_000_000 { n / 1000 } else { n }
+}
+/// Epoch seconds from a number (s or ms) or an RFC 3339 string.
+pub fn instant(value: &Value) -> Option<i64> {
+    if let Some(n) = value.as_f64() {
+        return Some(epoch_seconds(n as i64));
+    }
+    chrono::DateTime::parse_from_rfc3339(value.as_str()?)
+        .ok()
+        .map(|t| t.timestamp())
 }
 pub fn timestamp(value: &Value) -> Option<i64> {
     value.as_i64().or_else(|| {

@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """Compare full/display histories with the production Web and Swift card selectors."""
-import importlib.util
 import json
 import sys
 from pathlib import Path
 import sqlite3
 import subprocess
 import tempfile
+from script_loader import load_script
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('performance', ROOT/'scripts/benchmark-performance.py')
-performance = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(performance)
+performance = load_script('performance', 'benchmark-performance.py')
 
 with tempfile.TemporaryDirectory(prefix='aieyes-display-golden-') as temporary:
     root = Path(temporary)

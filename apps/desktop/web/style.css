@@ -113,9 +113,6 @@ canvas { display:block; width:100%; height:var(--chart-height); }
 .prices-list, .pricing-gaps { max-height: 300px; overflow: auto; }
 .price-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; }
 .price-toolbar input { flex: 1; min-width: 160px; }
-.account-toggle { display: flex; align-items: center; gap: 10px; padding: 12px 0; }
-.account-history { margin-top: 19px; }
-.account-history > summary { font-weight: 500; }
 .host-selectors { display: grid; gap: 14px; margin: 21px 0; }
 .host-selectors .section-head { margin: 4px 0 0; }
 .device-selects { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
@@ -253,7 +250,6 @@ body.editor-open { overflow: hidden; }
 .empty-usage { padding: 24px; color: var(--muted); }
 .quota-placeholder { border-style: dashed; }
 .quota-placeholder p { margin: 8px 0 0; font-size: var(--font-secondary); }
-.account-help { margin: 0 0 14px; line-height: 1.6; }
 .danger { color: var(--danger); border-color: var(--danger); }
 #message[data-kind=error] { color: var(--danger); border-color: var(--danger); }
 #activity[data-status=error], #activity[data-status=partial] { color: var(--danger); }
@@ -358,7 +354,6 @@ body.editor-open { overflow: hidden; }
 #activity[data-status=error]::before { background:var(--danger); }
 #activity[data-status=busy]::before { background:var(--accent); animation:status-pulse 1s ease-in-out infinite alternate; }
 @keyframes status-pulse { to { opacity:.35; } }
-.error-list { max-height:200px; overflow:auto; }
 .error-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 0; }
 .error-row + .error-row { border-top:1px solid var(--border); }
 .error-row p { margin:3px 0 0; overflow-wrap:anywhere; }
@@ -400,7 +395,6 @@ button.host-status[aria-disabled=true] { cursor:progress; }
 .cache-card .token-breakdown strong { font-size:var(--font-section); white-space:nowrap; font-variant-numeric:tabular-nums; }
 @container (max-width:350px) { .stats { grid-template-columns:1fr; } }
 .section-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
-.scope-note { color:var(--muted); font-size:var(--font-secondary); margin:0 0 8px; }
 #query-status { padding:10px 12px; margin-bottom:12px; background:var(--surface-sunken); border-radius:var(--radius-control); }
 #query-status p { margin:0 0 6px; }
 .message-close { position:absolute; top:5px; right:5px; width:var(--control-md); height:var(--control-md); padding:4px; }
@@ -408,7 +402,6 @@ button.host-status[aria-disabled=true] { cursor:progress; }
 .discard-guard { position:sticky; bottom:0; padding:14px; background:var(--solid); border:1px solid var(--warn); border-radius:var(--radius-control); }
 .discard-guard p { margin:0 0 8px; }
 .quota-disclosure:not([open]) + .quota-content .quota-reset { display:none; }
-.all-quota-account { margin-bottom:18px; }
 @media (prefers-contrast:more) { :root { --card-border:var(--ink); } }
 .table-scroll { max-width:100%; overflow:auto; scrollbar-gutter:stable; }
 .table-scroll table { width:100%; border-collapse:separate; border-spacing:0; font-size:var(--font-secondary); }
@@ -542,13 +535,9 @@ html[data-theme=dark] .provider-mark .provider-dark { display:block; }
 .provider-identity,.order-account { display:inline-flex; align-items:center; gap:6px; min-width:0; }
 .quota-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .subscription-badge { display:inline-block; max-width:70px; padding:2px 6px; border-radius:var(--radius-pill); background:var(--surface-sunken); color:var(--ink); font-size:var(--font-caption); font-weight:var(--weight-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
-.quota-credit-summary { flex-shrink:0; max-width:55%; font-size:var(--font-secondary); }
-.quota-disclosure[open] .quota-credit-summary { display:none; }
 .credit-label { display:inline-flex; align-items:center; gap:4px; color:var(--accent-text); white-space:nowrap; }
 .credit-label .ui-icon { width:15px; height:15px; flex-basis:15px; }
 .credit-balance { display:inline-flex; align-items:center; gap:4px; min-width:0; }
-.quota-credit-summary .credit-balance { max-width:100%; }
-.quota-credit-summary strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .credit-row .credit-balance { flex-wrap:wrap; }
 .quota-reset { font-size:var(--font-secondary); line-height:var(--line-secondary); overflow-wrap:anywhere; }
 @media (prefers-reduced-motion:no-preference) { #activity,.stat-value { transition:color var(--t-base) var(--ease),opacity var(--t-base) var(--ease); } }
@@ -569,8 +558,6 @@ html[data-theme=dark] .provider-mark .provider-dark { display:block; }
 /* Agent setup keeps the common controls visible; machine-specific paths stay advanced. */
 .agent-setup h2{display:flex;align-items:center;gap:8px;margin:0}
 .agent-machines label,.agent-setup .actions label{margin:0}
-.account-machine-summary{border-top:1px solid var(--border);margin-top:12px;padding-top:8px}
-.account-command-preview{white-space:pre-wrap;overflow-wrap:anywhere;padding:10px;background:var(--surface-sunken);border-radius:var(--radius-control)}
 .account-agent-group h2{display:flex;align-items:center;gap:8px}
 /* Account edits remain readable at normal and compact settings widths. */
 .account-config > label { margin:14px 0; }
@@ -631,7 +618,6 @@ details:has([data-command-field]) > label { display:grid; gap:8px; margin:12px 0
 .account-switch-entry .ui-icon { width:16px; height:16px; }
 .agent-machines > .agent-machine { border-top:1px solid var(--border); padding:8px 4px; }
 .agent-machine > .list-row { border:0; min-height:40px; padding:4px 0; gap:16px; }
-.agent-machine .agent-auto-valuation { padding:8px 12px; margin-top:4px; border-radius:var(--radius-control); background:var(--surface-soft); }
 /* A single compact machine row; details and credentials stay in their own views. */
 .agent-machines > .agent-machine.list-row { flex-wrap:nowrap; gap:10px; min-height:44px; padding:8px 0; }
 :is(.agent-machines,.agent-machine) > .list-row { background-image:none; }
@@ -667,7 +653,7 @@ details:has([data-command-field]) > label { display:grid; gap:8px; margin:12px 0
   .quota-disclosure:not([open]) + .quota-content .quota-windows { grid-template-columns:minmax(0,1fr); }
 }
 /* Short interface labels occupy the same row in both languages. */
-nav button, .settings-sidebar button, .stat-label > span, .stat-value,
+nav button, .stat-label > span, .stat-value,
 .metric-picker button, .panel-tabs button { white-space:nowrap; }
 .account-switch-entry { min-width:144px; white-space:nowrap; flex-shrink:0; }
 .quota-window .between > strong { white-space:nowrap; flex-shrink:0; }

@@ -41,13 +41,11 @@
   --sidebar-width: 214px;
   --sidebar-compact-width: 72px;
   --count-badge: rgba(88,108,214,.12);
-  --shadow-card: none;
   --shadow-overlay: var(--shadow-float);
 
   --ease: cubic-bezier(.22,.61,.36,1);
   --ease-soft: cubic-bezier(.33,1,.68,1);
   --ease-spring: cubic-bezier(.34,1.34,.44,1);
-  --ease-in-out: cubic-bezier(.4,0,.2,1);
   --t-fast: .13s;
   --t-base: .2s;
   --t-slow: .32s;

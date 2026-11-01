@@ -47,7 +47,7 @@ open dist/Aieyes.app
 | 代理 | 本机 HTTP/HTTPS/SOCKS5、本机来源覆盖、连接测试与延迟；远程环境统一使用账户前置命令；PAC 和代理认证界面尚未实现 |
 | 应用内更新 | 显示当前版本，支持手动及每日检查、签名校验、一键安装重启；Linux 支持 AppImage、DEB 与 RPM |
 | 桌宠与会话状态 | 文件、链接、npx／npm 素材导入，保留桌宠库与 idle 预览；支持 v1 8×9 和 v2 8×11 PNG/WebP 图集，默认月薪喵。三端共享逐帧时间，本机及 SSH 会话联动，详见[桌宠说明](pets.md) |
-| Windows/Linux | 桌宠单击展开与 macOS 菜单栏一致的面板，悬停查看提示，支持贴边、隐藏和动态托盘；界面为半透明圆润风格（见 [Windows 界面刷新](windows-ui-refresh.md)）；提供 Windows NSIS、Linux DEB/RPM/AppImage，真实桌面交互和安装卸载仍需按平台验收 |
+| Windows/Linux | 桌宠单击展开与 macOS 菜单栏一致的面板，悬停查看提示，支持贴边、隐藏和动态托盘；界面为半透明圆润风格（见 [Windows 外观与交互](windows-appearance.md)）；提供 Windows NSIS、Linux DEB/RPM/AppImage，真实桌面交互和安装卸载仍需按平台验收 |
 
 服务器通过 CPU、内存圆环和 GPU／文件系统细进度条展示实时资源，尚未保存长期采样历史。Token 历史保存在 SQLite 中。
 
@@ -61,7 +61,7 @@ open dist/Aieyes.app
 
 macOS 与 Windows/Linux 的 Agent 开关、机器勾选和服务器启停直接保存；账户、服务器及高级设置表单点击「保存」即生效，不再需要顶部二次保存。常规设置自动保存，失败保留输入并显示具体原因。配置读写使用独立通道，不等待远程额度或 SSH 操作；后台刷新与保存分开提示。核心按本次修改合并配置，独立窗口修改同一字段时明确报冲突，避免覆盖登录档案。服务器密码保存在系统凭据库。额度采样仍可在关闭工具窗口后后台运行。
 
-Windows 悬浮面板同步设置与服务器采样，固定面板持续显示最新读数；错误与过期数据有明确状态，退出入口位于面板「更多」。本轮完整修复与验证见 [跨平台交互和 UI 评审](cross-platform-ui-review-2026-10-05.md)。 10-06 后续统一刷新、空态、原生确认与中性卡片的落地和验收范围见 [实施记录](ui-reform-2026-10-06-implementation.md)。后续面板层级、草稿保护、数据时间、分析交互和长流程改版见 [全面 UI 审计实施记录](ui-audit-and-redesign-2026-10-06-implementation.md)。
+Windows 悬浮面板同步设置与服务器采样，固定面板持续显示最新读数；错误与过期数据有明确状态，退出入口位于面板「更多」。
 
 在「设置 → Agent 接入」选择并启用 Codex、Claude Code、Antigravity、DeepSeek 或自定义 Agent；支持本机／SSH 的 Agent 可在「机器与目录」多选机器，通过「目录设置」配置数据目录和 CLI。服务器 Shell 位于服务器高级设置。前置命令按账户和机器分别保存，仅在账户设备设置编辑；同机相关目录及既有唤醒部署自动同步，不参与历史同步及监控。在所选 Agent 的账户区域添加登录或 API Key：Codex 登录成功后自动添加账号并查询额度，取消或失败不创建空账户；Claude Code、Antigravity 使用各机器已有登录；DeepSeek 在本机查询余额。账户同时显示已登录／使用中的设备计数；优先查询位置在账户设置顶部。同一账户可以连接多个位置，额度只显示一份，凭据不跨机器复制。面板自动选择每种 Agent 排序前五个账户；手动选择不限数量，可选为空，并严格保留选择。可在 Agent 接入页或「更多 → 面板显示账户」调整或恢复自动模式。停用保留历史、账户和配置，已归档账户需要明确恢复，也可删除配置并保留历史与凭证。删除会清理关联唤醒任务，弃用设备可确认强制解除管理。迁移与验证说明见 [Agent 接入与账户设置](agents-and-accounts-settings.md)。
 
@@ -69,7 +69,7 @@ Windows 悬浮面板同步设置与服务器采样，固定面板持续显示最
 
 在「设置 → 服务器 → 编辑」点击「读取设备」，按组下拉选择文件系统、GPU、CPU 核心、磁盘、网卡及细分项。选择面板支持搜索、全选、清空和反选；有搜索词时仅操作匹配结果。前台服务器页约每 2 秒发起一次采样（加上请求耗时），后台使用设置间隔；新配置默认 10 秒，旧配置保留。
 
-限额支持账户排序；账户卡默认展开，单个账户也可折叠为摘要。悬浮小窗与主窗口均按概览、账户、其他细分排列；小窗点击总 Token 浮出输入、输出与缓存明细，主窗口直接显示明细。credit 余额显示当前余额的 API 等价美元价值，下一行是每 1000 credits 的估值入口。5h／7d 额度估值合并为单行，7d 按“容量倍率／同期消耗”排列。额度估值优先采样 5h 总额度，显示 5h 价值、7d 同期换算和近期容量倍率预估；正常周期重置后自动接续，异常或提前重置后需要确认。旧 7d 采样及历史保留。价格映射区位于顶部，每个模型支持一键填入右侧模型 ID；删除映射后完整重算会清除无法匹配的旧计价。悬浮面板底部显示连接状态与更新按钮，新版本附感叹号，固定与出站测试入口位于「更多」。使用口径与验证范围见 [5h 采样和连接功能](five-hour-and-connection-improvements.md)，原有归因边界见 [限额估值与 UI 评审](quota-value-and-macos-review.md)。
+限额支持账户排序；账户卡默认展开，单个账户也可折叠为摘要。悬浮小窗与主窗口均按概览、账户、其他细分排列；小窗点击总 Token 浮出输入、输出与缓存明细，主窗口直接显示明细。credit 余额显示当前余额的 API 等价美元价值，下一行是每 1000 credits 的估值入口。5h／7d 额度估值合并为单行，7d 按“容量倍率／同期消耗”排列。额度估值优先采样 5h 总额度，显示 5h 价值、7d 同期换算和近期容量倍率预估；正常周期重置后自动接续，异常或提前重置后需要确认。旧 7d 采样及历史保留。价格映射区位于顶部，每个模型支持一键填入右侧模型 ID；删除映射后完整重算会清除无法匹配的旧计价。悬浮面板底部显示连接状态与更新按钮，新版本附感叹号，固定与出站测试入口位于「更多」。使用口径与验证范围见 [5h 采样和连接功能](five-hour-and-connection-improvements.md)。
 
 Codex 账户新增 credits 余额及每 500 / 1000 credits 的 API 等价估值。设置中的“定时唤醒”支持每天多个固定时刻、本机或 SSH Linux 部署、模型与 effort 选择；退出应用后继续执行。使用方式、归因边界和验证范围见 [Credits 与定时唤醒](credits-and-wakeups.md)。
 
@@ -94,7 +94,7 @@ node --check apps/desktop/web/tooltip.js
 sh scripts/build-macos.sh debug
 ```
 
-统一检查入口及平台要求见[手动验证与维护](manual-verification.md)，本轮代码清理方案与验收见[死代码、测试与跨平台一致性优化](dead-code-and-platform-audit-2026-10-12.md)。主题同步已包含在 `npm run test:ui --prefix apps/desktop`，也可在 debug 构建后单独运行 `node scripts/test-theme-sync-ui.cjs`；macOS 实际弹出面板明暗切换验证：`sh scripts/test-native-theme.sh`。
+统一检查入口及平台要求见[手动验证与维护](manual-verification.md)。主题同步已包含在 `npm run test:ui --prefix apps/desktop`，也可在 debug 构建后单独运行 `node scripts/test-theme-sync-ui.cjs`；macOS 实际弹出面板明暗切换验证：`sh scripts/test-native-theme.sh`。
 
 Tauri 界面在安装目标系统构建依赖后运行：
 
@@ -137,17 +137,12 @@ dist/Aieyes.app/Contents/MacOS/Aieyes --render "$PWD/.local/previews"
 - [账户、数据源、前置命令与计价](adapters.md)
 - [产品规格](product-spec.md)
 - [技术设计](architecture.md)
-- [实现与验收记录](implementation-plan.md)
-- [既有验证结果](verification.md)
-- [界面整合验收记录](ui-simplification.md)
+- [实现摘要与尚存问题](changes.md)
+- [文档索引](README.md)
 
 应用使用直接的状态与操作文案。演示数据不混入真实统计；项目不包含真实登录凭据或服务器私钥。
 
-三端交互一致性、远程命令同步和桌宠库的实现与验证见 [2026-10-14 验收记录](cross-platform-and-pet-implementation-2026-10-14.md)。此前 UI 优化见 [2026-10-07 UI 优化实施](ui-review-and-optimization-2026-10-07-implementation.md)。
-
 采样误判修复、历史结果恢复、自动账户选择和主题配置见 [采样修复与统一外观](sampling-repair-and-appearance.md)。
-
-紧凑资源布局、Antigravity 统一与分组估值的迁移和验证见 [实施记录](compact-antigravity.md)。
 
 Codex 多账号管理的启用方式、凭据协调与验收边界见 [Codex 账号管理](codex-accounts.md)。
 

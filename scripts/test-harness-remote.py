@@ -1,6 +1,5 @@
 """Harness SSH projection uses local disposable files and Node; never contacts SSH."""
 import contextlib
-import importlib.util
 import io
 import json
 import pathlib
@@ -9,12 +8,11 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from script_loader import load_script
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location('harness',ROOT/'scripts/harness_remote.py')
-h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
-spec=importlib.util.spec_from_file_location('sessions',ROOT/'scripts/session_remote.py')
-s=importlib.util.module_from_spec(spec);spec.loader.exec_module(s)
+h = load_script('harness', 'harness_remote.py')
+s = load_script('sessions', 'session_remote.py')
 FIXTURE=ROOT/'crates/core/tests/fixtures/native-agents/harness.jsonl'
 
 def compressed(data):

@@ -235,24 +235,6 @@ private struct MachineSessionHooksView: View {
     }
 }
 
-struct AgentAutomaticValuationView: View {
-    @Environment(\.dismiss) private var dismiss
-    @SurfaceModel var model: AppModel
-    let provider: String, machine: String
-    private var sources: [AgentSource] { model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && $0.isDirectorySource } }
-    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
-    var body: some View {
-        let _ = interfaceLanguage;
-        VStack(alignment: .leading, spacing: 16) {
-            Text(Format.provider(provider) + " · " + model.machineName(machine)).font(AppFont.title)
-            ScrollView { AutomaticValuationControls(model: model, sources: sources).frame(maxWidth: .infinity, alignment: .leading) }
-            HStack { Spacer(); Button(L("完成")) { dismiss() }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction).disabled(model.automaticSaving) }
-        }.padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogAutomaticWidth, height: 440).aieyesAccent()
-            .interactiveDismissDisabled(model.automaticSaving)
-            .updateOperation(L("自动估值设置"), active: model.automaticSaving)
-    }
-}
-
 struct AgentDirectoriesView: View {
     @Environment(\.dismiss) private var dismiss
     @SurfaceModel var model: AppModel
@@ -354,9 +336,6 @@ struct AccountsSettingsView: View {
     @State private var selectedAccount: AgentAccount?
     @State private var deleting: AgentAccount?
     @State private var cleanup: [AccountCleanupRecord] = []
-    @State private var sourceToManage: AgentSource?
-    @State private var authIntent = "login"
-    @State private var agySource: AgentSource?
     @State private var copilotAuth = false
     @State private var copilotDeviceFlow = false
     @State private var qoderCLI: [String: QoderCLIStatus] = [:]
@@ -428,12 +407,10 @@ struct AccountsSettingsView: View {
         .task { for agent in visibleAgents where ["qoder", "qoder-cn"].contains(agent.provider) { qoderCLI[agent.provider] = try? await model.engine.call("qoderCli.status", params: ["provider": agent.provider], as: QoderCLIStatus.self) } }
         .sheet(item: $adding, onDismiss: { Task { await model.loadAccountStatuses(refresh: true, dueOnly: true) } }) { agent in AccountConnectionView(model: model, initialProvider: agent.provider) }
         .sheet(item: $selectedAccount) { account in AccountDevicesView(model: model, account: account) }
-        .sheet(item: $agySource) { source in AntigravityLoginView(model: model, source: source) }
         .sheet(isPresented: $copilotAuth) { CopilotAuthView(model: model) }
         .sheet(isPresented: $qoderInstall) { QoderCLIInstallView(model: model, provider: qoderProvider) { qoderCLI[qoderProvider] = $0 } }
 
         .sheet(isPresented: $buddyAuth) { BuddyAuthView(model: model, provider: buddyProvider) }
-        .sheet(item: $sourceToManage, onDismiss: { Task { await model.loadAccountStatuses(refresh: true, dueOnly: true) } }) { source in AccountConnectionView(model: model, initialSourceID: source.id, intent: authIntent) }
         .sheet(item: $deleting, onDismiss: { Task { cleanup = (try? await model.engine.call("accounts.cleanup.list")) ?? [] } }) { account in DeleteArchivedAccountView(model: model, account: account) }
     }
     private func sectionKey(_ section: String) -> String { "settings.section." + (provider ?? "all") + "." + section }
@@ -494,18 +471,6 @@ struct AccountsSettingsView: View {
             if let error = model.claudeKeychainError { Text(error).font(AppFont.secondary).foregroundStyle(.red) }
         }
     }
-    private func machineRow(_ agent: AgentConfiguration, machine: String) -> some View {
-        HStack {
-            Text(model.machineName(machine)); Spacer()
-            Text(currentAccount(agent.provider, machine: machine)).font(AppFont.secondary).foregroundStyle(.secondary)
-            if agent.provider == "antigravity", let source = managementSource(agent.provider, machine: machine) { Button(L("登录 / 检查")) { agySource = source } }
-            if agent.provider == "codex", let source = managementSource(agent.provider, machine: machine) {
-                let loggedIn = model.accountStatuses.contains { $0.accountKey.hasPrefix("codex:") && $0.sourceId == source.id && ($0.current == true || $0.credential == true) }
-                if loggedIn { Button(L("切换账户")) { authIntent = "switch"; sourceToManage = source } }
-                else { Button(L("登录")) { authIntent = "login"; sourceToManage = source } }
-            }
-        }
-    }
     @ViewBuilder private var archivedSection: some View {
         if !archivedAccounts.isEmpty {
             Section(L("已归档账户")) {
@@ -544,18 +509,6 @@ struct AccountsSettingsView: View {
             do { try await model.persistConfiguration(next) }
             catch { model.settingsMessage = error.localizedDescription }
         }
-    }
-    private func managementSource(_ provider: String, machine: String) -> AgentSource? {
-        let sources = model.settings.sources.filter { $0.provider == provider && ($0.hostId ?? "local") == machine && model.settings.sourceEnabled($0) }
-        return sources.first { source in model.accountStatuses.contains { $0.sourceId == source.id && ($0.current == true || $0.credential == true) } } ?? sources.first
-    }
-    private func currentAccount(_ provider: String, machine: String) -> String {
-        let names = model.settings.accounts.filter { account in account.provider == provider && model.accountStatuses.contains { $0.accountKey == account.key && $0.machineId == machine && $0.current == true } }.map(\.name)
-        if !names.isEmpty { return L("正在使用 ") + names.joined(separator: "、") }
-        let rows = model.accountStatuses.filter { $0.accountKey.hasPrefix(provider + ":") && $0.machineId == machine }
-        if let summary = rows.first(where: { $0.identity != nil })?.identitySummary ?? rows.compactMap(\.identitySummary).first { return summary }
-        if rows.contains(where: { $0.credential == true }) { return L("已登录，尚未选用") }
-        return rows.isEmpty || rows.contains(where: { $0.current == nil || $0.credential == nil || $0.error != nil }) ? L("登录状态待确认") : L("未登录")
     }
 }
 

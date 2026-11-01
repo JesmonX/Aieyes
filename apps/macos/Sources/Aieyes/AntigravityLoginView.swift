@@ -35,7 +35,7 @@ struct AntigravityLoginView: View {
             if let identity = status?.identity { Text(identity.summary).textSelection(.enabled).foregroundStyle(status?.current == false ? Palette.warn : Color.primary) }
             if let note = status?.metadataError { Text(L(note)).font(AppFont.secondary).foregroundStyle(.secondary) }
             if let raw = status?.authUrl, let url = URL(string: raw) {
-                HStack { Link(L("打开授权网页"), destination: url); Button(L("复制授权网址")) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(raw, forType: .string) } }
+                HStack { Link(L("打开授权网页"), destination: url); Button(L("复制授权网址")) { Pasteboard.copy(raw) } }
                 SecureField(L("浏览器返回的授权码"), text: $code)
                 Button(L("提交授权码")) { let value = code; code = ""; Task { await call("submitCode", extra: ["code":value]) } }.disabled(code.isEmpty || sending)
             }

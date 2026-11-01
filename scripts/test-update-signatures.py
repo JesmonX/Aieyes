@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Exercise real update signatures with disposable keys, never the release signing identity."""
 import base64
-import importlib.util
 import os
 import pathlib
 import platform
 import shutil
 import subprocess
 import tempfile
+from script_loader import load_script
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CLI = os.environ.get('AIEYES_TAURI_CLI') or shutil.which('tauri')
@@ -48,8 +48,7 @@ with tempfile.TemporaryDirectory(prefix='aieyes-signature-test-') as temporary:
         swift = 'import Foundation; import CryptoKit; let key = try Curve25519.Signing.PrivateKey(rawRepresentation: Data(base64Encoded: readLine()!)!); print(key.publicKey.rawRepresentation.base64EncodedString())'
         public_key = run(['swift', '-e', swift], input=seed).strip()
         run(['swift', ROOT/'scripts/verify-sparkle-key.swift'], input=seed+'\n'+public_key+'\n')
-        spec = importlib.util.spec_from_file_location('signmac', ROOT/'scripts/sign-macos-update.py')
-        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        module = load_script('signmac', 'sign-macos-update.py')
         dmg = directory/'Aieyes-1.2.3-macos-x64.dmg'; dmg.write_bytes(b'fixture mac installer')
         module.create_feed(directory, '1.2.3', 'x64', '99', sign, seed, public_key, 'Test release')
         feed = directory/'appcast-macos-x64.xml'

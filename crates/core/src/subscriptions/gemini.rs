@@ -56,12 +56,8 @@ fn credential(auth: &Value) -> Result<(&str, Option<String>)> {
         "登录凭据格式无效"
     );
     if !auth["expires"].is_null() {
-        let expires = auth["expires"].as_i64().context("登录凭据格式无效")?;
-        let expires = if expires > 10_000_000_000 {
-            expires / 1000
-        } else {
-            expires
-        };
+        let expires =
+            crate::models::epoch_seconds(auth["expires"].as_i64().context("登录凭据格式无效")?);
         ensure!(expires > now(), REJECTED);
     }
     let selected = project(&auth["projectId"]);

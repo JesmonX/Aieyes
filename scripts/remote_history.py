@@ -122,9 +122,6 @@ def _agy_text(fields, number):
     value = fields.get(number, [b''])[0]
     return value.decode('utf-8') if isinstance(value, bytes) else ''
 
-def _agy_database(path):
-    return _agy_database_detailed(path)['events']
-
 
 def _agy_database_detailed(path):
     events, issues = [], []

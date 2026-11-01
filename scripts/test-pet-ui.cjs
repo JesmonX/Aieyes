@@ -69,7 +69,7 @@ function fixture(data){
   const core=path.resolve(__dirname,'../target/debug/aieyes-core'+(process.platform==='win32'?'.exe':''));
   data.pet=JSON.parse(execFileSync(core,['--data-dir',temp,'--call','pets.current','{"includeImage":true}'],{encoding:'utf8',maxBuffer:16*1024*1024}));
   fs.rmSync(temp,{recursive:true,force:true});
-  const server=http.createServer((req,res)=>{if(require('./ui-test-helpers.cjs').serveFont(req,res))return;const file=path.join(root,path.basename(new URL(req.url,'http://local').pathname)||'floating.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.html':'text/html','.js':'text/javascript','.css':'text/css','.png':'image/png'})[path.extname(file)]||'text/plain');res.end(fs.readFileSync(file));});
+  const server=http.createServer(require('./ui-test-helpers.cjs').serveWebRoot(root,'floating.html'));
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch();
   try{
     const page=await browser.newPage({viewport:{width:480,height:780}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.addInitScript(fixture,data);

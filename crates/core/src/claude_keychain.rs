@@ -20,9 +20,9 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-pub const SERVICE: &str = "Claude Code-credentials";
+const SERVICE: &str = "Claude Code-credentials";
 /// A token that Claude has since replaced is re-read at most this often.
-pub const RETRY_SECONDS: i64 = 24 * 60 * 60;
+const RETRY_SECONDS: i64 = 24 * 60 * 60;
 /// How long the user has to answer the system dialog.
 #[cfg(target_os = "macos")]
 const DIALOG_SECONDS: u64 = 120;
@@ -238,11 +238,7 @@ pub fn ask(cache: &mut Cache, run: Runner, stamp: i64, at: i64) -> Consent {
 /// Startup reads once per process: when never asked, when Claude had no Keychain item
 /// yet (the lookup itself never prompts), or silently again after an earlier grant
 /// (the token lives in memory only). A refusal is never asked again automatically.
-pub fn should_ask_at_startup(
-    consent: Option<&Consent>,
-    cache: &Cache,
-    claude_exists: bool,
-) -> bool {
+fn should_ask_at_startup(consent: Option<&Consent>, cache: &Cache, claude_exists: bool) -> bool {
     cfg!(target_os = "macos")
         && claude_exists
         && cache.token.is_none()
@@ -305,21 +301,6 @@ fn finish_query(
         .ok_or_else(|| Unavailable(reason(consent, cache)).into())
 }
 
-/// The token for one quota query, reading the item when `query_due`.
-pub fn for_query(
-    cache: &mut Cache,
-    consent: Option<&Consent>,
-    run: Runner,
-    stamp: i64,
-    at: i64,
-) -> Result<String> {
-    match begin_query(cache, consent, stamp, at) {
-        Next::Token(token) => Ok(token),
-        Next::Fail(reason) => Err(Unavailable(reason).into()),
-        Next::Read => finish_query(cache, consent, run(), stamp, at),
-    }
-}
-
 /// The token for a quota query in this process.
 pub fn query_token(consent: Option<&Consent>) -> Result<String> {
     let (stamp, at) = (stamp(&crate::store::home()), now());
@@ -368,21 +349,6 @@ fn finish_retry(
         cache.expired = true;
     }
     cache.token.clone()
-}
-
-/// The refreshed token to retry with, or None to wait for Claude.
-pub fn after_unauthorized(
-    cache: &mut Cache,
-    rejected: &str,
-    run: Runner,
-    stamp: i64,
-    at: i64,
-) -> Option<String> {
-    match begin_retry(cache, rejected, stamp, at) {
-        Next::Token(token) => Some(token),
-        Next::Fail(_) => None,
-        Next::Read => finish_retry(cache, run(), rejected, stamp, at),
-    }
 }
 
 /// Called by the quota query when `rejected` got a 401.
@@ -479,6 +445,36 @@ impl crate::Engine {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    /// `query_token` with an injected Keychain runner.
+    fn for_query(
+        cache: &mut Cache,
+        consent: Option<&Consent>,
+        run: Runner,
+        stamp: i64,
+        at: i64,
+    ) -> Result<String> {
+        match begin_query(cache, consent, stamp, at) {
+            Next::Token(token) => Ok(token),
+            Next::Fail(reason) => Err(Unavailable(reason).into()),
+            Next::Read => finish_query(cache, consent, run(), stamp, at),
+        }
+    }
+
+    /// `unauthorized` with an injected Keychain runner.
+    fn after_unauthorized(
+        cache: &mut Cache,
+        rejected: &str,
+        run: Runner,
+        stamp: i64,
+        at: i64,
+    ) -> Option<String> {
+        match begin_retry(cache, rejected, stamp, at) {
+            Next::Token(token) => Some(token),
+            Next::Fail(_) => None,
+            Next::Read => finish_retry(cache, run(), rejected, stamp, at),
+        }
+    }
 
     fn granted() -> Read {
         Read::Token("fixture-token".into())

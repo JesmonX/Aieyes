@@ -41,16 +41,7 @@ fn credits(v: &Value, precise: &str, plain: &str) -> Option<f64> {
     (n.is_finite() && n >= 0.).then_some(n)
 }
 
-/// Epoch seconds from a number (s or ms) or an RFC 3339 string.
-fn instant(v: &Value) -> Option<i64> {
-    if let Some(n) = v.as_f64() {
-        let n = n as i64;
-        return Some(if n > 10_000_000_000 { n / 1000 } else { n });
-    }
-    chrono::DateTime::parse_from_rfc3339(v.as_str()?)
-        .ok()
-        .map(|t| t.timestamp())
-}
+use crate::models::instant;
 
 /// A status the official clients count; a missing status counts too.
 fn counted(status: &Value, allowed: &[&str]) -> bool {

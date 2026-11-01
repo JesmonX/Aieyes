@@ -1,6 +1,5 @@
 """Hermetic identity/entitlement tests: never read a real credential store."""
 import base64
-import importlib.util
 import json
 import os
 import pathlib
@@ -9,10 +8,9 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from script_loader import load_script
 
-spec = importlib.util.spec_from_file_location('agy_identity', pathlib.Path(__file__).with_name('agy_identity.py'))
-agy = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(agy)
+agy = load_script('agy_identity', 'agy_identity.py')
 
 
 def credential(sub='one', email='one@example.test'):

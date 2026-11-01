@@ -1,15 +1,14 @@
 """Native session metadata -> SSH process association; no model/account calls."""
 import contextlib
-import importlib.util
 import json
 import pathlib
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from script_loader import load_script
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('sessions', ROOT/'scripts/session_remote.py')
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m = load_script('sessions', 'session_remote.py')
 
 class ProcessTests(unittest.TestCase):
     def tearDown(self):

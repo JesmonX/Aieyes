@@ -1,8 +1,8 @@
 # Agent 订阅、原生用量与账户接入
 
-2026-10-19 原生客户端安装、目录、真实模型调用、Kimi 额度与额外用量钱包、Harness 官方 API 余额、Qoder CLI Credits 及剩余验收项见[原生 Agent 验证记录](native-agent-verification.md)。下文套餐研究保留 2026-10-15 核实口径。
+下文套餐研究保留 2026-10-15 核实口径；各 Agent 的验收状态与剩余项见[实现摘要与尚存问题](changes.md)。
 
-2026-10-31 的 ZCode、Grok、DSH 原生凭据格式和查询修正见[原生账户审计](native-account-audit-2026-10-31.md)。以下使用及接口说明反映该次修正。
+以下使用及接口说明反映 2026-10-31 对 ZCode、Grok、DSH 原生凭据格式和查询的修正。
 
 核实日期：2026-10-15。价格用于说明计费边界，不作为运行时额度分母；账户返回的额度、周期和套餐名称优先。
 
@@ -175,9 +175,9 @@ Qoder 原生 assistant 的 `usage.credits` 作为独立请求计量读取，保�
 
 OpenCode 额外支持本机 `opencode.db`：v1 `message` 和 v2 `session_message`。只取已完成 assistant 的模型、时间、Token 和稳定 ID，排除正文、未完成消息；v2 有真实数据时优先读取 v2，预建空表不会遮住仍在使用的 v1 记录。OpenCode reasoning 独立于 output，转为 Aieyes 的 output 包含 reasoning 口径；输入、缓存读取和缓存写入互斥。重复扫描幂等。本机与 SSH 使用 rowid 增量游标，每轮额外检查最多 256 条未完成请求，无变化时不读取旧行；已结算记录的人工修改通过显式 rescan 重放。新增来源遵循 `XDG_DATA_HOME/opencode`，已有来源保留明确路径。
 
-Pi / Oh My Pi 已接入原生日志、生命周期与本机 API 配置保存，分别使用 `~/.pi/agent`、`~/.omp/agent`（支持原生环境目录和 OMP Profile）。分叉与旧会话升级保持请求身份，缓存与推理 Token 按原生口径处理。二者没有统一客户端额度，额度属于实际模型服务商；本地用量和预估费用不代表余额。真实调用、SSH 与性能结果见[原生 Agent 验收记录](native-agent-verification.md)。
+Pi / Oh My Pi 已接入原生日志、生命周期与本机 API 配置保存，分别使用 `~/.pi/agent`、`~/.omp/agent`（支持原生环境目录和 OMP Profile）。分叉与旧会话升级保持请求身份，缓存与推理 Token 按原生口径处理。二者没有统一客户端额度，额度属于实际模型服务商；本地用量和预估费用不代表余额。
 
-OpenCode / ZCode 的 SSH SQLite 统计通过只读元数据投影读取；其他来源也可导出标准 JSONL，凭据不复制到 SSH。历史默认属于设备来源，不能由本机日志推断整个账户的剩余额度。Cursor 私有会话库未声明为已支持。新增原生路径与 SSH 实测边界见[验证记录](native-agent-verification.md)。
+OpenCode / ZCode 的 SSH SQLite 统计通过只读元数据投影读取；其他来源也可导出标准 JSONL，凭据不复制到 SSH。历史默认属于设备来源，不能由本机日志推断整个账户的剩余额度。Cursor 私有会话库未声明为已支持。
 
 Cursor 新来源默认指向 `~/.cursor`，可在用户或项目的 `.cursor/hooks.json` 安装、停用或修复只读状态观察器。该路径用于生命周期事件，CLI 的 `CURSOR_CONFIG_DIR` 不迁移用户 Hooks；私有数据库中的上下文 Token 不计入请求用量。发现私有库时明确提示 Token 读取尚未接入；标准 JSONL 可放在 `~/.cursor/imports`，也可继续选择原有导出文件或目录。用户没有 Cursor 账号，已明确排除登录及依赖账号的真实事件触发验收。
 
@@ -195,7 +195,7 @@ Cursor 新来源默认指向 `~/.cursor`，可在用户或项目的 `.cursor/hoo
 
 `cargo test --workspace --locked` 覆盖解析、缺失字段、比例单位、地区隔离、登录过期/多账户歧义、HTTP 重定向/错误脱敏、只读 SQLite、重复导入与失败建账。`node scripts/test-subscriptions-ui.cjs` 使用真实核心配置和模拟服务凭据，验证七种表单（含 Kimi Code 与 Harness）、官网打开、失败重试、取消和成功保存。该浏览器测试已纳入现有 Windows/Linux CI，现有 Core/macOS CI 检查三平台 Rust 和 Swift 编译。
 
-Qoder 本机现有登录已完成真实额度和身份查询（套餐余额为 0 Credits）；其余付费接口的验收边界见[验证记录](native-agent-verification.md)。接口变动需要脱敏样例和真实账户回归，不能仅凭合成测试宣称兼容全部套餐。
+Qoder 本机现有登录已完成真实额度和身份查询（套餐余额为 0 Credits）；其余付费接口的验收边界见[实现摘要与尚存问题](changes.md#尚存问题)。接口变动需要脱敏样例和真实账户回归，不能仅凭合成测试宣称兼容全部套餐。
 
 
 ### Kiro（CLI 与 IDE，2026-10-31 核对）

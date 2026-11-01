@@ -85,17 +85,9 @@ label:has(> input[type=checkbox]:disabled) { color:var(--muted); cursor:default;
 .subscription-badge { display:inline-block; max-width:120px; padding:3px 6px; border-radius:var(--radius-pill); background:var(--surface-sunken); color:var(--ink); font-size:var(--font-secondary); line-height:var(--line-secondary); font-weight:var(--weight-strong); white-space:nowrap; }
 .quota-subscription { display:flex; justify-content:center; flex:0 1 var(--quota-badge-width); min-width:0; }
 .quota-subscription .subscription-badge { max-width:100%; }
-.estimate-summary { display:grid; gap:6px; font-size:var(--font-secondary); margin-top:6px; }
-.estimate-summary:empty { display:none; }
-.estimate-summary small { display:block; font-size:var(--font-caption); color:var(--muted); }
-.estimate-summary p { margin:0; }
-.estimate-amount { color:var(--ink); font-weight:var(--weight-strong); font-variant-numeric:tabular-nums; }
 .panel-account-group legend button { margin-left:8px; font-size:var(--font-entry); }
 /* Settings sit on the window backdrop, using the floating panel's card finish. */
 .settings-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:var(--space-layout); align-items:start; }
-.settings-sidebar { display:flex; flex-direction:column; gap:6px; position:sticky; top:12px; padding:7px; border-radius:var(--radius-overlay); background:transparent; }
-.settings-sidebar button { width:100%; min-height:var(--control-md); padding:4px 10px; text-align:left; justify-content:flex-start; border:0; box-shadow:none; background:transparent; font-size:var(--font-body); white-space:nowrap; }
-.settings-sidebar button.active { color:var(--accent-text); background:var(--soft); }
 .settings-subpage { min-width:0; display:grid; gap:var(--settings-section-gap); container:settings-form / inline-size; }
 .settings-subpage > .card { margin:0; }
 .settings-block .card { background:var(--settings-card-fill); border-color:var(--card-border); }
@@ -227,19 +219,12 @@ dialog[open] { animation:control-reveal .18s var(--ease); }
 }
 @media(max-width:700px) { .settings-layout { grid-template-columns:minmax(0,1fr); gap:12px; } .settings-subpage .list-row { flex-wrap:wrap; } }
 .api-connection + .api-connection { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
-.api-price-row { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 12px; margin: 12px 0; }
-.api-launch-command { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-.billing-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-.billing-grid > div { display: grid; gap: 5px; min-width: 0; }
-.billing-grid strong { font-size: var(--font-panel-title); overflow-wrap: anywhere; }
-.billing-grid small, .billing-grid span { color: var(--muted); }
-@media (max-width: 700px) { .billing-grid { grid-template-columns: 1fr; } .billing-grid > div { grid-template-columns: 1fr auto; } .billing-grid small { grid-column: 1 / -1; } }
 @media(max-width:700px) { .form-row { grid-template-columns:1fr; gap:6px; } }
 .native-connections .row-body{min-width:0;overflow-wrap:anywhere}
 .account-agent-group > .between{flex-wrap:wrap;gap:8px}
 .agent-selector.server-selector{margin-bottom:12px;max-width:100%;overflow-x:auto;flex-wrap:nowrap}
 .server-selector button{flex:none;white-space:nowrap}
-/* Control sizes (docs/ui-review-and-optimization-2026-10-26.md §5.1). Buttons default to control-sm
+/* Control sizes (docs/ui-control-spec.md). Buttons default to control-sm
    (cards, rows, filters); page actions, forms, dialogs, menus and segmented selectors use control-md,
    which the panel's compact density shrinks to 28px. Rows centre their controls so a taller
    neighbour never stretches a button into another height. */
@@ -310,7 +295,7 @@ html[data-platform=windows] :is(.dialog-foot,.dialog-actions) > [role=status] { 
 @media(forced-colors:active) {
   button.danger,button.danger:enabled:hover,button.danger:enabled:active { background:Canvas; color:ButtonText; border-color:ButtonText; }
   button,input,select,textarea,dialog,.panel-menu,.panel-more-menu,.refresh-menu,.multi-panel,.hint { background:Canvas; color:CanvasText; border-color:ButtonText; }
-  nav button.active,aside nav button.active,.settings-sidebar button.active,.panel-tabs button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true] { forced-color-adjust:none; background:Highlight; color:HighlightText; box-shadow:none; }
+  nav button.active,aside nav button.active,.panel-tabs button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true] { forced-color-adjust:none; background:Highlight; color:HighlightText; box-shadow:none; }
   .primary,.primary:enabled:hover,.primary:enabled:active { forced-color-adjust:none; background:Highlight; color:HighlightText; border-color:ButtonText; box-shadow:none; }
   .primary:disabled { background:Canvas; color:GrayText; border-color:GrayText; }
   input[type=checkbox]:not([role=switch]),input[type=checkbox]:not([role=switch]):is(:checked,:indeterminate,:enabled:hover) { appearance:auto; accent-color:auto; background:revert; border:revert; box-shadow:none; }

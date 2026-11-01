@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -7,10 +6,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from script_loader import load_script
 
-spec = importlib.util.spec_from_file_location('repair', Path(__file__).with_name('repair-legacy-account-history.py'))
-repair = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(repair)
+repair = load_script('repair', 'repair-legacy-account-history.py')
 
 
 class LegacyHistoryTests(unittest.TestCase):

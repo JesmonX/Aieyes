@@ -802,8 +802,7 @@ private struct DailyUsageDay: View {
         }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
             .accessibilityElement(children: .combine).accessibilityLabel(label)
             .contextMenu { Button(L("复制模型与精确数值")) {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(day + "\t" + (modelNames[row.model] ?? row.model) + "\t" + value, forType: .string)
+                Pasteboard.copy(day + "\t" + (modelNames[row.model] ?? row.model) + "\t" + value)
             } }
     }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
@@ -874,7 +873,7 @@ struct ModelChart: View, Equatable {
                             .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + DesignTokens.fontSecondary * 0.35 }
                         VStack(alignment: .leading, spacing: 3) { Text(modelNames[item.key] ?? item.key).font(AppFont.secondary).textSelection(.enabled).help(modelNames[item.key] ?? item.key); Text((cost ? Format.money(item.cost) + " USD" : Format.compact(item.total) + " Token") + " · " + Format.percent(total > 0 ? value(item) / total * 100 : 0)).font(AppFont.secondary).monospacedDigit().foregroundStyle(.secondary) }
                     }
-                        .contextMenu { Button(L("复制模型与精确数值")) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString((modelNames[item.key] ?? item.key) + "\t" + String(item.total) + " Token\t" + String(item.cost) + " USD", forType: .string) } }
+                        .contextMenu { Button(L("复制模型与精确数值")) { Pasteboard.copy((modelNames[item.key] ?? item.key) + "\t" + String(item.total) + " Token\t" + String(item.cost) + " USD") } }
                 }
                 if ranked.count > 5 { Button(showAll ? L("收起其他模型") : L("展开其他 {0} 个模型" , ranked.count - 5)) { showAll.toggle() }.font(AppFont.secondary) }
             }.frame(maxWidth: .infinity, alignment: .leading)

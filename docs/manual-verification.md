@@ -4,7 +4,7 @@
 
 自动化入口：`sh scripts/ci-checks.sh [--rust]`、`npm run test:ui --prefix apps/desktop`、`sh scripts/test-native.sh`。共享检查包含发布、采集、唤醒、增量历史、旧账户历史、Antigravity 身份、Node 交互、重置格式及生成契约；远端 Codex 权限/锁测试依赖 POSIX，在 Unix 检查任务执行。Web 测试链包含真实核心的主题同步；`verify-models.swift` 在原生测试链中使用真实核心输出。面板偏好和重置格式由两端读取同一组 JSON 夹具。
 
-统一工作区的导航、账户摘要、筛选隔离与本轮验证结果见 [2026-10-15 工作区 UI 改版](workspace-redesign-2026-10-15.md)。`node scripts/test-workspace-ui.cjs` 可单独运行工作区交互检查并生成 Web 预览，原生 24 张截图矩阵的命令见该记录。
+`node scripts/test-workspace-ui.cjs` 可单独运行工作区交互检查并生成 Web 预览。
 
 以下工具保留为按需验证或维护入口；性能基准、真实联网下载及截图矩阵不作为每次 CI 的默认步骤。
 
@@ -21,7 +21,7 @@
 | [benchmark-runtime-hotpaths.py](../scripts/benchmark-runtime-hotpaths.py) | `python3 scripts/benchmark-runtime-hotpaths.py --before <旧核心>`，合成采样历史与未变化会话读取对照 |
 | [test-estimate-display.py](../scripts/test-estimate-display.py) | `python3 scripts/test-estimate-display.py`，调用真实核心并比较 Web/Swift 完整历史与展示投影；已纳入性能 UI 套件 |
 | [benchmark-remote-history.py](../scripts/benchmark-remote-history.py) | `python3 scripts/benchmark-remote-history.py`，全量与增量采集性能对照 |
-| [verify-update-transfer.swift](../scripts/verify-update-transfer.swift) | 可选真实联网读取、下载和签名校验；需要包含 Sparkle 更新源、公钥的临时 plist，见 [传输说明](macos-performance-and-update-transport.md)；不安装更新 |
+| [verify-update-transfer.swift](../scripts/verify-update-transfer.swift) | 可选真实联网读取、下载和签名校验；需要包含 Sparkle 更新源、公钥的临时 plist；不安装更新 |
 | [test-ui-native-render.sh](../scripts/test-ui-native-render.sh) | `sh scripts/test-ui-native-render.sh`，合成场景原生截图矩阵；可用 `AIEYES_RENDER_BINARY`、`AIEYES_RENDER_ROOT` 指定构建与输出 |
 
 Tauri 宿主测试先运行 `node scripts/prepare-wakeup.cjs --debug`，再运行 `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked --features custom-protocol`。Windows/macOS Tauri 测试在上述 Cargo 命令中增加 `--features native-tray`；Linux 不启用此特性。打包资源只匹配真实核心二进制，CI 也按此顺序准备资源。
@@ -36,7 +36,7 @@ Tauri 宿主测试先运行 `node scripts/prepare-wakeup.cjs --debug`，再运�
 
 ## 2026-10-26 界面优化：实机验收清单
 
-[优化方案](ui-review-and-optimization-2026-10-26.md) 阶段 2 的原生改动无法在 CI 中完成验收，按平台和系统版本记录如下。“已验证”注明日期与方式，其余项发布前需在真实桌面逐项确认。
+2026-10-26 UI 优化阶段 2 的原生改动无法在 CI 中完成验收，按平台和系统版本记录如下。“已验证”注明日期与方式，其余项发布前需在真实桌面逐项确认。
 
 **Windows 11 25H2（build 26200）**：2026-10-27 用 dev 构建运行 `pwsh -File scripts/test-windows-panel.ps1 -VerifyMaterials`，43 项检查通过；2026-10-28 用含 W-12、W-16 改动的 dev 构建复跑，46 项检查通过。
 
@@ -80,6 +80,6 @@ Tauri 宿主测试先运行 `node scripts/prepare-wakeup.cjs --debug`，再运�
 
 ## 2026-10-28 后续实施验收
 
-完整变更、已通过检查和剩余人工项见 [三端 UI 实施记录](ui-implementation-2026-10-28.md)。Windows 新增 `powershell -File scripts/test-windows-preferences.ps1 -Binary <开发包 exe>`，需要普通权限交互会话、Node 和 Playwright；临时小时制及透明度在 finally 恢复。macOS GUI 中运行 `sh scripts/test-native-navigation.sh`，验证真实 List 选择、标题、页面保留与折叠栏。
+剩余人工项汇总见[实现摘要与尚存问题](changes.md#尚存问题)。Windows 新增 `powershell -File scripts/test-windows-preferences.ps1 -Binary <开发包 exe>`，需要普通权限交互会话、Node 和 Playwright；临时小时制及透明度在 finally 恢复。macOS GUI 中运行 `sh scripts/test-native-navigation.sh`，验证真实 List 选择、标题、页面保留与折叠栏。
 
 Linux 先在隔离桌面会话中设置 `AIEYES_DATA_DIR=<绝对临时目录>`，再从相同环境启动 `WebKitWebDriver --port=4445`。运行 `python3 scripts/test-linux-native.py --binary <实际 Tauri 二进制> --data-dir <同一临时目录> --backend wayland --output <证据目录>`；X11 使用 `--backend x11`。脚本仅清理二进制路径与数据目录同时匹配的测试进程。

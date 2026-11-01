@@ -51,7 +51,7 @@ pub fn window<'a>(q: &'a QuotaSnapshot, minutes: i64, group: &str) -> Option<&'a
     let first = rows.next();
     if rows.next().is_none() { first } else { None }
 }
-pub fn scope_key(account: &str, group: &str) -> String {
+fn scope_key(account: &str, group: &str) -> String {
     if group.is_empty() {
         account.into()
     } else {

@@ -1,9 +1,10 @@
 import contextlib
 import importlib.util,json,os,pathlib,sqlite3,subprocess,sys,tempfile,unittest
 from unittest.mock import patch
+from script_loader import load_script
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location('sessions',ROOT/'scripts/session_remote.py')
-m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);m.SCRIPT=(ROOT/'scripts/session_remote.py').read_text()
+m = load_script('sessions', 'session_remote.py')
+m.SCRIPT=(ROOT/'scripts/session_remote.py').read_text()
 class ObserverTests(unittest.TestCase):
     def test_kiro_cli_and_ide_metadata_keep_parent_and_headless_classification(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -51,15 +51,12 @@ body[data-view=panel] { display:block; justify-items:normal; user-select:text; }
 .panel-body .quota-heading h2,.panel-body .section-head:not(.overview-heading) > h2 { font-size:var(--font-panel-title); line-height:26px; }
 .panel-body .quota-title { flex-wrap:nowrap; }
 .panel-body .quotas { grid-template-columns:1fr; gap:12px; }
-.panel-chart { height:var(--chart-height); }
 .panel-body .daily-table { max-height:280px; }
 .panel-body .onboarding h2 { font-size:var(--font-section); }
 .panel-body .onboarding p { font-size:var(--font-panel-body); margin-bottom:12px; }
-.panel-wide { width:100%; }
 .panel-body .sampling-banner { padding:4px 0; min-height:var(--control-height); border:0; font-size:var(--font-secondary); }
-.panel-filter-summary,.panel-account-empty { font-size:var(--font-secondary); }
+.panel-filter-summary { font-size:var(--font-secondary); }
 .panel-filter-summary .active-filters { margin-top:6px; }
-.panel-body #message .error-list { max-height:70px; }
 .panel-body .card:has(> details[data-agent-detail=panel-trend]) { padding:0; border:0; background:transparent; }
 .panel-body details[data-agent-detail=panel-trend] > summary h2 { display:inline; margin:0; font-size:var(--font-secondary); font-weight:var(--weight-regular); }
 .panel-body .card h2 { font-size:var(--font-card-title); }

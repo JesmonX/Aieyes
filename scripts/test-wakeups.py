@@ -3,7 +3,6 @@ from types import SimpleNamespace
 from contextlib import closing
 import datetime
 import base64
-import importlib.util
 import json
 import os
 import pathlib
@@ -16,9 +15,9 @@ import threading
 import time
 import unittest
 from unittest.mock import Mock, patch
+from script_loader import load_script
 
-spec=importlib.util.spec_from_file_location('wake',pathlib.Path(__file__).with_name('remote_wakeup.py'))
-wake=importlib.util.module_from_spec(spec);spec.loader.exec_module(wake)
+wake = load_script('wake', 'remote_wakeup.py')
 
 class WakeTests(unittest.TestCase):
     def test_next_run_uses_real_full_minutes(self):
@@ -64,9 +63,7 @@ class WakeTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == 'posix', 'Remote runner requires a POSIX host')
     def test_profile_probe_passes_initialization_to_auth_helper(self):
-        spec = importlib.util.spec_from_file_location('auth_helper', pathlib.Path(__file__).with_name('remote_codex_auth.py'))
-        helper = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(helper)
+        helper = load_script('auth_helper', 'remote_codex_auth.py')
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary).resolve()
             claims = {'https://api.openai.com/auth': {'chatgpt_user_id': 'fixture', 'chatgpt_account_id': 'team'}}

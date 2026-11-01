@@ -1,7 +1,6 @@
 """Read-only SSH config transport, using temporary fixtures only."""
 import base64
 import contextlib
-import importlib.util
 import json
 import sqlite3
 import os
@@ -9,10 +8,9 @@ import pathlib
 import tempfile
 import unittest
 from unittest.mock import patch
+from script_loader import load_script
 
-spec = importlib.util.spec_from_file_location('account_scan', pathlib.Path(__file__).with_name('remote_account_scan.py'))
-scan = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(scan)
+scan = load_script('account_scan', 'remote_account_scan.py')
 
 
 class NativeTransport(unittest.TestCase):

@@ -1,17 +1,14 @@
 """Installed ZCode 3.15.3 credential protocol; no real login files or requests."""
 import base64
-import importlib.util
 import json
 import os
 import pathlib
 import tempfile
 import unittest
 from unittest.mock import patch
+from script_loader import load_script
 
-spec = importlib.util.spec_from_file_location(
-    'account_scan', pathlib.Path(__file__).with_name('remote_account_scan.py'))
-scan = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(scan)
+scan = load_script('account_scan', 'remote_account_scan.py')
 
 # Node crypto AES-256-GCM: SHA256("test-secret"), 12 bytes of 0x05, "zai".
 CIPHER = 'enc:v1:BQUFBQUFBQUFBQUF.N6rUk4dZmqwly8-sZzrbtA.ffbf'

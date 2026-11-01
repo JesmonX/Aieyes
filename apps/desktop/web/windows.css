@@ -5,7 +5,6 @@
    owned by tokens.css. Glass is painted once per surface, never once per row. */
 html[data-platform=windows] {
   --win-spring:cubic-bezier(.22,1.35,.36,1);
-  --win-settle:cubic-bezier(.2,.8,.2,1);
   --win-edge:rgb(255 255 255 / var(--edge-highlight-opacity));
   --window-edge:var(--win-edge); --highlight:var(--win-edge);
   --win-sheen:none;

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Exercise the production Swift AppModel cache against isolated real core IPC."""
 import argparse
-import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from script_loader import load_script
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,9 +23,7 @@ def main():
     data.mkdir()
     logs = output/'rpc'
     logs.mkdir()
-    spec = importlib.util.spec_from_file_location('benchmark', ROOT/'scripts/benchmark-performance.py')
-    benchmark = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(benchmark)
+    benchmark = load_script('benchmark', 'benchmark-performance.py')
     settings = benchmark.seed(data, 10000, binary)
     for source in settings['sources']:
         path = output/'empty'/source['id']

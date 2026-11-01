@@ -25,7 +25,7 @@ use keyring::Error as SecretError;
 use keyring_core::Error as SecretError;
 const SSH: &str = "app.aieyes.ssh";
 /// Tokens Aieyes was granted directly; agent-owned credentials are never copied here.
-pub const AGENTS: &str = "app.aieyes.agents";
+const AGENTS: &str = "app.aieyes.agents";
 fn entry(reference: &str) -> Result<SecretEntry> {
     entry_in(SSH, reference)
 }

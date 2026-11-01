@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Offline regressions for the opt-in live scripts; never launch native clients."""
-import importlib.util
 import json
 import pathlib
 import queue
@@ -10,19 +9,13 @@ import tempfile
 import types
 import unittest
 from unittest import mock
+from script_loader import load_script
 
 ROOT = pathlib.Path(__file__).resolve().parent
 
 
-def module(name, filename):
-    spec = importlib.util.spec_from_file_location(name, ROOT / filename)
-    result = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(result)
-    return result
-
-
-live = module('live', 'verify-agent-integration-live.py')
-lifecycle = module('lifecycle', 'verify-agent-lifecycle-live.py')
+live = load_script('live', 'verify-agent-integration-live.py')
+lifecycle = load_script('lifecycle', 'verify-agent-lifecycle-live.py')
 
 
 class LiveAuditTests(unittest.TestCase):

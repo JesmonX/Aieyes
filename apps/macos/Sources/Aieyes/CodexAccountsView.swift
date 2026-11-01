@@ -270,8 +270,7 @@ struct CodexAccountsView: View {
         if source?.codexHomeId == nil { let _: Acknowledgement = try await call("enable"); try await settingsChanged() }
     }
     private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        if NSPasteboard.general.setString(text, forType: .string) { notice = L("已复制") } else { error = L("复制失败，请重试") }
+        if Pasteboard.copy(text) { notice = L("已复制") } else { error = L("复制失败，请重试") }
     }
     private func perform(_ action: @escaping @MainActor () async throws -> Void) {
         guard !busy else { return }; busy = true; error = nil; notice = nil

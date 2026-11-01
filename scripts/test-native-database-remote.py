@@ -1,6 +1,5 @@
 """Actual SQLite reads against disposable native schemas; no SSH or credentials."""
 import contextlib
-import importlib.util
 import json
 import os
 import pathlib
@@ -11,11 +10,10 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from script_loader import load_script
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('native', ROOT / 'scripts/native_database_remote.py')
-m = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
+m = load_script('native', 'native_database_remote.py')
 
 
 @contextlib.contextmanager

@@ -1,14 +1,12 @@
 """Qoder setup must preserve existing user startup files on read failures."""
-import importlib.util
 import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from script_loader import load_script
 
-spec = importlib.util.spec_from_file_location('qoder_env', Path(__file__).with_name('qoder_env_remote.py'))
-env = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(env)
+env = load_script('qoder_env', 'qoder_env_remote.py')
 
 
 class QoderEnvironmentTests(unittest.TestCase):

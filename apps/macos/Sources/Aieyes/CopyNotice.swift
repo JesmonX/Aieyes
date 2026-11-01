@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ErrorNotice: View {
     var message: String
@@ -17,5 +18,13 @@ struct ErrorNotice: View {
                 }.foregroundStyle(.secondary)
             }
         }.font(AppFont.secondary)
+    }
+}
+
+enum Pasteboard {
+    /// Replaces the general pasteboard contents with plain text.
+    @discardableResult static func copy(_ text: String) -> Bool {
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.setString(text, forType: .string)
     }
 }

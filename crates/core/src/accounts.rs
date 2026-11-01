@@ -285,7 +285,7 @@ pub(crate) fn record_agy_status(
     row.as_object_mut().unwrap().remove("authRevision");
     Ok(row)
 }
-pub fn task_uses(account: &Account, settings: &Settings, record: &crate::wakeups::Record) -> bool {
+fn task_uses(account: &Account, settings: &Settings, record: &crate::wakeups::Record) -> bool {
     let task_matches = |task: &crate::wakeups::Task| {
         task.codex_profile_id
             .as_deref()

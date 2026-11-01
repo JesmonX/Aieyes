@@ -103,7 +103,7 @@ pub(crate) fn expired_at(kind: &str, entry: &Value) -> Option<i64> {
     entry["expires"]
         .as_i64()
         .filter(|t| *t > 0)
-        .map(|t| if t > 10_000_000_000 { t / 1000 } else { t })
+        .map(crate::models::epoch_seconds)
         .filter(|t| *t <= now())
 }
 

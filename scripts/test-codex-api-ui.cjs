@@ -42,7 +42,7 @@ function fixture(){
 }
 (async()=>{
   const root=path.resolve(__dirname,'../apps/desktop/web');
-  const server=http.createServer((req,res)=>{if(serveFont(req,res))return;const file=path.join(root,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('Content-Type',({'.js':'application/javascript','.css':'text/css','.html':'text/html'})[path.extname(file)]||'text/plain');res.end(fs.readFileSync(file));});
+  const server=http.createServer(require('./ui-test-helpers.cjs').serveWebRoot(root));
   await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
   try{
     browser=await chromium.launch({headless:true});

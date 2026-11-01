@@ -1246,20 +1246,6 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     func discardSettingsDraft() {
         settingsDraft = settings; settingsMessage = nil; settingsValidationField = nil; mappingModel = ""; mappingID = ""
     }
-    func setLanguage(_ language: String) async {
-        guard settingsLoaded else { return }
-        let draftLanguage = settingsDraft.appearance?.language ?? "zh-CN"
-        var next = settings
-        var appearance = next.appearance ?? AppearanceSettings()
-        appearance.language = AieyesLocale.normalize(language)
-        next.appearance = appearance
-        guard await save(next, refreshDashboard: false) else { return }
-        var draft = settingsDraft.appearance ?? AppearanceSettings()
-        if draft.language == draftLanguage {
-            draft.language = appearance.language
-            settingsDraft.appearance = draft
-        }
-    }
     func setTheme(_ theme: String) async {
         guard settingsLoaded, ["system", "light", "dark"].contains(theme), (settings.appearance?.theme ?? "system") != theme else { return }
         let draftTheme = settingsDraft.appearance?.theme ?? "system"

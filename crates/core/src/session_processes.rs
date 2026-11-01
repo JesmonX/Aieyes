@@ -54,10 +54,7 @@ fn absolute(value: &str) -> Option<PathBuf> {
 }
 fn stamp(value: &Value) -> u64 {
     crate::models::timestamp(value)
-        .map(|v| {
-            let v = v.max(0) as u64;
-            if v > 10_000_000_000 { v / 1000 } else { v }
-        })
+        .map(|v| crate::models::epoch_seconds(v.max(0)) as u64)
         .unwrap_or(0)
 }
 fn metadata(value: &Value, context: &mut Context) {

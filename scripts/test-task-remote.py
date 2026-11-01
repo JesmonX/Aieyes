@@ -1,7 +1,6 @@
 """Official Cline/Roo layouts and real CLI metadata; no account or SSH required."""
 import contextlib
 import datetime
-import importlib.util
 import io
 import json
 import os
@@ -12,14 +11,11 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+from script_loader import load_script
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('tasks', ROOT / 'scripts/task_remote.py')
-tasks = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(tasks)
-spec = importlib.util.spec_from_file_location('sessions', ROOT / 'scripts/session_remote.py')
-sessions = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(sessions)
+tasks = load_script('tasks', 'task_remote.py')
+sessions = load_script('sessions', 'session_remote.py')
 CURRENT = json.loads((ROOT / 'crates/core/tests/fixtures/native-agents/cline-current.json').read_text())
 
 

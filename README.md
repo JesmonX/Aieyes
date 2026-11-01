@@ -36,7 +36,7 @@ macOS uses a native SwiftUI/AppKit interface. Windows and Linux share the Tauri 
 
 Codex · Claude Code · Antigravity · DeepSeek · ZCode · Qoder · Grok · Cursor · OpenCode · Kimi · Harness · CodeBuddy · Pi · Oh My Pi
 
-History, quota queries, API setup and session status vary by integration. For example, Cursor’s private request-level token database is not a supported history source. See [integration details](docs/agent-subscriptions.md) and [native-agent verification](docs/native-agent-verification.md) for the current capabilities.
+History, quota queries, API setup and session status vary by integration. For example, Cursor’s private request-level token database is not a supported history source. See [integration details](docs/agent-subscriptions.md) for the current capabilities.
 
 ## Get started
 

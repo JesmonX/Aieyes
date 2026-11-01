@@ -13,16 +13,11 @@ impl Models {
     pub fn load(settings: &std::path::Path) -> Result<Self> {
         let path = settings.with_file_name("models.json");
         files::safe(&path)?;
-        let original = match std::fs::File::open(&path) {
-            Ok(file) => {
-                let mut bytes = Vec::new();
-                file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
-                ensure!(bytes.len() <= 1024 * 1024, "CodeBuddy 模型配置文件过大");
-                Some(bytes)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(_) => anyhow::bail!("无法读取 CodeBuddy 模型配置"),
-        };
+        let original = read_config(
+            &path,
+            "CodeBuddy 模型配置文件过大",
+            "无法读取 CodeBuddy 模型配置",
+        )?;
         let revision = original
             .as_ref()
             .map_or_else(|| "missing".into(), |b| digest(b));

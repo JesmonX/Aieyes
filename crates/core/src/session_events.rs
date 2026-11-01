@@ -48,7 +48,7 @@ fn field(v: &Value, names: &[&str]) -> String {
 pub const HEADLESS: &str = "headless";
 pub const INTERACTIVE: &str = "interactive";
 pub const INTERNAL: &str = "internal";
-pub const UNKNOWN: &str = "unknown";
+const UNKNOWN: &str = "unknown";
 /// Session source of processes Aieyes spawns itself (`AIEYES_INTERNAL=1`).
 pub const INTERNAL_SOURCE: &str = "aieyes-internal";
 

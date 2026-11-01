@@ -535,16 +535,7 @@ fn kiro_auth(db: &rusqlite::Connection) -> Result<Value> {
     out.insert("profileArn".into(), profile["arn"].clone());
     Ok(json!({ "kiro": out }))
 }
-/// Seconds since the epoch from a number (s or ms) or an RFC 3339 string.
-fn epoch(value: &Value) -> Option<i64> {
-    if let Some(n) = value.as_f64() {
-        let n = n as i64;
-        return Some(if n > 10_000_000_000 { n / 1000 } else { n });
-    }
-    chrono::DateTime::parse_from_rfc3339(value.as_str()?)
-        .ok()
-        .map(|t| t.timestamp())
-}
+use crate::models::instant as epoch;
 /// Kiro login rows: kiro-cli's database and the IDE's `kiro-auth-token.json`.
 /// The credential is `{accessToken, profileArn}`; the API region comes from the
 /// ARN. kiro-cli keeps the ARN in `state` (social tokens also carry it); the IDE
@@ -1803,7 +1794,7 @@ fn login(
         .or(access["exp"].as_i64());
     // The native client refreshes its own token on next launch; stay quiet for a day.
     if let Some(at) = expires
-        .map(|t| if t > 10_000_000_000 { t / 1000 } else { t })
+        .map(crate::models::epoch_seconds)
         .filter(|t| *t <= now())
     {
         row.connection.token_expired_at = Some(at);
@@ -4384,7 +4375,11 @@ impl Engine {
         Ok(())
     }
     pub(crate) fn refresh_native_connections(&mut self, params: &Value) -> Result<()> {
-        if !std::env::var("AIEYES_AUTO_SCAN").is_ok_and(|value| value == "off") {
+        #[cfg(test)]
+        let off = self.native_discovery_off;
+        #[cfg(not(test))]
+        let off = false;
+        if !off && !std::env::var("AIEYES_AUTO_SCAN").is_ok_and(|value| value == "off") {
             let _lock = crate::file_lock::history(&self.store.root, "native-discovery")?;
             let settings = self.store.settings()?;
             let mut changed = self.changed_local_targets(&settings)?;

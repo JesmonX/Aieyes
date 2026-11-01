@@ -94,7 +94,7 @@ OpenRouter 请求路径为 `/api/v1/models`；读取 `pricing.prompt`、`complet
 
 ## Antigravity 与 DeepSeek
 
-`provider: "antigravity"` 通过 Python 3 / curl 调用 `loadCodeAssist` 和 `retrieveUserQuotaSummary`，投影模型组窗口、重置时间和实际返回的 AI Credits。仅使用现有 access token，已知过期时不发 HTTP 请求；不执行 `/usage`，避免 CLI 自行刷新 OAuth。支持 SSH 和限额查询前置命令；`agyBinary` 继续用于显式登录流程。查询优先使用该机器的 CLI 登录；没有 CLI 凭据时读取默认 Antigravity IDE 的只读 SQLite 登录存储，纯 IDE 安装无需创建 CLI 历史目录。已有 CLI 凭据过期、为空或损坏时不会改查其他 IDE 账户；数据目录不用于切换身份。存储格式和验证边界见[原生账户审计](native-account-audit-2026-10-31.md)。
+`provider: "antigravity"` 通过 Python 3 / curl 调用 `loadCodeAssist` 和 `retrieveUserQuotaSummary`，投影模型组窗口、重置时间和实际返回的 AI Credits。仅使用现有 access token，已知过期时不发 HTTP 请求；不执行 `/usage`，避免 CLI 自行刷新 OAuth。支持 SSH 和限额查询前置命令；`agyBinary` 继续用于显式登录流程。查询优先使用该机器的 CLI 登录；没有 CLI 凭据时读取默认 Antigravity IDE 的只读 SQLite 登录存储，纯 IDE 安装无需创建 CLI 历史目录。已有 CLI 凭据过期、为空或损坏时不会改查其他 IDE 账户；数据目录不用于切换身份。存储格式和验证边界。
 
 `provider: "deepseek"` 通过官方 [Get User Balance](https://api-docs.deepseek.com/api/get-user-balance) 的 `GET https://api.deepseek.com/user/balance` 查询，使用 Bearer API Key。`balances` 保存币种、总额、赠送余额和充值余额，金额以原始十进制字符串保留，`isAvailable` 反映 API 可用状态。余额不换算为百分比，不跨币种合计。
 

@@ -81,10 +81,6 @@ struct MainWindowView: View {
         if value.hasPrefix("settings:") { model.openSettings(.init(category:String(value.dropFirst(9))));select("settings") }
         else { select(value) }
     }
-    @ViewBuilder private func groupLabel(_ text: String) -> some View {
-        if collapsed { Divider().padding(.vertical, 6) }
-        else { Text(text).font(AppFont.caption).foregroundStyle(.secondary).padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 3) }
-    }
     private func navigationButton(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) { Image(systemName: icon).frame(width: 22); if !collapsed { Text(title).lineLimit(1); Spacer(minLength: 0) } }

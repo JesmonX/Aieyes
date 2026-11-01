@@ -1254,6 +1254,8 @@ esac
         engine.store.save_auth_settings(&settings).unwrap();
         let reads = Arc::new(AtomicUsize::new(0));
         engine.status_observation_reads = Some(reads.clone());
+        // Never discover the developer's real Qoder login.
+        engine.native_discovery_off = true;
         let rows = engine
             .refresh_account_status_batch(
                 &json!({"sourceIds":["local","same-profile","other-profile","quota-profile"]}),

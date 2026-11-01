@@ -62,7 +62,7 @@ GPU 使用可用的 `nvidia-smi`，否则显示不可用原因。某些平台没
 
 适配器在凭据所在机器运行，需要 Python 3 与 curl；SSH Linux 的系统凭据读取可使用 `secret-tool`，无图形会话优先使用 CLI 文件存储。凭据、授权头与原始 API 响应不写入 Aieyes 配置、日志、数据库或 RPC；curl 的授权头通过标准输入传递。其他登录模式和无法确定的多个身份显示未知。Windows 的系统凭据适配及 IDE 实机登录尚未验证。
 
-此前 macOS / SSH 的邮箱、Google AI Pro 和 17 条历史读取是历史验收记录。2026-10-31 本机现有 CLI access token 已过期；本轮只核实字段和发行包源码，没有刷新令牌或取得新的付费登录。IDE 2.6.0 的存储已按官方安装包源码接入并通过隔离回归，未启动 IDE 登录，详见[原生账户审计](native-account-audit-2026-10-31.md)。
+此前 macOS / SSH 的邮箱、Google AI Pro 和 17 条历史读取是历史验收记录。2026-10-31 本机现有 CLI access token 已过期；本轮只核实字段和发行包源码，没有刷新令牌或取得新的付费登录。IDE 2.6.0 的存储已按官方安装包源码接入并通过隔离回归，未启动 IDE 登录。
 
 ## SSH Python 兼容
 

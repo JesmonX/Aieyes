@@ -50,7 +50,7 @@ function bridge(){window.setInterval=()=>0;window.__TAURI__={event:{async listen
     s.appearance={...(s.appearance??{}),settingsAgentIds:['copilot']};s.proxy={mode:'custom',url:'http://127.0.0.1:9'};await rpc('settings.save',s);
     const idle=await rpc('copilotAuth.status');assert.equal(idle.phase,'idle');assert.equal(idle.deviceFlow,false,'No Aieyes OAuth App client id in this build');
     const web=path.join(project,'apps/desktop/web'),output=path.join(project,'.local/copilot-auth');fs.mkdirSync(output,{recursive:true});
-    server=http.createServer((req,res)=>{if(serveFont(req,res))return;const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html','.png':'image/png'})[path.extname(file)]||'text/plain');res.end(fs.readFileSync(file));});
+    server=http.createServer(require('./ui-test-helpers.cjs').serveWebRoot(web));
     await new Promise(r=>server.listen(0,'127.0.0.1',r));browser=await chromium.launch({headless:true});
     const page=await browser.newPage({viewport:{width:1120,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.exposeFunction('testRPC',invoke);await page.addInitScript(bridge);
     await page.goto(`http://127.0.0.1:${server.address().port}/`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);

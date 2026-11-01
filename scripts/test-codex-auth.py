@@ -2,17 +2,15 @@
 """Offline coordinator fault tests. No real accounts or processes are touched."""
 import base64
 import builtins
-import importlib.util
 import json
 import pathlib
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
+from script_loader import load_script
 
-spec = importlib.util.spec_from_file_location('auth_helper', pathlib.Path(__file__).with_name('remote_codex_auth.py'))
-a = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(a)
+a = load_script('auth_helper', 'remote_codex_auth.py')
 scan_switch_processes = a.switch_running
 
 

@@ -375,26 +375,6 @@ struct SettingsView: View {
     }
 }
 
-struct SettingsSidebar: View {
-    var title: String
-    var items: [(String, String)]
-    @Binding var selection: String
-    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
-    var body: some View {
-        let _ = interfaceLanguage;
-        VStack(alignment: .leading, spacing: 5) {
-            ForEach(items, id: \.0) { key, label in
-                Button { selection = key } label: {
-                    Text(label).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 9)
-                        .foregroundStyle(selection == key ? Palette.accent : Color.primary)
-                        .background(selection == key ? Palette.accent.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityAddTraits(selection == key ? .isSelected : [])
-            }
-        }.padding(7).frame(width: DesignTokens.settingsSidebarWidth).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12)).accessibilityLabel(title)
-    }
-}
-
 private struct ExistingMappingRow: View {
     @SurfaceModel var model: AppModel
     let name: String

@@ -50,7 +50,7 @@ function fixture(){window.setInterval=()=>0;window.__TAURI__={event:{async liste
   for(const p of providers){const a=settings.agents.find(a=>a.provider===p);a.enabled=true;a.machineIds=['local'];}
   await rpc('settings.save',settings);
   const web=path.join(project,'apps/desktop/web');
-  const server=http.createServer((req,res)=>{if(serveFont(req,res))return;const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html','.png':'image/png'})[path.extname(file)]||'text/plain');res.end(fs.readFileSync(file));});
+  const server=http.createServer(require('./ui-test-helpers.cjs').serveWebRoot(web));
   await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
   try{
     browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1180,height:900}}),errors=[];

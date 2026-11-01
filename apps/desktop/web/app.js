@@ -1,6 +1,5 @@
 const historicalAccounts = () => [...(state.settings?.accounts ?? []), ...(state.settings?.deletedAccounts ?? [])];
 const filterAccounts = () => [...(state.settings?.accounts ?? []), ...(state.settings?.historyShowDeletedAccounts ? state.settings?.deletedAccounts ?? [] : [])];
-const accountFilterName = (a) => a.name + (state.settings.accounts.some((current) => current.provider === a.provider && current.id === a.id) ? a.archived ? AieyesI18n.t("（已归档）") : '' : AieyesI18n.t("（已删除）"));
 const $ = (s) => document.querySelector(s);
 document.querySelectorAll('[data-ui-icon]').forEach((element) => element.innerHTML = uiIcon(element.dataset.uiIcon));
 /* The floating window expands into a compact panel that mirrors the macOS menu bar
@@ -1329,9 +1328,6 @@ function mappingDraft(next) {
   next.modelMappings ??= {};if (from) next.modelMappings[from] = to;
   return next;
 }
-function settingsSidebar(items, current, attribute, label) {
-  return `<nav class="settings-sidebar" aria-label="${escapeHTML(label)}">${items.map(([key, label]) => `<button type="button" ${attribute}="${escapeHTML(key)}" ${key === current ? 'class="active" aria-current="page"' : ''}>${escapeHTML(label)}</button>`).join('')}</nav>`;
-}
 function bindSettingsSidebar(attribute, onSelect) {
   const buttons = [...document.querySelectorAll('#content [' + attribute + ']')];
   for (const button of buttons) {
@@ -1339,7 +1335,8 @@ function bindSettingsSidebar(attribute, onSelect) {
     button.onkeydown = (event) => {const index = buttons.indexOf(button),next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : ['ArrowDown', 'ArrowRight'].includes(event.key) ? (index + 1) % buttons.length : ['ArrowUp', 'ArrowLeft'].includes(event.key) ? (index + buttons.length - 1) % buttons.length : null;if (next == null) return;event.preventDefault();buttons[next].click();document.querySelector('[' + attribute + '="' + CSS.escape(buttons[next].getAttribute(attribute)) + '"]')?.focus();};
   }
 }
-let generalPages = [['appearance', AieyesI18n.t("外观")], ['desktop', AieyesI18n.t("桌宠与会话")], ['network', AieyesI18n.t("网络代理")], ['refresh', AieyesI18n.t("刷新与历史")], ['notifications', AieyesI18n.t("通知")], ['updates', AieyesI18n.t("更新与关于")]];window.addEventListener("aieyes:language", () => {generalPages = [['appearance', AieyesI18n.t("外观")], ['desktop', AieyesI18n.t("桌宠与会话")], ['network', AieyesI18n.t("网络代理")], ['refresh', AieyesI18n.t("刷新与历史")], ['notifications', AieyesI18n.t("通知")], ['updates', AieyesI18n.t("更新与关于")]];});
+const generalPageList = () => [['appearance', AieyesI18n.t("外观")], ['desktop', AieyesI18n.t("桌宠与会话")], ['network', AieyesI18n.t("网络代理")], ['refresh', AieyesI18n.t("刷新与历史")], ['notifications', AieyesI18n.t("通知")], ['updates', AieyesI18n.t("更新与关于")]];
+let generalPages = generalPageList();window.addEventListener("aieyes:language", () => {generalPages = generalPageList();});
 function settingsCategoriesHTML() {
   return `<nav class="settings-categories" aria-label="${AieyesI18n.t("设置")}">${generalPages.map(([key, title]) => `<button type="button" data-general-page="${key}" ${key === state.generalTab ? 'class="active" aria-current="page"' : ''}>${title}</button>`).join('')}</nav>`;
 }

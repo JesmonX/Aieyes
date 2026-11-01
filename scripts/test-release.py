@@ -1,4 +1,3 @@
-import importlib.util
 import pathlib
 import tempfile
 import unittest
@@ -8,10 +7,9 @@ import json
 import plistlib
 import subprocess
 from unittest.mock import patch
+from script_loader import load_script
 
-spec = importlib.util.spec_from_file_location("release", pathlib.Path(__file__).with_name("release.py"))
-release = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(release)
+release = load_script("release", "release.py")
 
 
 class ReleaseTests(unittest.TestCase):

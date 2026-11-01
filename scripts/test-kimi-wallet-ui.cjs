@@ -31,7 +31,7 @@ function seed(wallet=initialWallet,extra={}){
     db=new DatabaseSync(path.join(root,'data/aieyes.sqlite'));seed();
     assert.deepEqual((await rpc('dashboard')).quotas[0].extraUsage,initialWallet);
     const web=path.join(project,'apps/desktop/web'),output=path.join(project,'.local/kimi-wallet');fs.mkdirSync(output,{recursive:true});
-    server=http.createServer((req,res)=>{if(serveFont(req,res))return;const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html','.png':'image/png'})[path.extname(file)]||'text/plain');res.end(fs.readFileSync(file));});await new Promise(r=>server.listen(0,'127.0.0.1',r));browser=await chromium.launch({headless:true});
+    server=http.createServer(require('./ui-test-helpers.cjs').serveWebRoot(web));await new Promise(r=>server.listen(0,'127.0.0.1',r));browser=await chromium.launch({headless:true});
     for(const surface of ['index.html','floating.html']){
       seed();const page=await browser.newPage({viewport:{width:surface==='floating.html'?450:1120,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));await page.exposeFunction('testRPC',invoke);await page.addInitScript(bridge);await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
       const card=page.locator('[data-quota="kimi:wallet"]:visible');await card.waitFor();const wallet=card.locator('[data-extra-usage]');await wallet.getByText('USD 10.00',{exact:true}).waitFor();

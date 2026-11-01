@@ -73,8 +73,7 @@ struct QoderCLIInstallView: View {
             Text(status?.command ?? "").font(.system(.body, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Button(L("复制命令")) {
-                    NSPasteboard.general.clearContents()
-                    copied = NSPasteboard.general.setString(status?.command ?? "", forType: .string) ? L("已复制") : L("复制失败，请重试")
+                    copied = Pasteboard.copy(status?.command ?? "") ? L("已复制") : L("复制失败，请重试")
                 }.disabled(status == nil)
                 if let copied { Text(copied).font(AppFont.secondary).foregroundStyle(.secondary) }
             }

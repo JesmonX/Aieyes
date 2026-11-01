@@ -23,7 +23,7 @@
     const distance=kind==='menu'?4:8;
     return run(element,[{opacity:0,transform:`translateY(${distance}px)`},{opacity:1,transform:'none'}],{duration:kind==='page'?220:240,id:kind});
   }
-  const groups=['aside > nav','.settings-tabs','.settings-sidebar','.panel-tabs','.metric-picker'];
+  const groups=['aside > nav','.settings-tabs','.panel-tabs','.metric-picker'];
   function selected() {
     return groups.flatMap(selector=>[...document.querySelectorAll(selector)].map((group,i)=>{
       const button=group.querySelector(':scope > button.active,:scope > button[aria-pressed=true]');

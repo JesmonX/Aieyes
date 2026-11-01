@@ -1,6 +1,6 @@
 # 三端控件与样式规格
 
-本文件记录当前实现，配合 `ui-design-tokens.json`、`ui-phase-colors.json` 和 `ui-review-and-optimization-2026-10-26.md` 使用。macOS 使用 SwiftUI/AppKit；Windows/Linux 使用同一套 Web 组件。浏览器截图只验收 Web 内容，原生窗口、托盘、DPI、输入与辅助功能仍按 `manual-verification.md` 验收。
+本文件记录当前实现，配合 `ui-design-tokens.json` 和 `ui-phase-colors.json` 使用。macOS 使用 SwiftUI/AppKit；Windows/Linux 使用同一套 Web 组件。浏览器截图只验收 Web 内容，原生窗口、托盘、DPI、输入与辅助功能仍按 `manual-verification.md` 验收。
 
 ## 尺寸和文字
 

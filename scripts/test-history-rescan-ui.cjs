@@ -43,7 +43,7 @@ db.execute('INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?)',(event['id'],*row[1:5]
 db.execute('INSERT INTO event_sources VALUES(?,?)',(event['id'],'fixture'));db.commit();db.close()
 `,path.join(root,'aieyes.sqlite')]);
     const web=path.join(project,'apps/desktop/web');
-    server=http.createServer((req,res)=>{if(serveFont(req,res))return;const file=path.join(web,path.basename(new URL(req.url,'http://local').pathname)||'index.html');if(!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('content-type',({'.js':'text/javascript','.css':'text/css','.html':'text/html','.png':'image/png'})[path.extname(file)]||'text/plain');res.end(fs.readFileSync(file));});
+    server=http.createServer(require('./ui-test-helpers.cjs').serveWebRoot(web));
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1180,height:900}}),errors=[];
     page.on('pageerror',error=>errors.push(String(error)));await page.exposeFunction('testRPC',invoke);await page.addInitScript(browserFixture);

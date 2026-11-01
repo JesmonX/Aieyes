@@ -42,7 +42,7 @@ struct CopilotAuthView: View {
                 Text(code).font(.system(.title2, design: .monospaced)).textSelection(.enabled)
                 HStack {
                     if let raw = status?.verificationUri, let url = URL(string: raw), url.scheme == "https" { Link(L("打开授权网页"), destination: url) }
-                    Button(L("复制授权码")) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(code, forType: .string) }
+                    Button(L("复制授权码")) { Pasteboard.copy(code) }
                 }
             }
             if status?.phase == "external" {

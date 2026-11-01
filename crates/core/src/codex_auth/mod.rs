@@ -116,7 +116,7 @@ pub fn backend(
         local::call(&location(source, settings), method, params)
     }
 }
-pub fn source_for_profile<'a, 'b>(
+fn source_for_profile<'a, 'b>(
     settings: &'a Settings,
     reference: &'b str,
 ) -> Result<(&'a Source, &'b str)> {

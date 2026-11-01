@@ -275,7 +275,7 @@ for value, locations in references.items():
     if value not in catalog:
         errors.append(f'Missing exact message {value!r}: {", ".join(sorted(locations))}')
 
-# Web i18n rules (docs/ui-review-and-optimization-2026-10-26.md E-04): status attributes hold codes, translations
+# Web i18n rules: status attributes hold codes, translations
 # made once at module level must follow language changes, and fragments are not glued into sentences.
 # Existing concatenations are budgeted; lower the budget as they become whole-sentence templates with {0} slots.
 CONCATENATION_BUDGET = 0

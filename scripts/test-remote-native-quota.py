@@ -2,7 +2,6 @@
 """Offline native SSH quota fixtures. No real credential, login or quota calls."""
 import contextlib
 import http.server
-import importlib.util
 import json
 import os
 import pathlib
@@ -14,11 +13,10 @@ import threading
 import time
 import unittest
 from unittest import mock
+from script_loader import load_script
 
 HERE = pathlib.Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location('remote_native_quota', HERE / 'remote_native_quota.py')
-remote = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(remote)
+remote = load_script('remote_native_quota', 'remote_native_quota.py')
 TOKEN = 'native-quota-fixture-access-DO-NOT-EXPORT'
 REFRESH = 'native-quota-fixture-refresh-DO-NOT-EXPORT'
 

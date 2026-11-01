@@ -50,14 +50,12 @@ fn amount(v: &Value) -> Option<f64> {
 }
 
 /// Epoch seconds from a number (s or ms) or an RFC 3339 string.
+/// Non-positive numbers mean unset.
 fn instant(v: &Value) -> Option<i64> {
-    if let Some(n) = v.as_f64().filter(|n| *n > 0.) {
-        let n = n as i64;
-        return Some(if n > 10_000_000_000 { n / 1000 } else { n });
+    if v.as_f64().is_some_and(|n| n <= 0.) {
+        return None;
     }
-    chrono::DateTime::parse_from_rfc3339(v.as_str()?)
-        .ok()
-        .map(|t| t.timestamp())
+    crate::models::instant(v)
 }
 
 // `entitlement_base_info.product_type` and pack `status`, as the clients define them.

@@ -37,7 +37,7 @@ Esc 由当前获得焦点的面板处理，优先关闭菜单或弹窗，再关�
 
 实际使用 Wayland 后端时，主窗口保持原生 Wayland，桌宠和面板通过单独的 X11/XWayland 辅助进程提供定位与置顶；只有辅助进程设置 `GDK_BACKEND=x11`。主进程独占核心、轮询、托盘和偏好写入，两者通过私有 Unix socket 通信。辅助进程崩溃后只重启一次，再次失败返回主窗口。显式选择 X11 时仍在同一进程中运行。外部 URL 启动清除 `GDK_BACKEND` 并解除请求进程组继承，应用不会修改系统会话或桌面扩展。
 
-Linux 会保存主窗口逻辑尺寸、最大化状态及 X11 位置，恢复时限制在当前显示器工作区内；Wayland 位置由合成器管理。首次关闭会提示后台监测继续。2026-10-28 的原生构建与虚拟桌面证据，以及尚待 GNOME/KDE 实机验收的项目，见 [实施记录](ui-implementation-2026-10-28.md)。
+Linux 会保存主窗口逻辑尺寸、最大化状态及 X11 位置，恢复时限制在当前显示器工作区内；Wayland 位置由合成器管理。首次关闭会提示后台监测继续。尚待 GNOME/KDE 实机验收的项目见[实现摘要与尚存问题](changes.md#尚存问题)。
 
 ## 会话范围
 
@@ -135,7 +135,7 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --l
 
 2026-10-03 [首次原生构建](https://github.com/JesmonX/Aieyes/actions/runs/37125369069) 已通过：Windows 生成 NSIS 安装包，Ubuntu 22.04 生成 deb 和 AppImage，两个平台的 JavaScript 语法与 4 项交互测试均通过。产物在运行页面的 Artifacts，保留 14 天。
 
-0.1.54 的 CI 产物来源、修复候选、Fedora 与 Ubuntu 原生验收及 macOS 对照见 [Linux 包一致性报告](linux-consistency-0.1.54.md)。报告分别记录实际安装包、浏览器矩阵和模拟桌面环境的覆盖范围；Windows 原生、多屏和显式 Wayland 的限制单独列出。
+0.1.54 已在 Fedora 与 Ubuntu 完成安装包一致性验收；Windows 原生、多屏和显式 Wayland 的限制见[实现摘要与尚存问题](changes.md#尚存问题)。
 
 
 ## 本地浏览器验证
