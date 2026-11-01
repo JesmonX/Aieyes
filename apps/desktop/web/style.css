@@ -731,8 +731,9 @@ body[data-platform=windows] #message { top:calc(var(--titlebar-h) + 64px); }
 }
 
 @layer components {
-.quota-card[data-provider="qoder"] .quota-meter strong,
-.quota-card[data-provider="qoder-cn"] .quota-meter strong { white-space:pre-line; overflow-wrap:anywhere; flex-shrink:1; line-height:1.5; }
+.quota-card:is([data-provider="qoder"],[data-provider="qoder-cn"]) .quota-meters:has(> .quota-meter:nth-child(2)) { grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.quota-card:is([data-provider="qoder"],[data-provider="qoder-cn"]) .quota-meter > .between { flex-direction:column; align-items:flex-start; gap:2px; }
+.quota-card:is([data-provider="qoder"],[data-provider="qoder-cn"]) .quota-meter strong { white-space:normal; overflow-wrap:anywhere; line-height:1.5; }
 #account-context { position:fixed; z-index:10000; display:grid; gap:4px; min-width:174px; padding:8px; background:var(--surface-strong); color:var(--ink); border:1px solid var(--border); border-radius:var(--radius-overlay); box-shadow:var(--shadow-lift); }
 #account-context button { text-align:start; }
 }

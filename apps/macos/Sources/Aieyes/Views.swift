@@ -1249,17 +1249,32 @@ struct QuotaCard: View, Equatable {
             }
         } }
         if quota.isAvailable == false { Text(L("余额不足")).font(AppFont.secondary).foregroundStyle(Palette.warn) }
-        ForEach(expanded ? quota.visibleMeters : Array(quota.visibleMeters.prefix(2))) { meter in
-            VStack(alignment: .leading, spacing: 5) {
+        if ["qoder", "qoder-cn"].contains(quota.provider), displayedMeters.count > 1 {
+            LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 10) {
+                ForEach(displayedMeters) { meter in meterContent(meter, stacked: true) }
+            }
+        } else {
+            ForEach(displayedMeters) { meter in meterContent(meter) }
+        }
+        if let notice = quota.visibleNotice { Label(L(notice), systemImage: "info.circle").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+    }
+    private var displayedMeters: [QuotaMeter] { expanded ? quota.visibleMeters : Array(quota.visibleMeters.prefix(2)) }
+    private func meterContent(_ meter: QuotaMeter, stacked: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if stacked {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L(meter.label)).foregroundStyle(.secondary)
+                    Text(quota.meterSummary(meter)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
+                }.font(AppFont.secondary).frame(maxWidth: .infinity, alignment: .leading)
+            } else {
                 ViewThatFits(in: .horizontal) {
                     HStack { Text(L(meter.label)).foregroundStyle(.secondary).fixedSize(); Spacer(minLength: 6); Text(quota.meterSummary(meter)).monospacedDigit().fixedSize() }
                     VStack(alignment: .leading, spacing: 3) { Text(L(meter.label)).foregroundStyle(.secondary); Text(quota.meterSummary(meter)).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
                 }.font(AppFont.secondary)
-                if let fraction = meter.fraction { ResourceBar(percent: 100 - fraction * 100, tint: Palette.quota(fraction * 100)) }
-                if expanded, let reset = meter.resetsAt, reset > 0 { Text(L("重置 ") + Format.date(reset)).font(AppFont.caption).foregroundStyle(.secondary) }
-            }.accessibilityElement(children: .combine).accessibilityLabel(L(meter.label) + "，" + quota.meterSummary(meter))
-        }
-        if let notice = quota.visibleNotice { Label(L(notice), systemImage: "info.circle").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            }
+            if let fraction = meter.fraction { ResourceBar(percent: 100 - fraction * 100, tint: Palette.quota(fraction * 100)) }
+            if expanded, let reset = meter.resetsAt, reset > 0 { Text(L("重置 ") + Format.date(reset)).font(AppFont.caption).foregroundStyle(.secondary) }
+        }.accessibilityElement(children: .combine).accessibilityLabel(L(meter.label) + "，" + quota.meterSummary(meter))
     }
     private var agyGroups: [String] {
         quota.windows.reduce(into: [String]()) { result, w in
