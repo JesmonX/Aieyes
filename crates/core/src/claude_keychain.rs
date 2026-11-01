@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+#[cfg(target_os = "macos")]
 const SERVICE: &str = "Claude Code-credentials";
 /// A token that Claude has since replaced is re-read at most this often.
 const RETRY_SECONDS: i64 = 24 * 60 * 60;
