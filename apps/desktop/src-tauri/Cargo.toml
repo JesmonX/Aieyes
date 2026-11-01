@@ -1,6 +1,6 @@
 [package]
 name = "aieyes-desktop"
-version = "0.1.69"
+version = "0.1.70"
 edition = "2024"
 default-run = "aieyes-desktop"
 
