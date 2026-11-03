@@ -1,9 +1,11 @@
 @import url("select.css");
 
 @layer platform {
-/* Windows finishes only. Shared colors, type, geometry and native backdrops remain
-   owned by tokens.css. Glass is painted once per surface, never once per row. */
-html[data-platform=windows] {
+/* Desktop finishes shared by Windows and Linux, so both look the same. Native materials
+   (Mica, Acrylic, blur) exist only on Windows; Linux keeps surfaces unblurred (see the end of this file).
+   Shared colors, type, geometry and native backdrops remain owned by tokens.css.
+   Glass is painted once per surface, never once per row. */
+html:is([data-platform=windows],[data-platform=linux]) {
   --win-spring:cubic-bezier(.22,1.35,.36,1);
   --win-edge:rgb(255 255 255 / var(--edge-highlight-opacity));
   --window-edge:var(--win-edge); --highlight:var(--win-edge);
@@ -14,7 +16,7 @@ html[data-platform=windows] {
   --win-overlay-shadow:0 4px 12px rgba(24,32,55,.08),0 20px 48px -16px rgba(24,32,55,.26);
   --win-selected:var(--control-tint);
 }
-html[data-platform=windows][data-theme=dark] {
+html:is([data-platform=windows],[data-platform=linux])[data-theme=dark] {
   --win-edge:rgba(255,255,255,.04);
   --window-edge:var(--win-edge); --highlight:var(--win-edge);
   --win-sheen:none;
@@ -24,20 +26,15 @@ html[data-platform=windows][data-theme=dark] {
   --win-overlay-shadow:0 4px 12px rgba(0,0,0,.24),0 20px 48px -16px rgba(0,0,0,.6);
   --win-selected:var(--control-tint);
 }
-/* Match the dark theme's raised surfaces with clean, light fills. Geometry and
-   categorical gradients are shared; only the light palette changes here. */
-html[data-platform=windows][data-theme=light] {
-  --detail-window:#f4f5f7;
-  --detail-card:#ffffff;
-  --win-card-shadow:none;
-}
-html[data-platform=windows][data-material=opaque] { --win-overlay-fill:var(--solid); }
+/* The light window and card fills are shared with Linux in tokens.css. */
+html:is([data-platform=windows],[data-platform=linux])[data-theme=light] { --win-card-shadow:none; }
+html:is([data-platform=windows],[data-platform=linux])[data-material=opaque] { --win-overlay-fill:var(--solid); }
 /* White edge highlights are independent of fill alpha and depth shadows.
    Only windows with a confirmed native material expose translucent overlays. */
-html[data-platform=windows]:is([data-material=mica],[data-material=acrylic],[data-material=blur]) {
+html:is([data-platform=windows],[data-platform=linux]):is([data-material=mica],[data-material=acrylic],[data-material=blur]) {
   --win-overlay-fill:rgb(250 250 252 / var(--overlay-fill-opacity));
 }
-html[data-platform=windows][data-theme=dark]:is([data-material=mica],[data-material=acrylic],[data-material=blur]) {
+html:is([data-platform=windows],[data-platform=linux])[data-theme=dark]:is([data-material=mica],[data-material=acrylic],[data-material=blur]) {
   --win-overlay-fill:rgb(43 44 50 / var(--overlay-fill-opacity));
 }
 /* The original select still owns its intrinsic width, form value and validity.
@@ -47,87 +44,93 @@ html[data-platform=windows][data-theme=dark]:is([data-material=mica],[data-mater
 
 @layer overrides {
 @media (prefers-reduced-transparency:reduce),(forced-colors:active) {
-  html[data-platform=windows]:is([data-theme=light],[data-theme=dark]):is([data-material=mica],[data-material=acrylic],[data-material=blur]) { --win-overlay-fill:var(--solid); }
+  html:is([data-platform=windows],[data-platform=linux]):is([data-theme=light],[data-theme=dark]):is([data-material=mica],[data-material=acrylic],[data-material=blur]) { --win-overlay-fill:var(--solid); }
 }
 @media not (forced-colors:active) {
-  html[data-platform=windows] :is(.card,.stat):not(.card .card):not([data-provider]) {
+  html:is([data-platform=windows],[data-platform=linux]) :is(.card,.stat):not(.card .card):not([data-provider]) {
     background-image:var(--win-sheen);
     box-shadow:none;
   }
-  html[data-platform=windows] .settings-block .card .card { background-image:none; box-shadow:none; }
-  html[data-platform=windows] :is(aside,.panel-head,.panel-foot) { background-image:linear-gradient(150deg,var(--surface-soft),transparent 75%); }
-  html[data-platform=windows] button { background-image:var(--win-control-sheen); }
-  html[data-platform=windows] button:is(.primary,.tinted) { box-shadow:var(--control-shadow); }
-  html[data-platform=windows] button:is(.primary,.tinted):disabled { box-shadow:none; }
-  html[data-platform=windows] button.danger { border-color:color-mix(in srgb,var(--danger) 30%,var(--control-stroke)); }
-  html[data-platform=windows] :is(input:not([type=checkbox]):not([type=range]),textarea):focus-visible {
+  html:is([data-platform=windows],[data-platform=linux]) .settings-block .card .card { background-image:none; box-shadow:none; }
+  html:is([data-platform=windows],[data-platform=linux]) :is(aside,.panel-head,.panel-foot) { background-image:linear-gradient(150deg,var(--surface-soft),transparent 75%); }
+  html:is([data-platform=windows],[data-platform=linux]) button { background-image:var(--win-control-sheen); }
+  html:is([data-platform=windows],[data-platform=linux]) button:is(.primary,.tinted) { box-shadow:var(--control-shadow); }
+  html:is([data-platform=windows],[data-platform=linux]) button:is(.primary,.tinted):disabled { box-shadow:none; }
+  html:is([data-platform=windows],[data-platform=linux]) button.danger { border-color:color-mix(in srgb,var(--danger) 30%,var(--control-stroke)); }
+  html:is([data-platform=windows],[data-platform=linux]) :is(input:not([type=checkbox]):not([type=range]),textarea):focus-visible {
     box-shadow:none;
   }
-  html[data-platform=windows] :is(nav button,.settings-tabs button,.metric-picker button) { position:relative; isolation:isolate; background-image:none; }
-  html[data-platform=windows] :is(nav button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true]) { background:transparent; box-shadow:none; }
-  html[data-platform=windows] :is(nav button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true])::before {
+  html:is([data-platform=windows],[data-platform=linux]) :is(nav button,.settings-tabs button,.metric-picker button) { position:relative; isolation:isolate; background-image:none; }
+  html:is([data-platform=windows],[data-platform=linux]) :is(nav button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true]) { background:transparent; box-shadow:none; }
+  html:is([data-platform=windows],[data-platform=linux]) :is(nav button.active,.settings-tabs button.active,.metric-picker button[aria-pressed=true])::before {
     content:''; position:absolute; inset:0; z-index:-1; pointer-events:none; border-radius:inherit;
     background:var(--win-selected); box-shadow:none;
   }
-  html[data-platform=windows] :is(.heading-refresh,.estimate-entry,#token-summary,#sidebar-toggle,.panel-actions > button,#panel-refresh,.window-controls button) { background-image:none; }
+  html:is([data-platform=windows],[data-platform=linux]) :is(.heading-refresh,.estimate-entry,#token-summary,#sidebar-toggle,.panel-actions > button,#panel-refresh,.window-controls button) { background-image:none; }
   /* Keep the shared finish at low specificity: IDs in :is() otherwise give
      every menu an ID-level rule that defeats the opaque menu policy below. */
-  html[data-platform=windows] :where(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) {
+  html:is([data-platform=windows],[data-platform=linux]) :where(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) {
     background-color:var(--win-overlay-fill); background-image:var(--win-sheen);
     border-color:var(--border); box-shadow:var(--win-overlay-shadow);
     backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
   }
-  html[data-platform=windows] :is(.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body) button { background-image:none; }
-  html[data-platform=windows][data-material=opaque] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
-  html[data-platform=windows] #token-popover .card { background:transparent; box-shadow:none; }
-  html[data-platform=windows] #editor-backdrop,html[data-platform=windows] dialog::backdrop { background:rgb(12 18 32 / 20%); backdrop-filter:blur(3px); }
+  html:is([data-platform=windows],[data-platform=linux]) :is(.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body) button { background-image:none; }
+  html:is([data-platform=windows],[data-platform=linux])[data-material=opaque] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
+  html:is([data-platform=windows],[data-platform=linux]) #token-popover .card { background:transparent; box-shadow:none; }
+  html:is([data-platform=windows],[data-platform=linux]) #editor-backdrop,html:is([data-platform=windows],[data-platform=linux]) dialog::backdrop { background:rgb(12 18 32 / 20%); backdrop-filter:blur(3px); }
   /* Opaque text menus are independent of the selected native window material.
      Dialog fill and its backdrop deliberately keep the existing policy. */
-  html[data-platform=windows] :is(.win-select-menu,.multi-panel,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body,.agent-picker-menu) {
+  html:is([data-platform=windows],[data-platform=linux]) :is(.win-select-menu,.multi-panel,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body,.agent-picker-menu) {
     background:var(--solid); backdrop-filter:none; -webkit-backdrop-filter:none;
   }
 }
 @media (prefers-reduced-motion:no-preference) and (forced-colors:none) {
-  html[data-platform=windows] button {
+  html:is([data-platform=windows],[data-platform=linux]) button {
     transition:background-color .13s ease,color .13s ease,border-color .13s ease,box-shadow .13s ease,transform .26s var(--win-spring);
   }
 
 
-  html[data-platform=windows] :is(nav button,.settings-tabs button,.metric-picker button,.win-select-trigger,.multi-trigger,.estimate-entry,#token-summary,.window-controls button):enabled:hover { transform:none; }
-  html[data-platform=windows] :is(.window-controls button,#token-summary):enabled:active { transform:none; }
-  html[data-platform=windows] :is(.panel-menu,.refresh-menu,.panel-more-menu,.machine-menu-body) button:enabled:hover { transform:none; }
-  html[data-platform=windows] input[type=checkbox]::after,html[data-platform=windows] .multi-trigger::after { transition:transform .22s var(--win-spring),opacity .14s ease; }
-  html[data-platform=windows] input[type=range]::-webkit-slider-thumb { transition:transform .22s var(--win-spring),box-shadow .13s ease; }
-  html[data-platform=windows] input[type=range]:enabled:active::-webkit-slider-thumb { transform:scale(1.12); box-shadow:0 0 0 4px var(--soft); }
-  html[data-platform=windows] [data-win-selection]::before { animation:win-selection .26s var(--win-spring) backwards; }
+  html:is([data-platform=windows],[data-platform=linux]) :is(nav button,.settings-tabs button,.metric-picker button,.win-select-trigger,.multi-trigger,.estimate-entry,#token-summary,.window-controls button):enabled:hover { transform:none; }
+  html:is([data-platform=windows],[data-platform=linux]) :is(.window-controls button,#token-summary):enabled:active { transform:none; }
+  html:is([data-platform=windows],[data-platform=linux]) :is(.panel-menu,.refresh-menu,.panel-more-menu,.machine-menu-body) button:enabled:hover { transform:none; }
+  html:is([data-platform=windows],[data-platform=linux]) input[type=checkbox]::after,html:is([data-platform=windows],[data-platform=linux]) .multi-trigger::after { transition:transform .22s var(--win-spring),opacity .14s ease; }
+  html:is([data-platform=windows],[data-platform=linux]) input[type=range]::-webkit-slider-thumb { transition:transform .22s var(--win-spring),box-shadow .13s ease; }
+  html:is([data-platform=windows],[data-platform=linux]) input[type=range]:enabled:active::-webkit-slider-thumb { transform:scale(1.12); box-shadow:0 0 0 4px var(--soft); }
+  html:is([data-platform=windows],[data-platform=linux]) [data-win-selection]::before { animation:win-selection .26s var(--win-spring) backwards; }
   @keyframes win-selection { from { transform:translate(var(--win-selection-x,0px),var(--win-selection-y,0px)) scale(var(--win-selection-sx,1),var(--win-selection-sy,1)); } to { transform:none; } }
 }
 @media (prefers-reduced-transparency:reduce) {
-  html[data-platform=windows] { --win-overlay-fill:var(--solid); --win-sheen:none; --win-control-sheen:none; }
-  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint,#editor-backdrop) { backdrop-filter:none; -webkit-backdrop-filter:none; }
-  html[data-platform=windows] dialog::backdrop { backdrop-filter:none; }
+  html:is([data-platform=windows],[data-platform=linux]) { --win-overlay-fill:var(--solid); --win-sheen:none; --win-control-sheen:none; }
+  html:is([data-platform=windows],[data-platform=linux]) :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint,#editor-backdrop) { backdrop-filter:none; -webkit-backdrop-filter:none; }
+  html:is([data-platform=windows],[data-platform=linux]) dialog::backdrop { backdrop-filter:none; }
 }
 @media (prefers-reduced-motion:reduce),(forced-colors:active) {
-  html[data-platform=windows] *,html[data-platform=windows] *::before,html[data-platform=windows] *::after { animation:none !important; transition:none !important; }
-  html[data-platform=windows] details::details-content { transition:none !important; }
+  html:is([data-platform=windows],[data-platform=linux]) *,html:is([data-platform=windows],[data-platform=linux]) *::before,html:is([data-platform=windows],[data-platform=linux]) *::after { animation:none !important; transition:none !important; }
+  html:is([data-platform=windows],[data-platform=linux]) details::details-content { transition:none !important; }
 }
 /* Category tint changes hue without increasing the card's alpha. */
 @media not (forced-colors:active) {
-  html[data-platform=windows] :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
+  html:is([data-platform=windows],[data-platform=linux]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
     background:color-mix(in srgb,var(--category) 8%,var(--card-fill));
     box-shadow:none;
   }
-  html[data-platform=windows]:is([data-material=mica],[data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
+  html:is([data-platform=windows],[data-platform=linux]):is([data-material=mica],[data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
     background:rgb(from color-mix(in srgb,var(--category) 8%,var(--window-base)) r g b / .35);
   }
   /* Resource groups already sit inside a card; add tint, not a second pane. */
-  html[data-platform=windows] .card :is(.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
+  html:is([data-platform=windows],[data-platform=linux]) .card :is(.resource-block,.server-gpu,.server-filesystems,.server-network-rates) {
     background:color-mix(in srgb,var(--category) 8%,transparent); box-shadow:none;
   }
-  html[data-platform=windows] button:enabled:hover,html[data-platform=windows] button:enabled:active { transform:none; }
+  html:is([data-platform=windows],[data-platform=linux]) button:enabled:hover,html:is([data-platform=windows],[data-platform=linux]) button:enabled:active { transform:none; }
 }
 @media (prefers-reduced-transparency:reduce) {
-  html[data-platform=windows]:is([data-material=mica],[data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) { background:var(--solid); }
-  html[data-platform=windows] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
+  html:is([data-platform=windows],[data-platform=linux]):is([data-material=mica],[data-material=acrylic],[data-material=blur]) :is(.quota-card,.quota-placeholder,.resource-block,.server-gpu,.server-filesystems,.server-network-rates) { background:var(--solid); }
+  html:is([data-platform=windows],[data-platform=linux]) :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint) { backdrop-filter:none; -webkit-backdrop-filter:none; }
 }
+}
+
+@layer overrides {
+/* Linux keeps its existing no-blur policy (style.css): the shared finishes above must not reintroduce backdrop blur. */
+html[data-platform=linux] :is(dialog,.multi-panel,.win-select-menu,.panel-menu,.panel-more-menu,.refresh-menu,.machine-menu-body,.wake-more-menu,.workspace-help-menu,.theme-menu-body,#token-popover,#refresh-status-popover,#quota-failures-popover,.hint,#editor-backdrop),
+html[data-platform=linux] dialog::backdrop { backdrop-filter:none; -webkit-backdrop-filter:none; }
 }

@@ -294,12 +294,12 @@
     if (directorySelection) body = agentsHTML();else
     if (showCodex || state.settings.accounts.some((a) => accountKey(a) === detailKey)) body = accountsHTML();else
     {
-      const section = (key, title, detail, content, opened = false) => `<details class="${document.documentElement.dataset.platform === 'windows' ? '' : 'card '}settings-disclosure" id="agent-section-${key}" data-agent-detail="settings:${agent.provider}:${key}" data-persist-disclosure="settings:${agent.provider}:${key}" ${disclosureOpen('settings:' + agent.provider + ':' + key, opened) ? 'open' : ''}><summary><strong>${title}</strong><small>${e(detail)}</small></summary><div class="settings-section-body">${content}</div></details>`;
+      const section = (key, title, detail, content, opened = false) => `<details class="settings-disclosure" id="agent-section-${key}" data-agent-detail="settings:${agent.provider}:${key}" data-persist-disclosure="settings:${agent.provider}:${key}" ${disclosureOpen('settings:' + agent.provider + ':' + key, opened) ? 'open' : ''}><summary><strong>${title}</strong><small>${e(detail)}</small></summary><div class="settings-section-body">${content}</div></details>`;
       body = `<section class="card agent-integration-header" data-provider="${e(agent.provider)}"><div class="between"><h2>${providerMark(agent.provider)} ${e(providers[agent.provider])}</h2><label><input type="checkbox" role="switch" data-agent-enable="${e(agent.provider)}" ${state.settingsSaving ? 'disabled' : ''} ${agent.enabled ? 'checked' : ''}>${AieyesI18n.t("启用")}</label></div>${agent.provider === 'codex' && state.chatgptWorkInstalled ? `<p class="muted tiny" data-work-installed>${AieyesI18n.t("本机已安装 ChatGPT Work，会话与用量单独显示，账户和额度与 Codex 共用。")}</p>` : ''}</section>`;
       if (['pi', 'omp'].includes(agent.provider)) body += helpHTML(AieyesI18n.t("额度"), AieyesI18n.t("额度由当前模型服务商提供；本地 Token 和预估费用不代表可用余额。"));
       if (agent.provider === 'trae') body += helpHTML(AieyesI18n.t("Trae 会话"), AieyesI18n.t("Trae IDE 的对话保存在加密数据库中，不会读取。trae-cli 的会话和 Token 用量来自所添加目录中的 trajectories 文件夹。"));
-      const grouped = document.documentElement.dataset.platform === 'windows';
-      if(grouped) body += '<section class="card agent-settings-group">';
+      // One card holds every section on Windows and Linux alike; each section is a disclosure row inside it.
+      body += '<section class="card agent-settings-group">';
       body += section('accounts', AieyesI18n.t("账户"), AieyesI18n.t("{0} 个账户", state.settings.accounts.filter(a => AieyesUI.sameAgent(a.provider, agent.provider) && !a.archived).length), accountsHTML(false), true);
       const apiProvider = AieyesUI.featureProvider(agent.provider, 'api');
       if (apiProvider) {
@@ -309,9 +309,9 @@
       }
       const nativeApis = window.AieyesAccountScan?.list(agent.provider, 'api') ?? '';
       if (nativeApis) body += section('native-api', AieyesI18n.t("原生 API 连接"), '', nativeApis);
-      if (AieyesUI.agentSupports(agent.provider, 'machines', state.settings)) body += section('machines', AieyesI18n.t("机器与目录"), AieyesI18n.t("{0} 台机器", agent.machineIds.length), agentsHTML(grouped));
+      if (AieyesUI.agentSupports(agent.provider, 'machines', state.settings)) body += section('machines', AieyesI18n.t("机器与目录"), AieyesI18n.t("{0} 台机器", agent.machineIds.length), agentsHTML(true));
       if (AieyesUI.agentSupports(agent.provider, 'valuation', state.settings)) body += section('valuation', AieyesI18n.t("估值与采样"), '', `<button type="button" data-agent-estimates="${e(agent.provider)}">${AieyesI18n.t("管理估值与采样")}</button>`);
-      if (grouped) body += '</section>';
+      body += '</section>';
     }
     return `<div class="settings-layout agent-settings-layout">${selectorHTML(agent)}<div class="settings-subpage" data-agent-section="${e(agent.provider)}">${body}</div></div>`;
   }
@@ -429,7 +429,7 @@
       const resetRequired = a.deviceSettings?.some((d) => d.machineId === id && d.preCommandResetRequired);
       return `<section class="card"><h3>${e(deviceName(id))}${active ? '' : AieyesI18n.t(" · 已暂停")}</h3><p class="muted" data-device-summary="${e(id)}" data-account="${e(accountKey(a))}">${e(AieyesI18n.message(statusText(rows)))}</p>${sources.map((s) => {const r = rows.find((r) => r.sourceId === s.id);return `<div class="list-row"><div class="row-body">${e(s.name)}<small>${e(s.path || (s.subscription?.mode === 'cli' ? AieyesI18n.t("CLI 额度连接") : s.subscription ? AieyesI18n.t("订阅额度连接") : ''))}</small><span data-source-status="${e(s.id)}" data-account="${e(accountKey(a))}">${sourceStatusHTML(r)}</span></div><span data-source-actions="${e(s.id)}" data-account="${e(accountKey(a))}">${sourceActionsHTML(a, s, r)}</span></div>`;}).join('')}${id !== 'local' ? `<details data-agent-detail="command:${e(accountKey(a))}:${e(id)}"><summary>${AieyesI18n.t("前置命令")}</summary>${helpHTML(AieyesI18n.t("前置命令"), AieyesI18n.t("用于此账户的授权、切换、额度查询和定时唤醒；历史同步、监控不执行。清空后不执行。"))}${resetRequired ? `<div class="error">${AieyesI18n.t("此机器的旧目录前置命令不一致，已清空，请重新设置。留空保存表示不执行前置命令。")}</div><button type="button" data-command-confirm="` + e(id) + '" data-account="' + e(accountKey(a)) + `">${AieyesI18n.t("确认当前命令")}</button>` : ''}<label class="command-field"><textarea aria-label="${AieyesI18n.t("前置命令")}" id="account-command-${e(id)}" data-command-field="${e(id)}" data-account="${e(accountKey(a))}">${e(draftValue(a, 'command:' + id, deviceCommand(a, id)))}</textarea></label></details>` : ''}</section>`;
     }).join('');
-    return document.documentElement.dataset.platform === 'windows' ? `<section class="card account-settings-group">${content}</section>` : content;
+    return `<section class="card account-settings-group">${content}</section>`;
   }
   async function deleteAccount(a) {
     let preview;try {preview = await api('accounts.deletion.preview', { accountKey: accountKey(a) });} catch (error) {notify(String(error), 'error');return;}

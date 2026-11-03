@@ -345,8 +345,8 @@
   --font-ui:"Aieyes HarmonyOS Sans SC","Noto Sans CJK SC","Noto Sans",sans-serif;
   --font-display:var(--font-ui);
 }
-/* Linux light follows Windows and Adwaita: white cards with a 1px edge on a light gray window. */
-:root[data-platform=linux][data-theme=light] { --detail-window:#fafafa; --detail-card:#ffffff; --settings-card-fill:#ffffff; }
+/* Windows and Linux light share one window: white quota cards and gray settings cards with a 1px edge on a light gray pane. */
+:root:is([data-platform=windows],[data-platform=linux])[data-theme=light] { --detail-window:#f4f5f7; --detail-card:#ffffff; }
 /* Only enable alpha surfaces after the HWND has successfully acquired a backdrop. */
 :root[data-platform=windows]:where([data-material=mica],[data-material=acrylic],[data-material=blur]) {
   --card-fill:var(--panel);

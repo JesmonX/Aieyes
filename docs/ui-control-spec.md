@@ -57,7 +57,7 @@ Agent 页保留前四个常用入口，其余通过带搜索框的“更多 Agen
 | `controls.css` / `select.css` | 按钮、字段、选择器、确认、菜单和分段控件 |
 | `style.css` / `workspace.css` | 业务卡片、导航、设置和工作区组合 |
 | `panel.css` / `floating.css` | 紧凑面板与 Web 桌宠 |
-| `windows.css` | Windows 控件与动效差异 |
+| `windows.css` | Windows 与 Linux 共用的控件、弹出层与动效外观；原生材质仅限 Windows |
 
 平台选择器进入 `platform` 层；减少动效、减少透明度和强制颜色进入 `overrides` 层。同文件、同上下文的选择器与声明不得重复。按元素动态设置的 `--weeks` 和 `--provider-mask` 是有记录的变量入口；其他没有全局声明的变量必须有回退值。
 

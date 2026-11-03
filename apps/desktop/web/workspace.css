@@ -225,7 +225,7 @@ body:not(:has(#panel)) .quota-group[data-single-account=true] > .quotas { grid-t
 .settings-agent-selector { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:14px; }
 .settings-agent-selector .agent-common { display:flex; flex-wrap:wrap; flex-basis:100%; gap:4px; min-width:0; margin:0; }
 .agent-more { position:relative; margin-left:auto; }
-.agent-more > summary { display:flex; align-items:center; gap:6px; min-height:var(--control-md); padding:4px 8px; border-radius:var(--radius-control); cursor:pointer; list-style:none; }
+.agent-more > summary { display:flex; align-items:center; gap:6px; min-height:var(--control-md); padding:4px 8px; border-radius:var(--radius-control); cursor:pointer; list-style:none; white-space:nowrap; }
 .agent-more > summary::before { display:none; }
 .agent-more > summary::-webkit-details-marker { display:none; }
 .agent-more > summary > svg { width:12px; height:12px; }
@@ -324,23 +324,23 @@ html:not(:has(#panel,body[data-platform=windows])) { scrollbar-gutter:stable; }
 .bank summary { display:flex; align-items:center; gap:6px; color:var(--ink); }
 .bank summary > svg { color:var(--muted); width:16px; height:16px; }
 .bank-count { margin-left:auto; }
-html[data-platform=windows] .agent-settings-group { padding:4px var(--space-card); }
-html[data-platform=windows] .agent-settings-group .settings-disclosure { background:transparent; border-radius:0; }
-html[data-platform=windows] .agent-settings-group .settings-disclosure:last-child { border-bottom:0; }
-html[data-platform=windows] .agent-integration-header h2 { margin:0; }
-html[data-platform=windows] .agent-machines > .list-row { width:auto; padding:8px 12px; }
-html[data-platform=windows] .agent-settings-group fieldset { min-width:0; }
-html[data-platform=windows] .agent-settings-group .list-row { min-width:0; overflow-wrap:anywhere; }
-html[data-platform=windows] .agent-settings-group .row-body { min-width:0; }
+.agent-settings-group { padding:4px var(--space-card); }
+.agent-settings-group .settings-disclosure { background:transparent; border-radius:0; }
+.agent-settings-group .settings-disclosure:last-child { border-bottom:0; }
+.agent-integration-header h2 { margin:0; }
+.agent-machines > .list-row { width:auto; padding:8px 12px; }
+.agent-settings-group fieldset { min-width:0; }
+.agent-settings-group .list-row { min-width:0; overflow-wrap:anywhere; }
+.agent-settings-group .row-body { min-width:0; }
 .agent-picker-results h4 { color:var(--muted); margin:8px 4px 4px; }
 .agent-picker-results button { width:100%; }
 .agent-order-row { display:flex; align-items:center; gap:6px; }
 .agent-order-row > .row-body { flex:1; }
 .agent-drag-handle { display:inline-flex; color:var(--muted); cursor:grab; flex:none; }
 .agent-order-row.drop-target { outline:1px solid var(--accent); }
-html[data-platform=windows] .account-settings-group { padding:var(--space-card); }
-html[data-platform=windows] .account-settings-group > .card { padding:12px 0; margin:0; border:0; }
-html[data-platform=windows] .account-settings-group > .card + .card { border-top:1px solid var(--border); }
-html[data-platform=windows] .account-settings-group :is(input,select,textarea) { max-width:100%; }
-html[data-platform=windows] .account-settings-group .list-row { min-width:0; overflow-wrap:anywhere; }
+.account-settings-group { padding:var(--space-card); }
+.account-settings-group > .card { padding:12px 0; margin:0; border:0; }
+.account-settings-group > .card + .card { border-top:1px solid var(--border); }
+.account-settings-group :is(input,select,textarea) { max-width:100%; }
+.account-settings-group .list-row { min-width:0; overflow-wrap:anywhere; }
 }

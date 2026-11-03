@@ -1,10 +1,10 @@
-/* A Windows select-only combobox. The HTML select remains the sole form/value
+/* A desktop (Windows and Linux) select-only combobox. The HTML select remains the sole form/value
    owner; the enhancement can be removed without migrating any application state. */
 (() => {
   const root = document.documentElement,contrast = matchMedia('(forced-colors: active)');
   const instances = new Map();
   let active = null,sequence = 0,observing = false;
-  const supported = () => root.dataset.platform === 'windows' && !contrast.matches && typeof HTMLElement.prototype.showPopover === 'function';
+  const supported = () => ['windows', 'linux'].includes(root.dataset.platform) && !contrast.matches && typeof HTMLElement.prototype.showPopover === 'function';
   const enabledOption = (option) => !option.disabled && !option.hidden && !option.closest('optgroup[disabled],optgroup[hidden]');
   const textOf = (option) => option?.label ?? '';
 

@@ -163,8 +163,11 @@ const settle=page=>page.evaluate(async()=>{
       await fallback.addInitScript(fixture);
       await fallback.addInitScript(platform=>{if(platform==='linux')desktopInfo.platform='linux';else HTMLElement.prototype.showPopover=undefined;},platform);
       const view=await fallback.newPage();await view.goto(url);await view.evaluate(()=>AieyesApp.ready);await view.evaluate(()=>AieyesApp.navigatePage('analysis'));
-      assert.equal(await view.locator('.win-select').count(),0,`${platform} retains native selects`);
-      await view.locator('#provider').selectOption('codex');assert.equal(await view.locator('#provider').inputValue(),'codex');
+      // Linux shares the Windows select proxy; without the Popover API the native select remains.
+      if(platform==='linux')assert(await view.locator('.win-select').count()>0,'linux uses the shared select proxy');
+      else assert.equal(await view.locator('.win-select').count(),0,`${platform} retains native selects`);
+      await view.locator('#provider').selectOption('codex',{force:true});assert.equal(await view.locator('#provider').inputValue(),'codex');
+      if(platform==='linux')await view.waitForFunction(()=>document.querySelector('#provider').closest('.win-select')?.querySelector('.win-select-label')?.textContent.trim()===document.querySelector('#provider').selectedOptions[0].label);
       await fallback.close();
     }
     console.log('Windows glass interactions: native values, keyboard, rollback/reset, dynamic options, nested Escape, refresh retention, interrupted motion and native fallbacks passed');

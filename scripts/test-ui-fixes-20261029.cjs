@@ -24,6 +24,15 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
  await page.evaluate(()=>{state.dashboard.quotas[0].bankReset={availableCount:2,credits:[]};state.dashboard.quotas[0].plan='plus';state.page='agent';render();document.querySelector('.quota-disclosure').open=true;});await page.screenshot({path:path.join(out,'accounts-windows.png'),fullPage:true});
  assert.equal(await page.locator('.quota-card').first().locator('.bank summary .ui-icon').count(),1);
  await page.locator('.quota-card').first().screenshot({path:path.join(out,'account-expanded-windows.png')});
- console.log('Windows settings bounds, entry labels and light/dark layout passed at 760/900/1120/1440px');
+ // Linux renders Integrations and account settings with the same grouped cards as Windows.
+ const linux=await browser.newPage({viewport:{width:1120,height:850},reducedMotion:'reduce'});await linux.addInitScript(fixture,{platform:'linux'});await linux.goto(`http://127.0.0.1:${server.address().port}`);await linux.evaluate(()=>AieyesApp.ready);
+ await linux.locator('[data-settings-tab=integrations]').click();
+ const grouped=await linux.evaluate(()=>{const group=document.querySelector('#content .agent-settings-group'),rows=[...document.querySelectorAll('#content .settings-disclosure')];return {group:!!group,rows:rows.length,inside:rows.every(row=>group?.contains(row)),cards:rows.filter(row=>row.classList.contains('card')).length,padding:group&&getComputedStyle(group).paddingLeft};});
+ assert.deepEqual(grouped,{group:true,rows:grouped.rows,inside:true,cards:0,padding:'16px'},'Linux groups every integration section in one card');
+ assert(grouped.rows>=3,'Linux shows the integration sections');
+ await linux.locator('[data-account-edit]').first().click();
+ assert.equal(await linux.locator('#content .account-settings-group').count(),1,'Linux account settings share one card');
+ await linux.screenshot({path:path.join(out,'account-settings-linux.png'),fullPage:true});await linux.close();
+ console.log('Windows settings bounds, entry labels and light/dark layout passed at 760/900/1120/1440px; Linux uses the same grouped settings cards');
  }finally{await browser?.close();server.close();}
 })().catch(e=>{console.error(e);process.exit(1)});
