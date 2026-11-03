@@ -117,6 +117,10 @@ test('native and Web share panel preference and valuation window fixtures', () =
     const actual = window.AieyesUI.estimateWindows(row).map(w=>w.id);
     assert.deepEqual([...actual],row.expected,row.name);
   }
+  for (const row of fixture.freeQuota) {
+    const settings = row.hide === null ? {} : {hideFreeQuotaCards:row.hide};
+    assert.equal(window.AieyesUI.hidesFreeQuota(settings,row.quotas,row.account),row.expected,row.name);
+  }
 });
 test('valuation fields follow the current account plan and quota windows', () => {
   const window = {};

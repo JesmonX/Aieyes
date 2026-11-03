@@ -84,10 +84,27 @@ import Foundation
         }
         var seed = Settings()
         seed.hosts = [Host(id: "shared", name: "Before", target: "fixture.invalid", enabled: false)]
-        seed.accounts = [AgentAccount(id: "notify", name: "Notify", provider: "codex", quotaEnabled: false)]
+        seed.accounts = [AgentAccount(id: "notify", name: "Notify", provider: "codex", quotaEnabled: true)]
         let _: Acknowledgement = try await other.call("settings.save", params: parameters(seed))
         let baseline: Settings = try await other.call("settings.get")
         model.settings = baseline; model.settingsDraft = baseline; model.settingsLoaded = true
+        // Account-card actions must use the same encoded, merging save path as settings.
+        model.settingsDraft.modelMappings["pending-card-edit"] = "vendor/pending"
+        var hidden = model.settings
+        hidden.accounts[0].quotaEnabled = false
+        try await model.persistConfiguration(hidden, base: model.settings)
+        let afterHide: Settings = try await other.call("settings.get")
+        precondition(!afterHide.accounts[0].quotaEnabled && afterHide.accounts[0].archived != true)
+        precondition(afterHide.accounts.count == baseline.accounts.count && afterHide.hosts == baseline.hosts)
+        var archived = model.settings
+        archived.accounts[0].archived = true
+        try await model.persistConfiguration(archived, base: model.settings)
+        let afterArchive: Settings = try await other.call("settings.get")
+        precondition(afterArchive.accounts[0].archived == true && afterArchive.accounts.count == baseline.accounts.count)
+        precondition(model.settingsDraft.modelMappings["pending-card-edit"] == "vendor/pending", "Card actions preserve unrelated unsaved settings")
+        try await model.persistConfiguration(baseline, base: model.settings)
+        model.discardSettingsDraft()
+        print("Native account-card hide and archive: real-core persistence, retained accounts, and unsaved settings preserved")
         var editedHost = baseline.hosts[0]; editedHost.port = 2222
         var concurrent = baseline
         concurrent.hosts[0].name = "Other window"
@@ -145,7 +162,15 @@ import Foundation
             let saved: Settings = try await other.call("settings.get")
             precondition(saved.preciseCounting == precise && model.settingsDraft == saved, "Precise counting must round-trip through general autosave")
         }
+        precondition(model.settings.hideFreeQuotaCards == false, "Hiding free quota cards defaults to off")
+        for hide in [true, false] {
+            model.settingsDraft.hideFreeQuotaCards = hide
+            await model.saveGeneralConfiguration()
+            let saved: Settings = try await other.call("settings.get")
+            precondition(saved.hideFreeQuotaCards == hide && model.settingsDraft == saved, "Hiding free quota cards must round-trip through general autosave")
+        }
         print("Native shared precise counting: default on, disable/enable/disable autosave passed")
+        print("Native free quota card setting: default off, enable/disable autosave passed")
         print("Native notification defaults: real-core general autosave and draft synchronization passed")
         print("Native account notification overrides: enable, disable and restore inheritance passed")
         print("Native source-level automatic opt-in and disable: real-core persistence and draft synchronization passed")

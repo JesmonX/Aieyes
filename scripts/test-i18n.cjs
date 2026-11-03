@@ -107,7 +107,7 @@ function populate() {
       for (const category of ['integrations', 'hosts', 'prices', 'wakeups']) {
         await page.evaluate(category => AieyesApp.openSettings({category}), category);await audit(category);
       }
-      for (const section of ['appearance', 'desktop', 'network', 'refresh', 'notifications', 'updates']) {
+      for (const section of ['appearance', 'desktop', 'network', 'refresh', 'notifications', 'advanced', 'updates']) {
         await page.evaluate(section => AieyesApp.openSettings({category: 'general', section}), section);await audit(section);
       }
       const providers = await page.evaluate(() => Object.keys(AieyesContract.providers).filter(p => p !== 'all'));

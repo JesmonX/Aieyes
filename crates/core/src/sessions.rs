@@ -99,6 +99,10 @@ pub struct LiveSession {
     pub parent_path: String,
     #[serde(skip)]
     pub turn_started_at: u64,
+    /// Settled for at least 90 seconds. It still takes part in deduplication,
+    /// so a stale record of the same session cannot outlive the settlement.
+    #[serde(skip)]
+    pub expired: bool,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -415,6 +419,10 @@ impl Snapshot {
                 }
                 main
             })
+            // A settled record is removed only after it had the chance to
+            // supersede an older active record of the same session (e.g. a
+            // Claude SessionEnd hook versus a transcript without a process).
+            .filter(|s| !(s.expired && s.phase.terminal()))
             .collect();
         self.sessions.sort_by_key(|s| {
             (
@@ -819,7 +827,8 @@ impl Reader {
             {
                 phase = Phase::Unknown;
             }
-            if (elapsed >= 3600 && alive != Some(true)) || (phase.terminal() && elapsed >= 90) {
+            let expired = phase.terminal() && elapsed >= 90;
+            if !expired && elapsed >= 3600 && alive != Some(true) {
                 continue;
             }
             if source.provider == "antigravity"
@@ -868,6 +877,7 @@ impl Reader {
                 path: f.key.clone(),
                 parent_path: cursor.activity.parent_session_path.clone(),
                 turn_started_at: cursor.activity.turn_started_at(),
+                expired,
             });
         }
         // A legacy hook may lack source metadata while its native log has it.
@@ -4209,6 +4219,277 @@ mod codex_source_tests {
                     case["visible"] == true,
                     "{}",
                     case["name"]
+                );
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod settled_session_tests {
+    use super::*;
+
+    fn claude_source() -> Source {
+        Source {
+            id: "claude".into(),
+            provider: "claude".into(),
+            name: "Claude".into(),
+            ..Default::default()
+        }
+    }
+    /// Polls one transcript and one hook spool of session `s`, `age` seconds
+    /// after the transcript's first row, and returns the merged phases.
+    fn settled(
+        rows: &[Value],
+        hooks: &[(&str, u64, Value)],
+        process: (u32, u64),
+        t0: u64,
+        ages: &[u64],
+    ) -> Vec<Vec<Phase>> {
+        let source = claude_source();
+        let mut reader = Reader::default();
+        let log: Vec<_> = rows.iter().flat_map(session_events::claude).collect();
+        let spool: Vec<_> = hooks
+            .iter()
+            .map(|(kind, offset, input)| {
+                let mut e = session_events::hook("claude", kind, input, (t0 + offset) * 1000);
+                (e.pid, e.process_start) = process;
+                e.classification = session_events::INTERACTIVE.into();
+                e
+            })
+            .collect();
+        ages.iter()
+            .enumerate()
+            .map(|(poll, age)| {
+                let file = |key: &str, hook: bool, events: &Vec<Event>| FileBatch {
+                    key: key.into(),
+                    hook,
+                    reset: poll == 0,
+                    modified: t0,
+                    events: if poll == 0 { events.clone() } else { vec![] },
+                    ..Default::default()
+                };
+                let batch = SourceBatch {
+                    files: vec![
+                        file("/p/s.jsonl", false, &log),
+                        file("/h/s.jsonl", true, &spool),
+                    ],
+                    ..Default::default()
+                };
+                let now = t0 + age;
+                let mut snapshot =
+                    reader.consume(&source, batch, now, now, "本机", Some("installed".into()));
+                snapshot.finish();
+                snapshot.sessions.iter().map(|s| s.phase).collect()
+            })
+            .collect()
+    }
+    fn rows(t0: u64) -> impl Fn(&str, u64, Value) -> Value {
+        move |kind, offset, message| {
+            let at = chrono::DateTime::from_timestamp((t0 + offset) as i64, 0)
+                .unwrap()
+                .to_rfc3339();
+            json!({"type":kind,"sessionId":"s","entrypoint":"cli","uuid":format!("u{offset}"),
+                "parentUuid":format!("u{}", offset.saturating_sub(1)),"timestamp":at,"message":message})
+        }
+    }
+    // An exited process cannot be found; a pid and start that never match.
+    const EXITED: (u32, u64) = (1, 12345);
+
+    #[test]
+    fn claude_session_end_settles_a_transcript_left_open_by_an_interrupt_or_command() {
+        let t0 = seconds(SystemTime::now()) - 4000;
+        let row = rows(t0);
+        let hook = |kind, offset, prompt: &str| {
+            (kind, offset, json!({"session_id":"s","prompt_id":prompt}))
+        };
+        let ages = [30, 120, 200, 1800, 3500];
+        let interrupted = [
+            row("user", 0, json!({"role":"user","content":"run"})),
+            row(
+                "assistant",
+                1,
+                json!({"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"t","name":"Bash"}]}),
+            ),
+            row(
+                "user",
+                2,
+                json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"t"}]}),
+            ),
+            row(
+                "user",
+                3,
+                json!({"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}),
+            ),
+        ];
+        let hooks = [
+            hook("UserPromptSubmit", 0, "p1"),
+            hook("PreToolUse", 1, "p1"),
+            hook("PostToolUse", 2, "p1"),
+            hook("SessionEnd", 5, "p2"),
+        ];
+        assert_eq!(
+            settled(&interrupted, &hooks, EXITED, t0, &ages),
+            [vec![Phase::Interrupted], vec![], vec![], vec![], vec![]]
+        );
+        // Prompt-less SessionEnd after the user leaves with an exit command.
+        let exited = [
+            row("user", 0, json!({"role":"user","content":"hi"})),
+            row(
+                "assistant",
+                1,
+                json!({"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}),
+            ),
+            row(
+                "user",
+                3,
+                json!({"role":"user","content":"<command-name>/exit</command-name>"}),
+            ),
+        ];
+        let hooks = [
+            hook("UserPromptSubmit", 0, "p1"),
+            hook("Stop", 1, "p1"),
+            hook("SessionEnd", 4, "p2"),
+        ];
+        let polls = settled(&exited, &hooks, EXITED, t0, &ages);
+        assert!(
+            polls[1..].iter().all(Vec::is_empty),
+            "a settled hook must outlive no stale transcript: {polls:?}"
+        );
+    }
+
+    #[test]
+    fn claude_interrupt_marker_and_local_commands_do_not_open_a_turn() {
+        let t0 = seconds(SystemTime::now()) - 10;
+        let row = rows(t0);
+        let alive = (std::process::id(), 0);
+        let done = [
+            row("user", 0, json!({"role":"user","content":"hi"})),
+            row(
+                "assistant",
+                1,
+                json!({"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}]}),
+            ),
+        ];
+        // Esc while the model works: no Stop hook follows, the process stays open.
+        let interrupted = [
+            row("user", 0, json!({"role":"user","content":"run"})),
+            row(
+                "user",
+                1,
+                json!({"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}),
+            ),
+        ];
+        let hooks = [(
+            "UserPromptSubmit",
+            0,
+            json!({"session_id":"s","prompt_id":"p1"}),
+        )];
+        assert_eq!(
+            settled(&interrupted, &hooks, alive, t0, &[5, 200, 4000]),
+            [vec![Phase::Interrupted], vec![], vec![]]
+        );
+        // `/model` writes its output; `/clear` writes a system record.
+        for result in [
+            row(
+                "user",
+                3,
+                json!({"role":"user","content":"<local-command-stdout>Set model</local-command-stdout>"}),
+            ),
+            row("system", 3, Value::Null),
+        ] {
+            let mut result = result;
+            if result["type"] == "system" {
+                result["subtype"] = json!("local_command");
+            }
+            let mut rows = done.to_vec();
+            rows.push(row(
+                "user",
+                2,
+                json!({"role":"user","content":"<command-name>/model</command-name>"}),
+            ));
+            rows.push(result);
+            let mut activity = session_events::Activity::default();
+            for event in rows.iter().flat_map(session_events::claude) {
+                activity.apply(event);
+            }
+            assert_eq!(activity.phase, None, "{rows:?}");
+        }
+        // A prompt command continues with a model request.
+        let mut activity = session_events::Activity::default();
+        for event in [
+            row(
+                "user",
+                2,
+                json!({"role":"user","content":"<command-name>/goal</command-name>"}),
+            ),
+            row(
+                "assistant",
+                3,
+                json!({"role":"assistant","stop_reason":null,"content":[{"type":"thinking"}]}),
+            ),
+        ]
+        .iter()
+        .flat_map(session_events::claude)
+        {
+            activity.apply(event);
+        }
+        assert_eq!(activity.phase, Some(Phase::Thinking));
+    }
+
+    #[test]
+    fn qoder_desktop_message_status_reaches_the_live_phase() {
+        let temp = tempfile::tempdir().unwrap();
+        let now = seconds(SystemTime::now());
+        let db = rusqlite::Connection::open(temp.path().join("main.sqlite")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE chat_sessions(session_id TEXT,updated_at INTEGER,owner_session_id TEXT,deleted_at INTEGER);
+             CREATE TABLE chat_session_turn_states(revision INTEGER,session_id TEXT,turn_id TEXT,status TEXT);
+             CREATE TABLE chat_session_messages(session_id TEXT,turn_id TEXT,sequence INTEGER,role TEXT,status TEXT,updated_at INTEGER);",
+        )
+        .unwrap();
+        let cases = [
+            ("completed", "assistant", 5, Some(Phase::Complete)),
+            ("completed", "assistant", 200, None),
+            ("failed", "assistant", 5, Some(Phase::Failed)),
+            ("cancelled", "assistant", 5, Some(Phase::Interrupted)),
+            (
+                "waiting_for_approval",
+                "assistant",
+                200,
+                Some(Phase::NeedsInput),
+            ),
+            ("streaming", "assistant", 5, Some(Phase::Working)),
+            ("streaming", "assistant", 200, Some(Phase::Unknown)),
+            ("completed", "user", 5, Some(Phase::Working)),
+        ];
+        for (status, role, age, expected) in cases {
+            db.execute_batch("DELETE FROM chat_sessions; DELETE FROM chat_session_messages;")
+                .unwrap();
+            let at = ((now - age) * 1000) as i64;
+            db.execute("INSERT INTO chat_sessions VALUES('s',?1,NULL,NULL)", [at])
+                .unwrap();
+            db.execute(
+                "INSERT INTO chat_session_messages VALUES('s','t',1,?1,?2,?3)",
+                rusqlite::params![role, status, at],
+            )
+            .unwrap();
+            for provider in ["qoder", "qoder-cn"] {
+                let settings = Settings {
+                    sources: vec![Source {
+                        id: provider.into(),
+                        provider: provider.into(),
+                        name: provider.into(),
+                        path: temp.path().to_string_lossy().into(),
+                        enabled: true,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                };
+                let snapshot = SessionMonitor::default().read(&settings, SystemTime::now());
+                assert_eq!(
+                    snapshot.phase(),
+                    expected,
+                    "{provider} {status}/{role} {age}s"
                 );
             }
         }

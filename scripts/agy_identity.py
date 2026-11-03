@@ -6,6 +6,7 @@ may refresh its credential. curl reads its authorization header through stdin.
 import base64
 import datetime
 import hashlib
+import hmac
 import json
 import os
 import pathlib
@@ -20,6 +21,7 @@ LICENSE_URL = 'https://aicode.googleapis.com/v1:fetchLicenses'
 USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo'
 ASSIST_URL = 'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist'
 QUOTA_URL = 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary'
+USER_AGENT = 'antigravity (aieyes read-only quota)'
 RELOGIN = 'Antigravity 登录已过期，请在 agy 中重新登录'
 RELOGIN_IDE = 'Antigravity IDE 登录已过期，请在 IDE 中重新登录'
 IDE_INVALID = 'Antigravity IDE 登录凭据无法读取，请在 IDE 中重新登录'
@@ -197,9 +199,15 @@ def same_owner(left, right):
         return identity(left)['key'] == identity(right)['key']
     except Exception:
         # New CLI stores id_token_email, not an ID token. An email alone is
-        # not an account ID; identical access tokens still prove the same store.
-        token = left.get('token', {}).get('access_token')
-        return bool(token and token == right.get('token', {}).get('access_token'))
+        # not an account ID; an identical OAuth grant still proves one owner.
+        # The access token rotates on every refresh, so a stale file-backend
+        # copy only shares the refresh token with the current keychain entry.
+        # Tokens are compared locally and never projected.
+        def same(name):
+            mine, theirs = left.get('token', {}).get(name), right.get('token', {}).get(name)
+            return (isinstance(mine, str) and isinstance(theirs, str) and bool(mine)
+                    and hmac.compare_digest(mine.encode(), theirs.encode()))
+        return same('access_token') or same('refresh_token')
 
 
 def read_credential():
@@ -250,11 +258,13 @@ def subscription(value):
     if not isinstance(licenses, list) or not licenses or not isinstance(licenses[0], dict):
         return None
     first = licenses[0]
+    # Free tier display names vary; the tier id keeps one label for them.
+    if first.get('userTier') in ('free-tier', 'g1-free-tier'):
+        return 'Free'
     label = first.get('tierDisplayName')
     if isinstance(label, str) and label.strip() and len(label) <= 120 and not any(ord(c) < 32 for c in label):
         return label.strip()
-    return {'g1-pro-tier': 'Google AI Pro', 'g1-ultra-tier': 'Google AI Ultra',
-            'free-tier': 'Free', 'g1-free-tier': 'Free'}.get(first.get('userTier'))
+    return {'g1-pro-tier': 'Google AI Pro', 'g1-ultra-tier': 'Google AI Ultra'}.get(first.get('userTier'))
 
 
 def access_token(credential):
@@ -279,6 +289,9 @@ def request_json(credential, url, body=None):
         raise ValueError('Antigravity 查询地址不支持')
     token = access_token(credential)
     config = 'header = "Authorization: Bearer ' + token + '"\n'
+    # Code Assist rejects unknown clients (curl/x.y) as UNSUPPORTED_CLIENT: no
+    # tier or project, and the quota summary answers 403 "no valid license".
+    config += 'user-agent = "' + USER_AGENT + '"\n'
     if body is not None:
         config += 'header = "Content-Type: application/json"\n'
         config += 'data = ' + json.dumps(json.dumps(body, separators=(',', ':'))) + '\n'

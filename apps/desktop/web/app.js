@@ -439,12 +439,22 @@ function updateQuotaGroupAttention() {
   }
   updateQuotaFailurePopover();
 }
+// Settings → Advanced hides free accounts' quota cards; they are still queried.
+function shownQuotaSettings(quotas = state.dashboard?.quotas) {
+  return { ...state.settings, accounts: state.settings.accounts.filter((a) => !AieyesUI.hidesFreeQuota(state.settings, quotas, a)) };
+}
+function quotaCardAccounts(quotas = state.dashboard?.quotas, hideFree = true) {
+  return (hideFree ? shownQuotaSettings(quotas) : state.settings).accounts.filter((a) => !a.archived && a.quotaEnabled && AieyesUI.supports(a.provider, 'quota', state.settings));
+}
 function quotaSection(d) {
-  const selected = PANEL ? AieyesUI.panelAccounts(state.settings, d.quotaOrder ?? []) : null;
-  const visible = (a) => (!state.provider || AieyesUI.sameAgent(a.provider, state.provider)) && (!state.accountKey || state.accountKey === a.provider + ':' + (a.accountId ?? a.id)) && (!PANEL || selected[a.provider]?.includes(a.provider + ':' + (a.accountId ?? a.id)));
-  const accounts = state.settings.accounts.filter((a) => !a.archived && a.quotaEnabled && AieyesUI.supports(a.provider, 'quota', state.settings) && visible(a));
+  const eligible = quotaCardAccounts(d.quotas);
+  const selected = PANEL ? AieyesUI.panelAccounts(shownQuotaSettings(d.quotas), d.quotaOrder ?? []) : null;
+  const filtered = (a) => (!state.provider || AieyesUI.sameAgent(a.provider, state.provider)) && (!state.accountKey || state.accountKey === a.provider + ':' + (a.accountId ?? a.id));
+  const visible = (a) => filtered(a) && (!PANEL || selected[a.provider]?.includes(a.provider + ':' + (a.accountId ?? a.id)));
+  const accounts = eligible.filter(visible);
   const order = d.quotaOrder ?? [];accounts.sort((a, b) => (order.indexOf(a.provider + ':' + a.id) < 0 ? Infinity : order.indexOf(a.provider + ':' + a.id)) - (order.indexOf(b.provider + ':' + b.id) < 0 ? Infinity : order.indexOf(b.provider + ':' + b.id)));
-  if (!accounts.length) return `<div class="card empty-quota"><h2>${state.provider ? AieyesI18n.t("此 Agent 暂无显示账户") : AieyesI18n.t("尚未显示账户")}</h2>${PANEL && state.settings.accounts.some((a) => !a.archived && a.quotaEnabled && AieyesUI.supports(a.provider, 'quota', state.settings)) ? `<button type="button" data-empty-panel-accounts>${AieyesI18n.t("选择面板账户")}</button>` : `<button data-add-quota>${AieyesI18n.t("接入账户")}</button>`}</div>`;
+  if (!accounts.length && !eligible.some(filtered) && quotaCardAccounts(d.quotas, false).some(filtered)) return `<div class="card empty-quota" data-free-quota-hidden><h2>${AieyesI18n.t("免费账户的额度卡片已隐藏")}</h2><button type="button" data-open-advanced>${AieyesI18n.t("高级设置")}</button></div>`;
+  if (!accounts.length) return `<div class="card empty-quota"><h2>${state.provider ? AieyesI18n.t("此 Agent 暂无显示账户") : AieyesI18n.t("尚未显示账户")}</h2>${PANEL && eligible.length ? `<button type="button" data-empty-panel-accounts>${AieyesI18n.t("选择面板账户")}</button>` : `<button data-add-quota>${AieyesI18n.t("接入账户")}</button>`}</div>`;
   const groups = [...new Set(accounts.map((a) => AieyesUI.agentProvider(a.provider)))];
   return `<div class="section-head quota-heading"><h2>${AieyesI18n.t("账户额度 {0} ", refreshIndicator('quotas'))}<span class="count">${accounts.length}</span></h2><div class="section-actions"><button id="order-quotas" title="${AieyesI18n.t("调整账户顺序")}" aria-label="${AieyesI18n.t("调整账户顺序")}">${uiIcon('sort')}</button><button id="read-quotas" ${state.quotaBusy || state.refreshState.quotas?.busy ? 'disabled' : ''}>${state.quotaBusy ? AieyesI18n.t("读取中…") : AieyesI18n.t("刷新额度")}</button></div></div><div class="quota-groups">` + groups.map((provider) => {
     const rows = accounts.filter((a) => AieyesUI.sameAgent(a.provider, provider)),quotas = rows.map((a) => (d.quotas ?? []).find((q) => q.provider === a.provider && q.accountId === a.id));
@@ -588,7 +598,7 @@ async function referencePrices(model = null, name = '') {
 async function syncPrices() {await job(AieyesI18n.t("同步价格"), async () => {await api('prices.sync');state.prices = await api('prices.list');await loadDashboard();if (state.page === 'settings') renderSettings();notify(AieyesI18n.t("价格已更新"));}, 'prices');}
 function applyQuotaSamples(rows) {
   if (!state.dashboard || !Array.isArray(rows)) return;
-  const changed = [];
+  const changed = [];let tierChanged = false;
   for (let row of rows) {
     const key = row.provider + ':' + row.accountId;
     if (!state.settings?.accounts.some((a) => a.provider + ':' + a.id === key && !a.archived)) continue;
@@ -596,10 +606,13 @@ function applyQuotaSamples(rows) {
     if ((old?.observationRevision || row.observationRevision) ? (old?.observationRevision ?? 0) > (row.observationRevision ?? 0) : old?.updatedAt > row.updatedAt) continue;
     if (row.error && old && !row.observationRevision) row = { ...old, error: row.error };
     if (JSON.stringify(row) === JSON.stringify(old)) continue;
+    if (Boolean(row.freePlan) !== Boolean(old?.freePlan)) tierChanged = true;
     if (index >= 0) state.dashboard.quotas[index] = row;else if ((!state.provider || AieyesUI.sameAgent(state.provider, row.provider)) && (!state.accountKey || state.accountKey === key)) state.dashboard.quotas.push(row);
     changed.push(row);
   }
   if (state.page === 'agent') {
+    // A card that appears or disappears changes group counts and layout.
+    if (tierChanged && state.settings.hideFreeQuotaCards) {render();return;}
     const view = rememberView();let replaced = false;
     for (const row of changed) {const key = CSS.escape(row.provider + ':' + row.accountId),node = document.querySelector('[data-quota="' + key + '"],[data-quota-placeholder="' + key + '"]');if (node) {node.outerHTML = quotaCard(row, state.dashboard.quotas.length);replaced = true;}}
     if (replaced) {updateQuotaGroupAttention();bindQuotaTools();restoreView(view);}
@@ -761,6 +774,7 @@ function collectGeneralDraft(next, forms) {
     for (const [field, key] of [['unexpectedResetNotification', 'unexpected'], ['naturalResetNotification', 'natural']]) if (changed(field)) next.quotaResetNotifications = { unexpected: true, natural: false, ...next.quotaResetNotifications, [key]: data.get(field) === 'true' };
     if (changed('historyShowDeletedAccounts')) next.historyShowDeletedAccounts = data.get('historyShowDeletedAccounts') === 'true';
     if (changed('preciseCounting')) next.preciseCounting = data.get('preciseCounting') === 'true';
+    if (changed('hideFreeQuotaCards')) next.hideFreeQuotaCards = data.get('hideFreeQuotaCards') === 'true';
     for (const [field, key] of [['appearanceLanguage', 'language'], ['appearanceTheme', 'theme'], ['appearanceAccent', 'accent'], ['appearanceChartPalette', 'chartPalette'], ['appearanceChartContrast', 'chartContrast']]) if (changed(field)) next.appearance = { theme: 'system', accent: 'indigo', chartPalette: 'classic', chartContrast: 'high', ...next.appearance, [key]: values[field] };
     if (Object.hasOwn(values, 'appMode') && Object.keys(values).some((key) => key.startsWith('app') && changed(key))) next.proxy = proxyValue(data, 'app');
     if (changed('proxyTestUrls')) next.proxyTestUrls = values.proxyTestUrls.split(',').map((v) => v.trim()).filter(Boolean);
@@ -987,6 +1001,7 @@ function renderOverview() {
   $('#open-detail').onclick = () => openAnalysis();
   if ($('#read-quotas')) $('#read-quotas').onclick = () => userRefresh('quotas');
   document.querySelectorAll('[data-add-quota]').forEach((b) => b.onclick = () => openSetup('quota'));
+  document.querySelectorAll('[data-open-advanced]').forEach((b) => b.onclick = () => openSettings({ category: 'general', section: 'advanced' }));
   if ($('#repair-pricing')) $('#repair-pricing').onclick = openPricing;
   bindQuotaTools();bindAttention();bindTokenSummary();bindSetup();restoreView(view);window.AieyesSessions?.visibility();
   window.AieyesMotion?.didRender('agent');
@@ -1360,7 +1375,7 @@ function bindSettingsSidebar(attribute, onSelect) {
     button.onkeydown = (event) => {const index = buttons.indexOf(button),next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : ['ArrowDown', 'ArrowRight'].includes(event.key) ? (index + 1) % buttons.length : ['ArrowUp', 'ArrowLeft'].includes(event.key) ? (index + buttons.length - 1) % buttons.length : null;if (next == null) return;event.preventDefault();buttons[next].click();document.querySelector('[' + attribute + '="' + CSS.escape(buttons[next].getAttribute(attribute)) + '"]')?.focus();};
   }
 }
-const generalPageList = () => [['appearance', AieyesI18n.t("外观")], ['desktop', AieyesI18n.t("桌宠与会话")], ['network', AieyesI18n.t("网络代理")], ['refresh', AieyesI18n.t("刷新与历史")], ['notifications', AieyesI18n.t("通知")], ['updates', AieyesI18n.t("更新与关于")]];
+const generalPageList = () => [['appearance', AieyesI18n.t("外观")], ['desktop', AieyesI18n.t("桌宠与会话")], ['network', AieyesI18n.t("网络代理")], ['refresh', AieyesI18n.t("刷新与历史")], ['notifications', AieyesI18n.t("通知")], ['advanced', AieyesI18n.t("高级")], ['updates', AieyesI18n.t("更新与关于")]];
 let generalPages = generalPageList();window.addEventListener("aieyes:language", () => {generalPages = generalPageList();});
 function settingsCategoriesHTML() {
   return `<nav class="settings-categories" aria-label="${AieyesI18n.t("设置")}">${generalPages.map(([key, title]) => `<button type="button" data-general-page="${key}" ${key === state.generalTab ? 'class="active" aria-current="page"' : ''}>${title}</button>`).join('')}</nav>`;
@@ -1374,6 +1389,7 @@ function generalSettingsHTML(s, tab = state.generalTab) {
   if (tab === 'appearance') {
     fields = `<h2>${AieyesI18n.t("界面")}</h2>${select('appearanceLanguage', AieyesI18n.t('语言'), [['zh-CN','简体中文'], ['en','English']], s.appearance?.language ?? 'zh-CN')}${select('appearanceTheme', AieyesI18n.t("主题"), [['system', AieyesI18n.t("跟随系统")], ['light', AieyesI18n.t("浅色")], ['dark', AieyesI18n.t("深色")]], s.appearance?.theme ?? 'system')}${select('appearanceAccent', AieyesI18n.t("强调色"), [['system', AieyesI18n.t("默认")], ['indigo', AieyesI18n.t("靛蓝")], ['blue', AieyesI18n.t("蓝")], ['teal', AieyesI18n.t("青绿")], ['purple', AieyesI18n.t("紫")]], s.appearance?.accent ?? 'system')}${window.AieyesDesktop?.appearanceHTML() ?? ''}<h3>${AieyesI18n.t("图表")}</h3>${select('appearanceChartPalette', AieyesI18n.t("图表配色"), window.AieyesChartPalettes.map((p) => [p.id, p.name]), s.appearance?.chartPalette ?? 'classic')}${select('appearanceChartContrast', AieyesI18n.t("图表对比度"), [['high', AieyesI18n.t("高对比度")], ['low', AieyesI18n.t("柔和")]], s.appearance?.chartContrast ?? 'high')}<div id="chart-palette-preview" class="chart-palette-preview"></div>`;
   }
+  if (tab === 'advanced') fields = `<h2>${AieyesI18n.t("账户额度")}</h2><div class="setting-row"><label><input id="field-hideFreeQuotaCards" type="checkbox" role="switch" name="hideFreeQuotaCards" ${s.hideFreeQuotaCards ? 'checked' : ''}>${AieyesI18n.t("隐藏免费账户的额度卡片")}</label>${helpHTML(AieyesI18n.t("隐藏免费账户的额度卡片"), AieyesI18n.t("适用于所有有付费套餐的 Agent。服务商返回免费套餐时隐藏该账户的额度卡片；套餐未知或读取失败时照常显示。隐藏的账户仍会查询额度，升级后自动显示。"))}</div><p class="muted tiny">${AieyesI18n.t("主窗口与面板都不显示免费账户的额度卡片")}</p>`;
   if (tab === 'network') fields = `${proxyFields('app', s.proxy)}<details class="settings-details" data-persist-disclosure="settings:network:test" ${disclosureOpen('settings:network:test', false) ? 'open' : ''}><summary>${AieyesI18n.t("测试选项")}</summary>${field('proxyTestUrls', AieyesI18n.t("测试地址（逗号分隔）"), (s.proxyTestUrls ?? ['https://api.github.com/rate_limit', 'https://openrouter.ai']).join(', '))}</details>`;
   if (tab === 'refresh') {
     fields = `<h2>${AieyesI18n.t("刷新")}</h2>${secondsField('refreshSeconds', AieyesI18n.t("额度查询"), s.refreshSeconds)}${s.agents?.some((a) => ['qoder', 'qoder-cn'].includes(a.provider) && a.enabled) ? `<p class="muted tiny" data-quota-floor>${AieyesI18n.t("Qoder 系列额度查询会启动对应 CLI，最少每 10 分钟一次")}</p>` : ''}${secondsField('historyRefreshSeconds', AieyesI18n.t("日志同步"), s.historyRefreshSeconds ?? Math.max(10, s.refreshSeconds))}<h3>${AieyesI18n.t("服务器")}</h3>${secondsField('serverForegroundRefreshSeconds', AieyesI18n.t("前台"), s.serverForegroundRefreshSeconds ?? 2)}${secondsField('serverRefreshSeconds', AieyesI18n.t("后台"), s.serverRefreshSeconds)}<h3>${AieyesI18n.t("历史用量")}</h3><div class="setting-row"><label><input id="field-preciseCounting" type="checkbox" role="switch" name="preciseCounting" ${s.preciseCounting ? 'checked' : ''}>${AieyesI18n.t("精确计数")}</label>${helpHTML(AieyesI18n.t("精确计数"), AieyesI18n.t("为所有 Agent 去除可识别的 fork 和继承历史重复用量。关闭时按各会话计入；修改后在下次同步自动重算。"))}</div><p class="muted tiny">${AieyesI18n.t("去除可识别的继承重复用量")}</p>`;
@@ -2036,7 +2052,8 @@ function bindQuotaTools() {
 }
 function openPanelAccounts() {
   if (state.estimateBusy) {notify(AieyesI18n.t("采样操作正在保存，请稍后调整面板选择。"));return;}
-  const preference = AieyesUI.panelPreference(),selected = AieyesUI.panelAccounts(state.settings, state.dashboard.quotaOrder ?? [], preference),accounts = state.settings.accounts.filter((a) => !a.archived && a.quotaEnabled && AieyesUI.supports(a.provider, 'quota', state.settings));
+  const accounts = quotaCardAccounts(),shown = shownQuotaSettings();
+  const preference = AieyesUI.panelPreference(),selected = AieyesUI.panelAccounts(shown, state.dashboard.quotaOrder ?? [], preference);
   const rawProviders = [...new Set([...accounts.map((a) => a.provider), ...Object.keys(preference.providers)])],groups = [...new Set(rawProviders.map((p) => AieyesUI.agentProvider(p)))];
   const members = (provider) => rawProviders.filter((p) => AieyesUI.sameAgent(p, provider));
   const manual = (provider) => members(provider).some((p) => preference.providers[p]?.mode === 'custom');
@@ -2044,7 +2061,7 @@ function openPanelAccounts() {
   if (PANEL) $('#quota-dialog').dataset.opener = '#panel-more > summary';
   const update = () => {for (const group of document.querySelectorAll('[data-account-provider]')) {const inputs = [...group.querySelectorAll('input')],count = inputs.filter((i) => i.checked).length;group.querySelector('.selected-count').textContent = AieyesI18n.t(manual(group.dataset.accountProvider) ? "手动 · {0} 个" : "自动 · {0} 个", count);}};
   document.querySelectorAll('[data-panel-account]').forEach((input) => input.onchange = () => {const provider = input.closest('[data-account-provider]').dataset.accountProvider;for (const p of members(provider)) preference.providers[p] = { mode: 'custom', keys: [] };update();});update();
-  document.querySelectorAll('[data-panel-default]').forEach((button) => button.onclick = () => {const provider = button.dataset.panelDefault;for (const p of members(provider)) preference.providers[p] = { mode: 'auto', keys: [] };const choices = AieyesUI.panelAccounts(state.settings, state.dashboard.quotaOrder ?? [], preference),defaults = members(provider).flatMap((p) => choices[p] ?? []);button.closest('fieldset').querySelectorAll('input').forEach((input) => input.checked = defaults.includes(input.dataset.panelAccount));update();});
+  document.querySelectorAll('[data-panel-default]').forEach((button) => button.onclick = () => {const provider = button.dataset.panelDefault;for (const p of members(provider)) preference.providers[p] = { mode: 'auto', keys: [] };const choices = AieyesUI.panelAccounts(shown, state.dashboard.quotaOrder ?? [], preference),defaults = members(provider).flatMap((p) => choices[p] ?? []);button.closest('fieldset').querySelectorAll('input').forEach((input) => input.checked = defaults.includes(input.dataset.panelAccount));update();});
   $('#panel-accounts-cancel').onclick = () => $('#quota-dialog').close();
   $('#panel-accounts-save').onclick = () => {for (const group of document.querySelectorAll('[data-account-provider]')) {for (const provider of members(group.dataset.accountProvider)) if (preference.providers[provider]?.mode === 'custom') preference.providers[provider].keys = [...group.querySelectorAll('input:checked')].map((i) => i.dataset.panelAccount).filter((key) => key.startsWith(provider + ':'));}try {localStorage.setItem('aieyes.panel.accounts.v2', JSON.stringify(preference));} catch (error) {$('#quota-tool-error').textContent = AieyesI18n.t("无法保存本机选择：") + String(error);$('#quota-tool-error').hidden = false;return;}$('#quota-dialog').close();render();};
   $('#panel-accounts-cancel').focus();

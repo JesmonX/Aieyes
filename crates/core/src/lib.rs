@@ -42,6 +42,7 @@ pub mod operations;
 pub mod pet_import;
 pub mod pets;
 mod pi_history;
+mod plan_tier;
 pub mod pricing;
 pub mod process;
 mod provider_paths;

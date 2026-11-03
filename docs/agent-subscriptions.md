@@ -74,6 +74,25 @@ Cline 令牌读自 `~/.cline/data/settings/providers.json`（`CLINE_DATA_DIR`）
 
 OpenRouter 的 `usage` 为累计用量，周期限额分别使用 `usage_daily`、`usage_weekly`、`usage_monthly`；仅当 `include_byok_in_limit=true` 时计入同周期的 `byok_usage_*`。旧响应缺少周期计数时，可从服务端明确给出的限额与剩余额度计算已用，不能用累计值冒充当期值。字段语义依据 [OpenRouter 官方 SDK](https://github.com/OpenRouterTeam/typescript-sdk/blob/main/docs/models/operations/getcurrentkeydata.mdx)，由 fixture 覆盖；这些 Key 限额不等于账户总余额。
 
+## 免费账户识别
+
+「设置 → 常规 → 高级 → 隐藏免费账户的额度卡片」依据核心 `plan_tier::is_free` 判定（2026-11-03 核对）。快照只保存服务商原样的 `plan`；核心在输出概览数据和 `quotas.refresh` 结果时附加 `freePlan`，该字段不写入数据库。判定规则：`personal_standard`，或按词含 `free`、含「免费」；含 `trial`、「试用」的付费层试用不算免费；缺失或未知套餐不算免费。
+
+| Agent | 接口与字段 | 判为免费 |
+| --- | --- | --- |
+| Codex（含 OpenCode / Pi 中的 ChatGPT 登录） | app-server `rateLimits.planType` | `free`（[协议枚举](protocols/codex-0.160.0-rate-limits.schema.json)） |
+| Copilot（含上游 github-copilot） | `copilot_internal/user` 的 `access_type_sku`、`copilot_plan` | 现行 Free 返回 `copilot_plan:"individual"` 与 `access_type_sku:"free_limited_copilot"`，按 SKU 识别为 Copilot Free；旧格式 `copilot_plan:"free"` |
+| Cursor | IDE `cursorAuth/stripeMembershipType` | `free`；`free_trial`（Cursor Pro Trial）不算 |
+| Kiro | `GetUsageLimits` `subscriptionInfo.subscriptionTitle` / `type`，CLI `/usage` | `KIRO FREE` |
+| Trae / Trae CN | `ide_user_ent_usage` 的 `product_type` / `display_desc` | `product_type` 0（Free）、`display_desc` 「免费」 |
+| Qoder / Qoder CN | CLI `get_usage_info` 的 `userType` | `personal_standard` |
+| Gemini CLI（Pi / OMP） | `loadCodeAssist` 的 `paidTier`，其次 `currentTier` | 层级 id `free-tier` / `g1-free-tier`，不看展示名；空 `paidTier:{}` 跳过 |
+| Antigravity | `fetchLicenses` 的 `userTier` / `tierDisplayName`，其次 `loadCodeAssist` | `userTier` 为 `free-tier` / `g1-free-tier` 时优先记为 Free |
+| WorkBuddy / CodeBuddy（余额登录） | `get-user-resource-summary` 的 `IsPaidUser` | 仅 `false`；字段缺失时套餐未知 |
+| Cline / Kilo 中的 OpenRouter Key | `/api/v1/key` 的 `is_free_tier` | `true` |
+
+不受此设置影响：Claude Code 没有免费层（Free 计划不含 Claude Code）；ZCode 只有 lite / pro / max 付费档；Grok 的 `billing?format=credits` 不含套餐层级；Kimi Code 和 OpenCode Go / Console 没有可识别的免费档；DeepSeek、Moonshot、xAI API、Cline / Kilo 钱包只有余额。尚未处理：ZCode 实际返回的 `data.level` 未读取（目前读 `planName` / `plan`），Grok 套餐需另查 `/v1/settings`。各免费值来自官方文档、客户端安装包或社区实测响应，没有对应真实免费账户的联网验收。
+
 ## Claude Code 官方额度与本地用量
 
 macOS 在发现默认 Claude 目录后的首次启动请求 `Claude Code-credentials` 钥匙串

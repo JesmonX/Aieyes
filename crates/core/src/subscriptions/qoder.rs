@@ -318,6 +318,10 @@ fn product_message(provider: &str, message: &str) -> String {
 }
 
 const SIGNED_OUT: &str = "Qoder CLI 未登录，请在终端运行 qodercli login";
+// The `qodercli` daemon auth is read-only: an expired saved login is never
+// refreshed, the daemon starts unauthenticated, and only later requests fail.
+// A normal CLI command (e.g. `qodercli status`) refreshes the saved login.
+const LOGIN_EXPIRED: &str = "Qoder CLI 登录已过期，请在终端运行 qodercli status 刷新登录";
 
 fn await_response(
     provider: &str,
@@ -367,6 +371,19 @@ fn await_response(
         let response = &frame["response"];
         if response["subtype"] != "success" {
             let code = response["error"]["code"].as_str().unwrap_or("");
+            let text = response["error"]
+                .as_str()
+                .or(response["error"]["message"].as_str())
+                .unwrap_or("");
+            if code == "AUTH_REQUIRED"
+                || text.contains("auth is not initialized")
+                || text.contains("no authenticated identity")
+            {
+                return Err(QueryFailure {
+                    message: LOGIN_EXPIRED,
+                    retry: false,
+                });
+            }
             return Err(QueryFailure {
                 message: if initializing {
                     "Qoder CLI 初始化失败，请检查登录"
@@ -754,6 +771,34 @@ mod tests {
         }
         assert!(!keys.contains("internal-session:qoder:expired"));
         assert!(keys.contains("internal-session:kiro:unrelated"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expired_daemon_login_fails_once_with_a_refresh_hint() {
+        // Recorded from qodercli 1.1.81 whose saved token login had expired.
+        let mut attempts = 0;
+        let error = query_attempts(
+            || {
+                attempts += 1;
+                let mut command = std::process::Command::new("python3");
+                command.args(["-u", "-c", r#"
+import json,sys
+for _ in range(2):
+    request=json.loads(sys.stdin.readline())
+    rid=request['request_id']
+    if rid=='aieyes-init':
+        print(json.dumps(dict(type='control_response',response=dict(subtype='success',request_id=rid,response=dict(daemon_protocol_version=2)))))
+    else:
+        print(json.dumps(dict(type='control_response',response=dict(subtype='error',request_id=rid,error='daemon auth is not initialized; provide the auth field in daemon.initialize params'))))
+"#]);
+                Ok(command)
+            },
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert_eq!(error.to_string(), LOGIN_EXPIRED);
     }
 
     #[cfg(unix)]

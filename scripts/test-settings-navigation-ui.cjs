@@ -85,7 +85,7 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
       await page.locator('#cancel-editor').click();
 
       await page.locator('[data-settings-tab=general]').click();
-      assert.deepEqual(await page.locator('[data-general-page]').allTextContents(), ['外观','桌宠与会话','网络代理','刷新与历史','通知','更新与关于']);
+      assert.deepEqual(await page.locator('[data-general-page]').allTextContents(), ['外观','桌宠与会话','网络代理','刷新与历史','通知','高级','更新与关于']);
       assert.equal(await page.locator('[data-general-section=appearance] #material-main, [data-general-section=appearance] #material-floating').count(), platform === 'windows' ? 2 : 0, 'Windows material controls belong to Appearance');
       await openGeneralPage(page, 'desktop');
       assert.equal(await page.locator('#material-main, #material-floating').count(), 0, 'Pet settings contain no window material controls');
@@ -105,7 +105,7 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
       const before = await page.evaluate(() => structuredClone(state.settings));
       await page.locator('#field-appearanceAccent').selectOption('teal'); await settled(page);
       const after = await page.evaluate(() => state.settings);
-      for (const key of ['refreshSeconds','historyRefreshSeconds','serverForegroundRefreshSeconds','serverRefreshSeconds','proxy','proxyTestUrls','historyShowDeletedAccounts','codexApis']) assert.deepEqual(after[key], before[key], 'appearance leaves ' + key + ' intact');
+      for (const key of ['refreshSeconds','historyRefreshSeconds','serverForegroundRefreshSeconds','serverRefreshSeconds','proxy','proxyTestUrls','historyShowDeletedAccounts','hideFreeQuotaCards','codexApis']) assert.deepEqual(after[key], before[key], 'appearance leaves ' + key + ' intact');
       await openGeneralPage(page, 'refresh');
       await page.evaluate(() => navigationFixture.failSave = true);
       await page.locator('#field-refreshSeconds').fill('600'); await page.locator('#field-refreshSeconds').blur(); await settled(page);

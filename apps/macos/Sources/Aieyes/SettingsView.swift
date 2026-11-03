@@ -58,7 +58,7 @@ struct SettingsView: View {
             Divider().opacity(0.5)
             if model.settingsTab == "general" {
                 FlowLayout(spacing: 8) {
-                    ForEach([( "appearance", L("外观")), ("desktop", L("桌宠与会话")), ("network", L("网络代理")), ("refresh", L("刷新与历史")), ("notifications", L("通知")), ("updates", L("更新与关于"))], id: \.0) { key, title in
+                    ForEach([( "appearance", L("外观")), ("desktop", L("桌宠与会话")), ("network", L("网络代理")), ("refresh", L("刷新与历史")), ("notifications", L("通知")), ("advanced", L("高级")), ("updates", L("更新与关于"))], id: \.0) { key, title in
                         Button(title) { model.generalPage = key }
                             .buttonStyle(.chip(selected: model.generalPage == key, in: generalChips, font: AppFont.body))
                     }
@@ -367,6 +367,12 @@ struct SettingsView: View {
             }
             }
             if model.generalPage == "notifications" { QuotaNotificationSettingsView(model: model, service: model.resetNotifications) }
+            if model.generalPage == "advanced" {
+            Section(L("账户额度")) {
+                Toggle(L("隐藏免费账户的额度卡片"), isOn: Binding(get: { model.settingsDraft.hideFreeQuotaCards == true }, set: { model.settingsDraft.hideFreeQuotaCards = $0 }))
+                HStack { Text(L("主窗口与面板都不显示免费账户的额度卡片")).font(AppFont.secondary).foregroundStyle(.secondary); HelpNote(title: L("隐藏免费账户的额度卡片"), text: L("适用于所有有付费套餐的 Agent。服务商返回免费套餐时隐藏该账户的额度卡片；套餐未知或读取失败时照常显示。隐藏的账户仍会查询额度，升级后自动显示。")) }
+            }
+            }
             if model.generalPage == "updates" { Section(L("更新")) { UpdateSettingsView() }; Section(L("关于")) { Text("Aieyes").font(AppFont.section); Link(L("项目主页"), destination: URL(string: "https://github.com/JesmonX/Aieyes")!) } }
             }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).environment(\.petPreviewViewport, viewport.frame(in: .global)) }
         }.padding(.top, 12)

@@ -157,11 +157,13 @@ struct SetupGuideChecks {
             }
         case "wakeups": return wakeupRows()
         case "panel":
-            let selected = PanelAccountPreference.selections(panelPreference, accounts: settings.accounts, order: dashboard?.quotaOrder ?? [])
+            let hidden = { (a: AgentAccount) in settings.hidesFreeQuota(a, quotas: dashboard?.quotas ?? []) }
+            let selected = PanelAccountPreference.selections(panelPreference, accounts: settings.accounts.filter { !hidden($0) }, order: dashboard?.quotaOrder ?? [])
             let result: [SetupGuide.Check] = accounts(includeArchived: true).map { a in
                 let status: SetupGuide.CheckState = a.archived == true ? .archived : !a.quotaEnabled ? .paused : dashboard?.quotaOrder == nil ? .reconfirm : selected[a.provider]?.contains(a.key) == true ? .selected : .excluded
-                let text = a.archived == true ? L("恢复账户后可加入面板") : !a.quotaEnabled ? L("开启“显示并查询额度”") : status == .selected ? L("此账户将在面板显示") : L("在账户设置中调整面板选择")
-                return .init(label: a.name, text: text, destination: accountTarget(a), level: a.archived == true || !a.quotaEnabled ? "warn" : "info", status: status)
+                let text = a.archived == true ? L("恢复账户后可加入面板") : !a.quotaEnabled ? L("开启“显示并查询额度”") : status == .selected ? L("此账户将在面板显示") : hidden(a) ? L("免费账户的额度卡片已隐藏") : L("在账户设置中调整面板选择")
+                let destination = hidden(a) && a.archived != true && a.quotaEnabled ? SettingsDestination(category: "general", section: "advanced") : accountTarget(a)
+                return .init(label: a.name, text: text, destination: destination, level: a.archived == true || !a.quotaEnabled ? "warn" : "info", status: status)
             }
             return result.isEmpty ? [.init(label: L("面板账户"), text: L("添加账户后选择面板显示项"), destination: .init(section: "accounts"), level: "pending", status: .missing)] : result
         case "prices":

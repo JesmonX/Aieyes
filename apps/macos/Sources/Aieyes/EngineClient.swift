@@ -108,6 +108,11 @@ final class EngineClient: @unchecked Sendable {
         for request in requests { request.complete(.failure(ClientError.message(L("核心连接已断开")))) }
     }
     private func send<T: Decodable>(_ method: String, params: [String: Any], onProgress: (@Sendable (String) -> Void)? = nil, onHostSample: (@Sendable (HostResult) -> Void)? = nil, onQuotaSample: (@Sendable (Quota) -> Void)? = nil, onAccountSample: (@Sendable (AccountDeviceStatus) -> Void)? = nil) async throws -> T {
+        // Invalid Swift values raise an Objective-C exception during serialization;
+        // reject them here so callers can handle a Swift error instead of aborting.
+        guard JSONSerialization.isValidJSONObject(params) else {
+            throw EncodingError.invalidValue(method, .init(codingPath: [], debugDescription: "RPC parameters must contain only JSON-compatible values"))
+        }
         let payload = try JSONSerialization.data(withJSONObject: params)
         let data: Data = try await withCheckedThrowingContinuation { continuation in
             queue.async {
@@ -757,6 +762,11 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     @Published var quotaError: String?
     @Published var quotaNextAttempt: Date?
     var quotaAccounts: [AgentAccount] { settings.accounts.filter { $0.quotaEnabled && $0.archived != true && settings.supports($0.provider, "quota") } }
+    /// Accounts that may show a quota card: `quotaAccounts` without the free
+    /// accounts hidden in Settings → Advanced, which are still queried.
+    func quotaCardAccounts(_ quotas: [Quota]) -> [AgentAccount] { quotaAccounts.filter { !settings.hidesFreeQuota($0, quotas: quotas) } }
+    /// Panel choices consider every account except hidden free ones.
+    func panelCandidates(_ quotas: [Quota]) -> [AgentAccount] { settings.accounts.filter { !settings.hidesFreeQuota($0, quotas: quotas) } }
     var hasQuotaAccounts: Bool { !quotaAccounts.isEmpty }
     private var timer: Timer?
     private var lastScan = Date.distantPast
@@ -1433,7 +1443,7 @@ struct RemovalRequest: Identifiable { var kind: String, itemID: String, title: S
     var menuText: String {
         switch settings.menuMetric {
         case "tokens": return Format.compact(menuDashboard.summary.total)
-        case "quota": return menuDashboard.quotas.first?.windows.first.map { String(format: "%.0f%%", max(0, 100 - $0.usedPercent)) } ?? ""
+        case "quota": return menuDashboard.quotas.first { quota in !(settings.hideFreeQuotaCards == true && quota.freePlan == true) }?.windows.first.map { String(format: "%.0f%%", max(0, 100 - $0.usedPercent)) } ?? ""
         case "cpu": return hosts.first?.sample?.cpu?.first(where: { $0.id == "cpu" })?.utilization.map { String(format: "%.0f%%", $0) } ?? ""
         default: return ""
         }

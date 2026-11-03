@@ -376,8 +376,8 @@ def metadata(v, provider, hook):
             source=p.get('source')
             if isinstance(source,dict):row['parentSession']=text(((source.get('subagent') or {}).get('thread_spawn') or {}).get('parent_thread_id'))
         return [row]
-    rows = []; message = v.get('message') or {}; content = message.get('content')
-    content = content if isinstance(content,list) else []
+    rows = []; message = v.get('message') or {}; raw = message.get('content')
+    content = raw if isinstance(raw,list) else []
     base = dict(at=at,session=text(v.get('sessionId')),parentSession=text(v.get('parentSessionId') or v.get('parent_session_id')))
     if provider=='claude' and text(v.get('entrypoint')):base['sessionSource']=text(v['entrypoint'])
     if v.get('isSidechain') is True and text(v.get('agentId')):
@@ -385,8 +385,16 @@ def metadata(v, provider, hook):
     if base.get('sessionSource'):rows.append(dict(base,kind='identity'))
     if v.get('type') == 'user':
         results = [p for p in content if isinstance(p,dict) and p.get('type')=='tool_result']
-        if not results and not v.get('isMeta'): rows.append(dict(base,kind='start',turn=text(v.get('uuid'))))
+        if not results and not v.get('isMeta'):
+            # Only the line prefix is inspected; message text is never kept.
+            first = raw if isinstance(raw,str) else next((p['text'] for p in content if isinstance(p,dict) and p.get('type')=='text' and isinstance(p.get('text'),str)),'')
+            first = first.lstrip()
+            if first.startswith('[Request interrupted by user'): rows.append(dict(base,kind='interrupted'))
+            elif first.startswith(('<local-command-stdout>','<local-command-stderr>')): rows.append(dict(base,kind='local_command',turn=text(v.get('parentUuid'))))
+            else: rows.append(dict(base,kind='start',turn=text(v.get('uuid'))))
         for part in results: rows.append(dict(base,kind='output',call=text(part.get('tool_use_id'))))
+    elif v.get('type') == 'system' and v.get('subtype') == 'local_command':
+        rows.append(dict(base,kind='local_command',turn=text(v.get('parentUuid'))))
     elif v.get('type') == 'assistant':
         if v.get('isApiErrorMessage') is True: return [dict(base,kind='failed')]
         for part in content:

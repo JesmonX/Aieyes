@@ -786,16 +786,14 @@ fn agy_credits(q: &mut QuotaSnapshot, data: &Value) {
         .find(|v| v.is_object())
         .unwrap_or(data);
     let tiers = ["paidTier", "paid_tier", "currentTier", "current_tier"].map(|k| &assist[k]);
-    let tier = tiers.iter().find(|t| t.is_object());
-    let Some(tier) = tier else {
+    if !tiers.iter().any(|t| t.is_object()) {
         return;
-    };
+    }
     if q.plan.is_none() {
-        q.plan = tier["name"]
-            .as_str()
-            .or(tier["id"].as_str())
-            .filter(|s| !s.is_empty() && s.len() <= 128)
-            .map(str::to_owned);
+        // An empty `paidTier: {}` names no plan; fall through to the current tier.
+        q.plan = tiers
+            .into_iter()
+            .find_map(crate::subscriptions::gemini::tier_plan);
     }
     for credit in tiers
         .iter()

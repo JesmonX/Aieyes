@@ -95,6 +95,18 @@ class ObserverTests(unittest.TestCase):
             self.assertIsNone(helper['writer'](path, [process, process], m.headless_argv))
             self.assertEqual(helper['writer'](path, [(*process[:3], True)], m.headless_argv), 'internal')
 
+    def test_claude_interrupt_marker_and_local_commands_match_the_core_parser(self):
+        def kinds(row):
+            row=dict(dict(sessionId='s',uuid='u2',parentUuid='u1',timestamp='2026-11-03T07:00:00Z'),**row)
+            return [(e['kind'],e.get('turn','')) for e in m.metadata(row,'claude',False)]
+        user=lambda content:dict(type='user',message=dict(role='user',content=content))
+        self.assertEqual(kinds(user([dict(type='text',text='[Request interrupted by user]')])),[('interrupted','')])
+        self.assertEqual(kinds(user('[Request interrupted by user for tool use]')),[('interrupted','')])
+        self.assertEqual(kinds(user('<local-command-stdout>Set model</local-command-stdout>')),[('local_command','u1')])
+        self.assertEqual(kinds(dict(type='system',subtype='local_command')),[('local_command','u1')])
+        self.assertEqual(kinds(user('<command-name>/goal</command-name>')),[('start','u2')])
+        self.assertEqual(kinds(user('PRIVATE prompt')),[('start','u2')])
+
     def test_claude_sources_survive_log_tail_incremental_cache_and_hook_environment(self):
         for entrypoint in ('cli','sdk-cli','sdk-ts','sdk-py'):
             with self.subTest(entrypoint=entrypoint), tempfile.TemporaryDirectory() as directory:

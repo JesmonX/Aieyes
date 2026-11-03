@@ -44,6 +44,20 @@ fn public_string(value: &Value, limit: usize) -> Option<String> {
         .filter(|s| !s.is_empty() && s.len() <= limit && !s.chars().any(char::is_control))
         .map(str::to_owned)
 }
+/// Code Assist free tier ids. Their display names vary and need not say
+/// "Free", so the id decides.
+const FREE_TIERS: &[&str] = &["free-tier", "g1-free-tier"];
+/// The plan label of a `loadCodeAssist` tier object, if it names one.
+pub(crate) fn tier_plan(tier: &Value) -> Option<String> {
+    let id = public_string(&tier["id"], 256);
+    if id
+        .as_deref()
+        .is_some_and(|id| FREE_TIERS.contains(&id.to_ascii_lowercase().as_str()))
+    {
+        return Some("Free".into());
+    }
+    public_string(&tier["name"], 256).or(id)
+}
 fn project(value: &Value) -> Option<String> {
     public_string(value, 256).filter(|s| !s.chars().any(char::is_whitespace))
 }
@@ -211,9 +225,7 @@ pub(crate) fn probe_using(
     let project = selected.or(reported).context("原生账户身份待确认")?;
     let plan = [&value["paidTier"], &value["currentTier"]]
         .into_iter()
-        .find_map(|tier| {
-            public_string(&tier["name"], 256).or_else(|| public_string(&tier["id"], 256))
-        });
+        .find_map(tier_plan);
     let (meters, invalid) = credits(&value);
     if invalid {
         metadata_error = Some(FORMAT.into());
@@ -613,6 +625,30 @@ mod tests {
             vec![(200, user()), (200, value), (200, quota())],
         );
         assert_eq!(result.unwrap().plan.as_deref(), Some("Free"));
+    }
+
+    #[test]
+    fn free_tier_ids_are_free_whatever_their_display_name() {
+        let mut value = load();
+        value["currentTier"] =
+            json!({"id":"free-tier","name":"Gemini Code Assist for individuals"});
+        let (result, _) = run(
+            &auth(),
+            None,
+            vec![(200, user()), (200, value), (200, quota())],
+        );
+        let plan = result.unwrap().plan;
+        assert_eq!(plan.as_deref(), Some("Free"));
+        assert!(crate::plan_tier::is_free(plan.as_deref()));
+        assert_eq!(
+            tier_plan(&json!({"id":"standard-tier","name":"Gemini Code Assist"})).as_deref(),
+            Some("Gemini Code Assist")
+        );
+        assert_eq!(
+            tier_plan(&json!({"id":"standard-tier"})).as_deref(),
+            Some("standard-tier")
+        );
+        assert_eq!(tier_plan(&json!({})), None);
     }
 
     #[test]

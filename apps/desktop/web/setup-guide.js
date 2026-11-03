@@ -38,7 +38,7 @@
     if (category === 'hosts') return AieyesI18n.t("配置机器");
     if (category === 'prices') return AieyesI18n.t("设置价格");
     if (category === 'wakeups') return AieyesI18n.t("管理任务");
-    return { accounts: AieyesI18n.t("管理账户"), machines: AieyesI18n.t("选择目录"), api: AieyesI18n.t("配置 API"), valuation: AieyesI18n.t("管理采样"), appearance: AieyesI18n.t("设置外观"), desktop: AieyesI18n.t("设置桌宠"), network: AieyesI18n.t("设置网络"), refresh: AieyesI18n.t("调整刷新"), notifications: AieyesI18n.t("设置通知"), updates: AieyesI18n.t("检查更新") }[target.section] ?? AieyesI18n.t("接入 Agent");
+    return { accounts: AieyesI18n.t("管理账户"), machines: AieyesI18n.t("选择目录"), api: AieyesI18n.t("配置 API"), valuation: AieyesI18n.t("管理采样"), appearance: AieyesI18n.t("设置外观"), desktop: AieyesI18n.t("设置桌宠"), network: AieyesI18n.t("设置网络"), refresh: AieyesI18n.t("调整刷新"), notifications: AieyesI18n.t("设置通知"), advanced: AieyesI18n.t("高级设置"), updates: AieyesI18n.t("检查更新") }[target.section] ?? AieyesI18n.t("接入 Agent");
   }
   const rowsHTML = (rows) => `<ul class="setup-checks">${rows.map((r) => `<li data-guide-level="${r.level}" data-guide-state="${r.status}"><div><strong>${e(r.label)}</strong><div class="setup-check-status"><span class="setup-status-badge">${e(statusLabels[r.status])}</span><span>${e(r.text)}</span></div>${r.updatedAt > 0 ? `<time datetime="${new Date(r.updatedAt * 1000).toISOString()}">${AieyesI18n.t("上次数据：{0}", e(stamp(r.updatedAt)))}</time>` : ''}${r.details ? `<details class="setup-row-details"><summary>${AieyesI18n.t("状态说明")}</summary><p>${e(r.details)}</p></details>` : ''}</div>${r.target ? action(destinationLabel(r.target), r.target) : ''}</li>`).join('')}</ul>`;
   function quotaRow(a) {
@@ -113,10 +113,11 @@
     });
   }
   function panelRows() {
-    const selected = AieyesUI.panelAccounts(settings(), snapshot()?.quotaOrder ?? []);
+    const hidden = (a) => AieyesUI.hidesFreeQuota(settings(), snapshot()?.quotas, a);
+    const selected = AieyesUI.panelAccounts({ ...settings(), accounts: settings().accounts.filter((a) => !hidden(a)) }, snapshot()?.quotaOrder ?? []);
     const rows = accounts(true).map((a) => {
       const status = a.archived ? 'archived' : !a.quotaEnabled ? 'paused' : !snapshot()?.quotaOrder ? 'reconfirm' : selected[a.provider]?.includes(accountKey(a)) ? 'selected' : 'excluded';
-      return row(a.name, a.archived ? AieyesI18n.t("恢复账户后可加入面板") : !a.quotaEnabled ? AieyesI18n.t("开启“显示并查询额度”") : status === 'selected' ? AieyesI18n.t("此账户将在面板显示") : AieyesI18n.t("在账户设置中调整面板选择"), accountTarget(a), a.archived || !a.quotaEnabled ? 'warn' : 'info', status);
+      return row(a.name, a.archived ? AieyesI18n.t("恢复账户后可加入面板") : !a.quotaEnabled ? AieyesI18n.t("开启“显示并查询额度”") : status === 'selected' ? AieyesI18n.t("此账户将在面板显示") : hidden(a) ? AieyesI18n.t("免费账户的额度卡片已隐藏") : AieyesI18n.t("在账户设置中调整面板选择"), hidden(a) && !a.archived && a.quotaEnabled ? { category: 'general', section: 'advanced' } : accountTarget(a), a.archived || !a.quotaEnabled ? 'warn' : 'info', status);
     });
     return rows.length ? rows : [row(AieyesI18n.t("面板账户"), AieyesI18n.t("添加账户后选择面板显示项"), { section: 'accounts' }, 'pending', 'missing')];
   }

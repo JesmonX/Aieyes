@@ -6,6 +6,9 @@ struct BalancedGridLayout: Layout {
     var minimumWidth: CGFloat
     var spacing: CGFloat = 10
     var maximumColumns: Int = .max
+    /// A lone item in the last row takes the full width (server device summaries);
+    /// card grids keep it in one column so it matches the row above.
+    var stretchLoneRow = true
     struct Cache {
         struct Key: Equatable { let width: CGFloat, minimum: CGFloat, spacing: CGFloat; let maximum: Int, count: Int }
         struct Measurement { let key: Key, size: CGSize, points: [CGPoint], sizes: [CGSize] }
@@ -29,7 +32,7 @@ struct BalancedGridLayout: Layout {
         let columns = columns(width, subviews.count)
         var points: [CGPoint] = [], sizes: [CGSize] = [], y: CGFloat = 0
         for row in rows(width, subviews) {
-            let cell = max(0, row.count == 1 ? width : (width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
+            let cell = max(0, row.count == 1 && stretchLoneRow ? width : (width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
             var height: CGFloat = 0
             for (column, index) in row.enumerated() {
                 let size = subviews[index].sizeThatFits(.init(width: cell, height: nil))
@@ -383,11 +386,16 @@ struct RootView: View, Equatable {
         return usageDashboard.dayModels.filter { dates.contains($0.day) }
     }
     private var sessionStrip: some View { SessionStrip(model: model, status: model.sessionStripStatus, expanded: $sessionsExpanded, compact: compact, provider: filters.provider) }
+    private func filtered(_ account: AgentAccount) -> Bool { filters.provider == "all" || CoreContract.sameAgent(filters.provider, account.provider) }
     private var displayedQuotaAccounts: [AgentAccount] {
-        let selections = PanelAccountPreference.selections(panelAccounts, accounts: model.settings.accounts, order: usageDashboard.quotaOrder ?? [])
-        return model.quotaAccounts.filter { account in
-            (filters.provider == "all" || CoreContract.sameAgent(filters.provider, account.provider)) && (!compact || selections[account.provider]?.contains(account.key) == true)
+        let selections = PanelAccountPreference.selections(panelAccounts, accounts: model.panelCandidates(usageDashboard.quotas), order: usageDashboard.quotaOrder ?? [])
+        return model.quotaCardAccounts(usageDashboard.quotas).filter { account in
+            filtered(account) && (!compact || selections[account.provider]?.contains(account.key) == true)
         }
+    }
+    /// Every account the current Agent filter would show was hidden as free.
+    private var onlyFreeQuotaHidden: Bool {
+        !model.quotaCardAccounts(usageDashboard.quotas).contains(where: filtered) && model.quotaAccounts.contains(where: filtered)
     }
     private var displayedQuotas: [Quota] { usageDashboard.quotas.filter { quota in !compact || displayedQuotaAccounts.contains { $0.key == quota.id } } }
     private var quotaProviders: [String] {
@@ -420,7 +428,7 @@ struct RootView: View, Equatable {
         return QuotaGroupSection(key: "quota.group." + scope + "." + provider, model: model, provider: provider,
             accountCount: accounts.count,
             quotas: displayedQuotas.filter { quota in CoreContract.sameAgent(quota.provider, provider) && accounts.contains { $0.key == quota.id } }) {
-            BalancedGridLayout(minimumWidth: 1, spacing: 14, maximumColumns: min(quotaColumns, max(1, accounts.count))) {
+            BalancedGridLayout(minimumWidth: 1, spacing: 14, maximumColumns: min(quotaColumns, max(1, accounts.count)), stretchLoneRow: false) {
                 ForEach(accounts, id: \.key) { account in
                     Group {
                     if let quota = displayedQuotas.first(where: { $0.id == account.key }) { AccountObservedQuota(model: model, quota: quota, compact: compact, defaultExpanded: false) }
@@ -447,8 +455,11 @@ struct RootView: View, Equatable {
                     }
                 }
             }
-            if displayedQuotaAccounts.isEmpty {
-                Surface { Text(L("尚未显示账户")).font(AppFont.section); Button(compact && !model.quotaAccounts.isEmpty ? L("选择面板账户") : L("接入账户")) { if compact && !model.quotaAccounts.isEmpty { model.showPanelAccounts?() } else { model.openSettings(.init(section: "accounts")) } } }
+            if displayedQuotaAccounts.isEmpty && onlyFreeQuotaHidden {
+                Surface { Text(L("免费账户的额度卡片已隐藏")).font(AppFont.section); Button(L("高级设置")) { model.openSettings(.init(category: "general", section: "advanced")) } }
+            } else if displayedQuotaAccounts.isEmpty {
+                let candidates = !model.quotaCardAccounts(usageDashboard.quotas).isEmpty
+                Surface { Text(L("尚未显示账户")).font(AppFont.section); Button(compact && candidates ? L("选择面板账户") : L("接入账户")) { if compact && candidates { model.showPanelAccounts?() } else { model.openSettings(.init(section: "accounts")) } } }
             }
             QuotaErrorNotice(model: model)
         }
@@ -1956,8 +1967,7 @@ private struct AccountCardActions: ViewModifier {
             var next = base
             guard let i = next.accounts.firstIndex(where: { $0.key == account.key }) else { return }
             if archive { next.accounts[i].archived = true } else { next.accounts[i].quotaEnabled = false }
-            let saved: Settings = try await model.accountEngine.call("settings.patch", params: ["base":base, "settings":next])
-            model.acceptConfiguration(saved)
+            try await model.persistConfiguration(next, base: base)
         } catch { failure = error.localizedDescription } }
     }
 }

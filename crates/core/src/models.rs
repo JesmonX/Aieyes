@@ -417,6 +417,8 @@ pub struct Settings {
     pub configuration_issues: Vec<String>,
     pub deleted_accounts: Vec<Account>,
     pub history_show_deleted_accounts: bool,
+    /// Hide quota cards whose provider reports a free plan (`QuotaSnapshot::free_plan`).
+    pub hide_free_quota_cards: bool,
     #[serde(alias = "codexPreciseCounting")]
     pub precise_counting: bool,
     #[serde(skip)]
@@ -450,6 +452,7 @@ impl Default for Settings {
             configuration_issues: vec![],
             deleted_accounts: vec![],
             history_show_deleted_accounts: false,
+            hide_free_quota_cards: false,
             precise_counting: true,
             counting_generation: 0,
             agents: vec![],
@@ -961,6 +964,10 @@ pub struct QuotaSnapshot {
     pub bank_reset: Option<Value>,
     pub bank_updated_at: Option<i64>,
     pub plan: Option<String>,
+    /// The provider reported a free tier (`plan_tier::is_free`). Derived for the
+    /// UIs when a snapshot leaves the core; never stored or read back.
+    #[serde(skip_deserializing, skip_serializing_if = "std::ops::Not::not")]
+    pub free_plan: bool,
     /// Paid-through time stated by the provider's login, not a billing-cycle reset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subscription_expires_at: Option<i64>,

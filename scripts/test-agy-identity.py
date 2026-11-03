@@ -133,6 +133,10 @@ class IdentityTests(unittest.TestCase):
             self.assertEqual(request.call_args.args[1], agy.USERINFO_URL)
             self.assertTrue(agy.same_owner(current, current))
             self.assertFalse(agy.same_owner(current, {**current, 'token': {'access_token': 'different'}}))
+            # A refreshed keychain entry and a stale file copy share only the grant.
+            refreshed = {**current, 'token': {**current['token'], 'access_token': 'private-refreshed'}}
+            self.assertTrue(agy.same_owner(current, refreshed))
+            self.assertFalse(agy.same_owner(current, {**refreshed, 'token': {**refreshed['token'], 'refresh_token': 'other-grant'}}))
         with patch.object(agy, 'request_json', return_value={'email': 'old@example.test'}):
             with self.assertRaises(ValueError):
                 agy.resolve_identity(current)
@@ -184,6 +188,10 @@ class IdentityTests(unittest.TestCase):
         for tier, expected in [('g1-pro-tier', 'Google AI Pro'), ('g1-ultra-tier', 'Google AI Ultra'), ('free-tier', 'Free')]:
             self.assertEqual(agy.subscription({'licenses': [{'userTier': tier}]}), expected)
         self.assertEqual(agy.subscription({'licenses': [{'tierDisplayName': 'Google AI Pro'}, {'tierDisplayName': 'Free'}]}), 'Google AI Pro')
+        # A free tier keeps one label whatever its display name says.
+        for tier in ['free-tier', 'g1-free-tier']:
+            self.assertEqual(agy.subscription({'licenses': [{'userTier': tier, 'tierDisplayName': 'Gemini for individuals'}]}), 'Free')
+        self.assertEqual(agy.subscription({'licenses': [{'userTier': 'g1-pro-tier', 'tierDisplayName': 'Google AI Pro (2 TB)'}]}), 'Google AI Pro (2 TB)')
         for value in [{}, {'licenses': []}, {'licenses': [{}]}, {'licenses': [{'userTier': 'future-tier'}]}]:
             self.assertIsNone(agy.subscription(value))
 

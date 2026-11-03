@@ -108,7 +108,7 @@ async function modelChecks() {
     for (const platform of ['windows', 'linux']) {
       frame = await route(platform);
       console.log(`Checking ${platform} pages and scenario matrix…`);
-      for (const target of [{ category: 'integrations' }, { category: 'hosts' }, { category: 'prices' }, { category: 'wakeups' }, ...['appearance','desktop','network','refresh','notifications','updates'].map(section => ({ category: 'general', section }))]) {
+      for (const target of [{ category: 'integrations' }, { category: 'hosts' }, { category: 'prices' }, { category: 'wakeups' }, ...['appearance','desktop','network','refresh','notifications','advanced','updates'].map(section => ({ category: 'general', section }))]) {
         await frame.evaluate(target => AieyesApp.openSettings(target), target);
         await frame.waitForTimeout(80);assert(!/TypeError|ReferenceError|Unhandled preview call|Unexpected call:/.test(await frame.locator('body').innerText()), JSON.stringify(target));
       }

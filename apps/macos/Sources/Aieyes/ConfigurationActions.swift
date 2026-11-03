@@ -183,6 +183,7 @@ extension AppModel {
                 next.quotaResetNotifications = settingsDraft.quotaResetNotifications
                 next.historyShowDeletedAccounts = settingsDraft.historyShowDeletedAccounts
                 next.preciseCounting = settingsDraft.preciseCounting
+                next.hideFreeQuotaCards = settingsDraft.hideFreeQuotaCards
                 next.historyRefreshSeconds = settingsDraft.historyRefreshSeconds
                 next.serverForegroundRefreshSeconds = settingsDraft.serverForegroundRefreshSeconds
                 next.localMonitor = settingsDraft.localMonitor

@@ -53,6 +53,12 @@ import Foundation
         setenv("AIEYES_CORE_PATH", script.path, 1)
         let engine = EngineClient()
         defer { engine.stop() }
+        do {
+            let _: Settings = try await engine.call("settings.patch", params: ["base": Settings(), "settings": Settings()])
+            preconditionFailure("Raw Swift settings must be rejected before JSONSerialization can abort")
+        } catch is EncodingError {
+            print("Invalid RPC parameters return a catchable Swift error without terminating the app")
+        }
         let _: Acknowledgement = try await engine.call("settings.get")
         let blocked = Task { let _: Acknowledgement? = try? await engine.call("fixture.block") }
         while !FileManager.default.fileExists(atPath:directory.appendingPathComponent("blocked").path) { try await Task.sleep(for:.milliseconds(10)) }

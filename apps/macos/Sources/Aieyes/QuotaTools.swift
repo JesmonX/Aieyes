@@ -222,10 +222,13 @@ struct PanelAccountsView: View {
     @State private var selected: [String: [String]] = [:]
     @State private var automatic = Set<String>()
     @State private var initialDraft = ""
+    /// Free accounts hidden in Settings → Advanced are not offered here.
+    private var accounts: [AgentAccount] { model.quotaCardAccounts(model.panelDashboard.quotas) }
+    private var candidates: [AgentAccount] { model.panelCandidates(model.panelDashboard.quotas) }
     private var draft: String { PanelAccountPreference.encode(selected, automatic: automatic) }
     private var snapshot: String { draftSnapshot(selected) + draftSnapshot(automatic.sorted()) }
     @FocusState private var cancelFocused: Bool
-    private func members(_ provider: String) -> [String] { Array(Set(model.quotaAccounts.map(\.provider))).filter { CoreContract.sameAgent($0, provider) } }
+    private func members(_ provider: String) -> [String] { Array(Set(accounts.map(\.provider))).filter { CoreContract.sameAgent($0, provider) } }
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
@@ -234,14 +237,14 @@ struct PanelAccountsView: View {
             HelpNote(title: L("面板账户"), text: L("自动显示每类前 5 个账户；新增账户默认加入。手动选择可留空、不限数量，仅影响本机面板。"))
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    ForEach(Array(Set(model.quotaAccounts.map { CoreContract.agentProvider($0.provider) })).sorted(), id: \.self) { provider in
+                    ForEach(Array(Set(accounts.map { CoreContract.agentProvider($0.provider) })).sorted(), id: \.self) { provider in
                         VStack(alignment: .leading, spacing: 8) {
                             ProviderIdentity(provider: provider).font(AppFont.section)
                             HStack { Text(L("· {0} 个" , members(provider).reduce(0) { $0 + (selected[$1]?.count ?? 0) })).foregroundStyle(.secondary); Spacer(); Button(members(provider).allSatisfy { automatic.contains($0) } ? L("自动选择") : L("恢复自动选择")) {
-                                let defaults = PanelAccountPreference.selections("{}", accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])
+                                let defaults = PanelAccountPreference.selections("{}", accounts: candidates, order: model.dashboard.quotaOrder ?? [])
                                 for member in members(provider) { automatic.insert(member); selected[member] = defaults[member] }
                             }.font(AppFont.secondary) }.font(AppFont.secondary)
-                            ForEach(model.quotaAccounts.filter { CoreContract.sameAgent($0.provider, provider) }, id: \.key) { account in
+                            ForEach(accounts.filter { CoreContract.sameAgent($0.provider, provider) }, id: \.key) { account in
                                 Toggle(account.name, isOn: Binding(get: { selected[account.provider]?.contains(account.key) == true }, set: { enabled in
                                     for member in members(provider) { automatic.remove(member) }
                                     var keys = selected[account.provider] ?? []
@@ -251,12 +254,12 @@ struct PanelAccountsView: View {
                             }
                         }
                     }
-                    if model.quotaAccounts.isEmpty { Text(L("尚无可显示额度的账户")).foregroundStyle(.secondary) }
+                    if accounts.isEmpty { Text(L("尚无可显示额度的账户")).foregroundStyle(.secondary) }
                 }.padding(4)
             }
             HStack { Spacer(); Button(L("取消"), action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button(L("保存面板选择")) { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.aieyesPrimary) }
         }.padding(DesignTokens.dialogPadding).font(AppFont.body).frame(width: DesignTokens.dialogSelectionWidth, height: 480).aieyesAccent()
-            .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); for (provider, choice) in PanelAccountPreference.decode(stored).providers where choice.mode == "custom" { selected[provider] = choice.keys }; initialDraft = snapshot; cancelFocused = true }
+            .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}") }; automatic = Set(accounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: candidates, order: model.dashboard.quotaOrder ?? []); for (provider, choice) in PanelAccountPreference.decode(stored).providers where choice.mode == "custom" { selected[provider] = choice.keys }; initialDraft = snapshot; cancelFocused = true }
             .onChange(of: !initialDraft.isEmpty && initialDraft != snapshot) { _, dirty in onDirtyChange?(dirty) }
             .updateDraftGuard(L("面板显示账户"), snapshot: snapshot, dirty: !initialDraft.isEmpty && initialDraft != snapshot, saving: false, save: { stored = draft; onClose(); return true }, discard: onClose)
     }

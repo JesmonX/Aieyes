@@ -1625,6 +1625,9 @@ impl Store {
             if quota.error.as_deref() == Some("设置额度查询命令") {
                 quota.error = Some("请刷新额度；远程代理可在数据源中设置".into());
             }
+            // Before balance dedup clears a shared Buddy copy's plan: both
+            // copies belong to the same account and tier.
+            crate::plan_tier::mark(&mut quota);
             d.quotas.push(quota);
         }
         d.automatic_estimate_summaries = self
@@ -2033,6 +2036,83 @@ mod discovery_tests {
             )
             .unwrap();
         assert!(dashboard.quotas.is_empty());
+    }
+    #[test]
+    fn free_plans_are_flagged_on_read_and_never_stored() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::open(temp.path()).unwrap();
+        let mut settings = Settings::default();
+        for (id, plan) in [
+            ("free", Some("Cursor Free")),
+            ("trial", Some("Cursor Pro Trial")),
+            ("pro", Some("Cursor Pro")),
+            ("unknown", None),
+        ] {
+            settings.accounts.push(Account {
+                id: id.into(),
+                provider: "cursor".into(),
+                quota_enabled: true,
+                ..Default::default()
+            });
+            settings
+                .native_connections
+                .push(crate::account_scan::NativeConnection {
+                    id: format!("ref-{id}"),
+                    account_key: Some(format!("cursor:{id}")),
+                    provider: "cursor".into(),
+                    machine_id: "local".into(),
+                    status: "observed".into(),
+                    ..Default::default()
+                });
+            store
+                .quota(&QuotaSnapshot {
+                    account_id: id.into(),
+                    provider: "cursor".into(),
+                    updated_at: 1,
+                    plan: plan.map(str::to_owned),
+                    windows: vec![QuotaWindow {
+                        id: "plan".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let mut dashboard = Dashboard::default();
+        store
+            .fill_dashboard_status(&mut dashboard, &Filter::default(), &settings, false)
+            .unwrap();
+        let flags: Vec<_> = dashboard
+            .quotas
+            .iter()
+            .map(|q| (q.account_id.as_str(), q.free_plan))
+            .collect();
+        assert_eq!(
+            flags,
+            [
+                ("free", true),
+                ("trial", false),
+                ("pro", false),
+                ("unknown", false)
+            ]
+        );
+        let json = serde_json::to_value(&dashboard.quotas).unwrap();
+        assert_eq!(json[0]["freePlan"], true);
+        assert!(json[1].get("freePlan").is_none());
+        // Only the UI output carries the flag: stored payloads stay unchanged,
+        // and a flag in incoming data is ignored.
+        let stored: String = store
+            .db
+            .query_row(
+                "SELECT payload FROM quotas WHERE account_key='cursor:free'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!stored.contains("freePlan"));
+        let read: QuotaSnapshot =
+            serde_json::from_str(r#"{"plan":"pro","freePlan":true}"#).unwrap();
+        assert!(!read.free_plan);
     }
     #[test]
     fn cursor_team_pool_is_shown_once_without_removing_personal_windows() {

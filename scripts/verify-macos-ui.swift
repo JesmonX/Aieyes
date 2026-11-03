@@ -8,7 +8,8 @@ import Foundation
             var preference: PanelAccountPreference.Preference?, rawPreference: String?, expected: [String: [String]]
         }
         struct Windows: Decodable { var name: String, provider: String, windows: [QuotaWindow], expected: [String] }
-        var panels: [Panel], windows: [Windows]
+        struct FreeQuota: Decodable { var name: String, hide: Bool?, account: AgentAccount, quotas: [Quota], expected: Bool }
+        var panels: [Panel], windows: [Windows], freeQuota: [FreeQuota]
     }
     @MainActor static func main() async throws {
         func waitFor(_ description: String, _ condition: () -> Bool) async throws {
@@ -27,6 +28,10 @@ import Foundation
             let raw: [String: Any] = ["sourceId":"fixture", "accountId":"fixture", "provider":row.provider, "name":"Fixture", "updatedAt":1, "origin":"fixture", "windows":try JSONSerialization.jsonObject(with: JSONEncoder().encode(row.windows))]
             let quota = try JSONDecoder().decode(Quota.self, from: JSONSerialization.data(withJSONObject: raw))
             precondition(EstimatePresentation.windows(quota).map(\.id) == row.expected, row.name)
+        }
+        for row in fixture.freeQuota {
+            var settings = Settings(); settings.hideFreeQuotaCards = row.hide
+            precondition(settings.hidesFreeQuota(row.account, quotas: row.quotas) == row.expected, row.name)
         }
         let presentation = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: "scripts/fixtures/estimate-presentation.json"))) as! [String: Any]
         let recordBase = presentation["record"] as! [String: Any]

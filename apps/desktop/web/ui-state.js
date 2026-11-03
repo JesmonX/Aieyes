@@ -114,6 +114,11 @@ window.AieyesUI = {
       return next;
     } catch (_) {return { version: 2, providers: {} };}
   },
+  // Settings → Advanced: an account's quota card is hidden only after its
+  // provider reported a free plan (the core's `freePlan`); unknown plans stay.
+  hidesFreeQuota(settings, quotas, account) {
+    return settings?.hideFreeQuotaCards === true && (quotas ?? []).some((q) => q.freePlan === true && q.provider === account.provider && q.accountId === account.id);
+  },
   panelAccounts(settings, order = [], preference = this.panelPreference()) {
     preference = this.normalizePanelPreference(preference);
     const selected = {},eligible = (settings?.accounts ?? []).filter((a) => !a.archived && a.quotaEnabled);

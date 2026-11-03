@@ -288,7 +288,8 @@ impl Engine {
             }
             drop(tx);
             for finished in rx {
-                for row in finished {
+                for mut row in finished {
+                    crate::plan_tier::mark(&mut row);
                     if let Some(progress) = &mut self.progress {
                         progress(json!({"kind":"quotas.refresh","row":row}));
                     }

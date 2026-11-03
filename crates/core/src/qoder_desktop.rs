@@ -240,10 +240,14 @@ pub(crate) fn activity(path: &Path, now: u64) -> Result<Vec<crate::native_sessio
             if now.saturating_sub(at / 1000) > 86400 {
                 return None;
             }
+            // Lifecycle kinds understood by `session_events::Activity::apply`.
+            // The row's preceding `start` already marks a running turn.
             let kind = match status.as_str() {
                 "running" | "pending" | "streaming" | "in_progress" => "activity",
-                "waiting_for_approval" | "waiting_for_input" => "waiting",
-                "completed" | "done" | "failed" | "cancelled" | "interrupted" => "finish",
+                "waiting_for_approval" | "waiting_for_input" => "PermissionRequest",
+                "completed" | "done" => "complete",
+                "failed" => "failed",
+                "cancelled" | "interrupted" => "interrupted",
                 _ => return None,
             };
             Some((id, turn, kind.into(), at, parent))
@@ -261,7 +265,7 @@ mod tests {
         writer.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE chat_sessions(session_id TEXT,updated_at INTEGER,owner_session_id TEXT,deleted_at INTEGER); CREATE TABLE chat_session_turn_states(revision INTEGER,session_id TEXT,turn_id TEXT,status TEXT); INSERT INTO chat_sessions VALUES('s',1700000000000,NULL,NULL); INSERT INTO chat_session_turn_states VALUES(1,'s','t','completed');").unwrap();
         let rows = activity(&p, 1700000000).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].2, "finish");
+        assert_eq!(rows[0].2, "complete");
         assert!(
             crate::sqlite_ro::open_ro(&p)
                 .unwrap()
@@ -282,7 +286,7 @@ mod tests {
           INSERT INTO chat_session_messages VALUES('done','t1',1,'assistant','completed',1700000000000),('active','t2',1,'user','completed',1700000000000),('old','t0',1,'assistant','completed',1600000000000);").unwrap();
         let rows = activity(&path, 1700000000).unwrap();
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().any(|r| r.0 == "done" && r.2 == "finish"));
+        assert!(rows.iter().any(|r| r.0 == "done" && r.2 == "complete"));
         assert!(rows.iter().any(|r| r.0 == "active" && r.2 == "activity"));
     }
     #[test]

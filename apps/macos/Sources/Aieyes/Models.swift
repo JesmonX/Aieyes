@@ -382,6 +382,8 @@ struct Quota: Codable, Equatable, Identifiable {
     var sourceId: String, accountId: String, provider: String, name: String, updatedAt: Double, origin: String
     var balances: [Balance]?, isAvailable: Bool?
     var windows: [QuotaWindow], bankReset: BankReset?, bankUpdatedAt: Double?, plan: String?, error: String?
+    /// The core's reading of `plan`: the provider reported a free tier.
+    var freePlan: Bool? = nil
     var meters: [QuotaMeter]? = nil
     var subscriptionExpiresAt: Double? = nil
     var snapshotAt: Double? = nil, staleSince: Double? = nil
@@ -702,6 +704,12 @@ struct Settings: Codable, Equatable {
     var historicalAccounts: [AgentAccount] { accounts + (deletedAccounts ?? []) }
     var historyShowDeletedAccounts: Bool?
     var preciseCounting: Bool?
+    /// Settings → Advanced. Hidden free accounts are still queried.
+    var hideFreeQuotaCards: Bool?
+    /// An account's quota card is hidden only after its provider reported a free plan.
+    func hidesFreeQuota(_ account: AgentAccount, quotas: [Quota]) -> Bool {
+        hideFreeQuotaCards == true && quotas.contains { $0.freePlan == true && $0.provider == account.provider && $0.accountId == account.id }
+    }
     var filterAccounts: [AgentAccount] { accounts + (historyShowDeletedAccounts == true ? deletedAccounts ?? [] : []) }
     func accountFilterName(_ account: AgentAccount) -> String {
         account.name + (accounts.contains { $0.key == account.key } ? (account.archived == true ? L("（已归档）") : "") : L("（已删除）"))

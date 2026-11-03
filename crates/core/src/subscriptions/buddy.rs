@@ -153,14 +153,15 @@ pub(super) fn parse(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
         balance: Some(remaining.to_string()),
         ..Default::default()
     });
-    q.plan = Some(
-        if summary["IsPaidUser"] == true {
+    // Only an explicit answer names the tier; a missing flag is unknown, not free.
+    q.plan = summary["IsPaidUser"].as_bool().map(|paid| {
+        if paid {
             "Buddy 付费套餐"
         } else {
             "Buddy 免费套餐"
         }
-        .into(),
-    );
+        .into()
+    });
     let mut seen = std::collections::HashSet::new();
     for (kind, label) in [("paid", "付费积分包"), ("free", "免费积分包")] {
         for p in v[kind].as_array().context("Buddy 积分包字段缺失")? {
@@ -233,6 +234,20 @@ mod tests {
         let mut q = QuotaSnapshot::default();
         parse(&mut q, &v).unwrap();
         assert_eq!(q.meters[3].remaining, Some(30.));
+        assert_eq!(q.plan.as_deref(), Some("Buddy 付费套餐"));
+        // The tier is only named when the server states it.
+        for (flag, plan) in [
+            (json!(false), Some("Buddy 免费套餐")),
+            (json!(null), None),
+            (json!("false"), None),
+        ] {
+            let mut tier = v.clone();
+            tier["summary"]["IsPaidUser"] = flag;
+            let mut q = QuotaSnapshot::default();
+            parse(&mut q, &tier).unwrap();
+            assert_eq!(q.plan.as_deref(), plan);
+            assert_eq!(crate::plan_tier::is_free(q.plan.as_deref()), plan.is_some());
+        }
         v["summary"]["Packages"][0]["CycleTotalCapacity"] = json!("NaN");
         assert!(parse(&mut QuotaSnapshot::default(), &v).is_err());
         assert!(parse(&mut QuotaSnapshot::default(), &json!({})).is_err());

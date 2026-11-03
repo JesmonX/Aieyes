@@ -1091,8 +1091,13 @@ fn copilot_usage(q: &mut QuotaSnapshot, v: &Value) -> Result<()> {
             });
         }
     }
+    // Current Free responses say `copilot_plan: "individual"`; only the SKU
+    // (`free_limited_copilot`) tells them apart from Pro.
+    let free_sku = text(&v["access_type_sku"])
+        .to_ascii_lowercase()
+        .starts_with("free_limited");
     q.plan = match text(&v["copilot_plan"]) {
-        "free" => Some("Copilot Free".into()),
+        plan if free_sku || plan == "free" => Some("Copilot Free".into()),
         "individual" | "individual_pro" => Some("Copilot Pro".into()),
         "individual_pro_plus" | "pro_plus" => Some("Copilot Pro+".into()),
         "business" => Some("Copilot Business".into()),
@@ -1517,6 +1522,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(free.plan.as_deref(), Some("Copilot Free"));
+        // Current Free response: the plan says individual, the SKU says free.
+        let limited = parse(&source, &config, &json!({
+            "copilot_plan":"individual","access_type_sku":"free_limited_copilot","chat_enabled":true,
+            "quota_reset_date_utc":"2026-11-01T00:00:00.000Z",
+            "quota_snapshots":{"premium_interactions":{"entitlement":50,"remaining":40,"unlimited":false}}
+        })).unwrap();
+        assert_eq!(limited.plan.as_deref(), Some("Copilot Free"));
+        assert!(crate::plan_tier::is_free(limited.plan.as_deref()));
+        assert!(!crate::plan_tier::is_free(pro.plan.as_deref()));
         let ids: Vec<_> = free
             .meters
             .iter()

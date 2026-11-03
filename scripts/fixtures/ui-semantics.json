@@ -776,5 +776,143 @@
       ],
       "expected": []
     }
+  ],
+  "freeQuota": [
+    {
+      "name": "off keeps a reported free plan",
+      "hide": false,
+      "account": {
+        "id": "a",
+        "name": "A",
+        "provider": "cursor",
+        "quotaEnabled": true
+      },
+      "quotas": [
+        {
+          "sourceId": "fixture",
+          "accountId": "a",
+          "provider": "cursor",
+          "name": "Fixture",
+          "updatedAt": 1,
+          "origin": "live",
+          "windows": [],
+          "freePlan": true
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "on hides a reported free plan",
+      "hide": true,
+      "account": {
+        "id": "a",
+        "name": "A",
+        "provider": "cursor",
+        "quotaEnabled": true
+      },
+      "quotas": [
+        {
+          "sourceId": "fixture",
+          "accountId": "a",
+          "provider": "cursor",
+          "name": "Fixture",
+          "updatedAt": 1,
+          "origin": "live",
+          "windows": [],
+          "freePlan": true
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "on keeps a paid or unknown plan",
+      "hide": true,
+      "account": {
+        "id": "a",
+        "name": "A",
+        "provider": "cursor",
+        "quotaEnabled": true
+      },
+      "quotas": [
+        {
+          "sourceId": "fixture",
+          "accountId": "a",
+          "provider": "cursor",
+          "name": "Fixture",
+          "updatedAt": 1,
+          "origin": "live",
+          "windows": []
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "on keeps an account not read yet",
+      "hide": true,
+      "account": {
+        "id": "a",
+        "name": "A",
+        "provider": "cursor",
+        "quotaEnabled": true
+      },
+      "quotas": [],
+      "expected": false
+    },
+    {
+      "name": "on matches both provider and account",
+      "hide": true,
+      "account": {
+        "id": "a",
+        "name": "A",
+        "provider": "cursor",
+        "quotaEnabled": true
+      },
+      "quotas": [
+        {
+          "sourceId": "fixture",
+          "accountId": "b",
+          "provider": "cursor",
+          "name": "Fixture",
+          "updatedAt": 1,
+          "origin": "live",
+          "windows": [],
+          "freePlan": true
+        },
+        {
+          "sourceId": "fixture",
+          "accountId": "a",
+          "provider": "kiro",
+          "name": "Fixture",
+          "updatedAt": 1,
+          "origin": "live",
+          "windows": [],
+          "freePlan": true
+        }
+      ],
+      "expected": false
+    },
+    {
+      "name": "missing setting is off",
+      "hide": null,
+      "account": {
+        "id": "a",
+        "name": "A",
+        "provider": "cursor",
+        "quotaEnabled": true
+      },
+      "quotas": [
+        {
+          "sourceId": "fixture",
+          "accountId": "a",
+          "provider": "cursor",
+          "name": "Fixture",
+          "updatedAt": 1,
+          "origin": "live",
+          "windows": [],
+          "freePlan": true
+        }
+      ],
+      "expected": false
+    }
   ]
 }

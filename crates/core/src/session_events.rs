@@ -884,12 +884,40 @@ pub fn claude(row: &Value) -> Vec<Event> {
                 .flatten()
                 .filter(|v| v["type"] == "tool_result")
                 .collect();
+            // Only the line prefix is inspected; message text is never kept.
+            let text = match &row["message"]["content"] {
+                Value::String(s) => s.as_str(),
+                Value::Array(parts) => parts
+                    .iter()
+                    .find_map(|p| (p["type"] == "text").then(|| p["text"].as_str()).flatten())
+                    .unwrap_or(""),
+                _ => "",
+            }
+            .trim_start();
             if results.is_empty() && row["isMeta"] != true {
-                out.push(Event {
-                    kind: "start".into(),
-                    turn: field(row, &["uuid"]),
-                    ..base
-                });
+                if text.starts_with("[Request interrupted by user") {
+                    // Esc writes this marker and fires no Stop hook.
+                    out.push(Event {
+                        kind: "interrupted".into(),
+                        ..base
+                    });
+                } else if text.starts_with("<local-command-stdout>")
+                    || text.starts_with("<local-command-stderr>")
+                {
+                    out.push(Event {
+                        kind: "local_command".into(),
+                        turn: field(row, &["parentUuid"]),
+                        ..base
+                    });
+                } else {
+                    // Prompt slash commands (skills, `/goal`) continue with a
+                    // model request, so a command line still opens a turn.
+                    out.push(Event {
+                        kind: "start".into(),
+                        turn: field(row, &["uuid"]),
+                        ..base
+                    });
+                }
             } else {
                 for r in results {
                     out.push(Event {
@@ -927,6 +955,11 @@ pub fn claude(row: &Value) -> Vec<Event> {
                 });
             }
         }
+        Some("system") if row["subtype"] == "local_command" => out.push(Event {
+            kind: "local_command".into(),
+            turn: field(row, &["parentUuid"]),
+            ..base
+        }),
         _ => {}
     }
     out
@@ -1033,7 +1066,11 @@ impl Activity {
             self.external_background = false;
             self.phase = Some(Phase::Working);
         } else {
-            if !e.turn.is_empty() && !self.turn.is_empty() && self.turn != e.turn {
+            // Session lifecycle events are not tied to a turn. Claude's
+            // SessionEnd carries the ID of the next, never-submitted prompt.
+            let session_event = matches!(e.kind.as_str(), "SessionStart" | "SessionEnd");
+            if !session_event && !e.turn.is_empty() && !self.turn.is_empty() && self.turn != e.turn
+            {
                 return;
             }
             if e.kind == "SessionStart" {
@@ -1057,6 +1094,14 @@ impl Activity {
             } else if !self.phase.is_some_and(Phase::terminal) {
                 match e.kind.as_str() {
                     "unknown" => self.phase = Some(Phase::Unknown),
+                    // A local slash command (`/model`, `/clear`) ran without a
+                    // model request: the turn its command line opened is idle.
+                    "local_command" => {
+                        self.phase = None;
+                        self.waiting.clear();
+                        self.tools.clear();
+                        self.anonymous_tools = 0;
+                    }
                     "thinking" => self.phase = Some(Phase::Thinking),
                     "tool_phase" => self.phase = Some(Phase::Tool),
                     "tool" | "anonymous_tool" | "PreToolUse" => {

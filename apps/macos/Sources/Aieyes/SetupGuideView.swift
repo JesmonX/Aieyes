@@ -112,7 +112,7 @@ struct SetupGuideView: View {
         case "wakeups": return L("管理任务")
         default: break
         }
-        return ["accounts": L("管理账户"), "machines": L("选择目录"), "api": L("配置 API"), "valuation": L("管理采样"), "appearance": L("设置外观"), "desktop": L("设置桌宠"), "network": L("设置网络"), "refresh": L("调整刷新"), "notifications": L("设置通知"), "updates": L("检查更新")][target.section ?? ""] ?? L("接入 Agent")
+        return ["accounts": L("管理账户"), "machines": L("选择目录"), "api": L("配置 API"), "valuation": L("管理采样"), "appearance": L("设置外观"), "desktop": L("设置桌宠"), "network": L("设置网络"), "refresh": L("调整刷新"), "notifications": L("设置通知"), "advanced": L("高级设置"), "updates": L("检查更新")][target.section ?? ""] ?? L("接入 Agent")
     }
     private func checkRow(_ row: SetupGuide.Check) -> some View {
         VStack(alignment: .leading, spacing: 6) {

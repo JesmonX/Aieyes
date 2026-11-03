@@ -569,6 +569,7 @@ struct AccountDevicesView: View {
                 Section {
                     if model.settings.supports(account.provider, "quota") {
                     Toggle(L("显示并查询额度"), isOn: Binding(get: { account.quotaEnabled }, set: { value in account.quotaEnabled = value; save { $0.quotaEnabled = value } }))
+                    if model.settings.hidesFreeQuota(current, quotas: model.dashboard.quotas) { Text(L("免费账户的额度卡片已按“高级”设置隐藏，仍会查询额度")).font(AppFont.secondary).foregroundStyle(.secondary) }
                     if let message = model.dashboard.quotas.first(where: { $0.id == account.key })?.error { ErrorNotice(message: message, context: L("额度查询失败")) }
                     DisclosureGroup(L("查询与提醒"), isExpanded: $queryExpanded) {
                     Picker(L("优先查询位置"), selection: Binding(get: { account.quotaSourceId ?? "" }, set: { value in account.quotaSourceId = value.isEmpty ? nil : value; save { $0.quotaSourceId = value.isEmpty ? nil : value } })) {
@@ -706,11 +707,11 @@ struct AccountDevicesView: View {
     private func legacyCommand(_ source: AgentSource) -> String { source.quotaPreCommand.isEmpty ? model.settings.hosts.first { $0.id == source.hostId }?.preCommand ?? "" : source.quotaPreCommand }
     private func legacyCommands(_ machine: String) -> Set<String> { Set(model.settings.sources.filter { $0.provider == account.provider && $0.hostId == machine }.map(legacyCommand)) }
     private func inheritedCommand(_ machine: String) -> String { current.deviceSettings?.first { $0.machineId == machine }?.preCommand ?? (legacyCommands(machine).count == 1 ? legacyCommands(machine).first ?? "" : "") }
-    private var panelSelectionCount: Int { PanelAccountPreference.selections(panelPreference, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[account.provider]?.count ?? 0 }
+    private var panelSelectionCount: Int { PanelAccountPreference.selections(panelPreference, accounts: model.panelCandidates(model.dashboard.quotas), order: model.dashboard.quotaOrder ?? [])[account.provider]?.count ?? 0 }
     private var panelBinding: Binding<Bool> {
-        Binding(get: { (PanelAccountPreference.selections(panelPreference, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[account.provider] ?? []).contains(account.key) }, set: { enabled in
+        Binding(get: { (PanelAccountPreference.selections(panelPreference, accounts: model.panelCandidates(model.dashboard.quotas), order: model.dashboard.quotaOrder ?? [])[account.provider] ?? []).contains(account.key) }, set: { enabled in
             var pref = PanelAccountPreference.decode(panelPreference)
-            let selected = pref.providers[account.provider]?.mode == "custom" ? pref.providers[account.provider]?.keys ?? [] : PanelAccountPreference.selections(panelPreference, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? [])[account.provider] ?? []
+            let selected = pref.providers[account.provider]?.mode == "custom" ? pref.providers[account.provider]?.keys ?? [] : PanelAccountPreference.selections(panelPreference, accounts: model.panelCandidates(model.dashboard.quotas), order: model.dashboard.quotaOrder ?? [])[account.provider] ?? []
             var keys = selected.filter { $0 != account.key }
             if enabled { keys.append(account.key) }
             pref.providers[account.provider] = .init(mode: "custom", keys: keys)
