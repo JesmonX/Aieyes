@@ -5,6 +5,22 @@ body:not(:has(#panel)) .quotas { grid-template-columns:repeat(var(--workspace-qu
 @media(min-width:974px) { body { --workspace-quota-columns:2; } }
 @media(min-width:1390px) { body { --workspace-quota-columns:3; } }
 @media(min-width:1800px) { body { --workspace-quota-columns:4; } }
+/* Masonry (quota-card-layout.js): placement written for N columns applies only while N is current. */
+@media(min-width:974px) and (max-width:1389.98px) {
+  body:not(:has(#panel)) :is(.quota-groups,.quotas)[data-masonry="2"] { row-gap:0; grid-auto-rows:4px; margin-bottom:calc(-1 * var(--masonry-gap,0px)); }
+  body:not(:has(#panel)) [data-masonry="2"] > * { grid-row:var(--masonry-row-2,auto); }
+  body:not(:has(#panel)) [data-masonry="2"] > :not([data-single-account=false]) { grid-column:var(--masonry-column-2,auto); }
+}
+@media(min-width:1390px) and (max-width:1799.98px) {
+  body:not(:has(#panel)) :is(.quota-groups,.quotas)[data-masonry="3"] { row-gap:0; grid-auto-rows:4px; margin-bottom:calc(-1 * var(--masonry-gap,0px)); }
+  body:not(:has(#panel)) [data-masonry="3"] > * { grid-row:var(--masonry-row-3,auto); }
+  body:not(:has(#panel)) [data-masonry="3"] > :not([data-single-account=false]) { grid-column:var(--masonry-column-3,auto); }
+}
+@media(min-width:1800px) {
+  body:not(:has(#panel)) :is(.quota-groups,.quotas)[data-masonry="4"] { row-gap:0; grid-auto-rows:4px; margin-bottom:calc(-1 * var(--masonry-gap,0px)); }
+  body:not(:has(#panel)) [data-masonry="4"] > * { grid-row:var(--masonry-row-4,auto); }
+  body:not(:has(#panel)) [data-masonry="4"] > :not([data-single-account=false]) { grid-column:var(--masonry-column-4,auto); }
+}
 main,.settings-block { max-width:none; }
 .settings-agent-selector button { display:flex; align-items:center; gap:8px; text-align:left; white-space:nowrap; border:0; box-shadow:none; background:transparent; }
 .settings-agent-selector .provider-mark { width:20px; height:20px; flex:0 0 20px; }
@@ -51,7 +67,7 @@ main,.settings-block { max-width:none; }
 .setup-checks [data-guide-level=ok] span { color:var(--muted); }
 .setup-command { white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; background:var(--soft); border-radius:var(--radius-control); user-select:text; }
 .setup-check-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; }
-.setup-checks .setup-status-badge { flex:none; padding:2px 7px; border-radius:var(--radius-pill); color:var(--accent-text); background:color-mix(in srgb,var(--accent) 12%,transparent); font-weight:600; }
+.setup-checks .setup-status-badge { flex:none; padding:2px 7px; border-radius:var(--radius-pill); color:var(--accent-text); background:color-mix(in srgb,var(--accent) 12%,transparent); font-weight:var(--weight-strong); }
 .setup-checks [data-guide-level=warn] .setup-status-badge { color:var(--warn); background:color-mix(in srgb,var(--warn) 12%,transparent); }
 .setup-checks [data-guide-level=ok] .setup-status-badge { color:var(--ok); background:color-mix(in srgb,var(--ok) 12%,transparent); }
 .setup-checks time { color:var(--muted); font-size:var(--font-caption); overflow-wrap:anywhere; }
@@ -143,7 +159,7 @@ body:not(:has(#panel)) .quota-group[data-single-account=true] > .quotas { grid-t
 .overview-usage .usage-heading > span:last-child:empty { display:none; }
 .overview-usage > .native-credits { grid-column:1 / -1; }
 .usage-inline { grid-column:2; grid-row:1; display:flex; align-items:center; flex-wrap:wrap; gap:8px 24px; font-size:var(--font-secondary); font-variant-numeric:tabular-nums; }
-.usage-inline strong { margin-left:6px; font-size:var(--font-number); font-weight:var(--weight-strong); color:var(--ink); }
+.usage-inline strong { display:inline-block; margin-left:6px; font-size:var(--font-number); font-weight:var(--weight-strong); color:var(--ink); }
 @container usage (max-width:720px) {
   .usage-inline { grid-column:1 / -1; grid-row:2; gap:8px 20px; }
 }
@@ -236,8 +252,17 @@ body:not(:has(#panel)) .quota-group[data-single-account=true] > .quotas { grid-t
 #live-sessions { border-color:var(--card-border); background:var(--card-fill); border-radius:var(--radius-card); }
 #live-sessions > summary { flex-wrap:wrap; }
 .session-counts { display:flex; gap:8px; flex-wrap:wrap; font-size:var(--font-caption); color:var(--muted); }
-.session-counts [data-phase=needsInput] { color:var(--phase-needsInput); }
-.session-counts [data-phase=failed] { color:var(--phase-failed); }
+/* Each phase count leads with its phase color; the label and number still carry the meaning. */
+.session-counts > span { --phase-color:var(--phase-unknown); display:inline-flex; align-items:center; gap:5px; }
+.session-counts .phase-dot { width:7px; height:7px; flex:none; border-radius:50%; background:var(--phase-color); }
+.session-counts [data-phase=idle] { --phase-color:var(--phase-idle); }
+.session-counts [data-phase=working] { --phase-color:var(--phase-working); }
+.session-counts [data-phase=thinking] { --phase-color:var(--phase-thinking); }
+.session-counts [data-phase=tool] { --phase-color:var(--phase-tool); }
+.session-counts [data-phase=complete] { --phase-color:var(--phase-complete); }
+.session-counts [data-phase=interrupted] { --phase-color:var(--phase-interrupted); }
+.session-counts [data-phase=needsInput] { --phase-color:var(--phase-needsInput); color:var(--phase-needsInput); }
+.session-counts [data-phase=failed] { --phase-color:var(--phase-failed); color:var(--phase-failed); }
 .live-row[data-phase=failed] { border-left:3px solid var(--phase-failed); padding-left:8px; }
 .live-row[data-phase=needsInput] { border-left:3px solid var(--phase-needsInput); padding-left:8px; }
 #phase { background:var(--solid); color:var(--ink); border:1px solid var(--card-border); border-radius:calc(var(--radius-overlay) * var(--pet-scale)); box-shadow:var(--shadow-xs); }
@@ -257,8 +282,16 @@ aside nav [data-page=settings] { margin-top:0; border-top:0; }
 .overview-usage #token-popover { z-index:10; }
 #token-popover { position:fixed; inset:auto; margin:0; overflow:auto; }
 .overview-usage #token-summary > svg { width:12px; height:12px; color:var(--muted); }
-/* Wrapping Agent tabs avoids an otherwise permanent horizontal scroller. */
 .agent-selector { display:flex; gap:4px; padding:3px; margin:0 0 12px; border:1px solid var(--border); border-radius:var(--radius-overlay); background:var(--surface-soft); scrollbar-width:thin; flex-wrap:wrap; overflow:visible; }
+/* Agent tabs stay on one line and scroll sideways (scroll-affordance.js); a fade marks only the
+   edge that hides tabs, so the frame itself never fades. */
+.agent-selector:has(> .tab-scroller) { display:block; padding:0; overflow:hidden; }
+.tab-scroller { --fade-start:0px; --fade-end:0px; position:relative; display:flex; gap:4px; min-width:0; padding:3px; overflow-x:auto; overflow-y:hidden; overscroll-behavior-x:contain; scrollbar-width:none;
+  -webkit-mask-image:linear-gradient(to right,transparent,#000 var(--fade-start),#000 calc(100% - var(--fade-end)),transparent); mask-image:linear-gradient(to right,transparent,#000 var(--fade-start),#000 calc(100% - var(--fade-end)),transparent); }
+.tab-scroller::-webkit-scrollbar { display:none; }
+.tab-scroller[data-overflow~=start] { --fade-start:28px; }
+.tab-scroller[data-overflow~=end] { --fade-end:28px; }
+.tab-scroller > button:focus-visible { outline-offset:-2px; }
 .quota-title,.panel-body .quota-title { flex-wrap:wrap; }
 .quota-card .quota-title h3 { min-width:0; flex:1; }
 .setup-scene > .win-select,.setup-scene > select { width:var(--field-choice-width); max-width:100%; }
@@ -283,6 +316,7 @@ html:not(:has(#panel,body[data-platform=windows])) { scrollbar-gutter:stable; }
   .quota-card::before { display:none; }
   .agent-selector button[aria-pressed=true] { forced-color-adjust:none; color:HighlightText; background:Highlight; }
   .resource-block > strong { color:CanvasText; }
+  .session-counts .phase-dot { forced-color-adjust:none; background:CanvasText; }
 }
 
 .quota-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 12px; }

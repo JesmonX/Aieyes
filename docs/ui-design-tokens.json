@@ -140,13 +140,19 @@
       "web": 700
     }
   },
+  "motion": {
+    "fast": 130,
+    "base": 200,
+    "slow": 320,
+    "expand": 260
+  },
   "colors": {
     "ink": {
       "light": "252528",
       "dark": "efeff2"
     },
     "muted": {
-      "light": "62626b",
+      "light": "505058",
       "dark": "b6b6c0"
     },
     "faint": {

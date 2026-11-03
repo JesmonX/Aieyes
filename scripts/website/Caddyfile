@@ -8,9 +8,9 @@ aieyes.2h3ngy4n.space {
         Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
         Strict-Transport-Security "max-age=15552000"
     }
-    @pages not path /screenshots/* /providers/* /fonts/* /brand.png /favicon.png /og.png /pet-*.webp /go/download/*
+    @pages not path /screenshots/* /providers/* /fonts/* /brand.png /favicon.png /og.jpg /og-zh-CN.jpg /pet-*.webp /go/download/*
     header @pages Cache-Control "no-cache"
-    @assets path /screenshots/* /providers/* /fonts/* /brand.png /favicon.png /og.png /pet-*.webp
+    @assets path /screenshots/* /providers/* /fonts/* /brand.png /favicon.png /og.jpg /og-zh-CN.jpg /pet-*.webp
     header @assets Cache-Control "public, max-age=3600"
     redir /go/github https://github.com/JesmonX/Aieyes 302
     redir /go/download/macos /#download-macos 302

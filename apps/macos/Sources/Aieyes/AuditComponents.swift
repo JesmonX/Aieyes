@@ -81,10 +81,24 @@ struct SubscriptionBadge: View {
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
-        Text(Format.subscription(plan)).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).lineLimit(1)
+        Text(Format.subscription(plan)).font(.system(size: DesignTokens.fontCaption, weight: DesignTokens.weightMedium)).lineLimit(1)
             .padding(.horizontal, 6).padding(.vertical, 3)
             .foregroundStyle(Color.primary).background(Color.primary.opacity(0.06), in: Capsule())
             .help(plan).accessibilityLabel(L("订阅 ") + Format.subscription(plan))
+    }
+}
+/// Whole days left, counted up: a subscription ending today still reads 1d.
+struct SubscriptionRemaining: View {
+    var expiresAt: Double?
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    var body: some View {
+        let _ = interfaceLanguage
+        if let expiresAt, expiresAt > Date().timeIntervalSince1970 {
+            let date = Date(timeIntervalSince1970: expiresAt).formatted(date: .abbreviated, time: .omitted)
+            Text("\(Int(((expiresAt - Date().timeIntervalSince1970) / 86_400).rounded(.up)))d")
+                .font(.system(size: DesignTokens.fontSecondary)).monospacedDigit().lineLimit(1).fixedSize()
+                .foregroundStyle(.secondary).help(L("订阅到期 ") + date).accessibilityLabel(L("订阅到期 ") + date)
+        }
     }
 }
 struct CreditBalanceLabel: View {

@@ -15,6 +15,7 @@ struct SettingsView: View {
         nonmutating set { model.settingsDraft = newValue }
     }
     @State private var autoSaveTask: Task<Void, Never>?
+    @Namespace private var generalChips
     @State private var accountEditor: AgentAccount?
     @State private var accountMachineID: String?
     @State private var accountSection: String?
@@ -59,12 +60,9 @@ struct SettingsView: View {
                 FlowLayout(spacing: 8) {
                     ForEach([( "appearance", L("外观")), ("desktop", L("桌宠与会话")), ("network", L("网络代理")), ("refresh", L("刷新与历史")), ("notifications", L("通知")), ("updates", L("更新与关于"))], id: \.0) { key, title in
                         Button(title) { model.generalPage = key }
-                            .buttonStyle(.plain).font(AppFont.body).padding(.horizontal, 10).padding(.vertical, 7)
-                            .foregroundStyle(model.generalPage == key ? Palette.accent : Color.secondary)
-                            .background(model.generalPage == key ? Palette.accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
-                            .accessibilityAddTraits(model.generalPage == key ? .isSelected : [])
+                            .buttonStyle(.chip(selected: model.generalPage == key, in: generalChips, font: AppFont.body))
                     }
-                }.padding(.horizontal, 22).padding(.vertical, 12)
+                }.motion(.spring, value: model.generalPage).padding(.horizontal, 22).padding(.vertical, 12)
             }
             RetainedPageHost(selection: model.settingsTab == "general" ? "general." + model.generalPage : model.settingsTab, active: parentActive || CommandLine.arguments.contains("--render")) { _ in
                 switch model.settingsTab {
@@ -382,6 +380,7 @@ private struct ExistingMappingRow: View {
     @State private var from = ""
     @State private var to = ""
     @State private var baseline: Settings?
+    @State private var confirmRemoval = false
     @State private var busy = false
     @State private var error: String?
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
@@ -401,10 +400,15 @@ private struct ExistingMappingRow: View {
                 HStack {
                     Text(name); Image(systemName: "arrow.right"); Text(model.settingsDraft.modelMappings[name] ?? ""); Spacer()
                     Button(L("编辑")) { baseline = model.settings; from = name; to = model.settingsDraft.modelMappings[name] ?? ""; editing = true }
-                    Button { model.settingsDraft.modelMappings.removeValue(forKey: name); Task { _ = await model.saveSettingsDraft() } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain).foregroundStyle(Palette.danger).accessibilityLabel(L("移除映射 ") + name)
+                    Button { confirmRemoval = true } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain).foregroundStyle(Palette.danger).accessibilityLabel(L("移除映射 ") + name)
                 }
             }
         }.font(AppFont.secondary)
+        // Removal only edits the draft; the normal settings save flow persists it with other draft edits.
+        .confirmationDialog(L("移除模型映射「{0}」？", name), isPresented: $confirmRemoval, titleVisibility: .visible) {
+            Button(L("移除"), role: .destructive) { model.settingsDraft.modelMappings.removeValue(forKey: name) }
+            Button(L("取消"), role: .cancel) { }
+        } message: { Text(L("从配置草稿中移除，保存配置后生效。")) }
     }
     private func save() async {
         let from = from.trimmingCharacters(in: .whitespacesAndNewlines), to = to.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -433,7 +437,7 @@ struct PriceCatalogRow: View, Equatable {
             Spacer()
             Button(L("一键映射"), action: map)
             Button(L("编辑"), action: edit).accessibilityLabel(L("编辑价格 ") + price.id)
-        }.padding(12).frame(height: 68).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        }.padding(12).frame(height: 68).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
     }
 }
 
@@ -788,7 +792,7 @@ private struct ChartPalettePreview: View {
                             RoundedRectangle(cornerRadius: 2).fill(Palette.adaptive(hex, hex)).frame(height: heights[index] * 48).frame(maxWidth: .infinity)
                         }
                     }.frame(height: 48, alignment: .bottom)
-                }.padding(12).frame(maxWidth: .infinity).background(Palette.adaptive(dark ? 0x29292e : 0xffffff, dark ? 0x29292e : 0xffffff), in: RoundedRectangle(cornerRadius: 8))
+                }.padding(12).frame(maxWidth: .infinity).background(Palette.adaptive(dark ? DesignTokens.panelDark : DesignTokens.panelLight, dark ? DesignTokens.panelDark : DesignTokens.panelLight), in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
                 .accessibilityElement(children: .ignore).accessibilityLabel(L("{0}背景柱形图配色预览" , dark ? L("深色") : L("浅色")))
             }
         }

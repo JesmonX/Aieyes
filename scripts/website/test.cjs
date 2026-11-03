@@ -81,32 +81,40 @@ async function checkFontsAndAnimation(browser,origin){
   const contracts=JSON.parse(fs.readFileSync(path.join(root,'docs/core-contracts.json'),'utf8'));
   const page=await browser.newPage({viewport:{width:1440,height:1100},reducedMotion:'no-preference'});
   try{
+    const fontRequests=[];page.on('request',request=>{if(request.url().includes('/fonts/'))fontRequests.push(new URL(request.url()).pathname);});
     await page.goto(origin+'/#sessions');await page.evaluate(()=>document.fonts.ready);
-    const fonts=await page.evaluate(async()=>{await Promise.all([document.fonts.load('18px "Comic Neue"','Aieyes'),document.fonts.load('18px "LXGW WenKai"','工作账户')]);return {comic:document.fonts.check('18px "Comic Neue"','Aieyes'),chinese:document.fonts.check('18px "LXGW WenKai"','工作账户'),family:getComputedStyle(document.body).fontFamily,body:getComputedStyle(document.body).fontSize};});
-    assert(fonts.comic&&fonts.chinese);assert.equal(fonts.family.split(',')[0].trim().replace(/^["']|["']$/g,''),'Comic Sans MS');assert.equal(fonts.body,'18px');
-    for(const provider of contracts.providers.filter(p=>p.icon&&p.id!=='custom')){
+    assert(!fontRequests.includes('/fonts/lxgw-wenkai-regular.woff2'),'English pages use the small LXGW face only: '+fontRequests.join(', '));
+    const fonts=await page.evaluate(async()=>{await Promise.all([document.fonts.load('18px "Comic Neue"','Aieyes'),document.fonts.load('700 18px "Comic Neue"','Aieyes'),document.fonts.load('18px "LXGW WenKai"','工作账户')]);return {comic:document.fonts.check('18px "Comic Neue"','Aieyes'),bold:document.fonts.check('700 18px "Comic Neue"','Aieyes'),chinese:document.fonts.check('18px "LXGW WenKai"','工作账户'),family:getComputedStyle(document.body).fontFamily,body:getComputedStyle(document.body).fontSize,weights:[...new Set([...document.querySelectorAll('body *')].map(el=>getComputedStyle(el).fontWeight))].sort()};});
+    // The shipped webfont leads so every platform renders the same Regular/Bold pair.
+    assert(fonts.comic&&fonts.bold&&fonts.chinese);assert.equal(fonts.family.split(',')[0].trim().replace(/^["']|["']$/g,''),'Comic Neue');assert.equal(fonts.body,'18px');
+    assert.deepEqual(fonts.weights.filter(weight=>!['400','700'].includes(weight)),[],'only shipped font weights are used');
+    assert.equal(await page.locator('.provider',{hasText:'ChatGPT Work'}).count(),0);
+    assert.equal(await page.locator('.provider',{hasText:'DeepSeek'}).count(),1);
+    for(const name of ['Qoder CN','Trae CN'])assert.equal(await page.locator('.provider',{hasText:name}).count(),1);
+    for(const provider of contracts.providers.filter(p=>p.icon&&p.id!=='custom'&&!['chatgpt-work','deepseek-harness'].includes(p.id))){
       const asset=provider.icon.darkAsset||provider.icon.asset;
-      assert(await page.locator(`.provider img[src="/providers/provider-${asset}.png"]`).count()>0);
-      if(provider.icon.monochrome)assert.equal(await page.locator(`.provider img[src="/providers/provider-${asset}.png"]`).first().evaluate(el=>getComputedStyle(el).filter),'brightness(0) invert(1)');
+      assert(await page.locator(`.provider img[src="/providers/provider-${asset}.webp"]`).count()>0);
+      if(provider.icon.monochrome)assert.equal(await page.locator(`.provider img[src="/providers/provider-${asset}.webp"]`).first().evaluate(el=>getComputedStyle(el).filter),'brightness(0) invert(1)');
     }
     const frames=[];
-    for(const [state,row] of [['idle',0],['working',1],['complete',4]]){
-      const actual=await page.locator(`#sessions .pet-${state}`).evaluate(async(el,{row,durations})=>{
+    // The website sheet keeps the idle, working and complete rows of the shared contract.
+    for(const [sheetRow,[state,row]] of [['idle',0],['working',1],['complete',4]].entries()){
+      const actual=await page.locator(`#sessions .pet-${state}`).evaluate(async(el,{sheetRow,durations})=>{
         const animation=el.getAnimations().find(a=>a.effect.target===el);animation.pause();await animation.ready;
         const timing=animation.effect.getTiming(),size=parseFloat(getComputedStyle(el).getPropertyValue('--pet-size'));
         const sprite=new Image();sprite.src='/pet-spritesheet.webp';await sprite.decode();
-        const canvas=document.createElement('canvas');canvas.width=sprite.width/8;canvas.height=sprite.height/9;const context=canvas.getContext('2d');
+        const canvas=document.createElement('canvas');canvas.width=sprite.width/8;canvas.height=sprite.height/3;const context=canvas.getContext('2d');
         let elapsed=0;const frames=[];
         for(const [frame,duration] of durations.entries()){
           // Sample a complete later iteration so staggered negative delays do
           // not put the animation before its active interval.
           animation.currentTime=timing.delay+timing.duration+elapsed+duration/2;
-          context.clearRect(0,0,canvas.width,canvas.height);context.drawImage(sprite,frame*canvas.width,row*canvas.height,canvas.width,canvas.height,0,0,canvas.width,canvas.height);
+          context.clearRect(0,0,canvas.width,canvas.height);context.drawImage(sprite,frame*canvas.width,sheetRow*canvas.height,canvas.width,canvas.height,0,0,canvas.width,canvas.height);
           const rgba=context.getImageData(0,0,canvas.width,canvas.height).data;let visible=0;for(let i=3;i<rgba.length;i+=4)if(rgba[i]>16)visible++;
           frames.push({frame,x:parseFloat(getComputedStyle(el).backgroundPositionX),expected:-frame*size,visible});elapsed+=duration;
         }
         return {duration:timing.duration,frames};
-      },{row,durations:contracts.petFrameDurations[row]});
+      },{sheetRow,durations:contracts.petFrameDurations[row]});
       assert.equal(actual.duration,contracts.petFrameDurations[row].reduce((a,b)=>a+b,0));
       for(const frame of actual.frames){assert(Math.abs(frame.x-frame.expected)<.1,JSON.stringify(frame));assert(frame.visible>100,`${state} frame ${frame.frame} is not blank`);}
       frames.push({state,...actual});
@@ -119,7 +127,9 @@ async function checkNoScript(browser,origin){
   try{const page=await context.newPage();for(const [language,url] of [['en','/'],['zh-CN','/zh-CN/index.html']]){
     await page.goto(origin+url);assert.equal(await page.locator('.package-button').count(),6);
     assert(await page.locator('.hero-actions a[href="#download"]').isVisible());
-    assert.equal(await page.locator('.hero-shot img').getAttribute('src'),`/screenshots/${language}/macos-overview.webp`);
+    const preview=new URL(await page.locator('.hero-shot img').getAttribute('src'),origin);
+    assert.equal(preview.pathname,`/screenshots/${language}/macos-overview.webp`);
+    assert.match(preview.searchParams.get('v'),/^[a-f0-9]{12}$/);
     for(const platform of ['macos','windows'])for(const feature of ['overview','analytics','servers','panel']){
       const file=path.join(site,'screenshots',language,`${platform}-${feature}.webp`);assert(fs.statSync(file).size>1000,file);
       if(language==='en')assert(fs.readFileSync(file).equals(fs.readFileSync(path.join(site,'screenshots',`${platform}-${feature}.webp`))));
@@ -154,6 +164,10 @@ for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
       await page.evaluate(()=>document.querySelectorAll('img').forEach(image=>image.loading='eager'));
       await page.waitForFunction(()=>[...document.images].filter(image=>image.getAttribute('src')).every(image=>image.complete&&image.naturalWidth>0));
       assert.equal(await page.locator('link[rel=alternate][hreflang]').count(),3);
+      const share=new URL(await page.locator('meta[property="og:image"]').getAttribute('content'));
+      assert(fs.existsSync(path.join(site,share.pathname))&&share.pathname===(language==='en'?'/og.jpg':'/og-zh-CN.jpg'),`${language}: sharing image`);
+      assert.equal(await page.locator('meta[property="og:image:width"]').getAttribute('content'),'1200');
+      assert(await page.locator('meta[property="og:image:alt"]').getAttribute('content'));
       assert.equal(await page.locator('.downloads .package-button').count(),6);
       assert(await page.locator('a[data-language]').getAttribute('href'));
       assert.equal(await page.locator('a[data-track="github"]').first().getAttribute('href'),'https://aieyes.2h3ngy4n.space/go/github');
@@ -176,7 +190,10 @@ for(const name of ['README.md','README.zh-CN.md','docs/development.md']){
       assert.equal(await page.locator('[data-feature-tab="overview"]').evaluate(el=>el===document.activeElement),true);
       assert.equal(await page.locator('.animated-pet').first().evaluate(el=>getComputedStyle(el).animationName),'none');
 
+      const previewVersion=new URL(await page.locator('.hero-shot img').getAttribute('src'),origin).searchParams.get('v');
       await page.locator('button[data-platform=windows]').click();
+      assert.match(previewVersion,/^[a-f0-9]{12}$/);
+      assert(await page.locator('img[data-preview]').evaluateAll((images,version)=>images.every(image=>new URL(image.src).searchParams.get('v')===version),previewVersion));
       assert.equal(await page.locator('button[data-platform=windows]').getAttribute('aria-pressed'),'true');
       assert(await page.locator('.feature img[data-preview]').evaluateAll(images=>images.every(image=>image.src.includes('/windows-'))));
       await page.waitForFunction(()=>[...document.querySelectorAll('img[data-preview]')].every(image=>image.complete&&image.naturalWidth>0));

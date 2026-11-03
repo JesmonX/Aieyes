@@ -10,7 +10,6 @@ struct MainWindowView: View {
     }
     @AppStorage("main.sidebarCollapsed") private var collapsed = false
     @AppStorage(NativePanelKey.detailPage.rawValue) private var savedPage = "agent"
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
@@ -29,25 +28,17 @@ struct MainWindowView: View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Button { withAnimation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.88)) { collapsed.toggle() } } label: { BrandMark().frame(width: 30, height: 30).frame(width: 34, height: 34).contentShape(Rectangle()) }.buttonStyle(.plain).help(collapsed ? L("展开导航") : L("收起导航")).accessibilityLabel(collapsed ? L("展开导航") : L("收起导航")).accessibilityValue(collapsed ? L("已收起") : L("已展开"))
+                    Button { withMotion(.expand) { collapsed.toggle() } } label: { BrandMark().frame(width: 30, height: 30).frame(width: 34, height: 34).contentShape(Rectangle()) }.buttonStyle(.plain).help(collapsed ? L("展开导航") : L("收起导航")).accessibilityLabel(collapsed ? L("展开导航") : L("收起导航")).accessibilityValue(collapsed ? L("已收起") : L("已展开"))
                     if !collapsed { Text("Aieyes").font(AppFont.title); Spacer() }
                 }.padding(.horizontal, 12).padding(.top, 18)
-                if collapsed {
-                    ScrollView { VStack(spacing:4) {
-                        ForEach(monitoring, id:\.0) { key,title,icon in navigationButton(title,icon:icon,selected:model.detailPage == key) { select(key) } }
-                        Divider()
-                        ForEach(configuration, id:\.0) { key,title,icon in navigationButton(title,icon:icon,selected:model.detailPage == "settings" && model.settingsTab == key) { choose("settings:" + key) } }
-                        navigationButton(L("设置"),icon:"gearshape",selected:selectedNavigation == "settings:general") { choose("settings:general") }
-                        navigationButton(L("配置向导"),icon:"questionmark.circle",selected:model.detailPage == "setup") { select("setup") }
-                    }.padding(.horizontal,8) }
-                } else {
-                    List(selection:Binding<String?>(get:{selectedNavigation},set:{ if let value = $0 { choose(value) } })) {
-                        Section(L("监测")) { ForEach(monitoring,id:\.0) { key,title,icon in Label(title,systemImage:icon).tag(key) } }
-                        Section(L("配置")) { ForEach(configuration,id:\.0) { key,title,icon in Label(title,systemImage:icon).tag("settings:" + key) } }
-                        Label(L("设置"),systemImage:"gearshape").tag("settings:general")
-                        Label(L("配置向导"),systemImage:"questionmark.circle").tag("setup")
-                    }.listStyle(.sidebar)
-                }
+                // One native List in both widths: collapsing only fades the labels, so icons and the
+                // selection highlight stay where they are while the column animates.
+                List(selection:Binding<String?>(get:{selectedNavigation},set:{ if let value = $0 { choose(value) } })) {
+                    Section { ForEach(monitoring,id:\.0) { key,title,icon in navigationRow(title,icon:icon).tag(key) } } header: { sectionHeader(L("监测")) }
+                    Section { ForEach(configuration,id:\.0) { key,title,icon in navigationRow(title,icon:icon).tag("settings:" + key) } } header: { sectionHeader(L("配置")) }
+                    navigationRow(L("设置"),icon:"gearshape").tag("settings:general")
+                    navigationRow(L("配置向导"),icon:"questionmark.circle").tag("setup")
+                }.listStyle(.sidebar)
             }.frame(width: collapsed ? 62 : 214).background {
                 if reduceTransparency || previewAccessible || contrast == .increased { Color(nsColor: .windowBackgroundColor) }
                 else { Rectangle().fill(.ultraThinMaterial) }
@@ -81,15 +72,13 @@ struct MainWindowView: View {
         if value.hasPrefix("settings:") { model.openSettings(.init(category:String(value.dropFirst(9))));select("settings") }
         else { select(value) }
     }
-    private func navigationButton(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) { Image(systemName: icon).frame(width: 22); if !collapsed { Text(title).lineLimit(1); Spacer(minLength: 0) } }
-                .font(AppFont.body).padding(.horizontal, 10).padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: collapsed ? .center : .leading)
-                .foregroundStyle(selected ? Palette.accent : Color.secondary)
-                .background(selected ? Palette.accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 8))
-                .contentShape(Rectangle())
-        }.buttonStyle(.plain).help(title).accessibilityLabel(title).accessibilityAddTraits(selected ? .isSelected : [])
+    private func navigationRow(_ title: String, icon: String) -> some View {
+        Label { Text(title).lineLimit(1).opacity(collapsed ? 0 : 1) } icon: { Image(systemName: icon) }
+            .help(collapsed ? title : "").accessibilityLabel(title)
+    }
+    /// Headers keep their height while collapsed, so rows never shift vertically.
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title).lineLimit(1).opacity(collapsed ? 0 : 1).accessibilityHidden(collapsed)
     }
     private func select(_ value: String) {
         let page = ["agent", "analysis", "servers", "settings", "setup"].contains(value) ? value : "agent"
@@ -119,9 +108,9 @@ struct RetainedPageHost<Content: View>: NSViewRepresentable {
     let selection: String
     var active = true
     @ViewBuilder var content: (String) -> Content
-    func makeNSView(context: Context) -> Container { Container() }
+    func makeNSView(context: Context) -> Container { let view = Container(); view.wantsLayer = true; return view }
     func updateNSView(_ view: Container, context: Context) {
-        view.show(selection, active: active, environment: context.environment, content: content(selection))
+        view.show(selection, active: active, environment: context.environment, content: content(selection), fade: !context.environment.accessibilityReduceMotion && !CommandLine.arguments.contains("--render"))
     }
     static func dismantleNSView(_ view: Container, coordinator: ()) { view.deactivate() }
     struct Page: View {
@@ -161,8 +150,16 @@ struct RetainedPageHost<Content: View>: NSViewRepresentable {
         private(set) var entries: [String: Entry] = [:]
         private(set) var selected: String?
         override var isFlipped: Bool { true }
-        func show(_ key: String, active: Bool, environment: EnvironmentValues, content: Content) {
+        func show(_ key: String, active: Bool, environment: EnvironmentValues, content: Content, fade: Bool = false) {
             let changed = selected != key
+            // A short cross-fade on page switches; the first page and Reduce Motion appear directly.
+            if changed, fade, selected != nil, let layer {
+                let transition = CATransition()
+                transition.type = .fade
+                transition.duration = 0.15
+                transition.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                layer.add(transition, forKey: "page")
+            }
             if changed, let old = selected.flatMap({ entries[$0] }) {
                 // Detachment can defer SwiftUI's representable update. Persist
                 // the latest position before taking the old graph off-window.
@@ -198,7 +195,6 @@ struct PersistentSection<Content: View>: View {
     let title: String, detail: String
     var tint: Color
     @AppStorage private var expanded: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ViewBuilder var content: Content
     init(key: String, title: String, detail: String = "", tint: Color = .secondary, initiallyExpanded: Bool = true, @ViewBuilder content: () -> Content) {
         self.title = title; self.detail = detail; self.tint = tint; self.content = content()
@@ -209,7 +205,7 @@ struct PersistentSection<Content: View>: View {
         let _ = interfaceLanguage;
         DisclosureGroup(isExpanded: $expanded) { content.padding(.top, 8) } label: {
             HStack(spacing: 7) { Circle().fill(tint).frame(width: 7, height: 7); Text(title).font(AppFont.secondary.weight(.medium)); Spacer(minLength: 0); Text(detail).font(AppFont.caption).foregroundStyle(detail.contains("⚠") ? Palette.warn : Color.secondary) }
-        }.animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.9), value: expanded)
+        }.motion(.expand, value: expanded)
     }
 }
 

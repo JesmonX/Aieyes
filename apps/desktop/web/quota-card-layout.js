@@ -53,3 +53,68 @@
   document.fonts?.ready.then(schedule);document.fonts?.addEventListener('loadingdone', schedule);
   addEventListener('resize', schedule);addEventListener('aieyes:language', schedule);schedule();
 })();
+// Masonry for multi-column quota grids. Each item goes to the shortest column and spans rows of a
+// small implicit track in proportion to its height, so an expanded card leaves no hole beside it.
+// A full-width group (several accounts) reports how far each of its columns reaches, so the groups
+// after it start under its shorter columns. Only grid lines are written: DOM, reading and Tab order
+// are unchanged, and single-column grids (the panel, narrow windows) keep normal flow.
+(() => {
+  const content = document.querySelector('#content');
+  if (!content) return;
+  const GRIDS = '.quota-groups,.quotas', UNIT = 4, observed = new WeakSet();
+  // Placement is written per column count (--masonry-row-N, --masonry-column-N); workspace.css applies
+  // it only while N columns are current, so a resize falls back to plain grid flow until this re-runs.
+  const clear = (element, keep = '') => {for (const name of [...element.style]) if (name.startsWith('--masonry-') && !name.endsWith('-' + keep)) element.style.removeProperty(name);};
+  const reset = grid => {
+    if (!grid.dataset.masonry) return;
+    delete grid.dataset.masonry;clear(grid);for (const item of grid.children) clear(item);
+  };
+  function layout(grid) {
+    if (!grid.isConnected) return;
+    const style = getComputedStyle(grid), columns = style.display === 'grid' ? style.gridTemplateColumns.split(' ').filter(Boolean).length : 0;
+    const items = [...grid.children].filter(item => item.getClientRects().length);
+    if (columns < 2 || items.length < 2) {reset(grid);return;}
+    // A new column count is not styled yet, so the natural row gap is readable; it becomes part of each span.
+    if (grid.dataset.masonry !== String(columns)) {
+      reset(grid);grid.style.setProperty('--masonry-gap', (parseFloat(style.rowGap) || 0) + 'px');grid.dataset.masonry = String(columns);
+    }
+    const gap = parseFloat(grid.style.getPropertyValue('--masonry-gap')) || 0, rows = px => Math.max(1, Math.ceil((px + gap) / UNIT));
+    const ROW = '--masonry-row-' + columns, COLUMN = '--masonry-column-' + columns;
+    // Read everything first, then write, so the layout is computed once.
+    const measured = items.map(item => {
+      const box = item.getBoundingClientRect(), full = getComputedStyle(item).gridColumnEnd === '-1';
+      let reach = null;
+      if (full) {
+        const inner = item.querySelector(`.quotas[data-masonry="${columns}"]`), area = inner?.getBoundingClientRect();
+        if (inner && Math.abs(area.width - grid.getBoundingClientRect().width) < 1) {
+          reach = Array(columns).fill(area.top - box.top);
+          for (const card of inner.children) if (card.getClientRects().length) {const column = parseInt(card.style.getPropertyValue(COLUMN), 10) - 1;if (column >= 0 && column < columns) reach[column] = Math.max(reach[column], card.getBoundingClientRect().bottom - box.top);}
+        }
+      }
+      return { item, span: rows(box.height), full, reach };
+    });
+    const filled = Array(columns).fill(0);
+    for (const { item, span, full, reach } of measured) {
+      let start, column = '';
+      if (full) {start = Math.max(...filled);filled.forEach((_, i) => filled[i] = start + (reach ? rows(reach[i]) : span));}
+      else {const index = filled.indexOf(Math.min(...filled));start = filled[index];filled[index] += span;column = String(index + 1);}
+      const row = `${start + 1} / span ${span}`;
+      if (item.style.getPropertyValue(ROW) !== row) item.style.setProperty(ROW, row);
+      if (column && item.style.getPropertyValue(COLUMN) !== column) item.style.setProperty(COLUMN, column);
+    }
+  }
+  // Only cards are observed. Spans settle inside the callback, before paint, so a growing card
+  // never overlaps its neighbour for a frame; the outer group grid follows from the same reads.
+  const sizes = new ResizeObserver(rows => {
+    const grids = new Set();
+    for (const { target } of rows) {
+      if (!target.isConnected) {sizes.unobserve(target);observed.delete(target);continue;}
+      for (let grid = target.parentElement?.closest(GRIDS); grid && content.contains(grid); grid = grid.parentElement?.closest(GRIDS)) grids.add(grid);
+    }
+    // Card grids first: their spans set the height of the group grid around them.
+    for (const inner of [true, false]) for (const grid of grids) if (grid.matches('.quotas') === inner) layout(grid);
+  });
+  const discover = () => {for (const card of content.querySelectorAll('.quotas > *')) if (!observed.has(card)) {observed.add(card);sizes.observe(card);}};
+  new MutationObserver(discover).observe(content, { childList:true, subtree:true });
+  discover();
+})();

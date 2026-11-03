@@ -54,7 +54,7 @@ body[data-view=panel] { display:block; justify-items:normal; user-select:text; }
 .panel-body .daily-table { max-height:280px; }
 .panel-body .onboarding h2 { font-size:var(--font-section); }
 .panel-body .onboarding p { font-size:var(--font-panel-body); margin-bottom:12px; }
-.panel-body .sampling-banner { padding:4px 0; min-height:var(--control-height); border:0; font-size:var(--font-secondary); }
+.panel-body .sampling-banner { padding:4px 4px 4px 12px; margin:0; }
 .panel-filter-summary { font-size:var(--font-secondary); }
 .panel-filter-summary .active-filters { margin-top:6px; }
 .panel-body .card:has(> details[data-agent-detail=panel-trend]) { padding:0; border:0; background:transparent; }

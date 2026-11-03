@@ -58,11 +58,11 @@ struct ActivityIndicator: View {
     var body: some View {
         let _ = interfaceLanguage;
         Image(systemName: phase?.symbol ?? "circle.dotted")
-            .font(.system(size: 14, weight: .semibold))
+            .font(.system(size: DesignTokens.iconSize, weight: DesignTokens.weightStrong))
             .foregroundStyle(phase?.color ?? .secondary)
             .symbolEffect(.pulse, options: .repeating, isActive: phase?.active == true && !reduceMotion && surfaceActive)
             .frame(width: 22, height: 22)
-            .background((phase?.color ?? .secondary).opacity(0.12), in: Circle())
+            .background((phase?.color ?? .secondary).opacity(DesignTokens.controlTintOpacity), in: Circle())
             .accessibilityLabel(phase?.label ?? L("无活跃会话"))
     }
 }
@@ -250,7 +250,7 @@ struct MenuActivityLabel: View {
             if value.phase == nil || value.phase == .idle { BrandMark(template: true).frame(width: 22, height: 22) }
             else { MenuActivityIndicator(phase: value.phase, enabled: value.animationEnabled).frame(width: 22, height: 22) }
             if !value.text.isEmpty { Text(value.text).monospacedDigit() }
-        }.font(.system(size: 14, weight: .medium)).padding(.horizontal, 5)
+        }.font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightMedium)).padding(.horizontal, 5)
     }
 }
 

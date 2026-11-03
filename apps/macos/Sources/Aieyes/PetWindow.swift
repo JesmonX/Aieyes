@@ -61,14 +61,23 @@ private enum PetSprites {
     private(set) var row = 0
     private(set) var assetIdentity = ""
     private var requested = ""
+    @Published private(set) var failed = false
     func load(_ asset: ImportedPet?, row: Int) {
         let key = (asset?.contentHash ?? "") + ":" + String(row) + ":" + (asset?.spritePath ?? "")
         guard key != requested else { return }; requested = key
-        guard let asset else { images = []; return }
-        if let known = PetSprites.cached(asset, row: row) { self.row = row; assetIdentity = asset.contentHash; images = known; return }
+        guard let asset else { images = []; failed = false; return }
+        if let known = PetSprites.cached(asset, row: row) { self.row = row; assetIdentity = asset.contentHash; images = known; failed = false; return }
         PetSprites.queue.async { [weak self] in
             let next = PetSprites.frames(for: asset, row: row)
-            DispatchQueue.main.async { [weak self] in guard let self, self.requested == key else { return }; if !next.isEmpty { self.row = row; self.assetIdentity = asset.contentHash; self.images = next } }
+            DispatchQueue.main.async { [weak self] in guard let self, self.requested == key else { return }; if !next.isEmpty { self.row = row; self.assetIdentity = asset.contentHash; self.images = next; self.failed = false }
+                else {
+                    // Allow a later retry. Frames of this pet can stay on screen; frames of a previous pet cannot,
+                    // so a switched-to pet falls back to its own idle row before reporting failure.
+                    self.requested = ""
+                    if self.images.isEmpty || self.assetIdentity != asset.contentHash {
+                        if row != PetState.idle.row { self.load(asset, row: PetState.idle.row) } else { self.images = []; self.failed = true }
+                    }
+                } }
         }
     }
 }
@@ -179,7 +188,10 @@ private struct PetSpriteView: View {
         Group {
             if !frames.images.isEmpty {
                 PetLayerSprite(images: frames.images, state: displayedState, identity: frames.assetIdentity + ":" + displayedState.animationIdentity, playing: enabled, reduced: reduced)
-            } else if asset == nil { Text(L("请导入桌宠")).font(.system(size: 13 * scale)) } else { Color.clear }
+            } else if asset == nil { Text(L("请导入桌宠")).font(.system(size: 13 * scale)) }
+            else if frames.failed { Text(L("桌宠图片加载失败，请重新导入或选择其他桌宠")).font(.system(size: 12 * scale)).multilineTextAlignment(.center).foregroundStyle(Palette.warn) }
+            // Empty layer while decoding: transparent and click-through, unlike an opaque Color.clear area.
+            else { PetLayerSprite(images: [], state: displayedState, identity: "", playing: false, reduced: reduced) }
         }.frame(width: 132 * scale, height: 143 * scale)
             .onAppear { configure() }
             .onChange(of: state.row) { _, _ in configure() }
@@ -201,6 +213,7 @@ private struct PetView: View {
             PetSpriteView(state: state, asset: live.asset, scale: scale, enabled: enabled && live.petVisible && !live.suspended)
             Text(L(state.label)).font(.system(size: max(11,12 * scale), weight: .medium))
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                .contentTransition(.opacity).motion(.standard, value: state.label)
                 .padding(.horizontal, 9 * scale).padding(.vertical, 3 * scale)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay * scale))
                 .overlay(RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay * scale).strokeBorder(Palette.cardBorder.opacity(DesignTokens.cardBorderOpacity)))
@@ -245,7 +258,7 @@ private final class PetHost: NSHostingView<PetView> {
     override func mouseUp(with event: NSEvent) {
         guard let window, press != nil else { return }
         press = nil
-        if dragged { PetWindowController.clamp(window, snap: true, preferredPoint: NSEvent.mouseLocation); UserDefaults.standard.set(NSStringFromPoint(window.frame.origin), forKey: "aieyes.pet.position") }
+        if dragged { UserDefaults.standard.set(NSStringFromPoint(PetWindowController.settle(window, preferredPoint: NSEvent.mouseLocation)), forKey: "aieyes.pet.position") }
         else { open?(self, true) }
     }
     var update: (() -> Void)?
@@ -310,14 +323,21 @@ private final class PetHost: NSHostingView<PetView> {
         NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: panel).sink { [weak self] _ in
             self?.publishVisibility()
         }.store(in: &subscriptions)
-        mouseLocal = NSEvent.addLocalMonitorForEvents(matching:[.mouseMoved,.leftMouseDragged,.leftMouseUp]) { [weak self] event in self?.updateHit();return event }
+        mouseLocal = NSEvent.addLocalMonitorForEvents(matching:[.mouseMoved,.leftMouseDragged,.leftMouseUp]) { [weak self] event in
+            self?.updateHit()
+            // Dropping the pet on another display changes which screen the check applies to.
+            if event.type == .leftMouseUp { self?.scheduleFullscreenCheck() }
+            return event
+        }
         mouseGlobal = NSEvent.addGlobalMonitorForEvents(matching:[.mouseMoved,.leftMouseDragged,.leftMouseUp]) { [weak self] _ in DispatchQueue.main.async { self?.updateHit() } }
-        Timer.publish(every:1,on:.main,in:.common).autoconnect().sink { [weak self] _ in self?.updateFullscreen() }.store(in:&subscriptions)
-        NSWorkspace.shared.notificationCenter.publisher(for:NSWorkspace.activeSpaceDidChangeNotification).sink { [weak self] _ in self?.updateFullscreen() }.store(in:&subscriptions)
+        Timer.publish(every:2,tolerance:0.5,on:.main,in:.common).autoconnect().sink { [weak self] _ in self?.pollFullscreen() }.store(in:&subscriptions)
+        // System events answer immediately; each also re-checks once after window animations settle.
+        NSWorkspace.shared.notificationCenter.publisher(for:NSWorkspace.activeSpaceDidChangeNotification).sink { [weak self] _ in self?.scheduleFullscreenCheck() }.store(in:&subscriptions)
+        NSWorkspace.shared.notificationCenter.publisher(for:NSWorkspace.didWakeNotification).sink { [weak self] _ in self?.scheduleFullscreenCheck() }.store(in:&subscriptions)
         // Respond to application switches immediately, rather than waiting for the fullscreen timer.
         NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification).sink { [weak self] _ in
             guard let self else { return }
-            self.updateFullscreen()
+            self.scheduleFullscreenCheck()
             if self.panel.isVisible {
                 self.panel.level = .floating
                 self.panel.orderFrontRegardless()
@@ -325,7 +345,16 @@ private final class PetHost: NSHostingView<PetView> {
         }.store(in: &subscriptions)
         Self.clamp(panel); sync()
         NotificationCenter.default.publisher(for:UserDefaults.didChangeNotification).sink { [weak self] _ in self?.sync() }.store(in:&subscriptions)
-        NotificationCenter.default.publisher(for:NSApplication.didChangeScreenParametersNotification).sink { [weak self] _ in if let self { Self.clamp(self.panel) } }.store(in:&subscriptions)
+        NotificationCenter.default.publisher(for:NSApplication.didChangeScreenParametersNotification).sink { [weak self] _ in if let self { Self.clamp(self.panel); self.scheduleFullscreenCheck() } }.store(in:&subscriptions)
+    }
+    private var fullscreenRecheck: DispatchWorkItem?
+    private var fullscreenPolling = false
+    private func scheduleFullscreenCheck() {
+        updateFullscreen()
+        fullscreenRecheck?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.updateFullscreen() } }
+        fullscreenRecheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
     private func resize() {
         let scale = PetAppearance.scale(UserDefaults.standard.double(forKey: "aieyes.pet.scale"))
@@ -352,8 +381,9 @@ private final class PetHost: NSHostingView<PetView> {
         panel.title = L("Aieyes 宠物")
         panel.contentView?.setAccessibilityLabel(L("Aieyes 宠物，单击打开面板"))
         updateFullscreen()
-        if preferences.enabled && !fullscreen && !panel.isVisible { panel.orderFrontRegardless() }
-        else if (!preferences.enabled || fullscreen) && panel.isVisible { panel.orderOut(nil) }
+        // Disabling hides at once (an explicit command); showing fades in.
+        if preferences.enabled && !fullscreen { showPanel() }
+        else if (!preferences.enabled || fullscreen) && panel.isVisible { hidePanel(animated: false) }
         publishVisibility()
     }
     private func updateHit() {
@@ -365,26 +395,84 @@ private final class PetHost: NSHostingView<PetView> {
         if inside && hitTimer == nil { hitTimer = Timer.scheduledTimer(withTimeInterval:0.05,repeats:true) { [weak self] _ in MainActor.assumeIsolated { self?.updateHit() } } }
         else if !inside && !host.dragging { hitTimer?.invalidate();hitTimer = nil }
     }
-    private func updateFullscreen() {
-        guard let prefs = appliedPreferences else { return }
-        var hidden = false
-        if prefs.enabled && prefs.hideInFullscreen, let screen = NSScreen.screens.first(where:{$0.frame.intersects(panel.frame)}), let display = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
-            let area = CGDisplayBounds(display)
-            let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],kCGNullWindowID) as? [[String:Any]] ?? []
-            hidden = windows.contains { row in
-                guard (row[kCGWindowLayer as String] as? Int) == 0,
-                    let value = row[kCGWindowBounds as String] as? NSDictionary,
-                    let rect = CGRect(dictionaryRepresentation:value) else { return false }
-                return abs(rect.minX-area.minX) < 2 && abs(rect.minY-area.minY) < 2 && rect.width >= area.width-2 && rect.height >= area.height-2
+    /// The display the pet occupies, when fullscreen surfaces should hide it.
+    private func fullscreenArea() -> CGRect? {
+        guard let prefs = appliedPreferences, prefs.enabled, prefs.hideInFullscreen,
+              let screen = NSScreen.screens.first(where:{$0.frame.intersects(panel.frame)}),
+              let display = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
+        return CGDisplayBounds(display)
+    }
+    private nonisolated static func surfaceCovers(_ area: CGRect) -> Bool {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements],kCGNullWindowID) as? [[String:Any]] ?? []
+        return windows.contains { row in
+            guard (row[kCGWindowLayer as String] as? Int) == 0,
+                let value = row[kCGWindowBounds as String] as? NSDictionary,
+                let rect = CGRect(dictionaryRepresentation:value) else { return false }
+            return abs(rect.minX-area.minX) < 2 && abs(rect.minY-area.minY) < 2 && rect.width >= area.width-2 && rect.height >= area.height-2
+        }
+    }
+    private func updateFullscreen() { applyFullscreen(fullscreenArea().map(Self.surfaceCovers) ?? false) }
+    /// A borderless surface posts no system event, so a slow check still runs,
+    /// off the main thread because window enumeration can stall it.
+    private func pollFullscreen() {
+        guard !fullscreenPolling, let area = fullscreenArea() else { return }
+        fullscreenPolling = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let hidden = Self.surfaceCovers(area)
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.fullscreenPolling = false
+                    if self.fullscreenArea() == area, hidden != self.fullscreen { self.applyFullscreen(hidden) }
+                }
             }
         }
+    }
+    private func applyFullscreen(_ hidden: Bool) {
+        guard let prefs = appliedPreferences else { return }
         fullscreen = hidden
-        if prefs.enabled && !hidden { if !panel.isVisible { panel.orderFrontRegardless() };updateHit() }
-        else { if panel.isVisible { panel.orderOut(nil) };hitTimer?.invalidate();hitTimer = nil }
+        if prefs.enabled && !hidden { showPanel();updateHit() }
+        else { hidePanel(animated: true);hitTimer?.invalidate();hitTimer = nil }
         publishVisibility()
+    }
+    private static let fadeDuration = 0.18
+    private var visibilityGeneration = 0
+    /// Fades the pet in; a fade-out still in flight reverses instead of finishing.
+    private func showPanel() {
+        visibilityGeneration += 1
+        let reduced = Motion.reduced
+        if !panel.isVisible { panel.alphaValue = reduced ? 1 : 0; panel.orderFrontRegardless() }
+        guard panel.alphaValue < 1 else { return }
+        if reduced { panel.alphaValue = 1; return }
+        NSAnimationContext.runAnimationGroup { context in context.duration = Self.fadeDuration; panel.animator().alphaValue = 1 }
+    }
+    private func hidePanel(animated: Bool) {
+        visibilityGeneration += 1
+        guard panel.isVisible else { return }
+        guard animated && !Motion.reduced else { panel.orderOut(nil); panel.alphaValue = 1; return }
+        let generation = visibilityGeneration
+        NSAnimationContext.runAnimationGroup({ context in context.duration = Self.fadeDuration; panel.animator().alphaValue = 0 }) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.visibilityGeneration == generation else { return }
+                self.panel.orderOut(nil); self.panel.alphaValue = 1; self.publishVisibility()
+            }
+        }
     }
     static func clamp(_ window: NSWindow, snap: Bool = false, preferredPoint: NSPoint? = nil) {
         window.setFrameOrigin(PetWindowGeometry.origin(frame: window.frame, areas: NSScreen.screens.map(\.visibleFrame), snap: snap, preferredPoint: preferredPoint))
+    }
+    /// After a drag the pet eases onto the snapped edge instead of jumping; Reduce Motion places it directly.
+    /// Returns the final origin, which is what gets saved (the frame is still moving).
+    static func settle(_ window: NSWindow, preferredPoint: NSPoint) -> NSPoint {
+        let origin = PetWindowGeometry.origin(frame: window.frame, areas: NSScreen.screens.map(\.visibleFrame), snap: true, preferredPoint: preferredPoint)
+        guard origin != window.frame.origin else { return origin }
+        if Motion.reduced { window.setFrameOrigin(origin); return origin }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = fadeDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().setFrame(NSRect(origin: origin, size: window.frame.size), display: true)
+        }
+        return origin
     }
 }
 
@@ -480,7 +568,7 @@ private struct PetLibraryRow: View {
                 if let date = pet.importedAt { Text(date.replacingOccurrences(of: "T", with: " ").prefix(16)).font(AppFont.secondary).foregroundStyle(.secondary) }
             }.frame(maxWidth: .infinity, alignment: .leading)
             Button(selected ? L("使用中") : model.petSelectionBusy == pet.libraryKey ? L("切换中…") : L("使用")) { Task { await model.selectPet(pet) } }.disabled(selected || model.petImportBusy || model.petSelectionBusy != nil)
-        }.padding(8).background(selected ? Palette.accent.opacity(0.08) : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 8))
+        }.padding(8).background(selected ? Palette.accent.opacity(0.08) : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
         .background { GeometryReader { geometry in
             let showing = PetPreviewVisibility.isVisible(geometry.frame(in: .global), viewport: viewport, enclosing: enclosingViewport)
             Color.clear.onChange(of: showing, initial: true) { _, next in visible = next }

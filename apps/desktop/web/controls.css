@@ -82,9 +82,11 @@ label:has(> input[type=checkbox]:disabled) { color:var(--muted); cursor:default;
 .filters { gap:var(--space-control); padding:0; border:0; }
 .filters select,#days { height:var(--control-compact-height); min-height:var(--control-compact-height); padding-top:2px; padding-bottom:2px; line-height:var(--line-secondary); font-size:var(--font-secondary); }
 .filters select { flex:0 1 auto; width:auto; max-width:230px; }
-.subscription-badge { display:inline-block; max-width:120px; padding:3px 6px; border-radius:var(--radius-pill); background:var(--surface-sunken); color:var(--ink); font-size:var(--font-secondary); line-height:var(--line-secondary); font-weight:var(--weight-strong); white-space:nowrap; }
-.quota-subscription { display:flex; justify-content:center; flex:0 1 var(--quota-badge-width); min-width:0; }
-.quota-subscription .subscription-badge { max-width:100%; }
+/* One pill on every surface: an ink tint and hairline stay visible on tinted, opaque and translucent cards alike. */
+.subscription-badge { display:inline-block; max-width:120px; padding:3px 8px; border-radius:var(--radius-pill); background:color-mix(in srgb,var(--ink) 8%,transparent); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ink) 10%,transparent); color:var(--ink); font-size:var(--font-secondary); line-height:var(--line-secondary); font-weight:var(--weight-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+.quota-subscription { display:flex; justify-content:center; align-items:center; gap:4px; flex:0 1 var(--quota-badge-width); min-width:0; }
+.quota-subscription .subscription-badge { max-width:100%; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.subscription-remaining { flex:none; color:var(--muted, currentColor); font-size:var(--font-secondary); line-height:var(--line-secondary); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .panel-account-group legend button { margin-left:8px; font-size:var(--font-entry); }
 /* Settings sit on the window backdrop, using the floating panel's card finish. */
 .settings-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:var(--space-layout); align-items:start; }
@@ -286,12 +288,56 @@ button.back-link svg { width:16px; height:16px; }
 }
 
 @layer platform {
+/* motion.js sets data-overlay-motion where @starting-style and discrete transitions exist (WebView2,
+   recent WebKitGTK); elsewhere overlays keep their keyframe entrance and close at once.
+   Transitions keep logical close/focus synchronous. Discrete display/overlay
+   transitions let native dialogs and popovers finish painting their exit. */
+html[data-overlay-motion=transition] dialog {
+  animation:none !important;
+  opacity:0; transform:translateY(8px) scale(.97);
+  transition:opacity .14s ease,transform .14s ease,display .14s allow-discrete,overlay .14s allow-discrete;
+}
+html[data-overlay-motion=transition] dialog[open] { opacity:1; transform:none; transition:opacity .18s ease,transform .3s var(--win-spring,var(--ease-spring)),display .3s allow-discrete,overlay .3s allow-discrete; }
+html[data-overlay-motion=transition] dialog:not([open]) { pointer-events:none; }
+html[data-overlay-motion=transition] :is(.win-select-menu,.multi-panel,.panel-menu,.refresh-menu,#refresh-status-popover,#quota-failures-popover) {
+  animation:none !important; opacity:0; transform:translateY(var(--win-menu-offset,4px)) scale(.97);
+  transform-origin:var(--win-menu-origin,top center);
+  transition:opacity .12s ease,transform .12s ease,display .12s allow-discrete,overlay .12s allow-discrete;
+}
+html[data-overlay-motion=transition] :is(.win-select-menu,.multi-panel,#refresh-status-popover,#quota-failures-popover):popover-open,
+html[data-overlay-motion=transition] :is(.panel-menu,.refresh-menu):not([hidden]) {
+  opacity:1; transform:none;
+  transition:opacity .14s ease,transform .24s var(--win-spring,var(--ease-spring)),display .24s allow-discrete,overlay .24s allow-discrete;
+}
+html[data-overlay-motion=transition] :is(.win-select-menu,.multi-panel):not(:popover-open) { pointer-events:none; }
+@starting-style {
+  html[data-overlay-motion=transition] dialog[open] { opacity:0; transform:translateY(8px) scale(.97); }
+  html[data-overlay-motion=transition] :is(.win-select-menu,.multi-panel,#refresh-status-popover,#quota-failures-popover):popover-open,
+  html[data-overlay-motion=transition] :is(.panel-menu,.refresh-menu):not([hidden]) { opacity:0; transform:translateY(var(--win-menu-offset,4px)) scale(.97); }
+}
+@supports selector(details::details-content) {
+  html[data-overlay-motion=transition] :is(#panel-more,.machine-menu)::details-content { transition:content-visibility .12s allow-discrete; }
+  /* Opening must expose focusable items immediately. Only closing retains the
+     container for its exit; animate the contents separately on entry. */
+  html[data-overlay-motion=transition] :is(#panel-more,.machine-menu)[open]::details-content { transition:none; }
+  html[data-overlay-motion=transition] :is(.panel-more-menu,.machine-menu-body) {
+    opacity:0; transform:translateY(-4px) scale(.97); transform-origin:top right;
+    transition:opacity .12s ease,transform .12s ease;
+  }
+  html[data-overlay-motion=transition] .panel-more-menu { transform:translateY(4px) scale(.97); transform-origin:bottom right; }
+  html[data-overlay-motion=transition] :is(#panel-more,.machine-menu)[open] > :is(.panel-more-menu,.machine-menu-body) { opacity:1; transform:none; transition:opacity .14s ease,transform .24s var(--win-spring,var(--ease-spring)); }
+  html[data-overlay-motion=transition] :is(#panel-more,.machine-menu):not([open]) > :is(.panel-more-menu,.machine-menu-body) { pointer-events:none; }
+  @starting-style {
+    html[data-overlay-motion=transition] .machine-menu[open] > .machine-menu-body { opacity:0; transform:translateY(-4px) scale(.97); }
+    html[data-overlay-motion=transition] #panel-more[open] > .panel-more-menu { opacity:0; transform:translateY(4px) scale(.97); }
+  }
+}
 html[data-platform=windows] :is(.dialog-foot,.dialog-actions) > .primary { order:-1; }
 html[data-platform=windows] :is(.dialog-foot,.dialog-actions) > [role=status] { order:-2; }
 }
 
 @layer overrides {
-@media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
+/* The global reduced-motion switch lives once, in style.css overrides. */
 @media(forced-colors:active) {
   button.danger,button.danger:enabled:hover,button.danger:enabled:active { background:Canvas; color:ButtonText; border-color:ButtonText; }
   button,input,select,textarea,dialog,.panel-menu,.panel-more-menu,.refresh-menu,.multi-panel,.hint { background:Canvas; color:CanvasText; border-color:ButtonText; }
@@ -313,5 +359,6 @@ html[data-platform=windows] :is(.dialog-foot,.dialog-actions) > [role=status] { 
   .settings-block .card { background:Canvas; border-color:CanvasText; }
 }
 @media (forced-colors:active) { .wake-more-menu { background:Canvas; border-color:CanvasText; } }
+@media (forced-colors:active) { .subscription-badge { border:1px solid CanvasText; box-shadow:none; } }
 @media (forced-colors:active) { .segmented > button[aria-pressed=true] { forced-color-adjust:none; color:HighlightText; background:Highlight; } }
 }

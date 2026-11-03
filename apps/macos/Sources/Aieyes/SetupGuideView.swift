@@ -120,7 +120,7 @@ struct SetupGuideView: View {
             FlowLayout(spacing: 8) {
                 Text(row.status.title).font(AppFont.caption.weight(.medium))
                     .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background((row.level == "warn" ? Palette.warn : row.level == "ok" ? Palette.ok : Palette.accent).opacity(0.12), in: Capsule())
+                    .background((row.level == "warn" ? Palette.warn : row.level == "ok" ? Palette.ok : Palette.accent).opacity(DesignTokens.controlTintOpacity), in: Capsule())
                     .foregroundStyle(row.level == "warn" ? Palette.warn : row.level == "ok" ? Palette.ok : Palette.accent)
                 Text(row.text).font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
@@ -153,6 +153,6 @@ struct SetupGuideView: View {
         }
     }
     private func command(_ text: String) -> some View {
-        Text(text).font(.system(size: 12, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading).padding(10).background(Palette.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+        Text(text).font(.system(size: DesignTokens.fontCaption, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading).padding(10).background(Palette.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
     }
 }

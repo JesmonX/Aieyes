@@ -5,6 +5,7 @@ struct WakeupsView: View {
     @StateObject private var store = WakeupsStore()
     @State private var editing: WakeTask?
     @State private var removal: WakeRecord?
+    @State private var runConfirm: WakeRecord?
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
@@ -19,7 +20,7 @@ struct WakeupsView: View {
                     if store.loading { ProgressView().controlSize(.small) }
                 }
                 if let error = store.listError { ErrorNotice(message: error) }
-                if store.records.isEmpty && !store.loading { Text(L("尚未配置定时任务")).foregroundStyle(.secondary) }
+                if store.records.isEmpty && !store.loading && store.listError == nil { Text(L("尚未配置定时任务")).foregroundStyle(.secondary) }
             }
             ForEach(store.records) { record in Section { taskCard(record) } }
         }.formStyle(AdaptiveGroupedFormStyle()).background(OverlayScrollStyle()).font(AppFont.body).disabled(model.installingUpdate).task { await store.load() }
@@ -27,6 +28,10 @@ struct WakeupsView: View {
         .sheet(item: $removal) { record in
             DangerConfirmation(title: record.deployment == nil ? L("删除任务草稿？") : L("移除自动任务？"), explanation: record.deployment == nil ? L("删除「") + record.task.name + L("」的任务草稿。") : L("将从目标机器移除「") + record.task.name + L("」的定时部署，后续自动唤醒会停止。运行历史保留。"), affected: [], confirmLabel: L("确认移除"), cancel: { removal = nil }, confirm: { removal = nil; store.perform(record.deployment == nil ? "delete" : "remove", record.id) })
         }
+        .confirmationDialog(L("立即运行任务？"), isPresented: Binding(get: { runConfirm != nil }, set: { if !$0 { runConfirm = nil } }), titleVisibility: .visible, presenting: runConfirm) { record in
+            Button(L("确认运行")) { runConfirm = nil; store.perform("run", record.id) }
+            Button(L("取消"), role: .cancel) { runConfirm = nil }
+        } message: { record in Text(L("将立即调用「{0}」的模型，可能消耗订阅额度。", record.task.name)) }
         .sheet(item: $editing) { task in
             WakeEditor(model: model, task: task, deployed: store.records.first { $0.id == task.id }?.deployment != nil) { value in
                 try await store.save(value); editing = nil
@@ -49,7 +54,7 @@ struct WakeupsView: View {
                 Menu(L("更多操作")) {
                     if let d = r.deployment, !needsDeploy {
                         Button(d.enabled ? L("停用") : L("启用")) { store.perform(d.enabled ? "disable" : "enable", r.id) }
-                        Button(L("立即运行")) { store.perform("run", r.id) }.help(L("立即调用模型，可能消耗订阅额度"))
+                        Button(L("立即运行")) { runConfirm = r }.help(L("立即调用模型，可能消耗订阅额度"))
                         Button(L("状态与记录")) { store.perform("status", r.id) }
                     }
                     Button(r.deployment == nil ? L("删除草稿") : L("移除自动任务"), role: .destructive) { removal = r }
@@ -138,7 +143,9 @@ struct WakeEditor: View {
                     LabeledContent(L("模型 ID")) { TextField(L("模型 ID"), text: $task.model).labelsHidden() }
                     Picker(L("推理强度"), selection: $task.effort) { Text(L("模型默认")).tag(""); ForEach(efforts, id: \.self) { Text($0).tag($0) } }
                     Text(L("提示词")).font(AppFont.section)
-                    TextEditor(text: $task.prompt).frame(height: 80).overlay(RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.2)))
+                    TextEditor(text: $task.prompt).font(AppFont.body).scrollContentBackground(.hidden)
+                        .padding(.horizontal, DesignTokens.controlPaddingX - 5).padding(.vertical, 4)
+                        .frame(height: 80).modifier(AieyesControlSurface(field: true))
                     Text(L("模型请求可能消耗订阅额度，实际消耗取决于模型和提示词。")).font(AppFont.secondary).foregroundStyle(.secondary)
                 }.textFieldStyle(.aieyes)
             }.frame(maxHeight: 490)

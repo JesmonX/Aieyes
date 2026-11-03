@@ -37,7 +37,7 @@ def main():
         core.close()
     source = ROOT/'apps/macos/Sources/Aieyes'
     names = ['Localization', 'LocalizationCatalog', 'MonitorSelection', 'Models', 'ProviderPresentation', 'EngineClient', 'QuotaNotifications',
-        'ConfigurationActions', 'DesignTokens', 'Palette', 'SessionActivity']
+        'ConfigurationActions', 'DesignTokens', 'Motion', 'Palette', 'SessionActivity']
     executable = output/'verify-dashboard-cache'
     subprocess.run(['swiftc', '-module-cache-path', str(ROOT/'.build/swift-module-cache'),
         *[str(source/(name+'.swift')) for name in names], str(ROOT/'scripts/verify-dashboard-cache.swift'),

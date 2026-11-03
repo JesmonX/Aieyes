@@ -16,13 +16,13 @@ struct FloatingTokenCard: View {
         let _ = interfaceLanguage;
         Button { expanded.toggle() } label: {
             if inline {
-                HStack(spacing: 5) { Text("Token").foregroundStyle(.secondary); Text(Format.compact(total)).font(.system(size:valueSize,weight:.semibold)).monospacedDigit(); Image(systemName: "chevron.down").font(AppFont.caption).foregroundStyle(.secondary) }
+                HStack(spacing: 5) { Text("Token").foregroundStyle(.secondary); Text(Format.compact(total)).font(.system(size:valueSize,weight:.semibold)).monospacedDigit().numericTransition(value: total); Image(systemName: "chevron.down").font(AppFont.caption).foregroundStyle(.secondary) }
             } else {
             VStack(alignment: .leading, spacing: 8) {
                 HStack { Text(L("总 Token")); Spacer(); Image(systemName: "chevron.down") }.font(AppFont.secondary).foregroundStyle(.secondary)
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(Format.compact(total)).font(.system(size: DesignTokens.fontNumber, weight: DesignTokens.weightStrong))
-                    Text("(" + Format.percent(tokens.cacheRate.map { $0 * 100 }) + ")").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary)
+                    Text(Format.compact(total)).font(.system(size: DesignTokens.fontNumber, weight: DesignTokens.weightStrong)).numericTransition(value: total)
+                    Text("(" + Format.percent(tokens.cacheRate.map { $0 * 100 }) + ")").font(.system(size: DesignTokens.fontCaption)).foregroundStyle(.secondary).numericTransition(value: tokens.cacheRate)
                 }.monospacedDigit()
             }.frame(maxWidth: .infinity, alignment: .leading).padding(DesignTokens.tokenCardPadding).modifier(NeutralCard())
             }

@@ -58,7 +58,9 @@ enum Palette {
     }
     /// Text and symbols on a solid accent fill. AppKit draws white on the system accent in both appearances.
     static func accentInk(named name: String) -> Color { name == "system" ? .white : adaptive(DesignTokens.accentInkLight, DesignTokens.accentInkDark) }
-    static func category(_ key: String) -> Color {
+    static func category(_ key: String) -> Color { knownCategory(key) ?? accent }
+    /// The category color for providers and resources that have one.
+    static func knownCategory(_ key: String) -> Color? {
         switch key {
         case "codex": return adaptive(DesignTokens.categoryCodexLight, DesignTokens.categoryCodexDark)
         case "claude": return adaptive(DesignTokens.categoryClaudeLight, DesignTokens.categoryClaudeDark)
@@ -69,7 +71,7 @@ enum Palette {
         case "gpu": return adaptive(DesignTokens.categoryGpuLight, DesignTokens.categoryGpuDark)
         case "storage": return adaptive(DesignTokens.categoryStorageLight, DesignTokens.categoryStorageDark)
         case "network": return adaptive(DesignTokens.categoryNetworkLight, DesignTokens.categoryNetworkDark)
-        default: return accent
+        default: return nil
         }
     }
     static var balanceBlue: Color { accent }
@@ -78,11 +80,22 @@ enum Palette {
     static let danger = adaptive(DesignTokens.dangerLight, DesignTokens.dangerDark)
     static let cardBorder = adaptive(DesignTokens.cardStrokeLight, DesignTokens.cardStrokeDark)
     static let radiusCard: CGFloat = DesignTokens.radiusCard
-    static func quota(_ used: Double) -> Color {
-        guard used.isFinite else { return .secondary }
+    /// Warn at 30% remaining, danger under 10%; healthy quota has no alert color.
+    private static func quotaAlert(_ used: Double) -> Color? {
+        guard used.isFinite else { return nil }
         let remaining = min(100, max(0, 100 - used))
-        return remaining < 10 ? danger : remaining <= 30 ? warn : accent
+        return remaining < 10 ? danger : remaining <= 30 ? warn : nil
     }
+    /// Remaining-quota text: primary while healthy, so it never reads as a link.
+    static func quota(_ used: Double) -> Color { used.isFinite ? quotaAlert(used) ?? .primary : .secondary }
+    /// Remaining-quota bar: the caller's provider or neutral tint while healthy.
+    static func quotaBar(_ used: Double, healthy: Color) -> Color { quotaAlert(used) ?? healthy }
+    static func quotaCritical(_ used: Double) -> Bool { used.isFinite && 100 - used < 10 }
+    static var neutralTint: Color { otherModels }
+    /// Category-tinted inset surfaces (server resources) share one strength.
+    static let tintSurfaceOpacity = 0.08
+    /// Solid card fill in the detail window, shared with the Web build's --detail-card.
+    static let detailCard = adaptive(DesignTokens.detailCardLight, DesignTokens.detailCardDark)
     private static var modelSlots: [String: [String: Int]] = [:]
     private static var modelUsedSlots: [String: Set<Int>] = [:]
     private static let modelLock = NSLock()
@@ -125,7 +138,7 @@ private struct AieyesAccent: ViewModifier {
 }
 
 /// Keep native Button/TextField semantics; only their painted surfaces change.
-private struct AieyesControlSurface: ViewModifier {
+struct AieyesControlSurface: ViewModifier {
     var tint: Color? = nil
     /// A solid fill replaces the glass finish (the primary action).
     var fill: Color? = nil
@@ -168,7 +181,6 @@ private struct AieyesButtonBody: View {
     let configuration: ButtonStyle.Configuration
     let level: AieyesButtonStyle.Level
     @Environment(\.isEnabled) private var enabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.controlSize) private var controlSize
     @AppStorage("appearance.accent") private var accentName = "system"
     @State private var hovered = false
@@ -190,7 +202,7 @@ private struct AieyesButtonBody: View {
             .contentShape(RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
             .opacity(enabled ? 1 : 0.45)
             .onHover { hovered = $0 }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.13), value: hovered || configuration.isPressed)
+            .motion(.fast, value: hovered || configuration.isPressed)
     }
 }
 

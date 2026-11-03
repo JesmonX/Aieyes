@@ -42,48 +42,7 @@ html[data-platform=windows][data-theme=dark]:is([data-material=mica],[data-mater
 }
 /* The original select still owns its intrinsic width, form value and validity.
    Its proxy occupies exactly the same rectangle, including at fractional DPI. */
-/* Transitions keep logical close/focus synchronous. Discrete display/overlay
-   transitions let native dialogs and popovers finish painting their exit. */
-html[data-platform=windows] dialog {
-  animation:none !important;
-  opacity:0; transform:translateY(8px) scale(.97);
-  transition:opacity .14s ease,transform .14s ease,display .14s allow-discrete,overlay .14s allow-discrete;
-}
-html[data-platform=windows] dialog[open] { opacity:1; transform:none; transition:opacity .18s ease,transform .3s var(--win-spring),display .3s allow-discrete,overlay .3s allow-discrete; }
-html[data-platform=windows] dialog:not([open]) { pointer-events:none; }
-html[data-platform=windows] :is(.win-select-menu,.multi-panel,.panel-menu,.refresh-menu,#refresh-status-popover,#quota-failures-popover) {
-  animation:none !important; opacity:0; transform:translateY(var(--win-menu-offset,4px)) scale(.97);
-  transform-origin:var(--win-menu-origin,top center);
-  transition:opacity .12s ease,transform .12s ease,display .12s allow-discrete,overlay .12s allow-discrete;
-}
-html[data-platform=windows] :is(.win-select-menu,.multi-panel,#refresh-status-popover,#quota-failures-popover):popover-open,
-html[data-platform=windows] :is(.panel-menu,.refresh-menu):not([hidden]) {
-  opacity:1; transform:none;
-  transition:opacity .14s ease,transform .24s var(--win-spring),display .24s allow-discrete,overlay .24s allow-discrete;
-}
-html[data-platform=windows] :is(.win-select-menu,.multi-panel):not(:popover-open) { pointer-events:none; }
-@starting-style {
-  html[data-platform=windows] dialog[open] { opacity:0; transform:translateY(8px) scale(.97); }
-  html[data-platform=windows] :is(.win-select-menu,.multi-panel,#refresh-status-popover,#quota-failures-popover):popover-open,
-  html[data-platform=windows] :is(.panel-menu,.refresh-menu):not([hidden]) { opacity:0; transform:translateY(var(--win-menu-offset,4px)) scale(.97); }
-}
-@supports selector(details::details-content) {
-  html[data-platform=windows] :is(#panel-more,.machine-menu)::details-content { transition:content-visibility .12s allow-discrete; }
-  /* Opening must expose focusable items immediately. Only closing retains the
-     container for its exit; animate the contents separately on entry. */
-  html[data-platform=windows] :is(#panel-more,.machine-menu)[open]::details-content { transition:none; }
-  html[data-platform=windows] :is(.panel-more-menu,.machine-menu-body) {
-    opacity:0; transform:translateY(-4px) scale(.97); transform-origin:top right;
-    transition:opacity .12s ease,transform .12s ease;
-  }
-  html[data-platform=windows] .panel-more-menu { transform:translateY(4px) scale(.97); transform-origin:bottom right; }
-  html[data-platform=windows] :is(#panel-more,.machine-menu)[open] > :is(.panel-more-menu,.machine-menu-body) { opacity:1; transform:none; transition:opacity .14s ease,transform .24s var(--win-spring); }
-  html[data-platform=windows] :is(#panel-more,.machine-menu):not([open]) > :is(.panel-more-menu,.machine-menu-body) { pointer-events:none; }
-  @starting-style {
-    html[data-platform=windows] .machine-menu[open] > .machine-menu-body { opacity:0; transform:translateY(-4px) scale(.97); }
-    html[data-platform=windows] #panel-more[open] > .panel-more-menu { opacity:0; transform:translateY(4px) scale(.97); }
-  }
-}
+/* Overlay enter/exit transitions are shared by every platform that supports them (controls.css). */
 }
 
 @layer overrides {

@@ -66,6 +66,7 @@ function providerMark(provider) {
   return `<span class="provider-mark${icon ? icon.monochrome ? ' provider-monochrome' : '' : ' provider-fallback'}" data-provider="${escapeHTML(provider)}"${icon?.monochrome ? ` style="--provider-mask:url(provider-${escapeHTML(icon.asset)}.png)"` : ''} title="${name}" aria-label="${name}">${icon ? `<img src="provider-${icon.asset}.png" class="${icon.darkAsset ? 'provider-light' : ''}" alt="" width="36" height="36">${icon.darkAsset ? `<img src="provider-${icon.darkAsset}.png" class="provider-dark" alt="" width="36" height="36">` : ''}` : uiIcon('terminal')}</span>`;
 }
 function providerIdentity(provider) {return `<span class="provider-identity">${providerMark(provider)}<span>${escapeHTML(providers[provider] ?? provider)}</span></span>`;}
+function subscriptionRemaining(expiresAt) {const seconds = Number(expiresAt) - Date.now() / 1000;if (!(seconds > 0)) return '';return `<span class="subscription-remaining" title="${escapeHTML(AieyesI18n.t("订阅到期 {0}", date(expiresAt)))}">${Math.ceil(seconds / 86400)}d</span>`;}
 function subscriptionBadge(plan) {const label = AieyesUI.subscription(plan);return label ? `<span class="subscription-badge" title="${escapeHTML(plan)}" aria-label="${AieyesI18n.t("订阅 {0}", escapeHTML(label))}">${escapeHTML(label)}</span>` : '';}
 // Keep category slots across filtering and appearance changes. Probe collisions
 // until a preset is full; larger category sets reuse colors with named legends.
@@ -317,14 +318,14 @@ function rememberView() {
   return { focus: focusSelector(document.activeElement), window: [page.scrollLeft, page.scrollTop], panel: $('.panel-body')?.scrollTop,
     closed: [...document.querySelectorAll('#content [data-agent-detail]:not(.quota-disclosure):not([open])')].map((el) => el.dataset.agentDetail),
     opened: [...document.querySelectorAll('#content [data-agent-detail]:not(.quota-disclosure)[open],#content [data-metric][open]')].map((el) => [el.hasAttribute('data-metric') ? 'data-metric' : 'data-agent-detail', el.dataset.metric ?? el.dataset.agentDetail]),
-    scrollers: [...document.querySelectorAll('#content .daily-table,#content .prices-list')].map((el) => ({ className: el.className, top: el.scrollTop, left: el.scrollLeft })) };
+    scrollers: [...document.querySelectorAll('#content .daily-table,#content .prices-list,#content .tab-scroller')].map((el) => ({ className: el.className, top: el.scrollTop, left: el.scrollLeft })) };
 }
 function restoreView(view) {
   window.AieyesSingleSelect?.mountAll($('#content'));
   for (const key of view.closed ?? []) {const el = document.querySelector('[data-agent-detail="' + CSS.escape(key) + '"]');if (el && el.dataset.collapsible !== 'false') el.open = false;}
   for (const [attribute, value] of view.opened) {const el = document.querySelector(`[${attribute}="${CSS.escape(value)}"]`);if (el) {el.open = true;if (el.tagName === 'TBODY') {el.setAttribute('open', '');el.querySelector('[data-day-toggle]')?.setAttribute('aria-expanded', 'true');el.querySelectorAll('.day-model').forEach((row) => row.hidden = false);}}}
   // Scroll first: the virtual price list only holds the focused row once its window is restored.
-  for (const item of view.scrollers) {const el = [...document.querySelectorAll('#content .daily-table,#content .prices-list')].find((el) => el.className === item.className);if (el) {el.scrollTop = item.top;el.scrollLeft = item.left;if (el.matches('.prices-list')) scrollPriceRows(el);}}
+  for (const item of view.scrollers) {const el = [...document.querySelectorAll('#content .daily-table,#content .prices-list,#content .tab-scroller')].find((el) => el.className === item.className);if (el) {el.scrollTop = item.top;el.scrollLeft = item.left;if (el.matches('.prices-list')) scrollPriceRows(el);}}
   if (view.focus) document.querySelector(view.focus)?.focus({ preventScroll: true });
   if (view.panel != null && $('.panel-body')) $('.panel-body').scrollTop = view.panel;
   if (view.window) {const page = pageScroller();page.scrollLeft = view.window[0];page.scrollTop = view.window[1];}
@@ -340,7 +341,7 @@ function bindSetup() {if ($('#add-first-source')) $('#add-first-source').onclick
 function samplingBanner(d) {
   const records = [...(d.quotaEstimates ?? []), ...(d.creditEstimates ?? [])].filter((e) => e.status !== 'completed');
   if (!records.length) return '';if (records.some((e) => e.status === 'pending')) return attention(AieyesI18n.t("待确认：采样需要确认用量来源"), AieyesI18n.t("管理采样"), 'sampling-attention');
-  return `<button class="sampling-banner" data-manage-sampling><span>${AieyesI18n.t("后台采样 · {0} 项进行中{1}", records.filter(e => e.status === 'active').length, records.some(e => e.status === 'pending') ? AieyesI18n.t(" · 有待确认项") : '')}</span><span>${AieyesI18n.t("管理采样")} ${uiIcon('right')}</span></button>`;
+  return `<div class="sampling-banner"><span class="sampling-status"><i class="status-dot" aria-hidden="true"></i><span>${AieyesI18n.t("后台采样 · {0} 项进行中{1}", records.filter(e => e.status === 'active').length, records.some(e => e.status === 'pending') ? AieyesI18n.t(" · 有待确认项") : '')}</span></span><button type="button" class="sampling-manage" data-manage-sampling>${AieyesI18n.t("管理采样")} ${uiIcon('right')}</button></div>`;
 }
 function openSampling() {
   if (state.estimateBusy) {notify(AieyesI18n.t("后台采样操作仍在进行，可从任务入口返回"));return;}
@@ -956,7 +957,7 @@ function renderAnalysis() {
   <div class="section-head overview-heading"><h2>${!state.dateRange && state.days === 1 ? AieyesI18n.t("今日概览") : AieyesI18n.t("使用概览")} ${refreshIndicator('scan')}</h2></div>
   <div class="stats">${stat(AieyesI18n.t("总 Token"), compact(s.total), '', '✧')}${stat(AieyesI18n.t("API 等价成本") + (s.total > 0 && s.pricedTokens < s.total ? ` <button id="repair-pricing" class="pricing-alert" aria-label="${AieyesI18n.t("计价未完成，设置模型价格")}" title="${AieyesI18n.t("部分 Token 尚未计价")}">!</button>` : ''), equivalentCostAvailable(s) ? money(s.cost) : '—', '', '$')}</div>${cacheCard(t)}${nativeCreditsHTML(s, models)}
   <div class="section-head"><h2>${!state.dateRange && state.days === 1 ? AieyesI18n.t("近 7 天趋势") : AieyesI18n.t("使用趋势")}</h2><div id="cost-mode" class="metric-picker" role="group" aria-label="${AieyesI18n.t("统计指标")}"><button type="button" data-cost-mode="false" aria-pressed="${!state.cost}">Token</button><button type="button" data-cost-mode="true" aria-pressed="${state.cost}">${AieyesI18n.t("API 等价成本")}</button></div></div>
-  <div class="chart-row"><div class="card"><h2>${AieyesI18n.t("每日用量")}</h2><canvas id="trend" role="img" aria-details="daily-usage" aria-label="${AieyesI18n.t("按模型堆叠的每日用量，下方有逐日数据")}${AieyesI18n.t("；左右键选择日期，回车查看精确值")}"></canvas><details class="model-legend" data-persist-disclosure="analysis:model-legend" ${disclosureOpen('analysis:model-legend', true) ? 'open' : ''}><summary>${AieyesI18n.t("模型图例")}</summary><div class="model-key">${trendModels.map((m) => `<button data-trend-model="${escapeHTML(m)}" aria-label="${AieyesI18n.t("显示或隐藏模型 {0}", escapeHTML(modelName(m)))}"><i style="background:${color(m)}"></i>${escapeHTML(modelName(m))}</button>`).join('')}</div></details></div><div class="card"><h2>${AieyesI18n.t("模型分布")}</h2>${modelDistribution(models)}</div></div>
+  <div class="chart-row"><div class="card"><h2>${AieyesI18n.t("每日用量")}</h2><canvas id="trend" role="img" aria-details="daily-usage" aria-label="${AieyesI18n.t("按模型堆叠的每日用量，下方有逐日数据")}${AieyesI18n.t("；左右键选择日期，回车查看精确值")}"></canvas><details class="model-legend" data-persist-disclosure="analysis:model-legend" ${disclosureOpen('analysis:model-legend', trendModels.length <= 8) ? 'open' : ''}><summary>${AieyesI18n.t("模型图例")}</summary><div class="model-key">${trendModels.map((m) => `<button data-trend-model="${escapeHTML(m)}" aria-label="${AieyesI18n.t("显示或隐藏模型 {0}", escapeHTML(modelName(m)))}"><i style="background:${color(m)}"></i>${escapeHTML(modelName(m))}</button>`).join('')}</div></details></div><div class="card"><h2>${AieyesI18n.t("模型分布")}</h2>${modelDistribution(models)}</div></div>
   ${samplingBanner(d)}<div class="card"><details class="daily" data-agent-detail="daily"><summary><h2>${AieyesI18n.t("每日明细")}</h2></summary>${dailyTable(d.trendDays, d.dayModels)}</details></div>
   <div class="card"><h2>${state.dateRange ? AieyesI18n.t("所选日期用量") : AieyesI18n.t("过去 365 天")}</h2>${state.dateRange ? yearlyHeatmapHTML(d.heatmap) : heatmapHTML(d.heatmap)}</div>
   `;
@@ -970,7 +971,7 @@ function renderAnalysis() {
   bindQuotaTools();bindAttention();
   if ($('#repair-pricing')) $('#repair-pricing').onclick = openPricing;
   shortenEmptyUsage(d);restoreView(view);
-  bindAnalysis();requestAnimationFrame(drawTrend);
+  bindAnalysis();markTrendGrowth();requestAnimationFrame(drawTrend);
   window.AieyesMotion?.didRender('analysis');
 }
 function renderOverview() {
@@ -980,7 +981,7 @@ function renderOverview() {
   if (state.provider && !enabledProviders.includes(state.provider)) {void changeFilters({ provider: '', accountKey: '' });return;}
   const visibleProviders = enabledProviders.map((key) => [key, providers[key]]);
   const stop = visibleProviders.some(([key]) => key === state.provider) ? state.provider : '';
-  const agentTabs = `<div class="agent-selector" role="group" aria-label="${AieyesI18n.t("选择 Agent")}"><button data-overview-agent="" aria-pressed="${!state.provider}" tabindex="${stop ? -1 : 0}">${AieyesI18n.t("总览")}</button>${visibleProviders.map(([key, label]) => `<button data-overview-agent="${key}" data-provider="${key}" aria-pressed="${key === state.provider}" tabindex="${key === stop ? 0 : -1}">${escapeHTML(label)}</button>`).join('')}</div>`;
+  const agentTabs = `<div class="agent-selector" role="group" aria-label="${AieyesI18n.t("选择 Agent")}"><div class="tab-scroller"><button data-overview-agent="" aria-pressed="${!state.provider}" tabindex="${stop ? -1 : 0}">${AieyesI18n.t("总览")}</button>${visibleProviders.map(([key, label]) => `<button data-overview-agent="${key}" data-provider="${key}" aria-pressed="${key === state.provider}" tabindex="${key === stop ? 0 : -1}">${escapeHTML(label)}</button>`).join('')}</div></div>`;
   $('#content').innerHTML = `${state.settings.sources.length || state.settings.accounts.length ? '' : onboarding()}${agentTabs}<div class="overview-usage card"><div class="between usage-heading"><span class="muted usage-title">${AieyesI18n.t("今日用量 {0}", refreshIndicator('scan'))}</span><button id="open-detail" class="analysis-link">${AieyesI18n.t("查看分析 {0}", uiIcon('right'))}</button><span class="usage-actions">${s.total > 0 && s.pricedTokens < s.total ? `<button type="button" id="repair-pricing" class="pricing-alert" aria-label="${AieyesI18n.t("计价未完成，设置模型价格")}" title="${AieyesI18n.t("计价未完成：部分模型缺少价格，点击设置模型价格")}">!</button>` : ''}</span></div><div class="usage-inline">${tokenSummary(s, true)}<span>${AieyesI18n.t("API 等价成本 ")}<strong>${equivalentCostAvailable(s) ? money(s.cost) : '—'}</strong></span></div>${nativeCreditsHTML(s, [], true)}</div>${quotaSection(d)}${samplingBanner(d)}`;
   document.querySelectorAll('[data-overview-agent]').forEach((button) => button.onclick = () => changeFilters({ provider: button.dataset.overviewAgent, accountKey: '', sourceId: '', model: '' }));
   $('#open-detail').onclick = () => openAnalysis();
@@ -1105,22 +1106,46 @@ function quotaCard(q, visibleAccounts = 1) {
     const groups = new Map();for (const w of q.windows) {const group = w.groupName || w.name.split(' · ').slice(0, -1).join(' · ');if (!groups.has(group)) groups.set(group, []);groups.get(group).push(w);}
     windows = `<div class="agy-groups">${[...groups].map(([group, rows]) => `<div class="agy-group"><strong>${escapeHTML(group)}</strong><div class="agy-windows">${rows.sort((a, b) => (a.windowMinutes ?? 0) - (b.windowMinutes ?? 0)).map((w) => windowHTML({ ...w, name: w.windowMinutes === window.AieyesContract.windows.week ? '7d' : w.windowMinutes === window.AieyesContract.windows.fiveHour ? '5h' : w.name })).join('')}</div>${estimateEntry(q, records.filter((e) => e.groupId === (rows[0]?.groupId || group)), rows[0]?.groupId || group)}</div>`).join('')}</div>`;
   }
-  return `<div class="card quota-card" tabindex="0" data-provider="${escapeHTML(q.provider)}" data-quota="${escapeHTML(key)}"><details class="quota-disclosure" data-collapsible="${collapsible}" data-agent-detail="quota:${escapeHTML(key)}" ${expanded ? 'open' : ''}><summary class="quota-title"><h3>${providerMark(q.provider)}<span class="quota-heading-label"><span class="quota-name" title="${escapeHTML(q.name)}">${escapeHTML(q.name)}</span>${cardIdentity && cardIdentity !== q.name ? `<small class="quota-email" title="${escapeHTML(cardIdentity)}">${escapeHTML(cardIdentity)}</small>` : ''}</span></h3>${q.plan ? `<span class="quota-subscription">${subscriptionBadge(q.plan)}</span>` : ''}${q.provider === 'codex' ? `<span class="quota-collapsed-summary">${creditBalance(q, credit, true)}<span>Bank Reset <strong>${q.bankReset?.availableCount ?? '—'}</strong>${AieyesI18n.t(" 次可用")}</span></span>` : ''}</summary></details><div class="quota-content">${window.AieyesAccountTargets?.eligible(key) ? `<div class="account-switch-row"><button class="account-switch-entry" data-switch-account="${escapeHTML(key)}">${AieyesI18n.t("{0}切换账户", uiIcon('switch'))}</button><span class="account-device-counts" data-device-counts="${escapeHTML(key)}">${window.AieyesAgentSettings?.countsHTML(key) ?? ''}</span></div>` : q.provider === 'codex' ? `<div class="account-switch-row"><span class="muted tiny">${AieyesI18n.t("暂无可用机器")}</span><button data-account-machine-settings>${AieyesI18n.t("机器设置")}</button></div>` : ''}${q.metadataError ? `<p class="tiny muted quota-identity-note">${escapeHTML(AieyesI18n.message(q.metadataError))}${q.identity?.stale && q.plan ? AieyesI18n.t(" · 显示上次订阅") : ''}</p>` : ''}${(q.balances ?? []).map((b) => `<div class="quota-window"><div class="between"><span>${AieyesI18n.t("可用余额")}</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted balance-detail"><span>${AieyesI18n.t("赠送 {0}", escapeHTML(b.granted))}</span><span>${AieyesI18n.t("充值 {0}", escapeHTML(b.toppedUp))}</span></div></div>`).join('')}${extraUsageHTML(q.extraUsage)}${q.isAvailable === false ? `<div class="error">${AieyesI18n.t("当前余额不足以调用 API")}</div>` : ''}${quotaMetersHTML(q)}${windows}${quotaNoticeHTML(q)}${q.error ? `<div class="error quota-error"><div class="error-detail">${AieyesUI.errorHTML(q.error, AieyesI18n.t("额度查询失败"))}</div><span class="short-error">${AieyesI18n.t("额度更新失败")}</span><button type="button" data-retry-quota="${escapeHTML(q.accountId)}">${AieyesI18n.t("重试")}</button></div>` : ''}${!quotaGroupsWindows(q) && (q.windows.some((w) => w.windowMinutes === window.AieyesContract.windows.fiveHour || w.windowMinutes === window.AieyesContract.windows.week) || latest) ? estimateEntry(q, records) : ''}${q.provider === 'codex' ? creditRow(q, credit, credits) : ''}${q.bankReset ? `<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>${uiIcon("stack")}<span>Bank Reset</span><span class="bank-count">${AieyesI18n.t("{0} 次可用", q.bankReset.availableCount)}</span></summary>${(q.bankReset.credits ?? []).map((c) => `<div class="between tiny muted"><span>${escapeHTML(c.title ?? 'Reset Credit')}</span><span>${AieyesI18n.t("到期 {0}", date(c.expiresAt))}</span></div>`).join('')}</details>` : ''}<div class="quota-footer">${q.updatedAt > 0 ? `<div class="between tiny muted quota-meta"><span>${q.origin === 'log' ? AieyesI18n.t("记录") : AieyesI18n.t("更新")} ${date(q.updatedAt)}</span>${quotaAgeHTML(q)}</div>` : ''}<button class="quota-analysis" data-view-analysis="${escapeHTML(key)}">${AieyesI18n.t("查看分析 {0}", uiIcon('right'))}</button></div></div></div>`;
+  return `<div class="card quota-card" tabindex="0" data-provider="${escapeHTML(q.provider)}" data-quota="${escapeHTML(key)}"><details class="quota-disclosure" data-collapsible="${collapsible}" data-agent-detail="quota:${escapeHTML(key)}" ${expanded ? 'open' : ''}><summary class="quota-title"><h3>${providerMark(q.provider)}<span class="quota-heading-label"><span class="quota-name" title="${escapeHTML(q.name)}">${escapeHTML(q.name)}</span>${cardIdentity && cardIdentity !== q.name ? `<small class="quota-email" title="${escapeHTML(cardIdentity)}">${escapeHTML(cardIdentity)}</small>` : ''}</span></h3>${q.plan ? `<span class="quota-subscription">${subscriptionBadge(q.plan)}${subscriptionRemaining(q.subscriptionExpiresAt)}</span>` : ''}${q.provider === 'codex' ? `<span class="quota-collapsed-summary">${creditBalance(q, credit, true)}<span>Bank Reset <strong>${q.bankReset?.availableCount ?? '—'}</strong>${AieyesI18n.t(" 次可用")}</span></span>` : ''}</summary></details><div class="quota-content">${window.AieyesAccountTargets?.eligible(key) ? `<div class="account-switch-row"><button class="account-switch-entry" data-switch-account="${escapeHTML(key)}">${AieyesI18n.t("{0}切换账户", uiIcon('switch'))}</button><span class="account-device-counts" data-device-counts="${escapeHTML(key)}">${window.AieyesAgentSettings?.countsHTML(key) ?? ''}</span></div>` : q.provider === 'codex' ? `<div class="account-switch-row"><span class="muted tiny">${AieyesI18n.t("暂无可用机器")}</span><button data-account-machine-settings>${AieyesI18n.t("机器设置")}</button></div>` : ''}${q.metadataError ? `<p class="tiny muted quota-identity-note">${escapeHTML(AieyesI18n.message(q.metadataError))}${q.identity?.stale && q.plan ? AieyesI18n.t(" · 显示上次订阅") : ''}</p>` : ''}${(q.balances ?? []).map((b) => `<div class="quota-window"><div class="between"><span>${AieyesI18n.t("可用余额")}</span><strong>${escapeHTML(b.currency)} ${escapeHTML(b.total)}</strong></div><div class="between tiny muted balance-detail"><span>${AieyesI18n.t("赠送 {0}", escapeHTML(b.granted))}</span><span>${AieyesI18n.t("充值 {0}", escapeHTML(b.toppedUp))}</span></div></div>`).join('')}${extraUsageHTML(q.extraUsage)}${q.isAvailable === false ? `<div class="error">${AieyesI18n.t("当前余额不足以调用 API")}</div>` : ''}${quotaMetersHTML(q)}${windows}${quotaNoticeHTML(q)}${q.error ? `<div class="error quota-error"><div class="error-detail">${AieyesUI.errorHTML(q.error, AieyesI18n.t("额度查询失败"))}</div><span class="short-error">${AieyesI18n.t("额度更新失败")}</span><button type="button" data-retry-quota="${escapeHTML(q.accountId)}">${AieyesI18n.t("重试")}</button></div>` : ''}${!quotaGroupsWindows(q) && (q.windows.some((w) => w.windowMinutes === window.AieyesContract.windows.fiveHour || w.windowMinutes === window.AieyesContract.windows.week) || latest) ? estimateEntry(q, records) : ''}${q.provider === 'codex' ? creditRow(q, credit, credits) : ''}${q.bankReset ? `<details class="bank" data-agent-detail="bank:${escapeHTML(key)}"><summary>${uiIcon("stack")}<span>Bank Reset</span><span class="bank-count">${AieyesI18n.t("{0} 次可用", q.bankReset.availableCount)}</span></summary>${(q.bankReset.credits ?? []).map((c) => `<div class="between tiny muted"><span>${escapeHTML(c.title ?? 'Reset Credit')}</span><span>${AieyesI18n.t("到期 {0}", date(c.expiresAt))}</span></div>`).join('')}</details>` : ''}<div class="quota-footer">${q.updatedAt > 0 ? `<div class="between tiny muted quota-meta"><span>${q.origin === 'log' ? AieyesI18n.t("记录") : AieyesI18n.t("更新")} ${date(q.updatedAt)}</span>${quotaAgeHTML(q)}</div>` : ''}<button class="quota-analysis" data-view-analysis="${escapeHTML(key)}">${AieyesI18n.t("查看分析 {0}", uiIcon('right'))}</button></div></div></div>`;
 }
 
+// Round axis steps (1, 2, 2.5 or 5 × 10ⁿ) give readable ticks; the plot scales to the rounded top.
+function trendAxis(max, intervals, integer) {
+  const step = (raw) => {const power = 10 ** Math.floor(Math.log10(raw));return [1, 2, 2.5, 5, 10].map((n) => n * power).find((n) => n >= raw * (1 - 1e-9) && (!integer || Number.isInteger(n))) ?? 1;};
+  return [3, 4].filter((n) => n <= Math.max(2, intervals)).concat(2).map((n) => {const size = Math.max(integer ? 1 : 0, step(max / n));return { step: size, top: Math.max(size, Math.ceil(max / size - 1e-9) * size) };}).sort((a, b) => a.top - b.top || b.step - a.step)[0];
+}
+const axisNumber = (n) => String(+n.toFixed(2));
+const axisToken = (n) => n >= 1e9 ? axisNumber(n / 1e9) + 'B' : n >= 1e6 ? axisNumber(n / 1e6) + 'M' : n >= 1e3 ? axisNumber(n / 1e3) + 'K' : axisNumber(n);
+function axisMoney(step) {const digits = Math.min(6, (String(+step.toPrecision(6)).split('.')[1] ?? '').length);return new Intl.NumberFormat(AieyesI18n.locale, { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', minimumFractionDigits: digits, maximumFractionDigits: digits }).format;}
+// Columns grow in when the chart is first shown or its filters or metric change, never on a live refresh.
+let trendGrowth = null,trendSignature = null,trendFrame = 0;
+function markTrendGrowth() {
+  const signature = JSON.stringify([state.appliedFilters ?? null, state.cost]),entering = renderedViewKey !== viewKey() || signature !== trendSignature;trendSignature = signature;
+  if (entering && !matchMedia('(prefers-reduced-motion: reduce)').matches && !document.hidden) trendGrowth = performance.now();else if (entering) trendGrowth = null;
+}
 function drawTrend() {
   const canvas = $('#trend');if (!canvas || !state.dashboard) return;
   const width = canvas.clientWidth,height = canvas.clientHeight,dpr = window.devicePixelRatio || 1;canvas.width = width * dpr;canvas.height = height * dpr;
   const ctx = canvas.getContext('2d');ctx.scale(dpr, dpr);
-  const days = state.dashboard.trendDays,rows = state.dashboard.dayModels.filter((r) => !hiddenTrendModels.has(r.model)),byDay = new Map();for (const row of rows) {if (!byDay.has(row.day)) byDay.set(row.day, []);byDay.get(row.day).push(row);}const values = days.map((d) => (byDay.get(d.key) ?? []).reduce((n, r) => n + (state.cost ? r.usage.cost : r.usage.total), 0)),max = Math.max(1, ...values);
+  const days = state.dashboard.trendDays,rows = state.dashboard.dayModels.filter((r) => !hiddenTrendModels.has(r.model)),byDay = new Map();for (const row of rows) {if (!byDay.has(row.day)) byDay.set(row.day, []);byDay.get(row.day).push(row);}const values = days.map((d) => (byDay.get(d.key) ?? []).reduce((n, r) => n + (state.cost ? r.usage.cost : r.usage.total), 0));
   const style = getComputedStyle(canvas),metric = (name) => Number.parseFloat(style.getPropertyValue('--' + name)),muted = style.getPropertyValue('--muted');
   const left = metric('chart-plot-left'),top = metric('chart-plot-top'),bottom = metric('chart-plot-bottom'),plot = height - top - bottom,space = (width - left) / Math.max(1, days.length);
+  const axis = trendAxis(Math.max(state.cost ? 0 : 1, ...values) || 1, Math.floor(plot / 28), !state.cost),max = axis.top,ticks = Math.round(axis.top / axis.step),tickLabel = state.cost ? axisMoney(axis.step) : axisToken;
+  if (trendGrowth != null && !canvas.getClientRects().length) trendGrowth = null;
+  const elapsed = trendGrowth == null ? 1 : Math.min(1, (performance.now() - trendGrowth) / (metric('motion-slow') || 320)),growth = 1 - (1 - elapsed) ** 3;
+  if (elapsed >= 1) trendGrowth = null;else if (!trendFrame) trendFrame = requestAnimationFrame(() => {trendFrame = 0;drawTrend();});
   ctx.font = `${style.getPropertyValue('--font-secondary').trim() || '14px'} ${style.fontFamily}`;ctx.fillStyle = muted;ctx.textAlign = 'right';
-  for (let i = 0; i < 3; i++) {const y = top + plot * i / 2;ctx.fillText(state.cost ? money(max * (1 - i / 2)) : compact(max * (1 - i / 2)), left - metric('chart-label-gap'), y + 3);ctx.strokeStyle = style.color;ctx.beginPath();ctx.moveTo(left, y);ctx.lineTo(width, y);ctx.stroke();}
+  for (let i = 0; i <= ticks; i++) {const y = top + plot * i / ticks;ctx.fillText(tickLabel(axis.step * (ticks - i)), left - metric('chart-label-gap'), y + 3);ctx.strokeStyle = style.color;ctx.beginPath();ctx.moveTo(left, y);ctx.lineTo(width, y);ctx.stroke();}
+  // Each column is clipped to a rounded top; stacked segments leave a 1px transparent seam, so no background color is assumed.
+  const barWidth = Math.max(1, space * .6),radius = Math.min(metric('radius-mark') || 3, barWidth / 2),seam = 1;
   let labelRight = -Infinity;
   days.forEach((d, i) => {
-    let used = 0;const x = left + i * space + space * .2;
-    (byDay.get(d.key) ?? []).forEach((r) => {const h = (state.cost ? r.usage.cost : r.usage.total) / max * plot;ctx.fillStyle = color(r.model);ctx.fillRect(x, top + plot - used - h, Math.max(1, space * .6), h);used += h;});
+    let used = 0;const x = left + i * space + space * .2,base = top + plot,column = values[i] / max * plot * growth;
+    if (column > 0) {
+      const corner = Math.min(radius, column);ctx.save();ctx.beginPath();ctx.moveTo(x, base);ctx.lineTo(x, base - column + corner);ctx.arcTo(x, base - column, x + corner, base - column, corner);ctx.lineTo(x + barWidth - corner, base - column);ctx.arcTo(x + barWidth, base - column, x + barWidth, base - column + corner, corner);ctx.lineTo(x + barWidth, base);ctx.closePath();ctx.clip();
+      (byDay.get(d.key) ?? []).forEach((r, index) => {const h = (state.cost ? r.usage.cost : r.usage.total) / max * plot * growth,gap = index && h > seam * 2 ? seam : 0;ctx.fillStyle = color(r.model);ctx.fillRect(x, base - used - h, barWidth, h - gap);used += h;});
+      ctx.restore();
+    }
     if (i % Math.max(1, Math.floor(days.length / 7)) === 0) {
       const label = d.key.slice(5),labelWidth = ctx.measureText(label).width;
       if (labelWidth + 2 > width) return;
@@ -1489,9 +1514,10 @@ function closeEditor(force = false) {
   $('#editor').close();finishEditor();
 }
 // Destructive confirmations share one shell: a danger-styled confirm button and focus on Cancel.
-function confirmDestructive(title, html, onConfirm, confirmLabel) {
+function confirmDestructive(title, html, onConfirm, confirmLabel, { danger = true } = {}) {
+  if (editorSaving) return;
   showEditor(title, html, onConfirm);
-  const submit = $('#editor-form button[type=submit]');$('#editor').dataset.kind = 'confirmation';submit.textContent = confirmLabel;submit.classList.add('danger');
+  const submit = $('#editor-form button[type=submit]');$('#editor').dataset.kind = 'confirmation';submit.textContent = confirmLabel;submit.classList.toggle('danger', danger);
   $('#cancel-editor').focus();
 }
 function showEditor(title, html, onSubmit, kind = 'source') {
@@ -1704,7 +1730,7 @@ if (!PANEL) bindRefreshMenu('refresh', 'refresh-menu');
 // Segmented selectors (§5.3) are a single tab stop: arrows, Home and End move focus between the
 // options and Enter or Space selects, since selecting reloads data or starts SSH sampling.
 document.addEventListener('keydown', (event) => {
-  const button = event.target instanceof Element ? event.target.closest(':is(.agent-selector,.segmented) > button') : null;
+  const button = event.target instanceof Element ? event.target.closest(':is(.agent-selector,.segmented,.tab-scroller) > button') : null;
   if (!button) return;
   const buttons = [...button.parentElement.children].filter((b) => b.matches('button') && !b.disabled && b.getClientRects().length),index = buttons.indexOf(button);
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : ['ArrowDown', 'ArrowRight'].includes(event.key) ? (index + 1) % buttons.length : ['ArrowUp', 'ArrowLeft'].includes(event.key) ? (index + buttons.length - 1) % buttons.length : null;
@@ -1712,7 +1738,7 @@ document.addEventListener('keydown', (event) => {
   event.preventDefault();buttons.forEach((b, i) => b.tabIndex = i === next ? 0 : -1);buttons[next].focus();buttons[next].scrollIntoView({ block: 'nearest', inline: 'nearest' });
 });
 $('#activity').onclick = () => userRefresh(state.page === 'servers' ? 'hosts' : 'scan');$('#activity').onkeydown = (e) => {if (e.key === 'Enter' || e.key === ' ') {e.preventDefault();userRefresh(state.page === 'servers' ? 'hosts' : 'scan');}};
-document.addEventListener('keydown', (e) => {if (!(e.ctrlKey || e.metaKey) || $('#editor')?.open || $('#quota-dialog')?.open) return;if (e.key.toLowerCase() === 's' && state.page === 'settings' && !PANEL) {e.preventDefault();if (settingsFormsDirty()) job(AieyesI18n.t("保存应用配置"), () => saveAllSettings());return;}if (e.key === ',') {e.preventDefault();void openSettings({ category: 'general' }).catch((error) => notify(String(error), 'error'));}if (e.shiftKey && e.key.toLowerCase() === 'd') {e.preventDefault();if (PANEL) openDetail();else {void navigatePage('agent');}}});
+document.addEventListener('keydown', (e) => {if ($('#editor')?.open || $('#quota-dialog')?.open) return;const refreshKey = e.key === 'F5' || ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'r');if (refreshKey) {e.preventDefault();if (!e.repeat) userRefresh(state.page === 'servers' ? 'hosts' : 'scan');return;}if (!(e.ctrlKey || e.metaKey)) return;const pageKey = { '1': 'agent', '2': 'analysis', '3': 'servers' }[e.key];if (pageKey && !e.shiftKey && !e.altKey) {e.preventDefault();void navigatePage(pageKey);return;}if (e.key.toLowerCase() === 's' && state.page === 'settings' && !PANEL) {e.preventDefault();if (settingsFormsDirty()) job(AieyesI18n.t("保存应用配置"), () => saveAllSettings());return;}if (e.key === ',') {e.preventDefault();void openSettings({ category: 'general' }).catch((error) => notify(String(error), 'error'));}if (e.shiftKey && e.key.toLowerCase() === 'd') {e.preventDefault();if (PANEL) openDetail();else {void navigatePage('agent');}}});
 // Error text remains selectable; only the explicit close control dismisses it.
 new ResizeObserver(() => {if (state.page === 'analysis') drawTrend();}).observe($('#content'));
 function syncSharedAppearance(appearance) {
@@ -1913,9 +1939,10 @@ window.addEventListener('focus', invalidateQuotaSchedule);
 document.addEventListener('close', scheduleRefreshes, true);
 window.addEventListener('beforeunload', () => {rememberPage();viewPreferences.save(dashboardScope(), state);refreshStopped = true;clearTimeout(refreshTimer);clearTimeout(dashboardTimer);});
 // Age visible samples even while an RPC is slow or the panel receives no new events.
-setInterval(updateHostStatuses, 1000);
+setInterval(() => {if (!document.hidden) updateHostStatuses();}, 1000);
 function updateResetDisplays(now = Date.now() / 1000) {for (const el of document.querySelectorAll('[data-reset-at]')) el.textContent = AieyesUI.quotaReset({ resetsAt: Number(el.dataset.resetAt), windowMinutes: Number(el.dataset.windowMinutes), usedPercent: el.dataset.usedPercent?.trim() ? Number(el.dataset.usedPercent) : undefined }, now);}
-setInterval(() => {updateResetDisplays();updateActivity();}, 30000);
+setInterval(() => {if (!document.hidden) {updateResetDisplays();updateActivity();}}, 30000);
+document.addEventListener('visibilitychange', () => {if (!document.hidden) {updateHostStatuses();updateResetDisplays();updateActivity();}});
 function estimateValues(e, q) {
   const visible = AieyesUI.estimateVisibility(q, [e], e.groupId),rows = [
     ...(visible.five ? [[AieyesI18n.t("本段 5h API 等价值"), e.fiveHourValue]] : []),
@@ -1976,7 +2003,6 @@ async function refreshQuotaDialog() {
   if (expanded && dialog.querySelector('details')) dialog.querySelector('details').open = true;
   if (focus) document.getElementById(focus)?.focus({ preventScroll: true });
 }
-function hasActiveFilters() {return Boolean(state.provider || state.accountKey || state.sourceId || state.model || state.dateRange || state.days !== 1);}
 function bindQuotaTools() {
   document.querySelectorAll('[data-empty-panel-accounts]').forEach((button) => button.onclick = openPanelAccounts);
   document.querySelectorAll('[data-retry-quota]').forEach((button) => button.onclick = () => quotas(button.dataset.retryQuota));
@@ -1986,14 +2012,14 @@ function bindQuotaTools() {
   document.querySelectorAll('[data-switch-account]').forEach((b) => b.onclick = () => PANEL ? openSettings({ category: 'integrations', accountKey: b.dataset.switchAccount, section: 'switch' }) : window.AieyesAccountTargets.open(b.dataset.switchAccount));
   renderQueryStatus();
   $('#content > .active-filters')?.remove();$('#content > .panel-filter-summary')?.remove();
-  if (state.page === 'analysis' && hasActiveFilters()) {
+  // The range menu already shows the selected dates, so only the other filters get chips.
+  if (state.page === 'analysis' && (state.provider || state.accountKey || state.sourceId || state.model)) {
     const filters = document.createElement('div');filters.className = 'active-filters';
     for (const [key, label] of [['provider', providers[state.provider]], ['accountKey', state.accountKey === 'none' ? AieyesI18n.t("未关联账户") : historicalAccounts().find((a) => a.provider + ':' + a.id === state.accountKey)?.name ?? state.accountKey], ['sourceId', state.settings.sources.find((s) => s.id === state.sourceId)?.name ?? state.sourceId], ['model', state.model]]) {
       if (!state[key]) continue;
       const button = document.createElement('button');button.innerHTML = escapeHTML(label) + uiIcon('x');button.setAttribute('aria-label', AieyesI18n.t("清除筛选：") + label);
       button.onclick = () => {state[key] = '';if (key === 'provider') {state.accountKey = '';state.sourceId = '';state.model = '';}if (key === 'accountKey') state.sourceId = '';changeFilters();};filters.append(button);
     }
-    if (state.dateRange || state.days !== 1) {const range = document.createElement('button');range.textContent = rangeLabel();range.setAttribute('aria-label', AieyesI18n.t("清除时间范围"));range.onclick = () => {state.days = 1;state.dateRange = null;changeFilters();};filters.append(range);}
     const clear = document.createElement('button');clear.textContent = AieyesI18n.t("清除全部");clear.onclick = () => {state.provider = state.accountKey = state.sourceId = state.model = '';state.days = 1;state.dateRange = null;changeFilters();};filters.append(clear);
     if (PANEL) {const disclosure = document.createElement('details');disclosure.className = 'panel-filter-summary';disclosure.innerHTML = `<summary>${AieyesI18n.t("已筛选 {0} 项", filters.children.length - 1)}</summary>`;disclosure.append(filters);$('#content .filters')?.after(disclosure);} else $('#content .filters')?.after(filters);
   }

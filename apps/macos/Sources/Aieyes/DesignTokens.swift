@@ -123,11 +123,15 @@ enum DesignTokens {
     static let weightMedium: Font.Weight = .medium
     static let weightStrong: Font.Weight = .semibold
     static let weightBold: Font.Weight = .bold
+    static let motionFast: Double = 0.13
+    static let motionBase: Double = 0.2
+    static let motionSlow: Double = 0.32
+    static let motionExpand: Double = 0.26
     static let fontPanelBody = fontBody
     static let fontPanelCaption = fontCaption
     static let fontPanelNumber = fontNumber
     static let inkLight: UInt32 = 0x252528
-    static let mutedLight: UInt32 = 0x62626b
+    static let mutedLight: UInt32 = 0x505058
     static let faintLight: UInt32 = 0x6b6b73
     static let accentLight: UInt32 = 0x5566d9
     static let accentInkLight: UInt32 = 0xffffff

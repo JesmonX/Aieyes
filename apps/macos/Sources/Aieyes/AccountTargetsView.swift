@@ -81,7 +81,7 @@ struct AccountTargetsView: View {
                                     loginSource = model.settings.sources.first { $0.id == target.sourceId }
                                 }.disabled(targets.checking.contains(target.sourceId) && !target.canSwitch)
                             }
-                        }.padding(12).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
+                        }.padding(12).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
                     }
                 }
             }

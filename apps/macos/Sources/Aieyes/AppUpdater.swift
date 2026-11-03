@@ -288,7 +288,7 @@ struct UpdateMenuButton: View {
         let _ = interfaceLanguage;
         Button { updater.check() } label: {
             Image(systemName: "arrow.down.circle").frame(width: 28, height: 28)
-                .overlay(alignment: .topTrailing) { if updater.hasUpdate { Text("!").font(.system(size: 11, weight: .bold)).foregroundStyle(Palette.warn) } }
+                .overlay(alignment: .topTrailing) { if updater.hasUpdate { Text("!").font(.system(size: DesignTokens.fontCaption, weight: DesignTokens.weightBold)).foregroundStyle(Palette.warn) } }
         }.help(updater.hasUpdate ? L("发现新版本 · 查看更新") : L("检查更新"))
             .accessibilityLabel(updater.hasUpdate ? L("发现新版本，查看更新") : L("检查更新"))
             .disabled(updater.phase == "checking")

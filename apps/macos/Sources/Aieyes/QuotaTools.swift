@@ -75,7 +75,7 @@ struct SamplingManagementView: View {
                             Button(L("结束采样")) { Task { _ = await model.performEstimate("stop", accountKey: estimate.accountKey, params: ["id": estimate.id], credits: estimate.kind == "credits") } }
                                 .disabled(model.estimateBusy.contains(estimate.accountKey))
                         }
-                    }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
                 }
             }.padding(DesignTokens.dialogPadding).frame(maxWidth: .infinity, alignment: .leading)
         }.aieyesAccent().font(AppFont.body).disabled(model.installingUpdate)
@@ -152,7 +152,7 @@ struct AgentValuationView: View {
                     Text(Format.date(record.startedAt) + " → " + Format.date(record.checkpointAt)).font(AppFont.secondary).foregroundStyle(.secondary)
                     if let reason = record.rollingExcludedReason { Text(L(reason)).font(AppFont.secondary).foregroundStyle(Palette.warn) }
                     if let error = model.estimateErrors[record.accountKey] { ErrorNotice(message: error).font(AppFont.secondary).foregroundStyle(Palette.warn) }
-                }.padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+                }.padding(12).background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
             }
         }
     }
@@ -171,8 +171,8 @@ struct AgentValuationView: View {
 struct QuotaOrderView: View {
     @SurfaceModel var model: AppModel
     var onClose: (() -> Void)? = nil
+    var onDirtyChange: ((Bool) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var keys: [String] = []
     @State private var initialKeys: [String] = []
     @State private var saving = false
@@ -193,13 +193,14 @@ struct QuotaOrderView: View {
                         Button { move(key, -1) } label: { Image(systemName: "arrow.up") }.disabled(keys.first == key).accessibilityLabel(L("上移账户"))
                         Button { move(key, 1) } label: { Image(systemName: "arrow.down") }.disabled(keys.last == key).accessibilityLabel(L("下移账户"))
                     }.buttonStyle(.borderless).padding(.vertical, 4)
-                }.onMove { from, to in withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { keys.move(fromOffsets: from, toOffset: to) } }
+                }.onMove { from, to in withMotion(.spring) { keys.move(fromOffsets: from, toOffset: to) } }
             }.frame(minHeight: 150, maxHeight: 300)
             if let error { ErrorNotice(message: error) }
             HStack { Spacer(); Button(L("取消")) { close() }.keyboardShortcut(.cancelAction); Button(saving ? L("保存中…") : L("保存顺序")) {
                 Task { await saveOrder() }
             }.buttonStyle(.aieyesPrimary).keyboardShortcut(.defaultAction) }.disabled(saving)
         }.aieyesAccent().font(AppFont.body).padding(DesignTokens.dialogPadding).frame(width: DesignTokens.dialogSelectionWidth).onAppear { keys = model.dashboard.quotaOrder ?? model.quotaAccounts.map(\.key); initialKeys = keys }
+        .onChange(of: keys != initialKeys) { _, dirty in onDirtyChange?(dirty) }
         .updateDraftGuard(L("账户顺序"), snapshot: draftSnapshot(keys), dirty: keys != initialKeys, saving: saving, save: { await saveOrder() }, discard: close)
     }
     @discardableResult private func saveOrder() async -> Bool {
@@ -209,13 +210,14 @@ struct QuotaOrderView: View {
     private func close() { if let onClose { onClose() } else { dismiss() } }
     private func move(_ key: String, _ offset: Int) {
         guard let i = keys.firstIndex(of: key), keys.indices.contains(i + offset) else { return }
-        withAnimation(reduceMotion ? nil : .spring(response: 0.3)) { keys.swapAt(i, i + offset) }
+        withMotion(.spring) { keys.swapAt(i, i + offset) }
     }
 }
 
 struct PanelAccountsView: View {
     @SurfaceModel var model: AppModel
     var onClose: () -> Void
+    var onDirtyChange: ((Bool) -> Void)? = nil
     @AppStorage(NativePanelKey.accounts.rawValue) private var stored = "{}"
     @State private var selected: [String: [String]] = [:]
     @State private var automatic = Set<String>()
@@ -255,6 +257,7 @@ struct PanelAccountsView: View {
             HStack { Spacer(); Button(L("取消"), action: onClose).keyboardShortcut(.cancelAction).focused($cancelFocused); Button(L("保存面板选择")) { stored = PanelAccountPreference.encode(selected, automatic: automatic); onClose() }.buttonStyle(.aieyesPrimary) }
         }.padding(DesignTokens.dialogPadding).font(AppFont.body).frame(width: DesignTokens.dialogSelectionWidth, height: 480).aieyesAccent()
             .onAppear { if stored == "{}" { stored = PanelAccountPreference.migrated(UserDefaults.standard.string(forKey: NativePanelKey.accountsLegacy.rawValue) ?? "{}") }; automatic = Set(model.quotaAccounts.map(\.provider).filter { PanelAccountPreference.automatic(stored, provider: $0) }); selected = PanelAccountPreference.selections(stored, accounts: model.settings.accounts, order: model.dashboard.quotaOrder ?? []); for (provider, choice) in PanelAccountPreference.decode(stored).providers where choice.mode == "custom" { selected[provider] = choice.keys }; initialDraft = snapshot; cancelFocused = true }
+            .onChange(of: !initialDraft.isEmpty && initialDraft != snapshot) { _, dirty in onDirtyChange?(dirty) }
             .updateDraftGuard(L("面板显示账户"), snapshot: snapshot, dirty: !initialDraft.isEmpty && initialDraft != snapshot, saving: false, save: { stored = draft; onClose(); return true }, discard: onClose)
     }
 }
@@ -436,7 +439,7 @@ struct QuotaEstimateView: View {
             if e.originalEstimateId != nil { Text(L("已修正 · 原采样记录保留")).font(AppFont.secondary).foregroundStyle(.secondary) }
             else if e.samplingMode != "automatic" && e.status == "completed" && !e.hasValue { Button(L("按原记录修复估值")) { perform("repair", ["id": e.id]) }.disabled(busy) }
             DisclosureGroup(L("计算依据")) { calculationDetails(e) }
-        }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }.padding(14).background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
     }
     private func resultHeader(_ e: QuotaEstimate) -> some View {
         HStack {

@@ -1,5 +1,6 @@
 export const en = {
   "lang": "en",
+  "shareAlt": "Aieyes overview window with account quotas and sessions, beside the headline “Your AI agents. One clear view.”",
   "alternate": "简体中文",
   "alternatePath": "/zh-CN/index.html",
   "title": "Aieyes — Your AI agents. One clear view.",
@@ -25,7 +26,7 @@ export const en = {
   "enlarge": "Enlarge preview",
   "scene": "A home for your everyday AI workflow",
   "sceneNote": "Your day, at a glance.",
-  "ecosystem": "Bring the tools you already use.",
+  "ecosystem": "Works with 20+ coding agents you already use.",
   "ecosystemNote": "",
   "features": [
     {
@@ -34,10 +35,11 @@ export const en = {
       "kicker": "USAGE & QUOTAS",
       "color": "violet",
       "title": "Know before\nyou ask.",
+      "tabHint": "Quotas and resets at a glance",
       "body": "See balances, reset times and today’s tokens across every account. Open the compact panel, check what you need, and keep working.",
       "points": [
         "One Agent, many accounts",
-        "All Agents and accounts together",
+        "Credits, weekly quotas and reset alerts",
         "A compact panel within reach"
       ]
     },
@@ -47,6 +49,7 @@ export const en = {
       "kicker": "USAGE ANALYTICS",
       "color": "cyan",
       "title": "See where\nyour usage goes.",
+      "tabHint": "Trends, models and cache",
       "body": "Follow daily trends, model usage and cache efficiency. Filter by Agent, account or machine to focus on the work that matters.",
       "points": [
         "Daily trends and model breakdowns",
@@ -60,10 +63,11 @@ export const en = {
       "kicker": "AGENTS, ACCOUNTS & APIs",
       "color": "blue",
       "title": "More accounts.\nOne workspace.",
-      "body": "Query several accounts for one Agent, or all your Agents together. Switch saved accounts and API connections, then pick up the conversation.",
+      "tabHint": "Switch and keep chatting",
+      "body": "Accounts are discovered automatically on this computer and over SSH. Switch saved accounts and API connections, archive old ones, then pick up the conversation.",
       "points": [
-        "One Agent, multiple accounts",
-        "Multiple Agents, all accounts",
+        "Automatic account discovery",
+        "One Agent or many, every account",
         "Switch accounts and keep chatting"
       ]
     },
@@ -73,6 +77,7 @@ export const en = {
       "kicker": "SESSIONS & DESKTOP PETS",
       "color": "pink",
       "title": "A little company.\nA timely signal.",
+      "tabHint": "Live status, with a pet",
       "body": "See when your Agent is working, using tools or waiting for you. Keep a pet beside your work, with status always a glance away.",
       "points": [
         "Local and remote session status",
@@ -86,6 +91,7 @@ export const en = {
       "kicker": "SSH RESOURCE MONITORING",
       "color": "green",
       "title": "Your remote lab,\nright here.",
+      "tabHint": "SSH hosts in view",
       "body": "Watch CPU, memory, GPUs, storage and network activity through SSH. Pick the devices and details you want for each machine.",
       "points": [
         "CPU, memory and multiple GPUs",
@@ -99,6 +105,7 @@ export const en = {
       "kicker": "SCHEDULED WAKEUPS",
       "color": "orange",
       "title": "A rhythm\nyou set.",
+      "tabHint": "Model calls on a schedule",
       "body": "Schedule a light model call on your computer or an SSH host. Choose the times, check the task, and see each result.",
       "points": [
         "Several times each day",
@@ -190,7 +197,11 @@ export const en = {
     ],
     [
       "Can I change the language?",
-      "Choose English or Simplified Chinese in Appearance, or use the language button on the panel."
+      "Yes. Choose English or Simplified Chinese under Settings → Appearance; every window switches right away."
+    ],
+    [
+      "Do all Agents show quotas?",
+      "Usage history and session status work across supported Agents. Quota details depend on what each client, login and plan exposes; some, such as Roo Code, provide history without a quota API."
     ],
     [
       "How do I install Aieyes?",
@@ -207,6 +218,7 @@ export const en = {
 
 export const zh = {
   "lang": "zh-CN",
+  "shareAlt": "Aieyes 总览窗口，展示账户额度与会话，旁边是标题“所有 AI Agent，一眼看清。”",
   "alternate": "English",
   "alternatePath": "/",
   "title": "Aieyes — AI Agent 工作状态，一眼看清。",
@@ -232,7 +244,7 @@ export const zh = {
   "enlarge": "放大预览",
   "scene": "给日常 AI 工作流，一个清晰的入口",
   "sceneNote": "日常工作，一眼看清。",
-  "ecosystem": "接入你已经在用的工具。",
+  "ecosystem": "接入 20 多款你已经在用的编程 Agent。",
   "ecosystemNote": "",
   "features": [
     {
@@ -241,10 +253,11 @@ export const zh = {
       "kicker": "用量与额度",
       "color": "violet",
       "title": "下一次提问前，\n心里先有数。",
+      "tabHint": "额度与重置，一目了然",
       "body": "账户还剩多少额度，什么时候重置，今天用了多少 Token。打开紧凑面板就能看见，检查完继续手头的工作。",
       "points": [
         "单 Agent，多账户查询",
-        "多 Agent，统一看额度",
+        "Credits、周额度与重置提醒",
         "随手可见的紧凑面板"
       ]
     },
@@ -254,6 +267,7 @@ export const zh = {
       "kicker": "历史用量分析",
       "color": "cyan",
       "title": "每一份用量，\n都有迹可循。",
+      "tabHint": "趋势、模型与缓存",
       "body": "从每日趋势到模型分布，从输入输出到缓存效率。按 Agent、账户或机器筛选，把注意力放在你关心的部分。",
       "points": [
         "每日趋势与模型细分",
@@ -267,10 +281,11 @@ export const zh = {
       "kicker": "Agent、账户与 API",
       "color": "blue",
       "title": "账户越来越多，\n切换依然顺手。",
-      "body": "查一个 Agent 的多个账户，也查多个 Agent 的所有账户。在已保存的账户与 API 连接之间切换，接着原来的对话继续工作。",
+      "tabHint": "切换账户，接着对话",
+      "body": "自动发现本机与 SSH 主机上的账户。在已保存的账户与 API 连接之间切换，归档不再使用的账户，接着原来的对话继续工作。",
       "points": [
-        "单 Agent，多账户查询",
-        "多 Agent，多账户统一查看",
+        "自动发现账户",
+        "单 Agent 或多 Agent，所有账户",
         "切换账户与 API，继续对话"
       ]
     },
@@ -280,6 +295,7 @@ export const zh = {
       "kicker": "会话状态与桌宠",
       "color": "pink",
       "title": "桌面上多点陪伴，\n也多一份提醒。",
+      "tabHint": "会话状态，桌宠相伴",
       "body": "Agent 在工作、执行工具，还是正等你输入？让桌宠用状态告诉你，也可以从菜单栏或系统托盘随时查看。",
       "points": [
         "本机与远程会话状态",
@@ -293,6 +309,7 @@ export const zh = {
       "kicker": "SSH 服务器监控",
       "color": "green",
       "title": "远程机器，\n也能近在眼前。",
+      "tabHint": "SSH 资源随时查看",
       "body": "通过 SSH 查看服务器资源，和 Agent 状态放在一起。CPU、内存、GPU、存储与网络，每台主机都能选出关心的细节。",
       "points": [
         "CPU、内存与多 GPU 读数",
@@ -306,6 +323,7 @@ export const zh = {
       "kicker": "定时唤醒",
       "color": "orange",
       "title": "让日常工作，\n多一点节奏感。",
+      "tabHint": "按时调用模型",
       "body": "在本机或 SSH 主机上，按固定时刻发起轻量模型调用。设置时间，查看任务和运行结果，无需再留一个终端窗口。",
       "points": [
         "每天多个固定时刻",
@@ -397,7 +415,11 @@ export const zh = {
     ],
     [
       "可以切换中英文吗？",
-      "可以。在外观设置中选择简体中文或 English，也可以使用面板上的语言按钮。"
+      "可以。在“设置 → 外观”中选择简体中文或 English，所有窗口即时切换。"
+    ],
+    [
+      "所有 Agent 都能查看额度吗？",
+      "已支持的 Agent 均可导入历史用量并跟踪会话状态。额度项取决于各客户端、登录凭据与套餐；部分 Agent（如 Roo Code）只提供历史，不提供额度查询。"
     ],
     [
       "如何安装 Aieyes？",

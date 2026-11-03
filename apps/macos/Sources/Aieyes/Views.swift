@@ -126,8 +126,14 @@ struct NeutralCard: ViewModifier {
         content.background {
             if previewAccessible || reduceTransparency || contrast == .increased { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(Color(nsColor: .controlBackgroundColor)) }
             else if translucentPanel { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(Color(nsColor: .controlBackgroundColor).opacity(DesignTokens.panelCardOpacity)) }
-            else { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(.regularMaterial) }
+            // The detail page already sits on a material; a second blur under each card only muddies it.
+            else { RoundedRectangle(cornerRadius: Palette.radiusCard).fill(Palette.detailCard) }
             RoundedRectangle(cornerRadius: Palette.radiusCard).fill(LinearGradient(colors: [tint.opacity(0.18), tint.opacity(0.04)], startPoint: .topLeading, endPoint: .bottomTrailing))
+        }
+        .overlay {
+            if !(previewAccessible || reduceTransparency || contrast == .increased) {
+                RoundedRectangle(cornerRadius: Palette.radiusCard).strokeBorder(LinearGradient(colors: [.white.opacity(DesignTokens.edgeHighlightOpacity), .clear], startPoint: .top, endPoint: .init(x: 0.5, y: 0.12)), lineWidth: DesignTokens.borderWidth).allowsHitTesting(false)
+            }
         }
         .shadow(color: .black.opacity(previewAccessible || reduceTransparency || contrast == .increased ? 0 : 0.06), radius: 9, y: 3)
         .overlay(RoundedRectangle(cornerRadius: Palette.radiusCard).strokeBorder(Palette.cardBorder.opacity(previewAccessible || contrast == .increased ? 1 : DesignTokens.cardBorderOpacity), lineWidth: previewAccessible || contrast == .increased ? 2 : DesignTokens.borderWidth))
@@ -138,7 +144,6 @@ struct RootView: View, Equatable {
     @Environment(\.workspaceCardColumns) private var workspaceCardColumns
     let model: AppModel
     @StateObject private var observation: SurfaceObservation
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.previewAccessibleSurfaces) private var previewAccessible
@@ -160,6 +165,8 @@ struct RootView: View, Equatable {
     @AppStorage private var trendExpanded: Bool
     @AppStorage private var sessionsExpanded: Bool
     @AppStorage(NativePanelKey.accounts.rawValue) private var panelAccounts = "{}"
+    @Namespace private var agentChips
+    @Namespace private var serverChips
     private var usageDashboard: Dashboard { compact ? model.panelDashboard : activePage == "analysis" ? model.dashboard : model.overviewDashboard }
     init(model: AppModel, compact: Bool = true, page: String = "agent", nativePanelBackground: Bool = false) {
         self.model = model; self.compact = compact; self.page = page;
@@ -202,7 +209,7 @@ struct RootView: View, Equatable {
         .background { rootBackground }
         .environment(\.translucentPanel, compact)
         .environment(\.surfaceActive, model.isWindowVisible(compact ? "panel" : "detail") && (compact || model.detailPage == activePage))
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: activePage)
+        .motion(.standard, value: activePage)
         .font(AppFont.body).disabled(model.installingUpdate)
         .aieyesAccent()
     }
@@ -232,10 +239,8 @@ struct RootView: View, Equatable {
     private var footer: some View { SurfaceFooter(model: model, compact: compact, activePage: activePage) }
     @ViewBuilder private var agentContent: some View {
         if model.settings.sources.isEmpty && model.settings.accounts.isEmpty { connectionGuide }
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 4) { agentButtons }
-            ScrollView(.horizontal) { HStack(spacing: 4) { agentButtons } }.scrollIndicators(.hidden)
-        }
+        // One chip row (not ViewThatFits) so the sliding selection has a single matched source.
+        ScrollView(.horizontal) { HStack(spacing: 4) { agentButtons }.motion(.spring, value: filters.provider) }.scrollIndicators(.hidden)
         sessionStrip
         Surface(spacing: 6, padding: 12) {
             ViewThatFits(in: .horizontal) {
@@ -251,8 +256,12 @@ struct RootView: View, Equatable {
     private var todayMetrics: some View {
         HStack(spacing:20) {
             FloatingTokenCard(total:usageDashboard.summary.total,tokens:usageDashboard.summary.tokens,inline:true,valueSize:compact ? DesignTokens.fontPanelOverview : DesignTokens.fontNumber)
-            HStack(spacing:6) { Text(L("API 等价成本")).foregroundStyle(.secondary); Text(usageDashboard.summary.costAvailable ? Format.money(usageDashboard.summary.cost) : "—").font(.system(size:compact ? DesignTokens.fontPanelOverview : DesignTokens.fontNumber,weight:.semibold)) }
+            HStack(spacing:6) { Text(L("API 等价成本")).foregroundStyle(.secondary); todayCost.font(.system(size:compact ? DesignTokens.fontPanelOverview : DesignTokens.fontNumber,weight:.semibold)) }
         }.font(AppFont.secondary).monospacedDigit().fixedSize(horizontal:true,vertical:false)
+    }
+    private var todayCost: some View {
+        let value = usageDashboard.summary.costAvailable ? Format.money(usageDashboard.summary.cost) : "—"
+        return Text(value).numericTransition(value: value)
     }
     private var analysisAction: some View { HStack { Button(L("查看分析"),systemImage:"arrow.up.right") { model.openAnalysis(from:scope) }.font(AppFont.caption).tint(.primary); PricingWarning { model.openPricing() }.opacity(usageDashboard.summary.pricedTokens < usageDashboard.summary.total ? 1 : 0).allowsHitTesting(usageDashboard.summary.pricedTokens < usageDashboard.summary.total).disabled(usageDashboard.summary.pricedTokens >= usageDashboard.summary.total).accessibilityHidden(usageDashboard.summary.pricedTokens >= usageDashboard.summary.total) }.fixedSize() }
     @ViewBuilder private var agentButtons: some View {
@@ -260,7 +269,7 @@ struct RootView: View, Equatable {
         ForEach(model.overviewAgentProviders, id: \.self) { provider in agentButton(provider, title: Format.provider(provider)) }
     }
     private func agentButton(_ provider: String, title: String) -> some View {
-        Button { filters.provider = provider } label: { Text(title).font(AppFont.secondary).padding(.horizontal, 10).padding(.vertical, 7).foregroundStyle(filters.provider == provider ? Palette.category(provider) : Color.secondary).background(filters.provider == provider ? Palette.category(provider).opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 8)) }.buttonStyle(.plain).accessibilityAddTraits(filters.provider == provider ? .isSelected : [])
+        Button(title) { filters.provider = provider }.buttonStyle(.chip(selected: filters.provider == provider, tint: Palette.category(provider), in: agentChips))
     }
     @ViewBuilder private var analysisContent: some View {
         if model.settings.sources.isEmpty { connectionGuide }
@@ -363,7 +372,7 @@ struct RootView: View, Equatable {
         HStack(spacing: 8) {
             Text(title).font(AppFont.secondary).lineLimit(2).help(title)
             Button(action: clear) { Image(systemName: "xmark.circle.fill").frame(width: DesignTokens.iconButtonSize, height: DesignTokens.iconButtonSize) }.buttonStyle(.plain).accessibilityLabel(L("清除") + title)
-        }.padding(.leading, 10).background(Palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        }.padding(.leading, DesignTokens.controlPaddingX).background(Palette.accent.opacity(DesignTokens.controlTintOpacity), in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
     }
     private var recentDays: [Aggregate] { filters.dateRange == nil ? Array(usageDashboard.trendDays.suffix(max(7, filters.days))) : usageDashboard.trendDays }
     private var selectableSources: [AgentSource] {
@@ -456,18 +465,15 @@ struct RootView: View, Equatable {
     }
     private var selectedServer: String { model.settings.monitoredHosts.contains { $0.id == serverSelection } ? serverSelection : "all" }
     private func serverButton(_ id: String, title: String) -> some View {
-        Button { serverSelection = id } label: {
-            Text(title).font(AppFont.secondary).lineLimit(1).padding(.horizontal, 10).padding(.vertical, 7)
-                .foregroundStyle(selectedServer == id ? Palette.accent : Color.secondary)
-                .background(selectedServer == id ? Palette.accent.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-        }.buttonStyle(.plain).help(title).accessibilityLabel(title).accessibilityAddTraits(selectedServer == id ? .isSelected : [])
+        Button { serverSelection = id } label: { Text(title).lineLimit(1) }
+            .buttonStyle(.chip(selected: selectedServer == id, in: serverChips)).help(title).accessibilityLabel(title)
     }
     private var serverSelector: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 4) {
                 serverButton("all", title: L("全部"))
                 ForEach(model.settings.monitoredHosts) { host in serverButton(host.id, title: host.name.isEmpty ? host.target : host.name) }
-            }
+            }.motion(.spring, value: selectedServer)
         }.scrollIndicators(.hidden).accessibilityLabel(L("选择服务器"))
             .onChange(of: model.settings.monitoredHosts.map(\.id)) { _, ids in if serverSelection != "all" && !ids.contains(serverSelection) { serverSelection = "all" } }
     }
@@ -596,7 +602,6 @@ struct CacheSummaryCard: View {
 }
 
 struct StatCard: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var title: String, value: String, detail: String, icon: String, accent: Color
     var pricingIncomplete = false
     var onPricing: () -> Void = {}
@@ -610,11 +615,10 @@ struct StatCard: View {
                     PricingWarning(action: onPricing)
                 }
                 Spacer(); Image(systemName: icon).font(AppFont.secondary).foregroundStyle(accent) }
-            Text(value).contentTransition(.numericText()).font(.system(size: DesignTokens.fontNumber, weight: DesignTokens.weightStrong, design: .default)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.9)
+            Text(value).numericTransition(value: value).font(.system(size: DesignTokens.fontNumber, weight: DesignTokens.weightStrong, design: .default)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.9)
             if !detail.isEmpty { Text(detail).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1) }
         }.padding(DesignTokens.statPadding).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .modifier(NeutralCard())
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: value)
     }
 }
 struct EmptyCard: View {
@@ -693,6 +697,9 @@ struct UsageChart: View, Equatable {
         .chartYAxis { usageAxis }
         .chartOverlay { proxy in hoverOverlay(proxy) }
         .frame(height: DesignTokens.chartHeight)
+        // Switching metric or hiding a model eases the bars and axis instead of snapping.
+        .motion(.slow, value: cost)
+        .motion(.slow, value: hidden)
         .focusable()
         .onKeyPress(.leftArrow) { move(-1); return .handled }
         .onKeyPress(.rightArrow) { move(1); return .handled }
@@ -755,10 +762,12 @@ struct UsageChart: View, Equatable {
             HStack(spacing: 6) {
                 Circle().fill(Palette.model(name, preset: chartPalette, contrast: chartContrast))
                     .frame(width: DesignTokens.chartLegendDot, height: DesignTokens.chartLegendDot)
-                Label(title, systemImage: isHidden ? "eye.slash" : "eye").strikethrough(isHidden)
-            }.font(AppFont.secondary)
-        }.buttonStyle(.plain).help(title)
+                Text(title)
+            }.font(AppFont.secondary).opacity(isHidden ? 0.4 : 1).contentShape(Rectangle())
+        }.buttonStyle(.plain).help(title).motion(.fast, value: isHidden)
+            // Hidden models read as an unselected toggle; the action names what a press does.
             .accessibilityLabel((isHidden ? L("显示模型 ") : L("隐藏模型 ")) + title)
+            .accessibilityAddTraits(isHidden ? [] : .isSelected)
     }
     private func move(_ offset: Int) { guard !days.isEmpty else { return }; let index = selected.flatMap { key in days.firstIndex { $0.key == key } } ?? 0; selected = days[min(days.count - 1, max(0, index + offset))].key }
 }
@@ -864,7 +873,8 @@ struct ModelChart: View, Equatable {
         let ringKeys = Set(ranked.prefix(5).map(\.key))
         HStack(alignment: .top, spacing: 16) {
             Chart(slices) { item in SectorMark(angle: .value(cost ? "USD" : "Token", value(item)), innerRadius: .ratio(DesignTokens.modelChartInnerRatio), angularInset: DesignTokens.modelChartAngularInset).foregroundStyle(color(item.key, ring: ringKeys)).cornerRadius(DesignTokens.modelChartCorner).accessibilityLabel(Text(modelNames[item.key] ?? item.key)) }.frame(width: DesignTokens.modelChartSize, height: DesignTokens.modelChartHeight)
-                .chartBackground { _ in VStack { Text("\(models.count)").font(.title2); Text(L("模型")).font(AppFont.secondary) } }.accessibilityLabel(L("前五模型与其他；完整数值见列表"))
+                .motion(.slow, value: cost)
+                .chartBackground { _ in VStack { Text("\(models.count)").font(.system(size: DesignTokens.fontPanelOverview, weight: DesignTokens.weightStrong)).monospacedDigit().numericTransition(value: models.count); Text(L("模型")).font(AppFont.secondary) } }.accessibilityLabel(L("前五模型与其他；完整数值见列表"))
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(showAll ? ranked : Array(ranked.prefix(5))) { item in
                     // Models past the top five appear in the ring as its "其他" slice.
@@ -1005,17 +1015,22 @@ private struct QuotaAwaitingCard: View {
     let account: AgentAccount, provider: String
     @Environment(\.collapsedQuotaHeight) private var collapsedHeight
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
-    private var labels: some View {
+    private func labels(measuring: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: DesignTokens.spaceCardContent) {
             Text(account.name).font(AppFont.section)
             Text(model.quotaBusy ? L("正在读取账户额度…") : L("等待首次额度查询")).font(AppFont.secondary).foregroundStyle(.secondary)
+            // Same shape as a window row, so the first reading replaces it without the card jumping.
+            VStack(alignment: .leading, spacing: 4) {
+                HStack { Text("5h"); Spacer(); Text(L("剩余 ") + Format.percent(100)) }.font(AppFont.secondary)
+                ResourceBar(percent: 60)
+            }.modifier(LoadingPlaceholder(active: model.quotaBusy && !measuring))
         }
     }
     var body: some View {
         let _ = interfaceLanguage
-        Surface(tint: Palette.category(provider), minimumHeight: collapsedHeight) { labels }
+        Surface(tint: Palette.category(provider), minimumHeight: collapsedHeight) { labels() }
             .background { GeometryReader { proxy in
-                Surface(tint: Palette.category(provider)) { labels }.frame(width: proxy.size.width)
+                Surface(tint: Palette.category(provider)) { labels(measuring: true) }.frame(width: proxy.size.width)
                     .fixedSize(horizontal: false, vertical: true)
                     .background(GeometryReader { measured in Color.clear.preference(key: CollapsedQuotaMeasurements.self, value: [provider + ":" + account.id: ceil(measured.size.height)]) })
                     .hidden().accessibilityHidden(true).allowsHitTesting(false)
@@ -1047,7 +1062,6 @@ private struct QuotaGroupSection<Content: View>: View {
     @State private var openingSettings = false
     @FocusState private var headerFocused: Bool
     @FocusState private var failureButtonFocused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var failures: [Quota] { quotas.filter { $0.queryFailure != nil } }
 
     init(key: String, model: AppModel, provider: String, accountCount: Int, quotas: [Quota], @ViewBuilder content: () -> Content) {
@@ -1061,7 +1075,7 @@ private struct QuotaGroupSection<Content: View>: View {
             HStack(spacing: 7) {
                 Button { expanded.toggle() } label: {
                     HStack(spacing: 7) {
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right").font(AppFont.caption)
+                        Image(systemName: "chevron.right").font(AppFont.caption).rotationEffect(.degrees(expanded ? 90 : 0))
                         Circle().fill(Palette.category(provider)).frame(width: 7, height: 7)
                         Text(CoreContract.quotaProviderName(provider)).font(AppFont.secondary.weight(.medium))
                         Spacer(minLength: 0)
@@ -1085,7 +1099,7 @@ private struct QuotaGroupSection<Content: View>: View {
                     }
             }
         }
-        .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.9), value: expanded)
+        .motion(.expand, value: expanded)
         .onChange(of: showingFailures) { _, showing in
             if !showing && !openingSettings {
                 if failures.isEmpty { headerFocused = true } else { failureButtonFocused = true }
@@ -1195,7 +1209,6 @@ struct QuotaCard: View, Equatable {
             && (lhs.onAnalysis == nil) == (rhs.onAnalysis == nil) && (lhs.onRetry == nil) == (rhs.onRetry == nil)
     }
     private var bestCredit: QuotaEstimate? { EstimatePresentation.credit(creditHistory) ?? EstimatePresentation.canonical([creditEstimate].compactMap { $0 }).first }
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var defaultExpanded: Bool
     @AppStorage private var storedExpanded: Bool?
     private var isMeasurement = false
@@ -1257,6 +1270,8 @@ struct QuotaCard: View, Equatable {
         }
         if let notice = quota.visibleNotice { Label(L(notice), systemImage: "info.circle").font(AppFont.secondary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
     }
+    /// Healthy bars take the provider's color (or a neutral), never the link-blue accent.
+    private var barTint: Color { Palette.knownCategory(quota.provider) ?? Palette.neutralTint }
     private var displayedMeters: [QuotaMeter] { expanded ? quota.visibleMeters : Array(quota.visibleMeters.prefix(2)) }
     private func meterContent(_ meter: QuotaMeter, stacked: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -1271,7 +1286,7 @@ struct QuotaCard: View, Equatable {
                     VStack(alignment: .leading, spacing: 3) { Text(L(meter.label)).foregroundStyle(.secondary); Text(quota.meterSummary(meter)).monospacedDigit().fixedSize(horizontal: false, vertical: true) }
                 }.font(AppFont.secondary)
             }
-            if let fraction = meter.fraction { ResourceBar(percent: 100 - fraction * 100, tint: Palette.quota(fraction * 100)) }
+            if let fraction = meter.fraction { ResourceBar(percent: 100 - fraction * 100, tint: Palette.quotaBar(fraction * 100, healthy: barTint)) }
             if expanded, let reset = meter.resetsAt, reset > 0 { Text(L("重置 ") + Format.date(reset)).font(AppFont.caption).foregroundStyle(.secondary) }
         }.accessibilityElement(children: .combine).accessibilityLabel(L(meter.label) + "，" + quota.meterSummary(meter))
     }
@@ -1289,8 +1304,8 @@ struct QuotaCard: View, Equatable {
                     HStack(alignment: .top, spacing: 14) {
                         ForEach(quota.windows.filter { $0.groupLabel == group }.sorted { ($0.windowMinutes ?? 0) < ($1.windowMinutes ?? 0) }) { window in
                             VStack(alignment: .leading, spacing: 5) {
-                                HStack { Text(window.windowMinutes == CoreContract.weekMinutes ? "7d" : window.windowMinutes == CoreContract.fiveHourMinutes ? "5h" : L(window.name)); Spacer(minLength: 2); Text(Format.percent(max(0, 100-window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)) }.font(AppFont.secondary)
-                                ResourceBar(percent: 100-window.usedPercent, tint: Palette.quota(window.usedPercent))
+                                HStack { Text(window.windowMinutes == CoreContract.weekMinutes ? "7d" : window.windowMinutes == CoreContract.fiveHourMinutes ? "5h" : L(window.name)); Spacer(minLength: 2); QuotaRemainingText(used: window.usedPercent, prefix: false) }.font(AppFont.secondary)
+                                ResourceBar(percent: 100-window.usedPercent, tint: Palette.quotaBar(window.usedPercent, healthy: barTint))
                                 QuotaResetLabel(window: window)
                             }.frame(maxWidth: .infinity).accessibilityElement(children: .combine).accessibilityLabel(L(window.name) + L("，剩余 ") + Format.percent(max(0, 100-window.usedPercent)))
                         }
@@ -1314,7 +1329,7 @@ struct QuotaCard: View, Equatable {
         return text
     }
     @ViewBuilder private var cardHeader: some View {
-            Button { withAnimation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.86)) { if collapsible { storedExpanded = !expanded } } } label: {
+            Button { withMotion(.expand) { if collapsible { storedExpanded = !expanded } } } label: {
             HStack(spacing: 8) {
                 ProviderMark(provider: quota.provider)
                 VStack(alignment: .leading, spacing: 2) {
@@ -1324,9 +1339,9 @@ struct QuotaCard: View, Equatable {
                         Text(email).font(AppFont.secondary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).textSelection(.enabled).help(email)
                     }
                 }.frame(minWidth: 0, alignment: .leading)
-                if let plan = quota.plan, !Format.subscription(plan).isEmpty { SubscriptionBadge(plan: plan).frame(maxWidth: DesignTokens.quotaBadgeWidth) }
+                if let plan = quota.plan, !Format.subscription(plan).isEmpty { SubscriptionBadge(plan: plan).frame(maxWidth: DesignTokens.quotaBadgeWidth); SubscriptionRemaining(expiresAt: quota.subscriptionExpiresAt) }
                 Spacer(minLength: 0)
-                if collapsible { Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).foregroundStyle(.secondary) }
+                if collapsible { Image(systemName: "chevron.down").rotationEffect(.degrees(expanded ? 180 : 0)).font(.system(size: DesignTokens.fontSecondary, weight: DesignTokens.weightStrong)).foregroundStyle(.secondary) }
             }.contentShape(Rectangle())
             }.buttonStyle(.plain).help(collapsible ? (expanded ? L("折叠额度") : L("展开额度")) : quota.name)
                 .accessibilityLabel(headerAccessibility)
@@ -1364,10 +1379,11 @@ struct QuotaCard: View, Equatable {
                 .monospacedDigit().help(deviceCounts.summary)
         }
     }
-    private func staleLabel(_ stamp: Double) -> String { L("上次 {0}", Format.relative(Date(timeIntervalSince1970: stamp))) }
+    private func staleLabel(_ stamp: Double, now: Date = Date()) -> String { L("上次 {0}", Format.relative(Date(timeIntervalSince1970: stamp), now: now)) }
     @ViewBuilder private var quotaTimestamp: some View {
         if quota.updatedAt > 0 { Text("\(quota.origin == "log" ? L("记录") : L("更新")) \(Format.date(quota.updatedAt))").font(AppFont.caption).foregroundStyle(.secondary) }
-        if let age = quota.snapshotAge { Text(staleLabel(age)).font(AppFont.caption).foregroundStyle(quota.isStale ? Palette.warn : .secondary).help(Format.date(age)) }
+        // The relative age keeps ticking while the surface is visible.
+        if let age = quota.snapshotAge { SurfaceTimeline(interval: 60) { context in Text(staleLabel(age, now: context.date)).font(AppFont.caption).foregroundStyle(quota.isStale ? Palette.warn : .secondary).help(Format.date(age)) } }
     }
     @ViewBuilder private var analysisButton: some View {
         if let onAnalysis { Button(L("查看分析"), systemImage: "arrow.up.right", action: onAnalysis).font(AppFont.caption).tint(.primary) }
@@ -1390,9 +1406,9 @@ struct QuotaCard: View, Equatable {
                             HStack(alignment: .firstTextBaseline, spacing: 6) {
                                 Text(window.windowMinutes == CoreContract.fiveHourMinutes ? "5h" : window.windowMinutes == CoreContract.weekMinutes ? "7d" : L(window.name)).lineLimit(2)
                                 Spacer(minLength: 0)
-                                Text(L("剩余 ") + Format.percent(max(0, 100 - window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)).fixedSize()
+                                QuotaRemainingText(used: window.usedPercent).fixedSize()
                             }.font(AppFont.secondary)
-                            ResourceBar(percent: 100 - window.usedPercent, tint: Palette.quota(window.usedPercent))
+                            ResourceBar(percent: 100 - window.usedPercent, tint: Palette.quotaBar(window.usedPercent, healthy: barTint))
                             QuotaResetLabel(window: window)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -1407,10 +1423,10 @@ struct QuotaCard: View, Equatable {
             ForEach(quota.windows) { window in
                 VStack(spacing: 6) {
                     ViewThatFits(in: .horizontal) {
-                        HStack { Text(L(window.name)); Spacer(minLength: 6); Text(L("剩余 ") + Format.percent(max(0, 100 - window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)) }
-                        VStack(alignment: .leading, spacing: 3) { Text(L(window.name)); Text(L("剩余 ") + Format.percent(max(0, 100 - window.usedPercent))).monospacedDigit().foregroundStyle(Palette.quota(window.usedPercent)) }.frame(maxWidth: .infinity, alignment: .leading)
+                        HStack { Text(L(window.name)); Spacer(minLength: 6); QuotaRemainingText(used: window.usedPercent) }
+                        VStack(alignment: .leading, spacing: 3) { Text(L(window.name)); QuotaRemainingText(used: window.usedPercent) }.frame(maxWidth: .infinity, alignment: .leading)
                     }.font(AppFont.secondary)
-                    ResourceBar(percent: 100 - window.usedPercent, tint: Palette.quota(window.usedPercent))
+                    ResourceBar(percent: 100 - window.usedPercent, tint: Palette.quotaBar(window.usedPercent, healthy: barTint))
                     QuotaResetLabel(window: window).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -1477,7 +1493,7 @@ struct ServerCard: View, Equatable {
                     Spacer()
                     SurfaceTimeline(interval: 1) { context in
                         let label = status(at: context.date)
-                        HStack(spacing: 6) { Circle().fill(label == L("正常") ? Palette.ok : label == L("已暂停") ? Color.gray : label == L("连接失败") ? Palette.danger : Palette.warn).frame(width: 6, height: 6); Text(label).font(AppFont.secondary).foregroundStyle(.secondary) }
+                        HStack(spacing: 6) { Circle().fill(label == L("正常") ? Palette.ok : label == L("已暂停") ? Color.secondary : label == L("连接失败") ? Palette.danger : Palette.warn).frame(width: 6, height: 6); Text(label).font(AppFont.secondary).foregroundStyle(.secondary) }
                     }
 
                 }
@@ -1619,14 +1635,16 @@ struct ServerResourceSummary: View {
                                 Text(gpu.name ?? "—").foregroundStyle(.secondary).lineLimit(1).help(gpu.name ?? "—")
                             }.font(AppFont.secondary)
                             HStack(alignment: .top, spacing: 12) {
-                                ResourceStrip(title: L("利用率"), percent: gpu.utilization, tint: Palette.category("gpu"), warnHigh: false).frame(width: host.shows("gpuMemory") ? 86 : nil)
+                                // Sized to its own label, so "Utilization" never truncates; the memory strip takes the rest.
+                                ResourceStrip(title: L("利用率"), percent: gpu.utilization, tint: Palette.category("gpu"), warnHigh: false)
+                                    .frame(minWidth: 86).fixedSize(horizontal: host.shows("gpuMemory"), vertical: false)
                                 if host.shows("gpuMemory") {
                                     ResourceStrip(title: L("显存"), percent: Format.capacityPercent(gpu.memoryUsedMiB, gpu.memoryTotalMiB),
                                                   detail: Format.capacityPair(gpu.memoryUsedMiB.map { $0 * 1048576 }, gpu.memoryTotalMiB.map { $0 * 1048576 }), tint: Palette.category("gpu"))
                                 }
                             }
 
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(Palette.category("gpu").opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10).background(Palette.category("gpu").opacity(Palette.tintSurfaceOpacity), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
                     }
                 }
             }
@@ -1637,13 +1655,13 @@ struct ServerResourceSummary: View {
                     BalancedGridLayout(minimumWidth: 290, spacing: 9) {
                         ForEach(filesystems) { fs in ResourceStrip(title: fs.id, percent: Format.capacityPercent(fs.used, fs.total), detail: Format.capacityPair(fs.used, fs.total), tint: Palette.category("storage")) }
                     }
-                }.padding(10).background(Palette.category("storage").opacity(0.08), in: RoundedRectangle(cornerRadius: 12)) }
+                }.padding(10).background(Palette.category("storage").opacity(Palette.tintSurfaceOpacity), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay)) }
             }
             if host.metrics.contains("network") {
                 let networks = host.selectedDevices("network", sample?.network)
                 BalancedGridLayout(minimumWidth: 290, spacing: 9) {
                     ForEach(networks) { net in
-                        HStack { Text(net.id).lineLimit(1); Spacer(); Text("↓ " + Format.speed(net.rxBytesPerSecond) + " · ↑ " + Format.speed(net.txBytesPerSecond)).monospacedDigit() }.font(AppFont.caption).padding(10).background(Palette.category("network").opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                        HStack { Text(net.id).lineLimit(1); Spacer(); Text("↓ " + Format.speed(net.rxBytesPerSecond) + " · ↑ " + Format.speed(net.txBytesPerSecond)).monospacedDigit() }.font(AppFont.caption).padding(10).background(Palette.category("network").opacity(Palette.tintSurfaceOpacity), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
                     }
                 }
             }
@@ -1685,14 +1703,22 @@ struct ResourceBlock: View {
                 Text(title).font(AppFont.caption)
                 if let value, value >= 90 { Image(systemName: "exclamationmark.triangle").font(AppFont.caption).foregroundStyle(Palette.danger).help(L("高负载")).accessibilityLabel(L("高负载")) }
                 Spacer(minLength: 4)
-                Text(value.map { String(format: "%.0f%%", $0) } ?? "—").font(.system(size: DesignTokens.fontPanelTitle, weight: DesignTokens.weightStrong)).monospacedDigit().foregroundStyle((value ?? 0) >= 90 ? Palette.danger : Palette.category(category))
+                valueText
             }
             ResourceBar(percent: value, tint: Palette.category(category))
             if !detail.isEmpty { Text(detail).font(AppFont.caption).foregroundStyle(.secondary).monospacedDigit() }
         }.padding(.horizontal, 10).padding(.vertical, 8).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(Palette.category(category).opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.category(category).opacity(0.23)))
+            .background(Palette.category(category).opacity(Palette.tintSurfaceOpacity), in: RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay))
+            .overlay(RoundedRectangle(cornerRadius: DesignTokens.radiusOverlay).strokeBorder(Palette.category(category).opacity(DesignTokens.controlBorderOpacity)))
             .accessibilityElement(children: .combine)
+    }
+    /// A missing sample is a placeholder dash in a quiet tone, not a reading in the category color.
+    @ViewBuilder private var valueText: some View {
+        let font = Font.system(size: DesignTokens.fontPanelTitle, weight: DesignTokens.weightStrong)
+        if let value {
+            let label = String(format: "%.0f%%", value)
+            Text(label).font(font).monospacedDigit().foregroundStyle(value >= 90 ? Palette.danger : Palette.category(category)).numericTransition(value: label)
+        } else { Text("—").font(font).foregroundStyle(.tertiary) }
     }
 }
 
@@ -1723,7 +1749,6 @@ struct ResourceStrip: View {
 struct ResourceBar: View {
     var percent: Double?
     var tint: Color? = nil
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
     var body: some View {
         let _ = interfaceLanguage;
@@ -1736,8 +1761,38 @@ struct ResourceBar: View {
                 }
             }
         }.frame(height: DesignTokens.progressHeight)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: percent)
+            .motion(.slow, value: percent)
             .accessibilityLabel(percent.map { Format.percent($0) } ?? L("暂无数据"))
+    }
+}
+
+/// Remaining share of a quota window: neutral while healthy, warn or danger as it runs low, and a
+/// warning symbol under 10% so the state never depends on color alone.
+struct QuotaRemainingText: View {
+    var used: Double
+    var prefix = true
+    @AppStorage("aieyes.language") private var interfaceLanguage = "zh-CN"
+    var body: some View {
+        let _ = interfaceLanguage
+        let remaining = Format.percent(max(0, 100 - used))
+        HStack(spacing: 3) {
+            if Palette.quotaCritical(used) { Image(systemName: "exclamationmark.triangle").accessibilityHidden(true) }
+            Text((prefix ? L("剩余 ") : "") + remaining).monospacedDigit().numericTransition(value: remaining)
+        }.foregroundStyle(Palette.quota(used))
+    }
+}
+
+/// Skeleton rows for cards that are still waiting for their first reading.
+struct LoadingPlaceholder: ViewModifier {
+    var active: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.surfaceActive) private var surfaceActive
+    func body(content: Content) -> some View {
+        let placeholder = content.redacted(reason: .placeholder).accessibilityHidden(true).allowsHitTesting(false)
+        // A slow, shallow pulse while a request is in flight; Reduce Motion keeps the static skeleton.
+        if active && surfaceActive && !reduceMotion {
+            placeholder.phaseAnimator([1.0, 0.5]) { view, opacity in view.opacity(opacity) } animation: { _ in .easeInOut(duration: 0.9) }
+        } else { placeholder }
     }
 }
 
@@ -1780,10 +1835,10 @@ struct RefreshIndicator: View {
         let _ = interfaceLanguage;
         Button { showing.toggle() } label: {
             ZStack {
-                if model.refreshStates[key]?.busy == true || (key == "scan" && model.dashboardPending) { ProgressView().controlSize(.small).scaleEffect(0.7) }
+                if model.refreshStates[key]?.busy == true || (key == "scan" && model.dashboardPending) { ProgressView().controlSize(.mini) }
                 // A sync mark rather than a "verified" check; problems use the warning triangle (Web shares the rule).
-                else { Image(systemName: hasError ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath").foregroundStyle(hasError ? Palette.warn : Color.secondary).opacity(hasError || model.refreshStates[key]?.succeededAt != nil ? 1 : 0.6) }
-            }.frame(width: 22, height: 22)
+                else { Image(systemName: hasError ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath").contentTransition(.symbolEffect(.replace)).foregroundStyle(hasError ? Palette.warn : Color.secondary).opacity(hasError || model.refreshStates[key]?.succeededAt != nil ? 1 : 0.6) }
+            }.frame(width: 22, height: 22).motion(.standard, value: hasError)
         }.buttonStyle(.plain).help(statusLabel).accessibilityLabel(statusLabel)
         .popover(isPresented: $showing) {
             VStack(alignment: .leading, spacing: 12) {

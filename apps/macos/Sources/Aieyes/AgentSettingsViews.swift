@@ -26,6 +26,7 @@ private struct AgentEntrySelector: View {
     @State private var managing = false
     @State private var pickerSearch = ""
     @State private var managementSearch = ""
+    @Namespace private var agentChips
     private var entries: [AgentConfiguration] { model.settingsAgentIDs.compactMap { id in model.agentConfigurations.first { $0.provider == id } } }
     private func matches(_ agent: AgentConfiguration, _ query: String) -> Bool {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -42,9 +43,9 @@ private struct AgentEntrySelector: View {
             FlowLayout(spacing: 6) {
                 ForEach(entries) { agent in
                     Button { model.settingsAgent = agent.provider } label: { Label { Text(Format.provider(agent.provider)) } icon: { ProviderMark(provider: agent.provider, size: 20) } }
-                        .buttonStyle(.plain).padding(6).background(model.settingsAgent == agent.provider ? Palette.accent.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: DesignTokens.radiusControl))
+                        .buttonStyle(.chip(selected: model.settingsAgent == agent.provider, in: agentChips, font: AppFont.body))
                 }
-            }
+            }.motion(.spring, value: model.settingsAgent)
             HStack { Spacer(); Button(L("更多 Agent")) { selecting = true }; Button(L("管理 Agent")) { managing = true } }
         }
         .popover(isPresented: $selecting) {
