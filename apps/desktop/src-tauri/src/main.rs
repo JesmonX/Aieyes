@@ -439,7 +439,6 @@ fn main() {
                 desktop::setup(app, &root)?;
                 return Ok(());
             }
-            Engine::spawn_store_maintenance(&root);
             let runner = app
                 .path()
                 .resource_dir()?
@@ -463,6 +462,9 @@ fn main() {
             ));
             // Zero-config native account detection; settings revisions refresh the UI.
             Engine::spawn_auto_scan(&root);
+            // Only after the engines above have created the schema: on a fresh data directory a
+            // concurrent first open fails with "database is locked" and aborts startup.
+            Engine::spawn_store_maintenance(&root);
             updates::setup(app.handle(), &root);
             app.manage(session_sounds::Sounds::default());
             notifications::start(app.handle(), &root);
