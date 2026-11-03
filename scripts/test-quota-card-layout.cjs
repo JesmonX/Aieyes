@@ -25,10 +25,15 @@ const {fixture}=require('./workspace-ui-fixture.cjs');
    });
    await page.goto(`http://127.0.0.1:${server.address().port}/${surface}`);
    await page.waitForFunction(()=>typeof state!=='undefined'&&state.dashboard&&!state.busy);
+   // Measure layout, not a page entrance transform still in flight: its sub-pixel offset shows up in the box height.
+   const settled=()=>page.evaluate(()=>Promise.all(document.getAnimations().filter(a=>a.effect?.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))));
    await page.evaluate(()=>{state.dashboard.summary.pricedTokens=state.dashboard.summary.total;renderOverview();});
+   await settled();
    const usageHeight=(await page.locator('.overview-usage').boundingBox()).height;
    await page.evaluate(()=>{state.dashboard.summary.pricedTokens=0;renderOverview();});
-   assert.equal((await page.locator('.overview-usage').boundingBox()).height,usageHeight,'Missing-price warning does not add a row');
+   await settled();
+   // A row would add whole pixels; sub-pixel float noise (77.99999 vs 78) is not a row.
+   assert(Math.abs((await page.locator('.overview-usage').boundingBox()).height-usageHeight)<.5,'Missing-price warning does not add a row');
    const cards=page.locator('.quota-card[data-provider=codex]:visible');await cards.first().waitFor();
    await page.evaluate(()=>document.querySelectorAll('#content .quota-disclosure').forEach(node=>node.open=false));
    const equal=()=>page.waitForFunction(()=>{
